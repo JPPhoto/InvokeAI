@@ -735,6 +735,7 @@ class InvocationContext:
         config: ConfigInterface,
         util: UtilInterface,
         boards: BoardsInterface,
+        transient_storage: dict,
         data: InvocationContextData,
         services: InvocationServices,
     ) -> None:
@@ -754,6 +755,8 @@ class InvocationContext:
         """Utility methods, including a method to check if an invocation was canceled and step callbacks."""
         self.boards = boards
         """Methods to interact with boards."""
+        self.transient_storage = transient_storage
+        """Transient storage for all nodes in this execution."""
         self._data = data
         """An internal API providing access to data about the current queue item and invocation. You probably shouldn't use this. It may change without warning."""
         self._services = services
@@ -763,6 +766,7 @@ class InvocationContext:
 def build_invocation_context(
     services: InvocationServices,
     data: InvocationContextData,
+    transient_storage: dict,
     is_canceled: Callable[[], bool],
 ) -> InvocationContext:
     """Builds the invocation context for a specific invocation execution.
@@ -795,6 +799,7 @@ def build_invocation_context(
         conditioning=conditioning,
         services=services,
         boards=boards,
+        transient_storage=transient_storage
     )
 
     return ctx
