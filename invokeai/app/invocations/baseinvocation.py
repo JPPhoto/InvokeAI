@@ -273,6 +273,8 @@ class BaseInvocation(ABC, BaseModel):
 
     UIConfig: ClassVar[UIConfigBase]
 
+    reevaluate_on_iteration: ClassVar[bool] = False
+
     model_config = ConfigDict(
         protected_namespaces=(),
         validate_assignment=True,
@@ -433,6 +435,7 @@ RESERVED_NODE_ATTRIBUTE_FIELD_NAMES = {
     "type",
     "workflow",
     "bottleneck",
+    "reevaluate_on_iteration",
 }
 
 RESERVED_INPUT_FIELD_NAMES = {"metadata", "board"}
@@ -615,6 +618,7 @@ def invocation(
     category: Optional[str] = None,
     version: Optional[str] = None,
     use_cache: Optional[bool] = True,
+    reevaluate_on_iteration: bool = False,
     classification: Classification = Classification.Stable,
     bottleneck: Bottleneck = Bottleneck.GPU,
 ) -> Callable[[Type[TBaseInvocation]], Type[TBaseInvocation]]:
@@ -627,6 +631,7 @@ def invocation(
     :param Optional[str] category: Adds a category to the invocation. Used to group the invocations in the UI. Defaults to None.
     :param Optional[str] version: Adds a version to the invocation. Must be a valid semver string. Defaults to None.
     :param Optional[bool] use_cache: Whether or not to use the invocation cache. Defaults to True. The user may override this in the workflow editor.
+    :param bool reevaluate_on_iteration: Marks the invocation as eligible for per-iteration reevaluation behavior.
     :param Classification classification: The classification of the invocation. Defaults to FeatureClassification.Stable. Use Beta or Prototype if the invocation is unstable.
     :param Bottleneck bottleneck: The bottleneck of the invocation. Defaults to Bottleneck.GPU. Use Network if the invocation is network-bound.
     """
@@ -684,6 +689,8 @@ def invocation(
 
         if use_cache is not None:
             cls.model_fields["use_cache"].default = use_cache
+
+        cls.reevaluate_on_iteration = reevaluate_on_iteration
 
         cls.bottleneck = bottleneck
 

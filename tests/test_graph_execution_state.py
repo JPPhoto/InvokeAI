@@ -1,10 +1,17 @@
-from typing import Optional
+from typing import ClassVar, Optional
 from unittest.mock import Mock
 
 import pytest
 
-from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput, InvocationContext
+from invokeai.app.invocations.baseinvocation import (
+    BaseInvocation,
+    BaseInvocationOutput,
+    InvocationContext,
+    invocation,
+    invocation_output,
+)
 from invokeai.app.invocations.collections import RangeInvocation
+from invokeai.app.invocations.fields import Input, InputField, OutputField
 from invokeai.app.invocations.math import AddInvocation, MultiplyInvocation
 from invokeai.app.services.shared.graph import (
     CollectInvocation,
@@ -20,6 +27,20 @@ from tests.test_nodes import (
     TextToImageTestInvocation,
     create_edge,
 )
+
+
+@invocation_output("tick_output")
+class TickOutput(BaseInvocationOutput):
+    value: int = OutputField(description="Tick value")
+
+
+@invocation("tick", version="1.0.0", reevaluate_on_iteration=True)
+class TickInvocation(BaseInvocation):
+    _counter = 0  # shared across instances
+
+    def invoke(self, context: InvocationContext) -> TickOutput:
+        type(self)._counter += 1
+        return TickOutput(value=type(self)._counter)
 
 
 @pytest.fixture
@@ -270,3 +291,36 @@ def test_graph_nested_iterate_execution_order(execution_number: int):
             sum_values.append(o.value)
 
     assert sum_values == [0, 1, 10, 11]
+
+
+def test_upstream_node_can_be_reevaluated_per_iteration():
+    """
+    Desired behavior: if an upstream node is flagged for reevaluation, it should run once per iteration
+    when consumed by a node inside an IterateInvocation expansion.
+    """
+    TickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="c", start=1, stop=5, step=1))  # 1,2,3,4
+    graph.add_node(IterateInvocation(id="iter"))
+    graph.add_node(TickInvocation(id="a"))
+    graph.add_node(AddInvocation(id="add", b=0))
+
+    graph.add_edge(create_edge("c", "collection", "iter", "collection"))
+    graph.add_edge(create_edge("a", "value", "add", "a"))
+    graph.add_edge(create_edge("iter", "item", "add", "b"))
+
+    g = GraphExecutionState(graph=graph)
+
+    add_values: list[int] = []
+    while True:
+        n, o = invoke_next(g)
+        if n is None:
+            break
+        if g.prepared_source_mapping[n.id] == "add":
+            add_values.append(o.value)
+
+    # Expect tick to be reevaluated per iteration, yielding tick values 1..4 aligned with x=1..4:
+    # (1+1), (2+2), (3+3), (4+4)
+    assert add_values == [2, 4, 6, 8]
+    assert TickInvocation._counter == 4
