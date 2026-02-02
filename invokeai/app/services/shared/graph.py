@@ -813,6 +813,7 @@ class GraphExecutionState(BaseModel):
     ready_order: list[str] = Field(default_factory=list)
     indegree: dict[str, int] = Field(default_factory=dict, description="Remaining unmet input count for exec nodes")
     _iteration_path_cache: dict[str, tuple[int, ...]] = PrivateAttr(default_factory=dict)
+    _prepared_iter_context: dict[str, tuple[str, ...]] = PrivateAttr(default_factory=dict)
 
     def _type_key(self, node_obj: BaseInvocation) -> str:
         return node_obj.__class__.__name__
@@ -834,6 +835,31 @@ class GraphExecutionState(BaseModel):
         iterator_sources = [
             n for n in nx.ancestors(it_g, source_node_id) if isinstance(self.graph.get_node(n), IterateInvocation)
         ]
+
+        # Only use the explicit prepared iterator context for nodes that are reevaluated into an iterator scope.
+        # Normal iterator-expanded nodes should continue using the existing source-graph ancestry logic below.
+        source_node = self.graph.get_node(source_node_id)
+        ctx = self._prepared_iter_context.get(exec_node_id)
+        if ctx and getattr(type(source_node), "reevaluate_on_iteration", False):
+            topo = list(nx.topological_sort(it_g))
+            topo_index = {n: i for i, n in enumerate(topo)}
+
+            it_pairs = []
+            for it_exec in ctx:
+                it_src = self.prepared_source_mapping.get(it_exec)
+                if it_src is not None:
+                    it_pairs.append((it_exec, it_src))
+            it_pairs.sort(key=lambda p: topo_index.get(p[1], 0))
+
+            path: list[int] = []
+            for it_exec, _ in it_pairs:
+                it_node = self.execution_graph.nodes.get(it_exec)
+                if isinstance(it_node, IterateInvocation):
+                    path.append(it_node.index)
+
+            result = tuple(path)
+            self._iteration_path_cache[exec_node_id] = result
+            return result
 
         # Order iterators outer->inner via topo order of the iterator graph.
         topo = list(nx.topological_sort(it_g))
@@ -989,7 +1015,13 @@ class GraphExecutionState(BaseModel):
         """Returns true if the graph has any errors"""
         return len(self.errors) > 0
 
-    def _create_execution_node(self, node_id: str, iteration_node_map: list[tuple[str, str]]) -> list[str]:
+    def _create_execution_node(
+        self,
+        node_id: str,
+        iteration_node_map: list[tuple[str, str]],
+        *,
+        iter_context: tuple[str, ...] = (),
+    ) -> list[str]:
         """Prepares an iteration node and connects all edges, returning the new node id"""
 
         node = self.graph.get_node(node_id)
@@ -1041,9 +1073,15 @@ class GraphExecutionState(BaseModel):
             # Add to execution graph
             self.execution_graph.add_node(new_node)
             self.prepared_source_mapping[new_node.id] = node_id
+            self._prepared_iter_context[new_node.id] = iter_context
             if node_id not in self.source_prepared_mapping:
                 self.source_prepared_mapping[node_id] = set()
             self.source_prepared_mapping[node_id].add(new_node.id)
+
+            # If the source node was marked executed, it is no longer complete once we add new prepared nodes.
+            if node_id in self.executed:
+                self.executed.discard(node_id)
+                self.executed_history = [x for x in self.executed_history if x != node_id]
 
             # Add new edges to execution graph
             for edge in new_edges:
@@ -1062,6 +1100,43 @@ class GraphExecutionState(BaseModel):
             new_nodes.append(new_node.id)
 
         return new_nodes
+
+    def _resolve_parent_prepared_node(
+        self,
+        source_parent_id: str,
+        g: nx.DiGraph,
+        eg: nx.DiGraph,
+        iter_context: tuple[str, ...],
+    ) -> Optional[str]:
+        parent_node = self.graph.get_node(source_parent_id)
+        if getattr(type(parent_node), "reevaluate_on_iteration", False) and iter_context:
+            return self._get_or_create_reevaluated_node(source_parent_id, g, eg, iter_context)
+        return self._get_iteration_node(source_parent_id, g, eg, list(iter_context))
+
+    def _get_or_create_reevaluated_node(
+        self,
+        source_node_id: str,
+        g: nx.DiGraph,
+        eg: nx.DiGraph,
+        iter_context: tuple[str, ...],
+    ) -> Optional[str]:
+        prepared = self.source_prepared_mapping.get(source_node_id)
+        if prepared:
+            existing = next((p for p in prepared if self._prepared_iter_context.get(p, ()) == iter_context), None)
+            if existing is not None:
+                return existing
+
+        # Ensure any parents are resolved for the same iterator context, then create a new exec node for this context.
+        parents = [u for u, _ in g.in_edges(source_node_id)]
+        iteration_mappings: list[tuple[str, str]] = []
+        for p in parents:
+            pid = self._resolve_parent_prepared_node(p, g, eg, iter_context)
+            if pid is None:
+                return None
+            iteration_mappings.append((p, pid))
+
+        new_ids = self._create_execution_node(source_node_id, iteration_mappings, iter_context=iter_context)
+        return next(iter(new_ids), None)
 
     def _iterator_graph(self, base: Optional[nx.DiGraph] = None) -> nx.DiGraph:
         """Gets a DiGraph with edges to collectors removed so an ancestor search produces all active iterators for any node"""
@@ -1100,8 +1175,32 @@ class GraphExecutionState(BaseModel):
                 for a in nx.ancestors(g, n)
             )
 
+        it_g = self._iterator_graph(g)
+
+        def defer_reeval(n: str) -> bool:
+            node = self.graph.get_node(n)
+            if not getattr(type(node), "reevaluate_on_iteration", False):
+                return False
+
+            # If the node is already in an iterator scope, normal expansion handles it.
+            if any(isinstance(self.graph.get_node(a), IterateInvocation) for a in nx.ancestors(it_g, n)):
+                return False
+
+            # Defer if any direct consumer is in an iterator scope.
+            for _, child in g.out_edges(n):
+                if any(isinstance(self.graph.get_node(a), IterateInvocation) for a in nx.ancestors(it_g, child)):
+                    return True
+            return False
+
         next_node_id = next(
-            (n for n in sorted_nodes if unprepared(n) and iter_inputs_ready(n) and no_unexecuted_iter_ancestors(n)),
+            (
+                n
+                for n in sorted_nodes
+                if unprepared(n)
+                and iter_inputs_ready(n)
+                and no_unexecuted_iter_ancestors(n)
+                and not defer_reeval(n)
+            ),
             None,
         )
 
@@ -1136,14 +1235,24 @@ class GraphExecutionState(BaseModel):
             # For every iterator, the parent must either not be a child of that iterator, or must match the prepared iteration for that iterator
             eg = self.execution_graph.nx_graph_flat()
             prepared_parent_mappings = [
-                [(n, self._get_iteration_node(n, g, eg, it)) for n in next_node_parents]
+                [(n, self._resolve_parent_prepared_node(n, g, eg, tuple(it))) for n in next_node_parents]
                 for it in iterator_node_prepared_combinations
             ]  # type: ignore
+            valid = [
+                (it, m)
+                for it, m in zip(iterator_node_prepared_combinations, prepared_parent_mappings, strict=False)
+                if all(p[1] is not None for p in m)
+            ]
+
             prepared_parent_mappings = [m for m in prepared_parent_mappings if all(p[1] is not None for p in m)]
 
             # Create execution node for each iteration
-            for iteration_mappings in prepared_parent_mappings:
-                create_results = self._create_execution_node(next_node_id, iteration_mappings)  # type: ignore
+            for it, iteration_mappings in valid:
+                create_results = self._create_execution_node(
+                    next_node_id,
+                    iteration_mappings,  # type: ignore
+                    iter_context=tuple(it),
+                )
                 if create_results is not None:
                     new_node_ids.extend(create_results)
 
