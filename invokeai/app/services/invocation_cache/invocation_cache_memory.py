@@ -92,8 +92,10 @@ class MemoryInvocationCache(InvocationCacheBase):
             self._hits = 0
 
     @staticmethod
-    def create_key(invocation: BaseInvocation) -> int:
-        return hash(invocation.model_dump_json(exclude={"id"}, warnings=False))
+    def create_key(invocation: BaseInvocation, transient_storage: dict[str, Any]) -> int:
+        return hash(
+            invocation.model_dump_json(exclude={"id"}, warnings=False) + "|" + str(sorted(transient_storage.items()))
+        )
 
     def disable(self) -> None:
         with self._lock:

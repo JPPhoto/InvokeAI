@@ -237,7 +237,7 @@ class BaseInvocation(ABC, BaseModel):
 
         output: BaseInvocationOutput
         if self.use_cache:
-            key = services.invocation_cache.create_key(self)
+            key = services.invocation_cache.create_key(self, context.transient_storage)
             result = services.invocation_cache.get(key)
             if result is None:
                 services.logger.debug(f'Invocation cache miss for type "{self.get_type()}": {self.id}')

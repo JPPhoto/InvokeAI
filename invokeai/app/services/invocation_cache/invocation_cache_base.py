@@ -45,7 +45,7 @@ class InvocationCacheBase(ABC):
 
     @staticmethod
     @abstractmethod
-    def create_key(invocation: BaseInvocation) -> int:
+    def create_key(invocation: BaseInvocation, transient_storage: dict[str, Any]) -> int:
         """Gets the key for the invocation's cache item"""
         pass
 

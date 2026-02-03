@@ -27,12 +27,16 @@ def test_invocation_cache_memory_max_cache_size():
 
 
 def test_invocation_cache_memory_creates_deterministic_keys():
-    hash1 = MemoryInvocationCache.create_key(PromptTestInvocation(prompt="foo"))
-    hash2 = MemoryInvocationCache.create_key(PromptTestInvocation(prompt="foo"))
-    hash3 = MemoryInvocationCache.create_key(PromptTestInvocation(prompt="bar"))
+    hash1 = MemoryInvocationCache.create_key(PromptTestInvocation(prompt="foo"), {})
+    hash2 = MemoryInvocationCache.create_key(PromptTestInvocation(prompt="foo"), {})
+    hash3 = MemoryInvocationCache.create_key(PromptTestInvocation(prompt="bar"), {})
+    hash4 = MemoryInvocationCache.create_key(PromptTestInvocation(prompt="bar"), {"k": "v"})
+    hash5 = MemoryInvocationCache.create_key(PromptTestInvocation(prompt="bar"), {"k": "v"})
 
     assert hash1 == hash2
     assert hash1 != hash3
+    assert hash3 != hash4
+    assert hash4 == hash5
 
 
 def test_invocation_cache_memory_adds_invocation():
