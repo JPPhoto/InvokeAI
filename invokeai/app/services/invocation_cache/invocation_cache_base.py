@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput
 from invokeai.app.services.invocation_cache.invocation_cache_common import InvocationCacheStatus
@@ -22,12 +22,14 @@ class InvocationCacheBase(ABC):
     """
 
     @abstractmethod
-    def get(self, key: Union[int, str]) -> Optional[BaseInvocationOutput]:
+    def get(self, key: Union[int, str]) -> Optional[tuple[BaseInvocationOutput, dict[str, Any]]]:
         """Retrieves an invocation output from the cache"""
         pass
 
     @abstractmethod
-    def save(self, key: Union[int, str], invocation_output: BaseInvocationOutput) -> None:
+    def save(
+        self, key: Union[int, str], invocation_output: BaseInvocationOutput, transient_storage: dict[str, Any]
+    ) -> None:
         """Stores an invocation output in the cache"""
         pass
 

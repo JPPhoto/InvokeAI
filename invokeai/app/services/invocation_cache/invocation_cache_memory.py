@@ -1,7 +1,7 @@
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput
 from invokeai.app.services.invocation_cache.invocation_cache_base import InvocationCacheBase
@@ -13,6 +13,7 @@ from invokeai.app.services.invoker import Invoker
 class CachedItem:
     invocation_output: BaseInvocationOutput = field(compare=False)
     invocation_output_json: str = field(compare=False)
+    transient_storage: dict[str, Any] = field(compare=False)
 
 
 class MemoryInvocationCache(InvocationCacheBase):
@@ -40,7 +41,7 @@ class MemoryInvocationCache(InvocationCacheBase):
         self._invoker.services.tensors.on_deleted(self._delete_by_match)
         self._invoker.services.conditioning.on_deleted(self._delete_by_match)
 
-    def get(self, key: Union[int, str]) -> Optional[BaseInvocationOutput]:
+    def get(self, key: Union[int, str]) -> Optional[tuple[BaseInvocationOutput, dict[str, Any]]]:
         with self._lock:
             if self._max_cache_size == 0 or self._disabled:
                 return None
@@ -48,11 +49,13 @@ class MemoryInvocationCache(InvocationCacheBase):
             if item is not None:
                 self._hits += 1
                 self._cache.move_to_end(key)
-                return item.invocation_output
+                return item.invocation_output, item.transient_storage
             self._misses += 1
             return None
 
-    def save(self, key: Union[int, str], invocation_output: BaseInvocationOutput) -> None:
+    def save(
+        self, key: Union[int, str], invocation_output: BaseInvocationOutput, transient_storage: dict[str, Any]
+    ) -> None:
         with self._lock:
             if self._max_cache_size == 0 or self._disabled or key in self._cache:
                 return
@@ -62,6 +65,7 @@ class MemoryInvocationCache(InvocationCacheBase):
             self._cache[key] = CachedItem(
                 invocation_output,
                 invocation_output.model_dump_json(warnings=False, exclude_defaults=True, exclude_unset=True),
+                transient_storage,
             )
 
     def _delete_oldest_access(self, number_to_delete: int) -> None:
