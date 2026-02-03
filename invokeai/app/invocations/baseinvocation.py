@@ -238,14 +238,16 @@ class BaseInvocation(ABC, BaseModel):
         output: BaseInvocationOutput
         if self.use_cache:
             key = services.invocation_cache.create_key(self)
-            cached_value = services.invocation_cache.get(key)
-            if cached_value is None:
+            result = services.invocation_cache.get(key)
+            if result is None:
                 services.logger.debug(f'Invocation cache miss for type "{self.get_type()}": {self.id}')
                 output = self.invoke(context)
-                services.invocation_cache.save(key, output)
+                services.invocation_cache.save(key, output, context.transient_storage)
                 return output
             else:
+                cached_value, transient_storage = result
                 services.logger.debug(f'Invocation cache hit for type "{self.get_type()}": {self.id}')
+                context.transient_storage = transient_storage
                 return cached_value
         else:
             services.logger.debug(f'Skipping invocation cache for "{self.get_type()}": {self.id}')
