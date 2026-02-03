@@ -444,7 +444,7 @@ def test_transient_storage_persists_within_one_graph_execution_and_resets_for_ne
         title="Transient Storage Write Test",
         tags=["test"],
         version="1.0.0",
-        use_cache=False
+        use_cache=False,
     )
     class _TransientStorageWriteTestInvocation(BaseInvocation):
         key: str = InputField(default="k")
@@ -459,7 +459,7 @@ def test_transient_storage_persists_within_one_graph_execution_and_resets_for_ne
         title="Transient Storage Read Test",
         tags=["test"],
         version="1.0.0",
-        use_cache=False
+        use_cache=False,
     )
     class _TransientStorageReadTestInvocation(BaseInvocation):
         key: str = InputField(default="k")
@@ -482,7 +482,6 @@ def test_transient_storage_persists_within_one_graph_execution_and_resets_for_ne
             out.append((n, o))
         assert state.is_complete()
         return out
-
 
     # Execution 1: write then read in the same workflow should succeed.
     g1 = Graph()
