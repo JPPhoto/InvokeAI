@@ -3,6 +3,7 @@ import { colorTokenToCssVar } from 'common/util/colorTokenToCssVar';
 import { selectNodes } from 'features/nodes/store/selectors';
 import type { Templates } from 'features/nodes/store/types';
 import { selectWorkflowSettingsSlice } from 'features/nodes/store/workflowSettingsSlice';
+import { FLOW_CONTROL_HANDLE_COLOR, isFlowControlHandle } from 'features/nodes/types/constants';
 import { isInvocationNode } from 'features/nodes/types/invocation';
 
 import { getFieldColor } from './getEdgeColor';
@@ -32,6 +33,10 @@ export const buildSelectEdgeColor = (
 
     if (!sourceNode || !sourceHandleId || !targetNode || !targetHandleId) {
       return colorTokenToCssVar('base.500');
+    }
+
+    if (isFlowControlHandle(sourceHandleId) && isFlowControlHandle(targetHandleId)) {
+      return FLOW_CONTROL_HANDLE_COLOR;
     }
 
     const sourceNodeTemplate = templates[sourceNode.data.type];
