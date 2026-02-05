@@ -5,6 +5,7 @@ import { selectAutoAddBoardId } from 'features/gallery/store/gallerySelectors';
 import { selectNodesSlice } from 'features/nodes/store/selectors';
 import type { Templates } from 'features/nodes/store/types';
 import type { BoardField } from 'features/nodes/types/common';
+import { isFlowControlHandle } from 'features/nodes/types/constants';
 import type { BoardFieldInputInstance } from 'features/nodes/types/field';
 import { isBoardFieldInputInstance, isBoardFieldInputTemplate } from 'features/nodes/types/field';
 import { isExecutableNode, isInvocationNode } from 'features/nodes/types/invocation';
@@ -98,7 +99,8 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
   // skip out the "dummy" edges between collapsed nodes
   const filteredEdges = edges
     .filter((edge) => edge.type !== 'collapsed')
-    .filter((edge) => filteredNodeIds.includes(edge.source) && filteredNodeIds.includes(edge.target));
+    .filter((edge) => filteredNodeIds.includes(edge.source) && filteredNodeIds.includes(edge.target))
+    .filter((edge) => !isFlowControlHandle(edge.sourceHandle) && !isFlowControlHandle(edge.targetHandle));
 
   // Reduce the node editor edges into invocation graph edges
   const parsedEdges = filteredEdges.reduce<NonNullable<Graph['edges']>>((edgesAccumulator, edge) => {

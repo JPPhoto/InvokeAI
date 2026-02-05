@@ -4,6 +4,7 @@ import { areTypesEqual } from 'features/nodes/store/util/areTypesEqual';
 import { getCollectItemType } from 'features/nodes/store/util/getCollectItemType';
 import { getHasCycles } from 'features/nodes/store/util/getHasCycles';
 import { validateConnectionTypes } from 'features/nodes/store/util/validateConnectionTypes';
+import { isFlowControlHandle } from 'features/nodes/types/constants';
 import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
 import type { SetNonNullable } from 'type-fest';
 
@@ -76,6 +77,23 @@ export const validateConnection: ValidateConnectionFunc = (
       return 'nodes.missingNode';
     }
 
+    const isFlowControlSource = isFlowControlHandle(c.sourceHandle);
+    const isFlowControlTarget = isFlowControlHandle(c.targetHandle);
+    const isFlowControlConnection = isFlowControlSource || isFlowControlTarget;
+
+    if (isFlowControlConnection && !(isFlowControlSource && isFlowControlTarget)) {
+      return 'nodes.fieldTypesMustMatch';
+    }
+
+    if (isFlowControlConnection) {
+      if (filteredEdges.some((e) => e.source === c.source && e.sourceHandle === c.sourceHandle)) {
+        return 'nodes.inputMayOnlyHaveOneConnection';
+      }
+      if (filteredEdges.some((e) => e.target === c.target && e.targetHandle === c.targetHandle)) {
+        return 'nodes.inputMayOnlyHaveOneConnection';
+      }
+    }
+
     const sourceTemplate = templates[sourceNode.data.type];
     if (!sourceTemplate) {
       return 'nodes.missingInvocationTemplate';
@@ -86,37 +104,39 @@ export const validateConnection: ValidateConnectionFunc = (
       return 'nodes.missingInvocationTemplate';
     }
 
-    const sourceFieldTemplate = sourceTemplate.outputs[c.sourceHandle];
-    if (!sourceFieldTemplate) {
-      return 'nodes.missingFieldTemplate';
-    }
-
-    const targetFieldTemplate = targetTemplate.inputs[c.targetHandle];
-    if (!targetFieldTemplate) {
-      return 'nodes.missingFieldTemplate';
-    }
-
-    if (targetFieldTemplate.input === 'direct') {
-      return 'nodes.cannotConnectToDirectInput';
-    }
-
-    if (targetNode.data.type === 'collect' && c.targetHandle === 'item') {
-      // Collect nodes shouldn't mix and match field types.
-      const collectItemType = getCollectItemType(templates, nodes, edges, targetNode.id);
-      if (collectItemType && !areTypesEqual(sourceFieldTemplate.type, collectItemType)) {
-        return 'nodes.cannotMixAndMatchCollectionItemTypes';
+    if (!isFlowControlConnection) {
+      const sourceFieldTemplate = sourceTemplate.outputs[c.sourceHandle];
+      if (!sourceFieldTemplate) {
+        return 'nodes.missingFieldTemplate';
       }
-    }
 
-    if (filteredEdges.find(getTargetEqualityPredicate(c))) {
-      // CollectionItemField inputs can have multiple input connections
-      if (targetFieldTemplate.type.name !== 'CollectionItemField') {
-        return 'nodes.inputMayOnlyHaveOneConnection';
+      const targetFieldTemplate = targetTemplate.inputs[c.targetHandle];
+      if (!targetFieldTemplate) {
+        return 'nodes.missingFieldTemplate';
       }
-    }
 
-    if (!validateConnectionTypes(sourceFieldTemplate.type, targetFieldTemplate.type)) {
-      return 'nodes.fieldTypesMustMatch';
+      if (targetFieldTemplate.input === 'direct') {
+        return 'nodes.cannotConnectToDirectInput';
+      }
+
+      if (targetNode.data.type === 'collect' && c.targetHandle === 'item') {
+        // Collect nodes shouldn't mix and match field types.
+        const collectItemType = getCollectItemType(templates, nodes, edges, targetNode.id);
+        if (collectItemType && !areTypesEqual(sourceFieldTemplate.type, collectItemType)) {
+          return 'nodes.cannotMixAndMatchCollectionItemTypes';
+        }
+      }
+
+      if (filteredEdges.find(getTargetEqualityPredicate(c))) {
+        // CollectionItemField inputs can have multiple input connections
+        if (targetFieldTemplate.type.name !== 'CollectionItemField') {
+          return 'nodes.inputMayOnlyHaveOneConnection';
+        }
+      }
+
+      if (!validateConnectionTypes(sourceFieldTemplate.type, targetFieldTemplate.type)) {
+        return 'nodes.fieldTypesMustMatch';
+      }
     }
   }
 

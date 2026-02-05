@@ -13,6 +13,10 @@ type InvocationSchemaExtra = InvocationJSONSchemaExtra & {
   category?: string;
   tags?: string[];
   version: string;
+  flow_control?: {
+    incoming?: boolean;
+    outgoing?: boolean;
+  };
   properties: Omit<
     NonNullable<OpenAPIV3_1.SchemaObject['properties']> & (InputFieldJSONSchemaExtra | OutputFieldJSONSchemaExtra),
     'type'

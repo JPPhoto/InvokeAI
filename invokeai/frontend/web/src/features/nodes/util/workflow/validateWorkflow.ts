@@ -1,6 +1,7 @@
 import { parseify } from 'common/util/serialize';
 import { addElement, getIsFormEmpty } from 'features/nodes/components/sidePanel/builder/form-manipulation';
 import type { Templates } from 'features/nodes/store/types';
+import { isFlowControlHandle } from 'features/nodes/types/constants';
 import {
   isBoardFieldInputInstance,
   isImageFieldCollectionInputInstance,
@@ -179,7 +180,13 @@ export const validateWorkflow = async (args: ValidateWorkflowArgs): Promise<Vali
       );
     }
 
-    if (sourceNode && sourceTemplate && edge.type === 'default' && !(edge.sourceHandle in sourceTemplate.outputs)) {
+    if (
+      sourceNode &&
+      sourceTemplate &&
+      edge.type === 'default' &&
+      !isFlowControlHandle(edge.sourceHandle) &&
+      !(edge.sourceHandle in sourceTemplate.outputs)
+    ) {
       // The edge's source/output node field does not exist
       issues.push(
         t('nodes.sourceNodeFieldDoesNotExist', {
@@ -208,7 +215,13 @@ export const validateWorkflow = async (args: ValidateWorkflowArgs): Promise<Vali
       );
     }
 
-    if (targetNode && targetTemplate && edge.type === 'default' && !(edge.targetHandle in targetTemplate.inputs)) {
+    if (
+      targetNode &&
+      targetTemplate &&
+      edge.type === 'default' &&
+      !isFlowControlHandle(edge.targetHandle) &&
+      !(edge.targetHandle in targetTemplate.inputs)
+    ) {
       // The edge's target/input node field does not exist
       issues.push(
         t('nodes.targetNodeFieldDoesNotExist', {

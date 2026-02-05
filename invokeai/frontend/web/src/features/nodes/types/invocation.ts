@@ -6,6 +6,11 @@ import { zFieldInputInstance, zFieldInputTemplate, zFieldOutputTemplate } from '
 import { zSemVer } from './semver';
 
 // #region InvocationTemplate
+const zFlowControlConfig = z.object({
+  incoming: z.boolean().optional(),
+  outgoing: z.boolean().optional(),
+});
+
 const _zInvocationTemplate = z.object({
   type: z.string(),
   title: z.string(),
@@ -18,6 +23,7 @@ const _zInvocationTemplate = z.object({
   useCache: z.boolean(),
   nodePack: z.string().min(1).default('invokeai'),
   classification: zClassification,
+  flowControl: zFlowControlConfig.optional(),
 });
 export type InvocationTemplate = z.infer<typeof _zInvocationTemplate>;
 // #endregion

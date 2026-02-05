@@ -13,6 +13,7 @@ import { useWithFooter } from 'features/nodes/hooks/useWithFooter';
 import { memo } from 'react';
 
 import { InputFieldEditModeNodes } from './fields/InputFieldEditModeNodes';
+import InvocationNodeFlowControlHandles from './InvocationNodeFlowControlHandles';
 import InvocationNodeFooter from './InvocationNodeFooter';
 import InvocationNodeHeader from './InvocationNodeHeader';
 
@@ -41,6 +42,7 @@ const InvocationNode = ({ nodeId, isOpen }: Props) => {
 
   return (
     <>
+      <InvocationNodeFlowControlHandles />
       <InvocationNodeHeader nodeId={nodeId} isOpen={isOpen} />
       {isOpen && (
         <>
