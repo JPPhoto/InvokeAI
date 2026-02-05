@@ -129,6 +129,12 @@ class BaseInvocationOutput(BaseModel):
         json_schema_extra={"field_kind": FieldKind.NodeAttribute},
     )
 
+    flow_control_source: bool = Field(
+        default=False,
+        description="Internal flow-control dependency marker.",
+        json_schema_extra={"field_kind": FieldKind.NodeAttribute},
+    )
+
     @staticmethod
     def json_schema_extra(schema: dict[str, Any], model_class: Type[BaseInvocationOutput]) -> None:
         """Adds various UI-facing attributes to the invocation output's OpenAPI schema."""
@@ -266,6 +272,12 @@ class BaseInvocation(ABC, BaseModel):
     use_cache: bool = Field(
         default=True,
         description="Whether or not to use the cache",
+        json_schema_extra={"field_kind": FieldKind.NodeAttribute},
+    )
+
+    flow_control_target: bool = Field(
+        default=False,
+        description="Internal flow-control dependency marker.",
         json_schema_extra={"field_kind": FieldKind.NodeAttribute},
     )
 
@@ -433,11 +445,13 @@ RESERVED_NODE_ATTRIBUTE_FIELD_NAMES = {
     "type",
     "workflow",
     "bottleneck",
+    "flow_control_target",
+    "flow_control_source",
 }
 
 RESERVED_INPUT_FIELD_NAMES = {"metadata", "board"}
 
-RESERVED_OUTPUT_FIELD_NAMES = {"type", "output_meta"}
+RESERVED_OUTPUT_FIELD_NAMES = {"type", "output_meta", "flow_control_source"}
 
 
 class _Model(BaseModel):

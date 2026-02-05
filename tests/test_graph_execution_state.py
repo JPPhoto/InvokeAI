@@ -200,6 +200,69 @@ def test_graph_executes_depth_first():
     assert_topo_order_and_all_executed(g, order)
 
 
+def test_flow_control_edge_enforces_execution_order():
+    graph = Graph()
+    graph.add_node(PromptTestInvocation(id="source", prompt="source"))
+    graph.add_node(PromptTestInvocation(id="target", prompt="target"))
+    graph.add_edge(create_edge("source", "flow_control_source", "target", "flow_control_target"))
+
+    g = GraphExecutionState(graph=graph)
+    execution_order: list[str] = []
+
+    while True:
+        n = g.next()
+        if n is None:
+            break
+        o = n.invoke(Mock(InvocationContext))
+        g.complete(n.id, o)
+        execution_order.append(g.prepared_source_mapping[n.id])
+
+    assert execution_order.index("source") < execution_order.index("target")
+
+    # Flip node instantiation order to assert dependency direction drives execution order.
+    graph = Graph()
+    graph.add_node(PromptTestInvocation(id="target", prompt="target"))
+    graph.add_node(PromptTestInvocation(id="source", prompt="source"))
+    graph.add_edge(create_edge("source", "flow_control_source", "target", "flow_control_target"))
+
+    g = GraphExecutionState(graph=graph)
+    execution_order: list[str] = []
+
+    while True:
+        n = g.next()
+        if n is None:
+            break
+        o = n.invoke(Mock(InvocationContext))
+        g.complete(n.id, o)
+        execution_order.append(g.prepared_source_mapping[n.id])
+
+    assert execution_order.index("source") < execution_order.index("target")
+
+
+def test_flow_control_and_data_dependencies_must_both_be_ready():
+    graph = Graph()
+    graph.add_node(PromptTestInvocation(id="data_source", prompt="hello"))
+    graph.add_node(PromptTestInvocation(id="flow_source", prompt="gate"))
+    graph.add_node(PromptTestInvocation(id="target"))
+
+    graph.add_edge(create_edge("data_source", "prompt", "target", "prompt"))
+    graph.add_edge(create_edge("flow_source", "flow_control_source", "target", "flow_control_target"))
+
+    g = GraphExecutionState(graph=graph)
+    execution_order: list[str] = []
+
+    while True:
+        n = g.next()
+        if n is None:
+            break
+        o = n.invoke(Mock(InvocationContext))
+        g.complete(n.id, o)
+        execution_order.append(g.prepared_source_mapping[n.id])
+
+    assert execution_order.index("data_source") < execution_order.index("target")
+    assert execution_order.index("flow_source") < execution_order.index("target")
+
+
 # Because this tests deterministic ordering, we run it multiple times
 @pytest.mark.parametrize("execution_number", range(5))
 def test_graph_iterate_execution_order(execution_number: int):
