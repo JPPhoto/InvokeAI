@@ -99,8 +99,7 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
   // skip out the "dummy" edges between collapsed nodes
   const filteredEdges = edges
     .filter((edge) => edge.type !== 'collapsed')
-    .filter((edge) => filteredNodeIds.includes(edge.source) && filteredNodeIds.includes(edge.target))
-    .filter((edge) => !isFlowControlHandle(edge.sourceHandle) && !isFlowControlHandle(edge.targetHandle));
+    .filter((edge) => filteredNodeIds.includes(edge.source) && filteredNodeIds.includes(edge.target));
 
   // Reduce the node editor edges into invocation graph edges
   const parsedEdges = filteredEdges.reduce<NonNullable<Graph['edges']>>((edgesAccumulator, edge) => {
@@ -111,15 +110,22 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
       return edgesAccumulator;
     }
 
+    const sourceIsFlowControl = isFlowControlHandle(sourceHandle);
+    const targetIsFlowControl = isFlowControlHandle(targetHandle);
+    if (sourceIsFlowControl !== targetIsFlowControl) {
+      log.warn({ source, target, sourceHandle, targetHandle }, 'Flow control edge must connect flow handles');
+      return edgesAccumulator;
+    }
+
     // Format the edges and add to the edges array
     edgesAccumulator.push({
       source: {
         node_id: source,
-        field: sourceHandle,
+        field: sourceIsFlowControl ? 'flow_control_source' : sourceHandle,
       },
       destination: {
         node_id: target,
-        field: targetHandle,
+        field: targetIsFlowControl ? 'flow_control_target' : targetHandle,
       },
     });
 

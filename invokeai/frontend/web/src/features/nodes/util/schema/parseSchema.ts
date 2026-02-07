@@ -29,8 +29,8 @@ import { isCollectionFieldType, parseFieldType } from './parseFieldType';
 
 const log = logger('system');
 
-const RESERVED_INPUT_FIELD_NAMES = ['id', 'type', 'use_cache'];
-const RESERVED_OUTPUT_FIELD_NAMES = ['type'];
+const RESERVED_INPUT_FIELD_NAMES = ['id', 'type', 'use_cache', 'flow_control_target'];
+const RESERVED_OUTPUT_FIELD_NAMES = ['type', 'flow_control_source'];
 const RESERVED_FIELD_TYPES = ['IsIntermediate'];
 
 const invocationDenylist: string[] = ['graph', 'linear_ui_output'];
