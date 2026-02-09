@@ -5,7 +5,13 @@ import { selectAutoAddBoardId } from 'features/gallery/store/gallerySelectors';
 import { selectNodesSlice } from 'features/nodes/store/selectors';
 import type { Templates } from 'features/nodes/store/types';
 import type { BoardField } from 'features/nodes/types/common';
-import { isFlowControlHandle } from 'features/nodes/types/constants';
+import {
+  FLOW_CONTROL_SOURCE_FALSE_HANDLE_ID,
+  FLOW_CONTROL_SOURCE_HANDLE_ID,
+  FLOW_CONTROL_SOURCE_TRUE_HANDLE_ID,
+  FLOW_CONTROL_TARGET_HANDLE_ID,
+  isFlowControlHandle,
+} from 'features/nodes/types/constants';
 import type { BoardFieldInputInstance } from 'features/nodes/types/field';
 import { isBoardFieldInputInstance, isBoardFieldInputTemplate } from 'features/nodes/types/field';
 import { isExecutableNode, isInvocationNode } from 'features/nodes/types/invocation';
@@ -118,14 +124,25 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
     }
 
     // Format the edges and add to the edges array
+    const flowControlSourceField =
+      sourceHandle === FLOW_CONTROL_SOURCE_HANDLE_ID
+        ? 'flow_control_source'
+        : sourceHandle === FLOW_CONTROL_SOURCE_TRUE_HANDLE_ID
+          ? 'flow_control_source_true'
+          : sourceHandle === FLOW_CONTROL_SOURCE_FALSE_HANDLE_ID
+            ? 'flow_control_source_false'
+            : sourceHandle;
+    const flowControlTargetField =
+      targetHandle === FLOW_CONTROL_TARGET_HANDLE_ID ? 'flow_control_target' : targetHandle;
+
     edgesAccumulator.push({
       source: {
         node_id: source,
-        field: sourceIsFlowControl ? 'flow_control_source' : sourceHandle,
+        field: sourceIsFlowControl ? flowControlSourceField : sourceHandle,
       },
       destination: {
         node_id: target,
-        field: targetIsFlowControl ? 'flow_control_target' : targetHandle,
+        field: targetIsFlowControl ? flowControlTargetField : targetHandle,
       },
     });
 

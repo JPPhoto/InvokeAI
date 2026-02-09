@@ -162,6 +162,7 @@ class FieldDescriptions:
     mmditx = "MMDiTX"
     vae = "VAE"
     cond = "Conditioning tensor"
+    condition = "Boolean condition used for flow control."
     controlnet_model = "ControlNet model to load"
     vae_model = "VAE model to load"
     lora_model = "LoRA model to load"

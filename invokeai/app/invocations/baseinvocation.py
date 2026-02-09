@@ -90,6 +90,13 @@ class Bottleneck(str, Enum, metaclass=MetaEnum):
     GPU = "gpu"
 
 
+class FlowControlConfig(BaseModel):
+    """Flow control configuration for node rendering in the UI."""
+
+    incoming: Optional[bool] = Field(default=None, description="Whether to show the incoming flow control handle.")
+    outgoing: Optional[bool] = Field(default=None, description="Whether to show the outgoing flow control handle.")
+
+
 class UIConfigBase(BaseModel):
     """
     Provides additional node configuration to the UI.
@@ -104,6 +111,9 @@ class UIConfigBase(BaseModel):
     )
     node_pack: str = Field(description="The node pack that this node belongs to, will be 'invokeai' for built-in nodes")
     classification: Classification = Field(default=Classification.Stable, description="The node's classification")
+    flow_control: Optional[FlowControlConfig] = Field(
+        default=None, description="Optional flow control configuration for the node UI."
+    )
 
     model_config = ConfigDict(
         validate_assignment=True,
@@ -631,6 +641,7 @@ def invocation(
     use_cache: Optional[bool] = True,
     classification: Classification = Classification.Stable,
     bottleneck: Bottleneck = Bottleneck.GPU,
+    flow_control: Optional[FlowControlConfig] = None,
 ) -> Callable[[Type[TBaseInvocation]], Type[TBaseInvocation]]:
     """
     Registers an invocation.
@@ -643,6 +654,7 @@ def invocation(
     :param Optional[bool] use_cache: Whether or not to use the invocation cache. Defaults to True. The user may override this in the workflow editor.
     :param Classification classification: The classification of the invocation. Defaults to FeatureClassification.Stable. Use Beta or Prototype if the invocation is unstable.
     :param Bottleneck bottleneck: The bottleneck of the invocation. Defaults to Bottleneck.GPU. Use Network if the invocation is network-bound.
+    :param Optional[FlowControlConfig] flow_control: Optional flow control configuration for the UI.
     """
 
     def wrapper(cls: Type[TBaseInvocation]) -> Type[TBaseInvocation]:
@@ -683,6 +695,8 @@ def invocation(
         uiconfig["category"] = category
         uiconfig["classification"] = classification
         uiconfig["node_pack"] = node_pack
+        if flow_control is not None:
+            uiconfig["flow_control"] = flow_control
 
         if version is not None:
             try:

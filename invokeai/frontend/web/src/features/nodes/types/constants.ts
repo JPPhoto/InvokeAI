@@ -31,10 +31,15 @@ export const NO_PAN_CLASS = 'nopan';
 
 export const FLOW_CONTROL_TARGET_HANDLE_ID = '__flow-control-target';
 export const FLOW_CONTROL_SOURCE_HANDLE_ID = '__flow-control-source';
+export const FLOW_CONTROL_SOURCE_TRUE_HANDLE_ID = 'flow_control_source_true';
+export const FLOW_CONTROL_SOURCE_FALSE_HANDLE_ID = 'flow_control_source_false';
 export const FLOW_CONTROL_HANDLE_COLOR = 'lightskyblue';
 
 export const isFlowControlHandle = (handleId?: string | null): boolean =>
-  handleId === FLOW_CONTROL_TARGET_HANDLE_ID || handleId === FLOW_CONTROL_SOURCE_HANDLE_ID;
+  handleId === FLOW_CONTROL_TARGET_HANDLE_ID ||
+  handleId === FLOW_CONTROL_SOURCE_HANDLE_ID ||
+  handleId === FLOW_CONTROL_SOURCE_TRUE_HANDLE_ID ||
+  handleId === FLOW_CONTROL_SOURCE_FALSE_HANDLE_ID;
 
 /**
  * Colors for each field type - applies to their handles and edges.

@@ -28,6 +28,7 @@ from invokeai.app.invocations.baseinvocation import (
     invocation,
     invocation_output,
 )
+from invokeai.app.invocations.flow_control import IfInvocation
 from invokeai.app.invocations.fields import Input, InputField, OutputField, UIType
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.misc import uuid_string
@@ -805,6 +806,10 @@ class GraphExecutionState(BaseModel):
         description="The map of original graph nodes to prepared nodes",
         default_factory=dict,
     )
+    skipped_source_nodes: set[str] = Field(
+        description="The set of original graph node ids that were skipped during execution.",
+        default_factory=set,
+    )
     # Ready queues grouped by node class name (internal only)
     _ready_queues: dict[str, Deque[str]] = PrivateAttr(default_factory=dict)
     # Current class being drained; stays until its queue empties
@@ -965,7 +970,31 @@ class GraphExecutionState(BaseModel):
             self.executed_history.append(source_node)
 
         # Decrement children indegree and enqueue when ready
+        active_flow_field = None
+        node_obj = self.execution_graph.nodes.get(node_id)
+        if isinstance(node_obj, IfInvocation) and isinstance(output, BaseInvocationOutput):
+            active_flow_field = (
+                "flow_control_source_true"
+                if getattr(output, "flow_control_source_true", False)
+                else "flow_control_source_false"
+            )
+            source_node_id = self.prepared_source_mapping.get(node_id, node_id)
+            disabled_destinations = [
+                edge.destination.node_id
+                for edge in self.graph._get_output_edges(source_node_id)
+                if edge.source.field in {"flow_control_source_true", "flow_control_source_false"}
+                and edge.source.field != active_flow_field
+            ]
+            if disabled_destinations:
+                self._skip_source_nodes(disabled_destinations)
+
         for e in self.execution_graph._get_output_edges(node_id):
+            if active_flow_field is not None and e.source.field in {
+                "flow_control_source_true",
+                "flow_control_source_false",
+            }:
+                if e.source.field != active_flow_field:
+                    continue
             child = e.destination.node_id
             if child not in self.indegree:
                 raise KeyError(f"indegree missing for exec node {child}")
@@ -983,7 +1012,7 @@ class GraphExecutionState(BaseModel):
     def is_complete(self) -> bool:
         """Returns true if the graph is complete"""
         node_ids = set(self.graph.nx_graph_flat().nodes)
-        return self.has_error() or all((k in self.executed for k in node_ids))
+        return self.has_error() or all((k in self.executed or k in self.skipped_source_nodes) for k in node_ids)
 
     def has_error(self) -> bool:
         """Returns true if the graph has any errors"""
@@ -1087,7 +1116,7 @@ class GraphExecutionState(BaseModel):
         sorted_nodes = nx.topological_sort(g)
 
         def unprepared(n: str) -> bool:
-            return n not in self.source_prepared_mapping
+            return n not in self.source_prepared_mapping and n not in self.skipped_source_nodes
 
         def iter_inputs_ready(n: str) -> bool:
             if not isinstance(self.graph.get_node(n), IterateInvocation):
@@ -1148,6 +1177,22 @@ class GraphExecutionState(BaseModel):
                     new_node_ids.extend(create_results)
 
         return next(iter(new_node_ids), None)
+
+    def _skip_source_nodes(self, source_node_ids: Iterable[str]) -> None:
+        g = self.graph.nx_graph_flat()
+        to_skip: set[str] = set()
+        for node_id in source_node_ids:
+            to_skip.add(node_id)
+            to_skip.update(nx.descendants(g, node_id))
+
+        for node_id in to_skip:
+            if node_id in self.skipped_source_nodes:
+                continue
+            self.skipped_source_nodes.add(node_id)
+            self.executed.add(node_id)
+            prepared_nodes = self.source_prepared_mapping.get(node_id, set())
+            for exec_node_id in prepared_nodes:
+                self.executed.add(exec_node_id)
 
     def _get_iteration_node(
         self,

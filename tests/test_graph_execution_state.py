@@ -5,6 +5,7 @@ import pytest
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput, InvocationContext
 from invokeai.app.invocations.collections import RangeInvocation
+from invokeai.app.invocations.flow_control import IfInvocation
 from invokeai.app.invocations.math import AddInvocation, MultiplyInvocation
 from invokeai.app.services.shared.graph import (
     CollectInvocation,
@@ -19,6 +20,8 @@ from tests.test_nodes import (
     PromptTestInvocation,
     TextToImageTestInvocation,
     create_edge,
+    get_single_output_from_session,
+    run_session_with_mock_context,
 )
 
 
@@ -261,6 +264,42 @@ def test_flow_control_and_data_dependencies_must_both_be_ready():
 
     assert execution_order.index("data_source") < execution_order.index("target")
     assert execution_order.index("flow_source") < execution_order.index("target")
+
+
+def test_if_invocation_selects_true_branch():
+    graph = Graph()
+    graph.add_node(IfInvocation(id="if", condition=True))
+    graph.add_node(PromptTestInvocation(id="true_node", prompt="true"))
+    graph.add_node(PromptTestInvocation(id="false_node", prompt="false"))
+    graph.add_edge(create_edge("if", "flow_control_source_true", "true_node", "flow_control_target"))
+    graph.add_edge(create_edge("if", "flow_control_source_false", "false_node", "flow_control_target"))
+
+    g = GraphExecutionState(graph=graph)
+    run_session_with_mock_context(g)
+
+    true_output = get_single_output_from_session(g, "true_node")
+    assert true_output.prompt == "true"
+    false_prepared = g.source_prepared_mapping.get("false_node", set())
+    assert all(node_id not in g.results for node_id in false_prepared)
+    assert g.is_complete()
+
+
+def test_if_invocation_selects_false_branch():
+    graph = Graph()
+    graph.add_node(IfInvocation(id="if", condition=False))
+    graph.add_node(PromptTestInvocation(id="true_node", prompt="true"))
+    graph.add_node(PromptTestInvocation(id="false_node", prompt="false"))
+    graph.add_edge(create_edge("if", "flow_control_source_true", "true_node", "flow_control_target"))
+    graph.add_edge(create_edge("if", "flow_control_source_false", "false_node", "flow_control_target"))
+
+    g = GraphExecutionState(graph=graph)
+    run_session_with_mock_context(g)
+
+    false_output = get_single_output_from_session(g, "false_node")
+    assert false_output.prompt == "false"
+    true_prepared = g.source_prepared_mapping.get("true_node", set())
+    assert all(node_id not in g.results for node_id in true_prepared)
+    assert g.is_complete()
 
 
 # Because this tests deterministic ordering, we run it multiple times

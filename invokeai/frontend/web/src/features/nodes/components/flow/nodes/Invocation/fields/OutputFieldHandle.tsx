@@ -7,9 +7,15 @@ import {
   useIsConnectionInProgress,
   useIsConnectionStartField,
 } from 'features/nodes/hooks/useFieldConnectionState';
+import { useNodeType } from 'features/nodes/hooks/useNodeType';
 import { useOutputFieldTemplate } from 'features/nodes/hooks/useOutputFieldTemplate';
 import { useFieldTypeName } from 'features/nodes/hooks/usePrettyFieldType';
-import { HANDLE_TOOLTIP_OPEN_DELAY } from 'features/nodes/types/constants';
+import {
+  FLOW_CONTROL_HANDLE_COLOR,
+  FLOW_CONTROL_SOURCE_FALSE_HANDLE_ID,
+  FLOW_CONTROL_SOURCE_TRUE_HANDLE_ID,
+  HANDLE_TOOLTIP_OPEN_DELAY,
+} from 'features/nodes/types/constants';
 import type { FieldOutputTemplate } from 'features/nodes/types/field';
 import { isModelFieldType } from 'features/nodes/types/field';
 import type { CSSProperties } from 'react';
@@ -61,12 +67,46 @@ const handleStyles = {
   insetInlineEnd: '-0.5rem',
 } satisfies CSSProperties;
 
+const flowControlHandleStyles = {
+  position: 'absolute',
+  width: '12px',
+  height: '10px',
+  zIndex: 1,
+  background: 'none',
+  border: 'none',
+  insetInlineEnd: '-6px',
+} satisfies CSSProperties;
+
+const flowControlBoxSx = {
+  width: '12px',
+  height: '10px',
+  borderRadius: 0,
+  backgroundColor: FLOW_CONTROL_HANDLE_COLOR,
+  clipPath: 'polygon(0 0, 0 100%, 100% 50%)',
+  pointerEvents: 'none',
+  '&[data-is-connection-in-progress="true"][data-is-connection-start-field="false"][data-is-connection-valid="false"]':
+    {
+      filter: 'opacity(0.4) grayscale(0.7)',
+      cursor: 'not-allowed',
+    },
+  '&[data-is-connection-in-progress="true"][data-is-connection-start-field="true"][data-is-connection-valid="false"]': {
+    cursor: 'grab',
+  },
+  '&[data-is-connection-in-progress="false"] &[data-is-connection-valid="true"]': {
+    cursor: 'crosshair',
+  },
+} satisfies SystemStyleObject;
+
 export const OutputFieldHandle = memo(({ nodeId, fieldName }: Props) => {
   const fieldTemplate = useOutputFieldTemplate(fieldName);
+  const nodeType = useNodeType();
   const fieldTypeName = useFieldTypeName(fieldTemplate.type);
   const fieldColor = useMemo(() => getFieldColor(fieldTemplate.type), [fieldTemplate.type]);
   const isModelField = useMemo(() => isModelFieldType(fieldTemplate.type), [fieldTemplate.type]);
   const isConnectionInProgress = useIsConnectionInProgress();
+  const isIfFlowControlOutput =
+    nodeType === 'if' &&
+    (fieldName === FLOW_CONTROL_SOURCE_TRUE_HANDLE_ID || fieldName === FLOW_CONTROL_SOURCE_FALSE_HANDLE_ID);
 
   if (isConnectionInProgress) {
     return (
@@ -77,6 +117,7 @@ export const OutputFieldHandle = memo(({ nodeId, fieldName }: Props) => {
         fieldTypeName={fieldTypeName}
         fieldColor={fieldColor}
         isModelField={isModelField}
+        isIfFlowControlOutput={isIfFlowControlOutput}
       />
     );
   }
@@ -89,6 +130,7 @@ export const OutputFieldHandle = memo(({ nodeId, fieldName }: Props) => {
       fieldTypeName={fieldTypeName}
       fieldColor={fieldColor}
       isModelField={isModelField}
+      isIfFlowControlOutput={isIfFlowControlOutput}
     />
   );
 });
@@ -102,31 +144,57 @@ type HandleCommonProps = {
   fieldTypeName: string;
   fieldColor: string;
   isModelField: boolean;
+  isIfFlowControlOutput: boolean;
 };
 
-const IdleHandle = memo(({ fieldTemplate, fieldTypeName, fieldColor, isModelField }: HandleCommonProps) => {
-  return (
-    <Tooltip label={fieldTypeName} placement="start" openDelay={HANDLE_TOOLTIP_OPEN_DELAY}>
-      <Handle type="source" id={fieldTemplate.name} position={Position.Right} style={handleStyles}>
-        <Box
-          sx={sx}
-          data-cardinality={fieldTemplate.type.cardinality}
-          data-is-batch-field={fieldTemplate.type.batch}
-          data-is-model-field={isModelField}
-          data-is-connection-in-progress={false}
-          data-is-connection-start-field={false}
-          data-is-connection-valid={false}
-          backgroundColor={fieldTemplate.type.cardinality === 'SINGLE' ? fieldColor : 'base.900'}
-          borderColor={fieldColor}
-        />
-      </Handle>
-    </Tooltip>
-  );
-});
+const IdleHandle = memo(
+  ({ fieldTemplate, fieldTypeName, fieldColor, isModelField, isIfFlowControlOutput }: HandleCommonProps) => {
+    if (isIfFlowControlOutput) {
+      return (
+        <Tooltip label={fieldTypeName} placement="start" openDelay={HANDLE_TOOLTIP_OPEN_DELAY}>
+          <Handle type="source" id={fieldTemplate.name} position={Position.Right} style={flowControlHandleStyles}>
+            <Box
+              sx={flowControlBoxSx}
+              data-is-connection-in-progress={false}
+              data-is-connection-start-field={false}
+              data-is-connection-valid={false}
+            />
+          </Handle>
+        </Tooltip>
+      );
+    }
+
+    return (
+      <Tooltip label={fieldTypeName} placement="start" openDelay={HANDLE_TOOLTIP_OPEN_DELAY}>
+        <Handle type="source" id={fieldTemplate.name} position={Position.Right} style={handleStyles}>
+          <Box
+            sx={sx}
+            data-cardinality={fieldTemplate.type.cardinality}
+            data-is-batch-field={fieldTemplate.type.batch}
+            data-is-model-field={isModelField}
+            data-is-connection-in-progress={false}
+            data-is-connection-start-field={false}
+            data-is-connection-valid={false}
+            backgroundColor={fieldTemplate.type.cardinality === 'SINGLE' ? fieldColor : 'base.900'}
+            borderColor={fieldColor}
+          />
+        </Handle>
+      </Tooltip>
+    );
+  }
+);
 IdleHandle.displayName = 'IdleHandle';
 
 const ConnectionInProgressHandle = memo(
-  ({ nodeId, fieldName, fieldTemplate, fieldTypeName, fieldColor, isModelField }: HandleCommonProps) => {
+  ({
+    nodeId,
+    fieldName,
+    fieldTemplate,
+    fieldTypeName,
+    fieldColor,
+    isModelField,
+    isIfFlowControlOutput,
+  }: HandleCommonProps) => {
     const { t } = useTranslation();
     const isConnectionStartField = useIsConnectionStartField(nodeId, fieldName, 'target');
     const connectionErrorTKey = useConnectionErrorTKey(nodeId, fieldName, 'target');
@@ -137,6 +205,21 @@ const ConnectionInProgressHandle = memo(
       }
       return fieldTypeName;
     }, [fieldTypeName, t, connectionErrorTKey]);
+
+    if (isIfFlowControlOutput) {
+      return (
+        <Tooltip label={tooltip} placement="start" openDelay={HANDLE_TOOLTIP_OPEN_DELAY}>
+          <Handle type="source" id={fieldTemplate.name} position={Position.Right} style={flowControlHandleStyles}>
+            <Box
+              sx={flowControlBoxSx}
+              data-is-connection-in-progress={true}
+              data-is-connection-start-field={isConnectionStartField}
+              data-is-connection-valid={connectionErrorTKey === null}
+            />
+          </Handle>
+        </Tooltip>
+      );
+    }
 
     return (
       <Tooltip label={tooltip} placement="start" openDelay={HANDLE_TOOLTIP_OPEN_DELAY}>
