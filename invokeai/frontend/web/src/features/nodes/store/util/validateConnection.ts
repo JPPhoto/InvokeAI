@@ -90,12 +90,8 @@ export const validateConnection: ValidateConnectionFunc = (
         return 'nodes.inputMayOnlyHaveOneConnection';
       }
 
-      // Allow If node to have multiple flow-control outputs; keep single-source rule for all others.
-      const allowMultipleFlowSources = sourceNode.data.type === 'if';
-      if (!allowMultipleFlowSources) {
-        if (filteredEdges.some((e) => e.source === c.source && e.sourceHandle === c.sourceHandle)) {
-          return 'nodes.inputMayOnlyHaveOneConnection';
-        }
+      if (filteredEdges.some((e) => e.source === c.source && e.sourceHandle === c.sourceHandle)) {
+        return 'nodes.inputMayOnlyHaveOneConnection';
       }
     }
 
