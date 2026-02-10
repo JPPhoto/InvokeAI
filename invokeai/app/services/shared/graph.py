@@ -2,6 +2,7 @@
 
 import copy
 import itertools
+from abc import ABC, abstractmethod
 from collections import deque
 from typing import Any, Deque, Iterable, Optional, Type, TypeVar, Union, get_args, get_origin
 
@@ -28,8 +29,8 @@ from invokeai.app.invocations.baseinvocation import (
     invocation,
     invocation_output,
 )
-from invokeai.app.invocations.flow_control import IfInvocation
 from invokeai.app.invocations.fields import Input, InputField, OutputField, UIType
+from invokeai.app.invocations.flow_control import IfInvocation
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.misc import uuid_string
 
@@ -281,8 +282,21 @@ class CollectInvocationOutput(BaseInvocationOutput):
     )
 
 
+class FanInInvocation(BaseInvocation, ABC):
+    @classmethod
+    @abstractmethod
+    def fanin_input_field(cls) -> str: ...
+
+    @classmethod
+    @abstractmethod
+    def fanin_output_field(cls) -> str: ...
+
+    @abstractmethod
+    def prepare_fanin_inputs(self, state: "GraphExecutionState") -> None: ...
+
+
 @invocation("collect", version="1.0.0")
-class CollectInvocation(BaseInvocation):
+class CollectInvocation(FanInInvocation):
     """Collects values into a collection"""
 
     item: Optional[Any] = InputField(
@@ -295,6 +309,20 @@ class CollectInvocation(BaseInvocation):
     collection: list[Any] = InputField(
         description="The collection, will be provided on execution", default=[], ui_hidden=True
     )
+
+    @classmethod
+    def fanin_input_field(cls) -> str:
+        return ITEM_FIELD
+
+    @classmethod
+    def fanin_output_field(cls) -> str:
+        return COLLECTION_FIELD
+
+    def prepare_fanin_inputs(self, state: "GraphExecutionState") -> None:
+        input_edges = state.execution_graph._get_input_edges(self.id)
+        item_edges = [e for e in input_edges if e.destination.field == ITEM_FIELD]
+        item_edges.sort(key=lambda e: (state._get_iteration_path(e.source.node_id), e.source.node_id))
+        self.collection = [copydeep(getattr(state.results[e.source.node_id], e.source.field)) for e in item_edges]
 
     def invoke(self, context: InvocationContext) -> CollectInvocationOutput:
         """Invoke with provided services and return outputs."""
@@ -473,8 +501,8 @@ class Graph(BaseModel):
                 err = self._is_iterator_connection_valid(node.id)
                 if err is not None:
                     raise InvalidEdgeError(f"Invalid iterator node ({node.id}): {err}")
-            if isinstance(node, CollectInvocation):
-                err = self._is_collector_connection_valid(node.id)
+            if isinstance(node, FanInInvocation):
+                err = self._is_fanin_connection_valid(node.id, node.fanin_input_field(), node.fanin_output_field())
                 if err is not None:
                     raise InvalidEdgeError(f"Invalid collector node ({node.id}): {err}")
 
@@ -521,7 +549,7 @@ class Graph(BaseModel):
 
         # Validate that an edge to this node+field doesn't already exist
         input_edges = self._get_input_edges(edge.destination.node_id, edge.destination.field)
-        if len(input_edges) > 0 and not isinstance(to_node, CollectInvocation):
+        if len(input_edges) > 0 and not isinstance(to_node, FanInInvocation):
             raise InvalidEdgeError(f"Edge already exists ({edge})")
 
         # Validate that no cycles would be created
@@ -547,21 +575,27 @@ class Graph(BaseModel):
                 raise InvalidEdgeError(f"Iterator output type does not match iterator input type ({edge}): {err}")
 
         # Validate if collector input type matches output type (if this edge results in both being set)
-        if isinstance(to_node, CollectInvocation) and edge.destination.field == ITEM_FIELD:
-            err = self._is_collector_connection_valid(edge.destination.node_id, new_input=edge.source)
+        if isinstance(to_node, FanInInvocation) and edge.destination.field == to_node.fanin_input_field():
+            err = self._is_fanin_connection_valid(
+                edge.destination.node_id,
+                to_node.fanin_input_field(),
+                to_node.fanin_output_field(),
+                new_input=edge.source,
+            )
             if err is not None:
                 raise InvalidEdgeError(f"Collector output type does not match collector input type ({edge}): {err}")
 
         # Validate if collector output type matches input type (if this edge results in both being set) - skip if the destination field is not Any or list[Any]
-        if (
-            isinstance(from_node, CollectInvocation)
-            and edge.source.field == COLLECTION_FIELD
-            and not self._is_destination_field_list_of_Any(edge)
-            and not self._is_destination_field_Any(edge)
-        ):
-            err = self._is_collector_connection_valid(edge.source.node_id, new_output=edge.destination)
-            if err is not None:
-                raise InvalidEdgeError(f"Collector input type does not match collector output type ({edge}): {err}")
+        if isinstance(from_node, FanInInvocation) and edge.source.field == from_node.fanin_output_field():
+            if not self._is_destination_field_list_of_Any(edge) and not self._is_destination_field_Any(edge):
+                err = self._is_fanin_connection_valid(
+                    edge.source.node_id,
+                    from_node.fanin_input_field(),
+                    from_node.fanin_output_field(),
+                    new_output=edge.destination,
+                )
+                if err is not None:
+                    raise InvalidEdgeError(f"Collector input type does not match collector output type ({edge}): {err}")
 
     def has_node(self, node_id: str) -> bool:
         """Determines whether or not a node exists in the graph."""
@@ -676,8 +710,8 @@ class Graph(BaseModel):
             return "Iterator outputs must connect to an input with a matching type"
 
         # Collector input type must match all iterator output types
-        if isinstance(input_node, CollectInvocation):
-            collector_inputs = self._get_input_edges(input_node.id, ITEM_FIELD)
+        if isinstance(input_node, FanInInvocation):
+            collector_inputs = self._get_input_edges(input_node.id, input_node.fanin_input_field())
             if len(collector_inputs) == 0:
                 return "Iterator input collector must have at least one item input edge"
 
@@ -697,14 +731,16 @@ class Graph(BaseModel):
 
         return None
 
-    def _is_collector_connection_valid(
+    def _is_fanin_connection_valid(
         self,
         node_id: str,
+        input_field: str,
+        output_field: str,
         new_input: Optional[EdgeConnection] = None,
         new_output: Optional[EdgeConnection] = None,
     ) -> str | None:
-        inputs = [e.source for e in self._get_input_edges(node_id, ITEM_FIELD)]
-        outputs = [e.destination for e in self._get_output_edges(node_id, COLLECTION_FIELD)]
+        inputs = [e.source for e in self._get_input_edges(node_id, input_field)]
+        outputs = [e.destination for e in self._get_output_edges(node_id, output_field)]
 
         if new_input is not None:
             inputs.append(new_input)
@@ -1095,7 +1131,7 @@ class GraphExecutionState(BaseModel):
     def _iterator_graph(self, base: Optional[nx.DiGraph] = None) -> nx.DiGraph:
         """Gets a DiGraph with edges to collectors removed so an ancestor search produces all active iterators for any node"""
         g = base.copy() if base is not None else self.graph.nx_graph_flat()
-        collectors = (n for n in self.graph.nodes if isinstance(self.graph.get_node(n), CollectInvocation))
+        collectors = (n for n in self.graph.nodes if isinstance(self.graph.get_node(n), FanInInvocation))
         for c in collectors:
             g.remove_edges_from(list(g.in_edges(c)))
         return g
@@ -1143,7 +1179,7 @@ class GraphExecutionState(BaseModel):
         # Create execution nodes
         next_node = self.graph.get_node(next_node_id)
         new_node_ids = []
-        if isinstance(next_node, CollectInvocation):
+        if isinstance(next_node, FanInInvocation):
             # Collapse all iterator input mappings and create a single execution node for the collect invocation
             all_iteration_mappings = []
             for source_node_id in next_node_parents:
@@ -1253,12 +1289,8 @@ class GraphExecutionState(BaseModel):
         input_edges = self.execution_graph._get_input_edges(node.id)
         # Inputs must be deep-copied, else if a node mutates the object, other nodes that get the same input
         # will see the mutation.
-        if isinstance(node, CollectInvocation):
-            item_edges = [e for e in input_edges if e.destination.field == ITEM_FIELD]
-            item_edges.sort(key=lambda e: (self._get_iteration_path(e.source.node_id), e.source.node_id))
-
-            output_collection = [copydeep(getattr(self.results[e.source.node_id], e.source.field)) for e in item_edges]
-            node.collection = output_collection
+        if isinstance(node, FanInInvocation):
+            node.prepare_fanin_inputs(self)
         else:
             for edge in input_edges:
                 setattr(
