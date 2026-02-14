@@ -215,6 +215,16 @@ class ImageService(ImageServiceABC):
         is_intermediate: Optional[bool] = None,
         board_id: Optional[str] = None,
         search_term: Optional[str] = None,
+        file_name_term: Optional[str] = None,
+        metadata_term: Optional[str] = None,
+        width_min: Optional[int] = None,
+        width_max: Optional[int] = None,
+        width_exact: Optional[int] = None,
+        height_min: Optional[int] = None,
+        height_max: Optional[int] = None,
+        height_exact: Optional[int] = None,
+        board_ids: Optional[list[str]] = None,
+        starred_mode: Optional[str] = None,
     ) -> OffsetPaginatedResults[ImageDTO]:
         try:
             results = self.__invoker.services.image_records.get_many(
@@ -227,6 +237,16 @@ class ImageService(ImageServiceABC):
                 is_intermediate,
                 board_id,
                 search_term,
+                file_name_term,
+                metadata_term,
+                width_min,
+                width_max,
+                width_exact,
+                height_min,
+                height_max,
+                height_exact,
+                board_ids,
+                starred_mode,
             )
 
             image_dtos = [
@@ -320,6 +340,16 @@ class ImageService(ImageServiceABC):
         is_intermediate: Optional[bool] = None,
         board_id: Optional[str] = None,
         search_term: Optional[str] = None,
+        file_name_term: Optional[str] = None,
+        metadata_term: Optional[str] = None,
+        width_min: Optional[int] = None,
+        width_max: Optional[int] = None,
+        width_exact: Optional[int] = None,
+        height_min: Optional[int] = None,
+        height_max: Optional[int] = None,
+        height_exact: Optional[int] = None,
+        board_ids: Optional[list[str]] = None,
+        starred_mode: Optional[str] = None,
     ) -> ImageNamesResult:
         try:
             return self.__invoker.services.image_records.get_image_names(
@@ -330,6 +360,16 @@ class ImageService(ImageServiceABC):
                 is_intermediate=is_intermediate,
                 board_id=board_id,
                 search_term=search_term,
+                file_name_term=file_name_term,
+                metadata_term=metadata_term,
+                width_min=width_min,
+                width_max=width_max,
+                width_exact=width_exact,
+                height_min=height_min,
+                height_max=height_max,
+                height_exact=height_exact,
+                board_ids=board_ids,
+                starred_mode=starred_mode,
             )
         except Exception as e:
             self.__invoker.services.logger.error("Problem getting image names")

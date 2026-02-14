@@ -125,6 +125,16 @@ class ImageServiceABC(ABC):
         is_intermediate: Optional[bool] = None,
         board_id: Optional[str] = None,
         search_term: Optional[str] = None,
+        file_name_term: Optional[str] = None,
+        metadata_term: Optional[str] = None,
+        width_min: Optional[int] = None,
+        width_max: Optional[int] = None,
+        width_exact: Optional[int] = None,
+        height_min: Optional[int] = None,
+        height_max: Optional[int] = None,
+        height_exact: Optional[int] = None,
+        board_ids: Optional[list[str]] = None,
+        starred_mode: Optional[str] = None,
     ) -> OffsetPaginatedResults[ImageDTO]:
         """Gets a paginated list of image DTOs with starred images first when starred_first=True."""
         pass
@@ -159,6 +169,16 @@ class ImageServiceABC(ABC):
         is_intermediate: Optional[bool] = None,
         board_id: Optional[str] = None,
         search_term: Optional[str] = None,
+        file_name_term: Optional[str] = None,
+        metadata_term: Optional[str] = None,
+        width_min: Optional[int] = None,
+        width_max: Optional[int] = None,
+        width_exact: Optional[int] = None,
+        height_min: Optional[int] = None,
+        height_max: Optional[int] = None,
+        height_exact: Optional[int] = None,
+        board_ids: Optional[list[str]] = None,
+        starred_mode: Optional[str] = None,
     ) -> ImageNamesResult:
         """Gets ordered list of image names with metadata for optimistic updates."""
         pass
