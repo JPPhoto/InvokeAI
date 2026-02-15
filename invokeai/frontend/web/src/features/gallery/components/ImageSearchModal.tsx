@@ -20,7 +20,6 @@ import {
   Text,
 } from '@invoke-ai/ui-library';
 import { EMPTY_ARRAY } from 'app/store/constants';
-import { useAppSelector } from 'app/store/storeHooks';
 import type { SingleValue } from 'chakra-react-select';
 import { useRegisteredHotkeys } from 'features/system/components/HotkeysModal/useHotkeyData';
 import type { ChangeEvent, UIEvent } from 'react';
@@ -84,7 +83,6 @@ export const ImageSearchModal = memo(() => {
 
   const resultsRef = useRef<HTMLDivElement | null>(null);
 
-  const selectedBoardId = useAppSelector((s) => s.gallery.selectedBoardId);
   const { data: boards } = useListAllBoardsQuery({ include_archived: true });
 
   const openModal = useCallback(() => setIsOpen(true), []);
@@ -274,12 +272,7 @@ export const ImageSearchModal = memo(() => {
   const effectiveHeightExact = formState.height_enabled && formState.height_mode === 'eq' ? formState.height_exact : '';
 
   const effectiveFormState = useMemo(() => {
-    const boardIds =
-      formState.board_ids.length > 0
-        ? formState.board_ids
-        : selectedBoardId && selectedBoardId !== 'none'
-          ? [selectedBoardId]
-          : EMPTY_ARRAY;
+    const boardIds = formState.board_ids.length > 0 ? formState.board_ids : EMPTY_ARRAY;
 
     return {
       board_ids: boardIds,
@@ -312,7 +305,6 @@ export const ImageSearchModal = memo(() => {
     formState.metadata_enabled,
     formState.starred_mode,
     formState.width_enabled,
-    selectedBoardId,
   ]);
 
   const [debouncedEffectiveFormState] = useDebounce(effectiveFormState, SEARCH_DEBOUNCE_MS);
