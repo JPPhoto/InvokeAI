@@ -9,6 +9,9 @@ iterator patterns, tracks readiness via indegree (the number of incoming edges t
 executes nodes in class-grouped batches. In normal execution, runtime expansion happens in a separate execution graph
 instead of mutating the source graph.
 
+Some invocation types may also opt into `reevaluate_on_iteration`. Those nodes are materialized once per iterator
+context when they are consumed from inside iterator-expanded work, instead of being prepared once and reused globally.
+
 ## 2) Major Data Types
 
 ### EdgeConnection
@@ -102,12 +105,17 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
 - `prepared_source_mapping: dict[str, str]` - exec id -> source id.
 - `source_prepared_mapping: dict[str, set[str]]` - source id -> exec ids.
 - `indegree: dict[str, int]` - unmet inputs per exec node.
-- Prepared exec metadata caches:
+- `prepared_exec_metadata: dict[str, _PreparedExecNodeMetadata]` - serialized runtime metadata for prepared exec nodes.
+- Prepared exec metadata includes:
   - source node id
+  - iterator context for reevaluated exec nodes
   - iteration path
   - runtime state such as pending, ready, executed, or skipped
 - **Ready queues grouped by class** (private attrs): `_ready_queues: dict[class_name, deque[str]]`,
   `_active_class: Optional[str]`. Optional `ready_order: list[str]` to prioritize classes.
+
+`GraphExecutionState.model_post_init()` rebuilds private runtime helpers and ready queues from the serialized public
+state. This is what makes resumed or deserialized sessions continue correctly after prepared exec nodes already exist.
 
 ### 4.2 Core methods
 
@@ -121,7 +129,7 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
 `GraphExecutionState` now delegates most runtime behavior to internal helpers:
 
 - `_PreparedExecRegistry` Owns the relationship between source graph nodes and prepared execution graph nodes, plus
-  cached metadata such as iteration path and runtime state.
+  metadata such as iterator context, iteration path, and runtime state.
 - `_ExecutionMaterializer` Expands source graph nodes into concrete execution graph nodes when the scheduler runs out of
   ready work.
 - `_ExecutionScheduler` Owns indegree transitions, ready queues, class batching, and downstream release on completion.
@@ -137,12 +145,15 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
 
   1. has not been prepared,
   1. if it is an iterator, *its inputs are already executed*,
-  1. it has *no unexecuted iterator ancestors*.
+  1. it has *no unexecuted iterator ancestors*,
+  1. if it is marked `reevaluate_on_iteration`, it is not eagerly prepared outside iterator scope when one of its
+     consumers will require per-iteration reevaluation.
 
 - If the node is a **CollectInvocation**: collapse all prepared parents into one mapping and create **one** exec node.
 
 - Otherwise: compute all combinations of prepared iterator ancestors. For each combination, choose the prepared parent
-  for each upstream by matching iterator ancestry, then create **one** exec node.
+  for each upstream by matching iterator ancestry. If an upstream is a reevaluation root, materialize or reuse one
+  prepared exec node for that exact iterator context. Then create **one** exec node for the current combination.
 
 - For each new exec node:
 
@@ -151,6 +162,15 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
   - Set `indegree = number of unmet inputs` (i.e., parents not yet executed).
   - Try to resolve any `If`-specific scheduling state.
   - If the node is ready and not deferred by an unresolved `If`, enqueue it into its class queue.
+
+#### 4.4.1 Reevaluation roots
+
+- `reevaluate_on_iteration` is only meaningful for source nodes that sit outside iterator ancestry but feed
+  iterator-expanded work.
+- A node already inside iterator scope is expanded by the normal iterator machinery and is not reevaluated again for
+  deeper iterator contexts.
+- Reevaluated exec nodes are keyed by iterator context, so the same reevaluated parent is reused by multiple consumers
+  within one iteration path and rematerialized only when the iterator context changes.
 
 ### 4.5 Readiness and batching
 
@@ -181,6 +201,9 @@ Run `C` -> `D:0` -> enqueue `D`. Run `D` -> done.
 - For **IfInvocation**: hydrate only `condition` and the selected branch input.
 - For all others: deep-copy each incoming edge's value into the destination field. This prevents cross-node mutation
   through shared references.
+
+For reevaluated exec nodes, iteration-path lookup may come from the stored iterator context instead of pure source-graph
+ancestry. This keeps scheduling and collector ordering stable for nodes materialized per iterator context.
 
 ### 4.7 Lazy `If` semantics
 
@@ -218,6 +241,7 @@ In normal execution, all runtime expansion occurs in `execution_graph` with trac
 - `execution_graph` remains a DAG.
 - Nodes are enqueued only when `indegree == 0` and they are not deferred by an unresolved `If`.
 - `results` and `errors` are keyed by **exec node id**.
+- Reevaluated exec nodes are unique per source node and iterator context.
 - Collectors aggregate `item` inputs and may also merge incoming `collection` inputs during runtime hydration.
 - Branch-exclusive nodes behind an unselected `If` branch are skipped, not failed.
 

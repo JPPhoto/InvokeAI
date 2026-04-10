@@ -2,6 +2,7 @@ from typing import Optional
 from unittest.mock import Mock
 
 import pytest
+from pydantic import TypeAdapter
 
 from invokeai.app.invocations.baseinvocation import (
     BaseInvocation,
@@ -11,7 +12,7 @@ from invokeai.app.invocations.baseinvocation import (
     invocation_output,
 )
 from invokeai.app.invocations.collections import RangeInvocation
-from invokeai.app.invocations.fields import OutputField
+from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.logic import IfInvocation, IfInvocationOutput
 from invokeai.app.invocations.math import AddInvocation, MultiplyInvocation
 from invokeai.app.invocations.primitives import BooleanCollectionInvocation, BooleanInvocation
@@ -40,6 +41,35 @@ class TickOutput(BaseInvocationOutput):
 @invocation("tick", version="1.0.0", reevaluate_on_iteration=True)
 class TickInvocation(BaseInvocation):
     _counter = 0  # shared across instances
+
+    def invoke(self, context: InvocationContext) -> TickOutput:
+        type(self)._counter += 1
+        return TickOutput(value=type(self)._counter)
+
+
+@invocation("plain_tick", version="1.0.0")
+class PlainTickInvocation(BaseInvocation):
+    _counter = 0  # shared across instances
+
+    def invoke(self, context: InvocationContext) -> TickOutput:
+        type(self)._counter += 1
+        return TickOutput(value=type(self)._counter)
+
+
+@invocation("scoped_tick", version="1.0.0", reevaluate_on_iteration=True)
+class ScopedTickInvocation(BaseInvocation):
+    value: int = InputField(default=0)
+
+    _counter = 0  # shared across instances
+
+    def invoke(self, context: InvocationContext) -> TickOutput:
+        type(self)._counter += 1
+        return TickOutput(value=type(self)._counter)
+
+
+@invocation("offset_tick", version="1.0.0", reevaluate_on_iteration=True)
+class OffsetTickInvocation(BaseInvocation):
+    _counter = 100  # shared across instances
 
     def invoke(self, context: InvocationContext) -> TickOutput:
         type(self)._counter += 1
@@ -817,4 +847,512 @@ def test_upstream_node_can_be_reevaluated_per_iteration():
     # Expect tick to be reevaluated per iteration, yielding tick values 1..4 aligned with x=1..4:
     # (1+1), (2+2), (3+3), (4+4)
     assert add_values == [2, 4, 6, 8]
+    assert TickInvocation._counter == 4
+
+
+def test_reevaluated_upstream_node_is_reused_by_multiple_consumers_in_same_iteration():
+    TickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="c", start=1, stop=5, step=1))  # 1,2,3,4
+    graph.add_node(IterateInvocation(id="iter"))
+    graph.add_node(TickInvocation(id="tick"))
+    graph.add_node(AddInvocation(id="add", b=0))
+    graph.add_node(MultiplyInvocation(id="mul", b=1))
+
+    graph.add_edge(create_edge("c", "collection", "iter", "collection"))
+    graph.add_edge(create_edge("tick", "value", "add", "a"))
+    graph.add_edge(create_edge("iter", "item", "add", "b"))
+    graph.add_edge(create_edge("tick", "value", "mul", "a"))
+    graph.add_edge(create_edge("iter", "item", "mul", "b"))
+
+    g = GraphExecutionState(graph=graph)
+
+    add_values: list[int] = []
+    mul_values: list[int] = []
+    while True:
+        n, o = invoke_next(g)
+        if n is None:
+            break
+        source_id = g.prepared_source_mapping[n.id]
+        if source_id == "add":
+            add_values.append(o.value)
+        if source_id == "mul":
+            mul_values.append(o.value)
+
+    assert add_values == [2, 4, 6, 8]
+    assert mul_values == [1, 4, 9, 16]
+    assert TickInvocation._counter == 4
+
+
+def test_non_reevaluated_upstream_node_is_reused_across_iterations():
+    PlainTickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="c", start=1, stop=5, step=1))  # 1,2,3,4
+    graph.add_node(IterateInvocation(id="iter"))
+    graph.add_node(PlainTickInvocation(id="tick"))
+    graph.add_node(AddInvocation(id="add", b=0))
+
+    graph.add_edge(create_edge("c", "collection", "iter", "collection"))
+    graph.add_edge(create_edge("tick", "value", "add", "a"))
+    graph.add_edge(create_edge("iter", "item", "add", "b"))
+
+    g = GraphExecutionState(graph=graph)
+
+    add_values: list[int] = []
+    while True:
+        n, o = invoke_next(g)
+        if n is None:
+            break
+        if g.prepared_source_mapping[n.id] == "add":
+            add_values.append(o.value)
+
+    assert add_values == [2, 3, 4, 5]
+    assert PlainTickInvocation._counter == 1
+
+
+def test_reevaluated_upstream_node_runs_once_per_nested_iteration_path():
+    TickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="outer_range", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="outer_iter"))
+    graph.add_node(MultiplyInvocation(id="mul10", b=10))
+    graph.add_node(AddInvocation(id="stop_plus2", b=2))
+    graph.add_node(RangeInvocation(id="inner_range", start=0, stop=1, step=1))
+    graph.add_node(IterateInvocation(id="inner_iter"))
+    graph.add_node(TickInvocation(id="tick"))
+    graph.add_node(AddInvocation(id="add", b=0))
+
+    graph.add_edge(create_edge("outer_range", "collection", "outer_iter", "collection"))
+    graph.add_edge(create_edge("outer_iter", "item", "mul10", "a"))
+    graph.add_edge(create_edge("mul10", "value", "stop_plus2", "a"))
+    graph.add_edge(create_edge("mul10", "value", "inner_range", "start"))
+    graph.add_edge(create_edge("stop_plus2", "value", "inner_range", "stop"))
+    graph.add_edge(create_edge("inner_range", "collection", "inner_iter", "collection"))
+    graph.add_edge(create_edge("tick", "value", "add", "a"))
+    graph.add_edge(create_edge("inner_iter", "item", "add", "b"))
+
+    g = GraphExecutionState(graph=graph)
+
+    add_values: list[int] = []
+    while True:
+        n, o = invoke_next(g)
+        if n is None:
+            break
+        if g.prepared_source_mapping[n.id] == "add":
+            add_values.append(o.value)
+
+    assert add_values == [1, 3, 13, 15]
+    assert TickInvocation._counter == 4
+
+
+def test_reevaluated_upstream_node_is_not_materialized_for_skipped_if_branch_iterations():
+    TickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(BooleanCollectionInvocation(id="conditions", collection=[True, False, True]))
+    graph.add_node(IterateInvocation(id="condition_iter"))
+    graph.add_node(TickInvocation(id="tick"))
+    graph.add_node(AnyTypeTestInvocation(id="false_branch"))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_node(CollectInvocation(id="collect"))
+
+    graph.add_edge(create_edge("conditions", "collection", "condition_iter", "collection"))
+    graph.add_edge(create_edge("condition_iter", "item", "if", "condition"))
+    graph.add_edge(create_edge("tick", "value", "if", "true_input"))
+    graph.add_edge(create_edge("condition_iter", "item", "false_branch", "value"))
+    graph.add_edge(create_edge("false_branch", "value", "if", "false_input"))
+    graph.add_edge(create_edge("if", "value", "collect", "item"))
+
+    g = GraphExecutionState(graph=graph)
+    executed_source_ids = execute_all_nodes(g)
+
+    prepared_collect_id = next(iter(g.source_prepared_mapping["collect"]))
+    assert g.results[prepared_collect_id].collection == [1, False, 2]
+    assert TickInvocation._counter == 2
+    assert executed_source_ids.count("tick") == 2
+    assert executed_source_ids.count("false_branch") == 1
+
+
+def test_reevaluated_values_preserve_iteration_order_when_collected():
+    TickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="c", start=1, stop=5, step=1))  # 1,2,3,4
+    graph.add_node(IterateInvocation(id="iter"))
+    graph.add_node(TickInvocation(id="tick"))
+    graph.add_node(AddInvocation(id="add", b=0))
+    graph.add_node(CollectInvocation(id="collect"))
+
+    graph.add_edge(create_edge("c", "collection", "iter", "collection"))
+    graph.add_edge(create_edge("tick", "value", "add", "a"))
+    graph.add_edge(create_edge("iter", "item", "add", "b"))
+    graph.add_edge(create_edge("add", "value", "collect", "item"))
+
+    g = GraphExecutionState(graph=graph)
+    execute_all_nodes(g)
+
+    prepared_collect_id = next(iter(g.source_prepared_mapping["collect"]))
+    assert g.results[prepared_collect_id].collection == [2, 4, 6, 8]
+    assert TickInvocation._counter == 4
+
+
+def test_reevaluated_upstream_node_does_not_execute_when_iterator_has_no_iterations():
+    TickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(BooleanCollectionInvocation(id="c", collection=[]))
+    graph.add_node(IterateInvocation(id="iter"))
+    graph.add_node(TickInvocation(id="tick"))
+    graph.add_node(AddInvocation(id="add", b=0))
+
+    graph.add_edge(create_edge("c", "collection", "iter", "collection"))
+    graph.add_edge(create_edge("tick", "value", "add", "a"))
+    graph.add_edge(create_edge("iter", "item", "add", "b"))
+
+    g = GraphExecutionState(graph=graph)
+    executed_source_ids = execute_all_nodes(g)
+
+    assert executed_source_ids == ["c"]
+    assert "tick" not in executed_source_ids
+    assert "add" not in executed_source_ids
+    assert TickInvocation._counter == 0
+
+
+def test_reevaluated_node_without_iterator_consumers_executes_once():
+    TickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(TickInvocation(id="tick"))
+    graph.add_node(AddInvocation(id="add", b=10))
+
+    graph.add_edge(create_edge("tick", "value", "add", "a"))
+
+    g = GraphExecutionState(graph=graph)
+    executed_source_ids = execute_all_nodes(g)
+
+    prepared_add_id = next(iter(g.source_prepared_mapping["add"]))
+    assert g.results[prepared_add_id].value == 11
+    assert executed_source_ids == ["tick", "add"]
+    assert TickInvocation._counter == 1
+
+
+def test_reevaluated_node_supports_mixed_iterator_and_non_iterator_consumers():
+    TickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="c", start=1, stop=5, step=1))  # 1,2,3,4
+    graph.add_node(IterateInvocation(id="iter"))
+    graph.add_node(TickInvocation(id="tick"))
+    graph.add_node(AddInvocation(id="iter_add", b=0))
+    graph.add_node(AddInvocation(id="outside_add", b=100))
+
+    graph.add_edge(create_edge("c", "collection", "iter", "collection"))
+    graph.add_edge(create_edge("tick", "value", "iter_add", "a"))
+    graph.add_edge(create_edge("iter", "item", "iter_add", "b"))
+    graph.add_edge(create_edge("tick", "value", "outside_add", "a"))
+
+    g = GraphExecutionState(graph=graph)
+    executed_source_ids = execute_all_nodes(g)
+
+    iter_add_ids = g.source_prepared_mapping["iter_add"]
+    iter_values = sorted(g.results[node_id].value for node_id in iter_add_ids)
+    outside_add_id = next(iter(g.source_prepared_mapping["outside_add"]))
+
+    assert len(iter_add_ids) == 4
+    assert executed_source_ids.count("tick") == 5
+    assert executed_source_ids.count("outside_add") == 1
+    assert TickInvocation._counter == 5
+    assert len(set(iter_values)) == 4
+    assert g.results[outside_add_id].value >= 101
+
+
+def test_reevaluated_node_inside_outer_iterator_scope_is_not_reevaluated_per_inner_iteration():
+    ScopedTickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="outer_range", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="outer_iter"))
+    graph.add_node(MultiplyInvocation(id="mul10", b=10))
+    graph.add_node(AddInvocation(id="stop_plus2", b=2))
+    graph.add_node(RangeInvocation(id="inner_range", start=0, stop=1, step=1))
+    graph.add_node(IterateInvocation(id="inner_iter"))
+    graph.add_node(ScopedTickInvocation(id="tick"))
+    graph.add_node(AddInvocation(id="add", b=0))
+
+    graph.add_edge(create_edge("outer_range", "collection", "outer_iter", "collection"))
+    graph.add_edge(create_edge("outer_iter", "item", "mul10", "a"))
+    graph.add_edge(create_edge("mul10", "value", "stop_plus2", "a"))
+    graph.add_edge(create_edge("mul10", "value", "inner_range", "start"))
+    graph.add_edge(create_edge("stop_plus2", "value", "inner_range", "stop"))
+    graph.add_edge(create_edge("inner_range", "collection", "inner_iter", "collection"))
+    graph.add_edge(create_edge("outer_iter", "item", "tick", "value"))
+    graph.add_edge(create_edge("tick", "value", "add", "a"))
+    graph.add_edge(create_edge("inner_iter", "item", "add", "b"))
+
+    g = GraphExecutionState(graph=graph)
+
+    add_values: list[int] = []
+    while True:
+        n, o = invoke_next(g)
+        if n is None:
+            break
+        if g.prepared_source_mapping[n.id] == "add":
+            add_values.append(o.value)
+
+    assert add_values == [1, 2, 12, 13]
+    assert ScopedTickInvocation._counter == 2
+
+
+def test_multiple_reevaluated_parents_align_to_same_iteration_contexts():
+    TickInvocation._counter = 0
+    OffsetTickInvocation._counter = 100
+
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="c", start=1, stop=5, step=1))  # 1,2,3,4
+    graph.add_node(IterateInvocation(id="iter"))
+    graph.add_node(TickInvocation(id="tick_a"))
+    graph.add_node(OffsetTickInvocation(id="tick_b"))
+    graph.add_node(AddInvocation(id="sum_a", b=0))
+    graph.add_node(AddInvocation(id="sum_b", b=0))
+
+    graph.add_edge(create_edge("c", "collection", "iter", "collection"))
+    graph.add_edge(create_edge("tick_a", "value", "sum_a", "a"))
+    graph.add_edge(create_edge("iter", "item", "sum_a", "b"))
+    graph.add_edge(create_edge("tick_b", "value", "sum_b", "a"))
+    graph.add_edge(create_edge("sum_a", "value", "sum_b", "b"))
+
+    g = GraphExecutionState(graph=graph)
+
+    values: list[int] = []
+    while True:
+        n, o = invoke_next(g)
+        if n is None:
+            break
+        if g.prepared_source_mapping[n.id] == "sum_b":
+            values.append(o.value)
+
+    assert values == [103, 106, 109, 112]
+    assert TickInvocation._counter == 4
+    assert OffsetTickInvocation._counter == 104
+
+
+def test_reevaluated_root_node_materializes_once_per_independent_iterator_cross_product():
+    TickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="outer_range", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="outer_iter"))
+    graph.add_node(RangeInvocation(id="inner_range_source", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="inner_iter"))
+    graph.add_node(TickInvocation(id="tick"))
+    graph.add_node(AddInvocation(id="sum_ab"))
+    graph.add_node(AddInvocation(id="sum_tick", b=0))
+
+    graph.add_edge(create_edge("outer_range", "collection", "outer_iter", "collection"))
+    graph.add_edge(create_edge("inner_range_source", "collection", "inner_iter", "collection"))
+    graph.add_edge(create_edge("outer_iter", "item", "sum_ab", "a"))
+    graph.add_edge(create_edge("inner_iter", "item", "sum_ab", "b"))
+    graph.add_edge(create_edge("tick", "value", "sum_tick", "a"))
+    graph.add_edge(create_edge("sum_ab", "value", "sum_tick", "b"))
+
+    g = GraphExecutionState(graph=graph)
+
+    values: list[int] = []
+    while True:
+        n, o = invoke_next(g)
+        if n is None:
+            break
+        if g.prepared_source_mapping[n.id] == "sum_tick":
+            values.append(o.value)
+
+    assert values == [1, 3, 4, 6]
+    assert TickInvocation._counter == 4
+
+
+def test_reevaluated_execution_state_can_resume_after_serialization():
+    TickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="c", start=1, stop=5, step=1))
+    graph.add_node(IterateInvocation(id="iter"))
+    graph.add_node(TickInvocation(id="tick"))
+    graph.add_node(AddInvocation(id="add", b=0))
+    graph.add_node(CollectInvocation(id="collect"))
+
+    graph.add_edge(create_edge("c", "collection", "iter", "collection"))
+    graph.add_edge(create_edge("tick", "value", "add", "a"))
+    graph.add_edge(create_edge("iter", "item", "add", "b"))
+    graph.add_edge(create_edge("add", "value", "collect", "item"))
+
+    g = GraphExecutionState(graph=graph)
+
+    for _ in range(7):
+        invoke_next(g)
+
+    validator = TypeAdapter(GraphExecutionState)
+    resumed = validator.validate_json(g.model_dump_json(warnings=False, exclude_none=True), strict=False)
+
+    execute_all_nodes(resumed)
+
+    prepared_collect_id = next(iter(resumed.source_prepared_mapping["collect"]))
+    assert resumed.results[prepared_collect_id].collection == [2, 4, 6, 8]
+    assert TickInvocation._counter == 4
+
+
+def test_fresh_session_cloned_from_source_graph_preserves_reevaluation_behavior():
+    TickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="c", start=1, stop=5, step=1))
+    graph.add_node(IterateInvocation(id="iter"))
+    graph.add_node(TickInvocation(id="tick"))
+    graph.add_node(AddInvocation(id="add", b=0))
+
+    graph.add_edge(create_edge("c", "collection", "iter", "collection"))
+    graph.add_edge(create_edge("tick", "value", "add", "a"))
+    graph.add_edge(create_edge("iter", "item", "add", "b"))
+
+    original = GraphExecutionState(graph=graph)
+    invoke_next(original)
+    invoke_next(original)
+
+    cloned = GraphExecutionState(graph=original.graph)
+
+    add_values: list[int] = []
+    while True:
+        n, o = invoke_next(cloned)
+        if n is None:
+            break
+        if cloned.prepared_source_mapping[n.id] == "add":
+            add_values.append(o.value)
+
+    assert add_values == [2, 4, 6, 8]
+    assert TickInvocation._counter == 4
+
+
+def test_mixed_reevaluated_and_outer_scoped_parents_align_under_nested_iterators():
+    TickInvocation._counter = 0
+    ScopedTickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="outer_range", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="outer_iter"))
+    graph.add_node(MultiplyInvocation(id="mul10", b=10))
+    graph.add_node(AddInvocation(id="stop_plus2", b=2))
+    graph.add_node(RangeInvocation(id="inner_range", start=0, stop=1, step=1))
+    graph.add_node(IterateInvocation(id="inner_iter"))
+    graph.add_node(TickInvocation(id="root_tick"))
+    graph.add_node(ScopedTickInvocation(id="scoped_tick"))
+    graph.add_node(AddInvocation(id="sum_ticks", b=0))
+    graph.add_node(AddInvocation(id="sum_with_inner", b=0))
+
+    graph.add_edge(create_edge("outer_range", "collection", "outer_iter", "collection"))
+    graph.add_edge(create_edge("outer_iter", "item", "mul10", "a"))
+    graph.add_edge(create_edge("mul10", "value", "stop_plus2", "a"))
+    graph.add_edge(create_edge("mul10", "value", "inner_range", "start"))
+    graph.add_edge(create_edge("stop_plus2", "value", "inner_range", "stop"))
+    graph.add_edge(create_edge("inner_range", "collection", "inner_iter", "collection"))
+    graph.add_edge(create_edge("outer_iter", "item", "scoped_tick", "value"))
+    graph.add_edge(create_edge("root_tick", "value", "sum_ticks", "a"))
+    graph.add_edge(create_edge("scoped_tick", "value", "sum_ticks", "b"))
+    graph.add_edge(create_edge("sum_ticks", "value", "sum_with_inner", "a"))
+    graph.add_edge(create_edge("inner_iter", "item", "sum_with_inner", "b"))
+
+    g = GraphExecutionState(graph=graph)
+
+    values: list[int] = []
+    while True:
+        n, o = invoke_next(g)
+        if n is None:
+            break
+        if g.prepared_source_mapping[n.id] == "sum_with_inner":
+            values.append(o.value)
+
+    assert values == [2, 3, 14, 15]
+    assert TickInvocation._counter == 2
+    assert ScopedTickInvocation._counter == 2
+
+
+def test_nested_ifs_do_not_materialize_reevaluated_true_branch_for_skipped_iterations():
+    TickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(BooleanCollectionInvocation(id="conditions", collection=[True, False, False]))
+    graph.add_node(IterateInvocation(id="condition_iter"))
+    graph.add_node(TickInvocation(id="tick"))
+    graph.add_node(AnyTypeTestInvocation(id="inner_false", value="inner_false"))
+    graph.add_node(AnyTypeTestInvocation(id="outer_false", value="outer_false"))
+    graph.add_node(IfInvocation(id="inner_if"))
+    graph.add_node(IfInvocation(id="outer_if"))
+    graph.add_node(CollectInvocation(id="collect"))
+
+    graph.add_edge(create_edge("conditions", "collection", "condition_iter", "collection"))
+    graph.add_edge(create_edge("condition_iter", "item", "outer_if", "condition"))
+    graph.add_edge(create_edge("condition_iter", "item", "inner_if", "condition"))
+    graph.add_edge(create_edge("tick", "value", "inner_if", "true_input"))
+    graph.add_edge(create_edge("inner_false", "value", "inner_if", "false_input"))
+    graph.add_edge(create_edge("outer_false", "value", "outer_if", "false_input"))
+    graph.add_edge(create_edge("inner_if", "value", "outer_if", "true_input"))
+    graph.add_edge(create_edge("outer_if", "value", "collect", "item"))
+
+    g = GraphExecutionState(graph=graph)
+    executed_source_ids = execute_all_nodes(g)
+
+    assert TickInvocation._counter == 1
+    assert executed_source_ids.count("inner_if") == 1
+
+
+def test_branch_local_collector_is_not_prepared_when_if_branch_is_never_selected():
+    TickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=False))
+    graph.add_node(TickInvocation(id="tick"))
+    graph.add_node(CollectInvocation(id="true_collect"))
+    graph.add_node(AnyTypeTestInvocation(id="false_value", value="fallback"))
+    graph.add_node(IfInvocation(id="if"))
+
+    graph.add_edge(create_edge("condition", "value", "if", "condition"))
+    graph.add_edge(create_edge("tick", "value", "true_collect", "item"))
+    graph.add_edge(create_edge("true_collect", "collection", "if", "true_input"))
+    graph.add_edge(create_edge("false_value", "value", "if", "false_input"))
+
+    g = GraphExecutionState(graph=graph)
+    executed_source_ids = execute_all_nodes(g)
+
+    assert "tick" not in executed_source_ids
+    assert "true_collect" not in executed_source_ids
+    assert "true_collect" not in g.results
+    assert TickInvocation._counter == 0
+
+
+def test_reevaluated_source_completion_bookkeeping_is_stable():
+    TickInvocation._counter = 0
+
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="c", start=1, stop=5, step=1))
+    graph.add_node(IterateInvocation(id="iter"))
+    graph.add_node(TickInvocation(id="tick"))
+    graph.add_node(AddInvocation(id="add", b=0))
+
+    graph.add_edge(create_edge("c", "collection", "iter", "collection"))
+    graph.add_edge(create_edge("tick", "value", "add", "a"))
+    graph.add_edge(create_edge("iter", "item", "add", "b"))
+
+    g = GraphExecutionState(graph=graph)
+
+    invoke_next(g)
+    invoke_next(g)
+    invoke_next(g)
+
+    assert "tick" not in g.executed
+    assert "tick" not in g.executed_history
+
+    execute_all_nodes(g)
+
+    assert "tick" in g.executed
+    assert g.executed_history.count("tick") == 1
     assert TickInvocation._counter == 4

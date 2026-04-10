@@ -514,8 +514,7 @@ class _ExecutionMaterializer:
         execution_graph: nx.DiGraph,
         iter_context: tuple[str, ...],
     ) -> Optional[str]:
-        parent_node = self._state.graph.get_node(source_parent_id)
-        if getattr(type(parent_node), "reevaluate_on_iteration", False) and iter_context:
+        if self._should_reevaluate_in_context(source_parent_id, graph):
             return self._get_or_create_reevaluated_node(source_parent_id, graph, execution_graph, iter_context)
         return self.get_iteration_node(source_parent_id, graph, execution_graph, list(iter_context))
 
@@ -549,6 +548,17 @@ class _ExecutionMaterializer:
 
         new_ids = self.create_execution_node(source_node_id, iteration_mappings, iter_context=iter_context)
         return next(iter(new_ids), None)
+
+    def _should_reevaluate_in_context(self, source_node_id: str, graph: nx.DiGraph) -> bool:
+        node = self._state.graph.get_node(source_node_id)
+        if not getattr(type(node), "reevaluate_on_iteration", False):
+            return False
+
+        iterator_graph = self.iterator_graph(graph)
+        return not any(
+            isinstance(self._state.graph.get_node(ancestor_id), IterateInvocation)
+            for ancestor_id in nx.ancestors(iterator_graph, source_node_id)
+        )
 
     def _defer_reevaluation(self, node_id: str, graph: nx.DiGraph, iterator_graph: nx.DiGraph) -> bool:
         node = self._state.graph.get_node(node_id)
@@ -610,23 +620,37 @@ class _ExecutionMaterializer:
             iterator_nodes_prepared = [list(self._state.source_prepared_mapping[node_id]) for node_id in iterator_nodes]
             iterator_node_prepared_combinations = list(itertools.product(*iterator_nodes_prepared))
             execution_graph = self._state.execution_graph.nx_graph_flat()
-            prepared_parent_mappings = [
-                [
-                    (
-                        node_id,
-                        self._resolve_parent_prepared_node(node_id, g, execution_graph, tuple(prepared_iterators)),
-                    )
-                    for node_id in next_node_parents
-                ]
-                for prepared_iterators in iterator_node_prepared_combinations
-            ]
-            valid_mappings = [
-                (tuple(prepared_iterators), mapping)
-                for prepared_iterators, mapping in zip(
-                    iterator_node_prepared_combinations, prepared_parent_mappings, strict=False
-                )
-                if all(prepared_id is not None for _, prepared_id in mapping)
-            ]
+
+            valid_mappings: list[tuple[tuple[str, ...], list[tuple[str, str]]]] = []
+            for prepared_iterators in iterator_node_prepared_combinations:
+                iter_context = tuple(prepared_iterators)
+                iteration_mappings: list[tuple[str, str]] = []
+                is_valid = True
+                for node_id in next_node_parents:
+                    if self._should_reevaluate_in_context(node_id, g):
+                        continue
+
+                    prepared_id = self.get_iteration_node(node_id, g, execution_graph, list(prepared_iterators))
+                    if prepared_id is None:
+                        is_valid = False
+                        break
+                    iteration_mappings.append((node_id, prepared_id))
+
+                if not is_valid:
+                    continue
+
+                for node_id in next_node_parents:
+                    if not self._should_reevaluate_in_context(node_id, g):
+                        continue
+
+                    prepared_id = self._get_or_create_reevaluated_node(node_id, g, execution_graph, iter_context)
+                    if prepared_id is None:
+                        is_valid = False
+                        break
+                    iteration_mappings.append((node_id, prepared_id))
+
+                if is_valid:
+                    valid_mappings.append((iter_context, iteration_mappings))
 
             for prepared_iterators, iteration_mappings in valid_mappings:
                 create_results = self.create_execution_node(
@@ -1861,10 +1885,12 @@ class GraphExecutionState(BaseModel):
     # Optional priority; others follow in name order
     ready_order: list[str] = Field(default_factory=list)
     indegree: dict[str, int] = Field(default_factory=dict, description="Remaining unmet input count for exec nodes")
+    prepared_exec_metadata: dict[str, _PreparedExecNodeMetadata] = Field(
+        default_factory=dict, description="Serialized metadata for prepared execution nodes"
+    )
     _iteration_path_cache: dict[str, tuple[int, ...]] = PrivateAttr(default_factory=dict)
     _if_branch_exclusive_sources: dict[str, dict[str, set[str]]] = PrivateAttr(default_factory=dict)
     _resolved_if_exec_branches: dict[str, str] = PrivateAttr(default_factory=dict)
-    _prepared_exec_metadata: dict[str, _PreparedExecNodeMetadata] = PrivateAttr(default_factory=dict)
     _prepared_exec_registry: Optional[_PreparedExecRegistry] = PrivateAttr(default=None)
     _if_branch_scheduler: Optional[_IfBranchScheduler] = PrivateAttr(default=None)
     _execution_materializer: Optional[_ExecutionMaterializer] = PrivateAttr(default=None)
@@ -1879,9 +1905,51 @@ class GraphExecutionState(BaseModel):
             self._prepared_exec_registry = _PreparedExecRegistry(
                 prepared_source_mapping=self.prepared_source_mapping,
                 source_prepared_mapping=self.source_prepared_mapping,
-                metadata=self._prepared_exec_metadata,
+                metadata=self.prepared_exec_metadata,
             )
         return self._prepared_exec_registry
+
+    def model_post_init(self, __context: Any) -> None:
+        self._ready_queues.clear()
+        self._active_class = None
+        self._iteration_path_cache.clear()
+        self._if_branch_exclusive_sources.clear()
+        self._resolved_if_exec_branches.clear()
+        self._prepared_exec_registry = None
+        self._if_branch_scheduler = None
+        self._execution_materializer = None
+        self._execution_scheduler = None
+        self._execution_runtime = None
+
+        registry = self._prepared_registry()
+        for exec_node_id, source_node_id in self.prepared_source_mapping.items():
+            metadata = self.prepared_exec_metadata.get(exec_node_id)
+            if metadata is None:
+                self.prepared_exec_metadata[exec_node_id] = _PreparedExecNodeMetadata(source_node_id=source_node_id)
+                continue
+            metadata.source_node_id = source_node_id
+
+        for exec_node_id in self.execution_graph.nodes:
+            if exec_node_id not in self.indegree:
+                inputs = self.execution_graph._get_input_edges(exec_node_id)
+                self.indegree[exec_node_id] = sum(1 for edge in inputs if edge.source.node_id not in self.executed)
+
+            if exec_node_id in self.executed:
+                registry.set_state(exec_node_id, "executed")
+                continue
+
+            if registry.get_metadata(exec_node_id).state == "skipped":
+                continue
+
+            registry.set_state(exec_node_id, "pending")
+            self._try_resolve_if_node(exec_node_id)
+
+        for exec_node_id in self.execution_graph.nodes:
+            if exec_node_id in self.executed:
+                continue
+            if registry.get_metadata(exec_node_id).state == "skipped":
+                continue
+            self._enqueue_if_ready(exec_node_id)
 
     def _if_scheduler(self) -> _IfBranchScheduler:
         if self._if_branch_scheduler is None:
