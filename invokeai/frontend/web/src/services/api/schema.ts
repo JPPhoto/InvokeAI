@@ -12208,6 +12208,13 @@ export type components = {
             indegree?: {
                 [key: string]: number;
             };
+            /**
+             * Prepared Exec Metadata
+             * @description Serialized metadata for prepared execution nodes
+             */
+            prepared_exec_metadata?: {
+                [key: string]: components["schemas"]["_PreparedExecNodeMetadata"];
+            };
         };
         /**
          * Grounding DINO (Text Prompt Object Detection)
@@ -32164,6 +32171,24 @@ export type components = {
          * @enum {string}
          */
         ZImageVariantType: "turbo" | "zbase";
+        /** _PreparedExecNodeMetadata */
+        _PreparedExecNodeMetadata: {
+            /** Source Node Id */
+            source_node_id: string;
+            /**
+             * Iter Context
+             * @default []
+             */
+            iter_context?: string[];
+            /** Iteration Path */
+            iteration_path?: number[] | null;
+            /**
+             * State
+             * @default pending
+             * @enum {string}
+             */
+            state?: "pending" | "ready" | "executed" | "skipped";
+        };
     };
     responses: never;
     parameters: never;
