@@ -1801,6 +1801,7 @@
         "imageSubfolderStrategyHash": "Hash",
         "imageSubfolderStrategySaveFailed": "Failed to save Image Subfolder Strategy",
         "imageSubfolderStrategyType": "Type",
+        "imageSubfolderStrategyUnknown": "Unknown ({{strategy}})",
         "maxQueueHistory": "Max Queue History",
         "maxQueueHistorySaveFailed": "Failed to save Max Queue History",
         "models": "Models",
