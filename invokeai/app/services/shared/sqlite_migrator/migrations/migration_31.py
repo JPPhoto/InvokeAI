@@ -1,4 +1,9 @@
-"""Migration 31: Add workflow-call relationship columns to session_queue."""
+"""Migration 31: Add image_subfolder column to images table.
+
+This migration adds an image_subfolder column to the images table to support
+configurable image subfolder strategies (flat, date, type, hash).
+Existing images get an empty string (flat/root directory).
+"""
 
 import sqlite3
 
@@ -6,46 +11,29 @@ from invokeai.app.services.shared.sqlite_migrator.sqlite_migrator_common import 
 
 
 class Migration31Callback:
-    """Add durable parent/child workflow-call relationship columns to session_queue."""
+    """Migration to add image_subfolder column to images table."""
 
     def __call__(self, cursor: sqlite3.Cursor) -> None:
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='session_queue';")
+        self._add_image_subfolder_column(cursor)
+
+    def _add_image_subfolder_column(self, cursor: sqlite3.Cursor) -> None:
+        """Add image_subfolder column to images table."""
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='images';")
         if cursor.fetchone() is None:
             return
 
-        cursor.execute("PRAGMA table_info(session_queue);")
+        cursor.execute("PRAGMA table_info(images);")
         columns = [row[1] for row in cursor.fetchall()]
 
-        if "workflow_call_id" not in columns:
-            cursor.execute("ALTER TABLE session_queue ADD COLUMN workflow_call_id TEXT;")
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_session_queue_workflow_call_id ON session_queue(workflow_call_id);"
-            )
-
-        if "parent_item_id" not in columns:
-            cursor.execute("ALTER TABLE session_queue ADD COLUMN parent_item_id INTEGER;")
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_session_queue_parent_item_id ON session_queue(parent_item_id);"
-            )
-
-        if "parent_session_id" not in columns:
-            cursor.execute("ALTER TABLE session_queue ADD COLUMN parent_session_id TEXT;")
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_session_queue_parent_session_id ON session_queue(parent_session_id);"
-            )
-
-        if "root_item_id" not in columns:
-            cursor.execute("ALTER TABLE session_queue ADD COLUMN root_item_id INTEGER;")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_queue_root_item_id ON session_queue(root_item_id);")
-
-        if "workflow_call_depth" not in columns:
-            cursor.execute("ALTER TABLE session_queue ADD COLUMN workflow_call_depth INTEGER;")
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_session_queue_workflow_call_depth ON session_queue(workflow_call_depth);"
-            )
+        if "image_subfolder" not in columns:
+            cursor.execute("ALTER TABLE images ADD COLUMN image_subfolder TEXT NOT NULL DEFAULT '';")
 
 
 def build_migration_31() -> Migration:
+    """Builds the migration object for migrating from version 30 to version 31.
+
+    This migration adds an image_subfolder column to the images table.
+    """
     return Migration(
         from_version=30,
         to_version=31,
