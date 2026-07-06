@@ -1,4 +1,5 @@
 from collections import OrderedDict
+from copy import deepcopy
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, Optional, Union
@@ -49,7 +50,7 @@ class MemoryInvocationCache(InvocationCacheBase):
             if item is not None:
                 self._hits += 1
                 self._cache.move_to_end(key)
-                return item.invocation_output, item.transient_storage
+                return item.invocation_output, deepcopy(item.transient_storage)
             self._misses += 1
             return None
 
@@ -65,7 +66,7 @@ class MemoryInvocationCache(InvocationCacheBase):
             self._cache[key] = CachedItem(
                 invocation_output,
                 invocation_output.model_dump_json(warnings=False, exclude_defaults=True, exclude_unset=True),
-                transient_storage,
+                deepcopy(transient_storage),
             )
 
     def _delete_oldest_access(self, number_to_delete: int) -> None:

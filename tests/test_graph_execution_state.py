@@ -1510,3 +1510,37 @@ def test_transient_storage_persists_within_one_graph_execution_and_resets_for_ne
     read_outputs_2 = [o for (n, o) in trace2 if isinstance(n, _TransientStorageReadTestInvocation)]
     assert len(read_outputs_2) == 1
     assert read_outputs_2[0].value is None
+
+
+def test_cached_invocation_restores_transient_storage_in_place():
+    from invokeai.app.invocations.baseinvocation import invocation, invocation_output
+    from invokeai.app.invocations.fields import OutputField
+    from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
+
+    @invocation_output("transient_storage_cached_writer_output")
+    class _TransientStorageCachedWriterOutput(BaseInvocationOutput):
+        value: str = OutputField(default="cached")
+
+    @invocation("transient_storage_cached_writer", version="1.0.0")
+    class _TransientStorageCachedWriterInvocation(BaseInvocation):
+        def invoke(self, context: InvocationContext) -> _TransientStorageCachedWriterOutput:
+            context.transient_storage["cached"] = "value"
+            return _TransientStorageCachedWriterOutput(value="cached")
+
+    services = Mock()
+    services.configuration.node_cache_size = 5
+    services.invocation_cache = MemoryInvocationCache(max_cache_size=5)
+    services.logger = Mock()
+
+    first_storage = {"seed": "same"}
+    first_context = _make_invocation_context(transient_storage=first_storage)
+    first = _TransientStorageCachedWriterInvocation(id="first")
+    first.invoke_internal(context=first_context, services=services)
+
+    second_storage = {"seed": "same"}
+    second_context = _make_invocation_context(transient_storage=second_storage)
+    second = _TransientStorageCachedWriterInvocation(id="second")
+    second.invoke_internal(context=second_context, services=services)
+
+    assert second_context.transient_storage is second_storage
+    assert second_storage == {"seed": "same", "cached": "value"}

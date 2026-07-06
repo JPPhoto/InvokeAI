@@ -1,7 +1,6 @@
 # pyright: reportPrivateUsage=false
 from contextlib import suppress
 
-from typing import Optional
 from invokeai.app.invocations.fields import ImageField
 from invokeai.app.invocations.primitives import ImageOutput
 from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
@@ -14,6 +13,7 @@ def _get_output(cache: MemoryInvocationCache, key):
         return None
     invocation_output, _transient_storage = result
     return invocation_output
+
 
 def test_invocation_cache_memory_max_cache_size():
     cache = MemoryInvocationCache()
@@ -220,3 +220,23 @@ def test_invocation_cache_memory_transient_storage():
     assert cache.get(3) is None
     assert cache._hits == 2
     assert cache._misses == 1
+
+
+def test_invocation_cache_memory_snapshots_transient_storage():
+    cache = MemoryInvocationCache(max_cache_size=5)
+    output = ImageOutput(image=ImageField(image_name="foo"), width=512, height=512)
+    transient = {"items": ["before"]}
+
+    cache.save(1, output, transient)
+    transient["items"].append("after")
+
+    result = cache.get(1)
+    assert result is not None
+    _cached_output, cached_transient = result
+    assert cached_transient == {"items": ["before"]}
+
+    cached_transient["items"].append("mutated")
+    result = cache.get(1)
+    assert result is not None
+    _cached_output, cached_transient = result
+    assert cached_transient == {"items": ["before"]}

@@ -247,7 +247,8 @@ class BaseInvocation(ABC, BaseModel):
             else:
                 cached_value, transient_storage = result
                 services.logger.debug(f'Invocation cache hit for type "{self.get_type()}": {self.id}')
-                context.transient_storage = transient_storage
+                context.transient_storage.clear()
+                context.transient_storage.update(transient_storage)
                 return cached_value
         else:
             services.logger.debug(f'Skipping invocation cache for "{self.get_type()}": {self.id}')

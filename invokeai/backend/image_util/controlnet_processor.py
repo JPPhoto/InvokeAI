@@ -166,6 +166,7 @@ def process_controlnet_image(image_name: str, model_key: str, services: Invocati
         context = build_invocation_context(
             data=context_data,
             services=services,
+            transient_storage={},
             is_canceled=lambda: False,
         )
 

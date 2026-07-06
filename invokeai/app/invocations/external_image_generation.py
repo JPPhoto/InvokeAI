@@ -114,14 +114,17 @@ class BaseExternalImageGenerationInvocation(BaseInvocation, WithMetadata, WithBo
         if services.configuration.node_cache_size == 0 or not self.use_cache:
             return super().invoke_internal(context, services)
 
-        key = services.invocation_cache.create_key(self)
-        cached_value = services.invocation_cache.get(key)
-        if cached_value is None:
+        key = services.invocation_cache.create_key(self, context.transient_storage)
+        result = services.invocation_cache.get(key)
+        if result is None:
             services.logger.debug(f'Invocation cache miss for type "{self.get_type()}": {self.id}')
             output = self.invoke(context)
-            services.invocation_cache.save(key, output)
+            services.invocation_cache.save(key, output, context.transient_storage)
             return output
 
+        cached_value, transient_storage = result
+        context.transient_storage.clear()
+        context.transient_storage.update(transient_storage)
         services.logger.debug(f'Invocation cache hit for type "{self.get_type()}": {self.id}, duplicating images')
         if not isinstance(cached_value, ImageCollectionOutput):
             return cached_value
