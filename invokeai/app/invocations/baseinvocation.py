@@ -231,8 +231,8 @@ class BaseInvocation(ABC, BaseModel):
                 elif input_ == Input.Any:
                     raise MissingInputException(type(self).model_fields["type"].default, field_name)
 
-        # skip node cache codepath if it's disabled
-        if services.configuration.node_cache_size == 0:
+        # skip node cache codepath if it's disabled or the node must be evaluated for each iteration context
+        if services.configuration.node_cache_size == 0 or getattr(type(self), "reevaluate_on_iteration", False):
             return self.invoke(context)
 
         output: BaseInvocationOutput

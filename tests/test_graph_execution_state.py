@@ -21,6 +21,7 @@ from invokeai.app.invocations.primitives import (
     BooleanInvocation,
     BooleanOutput,
 )
+from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
 from invokeai.app.services.shared.graph import (
     CollectInvocation,
     Graph,
@@ -1440,6 +1441,26 @@ def test_upstream_node_can_be_reevaluated_per_iteration():
     # (1+1), (2+2), (3+3), (4+4)
     assert add_values == [2, 4, 6, 8]
     assert TickInvocation._counter == 4
+
+
+def test_reevaluated_node_bypasses_invocation_cache():
+    TickInvocation._counter = 0
+
+    services = Mock()
+    services.configuration.node_cache_size = 5
+    services.invocation_cache = MemoryInvocationCache(max_cache_size=5)
+    services.logger = Mock()
+    context = Mock(InvocationContext)
+
+    first = TickInvocation(id="prepared-a")
+    second = TickInvocation(id="prepared-b")
+
+    first_output = first.invoke_internal(context=context, services=services)
+    second_output = second.invoke_internal(context=context, services=services)
+
+    assert first_output.value == 1
+    assert second_output.value == 2
+    assert TickInvocation._counter == 2
 
 
 def test_reevaluated_upstream_node_is_reused_by_multiple_consumers_in_same_iteration():
