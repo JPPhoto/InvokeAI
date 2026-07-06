@@ -37,14 +37,17 @@ class SessionRunnerBase(ABC):
 
     @abstractmethod
     def run_node(
-        self, transient_storage: dict[str, Any], invocation: BaseInvocation, queue_item: SessionQueueItem
+        self,
+        invocation: BaseInvocation,
+        queue_item: SessionQueueItem,
+        transient_storage: Optional[dict[str, Any]] = None,
     ) -> None:
         """Run a single node in the graph.
 
         Args:
-            transient_storage: Transient storage passed to each node that executes.
             invocation: The invocation to run.
             queue_item: The session queue item.
+            transient_storage: Transient storage passed to each node that executes.
         """
         pass
 
