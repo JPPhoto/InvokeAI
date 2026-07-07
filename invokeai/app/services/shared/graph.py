@@ -824,8 +824,16 @@ class _ExecutionScheduler:
 
         return LoopState()
 
-    def _get_ordered_for_return_outputs(self, source_return_id: str) -> list["ForReturnInvocationOutput"]:
+    def _get_ordered_for_return_outputs(
+        self, for_exec_node_id: str, source_return_id: str
+    ) -> list["ForReturnInvocationOutput"]:
+        parent_iteration_path = self._state._get_iteration_path(for_exec_node_id)[:-1]
         prepared_return_ids = self._state._prepared_registry().get_prepared_ids(source_return_id)
+        prepared_return_ids = [
+            prepared_return_id
+            for prepared_return_id in prepared_return_ids
+            if self._state._get_iteration_path(prepared_return_id)[:-1] == parent_iteration_path
+        ]
         prepared_return_ids = sorted(prepared_return_ids, key=self._state._get_iteration_path)
         return [
             output
@@ -844,7 +852,7 @@ class _ExecutionScheduler:
         if not isinstance(for_output, ForInvocationOutput):
             return
 
-        return_outputs = self._get_ordered_for_return_outputs(source_return_id)
+        return_outputs = self._get_ordered_for_return_outputs(for_exec_node_id, source_return_id)
         for_output.output_collection = [output.output for output in return_outputs if output.output is not None]
         for_output.final_state = self._get_loop_state_for_next_iteration(for_exec_node_id, return_output)
         self._state.finalized_loop_nodes.add(source_for_id)

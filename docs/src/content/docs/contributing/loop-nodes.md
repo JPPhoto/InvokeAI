@@ -373,6 +373,10 @@ The final output contains:
 - collected body output items in iteration order
 - final loop state
 
+When a visible `For` node is itself materialized under an outer iterator context, final output aggregation is scoped to
+that parent context. Return values from the same source `ForReturn` in another outer iteration must not be mixed into the
+current loop's `output_collection`.
+
 Downstream nodes after the loop receive data through normal edges from the final-scoped outputs:
 
 - `For.output_collection`

@@ -61,6 +61,19 @@ class TwoAnyTestInvocation(BaseInvocation):
         return TwoAnyTestInvocationOutput(value=(self.first, self.second))
 
 
+@invocation_output("test_nested_any_collection_output")
+class NestedAnyCollectionTestInvocationOutput(BaseInvocationOutput):
+    collection: list[list[Any]] = OutputField(default=[])
+
+
+@invocation("test_nested_any_collection", version="1.0.0")
+class NestedAnyCollectionTestInvocation(BaseInvocation):
+    collection: list[list[Any]] = InputField(default=[])
+
+    def invoke(self, context: InvocationContext) -> NestedAnyCollectionTestInvocationOutput:
+        return NestedAnyCollectionTestInvocationOutput(collection=self.collection)
+
+
 @pytest.fixture
 def simple_graph() -> Graph:
     g = Graph()
@@ -567,6 +580,29 @@ def test_graph_for_rematerialized_body_reuses_external_input_each_iteration():
     )
     assert state.results[after_exec_id].value == [("alpha", "shared"), ("beta", "shared")]
     assert state.is_complete()
+
+
+def test_graph_for_output_collection_is_scoped_to_parent_iterator_context():
+    graph = Graph()
+    graph.add_node(NestedAnyCollectionTestInvocation(id="nested", collection=[["alpha"], ["beta"]]))
+    graph.add_node(IterateInvocation(id="outer_iterate"))
+    graph.add_node(ForInvocation(id="for"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("nested", "collection", "outer_iterate", "collection"))
+    graph.add_edge(create_edge("outer_iterate", "item", "for", "collection"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "collect", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+    collect_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "collect"
+    )
+
+    assert state.results[collect_exec_id].collection == [["alpha"], ["beta"]]
 
 
 def test_graph_for_final_output_collection_materializes_after_last_direct_return():
