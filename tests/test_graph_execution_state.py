@@ -332,6 +332,49 @@ def test_graph_for_body_state_helper_return_state_is_visible_to_next_iteration()
     assert state.is_complete()
 
 
+@pytest.mark.parametrize(
+    ("completed_count", "expected_remaining_source_ids"),
+    [
+        (1, ["state_set", "return", "for", "state_set", "return", "after"]),
+        (2, ["return", "for", "state_set", "return", "after"]),
+        (3, ["for", "state_set", "return", "after"]),
+    ],
+)
+def test_graph_for_partially_completed_stateful_loop_resumes_after_serialization(
+    completed_count: int, expected_remaining_source_ids: list[str]
+) -> None:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(StateSetInvocation(id="state_set", key="last_item"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "state", "state_set", "state"))
+    graph.add_edge(create_edge("for", "item", "state_set", "value"))
+    graph.add_edge(create_edge("state_set", "state", "return", "state"))
+    graph.add_edge(create_edge("for", "final_state", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    for _ in range(completed_count):
+        invoke_next(state)
+
+    raw = state.model_dump_json(warnings=False, exclude_none=True)
+    resumed = TypeAdapter(GraphExecutionState).validate_json(raw, strict=False)
+    registry = resumed._prepared_registry()
+    executed_source_ids = execute_all_nodes(resumed)
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in resumed.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+
+    assert all(
+        registry.get_iteration_path(exec_node_id) is not None for exec_node_id in resumed.prepared_source_mapping
+    )
+    assert executed_source_ids == expected_remaining_source_ids
+    assert resumed.results[after_exec_id].value == LoopState(values={"last_item": "beta"})
+    assert resumed.is_complete()
+
+
 def test_graph_for_rematerialized_body_reuses_external_input_each_iteration():
     graph = Graph()
     graph.add_node(PromptTestInvocation(id="external", prompt="shared"))

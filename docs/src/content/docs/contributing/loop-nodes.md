@@ -78,6 +78,7 @@ Implemented on this branch:
 - Ordinary loop state helper invocations: `state_empty`, `state_get`, `state_set`, and `state_merge`.
 - Final-scoped `For.output_collection` and `For.final_state` release after loop completion.
 - Empty collection finalization.
+- Serialization/resume coverage for partially completed stateful loops.
 
 ## Architectural Direction
 
@@ -429,6 +430,11 @@ The exact model shape may differ, but the runtime needs enough durable state to 
 - wait for the active iteration's `ForReturn`
 - materialize or complete the final loop output
 
+The current branch persists this through existing `GraphExecutionState` fields: the materialized execution graph,
+executed node ids, results, prepared-source mappings, source-prepared mappings, indegrees, and finalized loop source
+ids. Runtime-only queues and prepared metadata are rebuilt during model rehydration. Tests cover resuming a stateful
+`For` after the prepared `For` node, after a body state helper, and after `ForReturn`.
+
 ### 9. Caching
 
 Invocation cache behavior must not collapse distinct loop iterations incorrectly.
@@ -579,10 +585,15 @@ Frontend tests should cover:
 - What is the cleanest durable representation of a loop body boundary in saved workflow JSON?
 - Should loop output scope metadata live in invocation output field schema, node UI config, or graph-builder-only
   metadata?
-- Should state helper nodes live with core primitives, logic nodes, or a new loop/state node category?
-- Should the first implementation collect `None` outputs, skip them, or require an explicit output value?
 - How should nested `For` loops expose iteration paths and state without confusing collectors?
 - Should early break be added as `continue_condition` on `for_return`, or as a separate `for_continue` node later?
+
+Answered branch-local decisions:
+
+- The first implementation uses explicit `for_return`.
+- `ForReturn.output=None` is omitted from `For.output_collection`.
+- State helper nodes are ordinary invocations and are currently colocated with the loop node definitions. They may move to
+  a dedicated loop/state invocation module before merge if that becomes clearer for schema ownership.
 
 ## Incremental Implementation Plan
 
