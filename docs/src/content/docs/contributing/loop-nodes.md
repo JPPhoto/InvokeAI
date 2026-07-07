@@ -153,13 +153,26 @@ Per-iteration outputs:
 
 Final outputs:
 
-- `collection: list[Any]`
-- `state: LoopState`
+- `output_collection: list[Any]`
+- `final_state: LoopState`
 
-Open design question:
+The per-iteration outputs and final outputs must be distinguishable by schema metadata. A `For` node is not an ordinary
+flat invocation where every output has the same execution scope.
 
-- The implementation may require separate prepared execution nodes for per-iteration values and final values, or a
-  dedicated body-return node. The external contract should stay stable even if the internal representation changes.
+Potential output metadata:
+
+```py
+item: Any = OutputField(..., loop_scope="iteration")
+output_collection: list[Any] = OutputField(..., loop_scope="final")
+```
+
+The exact metadata name is open, but the distinction is required:
+
+- edges from iteration-scoped outputs are loop-body edges
+- edges from final-scoped outputs are after-loop edges
+
+This avoids ambiguity between `For.state` as the state provided to the current iteration and `For.final_state` as the
+state produced after the loop completes.
 
 ### 3. For Return Node
 
@@ -177,14 +190,62 @@ Outputs:
 
 Semantics:
 
-- `output` is appended to the final `For.collection` when present.
+- `output` is appended to the final `For.output_collection` when present.
 - `state` becomes the next iteration's state when present.
 - If `state` is omitted, the previous state carries forward unchanged.
 
 The loop should require either exactly one body return node in its body boundary or a clearly defined default return
 behavior. Requiring a return node is more explicit and easier to validate.
 
-### 4. State Helper Nodes
+For the first implementation, the recommended body boundary is a boundary pair:
+
+- `For` starts the body through its iteration-scoped outputs.
+- `ForReturn` ends the body for one iteration.
+- The loop body is the reachable subgraph from `For` iteration-scoped outputs to the matching `ForReturn`.
+
+This is simpler than a full visual subgraph while still giving the backend an explicit return boundary.
+
+### 4. Runtime Shape
+
+The author-time graph may show one `For` node, but the runtime execution graph should treat iteration and final outputs
+as separate prepared execution surfaces.
+
+Author-time graph:
+
+```text
+Range -> For.collection
+
+For.item -> BodyNode.input
+BodyNode.output -> ForReturn.output
+
+For.output_collection -> AfterLoopNode.collection
+For.final_state -> AfterLoopNode.state
+```
+
+Runtime execution graph:
+
+```text
+ForIter[0].item -> BodyNode[0].input -> ForReturn[0].output
+ForIter[1].item -> BodyNode[1].input -> ForReturn[1].output
+ForIter[2].item -> BodyNode[2].input -> ForReturn[2].output
+
+ForFinal.output_collection -> AfterLoopNode.collection
+ForFinal.final_state -> AfterLoopNode.state
+```
+
+For stateful loops:
+
+```text
+ForIter[0].state -> BodyNode[0] -> ForReturn[0].state
+ForReturn[0].state -> ForIter[1].state
+ForReturn[1].state -> ForIter[2].state
+ForReturn[2].state -> ForFinal.final_state
+```
+
+The source `For` node can remain one visible node, but the materializer needs to know which output fields route to
+per-iteration prepared nodes and which output fields route to the final prepared node.
+
+### 5. State Helper Nodes
 
 State helper nodes should be ordinary invocations, not special scheduler features.
 
@@ -255,6 +316,14 @@ The final output contains:
 - collected body output items in iteration order
 - final loop state
 
+Downstream nodes after the loop receive data through normal edges from the final-scoped outputs:
+
+- `For.output_collection`
+- `For.final_state`
+
+Those downstream nodes become ready only after the final prepared execution node for the loop is complete. They should
+not depend on or see per-iteration prepared outputs directly unless they are part of the loop body.
+
 ### 6. Ordering
 
 The first implementation should run iterations sequentially when state is used.
@@ -275,6 +344,26 @@ At minimum, persisted state must be able to recover:
 
 The loop must not depend on process-local mutable state that disappears on restart.
 
+A persisted loop runtime record should be able to represent the current boundary state. For example:
+
+```py
+class ForExecution(BaseModel):
+    source_for_node_id: str
+    total: int
+    next_index: int
+    current_state: LoopState
+    output_items: list[Any]
+    prepared_iteration_ids: list[str]
+    completed_return_ids: list[str]
+    final_exec_node_id: str | None = None
+```
+
+The exact model shape may differ, but the runtime needs enough durable state to decide whether the next action is to:
+
+- materialize the next iteration
+- wait for the active iteration's `ForReturn`
+- materialize or complete the final loop output
+
 ### 8. Caching
 
 Invocation cache behavior must not collapse distinct loop iterations incorrectly.
@@ -293,14 +382,23 @@ Potential validation rules:
 
 - `For.collection` must be connected or provided as a direct value.
 - `For.state`, when connected, must be compatible with `LoopState`.
+- Edges from iteration-scoped `For` outputs must be treated as loop-body edges.
+- Edges from final-scoped `For` outputs must be treated as after-loop edges.
 - A loop body must expose exactly one body return node, unless the default return behavior is explicitly defined.
 - A body return's `state` input must be compatible with `LoopState`.
 - The author-time graph must remain acyclic.
 
+First implementation recommendation:
+
+- Use a boundary pair rather than a full visual subgraph.
+- The body is reachable from iteration-scoped `For` outputs and terminates at one `ForReturn`.
+- Shared paths that escape the body before `ForReturn` should be rejected unless a clear rule is added later.
+
 Open design question:
 
-- The editor and backend need a durable way to identify the body boundary. This may require explicit body membership
-  metadata, a subgraph-like container, or a pair of boundary invocations.
+- The editor and backend need a durable saved-workflow representation for the body boundary. This may be output-scope
+  metadata plus reachability validation for the first implementation, with explicit body membership metadata or a visual
+  subgraph added later.
 
 ## Editor Contract
 
@@ -309,12 +407,34 @@ The editor should present `For` as a loop boundary rather than as an ordinary va
 Minimum editor behavior:
 
 - show `collection` and optional `state` inputs
-- show per-iteration outputs: `item`, `index`, `total`, `state`
-- show final outputs: `collection`, `state`
+- show per-iteration outputs in a distinct "Iteration Outputs" section: `item`, `index`, `total`, `state`
+- show final outputs in a distinct "Final Outputs" section: `output_collection`, `final_state`
 - make the body return node discoverable and understandable
 - prevent invalid body return wiring where possible
 
-The first version does not need a visual subgraph editor, but the graph representation must not block one later.
+Suggested first visual shape:
+
+```text
++-----------------------------------+
+| For                               |
+| Inputs                            |
+|   collection                      |
+|   state                           |
+|                                   |
+| Iteration Outputs                 |
+|   item                            |
+|   index                           |
+|   total                           |
+|   state                           |
+|                                   |
+| Final Outputs                     |
+|   output_collection               |
+|   final_state                     |
++-----------------------------------+
+```
+
+The first version does not need a visual subgraph editor, but the graph representation must not block one later. A later
+UI may draw a subtle loop region around the reachable body nodes between `For` and `ForReturn`.
 
 ## Testing Plan
 
@@ -324,6 +444,8 @@ Backend tests should cover:
 - collection items are emitted in order
 - index and total are correct for every iteration
 - body outputs are collected in iteration order
+- final-scoped outputs release after-loop nodes only after all required iteration returns complete
+- iteration-scoped outputs are duplicated only into matching loop-body iteration contexts
 - initial state reaches the first iteration
 - returned state reaches the next iteration
 - omitted returned state carries previous state forward
@@ -335,8 +457,10 @@ Backend tests should cover:
 Frontend tests should cover:
 
 - graph validation for loop source and state wiring
+- graph validation for iteration-scoped vs final-scoped output edges
 - workflow serialization and deserialization of loop nodes
 - type compatibility for `LoopState`
+- visual grouping of iteration outputs and final outputs
 - editor handling for body return nodes
 
 ## Open Questions
@@ -344,6 +468,8 @@ Frontend tests should cover:
 - Should the first implementation require an explicit `for_return` node, or should body output be inferred from a
   connected field?
 - What is the cleanest durable representation of a loop body boundary in saved workflow JSON?
+- Should loop output scope metadata live in invocation output field schema, node UI config, or graph-builder-only
+  metadata?
 - Should state helper nodes live with core primitives, logic nodes, or a new loop/state node category?
 - Should the first implementation collect `None` outputs, skip them, or require an explicit output value?
 - How should nested `For` loops expose iteration paths and state without confusing collectors?
@@ -352,13 +478,15 @@ Frontend tests should cover:
 ## Incremental Implementation Plan
 
 1. Add `LoopState` schema and state helper nodes.
-2. Add `For` and `ForReturn` invocation definitions without runtime behavior beyond validation/schema.
-3. Add graph validation for the bounded collection-based loop shape.
+2. Add `For` and `ForReturn` invocation definitions with scoped output metadata but without runtime behavior beyond
+   validation/schema.
+3. Add graph validation for the bounded collection-based loop shape and `ForReturn` body boundary.
 4. Extend `GraphExecutionState` materialization to create one iteration context at a time.
-5. Carry explicit returned state into the next iteration.
-6. Aggregate final output collection and final state.
-7. Add serialization/resume tests.
-8. Add editor affordances after the backend contract is stable.
+5. Route iteration-scoped outputs into body execution nodes and final-scoped outputs into after-loop nodes.
+6. Carry explicit returned state into the next iteration.
+7. Aggregate final output collection and final state.
+8. Add serialization/resume tests.
+9. Add editor affordances after the backend contract is stable.
 
 The first milestone should prove fixed collection iteration with explicit state carry. Early break, parallel stateless
 loops, richer collection producers, and visual loop-body editing can follow after that contract is stable.
