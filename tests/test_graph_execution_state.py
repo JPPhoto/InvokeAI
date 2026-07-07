@@ -141,6 +141,83 @@ def test_graph_for_final_outputs_do_not_materialize_from_iteration_output():
     assert "after" not in state.source_prepared_mapping
 
 
+def test_graph_for_return_schedules_next_iteration():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+
+    state = GraphExecutionState(graph=graph)
+    _for_node, _for_output = invoke_next(state)
+    _return_node, _return_output = invoke_next(state)
+
+    assert not state.is_complete()
+
+    next_node = state.next()
+
+    assert isinstance(next_node, ForInvocation)
+    assert state.prepared_source_mapping[next_node.id] == "for"
+    output = next_node.invoke(Mock(InvocationContext))
+
+    assert isinstance(output, ForInvocationOutput)
+    assert output.item == "beta"
+    assert output.index == 1
+    assert output.total == 2
+
+    state.complete(next_node.id, output)
+    next_return = state.next()
+
+    assert isinstance(next_return, ForReturnInvocation)
+    return_output = next_return.invoke(Mock(InvocationContext))
+
+    assert isinstance(return_output, ForReturnInvocationOutput)
+    assert return_output.output == "beta"
+    state.complete(next_return.id, return_output)
+
+    assert state.is_complete()
+
+
+def test_graph_for_return_passes_state_to_next_iteration():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+
+    state = GraphExecutionState(graph=graph)
+    for_node = state.next()
+    assert isinstance(for_node, ForInvocation)
+    state.complete(for_node.id, for_node.invoke(Mock(InvocationContext)))
+    return_node = state.next()
+    assert isinstance(return_node, ForReturnInvocation)
+    state.complete(return_node.id, ForReturnInvocationOutput(output="alpha", state=LoopState(values={"count": 1})))
+
+    next_node = state.next()
+
+    assert isinstance(next_node, ForInvocation)
+    output = next_node.invoke(Mock(InvocationContext))
+
+    assert isinstance(output, ForInvocationOutput)
+    assert output.state == LoopState(values={"count": 1})
+
+
+def test_graph_for_indirect_return_does_not_schedule_partial_next_iteration():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(create_edge("for", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "return", "output"))
+    graph.add_edge(create_edge("for", "state", "return", "state"))
+
+    state = GraphExecutionState(graph=graph)
+    _for_node, _for_output = invoke_next(state)
+    _body_node, _body_output = invoke_next(state)
+    _return_node, _return_output = invoke_next(state)
+
+    assert state.next() is None
+    assert state.is_complete()
+
+
 def test_graph_is_complete(simple_graph: Graph):
     g = GraphExecutionState(graph=simple_graph)
     _ = invoke_next(g)

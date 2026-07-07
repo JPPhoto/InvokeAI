@@ -429,6 +429,50 @@ class _ExecutionMaterializer:
         self._state._register_prepared_exec_node(new_node.id, node_id)
         return new_node
 
+    def create_for_iteration(
+        self,
+        source_for_id: str,
+        iteration_index: int,
+        collection: list[Any],
+        state: "LoopState",
+    ) -> str:
+        node = self._state.graph.get_node(source_for_id)
+        if not isinstance(node, ForInvocation):
+            raise TypeError(f"Expected source ForInvocation, got {type(node).__name__}")
+
+        new_node = self._create_execution_node_copy(node, source_for_id, iteration_index)
+        assert isinstance(new_node, ForInvocation)
+        new_node.collection = copydeep(collection)
+        new_node.state = copydeep(state)
+        self._initialize_execution_node(new_node.id)
+        return new_node.id
+
+    def create_direct_for_return_iteration(
+        self,
+        source_return_id: str,
+        source_for_id: str,
+        prepared_for_id: str,
+    ) -> Optional[str]:
+        node = self._state.graph.get_node(source_return_id)
+        if not isinstance(node, ForReturnInvocation):
+            raise TypeError(f"Expected source ForReturnInvocation, got {type(node).__name__}")
+
+        direct_for_edges = [
+            Edge(
+                source=EdgeConnection(node_id=prepared_for_id, field=edge.source.field),
+                destination=EdgeConnection(node_id="", field=edge.destination.field),
+            )
+            for edge in self._state.graph._get_input_edges(source_return_id)
+            if edge.source.node_id == source_for_id
+        ]
+        if not direct_for_edges:
+            return None
+
+        new_node = self._create_execution_node_copy(node, source_return_id, -1)
+        self._attach_execution_edges(new_node.id, direct_for_edges)
+        self._initialize_execution_node(new_node.id)
+        return new_node.id
+
     def _attach_execution_edges(self, exec_node_id: str, new_edges: list[Edge]) -> None:
         for edge in new_edges:
             self._state.execution_graph.add_edge(
@@ -672,9 +716,75 @@ class _ExecutionScheduler:
         registry = self._state._prepared_registry()
         source_node_id = registry.get_source_node_id(exec_node_id)
         prepared_nodes = registry.get_prepared_ids(source_node_id)
-        if all(node_id in self._state.executed for node_id in prepared_nodes):
+        if (
+            all(node_id in self._state.executed for node_id in prepared_nodes)
+            and source_node_id not in self._state.executed
+        ):
             self._state.executed.add(source_node_id)
-            self._state.executed_history.append(source_node_id)
+            if source_node_id not in self._state.executed_history:
+                self._state.executed_history.append(source_node_id)
+
+    def _get_direct_for_parent(self, exec_node_id: str) -> Optional[str]:
+        for edge in self._state.execution_graph._get_input_edges(exec_node_id):
+            source_node = self._state.execution_graph.get_node(edge.source.node_id)
+            if isinstance(source_node, ForInvocation):
+                return edge.source.node_id
+        return None
+
+    def _get_loop_state_for_next_iteration(
+        self, for_exec_node_id: str, return_output: "ForReturnInvocationOutput"
+    ) -> "LoopState":
+        if return_output.state is not None:
+            return return_output.state
+
+        for_output = self._state.results.get(for_exec_node_id)
+        if isinstance(for_output, ForInvocationOutput):
+            return for_output.state
+
+        return LoopState()
+
+    def _has_only_direct_for_return_inputs(self, source_for_id: str, source_return_id: str) -> bool:
+        input_edges = self._state.graph._get_input_edges(source_return_id)
+        return len(input_edges) > 0 and all(edge.source.node_id == source_for_id for edge in input_edges)
+
+    def _try_schedule_next_for_iteration(self, exec_node_id: str, output: BaseInvocationOutput) -> None:
+        if not isinstance(output, ForReturnInvocationOutput):
+            return
+        if not isinstance(self._state.execution_graph.get_node(exec_node_id), ForReturnInvocation):
+            return
+
+        for_exec_node_id = self._get_direct_for_parent(exec_node_id)
+        if for_exec_node_id is None:
+            return
+
+        for_node = self._state.execution_graph.get_node(for_exec_node_id)
+        if not isinstance(for_node, ForInvocation):
+            return
+
+        next_index = for_node.index + 1
+        if next_index >= len(for_node.collection):
+            return
+
+        registry = self._state._prepared_registry()
+        source_for_id = registry.get_source_node_id(for_exec_node_id)
+        source_return_id = registry.get_source_node_id(exec_node_id)
+        if not self._has_only_direct_for_return_inputs(source_for_id, source_return_id):
+            return
+
+        next_state = self._get_loop_state_for_next_iteration(for_exec_node_id, output)
+
+        next_for_id = self._state._materializer().create_for_iteration(
+            source_for_id=source_for_id,
+            iteration_index=next_index,
+            collection=for_node.collection,
+            state=next_state,
+        )
+        self._state.executed.discard(source_for_id)
+        self._state._materializer().create_direct_for_return_iteration(
+            source_return_id=source_return_id,
+            source_for_id=source_for_id,
+            prepared_for_id=next_for_id,
+        )
 
     def _decrement_child_indegree(self, child_exec_node_id: str, parent_exec_node_id: str) -> None:
         if child_exec_node_id not in self._state.indegree:
@@ -752,6 +862,7 @@ class _ExecutionScheduler:
             return
 
         self._record_completed_node(exec_node_id, output)
+        self._try_schedule_next_for_iteration(exec_node_id, output)
         self._mark_source_node_complete(exec_node_id)
         self._release_downstream_nodes(exec_node_id)
 
@@ -780,7 +891,7 @@ class _ExecutionRuntime:
         iterator_sources = [
             node_id
             for node_id in nx.ancestors(iterator_graph, source_node_id)
-            if isinstance(self._state.graph.get_node(node_id), IterateInvocation)
+            if isinstance(self._state.graph.get_node(node_id), (ForInvocation, IterateInvocation))
         ]
 
         topo = list(nx.topological_sort(iterator_graph))
@@ -805,11 +916,11 @@ class _ExecutionRuntime:
             if iterator_exec_id is None:
                 continue
             iterator_node = self._state.execution_graph.nodes.get(iterator_exec_id)
-            if isinstance(iterator_node, IterateInvocation):
+            if isinstance(iterator_node, (ForInvocation, IterateInvocation)):
                 path.append(iterator_node.index)
 
         node_obj = self._state.execution_graph.nodes.get(exec_node_id)
-        if isinstance(node_obj, IterateInvocation):
+        if isinstance(node_obj, (ForInvocation, IterateInvocation)):
             path.append(node_obj.index)
 
         return tuple(path)
