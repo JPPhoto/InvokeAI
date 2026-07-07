@@ -374,6 +374,22 @@ class _ExecutionMaterializer:
         input_collection = getattr(input_collection_output, input_collection_edge.source.field)
         return len(input_collection)
 
+    def _get_for_direct_return_node_id(self, source_for_id: str) -> Optional[str]:
+        source_for_node = self._state.graph.get_node(source_for_id)
+        iteration_edges = [
+            edge
+            for edge in self._state.graph._get_output_edges(source_for_id)
+            if get_output_field_scope(source_for_node, edge.source.field) == OutputScope.Iteration
+        ]
+        return next(
+            (
+                edge.destination.node_id
+                for edge in iteration_edges
+                if isinstance(self._state.graph.get_node(edge.destination.node_id), ForReturnInvocation)
+            ),
+            None,
+        )
+
     def _get_new_node_iterations(
         self, node: BaseInvocation, node_id: str, iteration_node_map: list[tuple[str, str]]
     ) -> list[int]:
@@ -428,6 +444,38 @@ class _ExecutionMaterializer:
         self._state.execution_graph.add_node(new_node)
         self._state._register_prepared_exec_node(new_node.id, node_id)
         return new_node
+
+    def _mark_source_node_executed(self, source_node_id: str) -> None:
+        if source_node_id in self._state.executed:
+            return
+        self._state.executed.add(source_node_id)
+        self._state.executed_history.append(source_node_id)
+
+    def _create_empty_for_final_output(self, source_for_id: str, node: "ForInvocation") -> str:
+        new_node = self._create_execution_node_copy(node, source_for_id, -1)
+        assert isinstance(new_node, ForInvocation)
+        initial_state = copydeep(node.state or LoopState())
+        new_node.collection = []
+        new_node.state = initial_state
+
+        self._state.results[new_node.id] = ForInvocationOutput(
+            item=None,
+            index=-1,
+            total=0,
+            state=initial_state,
+            output_collection=[],
+            final_state=initial_state,
+        )
+        self._state.executed.add(new_node.id)
+        self._state._set_prepared_exec_state(new_node.id, "executed")
+        self._mark_source_node_executed(source_for_id)
+        self._state.finalized_loop_nodes.add(source_for_id)
+
+        direct_return_node_id = self._get_for_direct_return_node_id(source_for_id)
+        if direct_return_node_id is not None:
+            self._mark_source_node_executed(direct_return_node_id)
+
+        return new_node.id
 
     def create_for_iteration(
         self,
@@ -523,6 +571,8 @@ class _ExecutionMaterializer:
         node = self._state.graph.get_node(node_id)
         iteration_indexes = self._get_new_node_iterations(node, node_id, iteration_node_map)
         if not iteration_indexes:
+            if isinstance(node, ForInvocation):
+                return [self._create_empty_for_final_output(node_id, node)]
             return []
 
         new_edges = self._build_execution_edges(node_id, iteration_node_map)
@@ -549,7 +599,8 @@ class _ExecutionMaterializer:
                 isinstance(source_node, ForInvocation)
                 and get_output_field_scope(source_node, edge.source.field) == OutputScope.Final
             ):
-                g.remove_edge(edge.source.node_id, edge.destination.node_id)
+                if g.has_edge(edge.source.node_id, edge.destination.node_id):
+                    g.remove_edge(edge.source.node_id, edge.destination.node_id)
         return g
 
     def get_node_iterators(self, node_id: str, it_graph: Optional[nx.DiGraph] = None) -> list[str]:
@@ -658,6 +709,7 @@ class _ExecutionMaterializer:
                 node_id
                 for node_id in nx.topological_sort(g)
                 if node_id not in self._state.source_prepared_mapping
+                and node_id not in self._state.executed
                 and not self._has_unmaterializable_for_final_input(node_id)
                 and (
                     not isinstance(self._state.graph.get_node(node_id), (ForInvocation, IterateInvocation))
@@ -1904,6 +1956,10 @@ class Graph(BaseModel):
             for edge in self._get_output_edges(body_node_id):
                 if edge.destination.node_id not in body_path_nodes:
                     return "For loop body paths must not escape before the matching ForReturn"
+
+        unsupported_body_node_ids = body_path_nodes - {return_node_id}
+        if len(unsupported_body_node_ids) > 0:
+            return "For runtime currently supports only direct For to ForReturn body edges"
 
         return None
 

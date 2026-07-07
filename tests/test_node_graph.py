@@ -92,7 +92,19 @@ def test_connections_are_compatible():
     assert result is True
 
 
-def test_graph_validates_for_boundary_pair():
+def test_graph_validates_direct_for_boundary_pair():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a", "b"])
+    body_return = ForReturnInvocation(id="return")
+
+    g.add_node(loop)
+    g.add_node(body_return)
+    g.add_edge(create_edge(loop.id, "item", body_return.id, "output"))
+
+    g.validate_self()
+
+
+def test_graph_rejects_indirect_for_body_until_body_rematerialization_exists():
     g = Graph()
     loop = ForInvocation(id="for", collection=["a", "b"])
     body = PromptTestInvocation(id="body")
@@ -104,7 +116,8 @@ def test_graph_validates_for_boundary_pair():
     g.add_edge(create_edge(body.id, "prompt", body_return.id, "output"))
     g.add_edge(create_edge(loop.id, "item", body.id, "prompt"))
 
-    g.validate_self()
+    with pytest.raises(InvalidEdgeError, match="direct For to ForReturn"):
+        g.validate_self()
 
 
 def test_graph_rejects_for_without_matching_return():

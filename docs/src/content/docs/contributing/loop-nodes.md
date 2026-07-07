@@ -37,7 +37,7 @@ producer nodes rather than extra modes on `For`.
 
 ## Current State
 
-Implemented already in main:
+Baseline behavior from main:
 
 - `IterateInvocation` expands a collection into per-item execution nodes.
 - `CollectInvocation` gathers per-iteration values into a collection.
@@ -61,11 +61,21 @@ Lessons from those branches:
 
 What is still not implemented:
 
-- A real `For` invocation does not yet exist.
-- A loop body boundary does not yet exist.
-- A return or continuation node does not yet exist for body outputs and next state.
-- Runtime materialization does not yet carry state from one iteration context to the next.
-- The editor does not yet represent a loop body boundary or per-iteration outputs as a structured loop interface.
+- General loop-body rematerialization for arbitrary nodes between `For` and `ForReturn`.
+- Visual editor affordances for a structured loop body boundary.
+- Durable body identity metadata for nested or shared loop body paths.
+- Early break or continue behavior.
+- Rich collection producer nodes designed specifically for loop sources.
+
+Implemented on this branch:
+
+- `For` and `ForReturn` scheduler-special invocation definitions.
+- Output-scope metadata for iteration-scoped and final-scoped outputs.
+- Validation for the currently supported direct `For -> ForReturn` loop boundary.
+- Runtime materialization for direct `For -> ForReturn` iteration continuations.
+- Loop-carried `LoopState` for direct iterations.
+- Final-scoped `For.output_collection` and `For.final_state` release after direct loop completion.
+- Empty collection finalization for direct loops.
 
 ## Architectural Direction
 
@@ -121,6 +131,28 @@ These should not be the first implementation target:
 - automatic inference of arbitrary loop body outputs
 
 Early break can be added later as an explicit continuation contract once fixed collection iteration is stable.
+
+## Current Implementation Boundary
+
+The current incremental implementation supports only a direct body boundary:
+
+```text
+For.iteration_output -> ForReturn.input
+```
+
+That direct-only restriction is intentional for now. The runtime can schedule the next direct `For` iteration when the
+matching direct `ForReturn` completes, can carry `LoopState` forward, and can release final-scoped outputs after the last
+direct return. It does not yet rematerialize arbitrary body nodes between `For` and `ForReturn`.
+
+Until body rematerialization exists, validation should reject indirect bodies such as:
+
+```text
+For.item -> BodyNode.input -> ForReturn.output
+```
+
+Accepting that shape would be misleading because the first iteration could execute, but later body-node iterations would
+not be cloned and scheduled correctly. The implementation should prefer rejecting unsupported loop bodies over allowing
+valid-looking workflows that silently truncate execution.
 
 ## Proposed Node Shape
 
@@ -202,7 +234,7 @@ Semantics:
 The loop should require exactly one matching body return node in its body boundary for the first implementation.
 Default return behavior can be added later, but it would make the boundary harder to validate.
 
-For the first implementation, the recommended body boundary is a boundary pair:
+For the target implementation, the recommended body boundary is a boundary pair:
 
 - `For` starts the body through its iteration-scoped outputs.
 - `ForReturn` ends the body for one iteration.
@@ -214,6 +246,9 @@ implementation should either reject nested `For` bodies or add durable body iden
 
 This is simpler than a full visual subgraph while still giving the backend an explicit return boundary. Validation must
 also reject loop-body paths that escape to after-loop nodes without passing through the matching `ForReturn`.
+
+The current branch implements the direct subset of this boundary. General reachable subgraphs between `For` and
+`ForReturn` require body-node rematerialization and should remain future work.
 
 ### 4. Runtime Shape
 

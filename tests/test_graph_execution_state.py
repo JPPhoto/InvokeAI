@@ -1,11 +1,18 @@
-from typing import Optional
+from typing import Any, Optional
 from unittest.mock import Mock
 
 import pytest
 from pydantic import TypeAdapter
 
-from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput, InvocationContext
+from invokeai.app.invocations.baseinvocation import (
+    BaseInvocation,
+    BaseInvocationOutput,
+    InvocationContext,
+    invocation,
+    invocation_output,
+)
 from invokeai.app.invocations.collections import RangeInvocation
+from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.logic import IfInvocation, IfInvocationOutput
 from invokeai.app.invocations.math import AddInvocation, MultiplyInvocation
 from invokeai.app.invocations.primitives import (
@@ -36,6 +43,20 @@ from tests.test_nodes import (
     TextToImageTestInvocation,
     create_edge,
 )
+
+
+@invocation_output("test_two_any_output")
+class TwoAnyTestInvocationOutput(BaseInvocationOutput):
+    value: Any = OutputField()
+
+
+@invocation("test_two_any", version="1.0.0")
+class TwoAnyTestInvocation(BaseInvocation):
+    first: Any = InputField(default=None)
+    second: Any = InputField(default=None)
+
+    def invoke(self, context: InvocationContext) -> TwoAnyTestInvocationOutput:
+        return TwoAnyTestInvocationOutput(value=(self.first, self.second))
 
 
 @pytest.fixture
@@ -200,24 +221,6 @@ def test_graph_for_return_passes_state_to_next_iteration():
     assert output.state == LoopState(values={"count": 1})
 
 
-def test_graph_for_indirect_return_does_not_schedule_partial_next_iteration():
-    graph = Graph()
-    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
-    graph.add_node(AnyTypeTestInvocation(id="body"))
-    graph.add_node(ForReturnInvocation(id="return"))
-    graph.add_edge(create_edge("for", "item", "body", "value"))
-    graph.add_edge(create_edge("body", "value", "return", "output"))
-    graph.add_edge(create_edge("for", "state", "return", "state"))
-
-    state = GraphExecutionState(graph=graph)
-    _for_node, _for_output = invoke_next(state)
-    _body_node, _body_output = invoke_next(state)
-    _return_node, _return_output = invoke_next(state)
-
-    assert state.next() is None
-    assert state.is_complete()
-
-
 def test_graph_for_final_output_collection_materializes_after_last_direct_return():
     graph = Graph()
     graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
@@ -264,6 +267,49 @@ def test_graph_for_final_state_materializes_after_last_direct_return():
 
     assert isinstance(after_node, AnyTypeTestInvocation)
     assert after_node.value == LoopState(values={"count": 2})
+
+
+def test_graph_for_empty_collection_materializes_final_outputs():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[], state=LoopState(values={"initial": True})))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(TwoAnyTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "first"))
+    graph.add_edge(create_edge("for", "final_state", "after", "second"))
+
+    state = GraphExecutionState(graph=graph)
+    after_node = state.next()
+
+    assert isinstance(after_node, TwoAnyTestInvocation)
+    assert after_node.first == []
+    assert after_node.second == LoopState(values={"initial": True})
+    assert "return" not in state.source_prepared_mapping
+    state.complete(after_node.id, after_node.invoke(Mock(InvocationContext)))
+
+    assert state.is_complete()
+
+
+def test_graph_for_multiple_final_edges_to_same_node_do_not_crash():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(TwoAnyTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "first"))
+    graph.add_edge(create_edge("for", "final_state", "after", "second"))
+
+    state = GraphExecutionState(graph=graph)
+    _for_node, _for_output = invoke_next(state)
+    _return_node, _return_output = invoke_next(state)
+    after_node = state.next()
+
+    assert isinstance(after_node, TwoAnyTestInvocation)
+    assert after_node.first == ["alpha"]
+    assert after_node.second == LoopState()
+    state.complete(after_node.id, after_node.invoke(Mock(InvocationContext)))
+
+    assert state.is_complete()
 
 
 def test_graph_is_complete(simple_graph: Graph):
