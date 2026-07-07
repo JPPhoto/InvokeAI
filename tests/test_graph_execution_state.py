@@ -432,6 +432,114 @@ def test_graph_for_rematerialized_body_cache_keys_include_loop_state_inputs():
     assert first_keys[5] != second_keys[5]
 
 
+def test_graph_for_body_failure_stops_loop_without_releasing_final_outputs():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(TwoAnyTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "first"))
+    graph.add_edge(create_edge("for", "final_state", "after", "second"))
+
+    state = GraphExecutionState(graph=graph)
+    _for_node, _for_output = invoke_next(state)
+    body_node = state.next()
+    assert isinstance(body_node, AnyTypeTestInvocation)
+
+    state.set_node_error(body_node.id, "body failed")
+
+    assert state.has_error()
+    assert state.next() is None
+    assert "after" not in state.source_prepared_mapping
+    assert state.source_prepared_mapping["for"] == {_for_node.id}
+    assert not any(exec_node_id in state.results for exec_node_id in state.source_prepared_mapping.get("return", set()))
+
+
+def test_graph_for_return_failure_stops_loop_without_releasing_final_outputs():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(TwoAnyTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "first"))
+    graph.add_edge(create_edge("for", "final_state", "after", "second"))
+
+    state = GraphExecutionState(graph=graph)
+    _for_node, _for_output = invoke_next(state)
+    _body_node, _body_output = invoke_next(state)
+    return_node = state.next()
+    assert isinstance(return_node, ForReturnInvocation)
+
+    state.set_node_error(return_node.id, "return failed")
+
+    assert state.has_error()
+    assert state.next() is None
+    assert "after" not in state.source_prepared_mapping
+    assert len(state.source_prepared_mapping["for"]) == 1
+    assert not any(exec_node_id in state.results for exec_node_id in state.source_prepared_mapping.get("return", set()))
+
+
+def test_graph_for_failure_after_successful_iteration_does_not_release_partial_outputs():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(TwoAnyTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "first"))
+    graph.add_edge(create_edge("for", "final_state", "after", "second"))
+
+    state = GraphExecutionState(graph=graph)
+    _for_0, _for_output_0 = invoke_next(state)
+    _body_0, _body_output_0 = invoke_next(state)
+    return_0 = state.next()
+    assert isinstance(return_0, ForReturnInvocation)
+    state.complete(return_0.id, ForReturnInvocationOutput(output="alpha", state=LoopState(values={"count": 1})))
+    _for_1, _for_output_1 = invoke_next(state)
+    body_1 = state.next()
+    assert isinstance(body_1, AnyTypeTestInvocation)
+
+    state.set_node_error(body_1.id, "second body failed")
+
+    assert state.has_error()
+    assert state.next() is None
+    assert "after" not in state.source_prepared_mapping
+    assert sum(exec_node_id in state.results for exec_node_id in state.source_prepared_mapping["return"]) == 1
+
+
+def test_graph_for_failure_state_round_trip_does_not_resume_loop_or_release_final_outputs():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(TwoAnyTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "first"))
+    graph.add_edge(create_edge("for", "final_state", "after", "second"))
+
+    state = GraphExecutionState(graph=graph)
+    _for_node, _for_output = invoke_next(state)
+    body_node = state.next()
+    assert isinstance(body_node, AnyTypeTestInvocation)
+    state.set_node_error(body_node.id, "body failed")
+
+    raw = state.model_dump_json(warnings=False, exclude_none=True)
+    resumed = TypeAdapter(GraphExecutionState).validate_json(raw, strict=False)
+
+    assert resumed.has_error()
+    assert resumed.next() is None
+    assert "after" not in resumed.source_prepared_mapping
+    assert not any(
+        exec_node_id in resumed.results for exec_node_id in resumed.source_prepared_mapping.get("return", set())
+    )
+
+
 def test_graph_for_rematerialized_body_reuses_external_input_each_iteration():
     graph = Graph()
     graph.add_node(PromptTestInvocation(id="external", prompt="shared"))

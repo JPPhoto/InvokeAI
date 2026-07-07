@@ -2535,6 +2535,9 @@ class GraphExecutionState(BaseModel):
             self._resolved_if_exec_branches[exec_node_id] = "true_input" if node.condition else "false_input"
 
     def _rehydrate_ready_queues(self) -> None:
+        if self.has_error():
+            return
+
         execution_graph = self.execution_graph.nx_graph_flat()
         for exec_node_id in nx.topological_sort(execution_graph):
             if exec_node_id in self.executed:
@@ -2584,6 +2587,8 @@ class GraphExecutionState(BaseModel):
         #       possibly with a timeout?
 
         if self.is_waiting_on_workflow_call():
+            return None
+        if self.has_error():
             return None
 
         # If there are no prepared nodes, prepare some nodes

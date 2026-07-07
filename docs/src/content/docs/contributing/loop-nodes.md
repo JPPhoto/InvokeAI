@@ -79,6 +79,7 @@ Implemented on this branch:
 - Final-scoped `For.output_collection` and `For.final_state` release after loop completion.
 - Empty collection finalization.
 - Serialization/resume coverage for partially completed stateful loops.
+- Failure handling that stops loop scheduling without releasing partial final outputs.
 
 ## Architectural Direction
 
@@ -357,7 +358,8 @@ The body return for iteration `i` determines:
 
 If the body return omits state, the previous state carries forward.
 
-If body execution fails, normal invocation failure behavior applies and no later iterations should be materialized.
+If body execution fails, normal invocation failure behavior applies. No later iterations should be materialized, no
+partial output collection should be exposed, and final-scoped outputs should remain unavailable.
 
 ### 5. Final Output
 
@@ -389,6 +391,10 @@ surface after all iterations complete.
 If execution is cancelled or fails before the final loop output is produced, partially aggregated outputs must remain
 internal execution state. Downstream after-loop nodes should not observe partial `output_collection` or `final_state`
 values.
+
+This applies even when earlier iterations completed successfully. A failed body node or failed `ForReturn` terminates
+the execution state without releasing the loop's final-scoped outputs. An empty collection is different: it is a
+successful loop completion with no body iterations, so it releases an empty `output_collection` and the initial state.
 
 ### 7. Ordering
 
