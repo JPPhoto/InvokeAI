@@ -31,6 +31,7 @@ from invokeai.app.services.shared.graph import (
     GraphExecutionState,
     IterateInvocation,
     LoopState,
+    StateSetInvocation,
     WorkflowCallFrame,
 )
 
@@ -267,6 +268,68 @@ def test_graph_for_rematerialized_body_carries_returned_state():
 
     assert isinstance(for_1, ForInvocation)
     assert for_1.state == LoopState(values={"count": 1})
+
+
+def test_graph_for_body_state_helper_updates_state_for_next_iteration_and_final_output():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta", "charlie"]))
+    graph.add_node(StateSetInvocation(id="state_set", key="last_item"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "state", "state_set", "state"))
+    graph.add_edge(create_edge("for", "item", "state_set", "value"))
+    graph.add_edge(create_edge("state_set", "state", "return", "state"))
+    graph.add_edge(create_edge("for", "final_state", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    executed_source_ids = execute_all_nodes(state)
+
+    assert executed_source_ids == [
+        "for",
+        "state_set",
+        "return",
+        "for",
+        "state_set",
+        "return",
+        "for",
+        "state_set",
+        "return",
+        "after",
+    ]
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert state.results[after_exec_id].value == LoopState(values={"last_item": "charlie"})
+    assert state.is_complete()
+
+
+def test_graph_for_body_state_helper_return_state_is_visible_to_next_iteration():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(StateSetInvocation(id="state_set", key="last_item"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "state", "return", "output"))
+    graph.add_edge(create_edge("for", "state", "state_set", "state"))
+    graph.add_edge(create_edge("for", "item", "state_set", "value"))
+    graph.add_edge(create_edge("state_set", "state", "return", "state"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+
+    assert state.results[after_exec_id].value == [
+        LoopState(),
+        LoopState(values={"last_item": "alpha"}),
+    ]
+    assert state.is_complete()
 
 
 def test_graph_for_rematerialized_body_reuses_external_input_each_iteration():
