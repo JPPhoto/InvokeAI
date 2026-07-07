@@ -605,6 +605,35 @@ def test_graph_for_output_collection_is_scoped_to_parent_iterator_context():
     assert state.results[collect_exec_id].collection == [["alpha"], ["beta"]]
 
 
+def test_graph_for_final_state_is_scoped_to_parent_iterator_context():
+    graph = Graph()
+    graph.add_node(NestedAnyCollectionTestInvocation(id="nested", collection=[["alpha"], ["beta"]]))
+    graph.add_node(IterateInvocation(id="outer_iterate"))
+    graph.add_node(ForInvocation(id="for"))
+    graph.add_node(StateSetInvocation(id="state_set", key="item"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("nested", "collection", "outer_iterate", "collection"))
+    graph.add_edge(create_edge("outer_iterate", "item", "for", "collection"))
+    graph.add_edge(create_edge("for", "state", "state_set", "state"))
+    graph.add_edge(create_edge("for", "item", "state_set", "value"))
+    graph.add_edge(create_edge("state_set", "state", "return", "state"))
+    graph.add_edge(create_edge("for", "final_state", "collect", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+    collect_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "collect"
+    )
+
+    assert state.results[collect_exec_id].collection == [
+        LoopState(values={"item": "alpha"}),
+        LoopState(values={"item": "beta"}),
+    ]
+
+
 def test_graph_for_final_output_collection_materializes_after_last_direct_return():
     graph = Graph()
     graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
