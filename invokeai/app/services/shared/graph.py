@@ -495,31 +495,40 @@ class _ExecutionMaterializer:
         self._initialize_execution_node(new_node.id)
         return new_node.id
 
-    def create_direct_for_return_iteration(
-        self,
-        source_return_id: str,
-        source_for_id: str,
-        prepared_for_id: str,
-    ) -> Optional[str]:
-        node = self._state.graph.get_node(source_return_id)
-        if not isinstance(node, ForReturnInvocation):
-            raise TypeError(f"Expected source ForReturnInvocation, got {type(node).__name__}")
-
-        direct_for_edges = [
-            Edge(
-                source=EdgeConnection(node_id=prepared_for_id, field=edge.source.field),
-                destination=EdgeConnection(node_id="", field=edge.destination.field),
-            )
-            for edge in self._state.graph._get_input_edges(source_return_id)
-            if edge.source.node_id == source_for_id
-        ]
-        if not direct_for_edges:
+    def create_for_body_iteration(self, source_for_id: str, prepared_for_id: str) -> Optional[str]:
+        graph = self._state.graph.nx_graph_flat()
+        body_path_to_return = self._state.graph._get_for_body_path_to_return(source_for_id, graph)
+        if body_path_to_return is None:
             return None
 
-        new_node = self._create_execution_node_copy(node, source_return_id, -1)
-        self._attach_execution_edges(new_node.id, direct_for_edges)
-        self._initialize_execution_node(new_node.id)
-        return new_node.id
+        body_path_nodes, source_return_id = body_path_to_return
+        source_to_prepared = {source_for_id: prepared_for_id}
+        prepared_return_id: Optional[str] = None
+
+        for source_node_id in nx.topological_sort(graph):
+            if source_node_id not in body_path_nodes:
+                continue
+
+            node = self._state.graph.get_node(source_node_id)
+            new_edges = [
+                Edge(
+                    source=EdgeConnection(node_id=source_to_prepared[edge.source.node_id], field=edge.source.field),
+                    destination=EdgeConnection(node_id="", field=edge.destination.field),
+                )
+                for edge in self._state.graph._get_input_edges(source_node_id)
+                if edge.source.node_id in source_to_prepared
+            ]
+
+            new_node = self._create_execution_node_copy(node, source_node_id, -1)
+            source_to_prepared[source_node_id] = new_node.id
+            self._state.executed.discard(source_node_id)
+            self._attach_execution_edges(new_node.id, new_edges)
+            self._initialize_execution_node(new_node.id)
+
+            if source_node_id == source_return_id:
+                prepared_return_id = new_node.id
+
+        return prepared_return_id
 
     def _attach_execution_edges(self, exec_node_id: str, new_edges: list[Edge]) -> None:
         for edge in new_edges:
@@ -794,11 +803,12 @@ class _ExecutionScheduler:
             if source_node_id not in self._state.executed_history:
                 self._state.executed_history.append(source_node_id)
 
-    def _get_direct_for_parent(self, exec_node_id: str) -> Optional[str]:
-        for edge in self._state.execution_graph._get_input_edges(exec_node_id):
-            source_node = self._state.execution_graph.get_node(edge.source.node_id)
+    def _get_for_parent(self, exec_node_id: str) -> Optional[str]:
+        execution_graph = self._state.execution_graph.nx_graph_flat()
+        for ancestor_id in nx.ancestors(execution_graph, exec_node_id):
+            source_node = self._state.execution_graph.get_node(ancestor_id)
             if isinstance(source_node, ForInvocation):
-                return edge.source.node_id
+                return ancestor_id
         return None
 
     def _get_loop_state_for_next_iteration(
@@ -813,10 +823,6 @@ class _ExecutionScheduler:
 
         return LoopState()
 
-    def _has_only_direct_for_return_inputs(self, source_for_id: str, source_return_id: str) -> bool:
-        input_edges = self._state.graph._get_input_edges(source_return_id)
-        return len(input_edges) > 0 and all(edge.source.node_id == source_for_id for edge in input_edges)
-
     def _get_ordered_for_return_outputs(self, source_return_id: str) -> list["ForReturnInvocationOutput"]:
         prepared_return_ids = self._state._prepared_registry().get_prepared_ids(source_return_id)
         prepared_return_ids = sorted(prepared_return_ids, key=self._state._get_iteration_path)
@@ -826,7 +832,7 @@ class _ExecutionScheduler:
             if isinstance((output := self._state.results.get(prepared_return_id)), ForReturnInvocationOutput)
         ]
 
-    def _finalize_direct_for_outputs(
+    def _finalize_for_outputs(
         self,
         for_exec_node_id: str,
         source_for_id: str,
@@ -848,7 +854,7 @@ class _ExecutionScheduler:
         if not isinstance(self._state.execution_graph.get_node(exec_node_id), ForReturnInvocation):
             return
 
-        for_exec_node_id = self._get_direct_for_parent(exec_node_id)
+        for_exec_node_id = self._get_for_parent(exec_node_id)
         if for_exec_node_id is None:
             return
 
@@ -859,12 +865,10 @@ class _ExecutionScheduler:
         registry = self._state._prepared_registry()
         source_for_id = registry.get_source_node_id(for_exec_node_id)
         source_return_id = registry.get_source_node_id(exec_node_id)
-        if not self._has_only_direct_for_return_inputs(source_for_id, source_return_id):
-            return
 
         next_index = for_node.index + 1
         if next_index >= len(for_node.collection):
-            self._finalize_direct_for_outputs(for_exec_node_id, source_for_id, source_return_id, output)
+            self._finalize_for_outputs(for_exec_node_id, source_for_id, source_return_id, output)
             return
 
         next_state = self._get_loop_state_for_next_iteration(for_exec_node_id, output)
@@ -876,11 +880,7 @@ class _ExecutionScheduler:
             state=next_state,
         )
         self._state.executed.discard(source_for_id)
-        self._state._materializer().create_direct_for_return_iteration(
-            source_return_id=source_return_id,
-            source_for_id=source_for_id,
-            prepared_for_id=next_for_id,
-        )
+        self._state._materializer().create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=next_for_id)
 
     def _decrement_child_indegree(self, child_exec_node_id: str, parent_exec_node_id: str) -> None:
         if child_exec_node_id not in self._state.indegree:
@@ -1951,15 +1951,14 @@ class Graph(BaseModel):
                 return "final-scoped For outputs cannot feed the loop body"
 
         for body_node_id in body_path_nodes:
+            for edge in self._get_input_edges(body_node_id):
+                if edge.source.node_id != node_id and edge.source.node_id not in body_path_nodes:
+                    return "For loop body inputs must come from the For node or the loop body"
             if body_node_id == return_node_id:
                 continue
             for edge in self._get_output_edges(body_node_id):
                 if edge.destination.node_id not in body_path_nodes:
                     return "For loop body paths must not escape before the matching ForReturn"
-
-        unsupported_body_node_ids = body_path_nodes - {return_node_id}
-        if len(unsupported_body_node_ids) > 0:
-            return "For runtime currently supports only direct For to ForReturn body edges"
 
         return None
 

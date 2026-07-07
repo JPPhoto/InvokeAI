@@ -61,7 +61,7 @@ Lessons from those branches:
 
 What is still not implemented:
 
-- General loop-body rematerialization for arbitrary nodes between `For` and `ForReturn`.
+- Loop-body inputs from nodes outside the `For` boundary and reachable body path.
 - Visual editor affordances for a structured loop body boundary.
 - Durable body identity metadata for nested or shared loop body paths.
 - Early break or continue behavior.
@@ -71,11 +71,12 @@ Implemented on this branch:
 
 - `For` and `ForReturn` scheduler-special invocation definitions.
 - Output-scope metadata for iteration-scoped and final-scoped outputs.
-- Validation for the currently supported direct `For -> ForReturn` loop boundary.
+- Validation for the currently supported `For -> ... -> ForReturn` loop boundary.
 - Runtime materialization for direct `For -> ForReturn` iteration continuations.
-- Loop-carried `LoopState` for direct iterations.
-- Final-scoped `For.output_collection` and `For.final_state` release after direct loop completion.
-- Empty collection finalization for direct loops.
+- Runtime rematerialization for body nodes on the reachable path from `For` iteration outputs to `ForReturn`.
+- Loop-carried `LoopState` for direct and rematerialized body iterations.
+- Final-scoped `For.output_collection` and `For.final_state` release after loop completion.
+- Empty collection finalization.
 
 ## Architectural Direction
 
@@ -134,25 +135,29 @@ Early break can be added later as an explicit continuation contract once fixed c
 
 ## Current Implementation Boundary
 
-The current incremental implementation supports only a direct body boundary:
+The current incremental implementation supports a bounded body path from iteration-scoped `For` outputs to one matching
+`ForReturn`:
 
 ```text
 For.iteration_output -> ForReturn.input
+For.iteration_output -> BodyNode.input -> ForReturn.input
 ```
 
-That direct-only restriction is intentional for now. The runtime can schedule the next direct `For` iteration when the
-matching direct `ForReturn` completes, can carry `LoopState` forward, and can release final-scoped outputs after the last
-direct return. It does not yet rematerialize arbitrary body nodes between `For` and `ForReturn`.
+The runtime schedules the next `For` iteration when the matching `ForReturn` completes, carries `LoopState` forward, and
+rematerializes the reachable body path for the next iteration. Final-scoped outputs release after the last matching
+`ForReturn` completes.
 
-Until body rematerialization exists, validation should reject indirect bodies such as:
+The current body rematerializer only copies edges whose source is the `For` node or another node in the loop body path.
+Until external body inputs are supported, validation should reject body inputs from outside the loop boundary:
 
 ```text
-For.item -> BodyNode.input -> ForReturn.output
+ExternalNode.output -> BodyNode.input
 ```
 
-Accepting that shape would be misleading because the first iteration could execute, but later body-node iterations would
-not be cloned and scheduled correctly. The implementation should prefer rejecting unsupported loop bodies over allowing
-valid-looking workflows that silently truncate execution.
+Accepting unsupported body inputs would be misleading because the first iteration could execute with already-prepared
+inputs, but later body-node iterations would not have those edges cloned correctly. The implementation should prefer
+rejecting unsupported loop bodies over allowing valid-looking workflows that silently change inputs after the first
+iteration.
 
 ## Proposed Node Shape
 
@@ -247,8 +252,8 @@ implementation should either reject nested `For` bodies or add durable body iden
 This is simpler than a full visual subgraph while still giving the backend an explicit return boundary. Validation must
 also reject loop-body paths that escape to after-loop nodes without passing through the matching `ForReturn`.
 
-The current branch implements the direct subset of this boundary. General reachable subgraphs between `For` and
-`ForReturn` require body-node rematerialization and should remain future work.
+The current branch implements this reachable body-path subset. More complex boundaries, external body inputs, shared
+paths, and nested loops require durable body identity metadata and should remain future work.
 
 ### 4. Runtime Shape
 

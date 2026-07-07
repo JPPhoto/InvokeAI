@@ -104,7 +104,7 @@ def test_graph_validates_direct_for_boundary_pair():
     g.validate_self()
 
 
-def test_graph_rejects_indirect_for_body_until_body_rematerialization_exists():
+def test_graph_validates_indirect_for_body():
     g = Graph()
     loop = ForInvocation(id="for", collection=["a", "b"])
     body = PromptTestInvocation(id="body")
@@ -116,7 +116,25 @@ def test_graph_rejects_indirect_for_body_until_body_rematerialization_exists():
     g.add_edge(create_edge(body.id, "prompt", body_return.id, "output"))
     g.add_edge(create_edge(loop.id, "item", body.id, "prompt"))
 
-    with pytest.raises(InvalidEdgeError, match="direct For to ForReturn"):
+    g.validate_self()
+
+
+def test_graph_rejects_for_body_inputs_from_outside_body_boundary():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a", "b"])
+    external = PromptTestInvocation(id="external", prompt="outside")
+    body = TextToImageTestInvocation(id="body")
+    body_return = ForReturnInvocation(id="return")
+
+    g.add_node(loop)
+    g.add_node(external)
+    g.add_node(body)
+    g.add_node(body_return)
+    g.add_edge(create_edge(loop.id, "item", body.id, "prompt"))
+    g.add_edge(create_edge(external.id, "prompt", body.id, "prompt2"))
+    g.add_edge(create_edge(body.id, "image", body_return.id, "output"))
+
+    with pytest.raises(InvalidEdgeError, match="inputs must come from the For node or the loop body"):
         g.validate_self()
 
 

@@ -221,6 +221,54 @@ def test_graph_for_return_passes_state_to_next_iteration():
     assert output.state == LoopState(values={"count": 1})
 
 
+def test_graph_for_rematerializes_indirect_body_for_each_iteration():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    executed_source_ids = execute_all_nodes(state)
+
+    assert executed_source_ids == ["for", "body", "return", "for", "body", "return", "after"]
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert state.results[after_exec_id].value == ["alpha", "beta"]
+    assert state.is_complete()
+
+
+def test_graph_for_rematerialized_body_carries_returned_state():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(create_edge("for", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "return", "output"))
+
+    state = GraphExecutionState(graph=graph)
+    for_0 = state.next()
+    assert isinstance(for_0, ForInvocation)
+    state.complete(for_0.id, for_0.invoke(Mock(InvocationContext)))
+    body_0 = state.next()
+    assert isinstance(body_0, AnyTypeTestInvocation)
+    state.complete(body_0.id, body_0.invoke(Mock(InvocationContext)))
+    return_0 = state.next()
+    assert isinstance(return_0, ForReturnInvocation)
+    state.complete(return_0.id, ForReturnInvocationOutput(output="alpha", state=LoopState(values={"count": 1})))
+
+    for_1 = state.next()
+
+    assert isinstance(for_1, ForInvocation)
+    assert for_1.state == LoopState(values={"count": 1})
+
+
 def test_graph_for_final_output_collection_materializes_after_last_direct_return():
     graph = Graph()
     graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
