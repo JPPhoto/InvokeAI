@@ -124,6 +124,23 @@ def test_graph_for_return_receives_first_iteration_item():
     assert return_output.output == for_output.item
 
 
+def test_graph_for_final_outputs_do_not_materialize_from_iteration_output():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    for_node, _for_output = invoke_next(state)
+    next_node = state.next()
+
+    assert state.prepared_source_mapping[for_node.id] == "for"
+    assert isinstance(next_node, ForReturnInvocation)
+    assert "after" not in state.source_prepared_mapping
+
+
 def test_graph_is_complete(simple_graph: Graph):
     g = GraphExecutionState(graph=simple_graph)
     _ = invoke_next(g)

@@ -407,6 +407,15 @@ class _ExecutionMaterializer:
                 )
         return new_edges
 
+    def _has_unmaterializable_for_final_input(self, node_id: str) -> bool:
+        for edge in self._state.graph._get_input_edges(node_id):
+            source_node = self._state.graph.get_node(edge.source.node_id)
+            if not isinstance(source_node, ForInvocation):
+                continue
+            if get_output_field_scope(source_node, edge.source.field) == OutputScope.Final:
+                return True
+        return False
+
     def _create_execution_node_copy(self, node: BaseInvocation, node_id: str, iteration_index: int) -> BaseInvocation:
         new_node = node.model_copy(deep=True)
         new_node.id = uuid_string()
@@ -587,6 +596,7 @@ class _ExecutionMaterializer:
                 node_id
                 for node_id in nx.topological_sort(g)
                 if node_id not in self._state.source_prepared_mapping
+                and not self._has_unmaterializable_for_final_input(node_id)
                 and (
                     not isinstance(self._state.graph.get_node(node_id), (ForInvocation, IterateInvocation))
                     or all(source_id in self._state.executed for source_id, _ in g.in_edges(node_id))
