@@ -21,6 +21,7 @@ from invokeai.app.invocations.primitives import (
     BooleanInvocation,
     BooleanOutput,
 )
+from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
 from invokeai.app.services.shared.graph import (
     CollectInvocation,
     ForInvocation,
@@ -373,6 +374,62 @@ def test_graph_for_partially_completed_stateful_loop_resumes_after_serialization
     assert executed_source_ids == expected_remaining_source_ids
     assert resumed.results[after_exec_id].value == LoopState(values={"last_item": "beta"})
     assert resumed.is_complete()
+
+
+def test_graph_for_rematerialized_body_cache_keys_overlap_for_matching_item_inputs():
+    def execute_loop_and_get_body_cache_keys(collection: list[int]) -> dict[int, int]:
+        graph = Graph()
+        graph.add_node(ForInvocation(id="for", collection=collection))
+        graph.add_node(StateSetInvocation(id="state_set", key="item"))
+        graph.add_node(ForReturnInvocation(id="return"))
+        graph.add_edge(create_edge("for", "item", "state_set", "value"))
+        graph.add_edge(create_edge("state_set", "state", "return", "state"))
+
+        state = GraphExecutionState(graph=graph)
+        execute_all_nodes(state)
+
+        return {
+            state.execution_graph.get_node(exec_node_id).value: MemoryInvocationCache.create_key(
+                state.execution_graph.get_node(exec_node_id)
+            )
+            for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+            if source_node_id == "state_set"
+        }
+
+    first_keys = execute_loop_and_get_body_cache_keys([0, 1, 4, 5])
+    second_keys = execute_loop_and_get_body_cache_keys([0, 2, 5, 7])
+
+    assert first_keys[0] == second_keys[0]
+    assert first_keys[5] == second_keys[5]
+    assert first_keys[1] not in second_keys.values()
+    assert first_keys[4] not in second_keys.values()
+
+
+def test_graph_for_rematerialized_body_cache_keys_include_loop_state_inputs():
+    def execute_loop_and_get_body_cache_keys(collection: list[int]) -> dict[int, int]:
+        graph = Graph()
+        graph.add_node(ForInvocation(id="for", collection=collection))
+        graph.add_node(StateSetInvocation(id="state_set", key="item"))
+        graph.add_node(ForReturnInvocation(id="return"))
+        graph.add_edge(create_edge("for", "state", "state_set", "state"))
+        graph.add_edge(create_edge("for", "item", "state_set", "value"))
+        graph.add_edge(create_edge("state_set", "state", "return", "state"))
+
+        state = GraphExecutionState(graph=graph)
+        execute_all_nodes(state)
+
+        return {
+            state.execution_graph.get_node(exec_node_id).value: MemoryInvocationCache.create_key(
+                state.execution_graph.get_node(exec_node_id)
+            )
+            for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+            if source_node_id == "state_set"
+        }
+
+    first_keys = execute_loop_and_get_body_cache_keys([0, 5])
+    second_keys = execute_loop_and_get_body_cache_keys([1, 5])
+
+    assert first_keys[5] != second_keys[5]
 
 
 def test_graph_for_rematerialized_body_reuses_external_input_each_iteration():

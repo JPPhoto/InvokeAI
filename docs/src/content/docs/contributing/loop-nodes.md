@@ -442,6 +442,13 @@ Invocation cache behavior must not collapse distinct loop iterations incorrectly
 Cache keys for body nodes must account for normal prepared input values. If a node depends on loop state, the explicit
 state input should participate in its normal invocation value hash.
 
+The `For` boundary itself is scheduler-special, but rematerialized body nodes are ordinary invocations after their inputs
+are prepared. A stateless body node can therefore reuse cache entries when different loop executions produce the same
+prepared body inputs. For example, loops over `[0, 1, 4, 5]` and `[0, 2, 5, 7]` may reuse body-node cache entries for
+items `0` and `5` if the body node depends only on the item and matching external configuration. If the body also
+depends on `index`, `total`, loop `state`, or other inputs, those values must participate in the normal cache key and
+can prevent reuse.
+
 If a future feature rematerializes stateful nodes outside iterator ancestry, that behavior must either bypass cache or
 include the relevant iteration context in the cache key.
 

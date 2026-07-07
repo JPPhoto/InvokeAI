@@ -1,6 +1,7 @@
 import pytest
 
 from invokeai.app.invocations.fields import OutputScope
+from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
 from invokeai.app.services.shared.graph import (
     ForInvocation,
     ForReturnInvocation,
@@ -105,3 +106,26 @@ def test_state_merge_invocation_default_values_are_not_shared() -> None:
     first.values["count"] = 1
 
     assert second.values == {}
+
+
+def test_loop_body_cache_key_ignores_rematerialized_node_id_when_inputs_match() -> None:
+    first = StateGetInvocation(id="state_get_0", state=LoopState(values={"count": 1}), key="count")
+    second = StateGetInvocation(id="state_get_1", state=LoopState(values={"count": 1}), key="count")
+
+    assert MemoryInvocationCache.create_key(first) == MemoryInvocationCache.create_key(second)
+
+
+def test_loop_body_cache_key_includes_loop_state_input() -> None:
+    first = StateGetInvocation(id="state_get_0", state=LoopState(), key="last_item", default=None)
+    second = StateGetInvocation(
+        id="state_get_1", state=LoopState(values={"last_item": "alpha"}), key="last_item", default=None
+    )
+
+    assert MemoryInvocationCache.create_key(first) != MemoryInvocationCache.create_key(second)
+
+
+def test_loop_body_cache_key_includes_loop_item_input() -> None:
+    first = StateSetInvocation(id="state_set_0", state=LoopState(), key="last_item", value="alpha")
+    second = StateSetInvocation(id="state_set_1", state=LoopState(), key="last_item", value="beta")
+
+    assert MemoryInvocationCache.create_key(first) != MemoryInvocationCache.create_key(second)
