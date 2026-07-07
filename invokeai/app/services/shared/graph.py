@@ -413,7 +413,7 @@ class _ExecutionMaterializer:
             if not isinstance(source_node, ForInvocation):
                 continue
             if get_output_field_scope(source_node, edge.source.field) == OutputScope.Final:
-                return True
+                return edge.source.node_id not in self._state.finalized_loop_nodes
         return False
 
     def _create_execution_node_copy(self, node: BaseInvocation, node_id: str, iteration_index: int) -> BaseInvocation:
@@ -543,6 +543,13 @@ class _ExecutionMaterializer:
         )
         for c in collectors:
             g.remove_edges_from(list(g.in_edges(c)))
+        for edge in self._state.graph.edges:
+            source_node = self._state.graph.get_node(edge.source.node_id)
+            if (
+                isinstance(source_node, ForInvocation)
+                and get_output_field_scope(source_node, edge.source.field) == OutputScope.Final
+            ):
+                g.remove_edge(edge.source.node_id, edge.destination.node_id)
         return g
 
     def get_node_iterators(self, node_id: str, it_graph: Optional[nx.DiGraph] = None) -> list[str]:
@@ -607,6 +614,15 @@ class _ExecutionMaterializer:
             None,
         )
 
+    def _get_final_for_exec_node(self, prepared_nodes: set[str]) -> Optional[str]:
+        prepared_for_nodes = [(node_id, self._state.execution_graph.nodes.get(node_id)) for node_id in prepared_nodes]
+        prepared_for_nodes = [
+            (node_id, node) for node_id, node in prepared_for_nodes if isinstance(node, ForInvocation)
+        ]
+        if not prepared_for_nodes:
+            return None
+        return max(prepared_for_nodes, key=lambda item: item[1].index)[0]
+
     def get_iteration_node(
         self,
         source_node_id: str,
@@ -619,6 +635,8 @@ class _ExecutionMaterializer:
             return next(iter(prepared_nodes))
 
         parent_iterators = self._get_parent_iterator_exec_nodes(source_node_id, graph, prepared_iterator_nodes)
+        if not parent_iterators and isinstance(self._state.graph.get_node(source_node_id), ForInvocation):
+            return self._get_final_for_exec_node(prepared_nodes)
         if len(prepared_nodes) == 1:
             prepared_node_id = next(iter(prepared_nodes))
             if self._matches_parent_iterators(prepared_node_id, parent_iterators, execution_graph):
@@ -747,6 +765,31 @@ class _ExecutionScheduler:
         input_edges = self._state.graph._get_input_edges(source_return_id)
         return len(input_edges) > 0 and all(edge.source.node_id == source_for_id for edge in input_edges)
 
+    def _get_ordered_for_return_outputs(self, source_return_id: str) -> list["ForReturnInvocationOutput"]:
+        prepared_return_ids = self._state._prepared_registry().get_prepared_ids(source_return_id)
+        prepared_return_ids = sorted(prepared_return_ids, key=self._state._get_iteration_path)
+        return [
+            output
+            for prepared_return_id in prepared_return_ids
+            if isinstance((output := self._state.results.get(prepared_return_id)), ForReturnInvocationOutput)
+        ]
+
+    def _finalize_direct_for_outputs(
+        self,
+        for_exec_node_id: str,
+        source_for_id: str,
+        source_return_id: str,
+        return_output: "ForReturnInvocationOutput",
+    ) -> None:
+        for_output = self._state.results.get(for_exec_node_id)
+        if not isinstance(for_output, ForInvocationOutput):
+            return
+
+        return_outputs = self._get_ordered_for_return_outputs(source_return_id)
+        for_output.output_collection = [output.output for output in return_outputs]
+        for_output.final_state = self._get_loop_state_for_next_iteration(for_exec_node_id, return_output)
+        self._state.finalized_loop_nodes.add(source_for_id)
+
     def _try_schedule_next_for_iteration(self, exec_node_id: str, output: BaseInvocationOutput) -> None:
         if not isinstance(output, ForReturnInvocationOutput):
             return
@@ -761,14 +804,15 @@ class _ExecutionScheduler:
         if not isinstance(for_node, ForInvocation):
             return
 
-        next_index = for_node.index + 1
-        if next_index >= len(for_node.collection):
-            return
-
         registry = self._state._prepared_registry()
         source_for_id = registry.get_source_node_id(for_exec_node_id)
         source_return_id = registry.get_source_node_id(exec_node_id)
         if not self._has_only_direct_for_return_inputs(source_for_id, source_return_id):
+            return
+
+        next_index = for_node.index + 1
+        if next_index >= len(for_node.collection):
+            self._finalize_direct_for_outputs(for_exec_node_id, source_for_id, source_return_id, output)
             return
 
         next_state = self._get_loop_state_for_next_iteration(for_exec_node_id, output)
@@ -2231,6 +2275,10 @@ class GraphExecutionState(BaseModel):
         description="The map of original graph nodes to prepared nodes",
         default_factory=dict,
     )
+    finalized_loop_nodes: set[str] = Field(
+        description="The set of loop source nodes whose final outputs have been materialized",
+        default_factory=set,
+    )
     # Ready queues grouped by node class name (internal only)
     _ready_queues: dict[str, Deque[str]] = PrivateAttr(default_factory=dict)
     # Current class being drained; stays until its queue empties
@@ -2406,6 +2454,7 @@ class GraphExecutionState(BaseModel):
                 "workflow_call_history",
                 "prepared_source_mapping",
                 "source_prepared_mapping",
+                "finalized_loop_nodes",
             ]
         }
     )

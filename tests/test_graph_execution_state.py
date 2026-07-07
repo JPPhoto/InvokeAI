@@ -218,6 +218,54 @@ def test_graph_for_indirect_return_does_not_schedule_partial_next_iteration():
     assert state.is_complete()
 
 
+def test_graph_for_final_output_collection_materializes_after_last_direct_return():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    _for_0, _for_output_0 = invoke_next(state)
+    _return_0, _return_output_0 = invoke_next(state)
+    _for_1, _for_output_1 = invoke_next(state)
+    _return_1, _return_output_1 = invoke_next(state)
+
+    after_node = state.next()
+
+    assert isinstance(after_node, AnyTypeTestInvocation)
+    assert after_node.value == ["alpha", "beta"]
+
+
+def test_graph_for_final_state_materializes_after_last_direct_return():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "final_state", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    for_0 = state.next()
+    assert isinstance(for_0, ForInvocation)
+    state.complete(for_0.id, for_0.invoke(Mock(InvocationContext)))
+    return_0 = state.next()
+    assert isinstance(return_0, ForReturnInvocation)
+    state.complete(return_0.id, ForReturnInvocationOutput(output="alpha", state=LoopState(values={"count": 1})))
+    for_1 = state.next()
+    assert isinstance(for_1, ForInvocation)
+    state.complete(for_1.id, for_1.invoke(Mock(InvocationContext)))
+    return_1 = state.next()
+    assert isinstance(return_1, ForReturnInvocation)
+    state.complete(return_1.id, ForReturnInvocationOutput(output="beta", state=LoopState(values={"count": 2})))
+
+    after_node = state.next()
+
+    assert isinstance(after_node, AnyTypeTestInvocation)
+    assert after_node.value == LoopState(values={"count": 2})
+
+
 def test_graph_is_complete(simple_graph: Graph):
     g = GraphExecutionState(graph=simple_graph)
     _ = invoke_next(g)

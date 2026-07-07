@@ -12608,6 +12608,11 @@ export type components = {
             source_prepared_mapping: {
                 [key: string]: string[];
             };
+            /**
+             * Finalized Loop Nodes
+             * @description The set of loop source nodes whose final outputs have been materialized
+             */
+            finalized_loop_nodes: string[];
             /** Ready Order */
             ready_order?: string[];
             /**
