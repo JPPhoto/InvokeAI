@@ -24,6 +24,8 @@ from invokeai.app.services.shared.graph import (
     CollectInvocationOutput,
     Edge,
     EdgeConnection,
+    ForInvocation,
+    ForReturnInvocation,
     Graph,
     GraphExecutionState,
     InvalidEdgeError,
@@ -88,6 +90,83 @@ def test_connections_are_compatible():
     result = are_connections_compatible(from_node, from_field, to_node, to_field)
 
     assert result is True
+
+
+def test_graph_validates_for_boundary_pair():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a", "b"])
+    body = PromptTestInvocation(id="body")
+    body_return = ForReturnInvocation(id="return")
+
+    g.add_node(loop)
+    g.add_node(body)
+    g.add_node(body_return)
+    g.add_edge(create_edge(body.id, "prompt", body_return.id, "output"))
+    g.add_edge(create_edge(loop.id, "item", body.id, "prompt"))
+
+    g.validate_self()
+
+
+def test_graph_rejects_for_without_matching_return():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a", "b"])
+    body = PromptTestInvocation(id="body")
+
+    g.add_node(loop)
+    g.add_node(body)
+    g.add_edge(create_edge(loop.id, "item", body.id, "prompt"))
+
+    with pytest.raises(InvalidEdgeError, match="exactly one matching ForReturn"):
+        g.validate_self()
+
+
+def test_graph_rejects_nested_for_until_body_identity_exists():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a", "b"])
+    nested_loop = ForInvocation(id="nested_for", collection=["c", "d"])
+    body_return = ForReturnInvocation(id="return")
+
+    g.add_node(loop)
+    g.add_node(nested_loop)
+    g.add_node(body_return)
+    g.add_edge(create_edge(nested_loop.id, "item", body_return.id, "output"))
+    g.add_edge(create_edge(loop.id, "item", nested_loop.id, "collection"))
+
+    with pytest.raises(InvalidEdgeError, match="Nested For loops"):
+        g.validate_self()
+
+
+def test_graph_rejects_for_body_edges_that_escape_to_after_loop_nodes():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a", "b"])
+    body = PromptTestInvocation(id="body")
+    body_return = ForReturnInvocation(id="return")
+    after = AnyTypeTestInvocation(id="after")
+
+    g.add_node(loop)
+    g.add_node(body)
+    g.add_node(body_return)
+    g.add_node(after)
+    g.add_edge(create_edge(body.id, "prompt", body_return.id, "output"))
+    g.add_edge(create_edge(loop.id, "item", body.id, "prompt"))
+    g.add_edge(create_edge(body.id, "prompt", after.id, "value"))
+
+    with pytest.raises(InvalidEdgeError, match="escape"):
+        g.validate_self()
+
+
+def test_graph_rejects_final_scoped_for_output_into_body():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a", "b"])
+    body_return = ForReturnInvocation(id="return")
+
+    g.add_node(loop)
+    g.add_node(body_return)
+    g.add_edge(create_edge(loop.id, "item", body_return.id, "output"))
+    g.add_edge(create_edge(loop.id, "final_state", body_return.id, "state"))
+
+    with pytest.raises(InvalidEdgeError, match="final-scoped"):
+        g.validate_self()
 
 
 def test_connections_are_incompatible():
