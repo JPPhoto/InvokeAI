@@ -338,6 +338,11 @@ Downstream nodes after the loop receive data through normal edges from the final
 Those downstream nodes become ready only after the final prepared execution node for the loop is complete. They should
 not depend on or see per-iteration prepared outputs directly unless they are part of the loop body.
 
+During incremental implementation, final-scoped `For` outputs may exist in the schema before the runtime final prepared
+node exists. In that state, edges from `For.output_collection` and `For.final_state` must not be materialized from
+per-iteration `For` execution nodes. They should remain blocked until the scheduler can create a final loop execution
+surface after all iterations complete.
+
 ### 6. Cancellation And Partial Results
 
 If execution is cancelled or fails before the final loop output is produced, partially aggregated outputs must remain
