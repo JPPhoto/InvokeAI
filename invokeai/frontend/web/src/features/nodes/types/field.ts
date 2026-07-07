@@ -50,6 +50,7 @@ import {
 
 // #region Base schemas & misc
 const zFieldInput = z.enum(['connection', 'direct', 'any']);
+const zFieldOutputScope = z.enum(['iteration', 'final']);
 const zFieldUIComponent = z.enum(['none', 'textarea', 'slider']);
 const zFieldInputInstanceBase = z.object({
   name: z.string().trim().min(1),
@@ -79,6 +80,7 @@ const zFieldInputTemplateBase = zFieldTemplateBase.extend({
 });
 const zFieldOutputTemplateBase = zFieldTemplateBase.extend({
   fieldKind: z.literal('output'),
+  output_scope: zFieldOutputScope.nullish(),
 });
 
 const SINGLE = 'SINGLE' as const;

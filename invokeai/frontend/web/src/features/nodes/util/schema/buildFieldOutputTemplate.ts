@@ -7,7 +7,7 @@ export const buildFieldOutputTemplate = (
   fieldName: string,
   fieldType: FieldType
 ): FieldOutputTemplate => {
-  const { title, description, ui_hidden, ui_type, ui_order } = fieldSchema;
+  const { title, description, ui_hidden, ui_type, ui_order, output_scope } = fieldSchema;
 
   const template: FieldOutputTemplate = {
     fieldKind: 'output',
@@ -18,6 +18,7 @@ export const buildFieldOutputTemplate = (
     ui_hidden,
     ui_type,
     ui_order,
+    output_scope,
   };
 
   return template;

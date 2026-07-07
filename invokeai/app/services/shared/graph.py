@@ -33,7 +33,7 @@ from invokeai.app.invocations.call_saved_workflow import (
     CallSavedWorkflowInvocation,
     is_call_saved_workflow_dynamic_input,
 )
-from invokeai.app.invocations.fields import Input, InputField, OutputField, UIType
+from invokeai.app.invocations.fields import Input, InputField, OutputField, OutputScope, UIType
 from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.misc import uuid_string
@@ -881,6 +881,23 @@ def get_output_field_type(node: BaseInvocation, field: str) -> Any:
         assert field_info is not None, f"Output field '{field}' not found in {invocation_output_class.get_type()}"
         output_field_type = field_info.annotation
         return output_field_type
+    except Exception:
+        return None
+
+
+def get_output_field_scope(node: BaseInvocation, field: str) -> OutputScope | None:
+    try:
+        invocation_class = type(node)
+        invocation_output_class = invocation_class.get_output_annotation()
+        field_info = invocation_output_class.model_fields.get(field)
+        assert field_info is not None, f"Output field '{field}' not found in {invocation_output_class.get_type()}"
+        json_schema_extra = field_info.json_schema_extra
+        if not isinstance(json_schema_extra, dict):
+            return None
+        output_scope = json_schema_extra.get("output_scope")
+        if output_scope is None:
+            return None
+        return OutputScope(output_scope)
     except Exception:
         return None
 

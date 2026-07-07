@@ -9,6 +9,7 @@ from invokeai.app.invocations.baseinvocation import (
     invocation,
     invocation_output,
 )
+from invokeai.app.invocations.fields import OutputField, OutputScope
 from invokeai.app.invocations.math import AddInvocation
 from invokeai.app.invocations.primitives import (
     ColorInvocation,
@@ -30,6 +31,7 @@ from invokeai.app.services.shared.graph import (
     NodeAlreadyInGraphError,
     NodeNotFoundError,
     are_connections_compatible,
+    get_output_field_scope,
 )
 from tests.test_nodes import (
     AnyTypeTestInvocation,
@@ -54,7 +56,29 @@ def create_edge(from_id: str, from_field: str, to_id: str, to_field: str) -> Edg
     )
 
 
+@invocation_output("test_scoped_output")
+class ScopedTestInvocationOutput(BaseInvocationOutput):
+    iteration_value: str = OutputField(output_scope=OutputScope.Iteration)
+    final_value: str = OutputField(output_scope=OutputScope.Final)
+    ordinary_value: str = OutputField()
+
+
+@invocation("test_scoped", version="1.0.0")
+class ScopedTestInvocation(BaseInvocation):
+    def invoke(self) -> ScopedTestInvocationOutput:
+        return ScopedTestInvocationOutput(iteration_value="iteration", final_value="final", ordinary_value="ordinary")
+
+
 # Tests
+def test_get_output_field_scope_reads_scoped_output_metadata():
+    node = ScopedTestInvocation(id="1")
+
+    assert get_output_field_scope(node, "iteration_value") == OutputScope.Iteration
+    assert get_output_field_scope(node, "final_value") == OutputScope.Final
+    assert get_output_field_scope(node, "ordinary_value") is None
+    assert get_output_field_scope(node, "missing_value") is None
+
+
 def test_connections_are_compatible():
     from_node = TextToImageTestInvocation(id="1", prompt="Banana sushi")
     from_field = "image"

@@ -24739,7 +24739,17 @@ export type components = {
             ui_order: number | null;
             /** @default null */
             ui_type: components["schemas"]["UIType"] | null;
+            /** @default null */
+            output_scope: components["schemas"]["OutputScope"] | null;
         };
+        /**
+         * OutputScope
+         * @description The execution scope for an output field.
+         *     - `Iteration`: The field emits values for a loop body's current iteration.
+         *     - `Final`: The field emits values after a loop boundary completes.
+         * @enum {string}
+         */
+        OutputScope: "iteration" | "final";
         /**
          * PBR Maps
          * @description Generate Normal, Displacement and Roughness Map from a given image
