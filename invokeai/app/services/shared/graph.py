@@ -1088,6 +1088,93 @@ def loc_to_dot_sep(loc: tuple[Union[str, int], ...]) -> str:
     return path
 
 
+class LoopState(BaseModel):
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+@invocation_output("for_output")
+class ForInvocationOutput(BaseInvocationOutput):
+    item: Any = OutputField(
+        description="The item for the current loop iteration",
+        title="Collection Item",
+        ui_type=UIType._CollectionItem,
+        output_scope=OutputScope.Iteration,
+    )
+    index: int = OutputField(
+        description="The index for the current loop iteration",
+        title="Index",
+        output_scope=OutputScope.Iteration,
+    )
+    total: int = OutputField(
+        description="The total number of items in the loop collection",
+        title="Total",
+        output_scope=OutputScope.Iteration,
+    )
+    state: LoopState = OutputField(
+        description="The state for the current loop iteration",
+        title="State",
+        output_scope=OutputScope.Iteration,
+    )
+    output_collection: list[Any] = OutputField(
+        description="The collected loop body outputs",
+        title="Output Collection",
+        ui_type=UIType._Collection,
+        output_scope=OutputScope.Final,
+    )
+    final_state: LoopState = OutputField(
+        description="The final loop state",
+        title="Final State",
+        output_scope=OutputScope.Final,
+    )
+
+
+@invocation("for", version="1.0.0")
+class ForInvocation(BaseInvocation):
+    collection: list[Any] = InputField(
+        description="The list of items to iterate over",
+        default=[],
+        ui_type=UIType._Collection,
+    )
+    state: Optional[LoopState] = InputField(
+        default=None,
+        description="Optional initial loop state",
+    )
+
+    def invoke(self, context: InvocationContext) -> ForInvocationOutput:
+        raise NotImplementedError("ForInvocation is scheduler-special and cannot be invoked directly")
+
+
+@invocation_output("for_return_output")
+class ForReturnInvocationOutput(BaseInvocationOutput):
+    output: Optional[Any] = OutputField(
+        default=None,
+        description="The output item to append to the loop output collection",
+        title="Output",
+        ui_type=UIType._CollectionItem,
+    )
+    state: Optional[LoopState] = OutputField(
+        default=None,
+        description="The state to pass to the next loop iteration",
+        title="State",
+    )
+
+
+@invocation("for_return", version="1.0.0")
+class ForReturnInvocation(BaseInvocation):
+    output: Optional[Any] = InputField(
+        default=None,
+        description="The output item to append to the loop output collection",
+        ui_type=UIType._CollectionItem,
+    )
+    state: Optional[LoopState] = InputField(
+        default=None,
+        description="The state to pass to the next loop iteration",
+    )
+
+    def invoke(self, context: InvocationContext) -> ForReturnInvocationOutput:
+        return ForReturnInvocationOutput(output=self.output, state=self.state)
+
+
 @invocation_output("iterate_output")
 class IterateInvocationOutput(BaseInvocationOutput):
     """Used to connect iteration outputs. Will be expanded to a specific output."""
