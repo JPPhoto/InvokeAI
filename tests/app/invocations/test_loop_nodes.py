@@ -5,6 +5,10 @@ from invokeai.app.services.shared.graph import (
     ForInvocation,
     ForReturnInvocation,
     LoopState,
+    StateEmptyInvocation,
+    StateGetInvocation,
+    StateMergeInvocation,
+    StateSetInvocation,
     get_output_field_scope,
 )
 
@@ -39,3 +43,65 @@ def test_for_return_invocation_returns_body_output_and_state() -> None:
 
     assert output.output == "value"
     assert output.state == state
+
+
+def test_state_empty_invocation_returns_empty_loop_state() -> None:
+    node = StateEmptyInvocation(id="state_empty")
+
+    output = node.invoke(None)  # type: ignore[arg-type]
+
+    assert output.state == LoopState()
+
+
+def test_state_get_invocation_returns_value_for_key() -> None:
+    state = LoopState(values={"count": 2})
+    node = StateGetInvocation(id="state_get", state=state, key="count")
+
+    output = node.invoke(None)  # type: ignore[arg-type]
+
+    assert output.value == 2
+
+
+def test_state_get_invocation_returns_default_for_missing_key() -> None:
+    state = LoopState(values={"count": 2})
+    node = StateGetInvocation(id="state_get", state=state, key="missing", default="fallback")
+
+    output = node.invoke(None)  # type: ignore[arg-type]
+
+    assert output.value == "fallback"
+
+
+def test_state_set_invocation_returns_new_state_with_value() -> None:
+    state = LoopState(values={"count": 2})
+    node = StateSetInvocation(id="state_set", state=state, key="count", value=3)
+
+    output = node.invoke(None)  # type: ignore[arg-type]
+
+    assert output.state == LoopState(values={"count": 3})
+    assert state == LoopState(values={"count": 2})
+
+
+def test_state_set_invocation_defaults_to_empty_input_state() -> None:
+    node = StateSetInvocation(id="state_set", key="count", value=1)
+
+    output = node.invoke(None)  # type: ignore[arg-type]
+
+    assert output.state == LoopState(values={"count": 1})
+
+
+def test_state_merge_invocation_returns_new_state_with_updates() -> None:
+    state = LoopState(values={"count": 2, "name": "old"})
+    node = StateMergeInvocation(id="state_merge", state=state, values={"name": "new", "done": True})
+
+    output = node.invoke(None)  # type: ignore[arg-type]
+
+    assert output.state == LoopState(values={"count": 2, "name": "new", "done": True})
+    assert state == LoopState(values={"count": 2, "name": "old"})
+
+
+def test_state_merge_invocation_default_values_are_not_shared() -> None:
+    first = StateMergeInvocation(id="first")
+    second = StateMergeInvocation(id="second")
+    first.values["count"] = 1
+
+    assert second.values == {}

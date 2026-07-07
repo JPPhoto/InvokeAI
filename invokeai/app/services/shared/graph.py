@@ -1339,6 +1339,65 @@ class LoopState(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
 
 
+@invocation_output("loop_state_output")
+class LoopStateOutput(BaseInvocationOutput):
+    state: LoopState = OutputField(description="The loop state")
+
+
+@invocation_output("loop_state_value_output")
+class LoopStateValueOutput(BaseInvocationOutput):
+    value: Any = OutputField(description="The value read from the loop state")
+
+
+@invocation("state_empty", title="Empty Loop State", tags=["loop", "state"], category="workflow", version="1.0.0")
+class StateEmptyInvocation(BaseInvocation):
+    """Creates an empty loop state."""
+
+    def invoke(self, context: InvocationContext) -> LoopStateOutput:
+        return LoopStateOutput(state=LoopState())
+
+
+@invocation("state_get", title="Get Loop State Value", tags=["loop", "state"], category="workflow", version="1.0.0")
+class StateGetInvocation(BaseInvocation):
+    """Reads a value from loop state."""
+
+    state: LoopState = InputField(description="The loop state to read")
+    key: str = InputField(default="", description="The state key to read")
+    default: Any = InputField(default=None, description="The value to return when the key is missing")
+
+    def invoke(self, context: InvocationContext) -> LoopStateValueOutput:
+        return LoopStateValueOutput(value=copydeep(self.state.values.get(self.key, self.default)))
+
+
+@invocation("state_set", title="Set Loop State Value", tags=["loop", "state"], category="workflow", version="1.0.0")
+class StateSetInvocation(BaseInvocation):
+    """Returns loop state with one value set."""
+
+    state: Optional[LoopState] = InputField(default=None, description="The loop state to update")
+    key: str = InputField(default="", description="The state key to set")
+    value: Any = InputField(default=None, description="The value to set")
+
+    def invoke(self, context: InvocationContext) -> LoopStateOutput:
+        values = copydeep((self.state or LoopState()).values)
+        values[self.key] = copydeep(self.value)
+        return LoopStateOutput(state=LoopState(values=values))
+
+
+@invocation(
+    "state_merge", title="Merge Loop State Values", tags=["loop", "state"], category="workflow", version="1.0.0"
+)
+class StateMergeInvocation(BaseInvocation):
+    """Returns loop state with multiple values merged."""
+
+    state: Optional[LoopState] = InputField(default=None, description="The loop state to update")
+    values: dict[str, Any] = InputField(default_factory=dict, description="The values to merge into the loop state")
+
+    def invoke(self, context: InvocationContext) -> LoopStateOutput:
+        values = copydeep((self.state or LoopState()).values)
+        values.update(copydeep(self.values))
+        return LoopStateOutput(state=LoopState(values=values))
+
+
 @invocation_output("for_output")
 class ForInvocationOutput(BaseInvocationOutput):
     item: Any = OutputField(

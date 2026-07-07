@@ -75,6 +75,7 @@ Implemented on this branch:
 - Runtime rematerialization for body nodes on the reachable path from `For` iteration outputs to `ForReturn`.
 - External body inputs are reused for each rematerialized body iteration when their source has a prepared execution node.
 - Loop-carried `LoopState` for direct and rematerialized body iterations.
+- Ordinary loop state helper invocations: `state_empty`, `state_get`, `state_set`, and `state_merge`.
 - Final-scoped `For.output_collection` and `For.final_state` release after loop completion.
 - Empty collection finalization.
 
