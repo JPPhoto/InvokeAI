@@ -269,6 +269,35 @@ def test_graph_for_rematerialized_body_carries_returned_state():
     assert for_1.state == LoopState(values={"count": 1})
 
 
+def test_graph_for_rematerialized_body_reuses_external_input_each_iteration():
+    graph = Graph()
+    graph.add_node(PromptTestInvocation(id="external", prompt="shared"))
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(TwoAnyTestInvocation(id="body"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "body", "first"))
+    graph.add_edge(create_edge("external", "prompt", "body", "second"))
+    graph.add_edge(create_edge("body", "value", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    executed_source_ids = execute_all_nodes(state)
+
+    assert executed_source_ids.count("external") == 1
+    assert executed_source_ids.count("for") == 2
+    assert executed_source_ids.count("body") == 2
+    assert executed_source_ids.count("return") == 2
+    assert executed_source_ids[-1] == "after"
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert state.results[after_exec_id].value == [("alpha", "shared"), ("beta", "shared")]
+    assert state.is_complete()
+
+
 def test_graph_for_final_output_collection_materializes_after_last_direct_return():
     graph = Graph()
     graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))

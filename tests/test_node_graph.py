@@ -119,7 +119,7 @@ def test_graph_validates_indirect_for_body():
     g.validate_self()
 
 
-def test_graph_rejects_for_body_inputs_from_outside_body_boundary():
+def test_graph_validates_for_body_inputs_from_outside_body_boundary():
     g = Graph()
     loop = ForInvocation(id="for", collection=["a", "b"])
     external = PromptTestInvocation(id="external", prompt="outside")
@@ -134,8 +134,7 @@ def test_graph_rejects_for_body_inputs_from_outside_body_boundary():
     g.add_edge(create_edge(external.id, "prompt", body.id, "prompt2"))
     g.add_edge(create_edge(body.id, "image", body_return.id, "output"))
 
-    with pytest.raises(InvalidEdgeError, match="inputs must come from the For node or the loop body"):
-        g.validate_self()
+    g.validate_self()
 
 
 def test_graph_rejects_for_without_matching_return():

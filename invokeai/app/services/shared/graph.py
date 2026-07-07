@@ -497,6 +497,7 @@ class _ExecutionMaterializer:
 
     def create_for_body_iteration(self, source_for_id: str, prepared_for_id: str) -> Optional[str]:
         graph = self._state.graph.nx_graph_flat()
+        execution_graph = self._state.execution_graph.nx_graph_flat()
         body_path_to_return = self._state.graph._get_for_body_path_to_return(source_for_id, graph)
         if body_path_to_return is None:
             return None
@@ -510,14 +511,26 @@ class _ExecutionMaterializer:
                 continue
 
             node = self._state.graph.get_node(source_node_id)
-            new_edges = [
-                Edge(
-                    source=EdgeConnection(node_id=source_to_prepared[edge.source.node_id], field=edge.source.field),
-                    destination=EdgeConnection(node_id="", field=edge.destination.field),
+            new_edges: list[Edge] = []
+            for edge in self._state.graph._get_input_edges(source_node_id):
+                prepared_source_id = source_to_prepared.get(edge.source.node_id)
+                if prepared_source_id is None:
+                    prepared_source_id = self.get_iteration_node(
+                        edge.source.node_id,
+                        graph,
+                        execution_graph,
+                        [prepared_for_id],
+                    )
+                if prepared_source_id is None:
+                    raise RuntimeError(
+                        f"Unable to rematerialize For body input {edge}: no prepared source node is available"
+                    )
+                new_edges.append(
+                    Edge(
+                        source=EdgeConnection(node_id=prepared_source_id, field=edge.source.field),
+                        destination=EdgeConnection(node_id="", field=edge.destination.field),
+                    )
                 )
-                for edge in self._state.graph._get_input_edges(source_node_id)
-                if edge.source.node_id in source_to_prepared
-            ]
 
             new_node = self._create_execution_node_copy(node, source_node_id, -1)
             source_to_prepared[source_node_id] = new_node.id
@@ -1951,9 +1964,6 @@ class Graph(BaseModel):
                 return "final-scoped For outputs cannot feed the loop body"
 
         for body_node_id in body_path_nodes:
-            for edge in self._get_input_edges(body_node_id):
-                if edge.source.node_id != node_id and edge.source.node_id not in body_path_nodes:
-                    return "For loop body inputs must come from the For node or the loop body"
             if body_node_id == return_node_id:
                 continue
             for edge in self._get_output_edges(body_node_id):

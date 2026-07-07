@@ -61,9 +61,8 @@ Lessons from those branches:
 
 What is still not implemented:
 
-- Loop-body inputs from nodes outside the `For` boundary and reachable body path.
-- Visual editor affordances for a structured loop body boundary.
 - Durable body identity metadata for nested or shared loop body paths.
+- Visual editor affordances for a structured loop body boundary.
 - Early break or continue behavior.
 - Rich collection producer nodes designed specifically for loop sources.
 
@@ -74,6 +73,7 @@ Implemented on this branch:
 - Validation for the currently supported `For -> ... -> ForReturn` loop boundary.
 - Runtime materialization for direct `For -> ForReturn` iteration continuations.
 - Runtime rematerialization for body nodes on the reachable path from `For` iteration outputs to `ForReturn`.
+- External body inputs are reused for each rematerialized body iteration when their source has a prepared execution node.
 - Loop-carried `LoopState` for direct and rematerialized body iterations.
 - Final-scoped `For.output_collection` and `For.final_state` release after loop completion.
 - Empty collection finalization.
@@ -147,17 +147,16 @@ The runtime schedules the next `For` iteration when the matching `ForReturn` com
 rematerializes the reachable body path for the next iteration. Final-scoped outputs release after the last matching
 `ForReturn` completes.
 
-The current body rematerializer only copies edges whose source is the `For` node or another node in the loop body path.
-Until external body inputs are supported, validation should reject body inputs from outside the loop boundary:
+The current body rematerializer copies edges whose source is the `For` node, another node in the loop body path, or an
+already prepared node outside the body path. That supports shared configuration or prompt inputs:
 
 ```text
 ExternalNode.output -> BodyNode.input
 ```
 
-Accepting unsupported body inputs would be misleading because the first iteration could execute with already-prepared
-inputs, but later body-node iterations would not have those edges cloned correctly. The implementation should prefer
-rejecting unsupported loop bodies over allowing valid-looking workflows that silently change inputs after the first
-iteration.
+If a future body shape requires an input source that cannot be mapped to a prepared execution node, the rematerializer
+must reject that graph shape or add the missing preparation rule. The implementation should prefer rejecting unsupported
+loop bodies over allowing valid-looking workflows that silently change inputs after the first iteration.
 
 ## Proposed Node Shape
 
@@ -252,8 +251,8 @@ implementation should either reject nested `For` bodies or add durable body iden
 This is simpler than a full visual subgraph while still giving the backend an explicit return boundary. Validation must
 also reject loop-body paths that escape to after-loop nodes without passing through the matching `ForReturn`.
 
-The current branch implements this reachable body-path subset. More complex boundaries, external body inputs, shared
-paths, and nested loops require durable body identity metadata and should remain future work.
+The current branch implements this reachable body-path subset. More complex boundaries, shared paths, and nested loops
+require durable body identity metadata and should remain future work.
 
 ### 4. Runtime Shape
 
