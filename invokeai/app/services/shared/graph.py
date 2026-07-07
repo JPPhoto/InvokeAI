@@ -357,16 +357,39 @@ class _ExecutionMaterializer:
         input_collection = getattr(input_collection_output, input_collection_edge.source.field)
         return len(input_collection)
 
+    def _get_for_iteration_count(self, node_id: str, iteration_node_map: list[tuple[str, str]]) -> int:
+        input_collection_edges = self._state.graph._get_input_edges(node_id, COLLECTION_FIELD)
+        if len(input_collection_edges) == 0:
+            node = self._state.graph.get_node(node_id)
+            assert isinstance(node, ForInvocation)
+            return len(node.collection)
+
+        input_collection_edge = input_collection_edges[0]
+        input_collection_prepared_node_id = next(
+            prepared_id
+            for source_id, prepared_id in iteration_node_map
+            if source_id == input_collection_edge.source.node_id
+        )
+        input_collection_output = self._state.results[input_collection_prepared_node_id]
+        input_collection = getattr(input_collection_output, input_collection_edge.source.field)
+        return len(input_collection)
+
     def _get_new_node_iterations(
         self, node: BaseInvocation, node_id: str, iteration_node_map: list[tuple[str, str]]
     ) -> list[int]:
-        if not isinstance(node, IterateInvocation):
-            return [-1]
+        if isinstance(node, IterateInvocation):
+            iteration_count = self._get_iterator_iteration_count(node_id, iteration_node_map)
+            if iteration_count == 0:
+                return []
+            return list(range(iteration_count))
 
-        iteration_count = self._get_iterator_iteration_count(node_id, iteration_node_map)
-        if iteration_count == 0:
-            return []
-        return list(range(iteration_count))
+        if isinstance(node, ForInvocation):
+            iteration_count = self._get_for_iteration_count(node_id, iteration_node_map)
+            if iteration_count == 0:
+                return []
+            return [0]
+
+        return [-1]
 
     def _build_execution_edges(self, node_id: str, iteration_node_map: list[tuple[str, str]]) -> list[Edge]:
         input_edges = self._state.graph._get_input_edges(node_id)
@@ -389,6 +412,8 @@ class _ExecutionMaterializer:
         new_node.id = uuid_string()
 
         if isinstance(new_node, IterateInvocation):
+            new_node.index = iteration_index
+        if isinstance(new_node, ForInvocation):
             new_node.index = iteration_index
 
         self._state.execution_graph.add_node(new_node)
@@ -469,7 +494,11 @@ class _ExecutionMaterializer:
 
     def get_node_iterators(self, node_id: str, it_graph: Optional[nx.DiGraph] = None) -> list[str]:
         g = it_graph or self.iterator_graph()
-        return [n for n in nx.ancestors(g, node_id) if isinstance(self._state.graph.get_node(n), IterateInvocation)]
+        return [
+            n
+            for n in nx.ancestors(g, node_id)
+            if isinstance(self._state.graph.get_node(n), (ForInvocation, IterateInvocation))
+        ]
 
     def _get_prepared_nodes_for_source(self, source_node_id: str) -> set[str]:
         return {
@@ -559,11 +588,11 @@ class _ExecutionMaterializer:
                 for node_id in nx.topological_sort(g)
                 if node_id not in self._state.source_prepared_mapping
                 and (
-                    not isinstance(self._state.graph.get_node(node_id), IterateInvocation)
+                    not isinstance(self._state.graph.get_node(node_id), (ForInvocation, IterateInvocation))
                     or all(source_id in self._state.executed for source_id, _ in g.in_edges(node_id))
                 )
                 and not any(
-                    isinstance(self._state.graph.get_node(ancestor_id), IterateInvocation)
+                    isinstance(self._state.graph.get_node(ancestor_id), (ForInvocation, IterateInvocation))
                     and ancestor_id not in self._state.executed
                     for ancestor_id in nx.ancestors(g, node_id)
                 )
@@ -1139,9 +1168,25 @@ class ForInvocation(BaseInvocation):
         default=None,
         description="Optional initial loop state",
     )
+    index: int = InputField(
+        description="The internal iteration index for a prepared For execution node",
+        default=-1,
+        ui_hidden=True,
+    )
 
     def invoke(self, context: InvocationContext) -> ForInvocationOutput:
-        raise NotImplementedError("ForInvocation is scheduler-special and cannot be invoked directly")
+        if self.index < 0:
+            raise NotImplementedError("ForInvocation is scheduler-special and cannot be invoked directly")
+
+        state = self.state or LoopState()
+        return ForInvocationOutput(
+            item=self.collection[self.index],
+            index=self.index,
+            total=len(self.collection),
+            state=state,
+            output_collection=[],
+            final_state=state,
+        )
 
 
 @invocation_output("for_return_output")

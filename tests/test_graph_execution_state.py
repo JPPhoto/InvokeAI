@@ -16,9 +16,14 @@ from invokeai.app.invocations.primitives import (
 )
 from invokeai.app.services.shared.graph import (
     CollectInvocation,
+    ForInvocation,
+    ForInvocationOutput,
+    ForReturnInvocation,
+    ForReturnInvocationOutput,
     Graph,
     GraphExecutionState,
     IterateInvocation,
+    LoopState,
     WorkflowCallFrame,
 )
 
@@ -79,6 +84,44 @@ def test_graph_state_executes_in_order(simple_graph: Graph):
     assert n3 is None
     assert g.results[n1[0].id].prompt == n1[0].prompt
     assert n2[0].prompt == n1[0].prompt
+
+
+def test_graph_for_materializes_first_iteration():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+
+    state = GraphExecutionState(graph=graph)
+
+    next_node = state.next()
+
+    assert isinstance(next_node, ForInvocation)
+    assert state.prepared_source_mapping[next_node.id] == "for"
+    output = next_node.invoke(Mock(InvocationContext))
+
+    assert isinstance(output, ForInvocationOutput)
+    assert output.item == "alpha"
+    assert output.index == 0
+    assert output.total == 2
+    assert output.state == LoopState()
+
+
+def test_graph_for_return_receives_first_iteration_item():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+
+    state = GraphExecutionState(graph=graph)
+    for_node, for_output = invoke_next(state)
+    return_node, return_output = invoke_next(state)
+
+    assert state.prepared_source_mapping[for_node.id] == "for"
+    assert isinstance(return_node, ForReturnInvocation)
+    assert state.prepared_source_mapping[return_node.id] == "return"
+    assert isinstance(return_output, ForReturnInvocationOutput)
+    assert return_output.output == for_output.item
 
 
 def test_graph_is_complete(simple_graph: Graph):

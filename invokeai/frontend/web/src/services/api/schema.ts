@@ -12097,6 +12097,12 @@ export type components = {
              */
             state?: components["schemas"]["LoopState"] | null;
             /**
+             * Index
+             * @description The internal iteration index for a prepared For execution node
+             * @default -1
+             */
+            index?: number;
+            /**
              * type
              * @default for
              * @constant
