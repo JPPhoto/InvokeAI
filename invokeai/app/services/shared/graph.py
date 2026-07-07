@@ -1406,6 +1406,10 @@ class Graph(BaseModel):
                 err = self._is_for_connection_valid(node.id)
                 if err is not None:
                     raise InvalidEdgeError(f"Invalid For node ({node.id}): {err}")
+            if isinstance(node, ForReturnInvocation):
+                err = self._is_for_return_connection_valid(node.id)
+                if err is not None:
+                    raise InvalidEdgeError(f"Invalid ForReturn node ({node.id}): {err}")
 
     def validate_self(self) -> None:
         """
@@ -1628,6 +1632,28 @@ class Graph(BaseModel):
             body_nodes.update(nx.descendants(graph, edge.destination.node_id))
         return body_nodes
 
+    def _get_for_body_path_nodes(
+        self, reachable_body_nodes: set[str], return_node_id: str, graph: nx.DiGraph
+    ) -> set[str]:
+        return (reachable_body_nodes & nx.ancestors(graph, return_node_id)) | {return_node_id}
+
+    def _get_for_body_path_to_return(self, node_id: str, graph: nx.DiGraph) -> tuple[set[str], str] | None:
+        iteration_edges = self._get_for_iteration_output_edges(node_id)
+        if len(iteration_edges) == 0:
+            return None
+
+        reachable_body_nodes = self._get_for_reachable_body_nodes(iteration_edges, graph)
+        reachable_return_node_ids = [
+            reachable_node_id
+            for reachable_node_id in reachable_body_nodes
+            if isinstance(self.get_node(reachable_node_id), ForReturnInvocation)
+        ]
+        if len(reachable_return_node_ids) != 1:
+            return None
+
+        return_node_id = reachable_return_node_ids[0]
+        return self._get_for_body_path_nodes(reachable_body_nodes, return_node_id, graph), return_node_id
+
     def _is_for_connection_valid(self, node_id: str) -> str | None:
         iteration_edges = self._get_for_iteration_output_edges(node_id)
         if len(iteration_edges) == 0:
@@ -1645,7 +1671,10 @@ class Graph(BaseModel):
             return "For loop body must expose exactly one matching ForReturn"
 
         return_node_id = reachable_return_node_ids[0]
-        body_path_nodes = (reachable_body_nodes & nx.ancestors(graph, return_node_id)) | {return_node_id}
+        body_path_nodes = self._get_for_body_path_nodes(reachable_body_nodes, return_node_id, graph)
+        unterminated_body_nodes = reachable_body_nodes - body_path_nodes
+        if len(unterminated_body_nodes) > 0:
+            return "For loop body paths must terminate at the matching ForReturn and not escape the loop body"
 
         nested_for_node_ids = [
             body_node_id
@@ -1666,6 +1695,23 @@ class Graph(BaseModel):
                 if edge.destination.node_id not in body_path_nodes:
                     return "For loop body paths must not escape before the matching ForReturn"
 
+        return None
+
+    def _is_for_return_connection_valid(self, node_id: str) -> str | None:
+        graph = self.nx_graph_flat()
+        matching_for_node_ids = []
+        for loop_node_id, loop_node in self.nodes.items():
+            if not isinstance(loop_node, ForInvocation):
+                continue
+            body_path_to_return = self._get_for_body_path_to_return(loop_node_id, graph)
+            if body_path_to_return is None:
+                continue
+            body_path_nodes, return_node_id = body_path_to_return
+            if node_id == return_node_id and node_id in body_path_nodes:
+                matching_for_node_ids.append(loop_node_id)
+
+        if len(matching_for_node_ids) != 1:
+            return "ForReturn must belong to exactly one matching For"
         return None
 
     def _is_iterator_connection_valid(

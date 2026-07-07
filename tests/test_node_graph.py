@@ -155,6 +155,38 @@ def test_graph_rejects_for_body_edges_that_escape_to_after_loop_nodes():
         g.validate_self()
 
 
+def test_graph_rejects_for_iteration_branch_that_does_not_reach_return():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a", "b"])
+    body_return = ForReturnInvocation(id="return")
+    after = AnyTypeTestInvocation(id="after")
+
+    g.add_node(loop)
+    g.add_node(body_return)
+    g.add_node(after)
+    g.add_edge(create_edge(loop.id, "item", body_return.id, "output"))
+    g.add_edge(create_edge(loop.id, "index", after.id, "value"))
+
+    with pytest.raises(InvalidEdgeError, match="terminate"):
+        g.validate_self()
+
+
+def test_graph_rejects_for_return_outputs_to_after_loop_nodes():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a", "b"])
+    body_return = ForReturnInvocation(id="return")
+    after = AnyTypeTestInvocation(id="after")
+
+    g.add_node(loop)
+    g.add_node(body_return)
+    g.add_node(after)
+    g.add_edge(create_edge(loop.id, "item", body_return.id, "output"))
+    g.add_edge(create_edge(body_return.id, "output", after.id, "value"))
+
+    with pytest.raises(InvalidEdgeError, match="terminate"):
+        g.validate_self()
+
+
 def test_graph_rejects_final_scoped_for_output_into_body():
     g = Graph()
     loop = ForInvocation(id="for", collection=["a", "b"])
@@ -166,6 +198,16 @@ def test_graph_rejects_final_scoped_for_output_into_body():
     g.add_edge(create_edge(loop.id, "final_state", body_return.id, "state"))
 
     with pytest.raises(InvalidEdgeError, match="final-scoped"):
+        g.validate_self()
+
+
+def test_graph_rejects_orphan_for_return():
+    g = Graph()
+    body_return = ForReturnInvocation(id="return")
+
+    g.add_node(body_return)
+
+    with pytest.raises(InvalidEdgeError, match="matching For"):
         g.validate_self()
 
 
