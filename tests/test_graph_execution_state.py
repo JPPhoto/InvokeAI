@@ -367,6 +367,47 @@ def test_graph_for_empty_collection_materializes_final_outputs():
     assert state.is_complete()
 
 
+def test_graph_for_empty_collection_with_indirect_body_completes_without_body_execution():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[]))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    after_node = state.next()
+
+    assert isinstance(after_node, AnyTypeTestInvocation)
+    assert after_node.value == []
+    assert "body" not in state.source_prepared_mapping
+    assert "return" not in state.source_prepared_mapping
+    state.complete(after_node.id, after_node.invoke(Mock(InvocationContext)))
+
+    assert state.is_complete()
+
+
+def test_graph_for_return_omitted_output_is_not_collected():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "state", "return", "state"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+
+    assert state.results[after_exec_id].value == []
+
+
 def test_graph_for_multiple_final_edges_to_same_node_do_not_crash():
     graph = Graph()
     graph.add_node(ForInvocation(id="for", collection=["alpha"]))

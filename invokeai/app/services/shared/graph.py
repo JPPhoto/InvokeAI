@@ -374,22 +374,6 @@ class _ExecutionMaterializer:
         input_collection = getattr(input_collection_output, input_collection_edge.source.field)
         return len(input_collection)
 
-    def _get_for_direct_return_node_id(self, source_for_id: str) -> Optional[str]:
-        source_for_node = self._state.graph.get_node(source_for_id)
-        iteration_edges = [
-            edge
-            for edge in self._state.graph._get_output_edges(source_for_id)
-            if get_output_field_scope(source_for_node, edge.source.field) == OutputScope.Iteration
-        ]
-        return next(
-            (
-                edge.destination.node_id
-                for edge in iteration_edges
-                if isinstance(self._state.graph.get_node(edge.destination.node_id), ForReturnInvocation)
-            ),
-            None,
-        )
-
     def _get_new_node_iterations(
         self, node: BaseInvocation, node_id: str, iteration_node_map: list[tuple[str, str]]
     ) -> list[int]:
@@ -471,9 +455,13 @@ class _ExecutionMaterializer:
         self._mark_source_node_executed(source_for_id)
         self._state.finalized_loop_nodes.add(source_for_id)
 
-        direct_return_node_id = self._get_for_direct_return_node_id(source_for_id)
-        if direct_return_node_id is not None:
-            self._mark_source_node_executed(direct_return_node_id)
+        body_path_to_return = self._state.graph._get_for_body_path_to_return(
+            source_for_id, self._state.graph.nx_graph_flat()
+        )
+        if body_path_to_return is not None:
+            body_path_nodes, _return_node_id = body_path_to_return
+            for body_node_id in body_path_nodes:
+                self._mark_source_node_executed(body_node_id)
 
         return new_node.id
 
@@ -857,7 +845,7 @@ class _ExecutionScheduler:
             return
 
         return_outputs = self._get_ordered_for_return_outputs(source_return_id)
-        for_output.output_collection = [output.output for output in return_outputs]
+        for_output.output_collection = [output.output for output in return_outputs if output.output is not None]
         for_output.final_state = self._get_loop_state_for_next_iteration(for_exec_node_id, return_output)
         self._state.finalized_loop_nodes.add(source_for_id)
 
