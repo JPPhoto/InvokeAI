@@ -2063,6 +2063,18 @@ class Graph(BaseModel):
         if len(nested_for_node_ids) > 0:
             return "Nested For loops require durable body identity metadata"
 
+        if any(isinstance(self.get_node(body_node_id), IterateInvocation) for body_node_id in body_path_nodes):
+            return "Iterate nodes inside For loop bodies are unsupported"
+
+        for body_node_id in body_path_nodes:
+            for edge in self._get_input_edges(body_node_id):
+                source_node_id = edge.source.node_id
+                if source_node_id == node_id or source_node_id in body_path_nodes:
+                    continue
+                active_source_scope = nx.ancestors(graph, source_node_id) | {source_node_id}
+                if any(isinstance(self.get_node(source_id), IterateInvocation) for source_id in active_source_scope):
+                    return "For loop body does not support iterator-derived external inputs"
+
         for edge in self._get_for_final_output_edges(node_id):
             if edge.destination.node_id in body_path_nodes:
                 return "final-scoped For outputs cannot feed the loop body"

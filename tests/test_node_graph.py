@@ -17,6 +17,7 @@ from invokeai.app.invocations.primitives import (
     FloatCollectionInvocation,
     FloatInvocation,
     IntegerInvocation,
+    StringCollectionInvocation,
     StringInvocation,
 )
 from invokeai.app.invocations.upscale import ESRGANInvocation
@@ -136,6 +137,31 @@ def test_graph_validates_for_body_inputs_from_outside_body_boundary():
     g.validate_self()
 
 
+def test_graph_rejects_for_body_inputs_from_external_iterator_scope():
+    g = Graph()
+    external_values = StringCollectionInvocation(id="external_values", collection=["external-a", "external-b"])
+    external_iterate = IterateInvocation(id="external_iterate")
+    external_adapter = PromptTestInvocation(id="external_adapter")
+    loop = ForInvocation(id="for", collection=["loop-a", "loop-b"])
+    body = TextToImageTestInvocation(id="body")
+    body_return = ForReturnInvocation(id="return")
+
+    g.add_node(external_values)
+    g.add_node(external_iterate)
+    g.add_node(external_adapter)
+    g.add_node(loop)
+    g.add_node(body)
+    g.add_node(body_return)
+    g.add_edge(create_edge(external_values.id, "collection", external_iterate.id, "collection"))
+    g.add_edge(create_edge(external_iterate.id, "item", external_adapter.id, "prompt"))
+    g.add_edge(create_edge(external_adapter.id, "prompt", body.id, "prompt2"))
+    g.add_edge(create_edge(loop.id, "item", body.id, "prompt"))
+    g.add_edge(create_edge(body.id, "image", body_return.id, "output"))
+
+    with pytest.raises(InvalidEdgeError, match="iterator-derived external inputs"):
+        g.validate_self()
+
+
 def test_graph_rejects_for_without_matching_return():
     g = Graph()
     loop = ForInvocation(id="for", collection=["a", "b"])
@@ -162,6 +188,25 @@ def test_graph_rejects_nested_for_until_body_identity_exists():
     g.add_edge(create_edge(loop.id, "item", nested_loop.id, "collection"))
 
     with pytest.raises(InvalidEdgeError, match="Nested For loops"):
+        g.validate_self()
+
+
+def test_graph_rejects_iterate_inside_for_body():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=[["a", "b"]])
+    collection_adapter = PolymorphicStringTestInvocation(id="collection_adapter")
+    nested_iterate = IterateInvocation(id="nested_iterate")
+    body_return = ForReturnInvocation(id="return")
+
+    g.add_node(loop)
+    g.add_node(collection_adapter)
+    g.add_node(nested_iterate)
+    g.add_node(body_return)
+    g.add_edge(create_edge(loop.id, "item", collection_adapter.id, "value"))
+    g.add_edge(create_edge(collection_adapter.id, "collection", nested_iterate.id, "collection"))
+    g.add_edge(create_edge(nested_iterate.id, "item", body_return.id, "output"))
+
+    with pytest.raises(InvalidEdgeError, match="Iterate nodes inside For loop bodies"):
         g.validate_self()
 
 

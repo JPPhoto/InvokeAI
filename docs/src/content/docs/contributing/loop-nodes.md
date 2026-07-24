@@ -157,6 +157,17 @@ already prepared node outside the body path. That supports shared configuration 
 ExternalNode.output -> BodyNode.input
 ```
 
+The external node must not be derived from an `Iterate`. An independent iterator feeding the body would create multiple
+body returns for one `For` iteration, while the first implementation requires exactly one matching `ForReturn`.
+Iterator-derived values must be collapsed as needed and then carried explicitly through the `For` inputs and iteration
+outputs. Direct iterator-derived external body inputs are rejected until the runtime has a durable contract for mapping
+multiple iteration dimensions.
+
+An `Iterate` node inside the `For` body is also rejected by the first implementation because the body rematerializer
+does not recursively expand nested iterator work. Unlike an independent external iterator, an internal iterator that is
+collapsed by a matching `Collect` before `ForReturn` has coherent semantics and should be supported by a future
+extension.
+
 If a future body shape requires an input source that cannot be mapped to a prepared execution node, the rematerializer
 must reject that graph shape or add the missing preparation rule. The implementation should prefer rejecting unsupported
 loop bodies over allowing valid-looking workflows that silently change inputs after the first iteration.
@@ -479,6 +490,9 @@ Potential validation rules:
 - The author-time graph must remain acyclic.
 - Nodes inside the loop body must not feed after-loop nodes directly.
 - Nested `For` loops must be rejected until the body boundary has durable identity metadata.
+- `Iterate` nodes inside the `For` body must be rejected.
+- Iterator-derived external body inputs must be rejected until multiple iteration dimensions have an explicit body
+  mapping contract.
 
 First implementation recommendation:
 
@@ -546,6 +560,59 @@ architecture are meant to be reusable by later loop-like nodes:
 Potential extensions should build on those pieces instead of introducing hidden graph cycles or process-local mutable
 state.
 
+### Nested Iterate Body
+
+A future extension should support a bounded inner `Iterate` whose results are collapsed before the outer body returns:
+
+```text
+For.iteration_output -> Iterate -> Action -> Collect -> ForReturn
+```
+
+`Collect` is the inner iteration boundary in this shape. It must collapse only the inner `Iterate` dimension and emit
+exactly one collection into `ForReturn` for each outer `For` iteration. The outer loop must not advance until that
+collection and the matching `ForReturn` complete.
+
+Supporting this shape requires:
+
+- rematerializing the inner `Iterate`, its descendants, and its matching `Collect` under the current prepared `For`
+  context
+- preserving a composite iteration path such as `(for_index, iterate_index)`
+- ensuring `Collect` collapses the inner dimension without mixing values from other `For` iterations
+- producing exactly one matching `ForReturn` completion per outer iteration
+- persisting and restoring nested prepared-node and collection state
+- stopping both inner and outer scheduling on cancellation or failure without releasing partial final outputs
+
+This extension must remain distinct from an independent external `Iterate` feeding a body node. The external shape has
+no explicit rule for product, zip, or state-lane semantics and should remain rejected until such a contract is designed.
+
+### Nested For Body
+
+A future extension should also support a complete inner `For` boundary inside an outer `For` body:
+
+```text
+OuterFor.iteration_output -> InnerFor.collection
+InnerFor.iteration_output -> InnerAction -> InnerForReturn
+InnerFor.output_collection -> OuterForReturn
+```
+
+The inner loop must finalize before the outer body returns. Its final outputs are ordinary body data in the outer loop,
+so one completed inner loop produces exactly one matching `OuterForReturn` completion for the current outer iteration.
+
+Supporting this shape requires:
+
+- durable body identity that associates each `ForReturn` with exactly one `For`, without relying on ambiguous
+  reachability
+- a composite execution context that distinguishes the outer iteration, inner loop instance, and inner iteration
+- independent output aggregation for every inner loop instance
+- separate outer and inner state lanes, with state crossing a loop boundary only through explicit connections
+- blocking the outer continuation until the inner loop finalizes successfully
+- persisting and restoring both loop boundaries and their prepared execution state
+- propagating inner cancellation or failure to the owning outer iteration without releasing partial inner or outer
+  final outputs
+
+Nested `For` remains rejected until these contracts are implemented and validated. It must not be approximated by
+allowing two reachability-inferred loop boundaries to share body or return nodes.
+
 Possible future loop-like nodes:
 
 - `While`: repeats while a condition remains true. This requires a condition value that is evaluated after each body
@@ -599,13 +666,15 @@ Frontend tests should cover:
 
 Backend unit tests currently cover the invocation contracts, state helper copy semantics, graph-boundary validation,
 sequential materialization, state carry, final output release, empty collections, failure handling, serialization and
-resume, parent iterator scoping, and cache-key behavior. Schema generation verifies that moving the invocation
-definitions does not change their serialized API contracts.
+resume, parent iterator scoping, and cache-key behavior. `DefaultSessionRunner` integration tests cover successful queue
+completion and session persistence, cancellation between iterations without releasing final outputs, and iteration-body
+exceptions without scheduling later iterations or after-loop nodes. Schema generation verifies that moving the
+invocation definitions does not change their serialized API contracts.
 
 The following paths remain unchecked and should not be inferred from the graph-unit coverage:
 
-- cancellation initiated through the queue or session processor, including suppression of partial final outputs
-- end-to-end queue and session processor execution of a complete `For` workflow
+- cancellation initiated through a real queue status event and the threaded `DefaultSessionProcessor`
+- end-to-end execution with the SQLite session queue rather than the runner's queue test double
 - frontend workflow round-trip and connection validation for iteration-scoped and final-scoped outputs
 - editor grouping and interaction behavior for `For` and `ForReturn`
 
