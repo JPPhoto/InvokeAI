@@ -14,6 +14,14 @@ from invokeai.app.invocations.baseinvocation import (
 from invokeai.app.invocations.collections import RangeInvocation
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.logic import IfInvocation, IfInvocationOutput
+from invokeai.app.invocations.loops import (
+    ForInvocation,
+    ForInvocationOutput,
+    ForReturnInvocation,
+    ForReturnInvocationOutput,
+    LoopState,
+    StateSetInvocation,
+)
 from invokeai.app.invocations.math import AddInvocation, MultiplyInvocation
 from invokeai.app.invocations.primitives import (
     BooleanCollectionInvocation,
@@ -25,15 +33,9 @@ from invokeai.app.invocations.primitives import (
 from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
 from invokeai.app.services.shared.graph import (
     CollectInvocation,
-    ForInvocation,
-    ForInvocationOutput,
-    ForReturnInvocation,
-    ForReturnInvocationOutput,
     Graph,
     GraphExecutionState,
     IterateInvocation,
-    LoopState,
-    StateSetInvocation,
     WorkflowCallFrame,
 )
 

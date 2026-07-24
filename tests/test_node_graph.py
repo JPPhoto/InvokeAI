@@ -10,6 +10,7 @@ from invokeai.app.invocations.baseinvocation import (
     invocation_output,
 )
 from invokeai.app.invocations.fields import OutputField, OutputScope
+from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation
 from invokeai.app.invocations.math import AddInvocation
 from invokeai.app.invocations.primitives import (
     ColorInvocation,
@@ -24,8 +25,6 @@ from invokeai.app.services.shared.graph import (
     CollectInvocationOutput,
     Edge,
     EdgeConnection,
-    ForInvocation,
-    ForReturnInvocation,
     Graph,
     GraphExecutionState,
     InvalidEdgeError,

@@ -1,8 +1,7 @@
 import pytest
 
 from invokeai.app.invocations.fields import OutputScope
-from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
-from invokeai.app.services.shared.graph import (
+from invokeai.app.invocations.loops import (
     ForInvocation,
     ForReturnInvocation,
     LoopState,
@@ -10,8 +9,9 @@ from invokeai.app.services.shared.graph import (
     StateGetInvocation,
     StateMergeInvocation,
     StateSetInvocation,
-    get_output_field_scope,
 )
+from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
+from invokeai.app.services.shared.graph import get_output_field_scope
 
 
 def test_loop_state_defaults_to_empty_values() -> None:
@@ -70,6 +70,18 @@ def test_state_get_invocation_returns_default_for_missing_key() -> None:
     output = node.invoke(None)  # type: ignore[arg-type]
 
     assert output.value == "fallback"
+
+
+def test_state_get_invocation_deep_copies_model_values() -> None:
+    nested_state = LoopState(values={"items": ["alpha"]})
+    state = LoopState(values={"nested": nested_state})
+    node = StateGetInvocation(id="state_get", state=state, key="nested")
+
+    output = node.invoke(None)  # type: ignore[arg-type]
+    assert isinstance(output.value, LoopState)
+    output.value.values["items"].append("beta")
+
+    assert nested_state == LoopState(values={"items": ["alpha"]})
 
 
 def test_state_set_invocation_returns_new_state_with_value() -> None:

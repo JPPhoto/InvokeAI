@@ -595,13 +595,23 @@ Frontend tests should cover:
 - visual grouping of iteration outputs and final outputs
 - editor handling for body return nodes
 
+### Current Coverage
+
+Backend unit tests currently cover the invocation contracts, state helper copy semantics, graph-boundary validation,
+sequential materialization, state carry, final output release, empty collections, failure handling, serialization and
+resume, parent iterator scoping, and cache-key behavior. Schema generation verifies that moving the invocation
+definitions does not change their serialized API contracts.
+
+The following paths remain unchecked and should not be inferred from the graph-unit coverage:
+
+- cancellation initiated through the queue or session processor, including suppression of partial final outputs
+- end-to-end queue and session processor execution of a complete `For` workflow
+- frontend workflow round-trip and connection validation for iteration-scoped and final-scoped outputs
+- editor grouping and interaction behavior for `For` and `ForReturn`
+
 ## Open Questions
 
-- Should the first implementation require an explicit `for_return` node, or should body output be inferred from a
-  connected field?
 - What is the cleanest durable representation of a loop body boundary in saved workflow JSON?
-- Should loop output scope metadata live in invocation output field schema, node UI config, or graph-builder-only
-  metadata?
 - How should nested `For` loops expose iteration paths and state without confusing collectors?
 - Should early break be added as `continue_condition` on `for_return`, or as a separate `for_continue` node later?
 
@@ -609,8 +619,10 @@ Answered branch-local decisions:
 
 - The first implementation uses explicit `for_return`.
 - `ForReturn.output=None` is omitted from `For.output_collection`.
-- State helper nodes are ordinary invocations and are currently colocated with the loop node definitions. They may move to
-  a dedicated loop/state invocation module before merge if that becomes clearer for schema ownership.
+- Loop output scope is invocation output field metadata and is preserved through backend schema and frontend type
+  generation.
+- `LoopState`, `For`, `ForReturn`, and the state helper nodes are defined in the dedicated `invocations.loops` module.
+  Scheduler, materialization, and graph-boundary validation remain in the graph execution service.
 
 ## Incremental Implementation Plan
 
