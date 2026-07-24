@@ -14,7 +14,8 @@ import {
 import type { InvocationTemplate } from 'features/nodes/types/invocation';
 import type { InvocationFieldSchema, InvocationSchemaObject } from 'features/nodes/types/openapi';
 import {
-  isInvocationFieldSchema,
+  isInvocationInputFieldSchema,
+  isInvocationOutputFieldSchema,
   isInvocationOutputSchemaObject,
   isInvocationSchemaObject,
 } from 'features/nodes/types/openapi';
@@ -126,7 +127,7 @@ export const parseSchema = (
           return inputsAccumulator;
         }
 
-        if (!isInvocationFieldSchema(property)) {
+        if (!isInvocationInputFieldSchema(property)) {
           log.warn({ node: type, field: propertyName, schema: parseify(property) }, 'Unhandled input property');
           return inputsAccumulator;
         }
@@ -203,7 +204,7 @@ export const parseSchema = (
           return outputsAccumulator;
         }
 
-        if (!isInvocationFieldSchema(property)) {
+        if (!isInvocationOutputFieldSchema(property)) {
           log.warn({ node: type, field: propertyName, schema: parseify(property) }, 'Unhandled output property');
           return outputsAccumulator;
         }

@@ -1,5 +1,5 @@
 import type { FieldType } from 'features/nodes/types/field';
-import type { InvocationFieldSchema } from 'features/nodes/types/openapi';
+import type { InvocationOutputFieldSchema } from 'features/nodes/types/openapi';
 import { buildFieldOutputTemplate } from 'features/nodes/util/schema/buildFieldOutputTemplate';
 import { describe, expect, it } from 'vitest';
 
@@ -17,7 +17,7 @@ describe('buildFieldOutputTemplate', () => {
       description: 'The current item',
       ui_hidden: false,
       output_scope: 'iteration',
-    } as InvocationFieldSchema;
+    } as InvocationOutputFieldSchema;
 
     const template = buildFieldOutputTemplate(fieldSchema, 'item', fieldType);
 

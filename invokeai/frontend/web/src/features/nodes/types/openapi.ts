@@ -39,7 +39,9 @@ type InvocationOutputSchemaObject = Omit<OpenAPIV3_1.SchemaObject, 'properties'>
   };
 };
 
-export type InvocationFieldSchema = OpenAPIV3_1.SchemaObject & (InputFieldJSONSchemaExtra | OutputFieldJSONSchemaExtra);
+export type InvocationInputFieldSchema = OpenAPIV3_1.SchemaObject & InputFieldJSONSchemaExtra;
+export type InvocationOutputFieldSchema = OpenAPIV3_1.SchemaObject & OutputFieldJSONSchemaExtra;
+export type InvocationFieldSchema = InvocationInputFieldSchema | InvocationOutputFieldSchema;
 
 export type OpenAPIV3_1SchemaOrRef = OpenAPIV3_1.ReferenceObject | OpenAPIV3_1.SchemaObject;
 
@@ -80,3 +82,12 @@ export const isInvocationOutputSchemaObject = (
 export const isInvocationFieldSchema = (
   obj: OpenAPIV3_1.ReferenceObject | OpenAPIV3_1.SchemaObject
 ): obj is InvocationFieldSchema => 'field_kind' in obj;
+
+export const isInvocationInputFieldSchema = (
+  obj: OpenAPIV3_1.ReferenceObject | OpenAPIV3_1.SchemaObject
+): obj is InvocationInputFieldSchema =>
+  'field_kind' in obj && ['input', 'internal', 'node_attribute'].includes(String(obj.field_kind));
+
+export const isInvocationOutputFieldSchema = (
+  obj: OpenAPIV3_1.ReferenceObject | OpenAPIV3_1.SchemaObject
+): obj is InvocationOutputFieldSchema => 'field_kind' in obj && obj.field_kind === 'output';

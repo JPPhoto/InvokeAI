@@ -1,9 +1,9 @@
 import { startCase } from 'es-toolkit/compat';
 import type { FieldOutputTemplate, FieldType } from 'features/nodes/types/field';
-import type { InvocationFieldSchema } from 'features/nodes/types/openapi';
+import type { InvocationOutputFieldSchema } from 'features/nodes/types/openapi';
 
 export const buildFieldOutputTemplate = (
-  fieldSchema: InvocationFieldSchema,
+  fieldSchema: InvocationOutputFieldSchema,
   fieldName: string,
   fieldType: FieldType
 ): FieldOutputTemplate => {

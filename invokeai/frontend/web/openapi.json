@@ -979,6 +979,9 @@
                       "$ref": "#/components/schemas/T5Encoder_BnBLLMint8_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/T5Encoder_GGUF_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/Qwen3Encoder_Qwen3Encoder_Config"
                     },
                     {
@@ -1308,6 +1311,9 @@
                       "$ref": "#/components/schemas/T5Encoder_BnBLLMint8_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/T5Encoder_GGUF_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/Qwen3Encoder_Qwen3Encoder_Config"
                     },
                     {
@@ -1635,6 +1641,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/T5Encoder_BnBLLMint8_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/T5Encoder_GGUF_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3Encoder_Qwen3Encoder_Config"
@@ -2009,6 +2018,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/T5Encoder_BnBLLMint8_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/T5Encoder_GGUF_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3Encoder_Qwen3Encoder_Config"
@@ -2407,6 +2419,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/T5Encoder_BnBLLMint8_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/T5Encoder_GGUF_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3Encoder_Qwen3Encoder_Config"
@@ -3635,6 +3650,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/T5Encoder_BnBLLMint8_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/T5Encoder_GGUF_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3Encoder_Qwen3Encoder_Config"
@@ -12008,6 +12026,9 @@
           },
           {
             "$ref": "#/components/schemas/T5Encoder_BnBLLMint8_Config"
+          },
+          {
+            "$ref": "#/components/schemas/T5Encoder_GGUF_Config"
           },
           {
             "$ref": "#/components/schemas/Qwen3Encoder_Qwen3Encoder_Config"
@@ -28729,6 +28750,286 @@
         "title": "FluxVariantType",
         "description": "FLUX.1 model variants."
       },
+      "ForInvocation": {
+        "class": "invocation",
+        "classification": "stable",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "collection": {
+            "default": [],
+            "description": "The list of items to iterate over",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "Collection",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional initial loop state",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "index": {
+            "default": -1,
+            "description": "The internal iteration index for a prepared For execution node",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": -1,
+            "orig_required": false,
+            "title": "Index",
+            "type": "integer",
+            "ui_hidden": true
+          },
+          "type": {
+            "const": "for",
+            "default": "for",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "title": "ForInvocation",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/ForInvocationOutput"
+        }
+      },
+      "ForInvocationOutput": {
+        "class": "output",
+        "properties": {
+          "item": {
+            "description": "The item for the current loop iteration",
+            "field_kind": "output",
+            "output_scope": "iteration",
+            "title": "Collection Item",
+            "ui_hidden": false,
+            "ui_type": "CollectionItemField"
+          },
+          "index": {
+            "description": "The index for the current loop iteration",
+            "field_kind": "output",
+            "output_scope": "iteration",
+            "title": "Index",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "total": {
+            "description": "The total number of items in the loop collection",
+            "field_kind": "output",
+            "output_scope": "iteration",
+            "title": "Total",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "state": {
+            "$ref": "#/components/schemas/LoopState",
+            "description": "The state for the current loop iteration",
+            "field_kind": "output",
+            "output_scope": "iteration",
+            "title": "State",
+            "ui_hidden": false
+          },
+          "output_collection": {
+            "description": "The collected loop body outputs",
+            "field_kind": "output",
+            "items": {},
+            "output_scope": "final",
+            "title": "Output Collection",
+            "type": "array",
+            "ui_hidden": false,
+            "ui_type": "CollectionField"
+          },
+          "final_state": {
+            "$ref": "#/components/schemas/LoopState",
+            "description": "The final loop state",
+            "field_kind": "output",
+            "output_scope": "final",
+            "title": "Final State",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "for_output",
+            "default": "for_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "output_meta",
+          "item",
+          "index",
+          "total",
+          "state",
+          "output_collection",
+          "final_state",
+          "type",
+          "type"
+        ],
+        "title": "ForInvocationOutput",
+        "type": "object"
+      },
+      "ForReturnInvocation": {
+        "class": "invocation",
+        "classification": "stable",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "output": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The output item to append to the loop output collection",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Output",
+            "ui_type": "CollectionItemField"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The state to pass to the next loop iteration",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "type": {
+            "const": "for_return",
+            "default": "for_return",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "title": "ForReturnInvocation",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/ForReturnInvocationOutput"
+        }
+      },
+      "ForReturnInvocationOutput": {
+        "class": "output",
+        "properties": {
+          "output": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The output item to append to the loop output collection",
+            "field_kind": "output",
+            "title": "Output",
+            "ui_hidden": false,
+            "ui_type": "CollectionItemField"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The state to pass to the next loop iteration",
+            "field_kind": "output",
+            "title": "State",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "for_return_output",
+            "default": "for_return_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "output", "state", "type", "type"],
+        "title": "ForReturnInvocationOutput",
+        "type": "object"
+      },
       "FoundModel": {
         "properties": {
           "path": {
@@ -29601,6 +29902,12 @@
                   "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/ForInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/ForReturnInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/FreeUInvocation"
                 },
                 {
@@ -30024,6 +30331,18 @@
                   "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/StateEmptyInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/StateGetInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/StateMergeInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/StateSetInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/StringBatchInvocation"
                 },
                 {
@@ -30273,6 +30592,12 @@
                   "$ref": "#/components/schemas/FluxReduxOutput"
                 },
                 {
+                  "$ref": "#/components/schemas/ForInvocationOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/ForReturnInvocationOutput"
+                },
+                {
                   "$ref": "#/components/schemas/GradientMaskOutput"
                 },
                 {
@@ -30322,6 +30647,12 @@
                 },
                 {
                   "$ref": "#/components/schemas/LoRASelectorOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/LoopStateOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/LoopStateValueOutput"
                 },
                 {
                   "$ref": "#/components/schemas/MDControlListOutput"
@@ -30547,6 +30878,15 @@
             "title": "Source Prepared Mapping",
             "description": "The map of original graph nodes to prepared nodes"
           },
+          "finalized_loop_nodes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true,
+            "title": "Finalized Loop Nodes",
+            "description": "The set of loop source nodes whose final outputs have been materialized"
+          },
           "ready_order": {
             "items": {
               "type": "string"
@@ -30575,7 +30915,8 @@
           "workflow_call_stack",
           "workflow_call_history",
           "prepared_source_mapping",
-          "source_prepared_mapping"
+          "source_prepared_mapping",
+          "finalized_loop_nodes"
         ],
         "title": "GraphExecutionState",
         "description": "Tracks source-graph expansion, execution progress, and runtime results."
@@ -37303,6 +37644,12 @@
                 "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
               },
               {
+                "$ref": "#/components/schemas/ForInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/FreeUInvocation"
               },
               {
@@ -37726,6 +38073,18 @@
                 "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
               },
               {
+                "$ref": "#/components/schemas/StateEmptyInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateGetInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateMergeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateSetInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/StringBatchInvocation"
               },
               {
@@ -37932,6 +38291,12 @@
                 "$ref": "#/components/schemas/FluxReduxOutput"
               },
               {
+                "$ref": "#/components/schemas/ForInvocationOutput"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocationOutput"
+              },
+              {
                 "$ref": "#/components/schemas/GradientMaskOutput"
               },
               {
@@ -37981,6 +38346,12 @@
               },
               {
                 "$ref": "#/components/schemas/LoRASelectorOutput"
+              },
+              {
+                "$ref": "#/components/schemas/LoopStateOutput"
+              },
+              {
+                "$ref": "#/components/schemas/LoopStateValueOutput"
               },
               {
                 "$ref": "#/components/schemas/MDControlListOutput"
@@ -38459,6 +38830,12 @@
                 "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
               },
               {
+                "$ref": "#/components/schemas/ForInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/FreeUInvocation"
               },
               {
@@ -38882,6 +39259,18 @@
                 "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
               },
               {
+                "$ref": "#/components/schemas/StateEmptyInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateGetInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateMergeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateSetInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/StringBatchInvocation"
               },
               {
@@ -39273,6 +39662,12 @@
           },
           "flux_vae_encode": {
             "$ref": "#/components/schemas/LatentsOutput"
+          },
+          "for": {
+            "$ref": "#/components/schemas/ForInvocationOutput"
+          },
+          "for_return": {
+            "$ref": "#/components/schemas/ForReturnInvocationOutput"
           },
           "freeu": {
             "$ref": "#/components/schemas/UNetOutput"
@@ -39697,6 +40092,18 @@
           "spandrel_image_to_image_autoscale": {
             "$ref": "#/components/schemas/ImageOutput"
           },
+          "state_empty": {
+            "$ref": "#/components/schemas/LoopStateOutput"
+          },
+          "state_get": {
+            "$ref": "#/components/schemas/LoopStateValueOutput"
+          },
+          "state_merge": {
+            "$ref": "#/components/schemas/LoopStateOutput"
+          },
+          "state_set": {
+            "$ref": "#/components/schemas/LoopStateOutput"
+          },
           "string": {
             "$ref": "#/components/schemas/StringOutput"
           },
@@ -39882,6 +40289,8 @@
           "flux_text_encoder",
           "flux_vae_decode",
           "flux_vae_encode",
+          "for",
+          "for_return",
           "freeu",
           "gemini_image_generation",
           "get_image_mask_bounding_box",
@@ -40023,6 +40432,10 @@
           "show_image",
           "spandrel_image_to_image",
           "spandrel_image_to_image_autoscale",
+          "state_empty",
+          "state_get",
+          "state_merge",
+          "state_set",
           "string",
           "string_batch",
           "string_collection",
@@ -40389,6 +40802,12 @@
               },
               {
                 "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocation"
               },
               {
                 "$ref": "#/components/schemas/FreeUInvocation"
@@ -40812,6 +41231,18 @@
               },
               {
                 "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateEmptyInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateGetInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateMergeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateSetInvocation"
               },
               {
                 "$ref": "#/components/schemas/StringBatchInvocation"
@@ -41293,6 +41724,12 @@
                 "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
               },
               {
+                "$ref": "#/components/schemas/ForInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/FreeUInvocation"
               },
               {
@@ -41714,6 +42151,18 @@
               },
               {
                 "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateEmptyInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateGetInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateMergeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateSetInvocation"
               },
               {
                 "$ref": "#/components/schemas/StringBatchInvocation"
@@ -47626,6 +48075,59 @@
         "required": ["success"],
         "title": "LogoutResponse",
         "description": "Response from logout."
+      },
+      "LoopState": {
+        "properties": {
+          "values": {
+            "additionalProperties": true,
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "title": "LoopState",
+        "type": "object"
+      },
+      "LoopStateOutput": {
+        "class": "output",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/LoopState",
+            "description": "The loop state",
+            "field_kind": "output",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "loop_state_output",
+            "default": "loop_state_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "state", "type", "type"],
+        "title": "LoopStateOutput",
+        "type": "object"
+      },
+      "LoopStateValueOutput": {
+        "class": "output",
+        "properties": {
+          "value": {
+            "description": "The value read from the loop state",
+            "field_kind": "output",
+            "title": "Value",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "loop_state_value_output",
+            "default": "loop_state_value_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "value", "type", "type"],
+        "title": "LoopStateValueOutput",
+        "type": "object"
       },
       "LoraModelDefaultSettings": {
         "properties": {
@@ -56109,6 +56611,9 @@
                 "$ref": "#/components/schemas/T5Encoder_BnBLLMint8_Config"
               },
               {
+                "$ref": "#/components/schemas/T5Encoder_GGUF_Config"
+              },
+              {
                 "$ref": "#/components/schemas/Qwen3Encoder_Qwen3Encoder_Config"
               },
               {
@@ -56684,6 +57189,9 @@
                     "$ref": "#/components/schemas/T5Encoder_BnBLLMint8_Config"
                   },
                   {
+                    "$ref": "#/components/schemas/T5Encoder_GGUF_Config"
+                  },
+                  {
                     "$ref": "#/components/schemas/Qwen3Encoder_Qwen3Encoder_Config"
                   },
                   {
@@ -57144,6 +57652,9 @@
                 "$ref": "#/components/schemas/T5Encoder_BnBLLMint8_Config"
               },
               {
+                "$ref": "#/components/schemas/T5Encoder_GGUF_Config"
+              },
+              {
                 "$ref": "#/components/schemas/Qwen3Encoder_Qwen3Encoder_Config"
               },
               {
@@ -57458,6 +57969,9 @@
               },
               {
                 "$ref": "#/components/schemas/T5Encoder_BnBLLMint8_Config"
+              },
+              {
+                "$ref": "#/components/schemas/T5Encoder_GGUF_Config"
               },
               {
                 "$ref": "#/components/schemas/Qwen3Encoder_Qwen3Encoder_Config"
@@ -58223,6 +58737,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/T5Encoder_BnBLLMint8_Config"
+                },
+                {
+                  "$ref": "#/components/schemas/T5Encoder_GGUF_Config"
                 },
                 {
                   "$ref": "#/components/schemas/Qwen3Encoder_Qwen3Encoder_Config"
@@ -59362,11 +59879,28 @@
               }
             ],
             "default": null
+          },
+          "output_scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputScope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
-        "required": ["field_kind", "ui_hidden", "ui_order", "ui_type"],
+        "required": ["field_kind", "ui_hidden", "ui_order", "ui_type", "output_scope"],
         "title": "OutputFieldJSONSchemaExtra",
         "type": "object"
+      },
+      "OutputScope": {
+        "description": "The execution scope for an output field.\n- `Iteration`: The field emits values for a loop body's current iteration.\n- `Final`: The field emits values after a loop boundary completes.",
+        "enum": ["iteration", "final"],
+        "title": "OutputScope",
+        "type": "string"
       },
       "PBRMapsInvocation": {
         "category": "controlnet_preprocessors",
@@ -67749,6 +68283,306 @@
         "required": ["description", "source", "name", "base", "type"],
         "title": "StarterModelWithoutDependencies"
       },
+      "StateEmptyInvocation": {
+        "category": "workflow",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Creates an empty loop state.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "type": {
+            "const": "state_empty",
+            "default": "state_empty",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["loop", "state"],
+        "title": "Empty Loop State",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LoopStateOutput"
+        }
+      },
+      "StateGetInvocation": {
+        "category": "workflow",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Reads a value from loop state.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The loop state to read",
+            "field_kind": "input",
+            "input": "any",
+            "orig_required": true
+          },
+          "key": {
+            "default": "",
+            "description": "The state key to read",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": "",
+            "orig_required": false,
+            "title": "Key",
+            "type": "string"
+          },
+          "default": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The value to return when the key is missing",
+            "input": "any",
+            "field_kind": "input",
+            "orig_required": false,
+            "orig_default": null,
+            "title": "Default"
+          },
+          "type": {
+            "const": "state_get",
+            "default": "state_get",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["loop", "state"],
+        "title": "Get Loop State Value",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LoopStateValueOutput"
+        }
+      },
+      "StateMergeInvocation": {
+        "category": "workflow",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Returns loop state with multiple values merged.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The loop state to update",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "values": {
+            "additionalProperties": true,
+            "default": {},
+            "description": "The values to merge into the loop state",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": {},
+            "orig_required": false,
+            "title": "Values",
+            "type": "object"
+          },
+          "type": {
+            "const": "state_merge",
+            "default": "state_merge",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["loop", "state"],
+        "title": "Merge Loop State Values",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LoopStateOutput"
+        }
+      },
+      "StateSetInvocation": {
+        "category": "workflow",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Returns loop state with one value set.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The loop state to update",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "key": {
+            "default": "",
+            "description": "The state key to set",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": "",
+            "orig_required": false,
+            "title": "Key",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The value to set",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Value"
+          },
+          "type": {
+            "const": "state_set",
+            "default": "state_set",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["loop", "state"],
+        "title": "Set Loop State Value",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LoopStateOutput"
+        }
+      },
       "String2Output": {
         "class": "output",
         "description": "Base class for invocations that output two strings",
@@ -69420,6 +70254,155 @@
         ],
         "title": "T5Encoder_BnBLLMint8_Config",
         "description": "Configuration for T5 Encoder models quantized by bitsandbytes' LLM.int8."
+      },
+      "T5Encoder_GGUF_Config": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "description": "A unique key for this model."
+          },
+          "hash": {
+            "type": "string",
+            "title": "Hash",
+            "description": "The hash of the model file(s)."
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Path to the model on the filesystem. Relative paths are relative to the Invoke root directory."
+          },
+          "file_size": {
+            "type": "integer",
+            "title": "File Size",
+            "description": "The size of the model in bytes."
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Name of the model."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Model description"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "The original source of the model (path, URL or repo_id)."
+          },
+          "source_type": {
+            "$ref": "#/components/schemas/ModelSourceType",
+            "description": "The type of source"
+          },
+          "source_api_response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Api Response",
+            "description": "The original API response from the source, as stringified JSON."
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url",
+            "description": "Optional URL for the model (e.g. download page or model page)."
+          },
+          "cover_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Image",
+            "description": "Url for image to preview model"
+          },
+          "config_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Path",
+            "description": "Path to the config for this model, if any."
+          },
+          "base": {
+            "type": "string",
+            "const": "any",
+            "title": "Base",
+            "default": "any"
+          },
+          "type": {
+            "type": "string",
+            "const": "t5_encoder",
+            "title": "Type",
+            "default": "t5_encoder"
+          },
+          "format": {
+            "type": "string",
+            "const": "gguf_quantized",
+            "title": "Format",
+            "default": "gguf_quantized"
+          },
+          "cpu_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Only",
+            "description": "Whether this model should run on CPU only"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "hash",
+          "path",
+          "file_size",
+          "name",
+          "description",
+          "source",
+          "source_type",
+          "source_api_response",
+          "source_url",
+          "cover_image",
+          "config_path",
+          "base",
+          "type",
+          "format",
+          "cpu_only"
+        ],
+        "title": "T5Encoder_GGUF_Config",
+        "description": "Configuration for GGUF-quantized T5 text encoder models in a single .gguf file.\n\nThese are conversions like city96/t5-v1_1-xxl-encoder-gguf, which use llama.cpp's T5 encoder\ntensor naming (``enc.blk.N.*``, ``token_embd.weight``, ``enc.output_norm.weight``)."
       },
       "T5Encoder_T5Encoder_Config": {
         "properties": {
