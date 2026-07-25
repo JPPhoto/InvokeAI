@@ -528,6 +528,9 @@ chains. For one loop source, it rejects a connection when any final-scoped outpu
 iteration-scoped output. The check is symmetric with respect to connection order: adding a final edge to an existing
 body and adding an iteration edge that would absorb an existing final target are both rejected.
 
+The ordinary invocation renderer now groups scoped fields under localized `Iteration Outputs` and `Final Outputs`
+headings. Nodes without scoped outputs keep the existing flat output rendering.
+
 This local guard intentionally does not require a complete body while the user is editing. Matching `ForReturn`
 ownership, unterminated body paths, nested loops, internal `Iterate` nodes, and iterator-derived external inputs remain
 whole-graph validation concerns enforced by the backend.
@@ -682,7 +685,8 @@ exceptions without scheduling later iterations or after-loop nodes. Schema gener
 invocation definitions does not change their serialized API contracts. Frontend unit tests cover `For` and `ForReturn`
 graph/workflow round trips, resolution of their output scopes from the current templates, and `LoopState` connection-type
 compatibility. Frontend connection tests cover iteration/final scope overlap in either connection order, through body
-descendants, and through connector nodes.
+descendants, and through connector nodes. Output row-model tests cover flat rendering for ordinary nodes and distinct
+iteration/final sections for scoped nodes.
 
 The following paths remain unchecked and should not be inferred from the graph-unit coverage:
 
@@ -690,7 +694,7 @@ The following paths remain unchecked and should not be inferred from the graph-u
 - end-to-end execution with the SQLite session queue rather than the runner's queue test double
 - frontend whole-graph validation for body return ownership, unterminated body paths, nested loops, internal `Iterate`
   nodes, and iterator-derived external inputs
-- editor grouping and interaction behavior for `For` and `ForReturn`
+- interaction behavior for discovering and wiring `ForReturn`
 
 ## Open Questions
 
