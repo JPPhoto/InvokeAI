@@ -2,7 +2,7 @@ import { deepClone } from 'common/util/deepClone';
 import { set } from 'es-toolkit/compat';
 import { callSavedWorkflowDynamicFieldsChanged, nodesSliceConfig } from 'features/nodes/store/nodesSlice';
 import type { IntegerFieldInputTemplate } from 'features/nodes/types/field';
-import type { InvocationTemplate } from 'features/nodes/types/invocation';
+import type { AnyEdge, InvocationTemplate } from 'features/nodes/types/invocation';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -489,6 +489,13 @@ describe(validateConnection.name, () => {
 
   describe('loop output scopes', () => {
     const loopTemplates = { for: for_loop, for_return };
+    const loopSinkTemplate: InvocationTemplate = {
+      ...for_return,
+      title: 'Loop Sink',
+      type: 'loop_sink',
+      outputType: 'loop_sink_output',
+      outputs: {},
+    };
 
     it('rejects a final-scoped output connected into an existing iteration body', () => {
       const forNode = buildNode(for_loop);
@@ -595,6 +602,81 @@ describe(validateConnection.name, () => {
       };
 
       expect(validateConnection(connection, nodes, edges, loopTemplates, null)).toBeNull();
+    });
+
+    it.each([
+      ['iteration', 'final', 'extension'],
+      ['final', 'iteration', 'extension'],
+      ['extension', 'final', 'iteration'],
+    ] as const)('rejects scope overlap regardless of incremental edge order: %s, %s, %s', (...order) => {
+      const forNode = buildNode(for_loop);
+      const bodyNode = buildNode(ifTemplate);
+      const afterLoopNode = buildNode(loopSinkTemplate);
+      const nodes = [forNode, bodyNode, afterLoopNode];
+      const edgeByName = {
+        iteration: buildEdge(forNode.id, 'item', bodyNode.id, 'true_input'),
+        final: buildEdge(forNode.id, 'final_state', afterLoopNode.id, 'state'),
+        extension: buildEdge(bodyNode.id, 'value', afterLoopNode.id, 'output'),
+      };
+      const templates = {
+        ...loopTemplates,
+        if: ifTemplate,
+        loop_sink: loopSinkTemplate,
+      };
+      const acceptedEdges: AnyEdge[] = [];
+      const results = order.map((name) => {
+        const edge = edgeByName[name];
+        if (edge.type !== 'default' || !edge.sourceHandle || !edge.targetHandle) {
+          throw new Error('Expected a default edge with field handles');
+        }
+        const result = validateConnection(
+          {
+            source: edge.source,
+            sourceHandle: edge.sourceHandle,
+            target: edge.target,
+            targetHandle: edge.targetHandle,
+          },
+          nodes,
+          acceptedEdges,
+          templates,
+          null
+        );
+        if (result === null) {
+          acceptedEdges.push(edge);
+        }
+        return result;
+      });
+
+      expect(results).toContain('nodes.loopOutputScopeConflict');
+    });
+
+    it('allows an unrelated connection when the graph already contains a scope conflict', () => {
+      const forNode = buildNode(for_loop);
+      const bodyNode = buildNode(ifTemplate);
+      const afterLoopNode = buildNode(loopSinkTemplate);
+      const addNode = buildNode(add);
+      const subNode = buildNode(sub);
+      const nodes = [forNode, bodyNode, afterLoopNode, addNode, subNode];
+      const edges = [
+        buildEdge(forNode.id, 'item', bodyNode.id, 'true_input'),
+        buildEdge(forNode.id, 'final_state', afterLoopNode.id, 'state'),
+        buildEdge(bodyNode.id, 'value', afterLoopNode.id, 'output'),
+      ];
+      const templates = {
+        ...loopTemplates,
+        add,
+        sub,
+        if: ifTemplate,
+        loop_sink: loopSinkTemplate,
+      };
+      const connection = {
+        source: addNode.id,
+        sourceHandle: 'value',
+        target: subNode.id,
+        targetHandle: 'a',
+      };
+
+      expect(validateConnection(connection, nodes, edges, templates, null)).toBeNull();
     });
   });
 

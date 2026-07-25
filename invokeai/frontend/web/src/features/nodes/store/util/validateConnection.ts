@@ -195,73 +195,150 @@ const getEffectiveSourceForEdge = (
   return getEffectiveSource(edge.source, edge.sourceHandle, nodes, edges, templates);
 };
 
-const hasOutputScopeConflict = (
-  connection: Connection,
-  effectiveSource: EffectiveSource,
-  nodes: AnyNode[],
-  edges: AnyEdge[],
-  templates: Templates
-) => {
-  if (!effectiveSource.fieldTemplate.output_scope) {
-    return false;
+const getOutputScopeConflicts = (nodes: AnyNode[], edges: AnyEdge[], templates: Templates) => {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const connectorInputById = new Map<string, AnyEdge>();
+  const scopedOutputByEndpoint = new Map<string, { nodeId: string; scope: 'iteration' | 'final' }>();
+
+  for (const node of nodes) {
+    if (!isInvocationNode(node)) {
+      continue;
+    }
+    const template = templates[node.data.type];
+    if (!template) {
+      continue;
+    }
+    for (const output of Object.values(template.outputs)) {
+      if (output.output_scope) {
+        scopedOutputByEndpoint.set(`${node.id}\0${output.name}`, {
+          nodeId: node.id,
+          scope: output.output_scope,
+        });
+      }
+    }
   }
 
+  if (scopedOutputByEndpoint.size === 0) {
+    return new Set<string>();
+  }
+
+  for (const edge of edges) {
+    if (
+      edge.type === 'default' &&
+      edge.targetHandle === CONNECTOR_INPUT_HANDLE &&
+      !connectorInputById.has(edge.target)
+    ) {
+      connectorInputById.set(edge.target, edge);
+    }
+  }
+
+  type ScopedOutput = { nodeId: string; scope: 'iteration' | 'final' };
+  const scopedOutputCache = new Map<string, ScopedOutput | null>();
+  const resolveScopedOutput = (
+    sourceId: string,
+    sourceHandle: string,
+    visited = new Set<string>()
+  ): ScopedOutput | null => {
+    const endpoint = `${sourceId}\0${sourceHandle}`;
+    const cached = scopedOutputCache.get(endpoint);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const directScopedOutput = scopedOutputByEndpoint.get(endpoint);
+    if (directScopedOutput) {
+      scopedOutputCache.set(endpoint, directScopedOutput);
+      return directScopedOutput;
+    }
+
+    const sourceNode = nodeById.get(sourceId);
+    if (
+      !sourceNode ||
+      !isConnectorNode(sourceNode) ||
+      sourceHandle !== CONNECTOR_OUTPUT_HANDLE ||
+      visited.has(sourceId)
+    ) {
+      scopedOutputCache.set(endpoint, null);
+      return null;
+    }
+
+    visited.add(sourceId);
+    const connectorInput = connectorInputById.get(sourceId);
+    if (connectorInput?.type !== 'default' || typeof connectorInput.sourceHandle !== 'string') {
+      scopedOutputCache.set(endpoint, null);
+      return null;
+    }
+
+    const scopedOutput = resolveScopedOutput(connectorInput.source, connectorInput.sourceHandle, visited);
+    scopedOutputCache.set(endpoint, scopedOutput);
+    return scopedOutput;
+  };
+
+  const targetsByScopeByNode = new Map<string, { iterationTargets: Set<string>; finalTargets: Set<string> }>();
+  const targetsBySource = new Map<string, Set<string>>();
+  for (const edge of edges) {
+    if (edge.type !== 'default' || typeof edge.sourceHandle !== 'string') {
+      continue;
+    }
+
+    const targets = targetsBySource.get(edge.source) ?? new Set<string>();
+    targets.add(edge.target);
+    targetsBySource.set(edge.source, targets);
+
+    const scopedOutput = resolveScopedOutput(edge.source, edge.sourceHandle);
+    if (!scopedOutput) {
+      continue;
+    }
+    const targetsByScope = targetsByScopeByNode.get(scopedOutput.nodeId) ?? {
+      iterationTargets: new Set<string>(),
+      finalTargets: new Set<string>(),
+    };
+    if (scopedOutput.scope === 'iteration') {
+      targetsByScope.iterationTargets.add(edge.target);
+    } else {
+      targetsByScope.finalTargets.add(edge.target);
+    }
+    targetsByScopeByNode.set(scopedOutput.nodeId, targetsByScope);
+  }
+
+  const conflicts = new Set<string>();
+  for (const [nodeId, { iterationTargets, finalTargets }] of targetsByScopeByNode) {
+    const reachableBodyNodes = new Set(iterationTargets);
+    const pendingBodyNodes = [...iterationTargets];
+    while (pendingBodyNodes.length > 0) {
+      const currentNodeId = pendingBodyNodes.pop();
+      if (!currentNodeId) {
+        continue;
+      }
+
+      for (const targetNodeId of targetsBySource.get(currentNodeId) ?? []) {
+        if (reachableBodyNodes.has(targetNodeId)) {
+          continue;
+        }
+        reachableBodyNodes.add(targetNodeId);
+        pendingBodyNodes.push(targetNodeId);
+      }
+    }
+
+    for (const targetId of finalTargets) {
+      if (reachableBodyNodes.has(targetId)) {
+        conflicts.add(`${nodeId}\0${targetId}`);
+      }
+    }
+  }
+
+  return conflicts;
+};
+
+const hasOutputScopeConflict = (connection: Connection, nodes: AnyNode[], edges: AnyEdge[], templates: Templates) => {
+  const existingConflicts = getOutputScopeConflicts(nodes, edges, templates);
   const candidateEdge: AnyEdge = {
     ...connection,
     id: '__candidate_connection__',
     type: 'default',
   };
-  const stagedEdges = [...edges, candidateEdge];
-  const iterationTargets = new Set<string>();
-  const finalTargets = new Set<string>();
-  const effectiveSources = new Map<string, ReturnType<typeof getEffectiveSourceForEdge>>();
-
-  for (const edge of stagedEdges) {
-    const sourceKey = `${edge.source}\0${edge.type === 'default' ? edge.sourceHandle : ''}`;
-    let edgeSource = effectiveSources.get(sourceKey);
-    if (edgeSource === undefined) {
-      edgeSource = getEffectiveSourceForEdge(edge, nodes, stagedEdges, templates);
-      effectiveSources.set(sourceKey, edgeSource);
-    }
-    if (!edgeSource || typeof edgeSource === 'string' || edgeSource.node.id !== effectiveSource.node.id) {
-      continue;
-    }
-
-    if (edgeSource.fieldTemplate.output_scope === 'iteration') {
-      iterationTargets.add(edge.target);
-    } else if (edgeSource.fieldTemplate.output_scope === 'final') {
-      finalTargets.add(edge.target);
-    }
-  }
-
-  const targetsBySource = new Map<string, Set<string>>();
-  for (const edge of stagedEdges) {
-    if (edge.type !== 'default') {
-      continue;
-    }
-    const targets = targetsBySource.get(edge.source) ?? new Set<string>();
-    targets.add(edge.target);
-    targetsBySource.set(edge.source, targets);
-  }
-
-  const reachableBodyNodes = new Set(iterationTargets);
-  const pendingBodyNodes = [...iterationTargets];
-  while (pendingBodyNodes.length > 0) {
-    const currentNodeId = pendingBodyNodes.pop();
-    if (!currentNodeId) {
-      continue;
-    }
-
-    for (const targetNodeId of targetsBySource.get(currentNodeId) ?? []) {
-      if (reachableBodyNodes.has(targetNodeId)) {
-        continue;
-      }
-      reachableBodyNodes.add(targetNodeId);
-      pendingBodyNodes.push(targetNodeId);
-    }
-  }
-
-  return [...finalTargets].some((targetId) => reachableBodyNodes.has(targetId));
+  const stagedConflicts = getOutputScopeConflicts(nodes, [...edges, candidateEdge], templates);
+  return [...stagedConflicts].some((conflict) => !existingConflicts.has(conflict));
 };
 
 /**
@@ -404,7 +481,7 @@ export const validateConnection: ValidateConnectionFunc = (
 
     const { node: resolvedSourceNode, handle: sourceHandle, fieldTemplate: sourceFieldTemplate } = effectiveSource;
 
-    if (hasOutputScopeConflict(c, effectiveSource, nodes, filteredEdges, templates)) {
+    if (hasOutputScopeConflict(c, nodes, filteredEdges, templates)) {
       return 'nodes.loopOutputScopeConflict';
     }
 

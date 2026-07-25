@@ -523,10 +523,11 @@ The ordinary node renderer and connection validation need enough output-scope me
 This is not only a visual grouping; it changes which connections are loop-body edges and which connections are
 after-loop edges.
 
-The current frontend connection validator stages each proposed edge and resolves scoped outputs through connector
-chains. For one loop source, it rejects a connection when any final-scoped output would target a node reachable from an
-iteration-scoped output. The check is symmetric with respect to connection order: adding a final edge to an existing
-body and adding an iteration edge that would absorb an existing final target are both rejected.
+The current frontend connection validator stages each proposed edge, resolves scoped outputs through connector chains,
+and checks every scoped loop source in the staged graph. It rejects a connection when any final-scoped output would
+target a node reachable from an iteration-scoped output. The check is independent of connection order: adding a final
+edge to an existing body, adding an iteration edge that would absorb an existing final target, and extending the body
+through an ordinary node edge are all rejected when they create scope overlap.
 
 The ordinary invocation renderer now groups scoped fields under localized `Iteration Outputs` and `Final Outputs`
 headings. Nodes without scoped outputs keep the existing flat output rendering.
@@ -684,9 +685,9 @@ completion and session persistence, cancellation between iterations without rele
 exceptions without scheduling later iterations or after-loop nodes. Schema generation verifies that moving the
 invocation definitions does not change their serialized API contracts. Frontend unit tests cover `For` and `ForReturn`
 graph/workflow round trips, resolution of their output scopes from the current templates, and `LoopState` connection-type
-compatibility. Frontend connection tests cover iteration/final scope overlap in either connection order, through body
-descendants, and through connector nodes. Output row-model tests cover flat rendering for ordinary nodes and distinct
-iteration/final sections for scoped nodes.
+compatibility. Frontend connection tests cover iteration/final scope overlap across incremental connection orders,
+through ordinary body extensions, body descendants, and connector nodes. Output row-model and renderer tests cover flat
+rendering for ordinary nodes and distinct localized iteration/final sections for scoped nodes.
 
 The following paths remain unchecked and should not be inferred from the graph-unit coverage:
 

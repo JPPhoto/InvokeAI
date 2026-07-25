@@ -169,7 +169,11 @@ describe('graphToWorkflow', () => {
       target: 'return',
       targetHandle: 'output',
     });
-    expect(getOutputFieldNamesByScope(Object.values(for_loop.outputs))).toEqual({
+    const resolvedForTemplate = loopTemplates[forNode.data.type];
+    if (!resolvedForTemplate) {
+      throw new Error('Expected the round-tripped For node type to resolve its template');
+    }
+    expect(getOutputFieldNamesByScope(Object.values(resolvedForTemplate.outputs))).toEqual({
       all: ['item', 'index', 'total', 'state', 'output_collection', 'final_state'],
       unscoped: [],
       iteration: ['item', 'index', 'total', 'state'],

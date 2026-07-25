@@ -1,9 +1,26 @@
 import { omit, pick } from 'es-toolkit/compat';
-import { call_saved_workflow, schema, templates, workflow_return } from 'features/nodes/store/util/testUtils';
+import {
+  call_saved_workflow,
+  for_loop,
+  for_return,
+  schema,
+  templates,
+  workflow_return,
+} from 'features/nodes/store/util/testUtils';
+import type { InvocationTemplate } from 'features/nodes/types/invocation';
 import { parseSchema } from 'features/nodes/util/schema/parseSchema';
+import type { OpenAPIV3_1 } from 'openapi-types';
 import { describe, expect, it } from 'vitest';
 
+import generatedSchemaJSON from '../../../../../openapi.json?raw';
+
 const stripUndefinedDeep = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+const normalizeInputUiHidden = (template: InvocationTemplate): InvocationTemplate => ({
+  ...template,
+  inputs: Object.fromEntries(
+    Object.entries(template.inputs).map(([name, input]) => [name, { ...input, ui_hidden: input.ui_hidden ?? false }])
+  ),
+});
 
 describe('parseSchema', () => {
   it('should parse the schema', () => {
@@ -45,5 +62,20 @@ describe('parseSchema', () => {
     }
     expect(collectionInput.type.name).toBe('CollectionField');
     expect(collectionInput.ui_type).toBe('CollectionField');
+  });
+  it('should keep the loop test templates aligned with the generated schema', () => {
+    const generatedSchema = JSON.parse(generatedSchemaJSON) as OpenAPIV3_1.Document;
+    const parsed = parseSchema(generatedSchema, ['for', 'for_return']);
+
+    expect(
+      stripUndefinedDeep(
+        Object.fromEntries(Object.entries(parsed).map(([type, template]) => [type, normalizeInputUiHidden(template)]))
+      )
+    ).toEqual(
+      stripUndefinedDeep({
+        for: normalizeInputUiHidden(for_loop),
+        for_return: normalizeInputUiHidden(for_return),
+      })
+    );
   });
 });
