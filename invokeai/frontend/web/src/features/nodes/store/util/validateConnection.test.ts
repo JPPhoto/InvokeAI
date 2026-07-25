@@ -16,6 +16,8 @@ import {
   buildNode,
   call_saved_workflow,
   collect,
+  for_loop,
+  for_return,
   img_resize,
   main_model_loader,
   sub,
@@ -483,6 +485,117 @@ describe(validateConnection.name, () => {
     const c = { source: n1.id, sourceHandle: 'value', target: n2.id, targetHandle: 'image' };
     const r = validateConnection(c, nodes, [], templates, null);
     expect(r).toEqual('nodes.fieldTypesMustMatch');
+  });
+
+  describe('loop output scopes', () => {
+    const loopTemplates = { for: for_loop, for_return };
+
+    it('rejects a final-scoped output connected into an existing iteration body', () => {
+      const forNode = buildNode(for_loop);
+      const returnNode = buildNode(for_return);
+      const nodes = [forNode, returnNode];
+      const edges = [buildEdge(forNode.id, 'item', returnNode.id, 'output')];
+      const connection = {
+        source: forNode.id,
+        sourceHandle: 'final_state',
+        target: returnNode.id,
+        targetHandle: 'state',
+      };
+
+      expect(validateConnection(connection, nodes, edges, loopTemplates, null)).toEqual(
+        'nodes.loopOutputScopeConflict'
+      );
+    });
+
+    it('rejects an iteration-scoped output that makes an existing final output part of the body', () => {
+      const forNode = buildNode(for_loop);
+      const returnNode = buildNode(for_return);
+      const nodes = [forNode, returnNode];
+      const edges = [buildEdge(forNode.id, 'final_state', returnNode.id, 'state')];
+      const connection = {
+        source: forNode.id,
+        sourceHandle: 'item',
+        target: returnNode.id,
+        targetHandle: 'output',
+      };
+
+      expect(validateConnection(connection, nodes, edges, loopTemplates, null)).toEqual(
+        'nodes.loopOutputScopeConflict'
+      );
+    });
+
+    it('rejects a final-scoped output connected to a descendant of an iteration body node', () => {
+      const forNode = buildNode(for_loop);
+      const bodyNode = buildNode(ifTemplate);
+      const returnNode = buildNode(for_return);
+      const nodes = [forNode, bodyNode, returnNode];
+      const edges = [
+        buildEdge(forNode.id, 'item', bodyNode.id, 'true_input'),
+        buildEdge(bodyNode.id, 'value', returnNode.id, 'output'),
+      ];
+      const connection = {
+        source: forNode.id,
+        sourceHandle: 'final_state',
+        target: returnNode.id,
+        targetHandle: 'state',
+      };
+
+      expect(validateConnection(connection, nodes, edges, { ...loopTemplates, if: ifTemplate }, null)).toEqual(
+        'nodes.loopOutputScopeConflict'
+      );
+    });
+
+    it('rejects a final-scoped output routed into the iteration body through a connector', () => {
+      const forNode = buildNode(for_loop);
+      const connectorNode = buildConnectorNode('connector');
+      const returnNode = buildNode(for_return);
+      const nodes = [forNode, connectorNode, returnNode];
+      const edges = [
+        buildEdge(forNode.id, 'item', returnNode.id, 'output'),
+        buildEdge(forNode.id, 'final_state', connectorNode.id, CONNECTOR_INPUT_HANDLE),
+      ];
+      const connection = {
+        source: connectorNode.id,
+        sourceHandle: CONNECTOR_OUTPUT_HANDLE,
+        target: returnNode.id,
+        targetHandle: 'state',
+      };
+
+      expect(validateConnection(connection, nodes, edges, loopTemplates, null)).toEqual(
+        'nodes.loopOutputScopeConflict'
+      );
+    });
+
+    it('accepts iteration-scoped outputs within the body', () => {
+      const forNode = buildNode(for_loop);
+      const returnNode = buildNode(for_return);
+      const nodes = [forNode, returnNode];
+      const edges = [buildEdge(forNode.id, 'item', returnNode.id, 'output')];
+      const connection = {
+        source: forNode.id,
+        sourceHandle: 'state',
+        target: returnNode.id,
+        targetHandle: 'state',
+      };
+
+      expect(validateConnection(connection, nodes, edges, loopTemplates, null)).toBeNull();
+    });
+
+    it('accepts final-scoped outputs outside the iteration body', () => {
+      const forNode = buildNode(for_loop);
+      const bodyReturnNode = buildNode(for_return);
+      const afterLoopNode = buildNode(for_loop);
+      const nodes = [forNode, bodyReturnNode, afterLoopNode];
+      const edges = [buildEdge(forNode.id, 'item', bodyReturnNode.id, 'output')];
+      const connection = {
+        source: forNode.id,
+        sourceHandle: 'final_state',
+        target: afterLoopNode.id,
+        targetHandle: 'state',
+      };
+
+      expect(validateConnection(connection, nodes, edges, loopTemplates, null)).toBeNull();
+    });
   });
 
   it('should reject mismatched types between if node branch inputs', () => {

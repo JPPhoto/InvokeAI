@@ -523,6 +523,15 @@ The ordinary node renderer and connection validation need enough output-scope me
 This is not only a visual grouping; it changes which connections are loop-body edges and which connections are
 after-loop edges.
 
+The current frontend connection validator stages each proposed edge and resolves scoped outputs through connector
+chains. For one loop source, it rejects a connection when any final-scoped output would target a node reachable from an
+iteration-scoped output. The check is symmetric with respect to connection order: adding a final edge to an existing
+body and adding an iteration edge that would absorb an existing final target are both rejected.
+
+This local guard intentionally does not require a complete body while the user is editing. Matching `ForReturn`
+ownership, unterminated body paths, nested loops, internal `Iterate` nodes, and iterator-derived external inputs remain
+whole-graph validation concerns enforced by the backend.
+
 Suggested first visual shape:
 
 ```text
@@ -672,13 +681,15 @@ completion and session persistence, cancellation between iterations without rele
 exceptions without scheduling later iterations or after-loop nodes. Schema generation verifies that moving the
 invocation definitions does not change their serialized API contracts. Frontend unit tests cover `For` and `ForReturn`
 graph/workflow round trips, resolution of their output scopes from the current templates, and `LoopState` connection-type
-compatibility.
+compatibility. Frontend connection tests cover iteration/final scope overlap in either connection order, through body
+descendants, and through connector nodes.
 
 The following paths remain unchecked and should not be inferred from the graph-unit coverage:
 
 - cancellation initiated through a real queue status event and the threaded `DefaultSessionProcessor`
 - end-to-end execution with the SQLite session queue rather than the runner's queue test double
-- structural frontend connection validation for iteration-scoped and final-scoped output edges
+- frontend whole-graph validation for body return ownership, unterminated body paths, nested loops, internal `Iterate`
+  nodes, and iterator-derived external inputs
 - editor grouping and interaction behavior for `For` and `ForReturn`
 
 ## Open Questions

@@ -1469,6 +1469,7 @@
         "colorCodeEdges": "Color-Code Edges",
         "colorCodeEdgesHelp": "Color-code edges according to their connected fields",
         "connectionWouldCreateCycle": "Connection would create a cycle",
+        "loopOutputScopeConflict": "Final loop outputs cannot feed the loop body",
         "currentImage": "Current Image",
         "currentImageDescription": "Displays the current image in the Node Editor",
         "downloadWorkflow": "Download Workflow JSON",

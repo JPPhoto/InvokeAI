@@ -195,6 +195,75 @@ const getEffectiveSourceForEdge = (
   return getEffectiveSource(edge.source, edge.sourceHandle, nodes, edges, templates);
 };
 
+const hasOutputScopeConflict = (
+  connection: Connection,
+  effectiveSource: EffectiveSource,
+  nodes: AnyNode[],
+  edges: AnyEdge[],
+  templates: Templates
+) => {
+  if (!effectiveSource.fieldTemplate.output_scope) {
+    return false;
+  }
+
+  const candidateEdge: AnyEdge = {
+    ...connection,
+    id: '__candidate_connection__',
+    type: 'default',
+  };
+  const stagedEdges = [...edges, candidateEdge];
+  const iterationTargets = new Set<string>();
+  const finalTargets = new Set<string>();
+  const effectiveSources = new Map<string, ReturnType<typeof getEffectiveSourceForEdge>>();
+
+  for (const edge of stagedEdges) {
+    const sourceKey = `${edge.source}\0${edge.type === 'default' ? edge.sourceHandle : ''}`;
+    let edgeSource = effectiveSources.get(sourceKey);
+    if (edgeSource === undefined) {
+      edgeSource = getEffectiveSourceForEdge(edge, nodes, stagedEdges, templates);
+      effectiveSources.set(sourceKey, edgeSource);
+    }
+    if (!edgeSource || typeof edgeSource === 'string' || edgeSource.node.id !== effectiveSource.node.id) {
+      continue;
+    }
+
+    if (edgeSource.fieldTemplate.output_scope === 'iteration') {
+      iterationTargets.add(edge.target);
+    } else if (edgeSource.fieldTemplate.output_scope === 'final') {
+      finalTargets.add(edge.target);
+    }
+  }
+
+  const targetsBySource = new Map<string, Set<string>>();
+  for (const edge of stagedEdges) {
+    if (edge.type !== 'default') {
+      continue;
+    }
+    const targets = targetsBySource.get(edge.source) ?? new Set<string>();
+    targets.add(edge.target);
+    targetsBySource.set(edge.source, targets);
+  }
+
+  const reachableBodyNodes = new Set(iterationTargets);
+  const pendingBodyNodes = [...iterationTargets];
+  while (pendingBodyNodes.length > 0) {
+    const currentNodeId = pendingBodyNodes.pop();
+    if (!currentNodeId) {
+      continue;
+    }
+
+    for (const targetNodeId of targetsBySource.get(currentNodeId) ?? []) {
+      if (reachableBodyNodes.has(targetNodeId)) {
+        continue;
+      }
+      reachableBodyNodes.add(targetNodeId);
+      pendingBodyNodes.push(targetNodeId);
+    }
+  }
+
+  return [...finalTargets].some((targetId) => reachableBodyNodes.has(targetId));
+};
+
 /**
  * Validates a connection between two fields
  * @returns A translation key for an error if the connection is invalid, otherwise null
@@ -334,6 +403,10 @@ export const validateConnection: ValidateConnectionFunc = (
     }
 
     const { node: resolvedSourceNode, handle: sourceHandle, fieldTemplate: sourceFieldTemplate } = effectiveSource;
+
+    if (hasOutputScopeConflict(c, effectiveSource, nodes, filteredEdges, templates)) {
+      return 'nodes.loopOutputScopeConflict';
+    }
 
     if (targetNode.data.type === 'collect' && c.targetHandle === 'item') {
       // Collect nodes shouldn't mix and match field types.
