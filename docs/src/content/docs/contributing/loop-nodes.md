@@ -217,9 +217,10 @@ output_collection: list[Any] = OutputField(..., loop_scope="final")
 ```
 
 The exact metadata name is open. This metadata does not exist as a complete engine contract today, so implementing `For`
-requires schema, validation, frontend type generation, workflow serialization, and execution-graph materialization to
-preserve the output scope. A `For` node cannot be implemented as an ordinary invocation that only returns one flat output
-model.
+requires schema, validation, frontend type generation, and execution-graph materialization to preserve the output scope.
+Saved workflows preserve the invocation type and edge field handles; when a workflow is loaded, the current invocation
+template resolves those handles to their output scopes. A `For` node cannot be implemented as an ordinary invocation
+that only returns one flat output model.
 
 The distinction is required:
 
@@ -483,8 +484,8 @@ Potential validation rules:
 - `For.state`, when connected, must be compatible with `LoopState`.
 - Edges from iteration-scoped `For` outputs must be treated as loop-body edges.
 - Edges from final-scoped `For` outputs must be treated as after-loop edges.
-- Output-scope metadata must survive saved workflow JSON, backend schema generation, frontend type generation, and graph
-  preparation.
+- Output-scope metadata must survive backend schema generation, frontend type generation, and graph preparation. Saved
+  workflows must preserve the node type and field handles needed to resolve that metadata from the current template.
 - A loop body must expose exactly one matching body return node.
 - A body return's `state` input must be compatible with `LoopState`.
 - The author-time graph must remain acyclic.
@@ -650,14 +651,14 @@ Backend tests should cover:
 - cache does not collapse distinct stateful iterations
 - nested `For` bodies are rejected until body identity metadata exists
 - body paths that feed after-loop nodes directly are rejected
-- saved workflow JSON preserves output-scope metadata
+- saved workflow JSON preserves the loop node types and field handles used to resolve output-scope metadata
 
 Frontend tests should cover:
 
 - graph validation for loop source and state wiring
 - graph validation for iteration-scoped vs final-scoped output edges
 - workflow serialization and deserialization of loop nodes
-- workflow serialization and deserialization preserve output-scope metadata
+- deserialized loop nodes resolve output-scope metadata from the current invocation templates
 - type compatibility for `LoopState`
 - visual grouping of iteration outputs and final outputs
 - editor handling for body return nodes
@@ -669,13 +670,15 @@ sequential materialization, state carry, final output release, empty collections
 resume, parent iterator scoping, and cache-key behavior. `DefaultSessionRunner` integration tests cover successful queue
 completion and session persistence, cancellation between iterations without releasing final outputs, and iteration-body
 exceptions without scheduling later iterations or after-loop nodes. Schema generation verifies that moving the
-invocation definitions does not change their serialized API contracts.
+invocation definitions does not change their serialized API contracts. Frontend unit tests cover `For` and `ForReturn`
+graph/workflow round trips, resolution of their output scopes from the current templates, and `LoopState` connection-type
+compatibility.
 
 The following paths remain unchecked and should not be inferred from the graph-unit coverage:
 
 - cancellation initiated through a real queue status event and the threaded `DefaultSessionProcessor`
 - end-to-end execution with the SQLite session queue rather than the runner's queue test double
-- frontend workflow round-trip and connection validation for iteration-scoped and final-scoped outputs
+- structural frontend connection validation for iteration-scoped and final-scoped output edges
 - editor grouping and interaction behavior for `For` and `ForReturn`
 
 ## Open Questions
@@ -689,7 +692,8 @@ Answered branch-local decisions:
 - The first implementation uses explicit `for_return`.
 - `ForReturn.output=None` is omitted from `For.output_collection`.
 - Loop output scope is invocation output field metadata and is preserved through backend schema and frontend type
-  generation.
+  generation. Saved workflows preserve node types and field handles, then resolve scope from the current templates when
+  loaded.
 - `LoopState`, `For`, `ForReturn`, and the state helper nodes are defined in the dedicated `invocations.loops` module.
   Scheduler, materialization, and graph-boundary validation remain in the graph execution service.
 

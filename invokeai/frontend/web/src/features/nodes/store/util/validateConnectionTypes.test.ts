@@ -109,6 +109,24 @@ describe(validateConnectionTypes.name, () => {
       });
     });
 
+    describe('LoopState', () => {
+      it('should accept LoopState connections', () => {
+        const r = validateConnectionTypes(
+          { name: 'LoopState', cardinality: 'SINGLE', batch: false },
+          { name: 'LoopState', cardinality: 'SINGLE', batch: false }
+        );
+        expect(r).toBe(true);
+      });
+
+      it('should reject LoopState connections to other field types', () => {
+        const r = validateConnectionTypes(
+          { name: 'LoopState', cardinality: 'SINGLE', batch: false },
+          { name: 'IntegerField', cardinality: 'SINGLE', batch: false }
+        );
+        expect(r).toBe(false);
+      });
+    });
+
     describe('SINGLE_OR_COLLECTION', () => {
       it('should accept any SINGLE of same type to SINGLE_OR_COLLECTION', () => {
         const r = validateConnectionTypes(
