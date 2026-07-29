@@ -129,11 +129,12 @@ const dynamicBaseQuery: BaseQueryFn<string | FetchArgs, unknown, FetchBaseQueryE
     requestBody && typeof requestBody === 'object' && 'item_ids' in requestBody && Array.isArray(requestBody.item_ids)
       ? requestBody.item_ids.length
       : undefined;
+  const requestPath = requestUrl.split('?')[0] ?? requestUrl;
   const finishQueueRequest =
     requestUrl.includes('api/v1/queue/') && queuePerformanceEnabled
       ? startQueuePerformanceMeasure(
           'api',
-          `${typeof args === 'string' ? 'GET' : (args.method ?? 'GET')} ${requestUrl}`,
+          `${typeof args === 'string' ? 'GET' : (args.method ?? 'GET')} ${requestPath}`,
           { requestedItemCount }
         )
       : null;
