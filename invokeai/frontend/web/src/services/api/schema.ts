@@ -6706,7 +6706,7 @@ export type components = {
             /**
              * Use Cache
              * @description Whether or not to use the cache
-             * @default true
+             * @default false
              */
             use_cache?: boolean;
             /**
@@ -13529,6 +13529,13 @@ export type components = {
              * @description The set of loop source nodes whose final outputs have been materialized
              */
             finalized_loop_nodes: string[];
+            /**
+             * Prepared Iteration Paths
+             * @description The iteration coordinates of each prepared execution node
+             */
+            prepared_iteration_paths?: {
+                [key: string]: number[];
+            };
             /** Ready Order */
             ready_order?: string[];
             /**
@@ -18865,7 +18872,7 @@ export type components = {
             /**
              * Use Cache
              * @description Whether or not to use the cache
-             * @default true
+             * @default false
              */
             use_cache?: boolean;
             /**
