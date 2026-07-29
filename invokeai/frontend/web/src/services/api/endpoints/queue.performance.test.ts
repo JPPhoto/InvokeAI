@@ -19,6 +19,7 @@ const buildSession = (expandedNodeCount: number, valueSize: number) => {
   const nodes: Record<string, unknown> = {};
   const results: Record<string, unknown> = {};
   const preparedSourceMapping: Record<string, string> = {};
+  const preparedIterationPaths: Record<string, number[]> = {};
   const preparedIds: string[] = [];
 
   for (let index = 0; index < expandedNodeCount; index++) {
@@ -26,6 +27,7 @@ const buildSession = (expandedNodeCount: number, valueSize: number) => {
     nodes[nodeId] = { id: nodeId, type: 'string', value };
     results[nodeId] = { type: 'string_output', value };
     preparedSourceMapping[nodeId] = 'source';
+    preparedIterationPaths[nodeId] = [index];
     preparedIds.push(nodeId);
   }
 
@@ -45,6 +47,7 @@ const buildSession = (expandedNodeCount: number, valueSize: number) => {
     workflow_call_history: [],
     prepared_source_mapping: preparedSourceMapping,
     source_prepared_mapping: { source: preparedIds },
+    prepared_iteration_paths: preparedIterationPaths,
     ready_order: [],
     indegree: {},
   };
@@ -149,6 +152,9 @@ describe.skipIf(!RUN_PERFORMANCE_TESTS)('queue large-payload performance', () =>
     expect(
       queueApi.endpoints.getQueueItem.select(3)(store.getState()).data?.session.execution_graph.nodes
     ).toHaveProperty('source_999');
+    expect(
+      queueApi.endpoints.getQueueItem.select(3)(store.getState()).data?.session.prepared_iteration_paths
+    ).toHaveProperty('source_999', [999]);
     expect(instrumentation.entries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ phase: 'api', name: expect.stringContaining('items_by_ids') }),
