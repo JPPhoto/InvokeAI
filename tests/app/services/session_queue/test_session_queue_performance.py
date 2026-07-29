@@ -74,6 +74,7 @@ def _build_large_completed_session() -> GraphExecutionState:
         session.executed_history.append(node_id)
         session.results[node_id] = PromptTestInvocationOutput(prompt=payload)
         session.prepared_source_mapping[node_id] = "source"
+        session.prepared_iteration_paths[node_id] = (index,)
         prepared_ids.add(node_id)
     session.source_prepared_mapping["source"] = prepared_ids
     return session
@@ -246,6 +247,7 @@ def test_large_completed_queue_item_costs(mock_invoker: Invoker, monkeypatch: py
     small_session = _build_small_session()
     small_json = small_session.model_dump_json(warnings=False, exclude_none=True)
     large_session = _build_large_completed_session()
+    assert len(large_session.prepared_iteration_paths) == EXPANDED_NODE_COUNT
     large_json = large_session.model_dump_json(warnings=False, exclude_none=True)
     large_size_bytes = len(large_json.encode())
     assert large_size_bytes >= TARGET_LARGE_SESSION_BYTES
@@ -286,7 +288,7 @@ def test_large_completed_queue_item_costs(mock_invoker: Invoker, monkeypatch: py
 
     session_parse_count = 0
     active_status_ms, active_status = _measure_ms(lambda: queue.get_queue_status("default"))
-    assert session_parse_count == 3
+    assert session_parse_count == 0
     assert active_status.item_id == large_item_id
 
     session_parse_count = 0
@@ -373,7 +375,7 @@ def test_large_completed_queue_item_costs(mock_invoker: Invoker, monkeypatch: py
     assert large_item_ms > metadata_max_ms * 5
     assert hydration_ms > metadata_max_ms * 5
     assert list_all_ms > metadata_max_ms * 5
-    assert active_status_ms > metadata_max_ms * 5
+    assert current_item_ms > active_status_ms * 5
     assert response_decode_ms > ids_decode_ms * 5
 
     with queue._db.transaction() as cursor:
@@ -408,7 +410,7 @@ def test_large_completed_queue_item_costs(mock_invoker: Invoker, monkeypatch: py
         f"\n  GET item_ids service: {item_ids_ms:.3f} ms, no session parse"
         f"\n  GET status service, idle queue: {status_ms:.3f} ms, no session parse"
         f"\n  GET counts_by_destination service: {destination_counts_ms:.3f} ms, no session parse"
-        f"\n  GET status service, large current item: {active_status_ms:.3f} ms, one session parse"
+        f"\n  GET status service, large current item: {active_status_ms:.3f} ms, no session parse"
         f"\n  GET current service, large current item: {current_item_ms:.3f} ms, one session parse"
         f"\n  GET one large queue item: {large_item_ms:.3f} ms, one session parse"
         f"\n  hydrate three visible items: {hydration_ms:.3f} ms, three session parses"
