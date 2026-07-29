@@ -19,7 +19,14 @@ import {
   shouldAcceptRefreshedToken,
 } from 'features/auth/store/authTokenRefresh';
 import queryString from 'query-string';
+import {
+  initializeQueuePerformanceInstrumentation,
+  isQueuePerformanceInstrumentationEnabled,
+  startQueuePerformanceMeasure,
+} from 'services/api/queuePerformance';
 import stableHash from 'stable-hash';
+
+initializeQueuePerformanceInstrumentation();
 
 const tagTypes = [
   'AppVersion',
@@ -116,6 +123,20 @@ const dynamicBaseQuery: BaseQueryFn<string | FetchArgs, unknown, FetchBaseQueryE
   }
   const requestGeneration = captureAuthGeneration();
   const changesMediaCookie = isAuthTransition || requestUrl.includes('/auth/media-cookie');
+  const queuePerformanceEnabled = isQueuePerformanceInstrumentationEnabled();
+  const requestBody = queuePerformanceEnabled && typeof args !== 'string' ? args.body : undefined;
+  const requestedItemCount =
+    requestBody && typeof requestBody === 'object' && 'item_ids' in requestBody && Array.isArray(requestBody.item_ids)
+      ? requestBody.item_ids.length
+      : undefined;
+  const finishQueueRequest =
+    requestUrl.includes('api/v1/queue/') && queuePerformanceEnabled
+      ? startQueuePerformanceMeasure(
+          'api',
+          `${typeof args === 'string' ? 'GET' : (args.method ?? 'GET')} ${requestUrl}`,
+          { requestedItemCount }
+        )
+      : null;
 
   const fetchBaseQueryArgs: FetchBaseQueryArgs = {
     baseUrl: getBaseUrl(),
@@ -137,6 +158,22 @@ const dynamicBaseQuery: BaseQueryFn<string | FetchArgs, unknown, FetchBaseQueryE
 
   const execute = () => rawBaseQuery(args, api, extraOptions);
   const result = changesMediaCookie ? await runWithMediaAuthLock(execute) : await execute();
+  if (finishQueueRequest) {
+    const contentLength = result.meta?.response?.headers.get('content-length');
+    const responseBytes = contentLength === null || contentLength === undefined ? null : Number(contentLength);
+    const resultData = result.data;
+    const itemCount = Array.isArray(resultData)
+      ? resultData.length
+      : resultData && typeof resultData === 'object' && 'item_ids' in resultData && Array.isArray(resultData.item_ids)
+        ? resultData.item_ids.length
+        : undefined;
+    finishQueueRequest({
+      itemCount,
+      responseMiB: responseBytes !== null && Number.isFinite(responseBytes) ? responseBytes / 1024 / 1024 : undefined,
+      status:
+        result.meta?.response?.status ?? (typeof result.error?.status === 'number' ? result.error.status : undefined),
+    });
+  }
 
   // If we sent an auth token but got 401, the token is invalid/expired.
   // Only trigger session expiry when we actually sent a token — unauthenticated
