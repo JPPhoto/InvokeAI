@@ -1,5 +1,6 @@
 import { getUserScopedQueueCounts } from 'features/queue/store/userScopedQueueCounts';
 import queryString from 'query-string';
+import { isQueuePerformanceInstrumentationEnabled, startQueuePerformanceMeasure } from 'services/api/queuePerformance';
 import type { components, paths } from 'services/api/schema';
 import type {
   GetQueueItemDTOsByItemIdsArgs,
@@ -312,12 +313,28 @@ export const queueApi = api.injectEndpoints({
         if (!result) {
           return [];
         }
+        const finishTags = startQueuePerformanceMeasure('tags', 'list_all tag generation', {
+          itemCount: result.length,
+        });
         const tags: ApiTagDescription[] = [
           'FetchOnReconnect',
           { type: 'SessionQueueItem', id: LIST_ALL_TAG },
           ...result.map(({ item_id }) => ({ type: 'SessionQueueItem', id: item_id }) satisfies ApiTagDescription),
         ];
+        finishTags();
         return tags;
+      },
+      async onQueryStarted(_, { queryFulfilled }) {
+        if (!isQueuePerformanceInstrumentationEnabled()) {
+          return;
+        }
+        const finish = startQueuePerformanceMeasure('rtk', 'list_all RTK fulfillment');
+        try {
+          const { data } = await queryFulfilled;
+          finish({ itemCount: data.length });
+        } catch {
+          finish({ failed: true });
+        }
       },
     }),
     getQueueItemIds: build.query<GetQueueItemIdsResult, GetQueueItemIdsArgs>({
@@ -325,11 +342,30 @@ export const queueApi = api.injectEndpoints({
         url: buildQueueUrl(`item_ids?${queryString.stringify(queryArgs)}`),
         method: 'GET',
       }),
-      providesTags: (queryArgs) => [
-        'FetchOnReconnect',
-        'SessionQueueItemIdList',
-        { type: 'SessionQueueItemIdList', id: stableHash(queryArgs) },
-      ],
+      providesTags: (result) => {
+        const finishTags = startQueuePerformanceMeasure('tags', 'item_ids stable-hash tag generation', {
+          itemCount: result?.item_ids.length ?? 0,
+        });
+        const tags: ApiTagDescription[] = [
+          'FetchOnReconnect',
+          'SessionQueueItemIdList',
+          { type: 'SessionQueueItemIdList', id: stableHash(result) },
+        ];
+        finishTags();
+        return tags;
+      },
+      async onQueryStarted(_, { queryFulfilled }) {
+        if (!isQueuePerformanceInstrumentationEnabled()) {
+          return;
+        }
+        const finish = startQueuePerformanceMeasure('rtk', 'item_ids RTK fulfillment');
+        try {
+          const { data } = await queryFulfilled;
+          finish({ itemCount: data.item_ids.length });
+        } catch {
+          finish({ failed: true });
+        }
+      },
     }),
     getQueueItemDTOsByItemIds: build.mutation<GetQueueItemDTOsByItemIdsResult, GetQueueItemDTOsByItemIdsArgs>({
       query: (body) => ({
@@ -338,9 +374,13 @@ export const queueApi = api.injectEndpoints({
         body,
       }),
       // Don't provide cache tags - we'll manually upsert into individual getQueueItem caches
-      async onQueryStarted(_, { dispatch, queryFulfilled }) {
+      async onQueryStarted({ item_ids }, { dispatch, queryFulfilled }) {
+        const finishFulfillment = startQueuePerformanceMeasure('rtk', 'items_by_ids RTK fulfillment', {
+          requestedItemCount: item_ids.length,
+        });
         try {
           const { data: queueItems } = await queryFulfilled;
+          finishFulfillment({ itemCount: queueItems.length });
 
           // Upsert each queue item into the individual item cache
           const updates: Param0<typeof queueApi.util.upsertQueryEntries> = [];
@@ -351,9 +391,13 @@ export const queueApi = api.injectEndpoints({
               value: queueItem,
             });
           }
+          const finishCache = startQueuePerformanceMeasure('cache', 'items_by_ids individual cache upserts', {
+            itemCount: queueItems.length,
+          });
           dispatch(queueApi.util.upsertQueryEntries(updates));
+          finishCache();
         } catch {
-          // Handle error if needed
+          finishFulfillment({ failed: true });
         }
       },
     }),

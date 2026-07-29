@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 import { configureStore } from '@reduxjs/toolkit';
 import { api } from 'services/api';
+import { initializeQueuePerformanceInstrumentation } from 'services/api/queuePerformance';
 import type { GetQueueItemDTOsByItemIdsResult } from 'services/api/types';
 import stableHash from 'stable-hash';
 import type { Param0 } from 'tsafe';
@@ -85,6 +86,9 @@ describe.skipIf(!RUN_PERFORMANCE_TESTS)('queue large-payload performance', () =>
   it('measures fetch decoding and RTK Query hydration for an 8 MiB completed expanded graph', async () => {
     vi.stubGlobal('window', { location: { origin: 'http://test' } });
     vi.stubGlobal('localStorage', { getItem: () => null });
+    const instrumentation = initializeQueuePerformanceInstrumentation();
+    instrumentation.enable();
+    instrumentation.clear();
 
     const largeItem = buildQueueItem(3, EXPANDED_NODE_COUNT, 4_200);
     const responseItems = [
@@ -145,6 +149,13 @@ describe.skipIf(!RUN_PERFORMANCE_TESTS)('queue large-payload performance', () =>
     expect(
       queueApi.endpoints.getQueueItem.select(3)(store.getState()).data?.session.execution_graph.nodes
     ).toHaveProperty('source_999');
+    expect(instrumentation.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ phase: 'api', name: expect.stringContaining('items_by_ids') }),
+        expect.objectContaining({ phase: 'rtk', name: 'items_by_ids RTK fulfillment' }),
+        expect.objectContaining({ phase: 'cache', name: 'items_by_ids individual cache upserts' }),
+      ])
+    );
 
     const threeLargeItems = [
       largeItem,
@@ -175,11 +186,15 @@ describe.skipIf(!RUN_PERFORMANCE_TESTS)('queue large-payload performance', () =>
 
     request.reset();
     threeLargeRequest.reset();
+    instrumentation.disable();
   });
 
   it('measures the unpaginated item-ID response and tag generation for a large queue', async () => {
     vi.stubGlobal('window', { location: { origin: 'http://test' } });
     vi.stubGlobal('localStorage', { getItem: () => null });
+    const instrumentation = initializeQueuePerformanceInstrumentation();
+    instrumentation.enable();
+    instrumentation.clear();
 
     const itemIds = Array.from({ length: LARGE_HISTORY_COUNT }, (_, index) => LARGE_HISTORY_COUNT - index);
     const responseJson = JSON.stringify({ item_ids: itemIds, total_count: itemIds.length });
@@ -204,6 +219,13 @@ describe.skipIf(!RUN_PERFORMANCE_TESTS)('queue large-payload performance', () =>
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(result.item_ids).toHaveLength(LARGE_HISTORY_COUNT);
+    expect(instrumentation.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ phase: 'api', name: expect.stringContaining('item_ids') }),
+        expect.objectContaining({ phase: 'rtk', name: 'item_ids RTK fulfillment' }),
+        expect.objectContaining({ phase: 'tags', name: 'item_ids stable-hash tag generation' }),
+      ])
+    );
 
     console.log(
       [
@@ -217,5 +239,6 @@ describe.skipIf(!RUN_PERFORMANCE_TESTS)('queue large-payload performance', () =>
     );
 
     request.unsubscribe();
+    instrumentation.disable();
   });
 });
