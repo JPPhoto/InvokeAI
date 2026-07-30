@@ -1,7 +1,7 @@
 import { deepClone } from 'common/util/deepClone';
 import { callSavedWorkflowDynamicFieldsChanged, nodesSliceConfig } from 'features/nodes/store/nodesSlice';
 import { CONNECTOR_INPUT_HANDLE, CONNECTOR_OUTPUT_HANDLE } from 'features/nodes/store/util/connectorTopology';
-import { add, buildEdge, buildNode, img_resize, sub, templates } from 'features/nodes/store/util/testUtils';
+import { add, buildEdge, buildNode, for_loop, img_resize, sub, templates } from 'features/nodes/store/util/testUtils';
 import type { IntegerFieldInputTemplate } from 'features/nodes/types/field';
 import { zInvocationNodeData } from 'features/nodes/types/invocation';
 import { describe, expect, it } from 'vitest';
@@ -73,6 +73,14 @@ const buildState = (nodes: unknown[], edges: unknown[]) =>
   }) as unknown as Parameters<typeof buildNodesGraph>[0];
 
 describe('buildNodesGraph', () => {
+  it('rejects an invalid For loop before queue submission', () => {
+    const forNode = buildNode(for_loop);
+    const bodyNode = buildNode(add);
+    const state = buildState([forNode, bodyNode], [buildEdge(forNode.id, 'item', bodyNode.id, 'a')]);
+
+    expect(() => buildNodesGraph(state, { ...templates, for: for_loop })).toThrow('nodes.forLoopReturnCount');
+  });
+
   it('serializes dynamic saved workflow inputs into workflow_inputs', () => {
     const state = nodesSliceConfig.getInitialState();
     const node = buildNode(callSavedWorkflowTemplate);

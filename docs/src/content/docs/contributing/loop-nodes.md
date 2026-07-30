@@ -80,6 +80,7 @@ Implemented on this branch:
 - Empty collection finalization.
 - Serialization/resume coverage for partially completed stateful loops.
 - Failure handling that stops loop scheduling without releasing partial final outputs.
+- Frontend enqueue-time whole-graph validation matching the backend's currently supported loop body shapes.
 
 ## Architectural Direction
 
@@ -692,14 +693,14 @@ invocation definitions does not change their serialized API contracts. Frontend 
 graph/workflow round trips, resolution of their output scopes from the current templates, and `LoopState` connection-type
 compatibility. Frontend connection tests cover iteration/final scope overlap across incremental connection orders,
 through ordinary body extensions, body descendants, and connector nodes. Output row-model and renderer tests cover flat
-rendering for ordinary nodes and distinct localized iteration/final sections for scoped nodes.
+rendering for ordinary nodes and distinct localized iteration/final sections for scoped nodes. Enqueue-time graph
+validation covers return ownership, unterminated paths, nested loops, internal `Iterate` nodes, iterator-derived external
+inputs, final outputs feeding the body, and body outputs escaping before `ForReturn`.
 
 The following paths remain unchecked and should not be inferred from the graph-unit coverage:
 
 - cancellation initiated through a real queue status event and the threaded `DefaultSessionProcessor`
 - end-to-end execution with the SQLite session queue rather than the runner's queue test double
-- frontend whole-graph validation for body return ownership, unterminated body paths, nested loops, internal `Iterate`
-  nodes, and iterator-derived external inputs
 - interaction behavior for discovering and wiring `ForReturn`
 
 ## Open Questions

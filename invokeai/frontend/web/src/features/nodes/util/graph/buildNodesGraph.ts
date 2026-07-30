@@ -15,6 +15,8 @@ import {
   isExecutableNode,
   isInvocationNode,
 } from 'features/nodes/types/invocation';
+import { validateForLoopGraph } from 'features/nodes/util/graph/validateForLoopGraph';
+import { t } from 'i18next';
 import type { AnyInvocation, Graph } from 'services/api/types';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -232,6 +234,11 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
     nodes: parsedNodes,
     edges: parsedEdges,
   };
+
+  const forLoopError = validateForLoopGraph(graph);
+  if (forLoopError !== null) {
+    throw new Error(t(forLoopError) || forLoopError);
+  }
 
   return graph;
 };
