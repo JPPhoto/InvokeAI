@@ -755,6 +755,85 @@ def test_graph_for_empty_collection_materializes_final_outputs():
     assert state.is_complete()
 
 
+def test_graph_for_empty_collection_preserves_connected_initial_state():
+    graph = Graph()
+    graph.add_node(IntegerCollectionInvocation(id="collection", collection=[]))
+    graph.add_node(StateSetInvocation(id="initial_state", key="initial", value=True))
+    graph.add_node(ForInvocation(id="for"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(TwoAnyTestInvocation(id="after"))
+    graph.add_edge(create_edge("collection", "collection", "for", "collection"))
+    graph.add_edge(create_edge("initial_state", "state", "for", "state"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "first"))
+    graph.add_edge(create_edge("for", "final_state", "after", "second"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+
+    assert state.results[after_exec_id].value == ([], LoopState(values={"initial": True}))
+    assert state.is_complete()
+
+
+def test_graph_for_empty_and_nonempty_parent_iterator_contexts_both_finalize():
+    graph = Graph()
+    graph.add_node(NestedAnyCollectionTestInvocation(id="nested", collection=[[], ["alpha"]]))
+    graph.add_node(IterateInvocation(id="outer_iterate"))
+    graph.add_node(ForInvocation(id="for"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("nested", "collection", "outer_iterate", "collection"))
+    graph.add_edge(create_edge("outer_iterate", "item", "for", "collection"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "collect", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+    collect_exec_ids = sorted(
+        (
+            exec_node_id
+            for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+            if source_node_id == "collect"
+        ),
+        key=state._get_iteration_path,
+    )
+
+    assert [state.results[exec_node_id].collection for exec_node_id in collect_exec_ids] == [
+        [[]],
+        [["alpha"]],
+    ]
+    assert state.is_complete()
+
+
+def test_graph_for_under_empty_parent_iterator_collects_and_completes():
+    graph = Graph()
+    graph.add_node(NestedAnyCollectionTestInvocation(id="nested", collection=[]))
+    graph.add_node(IterateInvocation(id="outer_iterate"))
+    graph.add_node(ForInvocation(id="for"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("nested", "collection", "outer_iterate", "collection"))
+    graph.add_edge(create_edge("outer_iterate", "item", "for", "collection"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "collect", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+    collect_exec_ids = [
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "collect"
+    ]
+
+    assert [state.results[exec_node_id].collection for exec_node_id in collect_exec_ids] == [[]]
+    assert state.is_complete()
+
+
 def test_graph_for_empty_collection_with_indirect_body_completes_without_body_execution():
     graph = Graph()
     graph.add_node(ForInvocation(id="for", collection=[]))

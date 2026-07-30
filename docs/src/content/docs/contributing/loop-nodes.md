@@ -410,7 +410,9 @@ values.
 
 This applies even when earlier iterations completed successfully. A failed body node or failed `ForReturn` terminates
 the execution state without releasing the loop's final-scoped outputs. An empty collection is different: it is a
-successful loop completion with no body iterations, so it releases an empty `output_collection` and the initial state.
+successful loop completion with no body iterations, so it releases an empty `output_collection` and the hydrated initial
+state. When `For` is under an outer iterator, each existing parent context finalizes independently; if the outer iterator
+has no contexts, the inner `For` produces no per-context final output.
 
 ### 7. Ordering
 
@@ -649,6 +651,9 @@ can provide stronger validation, simpler UI, or safer execution semantics.
 Backend tests should cover:
 
 - empty collection produces empty output and initial state
+- empty collection preserves initial state supplied by a connected input
+- mixed empty and nonempty parent iterator contexts both finalize in their own scopes
+- an empty parent iterator completes downstream collectors without creating a synthetic inner context
 - collection items are emitted in order
 - index and total are correct for every iteration
 - body outputs are collected in iteration order

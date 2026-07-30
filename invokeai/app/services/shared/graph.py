@@ -522,10 +522,22 @@ class _ExecutionMaterializer:
         self._state.executed.add(source_node_id)
         self._state.executed_history.append(source_node_id)
 
-    def _create_empty_for_final_output(self, source_for_id: str, node: "ForInvocation") -> str:
+    def _create_empty_for_final_output(
+        self,
+        source_for_id: str,
+        node: "ForInvocation",
+        iteration_node_map: list[tuple[str, str]],
+    ) -> str:
         new_node = self._create_execution_node_copy(node, source_for_id, -1)
         assert isinstance(new_node, ForInvocation)
-        initial_state = copydeep(node.state or LoopState())
+        new_edges = self._build_execution_edges(source_for_id, iteration_node_map)
+        iteration_path = self._get_known_iteration_path(-1, iteration_node_map)
+        if iteration_path is not None:
+            self._state._prepared_registry().set_iteration_path(new_node.id, (*iteration_path, -1))
+        self._attach_execution_edges(new_node.id, new_edges)
+        self._state._runtime().prepare_inputs(new_node)
+
+        initial_state = copydeep(new_node.state or LoopState())
         new_node.collection = []
         new_node.state = initial_state
 
@@ -539,6 +551,10 @@ class _ExecutionMaterializer:
         )
         self._state.executed.add(new_node.id)
         self._state._set_prepared_exec_state(new_node.id, "executed")
+
+        return new_node.id
+
+    def _mark_empty_for_complete(self, source_for_id: str) -> None:
         self._mark_source_node_executed(source_for_id)
         self._state.finalized_loop_nodes.add(source_for_id)
 
@@ -549,8 +565,6 @@ class _ExecutionMaterializer:
             body_path_nodes, _return_node_id = body_path_to_return
             for body_node_id in body_path_nodes:
                 self._mark_source_node_executed(body_node_id)
-
-        return new_node.id
 
     def create_for_iteration(
         self,
@@ -908,7 +922,7 @@ class _ExecutionMaterializer:
         iteration_indexes = self._get_new_node_iterations(node, node_id, iteration_node_map)
         if not iteration_indexes:
             if isinstance(node, ForInvocation):
-                return [self._create_empty_for_final_output(node_id, node)]
+                return [self._create_empty_for_final_output(node_id, node, iteration_node_map)]
             return []
 
         new_edges = self._build_execution_edges(node_id, iteration_node_map)
@@ -1097,7 +1111,15 @@ class _ExecutionMaterializer:
 
         if not new_node_ids:
             self._mark_source_node_empty(next_node_id)
+            if isinstance(next_node, ForInvocation):
+                self._mark_empty_for_complete(next_node_id)
             return next_node_id
+
+        if isinstance(next_node, ForInvocation) and all(
+            self._state.execution_graph.get_node(exec_node_id).index == -1
+            for exec_node_id in new_node_ids
+        ):
+            self._mark_empty_for_complete(next_node_id)
 
         return new_node_ids[0]
 
