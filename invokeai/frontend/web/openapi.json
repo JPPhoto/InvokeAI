@@ -51892,6 +51892,12 @@
                 "$ref": "#/components/schemas/Krea2ConditioningField"
               },
               {
+                "items": {
+                  "$ref": "#/components/schemas/Krea2ConditioningField"
+                },
+                "type": "array"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -51899,12 +51905,19 @@
             "description": "Positive conditioning tensor",
             "field_kind": "input",
             "input": "connection",
-            "orig_required": true
+            "orig_required": true,
+            "title": "Positive Conditioning"
           },
           "negative_conditioning": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/Krea2ConditioningField"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Krea2ConditioningField"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
@@ -51915,7 +51928,8 @@
             "field_kind": "input",
             "input": "connection",
             "orig_default": null,
-            "orig_required": false
+            "orig_required": false,
+            "title": "Negative Conditioning"
           },
           "cfg_scale": {
             "anyOf": [
@@ -52018,7 +52032,7 @@
         ],
         "title": "Denoise - Krea-2",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "output": {
           "$ref": "#/components/schemas/LatentsOutput"
         }
