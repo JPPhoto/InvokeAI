@@ -5,15 +5,21 @@ until the cached entry is evicted. The predicate must catch changes to those set
 ignoring changes that don't affect how the model loads (e.g. name, description).
 """
 
+import asyncio
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
+import pytest
+
+from invokeai.app.api.routers import model_manager as model_manager_router
 from invokeai.app.api.routers.model_manager import _load_settings_changed
 
 
-def _config(*, fp8: bool | None = None, cpu_only: bool | None = None):
+def _config(*, fp8: bool | None = None, cpu_only: bool | None = None, **fields):
     return SimpleNamespace(
         cpu_only=cpu_only,
         default_settings=SimpleNamespace(fp8_storage=fp8),
+        **fields,
     )
 
 
@@ -51,3 +57,52 @@ def test_unrelated_field_does_not_trigger_invalidation():
     bare_a = SimpleNamespace()
     bare_b = SimpleNamespace()
     assert _load_settings_changed(bare_a, bare_b) is False
+
+
+@pytest.mark.parametrize("field", ["path", "base", "type", "format", "variant"])
+def test_model_identity_changes_trigger_invalidation(field: str):
+    """Fields exposed by ModelRecordChanges can change the module selected or its source path."""
+    previous = _config(**{field: "old"})
+    updated = _config(**{field: "new"})
+    assert _load_settings_changed(previous, updated) is True
+
+
+@pytest.mark.parametrize("field", ["path", "base", "type", "format", "variant"])
+def test_update_route_drops_identity_changed_model_from_all_caches(field: str, monkeypatch: pytest.MonkeyPatch):
+    class Cache:
+        def __init__(self):
+            self.drop_model = MagicMock(return_value=1)
+
+    previous = _config(**{field: "old"})
+    updated = _config(**{field: "new"})
+    record_store = SimpleNamespace(
+        get_model=MagicMock(return_value=previous),
+        update_model=MagicMock(return_value=updated),
+    )
+    cache_a = Cache()
+    cache_b = Cache()
+    services = SimpleNamespace(
+        logger=MagicMock(),
+        model_manager=SimpleNamespace(
+            store=record_store,
+            load=SimpleNamespace(ram_caches={"cuda:0": cache_a, "cuda:1": cache_b}),
+        ),
+    )
+    monkeypatch.setattr(
+        model_manager_router.ApiDependencies,
+        "invoker",
+        SimpleNamespace(services=services),
+        raising=False,
+    )
+    monkeypatch.setattr(model_manager_router, "prepare_model_config_for_response", lambda config, _deps: config)
+
+    asyncio.run(
+        model_manager_router.update_model_record(
+            key="model-key",
+            changes=SimpleNamespace(),
+            current_admin=SimpleNamespace(),
+        )
+    )
+
+    cache_a.drop_model.assert_called_once_with("model-key")
+    cache_b.drop_model.assert_called_once_with("model-key")
