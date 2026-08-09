@@ -339,3 +339,28 @@ def test_cached_model_partial_load_and_inference(device: str, model: DummyModule
 
     # The output should be the same as the output from the CPU.
     assert torch.allclose(output1, output2.to("cpu"))
+
+
+@pytest.mark.parametrize("operation", ["load", "unload"])
+def test_partial_transfer_failure_invalidates_vram_accounting(operation: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed transfer must not leave a stale cached VRAM byte count."""
+    if operation == "load":
+        model = torch.nn.Linear(4, 4)
+        cached_model = CachedModelWithPartialLoad(model=model, compute_device=torch.device("meta"), keep_ram_copy=True)
+        transfer = cached_model.partial_load_to_vram
+    else:
+        model = torch.nn.Linear(4, 4, device="meta")
+        cached_model = CachedModelWithPartialLoad(model=model, compute_device=torch.device("meta"), keep_ram_copy=True)
+        transfer = cached_model.partial_unload_from_vram
+
+    cached_model._cur_vram_bytes = cached_model.total_bytes()
+
+    def fail_transfer(*args, **kwargs):
+        raise RuntimeError("simulated transfer failure")
+
+    monkeypatch.setattr(cached_model, "_load_state_dict_with_device_conversion", fail_transfer)
+
+    with pytest.raises(RuntimeError, match="simulated transfer failure"):
+        transfer(cached_model.total_bytes())
+
+    assert cached_model._cur_vram_bytes is None

@@ -29,6 +29,7 @@ from invokeai.app.services.model_install import (
     HFModelSource,
     ModelInstallService,
     ModelInstallServiceBase,
+    model_install_default,
 )
 from invokeai.app.services.model_install.model_install_common import (
     InstallStatus,
@@ -102,6 +103,53 @@ def test_install(
     assert model_record.path.endswith(f"{key}/test_embedding.safetensors")
     assert (mm2_app_config.models_path / model_record.path).exists()
     assert model_record.source == embedding_file.as_posix()
+
+
+def test_directory_install_retries_windows_move_failures(
+    mm2_installer: ModelInstallServiceBase,
+    diffusers_dir: Path,
+    mm2_app_config: InvokeAIAppConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient handle failure must not strand a partially moved directory install."""
+    real_move = shutil.move
+    calls = 0
+
+    def flaky_move(src: Path, dst: Path):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise PermissionError("simulated Windows file-handle race")
+        return real_move(src, dst)
+
+    monkeypatch.setattr(model_install_default, "move", flaky_move)
+
+    key = mm2_installer.install_path(diffusers_dir)
+
+    model_record = mm2_installer.record_store.get_model(key)
+    assert (mm2_app_config.models_path / model_record.path).exists()
+    assert calls >= 3
+
+
+def test_directory_install_failure_does_not_leave_partial_destination(
+    mm2_installer: ModelInstallServiceBase,
+    diffusers_dir: Path,
+    mm2_app_config: InvokeAIAppConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing_paths = set(mm2_app_config.models_path.iterdir())
+
+    def fail_first_move(_src: Path, _dst: Path):
+        raise PermissionError("simulated Windows file-handle race")
+
+    monkeypatch.setattr(model_install_default, "move", fail_first_move)
+
+    with pytest.raises(PermissionError, match="simulated Windows file-handle race"):
+        mm2_installer.install_path(diffusers_dir)
+
+    assert set(mm2_app_config.models_path.iterdir()) == existing_paths
+    assert list(diffusers_dir.iterdir())
+    assert mm2_installer.record_store.all_models() == []
 
 
 def test_rename(
