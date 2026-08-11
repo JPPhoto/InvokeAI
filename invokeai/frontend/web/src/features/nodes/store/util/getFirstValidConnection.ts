@@ -14,7 +14,7 @@ import { getInvocationNodeInputTemplate, isConnectorNode, isInvocationNode } fro
 
 const rankCandidateFieldsByType = <T extends FieldInputTemplate | FieldOutputTemplate>(
   fields: T[],
-  type: FieldType | undefined
+  type: FieldType | null | undefined
 ): T[] => {
   if (!type) {
     return fields;
@@ -142,7 +142,7 @@ export const getTargetCandidateFields = (
     return [];
   }
 
-  let sourceFieldType: FieldType | undefined;
+  let sourceFieldType: FieldType | null | undefined;
   if (isConnectorNode(sourceNode)) {
     sourceFieldType = resolveConnectorSourceFieldType(sourceNode.id, nodes, edges, templates);
   } else {
