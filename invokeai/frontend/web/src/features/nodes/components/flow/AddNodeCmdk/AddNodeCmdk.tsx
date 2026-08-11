@@ -381,21 +381,44 @@ export const getPendingConnectionNodeItems = (
     }
   }
 
-  const isForIterationOutput = isForIterationOutputConnection(pendingConnection);
+  return sortNodeCommandItems(items, searchTerm, pendingConnection);
+};
 
-  if (isForIterationOutput) {
-    items.sort((a, b) => {
+export const sortNodeCommandItems = (
+  items: NodeCommandItemData[],
+  searchTerm: string,
+  pendingConnection: PendingConnection | null
+): NodeCommandItemData[] => {
+  const sortedItems = [...items];
+  const shouldPromoteForReturn = isForIterationOutputConnection(pendingConnection);
+  const lowerSearch = searchTerm.toLowerCase();
+
+  sortedItems.sort((a, b) => {
+    // Contextual ForReturn priority is a hard first key, including when For is an exact title match.
+    if (shouldPromoteForReturn) {
       if (a.value === 'for_return' && b.value !== 'for_return') {
         return -1;
       }
       if (a.value !== 'for_return' && b.value === 'for_return') {
         return 1;
       }
-      return 0;
-    });
-  }
+    }
 
-  return items;
+    if (searchTerm) {
+      const aExact = a.label.toLowerCase() === lowerSearch;
+      const bExact = b.label.toLowerCase() === lowerSearch;
+      if (aExact && !bExact) {
+        return -1;
+      }
+      if (!aExact && bExact) {
+        return 1;
+      }
+    }
+
+    return 0;
+  });
+
+  return sortedItems;
 };
 
 const categoryItemSx: SystemStyleObject = {
@@ -512,23 +535,7 @@ const NodeCommandList = memo(
         _items.push(...getPendingConnectionNodeItems(templatesArray, pendingConnection, searchTerm));
       }
 
-      // Sort exact title matches to the top when searching
-      if (searchTerm) {
-        const lowerSearch = searchTerm.toLowerCase();
-        _items.sort((a, b) => {
-          const aExact = a.label.toLowerCase() === lowerSearch;
-          const bExact = b.label.toLowerCase() === lowerSearch;
-          if (aExact && !bExact) {
-            return -1;
-          }
-          if (!aExact && bExact) {
-            return 1;
-          }
-          return 0;
-        });
-      }
-
-      return _items;
+      return sortNodeCommandItems(_items, searchTerm, pendingConnection);
     }, [pendingConnection, templatesArray, searchTerm, currentImageFilterItem, notesFilterItem]);
 
     const groupedItems = useMemo(() => {
