@@ -1,6 +1,6 @@
 import type { PendingConnection } from 'features/nodes/store/types';
-import type { InvocationTemplate } from 'features/nodes/types/invocation';
 import { add, for_loop, for_return } from 'features/nodes/store/util/testUtils';
+import type { InvocationTemplate } from 'features/nodes/types/invocation';
 import { describe, expect, it } from 'vitest';
 
 import { getPendingConnectionNodeItems, sortNodeCommandItems } from './AddNodeCmdk';
