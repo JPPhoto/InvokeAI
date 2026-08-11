@@ -184,6 +184,36 @@ describe('getFirstValidConnection', () => {
       targetHandle: 'output',
     });
   });
+
+  it('should auto-wire a For state output to the ForReturn state input', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    const loopTemplates = { for: for_loop, for_return };
+
+    expect(
+      getFirstValidConnection(forNode.id, 'state', returnNode.id, null, [forNode, returnNode], [], loopTemplates, null)
+    ).toEqual({
+      source: forNode.id,
+      sourceHandle: 'state',
+      target: returnNode.id,
+      targetHandle: 'state',
+    });
+  });
+
+  it('should auto-wire the exact For state output to a fixed ForReturn state input', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    const loopTemplates = { for: for_loop, for_return };
+
+    expect(
+      getFirstValidConnection(forNode.id, null, returnNode.id, 'state', [forNode, returnNode], [], loopTemplates, null)
+    ).toEqual({
+      source: forNode.id,
+      sourceHandle: 'state',
+      target: returnNode.id,
+      targetHandle: 'state',
+    });
+  });
 });
 
 describe('getTargetCandidateFields', () => {

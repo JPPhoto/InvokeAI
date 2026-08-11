@@ -1,15 +1,30 @@
 import type { Connection } from '@xyflow/react';
 import { map } from 'es-toolkit/compat';
 import type { Templates } from 'features/nodes/store/types';
+import { areTypesEqual } from 'features/nodes/store/util/areTypesEqual';
 import {
   CONNECTOR_INPUT_HANDLE,
   CONNECTOR_OUTPUT_HANDLE,
   resolveConnectorSourceFieldType,
 } from 'features/nodes/store/util/connectorTopology';
 import { validateConnection } from 'features/nodes/store/util/validateConnection';
-import type { FieldInputTemplate, FieldOutputTemplate } from 'features/nodes/types/field';
+import type { FieldInputTemplate, FieldOutputTemplate, FieldType } from 'features/nodes/types/field';
 import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
 import { getInvocationNodeInputTemplate, isConnectorNode, isInvocationNode } from 'features/nodes/types/invocation';
+
+const rankCandidateFieldsByType = <T extends FieldInputTemplate | FieldOutputTemplate>(
+  fields: T[],
+  type: FieldType | undefined
+): T[] => {
+  if (!type) {
+    return fields;
+  }
+
+  return [
+    ...fields.filter((field) => areTypesEqual(type, field.type)),
+    ...fields.filter((field) => !areTypesEqual(type, field.type)),
+  ];
+};
 
 /**
  *
@@ -127,7 +142,10 @@ export const getTargetCandidateFields = (
     return [];
   }
 
-  if (!isConnectorNode(sourceNode)) {
+  let sourceFieldType: FieldType | undefined;
+  if (isConnectorNode(sourceNode)) {
+    sourceFieldType = resolveConnectorSourceFieldType(sourceNode.id, nodes, edges, templates);
+  } else {
     const sourceTemplate = templates[sourceNode.data.type];
     if (!sourceTemplate) {
       return [];
@@ -138,6 +156,8 @@ export const getTargetCandidateFields = (
     if (!sourceField) {
       return [];
     }
+
+    sourceFieldType = sourceField.type;
   }
 
   const targetCandidateFields = Object.entries(targetNode.data.inputs).flatMap(([fieldName, input]) => {
@@ -150,7 +170,7 @@ export const getTargetCandidateFields = (
     return connectionErrorTKey === null ? [field] : [];
   });
 
-  return targetCandidateFields;
+  return rankCandidateFieldsByType(targetCandidateFields, sourceFieldType);
 };
 
 export const getSourceCandidateFields = (
@@ -198,6 +218,7 @@ export const getSourceCandidateFields = (
     return [];
   }
 
+  let targetFieldType: FieldType | undefined;
   if (!isConnectorNode(targetNode)) {
     if (!isInvocationNode(targetNode)) {
       return [];
@@ -212,6 +233,7 @@ export const getSourceCandidateFields = (
     if (!targetField) {
       return [];
     }
+    targetFieldType = targetField.type;
   } else if (targetHandle !== CONNECTOR_INPUT_HANDLE) {
     return [];
   }
@@ -222,5 +244,5 @@ export const getSourceCandidateFields = (
     return connectionErrorTKey === null;
   });
 
-  return sourceCandidateFields;
+  return rankCandidateFieldsByType(sourceCandidateFields, targetFieldType);
 };
