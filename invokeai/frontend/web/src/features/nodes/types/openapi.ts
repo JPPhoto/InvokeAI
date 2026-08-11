@@ -79,10 +79,6 @@ export const isInvocationOutputSchemaObject = (
   obj: OpenAPIV3_1.ReferenceObject | OpenAPIV3_1.SchemaObject | InvocationOutputSchemaObject
 ): obj is InvocationOutputSchemaObject => 'class' in obj && obj.class === 'output';
 
-export const isInvocationFieldSchema = (
-  obj: OpenAPIV3_1.ReferenceObject | OpenAPIV3_1.SchemaObject
-): obj is InvocationFieldSchema => 'field_kind' in obj;
-
 export const isInvocationInputFieldSchema = (
   obj: OpenAPIV3_1.ReferenceObject | OpenAPIV3_1.SchemaObject
 ): obj is InvocationInputFieldSchema =>

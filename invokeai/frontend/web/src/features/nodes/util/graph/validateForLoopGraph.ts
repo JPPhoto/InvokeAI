@@ -1,6 +1,6 @@
 import type { Graph } from 'services/api/types';
 
-export type ForLoopGraphError =
+type ForLoopGraphError =
   | 'nodes.forLoopMissingIterationOutput'
   | 'nodes.forLoopReturnCount'
   | 'nodes.forLoopUnterminatedBody'

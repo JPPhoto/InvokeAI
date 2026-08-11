@@ -129,10 +129,7 @@ describe(validateForLoopGraph.name, () => {
         { id: 'for', type: 'for' },
         { id: 'return', type: 'for_return' },
       ],
-      edges: [
-        edge('for', 'item', 'return', 'output'),
-        edge('for', 'final_state', 'return', 'state'),
-      ],
+      edges: [edge('for', 'item', 'return', 'output'), edge('for', 'final_state', 'return', 'state')],
       expected: 'nodes.forLoopFinalOutputInBody',
     },
     {

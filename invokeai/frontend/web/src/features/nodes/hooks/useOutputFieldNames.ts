@@ -11,9 +11,8 @@ export const useOutputFieldNamesByScope = (): OutputFieldNamesByScope => {
   const ctx = useInvocationNodeContext();
   const selector = useMemo(
     () =>
-      createSelector(
-        [ctx.selectNodeTemplateOrThrow],
-        (template) => getOutputFieldNamesByScope(Object.values(template.outputs))
+      createSelector([ctx.selectNodeTemplateOrThrow], (template) =>
+        getOutputFieldNamesByScope(Object.values(template.outputs))
       ),
     [ctx]
   );
