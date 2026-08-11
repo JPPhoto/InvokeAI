@@ -62,7 +62,7 @@ Lessons from those branches:
 What is still not implemented:
 
 - Durable body identity metadata for nested or shared loop body paths.
-- Visual editor affordances for a structured loop body boundary.
+- A structured visual region or subgraph affordance for the loop body boundary.
 - Early break or continue behavior.
 - Rich collection producer nodes designed specifically for loop sources.
 
@@ -80,7 +80,14 @@ Implemented on this branch:
 - Empty collection finalization.
 - Serialization/resume coverage for partially completed stateful loops.
 - Failure handling that stops loop scheduling without releasing partial final outputs.
+- Completed prepared `For` iterations release their copied collection after the successor or final output is prepared,
+  avoiding quadratic collection retention while preserving serialization and resume behavior.
 - Frontend enqueue-time whole-graph validation matching the backend's currently supported loop body shapes.
+- Contextual `ForReturn` discovery in the add-node picker: iteration-output connections prioritize and auto-expand
+  `ForReturn`, then reuse ordinary connection validation to select its compatible input.
+- Threaded `DefaultSessionProcessor` integration coverage for successful execution, queue-status-event cancellation,
+  and body failure.
+- SQLite session-queue coverage for persisting, reloading, and completing a partially executed stateful loop.
 
 ## Architectural Direction
 
@@ -535,6 +542,11 @@ through an ordinary node edge are all rejected when they create scope overlap.
 The ordinary invocation renderer now groups scoped fields under localized `Iteration Outputs` and `Final Outputs`
 headings. Nodes without scoped outputs keep the existing flat output rendering.
 
+When an iteration-scoped output connection is dropped on empty canvas, the add-node picker prioritizes `ForReturn`,
+expands its category, and preserves that priority while searching. Selecting it uses the existing valid-connection
+candidate logic to wire the iteration value to the compatible `ForReturn` input. This is a narrow boundary-discovery
+affordance, not yet a structured visual loop-body editor.
+
 This local guard intentionally does not require a complete body while the user is editing. Matching `ForReturn`
 ownership, unterminated body paths, nested loops, internal `Iterate` nodes, and iterator-derived external inputs remain
 whole-graph validation concerns enforced by the backend.
@@ -686,22 +698,30 @@ Frontend tests should cover:
 
 Backend unit tests currently cover the invocation contracts, state helper copy semantics, graph-boundary validation,
 sequential materialization, state carry, final output release, empty collections, failure handling, serialization and
-resume, parent iterator scoping, and cache-key behavior. `DefaultSessionRunner` integration tests cover successful queue
-completion and session persistence, cancellation between iterations without releasing final outputs, and iteration-body
-exceptions without scheduling later iterations or after-loop nodes. Schema generation verifies that moving the
-invocation definitions does not change their serialized API contracts. Frontend unit tests cover `For` and `ForReturn`
-graph/workflow round trips, resolution of their output scopes from the current templates, and `LoopState` connection-type
-compatibility. Frontend connection tests cover iteration/final scope overlap across incremental connection orders,
-through ordinary body extensions, body descendants, and connector nodes. Output row-model and renderer tests cover flat
-rendering for ordinary nodes and distinct localized iteration/final sections for scoped nodes. Enqueue-time graph
-validation covers return ownership, unterminated paths, nested loops, internal `Iterate` nodes, iterator-derived external
-inputs, final outputs feeding the body, and body outputs escaping before `ForReturn`.
+resume, parent iterator scoping, cache-key behavior, and release of completed iteration collection copies.
+`DefaultSessionRunner` integration tests cover successful queue completion and session persistence, cancellation between
+iterations without releasing final outputs, and iteration-body exceptions without scheduling later iterations or
+after-loop nodes. Threaded `DefaultSessionProcessor` tests exercise the same success, cancellation, and failure paths;
+the cancellation path sends a real `QueueItemStatusChangedEvent` through the processor handler using a synchronized
+queue harness. SQLite queue tests persist a partial stateful loop, reload its prepared metadata, complete only the
+remaining iterations, and persist the final collection and state. Schema generation verifies that moving the invocation
+definitions does not change their serialized API contracts.
+
+Frontend unit tests cover `For` and `ForReturn` graph/workflow round trips, resolution of their output scopes from the
+current templates, and `LoopState` connection-type compatibility. Frontend connection tests cover iteration/final scope
+overlap across incremental connection orders, through ordinary body extensions, body descendants, and connector nodes.
+Output row-model and renderer tests cover flat rendering for ordinary nodes and distinct localized iteration/final
+sections for scoped nodes. Add-node picker tests cover contextual `ForReturn` priority, exact-search ordering, and
+compatible input auto-wiring through the shared connection helper. Enqueue-time graph validation covers return
+ownership, unterminated paths, nested loops, internal `Iterate` nodes, iterator-derived external inputs, final outputs
+feeding the body, and body outputs escaping before `ForReturn`.
 
 The following paths remain unchecked and should not be inferred from the graph-unit coverage:
 
-- cancellation initiated through a real queue status event and the threaded `DefaultSessionProcessor`
-- end-to-end execution with the SQLite session queue rather than the runner's queue test double
-- interaction behavior for discovering and wiring `ForReturn`
+- one combined production-style path using the threaded `DefaultSessionProcessor`, actual `SqliteSessionQueue`, and
+  registered event bus rather than the separate processor harness and SQLite persistence test
+- browser-level drag, picker selection, and rendered-edge interaction for discovering and wiring `ForReturn`; current
+  coverage exercises the pure picker-ordering and connection-selection logic
 
 ## Open Questions
 
@@ -735,5 +755,10 @@ Answered branch-local decisions:
 10. Add serialization/resume tests.
 11. Add editor affordances after the backend contract is stable.
 
-The first milestone should prove fixed collection iteration with explicit state carry. Early break, parallel stateless
-loops, richer collection producers, and visual loop-body editing can follow after that contract is stable.
+Steps 1 through 10 are complete for the current bounded body-path contract. Step 11 has the initial output grouping and
+contextual `ForReturn` discovery/wiring affordances, but not a structured visual body boundary.
+
+The next architecture slice is durable body identity for nested or shared loop paths. After that contract is explicit,
+internal `Iterate` bodies and nested `For` can be developed without relying on ambiguous reachability. Early break or
+continue, parallel stateless loops, richer collection producers, and structured visual loop-body editing remain later
+work.
