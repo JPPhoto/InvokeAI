@@ -31,12 +31,13 @@ import {
   nodesChanged,
 } from 'features/nodes/store/nodesSlice';
 import { selectNodesSlice } from 'features/nodes/store/selectors';
+import type { PendingConnection } from 'features/nodes/store/types';
 import { findUnoccupiedPosition } from 'features/nodes/store/util/findUnoccupiedPosition';
 import { getFirstValidConnection } from 'features/nodes/store/util/getFirstValidConnection';
 import { connectionToEdge } from 'features/nodes/store/util/reactFlowUtil';
 import { validateConnectionTypes } from 'features/nodes/store/util/validateConnectionTypes';
 import { selectShouldGroupNodesByCategory } from 'features/nodes/store/workflowSettingsSlice';
-import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
+import type { AnyEdge, AnyNode, InvocationTemplate } from 'features/nodes/types/invocation';
 import { isInvocationNode } from 'features/nodes/types/invocation';
 import { useRegisteredHotkeys } from 'features/system/components/HotkeysModal/useHotkeyData';
 import { toast } from 'features/toast/toast';
@@ -54,7 +55,6 @@ import {
   PiLightningFill,
 } from 'react-icons/pi';
 import type { S } from 'services/api/types';
-import { objectEntries } from 'tsafe';
 import { useDebounce } from 'use-debounce';
 
 const useAddNode = () => {
@@ -343,6 +343,61 @@ const filter = memoize(
   (item: FilterableItem, searchTerm: string) => `${item.type}-${searchTerm}`
 );
 
+const isForIterationOutputConnection = (pendingConnection: PendingConnection | null) =>
+  pendingConnection?.handleType === 'source' &&
+  pendingConnection.fieldTemplate.fieldKind === 'output' &&
+  pendingConnection.fieldTemplate.output_scope === 'iteration';
+
+export const getPendingConnectionNodeItems = (
+  templatesArray: InvocationTemplate[],
+  pendingConnection: PendingConnection,
+  searchTerm: string
+): NodeCommandItemData[] => {
+  const items: NodeCommandItemData[] = [];
+
+  for (const template of templatesArray) {
+    if (!filter(template, searchTerm)) {
+      continue;
+    }
+
+    const candidateFields = pendingConnection.handleType === 'source' ? template.inputs : template.outputs;
+    for (const fieldTemplate of Object.values(candidateFields)) {
+      const sourceType =
+        pendingConnection.handleType === 'source' ? pendingConnection.fieldTemplate.type : fieldTemplate.type;
+      const targetType =
+        pendingConnection.handleType === 'target' ? pendingConnection.fieldTemplate.type : fieldTemplate.type;
+
+      if (validateConnectionTypes(sourceType, targetType)) {
+        items.push({
+          label: template.title,
+          value: template.type,
+          description: template.description,
+          classification: template.classification,
+          nodePack: template.nodePack,
+          category: template.category,
+        });
+        break;
+      }
+    }
+  }
+
+  const isForIterationOutput = isForIterationOutputConnection(pendingConnection);
+
+  if (isForIterationOutput) {
+    items.sort((a, b) => {
+      if (a.value === 'for_return' && b.value !== 'for_return') {
+        return -1;
+      }
+      if (a.value !== 'for_return' && b.value === 'for_return') {
+        return 1;
+      }
+      return 0;
+    });
+  }
+
+  return items;
+};
+
 const categoryItemSx: SystemStyleObject = {
   cursor: 'pointer',
   userSelect: 'none',
@@ -454,30 +509,7 @@ const NodeCommandList = memo(
           }
         }
       } else {
-        for (const template of templatesArray) {
-          if (filter(template, searchTerm)) {
-            const candidateFields = pendingConnection.handleType === 'source' ? template.inputs : template.outputs;
-
-            for (const [_fieldName, fieldTemplate] of objectEntries(candidateFields)) {
-              const sourceType =
-                pendingConnection.handleType === 'source' ? pendingConnection.fieldTemplate.type : fieldTemplate.type;
-              const targetType =
-                pendingConnection.handleType === 'target' ? pendingConnection.fieldTemplate.type : fieldTemplate.type;
-
-              if (validateConnectionTypes(sourceType, targetType)) {
-                _items.push({
-                  label: template.title,
-                  value: template.type,
-                  description: template.description,
-                  classification: template.classification,
-                  nodePack: template.nodePack,
-                  category: template.category,
-                });
-                break;
-              }
-            }
-          }
-        }
+        _items.push(...getPendingConnectionNodeItems(templatesArray, pendingConnection, searchTerm));
       }
 
       // Sort exact title matches to the top when searching
@@ -534,6 +566,7 @@ const NodeCommandList = memo(
 
     // When searching, auto-expand all categories; when not searching, use manual state
     const isSearching = searchTerm.length > 0;
+    const shouldPromoteForReturn = isForIterationOutputConnection(pendingConnection);
 
     const expandAll = useCallback(() => {
       setExpandedCategories(new Set(groupedItems.map(([cat]) => cat)));
@@ -566,7 +599,10 @@ const NodeCommandList = memo(
           </Flex>
         )}
         {groupedItems.map(([category, categoryItems]) => {
-          const isExpanded = isSearching || expandedCategories.has(category);
+          const isExpanded =
+            isSearching ||
+            expandedCategories.has(category) ||
+            (shouldPromoteForReturn && categoryItems.some((item) => item.value === 'for_return'));
           return (
             <Box key={category}>
               <CommandItem value={`__category__:${category}`} onSelect={onSelect} asChild>

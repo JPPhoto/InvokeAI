@@ -6,7 +6,16 @@ import {
   getSourceCandidateFields,
   getTargetCandidateFields,
 } from 'features/nodes/store/util/getFirstValidConnection';
-import { add, buildEdge, buildNode, img_resize, sub, templates } from 'features/nodes/store/util/testUtils';
+import {
+  add,
+  buildEdge,
+  buildNode,
+  for_loop,
+  for_return,
+  img_resize,
+  sub,
+  templates,
+} from 'features/nodes/store/util/testUtils';
 import { describe, expect, it } from 'vitest';
 
 const buildConnectorNode = (id: string) => ({
@@ -158,6 +167,21 @@ describe('getFirstValidConnection', () => {
       sourceHandle: CONNECTOR_OUTPUT_HANDLE,
       target: n2.id,
       targetHandle: 'width',
+    });
+  });
+
+  it('should auto-wire a For iteration item output to the ForReturn output input', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    const loopTemplates = { for: for_loop, for_return };
+
+    expect(
+      getFirstValidConnection(forNode.id, 'item', returnNode.id, null, [forNode, returnNode], [], loopTemplates, null)
+    ).toEqual({
+      source: forNode.id,
+      sourceHandle: 'item',
+      target: returnNode.id,
+      targetHandle: 'output',
     });
   });
 });
