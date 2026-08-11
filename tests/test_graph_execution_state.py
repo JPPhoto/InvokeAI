@@ -230,11 +230,15 @@ def test_graph_for_return_schedules_next_iteration():
     _for_node, _for_output = invoke_next(state)
     _return_node, _return_output = invoke_next(state)
 
+    first_for_node_id = _for_node.id
+
     assert not state.is_complete()
 
     next_node = state.next()
 
     assert isinstance(next_node, ForInvocation)
+    assert state.execution_graph.get_node(first_for_node_id).collection == []
+    assert next_node.collection == ["alpha", "beta"]
     assert state.prepared_source_mapping[next_node.id] == "for"
     output = next_node.invoke(Mock(InvocationContext))
 
@@ -253,7 +257,48 @@ def test_graph_for_return_schedules_next_iteration():
     assert return_output.output == "beta"
     state.complete(next_return.id, return_output)
 
+    assert all(
+        state.execution_graph.get_node(exec_node_id).collection == []
+        for exec_node_id in state.source_prepared_mapping["for"]
+    )
     assert state.is_complete()
+
+
+def test_graph_for_retention_survives_partial_json_round_trip():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta", "charlie"]))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    first_for_node, _first_for_output = invoke_next(state)
+    _body_node, _body_output = invoke_next(state)
+    first_return_node, _first_return_output = invoke_next(state)
+    state.complete(
+        first_return_node.id,
+        ForReturnInvocationOutput(output="alpha", state=LoopState(values={"count": 1})),
+    )
+
+    raw = state.model_dump_json(warnings=False, exclude_none=True)
+    resumed = TypeAdapter(GraphExecutionState).validate_json(raw, strict=False)
+
+    prepared_for_nodes = [
+        resumed.execution_graph.get_node(exec_node_id) for exec_node_id in resumed.source_prepared_mapping["for"]
+    ]
+    assert first_for_node.id in resumed.execution_graph.nodes
+    assert all(
+        node.collection == ([] if node.index == 0 else ["alpha", "beta", "charlie"]) for node in prepared_for_nodes
+    )
+
+    execute_all_nodes(resumed)
+
+    after_node_id = next(iter(resumed.source_prepared_mapping["after"]))
+    assert resumed.results[after_node_id].value == ["alpha", "beta", "charlie"]
+    assert resumed.is_complete()
 
 
 def test_graph_for_return_passes_state_to_next_iteration():

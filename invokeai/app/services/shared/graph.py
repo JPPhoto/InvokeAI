@@ -1273,6 +1273,7 @@ class _ExecutionScheduler:
         next_index = for_node.index + 1
         if next_index >= len(for_node.collection):
             self._finalize_for_outputs(for_exec_node_id, source_for_id, source_return_id, output)
+            for_node.collection = []
             return
 
         next_state = self._get_loop_state_for_next_iteration(for_exec_node_id, output)
@@ -1285,6 +1286,7 @@ class _ExecutionScheduler:
         )
         self._state.executed.discard(source_for_id)
         self._state._materializer().create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=next_for_id)
+        for_node.collection = []
 
     def _decrement_child_indegree(self, child_exec_node_id: str, parent_exec_node_id: str) -> None:
         if child_exec_node_id not in self._state.indegree:
