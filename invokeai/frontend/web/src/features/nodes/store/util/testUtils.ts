@@ -634,7 +634,7 @@ const iterate: InvocationTemplate = {
 export const for_loop: InvocationTemplate = {
   title: 'For',
   type: 'for',
-  version: '1.0.0',
+  version: '1.1.0',
   tags: [],
   description: '',
   outputType: 'for_output',
@@ -666,6 +666,21 @@ export const for_loop: InvocationTemplate = {
       ui_hidden: false,
       type: {
         name: 'LoopState',
+        cardinality: 'SINGLE',
+        batch: false,
+      },
+    },
+    body_id: {
+      name: 'body_id',
+      title: 'Body Id',
+      required: false,
+      default: '',
+      description: 'Stable identity shared by this For and its matching ForReturn',
+      fieldKind: 'input',
+      input: 'direct',
+      ui_hidden: true,
+      type: {
+        name: 'StringField',
         cardinality: 'SINGLE',
         batch: false,
       },
@@ -777,7 +792,7 @@ export const for_loop: InvocationTemplate = {
 export const for_return: InvocationTemplate = {
   title: 'ForReturn',
   type: 'for_return',
-  version: '1.0.0',
+  version: '1.1.0',
   tags: [],
   description: '',
   outputType: 'for_return_output',
@@ -809,6 +824,21 @@ export const for_return: InvocationTemplate = {
       ui_hidden: false,
       type: {
         name: 'LoopState',
+        cardinality: 'SINGLE',
+        batch: false,
+      },
+    },
+    body_id: {
+      name: 'body_id',
+      title: 'Body Id',
+      required: false,
+      default: '',
+      description: 'Stable identity shared by this ForReturn and its matching For',
+      fieldKind: 'input',
+      input: 'direct',
+      ui_hidden: true,
+      type: {
+        name: 'StringField',
         cardinality: 'SINGLE',
         batch: false,
       },

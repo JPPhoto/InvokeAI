@@ -310,6 +310,7 @@ describe('graphToWorkflow', () => {
         for: {
           id: 'for',
           type: 'for',
+          body_id: 'body-1',
           collection: ['alpha', 'beta'],
           state: null,
           index: -1,
@@ -317,6 +318,7 @@ describe('graphToWorkflow', () => {
         return: {
           id: 'return',
           type: 'for_return',
+          body_id: 'body-1',
           output: null,
           state: null,
         },
@@ -339,6 +341,8 @@ describe('graphToWorkflow', () => {
     expect(forNode.data.inputs.collection?.value).toEqual(['alpha', 'beta']);
     expect(forNode.data.inputs.state?.value).toBeNull();
     expect(forNode.data.inputs.index?.value).toBe(-1);
+    expect(forNode.data.inputs.body_id?.value).toBe('body-1');
+    expect(returnNode.data.inputs.body_id?.value).toBe('body-1');
     expect(returnNode.data.inputs.state?.value).toBeNull();
     expect(workflow.edges).toHaveLength(1);
     expect(workflow.edges[0]).toMatchObject({
@@ -379,10 +383,12 @@ describe('graphToWorkflow', () => {
       collection: ['alpha', 'beta'],
       state: null,
       index: -1,
+      body_id: 'body-1',
     });
     expect(rebuiltGraph.nodes.return).toMatchObject({
       type: 'for_return',
       state: null,
+      body_id: 'body-1',
     });
     expect(rebuiltGraph.edges).toEqual(graph.edges);
   });

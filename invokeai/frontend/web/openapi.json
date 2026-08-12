@@ -33375,6 +33375,24 @@
             "orig_default": null,
             "orig_required": false
           },
+          "body_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Stable identity shared by this For and its matching ForReturn",
+            "field_kind": "input",
+            "input": "direct",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Body Id",
+            "ui_hidden": true
+          },
           "index": {
             "default": -1,
             "description": "The internal iteration index for a prepared For execution node",
@@ -33397,7 +33415,7 @@
         "required": ["type", "id"],
         "title": "ForInvocation",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "output": {
           "$ref": "#/components/schemas/ForInvocationOutput"
         }
@@ -33538,6 +33556,24 @@
             "orig_default": null,
             "orig_required": false
           },
+          "body_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Stable identity shared by this ForReturn and its matching For",
+            "field_kind": "input",
+            "input": "direct",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Body Id",
+            "ui_hidden": true
+          },
           "type": {
             "const": "for_return",
             "default": "for_return",
@@ -33549,7 +33585,7 @@
         "required": ["type", "id"],
         "title": "ForReturnInvocation",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "output": {
           "$ref": "#/components/schemas/ForReturnInvocationOutput"
         }

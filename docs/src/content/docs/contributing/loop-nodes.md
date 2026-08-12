@@ -61,7 +61,7 @@ Lessons from those branches:
 
 What is still not implemented:
 
-- Durable body identity metadata for nested or shared loop body paths.
+- Runtime support for nested or shared loop body paths.
 - A structured visual region or subgraph affordance for the loop body boundary.
 - Early break or continue behavior.
 - Rich collection producer nodes designed specifically for loop sources.
@@ -83,6 +83,8 @@ Implemented on this branch:
 - Completed prepared `For` iterations release their copied collection after the successor or final output is prepared,
   avoiding quadratic collection retention while preserving serialization and resume behavior.
 - Frontend enqueue-time whole-graph validation matching the backend's currently supported loop body shapes.
+- Optional durable `body_id` metadata on `For` and `ForReturn`, with matching frontend/backend validation for missing,
+  stale, duplicate, and mismatched identities. Legacy loops with no identity metadata remain valid.
 - Contextual `ForReturn` discovery in the add-node picker: iteration-output connections prioritize and auto-expand
   `ForReturn`, then reuse ordinary connection validation to select its compatible input.
 - Threaded `DefaultSessionProcessor` integration coverage for successful execution, queue-status-event cancellation,
@@ -171,6 +173,32 @@ Iterator-derived values must be collapsed as needed and then carried explicitly 
 outputs. Direct iterator-derived external body inputs are rejected until the runtime has a durable contract for mapping
 multiple iteration dimensions.
 
+### Durable Body Identity
+
+`For` and `ForReturn` each carry an optional hidden `body_id` input. When present, the same opaque value identifies one
+loop body boundary on both endpoints:
+
+```text
+For(body_id="body-a") -> body path -> ForReturn(body_id="body-a")
+```
+
+The value is part of the invocation data, so graph JSON and workflow JSON preserve it through save/load and execution
+resume. It is not inferred from a process-local transient store or from a runtime-generated execution-node ID. A body
+identity is valid only once on `For` nodes and once on `ForReturn` nodes, and the reachable structural boundary must
+agree with the value.
+
+Validation rules are shared by the backend and frontend:
+
+- both endpoints may omit `body_id` for compatibility with existing simple loops;
+- if either endpoint has an identity, the matching endpoint must also have one;
+- an identity on a return with no corresponding `For` is stale;
+- duplicate identities on `For` nodes or on `ForReturn` nodes are rejected;
+- the two endpoints must carry the same identity.
+
+This slice establishes the serialized contract; it does not enable nested `For` execution, internal `Iterate` execution,
+or arbitrary shared body rematerialization. Those paths remain rejected until their runtime iteration context and output
+ownership rules are implemented against this identity.
+
 An `Iterate` node inside the `For` body is also rejected by the first implementation because the body rematerializer
 does not recursively expand nested iterator work. Unlike an independent external iterator, an internal iterator that is
 collapsed by a matching `Collect` before `ForReturn` has coherent semantics and should be supported by a future
@@ -201,6 +229,7 @@ Inputs:
 
 - `collection: list[Any]`
 - `state: LoopState | None = None`
+- `body_id: str | None = None` (hidden durable boundary identity)
 
 Per-iteration outputs:
 
@@ -224,11 +253,10 @@ item: Any = OutputField(..., loop_scope="iteration")
 output_collection: list[Any] = OutputField(..., loop_scope="final")
 ```
 
-The exact metadata name is open. This metadata does not exist as a complete engine contract today, so implementing `For`
-requires schema, validation, frontend type generation, and execution-graph materialization to preserve the output scope.
-Saved workflows preserve the invocation type and edge field handles; when a workflow is loaded, the current invocation
-template resolves those handles to their output scopes. A `For` node cannot be implemented as an ordinary invocation
-that only returns one flat output model.
+The implemented schema uses `output_scope` metadata. This metadata is preserved through backend schema generation,
+frontend type generation, and execution-graph materialization. Saved workflows preserve the invocation type and edge
+field handles; when a workflow is loaded, the current invocation template resolves those handles to their output scopes.
+A `For` node cannot be implemented as an ordinary invocation that only returns one flat output model.
 
 The distinction is required:
 
@@ -246,6 +274,7 @@ Inputs:
 
 - `output: Any | None = None`
 - `state: LoopState | None = None`
+- `body_id: str | None = None` (hidden durable boundary identity matching `For.body_id`)
 
 Outputs:
 
@@ -268,14 +297,15 @@ For the target implementation, the recommended body boundary is a boundary pair:
 - The loop body is the reachable subgraph from `For` iteration-scoped outputs to the matching `ForReturn`.
 
 The `ForReturn` must be associated with a specific source `For`. Reachability alone is not sufficient once nested loops
-or shared body paths are allowed, because the backend must know which return node closes which loop. The first
-implementation should either reject nested `For` bodies or add durable body identity metadata before allowing them.
+or shared body paths are allowed, because the backend must know which return node closes which loop. The optional
+`body_id` contract now records that association in serialized invocation data, while the current runtime still rejects
+nested and internally iterated bodies.
 
 This is simpler than a full visual subgraph while still giving the backend an explicit return boundary. Validation must
 also reject loop-body paths that escape to after-loop nodes without passing through the matching `ForReturn`.
 
-The current branch implements this reachable body-path subset. More complex boundaries, shared paths, and nested loops
-require durable body identity metadata and should remain future work.
+The current branch implements this reachable body-path subset plus endpoint identity validation. More complex boundaries,
+shared paths, and nested loops remain future work until the runtime consumes the identity during materialization.
 
 ### 4. Runtime Shape
 
@@ -500,7 +530,7 @@ Potential validation rules:
 - A body return's `state` input must be compatible with `LoopState`.
 - The author-time graph must remain acyclic.
 - Nodes inside the loop body must not feed after-loop nodes directly.
-- Nested `For` loops must be rejected until the body boundary has durable identity metadata.
+- Nested `For` loops must remain rejected until runtime materialization consumes durable body identity metadata.
 - `Iterate` nodes inside the `For` body must be rejected.
 - Iterator-derived external body inputs must be rejected until multiple iteration dimensions have an explicit body
   mapping contract.
@@ -511,11 +541,11 @@ First implementation recommendation:
 - The body is reachable from iteration-scoped `For` outputs and terminates at one `ForReturn`.
 - Shared paths that escape the body before `ForReturn` should be rejected unless a clear rule is added later.
 
-Open design question:
+Resolved design question:
 
-- The editor and backend need a durable saved-workflow representation for the body boundary. This may be output-scope
-  metadata plus reachability validation for the first implementation if nested loops are rejected, with explicit body
-  membership metadata or a visual subgraph added later.
+- The durable endpoint association is the optional shared `body_id` field on `For` and `ForReturn`. Missing values
+  preserve legacy simple loops; once used, the value must be present exactly once on each endpoint and match the
+  structurally reachable body boundary. Visual body membership and runtime nested-loop ownership remain separate work.
 
 ## Editor Contract
 
@@ -680,7 +710,7 @@ Backend tests should cover:
 - cancellation or failure does not expose partial final outputs to after-loop nodes
 - serialized `GraphExecutionState` can resume a partially completed loop
 - cache does not collapse distinct stateful iterations
-- nested `For` bodies are rejected until body identity metadata exists
+- nested `For` bodies remain rejected until runtime materialization consumes body identity metadata
 - body paths that feed after-loop nodes directly are rejected
 - saved workflow JSON preserves the loop node types and field handles used to resolve output-scope metadata
 
@@ -696,7 +726,8 @@ Frontend tests should cover:
 
 ### Current Coverage
 
-Backend unit tests currently cover the invocation contracts, state helper copy semantics, graph-boundary validation,
+Backend unit tests currently cover the invocation contracts, durable body-identity validation and graph round-trip,
+state helper copy semantics, graph-boundary validation,
 sequential materialization, state carry, final output release, empty collections, failure handling, serialization and
 resume, parent iterator scoping, cache-key behavior, and release of completed iteration collection copies.
 `DefaultSessionRunner` integration tests cover successful queue completion and session persistence, cancellation between
@@ -707,7 +738,7 @@ queue harness. SQLite queue tests persist a partial stateful loop, reload its pr
 remaining iterations, and persist the final collection and state. Schema generation verifies that moving the invocation
 definitions does not change their serialized API contracts.
 
-Frontend unit tests cover `For` and `ForReturn` graph/workflow round trips, resolution of their output scopes from the
+Frontend unit tests cover `For` and `ForReturn` graph/workflow round trips, durable body-identity validation, resolution of their output scopes from the
 current templates, and `LoopState` connection-type compatibility. Frontend connection tests cover iteration/final scope
 overlap across incremental connection orders, through ordinary body extensions, body descendants, and connector nodes.
 Output row-model and renderer tests cover flat rendering for ordinary nodes and distinct localized iteration/final
@@ -725,7 +756,6 @@ The following paths remain unchecked and should not be inferred from the graph-u
 
 ## Open Questions
 
-- What is the cleanest durable representation of a loop body boundary in saved workflow JSON?
 - How should nested `For` loops expose iteration paths and state without confusing collectors?
 - Should early break be added as `continue_condition` on `for_return`, or as a separate `for_continue` node later?
 
@@ -736,6 +766,8 @@ Answered branch-local decisions:
 - Loop output scope is invocation output field metadata and is preserved through backend schema and frontend type
   generation. Saved workflows preserve node types and field handles, then resolve scope from the current templates when
   loaded.
+- Durable body identity is the optional shared `body_id` field on `For` and `ForReturn`. It is persisted as ordinary
+  invocation data; legacy workflows omit it and continue using the bounded reachability contract.
 - `LoopState`, `For`, `ForReturn`, and the state helper nodes are defined in the dedicated `invocations.loops` module.
   Scheduler, materialization, and graph-boundary validation remain in the graph execution service.
 
@@ -746,8 +778,8 @@ Answered branch-local decisions:
    validation/schema.
 3. Preserve output-scope metadata through saved workflows, backend schemas, frontend types, and graph preparation.
 4. Add graph validation for the bounded collection-based loop shape and matching `ForReturn` body boundary.
-5. Reject nested loops and body paths that escape directly to after-loop nodes until durable body identity metadata
-   exists.
+5. Reject nested loops and body paths that escape directly to after-loop nodes; add durable endpoint identity metadata
+   for future nested/shared runtime paths.
 6. Extend `GraphExecutionState` materialization to create one iteration context at a time.
 7. Route iteration-scoped outputs into body execution nodes and final-scoped outputs into after-loop nodes.
 8. Carry explicit returned state into the next iteration.
@@ -758,7 +790,7 @@ Answered branch-local decisions:
 Steps 1 through 10 are complete for the current bounded body-path contract. Step 11 has the initial output grouping and
 contextual `ForReturn` discovery/wiring affordances, but not a structured visual body boundary.
 
-The next architecture slice is durable body identity for nested or shared loop paths. After that contract is explicit,
-internal `Iterate` bodies and nested `For` can be developed without relying on ambiguous reachability. Early break or
-continue, parallel stateless loops, richer collection producers, and structured visual loop-body editing remain later
-work.
+The durable endpoint identity slice is now implemented. The next runtime slice can use `body_id` during materialization
+to distinguish nested or shared loop paths. Internal `Iterate` bodies and nested `For` must remain rejected until that
+runtime work is complete. Early break or continue, parallel stateless loops, richer collection producers, and
+structured visual loop-body editing remain later work.

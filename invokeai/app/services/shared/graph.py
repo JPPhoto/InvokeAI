@@ -1137,8 +1137,7 @@ class _ExecutionMaterializer:
             return next_node_id
 
         if isinstance(next_node, ForInvocation) and all(
-            self._state.execution_graph.get_node(exec_node_id).index == -1
-            for exec_node_id in new_node_ids
+            self._state.execution_graph.get_node(exec_node_id).index == -1 for exec_node_id in new_node_ids
         ):
             self._mark_empty_for_complete(next_node_id)
 
@@ -2159,6 +2158,7 @@ class Graph(BaseModel):
 
     def _validate_special_nodes(self) -> None:
         # TODO: may need to validate all iterators & collectors in subgraphs so edge connections in parent graphs will be available
+        self._validate_for_body_identities()
         for node in self.nodes.values():
             if isinstance(node, IterateInvocation):
                 err = self._is_iterator_connection_valid(node.id)
@@ -2176,6 +2176,76 @@ class Graph(BaseModel):
                 err = self._is_for_return_connection_valid(node.id)
                 if err is not None:
                     raise InvalidEdgeError(f"Invalid ForReturn node ({node.id}): {err}")
+
+    def _validate_for_body_identities(self) -> None:
+        """Validates optional durable identities shared by For and ForReturn endpoints.
+
+        Workflows written before body identities existed leave both endpoints unset and continue to use the
+        reachability-based boundary rules below. Once either endpoint carries an identity, both endpoints of the
+        structurally matching boundary must carry the same unique value.
+        """
+        for_nodes = [node for node in self.nodes.values() if isinstance(node, ForInvocation)]
+        return_nodes = [node for node in self.nodes.values() if isinstance(node, ForReturnInvocation)]
+        for_identity_nodes: dict[str, list[str]] = {}
+        return_identity_nodes: dict[str, list[str]] = {}
+
+        for node in for_nodes:
+            if node.body_id:
+                for_identity_nodes.setdefault(node.body_id, []).append(node.id)
+        for node in return_nodes:
+            if node.body_id:
+                return_identity_nodes.setdefault(node.body_id, []).append(node.id)
+
+        for body_id, node_ids in for_identity_nodes.items():
+            if len(node_ids) > 1:
+                raise InvalidEdgeError(f"Duplicate For body identity '{body_id}' is used by multiple For nodes")
+        for body_id, node_ids in return_identity_nodes.items():
+            if len(node_ids) > 1:
+                raise InvalidEdgeError(f"Duplicate For body identity '{body_id}' is used by multiple ForReturn nodes")
+
+        graph = self.nx_graph_flat()
+        matching_return_by_for_id: dict[str, str] = {}
+        matching_for_ids_by_return_id: dict[str, list[str]] = {}
+        for node in for_nodes:
+            body_path_to_return = self._get_for_body_path_to_return(node.id, graph)
+            if body_path_to_return is None:
+                continue
+            _body_path_nodes, return_node_id = body_path_to_return
+            matching_return_by_for_id[node.id] = return_node_id
+            matching_for_ids_by_return_id.setdefault(return_node_id, []).append(node.id)
+
+        for node in return_nodes:
+            if not node.body_id:
+                continue
+            matching_for_ids = matching_for_ids_by_return_id.get(node.id, [])
+            if len(matching_for_ids) == 1:
+                matching_for = self.get_node(matching_for_ids[0])
+                assert isinstance(matching_for, ForInvocation)
+                if not matching_for.body_id:
+                    raise InvalidEdgeError("For body identity is missing on the matching For")
+                if matching_for.body_id != node.body_id:
+                    raise InvalidEdgeError(
+                        f"For body identity mismatch between For '{matching_for.id}' and ForReturn '{node.id}'"
+                    )
+            elif node.body_id not in for_identity_nodes:
+                raise InvalidEdgeError(
+                    f"Stale For body identity '{node.body_id}' on ForReturn '{node.id}' has no matching For"
+                )
+
+        for node in for_nodes:
+            if not node.body_id:
+                continue
+            return_node_id = matching_return_by_for_id.get(node.id)
+            if return_node_id is None:
+                continue
+            matching_return = self.get_node(return_node_id)
+            assert isinstance(matching_return, ForReturnInvocation)
+            if not matching_return.body_id:
+                raise InvalidEdgeError("For body identity is missing on the matching ForReturn")
+            if matching_return.body_id != node.body_id:
+                raise InvalidEdgeError(
+                    f"For body identity mismatch between For '{node.id}' and ForReturn '{matching_return.id}'"
+                )
 
     def validate_self(self) -> None:
         """
@@ -2460,7 +2530,7 @@ class Graph(BaseModel):
             if body_node_id != node_id and isinstance(self.get_node(body_node_id), ForInvocation)
         ]
         if len(nested_for_node_ids) > 0:
-            return "Nested For loops require durable body identity metadata"
+            return "Nested For loops require runtime support for durable body identity metadata"
 
         if any(isinstance(self.get_node(body_node_id), IterateInvocation) for body_node_id in body_path_nodes):
             return "Iterate nodes inside For loop bodies are unsupported"

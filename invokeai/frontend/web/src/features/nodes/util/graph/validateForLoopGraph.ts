@@ -9,6 +9,10 @@ type ForLoopGraphError =
   | 'nodes.forLoopIteratorInputUnsupported'
   | 'nodes.forLoopFinalOutputInBody'
   | 'nodes.forLoopBodyEscape'
+  | 'nodes.forLoopBodyIdentityMissing'
+  | 'nodes.forLoopBodyIdentityStale'
+  | 'nodes.forLoopBodyIdentityDuplicate'
+  | 'nodes.forLoopBodyIdentityMismatch'
   | 'nodes.forReturnOwnership';
 
 const ITERATION_OUTPUT_FIELDS = new Set(['item', 'index', 'total', 'state']);
@@ -40,6 +44,103 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     }
     return visited;
   };
+
+  const getBodyId = (node: unknown): string | undefined => {
+    if (!node || typeof node !== 'object') {
+      return undefined;
+    }
+    const bodyId = (node as { body_id?: unknown }).body_id;
+    return typeof bodyId === 'string' && bodyId.length > 0 ? bodyId : undefined;
+  };
+
+  const forIdentityNodes = new Map<string, string[]>();
+  const returnIdentityNodes = new Map<string, string[]>();
+  const matchingReturnByForId = new Map<string, string>();
+  const identityMatchingForIdsByReturnId = new Map<string, string[]>();
+  for (const node of Object.values(nodes)) {
+    if (node.type === 'for') {
+      const bodyId = getBodyId(node);
+      if (bodyId !== undefined) {
+        forIdentityNodes.set(bodyId, [...(forIdentityNodes.get(bodyId) ?? []), node.id]);
+      }
+
+      const iterationEdges = edges.filter(
+        (edge) => edge.source.node_id === node.id && ITERATION_OUTPUT_FIELDS.has(edge.source.field)
+      );
+      if (iterationEdges.length === 0) {
+        continue;
+      }
+      const reachableBodyNodeIds = walk(
+        iterationEdges.map((edge) => edge.destination.node_id),
+        outgoing
+      );
+      const reachableReturnIds = [...reachableBodyNodeIds].filter((nodeId) => nodes[nodeId]?.type === 'for_return');
+      if (reachableReturnIds.length === 1) {
+        const returnId = reachableReturnIds[0];
+        if (returnId !== undefined) {
+          matchingReturnByForId.set(node.id, returnId);
+          identityMatchingForIdsByReturnId.set(returnId, [
+            ...(identityMatchingForIdsByReturnId.get(returnId) ?? []),
+            node.id,
+          ]);
+        }
+      }
+    }
+    if (node.type === 'for_return') {
+      const bodyId = getBodyId(node);
+      if (bodyId !== undefined) {
+        returnIdentityNodes.set(bodyId, [...(returnIdentityNodes.get(bodyId) ?? []), node.id]);
+      }
+    }
+  }
+
+  if ([...forIdentityNodes.values()].some((nodeIds) => nodeIds.length > 1)) {
+    return 'nodes.forLoopBodyIdentityDuplicate';
+  }
+  if ([...returnIdentityNodes.values()].some((nodeIds) => nodeIds.length > 1)) {
+    return 'nodes.forLoopBodyIdentityDuplicate';
+  }
+
+  for (const node of Object.values(nodes)) {
+    if (node.type !== 'for_return') {
+      continue;
+    }
+    const bodyId = getBodyId(node);
+    if (bodyId === undefined) {
+      continue;
+    }
+    const matchingForIds = identityMatchingForIdsByReturnId.get(node.id) ?? [];
+    if (matchingForIds.length === 1) {
+      const matchingFor = nodes[matchingForIds[0] ?? ''];
+      if (getBodyId(matchingFor) === undefined) {
+        return 'nodes.forLoopBodyIdentityMissing';
+      }
+      if (getBodyId(matchingFor) !== bodyId) {
+        return 'nodes.forLoopBodyIdentityMismatch';
+      }
+    } else if (!forIdentityNodes.has(bodyId)) {
+      return 'nodes.forLoopBodyIdentityStale';
+    }
+  }
+
+  for (const node of Object.values(nodes)) {
+    if (node.type !== 'for') {
+      continue;
+    }
+    const bodyId = getBodyId(node);
+    const returnId = matchingReturnByForId.get(node.id);
+    if (bodyId === undefined || returnId === undefined) {
+      continue;
+    }
+    const matchingReturn = nodes[returnId];
+    const returnBodyId = getBodyId(matchingReturn);
+    if (returnBodyId === undefined) {
+      return 'nodes.forLoopBodyIdentityMissing';
+    }
+    if (returnBodyId !== bodyId) {
+      return 'nodes.forLoopBodyIdentityMismatch';
+    }
+  }
 
   const matchingForIdsByReturnId = new Map<string, string[]>();
 

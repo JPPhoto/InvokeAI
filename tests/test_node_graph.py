@@ -107,6 +107,84 @@ def test_graph_validates_direct_for_boundary_pair():
     g.validate_self()
 
 
+def test_graph_validates_for_boundary_pair_with_body_identity():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a", "b"], body_id="body-1")
+    body_return = ForReturnInvocation(id="return", body_id="body-1")
+
+    g.add_node(loop)
+    g.add_node(body_return)
+    g.add_edge(create_edge(loop.id, "item", body_return.id, "output"))
+
+    g.validate_self()
+
+
+def test_graph_rejects_missing_for_body_identity():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a", "b"], body_id="body-1")
+    body_return = ForReturnInvocation(id="return")
+
+    g.add_node(loop)
+    g.add_node(body_return)
+    g.add_edge(create_edge(loop.id, "item", body_return.id, "output"))
+
+    with pytest.raises(InvalidEdgeError, match="body identity.*missing"):
+        g.validate_self()
+
+
+def test_graph_rejects_stale_for_return_body_identity():
+    g = Graph()
+    body_return = ForReturnInvocation(id="return", body_id="missing-for")
+
+    g.add_node(body_return)
+
+    with pytest.raises(InvalidEdgeError, match="Stale For body identity"):
+        g.validate_self()
+
+
+def test_graph_rejects_duplicate_for_body_identities():
+    g = Graph()
+    g.add_node(ForInvocation(id="first", body_id="body-1"))
+    g.add_node(ForInvocation(id="second", body_id="body-1"))
+
+    with pytest.raises(InvalidEdgeError, match="Duplicate For body identity"):
+        g.validate_self()
+
+
+def test_graph_rejects_duplicate_for_return_body_identities():
+    g = Graph()
+    g.add_node(ForReturnInvocation(id="first", body_id="body-1"))
+    g.add_node(ForReturnInvocation(id="second", body_id="body-1"))
+
+    with pytest.raises(InvalidEdgeError, match="Duplicate For body identity"):
+        g.validate_self()
+
+
+def test_graph_rejects_mismatched_for_body_identities():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a", "b"], body_id="body-1")
+    body_return = ForReturnInvocation(id="return", body_id="body-2")
+
+    g.add_node(loop)
+    g.add_node(body_return)
+    g.add_edge(create_edge(loop.id, "item", body_return.id, "output"))
+
+    with pytest.raises(InvalidEdgeError, match="body identity mismatch"):
+        g.validate_self()
+
+
+def test_graph_round_trips_for_body_identity():
+    g = Graph()
+    g.add_node(ForInvocation(id="for", collection=["a"], body_id="body-1"))
+    g.add_node(ForReturnInvocation(id="return", body_id="body-1"))
+    g.add_edge(create_edge("for", "item", "return", "output"))
+
+    restored = Graph.model_validate_json(g.model_dump_json())
+
+    assert restored.nodes["for"].body_id == "body-1"
+    assert restored.nodes["return"].body_id == "body-1"
+
+
 def test_graph_validates_indirect_for_body():
     g = Graph()
     loop = ForInvocation(id="for", collection=["a", "b"])

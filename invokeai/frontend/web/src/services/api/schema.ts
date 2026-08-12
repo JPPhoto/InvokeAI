@@ -13862,6 +13862,12 @@ export type components = {
              */
             state?: components["schemas"]["LoopState"] | null;
             /**
+             * Body Id
+             * @description Stable identity shared by this For and its matching ForReturn
+             * @default null
+             */
+            body_id?: string | null;
+            /**
              * Index
              * @description The internal iteration index for a prepared For execution node
              * @default -1
@@ -13943,6 +13949,12 @@ export type components = {
              * @default null
              */
             state?: components["schemas"]["LoopState"] | null;
+            /**
+             * Body Id
+             * @description Stable identity shared by this ForReturn and its matching For
+             * @default null
+             */
+            body_id?: string | null;
             /**
              * type
              * @default for_return

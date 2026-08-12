@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { validateForLoopGraph } from './validateForLoopGraph';
 
-type TestNode = { id: string; type: string };
+type TestNode = { id: string; type: string; body_id?: string | null };
 type TestEdge = {
   source: { node_id: string; field: string };
   destination: { node_id: string; field: string };
@@ -38,6 +38,75 @@ describe(validateForLoopGraph.name, () => {
     );
 
     expect(validateForLoopGraph(graph)).toBeNull();
+  });
+
+  it('accepts a valid For body with durable identity', () => {
+    const graph = buildGraph(
+      [
+        { id: 'for', type: 'for', body_id: 'body-1' },
+        { id: 'body', type: 'add' },
+        { id: 'return', type: 'for_return', body_id: 'body-1' },
+      ],
+      [edge('for', 'item', 'body', 'a'), edge('body', 'value', 'return', 'output')]
+    );
+
+    expect(validateForLoopGraph(graph)).toBeNull();
+  });
+
+  it.each([
+    {
+      name: 'missing ForReturn identity',
+      nodes: [
+        { id: 'for', type: 'for', body_id: 'body-1' },
+        { id: 'return', type: 'for_return' },
+      ],
+      edges: [edge('for', 'item', 'return', 'output')],
+      expected: 'nodes.forLoopBodyIdentityMissing',
+    },
+    {
+      name: 'missing For identity',
+      nodes: [
+        { id: 'for', type: 'for' },
+        { id: 'return', type: 'for_return', body_id: 'body-1' },
+      ],
+      edges: [edge('for', 'item', 'return', 'output')],
+      expected: 'nodes.forLoopBodyIdentityMissing',
+    },
+    {
+      name: 'stale ForReturn identity',
+      nodes: [{ id: 'return', type: 'for_return', body_id: 'missing-for' }],
+      edges: [],
+      expected: 'nodes.forLoopBodyIdentityStale',
+    },
+    {
+      name: 'duplicate For identities',
+      nodes: [
+        { id: 'first', type: 'for', body_id: 'body-1' },
+        { id: 'second', type: 'for', body_id: 'body-1' },
+      ],
+      edges: [],
+      expected: 'nodes.forLoopBodyIdentityDuplicate',
+    },
+    {
+      name: 'duplicate ForReturn identities',
+      nodes: [
+        { id: 'first', type: 'for_return', body_id: 'body-1' },
+        { id: 'second', type: 'for_return', body_id: 'body-1' },
+      ],
+      edges: [],
+      expected: 'nodes.forLoopBodyIdentityDuplicate',
+    },
+    {
+      name: 'mismatched identities',
+      nodes: [
+        { id: 'for', type: 'for', body_id: 'body-1' },
+        { id: 'return', type: 'for_return', body_id: 'body-2' },
+      ],
+      edges: [edge('for', 'item', 'return', 'output')],
+      expected: 'nodes.forLoopBodyIdentityMismatch',
+    },
+  ])('rejects $name', ({ nodes, edges, expected }) => {
+    expect(validateForLoopGraph(buildGraph(nodes, edges))).toBe(expected);
   });
 
   it.each([

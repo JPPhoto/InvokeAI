@@ -4,7 +4,7 @@ from typing import Any, Optional, TypeVar
 from pydantic import BaseModel, Field
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput, invocation, invocation_output
-from invokeai.app.invocations.fields import InputField, OutputField, OutputScope, UIType
+from invokeai.app.invocations.fields import Input, InputField, OutputField, OutputScope, UIType
 from invokeai.app.services.shared.invocation_context import InvocationContext
 
 T = TypeVar("T")
@@ -115,7 +115,7 @@ class ForInvocationOutput(BaseInvocationOutput):
     )
 
 
-@invocation("for", version="1.0.0")
+@invocation("for", version="1.1.0")
 class ForInvocation(BaseInvocation):
     collection: list[Any] = InputField(
         description="The list of items to iterate over",
@@ -125,6 +125,12 @@ class ForInvocation(BaseInvocation):
     state: Optional[LoopState] = InputField(
         default=None,
         description="Optional initial loop state",
+    )
+    body_id: Optional[str] = InputField(
+        default=None,
+        description="Stable identity shared by this For and its matching ForReturn",
+        input=Input.Direct,
+        ui_hidden=True,
     )
     index: int = InputField(
         description="The internal iteration index for a prepared For execution node",
@@ -162,7 +168,7 @@ class ForReturnInvocationOutput(BaseInvocationOutput):
     )
 
 
-@invocation("for_return", version="1.0.0")
+@invocation("for_return", version="1.1.0")
 class ForReturnInvocation(BaseInvocation):
     output: Optional[Any] = InputField(
         default=None,
@@ -172,6 +178,12 @@ class ForReturnInvocation(BaseInvocation):
     state: Optional[LoopState] = InputField(
         default=None,
         description="The state to pass to the next loop iteration",
+    )
+    body_id: Optional[str] = InputField(
+        default=None,
+        description="Stable identity shared by this ForReturn and its matching For",
+        input=Input.Direct,
+        ui_hidden=True,
     )
 
     def invoke(self, context: InvocationContext) -> ForReturnInvocationOutput:
