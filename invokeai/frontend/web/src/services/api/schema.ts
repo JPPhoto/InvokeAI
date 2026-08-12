@@ -14745,9 +14745,17 @@ export type components = {
             };
             /**
              * Finalized Loop Nodes
-             * @description The set of loop source nodes whose final outputs have been materialized
+             * @description Legacy set of top-level loop source nodes whose final outputs have been materialized
              */
             finalized_loop_nodes: string[];
+            /**
+             * Finalized Loop Contexts
+             * @description The finalized loop source and parent iteration contexts
+             */
+            finalized_loop_contexts?: [
+                string,
+                number[]
+            ][];
             /**
              * Prepared Iteration Paths
              * @description The iteration coordinates of each prepared execution node

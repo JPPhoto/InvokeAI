@@ -699,6 +699,76 @@ def test_graph_for_output_collection_is_scoped_to_parent_iterator_context():
     ]
 
 
+def test_graph_for_output_collection_preserves_multiple_items_per_parent_iterator_context():
+    graph = Graph()
+    graph.add_node(NestedAnyCollectionTestInvocation(id="nested", collection=[["alpha", "beta"], ["gamma"]]))
+    graph.add_node(IterateInvocation(id="outer_iterate"))
+    graph.add_node(ForInvocation(id="for"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("nested", "collection", "outer_iterate", "collection"))
+    graph.add_edge(create_edge("outer_iterate", "item", "for", "collection"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "collect", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+    collect_exec_ids = sorted(
+        (
+            exec_node_id
+            for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+            if source_node_id == "collect"
+        ),
+        key=state._get_iteration_path,
+    )
+
+    assert [state._get_iteration_path(exec_node_id) for exec_node_id in collect_exec_ids] == [(0,), (1,)]
+    assert [state.results[exec_node_id].collection for exec_node_id in collect_exec_ids] == [
+        [["alpha", "beta"]],
+        [["gamma"]],
+    ]
+
+
+def test_graph_for_does_not_release_final_outputs_until_each_parent_context_finishes():
+    graph = Graph()
+    graph.add_node(NestedAnyCollectionTestInvocation(id="nested", collection=[["alpha"], ["beta", "gamma"]]))
+    graph.add_node(IterateInvocation(id="outer_iterate"))
+    graph.add_node(ForInvocation(id="for"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("nested", "collection", "outer_iterate", "collection"))
+    graph.add_edge(create_edge("outer_iterate", "item", "for", "collection"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "collect", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    while len(state.finalized_loop_contexts) < 1:
+        invocation, output = invoke_next(state)
+        assert invocation is not None
+        assert output is not None
+
+    assert len(state.finalized_loop_contexts) == 1
+    assert "collect" not in state.source_prepared_mapping
+
+    resumed = TypeAdapter(GraphExecutionState).validate_json(state.model_dump_json(warnings=False), strict=False)
+    assert resumed.finalized_loop_contexts == state.finalized_loop_contexts
+    assert "collect" not in resumed.source_prepared_mapping
+
+    execute_all_nodes(resumed)
+    collect_exec_ids = sorted(
+        (
+            exec_node_id
+            for exec_node_id, source_node_id in resumed.prepared_source_mapping.items()
+            if source_node_id == "collect"
+        ),
+        key=resumed._get_iteration_path,
+    )
+    assert [resumed.results[exec_node_id].collection for exec_node_id in collect_exec_ids] == [
+        [["alpha"]],
+        [["beta", "gamma"]],
+    ]
+
+
 def test_graph_for_final_state_is_scoped_to_parent_iterator_context():
     graph = Graph()
     graph.add_node(NestedAnyCollectionTestInvocation(id="nested", collection=[["alpha"], ["beta"]]))
@@ -823,6 +893,66 @@ def test_graph_for_empty_collection_preserves_connected_initial_state():
 
     assert state.results[after_exec_id].value == ([], LoopState(values={"initial": True}))
     assert state.is_complete()
+
+
+def test_graph_for_independent_empty_and_nonempty_final_outputs_join_correctly():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="empty_for", collection=[]))
+    graph.add_node(ForInvocation(id="nonempty_for", collection=["alpha", "beta"]))
+    graph.add_node(ForReturnInvocation(id="empty_return"))
+    graph.add_node(ForReturnInvocation(id="nonempty_return"))
+    graph.add_node(TwoAnyTestInvocation(id="after"))
+    graph.add_edge(create_edge("empty_for", "item", "empty_return", "output"))
+    graph.add_edge(create_edge("nonempty_for", "item", "nonempty_return", "output"))
+    graph.add_edge(create_edge("empty_for", "output_collection", "after", "first"))
+    graph.add_edge(create_edge("nonempty_for", "output_collection", "after", "second"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+
+    assert state.results[after_exec_id].value == ([], ["alpha", "beta"])
+    assert state.is_complete()
+
+
+def test_graph_for_nested_parent_context_survives_state_round_trip():
+    graph = Graph()
+    graph.add_node(NestedAnyCollectionTestInvocation(id="nested", collection=[["alpha", "beta"], ["gamma"]]))
+    graph.add_node(IterateInvocation(id="outer_iterate"))
+    graph.add_node(ForInvocation(id="for"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("nested", "collection", "outer_iterate", "collection"))
+    graph.add_edge(create_edge("outer_iterate", "item", "for", "collection"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "collect", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    for _ in range(5):
+        invocation, output = invoke_next(state)
+        assert invocation is not None
+        assert output is not None
+
+    resumed = TypeAdapter(GraphExecutionState).validate_json(state.model_dump_json(warnings=False), strict=False)
+    execute_all_nodes(resumed)
+    collect_exec_ids = sorted(
+        (
+            exec_node_id
+            for exec_node_id, source_node_id in resumed.prepared_source_mapping.items()
+            if source_node_id == "collect"
+        ),
+        key=resumed._get_iteration_path,
+    )
+
+    assert [resumed._get_iteration_path(exec_node_id) for exec_node_id in collect_exec_ids] == [(0,), (1,)]
+    assert [resumed.results[exec_node_id].collection for exec_node_id in collect_exec_ids] == [
+        [["alpha", "beta"]],
+        [["gamma"]],
+    ]
 
 
 def test_graph_for_empty_and_nonempty_parent_iterator_contexts_both_finalize():

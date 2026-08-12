@@ -511,13 +511,15 @@ class _ExecutionMaterializer:
         return new_edges
 
     def _has_unmaterializable_for_final_input(self, node_id: str) -> bool:
+        final_for_source_ids = set()
         for edge in self._state.graph._get_input_edges(node_id):
             source_node = self._state.graph.get_node(edge.source.node_id)
             if not isinstance(source_node, ForInvocation):
                 continue
             if get_output_field_scope(source_node, edge.source.field) == OutputScope.Final:
-                return edge.source.node_id not in self._state.finalized_loop_nodes
-        return False
+                final_for_source_ids.add(edge.source.node_id)
+
+        return any(not self._state._all_for_contexts_finalized(source_for_id) for source_for_id in final_for_source_ids)
 
     def _create_execution_node_copy(self, node: BaseInvocation, node_id: str, iteration_index: int) -> BaseInvocation:
         new_node = node.model_copy(deep=True)
@@ -554,7 +556,7 @@ class _ExecutionMaterializer:
         new_edges = self._build_execution_edges(source_for_id, iteration_node_map)
         iteration_path = self._get_known_iteration_path(-1, iteration_node_map)
         if iteration_path is not None:
-            self._state._prepared_registry().set_iteration_path(new_node.id, (*iteration_path, -1))
+            self._state._prepared_registry().set_iteration_path(new_node.id, iteration_path)
         self._attach_execution_edges(new_node.id, new_edges)
         self._state._runtime().prepare_inputs(new_node)
 
@@ -576,8 +578,22 @@ class _ExecutionMaterializer:
         return new_node.id
 
     def _mark_empty_for_complete(self, source_for_id: str) -> None:
+        prepared_for_ids = [
+            prepared_id
+            for prepared_id in self._state._prepared_registry().get_prepared_ids(source_for_id)
+            if isinstance(self._state.execution_graph.get_node(prepared_id), ForInvocation)
+            and self._state.execution_graph.get_node(prepared_id).index == -1
+        ]
+        if not prepared_for_ids:
+            self._state.finalized_loop_contexts.add((source_for_id, ()))
+            self._state.finalized_loop_nodes.add(source_for_id)
+        for prepared_for_id in prepared_for_ids:
+            self._state._mark_loop_context_finalized(source_for_id, prepared_for_id)
+
+        if not self._state._all_for_contexts_finalized(source_for_id):
+            return
+
         self._mark_source_node_executed(source_for_id)
-        self._state.finalized_loop_nodes.add(source_for_id)
 
         body_path_to_return = self._state.graph._get_for_body_path_to_return(
             source_for_id, self._state.graph.nx_graph_flat()
@@ -593,6 +609,7 @@ class _ExecutionMaterializer:
         iteration_index: int,
         collection: list[Any],
         state: "LoopState",
+        iteration_path: tuple[int, ...],
     ) -> str:
         node = self._state.graph.get_node(source_for_id)
         if not isinstance(node, ForInvocation):
@@ -602,6 +619,7 @@ class _ExecutionMaterializer:
         assert isinstance(new_node, ForInvocation)
         new_node.collection = copydeep(collection)
         new_node.state = copydeep(state)
+        self._state._prepared_registry().set_iteration_path(new_node.id, iteration_path)
         self._initialize_execution_node(new_node.id)
         return new_node.id
 
@@ -644,6 +662,9 @@ class _ExecutionMaterializer:
 
             new_node = self._create_execution_node_copy(node, source_node_id, -1)
             source_to_prepared[source_node_id] = new_node.id
+            self._state._prepared_registry().set_iteration_path(
+                new_node.id, self._state._get_iteration_path(prepared_for_id)
+            )
             self._state.executed.discard(source_node_id)
             attached_edges = self._attach_execution_edges(new_node.id, new_edges)
             self._initialize_execution_node(new_node.id, attached_edges)
@@ -674,6 +695,9 @@ class _ExecutionMaterializer:
     def _get_collect_iteration_group_key(self, edge: Edge) -> tuple[int, ...]:
         path = self._state._get_iteration_path(edge.source.node_id)
         if edge.destination.field == ITEM_FIELD:
+            source_node = self._state.execution_graph.get_node(edge.source.node_id)
+            if isinstance(source_node, ForInvocation) and source_node.index == -1:
+                return path
             return path[:-1]
         return path
 
@@ -694,7 +718,7 @@ class _ExecutionMaterializer:
 
         final_nodes_by_parent_path: dict[tuple[int, ...], str] = {}
         for prepared_id in prepared_nodes:
-            parent_path = self._state._get_iteration_path(prepared_id)[:-1]
+            parent_path = self._state._get_for_parent_iteration_path(prepared_id)
             previous_id = final_nodes_by_parent_path.get(parent_path)
             if previous_id is None:
                 final_nodes_by_parent_path[parent_path] = prepared_id
@@ -1221,7 +1245,7 @@ class _ExecutionScheduler:
     def _get_ordered_for_return_outputs(
         self, for_exec_node_id: str, source_return_id: str
     ) -> list["ForReturnInvocationOutput"]:
-        parent_iteration_path = self._state._get_iteration_path(for_exec_node_id)[:-1]
+        parent_iteration_path = self._state._get_for_parent_iteration_path(for_exec_node_id)
         prepared_return_ids = self._state._prepared_registry().get_prepared_ids(source_return_id)
         prepared_return_ids = [
             prepared_return_id
@@ -1249,7 +1273,7 @@ class _ExecutionScheduler:
         return_outputs = self._get_ordered_for_return_outputs(for_exec_node_id, source_return_id)
         for_output.output_collection = [output.output for output in return_outputs if output.output is not None]
         for_output.final_state = self._get_loop_state_for_next_iteration(for_exec_node_id, return_output)
-        self._state.finalized_loop_nodes.add(source_for_id)
+        self._state._mark_loop_context_finalized(source_for_id, for_exec_node_id)
 
     def _try_schedule_next_for_iteration(self, exec_node_id: str, output: BaseInvocationOutput) -> None:
         if not isinstance(output, ForReturnInvocationOutput):
@@ -1276,12 +1300,14 @@ class _ExecutionScheduler:
             return
 
         next_state = self._get_loop_state_for_next_iteration(for_exec_node_id, output)
+        parent_iteration_path = self._state._get_for_parent_iteration_path(for_exec_node_id)
 
         next_for_id = self._state._materializer().create_for_iteration(
             source_for_id=source_for_id,
             iteration_index=next_index,
             collection=for_node.collection,
             state=next_state,
+            iteration_path=(*parent_iteration_path, next_index),
         )
         self._state.executed.discard(source_for_id)
         self._state._materializer().create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=next_for_id)
@@ -2926,7 +2952,11 @@ class GraphExecutionState(BaseModel):
         default_factory=dict,
     )
     finalized_loop_nodes: set[str] = Field(
-        description="The set of loop source nodes whose final outputs have been materialized",
+        description="Legacy set of top-level loop source nodes whose final outputs have been materialized",
+        default_factory=set,
+    )
+    finalized_loop_contexts: set[tuple[str, tuple[int, ...]]] = Field(
+        description="The finalized loop source and parent iteration contexts",
         default_factory=set,
     )
     prepared_iteration_paths: dict[str, tuple[int, ...]] = Field(
@@ -2994,6 +3024,40 @@ class GraphExecutionState(BaseModel):
 
     def _get_iteration_path(self, exec_node_id: str) -> tuple[int, ...]:
         return self._runtime().get_iteration_path(exec_node_id)
+
+    def _get_for_parent_iteration_path(self, exec_node_id: str) -> tuple[int, ...]:
+        iteration_path = self._get_iteration_path(exec_node_id)
+        node = self.execution_graph.get_node(exec_node_id)
+        if isinstance(node, ForInvocation) and node.index == -1:
+            return iteration_path
+        return iteration_path[:-1]
+
+    def _mark_loop_context_finalized(self, source_for_id: str, prepared_for_id: str) -> None:
+        parent_iteration_path = self._get_for_parent_iteration_path(prepared_for_id)
+        self.finalized_loop_contexts.add((source_for_id, parent_iteration_path))
+        if parent_iteration_path == ():
+            self.finalized_loop_nodes.add(source_for_id)
+
+    def _get_for_parent_iteration_paths(self, source_for_id: str) -> set[tuple[int, ...]]:
+        return {
+            self._get_for_parent_iteration_path(prepared_for_id)
+            for prepared_for_id in self._prepared_registry().get_prepared_ids(source_for_id)
+            if isinstance(self.execution_graph.get_node(prepared_for_id), ForInvocation)
+        }
+
+    def _is_loop_context_finalized(self, source_for_id: str, parent_iteration_path: tuple[int, ...]) -> bool:
+        return (source_for_id, parent_iteration_path) in self.finalized_loop_contexts or (
+            parent_iteration_path == () and source_for_id in self.finalized_loop_nodes
+        )
+
+    def _all_for_contexts_finalized(self, source_for_id: str) -> bool:
+        parent_iteration_paths = self._get_for_parent_iteration_paths(source_for_id)
+        if not parent_iteration_paths:
+            return source_for_id in self.finalized_loop_nodes
+        return all(
+            self._is_loop_context_finalized(source_for_id, parent_iteration_path)
+            for parent_iteration_path in parent_iteration_paths
+        )
 
     def _queue_for(self, cls_name: str) -> Deque[str]:
         return self._scheduler().queue_for(cls_name)

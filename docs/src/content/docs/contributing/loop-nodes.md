@@ -432,8 +432,10 @@ Downstream nodes after the loop receive data through normal edges from the final
 - `For.output_collection`
 - `For.final_state`
 
-Those downstream nodes become ready only after the final prepared execution node for the loop is complete. They should
-not depend on or see per-iteration prepared outputs directly unless they are part of the loop body.
+Those downstream nodes become ready only after the final prepared execution node for every active parent context is
+complete. The scheduler records completion independently for each parent context, then materializes after-loop nodes
+for those contexts together. They should not depend on or see per-iteration prepared outputs directly unless they are
+part of the loop body.
 
 During incremental implementation, final-scoped `For` outputs may exist in the schema before the runtime final prepared
 node exists. In that state, edges from `For.output_collection` and `For.final_state` must not be materialized from
@@ -449,8 +451,9 @@ values.
 This applies even when earlier iterations completed successfully. A failed body node or failed `ForReturn` terminates
 the execution state without releasing the loop's final-scoped outputs. An empty collection is different: it is a
 successful loop completion with no body iterations, so it releases an empty `output_collection` and the hydrated initial
-state. When `For` is under an outer iterator, each existing parent context finalizes independently; if the outer iterator
-has no contexts, the inner `For` produces no per-context final output.
+state. When `For` is under an outer iterator, each existing parent context finalizes independently, but after-loop nodes
+wait until all active parent contexts have final outputs. If the outer iterator has no contexts, the inner `For` produces
+no per-context final output and downstream collection behavior remains empty.
 
 ### 7. Ordering
 
@@ -494,8 +497,10 @@ The exact model shape may differ, but the runtime needs enough durable state to 
 
 The current branch persists this through existing `GraphExecutionState` fields: the materialized execution graph,
 executed node ids, results, prepared-source mappings, source-prepared mappings, indegrees, and finalized loop source
-ids. Runtime-only queues and prepared metadata are rebuilt during model rehydration. Tests cover resuming a stateful
-`For` after the prepared `For` node, after a body state helper, and after `ForReturn`.
+contexts. A finalized context is keyed by the `For` source node and its parent iteration path. Empty-loop final outputs
+use the parent path directly; they do not create a synthetic `-1` path component. Runtime-only queues and prepared
+metadata are rebuilt during model rehydration. Tests cover resuming a stateful `For` after the prepared `For` node,
+after a body state helper, after `ForReturn`, and across parent iterator contexts.
 
 ### 9. Caching
 
