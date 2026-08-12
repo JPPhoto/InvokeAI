@@ -119,6 +119,23 @@ def test_graph_validates_for_boundary_pair_with_body_identity():
     g.validate_self()
 
 
+def test_graph_validates_identity_bearing_nested_for_boundary_pair():
+    g = Graph()
+    g.add_node(ForInvocation(id="outer", collection=[["a"]], body_id="outer-body"))
+    g.add_node(AnyTypeTestInvocation(id="inner_collection"))
+    g.add_node(ForInvocation(id="inner", body_id="inner-body"))
+    g.add_node(AnyTypeTestInvocation(id="inner_body"))
+    g.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    g.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    g.add_edge(create_edge("outer", "item", "inner_collection", "value"))
+    g.add_edge(create_edge("inner_collection", "value", "inner", "collection"))
+    g.add_edge(create_edge("inner", "item", "inner_body", "value"))
+    g.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
+    g.add_edge(create_edge("inner", "output_collection", "outer_return", "output"))
+
+    g.validate_self()
+
+
 def test_for_body_path_resolution_uses_body_identity_for_ambiguous_reachable_returns():
     g = Graph()
     loop = ForInvocation(id="for", collection=["a"], body_id="outer-body")

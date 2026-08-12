@@ -631,6 +631,11 @@ class _ExecutionMaterializer:
             return self._create_nested_iterate_body_iteration(
                 source_for_id, prepared_for_id, graph, execution_graph, nested_body
             )
+        nested_for_body = self._state.graph._get_supported_for_nested_for_body(source_for_id, graph)
+        if nested_for_body is not None:
+            return self._create_nested_for_body_iteration(
+                source_for_id, prepared_for_id, graph, execution_graph, nested_for_body
+            )
 
         body_path_to_return = self._state.graph._get_for_body_path_to_return(source_for_id, graph)
         if body_path_to_return is None:
@@ -679,6 +684,179 @@ class _ExecutionMaterializer:
                 prepared_return_id = new_node.id
 
         return prepared_return_id
+
+    def _is_deferred_nested_for_return(self, node_id: str, graph: nx.DiGraph) -> bool:
+        return any(
+            (nested_body := self._state.graph._get_supported_for_nested_for_body(source_for_id, graph)) is not None
+            and nested_body[1] == node_id
+            for source_for_id, source_node in self._state.graph.nodes.items()
+            if isinstance(source_node, ForInvocation)
+        )
+
+    def create_nested_for_return(self, inner_for_id: str, prepared_inner_for_id: str) -> Optional[str]:
+        graph = self._state.graph.nx_graph_flat()
+        inner_iteration_path = self._state._get_iteration_path(prepared_inner_for_id)
+        outer_for_id: Optional[str] = None
+        nested_body: Optional[tuple[set[str], str, str, str]] = None
+        for source_for_id, source_node in self._state.graph.nodes.items():
+            if not isinstance(source_node, ForInvocation):
+                continue
+            candidate = self._state.graph._get_supported_for_nested_for_body(source_for_id, graph)
+            if candidate is not None and candidate[2] == inner_for_id:
+                outer_for_id = source_for_id
+                nested_body = candidate
+                break
+        if outer_for_id is None or nested_body is None:
+            return None
+
+        prepared_inner_for = self._state.execution_graph.get_node(prepared_inner_for_id)
+        outer_iteration_path = (
+            inner_iteration_path
+            if isinstance(prepared_inner_for, ForInvocation) and prepared_inner_for.index == -1
+            else inner_iteration_path[:-1]
+        )
+        prepared_outer_for_id = next(
+            (
+                prepared_id
+                for prepared_id in self._state._prepared_registry().get_prepared_ids(outer_for_id)
+                if self._state._get_iteration_path(prepared_id) == outer_iteration_path
+            ),
+            None,
+        )
+        if prepared_outer_for_id is None:
+            raise RuntimeError("Unable to rematerialize nested ForReturn: owning outer For is unavailable")
+
+        source_return_id = nested_body[1]
+        self._state.executed.discard(source_return_id)
+        return_edges: list[Edge] = []
+        for edge in self._state.graph._get_input_edges(source_return_id):
+            if edge.destination.field == "output":
+                prepared_source_id = prepared_inner_for_id
+                source_field = "output_collection"
+            elif edge.destination.field == "state":
+                prepared_source_id = prepared_outer_for_id
+                source_field = edge.source.field
+            else:
+                raise RuntimeError(f"Unable to rematerialize nested ForReturn input {edge}")
+            return_edges.append(
+                Edge(
+                    source=EdgeConnection(node_id=prepared_source_id, field=source_field),
+                    destination=EdgeConnection(node_id="", field=edge.destination.field),
+                )
+            )
+
+        prepared_return_node = self._create_execution_node_copy(
+            self._state.graph.get_node(source_return_id), source_return_id, -1
+        )
+        self._state._prepared_registry().set_iteration_path(prepared_return_node.id, outer_iteration_path)
+        attached_return_edges = self._attach_execution_edges(prepared_return_node.id, return_edges)
+        self._initialize_execution_node(prepared_return_node.id, attached_return_edges)
+        return prepared_return_node.id
+
+    def _create_nested_for_body_iteration(
+        self,
+        source_for_id: str,
+        prepared_for_id: str,
+        graph: nx.DiGraph,
+        execution_graph: nx.DiGraph,
+        nested_body: tuple[set[str], str, str, str],
+    ) -> Optional[str]:
+        body_path_nodes, source_return_id, source_inner_for_id, _source_inner_return_id = nested_body
+        prepared_for_node = self._state.execution_graph.get_node(prepared_for_id)
+        outer_iteration_path = self._state._get_iteration_path(prepared_for_id)
+        if isinstance(prepared_for_node, ForInvocation) and prepared_for_node.index >= 0:
+            outer_iteration_path = (
+                *self._state._get_for_parent_iteration_path(prepared_for_id),
+                prepared_for_node.index,
+            )
+
+        source_to_prepared: dict[str, str] = {source_for_id: prepared_for_id}
+        for source_node_id in nx.topological_sort(graph):
+            if source_node_id not in body_path_nodes or source_node_id in {
+                source_inner_for_id,
+                source_return_id,
+            }:
+                continue
+            if not nx.has_path(graph, source_node_id, source_inner_for_id):
+                continue
+
+            existing_prepared_ids = [
+                prepared_id
+                for prepared_id in self._state._prepared_registry().get_prepared_ids(source_node_id)
+                if self._state._get_iteration_path(prepared_id) == outer_iteration_path
+            ]
+            if len(existing_prepared_ids) == 1:
+                source_to_prepared[source_node_id] = existing_prepared_ids[0]
+                continue
+
+            new_edges: list[Edge] = []
+            for edge in self._state.graph._get_input_edges(source_node_id):
+                prepared_source_id = source_to_prepared.get(edge.source.node_id)
+                if prepared_source_id is None:
+                    prepared_source_id = self.get_iteration_node(
+                        edge.source.node_id, graph, execution_graph, [prepared_for_id]
+                    )
+                if prepared_source_id is None:
+                    raise RuntimeError(
+                        f"Unable to rematerialize nested For input {edge}: no prepared source node is available"
+                    )
+                new_edges.append(
+                    Edge(
+                        source=EdgeConnection(node_id=prepared_source_id, field=edge.source.field),
+                        destination=EdgeConnection(node_id="", field=edge.destination.field),
+                    )
+                )
+
+            new_node = self._create_execution_node_copy(self._state.graph.get_node(source_node_id), source_node_id, -1)
+            source_to_prepared[source_node_id] = new_node.id
+            self._state._prepared_registry().set_iteration_path(new_node.id, outer_iteration_path)
+            self._state.executed.discard(source_node_id)
+            attached_edges = self._attach_execution_edges(new_node.id, new_edges)
+            self._initialize_execution_node(new_node.id, attached_edges)
+
+        inner_input_map: list[tuple[str, str]] = []
+        for edge in self._state.graph._get_input_edges(source_inner_for_id):
+            prepared_source_id = source_to_prepared.get(edge.source.node_id)
+            if prepared_source_id is None:
+                prepared_source_id = self.get_iteration_node(
+                    edge.source.node_id, graph, execution_graph, [prepared_for_id]
+                )
+            if prepared_source_id is None:
+                raise RuntimeError(
+                    f"Unable to rematerialize nested For input {edge}: no prepared source node is available"
+                )
+            inner_input_map.append((edge.source.node_id, prepared_source_id))
+
+        if any(prepared_source_id not in self._state.results for _, prepared_source_id in inner_input_map):
+            return None
+
+        for body_node_id in body_path_nodes:
+            if body_node_id == source_inner_for_id or not nx.has_path(graph, body_node_id, source_inner_for_id):
+                self._state.executed.discard(body_node_id)
+        self._state.executed.discard(source_return_id)
+        self._state.executed.discard(source_inner_for_id)
+
+        inner_prepared_ids = self.create_execution_node(
+            source_inner_for_id, inner_input_map, iteration_path=outer_iteration_path
+        )
+        if not inner_prepared_ids:
+            self._mark_source_node_empty(source_inner_for_id)
+        elif all(
+            isinstance(self._state.execution_graph.get_node(inner_id), ForInvocation)
+            and self._state.execution_graph.get_node(inner_id).index == -1
+            for inner_id in inner_prepared_ids
+        ):
+            self._mark_empty_for_complete(source_inner_for_id)
+            for inner_prepared_id in inner_prepared_ids:
+                self.create_nested_for_return(source_inner_for_id, inner_prepared_id)
+        else:
+            for inner_prepared_id in inner_prepared_ids:
+                self.create_for_body_iteration(
+                    source_for_id=source_inner_for_id,
+                    prepared_for_id=inner_prepared_id,
+                )
+
+        return None
 
     def _create_nested_iterate_body_iteration(
         self,
@@ -1160,7 +1338,7 @@ class _ExecutionMaterializer:
             new_node_iteration_path = iteration_path
             if new_node_iteration_path is None:
                 new_node_iteration_path = self._get_known_iteration_path(iteration_index, iteration_node_map)
-            elif isinstance(node, IterateInvocation):
+            elif isinstance(node, (ForInvocation, IterateInvocation)):
                 new_node_iteration_path += (iteration_index,)
             if new_node_iteration_path is not None:
                 self._state._prepared_registry().set_iteration_path(new_node.id, new_node_iteration_path)
@@ -1297,6 +1475,10 @@ class _ExecutionMaterializer:
                 for node_id in nx.topological_sort(g)
                 if node_id not in self._state.source_prepared_mapping
                 and node_id not in self._state.executed
+                and not (
+                    isinstance(self._state.graph.get_node(node_id), ForReturnInvocation)
+                    and self._is_deferred_nested_for_return(node_id, g)
+                )
                 and not self._has_unmaterializable_for_final_input(node_id)
                 and (
                     not isinstance(self._state.graph.get_node(node_id), (ForInvocation, IterateInvocation))
@@ -1407,6 +1589,32 @@ class _ExecutionScheduler:
 
     def _get_for_parent(self, exec_node_id: str) -> Optional[str]:
         execution_graph = self._state.execution_graph.nx_graph_flat()
+
+        source_return_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
+        iteration_path = self._state._get_iteration_path(exec_node_id)
+        source_graph = self._state.graph.nx_graph_flat()
+        for source_for_id, source_for_node in self._state.graph.nodes.items():
+            if not isinstance(source_for_node, ForInvocation):
+                continue
+            body_path_to_return = self._state.graph._get_for_body_path_to_return(source_for_id, source_graph)
+            if body_path_to_return is None or body_path_to_return[1] != source_return_id:
+                continue
+            matching_for_ids = [
+                prepared_for_id
+                for prepared_for_id in self._state._prepared_registry().get_prepared_ids(source_for_id)
+                if isinstance(self._state.execution_graph.get_node(prepared_for_id), ForInvocation)
+                and iteration_path[: len(self._state._get_iteration_path(prepared_for_id))]
+                == self._state._get_iteration_path(prepared_for_id)
+            ]
+            if matching_for_ids:
+                return max(
+                    matching_for_ids,
+                    key=lambda prepared_for_id: (
+                        len(self._state._get_iteration_path(prepared_for_id)),
+                        self._state.execution_graph.get_node(prepared_for_id).index,
+                    ),
+                )
+
         for ancestor_id in nx.ancestors(execution_graph, exec_node_id):
             source_node = self._state.execution_graph.get_node(ancestor_id)
             if isinstance(source_node, ForInvocation):
@@ -1415,9 +1623,6 @@ class _ExecutionScheduler:
         # An empty nested Iterate has no item execution node, so its synthetic Collect and ForReturn have no
         # execution-graph edge back to their owning For. Recover ownership from the durable source boundary and
         # matching execution path so the outer loop can advance.
-        source_return_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
-        iteration_path = self._state._get_iteration_path(exec_node_id)
-        source_graph = self._state.graph.nx_graph_flat()
         for source_for_id, source_for_node in self._state.graph.nodes.items():
             if not isinstance(source_for_node, ForInvocation):
                 continue
@@ -1498,6 +1703,10 @@ class _ExecutionScheduler:
         next_index = for_node.index + 1
         if next_index >= len(for_node.collection):
             self._finalize_for_outputs(for_exec_node_id, source_for_id, source_return_id, output)
+            self._state._materializer().create_nested_for_return(
+                inner_for_id=source_for_id,
+                prepared_inner_for_id=for_exec_node_id,
+            )
             for_node.collection = []
             return
 
@@ -1522,10 +1731,17 @@ class _ExecutionScheduler:
             if not isinstance(source_node, ForInvocation):
                 continue
             nested_body = self._state.graph._get_supported_for_nested_iterate_body(source_for_id, graph)
-            if nested_body is None:
+            nested_for_body = self._state.graph._get_supported_for_nested_for_body(source_for_id, graph)
+            if nested_body is not None:
+                body_path_nodes, _return_id, iterate_id, _collect_id = nested_body
+                deferred_node_id = iterate_id
+            elif nested_for_body is not None:
+                body_path_nodes, _return_id, deferred_node_id, _inner_return_id = nested_for_body
+            else:
                 continue
-            body_path_nodes, _return_id, iterate_id, _collect_id = nested_body
-            if completed_source_id not in body_path_nodes or not nx.has_path(graph, completed_source_id, iterate_id):
+            if completed_source_id not in body_path_nodes or not nx.has_path(
+                graph, completed_source_id, deferred_node_id
+            ):
                 continue
             for prepared_for_id in self._state._prepared_registry().get_prepared_ids(source_for_id):
                 prepared_for_node = self._state.execution_graph.get_node(prepared_for_id)
@@ -1541,7 +1757,7 @@ class _ExecutionScheduler:
                     (iterate_path := self._state._get_iteration_path(prepared_iterate_id))[: len(prepared_for_path)]
                     == prepared_for_path
                     and len(iterate_path) > len(prepared_for_path)
-                    for prepared_iterate_id in self._state._prepared_registry().get_prepared_ids(iterate_id)
+                    for prepared_iterate_id in self._state._prepared_registry().get_prepared_ids(deferred_node_id)
                 ):
                     continue
                 self._state._materializer().create_for_body_iteration(
@@ -2493,12 +2709,28 @@ class Graph(BaseModel):
         matching_return_by_for_id: dict[str, str] = {}
         matching_for_ids_by_return_id: dict[str, list[str]] = {}
         for node in for_nodes:
-            body_path_to_return = self._get_for_body_path_to_return(node.id, graph, use_body_identity=False)
-            if body_path_to_return is None:
-                continue
-            _body_path_nodes, return_node_id = body_path_to_return
-            matching_return_by_for_id[node.id] = return_node_id
-            matching_for_ids_by_return_id.setdefault(return_node_id, []).append(node.id)
+            iteration_edges = self._get_for_iteration_output_edges(node.id)
+            reachable_return_ids = [
+                body_node_id
+                for body_node_id in self._get_for_reachable_body_nodes(iteration_edges, graph)
+                if isinstance(self.get_node(body_node_id), ForReturnInvocation)
+            ]
+            if node.body_id:
+                matching_return_ids = [
+                    return_id for return_id in reachable_return_ids if self.get_node(return_id).body_id == node.body_id
+                ]
+                if len(matching_return_ids) == 1:
+                    return_node_id = matching_return_ids[0]
+                elif len(reachable_return_ids) == 1:
+                    return_node_id = reachable_return_ids[0]
+                else:
+                    return_node_id = None
+            else:
+                return_node_id = reachable_return_ids[0] if len(reachable_return_ids) == 1 else None
+
+            if return_node_id is not None:
+                matching_return_by_for_id[node.id] = return_node_id
+                matching_for_ids_by_return_id.setdefault(return_node_id, []).append(node.id)
 
         for node in return_nodes:
             if not node.body_id:
@@ -2517,12 +2749,27 @@ class Graph(BaseModel):
                 raise InvalidEdgeError(
                     f"Stale For body identity '{node.body_id}' on ForReturn '{node.id}' has no matching For"
                 )
+            else:
+                raise InvalidEdgeError(
+                    f"For body identity mismatch: ForReturn '{node.id}' is not the structural return for body "
+                    f"identity '{node.body_id}'"
+                )
 
         for node in for_nodes:
             if not node.body_id:
                 continue
             return_node_id = matching_return_by_for_id.get(node.id)
             if return_node_id is None:
+                iteration_edges = self._get_for_iteration_output_edges(node.id)
+                reachable_return_ids = [
+                    body_node_id
+                    for body_node_id in self._get_for_reachable_body_nodes(iteration_edges, graph)
+                    if isinstance(self.get_node(body_node_id), ForReturnInvocation)
+                ]
+                if node.body_id and len(reachable_return_ids) > 1:
+                    raise InvalidEdgeError(
+                        f"For body identity mismatch: For '{node.id}' has no matching reachable ForReturn"
+                    )
                 continue
             matching_return = self.get_node(return_node_id)
             assert isinstance(matching_return, ForReturnInvocation)
@@ -2871,6 +3118,94 @@ class Graph(BaseModel):
 
         return body_path_nodes, return_node_id, iterate_node_id, collect_node_id
 
+    def _get_supported_for_nested_for_body(
+        self, node_id: str, graph: nx.DiGraph
+    ) -> tuple[set[str], str, str, str] | None:
+        """Returns the bounded nested For contract, if this For uses it.
+
+        The inner loop's final collection is the outer loop body's one output. The inner body therefore terminates at
+        its own ForReturn, while the outer body terminates at a second ForReturn fed by the inner For's final output.
+        """
+        outer_node = self.get_node(node_id)
+        if not isinstance(outer_node, ForInvocation) or not outer_node.body_id:
+            return None
+
+        iteration_edges = self._get_for_iteration_output_edges(node_id)
+        if len(iteration_edges) == 0:
+            return None
+        reachable_body_nodes = self._get_for_reachable_body_nodes(iteration_edges, graph)
+        reachable_return_ids = [
+            body_node_id
+            for body_node_id in reachable_body_nodes
+            if isinstance(self.get_node(body_node_id), ForReturnInvocation)
+        ]
+        outer_return_ids = [
+            return_id for return_id in reachable_return_ids if self.get_node(return_id).body_id == outer_node.body_id
+        ]
+        if len(outer_return_ids) != 1:
+            return None
+        outer_return_id = outer_return_ids[0]
+
+        nested_for_ids = [
+            body_node_id
+            for body_node_id in reachable_body_nodes
+            if isinstance(self.get_node(body_node_id), ForInvocation) and body_node_id != node_id
+        ]
+        if len(nested_for_ids) != 1:
+            return None
+        inner_for_id = nested_for_ids[0]
+        inner_for = self.get_node(inner_for_id)
+        assert isinstance(inner_for, ForInvocation)
+        if not inner_for.body_id:
+            return None
+
+        inner_body_path_to_return = self._get_for_body_path_to_return(inner_for_id, graph)
+        if inner_body_path_to_return is None:
+            return None
+        inner_body_path_nodes, inner_return_id = inner_body_path_to_return
+        if inner_return_id not in reachable_return_ids:
+            return None
+
+        if set(reachable_return_ids) != {outer_return_id, inner_return_id}:
+            return None
+        if any(
+            isinstance(self.get_node(body_node_id), (ForInvocation, IterateInvocation))
+            for body_node_id in inner_body_path_nodes
+        ):
+            return None
+
+        inner_collection_edges = self._get_input_edges(inner_for_id, COLLECTION_FIELD)
+        if len(inner_collection_edges) != 1:
+            return None
+        inner_collection_source_id = inner_collection_edges[0].source.node_id
+        if inner_collection_source_id != node_id and inner_collection_source_id not in reachable_body_nodes:
+            return None
+
+        outer_output_edges = self._get_input_edges(outer_return_id, "output")
+        if len(outer_output_edges) != 1 or (
+            outer_output_edges[0].source.node_id != inner_for_id
+            or outer_output_edges[0].source.field != "output_collection"
+        ):
+            return None
+        if any(
+            edge.destination.field != "output"
+            and (edge.destination.field != "state" or edge.source.node_id != node_id or edge.source.field != "state")
+            for edge in self._get_input_edges(outer_return_id)
+        ):
+            return None
+
+        outer_preparation_nodes = (reachable_body_nodes & nx.ancestors(graph, inner_for_id)) | {inner_for_id}
+        allowed_body_nodes = outer_preparation_nodes | inner_body_path_nodes | {outer_return_id}
+        if reachable_body_nodes != allowed_body_nodes:
+            return None
+
+        for body_node_id in allowed_body_nodes - {outer_return_id, inner_for_id}:
+            if body_node_id in inner_body_path_nodes:
+                continue
+            if not nx.has_path(graph, body_node_id, inner_for_id):
+                return None
+        return allowed_body_nodes, outer_return_id, inner_for_id, inner_return_id
+
     def _is_for_connection_valid(self, node_id: str) -> str | None:
         iteration_edges = self._get_for_iteration_output_edges(node_id)
         if len(iteration_edges) == 0:
@@ -2884,22 +3219,38 @@ class Graph(BaseModel):
             if isinstance(self.get_node(reachable_node_id), ForReturnInvocation)
         ]
 
-        if len(reachable_return_node_ids) != 1:
-            return "For loop body must expose exactly one matching ForReturn"
+        nested_for_node_ids = [
+            body_node_id
+            for body_node_id in reachable_body_nodes
+            if body_node_id != node_id and isinstance(self.get_node(body_node_id), ForInvocation)
+        ]
+        nested_body = self._get_supported_for_nested_for_body(node_id, graph) if nested_for_node_ids else None
+        if nested_for_node_ids and nested_body is None:
+            return "Nested For loops require one identity-bearing inner For with a matching ForReturn"
 
-        return_node_id = reachable_return_node_ids[0]
-        body_path_nodes = self._get_for_body_path_nodes(reachable_body_nodes, return_node_id, graph)
+        if nested_body is not None:
+            body_path_nodes, return_node_id, _inner_for_id, _inner_return_id = nested_body
+        else:
+            if len(reachable_return_node_ids) != 1:
+                return "For loop body must expose exactly one matching ForReturn"
+            return_node_id = reachable_return_node_ids[0]
+            if isinstance(loop_node := self.get_node(node_id), ForInvocation) and loop_node.body_id:
+                matching_return_node_ids = [
+                    return_id
+                    for return_id in reachable_return_node_ids
+                    if self.get_node(return_id).body_id == loop_node.body_id
+                ]
+                if len(matching_return_node_ids) != 1:
+                    return "For loop body must expose exactly one matching ForReturn"
+                return_node_id = matching_return_node_ids[0]
+            body_path_nodes = self._get_for_body_path_nodes(reachable_body_nodes, return_node_id, graph)
+
         unterminated_body_nodes = reachable_body_nodes - body_path_nodes
         if len(unterminated_body_nodes) > 0:
             return "For loop body paths must terminate at the matching ForReturn and not escape the loop body"
 
-        nested_for_node_ids = [
-            body_node_id
-            for body_node_id in body_path_nodes
-            if body_node_id != node_id and isinstance(self.get_node(body_node_id), ForInvocation)
-        ]
-        if len(nested_for_node_ids) > 0:
-            return "Nested For loops require runtime support for durable body identity metadata"
+        if nested_body is not None:
+            nested_for_node_ids = [nested_body[2]]
 
         if any(isinstance(self.get_node(body_node_id), IterateInvocation) for body_node_id in body_path_nodes):
             if self._get_supported_for_nested_iterate_body(node_id, graph) is None:
@@ -2933,7 +3284,7 @@ class Graph(BaseModel):
         for loop_node_id, loop_node in self.nodes.items():
             if not isinstance(loop_node, ForInvocation):
                 continue
-            body_path_to_return = self._get_for_body_path_to_return(loop_node_id, graph, use_body_identity=False)
+            body_path_to_return = self._get_for_body_path_to_return(loop_node_id, graph)
             if body_path_to_return is None:
                 continue
             body_path_nodes, return_node_id = body_path_to_return

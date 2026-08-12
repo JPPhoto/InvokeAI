@@ -48,6 +48,14 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
   const hasPath = (startId: string, targetId: string): boolean =>
     startId === targetId || walk([startId], outgoing).has(targetId);
 
+  const getBodyId = (node: unknown): string | undefined => {
+    if (!node || typeof node !== 'object') {
+      return undefined;
+    }
+    const bodyId = (node as { body_id?: unknown }).body_id;
+    return typeof bodyId === 'string' && bodyId.length > 0 ? bodyId : undefined;
+  };
+
   const supportsNestedIterateBody = (
     bodyPathNodeIds: Set<string>,
     iterateNodeIds: string[],
@@ -124,12 +132,131 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     return true;
   };
 
-  const getBodyId = (node: unknown): string | undefined => {
-    if (!node || typeof node !== 'object') {
-      return undefined;
+  const getSupportedNestedForBody = (
+    forId: string,
+    reachableBodyNodeIds: Set<string>,
+    reachableReturnIds: string[]
+  ): { bodyPathNodeIds: Set<string>; returnId: string; innerForId: string; innerReturnId: string } | null => {
+    const outerBodyId = getBodyId(nodes[forId]);
+    if (outerBodyId === undefined) {
+      return null;
     }
-    const bodyId = (node as { body_id?: unknown }).body_id;
-    return typeof bodyId === 'string' && bodyId.length > 0 ? bodyId : undefined;
+    const outerReturnIds = reachableReturnIds.filter((returnId) => getBodyId(nodes[returnId]) === outerBodyId);
+    if (outerReturnIds.length !== 1) {
+      return null;
+    }
+    const outerReturnId = outerReturnIds[0];
+    if (outerReturnId === undefined) {
+      return null;
+    }
+
+    const innerForIds = [...reachableBodyNodeIds].filter((nodeId) => nodes[nodeId]?.type === 'for');
+    if (innerForIds.length !== 1) {
+      return null;
+    }
+    const innerForId = innerForIds[0];
+    if (innerForId === undefined || getBodyId(nodes[innerForId]) === undefined) {
+      return null;
+    }
+
+    const innerIterationEdges = edges.filter(
+      (edge) => edge.source.node_id === innerForId && ITERATION_OUTPUT_FIELDS.has(edge.source.field)
+    );
+    if (innerIterationEdges.length === 0) {
+      return null;
+    }
+    const innerReachableBodyNodeIds = walk(
+      innerIterationEdges.map((edge) => edge.destination.node_id),
+      outgoing
+    );
+    const innerReachableReturnIds = [...innerReachableBodyNodeIds].filter(
+      (nodeId) => nodes[nodeId]?.type === 'for_return'
+    );
+    const innerBodyId = getBodyId(nodes[innerForId]);
+    const innerReturnIds = innerReachableReturnIds.filter((returnId) => getBodyId(nodes[returnId]) === innerBodyId);
+    if (innerReturnIds.length !== 1) {
+      return null;
+    }
+    const innerReturnId = innerReturnIds[0];
+    if (innerReturnId === undefined || !reachableReturnIds.includes(innerReturnId)) {
+      return null;
+    }
+    if (new Set(reachableReturnIds).size !== 2 || !reachableReturnIds.includes(outerReturnId)) {
+      return null;
+    }
+    if (
+      [...innerReachableBodyNodeIds].some(
+        (nodeId) => nodes[nodeId]?.type === 'for' || nodes[nodeId]?.type === 'iterate'
+      )
+    ) {
+      return null;
+    }
+
+    const innerCollectionEdges = edges.filter(
+      (edge) => edge.destination.node_id === innerForId && edge.destination.field === 'collection'
+    );
+    const innerCollectionSourceId = innerCollectionEdges[0]?.source.node_id;
+    if (
+      innerCollectionEdges.length !== 1 ||
+      innerCollectionSourceId === undefined ||
+      (innerCollectionSourceId !== forId && !reachableBodyNodeIds.has(innerCollectionSourceId))
+    ) {
+      return null;
+    }
+
+    const outerReturnOutputEdges = edges.filter(
+      (edge) => edge.destination.node_id === outerReturnId && edge.destination.field === 'output'
+    );
+    if (
+      outerReturnOutputEdges.length !== 1 ||
+      outerReturnOutputEdges[0]?.source.node_id !== innerForId ||
+      outerReturnOutputEdges[0]?.source.field !== 'output_collection'
+    ) {
+      return null;
+    }
+    const unsupportedOuterReturnInput = edges.some(
+      (edge) =>
+        edge.destination.node_id === outerReturnId &&
+        edge.destination.field !== 'output' &&
+        (edge.destination.field !== 'state' || edge.source.node_id !== forId || edge.source.field !== 'state')
+    );
+    if (unsupportedOuterReturnInput) {
+      return null;
+    }
+
+    const innerReturnAncestors = walk([innerReturnId], incoming);
+    const innerBodyPathNodeIds = new Set(
+      [...innerReachableBodyNodeIds].filter((nodeId) => nodeId === innerReturnId || innerReturnAncestors.has(nodeId))
+    );
+    innerBodyPathNodeIds.add(innerReturnId);
+    const outerPreparationNodeIds = new Set(
+      [...reachableBodyNodeIds].filter((nodeId) => walk([innerForId], incoming).has(nodeId))
+    );
+    outerPreparationNodeIds.add(innerForId);
+    const bodyPathNodeIds = new Set([...outerPreparationNodeIds, ...innerBodyPathNodeIds, outerReturnId]);
+    if ([...reachableBodyNodeIds].some((nodeId) => !bodyPathNodeIds.has(nodeId))) {
+      return null;
+    }
+    for (const bodyNodeId of outerPreparationNodeIds) {
+      if (bodyNodeId === innerForId || innerBodyPathNodeIds.has(bodyNodeId)) {
+        continue;
+      }
+      if (!hasPath(bodyNodeId, innerForId)) {
+        return null;
+      }
+    }
+
+    const unsupportedInnerReturnInput = edges.some(
+      (edge) =>
+        edge.destination.node_id === innerReturnId &&
+        edge.destination.field !== 'output' &&
+        (edge.destination.field !== 'state' || edge.source.node_id !== innerForId || edge.source.field !== 'state')
+    );
+    if (unsupportedInnerReturnInput) {
+      return null;
+    }
+
+    return { bodyPathNodeIds, returnId: outerReturnId, innerForId, innerReturnId };
   };
 
   const forIdentityNodes = new Map<string, string[]>();
@@ -154,8 +281,10 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
         outgoing
       );
       const reachableReturnIds = [...reachableBodyNodeIds].filter((nodeId) => nodes[nodeId]?.type === 'for_return');
-      if (reachableReturnIds.length === 1) {
-        const returnId = reachableReturnIds[0];
+      const identityMatchingReturnIds =
+        bodyId === undefined ? [] : reachableReturnIds.filter((returnId) => getBodyId(nodes[returnId]) === bodyId);
+      const returnId = identityMatchingReturnIds.length === 1 ? identityMatchingReturnIds[0] : reachableReturnIds[0];
+      if (returnId !== undefined && (reachableReturnIds.length === 1 || identityMatchingReturnIds.length === 1)) {
         if (returnId !== undefined) {
           matchingReturnByForId.set(node.id, returnId);
           identityMatchingForIdsByReturnId.set(returnId, [
@@ -240,28 +369,38 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
       outgoing
     );
     const reachableReturnIds = [...reachableBodyNodeIds].filter((nodeId) => nodes[nodeId]?.type === 'for_return');
-    if (reachableReturnIds.length !== 1) {
+    const nestedForNodeIds = [...reachableBodyNodeIds].filter(
+      (nodeId) => nodeId !== node.id && nodes[nodeId]?.type === 'for'
+    );
+    const nestedBody =
+      nestedForNodeIds.length > 0 ? getSupportedNestedForBody(node.id, reachableBodyNodeIds, reachableReturnIds) : null;
+    if (nestedForNodeIds.length > 0 && nestedBody === null) {
+      return 'nodes.forLoopNestedUnsupported';
+    }
+
+    if (nestedBody === null && reachableReturnIds.length !== 1) {
       return 'nodes.forLoopReturnCount';
     }
 
-    const returnId = reachableReturnIds[0];
+    const returnId = nestedBody?.returnId ?? reachableReturnIds[0];
     if (returnId === undefined) {
       return 'nodes.forLoopReturnCount';
     }
     matchingForIdsByReturnId.set(returnId, [...(matchingForIdsByReturnId.get(returnId) ?? []), node.id]);
 
-    const returnAncestorIds = walk(incoming.get(returnId) ?? [], incoming);
-    const bodyPathNodeIds = new Set(
-      [...reachableBodyNodeIds].filter((nodeId) => nodeId === returnId || returnAncestorIds.has(nodeId))
-    );
-    bodyPathNodeIds.add(returnId);
+    const bodyPathNodeIds =
+      nestedBody?.bodyPathNodeIds ??
+      (() => {
+        const returnAncestorIds = walk(incoming.get(returnId) ?? [], incoming);
+        const path = new Set(
+          [...reachableBodyNodeIds].filter((nodeId) => nodeId === returnId || returnAncestorIds.has(nodeId))
+        );
+        path.add(returnId);
+        return path;
+      })();
 
     if ([...reachableBodyNodeIds].some((nodeId) => !bodyPathNodeIds.has(nodeId))) {
       return 'nodes.forLoopUnterminatedBody';
-    }
-
-    if ([...bodyPathNodeIds].some((nodeId) => nodeId !== node.id && nodes[nodeId]?.type === 'for')) {
-      return 'nodes.forLoopNestedUnsupported';
     }
 
     const iterateNodeIds = [...bodyPathNodeIds].filter((nodeId) => nodes[nodeId]?.type === 'iterate');

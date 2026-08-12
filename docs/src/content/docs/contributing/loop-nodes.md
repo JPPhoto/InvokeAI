@@ -61,7 +61,7 @@ Lessons from those branches:
 
 What is still not implemented:
 
-- Runtime support for nested `For` loops or shared loop body paths.
+- Runtime support for arbitrary nested `For` loops or shared loop body paths.
 - A structured visual region or subgraph affordance for the loop body boundary.
 - Early break or continue behavior.
 - Rich collection producer nodes designed specifically for loop sources.
@@ -96,6 +96,8 @@ Implemented on this branch:
 - Production-style `DefaultSessionProcessor` coverage with the actual SQLite session queue and registered event bus,
   including bounded nested `Iterate` success, cancellation, and body-failure cleanup.
 - SQLite session-queue coverage for persisting, reloading, and completing a partially executed stateful loop.
+- Runtime support for one identity-bearing nested `For` whose final collection feeds the outer `ForReturn`, including
+  multiple outer contexts and empty inner collections.
 
 ## Architectural Direction
 
@@ -201,15 +203,30 @@ Validation rules are shared by the backend and frontend:
 - duplicate identities on `For` nodes or on `ForReturn` nodes are rejected;
 - the two endpoints must carry the same identity.
 
-This slice establishes the serialized contract. Nested `For` execution and arbitrary shared body rematerialization remain
-rejected. A bounded internal `Iterate` is now supported only when one matching `Collect` collapses its item dimension
-before `ForReturn`; other internal iterator shapes remain rejected.
+This slice establishes the serialized contract. A bounded identity-bearing nested `For` is supported when one inner
+`For` produces the outer body output through its final collection; arbitrary nested or shared body rematerialization
+remains rejected. A bounded internal `Iterate` is supported only when one matching `Collect` collapses its item
+dimension before `ForReturn`; other internal iterator shapes remain rejected.
 
 The first runtime consumer of the identity is the body-path resolver used by materialization and empty-loop cleanup. An
 identity-bearing `For` selects the reachable `ForReturn` with the same `body_id`; an identity-free `For` retains the
 legacy exactly-one-reachable-return rule. This separates runtime ownership lookup from author-time validation. It does
-not yet permit multiple nested or shared body paths, because those still require composite execution contexts and
-independent output ownership.
+permits only the bounded nested shape described below. Multiple nested levels, shared body paths, and mixed nested loop
+types still require composite execution contexts and independent output ownership.
+
+The supported nested `For` shape is:
+
+```text
+For.outer.item -> preparation -> For.inner.collection
+For.inner.item -> inner body -> ForReturn.inner.output
+For.inner.output_collection -> ForReturn.outer.output
+For.outer.state -> ForReturn.outer.state (optional)
+```
+
+The inner and outer boundaries must carry distinct matching `body_id` values. The scheduler keeps both iteration
+dimensions in execution paths, defers the outer `ForReturn` until the inner loop finalizes, and creates one outer return
+per outer iteration. Empty inner collections still produce one empty outer result. Nested `For` failure stops the outer
+loop without releasing downstream final outputs.
 
 The supported internal iterator extension has this shape:
 
@@ -311,7 +328,8 @@ Semantics:
 - `state` becomes the next iteration's state when present.
 - If `state` is omitted, the previous state carries forward unchanged.
 
-The loop should require exactly one matching body return node in its body boundary for the first implementation.
+The loop should require exactly one matching body return node for each loop boundary. A bounded nested shape may have
+multiple reachable returns, but durable identities must select exactly one return for each `For`.
 Default return behavior can be added later, but it would make the boundary harder to validate.
 
 For the target implementation, the recommended body boundary is a boundary pair:
@@ -322,14 +340,15 @@ For the target implementation, the recommended body boundary is a boundary pair:
 
 The `ForReturn` must be associated with a specific source `For`. Reachability alone is not sufficient once nested loops
 or shared body paths are allowed, because the backend must know which return node closes which loop. The optional
-`body_id` contract now records that association in serialized invocation data, while the current runtime still rejects
-nested and internally iterated bodies.
+`body_id` contract now records that association in serialized invocation data. The runtime consumes it for the supported
+bounded nested `For` shape and continues to reject arbitrary shared or mixed loop bodies.
 
 This is simpler than a full visual subgraph while still giving the backend an explicit return boundary. Validation must
 also reject loop-body paths that escape to after-loop nodes without passing through the matching `ForReturn`.
 
-The current branch implements this reachable body-path subset plus endpoint identity validation. More complex boundaries,
-shared paths, and nested loops remain future work until the runtime consumes the identity during materialization.
+The current branch implements this reachable body-path subset plus endpoint identity validation. The runtime also
+supports one identity-bearing inner `For` whose final collection feeds the outer `ForReturn`; deeper nesting, shared
+paths, and mixed loop types remain future work.
 
 ### 4. Runtime Shape
 
@@ -568,11 +587,13 @@ Potential validation rules:
 - Edges from final-scoped `For` outputs must be treated as after-loop edges.
 - Output-scope metadata must survive backend schema generation, frontend type generation, and graph preparation. Saved
   workflows must preserve the node type and field handles needed to resolve that metadata from the current template.
-- A loop body must expose exactly one matching body return node.
+- Each loop boundary must expose exactly one matching body return node; the bounded nested shape may have one inner and
+  one outer return reachable from the outer iteration output.
 - A body return's `state` input must be compatible with `LoopState`.
 - The author-time graph must remain acyclic.
 - Nodes inside the loop body must not feed after-loop nodes directly.
-- Nested `For` loops must remain rejected until runtime materialization consumes durable body identity metadata.
+- One identity-bearing nested `For` is valid only in the bounded inner-final-collection shape described above; deeper,
+  shared, or mixed nested loop shapes remain rejected.
 - An internal `Iterate` is valid only in the bounded `Iterate -> body -> Collect -> ForReturn` shape described above.
 - Other internal `Iterate` shapes, including multiple internal iterators or an iterator that escapes through another
   output, must be rejected.
@@ -582,7 +603,8 @@ Potential validation rules:
 First implementation recommendation:
 
 - Use a boundary pair rather than a full visual subgraph.
-- The body is reachable from iteration-scoped `For` outputs and terminates at one `ForReturn`.
+- The simple body is reachable from iteration-scoped `For` outputs and terminates at one `ForReturn`. The bounded nested
+  shape adds an inner boundary and terminates the outer body at its own matching `ForReturn`.
 - Shared paths that escape the body before `ForReturn` should be rejected unless a clear rule is added later.
 
 Resolved design question:
@@ -692,9 +714,9 @@ output, and iterator-derived external inputs remain rejected.
 This extension must remain distinct from an independent external `Iterate` feeding a body node. The external shape has
 no explicit rule for product, zip, or state-lane semantics and should remain rejected until such a contract is designed.
 
-### Nested For Body
+### Bounded Nested For Body
 
-A future extension should also support a complete inner `For` boundary inside an outer `For` body:
+The first nested `For` extension supports one complete identity-bearing inner `For` boundary inside an outer `For` body:
 
 ```text
 OuterFor.iteration_output -> InnerFor.collection
@@ -717,8 +739,9 @@ Supporting this shape requires:
 - propagating inner cancellation or failure to the owning outer iteration without releasing partial inner or outer
   final outputs
 
-Nested `For` remains rejected until these contracts are implemented and validated. It must not be approximated by
-allowing two reachability-inferred loop boundaries to share body or return nodes.
+This bounded shape is implemented and tested. Deeper nesting, shared body paths, and mixed nested `Iterate`/`For`
+shapes remain rejected. They must not be approximated by allowing reachability-inferred loop boundaries to share body
+or return nodes.
 
 Possible future loop-like nodes:
 
@@ -758,7 +781,9 @@ Backend tests should cover:
 - cancellation or failure does not expose partial final outputs to after-loop nodes
 - serialized `GraphExecutionState` can resume a partially completed loop
 - cache does not collapse distinct stateful iterations
-- nested `For` bodies remain rejected until runtime materialization consumes body identity metadata
+- the supported identity-bearing nested `For` shape completes outer contexts independently, including empty inner
+  collections
+- deeper nested `For`, shared body, and mixed nested loop shapes remain rejected
 - runtime body-path resolution selects the matching `ForReturn` by durable `body_id` when identity metadata is present
 - body paths that feed after-loop nodes directly are rejected
 - saved workflow JSON preserves the loop node types and field handles used to resolve output-scope metadata
@@ -790,6 +815,8 @@ remaining iterations, and persist the final collection and state. Schema generat
 definitions does not change their serialized API contracts.
 The production-style processor integration test uses the actual SQLite queue lifecycle and registered event bus with a
 bounded nested `Iterate` inside `For`, covering success, cancellation, and body-failure cleanup.
+Nested `For` runner tests cover independent outer contexts, empty inner collections, explicit outer state wiring, and
+inner-body failure without releasing final outputs.
 
 Frontend unit tests cover `For` and `ForReturn` graph/workflow round trips, durable body-identity validation, resolution of their output scopes from the
 current templates, and `LoopState` connection-type compatibility. Frontend connection tests cover iteration/final scope
@@ -809,7 +836,8 @@ The following paths remain unchecked and should not be inferred from the graph-u
 
 ## Open Questions
 
-- How should nested `For` loops expose iteration paths and state without confusing collectors?
+- How should deeper nested `For` loops and shared body paths expose iteration paths and state without confusing
+  collectors?
 - Should early break be added as `continue_condition` on `for_return`, or as a separate `for_continue` node later?
 
 Answered branch-local decisions:
@@ -831,20 +859,23 @@ Answered branch-local decisions:
    validation/schema.
 3. Preserve output-scope metadata through saved workflows, backend schemas, frontend types, and graph preparation.
 4. Add graph validation for the bounded collection-based loop shape and matching `ForReturn` body boundary.
-5. Reject nested loops and body paths that escape directly to after-loop nodes; add durable endpoint identity metadata
-   for future nested/shared runtime paths.
+5. Reject unsupported nested loops and body paths that escape directly to after-loop nodes; add durable endpoint identity
+   metadata for nested/shared runtime paths.
 6. Extend `GraphExecutionState` materialization to create one iteration context at a time.
 7. Route iteration-scoped outputs into body execution nodes and final-scoped outputs into after-loop nodes.
 8. Carry explicit returned state into the next iteration.
 9. Aggregate final output collection and final state.
 10. Add serialization/resume tests.
 11. Add editor affordances after the backend contract is stable.
+12. Support one identity-bearing nested `For` with independent inner aggregation and deferred outer return materialization.
+13. Define and implement shared-body and deeper-nesting contracts only after their scheduling and persistence semantics
+    are explicit.
 
-Steps 1 through 10 are complete for the current bounded body-path contract. Step 11 has the initial output grouping and
+Steps 1 through 12 are complete for the current bounded body-path contract. Step 11 has the initial output grouping and
 contextual `ForReturn` discovery/wiring affordances, but not a structured visual body boundary.
 
-The durable endpoint identity slice and its first runtime consumer are implemented. The bounded internal `Iterate` slice
-is also implemented with explicit composite paths, inner-dimension collection, empty-group handling, failure cleanup,
-and JSON resume coverage. The next runtime work is nested `For` or shared-body support; those remain rejected until they
-have explicit scheduling, state ownership, failure, and persistence contracts. Early break or continue, parallel
-stateless loops, richer collection producers, and structured visual loop-body editing remain later work.
+The durable endpoint identity slice, bounded internal `Iterate` slice, and bounded identity-bearing nested `For` slice are
+implemented. Nested execution uses explicit composite paths, independent inner aggregation, deferred outer returns,
+empty-group handling, failure cleanup, and durable source/execution mappings. Deeper nesting, shared-body paths, early
+break or continue, parallel stateless loops, richer collection producers, and structured visual loop-body editing remain
+later work.
