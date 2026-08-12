@@ -53,6 +53,26 @@ describe(validateForLoopGraph.name, () => {
     expect(validateForLoopGraph(graph)).toBeNull();
   });
 
+  it('accepts an internal Iterate collapsed by Collect', () => {
+    const graph = buildGraph(
+      [
+        { id: 'for', type: 'for' },
+        { id: 'iterate', type: 'iterate' },
+        { id: 'body', type: 'add' },
+        { id: 'collect', type: 'collect' },
+        { id: 'return', type: 'for_return' },
+      ],
+      [
+        edge('for', 'item', 'iterate', 'collection'),
+        edge('iterate', 'item', 'body', 'a'),
+        edge('body', 'value', 'collect', 'item'),
+        edge('collect', 'collection', 'return', 'output'),
+      ]
+    );
+
+    expect(validateForLoopGraph(graph)).toBeNull();
+  });
+
   it.each([
     {
       name: 'missing ForReturn identity',

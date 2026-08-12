@@ -8,7 +8,7 @@ from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocati
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.loops import ForInvocation, ForInvocationOutput, ForReturnInvocation
 from invokeai.app.services.session_processor.session_processor_default import DefaultSessionRunner
-from invokeai.app.services.shared.graph import Graph, GraphExecutionState
+from invokeai.app.services.shared.graph import CollectInvocation, Graph, GraphExecutionState, IterateInvocation
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from tests.app.services.workflow_call_test_utils import (
     _DummyConfig,
@@ -36,6 +36,19 @@ class ForRunnerBodyInvocation(BaseInvocation):
         return ForRunnerValueOutput(value=self.value)
 
 
+@invocation_output("test_for_runner_collection_adapter_output")
+class ForRunnerCollectionAdapterOutput(BaseInvocationOutput):
+    collection: list[Any] = OutputField(description="The inner loop collection")
+
+
+@invocation("test_for_runner_collection_adapter", version="1.0.0")
+class ForRunnerCollectionAdapterInvocation(BaseInvocation):
+    value: Any = InputField(default=None, description="The outer loop item")
+
+    def invoke(self, context: InvocationContext) -> ForRunnerCollectionAdapterOutput:
+        return ForRunnerCollectionAdapterOutput(collection=self.value)
+
+
 @invocation_output("test_for_runner_collection_output")
 class ForRunnerCollectionOutput(BaseInvocationOutput):
     collection: list[Any] = OutputField(description="The completed loop collection")
@@ -57,6 +70,24 @@ def _build_graph(*, fail_on: int | None = None) -> Graph:
     graph.add_node(ForRunnerCollectionInvocation(id="after"))
     graph.add_edge(create_edge("for", "item", "body", "value"))
     graph.add_edge(create_edge("body", "value", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "collection"))
+    return graph
+
+
+def _build_nested_graph(*, fail_on: int | None = None) -> Graph:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[[1, 2], [3, 4]]))
+    graph.add_node(ForRunnerCollectionAdapterInvocation(id="adapter"))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(ForRunnerBodyInvocation(id="body", fail_on=fail_on))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(ForRunnerCollectionInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "adapter", "value"))
+    graph.add_edge(create_edge("adapter", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "collect", "item"))
+    graph.add_edge(create_edge("collect", "collection", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "collection"))
     return graph
 
@@ -200,3 +231,53 @@ def test_session_runner_body_exception_fails_and_cleans_up_for_loop(monkeypatch:
         isinstance(output := session.results.get(exec_id), ForInvocationOutput) and output.output_collection
         for exec_id in session.source_prepared_mapping["for"]
     )
+
+
+def test_session_runner_nested_iterate_cancellation_stops_outer_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = GraphExecutionState(graph=_build_nested_graph())
+    callback_state: dict[str, Any] = {}
+
+    def cancel_after_nested_return(invocation, queue_item, output) -> None:
+        if queue_item.session.prepared_source_mapping[invocation.id] == "return":
+            callback_state["session_queue"].cancel_queue_item(queue_item.item_id)
+            callback_state["cancel_event"].set()
+
+    runner, cancel_event, session_queue, events = _build_runner(
+        monkeypatch, on_after_run_node=cancel_after_nested_return
+    )
+    callback_state.update(cancel_event=cancel_event, session_queue=session_queue)
+    queue_item = _build_queue_item(session)
+    session_queue.add_queue_item(queue_item)
+
+    runner.run(queue_item)
+
+    completed_source_ids = _completed_source_ids(events, session)
+    assert queue_item.status == "canceled"
+    assert completed_source_ids.count("for") == 1
+    assert completed_source_ids.count("iterate") == 2
+    assert completed_source_ids.count("body") == 2
+    assert completed_source_ids.count("collect") == 1
+    assert completed_source_ids.count("return") == 1
+    assert "after" not in session.source_prepared_mapping
+    assert not session.finalized_loop_nodes
+
+
+def test_session_runner_nested_iterate_body_exception_fails_outer_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = GraphExecutionState(graph=_build_nested_graph(fail_on=2))
+    runner, _cancel_event, session_queue, events = _build_runner(monkeypatch)
+    queue_item = _build_queue_item(session)
+    session_queue.add_queue_item(queue_item)
+
+    runner.run(queue_item)
+
+    completed_source_ids = _completed_source_ids(events, session)
+    assert queue_item.status == "failed"
+    assert session.has_error()
+    [failed_exec_id] = session.errors
+    assert session.prepared_source_mapping[failed_exec_id] == "body"
+    assert session.errors[failed_exec_id] == "ValueError: Refusing loop value 2"
+    assert completed_source_ids.count("for") == 1
+    assert completed_source_ids.count("iterate") == 2
+    assert completed_source_ids.count("body") == 1
+    assert "after" not in session.source_prepared_mapping
+    assert not session.finalized_loop_nodes

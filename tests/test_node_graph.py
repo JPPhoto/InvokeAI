@@ -119,6 +119,39 @@ def test_graph_validates_for_boundary_pair_with_body_identity():
     g.validate_self()
 
 
+def test_for_body_path_resolution_uses_body_identity_for_ambiguous_reachable_returns():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a"], body_id="outer-body")
+    matching_return = ForReturnInvocation(id="matching-return", body_id="outer-body")
+    other_return = ForReturnInvocation(id="other-return", body_id="inner-body")
+
+    g.add_node(loop)
+    g.add_node(matching_return)
+    g.add_node(other_return)
+    g.add_edge(create_edge(loop.id, "item", matching_return.id, "output"))
+    g.add_edge(create_edge(loop.id, "item", other_return.id, "output"))
+
+    body_path_to_return = g._get_for_body_path_to_return(loop.id, g.nx_graph_flat())
+
+    assert body_path_to_return is not None
+    assert body_path_to_return[1] == matching_return.id
+
+
+def test_for_body_path_resolution_rejects_ambiguous_identity_free_returns():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a"])
+    first_return = ForReturnInvocation(id="first-return")
+    second_return = ForReturnInvocation(id="second-return")
+
+    g.add_node(loop)
+    g.add_node(first_return)
+    g.add_node(second_return)
+    g.add_edge(create_edge(loop.id, "item", first_return.id, "output"))
+    g.add_edge(create_edge(loop.id, "item", second_return.id, "output"))
+
+    assert g._get_for_body_path_to_return(loop.id, g.nx_graph_flat()) is None
+
+
 def test_graph_rejects_missing_for_body_identity():
     g = Graph()
     loop = ForInvocation(id="for", collection=["a", "b"], body_id="body-1")
@@ -289,6 +322,26 @@ def test_graph_rejects_iterate_inside_for_body():
 
     with pytest.raises(InvalidEdgeError, match="Iterate nodes inside For loop bodies"):
         g.validate_self()
+
+
+def test_graph_validates_iterate_collect_inside_for_body():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=[["a", "b"], ["c", "d"]])
+    collection_adapter = PolymorphicStringTestInvocation(id="collection_adapter")
+    nested_iterate = IterateInvocation(id="nested_iterate")
+    body = AnyTypeTestInvocation(id="body")
+    collect = CollectInvocation(id="collect")
+    body_return = ForReturnInvocation(id="return")
+
+    for node in (loop, collection_adapter, nested_iterate, body, collect, body_return):
+        g.add_node(node)
+    g.add_edge(create_edge(loop.id, "item", collection_adapter.id, "value"))
+    g.add_edge(create_edge(collection_adapter.id, "collection", nested_iterate.id, "collection"))
+    g.add_edge(create_edge(nested_iterate.id, "item", body.id, "value"))
+    g.add_edge(create_edge(body.id, "value", collect.id, "item"))
+    g.add_edge(create_edge(collect.id, "collection", body_return.id, "output"))
+
+    g.validate_self()
 
 
 def test_graph_rejects_for_body_edges_that_escape_to_after_loop_nodes():

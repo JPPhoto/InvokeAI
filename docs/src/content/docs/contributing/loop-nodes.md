@@ -61,7 +61,7 @@ Lessons from those branches:
 
 What is still not implemented:
 
-- Runtime support for nested or shared loop body paths.
+- Runtime support for nested `For` loops or shared loop body paths.
 - A structured visual region or subgraph affordance for the loop body boundary.
 - Early break or continue behavior.
 - Rich collection producer nodes designed specifically for loop sources.
@@ -73,6 +73,8 @@ Implemented on this branch:
 - Validation for the currently supported `For -> ... -> ForReturn` loop boundary.
 - Runtime materialization for direct `For -> ForReturn` iteration continuations.
 - Runtime rematerialization for body nodes on the reachable path from `For` iteration outputs to `ForReturn`.
+- Runtime rematerialization for one bounded internal `Iterate` whose item stream is collapsed by one `Collect` before
+  `ForReturn`, with composite outer/inner iteration paths.
 - External body inputs are reused for each rematerialized body iteration when their source has a prepared execution node.
 - Loop-carried `LoopState` for direct and rematerialized body iterations.
 - Ordinary loop state helper invocations: `state_empty`, `state_get`, `state_set`, and `state_merge`.
@@ -85,6 +87,8 @@ Implemented on this branch:
 - Frontend enqueue-time whole-graph validation matching the backend's currently supported loop body shapes.
 - Optional durable `body_id` metadata on `For` and `ForReturn`, with matching frontend/backend validation for missing,
   stale, duplicate, and mismatched identities. Legacy loops with no identity metadata remain valid.
+- Runtime body-boundary resolution consumes `body_id` when selecting a matching reachable `ForReturn`; structural
+  validation remains identity-independent so malformed endpoint metadata is still reported precisely.
 - Contextual `ForReturn` discovery in the add-node picker: iteration-output connections prioritize and auto-expand
   `ForReturn`, then reuse ordinary connection validation to select its compatible input.
 - Threaded `DefaultSessionProcessor` integration coverage for successful execution, queue-status-event cancellation,
@@ -195,14 +199,32 @@ Validation rules are shared by the backend and frontend:
 - duplicate identities on `For` nodes or on `ForReturn` nodes are rejected;
 - the two endpoints must carry the same identity.
 
-This slice establishes the serialized contract; it does not enable nested `For` execution, internal `Iterate` execution,
-or arbitrary shared body rematerialization. Those paths remain rejected until their runtime iteration context and output
-ownership rules are implemented against this identity.
+This slice establishes the serialized contract. Nested `For` execution and arbitrary shared body rematerialization remain
+rejected. A bounded internal `Iterate` is now supported only when one matching `Collect` collapses its item dimension
+before `ForReturn`; other internal iterator shapes remain rejected.
 
-An `Iterate` node inside the `For` body is also rejected by the first implementation because the body rematerializer
-does not recursively expand nested iterator work. Unlike an independent external iterator, an internal iterator that is
-collapsed by a matching `Collect` before `ForReturn` has coherent semantics and should be supported by a future
-extension.
+The first runtime consumer of the identity is the body-path resolver used by materialization and empty-loop cleanup. An
+identity-bearing `For` selects the reachable `ForReturn` with the same `body_id`; an identity-free `For` retains the
+legacy exactly-one-reachable-return rule. This separates runtime ownership lookup from author-time validation. It does
+not yet permit multiple nested or shared body paths, because those still require composite execution contexts and
+independent output ownership.
+
+The supported internal iterator extension has this shape:
+
+```text
+For.item -> optional body preparation -> Iterate.collection
+Iterate.item -> body node(s) -> Collect.item
+Collect.collection -> ForReturn.output
+For.state -> ForReturn.state (optional)
+```
+
+There must be one internal `Iterate`, one `Collect`, exactly one item stream into that `Collect`, and a direct
+`Collect.collection` to `ForReturn.output` connection. The `Collect` is the scope boundary: each outer `For` iteration
+gets one collection and one `ForReturn`, even when the inner collection is empty. The inner execution paths include both
+dimensions, such as `(outer_index, inner_index)`; the `Collect` and `ForReturn` use only the outer path.
+
+An independent iterator feeding the loop body remains rejected. It would add an execution dimension that is not owned by
+the `For`, while the supported internal iterator is explicitly collapsed before the return boundary.
 
 If a future body shape requires an input source that cannot be mapped to a prepared execution node, the rematerializer
 must reject that graph shape or add the missing preparation rule. The implementation should prefer rejecting unsupported
@@ -334,6 +356,19 @@ ForIter[2].item -> BodyNode[2].input -> ForReturn[2].output
 ForFinal.output_collection -> AfterLoopNode.collection
 ForFinal.final_state -> AfterLoopNode.state
 ```
+
+For the bounded internal iterator extension:
+
+```text
+For[0].item -> Prepare[0] -> Iterate[0].collection
+Iterate[0,0].item -> Body[0,0] -> Collect[0].item
+Iterate[0,1].item -> Body[0,1] -> Collect[0].item
+Collect[0].collection -> ForReturn[0].output
+```
+
+The next outer iteration uses a new outer context, for example `Iterate[1,0]`, `Iterate[1,1]`, `Collect[1]`, and
+`ForReturn[1]`. The scheduler waits for every inner body execution before running the outer `Collect`, then waits for
+that `ForReturn` before creating the next outer `For` iteration.
 
 For stateful loops:
 
@@ -536,7 +571,9 @@ Potential validation rules:
 - The author-time graph must remain acyclic.
 - Nodes inside the loop body must not feed after-loop nodes directly.
 - Nested `For` loops must remain rejected until runtime materialization consumes durable body identity metadata.
-- `Iterate` nodes inside the `For` body must be rejected.
+- An internal `Iterate` is valid only in the bounded `Iterate -> body -> Collect -> ForReturn` shape described above.
+- Other internal `Iterate` shapes, including multiple internal iterators or an iterator that escapes through another
+  output, must be rejected.
 - Iterator-derived external body inputs must be rejected until multiple iteration dimensions have an explicit body
   mapping contract.
 
@@ -624,9 +661,10 @@ architecture are meant to be reusable by later loop-like nodes:
 Potential extensions should build on those pieces instead of introducing hidden graph cycles or process-local mutable
 state.
 
-### Nested Iterate Body
+### Bounded Nested Iterate Body
 
-A future extension should support a bounded inner `Iterate` whose results are collapsed before the outer body returns:
+The first nested-loop extension supports a bounded inner `Iterate` whose results are collapsed before the outer body
+returns:
 
 ```text
 For.iteration_output -> Iterate -> Action -> Collect -> ForReturn
@@ -645,6 +683,9 @@ Supporting this shape requires:
 - producing exactly one matching `ForReturn` completion per outer iteration
 - persisting and restoring nested prepared-node and collection state
 - stopping both inner and outer scheduling on cancellation or failure without releasing partial final outputs
+
+This bounded shape is implemented. Multiple internal iterators, an internal iterator that escapes through another
+output, and iterator-derived external inputs remain rejected.
 
 This extension must remain distinct from an independent external `Iterate` feeding a body node. The external shape has
 no explicit rule for product, zip, or state-lane semantics and should remain rejected until such a contract is designed.
@@ -716,6 +757,7 @@ Backend tests should cover:
 - serialized `GraphExecutionState` can resume a partially completed loop
 - cache does not collapse distinct stateful iterations
 - nested `For` bodies remain rejected until runtime materialization consumes body identity metadata
+- runtime body-path resolution selects the matching `ForReturn` by durable `body_id` when identity metadata is present
 - body paths that feed after-loop nodes directly are rejected
 - saved workflow JSON preserves the loop node types and field handles used to resolve output-scope metadata
 
@@ -731,13 +773,15 @@ Frontend tests should cover:
 
 ### Current Coverage
 
-Backend unit tests currently cover the invocation contracts, durable body-identity validation and graph round-trip,
+Backend unit tests currently cover the invocation contracts, durable body-identity validation, identity-aware runtime
+body-path resolution, and graph round-trip,
 state helper copy semantics, graph-boundary validation,
 sequential materialization, state carry, final output release, empty collections, failure handling, serialization and
 resume, parent iterator scoping, cache-key behavior, and release of completed iteration collection copies.
 `DefaultSessionRunner` integration tests cover successful queue completion and session persistence, cancellation between
 iterations without releasing final outputs, and iteration-body exceptions without scheduling later iterations or
-after-loop nodes. Threaded `DefaultSessionProcessor` tests exercise the same success, cancellation, and failure paths;
+after-loop nodes. Nested `Iterate` runner tests cover inner cancellation and body exceptions without releasing outer
+final outputs. Threaded `DefaultSessionProcessor` tests exercise the same success, cancellation, and failure paths;
 the cancellation path sends a real `QueueItemStatusChangedEvent` through the processor handler using a synchronized
 queue harness. SQLite queue tests persist a partial stateful loop, reload its prepared metadata, complete only the
 remaining iterations, and persist the final collection and state. Schema generation verifies that moving the invocation
@@ -749,8 +793,8 @@ overlap across incremental connection orders, through ordinary body extensions, 
 Output row-model and renderer tests cover flat rendering for ordinary nodes and distinct localized iteration/final
 sections for scoped nodes. Add-node picker tests cover contextual `ForReturn` priority, exact-search ordering, and
 compatible input auto-wiring through the shared connection helper. Enqueue-time graph validation covers return
-ownership, unterminated paths, nested loops, internal `Iterate` nodes, iterator-derived external inputs, final outputs
-feeding the body, and body outputs escaping before `ForReturn`.
+ownership, unterminated paths, nested loops, the supported bounded internal `Iterate` shape and rejected variants,
+iterator-derived external inputs, final outputs feeding the body, and body outputs escaping before `ForReturn`.
 
 The following paths remain unchecked and should not be inferred from the graph-unit coverage:
 
@@ -795,7 +839,8 @@ Answered branch-local decisions:
 Steps 1 through 10 are complete for the current bounded body-path contract. Step 11 has the initial output grouping and
 contextual `ForReturn` discovery/wiring affordances, but not a structured visual body boundary.
 
-The durable endpoint identity slice is now implemented. The next runtime slice can use `body_id` during materialization
-to distinguish nested or shared loop paths. Internal `Iterate` bodies and nested `For` must remain rejected until that
-runtime work is complete. Early break or continue, parallel stateless loops, richer collection producers, and
-structured visual loop-body editing remain later work.
+The durable endpoint identity slice and its first runtime consumer are implemented. The bounded internal `Iterate` slice
+is also implemented with explicit composite paths, inner-dimension collection, empty-group handling, failure cleanup,
+and JSON resume coverage. The next runtime work is nested `For` or shared-body support; those remain rejected until they
+have explicit scheduling, state ownership, failure, and persistence contracts. Early break or continue, parallel
+stateless loops, richer collection producers, and structured visual loop-body editing remain later work.

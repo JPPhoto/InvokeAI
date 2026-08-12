@@ -45,6 +45,7 @@ from invokeai.app.services.shared.graph import (
 from tests.test_nodes import (
     AnyTypeTestInvocation,
     AnyTypeTestInvocationOutput,
+    PolymorphicStringTestInvocation,
     PromptCollectionTestInvocation,
     PromptTestInvocation,
     TestEventService,
@@ -90,6 +91,19 @@ class IntegerCollectionFromItemTestInvocation(BaseInvocation):
     def invoke(self, context: InvocationContext) -> IntegerCollectionTestInvocationOutput:
         base = self.value * 10
         return IntegerCollectionTestInvocationOutput(collection=[base, base + 1])
+
+
+@invocation_output("test_any_collection_from_value_output")
+class AnyCollectionFromValueTestInvocationOutput(BaseInvocationOutput):
+    collection: list[Any] = OutputField(default=[])
+
+
+@invocation("test_any_collection_from_value", version="1.0.0")
+class AnyCollectionFromValueTestInvocation(BaseInvocation):
+    value: Any = InputField(default=None)
+
+    def invoke(self, context: InvocationContext) -> AnyCollectionFromValueTestInvocationOutput:
+        return AnyCollectionFromValueTestInvocationOutput(collection=self.value)
 
 
 class MaybeEmptyIntegerCollectionTestInvocation(BaseInvocation):
@@ -345,6 +359,229 @@ def test_graph_for_rematerializes_indirect_body_for_each_iteration():
     )
     assert state.results[after_exec_id].value == ["alpha", "beta"]
     assert state.is_complete()
+
+
+def test_graph_for_rematerializes_nested_iterate_body_through_collect():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[["a", "b"], ["c", "d"]]))
+    graph.add_node(PolymorphicStringTestInvocation(id="collection_adapter"))
+    graph.add_node(IterateInvocation(id="nested_iterate"))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "collection_adapter", "value"))
+    graph.add_edge(create_edge("collection_adapter", "collection", "nested_iterate", "collection"))
+    graph.add_edge(create_edge("nested_iterate", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "collect", "item"))
+    graph.add_edge(create_edge("collect", "collection", "return", "output"))
+    graph.add_edge(create_edge("for", "state", "return", "state"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    collect_exec_ids = state.source_prepared_mapping["collect"]
+    return_exec_ids = state.source_prepared_mapping["return"]
+
+    assert sorted(state._get_iteration_path(exec_node_id) for exec_node_id in collect_exec_ids) == [(0,), (1,)]
+    assert sorted(state._get_iteration_path(exec_node_id) for exec_node_id in return_exec_ids) == [(0,), (1,)]
+    assert state.results[after_exec_id].value == [["a", "b"], ["c", "d"]]
+    assert state.is_complete()
+
+
+def test_graph_for_rematerializes_nested_iterate_body_chain_through_collect():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[["a", "b"], ["c", "d"]]))
+    graph.add_node(PolymorphicStringTestInvocation(id="collection_adapter"))
+    graph.add_node(IterateInvocation(id="nested_iterate"))
+    graph.add_node(AnyTypeTestInvocation(id="first_body"))
+    graph.add_node(AnyTypeTestInvocation(id="second_body"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "collection_adapter", "value"))
+    graph.add_edge(create_edge("collection_adapter", "collection", "nested_iterate", "collection"))
+    graph.add_edge(create_edge("nested_iterate", "item", "first_body", "value"))
+    graph.add_edge(create_edge("first_body", "value", "second_body", "value"))
+    graph.add_edge(create_edge("second_body", "value", "collect", "item"))
+    graph.add_edge(create_edge("collect", "collection", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert state.results[after_exec_id].value == [["a", "b"], ["c", "d"]]
+    assert state.is_complete()
+
+
+def test_graph_for_nested_iterate_empty_inner_collection_still_returns_one_empty_group():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[0, 1]))
+    graph.add_node(MaybeEmptyIntegerCollectionTestInvocation(id="collection_adapter"))
+    graph.add_node(IterateInvocation(id="nested_iterate"))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "collection_adapter", "value"))
+    graph.add_edge(create_edge("collection_adapter", "collection", "nested_iterate", "collection"))
+    graph.add_edge(create_edge("nested_iterate", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "collect", "item"))
+    graph.add_edge(create_edge("collect", "collection", "return", "output"))
+    graph.add_edge(create_edge("for", "state", "return", "state"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert state.results[after_exec_id].value == [[], [1]]
+    assert state.is_complete()
+
+
+def test_graph_for_nested_iterate_resumes_after_json_round_trip():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[["a", "b"], ["c", "d"]]))
+    graph.add_node(PolymorphicStringTestInvocation(id="collection_adapter"))
+    graph.add_node(IterateInvocation(id="nested_iterate"))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "collection_adapter", "value"))
+    graph.add_edge(create_edge("collection_adapter", "collection", "nested_iterate", "collection"))
+    graph.add_edge(create_edge("nested_iterate", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "collect", "item"))
+    graph.add_edge(create_edge("collect", "collection", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    for _ in range(4):
+        invoke_next(state)
+
+    resumed = TypeAdapter(GraphExecutionState).validate_json(
+        state.model_dump_json(warnings=False, exclude_none=True), strict=False
+    )
+    execute_all_nodes(resumed)
+
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in resumed.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert resumed.results[after_exec_id].value == [["a", "b"], ["c", "d"]]
+    assert resumed.is_complete()
+
+
+def test_graph_for_nested_iterate_scopes_under_parent_iterator():
+    graph = Graph()
+    graph.add_node(NestedAnyCollectionTestInvocation(id="source", collection=[[["a", "b"], ["c"]], [["d", "e"]]]))
+    graph.add_node(IterateInvocation(id="parent_iterate"))
+    graph.add_node(ForInvocation(id="for"))
+    graph.add_node(PolymorphicStringTestInvocation(id="collection_adapter"))
+    graph.add_node(IterateInvocation(id="nested_iterate"))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(CollectInvocation(id="after"))
+    graph.add_edge(create_edge("source", "collection", "parent_iterate", "collection"))
+    graph.add_edge(create_edge("parent_iterate", "item", "for", "collection"))
+    graph.add_edge(create_edge("for", "item", "collection_adapter", "value"))
+    graph.add_edge(create_edge("collection_adapter", "collection", "nested_iterate", "collection"))
+    graph.add_edge(create_edge("nested_iterate", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "collect", "item"))
+    graph.add_edge(create_edge("collect", "collection", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    after_exec_ids = sorted(state.source_prepared_mapping["after"], key=state._get_iteration_path)
+    assert [state._get_iteration_path(exec_node_id) for exec_node_id in after_exec_ids] == [(0,), (1,)]
+    assert [state.results[exec_node_id].collection for exec_node_id in after_exec_ids] == [
+        [[["a", "b"], ["c"]]],
+        [[["d", "e"]]],
+    ]
+    assert state.is_complete()
+
+
+def test_graph_for_nested_iterate_mixed_empty_groups_under_parent_iterator():
+    graph = Graph()
+    graph.add_node(NestedAnyCollectionTestInvocation(id="source", collection=[[[], [1]], [[2]]]))
+    graph.add_node(IterateInvocation(id="parent_iterate"))
+    graph.add_node(ForInvocation(id="for"))
+    graph.add_node(AnyCollectionFromValueTestInvocation(id="collection_adapter"))
+    graph.add_node(IterateInvocation(id="nested_iterate"))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(CollectInvocation(id="after"))
+    graph.add_edge(create_edge("source", "collection", "parent_iterate", "collection"))
+    graph.add_edge(create_edge("parent_iterate", "item", "for", "collection"))
+    graph.add_edge(create_edge("for", "item", "collection_adapter", "value"))
+    graph.add_edge(create_edge("collection_adapter", "collection", "nested_iterate", "collection"))
+    graph.add_edge(create_edge("nested_iterate", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "collect", "item"))
+    graph.add_edge(create_edge("collect", "collection", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    after_exec_ids = sorted(state.source_prepared_mapping["after"], key=state._get_iteration_path)
+    assert [state._get_iteration_path(exec_node_id) for exec_node_id in after_exec_ids] == [(0,), (1,)]
+    assert [state.results[exec_node_id].collection for exec_node_id in after_exec_ids] == [
+        [[[], [1]]],
+        [[[2]]],
+    ]
+    assert state.is_complete()
+
+
+def test_graph_for_nested_iterate_failure_does_not_release_final_outputs():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[["a", "b"], ["c", "d"]]))
+    graph.add_node(PolymorphicStringTestInvocation(id="collection_adapter"))
+    graph.add_node(IterateInvocation(id="nested_iterate"))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "collection_adapter", "value"))
+    graph.add_edge(create_edge("collection_adapter", "collection", "nested_iterate", "collection"))
+    graph.add_edge(create_edge("nested_iterate", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "collect", "item"))
+    graph.add_edge(create_edge("collect", "collection", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    _for_node, _for_output = invoke_next(state)
+    _adapter_node, _adapter_output = invoke_next(state)
+    _inner_node, _inner_output = invoke_next(state)
+    _inner_node, _inner_output = invoke_next(state)
+    body_node = state.next()
+    assert isinstance(body_node, AnyTypeTestInvocation)
+
+    state.set_node_error(body_node.id, "nested body failed")
+
+    assert state.has_error()
+    assert state.next() is None
+    assert "after" not in state.source_prepared_mapping
+    assert not any(exec_node_id in state.results for exec_node_id in state.source_prepared_mapping.get("return", set()))
 
 
 def test_graph_for_rematerialized_body_carries_returned_state():

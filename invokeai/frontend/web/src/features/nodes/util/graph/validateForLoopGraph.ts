@@ -45,6 +45,85 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     return visited;
   };
 
+  const hasPath = (startId: string, targetId: string): boolean =>
+    startId === targetId || walk([startId], outgoing).has(targetId);
+
+  const supportsNestedIterateBody = (
+    bodyPathNodeIds: Set<string>,
+    iterateNodeIds: string[],
+    collectNodeIds: string[],
+    returnId: string,
+    forId: string
+  ): boolean => {
+    if (iterateNodeIds.length !== 1 || collectNodeIds.length !== 1) {
+      return false;
+    }
+
+    const iterateId = iterateNodeIds[0];
+    const collectId = collectNodeIds[0];
+    if (iterateId === undefined || collectId === undefined || !hasPath(iterateId, collectId)) {
+      return false;
+    }
+
+    const iterateCollectionEdges = edges.filter(
+      (edge) => edge.destination.node_id === iterateId && edge.destination.field === 'collection'
+    );
+    const iterateCollectionSourceId = iterateCollectionEdges[0]?.source.node_id;
+    if (
+      iterateCollectionEdges.length !== 1 ||
+      iterateCollectionSourceId === undefined ||
+      (iterateCollectionSourceId !== forId && !bodyPathNodeIds.has(iterateCollectionSourceId))
+    ) {
+      return false;
+    }
+
+    const returnOutputEdges = edges.filter(
+      (edge) => edge.destination.node_id === returnId && edge.destination.field === 'output'
+    );
+    if (
+      returnOutputEdges.length !== 1 ||
+      returnOutputEdges[0]?.source.node_id !== collectId ||
+      returnOutputEdges[0]?.source.field !== 'collection'
+    ) {
+      return false;
+    }
+
+    const unsupportedReturnInput = edges.some(
+      (edge) =>
+        edge.destination.node_id === returnId &&
+        edge.destination.field !== 'output' &&
+        (edge.destination.field !== 'state' || edge.source.node_id !== forId || edge.source.field !== 'state')
+    );
+    if (unsupportedReturnInput) {
+      return false;
+    }
+
+    const collectCollectionEdges = edges.filter(
+      (edge) => edge.destination.node_id === collectId && edge.destination.field === 'collection'
+    );
+    const collectItemEdges = edges.filter(
+      (edge) => edge.destination.node_id === collectId && edge.destination.field === 'item'
+    );
+    if (collectCollectionEdges.length !== 0 || collectItemEdges.length !== 1) {
+      return false;
+    }
+    const collectItemSourceId = collectItemEdges[0]?.source.node_id;
+    if (collectItemSourceId === undefined || !hasPath(iterateId, collectItemSourceId)) {
+      return false;
+    }
+
+    for (const bodyNodeId of bodyPathNodeIds) {
+      if (bodyNodeId === iterateId || bodyNodeId === collectId || bodyNodeId === returnId) {
+        continue;
+      }
+      if (!hasPath(bodyNodeId, collectId) || (!hasPath(bodyNodeId, iterateId) && !hasPath(iterateId, bodyNodeId))) {
+        return false;
+      }
+    }
+
+    return true;
+  };
+
   const getBodyId = (node: unknown): string | undefined => {
     if (!node || typeof node !== 'object') {
       return undefined;
@@ -185,7 +264,17 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
       return 'nodes.forLoopNestedUnsupported';
     }
 
-    if ([...bodyPathNodeIds].some((nodeId) => nodes[nodeId]?.type === 'iterate')) {
+    const iterateNodeIds = [...bodyPathNodeIds].filter((nodeId) => nodes[nodeId]?.type === 'iterate');
+    if (
+      iterateNodeIds.length > 0 &&
+      !supportsNestedIterateBody(
+        bodyPathNodeIds,
+        iterateNodeIds,
+        [...bodyPathNodeIds].filter((nodeId) => nodes[nodeId]?.type === 'collect'),
+        returnId,
+        node.id
+      )
+    ) {
       return 'nodes.forLoopIterateUnsupported';
     }
 
