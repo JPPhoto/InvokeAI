@@ -93,6 +93,8 @@ Implemented on this branch:
   `ForReturn`, then reuse ordinary connection validation to select its compatible input.
 - Threaded `DefaultSessionProcessor` integration coverage for successful execution, queue-status-event cancellation,
   and body failure.
+- Production-style `DefaultSessionProcessor` coverage with the actual SQLite session queue and registered event bus,
+  including bounded nested `Iterate` success, cancellation, and body-failure cleanup.
 - SQLite session-queue coverage for persisting, reloading, and completing a partially executed stateful loop.
 
 ## Architectural Direction
@@ -786,6 +788,8 @@ the cancellation path sends a real `QueueItemStatusChangedEvent` through the pro
 queue harness. SQLite queue tests persist a partial stateful loop, reload its prepared metadata, complete only the
 remaining iterations, and persist the final collection and state. Schema generation verifies that moving the invocation
 definitions does not change their serialized API contracts.
+The production-style processor integration test uses the actual SQLite queue lifecycle and registered event bus with a
+bounded nested `Iterate` inside `For`, covering success, cancellation, and body-failure cleanup.
 
 Frontend unit tests cover `For` and `ForReturn` graph/workflow round trips, durable body-identity validation, resolution of their output scopes from the
 current templates, and `LoopState` connection-type compatibility. Frontend connection tests cover iteration/final scope
@@ -798,8 +802,6 @@ iterator-derived external inputs, final outputs feeding the body, and body outpu
 
 The following paths remain unchecked and should not be inferred from the graph-unit coverage:
 
-- one combined production-style path using the threaded `DefaultSessionProcessor`, actual `SqliteSessionQueue`, and
-  registered event bus rather than the separate processor harness and SQLite persistence test
 - browser-level drag, picker selection, and rendered-edge interaction for discovering and wiring `ForReturn`; current
   coverage exercises the pure picker-ordering and connection-selection logic
 
