@@ -799,11 +799,13 @@ sections for scoped nodes. Add-node picker tests cover contextual `ForReturn` pr
 compatible input auto-wiring through the shared connection helper. Enqueue-time graph validation covers return
 ownership, unterminated paths, nested loops, the supported bounded internal `Iterate` shape and rejected variants,
 iterator-derived external inputs, final outputs feeding the body, and body outputs escaping before `ForReturn`.
+Chromium browser coverage mounts the picker, selects `ForReturn` from an iteration output, and verifies the created node
+and auto-wired edge in the live Redux graph.
 
 The following paths remain unchecked and should not be inferred from the graph-unit coverage:
 
-- browser-level drag, picker selection, and rendered-edge interaction for discovering and wiring `ForReturn`; current
-  coverage exercises the pure picker-ordering and connection-selection logic
+- browser-level drag and rendered-edge interaction for discovering and wiring `ForReturn`; picker selection and
+  auto-wiring are covered by the browser test
 
 ## Open Questions
 
