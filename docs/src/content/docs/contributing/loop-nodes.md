@@ -817,8 +817,8 @@ The SQLite queue round-trip also covers a bounded nested `For` checkpoint taken 
 loop completes, preserving the completed inner context while the remaining outer and inner iterations resume without replay.
 The production-style processor integration test uses the actual SQLite queue lifecycle and registered event bus with a
 bounded nested `Iterate` inside `For`, covering success, cancellation, and body-failure cleanup.
-Nested `For` runner tests cover independent outer contexts, empty inner collections, explicit outer state wiring, and
-inner-body failure without releasing final outputs.
+Nested `For` runner tests cover independent outer contexts, empty inner collections, explicit outer state wiring, inner
+cancellation, and inner-body failure without releasing final outputs.
 
 Frontend unit tests cover `For` and `ForReturn` graph/workflow round trips, durable body-identity validation, resolution of their output scopes from the
 current templates, and `LoopState` connection-type compatibility. Frontend connection tests cover iteration/final scope

@@ -288,6 +288,51 @@ def test_session_runner_nested_iterate_cancellation_stops_outer_loop(monkeypatch
     assert not session.finalized_loop_nodes
 
 
+def test_session_runner_nested_for_cancellation_stops_outer_loop_without_final_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = GraphExecutionState(graph=_build_nested_for_graph())
+    callback_state: dict[str, Any] = {}
+
+    def cancel_after_inner_return(invocation, queue_item, output) -> None:
+        if queue_item.session.prepared_source_mapping[invocation.id] == "inner_return":
+            callback_state["session_queue"].cancel_queue_item(queue_item.item_id)
+            callback_state["cancel_event"].set()
+
+    runner, cancel_event, session_queue, events = _build_runner(
+        monkeypatch, on_after_run_node=cancel_after_inner_return
+    )
+    callback_state.update(cancel_event=cancel_event, session_queue=session_queue)
+    queue_item = _build_queue_item(session)
+    session_queue.add_queue_item(queue_item)
+
+    runner.run(queue_item)
+
+    completed_source_ids = _completed_source_ids(events, session)
+    assert queue_item.status == "canceled"
+    assert session_queue.canceled_item_ids == [queue_item.item_id]
+    assert session_queue.completed_item_ids == []
+    assert session_queue.session_updates[-1] == (queue_item.item_id, session)
+    assert not session.is_complete()
+    assert completed_source_ids.count("outer_for") == 1
+    assert completed_source_ids.count("inner_for") == 1
+    assert completed_source_ids.count("inner_body") == 1
+    assert completed_source_ids.count("inner_return") == 1
+    assert "outer_return" not in completed_source_ids
+    assert "after" not in session.source_prepared_mapping
+    assert not session.finalized_loop_nodes
+    assert len(session.source_prepared_mapping["inner_for"]) == 2
+    assert sum(exec_id in session.results for exec_id in session.source_prepared_mapping["inner_for"]) == 1
+    assert len(session.source_prepared_mapping["inner_body"]) == 2
+    assert sum(exec_id in session.results for exec_id in session.source_prepared_mapping["inner_body"]) == 1
+    assert len(session.source_prepared_mapping["inner_return"]) == 2
+    assert sum(exec_id in session.results for exec_id in session.source_prepared_mapping["inner_return"]) == 1
+    assert not any(
+        isinstance(output := session.results.get(exec_id), ForInvocationOutput) and output.output_collection
+        for exec_id in session.source_prepared_mapping.get("outer_for", set())
+    )
+
+
 def test_session_runner_nested_iterate_body_exception_fails_outer_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     session = GraphExecutionState(graph=_build_nested_graph(fail_on=2))
     runner, _cancel_event, session_queue, events = _build_runner(monkeypatch)
