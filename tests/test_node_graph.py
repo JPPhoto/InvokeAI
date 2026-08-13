@@ -119,6 +119,87 @@ def test_graph_validates_for_boundary_pair_with_body_identity():
     g.validate_self()
 
 
+def test_graph_rejects_edge_to_for_body_identity():
+    g = Graph()
+    identity_source = StringInvocation(id="identity_source", value="wrong")
+    loop = ForInvocation(id="for", collection=["a"], body_id="serialized")
+    body_return = ForReturnInvocation(id="return", body_id="serialized")
+
+    g.add_node(identity_source)
+    g.add_node(loop)
+    g.add_node(body_return)
+    g.edges.append(create_edge(identity_source.id, "value", loop.id, "body_id"))
+    with pytest.raises(InvalidEdgeError, match="direct input"):
+        g.validate_self()
+
+
+def test_graph_rejects_edge_to_for_return_body_identity():
+    g = Graph()
+    identity_source = StringInvocation(id="identity_source", value="wrong")
+    loop = ForInvocation(id="for", collection=["a"])
+    body_return = ForReturnInvocation(id="return", body_id="serialized")
+
+    g.add_node(identity_source)
+    g.add_node(loop)
+    g.add_node(body_return)
+    g.edges.extend(
+        [
+            create_edge(identity_source.id, "value", body_return.id, "body_id"),
+            create_edge(loop.id, "item", body_return.id, "output"),
+        ]
+    )
+    with pytest.raises(InvalidEdgeError, match="direct input"):
+        g.validate_self()
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        ForInvocation(id="for", body_id=""),
+        ForReturnInvocation(id="return", body_id=""),
+    ],
+    ids=["For", "ForReturn"],
+)
+def test_graph_rejects_empty_for_body_identity(node):
+    g = Graph()
+    g.add_node(node)
+
+    with pytest.raises(InvalidEdgeError, match="body identity.*non-empty"):
+        g.validate_self()
+
+
+@pytest.mark.parametrize(
+    ("node_type", "destination_field", "expected_message"),
+    [
+        ("for", "collection", "For loop may have only one collection input edge"),
+        ("for", "state", "For loop may have only one state input edge"),
+        ("for_return", "output", "ForReturn may have only one input edge per field"),
+        ("for_return", "state", "ForReturn may have only one input edge per field"),
+    ],
+)
+def test_graph_rejects_duplicate_loop_boundary_inputs(node_type, destination_field, expected_message):
+    g = Graph()
+    g.add_node(AnyTypeTestInvocation(id="first"))
+    g.add_node(AnyTypeTestInvocation(id="second"))
+    g.add_node(ForInvocation(id="for", collection=[1]))
+    g.add_node(ForReturnInvocation(id="return"))
+    if node_type == "for_return":
+        g.edges.append(create_edge("for", "item", "return", "output"))
+        source_ids = ["first", "second"]
+        if destination_field == "state":
+            g.edges.append(create_edge("for", "state", "return", "state"))
+            source_ids = ["first", "second"]
+    else:
+        source_ids = ["first", "second"]
+    g.edges.extend(
+        create_edge(source_id, "value", "for" if node_type == "for" else "return", destination_field)
+        for source_id in source_ids
+    )
+
+    with pytest.raises(InvalidEdgeError, match=expected_message):
+        g.validate_self()
+
+
 def test_graph_validates_identity_bearing_nested_for_boundary_pair():
     g = Graph()
     g.add_node(ForInvocation(id="outer", collection=[["a"]], body_id="outer-body"))

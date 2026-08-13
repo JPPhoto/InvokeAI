@@ -9,7 +9,10 @@ type ForLoopGraphError =
   | 'nodes.forLoopIteratorInputUnsupported'
   | 'nodes.forLoopFinalOutputInBody'
   | 'nodes.forLoopBodyEscape'
+  | 'nodes.forLoopInputCount'
+  | 'nodes.forReturnInputCount'
   | 'nodes.forLoopBodyIdentityMissing'
+  | 'nodes.forLoopBodyIdentityEmpty'
   | 'nodes.forLoopBodyIdentityStale'
   | 'nodes.forLoopBodyIdentityDuplicate'
   | 'nodes.forLoopBodyIdentityMismatch'
@@ -55,6 +58,17 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     const bodyId = (node as { body_id?: unknown }).body_id;
     return typeof bodyId === 'string' && bodyId.length > 0 ? bodyId : undefined;
   };
+
+  if (
+    Object.values(nodes).some((node) => {
+      if (node.type !== 'for' && node.type !== 'for_return') {
+        return false;
+      }
+      return (node as { body_id?: unknown }).body_id === '';
+    })
+  ) {
+    return 'nodes.forLoopBodyIdentityEmpty';
+  }
 
   const supportsNestedIterateBody = (
     bodyPathNodeIds: Set<string>,
@@ -360,6 +374,13 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     const iterationEdges = edges.filter(
       (edge) => edge.source.node_id === node.id && ITERATION_OUTPUT_FIELDS.has(edge.source.field)
     );
+    if (
+      edges.filter((edge) => edge.destination.node_id === node.id && edge.destination.field === 'collection').length >
+        1 ||
+      edges.filter((edge) => edge.destination.node_id === node.id && edge.destination.field === 'state').length > 1
+    ) {
+      return 'nodes.forLoopInputCount';
+    }
     if (iterationEdges.length === 0) {
       return 'nodes.forLoopMissingIterationOutput';
     }
@@ -453,6 +474,13 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
   for (const node of Object.values(nodes)) {
     if (node.type === 'for_return' && matchingForIdsByReturnId.get(node.id)?.length !== 1) {
       return 'nodes.forReturnOwnership';
+    }
+    if (
+      node.type === 'for_return' &&
+      (edges.filter((edge) => edge.destination.node_id === node.id && edge.destination.field === 'output').length > 1 ||
+        edges.filter((edge) => edge.destination.node_id === node.id && edge.destination.field === 'state').length > 1)
+    ) {
+      return 'nodes.forReturnInputCount';
     }
   }
 

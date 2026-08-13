@@ -147,6 +147,78 @@ describe(validateForLoopGraph.name, () => {
       edges: [edge('for', 'item', 'return', 'output')],
       expected: 'nodes.forLoopBodyIdentityMismatch',
     },
+    {
+      name: 'empty For identity',
+      nodes: [{ id: 'for', type: 'for', body_id: '' }],
+      edges: [],
+      expected: 'nodes.forLoopBodyIdentityEmpty',
+    },
+    {
+      name: 'empty ForReturn identity',
+      nodes: [{ id: 'return', type: 'for_return', body_id: '' }],
+      edges: [],
+      expected: 'nodes.forLoopBodyIdentityEmpty',
+    },
+    {
+      name: 'duplicate For collection inputs',
+      nodes: [
+        { id: 'for', type: 'for' },
+        { id: 'first', type: 'add' },
+        { id: 'second', type: 'add' },
+        { id: 'return', type: 'for_return' },
+      ],
+      edges: [
+        edge('first', 'value', 'for', 'collection'),
+        edge('second', 'value', 'for', 'collection'),
+        edge('for', 'item', 'return', 'output'),
+      ],
+      expected: 'nodes.forLoopInputCount',
+    },
+    {
+      name: 'duplicate For state inputs',
+      nodes: [
+        { id: 'for', type: 'for' },
+        { id: 'first', type: 'add' },
+        { id: 'second', type: 'add' },
+        { id: 'return', type: 'for_return' },
+      ],
+      edges: [
+        edge('first', 'value', 'for', 'state'),
+        edge('second', 'value', 'for', 'state'),
+        edge('for', 'item', 'return', 'output'),
+      ],
+      expected: 'nodes.forLoopInputCount',
+    },
+    {
+      name: 'duplicate ForReturn outputs',
+      nodes: [
+        { id: 'for', type: 'for' },
+        { id: 'first', type: 'add' },
+        { id: 'second', type: 'add' },
+        { id: 'return', type: 'for_return' },
+      ],
+      edges: [
+        edge('for', 'item', 'return', 'output'),
+        edge('first', 'value', 'return', 'output'),
+        edge('second', 'value', 'return', 'output'),
+      ],
+      expected: 'nodes.forReturnInputCount',
+    },
+    {
+      name: 'duplicate ForReturn state inputs',
+      nodes: [
+        { id: 'for', type: 'for' },
+        { id: 'first', type: 'add' },
+        { id: 'second', type: 'add' },
+        { id: 'return', type: 'for_return' },
+      ],
+      edges: [
+        edge('for', 'item', 'return', 'output'),
+        edge('first', 'value', 'return', 'state'),
+        edge('second', 'value', 'return', 'state'),
+      ],
+      expected: 'nodes.forReturnInputCount',
+    },
   ])('rejects $name', ({ nodes, edges, expected }) => {
     expect(validateForLoopGraph(buildGraph(nodes, edges))).toBe(expected);
   });

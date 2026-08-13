@@ -2650,6 +2650,7 @@ class Graph(BaseModel):
                 edge.destination.field
             ):
                 continue
+            self._validate_edge_not_to_direct_input(edge, destination_node)
             if not are_connections_compatible(
                 self.get_node(edge.source.node_id),
                 edge.source.field,
@@ -2692,9 +2693,13 @@ class Graph(BaseModel):
         return_identity_nodes: dict[str, list[str]] = {}
 
         for node in for_nodes:
+            if node.body_id == "":
+                raise InvalidEdgeError(f"For body identity on For '{node.id}' must be non-empty")
             if node.body_id:
                 for_identity_nodes.setdefault(node.body_id, []).append(node.id)
         for node in return_nodes:
+            if node.body_id == "":
+                raise InvalidEdgeError(f"For body identity on ForReturn '{node.id}' must be non-empty")
             if node.body_id:
                 return_identity_nodes.setdefault(node.body_id, []).append(node.id)
 
@@ -2857,8 +2862,16 @@ class Graph(BaseModel):
             edge.destination.field
         ):
             return
+        self._validate_edge_not_to_direct_input(edge, destination_node)
         if not are_connections_compatible(source_node, edge.source.field, destination_node, edge.destination.field):
             raise InvalidEdgeError(f"Field types are incompatible ({edge})")
+
+    def _validate_edge_not_to_direct_input(self, edge: Edge, destination_node: BaseInvocation) -> None:
+        destination_field = type(destination_node).model_fields.get(edge.destination.field)
+        if destination_field is not None:
+            json_schema_extra = destination_field.json_schema_extra
+            if isinstance(json_schema_extra, dict) and json_schema_extra.get("input") == Input.Direct:
+                raise InvalidEdgeError(f"Cannot connect to direct input ({edge})")
 
     def _validate_iterator_edge_rules(
         self, edge: Edge, source_node: BaseInvocation, destination_node: BaseInvocation
@@ -3207,6 +3220,11 @@ class Graph(BaseModel):
         return allowed_body_nodes, outer_return_id, inner_for_id, inner_return_id
 
     def _is_for_connection_valid(self, node_id: str) -> str | None:
+        if len(self._get_input_edges(node_id, COLLECTION_FIELD)) > 1:
+            return "For loop may have only one collection input edge"
+        if len(self._get_input_edges(node_id, "state")) > 1:
+            return "For loop may have only one state input edge"
+
         iteration_edges = self._get_for_iteration_output_edges(node_id)
         if len(iteration_edges) == 0:
             return "For loop must have at least one iteration output edge"
@@ -3293,6 +3311,9 @@ class Graph(BaseModel):
 
         if len(matching_for_node_ids) != 1:
             return "ForReturn must belong to exactly one matching For"
+
+        if len(self._get_input_edges(node_id, "output")) > 1 or len(self._get_input_edges(node_id, "state")) > 1:
+            return "ForReturn may have only one input edge per field"
         return None
 
     def _is_iterator_connection_valid(

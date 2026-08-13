@@ -198,10 +198,14 @@ agree with the value.
 Validation rules are shared by the backend and frontend:
 
 - both endpoints may omit `body_id` for compatibility with existing simple loops;
+- when present, `body_id` must be a non-empty string;
+- `body_id` is direct serialized metadata and must not have an incoming graph edge;
 - if either endpoint has an identity, the matching endpoint must also have one;
 - an identity on a return with no corresponding `For` is stale;
 - duplicate identities on `For` nodes or on `ForReturn` nodes are rejected;
-- the two endpoints must carry the same identity.
+- the two endpoints must carry the same identity;
+- `For.collection`, `For.state`, `ForReturn.output`, and `ForReturn.state` each accept at most one incoming edge;
+  malformed saved graphs with duplicate boundary inputs are rejected.
 
 This slice establishes the serialized contract. A bounded identity-bearing nested `For` is supported when one inner
 `For` produces the outer body output through its final collection; arbitrary nested or shared body rematerialization
