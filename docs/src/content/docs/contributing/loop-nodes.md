@@ -813,6 +813,8 @@ the cancellation path sends a real `QueueItemStatusChangedEvent` through the pro
 queue harness. SQLite queue tests persist a partial stateful loop, reload its prepared metadata, complete only the
 remaining iterations, and persist the final collection and state. Schema generation verifies that moving the invocation
 definitions does not change their serialized API contracts.
+The SQLite queue round-trip also covers a bounded nested `For` checkpoint taken after the first outer iteration's inner
+loop completes, preserving the completed inner context while the remaining outer and inner iterations resume without replay.
 The production-style processor integration test uses the actual SQLite queue lifecycle and registered event bus with a
 bounded nested `Iterate` inside `For`, covering success, cancellation, and body-failure cleanup.
 Nested `For` runner tests cover independent outer contexts, empty inner collections, explicit outer state wiring, and

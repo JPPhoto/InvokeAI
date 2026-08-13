@@ -49,6 +49,24 @@ def _stateful_for_graph() -> Graph:
     return graph
 
 
+def _nested_for_graph() -> Graph:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="outer_for", collection=[["a", "b"], ["c", "d"]], body_id="outer-body"))
+    graph.add_node(AnyTypeTestInvocation(id="inner_collection"))
+    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(AnyTypeTestInvocation(id="inner_body"))
+    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
+    graph.add_edge(create_edge("inner_collection", "value", "inner_for", "collection"))
+    graph.add_edge(create_edge("inner_for", "item", "inner_body", "value"))
+    graph.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
+    graph.add_edge(create_edge("inner_for", "output_collection", "outer_return", "output"))
+    graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
+    return graph
+
+
 def _insert_session(queue: SqliteSessionQueue, state: GraphExecutionState) -> int:
     session_id = str(uuid.uuid4())
     batch_id = str(uuid.uuid4())
@@ -126,3 +144,61 @@ def test_sqlite_queue_resumes_partial_stateful_for_loop(session_queue: SqliteSes
     assert final_item.session.is_complete()
     assert final_item.session.results[after_collection_id].value == ["alpha", "beta", "charlie"]
     assert final_item.session.results[after_state_id].value == "charlie"
+
+
+def test_sqlite_queue_resumes_nested_for_after_first_outer_iteration(
+    session_queue: SqliteSessionQueue,
+) -> None:
+    item_id = _insert_session(session_queue, GraphExecutionState(graph=_nested_for_graph()))
+
+    queue_item = session_queue.dequeue()
+    assert queue_item is not None
+    state = queue_item.session
+    completed_sources = [_execute_next(state) for _ in range(9)]
+    assert completed_sources == [
+        "outer_for",
+        "inner_collection",
+        "inner_for",
+        "inner_body",
+        "inner_return",
+        "inner_for",
+        "inner_body",
+        "inner_return",
+        "outer_return",
+    ]
+    assert state.finalized_loop_contexts == {("inner_for", (0,))}
+    prepared_mapping = state.prepared_source_mapping.copy()
+    prepared_paths = {exec_id: state._get_iteration_path(exec_id) for exec_id in prepared_mapping}
+
+    session_queue.save_queue_item_session(queue_item.item_id, state)
+    resumed = session_queue.get_queue_item(item_id).session
+
+    assert resumed.finalized_loop_contexts == {("inner_for", (0,))}
+    assert resumed.prepared_source_mapping == prepared_mapping
+    assert {exec_id: resumed._get_iteration_path(exec_id) for exec_id in prepared_mapping} == prepared_paths
+    remaining_sources: list[str] = []
+    while (source_id := _execute_next(resumed)) is not None:
+        remaining_sources.append(source_id)
+
+    assert remaining_sources == [
+        "outer_for",
+        "inner_collection",
+        "inner_for",
+        "inner_body",
+        "inner_return",
+        "inner_for",
+        "inner_body",
+        "inner_return",
+        "outer_return",
+        "after",
+    ]
+    after_exec_id = next(
+        exec_id for exec_id, source_id in resumed.prepared_source_mapping.items() if source_id == "after"
+    )
+    assert resumed.results[after_exec_id].value == [["a", "b"], ["c", "d"]]
+    assert resumed.is_complete()
+    session_queue.set_queue_item_session(item_id, resumed)
+    final_item = session_queue.complete_queue_item(item_id)
+    assert final_item.status == "completed"
+    assert final_item.session.is_complete()
+    assert final_item.session.results[after_exec_id].value == [["a", "b"], ["c", "d"]]

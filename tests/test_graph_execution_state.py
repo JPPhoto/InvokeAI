@@ -488,6 +488,91 @@ def test_graph_for_nested_iterate_resumes_after_json_round_trip():
     assert resumed.is_complete()
 
 
+def test_graph_nested_for_resumes_after_json_round_trip_without_replaying_inner_output():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="outer_for", collection=[["a", "b"], ["c", "d"]], body_id="outer-body"))
+    graph.add_node(AnyCollectionFromValueTestInvocation(id="inner_collection"))
+    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(AnyTypeTestInvocation(id="inner_body"))
+    graph.add_node(StateSetInvocation(id="inner_state", key="last_item"))
+    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
+    graph.add_edge(create_edge("inner_collection", "collection", "inner_for", "collection"))
+    graph.add_edge(create_edge("inner_for", "item", "inner_body", "value"))
+    graph.add_edge(create_edge("inner_for", "state", "inner_state", "state"))
+    graph.add_edge(create_edge("inner_for", "item", "inner_state", "value"))
+    graph.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
+    graph.add_edge(create_edge("inner_state", "state", "inner_return", "state"))
+    graph.add_edge(create_edge("inner_for", "output_collection", "outer_return", "output"))
+    graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    executed_source_ids: list[str] = []
+    for _ in range(6):
+        invocation, _output = invoke_next(state)
+        assert invocation is not None
+        executed_source_ids.append(state.prepared_source_mapping[invocation.id])
+    assert executed_source_ids == [
+        "outer_for",
+        "inner_collection",
+        "inner_for",
+        "inner_body",
+        "inner_state",
+        "inner_return",
+    ]
+    first_outer_inner_for_ids = [
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "inner_for" and state._get_iteration_path(exec_node_id) == (0, 1)
+    ]
+    assert len(first_outer_inner_for_ids) == 1
+    assert state.execution_graph.get_node(first_outer_inner_for_ids[0]).state == LoopState(values={"last_item": "a"})
+    prepared_mapping = state.prepared_source_mapping.copy()
+    prepared_paths = {exec_node_id: state._get_iteration_path(exec_node_id) for exec_node_id in prepared_mapping}
+
+    resumed = TypeAdapter(GraphExecutionState).validate_json(
+        state.model_dump_json(warnings=False, exclude_none=True), strict=False
+    )
+    assert resumed.graph.nodes["inner_for"].body_id == "inner-body"
+    assert resumed.graph.nodes["outer_return"].body_id == "outer-body"
+    assert resumed.prepared_source_mapping == prepared_mapping
+    assert {
+        exec_node_id: resumed._get_iteration_path(exec_node_id) for exec_node_id in prepared_mapping
+    } == prepared_paths
+    assert resumed.finalized_loop_contexts == set()
+
+    resumed_source_ids = execute_all_nodes(resumed)
+
+    assert resumed_source_ids == [
+        "inner_for",
+        "inner_body",
+        "inner_state",
+        "inner_return",
+        "outer_return",
+        "outer_for",
+        "inner_collection",
+        "inner_for",
+        "inner_body",
+        "inner_state",
+        "inner_return",
+        "inner_for",
+        "inner_body",
+        "inner_state",
+        "inner_return",
+        "outer_return",
+        "after",
+    ]
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in resumed.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert resumed.results[after_exec_id].value == [["a", "b"], ["c", "d"]]
+    assert resumed.is_complete()
+
+
 def test_graph_for_nested_iterate_scopes_under_parent_iterator():
     graph = Graph()
     graph.add_node(NestedAnyCollectionTestInvocation(id="source", collection=[[["a", "b"], ["c"]], [["d", "e"]]]))
