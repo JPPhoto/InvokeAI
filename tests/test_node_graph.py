@@ -322,6 +322,97 @@ def test_graph_rejects_nested_for_until_body_identity_exists():
         g.validate_self()
 
 
+def test_graph_rejects_deeper_nested_for_loops():
+    g = Graph()
+    outer = ForInvocation(id="outer", collection=[[]], body_id="outer-body")
+    outer_collection = AnyTypeTestInvocation(id="outer_collection")
+    inner = ForInvocation(id="inner", body_id="inner-body")
+    inner_collection = AnyTypeTestInvocation(id="inner_collection")
+    leaf = ForInvocation(id="leaf", body_id="leaf-body")
+    leaf_body = AnyTypeTestInvocation(id="leaf_body")
+    leaf_return = ForReturnInvocation(id="leaf_return", body_id="leaf-body")
+    inner_return = ForReturnInvocation(id="inner_return", body_id="inner-body")
+    outer_return = ForReturnInvocation(id="outer_return", body_id="outer-body")
+
+    for node in (
+        outer,
+        outer_collection,
+        inner,
+        inner_collection,
+        leaf,
+        leaf_body,
+        leaf_return,
+        inner_return,
+        outer_return,
+    ):
+        g.add_node(node)
+    g.add_edge(create_edge("outer", "item", "outer_collection", "value"))
+    g.add_edge(create_edge("outer_collection", "value", "inner", "collection"))
+    g.add_edge(create_edge("inner", "item", "inner_collection", "value"))
+    g.add_edge(create_edge("inner_collection", "value", "leaf", "collection"))
+    g.add_edge(create_edge("leaf", "item", "leaf_body", "value"))
+    g.add_edge(create_edge("leaf_body", "value", "leaf_return", "output"))
+    g.add_edge(create_edge("leaf", "output_collection", "inner_return", "output"))
+    g.add_edge(create_edge("inner", "output_collection", "outer_return", "output"))
+
+    with pytest.raises(InvalidEdgeError, match="Nested For loops"):
+        g.validate_self()
+
+
+def test_graph_rejects_mixed_nested_for_and_iterate_body():
+    g = Graph()
+    outer = ForInvocation(id="outer", collection=[[]], body_id="outer-body")
+    inner_collection = AnyTypeTestInvocation(id="inner_collection")
+    inner = ForInvocation(id="inner", body_id="inner-body")
+    iterate_collection = PolymorphicStringTestInvocation(id="iterate_collection")
+    iterate = IterateInvocation(id="iterate")
+    body = AnyTypeTestInvocation(id="body")
+    collect = CollectInvocation(id="collect")
+    inner_return = ForReturnInvocation(id="inner_return", body_id="inner-body")
+    outer_return = ForReturnInvocation(id="outer_return", body_id="outer-body")
+
+    for node in (
+        outer,
+        inner_collection,
+        inner,
+        iterate_collection,
+        iterate,
+        body,
+        collect,
+        inner_return,
+        outer_return,
+    ):
+        g.add_node(node)
+    g.add_edge(create_edge("outer", "item", "inner_collection", "value"))
+    g.add_edge(create_edge("inner_collection", "value", "inner", "collection"))
+    g.add_edge(create_edge("inner", "item", "iterate_collection", "value"))
+    g.add_edge(create_edge("iterate_collection", "collection", "iterate", "collection"))
+    g.add_edge(create_edge("iterate", "item", "body", "value"))
+    g.add_edge(create_edge("body", "value", "collect", "item"))
+    g.add_edge(create_edge("collect", "collection", "inner_return", "output"))
+    g.add_edge(create_edge("inner", "output_collection", "outer_return", "output"))
+
+    with pytest.raises(InvalidEdgeError, match="Nested For loops"):
+        g.validate_self()
+
+
+def test_graph_rejects_for_return_shared_by_two_loops():
+    first = ForInvocation(id="first", collection=["a"])
+    second = ForInvocation(id="second", collection=["b"])
+    body_return = ForReturnInvocation(id="return")
+
+    g = Graph(
+        nodes={first.id: first, second.id: second, body_return.id: body_return},
+        edges=[
+            create_edge("first", "item", "return", "output"),
+            create_edge("second", "item", "return", "output"),
+        ],
+    )
+
+    with pytest.raises(InvalidEdgeError, match="exactly one matching For"):
+        g.validate_self()
+
+
 def test_graph_rejects_iterate_inside_for_body():
     g = Graph()
     loop = ForInvocation(id="for", collection=[["a", "b"]])

@@ -828,6 +828,8 @@ sections for scoped nodes. Add-node picker tests cover contextual `ForReturn` pr
 compatible input auto-wiring through the shared connection helper. Enqueue-time graph validation covers return
 ownership, unterminated paths, nested loops, the supported bounded internal `Iterate` shape and rejected variants,
 iterator-derived external inputs, final outputs feeding the body, and body outputs escaping before `ForReturn`.
+Backend and frontend validation tests also reject deeper nested `For` loops, mixed nested `For`/`Iterate` bodies, and a
+`ForReturn` shared by multiple loops while continuing to accept the bounded nested shape.
 Chromium browser coverage mounts the picker, selects `ForReturn` from an iteration output, and verifies the created node
 and auto-wired edge in the live Redux graph.
 
