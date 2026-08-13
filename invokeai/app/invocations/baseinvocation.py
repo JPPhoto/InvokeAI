@@ -774,9 +774,8 @@ def invocation(
             if isinstance(invoke_return_annotation, str):
                 invoke_return_annotation = getattr(sys.modules[cls.__module__], invoke_return_annotation)
 
-            is_valid_return_annotation = (
-                invoke_return_annotation is not BaseInvocationOutput
-                and issubclass(invoke_return_annotation, BaseInvocationOutput)
+            is_valid_return_annotation = invoke_return_annotation is not BaseInvocationOutput and issubclass(
+                invoke_return_annotation, BaseInvocationOutput
             )
         except (AttributeError, TypeError):
             is_valid_return_annotation = False
