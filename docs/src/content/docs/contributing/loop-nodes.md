@@ -831,13 +831,8 @@ ownership, unterminated paths, nested loops, the supported bounded internal `Ite
 iterator-derived external inputs, final outputs feeding the body, and body outputs escaping before `ForReturn`.
 Backend and frontend validation tests also reject deeper nested `For` loops, mixed nested `For`/`Iterate` bodies, and a
 `ForReturn` shared by multiple loops while continuing to accept the bounded nested shape.
-Chromium browser coverage mounts the picker, selects `ForReturn` from an iteration output, and verifies the created node
-and auto-wired edge in the live Redux graph.
-
-The following paths remain unchecked and should not be inferred from the graph-unit coverage:
-
-- browser-level drag and rendered-edge interaction for discovering and wiring `ForReturn`; picker selection and
-  auto-wiring are covered by the browser test
+Chromium browser coverage mounts the picker and live ReactFlow surface, drags an iteration output handle onto the
+canvas, selects `ForReturn`, and verifies both the Redux edge and its rendered edge path.
 
 ## Open Questions
 
@@ -877,10 +872,18 @@ Answered branch-local decisions:
     are explicit.
 
 Steps 1 through 12 are complete for the current bounded body-path contract. Step 11 has the initial output grouping and
-contextual `ForReturn` discovery/wiring affordances, but not a structured visual body boundary.
+contextual `ForReturn` discovery/wiring affordances, including browser coverage for the rendered drag-to-picker path,
+but not a structured visual body boundary.
 
 The durable endpoint identity slice, bounded internal `Iterate` slice, and bounded identity-bearing nested `For` slice are
 implemented. Nested execution uses explicit composite paths, independent inner aggregation, deferred outer returns,
 empty-group handling, failure cleanup, and durable source/execution mappings. Deeper nesting, shared-body paths, early
 break or continue, parallel stateless loops, richer collection producers, and structured visual loop-body editing remain
 later work.
+
+## Next Development Slice
+
+After the final adversarial review, browser-test cleanup, package rollback, and full PR validation, the next development
+slice is broader nested `For` support. The current implementation supports one identity-bearing inner `For` inside an
+outer `For`; the next nested-loop work should define and test deeper nesting and shared body paths before expanding
+runtime scheduling or visual loop regions.
