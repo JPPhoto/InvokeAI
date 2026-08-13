@@ -83,6 +83,24 @@ def _build_nested_graph(*, fail_on: int | None = None) -> Graph:
     return graph
 
 
+def _build_nested_for_graph(*, fail_on: int | None = None) -> Graph:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="outer_for", collection=[[1, 2], [3, 4]], body_id="outer-body"))
+    graph.add_node(ForSqliteCollectionAdapterInvocation(id="inner_collection"))
+    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(ForSqliteBodyInvocation(id="inner_body", fail_on=fail_on))
+    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForSqliteAfterInvocation(id="after"))
+    graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
+    graph.add_edge(create_edge("inner_collection", "collection", "inner_for", "collection"))
+    graph.add_edge(create_edge("inner_for", "item", "inner_body", "value"))
+    graph.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
+    graph.add_edge(create_edge("inner_for", "output_collection", "outer_return", "output"))
+    graph.add_edge(create_edge("outer_for", "output_collection", "after", "collection"))
+    return graph
+
+
 class _RecordingRegisteredEventService(EventServiceBase):
     def __init__(self) -> None:
         self._events: list[EventBase] = []
@@ -239,5 +257,117 @@ def test_processor_sqlite_queue_nested_iterate_for_cleanup(
                 assert queue_item.error_type == "ValueError"
                 assert queue_item.error_message == "Refusing loop value 2"
                 assert returns_seen == 0
+    finally:
+        _stop_processor(processor)
+
+
+@pytest.mark.parametrize("outcome", ["success", "canceled", "failure"])
+def test_processor_sqlite_queue_nested_for_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_invoker: Invoker,
+    registered_event_bus: _RecordingRegisteredEventService,
+    outcome: str,
+) -> None:
+    monkeypatch.setattr(
+        "invokeai.app.services.session_processor.session_processor_default.build_invocation_context",
+        lambda data, services, is_canceled: None,
+    )
+
+    queue = SqliteSessionQueue(db=mock_invoker.services.board_records._db)
+    mock_invoker.services.events = registered_event_bus
+    mock_invoker.services.session_queue = queue
+    mock_invoker.services.performance_statistics = _Stats()
+    queue.start(mock_invoker)
+
+    inner_returns_seen = 0
+
+    def cancel_after_first_inner_return(invocation, queue_item, output) -> None:
+        nonlocal inner_returns_seen
+        if queue_item.session.prepared_source_mapping[invocation.id] != "inner_return":
+            return
+        inner_returns_seen += 1
+        if outcome == "canceled" and inner_returns_seen == 1:
+            queue.cancel_queue_item(queue_item.item_id)
+
+    processor = DefaultSessionProcessor(
+        session_runner=DefaultSessionRunner(on_after_run_node_callbacks=[cancel_after_first_inner_return]),
+        polling_interval=0,
+    )
+    graph = _build_nested_for_graph(fail_on=3 if outcome == "failure" else None)
+    item_id = _insert_session(queue, graph)
+    status_handler_called = Event()
+    original_status_handler = processor._on_queue_item_status_changed
+
+    async def recording_status_handler(event) -> None:
+        if event[1].item_id == item_id and event[1].status == "canceled":
+            status_handler_called.set()
+        await original_status_handler(event)
+
+    processor._on_queue_item_status_changed = recording_status_handler  # type: ignore[method-assign]
+    try:
+        processor.start(mock_invoker)
+
+        expected_status = {
+            "success": "completed",
+            "canceled": "canceled",
+            "failure": "failed",
+        }[outcome]
+        assert registered_event_bus.wait_for_status(item_id, expected_status)
+
+        queue_item = queue.get_queue_item(item_id)
+        assert queue_item.status == expected_status
+        assert queue.get_current("default") is None
+        assert any(
+            isinstance(event, QueueItemStatusChangedEvent)
+            and event.item_id == item_id
+            and event.status == expected_status
+            for event in registered_event_bus._events
+        )
+
+        if outcome == "success":
+            assert queue_item.session.is_complete()
+            [after_exec_id] = queue_item.session.source_prepared_mapping["after"]
+            assert queue_item.session.results[after_exec_id].collection == [[1, 2], [3, 4]]
+            assert (
+                len(
+                    [
+                        exec_id
+                        for exec_id in queue_item.session.source_prepared_mapping["outer_return"]
+                        if exec_id in queue_item.session.results
+                    ]
+                )
+                == 2
+            )
+            assert inner_returns_seen == 4
+        else:
+            assert "after" not in queue_item.session.source_prepared_mapping
+            assert not queue_item.session.finalized_loop_nodes
+            assert not any(
+                getattr(queue_item.session.results.get(exec_id), "output_collection", [])
+                for exec_id in queue_item.session.source_prepared_mapping.get("outer_for", [])
+            )
+            if outcome == "canceled":
+                assert inner_returns_seen == 1
+                assert not any(
+                    exec_id in queue_item.session.results
+                    for exec_id in queue_item.session.source_prepared_mapping.get("outer_return", [])
+                )
+                assert status_handler_called.wait(timeout=5)
+                assert not queue_item.session.is_complete()
+            else:
+                assert queue_item.session.has_error()
+                assert queue_item.error_type == "ValueError"
+                assert queue_item.error_message == "Refusing loop value 3"
+                assert (
+                    len(
+                        [
+                            exec_id
+                            for exec_id in queue_item.session.source_prepared_mapping["outer_return"]
+                            if exec_id in queue_item.session.results
+                        ]
+                    )
+                    == 1
+                )
+                assert inner_returns_seen == 2
     finally:
         _stop_processor(processor)

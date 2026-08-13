@@ -816,7 +816,8 @@ definitions does not change their serialized API contracts.
 The SQLite queue round-trip also covers a bounded nested `For` checkpoint taken after the first outer iteration's inner
 loop completes, preserving the completed inner context while the remaining outer and inner iterations resume without replay.
 The production-style processor integration test uses the actual SQLite queue lifecycle and registered event bus with a
-bounded nested `Iterate` inside `For`, covering success, cancellation, and body-failure cleanup.
+bounded nested `Iterate` inside `For` and a bounded nested `For`, covering success, cancellation, and body-failure
+cleanup for both shapes.
 Nested `For` runner tests cover independent outer contexts, empty inner collections, explicit outer state wiring, inner
 cancellation, and inner-body failure without releasing final outputs.
 
