@@ -199,6 +199,8 @@ Validation rules are shared by the backend and frontend:
 
 - both endpoints may omit `body_id` for compatibility with existing simple loops;
 - when present, `body_id` must be a non-empty string;
+- the editor's blank hidden `body_id` value means unset and is omitted from graph JSON; an explicitly serialized empty
+  identity remains invalid;
 - `body_id` is direct serialized metadata and must not have an incoming graph edge;
 - if either endpoint has an identity, the matching endpoint must also have one;
 - an identity on a return with no corresponding `For` is stale;
@@ -214,7 +216,7 @@ dimension before `ForReturn`; other internal iterator shapes remain rejected.
 
 The first runtime consumer of the identity is the body-path resolver used by materialization and empty-loop cleanup. An
 identity-bearing `For` selects the reachable `ForReturn` with the same `body_id`; an identity-free `For` retains the
-legacy exactly-one-reachable-return rule. This separates runtime ownership lookup from author-time validation. It does
+legacy exactly-one-reachable-return rule. This separates runtime ownership lookup from author-time validation. It
 permits only the bounded nested shape described below. Multiple nested levels, shared body paths, and mixed nested loop
 types still require composite execution contexts and independent output ownership.
 

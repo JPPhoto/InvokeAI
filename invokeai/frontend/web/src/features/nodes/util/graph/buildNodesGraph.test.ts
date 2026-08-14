@@ -1,7 +1,16 @@
 import { deepClone } from 'common/util/deepClone';
 import { callSavedWorkflowDynamicFieldsChanged, nodesSliceConfig } from 'features/nodes/store/nodesSlice';
 import { CONNECTOR_INPUT_HANDLE, CONNECTOR_OUTPUT_HANDLE } from 'features/nodes/store/util/connectorTopology';
-import { add, buildEdge, buildNode, for_loop, img_resize, sub, templates } from 'features/nodes/store/util/testUtils';
+import {
+  add,
+  buildEdge,
+  buildNode,
+  for_loop,
+  for_return,
+  img_resize,
+  sub,
+  templates,
+} from 'features/nodes/store/util/testUtils';
 import type { IntegerFieldInputTemplate } from 'features/nodes/types/field';
 import { zInvocationNodeData } from 'features/nodes/types/invocation';
 import { describe, expect, it } from 'vitest';
@@ -79,6 +88,35 @@ describe('buildNodesGraph', () => {
     const state = buildState([forNode, bodyNode], [buildEdge(forNode.id, 'item', bodyNode.id, 'a')]);
 
     expect(() => buildNodesGraph(state, { ...templates, for: for_loop })).toThrow('nodes.forLoopReturnCount');
+  });
+
+  it('omits a blank optional body identity from a simple For graph', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    const state = buildState([forNode, returnNode], [buildEdge(forNode.id, 'item', returnNode.id, 'output')]);
+
+    const graph = buildNodesGraph(state, { ...templates, for: for_loop, for_return });
+
+    expect(graph.nodes[forNode.id]).not.toHaveProperty('body_id');
+    expect(graph.nodes[returnNode.id]).not.toHaveProperty('body_id');
+  });
+
+  it('preserves a populated body identity in a simple For graph', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    const forBodyIdInput = forNode.data.inputs.body_id;
+    const returnBodyIdInput = returnNode.data.inputs.body_id;
+    if (!forBodyIdInput || !returnBodyIdInput) {
+      throw new Error('Expected For body identity inputs');
+    }
+    forBodyIdInput.value = 'body-1';
+    returnBodyIdInput.value = 'body-1';
+    const state = buildState([forNode, returnNode], [buildEdge(forNode.id, 'item', returnNode.id, 'output')]);
+
+    const graph = buildNodesGraph(state, { ...templates, for: for_loop, for_return });
+
+    expect(graph.nodes[forNode.id]).toHaveProperty('body_id', 'body-1');
+    expect(graph.nodes[returnNode.id]).toHaveProperty('body_id', 'body-1');
   });
 
   it('serializes dynamic saved workflow inputs into workflow_inputs', () => {
