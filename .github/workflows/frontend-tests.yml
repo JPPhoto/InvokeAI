@@ -37,7 +37,7 @@ defaults:
 jobs:
   frontend-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # expected run time: <5 min
+    timeout-minutes: 10 # expected run time: <2 min
     steps:
       - uses: actions/checkout@v6
 
@@ -62,14 +62,4 @@ jobs:
       - name: vitest
         if: ${{ steps.changed-files.outputs.frontend_any_changed == 'true' || inputs.always_run == true }}
         run: 'pnpm test:no-watch'
-        shell: bash
-
-      - name: install Playwright browser
-        if: ${{ steps.changed-files.outputs.frontend_any_changed == 'true' || inputs.always_run == true }}
-        run: 'pnpm exec playwright install --with-deps chromium'
-        shell: bash
-
-      - name: browser vitest
-        if: ${{ steps.changed-files.outputs.frontend_any_changed == 'true' || inputs.always_run == true }}
-        run: 'pnpm test:browser'
         shell: bash

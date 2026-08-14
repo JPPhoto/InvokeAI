@@ -51,7 +51,6 @@ export default defineConfig(({ mode }) => {
     },
     test: {
       reporters: [['default', { summary: false }]],
-      exclude: ['**/node_modules/**', '**/.git/**', 'src/**/*.browser.test.{ts,tsx}'],
       typecheck: {
         enabled: true,
         ignoreSourceErrors: true,
