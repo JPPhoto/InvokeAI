@@ -4161,7 +4161,13 @@ class GraphExecutionState(BaseModel):
                 continue
             completed_source_ids.add(source_node_id)
         node_ids = set(self.graph.nx_graph_flat().nodes)
-        return self.has_error() or all((k in completed_source_ids for k in node_ids))
+        complete = self.has_error() or all((k in completed_source_ids for k in node_ids))
+        if complete and not self.has_error():
+            for source_node_id in nx.topological_sort(self.graph.nx_graph_flat()):
+                if source_node_id in completed_source_ids and source_node_id not in self.executed:
+                    self.executed.add(source_node_id)
+                    self.executed_history.append(source_node_id)
+        return complete
 
     def has_error(self) -> bool:
         """Returns true if the graph has any errors"""

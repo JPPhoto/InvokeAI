@@ -774,6 +774,7 @@ def test_graph_executes_sibling_for_with_one_empty_child_context():
     )
     assert state.results[after_exec_id].value == [(["a", "b"], []), (["c"], [])]
     assert state.is_complete()
+    assert set(state.graph.nx_graph_flat().nodes) <= state.executed
 
 
 def test_graph_nested_for_continuation_failure_does_not_release_outer_final_outputs():
