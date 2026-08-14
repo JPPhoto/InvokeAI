@@ -403,7 +403,7 @@ def test_graph_rejects_nested_for_until_body_identity_exists():
         g.validate_self()
 
 
-def test_graph_rejects_deeper_nested_for_loops():
+def test_graph_validates_deeper_nested_for_loops_with_one_child_per_boundary():
     g = Graph()
     outer = ForInvocation(id="outer", collection=[[]], body_id="outer-body")
     outer_collection = AnyTypeTestInvocation(id="outer_collection")
@@ -435,6 +435,23 @@ def test_graph_rejects_deeper_nested_for_loops():
     g.add_edge(create_edge("leaf_body", "value", "leaf_return", "output"))
     g.add_edge(create_edge("leaf", "output_collection", "inner_return", "output"))
     g.add_edge(create_edge("inner", "output_collection", "outer_return", "output"))
+
+    g.validate_self()
+
+
+def test_graph_rejects_multiple_direct_nested_for_children():
+    g = Graph()
+    g.add_node(ForInvocation(id="outer", collection=[[]], body_id="outer-body"))
+    g.add_node(ForInvocation(id="first", body_id="first-body"))
+    g.add_node(ForInvocation(id="second", body_id="second-body"))
+    g.add_node(ForReturnInvocation(id="first_return", body_id="first-body"))
+    g.add_node(ForReturnInvocation(id="second_return", body_id="second-body"))
+    g.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    g.add_edge(create_edge("outer", "item", "first", "collection"))
+    g.add_edge(create_edge("outer", "item", "second", "collection"))
+    g.add_edge(create_edge("first", "item", "first_return", "output"))
+    g.add_edge(create_edge("second", "item", "second_return", "output"))
+    g.add_edge(create_edge("first", "output_collection", "outer_return", "output"))
 
     with pytest.raises(InvalidEdgeError, match="Nested For loops"):
         g.validate_self()

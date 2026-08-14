@@ -53,6 +53,24 @@ describe(validateForLoopGraph.name, () => {
     expect(validateForLoopGraph(graph)).toBeNull();
   });
 
+  it('rejects graph edges into a durable body identity', () => {
+    const graph = buildGraph(
+      [
+        { id: 'source', type: 'add' },
+        { id: 'for', type: 'for', body_id: 'body-1' },
+        { id: 'body', type: 'add' },
+        { id: 'return', type: 'for_return', body_id: 'body-1' },
+      ],
+      [
+        edge('source', 'value', 'for', 'body_id'),
+        edge('for', 'item', 'body', 'a'),
+        edge('body', 'value', 'return', 'output'),
+      ]
+    );
+
+    expect(validateForLoopGraph(graph)).toBe('nodes.forLoopBodyIdentityEdge');
+  });
+
   it('accepts an internal Iterate collapsed by Collect', () => {
     const graph = buildGraph(
       [
@@ -88,6 +106,34 @@ describe(validateForLoopGraph.name, () => {
         edge('inner-collection', 'value', 'inner', 'collection'),
         edge('inner', 'item', 'inner-body', 'value'),
         edge('inner-body', 'value', 'inner-return', 'output'),
+        edge('inner', 'output_collection', 'outer-return', 'output'),
+      ]
+    );
+
+    expect(validateForLoopGraph(graph)).toBeNull();
+  });
+
+  it('accepts deeper nested For boundaries when each boundary has one child', () => {
+    const graph = buildGraph(
+      [
+        { id: 'outer', type: 'for', body_id: 'outer-body' },
+        { id: 'outer-collection', type: 'add' },
+        { id: 'inner', type: 'for', body_id: 'inner-body' },
+        { id: 'inner-collection', type: 'add' },
+        { id: 'leaf', type: 'for', body_id: 'leaf-body' },
+        { id: 'leaf-body', type: 'add' },
+        { id: 'leaf-return', type: 'for_return', body_id: 'leaf-body' },
+        { id: 'inner-return', type: 'for_return', body_id: 'inner-body' },
+        { id: 'outer-return', type: 'for_return', body_id: 'outer-body' },
+      ],
+      [
+        edge('outer', 'item', 'outer-collection', 'value'),
+        edge('outer-collection', 'value', 'inner', 'collection'),
+        edge('inner', 'item', 'inner-collection', 'value'),
+        edge('inner-collection', 'value', 'leaf', 'collection'),
+        edge('leaf', 'item', 'leaf-body', 'value'),
+        edge('leaf-body', 'value', 'leaf-return', 'output'),
+        edge('leaf', 'output_collection', 'inner-return', 'output'),
         edge('inner', 'output_collection', 'outer-return', 'output'),
       ]
     );
@@ -278,27 +324,21 @@ describe(validateForLoopGraph.name, () => {
       expected: 'nodes.forLoopNestedUnsupported',
     },
     {
-      name: 'deeper nested For loops',
+      name: 'multiple direct nested For children',
       nodes: [
         { id: 'outer', type: 'for', body_id: 'outer-body' },
-        { id: 'outer-collection', type: 'add' },
-        { id: 'inner', type: 'for', body_id: 'inner-body' },
-        { id: 'inner-collection', type: 'add' },
-        { id: 'leaf', type: 'for', body_id: 'leaf-body' },
-        { id: 'leaf-body', type: 'add' },
-        { id: 'leaf-return', type: 'for_return', body_id: 'leaf-body' },
-        { id: 'inner-return', type: 'for_return', body_id: 'inner-body' },
+        { id: 'first', type: 'for', body_id: 'first-body' },
+        { id: 'second', type: 'for', body_id: 'second-body' },
+        { id: 'first-return', type: 'for_return', body_id: 'first-body' },
+        { id: 'second-return', type: 'for_return', body_id: 'second-body' },
         { id: 'outer-return', type: 'for_return', body_id: 'outer-body' },
       ],
       edges: [
-        edge('outer', 'item', 'outer-collection', 'value'),
-        edge('outer-collection', 'value', 'inner', 'collection'),
-        edge('inner', 'item', 'inner-collection', 'value'),
-        edge('inner-collection', 'value', 'leaf', 'collection'),
-        edge('leaf', 'item', 'leaf-body', 'value'),
-        edge('leaf-body', 'value', 'leaf-return', 'output'),
-        edge('leaf', 'output_collection', 'inner-return', 'output'),
-        edge('inner', 'output_collection', 'outer-return', 'output'),
+        edge('outer', 'item', 'first', 'collection'),
+        edge('outer', 'item', 'second', 'collection'),
+        edge('first', 'item', 'first-return', 'output'),
+        edge('second', 'item', 'second-return', 'output'),
+        edge('first', 'output_collection', 'outer-return', 'output'),
       ],
       expected: 'nodes.forLoopNestedUnsupported',
     },

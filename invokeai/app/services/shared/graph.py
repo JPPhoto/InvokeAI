@@ -3134,10 +3134,10 @@ class Graph(BaseModel):
     def _get_supported_for_nested_for_body(
         self, node_id: str, graph: nx.DiGraph
     ) -> tuple[set[str], str, str, str] | None:
-        """Returns the bounded nested For contract, if this For uses it.
+        """Returns the supported recursive nested For contract, if this For uses it.
 
-        The inner loop's final collection is the outer loop body's one output. The inner body therefore terminates at
-        its own ForReturn, while the outer body terminates at a second ForReturn fed by the inner For's final output.
+        Each inner loop's final collection is its parent loop body's one output. Each nested body therefore terminates at
+        its own ForReturn, while the parent body terminates at a second ForReturn fed by the inner For's final output.
         """
         outer_node = self.get_node(node_id)
         if not isinstance(outer_node, ForInvocation) or not outer_node.body_id:
@@ -3164,9 +3164,17 @@ class Graph(BaseModel):
             for body_node_id in reachable_body_nodes
             if isinstance(self.get_node(body_node_id), ForInvocation) and body_node_id != node_id
         ]
-        if len(nested_for_ids) != 1:
+        direct_nested_for_ids = [
+            nested_for_id
+            for nested_for_id in nested_for_ids
+            if not any(
+                other_nested_for_id != nested_for_id and nx.has_path(graph, other_nested_for_id, nested_for_id)
+                for other_nested_for_id in nested_for_ids
+            )
+        ]
+        if len(direct_nested_for_ids) != 1:
             return None
-        inner_for_id = nested_for_ids[0]
+        inner_for_id = direct_nested_for_ids[0]
         inner_for = self.get_node(inner_for_id)
         assert isinstance(inner_for, ForInvocation)
         if not inner_for.body_id:
@@ -3179,12 +3187,21 @@ class Graph(BaseModel):
         if inner_return_id not in reachable_return_ids:
             return None
 
-        if set(reachable_return_ids) != {outer_return_id, inner_return_id}:
-            return None
-        if any(
-            isinstance(self.get_node(body_node_id), (ForInvocation, IterateInvocation))
+        inner_nested_for_ids = [
+            body_node_id
             for body_node_id in inner_body_path_nodes
-        ):
+            if isinstance(self.get_node(body_node_id), ForInvocation)
+        ]
+        if any(isinstance(self.get_node(body_node_id), IterateInvocation) for body_node_id in inner_body_path_nodes):
+            return None
+        inner_nested_body = (
+            self._get_supported_for_nested_for_body(inner_for_id, graph) if inner_nested_for_ids else None
+        )
+        if inner_nested_for_ids and inner_nested_body is None:
+            return None
+        if inner_nested_body is not None:
+            inner_body_path_nodes = inner_body_path_nodes | inner_nested_body[0]
+        if set(reachable_return_ids) - inner_body_path_nodes != {outer_return_id}:
             return None
 
         inner_collection_edges = self._get_input_edges(inner_for_id, COLLECTION_FIELD)
@@ -3210,6 +3227,13 @@ class Graph(BaseModel):
         outer_preparation_nodes = (reachable_body_nodes & nx.ancestors(graph, inner_for_id)) | {inner_for_id}
         allowed_body_nodes = outer_preparation_nodes | inner_body_path_nodes | {outer_return_id}
         if reachable_body_nodes != allowed_body_nodes:
+            return None
+
+        if any(
+            isinstance(self.get_node(body_node_id), (ForInvocation, IterateInvocation))
+            for body_node_id in outer_preparation_nodes
+            if body_node_id != inner_for_id
+        ):
             return None
 
         for body_node_id in allowed_body_nodes - {outer_return_id, inner_for_id}:
@@ -3240,7 +3264,14 @@ class Graph(BaseModel):
         nested_for_node_ids = [
             body_node_id
             for body_node_id in reachable_body_nodes
-            if body_node_id != node_id and isinstance(self.get_node(body_node_id), ForInvocation)
+            if body_node_id != node_id
+            and isinstance(self.get_node(body_node_id), ForInvocation)
+            and not any(
+                other_body_node_id != body_node_id
+                and isinstance(self.get_node(other_body_node_id), ForInvocation)
+                and nx.has_path(graph, other_body_node_id, body_node_id)
+                for other_body_node_id in reachable_body_nodes
+            )
         ]
         nested_body = self._get_supported_for_nested_for_body(node_id, graph) if nested_for_node_ids else None
         if nested_for_node_ids and nested_body is None:

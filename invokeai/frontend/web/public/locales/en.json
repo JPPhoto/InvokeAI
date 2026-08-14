@@ -1556,6 +1556,7 @@
         "forLoopBodyEscape": "For loop body outputs cannot escape before its return",
         "forLoopBodyIdentityMissing": "For loop body identity is missing on one boundary endpoint",
         "forLoopBodyIdentityEmpty": "For loop body identity must be non-empty",
+        "forLoopBodyIdentityEdge": "For loop body identity cannot have an incoming connection",
         "forLoopInputCount": "For loop may have only one collection and state input each",
         "forReturnInputCount": "ForReturn may have only one output and state input each",
         "forLoopBodyIdentityStale": "For loop body identity does not match a For boundary",

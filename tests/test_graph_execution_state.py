@@ -573,6 +573,47 @@ def test_graph_nested_for_resumes_after_json_round_trip_without_replaying_inner_
     assert resumed.is_complete()
 
 
+def test_graph_executes_deeper_nested_for_boundaries():
+    graph = Graph()
+    graph.add_node(
+        ForInvocation(
+            id="outer_for",
+            collection=[[["a", "b"], [], ["c"]], [], [[], ["d"]]],
+            body_id="outer-body",
+        )
+    )
+    graph.add_node(AnyCollectionFromValueTestInvocation(id="inner_collection"))
+    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(AnyCollectionFromValueTestInvocation(id="leaf_collection"))
+    graph.add_node(ForInvocation(id="leaf_for", body_id="leaf-body"))
+    graph.add_node(AnyTypeTestInvocation(id="leaf_body"))
+    graph.add_node(ForReturnInvocation(id="leaf_return", body_id="leaf-body"))
+    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+
+    graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
+    graph.add_edge(create_edge("inner_collection", "collection", "inner_for", "collection"))
+    graph.add_edge(create_edge("inner_for", "item", "leaf_collection", "value"))
+    graph.add_edge(create_edge("leaf_collection", "collection", "leaf_for", "collection"))
+    graph.add_edge(create_edge("leaf_for", "item", "leaf_body", "value"))
+    graph.add_edge(create_edge("leaf_body", "value", "leaf_return", "output"))
+    graph.add_edge(create_edge("leaf_for", "output_collection", "inner_return", "output"))
+    graph.add_edge(create_edge("inner_for", "output_collection", "outer_return", "output"))
+    graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert state.results[after_exec_id].value == [[["a", "b"], [], ["c"]], [], [[], ["d"]]]
+    assert state.is_complete()
+
+
 def test_graph_for_nested_iterate_scopes_under_parent_iterator():
     graph = Graph()
     graph.add_node(NestedAnyCollectionTestInvocation(id="source", collection=[[["a", "b"], ["c"]], [["d", "e"]]]))
