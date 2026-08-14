@@ -1,5 +1,6 @@
 import copy
 import pickle
+from typing import Any
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
@@ -12,7 +13,7 @@ from invokeai.app.invocations.baseinvocation import (
     invocation,
     invocation_output,
 )
-from invokeai.app.invocations.fields import OutputField, OutputScope
+from invokeai.app.invocations.fields import InputField, OutputField, OutputScope
 from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation
 from invokeai.app.invocations.math import AddInvocation
 from invokeai.app.invocations.primitives import (
@@ -72,6 +73,20 @@ class ScopedTestInvocationOutput(BaseInvocationOutput):
 class ScopedTestInvocation(BaseInvocation):
     def invoke(self) -> ScopedTestInvocationOutput:
         return ScopedTestInvocationOutput(iteration_value="iteration", final_value="final", ordinary_value="ordinary")
+
+
+@invocation_output("test_two_any_graph_output")
+class TwoAnyGraphTestInvocationOutput(BaseInvocationOutput):
+    value: Any = OutputField()
+
+
+@invocation("test_two_any_graph", version="1.0.0")
+class TwoAnyGraphTestInvocation(BaseInvocation):
+    first: Any = InputField(default=None)
+    second: Any = InputField(default=None)
+
+    def invoke(self) -> TwoAnyGraphTestInvocationOutput:
+        return TwoAnyGraphTestInvocationOutput(value=(self.first, self.second))
 
 
 # Tests
@@ -499,6 +514,30 @@ def test_graph_rejects_nested_for_continuation_branch_without_outer_return():
 
     with pytest.raises(InvalidEdgeError, match="Nested For loops"):
         g.validate_self()
+
+
+def test_graph_validates_independent_nested_for_children_with_explicit_fan_in():
+    g = Graph()
+    g.add_node(ForInvocation(id="outer", collection=[[]], body_id="outer-body"))
+    g.add_node(ForInvocation(id="first", body_id="first-body"))
+    g.add_node(ForInvocation(id="second", body_id="second-body"))
+    g.add_node(AnyTypeTestInvocation(id="first_body"))
+    g.add_node(AnyTypeTestInvocation(id="second_body"))
+    g.add_node(ForReturnInvocation(id="first_return", body_id="first-body"))
+    g.add_node(ForReturnInvocation(id="second_return", body_id="second-body"))
+    g.add_node(TwoAnyGraphTestInvocation(id="fan_in"))
+    g.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    g.add_edge(create_edge("outer", "item", "first", "collection"))
+    g.add_edge(create_edge("outer", "item", "second", "collection"))
+    g.add_edge(create_edge("first", "item", "first_body", "value"))
+    g.add_edge(create_edge("first_body", "value", "first_return", "output"))
+    g.add_edge(create_edge("second", "item", "second_body", "value"))
+    g.add_edge(create_edge("second_body", "value", "second_return", "output"))
+    g.add_edge(create_edge("first", "output_collection", "fan_in", "first"))
+    g.add_edge(create_edge("second", "output_collection", "fan_in", "second"))
+    g.add_edge(create_edge("fan_in", "value", "outer_return", "output"))
+
+    g.validate_self()
 
 
 def test_graph_rejects_multiple_direct_nested_for_children():

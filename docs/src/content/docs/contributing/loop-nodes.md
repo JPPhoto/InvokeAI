@@ -61,7 +61,8 @@ Lessons from those branches:
 
 What is still not implemented:
 
-- Runtime support for sibling/shared loop branches or mixed nested loop shapes.
+- Runtime support for sequential sibling composition, implicit zip or Cartesian loop semantics, or mixed nested loop
+  shapes.
 - A structured visual region or subgraph affordance for the loop body boundary.
 - Early break or continue behavior.
 - Rich collection producer nodes designed specifically for loop sources.
@@ -97,7 +98,7 @@ Implemented on this branch:
   including bounded nested `Iterate` success, cancellation, and body-failure cleanup.
 - SQLite session-queue coverage for persisting, reloading, and completing a partially executed stateful loop.
 - Runtime support for recursively identity-bearing nested `For` boundaries whose final collections feed their parent
-  `ForReturn`, including multiple outer contexts and empty inner or leaf collections.
+  `ForReturn`, including multiple outer contexts, empty inner or leaf collections, and explicit sibling fan-in.
 
 ## Architectural Direction
 
@@ -210,17 +211,17 @@ Validation rules are shared by the backend and frontend:
   malformed saved graphs with duplicate boundary inputs are rejected.
 
 This slice establishes the serialized contract. Identity-bearing nested `For` boundaries are supported recursively when
-each boundary has exactly one direct child `For`. The child final collection may feed the parent's matching `ForReturn`
-directly or through an ordinary outer continuation subgraph. Sibling loops, mixed nested loop shapes, and ambiguous
-product or zip semantics remain rejected. A bounded internal `Iterate` is supported only when one matching `Collect`
+each boundary has one direct child `For` or independent direct children joined by an explicit fan-in continuation. A child
+final collection may feed the parent's matching `ForReturn` directly or through an ordinary outer continuation subgraph.
+Sequential composition, mixed nested loop shapes, and implicit product or zip semantics remain rejected. A bounded internal `Iterate` is supported only when one matching `Collect`
 collapses its item dimension before `ForReturn`; other internal iterator shapes remain rejected.
 
 The first runtime consumer of the identity is the body-path resolver used by materialization and empty-loop cleanup. An
 identity-bearing `For` selects the reachable `ForReturn` with the same `body_id`; an identity-free `For` retains the
 legacy exactly-one-reachable-return rule. This separates runtime ownership lookup from author-time validation. It
 permits the recursive nested shape described below. Multiple nested levels use composite execution contexts and
-independent output ownership. A supported continuation subgraph runs once per parent iteration after the child finalizes;
-mixed nested loop types and sibling loop branches remain rejected.
+independent output ownership. A supported continuation subgraph runs once per parent iteration after one child finalizes,
+or after all independent sibling children finalize at the fan-in barrier; mixed nested loop types remain rejected.
 
 The supported nested `For` shape is:
 
@@ -354,7 +355,7 @@ For the target implementation, the recommended body boundary is a boundary pair:
 The `ForReturn` must be associated with a specific source `For`. Reachability alone is not sufficient once nested loops
 or shared body paths are allowed, because the backend must know which return node closes which loop. The optional
 `body_id` contract now records that association in serialized invocation data. The runtime consumes it for recursive
-identity-bearing nesting and continues to reject ambiguous sibling or mixed loop bodies.
+identity-bearing nesting and continues to reject mixed loop bodies and sibling shapes without an explicit fan-in.
 
 This is simpler than a full visual subgraph while still giving the backend an explicit return boundary. Validation must
 also reject loop-body paths that escape to after-loop nodes without passing through the matching `ForReturn`.
@@ -601,15 +602,16 @@ Potential validation rules:
 - Edges from final-scoped `For` outputs must be treated as after-loop edges.
 - Output-scope metadata must survive backend schema generation, frontend type generation, and graph preparation. Saved
   workflows must preserve the node type and field handles needed to resolve that metadata from the current template.
-- Each loop boundary must expose exactly one matching body return node. Nested boundaries may recurse, but each boundary
-  must have exactly one direct child `For`. That child's `output_collection` may feed the parent's matching return through
-  an ordinary continuation subgraph, but the continuation must remain in the parent body context.
+- Each loop boundary must expose exactly one matching body return node. Nested boundaries may recurse. One direct child
+  `For` may close the parent directly or through an ordinary continuation; multiple independent direct children must all
+  feed an ordinary parent-scoped continuation that acts as an explicit fan-in barrier.
 - A body return's `state` input must be compatible with `LoopState`.
 - The author-time graph must remain acyclic.
 - Nodes inside the loop body must not feed after-loop nodes directly.
 - Identity-bearing nested `For` boundaries are valid recursively only in the inner-final-collection shape described above.
-  A continuation node must be reachable from the child `output_collection`, must terminate at the parent `ForReturn`, and
-  must not be another `For`, `Iterate`, or `ForReturn`. Sibling or mixed nested loop shapes remain rejected.
+  The continuation subgraph must be reachable from every direct child `output_collection`, must terminate at the parent
+  `ForReturn`, and must not contain another `For`, `Iterate`, or `ForReturn`. Sibling children do not imply zip or
+  Cartesian semantics; an ordinary fan-in node must define how their final collections are combined.
 - An internal `Iterate` is valid only in the bounded `Iterate -> body -> Collect -> ForReturn` shape described above.
 - Other internal `Iterate` shapes, including multiple internal iterators or an iterator that escapes through another
   output, must be rejected.
@@ -734,14 +736,27 @@ no explicit rule for product, zip, or state-lane semantics and should remain rej
 ### Recursive Nested For Body
 
 The nested `For` extension supports complete identity-bearing inner `For` boundaries recursively inside an outer `For`
-body. Each boundary has exactly one direct child loop. The child final output may close the parent directly or pass through
-an ordinary continuation subgraph:
+body. Each boundary has one direct child loop or independent direct children joined by an ordinary continuation subgraph.
+A child final output may close the parent directly or pass through that continuation:
 
 ```text
 OuterFor.iteration_output -> InnerFor.collection
 InnerFor.iteration_output -> InnerAction -> InnerForReturn
 InnerFor.output_collection -> OuterContinuation -> OuterForReturn
 ```
+
+For independent sibling children, every child final collection must feed the same parent-scoped fan-in continuation:
+
+```text
+OuterFor.item -> FirstFor.collection
+OuterFor.item -> SecondFor.collection
+FirstFor.output_collection  -> FanIn.first
+SecondFor.output_collection -> FanIn.second
+FanIn.output -> OuterForReturn.output
+```
+
+The fan-in node defines how the collections are combined. The scheduler supplies no implicit sequential, zip, or
+Cartesian pairing.
 
 The inner loop must finalize before the outer continuation and body return execute. Its final outputs are ordinary body
 data in the outer loop, so one completed inner loop produces exactly one matching `OuterForReturn` completion for the
@@ -760,8 +775,10 @@ Supporting this shape requires:
 - propagating inner cancellation or failure to the owning outer iteration without releasing partial inner or outer
   final outputs
 
-This recursive shape is implemented and tested, including three nested boundaries, empty inner collections, and an outer
-continuation after an inner final output. Multiple direct child loops and mixed nested `Iterate`/`For` shapes remain
+This recursive shape is implemented and tested, including three nested boundaries, empty inner collections, an outer
+continuation after an inner final output, and independent sibling children joined by one explicit fan-in continuation.
+Sibling children finalize independently under the same parent iteration; the fan-in continuation runs once after all of
+them finalize. Sequential composition, implicit zip, Cartesian product, and mixed nested `Iterate`/`For` shapes remain
 rejected. They must not be approximated by allowing reachability-inferred loop boundaries to share body or return nodes.
 
 Possible future loop-like nodes:
@@ -804,8 +821,8 @@ Backend tests should cover:
 - cache does not collapse distinct stateful iterations
 - the supported identity-bearing nested `For` shape completes nested contexts independently, including empty inner and
   leaf collections
-- recursive nested `For` boundaries are accepted when each boundary has one direct child and any post-child continuation
-  is ordinary parent-scoped work; multiple direct child and mixed nested loop shapes remain rejected
+- recursive nested `For` boundaries are accepted when each boundary has one direct child or explicit sibling fan-in and
+  any post-child continuation is ordinary parent-scoped work; mixed nested loop shapes remain rejected
 - runtime body-path resolution selects the matching `ForReturn` by durable `body_id` when identity metadata is present
 - body paths that feed after-loop nodes directly are rejected
 - nested final output can traverse an ordinary parent-scoped continuation before `ForReturn`, including empty child loops
@@ -852,14 +869,15 @@ sections for scoped nodes. Add-node picker tests cover contextual `ForReturn` pr
 compatible input auto-wiring through the shared connection helper. Enqueue-time graph validation covers return
 ownership, unterminated paths, nested loops, the supported bounded internal `Iterate` shape and rejected variants,
 iterator-derived external inputs, final outputs feeding the body, and body outputs escaping before `ForReturn`.
-Backend and frontend validation tests accept deeper nested `For` loops with one child per boundary, while rejecting mixed
-nested `For`/`Iterate` bodies, multiple direct nested `For` children, and a `ForReturn` shared by multiple loops.
+Backend and frontend validation tests accept deeper nested `For` loops, explicit sibling fan-in, and reject mixed nested
+`For`/`Iterate` bodies, sibling children without complete fan-in, and a `ForReturn` shared by multiple loops.
 Browser-level picker and ReactFlow interaction coverage is deferred; the temporary browser-test dependencies and
 configuration are removed from this branch. Unit tests cover contextual `ForReturn` discovery and connection wiring.
 
 ## Open Questions
 
-- How should sibling nested loops share a parent body, and should that mean sequential composition, zip, or product?
+- How should sequential sibling composition, zip, and product be exposed as ordinary collection operations around the
+  explicit sibling fan-in boundary?
 - Should early break be added as `continue_condition` on `for_return`, or as a separate `for_continue` node later?
 
 Answered branch-local decisions:
@@ -873,8 +891,9 @@ Answered branch-local decisions:
   invocation data; legacy workflows omit it and continue using the bounded reachability contract.
 - A nested child's final `output_collection` may feed an ordinary parent-scoped continuation subgraph before the matching
   parent `ForReturn`. The continuation is materialized once at the parent iteration path after child finalization; it may
-  consume child final output plus parent iteration/preparation inputs. Sibling loops, product, zip, and mixed loop paths
-  remain unsupported.
+  consume child final output plus parent iteration/preparation inputs. Independent sibling loops are supported only when
+  every child final collection feeds one explicit parent-scoped fan-in continuation, which executes once after all
+  siblings finalize; no zip, Cartesian, or implicit sequential semantics are assigned.
 - `LoopState`, `For`, `ForReturn`, and the state helper nodes are defined in the dedicated `invocations.loops` module.
   Scheduler, materialization, and graph-boundary validation remain in the graph execution service.
 
@@ -896,21 +915,23 @@ Answered branch-local decisions:
 12. Support recursively identity-bearing nested `For` boundaries with independent inner aggregation and deferred outer
     return materialization.
 13. Define and implement a deterministic nested final-output continuation contract.
-14. Define and implement sibling nested-body contracts only after their scheduling and persistence semantics are explicit.
+14. Define and implement sibling nested-body contracts with an explicit fan-in barrier; leave sequential, zip, and
+    Cartesian composition to ordinary collection operations.
 
-Steps 1 through 13 are complete for the current recursive body-path contract. Step 11 has the initial output grouping and
+Steps 1 through 14 are complete for the current recursive body-path contract. Step 11 has the initial output grouping and
 contextual `ForReturn` discovery/wiring affordances, covered by unit tests, but not a structured visual body boundary or
 browser-level interaction coverage.
 
-The durable endpoint identity slice, bounded internal `Iterate` slice, recursive identity-bearing nested `For` slice, and
-deterministic nested final-output continuation slice are implemented. Nested execution uses explicit composite paths,
-independent inner aggregation, deferred outer returns, parent-scoped continuation materialization, empty-group handling,
-failure cleanup, and durable source/execution mappings. Sibling loop branches, early break or continue, parallel stateless
-loops, richer collection producers, and structured visual loop-body editing remain later work.
+The durable endpoint identity slice, bounded internal `Iterate` slice, recursive identity-bearing nested `For` slice,
+deterministic nested final-output continuation slice, and explicit sibling fan-in slice are implemented. Nested execution
+uses explicit composite paths, independent inner aggregation, deferred outer returns, parent-scoped continuation
+materialization, empty-group handling, failure cleanup, and durable source/execution mappings. Sequential sibling
+composition, implicit zip or Cartesian product, early break or continue, parallel stateless loops, richer collection
+producers, and structured visual loop-body editing remain later work.
 
 ## Next Development Slice
 
-After the final adversarial review and full PR validation, the next development slice is sibling nested-body support. The
-current implementation supports recursive identity-bearing `For` boundaries with one direct child and a deterministic
-parent-scoped continuation. The next nested-loop work should define whether multiple direct child loops are sequential,
-zipped, or Cartesian before expanding runtime scheduling or visual loop regions.
+After the final adversarial review and full PR validation, the next development slice is sequential sibling composition,
+zip, or Cartesian collection operations around the explicit sibling fan-in boundary. The current implementation supports
+independent direct child loops when every child final collection feeds one ordinary parent-scoped continuation; it does
+not assign implicit pairing or execution-order semantics to those collections.

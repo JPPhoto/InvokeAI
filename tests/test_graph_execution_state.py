@@ -106,6 +106,19 @@ class AnyCollectionFromValueTestInvocation(BaseInvocation):
         return AnyCollectionFromValueTestInvocationOutput(collection=self.value)
 
 
+@invocation_output("test_empty_collection_output")
+class EmptyCollectionTestInvocationOutput(BaseInvocationOutput):
+    collection: list[Any] = OutputField(default=[])
+
+
+@invocation("test_empty_collection", version="1.0.0")
+class EmptyCollectionTestInvocation(BaseInvocation):
+    value: Any = InputField(default=None)
+
+    def invoke(self, context: InvocationContext) -> EmptyCollectionTestInvocationOutput:
+        return EmptyCollectionTestInvocationOutput(collection=[])
+
+
 class MaybeEmptyIntegerCollectionTestInvocation(BaseInvocation):
     value: int = InputField(default=0)
     always_empty: bool = InputField(default=False)
@@ -645,6 +658,121 @@ def test_graph_executes_nested_for_with_outer_continuation_using_inner_final_out
         if source_node_id == "after"
     )
     assert state.results[after_exec_id].value == [([], []), (["a"], ["a"])]
+    assert state.is_complete()
+
+
+def test_graph_executes_independent_nested_for_children_through_explicit_fan_in():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="outer_for", collection=[[], ["a", "b"], ["c"]], body_id="outer-body"))
+    graph.add_node(ForInvocation(id="first_for", body_id="first-body"))
+    graph.add_node(ForInvocation(id="second_for", body_id="second-body"))
+    graph.add_node(AnyTypeTestInvocation(id="first_body"))
+    graph.add_node(AnyTypeTestInvocation(id="second_body"))
+    graph.add_node(ForReturnInvocation(id="first_return", body_id="first-body"))
+    graph.add_node(ForReturnInvocation(id="second_return", body_id="second-body"))
+    graph.add_node(TwoAnyTestInvocation(id="fan_in"))
+    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+
+    graph.add_edge(create_edge("outer_for", "item", "first_for", "collection"))
+    graph.add_edge(create_edge("outer_for", "item", "second_for", "collection"))
+    graph.add_edge(create_edge("first_for", "item", "first_body", "value"))
+    graph.add_edge(create_edge("first_body", "value", "first_return", "output"))
+    graph.add_edge(create_edge("second_for", "item", "second_body", "value"))
+    graph.add_edge(create_edge("second_body", "value", "second_return", "output"))
+    graph.add_edge(create_edge("first_for", "output_collection", "fan_in", "first"))
+    graph.add_edge(create_edge("second_for", "output_collection", "fan_in", "second"))
+    graph.add_edge(create_edge("fan_in", "value", "outer_return", "output"))
+    graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert state.results[after_exec_id].value == [([], []), (["a", "b"], ["a", "b"]), (["c"], ["c"])]
+    assert state.is_complete()
+
+
+def test_graph_nested_sibling_failure_does_not_release_outer_final_outputs():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="outer_for", collection=[["a"]], body_id="outer-body"))
+    graph.add_node(ForInvocation(id="first_for", body_id="first-body"))
+    graph.add_node(ForInvocation(id="second_for", body_id="second-body"))
+    graph.add_node(AnyTypeTestInvocation(id="first_body"))
+    graph.add_node(AnyTypeTestInvocation(id="second_body"))
+    graph.add_node(ForReturnInvocation(id="first_return", body_id="first-body"))
+    graph.add_node(ForReturnInvocation(id="second_return", body_id="second-body"))
+    graph.add_node(TwoAnyTestInvocation(id="fan_in"))
+    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+
+    graph.add_edge(create_edge("outer_for", "item", "first_for", "collection"))
+    graph.add_edge(create_edge("outer_for", "item", "second_for", "collection"))
+    graph.add_edge(create_edge("first_for", "item", "first_body", "value"))
+    graph.add_edge(create_edge("first_body", "value", "first_return", "output"))
+    graph.add_edge(create_edge("second_for", "item", "second_body", "value"))
+    graph.add_edge(create_edge("second_body", "value", "second_return", "output"))
+    graph.add_edge(create_edge("first_for", "output_collection", "fan_in", "first"))
+    graph.add_edge(create_edge("second_for", "output_collection", "fan_in", "second"))
+    graph.add_edge(create_edge("fan_in", "value", "outer_return", "output"))
+    graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    while True:
+        node = state.next()
+        assert node is not None
+        source_node_id = state.prepared_source_mapping[node.id]
+        if source_node_id == "first_body":
+            state.set_node_error(node.id, "first sibling failed")
+            break
+        state.complete(node.id, node.invoke(Mock(InvocationContext)))
+
+    assert state.has_error()
+    assert state.next() is None
+    assert "fan_in" not in state.source_prepared_mapping
+    assert "outer_return" not in state.source_prepared_mapping
+    assert "after" not in state.source_prepared_mapping
+
+
+def test_graph_executes_sibling_for_with_one_empty_child_context():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="outer_for", collection=[["a", "b"], ["c"]], body_id="outer-body"))
+    graph.add_node(ForInvocation(id="first_for", body_id="first-body"))
+    graph.add_node(EmptyCollectionTestInvocation(id="second_collection"))
+    graph.add_node(ForInvocation(id="second_for", body_id="second-body"))
+    graph.add_node(AnyTypeTestInvocation(id="first_body"))
+    graph.add_node(AnyTypeTestInvocation(id="second_body"))
+    graph.add_node(ForReturnInvocation(id="first_return", body_id="first-body"))
+    graph.add_node(ForReturnInvocation(id="second_return", body_id="second-body"))
+    graph.add_node(TwoAnyTestInvocation(id="fan_in"))
+    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+
+    graph.add_edge(create_edge("outer_for", "item", "first_for", "collection"))
+    graph.add_edge(create_edge("outer_for", "item", "second_collection", "value"))
+    graph.add_edge(create_edge("second_collection", "collection", "second_for", "collection"))
+    graph.add_edge(create_edge("first_for", "item", "first_body", "value"))
+    graph.add_edge(create_edge("first_body", "value", "first_return", "output"))
+    graph.add_edge(create_edge("second_for", "item", "second_body", "value"))
+    graph.add_edge(create_edge("second_body", "value", "second_return", "output"))
+    graph.add_edge(create_edge("first_for", "output_collection", "fan_in", "first"))
+    graph.add_edge(create_edge("second_for", "output_collection", "fan_in", "second"))
+    graph.add_edge(create_edge("fan_in", "value", "outer_return", "output"))
+    graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert state.results[after_exec_id].value == [(["a", "b"], []), (["c"], [])]
     assert state.is_complete()
 
 

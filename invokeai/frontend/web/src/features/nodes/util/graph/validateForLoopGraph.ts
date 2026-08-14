@@ -161,7 +161,7 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     forId: string,
     reachableBodyNodeIds: Set<string>,
     reachableReturnIds: string[]
-  ): { bodyPathNodeIds: Set<string>; returnId: string; innerForId: string; innerReturnId: string } | null => {
+  ): { bodyPathNodeIds: Set<string>; returnId: string } | null => {
     const outerBodyId = getBodyId(nodes[forId]);
     if (outerBodyId === undefined) {
       return null;
@@ -182,73 +182,95 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
           (otherInnerForId) => otherInnerForId !== innerForId && hasPath(otherInnerForId, innerForId)
         )
     );
-    if (directInnerForIds.length !== 1) {
+    if (directInnerForIds.length === 0) {
       return null;
     }
-    const innerForId = directInnerForIds[0];
-    if (innerForId === undefined || getBodyId(nodes[innerForId]) === undefined) {
-      return null;
-    }
+    const innerBodyPathNodeIds = new Set<string>();
 
-    const innerIterationEdges = edges.filter(
-      (edge) => edge.source.node_id === innerForId && ITERATION_OUTPUT_FIELDS.has(edge.source.field)
-    );
-    if (innerIterationEdges.length === 0) {
-      return null;
-    }
-    const innerReachableBodyNodeIds = walk(
-      innerIterationEdges.map((edge) => edge.destination.node_id),
-      outgoing
-    );
-    const innerReachableReturnIds = [...innerReachableBodyNodeIds].filter(
-      (nodeId) => nodes[nodeId]?.type === 'for_return'
-    );
-    const innerBodyId = getBodyId(nodes[innerForId]);
-    const innerReturnIds = innerReachableReturnIds.filter((returnId) => getBodyId(nodes[returnId]) === innerBodyId);
-    if (innerReturnIds.length !== 1) {
-      return null;
-    }
-    const innerReturnId = innerReturnIds[0];
-    if (innerReturnId === undefined || !reachableReturnIds.includes(innerReturnId)) {
-      return null;
-    }
+    for (const innerForId of directInnerForIds) {
+      if (innerForId === undefined || getBodyId(nodes[innerForId]) === undefined) {
+        return null;
+      }
 
-    const innerReturnAncestors = walk([innerReturnId], incoming);
-    const innerBodyPathNodeIds = new Set(
-      [...innerReachableBodyNodeIds].filter((nodeId) => nodeId === innerReturnId || innerReturnAncestors.has(nodeId))
-    );
-    innerBodyPathNodeIds.add(innerReturnId);
-    const innerNestedForIds = [...innerBodyPathNodeIds].filter((nodeId) => nodes[nodeId]?.type === 'for');
-    if ([...innerBodyPathNodeIds].some((nodeId) => nodes[nodeId]?.type === 'iterate')) {
-      return null;
-    }
-    const innerNestedBody =
-      innerNestedForIds.length > 0
-        ? getSupportedNestedForBody(innerForId, innerReachableBodyNodeIds, innerReachableReturnIds)
-        : null;
-    if (innerNestedForIds.length > 0 && innerNestedBody === null) {
-      return null;
-    }
-    if (innerNestedBody !== null) {
-      for (const bodyNodeId of innerNestedBody.bodyPathNodeIds) {
+      const innerIterationEdges = edges.filter(
+        (edge) => edge.source.node_id === innerForId && ITERATION_OUTPUT_FIELDS.has(edge.source.field)
+      );
+      if (innerIterationEdges.length === 0) {
+        return null;
+      }
+      const innerReachableBodyNodeIds = walk(
+        innerIterationEdges.map((edge) => edge.destination.node_id),
+        outgoing
+      );
+      const innerReachableReturnIds = [...innerReachableBodyNodeIds].filter(
+        (nodeId) => nodes[nodeId]?.type === 'for_return'
+      );
+      const innerBodyId = getBodyId(nodes[innerForId]);
+      const innerReturnIdsForBody = innerReachableReturnIds.filter(
+        (returnId) => getBodyId(nodes[returnId]) === innerBodyId
+      );
+      if (innerReturnIdsForBody.length !== 1) {
+        return null;
+      }
+      const innerReturnId = innerReturnIdsForBody[0];
+      if (innerReturnId === undefined || !reachableReturnIds.includes(innerReturnId)) {
+        return null;
+      }
+
+      const innerReturnAncestors = walk([innerReturnId], incoming);
+      const childBodyPathNodeIds = new Set(
+        [...innerReachableBodyNodeIds].filter(
+          (nodeId) => nodeId === innerReturnId || innerReturnAncestors.has(nodeId)
+        )
+      );
+      childBodyPathNodeIds.add(innerReturnId);
+      const innerNestedForIds = [...childBodyPathNodeIds].filter((nodeId) => nodes[nodeId]?.type === 'for');
+      if ([...childBodyPathNodeIds].some((nodeId) => nodes[nodeId]?.type === 'iterate')) {
+        return null;
+      }
+      const innerNestedBody =
+        innerNestedForIds.length > 0
+          ? getSupportedNestedForBody(innerForId, innerReachableBodyNodeIds, innerReachableReturnIds)
+          : null;
+      if (innerNestedForIds.length > 0 && innerNestedBody === null) {
+        return null;
+      }
+      if (innerNestedBody !== null) {
+        for (const bodyNodeId of innerNestedBody.bodyPathNodeIds) {
+          childBodyPathNodeIds.add(bodyNodeId);
+        }
+      }
+
+      const innerCollectionEdges = edges.filter(
+        (edge) => edge.destination.node_id === innerForId && edge.destination.field === 'collection'
+      );
+      const innerCollectionSourceId = innerCollectionEdges[0]?.source.node_id;
+      if (
+        innerCollectionEdges.length !== 1 ||
+        innerCollectionSourceId === undefined ||
+        (innerCollectionSourceId !== forId && !reachableBodyNodeIds.has(innerCollectionSourceId))
+      ) {
+        return null;
+      }
+
+      const unsupportedInnerReturnInput = edges.some(
+        (edge) =>
+          edge.destination.node_id === innerReturnId &&
+          edge.destination.field === 'state' &&
+          edge.source.node_id !== innerForId &&
+          !childBodyPathNodeIds.has(edge.source.node_id)
+      );
+      if (unsupportedInnerReturnInput) {
+        return null;
+      }
+
+      for (const bodyNodeId of childBodyPathNodeIds) {
         innerBodyPathNodeIds.add(bodyNodeId);
       }
     }
     if (
       new Set(reachableReturnIds.filter((returnId) => !innerBodyPathNodeIds.has(returnId))).size !== 1 ||
       !reachableReturnIds.includes(outerReturnId)
-    ) {
-      return null;
-    }
-
-    const innerCollectionEdges = edges.filter(
-      (edge) => edge.destination.node_id === innerForId && edge.destination.field === 'collection'
-    );
-    const innerCollectionSourceId = innerCollectionEdges[0]?.source.node_id;
-    if (
-      innerCollectionEdges.length !== 1 ||
-      innerCollectionSourceId === undefined ||
-      (innerCollectionSourceId !== forId && !reachableBodyNodeIds.has(innerCollectionSourceId))
     ) {
       return null;
     }
@@ -269,16 +291,25 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
       return null;
     }
 
-    const outerPreparationNodeIds = new Set(
-      [...reachableBodyNodeIds].filter((nodeId) => walk([innerForId], incoming).has(nodeId))
-    );
-    outerPreparationNodeIds.add(innerForId);
-    const innerFinalDescendantNodeIds = walk(
-      edges
+    const outerPreparationNodeIds = new Set<string>();
+    for (const innerForId of directInnerForIds) {
+      for (const bodyNodeId of reachableBodyNodeIds) {
+        if (walk([innerForId], incoming).has(bodyNodeId)) {
+          outerPreparationNodeIds.add(bodyNodeId);
+        }
+      }
+      outerPreparationNodeIds.add(innerForId);
+    }
+    const innerFinalDescendantNodeIds = new Set<string>();
+    for (const innerForId of directInnerForIds) {
+      for (const destinationId of edges
         .filter((edge) => edge.source.node_id === innerForId && edge.source.field === 'output_collection')
-        .map((edge) => edge.destination.node_id),
-      outgoing
-    );
+        .map((edge) => edge.destination.node_id)) {
+        for (const descendantId of walk([destinationId], outgoing)) {
+          innerFinalDescendantNodeIds.add(descendantId);
+        }
+      }
+    }
     const continuationNodeIds = new Set(
       [...reachableBodyNodeIds].filter(
         (nodeId) =>
@@ -305,18 +336,36 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
           (edge) =>
             edge.destination.node_id === nodeId &&
             (innerBodyPathNodeIds.has(edge.source.node_id) ||
-              (edge.source.node_id === innerForId && edge.source.field !== 'output_collection'))
+              (directInnerForIds.includes(edge.source.node_id) && edge.source.field !== 'output_collection'))
         )
       )
     ) {
       return null;
     }
     const outerReturnOutputSource = outerReturnOutputEdges[0]?.source;
-    if (outerReturnOutputSource?.node_id === innerForId) {
-      if (outerReturnOutputSource.field !== 'output_collection' || continuationNodeIds.size > 0) {
+    if (outerReturnOutputSource !== undefined && directInnerForIds.includes(outerReturnOutputSource.node_id)) {
+      if (
+        directInnerForIds.length !== 1 ||
+        outerReturnOutputSource.field !== 'output_collection' ||
+        continuationNodeIds.size > 0
+      ) {
         return null;
       }
     } else if (outerReturnOutputSource === undefined || !continuationNodeIds.has(outerReturnOutputSource.node_id)) {
+      return null;
+    }
+
+    if (
+      directInnerForIds.some(
+        (innerForId) =>
+          !edges
+            .filter((edge) => edge.source.node_id === innerForId && FINAL_OUTPUT_FIELDS.has(edge.source.field))
+            .some(
+              (edge) =>
+                continuationNodeIds.has(edge.destination.node_id) || edge.destination.node_id === outerReturnId
+            )
+      )
+    ) {
       return null;
     }
 
@@ -331,32 +380,22 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     }
     if (
       [...outerPreparationNodeIds].some(
-        (nodeId) => nodeId !== innerForId && (nodes[nodeId]?.type === 'for' || nodes[nodeId]?.type === 'iterate')
+        (nodeId) =>
+          !directInnerForIds.includes(nodeId) && (nodes[nodeId]?.type === 'for' || nodes[nodeId]?.type === 'iterate')
       )
     ) {
       return null;
     }
     for (const bodyNodeId of outerPreparationNodeIds) {
-      if (bodyNodeId === innerForId || innerBodyPathNodeIds.has(bodyNodeId)) {
+      if (directInnerForIds.includes(bodyNodeId) || innerBodyPathNodeIds.has(bodyNodeId)) {
         continue;
       }
-      if (!hasPath(bodyNodeId, innerForId)) {
+      if (!directInnerForIds.some((innerForId) => hasPath(bodyNodeId, innerForId))) {
         return null;
       }
     }
 
-    const unsupportedInnerReturnInput = edges.some(
-      (edge) =>
-        edge.destination.node_id === innerReturnId &&
-        edge.destination.field === 'state' &&
-        edge.source.node_id !== innerForId &&
-        !innerBodyPathNodeIds.has(edge.source.node_id)
-    );
-    if (unsupportedInnerReturnInput) {
-      return null;
-    }
-
-    return { bodyPathNodeIds, returnId: outerReturnId, innerForId, innerReturnId };
+    return { bodyPathNodeIds, returnId: outerReturnId };
   };
 
   const forIdentityNodes = new Map<string, string[]>();

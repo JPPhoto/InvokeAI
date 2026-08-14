@@ -219,6 +219,35 @@ describe(validateForLoopGraph.name, () => {
     expect(validateForLoopGraph(graph)).toBe('nodes.forLoopNestedUnsupported');
   });
 
+  it('accepts independent nested For children with an explicit fan-in continuation', () => {
+    const graph = buildGraph(
+      [
+        { id: 'outer', type: 'for', body_id: 'outer-body' },
+        { id: 'first', type: 'for', body_id: 'first-body' },
+        { id: 'second', type: 'for', body_id: 'second-body' },
+        { id: 'first-body', type: 'add' },
+        { id: 'second-body', type: 'add' },
+        { id: 'first-return', type: 'for_return', body_id: 'first-body' },
+        { id: 'second-return', type: 'for_return', body_id: 'second-body' },
+        { id: 'fan-in', type: 'add' },
+        { id: 'outer-return', type: 'for_return', body_id: 'outer-body' },
+      ],
+      [
+        edge('outer', 'item', 'first', 'collection'),
+        edge('outer', 'item', 'second', 'collection'),
+        edge('first', 'item', 'first-body', 'value'),
+        edge('first-body', 'value', 'first-return', 'output'),
+        edge('second', 'item', 'second-body', 'value'),
+        edge('second-body', 'value', 'second-return', 'output'),
+        edge('first', 'output_collection', 'fan-in', 'first'),
+        edge('second', 'output_collection', 'fan-in', 'second'),
+        edge('fan-in', 'value', 'outer-return', 'output'),
+      ]
+    );
+
+    expect(validateForLoopGraph(graph)).toBeNull();
+  });
+
   it.each([
     {
       name: 'missing ForReturn identity',
