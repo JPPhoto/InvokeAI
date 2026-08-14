@@ -113,6 +113,32 @@ describe(validateForLoopGraph.name, () => {
     expect(validateForLoopGraph(graph)).toBeNull();
   });
 
+  it('accepts nested ForReturn state produced by the inner body', () => {
+    const graph = buildGraph(
+      [
+        { id: 'outer', type: 'for', body_id: 'outer-body' },
+        { id: 'inner-collection', type: 'add' },
+        { id: 'inner', type: 'for', body_id: 'inner-body' },
+        { id: 'inner-body', type: 'add' },
+        { id: 'inner-state', type: 'add' },
+        { id: 'inner-return', type: 'for_return', body_id: 'inner-body' },
+        { id: 'outer-return', type: 'for_return', body_id: 'outer-body' },
+      ],
+      [
+        edge('outer', 'item', 'inner-collection', 'value'),
+        edge('inner-collection', 'value', 'inner', 'collection'),
+        edge('inner', 'item', 'inner-body', 'value'),
+        edge('inner', 'state', 'inner-state', 'state'),
+        edge('inner', 'item', 'inner-state', 'value'),
+        edge('inner-body', 'value', 'inner-return', 'output'),
+        edge('inner-state', 'state', 'inner-return', 'state'),
+        edge('inner', 'output_collection', 'outer-return', 'output'),
+      ]
+    );
+
+    expect(validateForLoopGraph(graph)).toBeNull();
+  });
+
   it('accepts deeper nested For boundaries when each boundary has one child', () => {
     const graph = buildGraph(
       [

@@ -237,6 +237,10 @@ one outer return per outer iteration. Continuation nodes may consume the inner f
 iteration or its preparation path. Empty inner collections still produce one empty outer result. Nested `For` failure
 stops the outer loop without releasing downstream final outputs.
 
+An inner `ForReturn.state` may come from the inner `For.state` or from a state-producing node in the inner body. It may
+not be sourced directly from the outer `For` or from outer preparation, because that would bypass the inner loop's state
+boundary and make state ownership ambiguous.
+
 The supported internal iterator extension has this shape:
 
 ```text

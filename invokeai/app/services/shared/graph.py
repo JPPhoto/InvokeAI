@@ -3240,6 +3240,13 @@ class Graph(BaseModel):
             return None
         if inner_nested_body is not None:
             inner_body_path_nodes = inner_body_path_nodes | inner_nested_body[0]
+        if any(
+            edge.destination.field == "state"
+            and edge.source.node_id != inner_for_id
+            and edge.source.node_id not in inner_body_path_nodes
+            for edge in self._get_input_edges(inner_return_id)
+        ):
+            return None
         if set(reachable_return_ids) - inner_body_path_nodes != {outer_return_id}:
             return None
 

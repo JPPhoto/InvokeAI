@@ -348,8 +348,9 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     const unsupportedInnerReturnInput = edges.some(
       (edge) =>
         edge.destination.node_id === innerReturnId &&
-        edge.destination.field !== 'output' &&
-        (edge.destination.field !== 'state' || edge.source.node_id !== innerForId || edge.source.field !== 'state')
+        edge.destination.field === 'state' &&
+        edge.source.node_id !== innerForId &&
+        !innerBodyPathNodeIds.has(edge.source.node_id)
     );
     if (unsupportedInnerReturnInput) {
       return null;

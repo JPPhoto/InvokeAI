@@ -460,6 +460,25 @@ def test_graph_validates_nested_for_with_shared_outer_continuation_path():
     g.validate_self()
 
 
+def test_graph_rejects_nested_for_return_state_from_outer_scope():
+    g = Graph()
+    g.add_node(ForInvocation(id="outer", collection=[[]], body_id="outer-body"))
+    g.add_node(AnyTypeTestInvocation(id="inner_collection"))
+    g.add_node(ForInvocation(id="inner", body_id="inner-body"))
+    g.add_node(AnyTypeTestInvocation(id="inner_body"))
+    g.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    g.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    g.add_edge(create_edge("outer", "item", "inner_collection", "value"))
+    g.add_edge(create_edge("inner_collection", "value", "inner", "collection"))
+    g.add_edge(create_edge("inner", "item", "inner_body", "value"))
+    g.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
+    g.add_edge(create_edge("outer", "state", "inner_return", "state"))
+    g.add_edge(create_edge("inner", "output_collection", "outer_return", "output"))
+
+    with pytest.raises(InvalidEdgeError, match="Nested For loops"):
+        g.validate_self()
+
+
 def test_graph_rejects_nested_for_continuation_branch_without_outer_return():
     g = Graph()
     g.add_node(ForInvocation(id="outer", collection=[[]], body_id="outer-body"))
