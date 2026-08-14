@@ -839,8 +839,8 @@ ownership, unterminated paths, nested loops, the supported bounded internal `Ite
 iterator-derived external inputs, final outputs feeding the body, and body outputs escaping before `ForReturn`.
 Backend and frontend validation tests accept deeper nested `For` loops with one child per boundary, while rejecting mixed
 nested `For`/`Iterate` bodies, multiple direct nested `For` children, and a `ForReturn` shared by multiple loops.
-Chromium browser coverage mounts the picker and live ReactFlow surface, drags an iteration output handle onto the
-canvas, selects `ForReturn`, and verifies both the Redux edge and its rendered edge path.
+Browser-level picker and ReactFlow interaction coverage is deferred; the temporary browser-test dependencies and
+configuration are removed from this branch. Unit tests cover contextual `ForReturn` discovery and connection wiring.
 
 ## Open Questions
 
@@ -879,8 +879,8 @@ Answered branch-local decisions:
 13. Define and implement shared-body contracts only after their scheduling and persistence semantics are explicit.
 
 Steps 1 through 12 are complete for the current recursive body-path contract. Step 11 has the initial output grouping and
-contextual `ForReturn` discovery/wiring affordances, including browser coverage for the rendered drag-to-picker path,
-but not a structured visual body boundary.
+contextual `ForReturn` discovery/wiring affordances, covered by unit tests, but not a structured visual body boundary or
+browser-level interaction coverage.
 
 The durable endpoint identity slice, bounded internal `Iterate` slice, and recursive identity-bearing nested `For` slice
 are implemented. Nested execution uses explicit composite paths, independent inner aggregation, deferred outer returns,
