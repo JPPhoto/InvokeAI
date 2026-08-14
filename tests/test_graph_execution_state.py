@@ -614,6 +614,119 @@ def test_graph_executes_deeper_nested_for_boundaries():
     assert state.is_complete()
 
 
+def test_graph_executes_nested_for_with_outer_continuation_using_inner_final_output():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="outer_for", collection=[[], ["a"]], body_id="outer-body"))
+    graph.add_node(AnyCollectionFromValueTestInvocation(id="inner_collection"))
+    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(AnyTypeTestInvocation(id="inner_body"))
+    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    graph.add_node(TwoAnyTestInvocation(id="continuation"))
+    graph.add_node(AnyTypeTestInvocation(id="continuation_tail"))
+    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+
+    graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
+    graph.add_edge(create_edge("inner_collection", "collection", "inner_for", "collection"))
+    graph.add_edge(create_edge("inner_for", "item", "inner_body", "value"))
+    graph.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
+    graph.add_edge(create_edge("outer_for", "item", "continuation", "first"))
+    graph.add_edge(create_edge("inner_for", "output_collection", "continuation", "second"))
+    graph.add_edge(create_edge("continuation", "value", "continuation_tail", "value"))
+    graph.add_edge(create_edge("continuation_tail", "value", "outer_return", "output"))
+    graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert state.results[after_exec_id].value == [([], []), (["a"], ["a"])]
+    assert state.is_complete()
+
+
+def test_graph_nested_for_continuation_failure_does_not_release_outer_final_outputs():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="outer_for", collection=[["a"]], body_id="outer-body"))
+    graph.add_node(AnyCollectionFromValueTestInvocation(id="inner_collection"))
+    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(AnyTypeTestInvocation(id="inner_body"))
+    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    graph.add_node(TwoAnyTestInvocation(id="continuation"))
+    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+
+    graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
+    graph.add_edge(create_edge("inner_collection", "collection", "inner_for", "collection"))
+    graph.add_edge(create_edge("inner_for", "item", "inner_body", "value"))
+    graph.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
+    graph.add_edge(create_edge("outer_for", "item", "continuation", "first"))
+    graph.add_edge(create_edge("inner_for", "output_collection", "continuation", "second"))
+    graph.add_edge(create_edge("continuation", "value", "outer_return", "output"))
+    graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    while True:
+        node = state.next()
+        assert node is not None
+        if state.prepared_source_mapping[node.id] == "continuation":
+            state.set_node_error(node.id, "outer continuation failed")
+            break
+        state.complete(node.id, node.invoke(Mock(InvocationContext)))
+
+    assert state.has_error()
+    assert state.next() is None
+    assert "after" not in state.source_prepared_mapping
+    assert not any(
+        exec_node_id in state.results for exec_node_id in state.source_prepared_mapping.get("outer_return", set())
+    )
+
+
+def test_graph_nested_for_continuation_resumes_after_json_round_trip():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="outer_for", collection=[["a"], ["b"]], body_id="outer-body"))
+    graph.add_node(AnyCollectionFromValueTestInvocation(id="inner_collection"))
+    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(AnyTypeTestInvocation(id="inner_body"))
+    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    graph.add_node(TwoAnyTestInvocation(id="continuation"))
+    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+
+    graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
+    graph.add_edge(create_edge("inner_collection", "collection", "inner_for", "collection"))
+    graph.add_edge(create_edge("inner_for", "item", "inner_body", "value"))
+    graph.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
+    graph.add_edge(create_edge("outer_for", "item", "continuation", "first"))
+    graph.add_edge(create_edge("inner_for", "output_collection", "continuation", "second"))
+    graph.add_edge(create_edge("continuation", "value", "outer_return", "output"))
+    graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    for _ in range(5):
+        invoke_next(state)
+
+    continuation_ids = state.source_prepared_mapping["continuation"].copy()
+    assert len(continuation_ids) == 1
+    resumed = TypeAdapter(GraphExecutionState).validate_json(
+        state.model_dump_json(warnings=False, exclude_none=True), strict=False
+    )
+    assert resumed.source_prepared_mapping["continuation"] == continuation_ids
+
+    execute_all_nodes(resumed)
+
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in resumed.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert resumed.results[after_exec_id].value == [(["a"], ["a"]), (["b"], ["b"])]
+    assert resumed.is_complete()
+
+
 def test_graph_deeper_nested_for_failure_does_not_release_final_outputs():
     graph = Graph()
     graph.add_node(ForInvocation(id="outer_for", collection=[[["a"]]], body_id="outer-body"))

@@ -141,6 +141,58 @@ describe(validateForLoopGraph.name, () => {
     expect(validateForLoopGraph(graph)).toBeNull();
   });
 
+  it('accepts a nested For with an outer continuation after the inner final output', () => {
+    const graph = buildGraph(
+      [
+        { id: 'outer', type: 'for', body_id: 'outer-body' },
+        { id: 'inner-collection', type: 'add' },
+        { id: 'inner', type: 'for', body_id: 'inner-body' },
+        { id: 'inner-body', type: 'add' },
+        { id: 'inner-return', type: 'for_return', body_id: 'inner-body' },
+        { id: 'continuation', type: 'add' },
+        { id: 'continuation-tail', type: 'add' },
+        { id: 'outer-return', type: 'for_return', body_id: 'outer-body' },
+      ],
+      [
+        edge('outer', 'item', 'inner-collection', 'value'),
+        edge('inner-collection', 'value', 'inner', 'collection'),
+        edge('inner', 'item', 'inner-body', 'value'),
+        edge('inner-body', 'value', 'inner-return', 'output'),
+        edge('inner', 'output_collection', 'continuation', 'value'),
+        edge('continuation', 'value', 'continuation-tail', 'value'),
+        edge('continuation-tail', 'value', 'outer-return', 'output'),
+      ]
+    );
+
+    expect(validateForLoopGraph(graph)).toBeNull();
+  });
+
+  it('rejects a nested continuation branch that does not reach the outer ForReturn', () => {
+    const graph = buildGraph(
+      [
+        { id: 'outer', type: 'for', body_id: 'outer-body' },
+        { id: 'inner-collection', type: 'add' },
+        { id: 'inner', type: 'for', body_id: 'inner-body' },
+        { id: 'inner-body', type: 'add' },
+        { id: 'inner-return', type: 'for_return', body_id: 'inner-body' },
+        { id: 'continuation', type: 'add' },
+        { id: 'dead-branch', type: 'add' },
+        { id: 'outer-return', type: 'for_return', body_id: 'outer-body' },
+      ],
+      [
+        edge('outer', 'item', 'inner-collection', 'value'),
+        edge('inner-collection', 'value', 'inner', 'collection'),
+        edge('inner', 'item', 'inner-body', 'value'),
+        edge('inner-body', 'value', 'inner-return', 'output'),
+        edge('inner', 'output_collection', 'continuation', 'value'),
+        edge('continuation', 'value', 'outer-return', 'output'),
+        edge('continuation', 'value', 'dead-branch', 'value'),
+      ]
+    );
+
+    expect(validateForLoopGraph(graph)).toBe('nodes.forLoopNestedUnsupported');
+  });
+
   it.each([
     {
       name: 'missing ForReturn identity',

@@ -439,6 +439,49 @@ def test_graph_validates_deeper_nested_for_loops_with_one_child_per_boundary():
     g.validate_self()
 
 
+def test_graph_validates_nested_for_with_shared_outer_continuation_path():
+    g = Graph()
+    g.add_node(ForInvocation(id="outer", collection=[[]], body_id="outer-body"))
+    g.add_node(AnyTypeTestInvocation(id="inner_collection"))
+    g.add_node(ForInvocation(id="inner", body_id="inner-body"))
+    g.add_node(AnyTypeTestInvocation(id="inner_body"))
+    g.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    g.add_node(AnyTypeTestInvocation(id="continuation"))
+    g.add_node(AnyTypeTestInvocation(id="continuation_tail"))
+    g.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    g.add_edge(create_edge("outer", "item", "inner_collection", "value"))
+    g.add_edge(create_edge("inner_collection", "value", "inner", "collection"))
+    g.add_edge(create_edge("inner", "item", "inner_body", "value"))
+    g.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
+    g.add_edge(create_edge("inner", "output_collection", "continuation", "value"))
+    g.add_edge(create_edge("continuation", "value", "continuation_tail", "value"))
+    g.add_edge(create_edge("continuation_tail", "value", "outer_return", "output"))
+
+    g.validate_self()
+
+
+def test_graph_rejects_nested_for_continuation_branch_without_outer_return():
+    g = Graph()
+    g.add_node(ForInvocation(id="outer", collection=[[]], body_id="outer-body"))
+    g.add_node(AnyTypeTestInvocation(id="inner_collection"))
+    g.add_node(ForInvocation(id="inner", body_id="inner-body"))
+    g.add_node(AnyTypeTestInvocation(id="inner_body"))
+    g.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    g.add_node(AnyTypeTestInvocation(id="continuation"))
+    g.add_node(AnyTypeTestInvocation(id="dead_branch"))
+    g.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    g.add_edge(create_edge("outer", "item", "inner_collection", "value"))
+    g.add_edge(create_edge("inner_collection", "value", "inner", "collection"))
+    g.add_edge(create_edge("inner", "item", "inner_body", "value"))
+    g.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
+    g.add_edge(create_edge("inner", "output_collection", "continuation", "value"))
+    g.add_edge(create_edge("continuation", "value", "outer_return", "output"))
+    g.add_edge(create_edge("continuation", "value", "dead_branch", "value"))
+
+    with pytest.raises(InvalidEdgeError, match="Nested For loops"):
+        g.validate_self()
+
+
 def test_graph_rejects_multiple_direct_nested_for_children():
     g = Graph()
     g.add_node(ForInvocation(id="outer", collection=[[]], body_id="outer-body"))

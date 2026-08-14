@@ -256,11 +256,7 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     const outerReturnOutputEdges = edges.filter(
       (edge) => edge.destination.node_id === outerReturnId && edge.destination.field === 'output'
     );
-    if (
-      outerReturnOutputEdges.length !== 1 ||
-      outerReturnOutputEdges[0]?.source.node_id !== innerForId ||
-      outerReturnOutputEdges[0]?.source.field !== 'output_collection'
-    ) {
+    if (outerReturnOutputEdges.length !== 1) {
       return null;
     }
     const unsupportedOuterReturnInput = edges.some(
@@ -277,7 +273,59 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
       [...reachableBodyNodeIds].filter((nodeId) => walk([innerForId], incoming).has(nodeId))
     );
     outerPreparationNodeIds.add(innerForId);
-    const bodyPathNodeIds = new Set([...outerPreparationNodeIds, ...innerBodyPathNodeIds, outerReturnId]);
+    const innerFinalDescendantNodeIds = walk(
+      edges
+        .filter((edge) => edge.source.node_id === innerForId && edge.source.field === 'output_collection')
+        .map((edge) => edge.destination.node_id),
+      outgoing
+    );
+    const continuationNodeIds = new Set(
+      [...reachableBodyNodeIds].filter(
+        (nodeId) =>
+          !outerPreparationNodeIds.has(nodeId) && !innerBodyPathNodeIds.has(nodeId) && nodeId !== outerReturnId
+      )
+    );
+    if ([...continuationNodeIds].some((nodeId) => !innerFinalDescendantNodeIds.has(nodeId))) {
+      return null;
+    }
+    if ([...continuationNodeIds].some((nodeId) => !hasPath(nodeId, outerReturnId))) {
+      return null;
+    }
+    if (
+      [...continuationNodeIds].some(
+        (nodeId) =>
+          nodes[nodeId]?.type === 'for' || nodes[nodeId]?.type === 'iterate' || nodes[nodeId]?.type === 'for_return'
+      )
+    ) {
+      return null;
+    }
+    if (
+      [...continuationNodeIds].some((nodeId) =>
+        edges.some(
+          (edge) =>
+            edge.destination.node_id === nodeId &&
+            (innerBodyPathNodeIds.has(edge.source.node_id) ||
+              (edge.source.node_id === innerForId && edge.source.field !== 'output_collection'))
+        )
+      )
+    ) {
+      return null;
+    }
+    const outerReturnOutputSource = outerReturnOutputEdges[0]?.source;
+    if (outerReturnOutputSource?.node_id === innerForId) {
+      if (outerReturnOutputSource.field !== 'output_collection' || continuationNodeIds.size > 0) {
+        return null;
+      }
+    } else if (outerReturnOutputSource === undefined || !continuationNodeIds.has(outerReturnOutputSource.node_id)) {
+      return null;
+    }
+
+    const bodyPathNodeIds = new Set([
+      ...outerPreparationNodeIds,
+      ...innerBodyPathNodeIds,
+      ...continuationNodeIds,
+      outerReturnId,
+    ]);
     if ([...reachableBodyNodeIds].some((nodeId) => !bodyPathNodeIds.has(nodeId))) {
       return null;
     }
