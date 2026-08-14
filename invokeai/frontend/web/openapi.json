@@ -19084,6 +19084,102 @@
         "title": "CollectInvocationOutput",
         "type": "object"
       },
+      "CollectionConcatInvocation": {
+        "category": "batch",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Concatenates two collections in left-to-right order.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "first": {
+            "default": [],
+            "description": "The first collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "First",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "second": {
+            "default": [],
+            "description": "The second collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "Second",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_concat",
+            "default": "collection_concat",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["collection", "concat", "sequential"],
+        "title": "Concatenate Collections",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
+        }
+      },
+      "CollectionConcatInvocationOutput": {
+        "class": "output",
+        "properties": {
+          "collection": {
+            "description": "The concatenated collection",
+            "field_kind": "output",
+            "items": {},
+            "title": "Collection",
+            "type": "array",
+            "ui_hidden": false,
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_concat_output",
+            "default": "collection_concat_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "collection", "type", "type"],
+        "title": "CollectionConcatInvocationOutput",
+        "type": "object"
+      },
       "ColorCollectionOutput": {
         "class": "output",
         "description": "Base class for nodes that output a collection of colors",
@@ -34754,6 +34850,9 @@
                   "$ref": "#/components/schemas/CollectInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/CollectionConcatInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/ColorCorrectInvocation"
                 },
                 {
@@ -35682,6 +35781,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/CollectInvocationOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
                 },
                 {
                   "$ref": "#/components/schemas/ColorCollectionOutput"
@@ -43351,6 +43453,9 @@
                 "$ref": "#/components/schemas/CollectInvocation"
               },
               {
+                "$ref": "#/components/schemas/CollectionConcatInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/ColorCorrectInvocation"
               },
               {
@@ -44238,6 +44343,9 @@
                 "$ref": "#/components/schemas/CollectInvocationOutput"
               },
               {
+                "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
+              },
+              {
                 "$ref": "#/components/schemas/ColorCollectionOutput"
               },
               {
@@ -44727,6 +44835,9 @@
               },
               {
                 "$ref": "#/components/schemas/CollectInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionConcatInvocation"
               },
               {
                 "$ref": "#/components/schemas/ColorCorrectInvocation"
@@ -45703,6 +45814,9 @@
           "collect": {
             "$ref": "#/components/schemas/CollectInvocationOutput"
           },
+          "collection_concat": {
+            "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
+          },
           "color": {
             "$ref": "#/components/schemas/ColorOutput"
           },
@@ -46580,6 +46694,7 @@
           "cogview4_model_loader",
           "cogview4_text_encoder",
           "collect",
+          "collection_concat",
           "color",
           "color_correct",
           "color_map",
@@ -47030,6 +47145,9 @@
               },
               {
                 "$ref": "#/components/schemas/CollectInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionConcatInvocation"
               },
               {
                 "$ref": "#/components/schemas/ColorCorrectInvocation"
@@ -48105,6 +48223,9 @@
               },
               {
                 "$ref": "#/components/schemas/CollectInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionConcatInvocation"
               },
               {
                 "$ref": "#/components/schemas/ColorCorrectInvocation"

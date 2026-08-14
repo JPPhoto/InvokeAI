@@ -758,6 +758,10 @@ FanIn.output -> OuterForReturn.output
 The fan-in node defines how the collections are combined. The scheduler supplies no implicit sequential, zip, or
 Cartesian pairing.
 
+The first explicit collection operation is `CollectionConcat`. It accepts two collection inputs and emits the first
+collection followed by the second, preserving each collection's item order. It is a normal parent-scoped continuation,
+so it can define sequential sibling composition without changing `For` or scheduler semantics.
+
 The inner loop must finalize before the outer continuation and body return execute. Its final outputs are ordinary body
 data in the outer loop, so one completed inner loop produces exactly one matching `OuterForReturn` completion for the
 current outer iteration. Continuation nodes can also consume outer iteration or preparation values, but they execute once
@@ -826,6 +830,7 @@ Backend tests should cover:
 - runtime body-path resolution selects the matching `ForReturn` by durable `body_id` when identity metadata is present
 - body paths that feed after-loop nodes directly are rejected
 - nested final output can traverse an ordinary parent-scoped continuation before `ForReturn`, including empty child loops
+- `CollectionConcat` combines sibling final collections in deterministic left-to-right order
 - saved workflow JSON preserves the loop node types and field handles used to resolve output-scope metadata
 
 Frontend tests should cover:
@@ -876,8 +881,8 @@ configuration are removed from this branch. Unit tests cover contextual `ForRetu
 
 ## Open Questions
 
-- How should sequential sibling composition, zip, and product be exposed as ordinary collection operations around the
-  explicit sibling fan-in boundary?
+- How should zip and Cartesian product be exposed as ordinary collection operations around the explicit sibling fan-in
+  boundary?
 - Should early break be added as `continue_condition` on `for_return`, or as a separate `for_continue` node later?
 
 Answered branch-local decisions:
@@ -917,8 +922,9 @@ Answered branch-local decisions:
 13. Define and implement a deterministic nested final-output continuation contract.
 14. Define and implement sibling nested-body contracts with an explicit fan-in barrier; leave sequential, zip, and
     Cartesian composition to ordinary collection operations.
+15. Add the first explicit sibling collection operation, `CollectionConcat`, with deterministic left-to-right semantics.
 
-Steps 1 through 14 are complete for the current recursive body-path contract. Step 11 has the initial output grouping and
+Steps 1 through 15 are complete for the current recursive body-path contract. Step 11 has the initial output grouping and
 contextual `ForReturn` discovery/wiring affordances, covered by unit tests, but not a structured visual body boundary or
 browser-level interaction coverage.
 
@@ -926,12 +932,11 @@ The durable endpoint identity slice, bounded internal `Iterate` slice, recursive
 deterministic nested final-output continuation slice, and explicit sibling fan-in slice are implemented. Nested execution
 uses explicit composite paths, independent inner aggregation, deferred outer returns, parent-scoped continuation
 materialization, empty-group handling, failure cleanup, and durable source/execution mappings. Sequential sibling
-composition, implicit zip or Cartesian product, early break or continue, parallel stateless loops, richer collection
-producers, and structured visual loop-body editing remain later work.
+composition is available through `CollectionConcat`; implicit zip or Cartesian product, early break or continue, parallel
+stateless loops, richer collection producers, and structured visual loop-body editing remain later work.
 
 ## Next Development Slice
 
-After the final adversarial review and full PR validation, the next development slice is sequential sibling composition,
-zip, or Cartesian collection operations around the explicit sibling fan-in boundary. The current implementation supports
-independent direct child loops when every child final collection feeds one ordinary parent-scoped continuation; it does
-not assign implicit pairing or execution-order semantics to those collections.
+After the final adversarial review and full PR validation, the next development slice is an explicit zip or Cartesian
+collection operation around the sibling fan-in boundary. `CollectionConcat` currently provides the sequential operation;
+the scheduler still assigns no implicit pairing or product semantics to sibling collections.

@@ -1,11 +1,13 @@
 # Copyright (c) 2023 Kyle Schouviller (https://github.com/kyle0654) and the InvokeAI Team
 
 
+from typing import Any
+
 import numpy as np
 from pydantic import ValidationInfo, field_validator
 
-from invokeai.app.invocations.baseinvocation import BaseInvocation, invocation
-from invokeai.app.invocations.fields import InputField
+from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput, invocation, invocation_output
+from invokeai.app.invocations.fields import InputField, OutputField, UIType
 from invokeai.app.invocations.primitives import IntegerCollectionOutput
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.misc import SEED_MAX
@@ -73,3 +75,25 @@ class RandomRangeInvocation(BaseInvocation):
     def invoke(self, context: InvocationContext) -> IntegerCollectionOutput:
         rng = np.random.default_rng(self.seed)
         return IntegerCollectionOutput(collection=list(rng.integers(low=self.low, high=self.high, size=self.size)))
+
+
+@invocation_output("collection_concat_output")
+class CollectionConcatInvocationOutput(BaseInvocationOutput):
+    collection: list[Any] = OutputField(description="The concatenated collection", ui_type=UIType._Collection)
+
+
+@invocation(
+    "collection_concat",
+    title="Concatenate Collections",
+    tags=["collection", "concat", "sequential"],
+    category="batch",
+    version="1.0.0",
+)
+class CollectionConcatInvocation(BaseInvocation):
+    """Concatenates two collections in left-to-right order."""
+
+    first: list[Any] = InputField(default=[], description="The first collection", ui_type=UIType._Collection)
+    second: list[Any] = InputField(default=[], description="The second collection", ui_type=UIType._Collection)
+
+    def invoke(self, context: InvocationContext) -> CollectionConcatInvocationOutput:
+        return CollectionConcatInvocationOutput(collection=[*self.first, *self.second])
