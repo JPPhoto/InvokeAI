@@ -113,8 +113,8 @@ Other iteration sources should be separate collection-producing nodes:
 - `Range` produces `list[int]`.
 - `Board Images` produces `list[ImageField]`.
 - `Model List` produces a list of model identifiers.
-- `Zip` produces a collection of tuples or records.
-- `Cartesian Product` produces a collection of combinations.
+- `Zip` produces equal-length positional pairs.
+- `Cartesian Product` produces every combination of two collections.
 
 This is preferred over multiple mutually exclusive `For` inputs because it:
 
@@ -362,8 +362,8 @@ also reject loop-body paths that escape to after-loop nodes without passing thro
 
 The current branch implements this reachable body-path subset plus endpoint identity validation. The runtime supports
 recursive identity-bearing inner `For` boundaries whose final collections feed their parent `ForReturn` directly or
-through an ordinary continuation subgraph. Sibling loop branches, mixed loop types, and product or zip semantics remain
-future work.
+through an ordinary continuation subgraph. Sibling loop branches may use explicit `CollectionConcat` or
+`CollectionZip` continuations; mixed loop types, implicit pairing, and Cartesian product remain future work.
 
 ### 4. Runtime Shape
 
@@ -756,11 +756,28 @@ FanIn.output -> OuterForReturn.output
 ```
 
 The fan-in node defines how the collections are combined. The scheduler supplies no implicit sequential, zip, or
-Cartesian pairing.
+Cartesian pairing. These semantics belong to ordinary collection operations, which can be connected as explicit
+parent-scoped continuations.
 
-The first explicit collection operation is `CollectionConcat`. It accepts two collection inputs and emits the first
-collection followed by the second, preserving each collection's item order. It is a normal parent-scoped continuation,
-so it can define sequential sibling composition without changing `For` or scheduler semantics.
+### Explicit Collection Fan-In Operations
+
+Use `CollectionConcat` when the two collections represent consecutive phases or sources and every item from the first
+must appear before every item from the second. It preserves each input's order and does not align items by position.
+Unequal lengths are expected and empty inputs are valid.
+
+Use `CollectionZip` when the two collections represent corresponding records, such as an image collection and a
+same-length collection of per-image parameters. It emits one pair for each position, preserving positional order. The
+inputs must have equal lengths; a mismatch raises an error instead of silently truncating one side or inventing padding
+values. Empty collections are valid when both inputs are empty.
+
+`CollectionCartesian` is the planned operation for combinations rather than correspondence. It will emit one pair for
+every combination of one item from each input, so unequal lengths are expected and an empty input produces no pairs. Use
+it when every item from one collection must be combined with every item from the other, not when items are meant to be
+matched by position. Its output ordering and implementation are the next collection-operation slice.
+
+`CollectionConcat` and `CollectionZip` are explicit nodes today; `CollectionCartesian` is planned as the same kind of
+ordinary node. None of these operations change `For` scheduling, create implicit loop dimensions, or assign meaning to
+sibling branches beyond the operation's documented collection semantics.
 
 The inner loop must finalize before the outer continuation and body return execute. Its final outputs are ordinary body
 data in the outer loop, so one completed inner loop produces exactly one matching `OuterForReturn` completion for the
@@ -782,7 +799,7 @@ Supporting this shape requires:
 This recursive shape is implemented and tested, including three nested boundaries, empty inner collections, an outer
 continuation after an inner final output, and independent sibling children joined by one explicit fan-in continuation.
 Sibling children finalize independently under the same parent iteration; the fan-in continuation runs once after all of
-them finalize. Sequential composition, implicit zip, Cartesian product, and mixed nested `Iterate`/`For` shapes remain
+them finalize. Implicit sequential, zip, or Cartesian composition and mixed nested `Iterate`/`For` shapes remain
 rejected. They must not be approximated by allowing reachability-inferred loop boundaries to share body or return nodes.
 
 Possible future loop-like nodes:
@@ -831,6 +848,7 @@ Backend tests should cover:
 - body paths that feed after-loop nodes directly are rejected
 - nested final output can traverse an ordinary parent-scoped continuation before `ForReturn`, including empty child loops
 - `CollectionConcat` combines sibling final collections in deterministic left-to-right order
+- `CollectionZip` combines equal-length sibling final collections into deterministic positional pairs and rejects length mismatches
 - saved workflow JSON preserves the loop node types and field handles used to resolve output-scope metadata
 
 Frontend tests should cover:
@@ -878,11 +896,13 @@ Backend and frontend validation tests accept deeper nested `For` loops, explicit
 `For`/`Iterate` bodies, sibling children without complete fan-in, and a `ForReturn` shared by multiple loops.
 Browser-level picker and ReactFlow interaction coverage is deferred; the temporary browser-test dependencies and
 configuration are removed from this branch. Unit tests cover contextual `ForReturn` discovery and connection wiring.
+Collection operation tests cover sequential concatenation, strict positional zipping, empty inputs, input immutability,
+and zip length mismatches.
 
 ## Open Questions
 
-- How should zip and Cartesian product be exposed as ordinary collection operations around the explicit sibling fan-in
-  boundary?
+- What additional validation or output representation should `CollectionCartesian` expose beyond its planned
+  left-major, right-minor pair ordering?
 - Should early break be added as `continue_condition` on `for_return`, or as a separate `for_continue` node later?
 
 Answered branch-local decisions:
@@ -899,6 +919,12 @@ Answered branch-local decisions:
   consume child final output plus parent iteration/preparation inputs. Independent sibling loops are supported only when
   every child final collection feeds one explicit parent-scoped fan-in continuation, which executes once after all
   siblings finalize; no zip, Cartesian, or implicit sequential semantics are assigned.
+- `CollectionConcat` is the explicit sequential operation: it preserves left-to-right collection order and accepts
+  unequal lengths.
+- `CollectionZip` is the explicit positional operation: it requires equal lengths and emits JSON-friendly pairs;
+  unequal lengths fail rather than truncate or pad.
+- `CollectionCartesian` is reserved for explicit all-combinations composition. Unequal lengths are valid, empty input
+  yields no pairs, and it will define deterministic pair ordering without changing scheduler behavior.
 - `LoopState`, `For`, `ForReturn`, and the state helper nodes are defined in the dedicated `invocations.loops` module.
   Scheduler, materialization, and graph-boundary validation remain in the graph execution service.
 
@@ -923,20 +949,25 @@ Answered branch-local decisions:
 14. Define and implement sibling nested-body contracts with an explicit fan-in barrier; leave sequential, zip, and
     Cartesian composition to ordinary collection operations.
 15. Add the first explicit sibling collection operation, `CollectionConcat`, with deterministic left-to-right semantics.
+16. Add explicit positional sibling pairing with `CollectionZip`, including a strict equal-length contract.
+17. Add explicit all-combinations sibling pairing with `CollectionCartesian`.
 
-Steps 1 through 15 are complete for the current recursive body-path contract. Step 11 has the initial output grouping and
+Steps 1 through 16 are complete for the current recursive body-path contract. Step 11 has the initial output grouping and
 contextual `ForReturn` discovery/wiring affordances, covered by unit tests, but not a structured visual body boundary or
 browser-level interaction coverage.
 
 The durable endpoint identity slice, bounded internal `Iterate` slice, recursive identity-bearing nested `For` slice,
-deterministic nested final-output continuation slice, and explicit sibling fan-in slice are implemented. Nested execution
+deterministic nested final-output continuation slice, explicit sibling fan-in slice, and positional `CollectionZip` slice
+are implemented. Nested execution
 uses explicit composite paths, independent inner aggregation, deferred outer returns, parent-scoped continuation
 materialization, empty-group handling, failure cleanup, and durable source/execution mappings. Sequential sibling
-composition is available through `CollectionConcat`; implicit zip or Cartesian product, early break or continue, parallel
-stateless loops, richer collection producers, and structured visual loop-body editing remain later work.
+composition is available through `CollectionConcat`, and positional pairing through `CollectionZip`; Cartesian product,
+early break or continue, parallel stateless loops, richer collection producers, and structured visual loop-body editing
+remain later work.
 
 ## Next Development Slice
 
-After the final adversarial review and full PR validation, the next development slice is an explicit zip or Cartesian
-collection operation around the sibling fan-in boundary. `CollectionConcat` currently provides the sequential operation;
-the scheduler still assigns no implicit pairing or product semantics to sibling collections.
+After the final adversarial review and full PR validation, the next development slice is an explicit
+`CollectionCartesian` operation around the sibling fan-in boundary. `CollectionConcat` provides sequential composition
+and `CollectionZip` provides strict positional pairing; the scheduler still assigns no implicit pairing or product
+semantics to sibling collections.

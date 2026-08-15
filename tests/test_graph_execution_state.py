@@ -13,7 +13,7 @@ from invokeai.app.invocations.baseinvocation import (
     invocation,
     invocation_output,
 )
-from invokeai.app.invocations.collections import CollectionConcatInvocation, RangeInvocation
+from invokeai.app.invocations.collections import CollectionConcatInvocation, CollectionZipInvocation, RangeInvocation
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.logic import IfInvocation, IfInvocationOutput
 from invokeai.app.invocations.loops import (
@@ -754,6 +754,40 @@ def test_graph_executes_sibling_for_through_collection_concat():
         if source_node_id == "after"
     )
     assert state.results[after_exec_id].value == [["a", "b", "a", "b"]]
+    assert state.is_complete()
+
+
+def test_graph_executes_sibling_for_through_collection_zip():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="outer_for", collection=[[1, 2]], body_id="outer-body"))
+    graph.add_node(ForInvocation(id="first_for", body_id="first-body"))
+    graph.add_node(ForInvocation(id="second_for", body_id="second-body"))
+    graph.add_node(AnyTypeTestInvocation(id="first_body"))
+    graph.add_node(AddInvocation(id="second_body", b=10))
+    graph.add_node(ForReturnInvocation(id="first_return", body_id="first-body"))
+    graph.add_node(ForReturnInvocation(id="second_return", body_id="second-body"))
+    graph.add_node(CollectionZipInvocation(id="zip"))
+    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+
+    graph.add_edge(create_edge("outer_for", "item", "first_for", "collection"))
+    graph.add_edge(create_edge("outer_for", "item", "second_for", "collection"))
+    graph.add_edge(create_edge("first_for", "item", "first_body", "value"))
+    graph.add_edge(create_edge("first_body", "value", "first_return", "output"))
+    graph.add_edge(create_edge("second_for", "item", "second_body", "a"))
+    graph.add_edge(create_edge("second_body", "value", "second_return", "output"))
+    graph.add_edge(create_edge("first_for", "output_collection", "zip", "first"))
+    graph.add_edge(create_edge("second_for", "output_collection", "zip", "second"))
+    graph.add_edge(create_edge("zip", "collection", "outer_return", "output"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    outer_return_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "outer_return"
+    )
+    assert state.results[outer_return_id].output == [[1, 11], [2, 12]]
     assert state.is_complete()
 
 

@@ -97,3 +97,29 @@ class CollectionConcatInvocation(BaseInvocation):
 
     def invoke(self, context: InvocationContext) -> CollectionConcatInvocationOutput:
         return CollectionConcatInvocationOutput(collection=[*self.first, *self.second])
+
+
+@invocation_output("collection_zip_output")
+class CollectionZipInvocationOutput(BaseInvocationOutput):
+    collection: list[Any] = OutputField(description="The positional pairs", ui_type=UIType._Collection)
+
+
+@invocation(
+    "collection_zip",
+    title="Zip Collections",
+    tags=["collection", "zip", "pair"],
+    category="batch",
+    version="1.0.0",
+)
+class CollectionZipInvocation(BaseInvocation):
+    """Pairs items at matching positions from two equally sized collections."""
+
+    first: list[Any] = InputField(default=[], description="The first collection", ui_type=UIType._Collection)
+    second: list[Any] = InputField(default=[], description="The second collection", ui_type=UIType._Collection)
+
+    def invoke(self, context: InvocationContext) -> CollectionZipInvocationOutput:
+        if len(self.first) != len(self.second):
+            raise ValueError("Zip inputs must have the same length")
+        return CollectionZipInvocationOutput(
+            collection=[[first, second] for first, second in zip(self.first, self.second, strict=True)]
+        )
