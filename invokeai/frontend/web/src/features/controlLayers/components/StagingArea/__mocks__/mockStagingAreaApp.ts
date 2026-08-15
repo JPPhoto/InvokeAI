@@ -130,8 +130,15 @@ export const createMockImageDTO = (overrides: Partial<ImageDTO> = {}): ImageDTO 
   ...overrides,
 });
 
+type InvocationProgressEventOverrides = {
+  item_id?: number;
+  destination?: string | null;
+  image?: S['InvocationProgressEvent']['image'];
+  percentage?: number;
+};
+
 export const createMockProgressEvent = (
-  overrides: PartialDeep<S['InvocationProgressEvent']> = {}
+  overrides: InvocationProgressEventOverrides = {}
 ): S['InvocationProgressEvent'] =>
   merge(
     {

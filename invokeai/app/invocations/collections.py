@@ -123,3 +123,27 @@ class CollectionZipInvocation(BaseInvocation):
         return CollectionZipInvocationOutput(
             collection=[[first, second] for first, second in zip(self.first, self.second, strict=True)]
         )
+
+
+@invocation_output("collection_cartesian_output")
+class CollectionCartesianInvocationOutput(BaseInvocationOutput):
+    collection: list[Any] = OutputField(description="The Cartesian product pairs", ui_type=UIType._Collection)
+
+
+@invocation(
+    "collection_cartesian",
+    title="Cartesian Product of Collections",
+    tags=["collection", "cartesian", "product"],
+    category="batch",
+    version="1.0.0",
+)
+class CollectionCartesianInvocation(BaseInvocation):
+    """Emits every pair formed by one item from each collection."""
+
+    first: list[Any] = InputField(default=[], description="The first collection", ui_type=UIType._Collection)
+    second: list[Any] = InputField(default=[], description="The second collection", ui_type=UIType._Collection)
+
+    def invoke(self, context: InvocationContext) -> CollectionCartesianInvocationOutput:
+        return CollectionCartesianInvocationOutput(
+            collection=[[first, second] for first in self.first for second in self.second]
+        )

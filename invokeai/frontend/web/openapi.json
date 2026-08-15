@@ -19084,6 +19084,102 @@
         "title": "CollectInvocationOutput",
         "type": "object"
       },
+      "CollectionCartesianInvocation": {
+        "category": "batch",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Emits every pair formed by one item from each collection.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "first": {
+            "default": [],
+            "description": "The first collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "First",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "second": {
+            "default": [],
+            "description": "The second collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "Second",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_cartesian",
+            "default": "collection_cartesian",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["collection", "cartesian", "product"],
+        "title": "Cartesian Product of Collections",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/CollectionCartesianInvocationOutput"
+        }
+      },
+      "CollectionCartesianInvocationOutput": {
+        "class": "output",
+        "properties": {
+          "collection": {
+            "description": "The Cartesian product pairs",
+            "field_kind": "output",
+            "items": {},
+            "title": "Collection",
+            "type": "array",
+            "ui_hidden": false,
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_cartesian_output",
+            "default": "collection_cartesian_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "collection", "type", "type"],
+        "title": "CollectionCartesianInvocationOutput",
+        "type": "object"
+      },
       "CollectionConcatInvocation": {
         "category": "batch",
         "class": "invocation",
@@ -34946,6 +35042,9 @@
                   "$ref": "#/components/schemas/CollectInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/CollectionCartesianInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/CollectionConcatInvocation"
                 },
                 {
@@ -35880,6 +35979,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/CollectInvocationOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/CollectionCartesianInvocationOutput"
                 },
                 {
                   "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
@@ -43555,6 +43657,9 @@
                 "$ref": "#/components/schemas/CollectInvocation"
               },
               {
+                "$ref": "#/components/schemas/CollectionCartesianInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/CollectionConcatInvocation"
               },
               {
@@ -44448,6 +44553,9 @@
                 "$ref": "#/components/schemas/CollectInvocationOutput"
               },
               {
+                "$ref": "#/components/schemas/CollectionCartesianInvocationOutput"
+              },
+              {
                 "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
               },
               {
@@ -44943,6 +45051,9 @@
               },
               {
                 "$ref": "#/components/schemas/CollectInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionCartesianInvocation"
               },
               {
                 "$ref": "#/components/schemas/CollectionConcatInvocation"
@@ -45925,6 +46036,9 @@
           "collect": {
             "$ref": "#/components/schemas/CollectInvocationOutput"
           },
+          "collection_cartesian": {
+            "$ref": "#/components/schemas/CollectionCartesianInvocationOutput"
+          },
           "collection_concat": {
             "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
           },
@@ -46808,6 +46922,7 @@
           "cogview4_model_loader",
           "cogview4_text_encoder",
           "collect",
+          "collection_cartesian",
           "collection_concat",
           "collection_zip",
           "color",
@@ -47260,6 +47375,9 @@
               },
               {
                 "$ref": "#/components/schemas/CollectInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionCartesianInvocation"
               },
               {
                 "$ref": "#/components/schemas/CollectionConcatInvocation"
@@ -48341,6 +48459,9 @@
               },
               {
                 "$ref": "#/components/schemas/CollectInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionCartesianInvocation"
               },
               {
                 "$ref": "#/components/schemas/CollectionConcatInvocation"

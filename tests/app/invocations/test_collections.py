@@ -2,7 +2,11 @@ from unittest.mock import Mock
 
 import pytest
 
-from invokeai.app.invocations.collections import CollectionConcatInvocation, CollectionZipInvocation
+from invokeai.app.invocations.collections import (
+    CollectionCartesianInvocation,
+    CollectionConcatInvocation,
+    CollectionZipInvocation,
+)
 
 
 def test_collection_concat_preserves_left_then_right_order() -> None:
@@ -60,6 +64,42 @@ def test_collection_zip_does_not_mutate_input_collections() -> None:
     first = ["left"]
     second = ["right"]
     invocation = CollectionZipInvocation(id="zip", first=first, second=second)
+
+    output = invocation.invoke(Mock())
+    output.collection.append(["changed", "value"])
+
+    assert first == ["left"]
+    assert second == ["right"]
+
+
+def test_collection_cartesian_preserves_left_major_right_minor_order() -> None:
+    invocation = CollectionCartesianInvocation(id="cartesian", first=[1, 2], second=["a", "b"])
+
+    output = invocation.invoke(Mock())
+
+    assert output.collection == [[1, "a"], [1, "b"], [2, "a"], [2, "b"]]
+
+
+def test_collection_cartesian_accepts_unequal_input_lengths() -> None:
+    invocation = CollectionCartesianInvocation(id="cartesian", first=[1], second=["a", "b", "c"])
+
+    output = invocation.invoke(Mock())
+
+    assert output.collection == [[1, "a"], [1, "b"], [1, "c"]]
+
+
+def test_collection_cartesian_handles_empty_inputs() -> None:
+    invocation = CollectionCartesianInvocation(id="cartesian", first=[], second=["value"])
+
+    output = invocation.invoke(Mock())
+
+    assert output.collection == []
+
+
+def test_collection_cartesian_does_not_mutate_input_collections() -> None:
+    first = ["left"]
+    second = ["right"]
+    invocation = CollectionCartesianInvocation(id="cartesian", first=first, second=second)
 
     output = invocation.invoke(Mock())
     output.collection.append(["changed", "value"])

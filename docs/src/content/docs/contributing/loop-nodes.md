@@ -363,7 +363,7 @@ also reject loop-body paths that escape to after-loop nodes without passing thro
 The current branch implements this reachable body-path subset plus endpoint identity validation. The runtime supports
 recursive identity-bearing inner `For` boundaries whose final collections feed their parent `ForReturn` directly or
 through an ordinary continuation subgraph. Sibling loop branches may use explicit `CollectionConcat` or
-`CollectionZip` continuations; mixed loop types, implicit pairing, and Cartesian product remain future work.
+`CollectionZip` or `CollectionCartesian` continuations; mixed loop types and implicit pairing remain future work.
 
 ### 4. Runtime Shape
 
@@ -770,14 +770,14 @@ same-length collection of per-image parameters. It emits one pair for each posit
 inputs must have equal lengths; a mismatch raises an error instead of silently truncating one side or inventing padding
 values. Empty collections are valid when both inputs are empty.
 
-`CollectionCartesian` is the planned operation for combinations rather than correspondence. It will emit one pair for
-every combination of one item from each input, so unequal lengths are expected and an empty input produces no pairs. Use
-it when every item from one collection must be combined with every item from the other, not when items are meant to be
-matched by position. Its output ordering and implementation are the next collection-operation slice.
+Use `CollectionCartesian` for combinations rather than correspondence. It emits one pair for every combination of one
+item from each input in left-major, right-minor order, so unequal lengths are expected and an empty input produces no
+pairs. Use it when every item from one collection must be combined with every item from the other, not when items are
+meant to be matched by position. Its output size is `len(first) * len(second)`, so inputs should be bounded when the
+result will feed a loop or another collection operation; Cartesian composition can grow much faster than either input.
 
-`CollectionConcat` and `CollectionZip` are explicit nodes today; `CollectionCartesian` is planned as the same kind of
-ordinary node. None of these operations change `For` scheduling, create implicit loop dimensions, or assign meaning to
-sibling branches beyond the operation's documented collection semantics.
+All three operations are explicit ordinary nodes. None changes `For` scheduling, creates implicit loop dimensions, or
+assigns meaning to sibling branches beyond the operation's documented collection semantics.
 
 The inner loop must finalize before the outer continuation and body return execute. Its final outputs are ordinary body
 data in the outer loop, so one completed inner loop produces exactly one matching `OuterForReturn` completion for the
@@ -849,6 +849,8 @@ Backend tests should cover:
 - nested final output can traverse an ordinary parent-scoped continuation before `ForReturn`, including empty child loops
 - `CollectionConcat` combines sibling final collections in deterministic left-to-right order
 - `CollectionZip` combines equal-length sibling final collections into deterministic positional pairs and rejects length mismatches
+- `CollectionCartesian` combines sibling final collections in deterministic left-major, right-minor order and accepts
+  unequal lengths
 - saved workflow JSON preserves the loop node types and field handles used to resolve output-scope metadata
 
 Frontend tests should cover:
@@ -896,13 +898,11 @@ Backend and frontend validation tests accept deeper nested `For` loops, explicit
 `For`/`Iterate` bodies, sibling children without complete fan-in, and a `ForReturn` shared by multiple loops.
 Browser-level picker and ReactFlow interaction coverage is deferred; the temporary browser-test dependencies and
 configuration are removed from this branch. Unit tests cover contextual `ForReturn` discovery and connection wiring.
-Collection operation tests cover sequential concatenation, strict positional zipping, empty inputs, input immutability,
-and zip length mismatches.
+Collection operation tests cover sequential concatenation, strict positional zipping, Cartesian products, empty inputs,
+input immutability, and zip length mismatches.
 
 ## Open Questions
 
-- What additional validation or output representation should `CollectionCartesian` expose beyond its planned
-  left-major, right-minor pair ordering?
 - Should early break be added as `continue_condition` on `for_return`, or as a separate `for_continue` node later?
 
 Answered branch-local decisions:
@@ -923,8 +923,8 @@ Answered branch-local decisions:
   unequal lengths.
 - `CollectionZip` is the explicit positional operation: it requires equal lengths and emits JSON-friendly pairs;
   unequal lengths fail rather than truncate or pad.
-- `CollectionCartesian` is reserved for explicit all-combinations composition. Unequal lengths are valid, empty input
-  yields no pairs, and it will define deterministic pair ordering without changing scheduler behavior.
+- `CollectionCartesian` is the explicit all-combinations operation. Unequal lengths are valid, empty input yields no
+  pairs, and pair ordering is deterministic left-major, right-minor without changing scheduler behavior.
 - `LoopState`, `For`, `ForReturn`, and the state helper nodes are defined in the dedicated `invocations.loops` module.
   Scheduler, materialization, and graph-boundary validation remain in the graph execution service.
 
@@ -952,22 +952,21 @@ Answered branch-local decisions:
 16. Add explicit positional sibling pairing with `CollectionZip`, including a strict equal-length contract.
 17. Add explicit all-combinations sibling pairing with `CollectionCartesian`.
 
-Steps 1 through 16 are complete for the current recursive body-path contract. Step 11 has the initial output grouping and
+Steps 1 through 17 are complete for the current recursive body-path contract. Step 11 has the initial output grouping and
 contextual `ForReturn` discovery/wiring affordances, covered by unit tests, but not a structured visual body boundary or
 browser-level interaction coverage.
 
 The durable endpoint identity slice, bounded internal `Iterate` slice, recursive identity-bearing nested `For` slice,
-deterministic nested final-output continuation slice, explicit sibling fan-in slice, and positional `CollectionZip` slice
-are implemented. Nested execution
+deterministic nested final-output continuation slice, explicit sibling fan-in slice, positional `CollectionZip` slice,
+and `CollectionCartesian` slice are implemented. Nested execution
 uses explicit composite paths, independent inner aggregation, deferred outer returns, parent-scoped continuation
 materialization, empty-group handling, failure cleanup, and durable source/execution mappings. Sequential sibling
-composition is available through `CollectionConcat`, and positional pairing through `CollectionZip`; Cartesian product,
-early break or continue, parallel stateless loops, richer collection producers, and structured visual loop-body editing
-remain later work.
+composition is available through `CollectionConcat`, positional pairing through `CollectionZip`, and all-combinations
+pairing through `CollectionCartesian`; early break or continue, parallel stateless loops, richer collection producers,
+and structured visual loop-body editing remain later work.
 
 ## Next Development Slice
 
-After the final adversarial review and full PR validation, the next development slice is an explicit
-`CollectionCartesian` operation around the sibling fan-in boundary. `CollectionConcat` provides sequential composition
-and `CollectionZip` provides strict positional pairing; the scheduler still assigns no implicit pairing or product
-semantics to sibling collections.
+After the final adversarial review and full PR validation, the next development slice is an explicit early-break
+contract for `For`. The current collection operations provide sequential, positional, and all-combinations fan-in; the
+scheduler still assigns no implicit pairing or product semantics to sibling collections.
