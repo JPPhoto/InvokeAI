@@ -2,7 +2,7 @@
 import { configureStore } from '@reduxjs/toolkit';
 import { api } from 'services/api';
 import { initializeQueuePerformanceInstrumentation } from 'services/api/queuePerformance';
-import type { GetQueueItemDTOsByItemIdsResult } from 'services/api/types';
+import type { GetQueueItemSummariesByItemIdsResult } from 'services/api/types';
 import stableHash from 'stable-hash';
 import type { Param0 } from 'tsafe';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -11,63 +11,21 @@ import { queueApi } from './queue';
 
 const RUN_PERFORMANCE_TESTS = process.env.INVOKEAI_PERFORMANCE_TESTS === '1';
 const TARGET_LARGE_RESPONSE_BYTES = 8 * 1024 * 1024;
-const EXPANDED_NODE_COUNT = 1_000;
 const LARGE_HISTORY_COUNT = 20_000;
 
-const buildSession = (expandedNodeCount: number, valueSize: number) => {
-  const value = 'x'.repeat(valueSize);
-  const nodes: Record<string, unknown> = {};
-  const results: Record<string, unknown> = {};
-  const preparedSourceMapping: Record<string, string> = {};
-  const preparedIterationPaths: Record<string, number[]> = {};
-  const preparedIds: string[] = [];
-
-  for (let index = 0; index < expandedNodeCount; index++) {
-    const nodeId = `source_${index}`;
-    nodes[nodeId] = { id: nodeId, type: 'string', value };
-    results[nodeId] = { type: 'string_output', value };
-    preparedSourceMapping[nodeId] = 'source';
-    preparedIterationPaths[nodeId] = [index];
-    preparedIds.push(nodeId);
-  }
-
-  return {
-    id: 'large-session',
-    graph: {
-      id: 'source-graph',
-      nodes: { source: { id: 'source', type: 'string', value: 'source' } },
-      edges: [],
-    },
-    execution_graph: { id: 'execution-graph', nodes, edges: [] },
-    executed: preparedIds,
-    executed_history: preparedIds,
-    results,
-    errors: {},
-    workflow_call_stack: [],
-    workflow_call_history: [],
-    prepared_source_mapping: preparedSourceMapping,
-    source_prepared_mapping: { source: preparedIds },
-    prepared_iteration_paths: preparedIterationPaths,
-    ready_order: [],
-    indegree: {},
-  };
-};
-
-const buildQueueItem = (itemId: number, expandedNodeCount: number, valueSize: number) => ({
+const buildQueueItemSummary = (itemId: number, valueSize: number) => ({
   item_id: itemId,
   status: 'completed',
-  priority: 0,
   batch_id: `batch-${itemId}`,
   origin: 'workflows',
   destination: 'workflows',
-  session_id: `session-${itemId}`,
   created_at: '2026-01-01T00:00:00Z',
-  updated_at: '2026-01-01T00:00:01Z',
   started_at: '2026-01-01T00:00:00Z',
   completed_at: '2026-01-01T00:00:01Z',
-  queue_id: 'default',
   user_id: 'system',
-  session: buildSession(expandedNodeCount, valueSize),
+  user_display_name: null,
+  user_email: null,
+  field_values: [{ node_path: 'source', field_name: 'value', value: 'x'.repeat(valueSize) }],
 });
 
 const createApiStore = () =>
@@ -86,26 +44,26 @@ describe.skipIf(!RUN_PERFORMANCE_TESTS)('queue large-payload performance', () =>
     vi.unstubAllGlobals();
   });
 
-  it('measures fetch decoding and RTK Query hydration for an 8 MiB completed expanded graph', async () => {
+  it('measures fetch decoding and RTK Query hydration for an 8 MiB summary response', async () => {
     vi.stubGlobal('window', { location: { origin: 'http://test' } });
     vi.stubGlobal('localStorage', { getItem: () => null });
     const instrumentation = initializeQueuePerformanceInstrumentation();
     instrumentation.enable();
     instrumentation.clear();
 
-    const largeItem = buildQueueItem(3, EXPANDED_NODE_COUNT, 4_200);
+    const largeItem = buildQueueItemSummary(3, TARGET_LARGE_RESPONSE_BYTES);
     const responseItems = [
-      buildQueueItem(1, 1, 8),
-      buildQueueItem(2, 1, 8),
+      buildQueueItemSummary(1, 8),
+      buildQueueItemSummary(2, 8),
       largeItem,
-    ] as unknown as GetQueueItemDTOsByItemIdsResult;
+    ] as unknown as GetQueueItemSummariesByItemIdsResult;
     const responseJson = JSON.stringify(responseItems);
     let activeResponseJson = responseJson;
     const responseSizeBytes = new TextEncoder().encode(responseJson).byteLength;
     expect(responseSizeBytes).toBeGreaterThanOrEqual(TARGET_LARGE_RESPONSE_BYTES);
 
     const fetchMock = vi.fn((input: Request | URL | string) => {
-      expect(inputUrl(input)).toContain('/api/v1/queue/default/items_by_ids');
+      expect(inputUrl(input)).toContain('/api/v1/queue/default/item_summaries_by_ids');
       return Promise.resolve(new Response(activeResponseJson, { headers: { 'Content-Type': 'application/json' } }));
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -124,7 +82,9 @@ describe.skipIf(!RUN_PERFORMANCE_TESTS)('queue large-payload performance', () =>
 
     const started = performance.now();
     const request = store.dispatch(
-      queueApi.endpoints.getQueueItemDTOsByItemIds.initiate({ item_ids: responseItems.map(({ item_id }) => item_id) })
+      queueApi.endpoints.getQueueItemSummariesByItemIds.initiate({
+        item_ids: responseItems.map(({ item_id }) => item_id),
+      })
     );
     const hydratedItems = await request.unwrap();
     await new Promise((resolve) => {
@@ -134,13 +94,13 @@ describe.skipIf(!RUN_PERFORMANCE_TESTS)('queue large-payload performance', () =>
     clearInterval(heartbeat);
 
     const parseStarted = performance.now();
-    const directlyParsed = JSON.parse(responseJson) as GetQueueItemDTOsByItemIdsResult;
+    const directlyParsed = JSON.parse(responseJson) as GetQueueItemSummariesByItemIdsResult;
     const directJsonParseMs = performance.now() - parseStarted;
     const cacheStore = createApiStore();
-    const updates: Param0<typeof queueApi.util.upsertQueryEntries> = directlyParsed.map((queueItem) => ({
-      endpointName: 'getQueueItem',
-      arg: queueItem.item_id,
-      value: queueItem,
+    const updates: Param0<typeof queueApi.util.upsertQueryEntries> = directlyParsed.map((summary) => ({
+      endpointName: 'getQueueItemSummary',
+      arg: summary.item_id,
+      value: summary,
     }));
     const cacheStarted = performance.now();
     cacheStore.dispatch(queueApi.util.upsertQueryEntries(updates));
@@ -150,28 +110,27 @@ describe.skipIf(!RUN_PERFORMANCE_TESTS)('queue large-payload performance', () =>
     expect(hydratedItems).toHaveLength(3);
     expect(directlyParsed).toHaveLength(3);
     expect(
-      queueApi.endpoints.getQueueItem.select(3)(store.getState()).data?.session.execution_graph.nodes
-    ).toHaveProperty('source_999');
-    expect(
-      queueApi.endpoints.getQueueItem.select(3)(store.getState()).data?.session.prepared_iteration_paths
-    ).toHaveProperty('source_999', [999]);
+      queueApi.endpoints.getQueueItemSummary.select(3)(store.getState()).data?.field_values?.[0]?.value
+    ).toHaveLength(TARGET_LARGE_RESPONSE_BYTES);
     expect(instrumentation.entries).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ phase: 'api', name: expect.stringContaining('items_by_ids') }),
-        expect.objectContaining({ phase: 'rtk', name: 'items_by_ids RTK fulfillment' }),
-        expect.objectContaining({ phase: 'cache', name: 'items_by_ids individual cache upserts' }),
+        expect.objectContaining({ phase: 'api', name: expect.stringContaining('item_summaries_by_ids') }),
+        expect.objectContaining({ phase: 'rtk', name: 'item_summaries_by_ids RTK fulfillment' }),
+        expect.objectContaining({ phase: 'cache', name: 'item_summaries_by_ids individual cache upserts' }),
       ])
     );
 
     const threeLargeItems = [
       largeItem,
-      { ...largeItem, item_id: 4, batch_id: 'batch-4', session_id: 'session-4' },
-      { ...largeItem, item_id: 5, batch_id: 'batch-5', session_id: 'session-5' },
-    ] as unknown as GetQueueItemDTOsByItemIdsResult;
+      { ...largeItem, item_id: 4, batch_id: 'batch-4' },
+      { ...largeItem, item_id: 5, batch_id: 'batch-5' },
+    ] as unknown as GetQueueItemSummariesByItemIdsResult;
     activeResponseJson = JSON.stringify(threeLargeItems);
     const threeLargeStarted = performance.now();
     const threeLargeRequest = store.dispatch(
-      queueApi.endpoints.getQueueItemDTOsByItemIds.initiate({ item_ids: threeLargeItems.map(({ item_id }) => item_id) })
+      queueApi.endpoints.getQueueItemSummariesByItemIds.initiate({
+        item_ids: threeLargeItems.map(({ item_id }) => item_id),
+      })
     );
     await threeLargeRequest.unwrap();
     const threeLargeRtkQueryMs = performance.now() - threeLargeStarted;
@@ -180,7 +139,6 @@ describe.skipIf(!RUN_PERFORMANCE_TESTS)('queue large-payload performance', () =>
       [
         'Frontend queue performance diagnostics:',
         `  synthetic response: ${(responseSizeBytes / 1024 / 1024).toFixed(2)} MiB`,
-        `  expanded execution nodes: ${EXPANDED_NODE_COUNT}`,
         `  fetch decode + RTK mutation + three cache upserts: ${rtkQueryMs.toFixed(3)} ms`,
         `  frontend event-loop heartbeat gap: ${maxHeartbeatGapMs.toFixed(3)} ms`,
         `  direct JSON.parse: ${directJsonParseMs.toFixed(3)} ms`,
