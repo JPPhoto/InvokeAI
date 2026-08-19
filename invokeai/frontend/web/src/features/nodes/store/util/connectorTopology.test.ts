@@ -9,8 +9,9 @@ import {
   getConnectorOutputEdges,
   resolveConnectorSource,
   resolveConnectorSourceFieldType,
+  resolvePendingConnectionSource,
 } from './connectorTopology';
-import { add, buildEdge, buildNode, img_resize, sub, templates } from './testUtils';
+import { add, buildEdge, buildNode, for_loop, img_resize, sub, templates } from './testUtils';
 
 const buildConnectorNode = (id: string): ConnectorNode => ({
   id,
@@ -25,6 +26,32 @@ const buildConnectorNode = (id: string): ConnectorNode => ({
 });
 
 describe('connectorTopology', () => {
+  it('resolves pending connector source metadata, including output scope', () => {
+    const source = buildNode(for_loop);
+    const connector = buildConnectorNode('connector-1');
+    const pendingConnection = {
+      nodeId: connector.id,
+      handleId: CONNECTOR_OUTPUT_HANDLE,
+      handleType: 'source' as const,
+      fieldTemplate: {
+        name: CONNECTOR_OUTPUT_HANDLE,
+        title: 'Connector Output',
+        description: '',
+        fieldKind: 'output' as const,
+        ui_hidden: false,
+        type: { name: 'AnyField', cardinality: 'SINGLE' as const, batch: false },
+      },
+    };
+    const nodes: AnyNode[] = [source, connector];
+    const edges = [buildEdge(source.id, 'item', connector.id, CONNECTOR_INPUT_HANDLE)];
+
+    expect(resolvePendingConnectionSource(pendingConnection, nodes, edges, { ...templates, for: for_loop })).toEqual({
+      nodeId: source.id,
+      fieldName: 'item',
+      outputScope: 'iteration',
+    });
+  });
+
   it('resolves the effective upstream source through one connector', () => {
     const source = buildNode(add);
     const connector = buildConnectorNode('connector-1');

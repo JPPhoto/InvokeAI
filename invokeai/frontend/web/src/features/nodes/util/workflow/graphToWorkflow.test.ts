@@ -340,7 +340,7 @@ describe('graphToWorkflow', () => {
 
     expect(forNode.data.inputs.collection?.value).toEqual(['alpha', 'beta']);
     expect(forNode.data.inputs.state?.value).toBeNull();
-    expect(forNode.data.inputs.index?.value).toBe(-1);
+    expect(forNode.data.inputs.index).toBeUndefined();
     expect(forNode.data.inputs.body_id?.value).toBe('body-1');
     expect(returnNode.data.inputs.body_id?.value).toBe('body-1');
     expect(returnNode.data.inputs.state?.value).toBeNull();
@@ -382,7 +382,6 @@ describe('graphToWorkflow', () => {
       type: 'for',
       collection: ['alpha', 'beta'],
       state: null,
-      index: -1,
       body_id: 'body-1',
     });
     expect(rebuiltGraph.nodes.return).toMatchObject({

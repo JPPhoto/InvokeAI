@@ -17,6 +17,12 @@ export const buildInvocationNode = (position: XYPosition, template: InvocationTe
 
       const inputFieldValue: FieldInputInstance = buildFieldInputInstance(fieldId, inputTemplate);
 
+      // A blank identity is a legacy-compatible omission for a new editor node. Loaded workflows
+      // retain an explicitly serialized empty identity so frontend validation can reject it.
+      if ((type === 'for' || type === 'for_return') && inputName === 'body_id') {
+        inputFieldValue.value = undefined;
+      }
+
       inputsAccumulator[inputName] = inputFieldValue;
 
       return inputsAccumulator;

@@ -202,6 +202,10 @@ Validation rules are shared by the backend and frontend:
 - when present, `body_id` must be a non-empty string;
 - the editor's blank hidden `body_id` value means unset and is omitted from graph JSON; an explicitly serialized empty
   identity remains invalid;
+- when the editor adds `ForReturn` from a `For` iteration output, it copies the existing `body_id` or creates one and
+  applies it to both boundary nodes; manual or imported boundary identities remain subject to the same validation;
+- copying a complete `For` and matching `ForReturn` pair creates a fresh shared `body_id`; copying only one boundary, or
+  a mismatched boundary selection, clears its identity so the pasted fragment does not retain a stale or duplicate ID;
 - `body_id` is direct serialized metadata and must not have an incoming graph edge;
 - if either endpoint has an identity, the matching endpoint must also have one;
 - an identity on a return with no corresponding `For` is stale;
@@ -285,6 +289,9 @@ Inputs:
 - `collection: list[Any]`
 - `state: LoopState | None = None`
 - `body_id: str | None = None` (hidden durable boundary identity)
+
+Prepared execution nodes also carry a hidden scheduler-owned `index`. It is direct metadata, not a connectable input;
+the scheduler copies it for each materialized iteration.
 
 Per-iteration outputs:
 
@@ -773,8 +780,9 @@ values. Empty collections are valid when both inputs are empty.
 Use `CollectionCartesian` for combinations rather than correspondence. It emits one pair for every combination of one
 item from each input in left-major, right-minor order, so unequal lengths are expected and an empty input produces no
 pairs. Use it when every item from one collection must be combined with every item from the other, not when items are
-meant to be matched by position. Its output size is `len(first) * len(second)`, so inputs should be bounded when the
-result will feed a loop or another collection operation; Cartesian composition can grow much faster than either input.
+meant to be matched by position. The node rejects products larger than 100,000 pairs before allocation. This bound
+supports common frame-by-parameter workflows while preventing accidental product explosions; inputs should still be
+bounded when the result will feed a loop or another collection operation.
 
 All three operations are explicit ordinary nodes. None changes `For` scheduling, creates implicit loop dimensions, or
 assigns meaning to sibling branches beyond the operation's documented collection semantics.

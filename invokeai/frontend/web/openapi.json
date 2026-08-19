@@ -19376,7 +19376,7 @@
         "category": "batch",
         "class": "invocation",
         "classification": "stable",
-        "description": "Emits every pair formed by one item from each collection.",
+        "description": "Emits every pair formed by one item from each collection, up to 100,000 pairs.",
         "node_pack": "invokeai",
         "properties": {
           "id": {
@@ -33833,7 +33833,7 @@
             "default": -1,
             "description": "The internal iteration index for a prepared For execution node",
             "field_kind": "input",
-            "input": "any",
+            "input": "direct",
             "orig_default": -1,
             "orig_required": false,
             "title": "Index",

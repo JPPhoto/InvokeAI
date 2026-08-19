@@ -101,6 +101,23 @@ describe('buildNodesGraph', () => {
     expect(graph.nodes[returnNode.id]).not.toHaveProperty('body_id');
   });
 
+  it('rejects an explicitly serialized empty body identity', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    const forBodyIdInput = forNode.data.inputs.body_id;
+    const returnBodyIdInput = returnNode.data.inputs.body_id;
+    if (!forBodyIdInput || !returnBodyIdInput) {
+      throw new Error('Expected For body identity inputs');
+    }
+    forBodyIdInput.value = '';
+    returnBodyIdInput.value = '';
+    const state = buildState([forNode, returnNode], [buildEdge(forNode.id, 'item', returnNode.id, 'output')]);
+
+    expect(() => buildNodesGraph(state, { ...templates, for: for_loop, for_return })).toThrow(
+      'nodes.forLoopBodyIdentityEmpty'
+    );
+  });
+
   it('preserves a populated body identity in a simple For graph', () => {
     const forNode = buildNode(for_loop);
     const returnNode = buildNode(for_return);

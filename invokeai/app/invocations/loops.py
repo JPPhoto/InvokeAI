@@ -135,6 +135,7 @@ class ForInvocation(BaseInvocation):
     index: int = InputField(
         description="The internal iteration index for a prepared For execution node",
         default=-1,
+        input=Input.Direct,
         ui_hidden=True,
     )
 

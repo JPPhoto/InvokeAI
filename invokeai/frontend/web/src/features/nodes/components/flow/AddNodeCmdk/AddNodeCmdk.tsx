@@ -31,9 +31,11 @@ import {
   nodesChanged,
 } from 'features/nodes/store/nodesSlice';
 import { selectNodesSlice } from 'features/nodes/store/selectors';
-import type { PendingConnection } from 'features/nodes/store/types';
+import type { PendingConnection, Templates } from 'features/nodes/store/types';
+import { resolvePendingConnectionSource } from 'features/nodes/store/util/connectorTopology';
 import { findUnoccupiedPosition } from 'features/nodes/store/util/findUnoccupiedPosition';
 import { getFirstValidConnection } from 'features/nodes/store/util/getFirstValidConnection';
+import { createLoopBodyIdentity, getLoopBodyIdentity } from 'features/nodes/store/util/loopIdentity';
 import { connectionToEdge } from 'features/nodes/store/util/reactFlowUtil';
 import { validateConnectionTypes } from 'features/nodes/store/util/validateConnectionTypes';
 import { selectShouldGroupNodesByCategory } from 'features/nodes/store/workflowSettingsSlice';
@@ -84,8 +86,36 @@ const useAddNode = () => {
       node.position = findUnoccupiedPosition(nodes, cursorPos?.x ?? node.position.x, cursorPos?.y ?? node.position.y);
       node.selected = true;
 
+      const forReturnBodyIdentity =
+        isInvocationNode(node) && node.data.type === 'for_return'
+          ? getForReturnBodyIdentity(pendingConnection, nodes, edges, templates)
+          : null;
+
       // Deselect all other nodes and edges
       const nodeChanges: NodeChange<AnyNode>[] = [{ type: 'add', item: node }];
+      if (forReturnBodyIdentity) {
+        const sourceNode = nodes.find((candidate) => candidate.id === forReturnBodyIdentity.sourceNodeId);
+        const sourceBodyIdInput =
+          sourceNode && isInvocationNode(sourceNode) ? sourceNode.data.inputs.body_id : undefined;
+        const returnBodyIdInput = isInvocationNode(node) ? node.data.inputs.body_id : undefined;
+        if (sourceNode && isInvocationNode(sourceNode) && sourceBodyIdInput && returnBodyIdInput) {
+          returnBodyIdInput.value = forReturnBodyIdentity.bodyId;
+          nodeChanges.unshift({
+            type: 'replace',
+            id: sourceNode.id,
+            item: {
+              ...sourceNode,
+              data: {
+                ...sourceNode.data,
+                inputs: {
+                  ...sourceNode.data.inputs,
+                  body_id: { ...sourceBodyIdInput, value: forReturnBodyIdentity.bodyId },
+                },
+              },
+            },
+          });
+        }
+      }
       const edgeChanges: EdgeChange<AnyEdge>[] = [];
       nodes.forEach(({ id, selected }) => {
         if (selected) {
@@ -343,15 +373,78 @@ const filter = memoize(
   (item: FilterableItem, searchTerm: string) => `${item.type}-${searchTerm}`
 );
 
-const isForIterationOutputConnection = (pendingConnection: PendingConnection | null) =>
-  pendingConnection?.handleType === 'source' &&
-  pendingConnection.fieldTemplate.fieldKind === 'output' &&
-  pendingConnection.fieldTemplate.output_scope === 'iteration';
+type PendingConnectionContext = {
+  nodes: AnyNode[];
+  edges: AnyEdge[];
+  templates: Templates;
+};
+
+const isForIterationOutputConnection = (
+  pendingConnection: PendingConnection | null,
+  context?: PendingConnectionContext
+) => {
+  if (!pendingConnection || pendingConnection.handleType !== 'source') {
+    return false;
+  }
+
+  const resolvedSource = context
+    ? resolvePendingConnectionSource(pendingConnection, context.nodes, context.edges, context.templates)
+    : null;
+  if (resolvedSource && context) {
+    const sourceNode = context.nodes.find((node) => node.id === resolvedSource.nodeId);
+    return (
+      isInvocationNode(sourceNode) &&
+      sourceNode.data.type === 'for' &&
+      (resolvedSource.outputScope === 'iteration' ||
+        (resolvedSource.nodeId === pendingConnection.nodeId &&
+          pendingConnection.fieldTemplate.fieldKind === 'output' &&
+          pendingConnection.fieldTemplate.output_scope === 'iteration'))
+    );
+  }
+
+  return (
+    pendingConnection.fieldTemplate.fieldKind === 'output' &&
+    pendingConnection.fieldTemplate.output_scope === 'iteration'
+  );
+};
+
+export const getForReturnBodyIdentity = (
+  pendingConnection: PendingConnection | null,
+  nodes: AnyNode[],
+  edges: AnyEdge[] = [],
+  templates?: Templates
+): { sourceNodeId: string; bodyId: string } | null => {
+  if (!pendingConnection || pendingConnection.handleType !== 'source') {
+    return null;
+  }
+
+  const pendingSource = nodes.find((node) => node.id === pendingConnection.nodeId);
+  const resolvedSource = resolvePendingConnectionSource(pendingConnection, nodes, edges, templates);
+  const sourceNode = resolvedSource ? nodes.find((node) => node.id === resolvedSource.nodeId) : pendingSource;
+  if (!isInvocationNode(sourceNode) || sourceNode.data.type !== 'for') {
+    return null;
+  }
+
+  const isIterationOutput = resolvedSource
+    ? resolvedSource.outputScope === 'iteration' ||
+      (resolvedSource.nodeId === pendingConnection.nodeId && isForIterationOutputConnection(pendingConnection))
+    : isForIterationOutputConnection(pendingConnection);
+  if (!isIterationOutput) {
+    return null;
+  }
+
+  const bodyId = getLoopBodyIdentity(sourceNode);
+  return {
+    sourceNodeId: sourceNode.id,
+    bodyId: bodyId ?? createLoopBodyIdentity(),
+  };
+};
 
 export const getPendingConnectionNodeItems = (
   templatesArray: InvocationTemplate[],
   pendingConnection: PendingConnection,
-  searchTerm: string
+  searchTerm: string,
+  context?: PendingConnectionContext
 ): NodeCommandItemData[] => {
   const items: NodeCommandItemData[] = [];
 
@@ -381,16 +474,17 @@ export const getPendingConnectionNodeItems = (
     }
   }
 
-  return sortNodeCommandItems(items, searchTerm, pendingConnection);
+  return sortNodeCommandItems(items, searchTerm, pendingConnection, context);
 };
 
 export const sortNodeCommandItems = (
   items: NodeCommandItemData[],
   searchTerm: string,
-  pendingConnection: PendingConnection | null
+  pendingConnection: PendingConnection | null,
+  context?: PendingConnectionContext
 ): NodeCommandItemData[] => {
   const sortedItems = [...items];
-  const shouldPromoteForReturn = isForIterationOutputConnection(pendingConnection);
+  const shouldPromoteForReturn = isForIterationOutputConnection(pendingConnection, context);
   const lowerSearch = searchTerm.toLowerCase();
 
   sortedItems.sort((a, b) => {
@@ -474,7 +568,13 @@ const NodeCommandList = memo(
   }) => {
     const { t } = useTranslation();
     const templatesArray = useStore($templatesArray);
+    const templates = useStore($templates);
     const pendingConnection = useStore($pendingConnection);
+    const { nodes, edges } = useAppSelector(selectNodesSlice);
+    const pendingConnectionContext = useMemo<PendingConnectionContext>(
+      () => ({ nodes, edges, templates }),
+      [nodes, edges, templates]
+    );
     const shouldGroupNodesByCategory = useAppSelector(selectShouldGroupNodesByCategory);
     const currentImageFilterItem = useMemo<FilterableItem>(
       () => ({
@@ -532,11 +632,20 @@ const NodeCommandList = memo(
           }
         }
       } else {
-        _items.push(...getPendingConnectionNodeItems(templatesArray, pendingConnection, searchTerm));
+        _items.push(
+          ...getPendingConnectionNodeItems(templatesArray, pendingConnection, searchTerm, pendingConnectionContext)
+        );
       }
 
-      return sortNodeCommandItems(_items, searchTerm, pendingConnection);
-    }, [pendingConnection, templatesArray, searchTerm, currentImageFilterItem, notesFilterItem]);
+      return sortNodeCommandItems(_items, searchTerm, pendingConnection, pendingConnectionContext);
+    }, [
+      pendingConnection,
+      templatesArray,
+      pendingConnectionContext,
+      searchTerm,
+      currentImageFilterItem,
+      notesFilterItem,
+    ]);
 
     const groupedItems = useMemo(() => {
       const groups: Record<string, NodeCommandItemData[]> = {};
@@ -573,7 +682,7 @@ const NodeCommandList = memo(
 
     // When searching, auto-expand all categories; when not searching, use manual state
     const isSearching = searchTerm.length > 0;
-    const shouldPromoteForReturn = isForIterationOutputConnection(pendingConnection);
+    const shouldPromoteForReturn = isForIterationOutputConnection(pendingConnection, pendingConnectionContext);
 
     const expandAll = useCallback(() => {
       setExpandedCategories(new Set(groupedItems.map(([cat]) => cat)));

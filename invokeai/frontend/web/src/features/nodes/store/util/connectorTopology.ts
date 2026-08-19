@@ -1,4 +1,4 @@
-import type { Templates } from 'features/nodes/store/types';
+import type { PendingConnection, Templates } from 'features/nodes/store/types';
 import type { FieldType } from 'features/nodes/types/field';
 import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
 import { isConnectorNode, isInvocationNode } from 'features/nodes/types/invocation';
@@ -26,6 +26,12 @@ type SpliceConnectionValidator = (
   ignoreEdge: AnyEdge | null,
   strict?: boolean
 ) => string | null;
+
+type ResolvedPendingConnectionSource = {
+  nodeId: string;
+  fieldName: string;
+  outputScope?: 'iteration' | 'final';
+};
 
 export const getConnectorInputEdge = (connectorId: string, edges: AnyEdge[]): AnyEdge | undefined =>
   edges.find(
@@ -83,6 +89,36 @@ export const resolveConnectorSource = (
   };
 
   return resolve(connectorId);
+};
+
+export const resolvePendingConnectionSource = (
+  pendingConnection: PendingConnection | null,
+  nodes: AnyNode[],
+  edges: AnyEdge[],
+  templates?: Templates
+): ResolvedPendingConnectionSource | null => {
+  if (!pendingConnection || pendingConnection.handleType !== 'source') {
+    return null;
+  }
+
+  const pendingNode = nodes.find((node) => node.id === pendingConnection.nodeId);
+  const resolvedSource =
+    pendingNode && isConnectorNode(pendingNode)
+      ? resolveConnectorSource(pendingNode.id, nodes, edges)
+      : isInvocationNode(pendingNode)
+        ? { nodeId: pendingNode.id, fieldName: pendingConnection.handleId }
+        : null;
+  if (!resolvedSource) {
+    return null;
+  }
+
+  const sourceNode = nodes.find((node) => node.id === resolvedSource.nodeId);
+  const outputScope =
+    sourceNode && isInvocationNode(sourceNode)
+      ? (templates?.[sourceNode.data.type]?.outputs[resolvedSource.fieldName]?.output_scope ?? undefined)
+      : undefined;
+
+  return { ...resolvedSource, outputScope };
 };
 
 export const resolveConnectorSourceFieldType = (

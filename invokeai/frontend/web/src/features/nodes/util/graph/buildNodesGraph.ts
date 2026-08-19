@@ -91,7 +91,7 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
           return inputsAccumulator;
         }
 
-        if ((type === 'for' || type === 'for_return') && name === 'body_id' && input.value === '') {
+        if ((type === 'for' || type === 'for_return') && name === 'body_id' && input.value === undefined) {
           return inputsAccumulator;
         }
 

@@ -12,6 +12,8 @@ from invokeai.app.invocations.primitives import IntegerCollectionOutput
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.misc import SEED_MAX
 
+MAX_CARTESIAN_PRODUCT_SIZE = 100_000
+
 
 @invocation("range", title="Integer Range", tags=["collection", "integer", "range"], category="batch", version="1.0.0")
 class RangeInvocation(BaseInvocation):
@@ -138,12 +140,16 @@ class CollectionCartesianInvocationOutput(BaseInvocationOutput):
     version="1.0.0",
 )
 class CollectionCartesianInvocation(BaseInvocation):
-    """Emits every pair formed by one item from each collection."""
+    """Emits every pair formed by one item from each collection, up to 100,000 pairs."""
 
     first: list[Any] = InputField(default=[], description="The first collection", ui_type=UIType._Collection)
     second: list[Any] = InputField(default=[], description="The second collection", ui_type=UIType._Collection)
 
     def invoke(self, context: InvocationContext) -> CollectionCartesianInvocationOutput:
+        if self.first and self.second and len(self.first) > MAX_CARTESIAN_PRODUCT_SIZE // len(self.second):
+            raise ValueError(
+                f"Cartesian product exceeds the maximum size of {MAX_CARTESIAN_PRODUCT_SIZE} pairs"
+            )
         return CollectionCartesianInvocationOutput(
             collection=[[first, second] for first in self.first for second in self.second]
         )

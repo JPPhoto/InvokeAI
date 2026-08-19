@@ -43,6 +43,9 @@ const isReservedInputField = (nodeType: string, fieldName: string) => {
   if (nodeType === 'iterate' && fieldName === 'index') {
     return true;
   }
+  if (nodeType === 'for' && fieldName === 'index') {
+    return true;
+  }
   return false;
 };
 

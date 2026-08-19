@@ -685,21 +685,6 @@ export const for_loop: InvocationTemplate = {
         batch: false,
       },
     },
-    index: {
-      name: 'index',
-      title: 'Index',
-      required: false,
-      default: -1,
-      description: 'The internal iteration index for a prepared For execution node',
-      fieldKind: 'input',
-      input: 'any',
-      ui_hidden: true,
-      type: {
-        name: 'IntegerField',
-        cardinality: 'SINGLE',
-        batch: false,
-      },
-    },
   },
   outputs: {
     item: {

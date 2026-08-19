@@ -15,6 +15,7 @@ import {
 } from 'features/nodes/store/nodesSlice';
 import { selectNodesSlice } from 'features/nodes/store/selectors';
 import { findUnoccupiedPosition } from 'features/nodes/store/util/findUnoccupiedPosition';
+import { reassignCopiedLoopBodyIdentities } from 'features/nodes/store/util/loopIdentity';
 import { validateConnection } from 'features/nodes/store/util/validateConnection';
 import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
 import { t } from 'i18next';
@@ -40,7 +41,7 @@ const _pasteSelection = (withEdgesToCopiedNodes?: boolean) => {
   const templates = $templates.get();
   const cursorPos = $cursorPos.get();
 
-  const copiedNodes = deepClone($copiedNodes.get());
+  const copiedNodes = reassignCopiedLoopBodyIdentities(deepClone($copiedNodes.get()));
   let copiedEdges = deepClone($copiedEdges.get());
 
   if (withEdgesToCopiedNodes) {

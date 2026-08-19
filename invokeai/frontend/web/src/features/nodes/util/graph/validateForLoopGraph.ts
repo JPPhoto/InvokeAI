@@ -178,9 +178,7 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     const innerForIds = [...reachableBodyNodeIds].filter((nodeId) => nodes[nodeId]?.type === 'for');
     const directInnerForIds = innerForIds.filter(
       (innerForId) =>
-        !innerForIds.some(
-          (otherInnerForId) => otherInnerForId !== innerForId && hasPath(otherInnerForId, innerForId)
-        )
+        !innerForIds.some((otherInnerForId) => otherInnerForId !== innerForId && hasPath(otherInnerForId, innerForId))
     );
     if (directInnerForIds.length === 0) {
       return null;
@@ -219,9 +217,7 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
 
       const innerReturnAncestors = walk([innerReturnId], incoming);
       const childBodyPathNodeIds = new Set(
-        [...innerReachableBodyNodeIds].filter(
-          (nodeId) => nodeId === innerReturnId || innerReturnAncestors.has(nodeId)
-        )
+        [...innerReachableBodyNodeIds].filter((nodeId) => nodeId === innerReturnId || innerReturnAncestors.has(nodeId))
       );
       childBodyPathNodeIds.add(innerReturnId);
       const innerNestedForIds = [...childBodyPathNodeIds].filter((nodeId) => nodes[nodeId]?.type === 'for');
@@ -361,8 +357,7 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
           !edges
             .filter((edge) => edge.source.node_id === innerForId && FINAL_OUTPUT_FIELDS.has(edge.source.field))
             .some(
-              (edge) =>
-                continuationNodeIds.has(edge.destination.node_id) || edge.destination.node_id === outerReturnId
+              (edge) => continuationNodeIds.has(edge.destination.node_id) || edge.destination.node_id === outerReturnId
             )
       )
     ) {
@@ -520,10 +515,7 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
         nodeId !== node.id &&
         nodes[nodeId]?.type === 'for' &&
         ![...reachableBodyNodeIds].some(
-          (otherNodeId) =>
-            otherNodeId !== nodeId &&
-            nodes[otherNodeId]?.type === 'for' &&
-            hasPath(otherNodeId, nodeId)
+          (otherNodeId) => otherNodeId !== nodeId && nodes[otherNodeId]?.type === 'for' && hasPath(otherNodeId, nodeId)
         )
     );
     const nestedBody =

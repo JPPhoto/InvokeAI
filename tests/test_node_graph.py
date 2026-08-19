@@ -171,6 +171,26 @@ def test_graph_rejects_edge_to_for_return_body_identity():
         g.validate_self()
 
 
+def test_graph_rejects_edge_to_for_scheduler_index():
+    g = Graph()
+    index_source = IntegerInvocation(id="index_source", value=99)
+    loop = ForInvocation(id="for", collection=["a", "b"])
+    body_return = ForReturnInvocation(id="return")
+
+    g.add_node(index_source)
+    g.add_node(loop)
+    g.add_node(body_return)
+    g.edges.extend(
+        [
+            create_edge(index_source.id, "value", loop.id, "index"),
+            create_edge(loop.id, "item", body_return.id, "output"),
+        ]
+    )
+
+    with pytest.raises(InvalidEdgeError, match="direct input"):
+        g.validate_self()
+
+
 @pytest.mark.parametrize(
     "node",
     [

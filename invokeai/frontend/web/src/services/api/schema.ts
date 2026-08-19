@@ -6782,7 +6782,7 @@ export type components = {
         };
         /**
          * Cartesian Product of Collections
-         * @description Emits every pair formed by one item from each collection.
+         * @description Emits every pair formed by one item from each collection, up to 100,000 pairs.
          */
         CollectionCartesianInvocation: {
             /**

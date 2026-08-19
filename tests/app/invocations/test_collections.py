@@ -3,6 +3,7 @@ from unittest.mock import Mock
 import pytest
 
 from invokeai.app.invocations.collections import (
+    MAX_CARTESIAN_PRODUCT_SIZE,
     CollectionCartesianInvocation,
     CollectionConcatInvocation,
     CollectionZipInvocation,
@@ -106,3 +107,22 @@ def test_collection_cartesian_does_not_mutate_input_collections() -> None:
 
     assert first == ["left"]
     assert second == ["right"]
+
+
+def test_collection_cartesian_rejects_products_above_the_bound() -> None:
+    invocation = CollectionCartesianInvocation(
+        id="cartesian", first=list(range(MAX_CARTESIAN_PRODUCT_SIZE + 1)), second=["value"]
+    )
+
+    with pytest.raises(ValueError, match=str(MAX_CARTESIAN_PRODUCT_SIZE)):
+        invocation.invoke(Mock())
+
+
+def test_collection_cartesian_accepts_a_product_at_the_bound() -> None:
+    invocation = CollectionCartesianInvocation(
+        id="cartesian", first=list(range(MAX_CARTESIAN_PRODUCT_SIZE)), second=["value"]
+    )
+
+    output = invocation.invoke(Mock())
+
+    assert len(output.collection) == MAX_CARTESIAN_PRODUCT_SIZE
