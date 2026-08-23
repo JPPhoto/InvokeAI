@@ -214,6 +214,7 @@ def test_graph_rejects_empty_for_body_identity(node):
         ("for", "state", "For loop may have only one state input edge"),
         ("for_return", "output", "ForReturn may have only one input edge per field"),
         ("for_return", "state", "ForReturn may have only one input edge per field"),
+        ("for_return", "continue_condition", "ForReturn may have only one input edge per field"),
     ],
 )
 def test_graph_rejects_duplicate_loop_boundary_inputs(node_type, destination_field, expected_message):
@@ -495,8 +496,49 @@ def test_graph_validates_nested_for_with_shared_outer_continuation_path():
     g.add_edge(create_edge("inner", "output_collection", "continuation", "value"))
     g.add_edge(create_edge("continuation", "value", "continuation_tail", "value"))
     g.add_edge(create_edge("continuation_tail", "value", "outer_return", "output"))
+    g.add_edge(create_edge("continuation_tail", "value", "outer_return", "continue_condition"))
 
     g.validate_self()
+
+
+def test_graph_validates_nested_for_return_continue_condition():
+    g = Graph()
+    g.add_node(ForInvocation(id="outer", collection=[[]], body_id="outer-body"))
+    g.add_node(AnyTypeTestInvocation(id="inner_collection"))
+    g.add_node(ForInvocation(id="inner", body_id="inner-body"))
+    g.add_node(AnyTypeTestInvocation(id="inner_body"))
+    g.add_node(AnyTypeTestInvocation(id="inner_condition"))
+    g.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    g.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    g.add_edge(create_edge("outer", "item", "inner_collection", "value"))
+    g.add_edge(create_edge("inner_collection", "value", "inner", "collection"))
+    g.add_edge(create_edge("inner", "item", "inner_body", "value"))
+    g.add_edge(create_edge("inner", "item", "inner_condition", "value"))
+    g.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
+    g.add_edge(create_edge("inner_condition", "value", "inner_return", "continue_condition"))
+    g.add_edge(create_edge("inner", "output_collection", "outer_return", "output"))
+
+    g.validate_self()
+
+
+def test_graph_rejects_nested_for_return_continue_condition_from_external_scope():
+    g = Graph()
+    g.add_node(ForInvocation(id="outer", collection=[[]], body_id="outer-body"))
+    g.add_node(AnyTypeTestInvocation(id="inner_collection"))
+    g.add_node(ForInvocation(id="inner", body_id="inner-body"))
+    g.add_node(AnyTypeTestInvocation(id="inner_body"))
+    g.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    g.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    g.add_node(AnyTypeTestInvocation(id="external_condition"))
+    g.add_edge(create_edge("outer", "item", "inner_collection", "value"))
+    g.add_edge(create_edge("inner_collection", "value", "inner", "collection"))
+    g.add_edge(create_edge("inner", "item", "inner_body", "value"))
+    g.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
+    g.add_edge(create_edge("inner", "output_collection", "outer_return", "output"))
+    g.add_edge(create_edge("external_condition", "value", "outer_return", "continue_condition"))
+
+    with pytest.raises(InvalidEdgeError, match="Nested For loops"):
+        g.validate_self()
 
 
 def test_graph_rejects_nested_for_return_state_from_outer_scope():
@@ -655,24 +697,28 @@ def test_graph_rejects_iterate_inside_for_body():
         g.validate_self()
 
 
-def test_graph_validates_iterate_collect_inside_for_body():
+def test_graph_rejects_iterate_collect_for_return_condition_without_scalar_aggregation():
     g = Graph()
     loop = ForInvocation(id="for", collection=[["a", "b"], ["c", "d"]])
     collection_adapter = PolymorphicStringTestInvocation(id="collection_adapter")
     nested_iterate = IterateInvocation(id="nested_iterate")
     body = AnyTypeTestInvocation(id="body")
+    condition = AnyTypeTestInvocation(id="condition")
     collect = CollectInvocation(id="collect")
     body_return = ForReturnInvocation(id="return")
 
-    for node in (loop, collection_adapter, nested_iterate, body, collect, body_return):
+    for node in (loop, collection_adapter, nested_iterate, body, condition, collect, body_return):
         g.add_node(node)
     g.add_edge(create_edge(loop.id, "item", collection_adapter.id, "value"))
     g.add_edge(create_edge(collection_adapter.id, "collection", nested_iterate.id, "collection"))
     g.add_edge(create_edge(nested_iterate.id, "item", body.id, "value"))
+    g.add_edge(create_edge(nested_iterate.id, "item", condition.id, "value"))
     g.add_edge(create_edge(body.id, "value", collect.id, "item"))
     g.add_edge(create_edge(collect.id, "collection", body_return.id, "output"))
+    g.add_edge(create_edge(condition.id, "value", body_return.id, "continue_condition"))
 
-    g.validate_self()
+    with pytest.raises(InvalidEdgeError, match="Iterate nodes inside For loop bodies"):
+        g.validate_self()
 
 
 def test_graph_rejects_for_body_edges_that_escape_to_after_loop_nodes():

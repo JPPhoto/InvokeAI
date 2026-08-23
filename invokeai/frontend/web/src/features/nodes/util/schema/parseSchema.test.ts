@@ -77,5 +77,13 @@ describe('parseSchema', () => {
         for_return: normalizeInputUiHidden(for_return),
       })
     );
+
+    expect(parsed.for_return?.version).toBe('1.2.0');
+    expect(parsed.for_return?.inputs.continue_condition).toMatchObject({
+      input: 'any',
+      required: false,
+      default: true,
+      type: { name: 'BooleanField' },
+    });
   });
 });

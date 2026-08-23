@@ -14085,6 +14085,12 @@ export type components = {
              */
             state?: components["schemas"]["LoopState"] | null;
             /**
+             * Continue Condition
+             * @description Whether to schedule the next loop iteration; false finalizes the loop
+             * @default true
+             */
+            continue_condition?: boolean | null;
+            /**
              * Body Id
              * @description Stable identity shared by this ForReturn and its matching For
              * @default null

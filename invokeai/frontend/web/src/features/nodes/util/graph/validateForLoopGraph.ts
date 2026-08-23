@@ -125,6 +125,7 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
       (edge) =>
         edge.destination.node_id === returnId &&
         edge.destination.field !== 'output' &&
+        edge.destination.field !== 'continue_condition' &&
         (edge.destination.field !== 'state' || edge.source.node_id !== forId || edge.source.field !== 'state')
     );
     if (unsupportedReturnInput) {
@@ -149,7 +150,10 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
       if (bodyNodeId === iterateId || bodyNodeId === collectId || bodyNodeId === returnId) {
         continue;
       }
-      if (!hasPath(bodyNodeId, collectId) || (!hasPath(bodyNodeId, iterateId) && !hasPath(iterateId, bodyNodeId))) {
+      if (!hasPath(bodyNodeId, collectId)) {
+        return false;
+      }
+      if (!hasPath(bodyNodeId, iterateId) && !hasPath(iterateId, bodyNodeId)) {
         return false;
       }
     }
@@ -281,6 +285,7 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
       (edge) =>
         edge.destination.node_id === outerReturnId &&
         edge.destination.field !== 'output' &&
+        edge.destination.field !== 'continue_condition' &&
         (edge.destination.field !== 'state' || edge.source.node_id !== forId || edge.source.field !== 'state')
     );
     if (unsupportedOuterReturnInput) {
@@ -312,6 +317,18 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
           !outerPreparationNodeIds.has(nodeId) && !innerBodyPathNodeIds.has(nodeId) && nodeId !== outerReturnId
       )
     );
+    if (
+      edges.some(
+        (edge) =>
+          edge.destination.node_id === outerReturnId &&
+          edge.destination.field === 'continue_condition' &&
+          edge.source.node_id !== forId &&
+          !continuationNodeIds.has(edge.source.node_id) &&
+          !(directInnerForIds.includes(edge.source.node_id) && FINAL_OUTPUT_FIELDS.has(edge.source.field))
+      )
+    ) {
+      return null;
+    }
     if ([...continuationNodeIds].some((nodeId) => !innerFinalDescendantNodeIds.has(nodeId))) {
       return null;
     }
@@ -603,7 +620,9 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     if (
       node.type === 'for_return' &&
       (edges.filter((edge) => edge.destination.node_id === node.id && edge.destination.field === 'output').length > 1 ||
-        edges.filter((edge) => edge.destination.node_id === node.id && edge.destination.field === 'state').length > 1)
+        edges.filter((edge) => edge.destination.node_id === node.id && edge.destination.field === 'state').length > 1 ||
+        edges.filter((edge) => edge.destination.node_id === node.id && edge.destination.field === 'continue_condition')
+          .length > 1)
     ) {
       return 'nodes.forReturnInputCount';
     }

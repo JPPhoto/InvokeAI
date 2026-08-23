@@ -64,7 +64,6 @@ What is still not implemented:
 - Runtime support for sequential sibling composition, implicit zip or Cartesian loop semantics, or mixed nested loop
   shapes.
 - A structured visual region or subgraph affordance for the loop body boundary.
-- Early break or continue behavior.
 - Rich collection producer nodes designed specifically for loop sources.
 
 Implemented on this branch:
@@ -99,6 +98,8 @@ Implemented on this branch:
 - SQLite session-queue coverage for persisting, reloading, and completing a partially executed stateful loop.
 - Runtime support for recursively identity-bearing nested `For` boundaries whose final collections feed their parent
   `ForReturn`, including multiple outer contexts, empty inner or leaf collections, and explicit sibling fan-in.
+- Optional `ForReturn.continue_condition` early-break behavior. `None` preserves legacy continuation, `True` schedules
+  the next iteration, and `False` finalizes the current loop context after collecting the current return.
 
 ## Architectural Direction
 
@@ -149,11 +150,13 @@ These should not be the first implementation target:
 - graph cycles in the author-time graph
 - hidden loop state based on `context.transient_storage`
 - multiple loop source modes on the `For` node
-- early break or continue semantics
+- a separate `ForContinue` control-flow node or general continue semantics
 - parallel loop-body execution
 - automatic inference of arbitrary loop body outputs
 
-Early break can be added later as an explicit continuation contract once fixed collection iteration is stable.
+The first early-break contract is deliberately attached to `ForReturn`, where the current iteration already completes.
+A separate `ForContinue` node remains a possible future extension if independent control-flow branches need to skip a
+return or continue without producing an output item.
 
 ## Current Implementation Boundary
 
@@ -486,6 +489,12 @@ The body return for iteration `i` determines:
 
 If the body return omits state, the previous state carries forward.
 
+`ForReturn.continue_condition` is optional. `None` and `True` schedule the next collection item when one exists. `False`
+completes the current loop context immediately after the current output and state are recorded. Final outputs are
+released normally, and downstream nodes receive only the items processed before the break. The condition is ordinary
+invocation input, so connected values are evaluated for each rematerialized `ForReturn` execution and survive
+serialization/resume.
+
 If body execution fails, normal invocation failure behavior applies. No later iterations should be materialized, no
 partial output collection should be exposed, and final-scoped outputs should remain unavailable.
 
@@ -735,7 +744,9 @@ Supporting this shape requires:
 - stopping both inner and outer scheduling on cancellation or failure without releasing partial final outputs
 
 This bounded shape is implemented. Multiple internal iterators, an internal iterator that escapes through another
-output, and iterator-derived external inputs remain rejected.
+output, iterator-derived external inputs, and a per-item predicate connected directly to
+`ForReturn.continue_condition` remain rejected. The latter would produce multiple condition values for one outer
+iteration; a future extension must define an explicit scalar aggregation boundary first.
 
 This extension must remain distinct from an independent external `Iterate` feeding a body node. The external shape has
 no explicit rule for product, zip, or state-lane semantics and should remain rejected until such a contract is designed.
@@ -844,6 +855,10 @@ Backend tests should cover:
 - returned state reaches the next iteration
 - omitted returned state carries previous state forward
 - final state is the last returned state
+- `ForReturn.continue_condition` continues by default, breaks after the current return when false, and evaluates a
+  connected predicate again for each rematerialized iteration
+- early break preserves returned state and final output release across serialization/resume, including nested inner and
+  outer loop contexts
 - body failure stops later iterations
 - cancellation or failure does not expose partial final outputs to after-loop nodes
 - serialized `GraphExecutionState` can resume a partially completed loop
@@ -854,6 +869,8 @@ Backend tests should cover:
   any post-child continuation is ordinary parent-scoped work; mixed nested loop shapes remain rejected
 - runtime body-path resolution selects the matching `ForReturn` by durable `body_id` when identity metadata is present
 - body paths that feed after-loop nodes directly are rejected
+- nested `ForReturn.continue_condition` inputs are accepted only from the current nested body or parent-scoped
+  continuation and reject external scopes that cannot be rematerialized
 - nested final output can traverse an ordinary parent-scoped continuation before `ForReturn`, including empty child loops
 - `CollectionConcat` combines sibling final collections in deterministic left-to-right order
 - `CollectionZip` combines equal-length sibling final collections into deterministic positional pairs and rejects length mismatches
@@ -903,15 +920,15 @@ compatible input auto-wiring through the shared connection helper. Enqueue-time 
 ownership, unterminated paths, nested loops, the supported bounded internal `Iterate` shape and rejected variants,
 iterator-derived external inputs, final outputs feeding the body, and body outputs escaping before `ForReturn`.
 Backend and frontend validation tests accept deeper nested `For` loops, explicit sibling fan-in, and reject mixed nested
-`For`/`Iterate` bodies, sibling children without complete fan-in, and a `ForReturn` shared by multiple loops.
+`For`/`Iterate` bodies, nested early-break predicate scope, sibling children without complete fan-in, and a `ForReturn`
+shared by multiple loops. Schema/template tests cover the versioned `continue_condition` input and its default-continue
+editor behavior.
 Browser-level picker and ReactFlow interaction coverage is deferred; the temporary browser-test dependencies and
 configuration are removed from this branch. Unit tests cover contextual `ForReturn` discovery and connection wiring.
 Collection operation tests cover sequential concatenation, strict positional zipping, Cartesian products, empty inputs,
 input immutability, and zip length mismatches.
 
 ## Open Questions
-
-- Should early break be added as `continue_condition` on `for_return`, or as a separate `for_continue` node later?
 
 Answered branch-local decisions:
 
@@ -933,6 +950,9 @@ Answered branch-local decisions:
   unequal lengths fail rather than truncate or pad.
 - `CollectionCartesian` is the explicit all-combinations operation. Unequal lengths are valid, empty input yields no
   pairs, and pair ordering is deterministic left-major, right-minor without changing scheduler behavior.
+- Early break uses optional `ForReturn.continue_condition`: `None` and `True` continue, while `False` finalizes the
+  current loop context. A future `ForContinue` node may provide an independent control-flow form if needed, but it is
+  not required for this contract.
 - `LoopState`, `For`, `ForReturn`, and the state helper nodes are defined in the dedicated `invocations.loops` module.
   Scheduler, materialization, and graph-boundary validation remain in the graph execution service.
 
@@ -959,8 +979,10 @@ Answered branch-local decisions:
 15. Add the first explicit sibling collection operation, `CollectionConcat`, with deterministic left-to-right semantics.
 16. Add explicit positional sibling pairing with `CollectionZip`, including a strict equal-length contract.
 17. Add explicit all-combinations sibling pairing with `CollectionCartesian`.
+18. Add an explicit `ForReturn.continue_condition` early-break contract and verify finalization, state, resume, and
+    nested-context cleanup.
 
-Steps 1 through 17 are complete for the current recursive body-path contract. Step 11 has the initial output grouping and
+Steps 1 through 18 are complete for the current recursive body-path contract. Step 11 has the initial output grouping and
 contextual `ForReturn` discovery/wiring affordances, covered by unit tests, but not a structured visual body boundary or
 browser-level interaction coverage.
 
@@ -970,11 +992,12 @@ and `CollectionCartesian` slice are implemented. Nested execution
 uses explicit composite paths, independent inner aggregation, deferred outer returns, parent-scoped continuation
 materialization, empty-group handling, failure cleanup, and durable source/execution mappings. Sequential sibling
 composition is available through `CollectionConcat`, positional pairing through `CollectionZip`, and all-combinations
-pairing through `CollectionCartesian`; early break or continue, parallel stateless loops, richer collection producers,
-and structured visual loop-body editing remain later work.
+pairing through `CollectionCartesian`. Early break is available through `ForReturn.continue_condition`; parallel
+stateless loops, richer collection producers, and structured visual loop-body editing remain later work.
 
 ## Next Development Slice
 
-After the final adversarial review and full PR validation, the next development slice is an explicit early-break
-contract for `For`. The current collection operations provide sequential, positional, and all-combinations fan-in; the
-scheduler still assigns no implicit pairing or product semantics to sibling collections.
+After the final adversarial review and full PR validation, the next development slice is a structured visual loop-body
+boundary/editor. It should expose the existing reachable `For` to `ForReturn` boundary and durable identity in the
+editor without changing scheduler semantics; browser-level interaction coverage remains deferred until the temporary
+browser-test dependencies are removed as the final cleanup step.

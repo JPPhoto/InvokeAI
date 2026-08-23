@@ -777,7 +777,7 @@ export const for_loop: InvocationTemplate = {
 export const for_return: InvocationTemplate = {
   title: 'ForReturn',
   type: 'for_return',
-  version: '1.1.0',
+  version: '1.2.0',
   tags: [],
   description: '',
   outputType: 'for_return_output',
@@ -809,6 +809,21 @@ export const for_return: InvocationTemplate = {
       ui_hidden: false,
       type: {
         name: 'LoopState',
+        cardinality: 'SINGLE',
+        batch: false,
+      },
+    },
+    continue_condition: {
+      name: 'continue_condition',
+      title: 'Continue Condition',
+      required: false,
+      default: true,
+      description: 'Whether to schedule the next loop iteration; false finalizes the loop',
+      fieldKind: 'input',
+      input: 'any',
+      ui_hidden: false,
+      type: {
+        name: 'BooleanField',
         cardinality: 'SINGLE',
         batch: false,
       },

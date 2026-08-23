@@ -33992,6 +33992,23 @@
             "orig_default": null,
             "orig_required": false
           },
+          "continue_condition": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": true,
+            "description": "Whether to schedule the next loop iteration; false finalizes the loop",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": true,
+            "orig_required": false,
+            "title": "Continue Condition"
+          },
           "body_id": {
             "anyOf": [
               {
@@ -34021,7 +34038,7 @@
         "required": ["type", "id"],
         "title": "ForReturnInvocation",
         "type": "object",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "output": {
           "$ref": "#/components/schemas/ForReturnInvocationOutput"
         }

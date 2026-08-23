@@ -800,6 +800,9 @@ class _ExecutionMaterializer:
             elif edge.destination.field == "state":
                 prepared_source_id = prepared_outer_for_id
                 source_field = edge.source.field
+            elif edge.destination.field == "continue_condition":
+                prepared_source_id = source_to_prepared.get(edge.source.node_id)
+                source_field = edge.source.field
             else:
                 raise RuntimeError(f"Unable to rematerialize nested ForReturn input {edge}")
             if prepared_source_id is None:
@@ -1805,7 +1808,9 @@ class _ExecutionScheduler:
         source_return_id = registry.get_source_node_id(exec_node_id)
 
         next_index = for_node.index + 1
-        if next_index >= len(for_node.collection):
+        for_return_node = self._state.execution_graph.get_node(exec_node_id)
+        assert isinstance(for_return_node, ForReturnInvocation)
+        if next_index >= len(for_node.collection) or for_return_node.continue_condition is False:
             self._finalize_for_outputs(for_exec_node_id, source_for_id, source_return_id, output)
             self._state._materializer().create_nested_for_return(
                 inner_for_id=source_for_id,
@@ -3228,6 +3233,7 @@ class Graph(BaseModel):
             return None
         if any(
             edge.destination.field != "output"
+            and edge.destination.field != "continue_condition"
             and (edge.destination.field != "state" or edge.source.node_id != node_id or edge.source.field != "state")
             for edge in self._get_input_edges(return_node_id)
         ):
@@ -3355,6 +3361,7 @@ class Graph(BaseModel):
             return None
         if any(
             edge.destination.field != "output"
+            and edge.destination.field != "continue_condition"
             and (edge.destination.field != "state" or edge.source.node_id != node_id or edge.source.field != "state")
             for edge in self._get_input_edges(outer_return_id)
         ):
@@ -3371,6 +3378,17 @@ class Graph(BaseModel):
                 inner_final_descendants.add(edge.destination.node_id)
                 inner_final_descendants.update(nx.descendants(graph, edge.destination.node_id))
         continuation_nodes = reachable_body_nodes - outer_preparation_nodes - inner_body_path_nodes - {outer_return_id}
+        if any(
+            edge.destination.field == "continue_condition"
+            and edge.source.node_id != node_id
+            and edge.source.node_id not in continuation_nodes
+            and not (
+                edge.source.node_id in direct_nested_for_ids
+                and edge.source.field in {"output_collection", "final_state"}
+            )
+            for edge in self._get_input_edges(outer_return_id)
+        ):
+            return None
         if not continuation_nodes <= inner_final_descendants:
             return None
         if any(not nx.has_path(graph, body_node_id, outer_return_id) for body_node_id in continuation_nodes):
@@ -3531,7 +3549,11 @@ class Graph(BaseModel):
         if len(matching_for_node_ids) != 1:
             return "ForReturn must belong to exactly one matching For"
 
-        if len(self._get_input_edges(node_id, "output")) > 1 or len(self._get_input_edges(node_id, "state")) > 1:
+        if (
+            len(self._get_input_edges(node_id, "output")) > 1
+            or len(self._get_input_edges(node_id, "state")) > 1
+            or len(self._get_input_edges(node_id, "continue_condition")) > 1
+        ):
             return "ForReturn may have only one input edge per field"
         return None
 

@@ -7,6 +7,7 @@ import pytest
 from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput, invocation, invocation_output
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.loops import ForInvocation, ForInvocationOutput, ForReturnInvocation, LoopState
+from invokeai.app.invocations.primitives import BooleanOutput
 from invokeai.app.services.session_processor.session_processor_default import DefaultSessionRunner
 from invokeai.app.services.shared.graph import CollectInvocation, Graph, GraphExecutionState, IterateInvocation
 from invokeai.app.services.shared.invocation_context import InvocationContext
@@ -62,6 +63,15 @@ class ForRunnerCollectionInvocation(BaseInvocation):
         return ForRunnerCollectionOutput(collection=self.collection)
 
 
+@invocation("test_for_runner_condition", version="1.0.0")
+class ForRunnerConditionInvocation(BaseInvocation):
+    value: Any = InputField(default=None)
+    continue_condition: bool = InputField(default=True)
+
+    def invoke(self, context: InvocationContext) -> BooleanOutput:
+        return BooleanOutput(value=self.continue_condition)
+
+
 def _build_graph(*, fail_on: int | None = None) -> Graph:
     graph = Graph()
     graph.add_node(ForInvocation(id="for", collection=[1, 2, 3]))
@@ -92,7 +102,13 @@ def _build_nested_graph(*, fail_on: int | None = None) -> Graph:
     return graph
 
 
-def _build_nested_for_graph(*, fail_on: int | None = None, collection: list[list[int]] | None = None) -> Graph:
+def _build_nested_for_graph(
+    *,
+    fail_on: int | None = None,
+    collection: list[list[int]] | None = None,
+    break_inner_after_first: bool = False,
+    break_outer_after_first: bool = False,
+) -> Graph:
     graph = Graph()
     graph.add_node(
         ForInvocation(
@@ -105,14 +121,25 @@ def _build_nested_for_graph(*, fail_on: int | None = None, collection: list[list
     graph.add_node(ForRunnerCollectionAdapterInvocation(id="inner_collection"))
     graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
     graph.add_node(ForRunnerBodyInvocation(id="inner_body", fail_on=fail_on))
-    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    graph.add_node(
+        ForReturnInvocation(
+            id="inner_return",
+            body_id="inner-body",
+            continue_condition=False if break_inner_after_first else None,
+        )
+    )
+    graph.add_node(ForRunnerConditionInvocation(id="outer_condition", continue_condition=not break_outer_after_first))
+    graph.add_node(ForRunnerCollectionInvocation(id="outer_output"))
     graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
     graph.add_node(ForRunnerCollectionInvocation(id="after"))
     graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
     graph.add_edge(create_edge("inner_collection", "collection", "inner_for", "collection"))
     graph.add_edge(create_edge("inner_for", "item", "inner_body", "value"))
     graph.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
-    graph.add_edge(create_edge("inner_for", "output_collection", "outer_return", "output"))
+    graph.add_edge(create_edge("inner_for", "output_collection", "outer_output", "collection"))
+    graph.add_edge(create_edge("outer_output", "collection", "outer_return", "output"))
+    graph.add_edge(create_edge("inner_for", "output_collection", "outer_condition", "value"))
+    graph.add_edge(create_edge("outer_condition", "value", "outer_return", "continue_condition"))
     graph.add_edge(create_edge("outer_for", "state", "outer_return", "state"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "collection"))
     return graph
@@ -396,6 +423,51 @@ def test_session_runner_completes_nested_for_with_empty_inner_collection(
     assert completed_source_ids.count("inner_return") == 2
     [after_exec_id] = session.source_prepared_mapping["after"]
     assert session.results[after_exec_id] == ForRunnerCollectionOutput(collection=[[], [3, 4]])
+
+
+def test_session_runner_nested_for_early_break_releases_each_inner_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = GraphExecutionState(graph=_build_nested_for_graph(break_inner_after_first=True))
+    runner, _cancel_event, session_queue, events = _build_runner(monkeypatch)
+    queue_item = _build_queue_item(session)
+    session_queue.add_queue_item(queue_item)
+
+    runner.run(queue_item)
+
+    assert queue_item.status == "completed"
+    assert session.is_complete()
+    completed_source_ids = _completed_source_ids(events, session)
+    assert completed_source_ids.count("outer_for") == 2
+    assert completed_source_ids.count("inner_for") == 2
+    assert completed_source_ids.count("inner_body") == 2
+    assert completed_source_ids.count("inner_return") == 2
+    assert completed_source_ids.count("outer_return") == 2
+    [after_exec_id] = session.source_prepared_mapping["after"]
+    assert session.results[after_exec_id] == ForRunnerCollectionOutput(collection=[[1], [3]])
+
+
+def test_session_runner_nested_for_connected_early_break_releases_outer_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = GraphExecutionState(graph=_build_nested_for_graph(break_outer_after_first=True))
+    runner, _cancel_event, session_queue, events = _build_runner(monkeypatch)
+    queue_item = _build_queue_item(session)
+    session_queue.add_queue_item(queue_item)
+
+    runner.run(queue_item)
+
+    assert queue_item.status == "completed"
+    assert session.is_complete()
+    completed_source_ids = _completed_source_ids(events, session)
+    assert completed_source_ids.count("outer_for") == 1
+    assert completed_source_ids.count("inner_for") == 2
+    assert completed_source_ids.count("inner_body") == 2
+    assert completed_source_ids.count("inner_return") == 2
+    assert completed_source_ids.count("outer_condition") == 1
+    assert completed_source_ids.count("outer_return") == 1
+    [after_exec_id] = session.source_prepared_mapping["after"]
+    assert session.results[after_exec_id] == ForRunnerCollectionOutput(collection=[[1, 2]])
 
 
 def test_session_runner_nested_for_body_exception_fails_without_outer_final_outputs(

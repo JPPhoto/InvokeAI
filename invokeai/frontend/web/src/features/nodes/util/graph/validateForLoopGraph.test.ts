@@ -71,24 +71,27 @@ describe(validateForLoopGraph.name, () => {
     expect(validateForLoopGraph(graph)).toBe('nodes.forLoopBodyIdentityEdge');
   });
 
-  it('accepts an internal Iterate collapsed by Collect', () => {
+  it('rejects an internal Iterate predicate branch without scalar aggregation', () => {
     const graph = buildGraph(
       [
         { id: 'for', type: 'for' },
         { id: 'iterate', type: 'iterate' },
         { id: 'body', type: 'add' },
+        { id: 'condition', type: 'add' },
         { id: 'collect', type: 'collect' },
         { id: 'return', type: 'for_return' },
       ],
       [
         edge('for', 'item', 'iterate', 'collection'),
         edge('iterate', 'item', 'body', 'a'),
+        edge('iterate', 'item', 'condition', 'value'),
         edge('body', 'value', 'collect', 'item'),
         edge('collect', 'collection', 'return', 'output'),
+        edge('condition', 'value', 'return', 'continue_condition'),
       ]
     );
 
-    expect(validateForLoopGraph(graph)).toBeNull();
+    expect(validateForLoopGraph(graph)).toBe('nodes.forLoopIterateUnsupported');
   });
 
   it('accepts one identity-bearing nested For whose final collection closes the outer body', () => {
@@ -98,6 +101,7 @@ describe(validateForLoopGraph.name, () => {
         { id: 'inner-collection', type: 'add' },
         { id: 'inner', type: 'for', body_id: 'inner-body' },
         { id: 'inner-body', type: 'add' },
+        { id: 'inner-condition', type: 'add' },
         { id: 'inner-return', type: 'for_return', body_id: 'inner-body' },
         { id: 'outer-return', type: 'for_return', body_id: 'outer-body' },
       ],
@@ -105,7 +109,9 @@ describe(validateForLoopGraph.name, () => {
         edge('outer', 'item', 'inner-collection', 'value'),
         edge('inner-collection', 'value', 'inner', 'collection'),
         edge('inner', 'item', 'inner-body', 'value'),
+        edge('inner', 'item', 'inner-condition', 'value'),
         edge('inner-body', 'value', 'inner-return', 'output'),
+        edge('inner-condition', 'value', 'inner-return', 'continue_condition'),
         edge('inner', 'output_collection', 'outer-return', 'output'),
       ]
     );
@@ -137,6 +143,30 @@ describe(validateForLoopGraph.name, () => {
     );
 
     expect(validateForLoopGraph(graph)).toBeNull();
+  });
+
+  it('rejects an outer nested ForReturn condition from an external scope', () => {
+    const graph = buildGraph(
+      [
+        { id: 'outer', type: 'for', body_id: 'outer-body' },
+        { id: 'inner-collection', type: 'add' },
+        { id: 'inner', type: 'for', body_id: 'inner-body' },
+        { id: 'inner-body', type: 'add' },
+        { id: 'inner-return', type: 'for_return', body_id: 'inner-body' },
+        { id: 'outer-return', type: 'for_return', body_id: 'outer-body' },
+        { id: 'external-condition', type: 'add' },
+      ],
+      [
+        edge('outer', 'item', 'inner-collection', 'value'),
+        edge('inner-collection', 'value', 'inner', 'collection'),
+        edge('inner', 'item', 'inner-body', 'value'),
+        edge('inner-body', 'value', 'inner-return', 'output'),
+        edge('inner', 'output_collection', 'outer-return', 'output'),
+        edge('external-condition', 'value', 'outer-return', 'continue_condition'),
+      ]
+    );
+
+    expect(validateForLoopGraph(graph)).toBe('nodes.forLoopNestedUnsupported');
   });
 
   it('accepts deeper nested For boundaries when each boundary has one child', () => {
@@ -187,6 +217,7 @@ describe(validateForLoopGraph.name, () => {
         edge('inner', 'output_collection', 'continuation', 'value'),
         edge('continuation', 'value', 'continuation-tail', 'value'),
         edge('continuation-tail', 'value', 'outer-return', 'output'),
+        edge('continuation-tail', 'value', 'outer-return', 'continue_condition'),
       ]
     );
 
@@ -369,6 +400,21 @@ describe(validateForLoopGraph.name, () => {
         edge('for', 'item', 'return', 'output'),
         edge('first', 'value', 'return', 'state'),
         edge('second', 'value', 'return', 'state'),
+      ],
+      expected: 'nodes.forReturnInputCount',
+    },
+    {
+      name: 'duplicate ForReturn continue conditions',
+      nodes: [
+        { id: 'for', type: 'for' },
+        { id: 'first', type: 'add' },
+        { id: 'second', type: 'add' },
+        { id: 'return', type: 'for_return' },
+      ],
+      edges: [
+        edge('for', 'item', 'return', 'output'),
+        edge('first', 'value', 'return', 'continue_condition'),
+        edge('second', 'value', 'return', 'continue_condition'),
       ],
       expected: 'nodes.forReturnInputCount',
     },

@@ -73,6 +73,14 @@ class TwoAnyTestInvocation(BaseInvocation):
         return TwoAnyTestInvocationOutput(value=(self.first, self.second))
 
 
+@invocation("test_continue_on_value", version="1.0.0")
+class ContinueOnValueTestInvocation(BaseInvocation):
+    value: Any = InputField(default=None)
+
+    def invoke(self, context: InvocationContext) -> BooleanOutput:
+        return BooleanOutput(value=self.value != "stop")
+
+
 @invocation_output("test_nested_any_collection_output")
 class NestedAnyCollectionTestInvocationOutput(BaseInvocationOutput):
     collection: list[list[Any]] = OutputField(default=[])
@@ -1625,6 +1633,93 @@ def test_graph_for_final_state_materializes_after_last_direct_return():
 
     assert isinstance(after_node, AnyTypeTestInvocation)
     assert after_node.value == LoopState(values={"count": 2})
+
+
+def test_graph_for_return_can_break_early_and_release_final_outputs():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta", "charlie"]))
+    graph.add_node(ForReturnInvocation(id="return", continue_condition=False))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    for_node, _for_output = invoke_next(state)
+    assert isinstance(for_node, ForInvocation)
+    return_node, return_output = invoke_next(state)
+    assert isinstance(return_node, ForReturnInvocation)
+    assert isinstance(return_output, ForReturnInvocationOutput)
+    assert return_output.output == "alpha"
+
+    after_node = state.next()
+
+    assert isinstance(after_node, AnyTypeTestInvocation)
+    assert after_node.value == ["alpha"]
+    assert not any(
+        isinstance(state.execution_graph.get_node(exec_node_id), ForInvocation)
+        and state.execution_graph.get_node(exec_node_id).index == 1
+        for exec_node_id in state.source_prepared_mapping["for"]
+    )
+
+    state.complete(after_node.id, after_node.invoke(Mock(InvocationContext)))
+    assert state.is_complete()
+
+
+def test_graph_for_return_evaluates_connected_break_condition_for_each_iteration():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "stop", "charlie"]))
+    graph.add_node(ContinueOnValueTestInvocation(id="condition"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "condition", "value"))
+    graph.add_edge(create_edge("condition", "value", "return", "continue_condition"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    executed_source_ids: list[str] = []
+    while True:
+        node = state.next()
+        assert node is not None
+        source_id = state.prepared_source_mapping[node.id]
+        if source_id == "after":
+            after_node = node
+            break
+        executed_source_ids.append(source_id)
+        state.complete(node.id, node.invoke(Mock(InvocationContext)))
+
+    assert executed_source_ids.count("condition") == 2
+    assert executed_source_ids.count("return") == 2
+    assert isinstance(after_node, AnyTypeTestInvocation)
+    assert after_node.value == ["alpha", "stop"]
+    state.complete(after_node.id, after_node.invoke(Mock(InvocationContext)))
+
+
+def test_graph_for_return_early_break_survives_resume_with_returned_state():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"], state=LoopState(values={"count": 0})))
+    graph.add_node(StateSetInvocation(id="state_set", key="count", value=1))
+    graph.add_node(ForReturnInvocation(id="return", continue_condition=False))
+    graph.add_node(TwoAnyTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "state", "state_set", "state"))
+    graph.add_edge(create_edge("state_set", "state", "return", "state"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "first"))
+    graph.add_edge(create_edge("for", "final_state", "after", "second"))
+
+    state = GraphExecutionState(graph=graph)
+    _for_node, _for_output = invoke_next(state)
+    _state_set_node, _state_set_output = invoke_next(state)
+    _return_node, _return_output = invoke_next(state)
+
+    resumed = TypeAdapter(GraphExecutionState).validate_json(state.model_dump_json(warnings=False), strict=False)
+    after_node = resumed.next()
+
+    assert isinstance(after_node, TwoAnyTestInvocation)
+    assert after_node.first == ["alpha"]
+    assert after_node.second == LoopState(values={"count": 1})
+    resumed.complete(after_node.id, after_node.invoke(Mock(InvocationContext)))
+    assert resumed.is_complete()
 
 
 def test_graph_for_empty_collection_materializes_final_outputs():

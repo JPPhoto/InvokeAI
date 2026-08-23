@@ -321,6 +321,7 @@ describe('graphToWorkflow', () => {
           body_id: 'body-1',
           output: null,
           state: null,
+          continue_condition: null,
         },
       },
       edges: [
@@ -343,6 +344,7 @@ describe('graphToWorkflow', () => {
     expect(forNode.data.inputs.index).toBeUndefined();
     expect(forNode.data.inputs.body_id?.value).toBe('body-1');
     expect(returnNode.data.inputs.body_id?.value).toBe('body-1');
+    expect(returnNode.data.inputs.continue_condition?.value).toBeNull();
     expect(returnNode.data.inputs.state?.value).toBeNull();
     expect(workflow.edges).toHaveLength(1);
     expect(workflow.edges[0]).toMatchObject({
@@ -387,6 +389,7 @@ describe('graphToWorkflow', () => {
     expect(rebuiltGraph.nodes.return).toMatchObject({
       type: 'for_return',
       state: null,
+      continue_condition: null,
       body_id: 'body-1',
     });
     expect(rebuiltGraph.edges).toEqual(graph.edges);

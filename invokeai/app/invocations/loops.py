@@ -169,7 +169,7 @@ class ForReturnInvocationOutput(BaseInvocationOutput):
     )
 
 
-@invocation("for_return", version="1.1.0")
+@invocation("for_return", version="1.2.0")
 class ForReturnInvocation(BaseInvocation):
     output: Optional[Any] = InputField(
         default=None,
@@ -179,6 +179,10 @@ class ForReturnInvocation(BaseInvocation):
     state: Optional[LoopState] = InputField(
         default=None,
         description="The state to pass to the next loop iteration",
+    )
+    continue_condition: Optional[bool] = InputField(
+        default=True,
+        description="Whether to schedule the next loop iteration; false finalizes the loop",
     )
     body_id: Optional[str] = InputField(
         default=None,
