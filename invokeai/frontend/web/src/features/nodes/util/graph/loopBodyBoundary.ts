@@ -1,5 +1,5 @@
 import { getLoopBodyIdentity } from 'features/nodes/store/util/loopIdentity';
-import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
+import type { AnyEdge, AnyNode, InvocationNode } from 'features/nodes/types/invocation';
 import { isInvocationNode } from 'features/nodes/types/invocation';
 
 const ITERATION_OUTPUT_FIELDS = new Set(['item', 'index', 'total', 'state']);
@@ -23,7 +23,7 @@ export type LoopBodyBoundary = {
   status: LoopBodyBoundaryStatus;
 };
 
-const isLoopBoundary = (node: AnyNode): boolean =>
+const isLoopBoundary = (node: AnyNode): node is InvocationNode =>
   isInvocationNode(node) && (node.data.type === 'for' || node.data.type === 'for_return');
 
 const getRawBodyId = (node: AnyNode): unknown => {
@@ -96,8 +96,9 @@ export const getForLoopBodyBoundaries = (nodes: AnyNode[], edges: AnyEdge[]): Lo
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
   const outgoing = new Map<string, string[]>();
   const incoming = new Map<string, string[]>();
+  const executableEdges = edges.filter((edge) => edge.type === 'default');
 
-  for (const edge of edges) {
+  for (const edge of executableEdges) {
     if (!nodesById.has(edge.source) || !nodesById.has(edge.target)) {
       continue;
     }
@@ -113,8 +114,13 @@ export const getForLoopBodyBoundaries = (nodes: AnyNode[], edges: AnyEdge[]): Lo
     .map((forNode) => {
       const rawBodyId = getRawBodyId(forNode);
       const bodyId = getLoopBodyIdentity(forNode);
-      const iterationTargets = edges
-        .filter((edge) => edge.source === forNode.id && ITERATION_OUTPUT_FIELDS.has(edge.sourceHandle))
+      const iterationTargets = executableEdges
+        .filter(
+          (edge) =>
+            edge.source === forNode.id &&
+            typeof edge.sourceHandle === 'string' &&
+            ITERATION_OUTPUT_FIELDS.has(edge.sourceHandle)
+        )
         .map((edge) => edge.target);
       const reachableNodeIds = getReachableNodeIds(iterationTargets, outgoing);
       const reachableReturnNodes = nodes.filter(

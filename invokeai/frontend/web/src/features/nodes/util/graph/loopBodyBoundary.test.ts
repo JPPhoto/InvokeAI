@@ -11,7 +11,11 @@ const setBodyId = (node: AnyNode, bodyId: string | undefined) => {
   node.data.inputs.body_id.value = bodyId;
 };
 
-const setNodeId = (node: AnyNode, id: string): AnyNode => ({ ...node, id, data: { ...node.data, id } });
+const setNodeId = (node: AnyNode, id: string): AnyNode => {
+  node.id = id;
+  node.data.id = id;
+  return node;
+};
 
 const edge = (source: string, sourceHandle: string, target: string, targetHandle: string): AnyEdge =>
   buildEdge(source, sourceHandle, target, targetHandle);
@@ -56,6 +60,32 @@ describe(getForLoopBodyBoundaries.name, () => {
     expect(boundaries[0]?.bodyNodeIds).toEqual(['for', 'body', 'return']);
   });
 
+  it('ignores collapsed dummy edges when resolving the body path', () => {
+    const forNode = setNodeId(buildNode(for_loop), 'for');
+    const bodyNode = setNodeId(buildNode(add), 'body');
+    const returnNode = setNodeId(buildNode(for_return), 'return');
+    const collapsedEdge = {
+      id: 'body-return-collapsed',
+      source: 'body',
+      target: 'return',
+      type: 'collapsed',
+      data: { count: 1 },
+    } as AnyEdge;
+
+    const boundaries = getForLoopBodyBoundaries(
+      [forNode, bodyNode, returnNode],
+      [edge('for', 'item', 'body', 'collection'), collapsedEdge]
+    );
+
+    expect(boundaries[0]).toEqual(
+      expect.objectContaining({
+        forNodeId: 'for',
+        bodyNodeIds: ['for', 'body'],
+        status: 'missing_return',
+      })
+    );
+  });
+
   it('uses durable identity to choose the matching return on a nested path', () => {
     const forNode = setNodeId(buildNode(for_loop), 'outer');
     const innerForNode = setNodeId(buildNode(for_loop), 'inner');
@@ -82,11 +112,10 @@ describe(getForLoopBodyBoundaries.name, () => {
   });
 
   it.each([
-    ['missing_return', [], undefined],
+    ['missing_return', []],
     [
       'multiple_returns',
       [edge('body', 'item', 'first-return', 'output'), edge('body', 'item', 'second-return', 'output')],
-      undefined,
     ],
   ] as const)('reports an incomplete legacy body as %s', (status, returnEdges) => {
     const forNode = setNodeId(buildNode(for_loop), 'for');

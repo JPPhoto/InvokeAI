@@ -675,9 +675,9 @@ headings. Nodes without scoped outputs keep the existing flat output rendering.
 
 The editor now also draws a non-interactive dashed boundary around the reachable path from each `For` iteration output
 to its selected `ForReturn`. The boundary resolver uses the same durable `body_id` values as graph validation, chooses
-the matching return on nested paths, and labels incomplete, ambiguous, stale, mismatched, empty, or duplicate identity
-states. Legacy simple loops without `body_id` remain visible and are labeled as legacy boundaries. The overlay is a
-rendering affordance only: it does not add serialized nodes or edges and does not change scheduler behavior.
+the matching return on nested paths, and labels incomplete, ambiguous, stale, mismatched, empty, duplicate, or orphaned
+identity states. Legacy simple loops without `body_id` remain visible and are labeled as legacy boundaries. The overlay
+is a rendering affordance only: it does not add serialized nodes or edges and does not change scheduler behavior.
 
 When an iteration-scoped output connection is dropped on empty canvas, the add-node picker prioritizes `ForReturn`,
 expands its category, and preserves that priority while searching. Selecting it uses the existing valid-connection
