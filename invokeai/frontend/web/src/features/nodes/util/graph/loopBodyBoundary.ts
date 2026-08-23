@@ -15,7 +15,7 @@ export type LoopBodyBoundaryStatus =
   | 'duplicate_identity'
   | 'orphan_return';
 
-export type LoopBodyBoundary = {
+type LoopBodyBoundary = {
   forNodeId?: string;
   returnNodeId?: string;
   bodyNodeIds: string[];
