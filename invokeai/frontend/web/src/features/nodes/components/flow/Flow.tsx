@@ -65,6 +65,7 @@ import { PiPlugsConnectedBold, PiTrashBold } from 'react-icons/pi';
 import CustomConnectionLine from './connectionLines/CustomConnectionLine';
 import InvocationCollapsedEdge from './edges/InvocationCollapsedEdge';
 import InvocationDefaultEdge from './edges/InvocationDefaultEdge';
+import LoopBodyBoundaryOverlay from './LoopBodyBoundaryOverlay';
 import ConnectorNode from './nodes/Connector/ConnectorNode';
 import CurrentImageNode from './nodes/CurrentImage/CurrentImageNode';
 import InvocationNodeWrapper from './nodes/Invocation/InvocationNodeWrapper';
@@ -523,6 +524,7 @@ const FlowSurface = memo((props: FlowSurfaceProps) => {
         noPanClassName={NO_PAN_CLASS}
       >
         <Background gap={snapGrid} offset={snapGrid} />
+        <LoopBodyBoundaryOverlay edges={renderedEdges} />
       </ReactFlow>
     </div>
   );

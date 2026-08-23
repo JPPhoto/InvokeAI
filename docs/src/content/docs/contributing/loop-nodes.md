@@ -673,6 +673,12 @@ through an ordinary node edge are all rejected when they create scope overlap.
 The ordinary invocation renderer now groups scoped fields under localized `Iteration Outputs` and `Final Outputs`
 headings. Nodes without scoped outputs keep the existing flat output rendering.
 
+The editor now also draws a non-interactive dashed boundary around the reachable path from each `For` iteration output
+to its selected `ForReturn`. The boundary resolver uses the same durable `body_id` values as graph validation, chooses
+the matching return on nested paths, and labels incomplete, ambiguous, stale, mismatched, empty, or duplicate identity
+states. Legacy simple loops without `body_id` remain visible and are labeled as legacy boundaries. The overlay is a
+rendering affordance only: it does not add serialized nodes or edges and does not change scheduler behavior.
+
 When an iteration-scoped output connection is dropped on empty canvas, the add-node picker prioritizes `ForReturn`,
 expands its category, and preserves that priority while searching. Selecting it uses the existing valid-connection
 candidate logic to wire the iteration value to the compatible `ForReturn` input. This is a narrow boundary-discovery
@@ -704,7 +710,8 @@ Suggested first visual shape:
 ```
 
 The first version does not need a visual subgraph editor, but the graph representation must not block one later. A later
-UI may draw a subtle loop region around the reachable body nodes between `For` and `ForReturn`.
+interactive UI may turn the current read-only boundary into a richer loop region around the reachable body nodes between
+`For` and `ForReturn`.
 
 ## Future Loop Architecture Extensions
 
@@ -982,9 +989,9 @@ Answered branch-local decisions:
 18. Add an explicit `ForReturn.continue_condition` early-break contract and verify finalization, state, resume, and
     nested-context cleanup.
 
-Steps 1 through 18 are complete for the current recursive body-path contract. Step 11 has the initial output grouping and
-contextual `ForReturn` discovery/wiring affordances, covered by unit tests, but not a structured visual body boundary or
-browser-level interaction coverage.
+Steps 1 through 18 are complete for the current recursive body-path contract. Step 11 now includes output grouping,
+contextual `ForReturn` discovery/wiring, and a structured visual body boundary, covered by frontend unit tests. Browser-
+level interaction coverage remains deferred until the temporary browser-test dependencies are removed as final cleanup.
 
 The durable endpoint identity slice, bounded internal `Iterate` slice, recursive identity-bearing nested `For` slice,
 deterministic nested final-output continuation slice, explicit sibling fan-in slice, positional `CollectionZip` slice,
@@ -993,11 +1000,10 @@ uses explicit composite paths, independent inner aggregation, deferred outer ret
 materialization, empty-group handling, failure cleanup, and durable source/execution mappings. Sequential sibling
 composition is available through `CollectionConcat`, positional pairing through `CollectionZip`, and all-combinations
 pairing through `CollectionCartesian`. Early break is available through `ForReturn.continue_condition`; parallel
-stateless loops, richer collection producers, and structured visual loop-body editing remain later work.
+stateless loops and richer collection producers remain later work.
 
 ## Next Development Slice
 
-After the final adversarial review and full PR validation, the next development slice is a structured visual loop-body
-boundary/editor. It should expose the existing reachable `For` to `ForReturn` boundary and durable identity in the
-editor without changing scheduler semantics; browser-level interaction coverage remains deferred until the temporary
-browser-test dependencies are removed as the final cleanup step.
+After the final adversarial review and full PR validation, the next development slice is browser-level interaction
+coverage for the structured visual loop-body boundary/editor, followed by removal of the temporary browser-test
+dependencies as final cleanup. Nested `For` remains the next architecture slice after that final review and cleanup.
