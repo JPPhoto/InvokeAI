@@ -3307,6 +3307,11 @@ export type components = {
              * @description The image names that were added to the board
              */
             added_images: string[];
+            /**
+             * Failed Images
+             * @description The names of authorized images that could not be added
+             */
+            failed_images: string[];
         };
         /**
          * Add Integers
@@ -9329,7 +9334,7 @@ export type components = {
              * Failed Images
              * @description The names of authorized images that could not be deleted
              */
-            failed_images?: string[];
+            failed_images: string[];
         };
         /**
          * DeleteOrphanedModelsRequest
@@ -33538,6 +33543,11 @@ export type components = {
              * @description The image names that were removed from their board
              */
             removed_images: string[];
+            /**
+             * Failed Images
+             * @description The names of authorized images that could not be removed
+             */
+            failed_images: string[];
         };
         /** RemoveVideosFromBoardResult */
         RemoveVideosFromBoardResult: {
@@ -35916,6 +35926,11 @@ export type components = {
              * @description The names of the images that were starred
              */
             starred_images: string[];
+            /**
+             * Failed Images
+             * @description The names of images that were not starred
+             */
+            failed_images: string[];
         };
         /** StarredVideosResult */
         StarredVideosResult: {
@@ -38684,6 +38699,11 @@ export type components = {
              * @description The names of the images that were unstarred
              */
             unstarred_images: string[];
+            /**
+             * Failed Images
+             * @description The names of images that were not unstarred
+             */
+            failed_images: string[];
         };
         /** UnstarredVideosResult */
         UnstarredVideosResult: {
