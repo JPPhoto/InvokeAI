@@ -61,9 +61,7 @@ Lessons from those branches:
 
 What is still not implemented:
 
-- Runtime support for sequential sibling composition, implicit zip or Cartesian loop semantics, or mixed nested loop
-  shapes.
-- A structured visual region or subgraph affordance for the loop body boundary.
+- Runtime support for implicit zip or Cartesian loop semantics, or mixed nested loop shapes.
 - Rich collection producer nodes designed specifically for loop sources.
 
 Implemented on this branch:
@@ -1006,4 +1004,4 @@ stateless loops and richer collection producers remain later work.
 
 After the final adversarial review and full PR validation, the next development slice is browser-level interaction
 coverage for the structured visual loop-body boundary/editor, followed by removal of the temporary browser-test
-dependencies as final cleanup. Nested `For` remains the next architecture slice after that final review and cleanup.
+dependencies as final cleanup. Parallel stateless loops and richer collection producers remain later architecture work.

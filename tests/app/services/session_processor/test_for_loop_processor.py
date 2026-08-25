@@ -239,6 +239,7 @@ def _build_processor(
     config = SimpleNamespace(
         generation_devices=[],
         profile_graphs=False,
+        multiuser=False,
         node_cache_size=0,
         offload_text_encoders_to_idle_gpus=False,
     )
