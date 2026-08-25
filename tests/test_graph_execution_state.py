@@ -328,6 +328,33 @@ def test_graph_for_return_schedules_next_iteration():
     assert state.is_complete()
 
 
+def test_graph_combines_independent_for_final_outputs_with_different_lengths():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="first_for", collection=["alpha"]))
+    graph.add_node(ForReturnInvocation(id="first_return"))
+    graph.add_node(ForInvocation(id="second_for", collection=["beta", "charlie"]))
+    graph.add_node(ForReturnInvocation(id="second_return"))
+    graph.add_node(CollectionConcatInvocation(id="concat"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+
+    graph.add_edge(create_edge("first_for", "item", "first_return", "output"))
+    graph.add_edge(create_edge("second_for", "item", "second_return", "output"))
+    graph.add_edge(create_edge("first_for", "output_collection", "concat", "first"))
+    graph.add_edge(create_edge("second_for", "output_collection", "concat", "second"))
+    graph.add_edge(create_edge("concat", "collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert state.results[after_exec_id].value == ["alpha", "beta", "charlie"]
+    assert state.is_complete()
+
+
 def test_graph_for_retention_survives_partial_json_round_trip():
     graph = Graph()
     graph.add_node(ForInvocation(id="for", collection=["alpha", "beta", "charlie"]))
@@ -1156,6 +1183,35 @@ def test_graph_for_rematerialized_body_carries_returned_state():
 
     assert isinstance(for_1, ForInvocation)
     assert for_1.state == LoopState(values={"count": 1})
+
+
+def test_graph_for_iteration_does_not_deep_copy_collection_twice():
+    class DeepCopyCounter:
+        copies = 0
+
+        def __deepcopy__(self, memo):
+            type(self).copies += 1
+            return self
+
+    item = DeepCopyCounter()
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[item, "last"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+
+    state = GraphExecutionState(graph=graph)
+    for_0 = state.next()
+    assert isinstance(for_0, ForInvocation)
+    DeepCopyCounter.copies = 0
+    state.complete(for_0.id, for_0.invoke(Mock(InvocationContext)))
+    return_0 = state.next()
+    assert isinstance(return_0, ForReturnInvocation)
+    state.complete(return_0.id, ForReturnInvocationOutput(output="first", state=LoopState()))
+
+    for_1 = state.next()
+    assert isinstance(for_1, ForInvocation)
+    assert for_1.collection[0] is item
+    assert DeepCopyCounter.copies == 2
 
 
 def test_graph_for_body_state_helper_updates_state_for_next_iteration_and_final_output():

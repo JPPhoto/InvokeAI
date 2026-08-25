@@ -62,7 +62,6 @@ Lessons from those branches:
 What is still not implemented:
 
 - Runtime support for implicit zip or Cartesian loop semantics, or mixed nested loop shapes.
-- Rich collection producer nodes designed specifically for loop sources.
 
 Implemented on this branch:
 
@@ -109,11 +108,10 @@ The `For` node should have one loop source:
 
 Other iteration sources should be separate collection-producing nodes:
 
-- `Range` produces `list[int]`.
-- `Board Images` produces `list[ImageField]`.
-- `Model List` produces a list of model identifiers.
-- `Zip` produces equal-length positional pairs.
-- `Cartesian Product` produces every combination of two collections.
+- `Range`, `RangeOfSize`, and `RandomRange` produce integer collections.
+- `CollectionConcat` combines collections in left-to-right order.
+- `CollectionZip` produces equal-length positional pairs.
+- `CollectionCartesian` produces every combination of two collections, up to 100,000 pairs.
 
 This is preferred over multiple mutually exclusive `For` inputs because it:
 
@@ -168,7 +166,7 @@ For.iteration_output -> BodyNode.input -> ForReturn.input
 
 The runtime schedules the next `For` iteration when the matching `ForReturn` completes, carries `LoopState` forward, and
 rematerializes the reachable body path for the next iteration. Final-scoped outputs release after the last matching
-`ForReturn` completes.
+`ForReturn` completes, or after `ForReturn.continue_condition` is `False`.
 
 The current body rematerializer copies edges whose source is the `For` node, another node in the loop body path, or an
 already prepared node outside the body path. That supports shared configuration or prompt inputs:
@@ -337,6 +335,7 @@ Inputs:
 
 - `output: Any | None = None`
 - `state: LoopState | None = None`
+- `continue_condition: bool | None = True`
 - `body_id: str | None = None` (hidden durable boundary identity matching `For.body_id`)
 
 Outputs:
@@ -349,6 +348,8 @@ Semantics:
 - `output` is appended to the final `For.output_collection` when present.
 - `state` becomes the next iteration's state when present.
 - If `state` is omitted, the previous state carries forward unchanged.
+- `continue_condition` defaults to `True`; `None` also continues for compatibility, while `False` finalizes the
+  current loop context after recording the current return.
 
 The loop should require exactly one matching body return node for each loop boundary. A nested shape may have multiple
 reachable returns, but durable identities must select exactly one return for each `For`.
@@ -463,8 +464,11 @@ If `For.state` is connected, the first iteration receives that state.
 
 If `For.state` is not connected, the first iteration receives an empty `LoopState`.
 
-The state value should be copied between iterations so mutation through shared Python object identity cannot leak across
-results.
+The scheduler deep-copies the collection and state when it creates each prepared `For` iteration. Ordinary input values
+are also deep-copied when transferred across execution edges; scheduler-managed `Iterate.collection` inputs are the
+intentional exception because the iterator reads the source collection without duplicating it. The state helper nodes
+deep-copy values when reading or updating state, so mutable values are not shared accidentally between iterations or
+helper results.
 
 ### 3. Per-Iteration Values
 
@@ -501,7 +505,7 @@ partial output collection should be exposed, and final-scoped outputs should rem
 The `For` final output is available only after:
 
 - every iteration has completed successfully, or
-- a later explicit early-break contract says the loop is complete
+- `ForReturn.continue_condition` is `False` for a completed iteration
 
 The final output contains:
 
@@ -542,10 +546,9 @@ no per-context final output and downstream collection behavior remains empty.
 
 ### 7. Ordering
 
-The first implementation should run iterations sequentially when state is used.
+Loop iterations are currently scheduled sequentially, including stateless loops.
 
-Parallel execution may be considered later for stateless loops, but only if it preserves deterministic collection order
-and does not change visible graph semantics.
+Parallel loop execution is not implemented.
 
 ### 8. Persistence And Resume
 
@@ -796,9 +799,8 @@ values. Empty collections are valid when both inputs are empty.
 Use `CollectionCartesian` for combinations rather than correspondence. It emits one pair for every combination of one
 item from each input in left-major, right-minor order, so unequal lengths are expected and an empty input produces no
 pairs. Use it when every item from one collection must be combined with every item from the other, not when items are
-meant to be matched by position. The node rejects products larger than 100,000 pairs before allocation. This bound
-supports common frame-by-parameter workflows while preventing accidental product explosions; inputs should still be
-bounded when the result will feed a loop or another collection operation.
+meant to be matched by position. The node rejects products larger than 100,000 pairs before allocation and accepts a
+product of exactly 100,000 pairs.
 
 All three operations are explicit ordinary nodes. None changes `For` scheduling, creates implicit loop dimensions, or
 assigns meaning to sibling branches beyond the operation's documented collection semantics.
@@ -807,6 +809,10 @@ The inner loop must finalize before the outer continuation and body return execu
 data in the outer loop, so one completed inner loop produces exactly one matching `OuterForReturn` completion for the
 current outer iteration. Continuation nodes can also consume outer iteration or preparation values, but they execute once
 at the outer context rather than once per inner item.
+
+An early break on an inner `ForReturn` finalizes only that inner loop context; the outer continuation still receives the
+partial inner collection and the outer loop can continue. An early break on the outer `ForReturn` finalizes the current
+outer context and prevents later outer iterations.
 
 Supporting this shape requires:
 

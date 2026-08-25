@@ -515,6 +515,44 @@ export const sortNodeCommandItems = (
   return sortedItems;
 };
 
+export const sortNodeCommandItemGroups = (
+  groups: [string, NodeCommandItemData[]][],
+  searchTerm: string,
+  shouldPromoteForReturn: boolean
+): [string, NodeCommandItemData[]][] => {
+  const lowerSearch = searchTerm.toLowerCase();
+  return [...groups].sort(([a, aItems], [b, bItems]) => {
+    if (shouldPromoteForReturn) {
+      const aHasForReturn = aItems.some((item) => item.value === 'for_return');
+      const bHasForReturn = bItems.some((item) => item.value === 'for_return');
+      if (aHasForReturn && !bHasForReturn) {
+        return -1;
+      }
+      if (!aHasForReturn && bHasForReturn) {
+        return 1;
+      }
+    }
+
+    if (searchTerm) {
+      const aHasExact = aItems.some((item) => item.label.toLowerCase() === lowerSearch);
+      const bHasExact = bItems.some((item) => item.label.toLowerCase() === lowerSearch);
+      if (aHasExact && !bHasExact) {
+        return -1;
+      }
+      if (!aHasExact && bHasExact) {
+        return 1;
+      }
+    }
+    if (a === 'other') {
+      return 1;
+    }
+    if (b === 'other') {
+      return -1;
+    }
+    return a.localeCompare(b);
+  });
+};
+
 const categoryItemSx: SystemStyleObject = {
   cursor: 'pointer',
   userSelect: 'none',
@@ -647,6 +685,8 @@ const NodeCommandList = memo(
       notesFilterItem,
     ]);
 
+    const shouldPromoteForReturn = isForIterationOutputConnection(pendingConnection, pendingConnectionContext);
+
     const groupedItems = useMemo(() => {
       const groups: Record<string, NodeCommandItemData[]> = {};
       for (const item of items) {
@@ -656,33 +696,11 @@ const NodeCommandList = memo(
         }
         groups[cat].push(item);
       }
-      // Sort categories alphabetically, but put "other" last.
-      // When searching, prioritize categories that contain an exact title match.
-      const lowerSearch = searchTerm.toLowerCase();
-      return Object.entries(groups).sort(([a, aItems], [b, bItems]) => {
-        if (searchTerm) {
-          const aHasExact = aItems.some((item) => item.label.toLowerCase() === lowerSearch);
-          const bHasExact = bItems.some((item) => item.label.toLowerCase() === lowerSearch);
-          if (aHasExact && !bHasExact) {
-            return -1;
-          }
-          if (!aHasExact && bHasExact) {
-            return 1;
-          }
-        }
-        if (a === 'other') {
-          return 1;
-        }
-        if (b === 'other') {
-          return -1;
-        }
-        return a.localeCompare(b);
-      });
-    }, [items, searchTerm]);
+      return sortNodeCommandItemGroups(Object.entries(groups), searchTerm, shouldPromoteForReturn);
+    }, [items, searchTerm, shouldPromoteForReturn]);
 
     // When searching, auto-expand all categories; when not searching, use manual state
     const isSearching = searchTerm.length > 0;
-    const shouldPromoteForReturn = isForIterationOutputConnection(pendingConnection, pendingConnectionContext);
 
     const expandAll = useCallback(() => {
       setExpandedCategories(new Set(groupedItems.map(([cat]) => cat)));

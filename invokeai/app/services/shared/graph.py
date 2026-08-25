@@ -529,8 +529,10 @@ class _ExecutionMaterializer:
 
         return any(not self._state._all_for_contexts_finalized(source_for_id) for source_for_id in final_for_source_ids)
 
-    def _create_execution_node_copy(self, node: BaseInvocation, node_id: str, iteration_index: int) -> BaseInvocation:
-        new_node = node.model_copy(deep=True)
+    def _create_execution_node_copy(
+        self, node: BaseInvocation, node_id: str, iteration_index: int, *, deep_copy: bool = True
+    ) -> BaseInvocation:
+        new_node = node.model_copy(deep=deep_copy)
         new_node.id = uuid_string()
 
         if isinstance(new_node, IterateInvocation):
@@ -553,7 +555,7 @@ class _ExecutionMaterializer:
         node: "ForInvocation",
         iteration_node_map: list[tuple[str, str]],
     ) -> str:
-        new_node = self._create_execution_node_copy(node, source_for_id, -1)
+        new_node = self._create_execution_node_copy(node, source_for_id, -1, deep_copy=False)
         assert isinstance(new_node, ForInvocation)
         new_edges = self._build_execution_edges(source_for_id, iteration_node_map)
         iteration_path = self._get_known_iteration_path(-1, iteration_node_map)
@@ -606,7 +608,7 @@ class _ExecutionMaterializer:
         if not isinstance(node, ForInvocation):
             raise TypeError(f"Expected source ForInvocation, got {type(node).__name__}")
 
-        new_node = self._create_execution_node_copy(node, source_for_id, iteration_index)
+        new_node = self._create_execution_node_copy(node, source_for_id, iteration_index, deep_copy=False)
         assert isinstance(new_node, ForInvocation)
         new_node.collection = copydeep(collection)
         new_node.state = copydeep(state)
@@ -1136,8 +1138,13 @@ class _ExecutionMaterializer:
 
     def _get_collect_iteration_group_key(self, edge: Edge, sibling_depth: Optional[int] = None) -> tuple[int, ...]:
         path = self._state._get_iteration_path(edge.source.node_id)
+        source_node = self._state.execution_graph.get_node(edge.source.node_id)
+        if (
+            isinstance(source_node, ForInvocation)
+            and get_output_field_scope(source_node, edge.source.field) == OutputScope.Final
+        ):
+            return self._state._get_for_parent_iteration_path(edge.source.node_id)
         if edge.destination.field == ITEM_FIELD:
-            source_node = self._state.execution_graph.get_node(edge.source.node_id)
             if isinstance(source_node, ForInvocation) and source_node.index == -1:
                 return path
             # Ragged siblings need the deepest path to identify their shared outer group.
@@ -1182,12 +1189,23 @@ class _ExecutionMaterializer:
 
         return [final_nodes_by_parent_path[parent_path] for parent_path in sorted(final_nodes_by_parent_path)]
 
+    def _get_prepared_edge_iteration_path(self, edge: Edge, prepared_id: str) -> tuple[int, ...]:
+        source_node = self._state.graph.get_node(edge.source.node_id)
+        if (
+            isinstance(source_node, ForInvocation)
+            and get_output_field_scope(source_node, edge.source.field) == OutputScope.Final
+        ):
+            return self._state._get_for_parent_iteration_path(prepared_id)
+        return self._state._get_iteration_path(prepared_id)
+
     def _get_iterator_input_iteration_paths(self, iterator_node_id: str) -> set[tuple[int, ...]]:
         iteration_paths: set[tuple[int, ...]] = set()
         for edge in self._state.graph._get_input_edges(iterator_node_id, COLLECTION_FIELD):
             source_node_id = edge.source.node_id
             prepared_nodes = self._get_ordered_prepared_nodes_for_source(source_node_id)
-            iteration_paths.update(self._state._get_iteration_path(prepared_id) for prepared_id in prepared_nodes)
+            iteration_paths.update(
+                self._get_prepared_edge_iteration_path(edge, prepared_id) for prepared_id in prepared_nodes
+            )
         return iteration_paths
 
     def _get_collect_candidate_group_keys(self, edge: Edge) -> set[tuple[int, ...]]:
@@ -1225,7 +1243,8 @@ class _ExecutionMaterializer:
             group_keys.update(self._get_collect_candidate_group_keys(edge))
             prepared_nodes = self._get_ordered_prepared_nodes_for_edge(edge)
             sibling_depth = max(
-                (len(self._state._get_iteration_path(prepared_id)) for prepared_id in prepared_nodes), default=0
+                (len(self._get_prepared_edge_iteration_path(edge, prepared_id)) for prepared_id in prepared_nodes),
+                default=0,
             )
             for prepared_id in prepared_nodes:
                 prepared_edge = Edge(
@@ -1235,7 +1254,12 @@ class _ExecutionMaterializer:
                 group_key = self._get_collect_iteration_group_key(prepared_edge, sibling_depth)
                 group_keys.add(group_key)
                 prepared_inputs.append(
-                    (prepared_edge, edge.source.node_id, prepared_id, self._state._get_iteration_path(prepared_id))
+                    (
+                        prepared_edge,
+                        edge.source.node_id,
+                        prepared_id,
+                        self._get_prepared_edge_iteration_path(edge, prepared_id),
+                    )
                 )
 
         if not group_keys:
@@ -1278,7 +1302,7 @@ class _ExecutionMaterializer:
         parent_prepared_nodes = {
             node_id: list(
                 dict.fromkeys(
-                    prepared_id
+                    (prepared_id, self._get_prepared_edge_iteration_path(edge, prepared_id))
                     for edge in input_edges
                     if edge.source.node_id == node_id
                     for prepared_id in self._get_ordered_prepared_nodes_for_edge(edge)
@@ -1287,10 +1311,10 @@ class _ExecutionMaterializer:
             for node_id in parent_node_ids
         }
         all_iteration_paths = {
-            self._state._get_iteration_path(prepared_id)
+            iteration_path
             for prepared_nodes in parent_prepared_nodes.values()
-            for prepared_id in prepared_nodes
-            if self._state._get_iteration_path(prepared_id) != ()
+            for _prepared_id, iteration_path in prepared_nodes
+            if iteration_path != ()
         }
         iteration_paths = sorted(
             iteration_path
@@ -1307,26 +1331,22 @@ class _ExecutionMaterializer:
         for iteration_path in iteration_paths:
             mapping: list[tuple[str, str]] = []
             for node_id, prepared_nodes in parent_prepared_nodes.items():
-                matching_prepared_node = next(
+                matching_prepared = next(
                     iter(
                         sorted(
                             (
-                                prepared_id
-                                for prepared_id in prepared_nodes
-                                if iteration_path[: len(self._state._get_iteration_path(prepared_id))]
-                                == self._state._get_iteration_path(prepared_id)
+                                (prepared_id, prepared_path)
+                                for prepared_id, prepared_path in prepared_nodes
+                                if iteration_path[: len(prepared_path)] == prepared_path
                             ),
-                            key=lambda prepared_id: (
-                                -len(self._state._get_iteration_path(prepared_id)),
-                                prepared_id,
-                            ),
+                            key=lambda prepared: (-len(prepared[1]), prepared[0]),
                         )
                     ),
                     None,
                 )
-                if matching_prepared_node is None:
+                if matching_prepared is None:
                     break
-                mapping.append((node_id, matching_prepared_node))
+                mapping.append((node_id, matching_prepared[0]))
             if len(mapping) == len(parent_node_ids):
                 mappings.append(mapping)
         return mappings
@@ -1336,10 +1356,12 @@ class _ExecutionMaterializer:
         self._state.executed.add(source_node_id)
         self._state.executed_history.append(source_node_id)
 
-    def _index_prepared_nodes_by_iteration_path(self, prepared_nodes: set[str]) -> dict[tuple[int, ...], list[str]]:
+    def _index_prepared_nodes_by_iteration_path(
+        self, prepared_nodes: set[str], input_edges: list[Edge]
+    ) -> dict[tuple[int, ...], list[str]]:
         prepared_nodes_by_iteration_path: dict[tuple[int, ...], list[str]] = {}
         for prepared_id in prepared_nodes:
-            iteration_path = self._state._get_iteration_path(prepared_id)
+            iteration_path = self._get_prepared_edge_iteration_path(input_edges[0], prepared_id)
             prepared_nodes_by_iteration_path.setdefault(iteration_path, []).append(prepared_id)
         return prepared_nodes_by_iteration_path
 
@@ -1390,7 +1412,10 @@ class _ExecutionMaterializer:
             node_id: self._get_prepared_nodes_for_source(node_id) for node_id in parent_node_ids
         }
         prepared_nodes_by_source_and_path = {
-            node_id: self._index_prepared_nodes_by_iteration_path(prepared_nodes)
+            node_id: self._index_prepared_nodes_by_iteration_path(
+                prepared_nodes,
+                [edge for edge in self._state.graph._get_input_edges(next_node_id) if edge.source.node_id == node_id],
+            )
             for node_id, prepared_nodes in prepared_nodes_by_source.items()
         }
 
@@ -1587,6 +1612,10 @@ class _ExecutionMaterializer:
                     and self._is_deferred_nested_for_return(node_id, g)
                 )
                 and not self._has_unmaterializable_for_final_input(node_id)
+                and all(
+                    source_id in self._state.source_prepared_mapping or source_id in self._state.executed
+                    for source_id, _ in g.in_edges(node_id)
+                )
                 and (
                     not isinstance(self._state.graph.get_node(node_id), (ForInvocation, IterateInvocation))
                     or all(source_id in self._state.executed for source_id, _ in g.in_edges(node_id))
@@ -1618,8 +1647,14 @@ class _ExecutionMaterializer:
             for iteration_mappings in self._get_parent_iteration_mappings(next_node_id, g):
                 iteration_path = None
                 if not parent_iterator_nodes:
+                    input_edges = self._state.graph._get_input_edges(next_node_id)
                     iteration_path = max(
-                        (self._state._get_iteration_path(prepared_id) for _, prepared_id in iteration_mappings),
+                        (
+                            self._get_prepared_edge_iteration_path(edge, prepared_id)
+                            for source_id, prepared_id in iteration_mappings
+                            for edge in input_edges
+                            if edge.source.node_id == source_id
+                        ),
                         key=lambda path: (len(path), path),
                         default=(),
                     )

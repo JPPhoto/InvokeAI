@@ -320,7 +320,24 @@ const getOutputScopeConflicts = (nodes: AnyNode[], edges: AnyEdge[], templates: 
       }
     }
 
-    for (const targetId of finalTargets) {
+    const reachableFinalNodes = new Set(finalTargets);
+    const pendingFinalNodes = [...finalTargets];
+    while (pendingFinalNodes.length > 0) {
+      const currentNodeId = pendingFinalNodes.pop();
+      if (!currentNodeId) {
+        continue;
+      }
+
+      for (const targetNodeId of targetsBySource.get(currentNodeId) ?? []) {
+        if (reachableFinalNodes.has(targetNodeId)) {
+          continue;
+        }
+        reachableFinalNodes.add(targetNodeId);
+        pendingFinalNodes.push(targetNodeId);
+      }
+    }
+
+    for (const targetId of reachableFinalNodes) {
       if (reachableBodyNodes.has(targetId)) {
         conflicts.add(`${nodeId}\0${targetId}`);
       }

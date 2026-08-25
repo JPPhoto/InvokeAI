@@ -573,6 +573,31 @@ describe(validateConnection.name, () => {
       );
     });
 
+    it('rejects a final-scoped output that reaches the iteration body through downstream nodes', () => {
+      const forNode = buildNode(for_loop);
+      const bodyNode = buildNode(ifTemplate);
+      const downstreamNode = buildNode(ifTemplate);
+      const downstreamNode2 = buildNode(ifTemplate);
+      const returnNode = buildNode(for_return);
+      const nodes = [forNode, bodyNode, downstreamNode, downstreamNode2, returnNode];
+      const edges = [
+        buildEdge(forNode.id, 'item', bodyNode.id, 'true_input'),
+        buildEdge(bodyNode.id, 'value', returnNode.id, 'output'),
+        buildEdge(downstreamNode.id, 'value', downstreamNode2.id, 'true_input'),
+        buildEdge(downstreamNode2.id, 'value', returnNode.id, 'state'),
+      ];
+      const connection = {
+        source: forNode.id,
+        sourceHandle: 'final_state',
+        target: downstreamNode.id,
+        targetHandle: 'true_input',
+      };
+
+      expect(validateConnection(connection, nodes, edges, { ...loopTemplates, if: ifTemplate }, null)).toEqual(
+        'nodes.loopOutputScopeConflict'
+      );
+    });
+
     it('accepts iteration-scoped outputs within the body', () => {
       const forNode = buildNode(for_loop);
       const returnNode = buildNode(for_return);

@@ -4,7 +4,12 @@ import { add, buildEdge, buildNode, for_loop, for_return, templates } from 'feat
 import type { InvocationTemplate } from 'features/nodes/types/invocation';
 import { describe, expect, it } from 'vitest';
 
-import { getForReturnBodyIdentity, getPendingConnectionNodeItems, sortNodeCommandItems } from './AddNodeCmdk';
+import {
+  getForReturnBodyIdentity,
+  getPendingConnectionNodeItems,
+  sortNodeCommandItemGroups,
+  sortNodeCommandItems,
+} from './AddNodeCmdk';
 
 describe('getPendingConnectionNodeItems', () => {
   it('prioritizes ForReturn for an iteration output connection', () => {
@@ -93,6 +98,45 @@ describe('getPendingConnectionNodeItems', () => {
     const sortedItems = sortNodeCommandItems(items, 'for', pendingConnection);
 
     expect(sortedItems.map((item) => item.value)).toEqual(['for', 'for_other']);
+  });
+});
+
+describe('sortNodeCommandItemGroups', () => {
+  it('promotes the category containing ForReturn for an iteration output connection', () => {
+    const addItem = getPendingConnectionNodeItems(
+      [add],
+      {
+        nodeId: 'add-node',
+        handleId: 'value',
+        handleType: 'source',
+        fieldTemplate: add.outputs.value as PendingConnection['fieldTemplate'],
+      },
+      ''
+    )[0];
+    const forReturnItem = getPendingConnectionNodeItems(
+      [for_return],
+      {
+        nodeId: 'for-node',
+        handleId: 'item',
+        handleType: 'source',
+        fieldTemplate: for_loop.outputs.item as PendingConnection['fieldTemplate'],
+      },
+      ''
+    )[0];
+    if (!addItem || !forReturnItem) {
+      throw new Error('Expected command items');
+    }
+
+    const groups = sortNodeCommandItemGroups(
+      [
+        ['math', [addItem]],
+        ['other', [forReturnItem]],
+      ],
+      '',
+      true
+    );
+
+    expect(groups.map(([category]) => category)).toEqual(['other', 'math']);
   });
 });
 
