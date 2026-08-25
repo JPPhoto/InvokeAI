@@ -17,6 +17,7 @@ import {
   MEDIA_COOKIE_SYNC_TIMEOUT_MS,
   runWithMediaAuthLock,
   shouldAcceptRefreshedToken,
+  shouldEndSessionForUnauthorized,
 } from 'features/auth/store/authTokenRefresh';
 import queryString from 'query-string';
 import {
@@ -100,7 +101,7 @@ export const getBaseUrl = (): string => {
   return getDeploymentBaseUrl();
 };
 
-const dynamicBaseQuery: BaseQueryFn<string | FetchArgs, unknown, FetchBaseQueryError> = async (
+export const dynamicBaseQuery: BaseQueryFn<string | FetchArgs, unknown, FetchBaseQueryError> = async (
   args,
   api,
   extraOptions
@@ -176,10 +177,12 @@ const dynamicBaseQuery: BaseQueryFn<string | FetchArgs, unknown, FetchBaseQueryE
     });
   }
 
-  // If we sent an auth token but got 401, the token is invalid/expired.
-  // Only trigger session expiry when we actually sent a token — unauthenticated
-  // requests (e.g. client_state queries during page load) should not cause logout.
-  if (result.error && result.error.status === 401 && !isAuthEndpoint && token) {
+  // If we sent an auth token but got 401, the token is invalid/expired. Only trigger session
+  // expiry when we actually sent a token — unauthenticated requests (e.g. client_state queries
+  // during page load) should not cause logout — and only while that token is still the live one,
+  // so a slow request cannot log out the session that replaced its own. See
+  // `shouldEndSessionForUnauthorized`.
+  if (result.error && result.error.status === 401 && !isAuthEndpoint && shouldEndSessionForUnauthorized(token)) {
     api.dispatch(sessionExpiredLogout());
   }
 
