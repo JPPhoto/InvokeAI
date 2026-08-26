@@ -1,15 +1,18 @@
-import type {
-  CanvasDocumentContractV2,
-  CanvasLayerBasePatch,
-  CanvasLayerConfigPatch,
-  CanvasLayerContract,
-  CanvasProjectMutation,
-  CanvasRasterLayerContractV2,
-  CanvasStateContractV2,
-} from '@workbench/canvas-engine/api';
 import type { Project } from '@workbench/projectContracts';
 
-import { isHideableLayer } from '@workbench/canvas-engine/api';
+import {
+  type CanvasDocumentContractV2,
+  type CanvasLayerBasePatch,
+  type CanvasLayerConfigPatch,
+  type CanvasLayerContract,
+  type CanvasProjectMutation,
+  type CanvasRasterLayerContractV2,
+  type CanvasStateContractV2,
+  type ReorderFlatStackCommand,
+  isHideableLayer,
+  reorderLayerStack,
+  repairSelectedLayerId,
+} from '@workbench/canvas-engine/api';
 
 import { normalizeCanvasDocumentContract } from './canvasMigration';
 import {
@@ -34,7 +37,7 @@ const CANVAS_PROJECT_MUTATION_TYPES: ReadonlySet<string> = new Set<CanvasProject
   'duplicateCanvasLayer',
   'mergeCanvasLayersDown',
   'removeCanvasLayers',
-  'reorderCanvasLayers',
+  'reorderCanvasLayerStacks',
   'replaceCanvasDocument',
   'replaceCanvasLayer',
   'resizeCanvasDocument',
@@ -81,10 +84,10 @@ export const nextLayerName = (existingNames: readonly string[]): string => {
   return `Layer ${n}`;
 };
 
-const repairSelectedLayerId = (document: CanvasDocumentContractV2): CanvasDocumentContractV2 =>
-  document.selectedLayerId === null || layerExists(document.layers, document.selectedLayerId)
-    ? document
-    : { ...document, selectedLayerId: document.layers[0]?.id ?? null };
+const withRepairedSelection = (document: CanvasDocumentContractV2): CanvasDocumentContractV2 => {
+  const selectedLayerId = repairSelectedLayerId(document.layers, document.selectedLayerId);
+  return selectedLayerId === document.selectedLayerId ? document : { ...document, selectedLayerId };
+};
 
 const setCanvasDocument = (project: Project, document: CanvasDocumentContractV2): Project =>
   document === project.canvas.document ? project : { ...project, canvas: { ...project.canvas, document } };
@@ -255,9 +258,7 @@ const applyLayerStackMutation = (
   }
   const selectedLayerId =
     mutation.selectedLayerId === undefined
-      ? document.selectedLayerId !== null && layers.some((layer) => layer.id === document.selectedLayerId)
-        ? document.selectedLayerId
-        : (layers[0]?.id ?? null)
+      ? repairSelectedLayerId(layers, document.selectedLayerId, document.layers)
       : mutation.selectedLayerId;
   changed ||= document.selectedLayerId !== selectedLayerId;
   return changed
@@ -284,28 +285,7 @@ const removeLayers = (document: CanvasDocumentContractV2, ids: readonly string[]
   if (layers.length === document.layers.length) {
     return document;
   }
-  let selectedLayerId = document.selectedLayerId;
-  if (selectedLayerId !== null && removed.has(selectedLayerId)) {
-    const removedIndex = document.layers.findIndex((layer) => layer.id === selectedLayerId);
-    const remainingIds = new Set(layers.map((layer) => layer.id));
-    selectedLayerId = null;
-    for (let index = removedIndex + 1; index < document.layers.length; index += 1) {
-      const id = document.layers[index]?.id;
-      if (id && remainingIds.has(id)) {
-        selectedLayerId = id;
-        break;
-      }
-    }
-    if (selectedLayerId === null) {
-      for (let index = removedIndex - 1; index >= 0; index -= 1) {
-        const id = document.layers[index]?.id;
-        if (id && remainingIds.has(id)) {
-          selectedLayerId = id;
-          break;
-        }
-      }
-    }
-  }
+  const selectedLayerId = repairSelectedLayerId(layers, document.selectedLayerId, document.layers);
   return { ...document, layers, selectedLayerId };
 };
 
@@ -325,20 +305,22 @@ const duplicateLayer = (document: CanvasDocumentContractV2, sourceId: string, ne
   };
 };
 
-const reorderLayers = (document: CanvasDocumentContractV2, orderedIds: readonly string[]) => {
-  if (orderedIds.length !== document.layers.length || new Set(orderedIds).size !== orderedIds.length) {
+const reorderLayerStacks = (
+  document: CanvasDocumentContractV2,
+  stacks: readonly ReorderFlatStackCommand[]
+): CanvasDocumentContractV2 => {
+  if (new Set(stacks.map((command) => command.stack)).size !== stacks.length) {
     return document;
   }
-  const byId = new Map(document.layers.map((layer) => [layer.id, layer]));
-  const layers: CanvasLayers = [];
-  for (const id of orderedIds) {
-    const layer = byId.get(id);
-    if (!layer) {
+  let layers: CanvasLayers = document.layers;
+  for (const command of stacks) {
+    const next = reorderLayerStack(layers, command);
+    if (!next) {
       return document;
     }
-    layers.push(layer);
+    layers = next;
   }
-  return { ...document, layers };
+  return layers.every((layer, index) => layer === document.layers[index]) ? document : { ...document, layers };
 };
 
 const patchLayer = (layer: CanvasLayerContract, patch: CanvasLayerBasePatch): CanvasLayerContract => {
@@ -586,8 +568,8 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
       return updateCanvasDocument(project, (document) => removeLayers(document, mutation.ids));
     case 'duplicateCanvasLayer':
       return updateCanvasDocument(project, (document) => duplicateLayer(document, mutation.sourceId, mutation.newId));
-    case 'reorderCanvasLayers':
-      return updateCanvasDocument(project, (document) => reorderLayers(document, mutation.orderedIds));
+    case 'reorderCanvasLayerStacks':
+      return updateCanvasDocument(project, (document) => reorderLayerStacks(document, mutation.stacks));
     case 'updateCanvasLayer':
       return updateCanvasDocument(project, (document) =>
         mapCanvasLayer(document, mutation.id, (layer) => patchLayer(layer, mutation.patch))
@@ -638,12 +620,13 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
         transform: below.transform,
         type: 'raster',
       };
+      const layers = document.layers
+        .filter((_, index) => index !== upperIndex)
+        .map((layer) => (layer.id === below.id ? merged : layer));
       return setCanvasDocument(project, {
         ...document,
-        layers: document.layers
-          .filter((_, index) => index !== upperIndex)
-          .map((layer) => (layer.id === below.id ? merged : layer)),
-        selectedLayerId: document.selectedLayerId === mutation.upperLayerId ? below.id : document.selectedLayerId,
+        layers,
+        selectedLayerId: repairSelectedLayerId(layers, document.selectedLayerId, document.layers),
       });
     }
     case 'setCanvasBbox':
@@ -692,7 +675,7 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
       return document
         ? setCanvasState(project, {
             ...project.canvas,
-            document: repairSelectedLayerId(document),
+            document: withRepairedSelection(document),
             documentRevision: project.canvas.documentRevision + 1,
             stagingArea: clearStagingArea(project.canvas.stagingArea),
           })
@@ -716,7 +699,7 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
       return document
         ? setCanvasState(project, {
             ...project.canvas,
-            document: repairSelectedLayerId(document),
+            document: withRepairedSelection(document),
             documentRevision: project.canvas.documentRevision + 1,
           })
         : project;

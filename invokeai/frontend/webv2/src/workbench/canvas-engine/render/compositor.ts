@@ -21,7 +21,9 @@ import type {
 import type { CanvasDiagnostics } from '@workbench/canvas-engine/diagnostics';
 import type { LayerDamage, Mat2d, Rect, Vec2 } from '@workbench/canvas-engine/types';
 
-import { isLayerHidden, LAYER_GROUP_COUNT, layerGroupRank } from '@workbench/canvas-engine/document/sources';
+import { isLayerContributing } from '@workbench/canvas-engine/document/layerEligibility';
+import { LAYER_STACK_ORDER, layerStackRank } from '@workbench/canvas-engine/document/layerStacks';
+import { isLayerHidden } from '@workbench/canvas-engine/document/sources';
 import { fromTRS, multiply } from '@workbench/canvas-engine/math/mat2d';
 import { intersect, isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 
@@ -526,24 +528,20 @@ export const compositeDocument = (
     ctx.clip();
   }
 
-  // Composite in STRICT GROUP ORDER (legacy `arrangeEntities` / `CanvasEntityRendererModule`):
-  // raster (bottom) < control < regional guidance < inpaint mask (top). This
-  // matches the layers panel, which renders these as fixed grouped sections, and
-  // makes a layer's global insertion index irrelevant ACROSS groups (a raster
-  // created after a control layer must still draw below it). WITHIN a group the
-  // panel/array relative order is preserved. The `stagedPreview` lands on top of
-  // all groups below. Index 0 is top-most, so iterate the array in reverse.
-  const drawGroup = (rank: number): void => {
+  // Composite stack by stack in `LAYER_STACK_ORDER`; within a stack the flat
+  // array order holds (index 0 is top-most, so iterate in reverse). The
+  // `stagedPreview` lands on top of every stack.
+  const drawStack = (rank: number): void => {
     for (let i = doc.layers.length - 1; i >= 0; i--) {
       const layer = doc.layers[i];
       if (
         !layer ||
         // Disabled OR hidden: neither draws. `onlyLayerId` (an isolated
         // operation preview) overrides both — the user is acting on that layer.
-        ((!layer.isEnabled || isLayerHidden(layer)) && layer.id !== opts.onlyLayerId) ||
+        ((!isLayerContributing(layer) || isLayerHidden(layer)) && layer.id !== opts.onlyLayerId) ||
         layer.id === opts.skipLayerId ||
         (opts.onlyLayerId && layer.id !== opts.onlyLayerId) ||
-        layerGroupRank(layer) !== rank
+        layerStackRank(layer) !== rank
       ) {
         continue;
       }
@@ -570,8 +568,8 @@ export const compositeDocument = (
       opts.diagnostics?.increment('layersDrawn');
     }
   };
-  for (let rank = 0; rank < LAYER_GROUP_COUNT; rank++) {
-    drawGroup(rank);
+  for (let rank = 0; rank < LAYER_STACK_ORDER.length; rank++) {
+    drawStack(rank);
   }
 
   if (opts.clipRect) {

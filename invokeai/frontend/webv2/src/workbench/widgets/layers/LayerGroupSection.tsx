@@ -1,5 +1,5 @@
 import type { DragEndEvent } from '@dnd-kit/core';
-import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
+import type { CanvasLayerContract, LayerStackKind } from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import type { LucideIcon } from 'lucide-react';
@@ -11,6 +11,7 @@ import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifi
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { IconButton, toaster, Tooltip } from '@platform/ui';
 import { canMergeVisibleRasters } from '@workbench/canvas-engine/api';
+import { reorderLayerActions } from '@workbench/canvasLayerOps';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectName } from '@workbench/WorkbenchContext';
@@ -18,7 +19,7 @@ import { ChevronDownIcon, EyeIcon, EyeOffIcon, FileDownIcon, LayersIcon, PlusIco
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { LayerGroupKey, LayerSelectionModifiers } from './layerGroups';
+import type { LayerSelectionModifiers } from './layerGroups';
 
 import { groupAddItemId } from './addLayerMenu';
 import { LAYER_KEYBOARD_SENSOR_OPTIONS } from './layerDndConfig';
@@ -43,12 +44,12 @@ const POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: 6 } } as cons
 interface LayerGroupSectionProps {
   dispatch: Dispatch<CanvasProjectMutation>;
   engine: LayerGroupEngine | null;
-  groupKey: LayerGroupKey;
+  groupKey: LayerStackKind;
   groupLayers: readonly CanvasLayerContract[];
   isCollapsed: boolean;
   layers: readonly CanvasLayerContract[];
   onSelectLayer: (layerId: string, modifiers: LayerSelectionModifiers) => void;
-  onToggleCollapse: (groupKey: LayerGroupKey) => void;
+  onToggleCollapse: (groupKey: LayerStackKind) => void;
   selectedIds: readonly string[];
   selectedLayerId: string | null;
 }
@@ -103,11 +104,8 @@ export const LayerGroupSection = ({
       if (!next) {
         return;
       }
-      commitStructural(
-        t('widgets.layers.actions.reorder'),
-        { orderedIds: next, type: 'reorderCanvasLayers' },
-        { orderedIds: layers.map((layer) => layer.id), type: 'reorderCanvasLayers' }
-      );
+      const { forward, inverse } = reorderLayerActions(layers, [next]);
+      commitStructural(t('widgets.layers.actions.reorder'), forward, inverse);
     },
     [commitStructural, editingLocked, layers, selectedIds, t]
   );
@@ -211,7 +209,7 @@ const GroupActions = ({
 }: {
   editingLocked: boolean;
   engine: LayerGroupEngine | null;
-  groupKey: LayerGroupKey;
+  groupKey: LayerStackKind;
   groupLayers: readonly CanvasLayerContract[];
   layers: readonly CanvasLayerContract[];
 }) => {

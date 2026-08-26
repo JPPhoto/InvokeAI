@@ -6,7 +6,7 @@ import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/ren
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
-import { isMergeableRasterLayer } from '@workbench/canvas-engine/document/sources';
+import { isMergeableRasterLayer } from '@workbench/canvas-engine/document/layerEligibility';
 import { isEmpty, roundOut, union } from '@workbench/canvas-engine/math/rect';
 
 export type BooleanRasterOperation = 'intersect' | 'cutout' | 'cutaway' | 'exclude';

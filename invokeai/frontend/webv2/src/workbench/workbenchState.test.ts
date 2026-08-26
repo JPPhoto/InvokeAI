@@ -75,7 +75,7 @@ const CANVAS_MUTATION_TYPES = new Set<CanvasProjectMutation['type']>([
   'duplicateCanvasLayer',
   'mergeCanvasLayersDown',
   'removeCanvasLayers',
-  'reorderCanvasLayers',
+  'reorderCanvasLayerStacks',
   'replaceCanvasDocument',
   'replaceCanvasLayer',
   'rollbackStagedImageCommit',
@@ -4172,18 +4172,38 @@ describe('workbenchReducer canvas v2 layer reducers', () => {
     expect(getCanvas(state).document.layers[0]?.isLocked).toBe(false);
   });
 
-  it('repairs the selection when an omitted stack-mutation selection removes the current layer', () => {
-    let state = withCanvasLayers(createInitialWorkbenchState(), [createRasterLayer('a'), createRasterLayer('b')]);
-    state = workbenchReducer(state, { id: 'a', type: 'setCanvasSelectedLayer' });
+  it('repairs an omitted stack-mutation selection to the nearest same-stack neighbour', () => {
+    let state = withCanvasLayers(createInitialWorkbenchState(), [
+      createRasterLayer('a'),
+      createRasterLayer('b'),
+      createControlLayer('c'),
+      createRasterLayer('d'),
+    ]);
+    state = workbenchReducer(state, { id: 'd', type: 'setCanvasSelectedLayer' });
 
     state = workbenchReducer(state, {
       enabledUpdates: [],
-      removeIds: ['a'],
+      removeIds: ['d'],
       type: 'applyCanvasLayerStackMutation',
     });
 
-    expect(getLayerIds(state)).toEqual(['b']);
+    expect(getLayerIds(state)).toEqual(['a', 'b', 'c']);
     expect(getCanvas(state).document.selectedLayerId).toBe('b');
+  });
+
+  it('leaves an empty selection empty when a stack mutation omits the selection', () => {
+    let state = withCanvasLayers(createInitialWorkbenchState(), [createRasterLayer('a'), createRasterLayer('b')]);
+    state = workbenchReducer(state, { id: null, type: 'setCanvasSelectedLayer' });
+    expect(getCanvas(state).document.selectedLayerId).toBeNull();
+
+    state = workbenchReducer(state, {
+      enabledUpdates: [],
+      lockedUpdates: [{ id: 'a', isLocked: true }],
+      type: 'applyCanvasLayerStackMutation',
+    });
+
+    expect(getCanvas(state).document.layers[0]?.isLocked).toBe(true);
+    expect(getCanvas(state).document.selectedLayerId).toBeNull();
   });
 
   it('atomically restores deleted layers into their original non-contiguous order', () => {
@@ -4445,17 +4465,73 @@ describe('workbenchReducer canvas v2 layer reducers', () => {
     ]);
     const originalLayerA = getCanvas(state).document.layers.find((layer) => layer.id === 'a');
 
-    const reordered = workbenchReducer(state, { orderedIds: ['c', 'a', 'b'], type: 'reorderCanvasLayers' });
+    const reordered = workbenchReducer(state, {
+      stacks: [{ orderedIds: ['c', 'a', 'b'], stack: 'raster' }],
+      type: 'reorderCanvasLayerStacks',
+    });
 
     expect(getLayerIds(reordered)).toEqual(['c', 'a', 'b']);
     // Untouched layer objects are reused, not cloned.
     expect(getCanvas(reordered).document.layers.find((layer) => layer.id === 'a')).toBe(originalLayerA);
 
-    const ignoredMissing = workbenchReducer(state, { orderedIds: ['c', 'a'], type: 'reorderCanvasLayers' });
-    const ignoredUnknown = workbenchReducer(state, { orderedIds: ['c', 'a', 'z'], type: 'reorderCanvasLayers' });
+    const ignoredMissing = workbenchReducer(state, {
+      stacks: [{ orderedIds: ['c', 'a'], stack: 'raster' }],
+      type: 'reorderCanvasLayerStacks',
+    });
+    const ignoredUnknown = workbenchReducer(state, {
+      stacks: [{ orderedIds: ['c', 'a', 'z'], stack: 'raster' }],
+      type: 'reorderCanvasLayerStacks',
+    });
+    const ignoredWrongStack = workbenchReducer(state, {
+      stacks: [{ orderedIds: ['c', 'a', 'b'], stack: 'control' }],
+      type: 'reorderCanvasLayerStacks',
+    });
 
     expect(getLayerIds(ignoredMissing)).toEqual(['a', 'b', 'c']);
     expect(getLayerIds(ignoredUnknown)).toEqual(['a', 'b', 'c']);
+    expect(getLayerIds(ignoredWrongStack)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('reorders several stacks atomically and refuses a duplicated stack or an unchanged order', () => {
+    const state = withCanvasLayers(createInitialWorkbenchState(), [
+      createRasterLayer('a'),
+      createControlLayer('x'),
+      createRasterLayer('b'),
+      createControlLayer('y'),
+    ]);
+
+    const reordered = workbenchReducer(state, {
+      stacks: [
+        { orderedIds: ['b', 'a'], stack: 'raster' },
+        { orderedIds: ['y', 'x'], stack: 'control' },
+      ],
+      type: 'reorderCanvasLayerStacks',
+    });
+    expect(getLayerIds(reordered)).toEqual(['b', 'y', 'a', 'x']);
+
+    const refused = workbenchReducer(state, {
+      stacks: [
+        { orderedIds: ['b', 'a'], stack: 'raster' },
+        { orderedIds: ['a', 'b'], stack: 'raster' },
+      ],
+      type: 'reorderCanvasLayerStacks',
+    });
+    expect(refused).toBe(state);
+
+    const partiallyInvalid = workbenchReducer(state, {
+      stacks: [
+        { orderedIds: ['b', 'a'], stack: 'raster' },
+        { orderedIds: ['y'], stack: 'control' },
+      ],
+      type: 'reorderCanvasLayerStacks',
+    });
+    expect(partiallyInvalid).toBe(state);
+
+    const unchanged = workbenchReducer(state, {
+      stacks: [{ orderedIds: ['a', 'b'], stack: 'raster' }],
+      type: 'reorderCanvasLayerStacks',
+    });
+    expect(unchanged).toBe(state);
   });
 
   it('updates base props with a field-wise transform merge and leaves other layers untouched', () => {

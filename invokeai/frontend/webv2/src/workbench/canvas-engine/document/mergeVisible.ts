@@ -1,5 +1,7 @@
 import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 
+import { isLayerContributing, isLayerEditable } from './layerEligibility';
+
 export type HasMergeVisibleContent = (layerId: string) => boolean;
 
 /** Returns eligible contributors in document order (top-most first). */
@@ -7,7 +9,7 @@ export const getMergeVisibleRasterLayers = (
   layers: readonly CanvasLayerContract[],
   hasContent: HasMergeVisibleContent
 ): CanvasLayerContract[] =>
-  layers.filter((layer) => layer.type === 'raster' && layer.isEnabled && hasContent(layer.id));
+  layers.filter((layer) => layer.type === 'raster' && isLayerContributing(layer) && hasContent(layer.id));
 
 /** Whether the raster group's merge-visible action has at least two contributors. */
 export const canMergeVisibleRasters = (
@@ -44,9 +46,5 @@ export const canMergeSelectedRasters = (
     .filter((layer) => selectedLayerIds.has(layer.id))
     .every(
       (layer) =>
-        layer.type === 'raster' &&
-        layer.isEnabled &&
-        !layer.isLocked &&
-        layer.blendMode === 'normal' &&
-        hasContent(layer.id)
+        layer.type === 'raster' && isLayerEditable(layer) && layer.blendMode === 'normal' && hasContent(layer.id)
     );

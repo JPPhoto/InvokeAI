@@ -241,8 +241,20 @@ describe('layer reorder', () => {
 
     expect(engine.layers.commitStructural).toHaveBeenCalledWith(
       'widgets.canvas.commands.reorderLayer',
-      { orderedIds: ['c2', 'r2', 'c1', 'r1'], type: 'reorderCanvasLayers' },
-      { orderedIds: ['c1', 'r1', 'c2', 'r2'], type: 'reorderCanvasLayers' }
+      {
+        stacks: [
+          { orderedIds: ['c2', 'c1'], stack: 'control' },
+          { orderedIds: ['r2', 'r1'], stack: 'raster' },
+        ],
+        type: 'reorderCanvasLayerStacks',
+      },
+      {
+        stacks: [
+          { orderedIds: ['c1', 'c2'], stack: 'control' },
+          { orderedIds: ['r1', 'r2'], stack: 'raster' },
+        ],
+        type: 'reorderCanvasLayerStacks',
+      }
     );
   });
 });

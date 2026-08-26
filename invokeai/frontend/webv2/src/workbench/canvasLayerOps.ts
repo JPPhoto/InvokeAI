@@ -10,7 +10,9 @@
  * Zero React, zero import-time side effects.
  */
 
-import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
+import type { CanvasLayerContract, ReorderFlatStackCommand } from '@workbench/canvas-engine/api';
+
+import { getStackOrder } from '@workbench/canvas-engine/api';
 
 import type { CanvasProjectMutation } from './canvasProjectMutations';
 
@@ -35,118 +37,11 @@ export const deleteLayerActions = (layer: CanvasLayerContract, index: number): S
   inverse: { index, layer, type: 'addCanvasLayer' },
 });
 
-/** Reorder to `nextIds` (forward), restoring `currentIds` on undo (inverse). */
-export const reorderLayerActions = (currentIds: readonly string[], nextIds: readonly string[]): StructuralActions => ({
-  forward: { orderedIds: [...nextIds], type: 'reorderCanvasLayers' },
-  inverse: { orderedIds: [...currentIds], type: 'reorderCanvasLayers' },
-});
-
-/** A z-reorder direction for the layer hotkeys. */
-export type LayerReorderKind = 'forward' | 'backward' | 'front' | 'back';
-
-const LAYER_TYPE_ORDER: readonly CanvasLayerContract['type'][] = [
-  'inpaint_mask',
-  'regional_guidance',
-  'control',
-  'raster',
-];
-
-const reorderSelectedIds = (
-  groupIds: readonly string[],
-  selected: ReadonlySet<string>,
-  kind: LayerReorderKind
-): string[] => {
-  if (kind === 'front' || kind === 'back') {
-    const moving = groupIds.filter((id) => selected.has(id));
-    const remaining = groupIds.filter((id) => !selected.has(id));
-    return kind === 'front' ? [...moving, ...remaining] : [...remaining, ...moving];
-  }
-  const next = [...groupIds];
-  if (kind === 'forward') {
-    for (let index = 1; index < next.length; index += 1) {
-      if (selected.has(next[index]!) && !selected.has(next[index - 1]!)) {
-        [next[index - 1], next[index]] = [next[index]!, next[index - 1]!];
-      }
-    }
-  } else {
-    for (let index = next.length - 2; index >= 0; index -= 1) {
-      if (selected.has(next[index]!) && !selected.has(next[index + 1]!)) {
-        [next[index], next[index + 1]] = [next[index + 1]!, next[index]!];
-      }
-    }
-  }
-  return next;
-};
-
-/** Moves every selected layer within its own type group, preserving group boundaries. */
-export const reorderSelectionWithinGroupsByKind = (
+/** Apply the stack reorders (forward), restoring each stack's current order on undo (inverse). */
+export const reorderLayerActions = (
   layers: readonly CanvasLayerContract[],
-  selectedIds: readonly string[],
-  kind: LayerReorderKind
-): string[] | null => {
-  const selected = new Set(selectedIds);
-  const nextIds = layers.map((layer) => layer.id);
-  let changed = false;
-  for (const type of LAYER_TYPE_ORDER) {
-    const slots: number[] = [];
-    const groupIds: string[] = [];
-    layers.forEach((layer, index) => {
-      if (layer.type === type) {
-        slots.push(index);
-        groupIds.push(layer.id);
-      }
-    });
-    const reordered = reorderSelectedIds(groupIds, selected, kind);
-    if (reordered.some((id, index) => id !== groupIds[index])) {
-      reordered.forEach((id, index) => {
-        nextIds[slots[index]!] = id;
-      });
-      changed = true;
-    }
-  }
-  return changed ? nextIds : null;
-};
-
-/** The destination index for a z-reorder of the layer at `index` in a stack of `count`. */
-export const reorderTargetIndex = (index: number, count: number, kind: LayerReorderKind): number => {
-  switch (kind) {
-    case 'forward':
-      return Math.max(0, index - 1);
-    case 'backward':
-      return Math.min(count - 1, index + 1);
-    case 'front':
-      return 0;
-    case 'back':
-      return count - 1;
-  }
-};
-
-/** Moves `items[from]` to `to`, shifting the rest. Returns a new array. */
-const moveItem = <T>(items: readonly T[], from: number, to: number): T[] => {
-  const next = [...items];
-  const [moved] = next.splice(from, 1);
-  if (moved === undefined) {
-    return next;
-  }
-  next.splice(to, 0, moved);
-  return next;
-};
-
-/**
- * The reordered id list for a z-reorder hotkey, or `null` when nothing would move
- * (already at the boundary, or the index is out of range) so callers can no-op.
- */
-export const reorderIdsForHotkey = (
-  currentIds: readonly string[],
-  index: number,
-  kind: LayerReorderKind
-): string[] | null => {
-  if (index < 0 || index >= currentIds.length) {
-    return null;
-  }
-  const target = reorderTargetIndex(index, currentIds.length, kind);
-  if (target === index) {
-    return null;
-  }
-  return moveItem(currentIds, index, target);
-};
+  stacks: readonly ReorderFlatStackCommand[]
+): StructuralActions => ({
+  forward: { stacks: [...stacks], type: 'reorderCanvasLayerStacks' },
+  inverse: { stacks: stacks.map((command) => getStackOrder(layers, command.stack)), type: 'reorderCanvasLayerStacks' },
+});

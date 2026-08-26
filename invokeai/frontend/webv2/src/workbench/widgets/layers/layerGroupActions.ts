@@ -1,8 +1,6 @@
-import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
+import type { CanvasLayerContract, LayerStackKind } from '@workbench/canvas-engine/api';
 
-import { isHideableLayer, isLayerHidden } from '@workbench/canvas-engine/api';
-
-import type { LayerGroupKey } from './layerGroups';
+import { isExportableRasterLayer, isHideableLayer, isLayerHidden } from '@workbench/canvas-engine/api';
 
 /** A group-header action id. Extend this + `getGroupActions` to add a new action. */
 export type GroupActionId = 'mergeVisible' | 'exportPsd' | 'toggleVisibility' | 'new';
@@ -13,7 +11,7 @@ export type GroupActionId = 'mergeVisible' | 'exportPsd' | 'toggleVisibility' | 
  * group offers "merge visible" + "export to PSD"; every group offers
  * hide/show-all + new.
  */
-export const getGroupActions = (groupKey: LayerGroupKey): GroupActionId[] => {
+export const getGroupActions = (groupKey: LayerStackKind): GroupActionId[] => {
   const actions: GroupActionId[] = [];
   if (groupKey === 'raster') {
     actions.push('mergeVisible', 'exportPsd');
@@ -22,34 +20,9 @@ export const getGroupActions = (groupKey: LayerGroupKey): GroupActionId[] => {
   return actions;
 };
 
-/**
- * True when a raster layer carries content that a PSD export could contain: an
- * image/paint/gradient/text source, or a non-`polygon` shape (`polygon` has no
- * rasterizer). A brand-new paint layer with unflushed live strokes is still
- * counted (its `source.bitmap` is null but its live cache holds pixels the
- * export bakes) — enablement never under-counts; a genuinely empty layer is
- * handled gracefully at export time (the planner returns `empty`).
- */
-const hasExportableRasterContent = (layer: CanvasLayerContract): boolean => {
-  if (layer.type !== 'raster') {
-    return false;
-  }
-  switch (layer.source.type) {
-    case 'image':
-    case 'paint':
-    case 'gradient':
-    case 'text':
-      return true;
-    case 'shape':
-      return layer.source.kind !== 'polygon';
-    default:
-      return false;
-  }
-};
-
 /** Whether the raster group's "export to PSD" action has anything to export. */
 export const canExportRasterPsd = (layers: readonly CanvasLayerContract[]): boolean =>
-  layers.some(hasExportableRasterContent);
+  layers.some(isExportableRasterLayer);
 
 /** A single layer's target enablement, for the bulk `setCanvasLayersEnabled` action. */
 export interface LayerVisibilityUpdate {
@@ -72,7 +45,7 @@ export interface LayerHiddenUpdate {
  * the generation input, so hiding a raster layer and disabling it are the same
  * act — and drives enablement.
  */
-export const groupVisibilityAxis = (groupKey: LayerGroupKey): 'enabled' | 'hidden' =>
+export const groupVisibilityAxis = (groupKey: LayerStackKind): 'enabled' | 'hidden' =>
   groupKey === 'raster' ? 'enabled' : 'hidden';
 
 /** True when every layer in the group is currently visible on the group's own axis. Empty ⇒ true. */

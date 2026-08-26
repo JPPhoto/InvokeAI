@@ -39,6 +39,7 @@ import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { PointerInput, Vec2 } from '@workbench/canvas-engine/types';
 
+import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { snapMovedPoint } from '@workbench/canvas-engine/math/snapping';
 
 import type { Tool, ToolContext } from './tool';
@@ -50,8 +51,6 @@ const PRIMARY_BUTTON = 1;
 
 /** Screen-space distance (CSS px) the pointer must travel before a press becomes a drag. */
 export const MOVE_DRAG_THRESHOLD_PX = 3;
-
-const isDraggable = (layer: CanvasLayerContract): boolean => layer.isEnabled && !layer.isLocked;
 
 /** Applies the shift-to-dominant-axis constraint to a document-space delta. */
 export const constrainDelta = (dx: number, dy: number, shift: boolean): Vec2 => {
@@ -105,7 +104,7 @@ export const createMoveTool = (): Tool => {
     }
     const requested = new Set(ctx.getSelectedLayerIds?.() ?? [selectedId]);
     const selected = doc.layers.filter((layer) => requested.has(layer.id));
-    return requested.has(selectedId) && selected.length === requested.size && selected.every(isDraggable)
+    return requested.has(selectedId) && selected.length === requested.size && selected.every(isLayerEditable)
       ? selected
       : [];
   };

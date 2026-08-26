@@ -19,6 +19,10 @@ export const isSupportedExportSource = (source: CanvasLayerSourceContract): bool
   return true;
 };
 
+/** A raster layer a PSD or raster export can contain; an empty layer is still counted and handled at export time. */
+export const isExportableRasterLayer = (layer: CanvasLayerContract): boolean =>
+  layer.type === 'raster' && isSupportedExportSource(layer.source);
+
 export interface CreateLayerExportGuardsDeps {
   readonly projectId: string;
   readonly layerCache: LayerCacheStore;

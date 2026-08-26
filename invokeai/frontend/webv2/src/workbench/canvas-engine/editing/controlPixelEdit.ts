@@ -8,6 +8,7 @@ import type {
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
 import { bakeMatrix, IDENTITY_TRANSFORM, type LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 
@@ -39,8 +40,7 @@ const isRasterizable = (layer: PixelEditableLayer): boolean =>
 
 export const isLayerPixelEditEligible = (layer: CanvasLayerContract | undefined): boolean =>
   !!layer &&
-  !layer.isLocked &&
-  layer.isEnabled &&
+  isLayerEditable(layer) &&
   ((layer.type === 'raster' && layer.source.type === 'paint') || (layer.type === 'control' && isRasterizable(layer)));
 
 export const decidePixelEdit = ({ hasSourceContent, isCacheReady, layer }: DecidePixelEditInput): PixelEditDecision => {

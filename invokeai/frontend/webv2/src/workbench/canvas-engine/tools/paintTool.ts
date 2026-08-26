@@ -17,6 +17,9 @@
 import type { CanvasLayerContract, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
 import type { PointerInput } from '@workbench/canvas-engine/types';
 
+import { isLayerPaintable, isLayerTransparencyLocked } from '@workbench/canvas-engine/document/layerEligibility';
+import { isMaskLayer } from '@workbench/canvas-engine/document/sources';
+
 import type { StrokeCommittedEvent, Tool, ToolContext } from './tool';
 
 import { createStrokeSession, type StrokeSession } from './strokeSession';
@@ -71,12 +74,6 @@ interface PaintTarget {
   forceOpaque?: boolean;
 }
 
-/** True for a mask-bearing layer (inpaint mask / regional guidance) — a paintable alpha stencil. */
-const isMaskLayer = (
-  layer: CanvasLayerContract
-): layer is Extract<CanvasLayerContract, { type: 'inpaint_mask' | 'regional_guidance' }> =>
-  layer.type === 'inpaint_mask' || layer.type === 'regional_guidance';
-
 /** Resolves (or auto-creates) the paint target for a gesture, or `null` to no-op. */
 const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget | null => {
   const doc = ctx.getDocument();
@@ -88,7 +85,7 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
   if (selected && selected.type === 'raster' && selected.source.type === 'paint') {
     // The selection is a paint layer: paint into it, unless it's locked/disabled
     // (a no-op — don't silently spawn a new layer over the user's locked target).
-    if (selected.isLocked || !selected.isEnabled) {
+    if (!isLayerPaintable(selected)) {
       return null;
     }
     if (selected.source.bitmap) {
@@ -115,7 +112,7 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
     // Erasing is a destructive pixel edit, so materialize the image into an
     // undoable paint layer in place. A locked/disabled/unready image refuses the
     // transaction; never spawn a new layer over the selected image.
-    if (selected.isLocked || !selected.isEnabled || selected.isTransparencyLocked) {
+    if (!isLayerPaintable(selected) || isLayerTransparencyLocked(selected)) {
       return null;
     }
     const transaction = ctx.beginPixelEdit?.(selected.id) ?? null;
@@ -133,8 +130,8 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
     // The selection is a mask: paint the stroke into its alpha stencil cache
     // (brush adds coverage, eraser removes — the shared stroke session handles
     // both via its composite op). Never auto-create a paint layer here. A
-    // locked/hidden mask refuses the stroke (a no-op, not a spawn).
-    if (selected.isLocked || !selected.isEnabled) {
+    // locked/disabled mask refuses the stroke (a no-op, not a spawn).
+    if (!isLayerPaintable(selected)) {
       return null;
     }
     if (selected.mask.bitmap) {

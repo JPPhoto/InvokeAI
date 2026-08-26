@@ -4,8 +4,13 @@ import { HStack, Text } from '@chakra-ui/react';
 import { toaster } from '@platform/ui';
 import { IconButton } from '@platform/ui/Button';
 import { Tooltip } from '@platform/ui/Tooltip';
-import { canMergeSelectedRasters, type CanvasLayerContract } from '@workbench/canvas-engine/api';
-import { reorderSelectionWithinGroupsByKind, type LayerReorderKind } from '@workbench/canvasLayerOps';
+import {
+  canMergeSelectedRasters,
+  moveLayersWithinStacks,
+  type CanvasLayerContract,
+  type LayerStackMoveKind,
+} from '@workbench/canvas-engine/api';
+import { reorderLayerActions } from '@workbench/canvasLayerOps';
 import { useCanvasRasterContentEpoch } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { publishLayerPanelSelection } from '@workbench/workbenchStore';
@@ -100,16 +105,13 @@ export const LayerMultiSelectionActions = ({
   }, [engine, selectedIds, t]);
 
   const reorder = useCallback(
-    (kind: LayerReorderKind, label: string) => {
-      const next = reorderSelectionWithinGroupsByKind(layers, selectedIds, kind);
-      if (!next) {
+    (kind: LayerStackMoveKind, label: string) => {
+      const next = moveLayersWithinStacks(layers, selectedIds, kind);
+      if (next.length === 0) {
         return;
       }
-      commitStructural(
-        label,
-        { orderedIds: next, type: 'reorderCanvasLayers' },
-        { orderedIds: layers.map((layer) => layer.id), type: 'reorderCanvasLayers' }
-      );
+      const { forward, inverse } = reorderLayerActions(layers, next);
+      commitStructural(label, forward, inverse);
     },
     [commitStructural, layers, selectedIds]
   );

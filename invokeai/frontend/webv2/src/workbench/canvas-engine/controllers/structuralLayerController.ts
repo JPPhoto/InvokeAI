@@ -2,6 +2,7 @@ import type { StructuralCommitOptions, StructuralCommitResult } from '@workbench
 import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 
+import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { createDocumentPatchEntry } from '@workbench/canvas-engine/history/documentPatch';
 
 import type { CanvasMutationContext } from './mutationContext';
@@ -110,7 +111,7 @@ export class StructuralLayerController {
       layers.length === 0 ||
       layers.length !== requested.size ||
       !requested.has(document.selectedLayerId) ||
-      layers.some((layer) => layer.isLocked || !layer.isEnabled)
+      layers.some((layer) => !isLayerEditable(layer))
     ) {
       return { status: 'dispatch-rejected' };
     }

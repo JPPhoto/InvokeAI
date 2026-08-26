@@ -27,6 +27,8 @@ import type { CanvasLayerSourceContract, CanvasRasterLayerContractV2 } from '@wo
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { Vec2 } from '@workbench/canvas-engine/types';
 
+import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
+
 import type { Tool, ToolContext } from './tool';
 
 /** Bit for the primary (usually left) mouse button in `PointerEvent.buttons`. */
@@ -116,8 +118,8 @@ export const createGradientTool = (): Tool => {
       const selected = doc.selectedLayerId ? doc.layers.find((layer) => layer.id === doc.selectedLayerId) : undefined;
 
       if (selected && selected.type === 'raster' && selected.source.type === 'gradient') {
-        // Edit the selected gradient layer — unless it's locked/hidden (no-op).
-        if (selected.isLocked || !selected.isEnabled) {
+        // Edit the selected gradient layer — unless it's locked/disabled (no-op).
+        if (!isLayerEditable(selected)) {
           clearPreview(ctx);
           return;
         }

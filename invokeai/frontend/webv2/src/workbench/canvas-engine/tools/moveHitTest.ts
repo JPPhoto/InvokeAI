@@ -84,7 +84,10 @@ export const hittableLayerSize = (
 export const layerMatrix = (transform: LayerTransform) =>
   fromTRS({ x: transform.x, y: transform.y }, transform.rotation, transform.scaleX, transform.scaleY);
 
-/** True when `point` (document space) falls inside `layer`'s rendered bounds. */
+/**
+ * True when `point` (document space) falls inside `layer`'s rendered bounds.
+ * @internal No production caller today; kept for a future stack hit-test consumer.
+ */
 export const hitTestLayer = (
   layer: CanvasLayerContract,
   doc: CanvasDocumentContractV2,

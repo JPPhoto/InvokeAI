@@ -4,7 +4,7 @@
  * group header's "New" button uses {@link groupAddItemId} to add its own type.
  */
 
-import type { LayerGroupKey } from './layerGroups';
+import type { LayerStackKind } from '@workbench/canvas-engine/api';
 
 /** The distinct "add a layer" actions offered across the panel's add surfaces. */
 export type AddLayerItemId = 'inpaint_mask' | 'regional_guidance' | 'regional_reference_image' | 'control' | 'raster';
@@ -49,4 +49,4 @@ export const isAddLayerItemAvailable = (id: AddLayerItemId, base: string | null)
   id !== 'regional_reference_image' || base !== 'flux2';
 
 /** The add-layer action a group-header "New" button triggers for its type. */
-export const groupAddItemId = (groupKey: LayerGroupKey): AddLayerItemId => groupKey;
+export const groupAddItemId = (groupKey: LayerStackKind): AddLayerItemId => groupKey;

@@ -7,6 +7,7 @@ import type { SelectionState } from '@workbench/canvas-engine/selection/selectio
 import type { PixelEditTransaction } from '@workbench/canvas-engine/tools/tool';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { getSourceBounds } from '@workbench/canvas-engine/document/sources';
 import { createImagePatchEntry } from '@workbench/canvas-engine/history/imagePatch';
 import { intersect, isEmpty, roundOut } from '@workbench/canvas-engine/math/rect';
@@ -63,7 +64,7 @@ export class SelectionPixelController {
       return null;
     }
     const layer = document.layers.find((candidate) => candidate.id === document.selectedLayerId);
-    if (layer?.type === 'raster' && layer.source.type === 'paint' && !layer.isLocked && layer.isEnabled) {
+    if (layer?.type === 'raster' && layer.source.type === 'paint' && isLayerEditable(layer)) {
       return { kind: 'raster', layerId: layer.id, transparencyLocked: layer.isTransparencyLocked === true };
     }
     if (layer?.type === 'control') {

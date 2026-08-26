@@ -88,9 +88,9 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   // instead of making the first Ctrl+Enter pay the chunk download/evaluation.
   useMountEffect(preloadCanvasInvocation);
 
-  // Right-click on the canvas surface: hit-test the layer under the cursor and
-  // open either the shared per-layer menu or the global empty-space menu at the
-  // pointer. Locked interaction skips the hit-test but keeps global save visible.
+  // Right-click on the canvas surface targets the selected layer (the panel is
+  // the sole authority; the stack is never hit-tested) and opens either the
+  // shared per-layer menu or the global menu at the pointer.
   const [contextMenuTarget, setContextMenuTarget] = useState<CanvasContextMenuTarget | null>(null);
   const closeContextMenu = useCallback(() => setContextMenuTarget(null), []);
   // The bbox tool snaps to a model-dependent grid; the engine is model-agnostic,

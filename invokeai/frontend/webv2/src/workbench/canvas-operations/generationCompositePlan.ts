@@ -11,6 +11,7 @@ import {
   adjustmentsKey,
   getBaseRasterContentBounds,
   getCompositeLayerBounds,
+  isLayerContributing,
   planBaseRasterComposite,
 } from '@workbench/canvas-engine/api';
 import { isCompositableControlLayer, isCompositableRegionalGuidanceLayer } from '@workbench/canvasLayerContent';
@@ -64,7 +65,7 @@ export { getBaseRasterContentBounds, getCompositeLayerBounds, planBaseRasterComp
 
 /** True when a layer is an enabled inpaint mask with persisted (non-empty) alpha. */
 const isActiveInpaintMaskLayer = (layer: CanvasLayerContract): layer is CanvasInpaintMaskLayerContract =>
-  layer.isEnabled && layer.type === 'inpaint_mask' && layer.mask.bitmap !== null;
+  isLayerContributing(layer) && layer.type === 'inpaint_mask' && layer.mask.bitmap !== null;
 
 /** The native content rect of a mask layer's persisted bitmap (layer-local, at its offset). */
 const maskContentRect = (

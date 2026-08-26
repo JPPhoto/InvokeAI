@@ -9,6 +9,7 @@ import type {
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Mat2d, Rect } from '@workbench/canvas-engine/types';
 
+import { isLayerContributing } from '@workbench/canvas-engine/document/layerEligibility';
 import { fromTRS, multiply } from '@workbench/canvas-engine/math/mat2d';
 import { roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 import { adjustmentsKey, applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
@@ -57,7 +58,7 @@ const defaultWriteImageData = (surface: RasterSurface, imageData: ImageData, x: 
 
 /** True when a layer is an enabled raster layer with rasterizable, non-empty pixels. */
 const isBaseRasterLayer = (layer: CanvasLayerContract): layer is CanvasRasterLayerContractV2 => {
-  if (!layer.isEnabled || layer.type !== 'raster') {
+  if (!isLayerContributing(layer) || layer.type !== 'raster') {
     return false;
   }
   if (layer.source.type === 'image') {

@@ -1,9 +1,14 @@
-import type { CanvasDocumentContractV2, CanvasEngine, StructuralCommitResult } from '@workbench/canvas-engine/api';
-import type { LayerReorderKind, StructuralActions } from '@workbench/canvasLayerOps';
+import type {
+  CanvasDocumentContractV2,
+  CanvasEngine,
+  LayerStackMoveKind,
+  StructuralCommitResult,
+} from '@workbench/canvas-engine/api';
+import type { StructuralActions } from '@workbench/canvasLayerOps';
 import type { CanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 
-import { isHideableLayer, isLayerHidden } from '@workbench/canvas-engine/api';
-import { deleteLayerActions, reorderLayerActions, reorderSelectionWithinGroupsByKind } from '@workbench/canvasLayerOps';
+import { isHideableLayer, isLayerHidden, moveLayersWithinStacks } from '@workbench/canvas-engine/api';
+import { deleteLayerActions, reorderLayerActions } from '@workbench/canvasLayerOps';
 import { canMergeLayerDown } from '@workbench/widgets/layers/layerOps';
 import { publishLayerPanelSelection } from '@workbench/workbenchStore';
 
@@ -20,7 +25,7 @@ const NUDGE_DELTAS: Record<string, { dx: number; dy: number }> = {
 };
 
 /** Command id → z-reorder direction (index 0 = top-most; "forward" moves toward 0). */
-const REORDER_KINDS: Record<string, LayerReorderKind> = {
+const REORDER_KINDS: Record<string, LayerStackMoveKind> = {
   'canvas.layerBackward': 'backward',
   'canvas.layerForward': 'forward',
   'canvas.layerToBack': 'back',
@@ -127,12 +132,11 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     if (!engine || selectedIndex < 0) {
       return;
     }
-    const currentIds = layers.map((layer) => layer.id);
-    const nextIds = reorderSelectionWithinGroupsByKind(layers, ctx.selectedLayerIds, reorderKind);
-    if (!nextIds) {
+    const stacks = moveLayersWithinStacks(layers, ctx.selectedLayerIds, reorderKind);
+    if (stacks.length === 0) {
       return;
     }
-    const { forward, inverse } = reorderLayerActions(currentIds, nextIds);
+    const { forward, inverse } = reorderLayerActions(layers, stacks);
     ctx.reportStructuralCommit(
       engine.layers.commitStructural(t('widgets.canvas.commands.reorderLayer'), forward, inverse)
     );

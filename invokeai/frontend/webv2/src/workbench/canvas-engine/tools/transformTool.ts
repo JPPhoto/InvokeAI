@@ -39,6 +39,7 @@ import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { LayerTransform, TransformRect, TransformTarget } from '@workbench/canvas-engine/transform/transformMath';
 import type { PointerInput, Vec2 } from '@workbench/canvas-engine/types';
 
+import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { applyToPoint, invert } from '@workbench/canvas-engine/math/mat2d';
 import {
   applyMove,
@@ -118,8 +119,7 @@ export const createTransformTool = (): Tool => {
     // Masks are MOVE-able (legacy parity) but not transform-able in this phase:
     // `applyTransform` has no mask bake path, so a transform session on a mask
     // would preview then no-op on Apply. Exclude them until that lands (Phase 7+).
-    layer.isEnabled &&
-    !layer.isLocked &&
+    isLayerEditable(layer) &&
     layer.type !== 'inpaint_mask' &&
     layer.type !== 'regional_guidance' &&
     hittableLayerRect(layer, doc) !== null;

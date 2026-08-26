@@ -5,13 +5,11 @@ import type {
   CanvasRegionalGuidanceLayerContract,
 } from '@workbench/canvas-engine/contracts';
 
-import { reorderSelectionWithinGroupsByKind } from '@workbench/canvasLayerOps';
 import { describe, expect, it } from 'vitest';
 
 import {
   getGroupPosition,
   groupLayers,
-  LAYER_GROUP_ORDER,
   reorderSelectionWithinGroup,
   reorderWithinGroup,
   reorderWithinGroupByKind,
@@ -61,12 +59,6 @@ const inpaint = (id: string): CanvasInpaintMaskLayerContract => ({
 
 const ids = (layers: CanvasLayerContract[]): string[] => layers.map((layer) => layer.id);
 
-describe('LAYER_GROUP_ORDER', () => {
-  it('matches legacy top-to-bottom display order', () => {
-    expect(LAYER_GROUP_ORDER).toEqual(['inpaint_mask', 'regional_guidance', 'control', 'raster']);
-  });
-});
-
 describe('groupLayers', () => {
   it('partitions into non-empty groups in display order, preserving global order within a group', () => {
     // Global z-order (index 0 = top) with interleaved types.
@@ -111,11 +103,11 @@ describe('reorderWithinGroup', () => {
   it('moves a raster below another raster, keeping other-group layers in place', () => {
     // r1 (slot 1) dropped onto r3 (slot 4): raster subsequence r1,r2,r3 -> r2,r3,r1
     // written back into slots [1,3,4]; i1 and g1 keep slots 0 and 2.
-    expect(reorderWithinGroup(layers, 'r1', 'r3')).toEqual(['i1', 'r2', 'g1', 'r3', 'r1']);
+    expect(reorderWithinGroup(layers, 'r1', 'r3')).toEqual({ orderedIds: ['r2', 'r3', 'r1'], stack: 'raster' });
   });
 
   it('moves a raster up', () => {
-    expect(reorderWithinGroup(layers, 'r3', 'r1')).toEqual(['i1', 'r3', 'g1', 'r1', 'r2']);
+    expect(reorderWithinGroup(layers, 'r3', 'r1')).toEqual({ orderedIds: ['r3', 'r1', 'r2'], stack: 'raster' });
   });
 
   it('rejects a cross-group drop (raster onto regional)', () => {
@@ -136,15 +128,24 @@ describe('reorderSelectionWithinGroup', () => {
   const layers = [inpaint('i1'), raster('r1'), regional('g1'), raster('r2'), raster('r3'), raster('r4')];
 
   it('drags selected members of the active group as one ordered block', () => {
-    expect(reorderSelectionWithinGroup(layers, 'r1', 'r4', ['r1', 'r3'])).toEqual(['i1', 'r2', 'g1', 'r4', 'r1', 'r3']);
+    expect(reorderSelectionWithinGroup(layers, 'r1', 'r4', ['r1', 'r3'])).toEqual({
+      orderedIds: ['r2', 'r4', 'r1', 'r3'],
+      stack: 'raster',
+    });
   });
 
   it('moves the selected block toward the front', () => {
-    expect(reorderSelectionWithinGroup(layers, 'r3', 'r1', ['r2', 'r3'])).toEqual(['i1', 'r2', 'g1', 'r3', 'r1', 'r4']);
+    expect(reorderSelectionWithinGroup(layers, 'r3', 'r1', ['r2', 'r3'])).toEqual({
+      orderedIds: ['r2', 'r3', 'r1', 'r4'],
+      stack: 'raster',
+    });
   });
 
   it('falls back to a single-layer drag when the active row is not selected', () => {
-    expect(reorderSelectionWithinGroup(layers, 'r1', 'r3', ['r2', 'r4'])).toEqual(['i1', 'r2', 'g1', 'r3', 'r1', 'r4']);
+    expect(reorderSelectionWithinGroup(layers, 'r1', 'r3', ['r2', 'r4'])).toEqual({
+      orderedIds: ['r2', 'r3', 'r1', 'r4'],
+      stack: 'raster',
+    });
   });
 
   it('does not reorder when the block is dropped on one of its own members', () => {
@@ -156,19 +157,28 @@ describe('reorderWithinGroupByKind', () => {
   const layers = [inpaint('i1'), raster('r1'), regional('g1'), raster('r2'), raster('r3')];
 
   it('moves to front (top of the group)', () => {
-    expect(reorderWithinGroupByKind(layers, 'r3', 'front')).toEqual(['i1', 'r3', 'g1', 'r1', 'r2']);
+    expect(reorderWithinGroupByKind(layers, 'r3', 'front')).toEqual({
+      orderedIds: ['r3', 'r1', 'r2'],
+      stack: 'raster',
+    });
   });
 
   it('moves to back (bottom of the group)', () => {
-    expect(reorderWithinGroupByKind(layers, 'r1', 'back')).toEqual(['i1', 'r2', 'g1', 'r3', 'r1']);
+    expect(reorderWithinGroupByKind(layers, 'r1', 'back')).toEqual({ orderedIds: ['r2', 'r3', 'r1'], stack: 'raster' });
   });
 
   it('moves forward one within the group', () => {
-    expect(reorderWithinGroupByKind(layers, 'r2', 'forward')).toEqual(['i1', 'r2', 'g1', 'r1', 'r3']);
+    expect(reorderWithinGroupByKind(layers, 'r2', 'forward')).toEqual({
+      orderedIds: ['r2', 'r1', 'r3'],
+      stack: 'raster',
+    });
   });
 
   it('moves backward one within the group', () => {
-    expect(reorderWithinGroupByKind(layers, 'r1', 'backward')).toEqual(['i1', 'r2', 'g1', 'r1', 'r3']);
+    expect(reorderWithinGroupByKind(layers, 'r1', 'backward')).toEqual({
+      orderedIds: ['r2', 'r1', 'r3'],
+      stack: 'raster',
+    });
   });
 
   it('is a no-op at the group front boundary (forward)', () => {
@@ -188,48 +198,5 @@ describe('reorderWithinGroupByKind', () => {
 
   it('returns null for an absent id', () => {
     expect(reorderWithinGroupByKind(layers, 'ghost', 'front')).toBeNull();
-  });
-});
-
-describe('reorderSelectionWithinGroupsByKind', () => {
-  const layers = [
-    inpaint('i1'),
-    raster('r1'),
-    regional('g1'),
-    raster('r2'),
-    inpaint('i2'),
-    raster('r3'),
-    regional('g2'),
-    raster('r4'),
-  ];
-
-  it('moves selected layers forward one place independently in each group', () => {
-    expect(reorderSelectionWithinGroupsByKind(layers, ['i2', 'r2', 'r4', 'g2'], 'forward')).toEqual([
-      'i2',
-      'r2',
-      'g2',
-      'r1',
-      'i1',
-      'r4',
-      'g1',
-      'r3',
-    ]);
-  });
-
-  it('moves selected layers to the back of their own groups while preserving their order', () => {
-    expect(reorderSelectionWithinGroupsByKind(layers, ['i1', 'r1', 'r3', 'g1'], 'back')).toEqual([
-      'i2',
-      'r2',
-      'g2',
-      'r4',
-      'i1',
-      'r1',
-      'g1',
-      'r3',
-    ]);
-  });
-
-  it('returns null when every selected layer is already at the requested boundary', () => {
-    expect(reorderSelectionWithinGroupsByKind(layers, ['i1', 'r1', 'g1'], 'front')).toBeNull();
   });
 });

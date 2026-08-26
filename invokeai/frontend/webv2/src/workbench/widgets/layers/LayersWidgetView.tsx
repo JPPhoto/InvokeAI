@@ -1,3 +1,5 @@
+import type { LayerStackKind } from '@workbench/canvas-engine/api';
+
 import { Flex, Icon, Stack, Text } from '@chakra-ui/react';
 import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
@@ -8,7 +10,7 @@ import { LayersIcon } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { LayerGroupKey, LayerSelectionModifiers } from './layerGroups';
+import type { LayerSelectionModifiers } from './layerGroups';
 
 import { groupLayers, reconcileLayerPanelSelection, selectLayerInPanel } from './layerGroups';
 import { LayerGroupSection } from './LayerGroupSection';
@@ -41,7 +43,7 @@ export const LayersWidgetView = () => {
   const groups = useMemo(() => groupLayers(layers), [layers]);
   // Collapse is transient panel UI state (not part of the canvas document / undo
   // history): a set of collapsed group keys, defaulting to expanded.
-  const [collapsedGroups, setCollapsedGroups] = useState<Partial<Record<LayerGroupKey, boolean>>>({});
+  const [collapsedGroups, setCollapsedGroups] = useState<Partial<Record<LayerStackKind, boolean>>>({});
   const allLayerIds = useMemo(() => groups.flatMap((group) => group.layers.map((layer) => layer.id)), [groups]);
   const visibleLayerIds = groups.flatMap((group) =>
     collapsedGroups[group.key] === true && !isLayerPropertiesGroupRequested(propertiesRequest, group.layers)
@@ -77,7 +79,7 @@ export const LayersWidgetView = () => {
     [allLayerIds, dispatch, selectedLayerId, selection, visibleLayerIds]
   );
 
-  const handleToggleCollapse = useCallback((groupKey: LayerGroupKey) => {
+  const handleToggleCollapse = useCallback((groupKey: LayerStackKind) => {
     setCollapsedGroups((prev) => ({ ...prev, [groupKey]: !prev[groupKey] }));
   }, []);
 

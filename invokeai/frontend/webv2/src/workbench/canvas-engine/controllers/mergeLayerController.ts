@@ -5,9 +5,9 @@ import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { isMergeableRasterLayer } from '@workbench/canvas-engine/document/layerEligibility';
 import { mergeDownMatrix } from '@workbench/canvas-engine/document/mergeDown';
 import { canMergeSelectedRasters, getMergeVisibleRasterLayers } from '@workbench/canvas-engine/document/mergeVisible';
-import { isMergeableRasterLayer } from '@workbench/canvas-engine/document/sources';
 import { isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 import { blendToComposite } from '@workbench/canvas-engine/render/compositor';
 

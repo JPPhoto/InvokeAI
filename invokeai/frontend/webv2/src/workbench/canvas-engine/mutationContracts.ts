@@ -28,6 +28,7 @@ import type {
   CanvasRegionalGuidanceLayerContract,
   CanvasStagingAreaContractV2,
 } from './contracts';
+import type { ReorderFlatStackCommand } from './document/layerStacks';
 
 export type CanvasLayerBasePatch = Partial<
   Pick<CanvasLayerBaseContract, 'name' | 'isEnabled' | 'isLocked' | 'opacity' | 'blendMode'>
@@ -93,7 +94,7 @@ export type CanvasProjectMutation =
     }
   | { type: 'removeCanvasLayers'; ids: string[] }
   | { type: 'duplicateCanvasLayer'; sourceId: string; newId: string }
-  | { type: 'reorderCanvasLayers'; orderedIds: string[] }
+  | { type: 'reorderCanvasLayerStacks'; stacks: readonly ReorderFlatStackCommand[] }
   | { type: 'updateCanvasLayer'; id: string; patch: CanvasLayerBasePatch }
   | { type: 'replaceCanvasLayer'; layerId: string; layer: CanvasLayerContract }
   | { type: 'setCanvasLayersEnabled'; updates: readonly { id: string; isEnabled: boolean }[] }

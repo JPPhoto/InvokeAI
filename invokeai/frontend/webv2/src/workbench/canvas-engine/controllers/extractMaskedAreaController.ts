@@ -12,6 +12,7 @@ import type {
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { isLayerContributing } from '@workbench/canvas-engine/document/layerEligibility';
 import { getSourceContentRect } from '@workbench/canvas-engine/document/sources';
 import { isEmpty } from '@workbench/canvas-engine/math/rect';
 import { compositeDocument } from '@workbench/canvas-engine/render/compositor';
@@ -81,7 +82,7 @@ export class ExtractMaskedAreaController<Permit> {
       return { status: 'empty' };
     }
     const contributors = document.layers.filter(
-      (layer) => layer.isEnabled && layer.type === 'raster' && this.deps.hasExportableContent(layer.id)
+      (layer) => isLayerContributing(layer) && layer.type === 'raster' && this.deps.hasExportableContent(layer.id)
     );
     if (contributors.length === 0) {
       return { status: 'empty' };
@@ -137,7 +138,7 @@ export class ExtractMaskedAreaController<Permit> {
         return { status: currentMask.type === 'inpaint_mask' && currentMask.isLocked ? 'unsupported' : 'not-ready' };
       }
       const liveContributors = liveDocument.layers.filter(
-        (layer) => layer.isEnabled && layer.type === 'raster' && this.deps.hasExportableContent(layer.id)
+        (layer) => isLayerContributing(layer) && layer.type === 'raster' && this.deps.hasExportableContent(layer.id)
       );
       if (
         liveMaskIndex !== maskIndex ||

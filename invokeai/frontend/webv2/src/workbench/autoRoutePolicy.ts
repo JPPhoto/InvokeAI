@@ -118,7 +118,7 @@ const CANVAS_EDIT_CONFIDENCE = {
   duplicateCanvasLayer: 'high',
   mergeCanvasLayersDown: 'high',
   removeCanvasLayers: 'high',
-  reorderCanvasLayers: 'high',
+  reorderCanvasLayerStacks: 'high',
   replaceCanvasDocument: 'none',
   replaceCanvasLayer: 'high',
   resizeCanvasDocument: 'high',

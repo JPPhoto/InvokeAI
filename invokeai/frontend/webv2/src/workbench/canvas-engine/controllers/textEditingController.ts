@@ -4,6 +4,8 @@ import type { TextEditSession, TextSource, TextToolOptions } from '@workbench/ca
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { Vec2 } from '@workbench/canvas-engine/types';
 
+import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
+
 export interface TextEditingControllerOptions {
   readonly session: {
     get(): TextEditSession | null;
@@ -78,14 +80,7 @@ export class TextEditingController {
     }
     const document = this.deps.getDocument();
     const layer = document?.layers.find((candidate) => candidate.id === layerId);
-    if (
-      !document ||
-      !layer ||
-      layer.type !== 'raster' ||
-      layer.source.type !== 'text' ||
-      !layer.isEnabled ||
-      layer.isLocked
-    ) {
+    if (!document || !layer || layer.type !== 'raster' || layer.source.type !== 'text' || !isLayerEditable(layer)) {
       return;
     }
     this.deps.session.set({

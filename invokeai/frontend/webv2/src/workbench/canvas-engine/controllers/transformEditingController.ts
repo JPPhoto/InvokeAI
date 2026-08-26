@@ -7,6 +7,7 @@ import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/rend
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { isRenderableLayer } from '@workbench/canvas-engine/document/sources';
 import { createDocumentPatchEntry } from '@workbench/canvas-engine/history/documentPatch';
 import { isEmpty, roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
@@ -55,7 +56,7 @@ export class TransformEditingController {
     }
     const document = this.deps.getDocument();
     const layer = document?.layers.find((candidate) => candidate.id === layerId);
-    if (!document || !layer || !layer.isEnabled || layer.isLocked || !hittableLayerSize(layer, document)) {
+    if (!document || !layer || !isLayerEditable(layer) || !hittableLayerSize(layer, document)) {
       return;
     }
     this.clearOverride();

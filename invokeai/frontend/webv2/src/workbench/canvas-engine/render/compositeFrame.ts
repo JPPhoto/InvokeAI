@@ -12,6 +12,7 @@ import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/rend
 import type { LayerDamage, Mat2d, Rect } from '@workbench/canvas-engine/types';
 import type { Viewport } from '@workbench/canvas-engine/viewport';
 
+import { isLayerContributing } from '@workbench/canvas-engine/document/layerEligibility';
 import { getSourceContentRect, isRenderableLayer, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { compositeDocument, shouldSmoothAtZoom } from '@workbench/canvas-engine/render/compositor';
 import { calculateActiveFrameLayerIds } from '@workbench/canvas-engine/render/frameDemand';
@@ -90,7 +91,7 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
     for (const layer of doc.layers) {
       // The layer's rasterizable source: a raster/control `source`, or a mask
       // layer's alpha bitmap viewed as a paint source (colorized at composite).
-      if (!layer.isEnabled || !renderableSourceOf(layer) || !activeFrameLayerIds.has(layer.id)) {
+      if (!isLayerContributing(layer) || !renderableSourceOf(layer) || !activeFrameLayerIds.has(layer.id)) {
         continue;
       }
       if (!isRenderableLayer(layer)) {

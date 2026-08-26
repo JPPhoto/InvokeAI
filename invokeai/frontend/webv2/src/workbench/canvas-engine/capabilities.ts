@@ -516,13 +516,7 @@ export {
   type CompositeEntry,
   type CompositeLayerRef,
 } from './render/rasterComposite';
-export {
-  getSourceBounds,
-  getSourceContentRect,
-  isMergeableRasterLayer,
-  isRenderableLayer,
-  renderableSourceOf,
-} from './document/sources';
+export { getSourceBounds, getSourceContentRect, isRenderableLayer, renderableSourceOf } from './document/sources';
 export {
   areSelectedRasterLayersContiguous,
   canMergeSelectedRasters,
@@ -534,6 +528,28 @@ export { isEmpty, union } from './math/rect';
 export { ZOOM_PRESETS } from './math/snapping';
 export { isLayerPixelEditEligible } from './editing/controlPixelEdit';
 export { type HideableLayer, isHideableLayer, isLayerHidden } from './document/sources';
+export {
+  getStackOrder,
+  LAYER_STACK_ORDER,
+  LAYER_STACKS_TOP_FIRST,
+  layerStackOf,
+  layerStackRank,
+  moveLayersWithinStacks,
+  reorderLayerStack,
+  type LayerStackKind,
+  type LayerStackMoveKind,
+  type ReorderFlatStackCommand,
+} from './document/layerStacks';
+export {
+  isLayerContributing,
+  isLayerEditable,
+  isLayerPaintable,
+  isMergeableRasterLayer,
+  isLayerTransparencyLocked,
+  isPixelBackedLayer,
+} from './document/layerEligibility';
+export { repairSelectedLayerId } from './document/selectionRepair';
+export { isExportableRasterLayer } from './layerExportGuards';
 export {
   getLayerThumbnailFallbackRenderState,
   nextLayerThumbnailFallbackStage,

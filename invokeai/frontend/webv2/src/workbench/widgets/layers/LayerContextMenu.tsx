@@ -3,6 +3,7 @@ import type {
   CanvasLayerContract,
   CanvasMaskContract,
   BooleanRasterOperation,
+  LayerStackMoveKind,
   RegionalGuidanceReferenceImage,
 } from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
@@ -16,7 +17,7 @@ import { useModelsSelector } from '@features/models';
 import { IconButton, MenuContent, RenameDialog, Tooltip } from '@platform/ui';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/api';
 import { getCanvasOperations } from '@workbench/canvas-operations/api';
-import { deleteLayerActions, duplicateLayerActions } from '@workbench/canvasLayerOps';
+import { deleteLayerActions, duplicateLayerActions, reorderLayerActions } from '@workbench/canvasLayerOps';
 import { useNotify } from '@workbench/useNotify';
 import { isCanvasInteractionLocked } from '@workbench/widgets/canvas/canvasInteractionLock';
 import { useCanvasDocumentEditingLocked, useLayerThumbnailVersion } from '@workbench/widgets/canvas/engineStoreHooks';
@@ -46,7 +47,6 @@ import type {
   LayerContextMenuSection,
   LayerContextSubmenuId,
 } from './layerContextMenuLayout';
-import type { LayerMoveKind } from './layerGroups';
 import type { LayerMenuDialogKind, LayerMenuDialogState } from './layerMenuState';
 import type { LayerPropertiesSection } from './layerPropertiesRequestStore';
 
@@ -267,16 +267,13 @@ const LayerMenu = ({
   );
 
   const reorder = useCallback(
-    (kind: LayerMoveKind, label: string) => {
+    (kind: LayerStackMoveKind, label: string) => {
       const next = reorderWithinGroupByKind(layers, layer.id, kind);
       if (!next) {
         return;
       }
-      commitStructural(
-        label,
-        { orderedIds: next, type: 'reorderCanvasLayers' },
-        { orderedIds: layers.map((entry) => entry.id), type: 'reorderCanvasLayers' }
-      );
+      const { forward, inverse } = reorderLayerActions(layers, [next]);
+      commitStructural(label, forward, inverse);
     },
     [commitStructural, layer.id, layers]
   );

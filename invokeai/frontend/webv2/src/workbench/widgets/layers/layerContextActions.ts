@@ -2,10 +2,11 @@ import type {
   BooleanRasterOperation,
   CanvasDocumentContractV2,
   CanvasLayerContract,
+  LayerStackMoveKind,
 } from '@workbench/canvas-engine/api';
 import type { LucideIcon } from 'lucide-react';
 
-import { getSourceContentRect } from '@workbench/canvas-engine/api';
+import { getSourceContentRect, isPixelBackedLayer } from '@workbench/canvas-engine/api';
 import {
   ArrowDownIcon,
   ArrowDownToLineIcon,
@@ -27,7 +28,6 @@ import {
   WorkflowIcon,
 } from 'lucide-react';
 
-import type { LayerMoveKind } from './layerGroups';
 import type { LayerPropertiesSection } from './layerPropertiesRequestStore';
 
 import { getGroupPosition } from './layerGroups';
@@ -91,7 +91,7 @@ export interface LayerContextActionState {
 }
 
 export interface LayerContextActionEffects {
-  reorder(kind: LayerMoveKind, actionId: LayerContextActionId): void;
+  reorder(kind: LayerStackMoveKind, actionId: LayerContextActionId): void;
   duplicate(): void;
   openRename(): void;
   openRunWorkflow(): void;
@@ -187,10 +187,6 @@ const isParametricRasterizable = (layer: CanvasLayerContract): boolean =>
     layer.source.type === 'text' ||
     (layer.source.type === 'shape' && layer.source.kind !== 'polygon'));
 
-const isPixelBacked = (layer: CanvasLayerContract): boolean =>
-  (layer.type === 'raster' || layer.type === 'control') &&
-  (layer.source.type === 'image' || layer.source.type === 'paint');
-
 const hasFilterableLayerContent = (context: LayerContextActionState): boolean => {
   if (!context.hasSupportedContent || (context.layer.type !== 'raster' && context.layer.type !== 'control')) {
     return false;
@@ -227,10 +223,7 @@ const hasMergeableLayerBelow = (context: LayerContextActionState): boolean =>
   canMergeLayerDown(context.document.layers, context.index, true);
 
 const isBooleanRasterLayer = (layer: CanvasLayerContract | undefined): boolean =>
-  !!layer &&
-  layer.isEnabled &&
-  layer.type === 'raster' &&
-  (layer.source.type === 'paint' || layer.source.type === 'image');
+  !!layer && layer.isEnabled && layer.type === 'raster' && isPixelBackedLayer(layer);
 
 const hasBooleanRasterPair = (context: LayerContextActionState): boolean =>
   isBooleanRasterLayer(context.document.layers[context.index]) &&
@@ -598,7 +591,7 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     icon: CopyIcon,
     id: 'copy-to-control',
     isEnabled: hasReadablePixels,
-    isVisible: (context) => isPixelBacked(context.layer),
+    isVisible: (context) => isPixelBackedLayer(context.layer),
     labelKey: 'widgets.layers.actions.copyToControl',
     order: 22,
     section: 'operations',
@@ -611,7 +604,7 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     icon: CopyIcon,
     id: 'copy-to-inpaint-mask',
     isEnabled: hasReadablePixels,
-    isVisible: (context) => isPixelBacked(context.layer) || context.layer.type === 'regional_guidance',
+    isVisible: (context) => isPixelBackedLayer(context.layer) || context.layer.type === 'regional_guidance',
     labelKey: 'widgets.layers.actions.copyToInpaintMask',
     order: 23,
     section: 'operations',
@@ -624,7 +617,7 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     icon: CopyIcon,
     id: 'copy-to-regional-guidance',
     isEnabled: hasReadablePixels,
-    isVisible: (context) => isPixelBacked(context.layer) || context.layer.type === 'inpaint_mask',
+    isVisible: (context) => isPixelBackedLayer(context.layer) || context.layer.type === 'inpaint_mask',
     labelKey: 'widgets.layers.actions.copyToRegionalGuidance',
     order: 24,
     section: 'operations',
@@ -676,7 +669,7 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     icon: ImageIcon,
     id: 'convert-to-inpaint-mask',
     isEnabled: isLayerMutable,
-    isVisible: (context) => isPixelBacked(context.layer),
+    isVisible: (context) => isPixelBackedLayer(context.layer),
     labelKey: 'widgets.layers.actions.convertToInpaintMask',
     order: 33,
     section: 'operations',
@@ -689,7 +682,7 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     icon: ImageIcon,
     id: 'convert-to-regional-guidance',
     isEnabled: isLayerMutable,
-    isVisible: (context) => isPixelBacked(context.layer),
+    isVisible: (context) => isPixelBackedLayer(context.layer),
     labelKey: 'widgets.layers.actions.convertToRegionalGuidance',
     order: 34,
     section: 'operations',

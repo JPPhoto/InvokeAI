@@ -5,6 +5,7 @@ import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationCon
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { getSourceContentRect, isMaskLayer } from '@workbench/canvas-engine/document/sources';
 import { createImagePatchEntry } from '@workbench/canvas-engine/history/imagePatch';
 import { invert as invertMatrix } from '@workbench/canvas-engine/math/mat2d';
@@ -91,7 +92,7 @@ export class MaskLayerController {
     }
     const document = this.deps.getDocument();
     const layer = document?.layers.find((candidate) => candidate.id === layerId);
-    if (!document || !layer || !isMaskLayer(layer) || layer.isLocked || !layer.isEnabled) {
+    if (!document || !layer || !isMaskLayer(layer) || !isLayerEditable(layer)) {
       return false;
     }
     if (!this.deps.isCacheReady(layer, document)) {

@@ -13,6 +13,7 @@ import type { LayerCacheEntry, LayerCacheStore } from '@workbench/canvas-engine/
 import type { RasterBackend } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { isLayerContributing } from '@workbench/canvas-engine/document/layerEligibility';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { fromTRS } from '@workbench/canvas-engine/math/mat2d';
 import { isEmpty, roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
@@ -115,7 +116,7 @@ export class RasterExportController {
     if (!layer || !source) {
       return { status: 'missing' };
     }
-    if (!options.includeDisabled && !layer.isEnabled) {
+    if (!options.includeDisabled && !isLayerContributing(layer)) {
       return { status: 'disabled' };
     }
     if (!this.options.isSupportedSource(source)) {
@@ -164,7 +165,7 @@ export class RasterExportController {
     if (!currentSource) {
       return { status: 'missing' };
     }
-    if (!options.includeDisabled && !currentLayer.isEnabled) {
+    if (!options.includeDisabled && !isLayerContributing(currentLayer)) {
       return { status: 'disabled' };
     }
     if (!this.options.isSupportedSource(currentSource)) {

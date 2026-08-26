@@ -39,6 +39,7 @@ import type {
 } from '@workbench/canvas-engine/contracts';
 import type { Vec2 } from '@workbench/canvas-engine/types';
 
+import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { applyToPoint, invert } from '@workbench/canvas-engine/math/mat2d';
 import { estimateTextExtent } from '@workbench/canvas-engine/render/rasterizers/textRasterizer';
 
@@ -55,7 +56,7 @@ type TextLayer = Extract<CanvasLayerContract, { type: 'raster' }> & { source: Te
 
 /** True when `layer` is an enabled, unlocked text layer (an edit-session candidate). */
 const isEditableTextLayer = (layer: CanvasLayerContract): layer is TextLayer =>
-  layer.type === 'raster' && layer.source.type === 'text' && layer.isEnabled && !layer.isLocked;
+  layer.type === 'raster' && layer.source.type === 'text' && isLayerEditable(layer);
 
 /**
  * The rendered text-block size for hit-testing: the live cache surface size when
