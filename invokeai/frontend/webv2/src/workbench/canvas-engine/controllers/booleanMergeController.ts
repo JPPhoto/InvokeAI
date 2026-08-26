@@ -2,6 +2,7 @@ import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
+import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
@@ -18,14 +19,12 @@ type ExportResult =
   | { status: 'ok'; surface: RasterSurface; rect: Rect; guard: LayerExportGuard; release(): void }
   | { status: 'missing' | 'disabled' | 'unsupported' | 'empty' | 'not-ready' | 'over-budget' };
 
-export interface BooleanMergeControllerOptions<Permit> {
+export interface BooleanMergeControllerOptions {
+  readonly concurrency: CanvasEditConcurrency;
   readonly backend: RasterBackend;
   readonly history: History;
   readonly getDocument: () => CanvasDocumentContractV2 | null;
   readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
-  readonly capturePermit: () => Permit | null;
-  readonly isPermitCurrent: (permit: Permit) => boolean;
-  readonly isGestureActive: () => boolean;
   readonly endBurst: () => void;
   readonly isCacheReady: (layer: CanvasLayerContract, document: CanvasDocumentContractV2) => boolean;
   readonly exportBaked: (layerId: string) => Promise<ExportResult>;
@@ -49,14 +48,14 @@ const modes: Record<BooleanRasterOperation, GlobalCompositeOperation> = {
 };
 
 /** Owns guarded two-layer boolean compositing and atomic stack history. */
-export class BooleanMergeController<Permit> {
+export class BooleanMergeController {
   private disposed = false;
 
-  constructor(private readonly deps: BooleanMergeControllerOptions<Permit>) {}
+  constructor(private readonly deps: BooleanMergeControllerOptions) {}
 
   async merge(upperLayerId: string, operation: BooleanRasterOperation): Promise<BooleanRasterResult> {
-    const permit = this.deps.capturePermit();
-    if (this.disposed || !permit || this.deps.isGestureActive()) {
+    const permit = this.deps.concurrency.capturePermit();
+    if (this.disposed || !permit || this.deps.concurrency.isGestureActive()) {
       return 'busy';
     }
     this.deps.endBurst();
@@ -93,7 +92,7 @@ export class BooleanMergeController<Permit> {
       const [upperPixels, belowPixels] = settled.map(
         (result) => (result as PromiseFulfilledResult<ExportResult>).value
       );
-      if (!this.deps.isPermitCurrent(permit)) {
+      if (!this.deps.concurrency.isPermitCurrent(permit)) {
         return 'busy';
       }
       if (upperPixels.status !== 'ok' || belowPixels.status !== 'ok') {
@@ -111,14 +110,14 @@ export class BooleanMergeController<Permit> {
         return 'empty';
       }
       if (
-        !this.deps.isPermitCurrent(permit) ||
-        this.deps.isGestureActive() ||
+        !this.deps.concurrency.isPermitCurrent(permit) ||
+        this.deps.concurrency.isGestureActive() ||
         upperPixels.guard.layer !== upper ||
         belowPixels.guard.layer !== below ||
         !this.deps.isGuardCurrent(upperPixels.guard) ||
         !this.deps.isGuardCurrent(belowPixels.guard)
       ) {
-        return this.deps.isPermitCurrent(permit) ? 'not-ready' : 'busy';
+        return this.deps.concurrency.isPermitCurrent(permit) ? 'not-ready' : 'busy';
       }
       const liveDocument = this.deps.getDocument();
       const liveIndex = liveDocument?.layers.findIndex((layer) => layer.id === upperLayerId) ?? -1;
@@ -183,7 +182,7 @@ export class BooleanMergeController<Permit> {
         );
         this.deps.installPrepared(prepared);
       };
-      if (!this.deps.isPermitCurrent(permit)) {
+      if (!this.deps.concurrency.isPermitCurrent(permit)) {
         return 'busy';
       }
       apply();

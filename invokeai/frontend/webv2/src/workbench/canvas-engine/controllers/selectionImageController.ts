@@ -1,11 +1,12 @@
 import type { LayerExportGuard, ReplaceSelectionFromImageResult } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2, CanvasImageRef } from '@workbench/canvas-engine/contracts';
 import type { DecodeImageResult } from '@workbench/canvas-engine/controllers/rasterController';
+import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { SelectionState } from '@workbench/canvas-engine/selection/selectionState';
 import type { Rect } from '@workbench/canvas-engine/types';
 
-export interface SelectionImageControllerOptions<Permit, Owner = symbol> {
-  readonly capturePermit: (owner?: Owner) => Permit | null;
+export interface SelectionImageControllerOptions {
+  readonly concurrency: CanvasEditConcurrency;
   readonly getDocument: () => CanvasDocumentContractV2 | null;
   readonly decodeImage: (
     image: CanvasImageRef,
@@ -16,24 +17,22 @@ export interface SelectionImageControllerOptions<Permit, Owner = symbol> {
       validateDecoded?: (width: number, height: number) => void;
     }
   ) => Promise<DecodeImageResult>;
-  readonly isGestureActive: () => boolean;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
-  readonly isPermitCurrent: (permit: Permit) => boolean;
   readonly selection: SelectionState;
 }
 
 /** Decodes guarded application results into the transient selection mask. */
-export class SelectionImageController<Permit, Owner = symbol> {
-  constructor(private readonly options: SelectionImageControllerOptions<Permit, Owner>) {}
+export class SelectionImageController {
+  constructor(private readonly options: SelectionImageControllerOptions) {}
 
   async replace(
     guard: LayerExportGuard,
     image: CanvasImageRef,
     rect: Rect,
     signal?: AbortSignal,
-    owner?: Owner
+    owner?: symbol
   ): Promise<ReplaceSelectionFromImageResult> {
-    const permit = this.options.capturePermit(owner);
+    const permit = this.options.concurrency.capturePermit(owner);
     if (!permit) {
       return { status: 'busy' };
     }
@@ -42,7 +41,7 @@ export class SelectionImageController<Permit, Owner = symbol> {
     }
     try {
       const decoded = await this.options.decodeImage(image, {
-        isCurrent: () => this.options.isPermitCurrent(permit),
+        isCurrent: () => this.options.concurrency.isPermitCurrent(permit),
         signal,
       });
       if (decoded.status !== 'ok') {
@@ -63,7 +62,7 @@ export class SelectionImageController<Permit, Owner = symbol> {
       if (layer.type !== 'raster' && layer.type !== 'control') {
         return { status: 'unsupported' };
       }
-      if (!this.options.isPermitCurrent(permit) || this.options.isGestureActive()) {
+      if (!this.options.concurrency.isPermitCurrent(permit) || this.options.concurrency.isGestureActive()) {
         return { status: 'busy' };
       }
       if (!this.options.isGuardCurrent(guard)) {

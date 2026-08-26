@@ -66,6 +66,13 @@ const createHarness = (overrides: Partial<CanvasMutationContextDeps> = {}) => {
 
 describe('createCanvasMutationContext', () => {
   describe('document edit permits', () => {
+    it('exposes the engine project id on the concurrency surface', () => {
+      const { context } = createHarness();
+
+      expect(context.projectId).toBe('p1');
+      expect(context.getEditRevision()).toBe(0);
+    });
+
     it('captures a permit while unlocked and keeps it current until the lock transitions', () => {
       const { context } = createHarness();
       const permit = context.capturePermit();

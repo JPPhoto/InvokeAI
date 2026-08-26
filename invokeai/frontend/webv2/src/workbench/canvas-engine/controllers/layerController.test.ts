@@ -1,6 +1,7 @@
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
 import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
+import { createTestEditConcurrency } from '@workbench/canvas-engine/editConcurrency.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
 import { LayerController } from './layerController';
@@ -79,7 +80,7 @@ describe('LayerController', () => {
   };
   const booleanMerge = {
     backend: {} as never,
-    capturePermit: () => null,
+    concurrency: createTestEditConcurrency({ capturePermit: () => null }),
     createLayerId: () => 'result',
     captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     dispatchPrepared: vi.fn(),
@@ -90,14 +91,12 @@ describe('LayerController', () => {
     history: {} as never,
     installPrepared: vi.fn(),
     isCacheReady: () => true,
-    isGestureActive: () => false,
     isGuardCurrent: () => true,
-    isPermitCurrent: () => true,
     preparePixels: vi.fn(),
   };
   const extractMaskedArea = {
     backend: {} as never,
-    capturePermit: () => null,
+    concurrency: createTestEditConcurrency({ capturePermit: () => null }),
     createLayerId: () => 'result',
     captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     derived: {} as never,
@@ -113,9 +112,7 @@ describe('LayerController', () => {
     history: {} as never,
     installPrepared: vi.fn(),
     isCacheReady: () => true,
-    isGestureActive: () => false,
     isGuardCurrent: () => true,
-    isPermitCurrent: () => true,
     layers: {} as never,
     preparePixels: vi.fn(),
     rasterize: vi.fn(),
@@ -123,7 +120,7 @@ describe('LayerController', () => {
   const crop = {
     backend: {} as never,
     captureCache: vi.fn(),
-    capturePermit: () => null,
+    concurrency: createTestEditConcurrency({ capturePermit: () => null }),
     discardPersisted: vi.fn(),
     dispatchPrepared: vi.fn(),
     endBurst: vi.fn(),
@@ -132,14 +129,12 @@ describe('LayerController', () => {
     getReducerDocument: () => null,
     history: {} as never,
     installPrepared: vi.fn(),
-    isGestureActive: () => false,
     isGuardCurrent: () => true,
-    isPermitCurrent: () => true,
     isSupportedSource: () => true,
     preparePixels: vi.fn(),
   };
   const copy = {
-    capturePermit: () => null,
+    concurrency: createTestEditConcurrency({ capturePermit: () => null }),
     createLayerId: () => 'copy',
     captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     dispatchPrepared: vi.fn(),
@@ -149,14 +144,12 @@ describe('LayerController', () => {
     getReducerDocument: () => null,
     history: {} as never,
     installPrepared: vi.fn(),
-    isGestureActive: () => false,
     isGuardCurrent: () => true,
-    isPermitCurrent: () => true,
     preparePixels: vi.fn(),
   };
   const newRasterLayer = {
     backend: {} as never,
-    capturePermit: () => null,
+    concurrency: createTestEditConcurrency({ capturePermit: () => null }),
     createLayerId: () => 'new',
     captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     dispatchPrepared: vi.fn(),
@@ -165,8 +158,6 @@ describe('LayerController', () => {
     getReducerDocument: () => null,
     history: {} as never,
     installPrepared: vi.fn(),
-    isGestureActive: () => false,
-    isPermitCurrent: () => true,
     layers: {} as never,
     preparePixels: vi.fn(),
     selection: {} as never,

@@ -97,7 +97,6 @@ import { MaskResultController } from '@workbench/canvas-engine/controllers/maskR
 import {
   createCanvasMutationContext,
   type CanvasMutationContext,
-  type DocumentEditPermit,
 } from '@workbench/canvas-engine/controllers/mutationContext';
 import { PersistenceController } from '@workbench/canvas-engine/controllers/persistenceController';
 import { PsdExportController } from '@workbench/canvas-engine/controllers/psdExportController';
@@ -856,6 +855,27 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     }
   };
 
+  const documentEditOwner = Symbol('canvas-operation-document-edit-owner');
+  // Later-defined engine values are passed as thunks: the context never
+  // invokes them during construction.
+  const mutationContext = createCanvasMutationContext({
+    commitEdit: (intent) => mutationPort.commitEdit(intent),
+    createLayerId,
+    projectId,
+    dispatch: (action, origin) => dispatchCanvasMutation(action, origin),
+    editOwner: documentEditOwner,
+    editingLocked: stores.documentEditingLocked,
+    endBurst: () => endNudgeBurst(),
+    getDocument: () => mirror.getDocument(),
+    getReducerDocument: () => mutationPort.getCanvasState()?.document ?? null,
+    history,
+    installPrepared: (prepared, persist) => installGeneratedPaintCache(prepared, persist),
+    isGestureActive: () => pipeline.isGestureActive(),
+    isGuardCurrent: (guard) => isLayerExportGuardCurrent(guard),
+    preparePixels: (layerId, rect, pixels) => prepareGeneratedPaintCache(layerId, rect, pixels),
+    refreshMirror: () => mirror.refresh(),
+    subscribeReducer: (listener) => mutationPort.subscribe(listener),
+  });
   const captureInsertionAnchor: CanvasMutationContext['captureInsertionAnchor'] = (stack, aboveId) =>
     mutationContext.captureInsertionAnchor(stack, aboveId);
   const editingController = new EditingController({
@@ -901,12 +921,10 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       requestRasterization: (layerId) => scheduleLayerRasterization([layerId]),
     },
     selectionImage: {
-      capturePermit: (owner) => captureDocumentEditPermit(owner),
+      concurrency: mutationContext,
       decodeImage: (image, options) => rasterController.decodeImage(image, options),
       getDocument: () => mirror.getDocument(),
-      isGestureActive: () => pipeline.isGestureActive(),
       isGuardCurrent: (guard) => isLayerExportGuardCurrent(guard),
-      isPermitCurrent: (permit) => isDocumentEditPermitCurrent(permit),
     },
     text: {
       canEdit: () => canEditDocument(),
@@ -1155,27 +1173,6 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     trackPublishedLayerImage: (layer) => rasterController.trackPublishedLayerImage(layer),
   });
 
-  const documentEditOwner = Symbol('canvas-operation-document-edit-owner');
-  // Later-defined engine values (mirror, pipeline, prepared-cache helpers) are
-  // passed as thunks: the context never invokes them during construction.
-  const mutationContext = createCanvasMutationContext({
-    commitEdit: (intent) => mutationPort.commitEdit(intent),
-    createLayerId,
-    projectId,
-    dispatch: (action, origin) => dispatchCanvasMutation(action, origin),
-    editOwner: documentEditOwner,
-    editingLocked: stores.documentEditingLocked,
-    endBurst: () => endNudgeBurst(),
-    getDocument: () => mirror.getDocument(),
-    getReducerDocument: () => mutationPort.getCanvasState()?.document ?? null,
-    history,
-    installPrepared: (prepared, persist) => installGeneratedPaintCache(prepared, persist),
-    isGestureActive: () => pipeline.isGestureActive(),
-    isGuardCurrent: (guard) => isLayerExportGuardCurrent(guard),
-    preparePixels: (layerId, rect, pixels) => prepareGeneratedPaintCache(layerId, rect, pixels),
-    refreshMirror: () => mirror.refresh(),
-    subscribeReducer: (listener) => mutationPort.subscribe(listener),
-  });
   structuralController = new StructuralLayerController({
     ctx: mutationContext,
     getSelectedLayerIds: resolveSelectedLayerIds,
@@ -1201,8 +1198,6 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     return result;
   };
   const canEditDocument = (owner?: symbol): boolean => mutationContext.canEdit(owner);
-  const captureDocumentEditPermit = (owner?: symbol): DocumentEditPermit | null => mutationContext.capturePermit(owner);
-  const isDocumentEditPermitCurrent = (permit: DocumentEditPermit): boolean => mutationContext.isPermitCurrent(permit);
 
   const rasterExportController = new RasterExportController({
     backend,
@@ -2244,11 +2239,10 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     renderableSourceOf(layer)?.type === 'paint';
 
   const layerMutationController = new LayerMutationController({
-    canEdit: () => canEditDocument(),
     captureInsertionAnchor,
-    capturePermit: () => captureDocumentEditPermit(),
     captureCache: captureLayerCache,
     createLayerId,
+    concurrency: mutationContext,
     discardPersisted: (layerId) => bitmapStore.discardLayer(layerId),
     dispatchPrepared: dispatchPreparedMutation,
     endBurst: () => endNudgeBurst(),
@@ -2260,8 +2254,6 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     hasPendingPixelWork: (layerId) => bitmapStore.hasPendingWork(layerId),
     history,
     installPrepared: installGeneratedPaintCache,
-    isGestureActive: () => pipeline.isGestureActive(),
-    isPermitCurrent: (permit) => isDocumentEditPermitCurrent(permit),
     needsPixelPersistence: layerNeedsPixelPersistence,
     preparePixels: prepareGeneratedPaintCache,
     prepareDuplicateRasterSource: prepareLayerRasterCache,
@@ -2288,15 +2280,14 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   const replaceSelectionFromImage = editingController.selectionImage.replace.bind(editingController.selectionImage);
 
   const maskResultController = new MaskResultController({
-    canEdit: (owner) => canEditDocument(owner),
     captureInsertionAnchor,
+    concurrency: mutationContext,
     createLayerId,
     dispatchPrepared: dispatchPreparedMutation,
     endBurst: () => endNudgeBurst(),
     getDocument: () => mirror.getDocument(),
     getReducerDocument,
     history,
-    isGestureActive: () => pipeline.isGestureActive(),
     isGuardCurrent: isLayerExportGuardCurrent,
   });
   const commitMaskImageResult = maskResultController.commit.bind(maskResultController);
@@ -2326,16 +2317,14 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
 
   const stagedResultController = new StagedResultController({
     captureInsertionAnchor,
-    capturePermit: (owner) => captureDocumentEditPermit(owner),
     createEventId,
     createLayerId,
+    concurrency: mutationContext,
     dispatchPrepared: dispatchPreparedMutation,
     endBurst: () => endNudgeBurst(),
     getCanvasState: () => mutationPort.getCanvasState(),
     getDocument: () => mirror.getDocument(),
     history,
-    isGestureActive: () => pipeline.isGestureActive(),
-    isPermitCurrent: (permit) => isDocumentEditPermitCurrent(permit),
     now: () => new Date().toISOString(),
   });
   const commitStagedImage = stagedResultController.commit.bind(stagedResultController);
@@ -2705,8 +2694,8 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     booleanMerge: {
       backend,
       captureInsertionAnchor,
-      capturePermit: () => captureDocumentEditPermit(),
       createLayerId,
+      concurrency: mutationContext,
       dispatchPrepared: dispatchPreparedMutation,
       endBurst: () => endNudgeBurst(),
       exportBaked: (layerId) => exportBakedLayerPixelsForStructural(layerId),
@@ -2715,15 +2704,13 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       history,
       installPrepared: (prepared) => installGeneratedPaintCache(prepared),
       isCacheReady: isLayerCacheReadyForOp,
-      isGestureActive: () => pipeline.isGestureActive(),
       isGuardCurrent: isLayerExportGuardCurrent,
-      isPermitCurrent: (permit) => isDocumentEditPermitCurrent(permit),
       preparePixels: prepareGeneratedPaintCache,
     },
     crop: {
       backend,
       captureCache: captureLayerCache,
-      capturePermit: () => captureDocumentEditPermit(),
+      concurrency: mutationContext,
       discardPersisted: (layerId) => bitmapStore.discardLayer(layerId),
       dispatchPrepared: dispatchPreparedMutation,
       endBurst: () => endNudgeBurst(),
@@ -2732,16 +2719,14 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       getReducerDocument,
       history,
       installPrepared: (prepared) => installGeneratedPaintCache(prepared),
-      isGestureActive: () => pipeline.isGestureActive(),
       isGuardCurrent: isLayerExportGuardCurrent,
-      isPermitCurrent: (permit) => isDocumentEditPermitCurrent(permit),
       isSupportedSource: isSupportedExportSource,
       preparePixels: prepareGeneratedPaintCache,
     },
     copy: {
       captureInsertionAnchor,
-      capturePermit: () => captureDocumentEditPermit(),
       createLayerId,
+      concurrency: mutationContext,
       dispatchPrepared: dispatchPreparedMutation,
       endBurst: () => endNudgeBurst(),
       exportBaked: (layerId) => exportBakedLayerPixelsForStructural(layerId, { includeDisabled: true }),
@@ -2749,16 +2734,14 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       getReducerDocument,
       history,
       installPrepared: (prepared) => installGeneratedPaintCache(prepared),
-      isGestureActive: () => pipeline.isGestureActive(),
       isGuardCurrent: isLayerExportGuardCurrent,
-      isPermitCurrent: (permit) => isDocumentEditPermitCurrent(permit),
       preparePixels: prepareGeneratedPaintCache,
     },
     extractMaskedArea: {
       backend,
       captureInsertionAnchor,
-      capturePermit: () => captureDocumentEditPermit(),
       createLayerId,
+      concurrency: mutationContext,
       derived: derivedSurfaceCache,
       diagnostics,
       dispatchPrepared: dispatchPreparedMutation,
@@ -2772,9 +2755,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       history,
       installPrepared: (prepared) => installGeneratedPaintCache(prepared),
       isCacheReady: isLayerCacheReadyForOp,
-      isGestureActive: () => pipeline.isGestureActive(),
       isGuardCurrent: isLayerExportGuardCurrent,
-      isPermitCurrent: (permit) => isDocumentEditPermitCurrent(permit),
       layers: layerCache,
       preparePixels: prepareGeneratedPaintCache,
       rasterize: (layerId) => rasterizeLayerPixelsForStructural(layerId),
@@ -2783,16 +2764,14 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     newRasterLayer: {
       backend,
       captureInsertionAnchor,
-      capturePermit: () => captureDocumentEditPermit(),
       createLayerId,
+      concurrency: mutationContext,
       dispatchPrepared: dispatchPreparedMutation,
       endBurst: () => endNudgeBurst(),
       getDocument: () => mirror.getDocument(),
       getReducerDocument,
       history,
       installPrepared: (prepared) => installGeneratedPaintCache(prepared),
-      isGestureActive: () => pipeline.isGestureActive(),
-      isPermitCurrent: (permit) => isDocumentEditPermitCurrent(permit),
       layers: layerCache,
       preparePixels: prepareGeneratedPaintCache,
       selection: editingController.selection,

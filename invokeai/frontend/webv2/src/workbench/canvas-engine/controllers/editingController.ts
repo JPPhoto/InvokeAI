@@ -14,7 +14,7 @@ import { SelectionPixelController, type SelectionPixelControllerOptions } from '
 import { TextEditingController, type TextEditingControllerOptions } from './textEditingController';
 import { TransformEditingController, type TransformEditingControllerOptions } from './transformEditingController';
 
-export interface EditingControllerOptions<Permit = unknown, Owner = symbol> {
+export interface EditingControllerOptions {
   readonly selection: SelectionStateDeps;
   readonly getDocument: () => CanvasDocumentContractV2 | null;
   readonly createSelectionState?: (deps: SelectionStateDeps) => SelectionState;
@@ -22,24 +22,24 @@ export interface EditingControllerOptions<Permit = unknown, Owner = symbol> {
   readonly text: TextEditingControllerOptions;
   readonly transform: TransformEditingControllerOptions;
   readonly selectionPixels: Omit<SelectionPixelControllerOptions, 'selection'>;
-  readonly selectionImage: Omit<SelectionImageControllerOptions<Permit, Owner>, 'selection'>;
+  readonly selectionImage: Omit<SelectionImageControllerOptions, 'selection'>;
   readonly floatingSelection: Omit<FloatingSelectionControllerOptions, 'selection'>;
 }
 
 /** Owns transient editing state whose lifetime follows one engine instance. */
-export class EditingController<Permit = unknown, Owner = symbol> {
+export class EditingController {
   readonly selection: SelectionState;
   readonly edits: CanvasEditGate;
   readonly text: TextEditingController;
   readonly transform: TransformEditingController;
   readonly selectionPixels: SelectionPixelController;
-  readonly selectionImage: SelectionImageController<Permit, Owner>;
+  readonly selectionImage: SelectionImageController;
   readonly floatingSelection: FloatingSelectionController;
   private readonly editGate: CanvasEditGateController;
   private readonly getDocument: () => CanvasDocumentContractV2 | null;
   private disposed = false;
 
-  constructor(options: EditingControllerOptions<Permit, Owner>) {
+  constructor(options: EditingControllerOptions) {
     this.selection = (options.createSelectionState ?? createSelectionState)(options.selection);
     this.getDocument = options.getDocument;
     this.editGate = (options.createEditGate ?? createCanvasEditGate)();
@@ -47,7 +47,7 @@ export class EditingController<Permit = unknown, Owner = symbol> {
     this.text = new TextEditingController(options.text);
     this.transform = new TransformEditingController(options.transform);
     this.selectionPixels = new SelectionPixelController({ ...options.selectionPixels, selection: this.selection });
-    this.selectionImage = new SelectionImageController<Permit, Owner>({
+    this.selectionImage = new SelectionImageController({
       ...options.selectionImage,
       selection: this.selection,
     });

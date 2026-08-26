@@ -6,6 +6,7 @@ import type {
 import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
 import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
+import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 
@@ -24,9 +25,9 @@ export type {
   MaskImageResultTarget,
 } from '@workbench/canvas-engine/capabilities';
 
-export interface MaskResultControllerOptions<Owner = symbol> {
-  readonly canEdit: (owner?: Owner) => boolean;
+export interface MaskResultControllerOptions {
   readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
+  readonly concurrency: CanvasEditConcurrency;
   readonly createLayerId: () => string;
   readonly dispatchPrepared: (
     action: CanvasProjectMutation,
@@ -37,17 +38,16 @@ export interface MaskResultControllerOptions<Owner = symbol> {
   readonly getDocument: () => CanvasDocumentContractV2 | null;
   readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
   readonly history: History;
-  readonly isGestureActive: () => boolean;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
 }
 
 /** Converts a guarded object-selection result into a structural mask layer. */
-export class MaskResultController<Owner = symbol> {
-  constructor(private readonly options: MaskResultControllerOptions<Owner>) {}
+export class MaskResultController {
+  constructor(private readonly options: MaskResultControllerOptions) {}
 
-  commit(options: CommitMaskImageResultOptions, owner?: Owner): Promise<CommitMaskImageResult> {
+  commit(options: CommitMaskImageResultOptions, owner?: symbol): Promise<CommitMaskImageResult> {
     const o = this.options;
-    if (!o.canEdit(owner)) {
+    if (!o.concurrency.canEdit(owner)) {
       return Promise.resolve({ status: 'busy' });
     }
     if (options.signal?.aborted) {
@@ -67,7 +67,7 @@ export class MaskResultController<Owner = symbol> {
     if (liveLayer.type !== 'raster' && liveLayer.type !== 'control') {
       return Promise.resolve({ status: 'unsupported' });
     }
-    if (o.isGestureActive()) {
+    if (o.concurrency.isGestureActive()) {
       return Promise.resolve({ status: 'busy' });
     }
     if (!o.isGuardCurrent(options.guard)) {

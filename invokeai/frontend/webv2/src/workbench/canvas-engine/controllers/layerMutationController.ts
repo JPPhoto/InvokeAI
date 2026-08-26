@@ -3,6 +3,7 @@ import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/c
 import type { RasterMemoryReservationResult } from '@workbench/canvas-engine/controllers/rasterMemoryBudgetController';
 import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
+import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
@@ -30,9 +31,8 @@ type DuplicateRasterPreparationResult =
   | { readonly status: 'ready'; readonly layer: CanvasLayerContract }
   | { readonly status: 'not-ready' | 'over-budget' };
 
-export interface LayerMutationControllerOptions<Permit> {
-  readonly canEdit: () => boolean;
-  readonly capturePermit: () => Permit | null;
+export interface LayerMutationControllerOptions {
+  readonly concurrency: CanvasEditConcurrency;
   readonly captureCache: (layer: CanvasLayerContract, document: CanvasDocumentContractV2) => CapturedLayerCache;
   readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
   readonly createLayerId: () => string;
@@ -54,8 +54,6 @@ export interface LayerMutationControllerOptions<Permit> {
   readonly history: History;
   readonly hasPendingPixelWork: (layerId: string) => boolean;
   readonly installPrepared: (prepared: PreparedLayerCacheReplacement, persist?: boolean) => void;
-  readonly isGestureActive: () => boolean;
-  readonly isPermitCurrent: (permit: Permit) => boolean;
   readonly needsPixelPersistence: (layer: CanvasLayerContract) => boolean;
   readonly preparePixels: (layerId: string, rect: Rect, pixels: RasterSurface) => PreparedLayerCacheReplacement;
   readonly publishSelectedLayerIds: (primaryId: string | null, selectedIds: readonly string[]) => void;
@@ -68,15 +66,15 @@ export interface LayerMutationControllerOptions<Permit> {
 }
 
 /** Owns failure-atomic copy and cross-type conversion mutations. */
-export class LayerMutationController<Permit> {
+export class LayerMutationController {
   private duplicateInFlight = false;
 
-  constructor(private readonly options: LayerMutationControllerOptions<Permit>) {}
+  constructor(private readonly options: LayerMutationControllerOptions) {}
 
   async duplicate(layerIds: readonly string[]): Promise<DuplicateLayersResult> {
     const o = this.options;
-    const permit = o.capturePermit();
-    if (this.duplicateInFlight || !permit || !o.canEdit() || o.isGestureActive()) {
+    const permit = o.concurrency.capturePermit();
+    if (this.duplicateInFlight || !permit || !o.concurrency.canEdit() || o.concurrency.isGestureActive()) {
       return { status: 'busy' };
     }
     const document = o.getDocument();
@@ -109,7 +107,7 @@ export class LayerMutationController<Permit> {
           return { status: 'stale' };
         }
       }
-      if (!o.isPermitCurrent(permit) || o.isGestureActive() || o.getDocument() !== document) {
+      if (!o.concurrency.isPermitCurrent(permit) || o.concurrency.isGestureActive() || o.getDocument() !== document) {
         return { status: 'stale' };
       }
       return this.commitDuplicate(layerIds);
@@ -121,7 +119,7 @@ export class LayerMutationController<Permit> {
 
   private commitDuplicate(layerIds: readonly string[]): DuplicateLayersResult {
     const o = this.options;
-    if (!o.canEdit() || o.isGestureActive()) {
+    if (!o.concurrency.canEdit() || o.concurrency.isGestureActive()) {
       return { status: 'busy' };
     }
     o.endBurst();
@@ -334,7 +332,7 @@ export class LayerMutationController<Permit> {
 
   copy(label: string, sourceLayerId: string, layer: CanvasLayerContract, anchor: FlatLayerInsertionAnchor): boolean {
     const o = this.options;
-    if (!o.canEdit() || o.isGestureActive()) {
+    if (!o.concurrency.canEdit() || o.concurrency.isGestureActive()) {
       return false;
     }
     o.endBurst();
@@ -395,7 +393,12 @@ export class LayerMutationController<Permit> {
 
   convert(label: string, expected: CanvasLayerContract, after: CanvasLayerContract): boolean {
     const o = this.options;
-    if (!o.canEdit() || o.isGestureActive() || expected.id !== after.id || expected.type === after.type) {
+    if (
+      !o.concurrency.canEdit() ||
+      o.concurrency.isGestureActive() ||
+      expected.id !== after.id ||
+      expected.type === after.type
+    ) {
       return false;
     }
     o.endBurst();

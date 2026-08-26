@@ -1,6 +1,12 @@
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasCommandRefusal } from '@workbench/canvas-engine/document/commandRefusal';
 import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
+import type {
+  CanvasEditConcurrency,
+  CanvasTransactionOutcome,
+  SubsetOf,
+} from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { LayerCacheStore, PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
@@ -12,18 +18,18 @@ import { isEmpty, roundOut, transformBounds } from '@workbench/canvas-engine/mat
 import { liftSelectedPixels } from '@workbench/canvas-engine/selection/floatingSelection';
 import { layerMatrix } from '@workbench/canvas-engine/tools/moveHitTest';
 
-export type NewRasterLayerResult = { status: 'created'; layerId: string } | { status: 'busy' | 'empty' | 'missing' };
+export type NewRasterLayerResult =
+  | { status: 'created'; layerId: string }
+  | { status: SubsetOf<CanvasTransactionOutcome, 'busy'> | SubsetOf<CanvasCommandRefusal, 'missing'> | 'empty' };
 
-export interface NewRasterLayerControllerOptions<Permit> {
+export interface NewRasterLayerControllerOptions {
+  readonly concurrency: CanvasEditConcurrency;
   readonly backend: RasterBackend;
   readonly layers: LayerCacheStore;
   readonly selection: SelectionState;
   readonly history: History;
   readonly getDocument: () => CanvasDocumentContractV2 | null;
   readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
-  readonly capturePermit: () => Permit | null;
-  readonly isPermitCurrent: (permit: Permit) => boolean;
-  readonly isGestureActive: () => boolean;
   readonly endBurst: () => void;
   readonly createLayerId: () => string;
   readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
@@ -50,18 +56,18 @@ export interface NewRasterLayerControllerOptions<Permit> {
  * The new layer is inserted directly above the active one, which is where the
  * user is looking, and becomes the selection.
  */
-export class NewRasterLayerController<Permit> {
+export class NewRasterLayerController {
   private disposed = false;
 
-  constructor(private readonly deps: NewRasterLayerControllerOptions<Permit>) {}
+  constructor(private readonly deps: NewRasterLayerControllerOptions) {}
 
   /**
    * Inserts `pixels` as a new paint layer covering `rect` (document space).
    * `pixels` is consumed as-is — the caller owns getting it into document space.
    */
   insert(rect: Rect, pixels: RasterSurface, name: string, label: string): NewRasterLayerResult {
-    const permit = this.deps.capturePermit();
-    if (this.disposed || !permit || this.deps.isGestureActive()) {
+    const permit = this.deps.concurrency.capturePermit();
+    if (this.disposed || !permit || this.deps.concurrency.isGestureActive()) {
       return { status: 'busy' };
     }
     const document = this.deps.getDocument();
@@ -112,7 +118,7 @@ export class NewRasterLayerController<Permit> {
       this.deps.installPrepared(prepared);
     };
 
-    if (!this.deps.isPermitCurrent(permit)) {
+    if (!this.deps.concurrency.isPermitCurrent(permit)) {
       return { status: 'busy' };
     }
     apply();

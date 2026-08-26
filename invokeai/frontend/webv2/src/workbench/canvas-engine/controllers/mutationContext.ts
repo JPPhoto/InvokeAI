@@ -3,6 +3,7 @@ import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
+import type { CanvasEditConcurrency, DocumentEditPermit } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
@@ -12,36 +13,19 @@ import type { Rect } from '@workbench/canvas-engine/types';
 import { captureInsertionAnchor, captureRestoreAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 
 /**
- * A claim on the current document-edit epoch. Captured before an async
- * operation and re-checked ({@link CanvasMutationContext.isPermitCurrent})
- * before publishing its result: any editing-lock transition in between bumps
- * the epoch and invalidates outstanding permits. A permit captured with the
- * engine's own edit-owner symbol bypasses the lock (the lock holder may edit).
- */
-export interface DocumentEditPermit {
-  readonly epoch: number;
-  readonly owner?: symbol;
-}
-
-/**
  * The shared mutation substrate handed to canvas controllers: the guarded
- * document-mutation protocol (edit permits, prepared-cache dispatch with
- * reducer/mirror postconditions, layer-cache replacement install), plus the
- * small set of engine services every mutating controller needs.
+ * document-mutation protocol (the edit-concurrency surface, prepared-cache
+ * dispatch with reducer/mirror postconditions, layer-cache replacement install),
+ * plus the small set of engine services every mutating controller needs.
  */
-export interface CanvasMutationContext {
+export interface CanvasMutationContext extends CanvasEditConcurrency {
   readonly history: History;
   getDocument(): CanvasDocumentContractV2 | null;
   getReducerDocument(): CanvasDocumentContractV2 | null;
-  /** Counts reducer document identities; a captured value is stale once any edit lands. */
-  getEditRevision(): number;
   /** Where a new `stack` layer lands: above `aboveId` when it belongs to the stack, else the stack top. */
   captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): FlatLayerInsertionAnchor;
   /** The anchor that restores `layerId` between its current same-stack neighbours; null when absent. */
   captureRestoreAnchor(layerId: string): FlatLayerInsertionAnchor | null;
-  canEdit(owner?: symbol): boolean;
-  capturePermit(owner?: symbol): DocumentEditPermit | null;
-  isPermitCurrent(permit: DocumentEditPermit): boolean;
   isGuardCurrent(guard: LayerExportGuard): boolean;
   dispatch(action: CanvasProjectMutation, origin?: WorkbenchActionOrigin): boolean;
   dispatchPrepared(
@@ -53,7 +37,6 @@ export interface CanvasMutationContext {
   preparePixels(layerId: string, rect: Rect, pixels: RasterSurface): PreparedLayerCacheReplacement;
   installPrepared(prepared: PreparedLayerCacheReplacement, persist?: boolean): void;
   endBurst(): void;
-  isGestureActive(): boolean;
   createLayerId(): string;
 }
 
@@ -213,6 +196,7 @@ export const createCanvasMutationContext = (
     isGestureActive: () => deps.isGestureActive(),
     isGuardCurrent: (guard) => deps.isGuardCurrent(guard),
     isPermitCurrent,
+    projectId: deps.projectId,
     preparePixels: (layerId, rect, pixels) => deps.preparePixels(layerId, rect, pixels),
   };
 };

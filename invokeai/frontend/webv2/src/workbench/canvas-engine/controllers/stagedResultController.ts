@@ -7,6 +7,7 @@ import type {
 } from '@workbench/canvas-engine/contracts';
 import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
+import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { ProjectEvent } from '@workbench/projectContracts';
@@ -15,8 +16,8 @@ import { insertLayersAtAnchor } from '@workbench/canvas-engine/document/insertio
 import { haveSameStackOrders } from '@workbench/canvas-engine/document/layerStacks';
 import { getCanvasStagingCandidateFingerprint } from '@workbench/canvasStagingView';
 
-export interface StagedResultControllerOptions<Permit, Owner = symbol> {
-  readonly capturePermit: (owner?: Owner) => Permit | null;
+export interface StagedResultControllerOptions {
+  readonly concurrency: CanvasEditConcurrency;
   readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
   readonly createEventId: () => string;
   readonly createLayerId: () => string;
@@ -30,8 +31,6 @@ export interface StagedResultControllerOptions<Permit, Owner = symbol> {
   readonly getCanvasState: () => CanvasStateContractV2 | null;
   readonly getDocument: () => CanvasDocumentContractV2 | null;
   readonly history: History;
-  readonly isGestureActive: () => boolean;
-  readonly isPermitCurrent: (permit: Permit) => boolean;
   readonly now: () => string;
 }
 
@@ -64,18 +63,18 @@ const createLayer = (
 };
 
 /** Owns guarded, project-bound acceptance of staged canvas results. */
-export class StagedResultController<Permit, Owner = symbol> {
+export class StagedResultController {
   private disposed = false;
 
-  constructor(private readonly options: StagedResultControllerOptions<Permit, Owner>) {}
+  constructor(private readonly options: StagedResultControllerOptions) {}
 
-  commit(options: CommitStagedImageOptions, owner?: Owner): CommitStagedImageResult {
+  commit(options: CommitStagedImageOptions, owner?: symbol): CommitStagedImageResult {
     const o = this.options;
     if (this.disposed) {
       return { status: 'missing' };
     }
-    const permit = o.capturePermit(owner);
-    if (!permit || o.isGestureActive()) {
+    const permit = o.concurrency.capturePermit(owner);
+    if (!permit || o.concurrency.isGestureActive()) {
       return { status: 'busy' };
     }
     const canvas = o.getCanvasState();
@@ -90,7 +89,7 @@ export class StagedResultController<Permit, Owner = symbol> {
     ) {
       return { status: 'missing' };
     }
-    if (!o.isPermitCurrent(permit) || o.isGestureActive()) {
+    if (!o.concurrency.isPermitCurrent(permit) || o.concurrency.isGestureActive()) {
       return { status: 'busy' };
     }
 

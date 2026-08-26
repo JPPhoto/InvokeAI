@@ -3,12 +3,14 @@ import type {
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
+import type { DocumentEditPermit } from '@workbench/canvas-engine/editConcurrency';
 import type { SelectionState } from '@workbench/canvas-engine/selection/selectionState';
 import type { PlacedSurface, Rect } from '@workbench/canvas-engine/types';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
 import { insertLayersAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
+import { createTestEditConcurrency } from '@workbench/canvas-engine/editConcurrency.testStub';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
@@ -55,7 +57,7 @@ interface HarnessOptions {
   selectedLayerId?: string | null;
   maskRect?: Rect | null;
   cacheRect?: Rect;
-  permit?: object | null;
+  permit?: DocumentEditPermit | null;
   gestureActive?: boolean;
 }
 
@@ -84,7 +86,10 @@ const createHarness = (options: HarnessOptions = {}) => {
   const controller = new NewRasterLayerController({
     backend,
     captureInsertionAnchor: createTestInsertionAnchorCapture('p', () => document?.layers ?? []),
-    capturePermit: () => (options.permit === undefined ? {} : options.permit),
+    concurrency: createTestEditConcurrency({
+      capturePermit: () => (options.permit === undefined ? { epoch: 0 } : options.permit),
+      isGestureActive: () => options.gestureActive === true,
+    }),
     createLayerId: () => `new-${(nextId += 1)}`,
     dispatchPrepared: (action) => {
       dispatched.push(action);
@@ -106,8 +111,6 @@ const createHarness = (options: HarnessOptions = {}) => {
     getReducerDocument: () => document,
     history,
     installPrepared: installed,
-    isGestureActive: () => options.gestureActive === true,
-    isPermitCurrent: () => true,
     layers: layerCache,
     preparePixels: (layerId, rect) => ({ layerId, rect }) as never,
     selection,

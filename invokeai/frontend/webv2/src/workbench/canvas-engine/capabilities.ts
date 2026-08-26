@@ -9,8 +9,10 @@ import type { StrokeCommittedEvent } from '@workbench/canvas-engine/tools/tool';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 
 import type { NewRasterLayerResult } from './controllers/newRasterLayerController';
+import type { CanvasCommandRefusal } from './document/commandRefusal';
 import type { FlatLayerInsertionAnchor } from './document/insertionAnchors';
 import type { LayerStackKind } from './document/layerStacks';
+import type { CanvasTransactionOutcome, SubsetOf } from './editConcurrency';
 import type { CanvasEditGate } from './editGate';
 import type {
   BboxToolOptions,
@@ -41,20 +43,16 @@ export interface LayerExportGuard {
 }
 
 /**
- * Why a guarded layer mutation declined to touch the document. Every commit
- * that captures a permit, does async work, then re-checks before publishing
- * reports refusal with exactly these reasons — one shared vocabulary so callers
- * can handle them uniformly and new commits can't invent near-miss variants.
- *
- * `busy` — another edit owns the document, or a gesture started mid-flight.
- * `stale` — the guarded pixels no longer match the live layer.
- * `aborted` — the caller's signal fired.
- *
- * This union still mixes runtime outcomes with document refusals (`missing`,
- * `locked`, `unsupported`); structural commits use the transaction-only
- * {@link StructuralCommitResult} instead.
+ * Why a guarded layer mutation declined to touch the document: the transaction
+ * outcomes a permit-guarded commit can hit (`busy` — another edit owns the
+ * document or a gesture started mid-flight; `stale` — the guarded pixels no
+ * longer match the live layer; `aborted` — the caller's signal fired) plus the
+ * command refusals its target can raise. Structural commits use the
+ * transaction-only {@link StructuralCommitResult}.
  */
-export type GuardedMutationRefusal = 'aborted' | 'busy' | 'locked' | 'missing' | 'stale' | 'unsupported';
+export type GuardedMutationRefusal =
+  | SubsetOf<CanvasTransactionOutcome, 'aborted' | 'busy' | 'stale'>
+  | SubsetOf<CanvasCommandRefusal, 'locked' | 'missing' | 'unsupported'>;
 
 export type CommitRasterFilterResult =
   | { status: 'committed'; layerId: string }
@@ -160,7 +158,12 @@ export interface CanvasDocumentSnapshot {
   readonly documentGeneration: number;
 }
 
-export type PsdExportResult = 'exported' | 'nothing' | 'too-large' | 'not-ready' | 'over-budget' | 'stale' | 'aborted';
+export type PsdExportResult =
+  | 'exported'
+  | 'nothing'
+  | 'too-large'
+  | 'over-budget'
+  | SubsetOf<CanvasTransactionOutcome, 'not-ready' | 'stale' | 'aborted'>;
 
 export interface CanvasPsdExportCapability {
   exportRasterLayersToPsd(fileName: string): Promise<PsdExportResult>;
@@ -189,7 +192,12 @@ export interface CanvasHistoryCapability {
   clearHistory(): void;
 }
 
-export type LayerThumbnailRequestResult = 'ready' | 'stale' | 'error' | 'missing' | 'unsupported' | 'over-budget';
+export type LayerThumbnailRequestResult =
+  | 'ready'
+  | 'error'
+  | 'over-budget'
+  | SubsetOf<CanvasTransactionOutcome, 'stale'>
+  | SubsetOf<CanvasCommandRefusal, 'missing' | 'unsupported'>;
 
 export interface CanvasPreviewCapability {
   drawLayerThumbnail(layerId: string, target: HTMLCanvasElement, maxSize: number): boolean;
@@ -225,7 +233,14 @@ export type ExportBakedLayerPixelsOptions = Omit<ExportLayerPixelsOptions, 'appl
 
 export type ExportBakedLayerBlobResult =
   | { status: 'ok'; blob: Blob; rect: Rect; guard: LayerExportGuard }
-  | { status: 'missing' | 'disabled' | 'unsupported' | 'empty' | 'not-ready' | 'over-budget' | 'aborted' };
+  | {
+      status:
+        | SubsetOf<CanvasCommandRefusal, 'missing' | 'unsupported'>
+        | SubsetOf<CanvasTransactionOutcome, 'not-ready' | 'aborted'>
+        | 'disabled'
+        | 'empty'
+        | 'over-budget';
+    };
 
 export interface CanvasSelectionCapability {
   deselect(): void;
@@ -271,8 +286,8 @@ export type ReplaceSelectionFromImageResult =
  */
 export type StructuralCommitResult =
   | { status: 'committed' }
-  | { status: 'busy' | 'gesture-active' | 'not-ready' | 'dispatch-rejected' }
-  | { status: 'stale'; expectedRevision: number; actualRevision: number }
+  | { status: SubsetOf<CanvasTransactionOutcome, 'busy' | 'gesture-active' | 'not-ready'> | 'dispatch-rejected' }
+  | { status: SubsetOf<CanvasTransactionOutcome, 'stale'>; expectedRevision: number; actualRevision: number }
   | { status: 'postcondition-failed'; recovered: 'reverted' | 'reverted-unmirrored' | 'unreverted' };
 
 export interface StructuralCommitOptions {
@@ -310,7 +325,7 @@ export interface CommitStagedImageOptions {
 
 export type CommitStagedImageResult =
   | { status: 'committed'; layerId: string }
-  | { status: 'busy' | 'stale' | 'missing' };
+  | { status: SubsetOf<CanvasTransactionOutcome, 'busy' | 'stale'> | SubsetOf<CanvasCommandRefusal, 'missing'> };
 
 export type GeneratedImageTarget = 'replace' | 'copy-raster' | 'copy-control';
 
@@ -359,17 +374,36 @@ export interface FilterPreviewInput {
  * refused, `'busy'` when another edit owns the document, and `'nothing'` when
  * fewer than two eligible rasters have content.
  */
-export type MergeVisibleResult = 'merged' | 'not-ready' | 'over-budget' | 'busy' | 'nothing';
+export type MergeVisibleResult =
+  | 'merged'
+  | SubsetOf<CanvasTransactionOutcome, 'not-ready' | 'busy'>
+  | 'over-budget'
+  | 'nothing';
 export type DuplicateLayersResult =
   | { readonly status: 'duplicated'; readonly duplicateIds: readonly string[]; readonly selectedLayerId: string }
-  | { readonly status: 'busy' | 'nothing' | 'not-ready' | 'over-budget' | 'stale' };
-export type BooleanRasterResult = 'merged' | 'missing' | 'unsupported' | 'not-ready' | 'busy' | 'empty';
+  | { readonly status: SubsetOf<CanvasTransactionOutcome, 'busy' | 'not-ready' | 'stale'> | 'nothing' | 'over-budget' };
+export type BooleanRasterResult =
+  | 'merged'
+  | SubsetOf<CanvasCommandRefusal, 'missing' | 'unsupported'>
+  | SubsetOf<CanvasTransactionOutcome, 'not-ready' | 'busy'>
+  | 'empty';
 export type ExtractMaskedAreaResult =
   | { status: 'extracted'; layerId: string }
-  | { status: 'missing' | 'unsupported' | 'not-ready' | 'busy' | 'empty' };
+  | {
+      status:
+        | SubsetOf<CanvasCommandRefusal, 'missing' | 'unsupported'>
+        | SubsetOf<CanvasTransactionOutcome, 'not-ready' | 'busy'>
+        | 'empty';
+    };
 export type CropLayerResult =
   | { status: 'cropped' }
-  | { status: 'missing' | 'locked' | 'unsupported' | 'empty' | 'not-ready' | 'over-budget' | 'busy' }
+  | {
+      status:
+        | SubsetOf<CanvasCommandRefusal, 'missing' | 'locked' | 'unsupported'>
+        | SubsetOf<CanvasTransactionOutcome, 'not-ready' | 'busy'>
+        | 'empty'
+        | 'over-budget';
+    }
   | { status: 'failed'; message: string };
 export interface CanvasDiagnosticsCapability {
   clearCaches(): Promise<void>;
@@ -459,7 +493,7 @@ export interface CanvasEnginePreviewCapability extends CanvasPreviewCapability {
     layerId: string,
     input: FilterPreviewInput,
     guard: LayerExportGuard
-  ): Promise<'shown' | 'missing' | 'stale'>;
+  ): Promise<'shown' | SubsetOf<CanvasCommandRefusal, 'missing'> | SubsetOf<CanvasTransactionOutcome, 'stale'>>;
   setStagedPreview(input: StagedPreviewInput | null): void;
 }
 

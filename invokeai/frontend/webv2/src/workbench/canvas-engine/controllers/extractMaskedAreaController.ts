@@ -3,6 +3,7 @@ import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/c
 import type { CanvasDiagnostics } from '@workbench/canvas-engine/diagnostics';
 import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
+import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { DerivedSurfaceCache } from '@workbench/canvas-engine/render/derivedSurfaceCache';
@@ -27,7 +28,8 @@ type ExportResult =
   | { status: 'ok'; surface: RasterSurface; rect: Rect; guard: LayerExportGuard; release(): void }
   | { status: 'missing' | 'disabled' | 'unsupported' | 'empty' | 'not-ready' | 'over-budget' };
 
-export interface ExtractMaskedAreaControllerOptions<Permit> {
+export interface ExtractMaskedAreaControllerOptions {
+  readonly concurrency: CanvasEditConcurrency;
   readonly backend: RasterBackend;
   readonly layers: LayerCacheStore;
   readonly derived: DerivedSurfaceCache;
@@ -35,9 +37,6 @@ export interface ExtractMaskedAreaControllerOptions<Permit> {
   readonly history: History;
   readonly getDocument: () => CanvasDocumentContractV2 | null;
   readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
-  readonly capturePermit: () => Permit | null;
-  readonly isPermitCurrent: (permit: Permit) => boolean;
-  readonly isGestureActive: () => boolean;
   readonly endBurst: () => void;
   readonly isCacheReady: (layer: CanvasLayerContract, document: CanvasDocumentContractV2) => boolean;
   readonly hasExportableContent: (layerId: string) => boolean;
@@ -58,13 +57,13 @@ export interface ExtractMaskedAreaControllerOptions<Permit> {
 }
 
 /** Owns guarded extraction of raster content through an inpaint mask. */
-export class ExtractMaskedAreaController<Permit> {
+export class ExtractMaskedAreaController {
   private disposed = false;
-  constructor(private readonly deps: ExtractMaskedAreaControllerOptions<Permit>) {}
+  constructor(private readonly deps: ExtractMaskedAreaControllerOptions) {}
 
   async extract(maskLayerId: string): Promise<ExtractMaskedAreaResult> {
-    const permit = this.deps.capturePermit();
-    if (this.disposed || !permit || this.deps.isGestureActive()) {
+    const permit = this.deps.concurrency.capturePermit();
+    if (this.disposed || !permit || this.deps.concurrency.isGestureActive()) {
       return { status: 'busy' };
     }
     this.deps.endBurst();
@@ -116,7 +115,7 @@ export class ExtractMaskedAreaController<Permit> {
       const [maskPixels, ...contributorPixels] = settled.map(
         (result) => (result as PromiseFulfilledResult<ExportResult>).value
       );
-      if (!this.deps.isPermitCurrent(permit)) {
+      if (!this.deps.concurrency.isPermitCurrent(permit)) {
         return { status: 'busy' };
       }
       if (maskPixels.status !== 'ok') {
@@ -125,7 +124,7 @@ export class ExtractMaskedAreaController<Permit> {
       if (contributorPixels.some((pixels) => pixels.status !== 'ok')) {
         return { status: contributorPixels.some((pixels) => pixels.status === 'not-ready') ? 'not-ready' : 'empty' };
       }
-      if (this.deps.isGestureActive()) {
+      if (this.deps.concurrency.isGestureActive()) {
         return { status: 'busy' };
       }
       if (maskPixels.guard.layer !== mask || !this.deps.isGuardCurrent(maskPixels.guard)) {
@@ -217,7 +216,7 @@ export class ExtractMaskedAreaController<Permit> {
         );
         this.deps.installPrepared(prepared);
       };
-      if (!this.deps.isPermitCurrent(permit)) {
+      if (!this.deps.concurrency.isPermitCurrent(permit)) {
         return { status: 'busy' };
       }
       apply();

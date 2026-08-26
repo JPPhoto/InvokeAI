@@ -2,6 +2,7 @@ import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
+import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
@@ -12,13 +13,11 @@ type ExportResult =
   | { status: 'ok'; surface: RasterSurface; rect: Rect; guard: LayerExportGuard; release(): void }
   | { status: 'missing' | 'disabled' | 'unsupported' | 'empty' | 'not-ready' | 'over-budget' };
 
-export interface CopyLayerControllerOptions<Permit> {
+export interface CopyLayerControllerOptions {
+  readonly concurrency: CanvasEditConcurrency;
   readonly history: History;
   readonly getDocument: () => CanvasDocumentContractV2 | null;
   readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
-  readonly capturePermit: () => Permit | null;
-  readonly isPermitCurrent: (permit: Permit) => boolean;
-  readonly isGestureActive: () => boolean;
   readonly endBurst: () => void;
   readonly exportBaked: (layerId: string) => Promise<ExportResult>;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
@@ -34,13 +33,13 @@ export interface CopyLayerControllerOptions<Permit> {
 }
 
 /** Owns guarded baked copies into new raster paint layers. */
-export class CopyLayerController<Permit> {
+export class CopyLayerController {
   private disposed = false;
-  constructor(private readonly deps: CopyLayerControllerOptions<Permit>) {}
+  constructor(private readonly deps: CopyLayerControllerOptions) {}
 
   async copyToRaster(layerId: string): Promise<string | null> {
-    const permit = this.deps.capturePermit();
-    if (this.disposed || !permit || this.deps.isGestureActive()) {
+    const permit = this.deps.concurrency.capturePermit();
+    if (this.disposed || !permit || this.deps.concurrency.isGestureActive()) {
       return null;
     }
     this.deps.endBurst();
@@ -54,10 +53,14 @@ export class CopyLayerController<Permit> {
       return null;
     }
     try {
-      if (!this.deps.isPermitCurrent(permit)) {
+      if (!this.deps.concurrency.isPermitCurrent(permit)) {
         return null;
       }
-      if (this.deps.isGestureActive() || !this.deps.isGuardCurrent(baked.guard) || baked.guard.layer !== sourceLayer) {
+      if (
+        this.deps.concurrency.isGestureActive() ||
+        !this.deps.isGuardCurrent(baked.guard) ||
+        baked.guard.layer !== sourceLayer
+      ) {
         return null;
       }
       const liveDocument = this.deps.getDocument();
@@ -96,7 +99,7 @@ export class CopyLayerController<Permit> {
         );
         this.deps.installPrepared(prepared);
       };
-      if (!this.deps.isPermitCurrent(permit)) {
+      if (!this.deps.concurrency.isPermitCurrent(permit)) {
         return null;
       }
       apply();

@@ -13,7 +13,7 @@ import { NewRasterLayerController, type NewRasterLayerControllerOptions } from '
 import { RasterizeLayerController, type RasterizeLayerControllerOptions } from './rasterizeLayerController';
 import { ThumbnailController, type ThumbnailControllerOptions } from './thumbnailController';
 
-export type LayerControllerDeps<Permit> = Omit<
+export type LayerControllerDeps = Omit<
   CanvasLayerCapability,
   'applyStructuralPreview' | 'canCommitStructural' | 'commitStagedImage' | 'commitStructural' | 'invertMask'
 > &
@@ -23,15 +23,15 @@ export type LayerControllerDeps<Permit> = Omit<
     structural: StructuralLayerController;
     rasterize: RasterizeLayerControllerOptions;
     merge: MergeLayerControllerOptions;
-    booleanMerge: BooleanMergeControllerOptions<Permit>;
-    extractMaskedArea: ExtractMaskedAreaControllerOptions<Permit>;
-    crop: CropLayerControllerOptions<Permit>;
-    copy: CopyLayerControllerOptions<Permit>;
-    newRasterLayer: NewRasterLayerControllerOptions<Permit>;
+    booleanMerge: BooleanMergeControllerOptions;
+    extractMaskedArea: ExtractMaskedAreaControllerOptions;
+    crop: CropLayerControllerOptions;
+    copy: CopyLayerControllerOptions;
+    newRasterLayer: NewRasterLayerControllerOptions;
   };
 
 /** Public layer-operation boundary. Implementations are injected by the composition root. */
-export class LayerController<Permit> {
+export class LayerController {
   readonly layers: Omit<CanvasLayerCapability, 'commitStagedImage'>;
   readonly previews: CanvasPreviewCapability;
   readonly mask: MaskLayerController;
@@ -39,14 +39,14 @@ export class LayerController<Permit> {
   readonly structural: StructuralLayerController;
   readonly rasterize: RasterizeLayerController;
   readonly merge: MergeLayerController;
-  readonly booleanMerge: BooleanMergeController<Permit>;
-  readonly extractMaskedArea: ExtractMaskedAreaController<Permit>;
-  readonly crop: CropLayerController<Permit>;
-  readonly copy: CopyLayerController<Permit>;
-  readonly newRasterLayer: NewRasterLayerController<Permit>;
+  readonly booleanMerge: BooleanMergeController;
+  readonly extractMaskedArea: ExtractMaskedAreaController;
+  readonly crop: CropLayerController;
+  readonly copy: CopyLayerController;
+  readonly newRasterLayer: NewRasterLayerController;
   private disposed = false;
 
-  constructor(deps: LayerControllerDeps<Permit>) {
+  constructor(deps: LayerControllerDeps) {
     this.mask = new MaskLayerController(deps.mask);
     this.thumbnail = new ThumbnailController(deps.thumbnail);
     this.structural = deps.structural;
