@@ -1,5 +1,6 @@
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
 import { LayerController } from './layerController';
@@ -80,6 +81,7 @@ describe('LayerController', () => {
     backend: {} as never,
     capturePermit: () => null,
     createLayerId: () => 'result',
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     dispatchPrepared: vi.fn(),
     endBurst: vi.fn(),
     exportBaked: vi.fn(),
@@ -97,6 +99,7 @@ describe('LayerController', () => {
     backend: {} as never,
     capturePermit: () => null,
     createLayerId: () => 'result',
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     derived: {} as never,
     diagnostics: {} as never,
     dispatchPrepared: vi.fn(),
@@ -138,6 +141,7 @@ describe('LayerController', () => {
   const copy = {
     capturePermit: () => null,
     createLayerId: () => 'copy',
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     dispatchPrepared: vi.fn(),
     endBurst: vi.fn(),
     exportBaked: vi.fn(),
@@ -154,6 +158,7 @@ describe('LayerController', () => {
     backend: {} as never,
     capturePermit: () => null,
     createLayerId: () => 'new',
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     dispatchPrepared: vi.fn(),
     endBurst: vi.fn(),
     getDocument: () => null,

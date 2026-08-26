@@ -1,5 +1,7 @@
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
@@ -21,6 +23,7 @@ export interface CopyLayerControllerOptions<Permit> {
   readonly exportBaked: (layerId: string) => Promise<ExportResult>;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
   readonly createLayerId: () => string;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
   readonly preparePixels: (layerId: string, rect: Rect, pixels: RasterSurface) => PreparedLayerCacheReplacement;
   readonly installPrepared: (prepared: PreparedLayerCacheReplacement) => void;
   readonly dispatchPrepared: (
@@ -58,8 +61,7 @@ export class CopyLayerController<Permit> {
         return null;
       }
       const liveDocument = this.deps.getDocument();
-      const sourceIndex = liveDocument?.layers.findIndex((layer) => layer.id === layerId) ?? -1;
-      if (!liveDocument || liveDocument.layers[sourceIndex] !== sourceLayer || sourceIndex < 0) {
+      if (!liveDocument || !liveDocument.layers.includes(sourceLayer)) {
         return null;
       }
       const newId = this.deps.createLayerId();
@@ -75,11 +77,12 @@ export class CopyLayerController<Permit> {
         type: 'raster',
       };
       const selectedLayerId = liveDocument.selectedLayerId;
+      const anchor = this.deps.captureInsertionAnchor('raster', layerId);
       const apply = (): void => {
         const prepared = this.deps.preparePixels(newId, baked.rect, baked.surface);
         this.deps.dispatchPrepared(
           {
-            add: { index: sourceIndex, layers: [layer] },
+            add: [{ anchor, layers: [layer] }],
             enabledUpdates: [],
             selectedLayerId: newId,
             type: 'applyCanvasLayerStackMutation',

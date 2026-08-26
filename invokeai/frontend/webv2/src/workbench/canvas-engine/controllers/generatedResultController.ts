@@ -154,10 +154,6 @@ export class GeneratedResultController {
         });
         return { layerId: liveLayer.id, status: 'committed' };
       }
-      const sourceIndex = document.layers.findIndex((candidate) => candidate.id === liveLayer.id);
-      if (sourceIndex < 0) {
-        return { status: 'missing' };
-      }
       const layerId = o.ctx.createLayerId();
       const selectedLayerId = document.selectedLayerId;
       const buildControlCopy = (): CanvasLayerContract => {
@@ -187,9 +183,10 @@ export class GeneratedResultController {
               transform: identityTransform,
               type: 'raster',
             };
+      const anchor = o.ctx.captureInsertionAnchor(copy.type, liveLayer.id);
       const publishCopy = (prepared: PreparedLayerCacheReplacement): void => {
         o.ctx.dispatchPrepared(
-          { index: sourceIndex, layer: copy, type: 'addCanvasLayer' },
+          { anchor, layer: copy, type: 'addCanvasLayer' },
           () => o.ctx.getReducerDocument()?.layers.some((candidate) => candidate === copy) === true,
           () => o.ctx.getDocument()?.layers.some((candidate) => candidate === copy) === true
         );

@@ -167,7 +167,11 @@ export const createGradientTool = (): Tool => {
         transform: { rotation: 0, scaleX: 1, scaleY: 1, x: doc.bbox.x, y: doc.bbox.y },
         type: 'raster',
       };
-      const forward: CanvasProjectMutation = { index: 0, layer, type: 'addCanvasLayer' };
+      const forward: CanvasProjectMutation = {
+        anchor: ctx.captureInsertionAnchor('raster', doc.selectedLayerId),
+        layer,
+        type: 'addCanvasLayer',
+      };
       const inverse: CanvasProjectMutation = { ids: [layerId], type: 'removeCanvasLayers' };
       ctx.commitStructural('Add gradient', forward, inverse);
       clearPreview(ctx);

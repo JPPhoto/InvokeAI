@@ -59,6 +59,15 @@ export const reorderLayerStack = <Layer extends CanvasLayerContract>(
   return next;
 };
 
+/** Whether both documents hold the same members in the same order within every stack. */
+export const haveSameStackOrders = (a: readonly CanvasLayerContract[], b: readonly CanvasLayerContract[]): boolean =>
+  a.length === b.length &&
+  LAYER_STACK_ORDER.every((stack) => {
+    const left = getStackOrder(a, stack).orderedIds;
+    const right = getStackOrder(b, stack).orderedIds;
+    return left.length === right.length && left.every((id, index) => id === right[index]);
+  });
+
 /** A z-move within a stack; index 0 is the front (top). */
 export type LayerStackMoveKind = 'front' | 'forward' | 'backward' | 'back';
 

@@ -10,9 +10,10 @@ import {
   type CanvasLayerContract,
   type LayerStackMoveKind,
 } from '@workbench/canvas-engine/api';
-import { reorderLayerActions } from '@workbench/canvasLayerOps';
+import { deleteLayersActions, reorderLayerActions } from '@workbench/canvasLayerOps';
+import { useNotify } from '@workbench/useNotify';
 import { useCanvasRasterContentEpoch } from '@workbench/widgets/canvas/engineStoreHooks';
-import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { reportStructuralCommit, useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { publishLayerPanelSelection } from '@workbench/workbenchStore';
 import {
   ArrowDownIcon,
@@ -30,9 +31,7 @@ import {
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { deleteLayersActions } from './layerMultiSelectionModel';
-
-type MultiSelectionEngine = Pick<CanvasEngineHandle, 'exports' | 'interaction' | 'layers'>;
+type MultiSelectionEngine = Pick<CanvasEngineHandle, 'document' | 'exports' | 'interaction' | 'layers'>;
 const BULK_TOOLTIP_POSITIONING = { placement: 'top' } as const;
 
 interface LayerMultiSelectionActionsProps {
@@ -54,6 +53,7 @@ export const LayerMultiSelectionActions = ({
 }: LayerMultiSelectionActionsProps) => {
   const commitStructural = useStructuralCommit(engine);
   const { t } = useTranslation();
+  const notify = useNotify();
   useCanvasRasterContentEpoch(engine);
   const selected = useMemo(() => {
     const ids = new Set(selectedIds);
@@ -160,11 +160,13 @@ export const LayerMultiSelectionActions = ({
   }, [allLocked, commitStructural, selected, t]);
 
   const deleteSelected = useCallback(() => {
-    const actions = deleteLayersActions(layers, selectedIds, selectedLayerId);
-    if (actions) {
-      commitStructural(t('widgets.layers.actions.deleteSelected'), actions.forward, actions.inverse);
+    const actions = engine ? deleteLayersActions(layers, selectedIds, selectedLayerId, engine.document) : null;
+    if (!actions) {
+      reportStructuralCommit({ status: engine ? 'dispatch-rejected' : 'not-ready' }, notify.error, t);
+      return;
     }
-  }, [commitStructural, layers, selectedIds, selectedLayerId, t]);
+    commitStructural(t('widgets.layers.actions.deleteSelected'), actions.forward, actions.inverse);
+  }, [commitStructural, engine, layers, notify, selectedIds, selectedLayerId, t]);
 
   return (
     <HStack

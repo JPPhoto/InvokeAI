@@ -1,5 +1,6 @@
 import type { SelectionState, SelectionStateDeps } from '@workbench/canvas-engine/selection/selectionState';
 
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
 import { EditingController } from './editingController';
@@ -20,6 +21,7 @@ const createSelection = (): SelectionState => ({
 
 const createTextOptions = () => ({
   canEdit: () => true,
+  captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
   commitStructural: vi.fn(),
   createLayerId: () => 'text-1',
   getDocument: () => null,

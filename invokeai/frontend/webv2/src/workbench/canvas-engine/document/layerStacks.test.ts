@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getStackOrder,
+  haveSameStackOrders,
   LAYER_STACK_ORDER,
   LAYER_STACKS_TOP_FIRST,
   layerStackRank,
@@ -35,6 +36,19 @@ describe('layer stacks', () => {
 
     expect(ids(next)).toEqual(['i1', 'r2', 'c1', 'r1']);
     expect(next?.[0]).toBe(layers[0]);
+  });
+
+  it('compares documents by their stack orders, not their flat interleaving', () => {
+    const interleaved = [
+      layer('r1', 'raster'),
+      layer('i1', 'inpaint_mask'),
+      layer('c1', 'control'),
+      layer('r2', 'raster'),
+    ];
+
+    expect(haveSameStackOrders(layers, interleaved)).toBe(true);
+    expect(haveSameStackOrders(layers, [...layers].reverse())).toBe(false);
+    expect(haveSameStackOrders(layers, layers.slice(1))).toBe(false);
   });
 
   it('accepts an unchanged order, a single-member stack, and an empty stack', () => {

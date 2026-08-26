@@ -8,7 +8,10 @@ import {
   type CanvasProjectMutation,
   type CanvasRasterLayerContractV2,
   type CanvasStateContractV2,
+  type FlatLayerInsertion,
+  type FlatLayerInsertionAnchor,
   type ReorderFlatStackCommand,
+  insertLayersAtAnchor,
   isHideableLayer,
   reorderLayerStack,
   repairSelectedLayerId,
@@ -181,7 +184,11 @@ const setCanvasLayerPositions = (
   return changed ? { ...document, layers } : document;
 };
 
+const isInsertionValid = (projectId: string, insertion: FlatLayerInsertion): boolean =>
+  insertion.anchor.projectId === projectId && insertion.layers.every((layer) => layer.type === insertion.anchor.stack);
+
 const applyLayerStackMutation = (
+  projectId: string,
   document: CanvasDocumentContractV2,
   mutation: Extract<CanvasProjectMutation, { type: 'applyCanvasLayerStackMutation' }>
 ): CanvasDocumentContractV2 => {
@@ -194,8 +201,11 @@ const applyLayerStackMutation = (
   for (const id of removeIds) {
     projectedIds.delete(id);
   }
-  if (mutation.add) {
-    for (const layer of mutation.add.layers) {
+  for (const insertion of mutation.add ?? []) {
+    if (!isInsertionValid(projectId, insertion)) {
+      return document;
+    }
+    for (const layer of insertion.layers) {
       if (currentIds.has(layer.id) || projectedIds.has(layer.id)) {
         return document;
       }
@@ -205,34 +215,23 @@ const applyLayerStackMutation = (
   if (
     mutation.enabledUpdates.some((update) => !projectedIds.has(update.id)) ||
     (mutation.lockedUpdates?.some((update) => !projectedIds.has(update.id)) ?? false) ||
-    (mutation.orderedIds !== undefined &&
-      (mutation.orderedIds.length !== projectedIds.size ||
-        new Set(mutation.orderedIds).size !== mutation.orderedIds.length ||
-        mutation.orderedIds.some((id) => !projectedIds.has(id)))) ||
     (mutation.selectedLayerId !== undefined &&
       mutation.selectedLayerId !== null &&
       !projectedIds.has(mutation.selectedLayerId))
   ) {
     return document;
   }
-  let layers = document.layers;
+  let layers: CanvasLayers = document.layers;
   let changed = false;
-  if (mutation.add?.layers.length) {
-    const index = Math.min(Math.max(0, Math.round(mutation.add.index)), layers.length);
-    layers = [...layers.slice(0, index), ...mutation.add.layers, ...layers.slice(index)];
-    changed = true;
+  for (const insertion of mutation.add ?? []) {
+    if (insertion.layers.length > 0) {
+      layers = insertLayersAtAnchor(layers, insertion.anchor, insertion.layers);
+      changed = true;
+    }
   }
   if (removeIds.size > 0) {
     layers = layers.filter((layer) => !removeIds.has(layer.id));
     changed = true;
-  }
-  if (mutation.orderedIds) {
-    const orderChanged = layers.some((layer, index) => layer.id !== mutation.orderedIds?.[index]);
-    if (orderChanged) {
-      const byId = new Map(layers.map((layer) => [layer.id, layer]));
-      layers = mutation.orderedIds.map((id) => byId.get(id)!);
-      changed = true;
-    }
   }
   const enabledById = new Map(mutation.enabledUpdates.map((update) => [update.id, update.isEnabled]));
   const lockedById = new Map(mutation.lockedUpdates?.map((update) => [update.id, update.isLocked]) ?? []);
@@ -270,11 +269,21 @@ const applyLayerStackMutation = (
     : document;
 };
 
-const addLayer = (document: CanvasDocumentContractV2, layer: CanvasLayerContract, index = 0) => {
-  const insertIndex = Math.min(Math.max(0, Math.round(index)), document.layers.length);
+const addLayer = (
+  projectId: string,
+  document: CanvasDocumentContractV2,
+  layer: CanvasLayerContract,
+  anchor: FlatLayerInsertionAnchor
+): CanvasDocumentContractV2 => {
+  if (
+    !isInsertionValid(projectId, { anchor, layers: [layer] }) ||
+    document.layers.some((candidate) => candidate.id === layer.id)
+  ) {
+    return document;
+  }
   return {
     ...document,
-    layers: [...document.layers.slice(0, insertIndex), layer, ...document.layers.slice(insertIndex)],
+    layers: insertLayersAtAnchor(document.layers, anchor, [layer]),
     selectedLayerId: layer.id,
   };
 };
@@ -412,8 +421,11 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
       ) {
         return project;
       }
-      const { layer } = mutation;
-      if (project.canvas.document.layers.some((candidate) => candidate.id === layer.id)) {
+      const { anchor, layer } = mutation;
+      if (
+        !isInsertionValid(project.id, { anchor, layers: [layer] }) ||
+        project.canvas.document.layers.some((candidate) => candidate.id === layer.id)
+      ) {
         return project;
       }
       const selectedLayerId = mutation.continueStaging ? project.canvas.document.selectedLayerId : layer.id;
@@ -423,7 +435,7 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
           ...project.canvas,
           document: {
             ...project.canvas.document,
-            layers: [layer, ...project.canvas.document.layers],
+            layers: insertLayersAtAnchor(project.canvas.document.layers, anchor, [layer]),
             selectedLayerId,
           },
           stagingArea: mutation.continueStaging
@@ -440,7 +452,7 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
         : project.canvas.stagingArea.pendingImages.length === 0;
       if (
         project.canvas.document.selectedLayerId !== expectedSelectedLayerId ||
-        project.canvas.document.layers[0] !== mutation.layer ||
+        !project.canvas.document.layers.includes(mutation.layer) ||
         project.events[0] !== mutation.event ||
         !stagingMatchesCommit
       ) {
@@ -452,7 +464,7 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
           ...project.canvas,
           document: {
             ...project.canvas.document,
-            layers: project.canvas.document.layers.slice(1),
+            layers: project.canvas.document.layers.filter((layer) => layer !== mutation.layer),
             selectedLayerId: mutation.selectedLayerId,
           },
           stagingArea: mutation.stagingArea,
@@ -561,9 +573,11 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
     case 'clearCanvasStaging':
       return { ...project, canvas: { ...project.canvas, stagingArea: clearStagingArea(project.canvas.stagingArea) } };
     case 'addCanvasLayer':
-      return updateCanvasDocument(project, (document) => addLayer(document, mutation.layer, mutation.index));
+      return updateCanvasDocument(project, (document) =>
+        addLayer(project.id, document, mutation.layer, mutation.anchor)
+      );
     case 'applyCanvasLayerStackMutation':
-      return updateCanvasDocument(project, (document) => applyLayerStackMutation(document, mutation));
+      return updateCanvasDocument(project, (document) => applyLayerStackMutation(project.id, document, mutation));
     case 'removeCanvasLayers':
       return updateCanvasDocument(project, (document) => removeLayers(document, mutation.ids));
     case 'duplicateCanvasLayer':

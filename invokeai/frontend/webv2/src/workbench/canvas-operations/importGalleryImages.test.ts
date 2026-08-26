@@ -7,6 +7,7 @@ import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
 import { accountLifecycle } from '@platform/state/accountLifecycle';
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import {
   createControlLayer,
   createEmptyPaintLayer,
@@ -145,14 +146,19 @@ const engine = (
   projectId: string,
   canCommitStructural: CanvasEngine['layers']['canCommitStructural'] = vi.fn(() => true),
   commitStructural: CanvasEngine['layers']['commitStructural'] = vi.fn(() => ({ status: 'committed' as const }))
-): CanvasEngine => ({ layers: { canCommitStructural, commitStructural }, projectId }) as unknown as CanvasEngine;
+): CanvasEngine =>
+  ({
+    document: { captureInsertionAnchor: createTestInsertionAnchorCapture(projectId) },
+    layers: { canCommitStructural, commitStructural },
+    projectId,
+  }) as unknown as CanvasEngine;
 
 const getForwardLayers = (action: WorkbenchAction | CanvasProjectMutation): readonly CanvasLayerContract[] => {
   const mutation = action.type === 'applyCanvasProjectMutation' ? action.mutation : action;
   if (mutation.type !== 'applyCanvasLayerStackMutation' || !mutation.add) {
     throw new Error('Expected add stack mutation');
   }
-  return mutation.add.layers;
+  return mutation.add.flatMap((insertion) => insertion.layers);
 };
 
 const expectedLayer = (
@@ -250,7 +256,7 @@ describe('importGalleryImagesToCanvas', () => {
     );
     expect(result.layerIds).toEqual(layers.map((layer) => layer.id));
     expect(forward).toMatchObject({
-      add: { index: 0 },
+      add: [{ anchor: { afterId: null, beforeId: null, projectId: project.id, stack: layers[0]!.type } }],
       enabledUpdates: [],
       selectedLayerId: layers[1]!.id,
       type: 'applyCanvasLayerStackMutation',

@@ -6,6 +6,7 @@ import type {
 
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { createBitmapStore } from '@workbench/canvas-engine/document/bitmapStore';
+import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import {
   createCompositeDedupeCache,
@@ -347,6 +348,7 @@ describe('createEngineRegistry', () => {
       type: 'replaceCanvasDocument',
     });
     project = applyCanvasProjectMutation(project, {
+      anchor: stackTopAnchor(project.id),
       layer: {
         blendMode: 'normal',
         id: 'pending-layer',

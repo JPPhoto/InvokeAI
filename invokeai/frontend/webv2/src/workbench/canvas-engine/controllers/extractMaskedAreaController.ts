@@ -1,6 +1,8 @@
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { CanvasDiagnostics } from '@workbench/canvas-engine/diagnostics';
+import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { DerivedSurfaceCache } from '@workbench/canvas-engine/render/derivedSurfaceCache';
@@ -45,6 +47,7 @@ export interface ExtractMaskedAreaControllerOptions<Permit> {
   readonly getAdjustedSurface: (layer: CanvasLayerContract, entry: LayerCacheEntry) => RasterSurface | null;
   readonly getMaskPattern: (style: string, color: string) => RasterSurface | null;
   readonly createLayerId: () => string;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
   readonly preparePixels: (layerId: string, rect: Rect, pixels: RasterSurface) => PreparedLayerCacheReplacement;
   readonly installPrepared: (prepared: PreparedLayerCacheReplacement) => void;
   readonly dispatchPrepared: (
@@ -195,11 +198,12 @@ export class ExtractMaskedAreaController<Permit> {
         type: 'raster',
       };
       const selectedLayerId = liveDocument.selectedLayerId;
+      const anchor = this.deps.captureInsertionAnchor('raster', null);
       const apply = (): void => {
         const prepared = this.deps.preparePixels(resultId, rect, pixels);
         this.deps.dispatchPrepared(
           {
-            add: { index: maskIndex, layers: [layer] },
+            add: [{ anchor, layers: [layer] }],
             enabledUpdates: [],
             selectedLayerId: resultId,
             type: 'applyCanvasLayerStackMutation',

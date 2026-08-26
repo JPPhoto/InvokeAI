@@ -1,3 +1,4 @@
+import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasLayerContract } from './canvas-engine/contracts';
@@ -73,8 +74,16 @@ describe('createWorkbenchStore', () => {
   it('resets transient layer multi-selection across project switches even without a Layers panel', () => {
     const store = createWorkbenchStore();
     const firstProjectId = store.getSnapshot().activeProject.id;
-    store.commands.canvas.apply(firstProjectId, { layer: paintLayer('a'), type: 'addCanvasLayer' });
-    store.commands.canvas.apply(firstProjectId, { layer: paintLayer('b'), type: 'addCanvasLayer' });
+    store.commands.canvas.apply(firstProjectId, {
+      anchor: stackTopAnchor(firstProjectId),
+      layer: paintLayer('a'),
+      type: 'addCanvasLayer',
+    });
+    store.commands.canvas.apply(firstProjectId, {
+      anchor: stackTopAnchor(firstProjectId),
+      layer: paintLayer('b'),
+      type: 'addCanvasLayer',
+    });
     publishLayerPanelSelection({ primaryId: 'b', projectId: firstProjectId, selectedIds: ['a', 'b'] });
 
     const secondProject = store.commands.projects.create();
@@ -88,7 +97,11 @@ describe('createWorkbenchStore', () => {
     const store = createWorkbenchStore();
     const projectId = store.getSnapshot().activeProject.id;
     for (const id of ['a', 'b', 'c']) {
-      store.commands.canvas.apply(projectId, { layer: paintLayer(id), type: 'addCanvasLayer' });
+      store.commands.canvas.apply(projectId, {
+        anchor: stackTopAnchor(projectId),
+        layer: paintLayer(id),
+        type: 'addCanvasLayer',
+      });
     }
     // Model a panel-originated multi-selection: it publishes before dispatching
     // its new primary, so the store preserves the selected set.

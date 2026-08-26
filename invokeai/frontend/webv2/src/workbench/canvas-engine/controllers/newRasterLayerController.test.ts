@@ -7,6 +7,8 @@ import type { SelectionState } from '@workbench/canvas-engine/selection/selectio
 import type { PlacedSurface, Rect } from '@workbench/canvas-engine/types';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { insertLayersAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
@@ -81,6 +83,7 @@ const createHarness = (options: HarnessOptions = {}) => {
 
   const controller = new NewRasterLayerController({
     backend,
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p', () => document?.layers ?? []),
     capturePermit: () => (options.permit === undefined ? {} : options.permit),
     createLayerId: () => `new-${(nextId += 1)}`,
     dispatchPrepared: (action) => {
@@ -92,8 +95,8 @@ const createHarness = (options: HarnessOptions = {}) => {
         if (action.removeIds) {
           next = next.filter((layer) => !action.removeIds!.includes(layer.id));
         }
-        if (action.add) {
-          next = [...next.slice(0, action.add.index), ...action.add.layers, ...next.slice(action.add.index)];
+        for (const insertion of action.add ?? []) {
+          next = insertLayersAtAnchor(next, insertion.anchor, insertion.layers);
         }
         document = { ...document, layers: next, selectedLayerId: action.selectedLayerId ?? null };
       }

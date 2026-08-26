@@ -150,10 +150,6 @@ export class FilterResultController {
         });
         return { layerId: liveLayer.id, status: 'committed' };
       }
-      const sourceIndex = document.layers.findIndex((candidate) => candidate.id === liveLayer.id);
-      if (sourceIndex < 0) {
-        return { status: 'missing' };
-      }
       const selectedLayerId = document.selectedLayerId;
       const layerId = o.ctx.createLayerId();
       let copy: CanvasLayerContract;
@@ -200,10 +196,11 @@ export class FilterResultController {
           type: 'raster',
         };
       }
+      const anchor = o.ctx.captureInsertionAnchor(copy.type, liveLayer.id);
       const apply = (): void => {
         const prepared = o.ctx.preparePixels(layerId, rect, pixels);
         o.ctx.dispatchPrepared(
-          { index: sourceIndex, layer: copy, type: 'addCanvasLayer' },
+          { anchor, layer: copy, type: 'addCanvasLayer' },
           () => o.ctx.getReducerDocument()?.layers.some((candidate) => candidate === copy) === true,
           () => o.ctx.getDocument()?.layers.some((candidate) => candidate === copy) === true
         );

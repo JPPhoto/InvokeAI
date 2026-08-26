@@ -2,6 +2,7 @@ import type { StructuralCommitResult } from '@workbench/canvas-engine/capabiliti
 import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
 import type { TextEditSession } from '@workbench/canvas-engine/engineStores';
 
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { DEFAULT_TEXT_OPTIONS } from '@workbench/canvas-engine/engineStores';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +16,7 @@ const createHarness = (document: CanvasDocumentContractV2) => {
   const invalidate = vi.fn();
   const controller = new TextEditingController({
     canEdit: () => true,
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p', () => document?.layers ?? []),
     commitStructural,
     createLayerId: () => 'text-new',
     getDocument: () => document,

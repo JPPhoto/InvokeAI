@@ -4,13 +4,15 @@
  * action pair for `engine.layers.commitStructural`, so the
  * inverse-construction logic lives in exactly one place.
  *
- * Index convention matches the contract and the layers panel: index 0 is the
- * top-most layer, so "up"/"forward" moves toward index 0.
- *
  * Zero React, zero import-time side effects.
  */
 
-import type { CanvasLayerContract, ReorderFlatStackCommand } from '@workbench/canvas-engine/api';
+import type {
+  CanvasDocumentCapability,
+  CanvasLayerContract,
+  FlatLayerInsertion,
+  ReorderFlatStackCommand,
+} from '@workbench/canvas-engine/api';
 
 import { getStackOrder } from '@workbench/canvas-engine/api';
 
@@ -31,11 +33,52 @@ export const duplicateLayerActions = (sourceId: string, newId: string): Structur
   inverse: { ids: [newId], type: 'removeCanvasLayers' },
 });
 
-/** Delete a layer (forward), re-adding it at its original index on undo (inverse). */
-export const deleteLayerActions = (layer: CanvasLayerContract, index: number): StructuralActions => ({
-  forward: { ids: [layer.id], type: 'removeCanvasLayers' },
-  inverse: { index, layer, type: 'addCanvasLayer' },
-});
+/** The engine surface that captures where deleted layers go back on undo. */
+export type InsertionAnchorSource = Pick<CanvasDocumentCapability, 'captureRestoreAnchor'>;
+
+/** Delete a layer (forward), re-adding it between its current same-stack neighbours on undo (inverse). */
+export const deleteLayerActions = (
+  layer: CanvasLayerContract,
+  anchors: InsertionAnchorSource
+): StructuralActions | null => {
+  const anchor = anchors.captureRestoreAnchor(layer.id);
+  return anchor
+    ? {
+        forward: { ids: [layer.id], type: 'removeCanvasLayers' },
+        inverse: { anchor, layer, type: 'addCanvasLayer' },
+      }
+    : null;
+};
+
+/**
+ * Delete every selected unlocked layer (forward), restoring each between its neighbours on undo
+ * (inverse), top first so every anchor resolves. Null when nothing is selected, a selected layer is
+ * locked, or a selected layer is missing from the engine document.
+ */
+export const deleteLayersActions = (
+  layers: readonly CanvasLayerContract[],
+  selectedIds: readonly string[],
+  selectedLayerId: string | null,
+  anchors: InsertionAnchorSource
+): StructuralActions | null => {
+  const selected = new Set(selectedIds);
+  const removed = layers.filter((layer) => selected.has(layer.id));
+  if (removed.length === 0 || removed.some((layer) => layer.isLocked)) {
+    return null;
+  }
+  const add: FlatLayerInsertion[] = [];
+  for (const layer of removed) {
+    const anchor = anchors.captureRestoreAnchor(layer.id);
+    if (!anchor) {
+      return null;
+    }
+    add.push({ anchor, layers: [layer] });
+  }
+  return {
+    forward: { ids: removed.map((layer) => layer.id), type: 'removeCanvasLayers' },
+    inverse: { add, enabledUpdates: [], selectedLayerId, type: 'applyCanvasLayerStackMutation' },
+  };
+};
 
 /** Apply the stack reorders (forward), restoring each stack's current order on undo (inverse). */
 export const reorderLayerActions = (

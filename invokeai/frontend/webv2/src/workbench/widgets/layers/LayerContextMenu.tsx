@@ -21,7 +21,7 @@ import { deleteLayerActions, duplicateLayerActions, reorderLayerActions } from '
 import { useNotify } from '@workbench/useNotify';
 import { isCanvasInteractionLocked } from '@workbench/widgets/canvas/canvasInteractionLock';
 import { useCanvasDocumentEditingLocked, useLayerThumbnailVersion } from '@workbench/widgets/canvas/engineStoreHooks';
-import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { reportStructuralCommit, useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectId, useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { publishLayerPanelSelection, readLayerPanelSelection } from '@workbench/workbenchStore';
 import {
@@ -38,7 +38,7 @@ import { useTranslation } from 'react-i18next';
 
 export type LayerContextMenuEngine = Pick<
   CanvasEngineHandle,
-  'exports' | 'interaction' | 'layers' | 'projectId' | 'tools'
+  'document' | 'exports' | 'interaction' | 'layers' | 'projectId' | 'tools'
 >;
 
 import type {
@@ -351,9 +351,13 @@ const LayerMenu = ({
   }, [commitStructural, document.selectedLayerId, engine, layer.id, notify, projectId, t]);
 
   const handleDelete = useCallback(() => {
-    const { forward, inverse } = deleteLayerActions(layer, index);
-    commitStructural(t('widgets.layers.actions.delete'), forward, inverse);
-  }, [commitStructural, index, layer, t]);
+    const actions = engine ? deleteLayerActions(layer, engine.document) : null;
+    if (!actions) {
+      reportStructuralCommit({ status: engine ? 'dispatch-rejected' : 'not-ready' }, notify.error, t);
+      return;
+    }
+    commitStructural(t('widgets.layers.actions.delete'), actions.forward, actions.inverse);
+  }, [commitStructural, engine, layer, notify, t]);
 
   const handleMerge = useCallback(() => {
     // Pixel work: engine-only, and not recorded on the undo history.
@@ -371,11 +375,18 @@ const LayerMenu = ({
       if (!copied) {
         throw new Error(t('widgets.layers.actions.copyFailed'));
       }
-      if (!engine?.layers.commitLayerCopy(label, layer.id, copied, index)) {
+      if (
+        !engine?.layers.commitLayerCopy(
+          label,
+          layer.id,
+          copied,
+          engine.document.captureInsertionAnchor(copied.type, layer.id)
+        )
+      ) {
         throw new Error(t('widgets.layers.actions.copyFailed'));
       }
     },
-    [engine, index, layer.id, t]
+    [engine, layer.id, t]
   );
 
   const convert = useCallback(

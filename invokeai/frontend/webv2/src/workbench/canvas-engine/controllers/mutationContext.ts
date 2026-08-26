@@ -1,11 +1,15 @@
 import type { CanvasEditIntent, WorkbenchActionOrigin } from '@workbench/autoRoutePolicy';
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
+
+import { captureInsertionAnchor, captureRestoreAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 
 /**
  * A claim on the current document-edit epoch. Captured before an async
@@ -31,6 +35,10 @@ export interface CanvasMutationContext {
   getReducerDocument(): CanvasDocumentContractV2 | null;
   /** Counts reducer document identities; a captured value is stale once any edit lands. */
   getEditRevision(): number;
+  /** Where a new `stack` layer lands: above `aboveId` when it belongs to the stack, else the stack top. */
+  captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): FlatLayerInsertionAnchor;
+  /** The anchor that restores `layerId` between its current same-stack neighbours; null when absent. */
+  captureRestoreAnchor(layerId: string): FlatLayerInsertionAnchor | null;
   canEdit(owner?: symbol): boolean;
   capturePermit(owner?: symbol): DocumentEditPermit | null;
   isPermitCurrent(permit: DocumentEditPermit): boolean;
@@ -51,6 +59,7 @@ export interface CanvasMutationContext {
 
 /** Engine-side wiring for {@link createCanvasMutationContext}. */
 export interface CanvasMutationContextDeps {
+  readonly projectId: string;
   readonly history: History;
   readonly getDocument: () => CanvasDocumentContractV2 | null;
   readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
@@ -97,6 +106,11 @@ export const createCanvasMutationContext = (
     }
   };
   const unsubscribeReducer = deps.subscribeReducer(syncEditRevision);
+  const getEditRevision = (): number => {
+    syncEditRevision();
+    return editRevision;
+  };
+  const currentLayers = (): readonly CanvasLayerContract[] => deps.getDocument()?.layers ?? [];
   const canEdit = (owner?: symbol): boolean => owner === deps.editOwner || !deps.editingLocked.get();
   const capturePermit = (owner?: symbol): DocumentEditPermit | null =>
     canEdit(owner) ? { epoch: documentEditEpoch, owner } : null;
@@ -173,7 +187,16 @@ export const createCanvasMutationContext = (
 
   return {
     canEdit,
+    captureInsertionAnchor: (stack, aboveId) =>
+      captureInsertionAnchor(currentLayers(), {
+        aboveId,
+        editRevision: getEditRevision(),
+        projectId: deps.projectId,
+        stack,
+      }),
     capturePermit,
+    captureRestoreAnchor: (layerId) =>
+      captureRestoreAnchor(currentLayers(), layerId, deps.projectId, getEditRevision()),
     createLayerId: () => deps.createLayerId(),
     dispatch: (action, origin) => deps.dispatch(action, origin),
     dispatchPrepared,
@@ -183,10 +206,7 @@ export const createCanvasMutationContext = (
     },
     endBurst: () => deps.endBurst(),
     getDocument: () => deps.getDocument(),
-    getEditRevision: () => {
-      syncEditRevision();
-      return editRevision;
-    },
+    getEditRevision,
     getReducerDocument: () => deps.getReducerDocument(),
     history: deps.history,
     installPrepared: (prepared, persist) => deps.installPrepared(prepared, persist),

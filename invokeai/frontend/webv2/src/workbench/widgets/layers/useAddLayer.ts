@@ -1,6 +1,9 @@
+import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
+
 import { useModelsSelector } from '@features/models';
+import { useNotify } from '@workbench/useNotify';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
-import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { reportStructuralCommit, useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { nextLayerName } from '@workbench/workbenchState';
 import { useCallback } from 'react';
@@ -24,14 +27,15 @@ import { useSelectedModelBase } from './useSelectedModelBase';
 
 /**
  * Returns a single `addLayer(id)` callback that creates a new layer of the given
- * kind at the top of the stack through the guarded structural commit (one undoable
- * history entry per add). Reused by the panel's add-layer menu AND each group
- * header's "New" button so both surfaces stay in lockstep.
+ * kind through the guarded structural commit (one undoable history entry per
+ * add). Reused by the panel's add-layer menu AND each group header's "New"
+ * button so both surfaces stay in lockstep.
  */
 export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
   const { t } = useTranslation();
   const engine = useCanvasEngine();
   const commitStructural = useStructuralCommit(engine);
+  const notify = useNotify();
   const base = useSelectedModelBase();
   const models = useModelsSelector((snapshot) => snapshot.models);
   const layerNames = useActiveProjectSelector(
@@ -47,14 +51,28 @@ export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
       if (!isAddLayerItemAvailable(id, base)) {
         return;
       }
+      const add = (label: string, layer: CanvasLayerContract): void => {
+        if (!engine) {
+          reportStructuralCommit({ status: 'not-ready' }, notify.error, t);
+          return;
+        }
+        commitStructural(
+          label,
+          {
+            anchor: engine.document.captureInsertionAnchor(
+              layer.type,
+              engine.document.getDocument()?.selectedLayerId ?? null
+            ),
+            layer,
+            type: 'addCanvasLayer',
+          },
+          { ids: [layer.id], type: 'removeCanvasLayers' }
+        );
+      };
       switch (id) {
         case 'raster': {
           const layer = createEmptyPaintLayer(nextLayerName(layerNames));
-          commitStructural(
-            t('widgets.layers.actions.addRasterLayer'),
-            { index: 0, layer, type: 'addCanvasLayer' },
-            { ids: [layer.id], type: 'removeCanvasLayers' }
-          );
+          add(t('widgets.layers.actions.addRasterLayer'), layer);
           return;
         }
         case 'control': {
@@ -64,29 +82,17 @@ export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
             base,
             resolveDefaultControlModelForBase(models, base)
           );
-          commitStructural(
-            t('widgets.layers.actions.addControlLayer'),
-            { index: 0, layer, type: 'addCanvasLayer' },
-            { ids: [layer.id], type: 'removeCanvasLayers' }
-          );
+          add(t('widgets.layers.actions.addControlLayer'), layer);
           return;
         }
         case 'inpaint_mask': {
           const layer = createInpaintMaskLayer(nextInpaintMaskName(layerNames));
-          commitStructural(
-            t('widgets.layers.actions.addInpaintMask'),
-            { index: 0, layer, type: 'addCanvasLayer' },
-            { ids: [layer.id], type: 'removeCanvasLayers' }
-          );
+          add(t('widgets.layers.actions.addInpaintMask'), layer);
           return;
         }
         case 'regional_guidance': {
           const layer = createRegionalGuidanceLayer(nextRegionalGuidanceName(layerNames), regionalGuidanceCount);
-          commitStructural(
-            t('widgets.layers.actions.addRegionalGuidance'),
-            { index: 0, layer, type: 'addCanvasLayer' },
-            { ids: [layer.id], type: 'removeCanvasLayers' }
-          );
+          add(t('widgets.layers.actions.addRegionalGuidance'), layer);
           return;
         }
         case 'regional_reference_image': {
@@ -95,15 +101,11 @@ export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
             regionalGuidanceCount,
             base
           );
-          commitStructural(
-            t('widgets.layers.actions.addRegionalReferenceImage'),
-            { index: 0, layer, type: 'addCanvasLayer' },
-            { ids: [layer.id], type: 'removeCanvasLayers' }
-          );
+          add(t('widgets.layers.actions.addRegionalReferenceImage'), layer);
           return;
         }
       }
     },
-    [base, commitStructural, layerNames, models, regionalGuidanceCount, t]
+    [base, commitStructural, engine, layerNames, models, notify, regionalGuidanceCount, t]
   );
 };

@@ -1,5 +1,7 @@
 import type { StructuralCommitResult } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { TextEditSession, TextSource, TextToolOptions } from '@workbench/canvas-engine/engineStores';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { Vec2 } from '@workbench/canvas-engine/types';
@@ -16,6 +18,7 @@ export interface TextEditingControllerOptions {
   readonly canEdit: () => boolean;
   readonly isGestureActive: () => boolean;
   readonly createLayerId: () => string;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
   readonly commitStructural: (
     label: string,
     forward: CanvasProjectMutation,
@@ -145,7 +148,11 @@ export class TextEditingController {
       };
       const added = this.deps.commitStructural(
         'Add text',
-        { index: 0, layer, type: 'addCanvasLayer' },
+        {
+          anchor: this.deps.captureInsertionAnchor('raster', this.deps.getDocument()?.selectedLayerId ?? null),
+          layer,
+          type: 'addCanvasLayer',
+        },
         { ids: [layerId], type: 'removeCanvasLayers' }
       );
       this.settle(added);

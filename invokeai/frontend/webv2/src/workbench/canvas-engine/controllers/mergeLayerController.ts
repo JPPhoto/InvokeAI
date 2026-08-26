@@ -5,7 +5,9 @@ import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { insertLayersAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import { isMergeableRasterLayer } from '@workbench/canvas-engine/document/layerEligibility';
+import { haveSameStackOrders } from '@workbench/canvas-engine/document/layerStacks';
 import { mergeDownMatrix } from '@workbench/canvas-engine/document/mergeDown';
 import { canMergeSelectedRasters, getMergeVisibleRasterLayers } from '@workbench/canvas-engine/document/mergeVisible';
 import { isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
@@ -226,13 +228,14 @@ export class MergeLayerController {
         type: 'raster',
       };
       const selectedLayerId = liveDocument.selectedLayerId;
+      const anchor = this.deps.ctx.captureInsertionAnchor('raster', null);
       const hasResult = (doc: CanvasDocumentContractV2 | null): boolean =>
-        doc?.selectedLayerId === resultId && doc.layers[0] === resultLayer;
+        doc?.selectedLayerId === resultId && doc.layers.includes(resultLayer);
       const apply = (): void => {
         const prepared = this.deps.ctx.preparePixels(resultId, rect, pixels);
         this.deps.ctx.dispatchPrepared(
           {
-            add: { index: 0, layers: [resultLayer] },
+            add: [{ anchor, layers: [resultLayer] }],
             enabledUpdates: [],
             selectedLayerId: resultId,
             type: 'applyCanvasLayerStackMutation',
@@ -385,27 +388,26 @@ export class MergeLayerController {
           transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
           type: 'raster',
         };
-        const originalIds = document.layers.map((layer) => layer.id);
         const contributorIds = contributors.map((layer) => layer.id);
-        const topIndex = document.layers.indexOf(contributors[0]!);
-        const mergedIds = originalIds.filter((id) => !selectedIds.has(id));
-        mergedIds.splice(topIndex, 0, resultId);
+        const anchor = this.deps.ctx.captureInsertionAnchor('raster', contributors[0]!.id);
+        const restoreInsertions = contributors.map((layer) => ({
+          anchor: this.deps.ctx.captureRestoreAnchor(layer.id)!,
+          layers: [layer],
+        }));
+        const mergedLayers = insertLayersAtAnchor(document.layers, anchor, [resultLayer]).filter(
+          (layer) => !selectedIds.has(layer.id)
+        );
         const selectedLayerId = document.selectedLayerId;
         const hasMerged = (candidate: CanvasDocumentContractV2 | null): boolean =>
-          candidate?.selectedLayerId === resultId &&
-          candidate.layers.length === mergedIds.length &&
-          candidate.layers.every((layer, index) => layer.id === mergedIds[index]);
+          candidate?.selectedLayerId === resultId && haveSameStackOrders(candidate.layers, mergedLayers);
         const hasOriginals = (candidate: CanvasDocumentContractV2 | null): boolean =>
-          candidate?.selectedLayerId === selectedLayerId &&
-          candidate.layers.length === originalIds.length &&
-          candidate.layers.every((layer, index) => layer.id === originalIds[index]);
+          candidate?.selectedLayerId === selectedLayerId && haveSameStackOrders(candidate.layers, document.layers);
         const applyPrepared = (): void => {
           const prepared = this.deps.ctx.preparePixels(resultId, rect, pixels);
           this.deps.ctx.dispatchPrepared(
             {
-              add: { index: topIndex, layers: [resultLayer] },
+              add: [{ anchor, layers: [resultLayer] }],
               enabledUpdates: [],
-              orderedIds: mergedIds,
               removeIds: contributorIds,
               selectedLayerId: resultId,
               type: 'applyCanvasLayerStackMutation',
@@ -439,9 +441,8 @@ export class MergeLayerController {
             }));
             this.deps.ctx.dispatchPrepared(
               {
-                add: { index: topIndex, layers: contributors },
+                add: restoreInsertions,
                 enabledUpdates: [],
-                orderedIds: originalIds,
                 removeIds: [resultId],
                 selectedLayerId,
                 type: 'applyCanvasLayerStackMutation',

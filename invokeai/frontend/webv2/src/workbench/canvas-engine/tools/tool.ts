@@ -15,6 +15,8 @@
 
 import type { StructuralCommitResult } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { EngineStores } from '@workbench/canvas-engine/engineStores';
 import type { CreatePath2D } from '@workbench/canvas-engine/freehand';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
@@ -53,7 +55,7 @@ export interface StrokeCommittedEvent {
    * now-empty auto-created layer (and a redo re-adds the layer + stroke).
    * Absent for strokes painted into a pre-existing layer.
    */
-  createdLayer?: { layer: CanvasLayerContract; index: number };
+  createdLayer?: { layer: CanvasLayerContract; anchor: FlatLayerInsertionAnchor };
 }
 
 export interface PixelEditPatch {
@@ -95,6 +97,8 @@ export interface ToolContext {
   invalidate(payload: InvalidatePayload): void;
   /** Reducer bridge. Painting tools use it for the single gesture-start `addCanvasLayer`. */
   dispatch(action: CanvasProjectMutation): void;
+  /** Where a layer the tool creates lands: above `aboveId` when it belongs to `stack`, else the stack top. */
+  captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): FlatLayerInsertionAnchor;
   /**
    * Records a structural document edit on the engine-owned canvas history:
    * dispatches `forward` now, and an undo dispatches `inverse` / a redo

@@ -38,6 +38,7 @@
  */
 
 import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { PlacedSurface, PointerInput, Rect, Vec2 } from '@workbench/canvas-engine/types';
@@ -74,7 +75,7 @@ export interface StrokeSessionConfig {
   composite: 'source-over' | 'destination-out' | 'source-atop';
   tool: 'brush' | 'eraser';
   /** Set only when this gesture auto-created its paint layer (for the composed history entry). */
-  createdLayer?: { layer: CanvasLayerContract; index: number } | null;
+  createdLayer?: { layer: CanvasLayerContract; anchor: FlatLayerInsertionAnchor } | null;
   /**
    * The bounded selection mask to clip the stroke to (resolved once by the tool
    * on pointer-down when a selection exists), as a placed surface in document

@@ -4,6 +4,7 @@ import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { PointerInput } from '@workbench/canvas-engine/types';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { createLayerCacheStore, type LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { describe, expect, it, vi } from 'vitest';
@@ -97,6 +98,7 @@ const createHarness = (doc: CanvasDocumentContractV2 | null): Harness => {
   const ctx: ToolContext = {
     backend,
     commitStructural: vi.fn(),
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     createLayerId: () => 'unused',
     createPath2D: (d) => ({ d }) as unknown as Path2D,
     dispatch: (action) => dispatched.push(action),

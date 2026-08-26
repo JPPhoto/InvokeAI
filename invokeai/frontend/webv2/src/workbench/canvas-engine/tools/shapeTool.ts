@@ -150,7 +150,11 @@ export const createShapeTool = (): Tool => {
         type: 'raster',
       };
 
-      const forward: CanvasProjectMutation = { index: 0, layer, type: 'addCanvasLayer' };
+      const forward: CanvasProjectMutation = {
+        anchor: ctx.captureInsertionAnchor('raster', doc.selectedLayerId),
+        layer,
+        type: 'addCanvasLayer',
+      };
       const inverse: CanvasProjectMutation = { ids: [layerId], type: 'removeCanvasLayers' };
       ctx.commitStructural('Add shape', forward, inverse);
       clearPreview(ctx);

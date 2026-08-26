@@ -4,6 +4,8 @@ import type {
   LayerExportGuard,
 } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 
@@ -24,6 +26,7 @@ export type {
 
 export interface MaskResultControllerOptions<Owner = symbol> {
   readonly canEdit: (owner?: Owner) => boolean;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
   readonly createLayerId: () => string;
   readonly dispatchPrepared: (
     action: CanvasProjectMutation,
@@ -64,7 +67,6 @@ export class MaskResultController<Owner = symbol> {
     if (liveLayer.type !== 'raster' && liveLayer.type !== 'control') {
       return Promise.resolve({ status: 'unsupported' });
     }
-    const sourceIndex = document.layers.findIndex((candidate) => candidate.id === liveLayer.id);
     if (o.isGestureActive()) {
       return Promise.resolve({ status: 'busy' });
     }
@@ -73,9 +75,6 @@ export class MaskResultController<Owner = symbol> {
     }
     if (options.signal?.aborted) {
       return Promise.resolve({ status: 'aborted' });
-    }
-    if (sourceIndex < 0) {
-      return Promise.resolve({ status: 'missing' });
     }
     const names = document.layers.map((layer) => layer.name);
     const layerId = o.createLayerId();
@@ -101,9 +100,10 @@ export class MaskResultController<Owner = symbol> {
             rect: options.rect,
           });
     const selectedLayerId = document.selectedLayerId;
+    const anchor = o.captureInsertionAnchor(layer.type, liveLayer.id);
     const apply = (): void =>
       o.dispatchPrepared(
-        { index: sourceIndex, layer, type: 'addCanvasLayer' },
+        { anchor, layer, type: 'addCanvasLayer' },
         () => o.getReducerDocument()?.layers.some((candidate) => candidate === layer) === true,
         () => o.getDocument()?.layers.some((candidate) => candidate === layer) === true
       );

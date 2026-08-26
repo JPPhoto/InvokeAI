@@ -9,6 +9,8 @@ import type { StrokeCommittedEvent } from '@workbench/canvas-engine/tools/tool';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 
 import type { NewRasterLayerResult } from './controllers/newRasterLayerController';
+import type { FlatLayerInsertionAnchor } from './document/insertionAnchors';
+import type { LayerStackKind } from './document/layerStacks';
 import type { CanvasEditGate } from './editGate';
 import type {
   BboxToolOptions,
@@ -146,6 +148,10 @@ export interface CanvasDocumentCapability {
    * captured value can be refused as stale once anything else lands.
    */
   getEditRevision(): number;
+  /** Where a new `stack` layer lands: above `aboveId` when it belongs to the stack, else the stack top. */
+  captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): FlatLayerInsertionAnchor;
+  /** The anchor that restores `layerId` between its current same-stack neighbours; null when absent. */
+  captureRestoreAnchor(layerId: string): FlatLayerInsertionAnchor | null;
 }
 
 /** Immutable reducer canvas state captured at one engine document generation. */
@@ -415,7 +421,12 @@ export interface CanvasEngineLayerCapability extends CanvasLayerCapability {
   cancelTransform(): void;
   clearMask(layerId: string): boolean;
   commitLayerConversion(label: string, expectedLiveLayer: CanvasLayerContract, after: CanvasLayerContract): boolean;
-  commitLayerCopy(label: string, sourceLayerId: string, layer: CanvasLayerContract, index: number): boolean;
+  commitLayerCopy(
+    label: string,
+    sourceLayerId: string,
+    layer: CanvasLayerContract,
+    anchor: FlatLayerInsertionAnchor
+  ): boolean;
   commitMaskImageResult(options: CommitMaskImageResultOptions): Promise<CommitMaskImageResult>;
   commitOpenTextSession(): boolean;
   commitRasterFilterResult(options: CommitRasterFilterOptions): Promise<CommitRasterFilterResult>;
@@ -530,6 +541,7 @@ export { isLayerPixelEditEligible } from './editing/controlPixelEdit';
 export { type HideableLayer, isHideableLayer, isLayerHidden } from './document/sources';
 export {
   getStackOrder,
+  haveSameStackOrders,
   LAYER_STACK_ORDER,
   LAYER_STACKS_TOP_FIRST,
   layerStackOf,
@@ -549,6 +561,14 @@ export {
   isPixelBackedLayer,
 } from './document/layerEligibility';
 export { repairSelectedLayerId } from './document/selectionRepair';
+export {
+  captureInsertionAnchor,
+  captureRestoreAnchor,
+  insertLayersAtAnchor,
+  resolveInsertionIndex,
+  type FlatLayerInsertion,
+  type FlatLayerInsertionAnchor,
+} from './document/insertionAnchors';
 export { isExportableRasterLayer } from './layerExportGuards';
 export {
   getLayerThumbnailFallbackRenderState,

@@ -15,6 +15,7 @@
  */
 
 import type { CanvasLayerContract, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
+import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { PointerInput } from '@workbench/canvas-engine/types';
 
 import { isLayerPaintable, isLayerTransparencyLocked } from '@workbench/canvas-engine/document/layerEligibility';
@@ -51,8 +52,8 @@ interface PaintTarget {
   layerId: string;
   commit(event: StrokeCommittedEvent): void;
   cancel(): void;
-  /** When the gesture auto-created its layer, the created contract + insert index (for history). */
-  createdLayer?: { layer: CanvasLayerContract; index: number };
+  /** When the gesture auto-created its layer, the created contract + its anchor (for history). */
+  createdLayer?: { layer: CanvasLayerContract; anchor: FlatLayerInsertionAnchor };
   /**
    * Overrides the brush colour for this gesture (mask targets paint an opaque
    * stencil — the stored RGB is irrelevant, the compositor colorizes by alpha).
@@ -178,8 +179,8 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
     transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
     type: 'raster',
   };
-  // Auto-create inserts at the top (index 0); the reducer selects it.
-  ctx.dispatch({ layer, type: 'addCanvasLayer' });
+  const anchor = ctx.captureInsertionAnchor('raster', doc.selectedLayerId);
+  ctx.dispatch({ anchor, layer, type: 'addCanvasLayer' });
 
   // A brand-new empty paint layer: create a zero-rect cache marked fresh so the
   // async rasterize pass doesn't clobber the stroke mid-gesture. The first stroke
@@ -200,7 +201,7 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
       ctx.dispatch({ id: previousSelectedLayerId, type: 'setCanvasSelectedLayer' });
     },
     commit: (event) => ctx.emitStrokeCommitted(event),
-    createdLayer: { index: 0, layer },
+    createdLayer: { anchor, layer },
     layerId,
   };
 };

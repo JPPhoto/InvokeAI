@@ -7,6 +7,7 @@ import type {
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 
 import { createBitmapStore } from '@workbench/canvas-engine/document/bitmapStore';
+import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -79,14 +80,22 @@ const setupProjects = (originLayer: CanvasLayerContract, otherLayer: CanvasLayer
     document: createEmptyCanvasDocumentV2(),
     type: 'replaceCanvasDocument',
   });
-  store.commands.canvas.apply(originProjectId, { layer: originLayer, type: 'addCanvasLayer' });
+  store.commands.canvas.apply(originProjectId, {
+    anchor: stackTopAnchor(originProjectId, originLayer.type),
+    layer: originLayer,
+    type: 'addCanvasLayer',
+  });
   store.commands.projects.create();
   const otherProjectId = store.getState().activeProjectId;
   store.commands.canvas.apply(otherProjectId, {
     document: createEmptyCanvasDocumentV2(),
     type: 'replaceCanvasDocument',
   });
-  store.commands.canvas.apply(otherProjectId, { layer: otherLayer, type: 'addCanvasLayer' });
+  store.commands.canvas.apply(otherProjectId, {
+    anchor: stackTopAnchor(otherProjectId, otherLayer.type),
+    layer: otherLayer,
+    type: 'addCanvasLayer',
+  });
   store.commands.projects.switchTo(originProjectId);
   return { originProjectId, otherProjectId, store };
 };

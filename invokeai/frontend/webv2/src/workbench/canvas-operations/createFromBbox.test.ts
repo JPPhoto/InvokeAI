@@ -6,6 +6,7 @@ import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
 import { accountLifecycle } from '@platform/state/accountLifecycle';
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEmptyPaintLayer } from '@workbench/widgets/layers/layerOps';
 import { createInitialWorkbenchState } from '@workbench/workbenchState';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -105,7 +106,7 @@ const createHarness = (
     return { status: 'committed' as const };
   });
   const engine = {
-    document: { getDocument },
+    document: { captureInsertionAnchor: createTestInsertionAnchorCapture(project.id), getDocument },
     exports: { exportRasterComposite },
     layers: {
       canCommitStructural: vi.fn(() => options.canCommitStructural ?? true),
@@ -145,7 +146,7 @@ const getCommittedLayers = (harness: ReturnType<typeof createHarness>): readonly
   if (forward?.type !== 'applyCanvasLayerStackMutation' || !forward.add) {
     throw new Error('Expected add stack mutation');
   }
-  return forward.add.layers;
+  return forward.add.flatMap((insertion) => insertion.layers);
 };
 
 describe('createFromBbox', () => {

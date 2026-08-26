@@ -2,6 +2,7 @@ import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contract
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { Project } from '@workbench/projectContracts';
 
+import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { applyCanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import { createEmptyPaintLayer } from '@workbench/widgets/layers/layerOps';
@@ -23,7 +24,11 @@ interface HarnessOptions {
 const createHarness = (options: HarnessOptions & { now?: () => number } = {}) => {
   const base = createInitialWorkbenchState().projects[0]!;
   const layer = createEmptyPaintLayer('Layer', 'layer');
-  let project: Project = applyCanvasProjectMutation(base, { index: 0, layer, type: 'addCanvasLayer' });
+  let project: Project = applyCanvasProjectMutation(base, {
+    anchor: stackTopAnchor(base.id),
+    layer,
+    type: 'addCanvasLayer',
+  });
   let mirrorDocument = project.canvas.document;
   const listeners = new Set<() => void>();
   const dispatched: CanvasProjectMutation[] = [];
@@ -48,6 +53,7 @@ const createHarness = (options: HarnessOptions & { now?: () => number } = {}) =>
   const ctx = createCanvasMutationContext({
     commitEdit: vi.fn(),
     createLayerId: () => 'new',
+    projectId: base.id,
     dispatch,
     editOwner: Symbol('owner'),
     editingLocked: { get: () => options.locked ?? false, subscribe: () => () => undefined },
@@ -70,6 +76,7 @@ const createHarness = (options: HarnessOptions & { now?: () => number } = {}) =>
     controller,
     ctx,
     dispatched,
+    projectId: base.id,
     document: () => project.canvas.document,
     history: ctx.history,
     layer,
@@ -201,13 +208,34 @@ describe('StructuralLayerController', () => {
     expect(report).toHaveBeenCalledWith('Structural edit could not be mirrored', 'Rename', expect.any(Error));
   });
 
+  it('refuses an insertion anchored at an older edit revision as stale', () => {
+    const { controller, ctx, document, projectId } = createHarness();
+    const anchor = ctx.captureInsertionAnchor('raster', document().selectedLayerId);
+    ctx.dispatch(rename('layer', 'Renamed'), 'system');
+    const added = createEmptyPaintLayer('Added', 'added');
+
+    expect(
+      controller.commit(
+        'Add',
+        { anchor, layer: added, type: 'addCanvasLayer' },
+        { ids: ['added'], type: 'removeCanvasLayers' }
+      )
+    ).toEqual({
+      actualRevision: anchor.capturedEditRevision + 1,
+      expectedRevision: anchor.capturedEditRevision,
+      status: 'stale',
+    });
+    expect(document().layers.some((layer) => layer.id === 'added')).toBe(false);
+    expect(anchor.projectId).toBe(projectId);
+  });
+
   it('moves a replay the reducer refuses as a reported no-op instead of wedging history', () => {
-    const { controller, ctx, document, history, report } = createHarness();
+    const { controller, ctx, document, history, projectId, report } = createHarness();
     const added = createEmptyPaintLayer('Added', 'added');
 
     controller.commit(
       'Add',
-      { index: 0, layer: added, type: 'addCanvasLayer' },
+      { anchor: stackTopAnchor(projectId), layer: added, type: 'addCanvasLayer' },
       { ids: ['added'], type: 'removeCanvasLayers' }
     );
     ctx.dispatch({ ids: ['added'], type: 'removeCanvasLayers' }, 'system');

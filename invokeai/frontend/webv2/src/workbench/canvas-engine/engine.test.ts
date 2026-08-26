@@ -30,6 +30,8 @@ import {
 
 type EngineTestAction = WorkbenchAction | CanvasProjectMutation;
 
+import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
+import { haveSameStackOrders } from '@workbench/canvas-engine/document/layerStacks';
 import { DEFAULT_CHECKER_COLORS } from '@workbench/canvas-engine/render/compositor';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { canvasApplicationPort } from '@workbench/canvas-operations/applicationPort';
@@ -2245,10 +2247,10 @@ describe('createCanvasEngine', () => {
       .map((call) => call[0] as EngineTestAction)
       .find((action) => action.type === 'applyCanvasLayerStackMutation');
     expect(mutation).toBeDefined();
-    const added = mutation?.type === 'applyCanvasLayerStackMutation' ? mutation.add : undefined;
+    const added = mutation?.type === 'applyCanvasLayerStackMutation' ? mutation.add?.[0] : undefined;
     const addedLayer = added?.layers[0];
     if (added && addedLayer?.type === 'raster') {
-      expect(added.index).toBe(1);
+      expect(added.anchor).toMatchObject({ beforeId: 'a', projectId, stack: 'raster' });
       expect(addedLayer.id).toBe(newId);
       expect(addedLayer.name).toBe('a copy');
       expect(addedLayer.source).toEqual({ bitmap: null, offset: { x: 0, y: 0 }, type: 'paint' });
@@ -4202,7 +4204,7 @@ describe('commitStructural', () => {
     expect(
       engine.layers.commitStructural(
         'Add',
-        { index: 0, layer: added, type: 'addCanvasLayer' },
+        { anchor: stackTopAnchor(projectId), layer: added, type: 'addCanvasLayer' },
         { ids: ['added'], type: 'removeCanvasLayers' }
       )
     ).toEqual({ status: 'committed' });
@@ -6370,9 +6372,14 @@ describe('structural raster publication failure atomicity', () => {
       harness.bitmapStore.markLayerDirty.mockClear();
       armStructuralFault(harness.faults, failure, { allocation: 1, draw: 1 });
 
-      expect(() => harness.engine.layers.commitLayerCopy('Copy layer', source.id, copy, 0)).toThrow(
-        structuralFaultMessage(failure)
-      );
+      expect(() =>
+        harness.engine.layers.commitLayerCopy(
+          'Copy layer',
+          source.id,
+          copy,
+          harness.engine.document.captureInsertionAnchor(copy.type, source.id)
+        )
+      ).toThrow(structuralFaultMessage(failure));
 
       expectInitialFailureExact(harness, expectedDocument);
       expect(harness.engine.document.getDocument()!.layers.some((layer) => layer.id === copy.id)).toBe(false);
@@ -6562,7 +6569,14 @@ describe('structural raster publication failure atomicity', () => {
     const harness = createFaultHarness(document);
     const originalCache = await snapshotLayerCache(harness.engine, source.id);
     const originalDocument = harness.engine.document.getDocument()!;
-    expect(harness.engine.layers.commitLayerCopy('Copy layer', source.id, copy, 0)).toBe(true);
+    expect(
+      harness.engine.layers.commitLayerCopy(
+        'Copy layer',
+        source.id,
+        copy,
+        harness.engine.document.captureInsertionAnchor(copy.type, source.id)
+      )
+    ).toBe(true);
     const committedDocument = structuredClone(harness.engine.document.getDocument()!);
     harness.engine.history.undo();
     const restoredDocument = harness.engine.document.getDocument()!;
@@ -6737,7 +6751,11 @@ describe('structural raster publication failure atomicity', () => {
     expect(harness.engine.stores.canUndo.get()).toBe(true);
     expect(harness.engine.stores.canRedo.get()).toBe(false);
 
-    harness.store.dispatch({ layer: sentinel, type: 'addCanvasLayer' });
+    harness.store.dispatch({
+      anchor: stackTopAnchor(harness.engine.projectId),
+      layer: sentinel,
+      type: 'addCanvasLayer',
+    });
     expect(() => harness.engine.history.undo()).not.toThrow();
     expect(harness.engine.document.getDocument()!.layers.some((layer) => layer.id === copiedId)).toBe(false);
     expect(harness.engine.document.getDocument()!.selectedLayerId).toBe(sentinel.id);
@@ -6759,7 +6777,14 @@ describe('structural raster publication failure atomicity', () => {
     );
     (harness.store.dispatch as Mock).mockClear();
 
-    expect(harness.engine.layers.commitLayerCopy('Copy layer', liveSource.id, copy, 0)).toBe(true);
+    expect(
+      harness.engine.layers.commitLayerCopy(
+        'Copy layer',
+        liveSource.id,
+        copy,
+        harness.engine.document.captureInsertionAnchor(copy.type, liveSource.id)
+      )
+    ).toBe(true);
 
     expect(harness.store.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'applyCanvasLayerStackMutation' })
@@ -7156,8 +7181,12 @@ describe('mergeVisibleRasterLayers', () => {
     expect(getPanelSelectedIds()).toEqual([merged.id]);
 
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers).toEqual(before.layers);
-    expect(engine.document.getDocument()!.selectedLayerId).toBe(before.selectedLayerId);
+    const restored = engine.document.getDocument()!;
+    expect(haveSameStackOrders(restored.layers, before.layers)).toBe(true);
+    expect(restored.layers.map((layer) => before.layers.find((candidate) => candidate.id === layer.id))).toEqual(
+      restored.layers
+    );
+    expect(restored.selectedLayerId).toBe(before.selectedLayerId);
     expect(engine.exports.hasExportableLayerContent('upper')).toBe(true);
     expect(engine.exports.hasExportableLayerContent('below')).toBe(true);
     expect(getPanelSelectedIds()).toEqual(['upper', 'below']);
@@ -10416,7 +10445,7 @@ describe('commitGeneratedImageResult', () => {
     engine.lifecycle.dispose();
   });
 
-  it('copies a generated result to an unlocked raster immediately above its source and restores selection on undo', async () => {
+  it('copies a generated result to a raster at the top of the raster stack and restores selection on undo', async () => {
     const above = workflowRaster('above');
     const source = workflowControl('source');
     const selected = workflowRaster('selected');
@@ -10445,13 +10474,13 @@ describe('commitGeneratedImageResult', () => {
     }
 
     expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual([
-      above.id,
       result.layerId,
+      above.id,
       source.id,
       selected.id,
     ]);
     expect(engine.document.getDocument()!.layers[2]).toEqual(source);
-    expect(engine.document.getDocument()!.layers[1]).toMatchObject({
+    expect(engine.document.getDocument()!.layers[0]).toMatchObject({
       id: result.layerId,
       isEnabled: true,
       isLocked: false,
@@ -10466,7 +10495,7 @@ describe('commitGeneratedImageResult', () => {
     expect(engine.document.getDocument()).toEqual(document);
     expect(engine.stores.canUndo.get()).toBe(false);
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers[1]?.id).toBe(result.layerId);
+    expect(engine.document.getDocument()!.layers[0]?.id).toBe(result.layerId);
     expect(engine.document.getDocument()!.selectedLayerId).toBe(result.layerId);
     expect(engine.stores.canRedo.get()).toBe(false);
     engine.lifecycle.dispose();
@@ -11559,7 +11588,7 @@ describe('commitMaskImageResult', () => {
       target: 'regional_guidance',
     },
   ] as const)(
-    'adds a complete $target directly above the source with one exact history entry',
+    'adds a complete $target at the top of its stack with one exact history entry',
     async ({ expected, target }) => {
       const document = docFor(target);
       const { projectId, store } = createReducerBackedStore(document);
@@ -11591,8 +11620,8 @@ describe('commitMaskImageResult', () => {
       const created = engine.document.getDocument()!.layers.find((layer) => layer.id === result.layerId)!;
       expect(created).toEqual({ ...expected, id: result.layerId });
       expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual([
-        document.layers[0]!.id,
         result.layerId,
+        document.layers[0]!.id,
         'source',
         'below',
       ]);
@@ -13627,7 +13656,14 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
     };
     const copy = { ...control, id: 'control-copy', name: 'Control copy' };
 
-    expect(engine.layers.commitLayerCopy('Copy layer', raster.id, copy, 0)).toBe(true);
+    expect(
+      engine.layers.commitLayerCopy(
+        'Copy layer',
+        raster.id,
+        copy,
+        engine.document.captureInsertionAnchor(copy.type, raster.id)
+      )
+    ).toBe(true);
     expect((await engine.exports.exportLayerPixels(copy.id)).status).toBe('ok');
     engine.history.undo();
     expect(engine.document.getDocument()!.layers.some((layer) => layer.id === copy.id)).toBe(false);

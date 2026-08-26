@@ -4,11 +4,10 @@ import type {
   LayerStackMoveKind,
   StructuralCommitResult,
 } from '@workbench/canvas-engine/api';
-import type { StructuralActions } from '@workbench/canvasLayerOps';
 import type { CanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 
 import { isHideableLayer, isLayerHidden, moveLayersWithinStacks } from '@workbench/canvas-engine/api';
-import { deleteLayerActions, reorderLayerActions } from '@workbench/canvasLayerOps';
+import { deleteLayersActions, reorderLayerActions } from '@workbench/canvasLayerOps';
 import { canMergeLayerDown } from '@workbench/widgets/layers/layerOps';
 import { publishLayerPanelSelection } from '@workbench/workbenchStore';
 
@@ -30,31 +29,6 @@ const REORDER_KINDS: Record<string, LayerStackMoveKind> = {
   'canvas.layerForward': 'forward',
   'canvas.layerToBack': 'back',
   'canvas.layerToFront': 'front',
-};
-
-const deleteSelectedLayerActions = (
-  layers: CanvasDocumentContractV2['layers'],
-  selectedIds: readonly string[],
-  selectedLayerId: string
-): StructuralActions | null => {
-  const selected = new Set(selectedIds);
-  const removed = layers.filter((layer) => selected.has(layer.id));
-  if (removed.length === 0 || removed.some((layer) => layer.isLocked)) {
-    return null;
-  }
-  if (removed.length === 1) {
-    return deleteLayerActions(removed[0]!, layers.indexOf(removed[0]!));
-  }
-  return {
-    forward: { ids: removed.map((layer) => layer.id), type: 'removeCanvasLayers' },
-    inverse: {
-      add: { index: 0, layers: removed },
-      enabledUpdates: [],
-      orderedIds: layers.map((layer) => layer.id),
-      selectedLayerId,
-      type: 'applyCanvasLayerStackMutation',
-    },
-  };
 };
 
 /**
@@ -149,12 +123,12 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     if (engine?.interaction.get('hasSelection')) {
       engine.selection.eraseSelection();
     } else if (engine && selectedLayer && selectedIndex >= 0 && !selectedLayer.isLocked) {
-      const actions = deleteSelectedLayerActions(layers, ctx.selectedLayerIds, selectedLayer.id);
-      if (actions) {
-        ctx.reportStructuralCommit(
-          engine.layers.commitStructural(t('widgets.canvas.commands.deleteLayer'), actions.forward, actions.inverse)
-        );
-      }
+      const actions = deleteLayersActions(layers, ctx.selectedLayerIds, selectedLayer.id, engine.document);
+      ctx.reportStructuralCommit(
+        actions
+          ? engine.layers.commitStructural(t('widgets.canvas.commands.deleteLayer'), actions.forward, actions.inverse)
+          : { status: 'dispatch-rejected' }
+      );
     }
   } else if (commandId === 'canvas.copySelection' || commandId === 'canvas.cutSelection') {
     ctx.copySelection(commandId === 'canvas.cutSelection');

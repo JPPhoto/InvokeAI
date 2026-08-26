@@ -155,7 +155,7 @@ export const isHighConfidenceCanvasEdit = (mutation: CanvasProjectMutation): boo
 
   if (mutation.type === 'applyCanvasLayerStackMutation') {
     return (
-      (mutation.add?.layers.length ?? 0) > 0 ||
+      (mutation.add?.some((insertion) => insertion.layers.length > 0) ?? false) ||
       (mutation.removeIds?.length ?? 0) > 0 ||
       mutation.enabledUpdates.length > 0
     );

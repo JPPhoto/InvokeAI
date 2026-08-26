@@ -5,6 +5,7 @@ import type { LayerTransform } from '@workbench/canvas-engine/transform/transfor
 import type { PointerInput } from '@workbench/canvas-engine/types';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
@@ -139,6 +140,7 @@ const createHarness = (doc: CanvasDocumentContractV2, options: HarnessOptions = 
       commits.push({ forward, inverse, label });
       return { status: 'committed' as const };
     },
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     createLayerId: () => 'x',
     createPath2D: (d) => ({ d }) as unknown as Path2D,
     dispatch: (action) => dispatched.push(action),

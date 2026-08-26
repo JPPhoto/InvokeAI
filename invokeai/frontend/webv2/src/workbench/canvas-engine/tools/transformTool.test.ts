@@ -4,6 +4,7 @@ import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { PointerInput, Vec2 } from '@workbench/canvas-engine/types';
 
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { applyToPoint } from '@workbench/canvas-engine/math/mat2d';
 import {
@@ -158,6 +159,7 @@ const createHarness = (doc: CanvasDocumentContractV2, zoom = 1, float?: Floating
       floatRef.current = null;
     },
     commitStructural: vi.fn(),
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     createLayerId: () => 'x',
     createPath2D: (d) => ({ d }) as unknown as Path2D,
     dispatch: vi.fn(),

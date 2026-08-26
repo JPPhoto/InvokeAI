@@ -1,6 +1,8 @@
 import type { CanvasStagingCandidateContract, CanvasStateContractV2 } from '@workbench/canvas-engine/contracts';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { insertLayersAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -56,7 +58,10 @@ describe('StagedResultController', () => {
               layers: mutation.removeIds
                 ? reducerCanvas.document.layers.filter((layer) => !mutation.removeIds?.includes(layer.id))
                 : mutation.add
-                  ? [...mutation.add.layers, ...reducerCanvas.document.layers]
+                  ? mutation.add.reduce(
+                      (layers, insertion) => insertLayersAtAnchor(layers, insertion.anchor, insertion.layers),
+                      reducerCanvas.document.layers
+                    )
                   : reducerCanvas.document.layers,
               selectedLayerId:
                 mutation.selectedLayerId === undefined
@@ -86,6 +91,7 @@ describe('StagedResultController', () => {
       }
     );
     const controller = new StagedResultController({
+      captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
       capturePermit: () => ({ epoch: 1 }),
       createEventId: () => 'event-1',
       createLayerId: () => 'layer-1',
@@ -124,6 +130,7 @@ describe('StagedResultController', () => {
     const canvas = makeCanvas();
     const history = createHistory();
     const controller = new StagedResultController({
+      captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
       capturePermit: () => ({ epoch: 1 }),
       createEventId: () => 'event-1',
       createLayerId: () => 'layer-1',
@@ -154,6 +161,7 @@ describe('StagedResultController', () => {
     const dispatchPrepared = vi.fn();
     const history = createHistory();
     const controller = new StagedResultController({
+      captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
       capturePermit: () => permit,
       createEventId: () => 'event-1',
       createLayerId: () => 'layer-1',
@@ -176,6 +184,7 @@ describe('StagedResultController', () => {
     const canvas = makeCanvas();
     const history = createHistory();
     const controller = new StagedResultController({
+      captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
       capturePermit: () => ({ epoch: 1 }),
       createEventId: () => 'event-1',
       createLayerId: () => 'layer-1',
@@ -204,6 +213,7 @@ describe('StagedResultController', () => {
     history.undo();
     expect(history.canRedo()).toBe(true);
     const controller = new StagedResultController({
+      captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
       capturePermit: () => ({ epoch: 1 }),
       createEventId: () => 'event-1',
       createLayerId: () => 'layer-1',
@@ -254,6 +264,7 @@ describe('StagedResultController', () => {
     const dispatchPrepared = vi.fn();
     const history = createHistory();
     const controller = new StagedResultController({
+      captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
       capturePermit: () => ({ epoch: 1 }),
       createEventId: () => 'event-1',
       createLayerId: () => 'layer-1',
@@ -277,6 +288,7 @@ describe('StagedResultController', () => {
     const dispatchPrepared = vi.fn();
     const history = createHistory();
     const controller = new StagedResultController({
+      captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
       capturePermit: () => ({ epoch: 1 }),
       createEventId: () => 'event-1',
       createLayerId: () => 'layer-1',

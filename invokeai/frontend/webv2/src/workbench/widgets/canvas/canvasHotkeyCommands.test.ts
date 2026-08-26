@@ -6,6 +6,7 @@ import type {
 } from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { executeCanvasHotkeyCommand, type CanvasHotkeyContext } from './canvasHotkeyCommands';
@@ -48,6 +49,9 @@ const createEngine = (interaction: Partial<CanvasInteractionState> = {}) => {
   };
   const engine = {
     projectId: 'project',
+    document: {
+      captureRestoreAnchor: () => stackTopAnchor('project'),
+    },
     history: { redo: vi.fn(), undo: vi.fn() },
     interaction: {
       get: vi.fn((key: string) => state[key]),
@@ -283,7 +287,10 @@ describe('delete: pixels vs layer', () => {
     expect(engine.layers.commitStructural).toHaveBeenCalledWith(
       'widgets.canvas.commands.deleteLayer',
       { ids: ['a', 'c'], type: 'removeCanvasLayers' },
-      expect.objectContaining({ orderedIds: ['a', 'b', 'c'], selectedLayerId: 'a' })
+      expect.objectContaining({
+        add: [expect.objectContaining({ layers: [layers[0]] }), expect.objectContaining({ layers: [layers[2]] })],
+        selectedLayerId: 'a',
+      })
     );
   });
 

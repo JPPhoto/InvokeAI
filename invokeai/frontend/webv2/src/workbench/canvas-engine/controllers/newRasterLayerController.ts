@@ -1,4 +1,6 @@
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { LayerCacheStore, PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
@@ -24,6 +26,7 @@ export interface NewRasterLayerControllerOptions<Permit> {
   readonly isGestureActive: () => boolean;
   readonly endBurst: () => void;
   readonly createLayerId: () => string;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
   readonly preparePixels: (layerId: string, rect: Rect, pixels: RasterSurface) => PreparedLayerCacheReplacement;
   readonly installPrepared: (prepared: PreparedLayerCacheReplacement) => void;
   readonly dispatchPrepared: (
@@ -87,16 +90,14 @@ export class NewRasterLayerController<Permit> {
       type: 'raster',
     };
 
-    // Above the active layer: index 0 is top-most, so "above" is one index lower.
-    const activeIndex = document.layers.findIndex((candidate) => candidate.id === document.selectedLayerId);
-    const insertIndex = activeIndex >= 0 ? activeIndex : 0;
+    const anchor = this.deps.captureInsertionAnchor('raster', document.selectedLayerId);
     const previousSelectedLayerId = document.selectedLayerId;
 
     const apply = (): void => {
       const prepared = this.deps.preparePixels(layerId, rect, pixels);
       this.deps.dispatchPrepared(
         {
-          add: { index: insertIndex, layers: [layer] },
+          add: [{ anchor, layers: [layer] }],
           enabledUpdates: [],
           selectedLayerId: layerId,
           type: 'applyCanvasLayerStackMutation',

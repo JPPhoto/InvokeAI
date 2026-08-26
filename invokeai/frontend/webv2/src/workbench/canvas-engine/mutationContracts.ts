@@ -28,6 +28,7 @@ import type {
   CanvasRegionalGuidanceLayerContract,
   CanvasStagingAreaContractV2,
 } from './contracts';
+import type { FlatLayerInsertion, FlatLayerInsertionAnchor } from './document/insertionAnchors';
 import type { ReorderFlatStackCommand } from './document/layerStacks';
 
 export type CanvasLayerBasePatch = Partial<
@@ -60,6 +61,7 @@ export type CanvasLayerConfigPatch =
 export type CanvasProjectMutation =
   | {
       type: 'commitStagedImage';
+      anchor: FlatLayerInsertionAnchor;
       candidateFingerprint: string;
       continueStaging: boolean;
       event: ProjectEvent;
@@ -81,14 +83,14 @@ export type CanvasProjectMutation =
   | { type: 'toggleCanvasStagingVisibility' }
   | { type: 'toggleCanvasStagingThumbnailsVisibility' }
   | { type: 'clearCanvasStaging' }
-  | { type: 'addCanvasLayer'; layer: CanvasLayerContract; index?: number }
+  | { type: 'addCanvasLayer'; layer: CanvasLayerContract; anchor: FlatLayerInsertionAnchor }
   | {
       type: 'applyCanvasLayerStackMutation';
-      add?: { index: number; layers: readonly CanvasLayerContract[] };
+      /** Applied in order against the document before `removeIds`, so an anchor may name a removed layer. */
+      add?: readonly FlatLayerInsertion[];
       removeIds?: readonly string[];
       enabledUpdates: readonly { id: string; isEnabled: boolean }[];
       lockedUpdates?: readonly { id: string; isLocked: boolean }[];
-      orderedIds?: readonly string[];
       /** Omit to preserve the current selection, repairing it if that layer is removed. */
       selectedLayerId?: string | null;
     }

@@ -46,6 +46,7 @@ const createHarness = (overrides: Partial<CanvasMutationContextDeps> = {}) => {
     createLayerId: () => 'layer-new',
     dispatch: vi.fn(() => true),
     editOwner,
+    projectId: 'p1',
     editingLocked: lock,
     endBurst: () => undefined,
     getDocument: () => null,

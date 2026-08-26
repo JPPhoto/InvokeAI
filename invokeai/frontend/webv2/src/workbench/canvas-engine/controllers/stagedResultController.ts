@@ -5,14 +5,19 @@ import type {
   CanvasStagingCandidateContract,
   CanvasStateContractV2,
 } from '@workbench/canvas-engine/contracts';
+import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { ProjectEvent } from '@workbench/projectContracts';
 
+import { insertLayersAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import { haveSameStackOrders } from '@workbench/canvas-engine/document/layerStacks';
 import { getCanvasStagingCandidateFingerprint } from '@workbench/canvasStagingView';
 
 export interface StagedResultControllerOptions<Permit, Owner = symbol> {
   readonly capturePermit: (owner?: Owner) => Permit | null;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
   readonly createEventId: () => string;
   readonly createLayerId: () => string;
   readonly dispatchPrepared: (
@@ -104,17 +109,18 @@ export class StagedResultController<Permit, Owner = symbol> {
     };
     const previousSelectedLayerId = canvas.document.selectedLayerId;
     const previousLayers = canvas.document.layers;
-    const acceptedLayers = [layer, ...previousLayers];
+    const anchor = o.captureInsertionAnchor('raster', null);
+    const acceptedLayers = insertLayersAtAnchor(previousLayers, anchor, [layer]);
     const previousStagingArea = canvas.stagingArea;
     const acceptedSelectedLayerId = continueStaging ? previousSelectedLayerId : layer.id;
     const hasPreviousLayerStack = (document: CanvasDocumentContractV2 | null): boolean =>
       document?.selectedLayerId === previousSelectedLayerId &&
-      document.layers.length === previousLayers.length &&
-      document.layers.every((current, index) => current === previousLayers[index]);
+      !document.layers.some((current) => current.id === layer.id) &&
+      haveSameStackOrders(document.layers, previousLayers);
     const hasAcceptedLayerStack = (document: CanvasDocumentContractV2 | null): boolean =>
       document?.selectedLayerId === acceptedSelectedLayerId &&
-      document.layers.length === acceptedLayers.length &&
-      document.layers.every((current, index) => current === acceptedLayers[index]);
+      document.layers.includes(layer) &&
+      haveSameStackOrders(document.layers, acceptedLayers);
     const isCommitted = (next: CanvasStateContractV2 | null): boolean =>
       next?.document.selectedLayerId === acceptedSelectedLayerId &&
       next.document.layers.some((current) => current === layer) &&
@@ -132,6 +138,7 @@ export class StagedResultController<Permit, Owner = symbol> {
       o.endBurst();
       o.dispatchPrepared(
         {
+          anchor,
           candidateFingerprint,
           continueStaging,
           event,
@@ -181,7 +188,7 @@ export class StagedResultController<Permit, Owner = symbol> {
       }
     };
     const addAcceptedLayer: Extract<CanvasProjectMutation, { type: 'applyCanvasLayerStackMutation' }> = {
-      add: { index: 0, layers: [layer] },
+      add: [{ anchor, layers: [layer] }],
       enabledUpdates: [],
       selectedLayerId: acceptedSelectedLayerId,
       type: 'applyCanvasLayerStackMutation',

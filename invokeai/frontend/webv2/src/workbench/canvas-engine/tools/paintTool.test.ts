@@ -13,6 +13,7 @@ import type {
 import type { PointerInput } from '@workbench/canvas-engine/types';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { isEmpty } from '@workbench/canvas-engine/math/rect';
 import { createLayerCacheStore, type LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
@@ -144,6 +145,7 @@ const createHarness = (
   const ctx: ToolContext = {
     backend,
     ...(beginPixelEdit ? { beginPixelEdit } : {}),
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     commitStructural: vi.fn(),
     createLayerId: () => {
       const id = `new-layer-${(idCounter += 1)}`;

@@ -1,11 +1,16 @@
 import type { DuplicateLayersResult } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { RasterMemoryReservationResult } from '@workbench/canvas-engine/controllers/rasterMemoryBudgetController';
+import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
+
+import { insertLayersAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import { haveSameStackOrders } from '@workbench/canvas-engine/document/layerStacks';
 
 export type CapturedLayerCache = { pixels: RasterSurface; rect: Rect } | null | 'not-ready';
 
@@ -29,6 +34,7 @@ export interface LayerMutationControllerOptions<Permit> {
   readonly canEdit: () => boolean;
   readonly capturePermit: () => Permit | null;
   readonly captureCache: (layer: CanvasLayerContract, document: CanvasDocumentContractV2) => CapturedLayerCache;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
   readonly createLayerId: () => string;
   readonly discardPersisted: (layerId: string) => void;
   readonly dispatchPrepared: (
@@ -42,6 +48,7 @@ export interface LayerMutationControllerOptions<Permit> {
     document: CanvasDocumentContractV2
   ) => DuplicateLayerRasterPlan;
   readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getEditRevision: () => number;
   readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
   readonly getSelectedLayerIds: (document: CanvasDocumentContractV2) => readonly string[];
   readonly history: History;
@@ -188,32 +195,31 @@ export class LayerMutationController<Permit> {
         return { status: 'stale' };
       }
       const duplicateBySource = new Map(sources.map((source, index) => [source.id, duplicates[index]!]));
-      const orderedIds = document.layers.flatMap((layer) => {
-        const duplicate = duplicateBySource.get(layer.id);
-        return duplicate ? [duplicate.id, layer.id] : [layer.id];
-      });
+      const insertions = sources.map((source, index) => ({
+        anchor: o.captureInsertionAnchor(source.type, source.id),
+        layers: [duplicates[index]!],
+      }));
+      const expectedLayers = insertions.reduce(
+        (layers, insertion) => insertLayersAtAnchor(layers, insertion.anchor, insertion.layers),
+        document.layers
+      );
       const selectedLayerId =
         (document.selectedLayerId ? duplicateBySource.get(document.selectedLayerId)?.id : null) ?? duplicates[0]!.id;
       const previousSelectedLayerId = document.selectedLayerId;
       const previousSelectedIds = [...o.getSelectedLayerIds(document)];
-      const originalIds = document.layers.map((layer) => layer.id);
       const duplicateIds = duplicates.map((layer) => layer.id);
       const hasDuplicates = (candidate: CanvasDocumentContractV2 | null): boolean =>
-        candidate?.selectedLayerId === selectedLayerId &&
-        candidate.layers.length === orderedIds.length &&
-        candidate.layers.every((layer, index) => layer.id === orderedIds[index]);
+        candidate?.selectedLayerId === selectedLayerId && haveSameStackOrders(candidate.layers, expectedLayers);
       const hasOriginals = (candidate: CanvasDocumentContractV2 | null): boolean =>
         candidate?.selectedLayerId === previousSelectedLayerId &&
-        candidate.layers.length === originalIds.length &&
-        candidate.layers.every((layer, index) => layer.id === originalIds[index]);
+        haveSameStackOrders(candidate.layers, document.layers);
       const applyPrepared = (
         prepared: readonly { duplicate: CanvasLayerContract; replacement: PreparedLayerCacheReplacement }[]
       ): void => {
         o.dispatchPrepared(
           {
-            add: { index: 0, layers: duplicates },
+            add: insertions,
             enabledUpdates: [],
-            orderedIds,
             selectedLayerId,
             type: 'applyCanvasLayerStackMutation',
           },
@@ -326,7 +332,7 @@ export class LayerMutationController<Permit> {
     }
   }
 
-  copy(label: string, sourceLayerId: string, layer: CanvasLayerContract, index: number): boolean {
+  copy(label: string, sourceLayerId: string, layer: CanvasLayerContract, anchor: FlatLayerInsertionAnchor): boolean {
     const o = this.options;
     if (!o.canEdit() || o.isGestureActive()) {
       return false;
@@ -334,7 +340,12 @@ export class LayerMutationController<Permit> {
     o.endBurst();
     const document = o.getDocument();
     const source = document?.layers.find((candidate) => candidate.id === sourceLayerId);
-    if (!document || !source || document.layers.some((candidate) => candidate.id === layer.id)) {
+    if (
+      !document ||
+      !source ||
+      anchor.capturedEditRevision !== o.getEditRevision() ||
+      document.layers.some((candidate) => candidate.id === layer.id)
+    ) {
       return false;
     }
     const captured = o.captureCache(source, document);
@@ -346,7 +357,7 @@ export class LayerMutationController<Permit> {
       const prepared = captured ? o.preparePixels(layer.id, captured.rect, captured.pixels) : null;
       o.dispatchPrepared(
         {
-          add: { index, layers: [layer] },
+          add: [{ anchor, layers: [layer] }],
           enabledUpdates: [],
           selectedLayerId: layer.id,
           type: 'applyCanvasLayerStackMutation',

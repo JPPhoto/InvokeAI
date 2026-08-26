@@ -7,6 +7,18 @@ import { createDocumentPatchEntry } from '@workbench/canvas-engine/history/docum
 
 import type { CanvasMutationContext } from './mutationContext';
 
+/** The edit revision a mutation's insertion was anchored at; a commit refuses an anchor captured earlier. */
+const anchorRevisionOf = (mutation: CanvasProjectMutation): number | undefined => {
+  switch (mutation.type) {
+    case 'addCanvasLayer':
+      return mutation.anchor.capturedEditRevision;
+    case 'applyCanvasLayerStackMutation':
+      return mutation.add?.[0]?.anchor.capturedEditRevision;
+    default:
+      return undefined;
+  }
+};
+
 export type StructuralMutationContext = Pick<
   CanvasMutationContext,
   | 'canEdit'
@@ -75,7 +87,10 @@ export class StructuralLayerController {
     inverse: CanvasProjectMutation,
     options: StructuralCommitOptions = {}
   ): StructuralCommitResult {
-    const refusal = this.refuse(options);
+    const refusal = this.refuse({
+      ...options,
+      expectedRevision: options.expectedRevision ?? anchorRevisionOf(forward) ?? anchorRevisionOf(inverse),
+    });
     if (refusal) {
       return refusal;
     }

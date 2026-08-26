@@ -96,6 +96,7 @@ import {
 import { MaskResultController } from '@workbench/canvas-engine/controllers/maskResultController';
 import {
   createCanvasMutationContext,
+  type CanvasMutationContext,
   type DocumentEditPermit,
 } from '@workbench/canvas-engine/controllers/mutationContext';
 import { PersistenceController } from '@workbench/canvas-engine/controllers/persistenceController';
@@ -855,6 +856,8 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     }
   };
 
+  const captureInsertionAnchor: CanvasMutationContext['captureInsertionAnchor'] = (stack, aboveId) =>
+    mutationContext.captureInsertionAnchor(stack, aboveId);
   const editingController = new EditingController({
     floatingSelection: {
       applyImagePatch,
@@ -907,6 +910,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     },
     text: {
       canEdit: () => canEditDocument(),
+      captureInsertionAnchor,
       commitStructural: (label, forward, inverse) => commitToolStructural(label, forward, inverse),
       createLayerId,
       getDocument: () => mirror.getDocument(),
@@ -987,6 +991,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   const toolContext: ToolContext = {
     applyTransform: () => applyTransform(),
     backend,
+    captureInsertionAnchor,
     beginPixelEdit: (layerId) => beginPixelEdit(layerId),
     beginTransformSession: (layerId) => beginTransformSession(layerId),
     cancelTextEdit: () => cancelTextEdit(),
@@ -1156,6 +1161,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   const mutationContext = createCanvasMutationContext({
     commitEdit: (intent) => mutationPort.commitEdit(intent),
     createLayerId,
+    projectId,
     dispatch: (action, origin) => dispatchCanvasMutation(action, origin),
     editOwner: documentEditOwner,
     editingLocked: stores.documentEditingLocked,
@@ -2239,6 +2245,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
 
   const layerMutationController = new LayerMutationController({
     canEdit: () => canEditDocument(),
+    captureInsertionAnchor,
     capturePermit: () => captureDocumentEditPermit(),
     captureCache: captureLayerCache,
     createLayerId,
@@ -2247,6 +2254,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     endBurst: () => endNudgeBurst(),
     getDuplicateRasterPlan,
     getDocument: () => mirror.getDocument(),
+    getEditRevision: () => mutationContext.getEditRevision(),
     getReducerDocument,
     getSelectedLayerIds: resolveSelectedLayerIds,
     hasPendingPixelWork: (layerId) => bitmapStore.hasPendingWork(layerId),
@@ -2281,6 +2289,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
 
   const maskResultController = new MaskResultController({
     canEdit: (owner) => canEditDocument(owner),
+    captureInsertionAnchor,
     createLayerId,
     dispatchPrepared: dispatchPreparedMutation,
     endBurst: () => endNudgeBurst(),
@@ -2316,6 +2325,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   const commitGeneratedImageResult = generatedResultController.commit.bind(generatedResultController);
 
   const stagedResultController = new StagedResultController({
+    captureInsertionAnchor,
     capturePermit: (owner) => captureDocumentEditPermit(owner),
     createEventId,
     createLayerId,
@@ -2694,6 +2704,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   const layerController = new LayerController({
     booleanMerge: {
       backend,
+      captureInsertionAnchor,
       capturePermit: () => captureDocumentEditPermit(),
       createLayerId,
       dispatchPrepared: dispatchPreparedMutation,
@@ -2728,6 +2739,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       preparePixels: prepareGeneratedPaintCache,
     },
     copy: {
+      captureInsertionAnchor,
       capturePermit: () => captureDocumentEditPermit(),
       createLayerId,
       dispatchPrepared: dispatchPreparedMutation,
@@ -2744,6 +2756,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     },
     extractMaskedArea: {
       backend,
+      captureInsertionAnchor,
       capturePermit: () => captureDocumentEditPermit(),
       createLayerId,
       derived: derivedSurfaceCache,
@@ -2769,6 +2782,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     commitGeneratedImageResult,
     newRasterLayer: {
       backend,
+      captureInsertionAnchor,
       capturePermit: () => captureDocumentEditPermit(),
       createLayerId,
       dispatchPrepared: dispatchPreparedMutation,
@@ -2873,6 +2887,8 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     isLayerExportGuardCurrent,
   };
   const documentCapability: CanvasDocumentCapability = {
+    captureInsertionAnchor,
+    captureRestoreAnchor: (layerId) => mutationContext.captureRestoreAnchor(layerId),
     captureSnapshot: captureDocumentSnapshot,
     getDocument: () => mirror.getDocument(),
     getEditRevision: () => mutationContext.getEditRevision(),

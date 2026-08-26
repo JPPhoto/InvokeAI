@@ -4,6 +4,7 @@ import type { PointerInput, Vec2 } from '@workbench/canvas-engine/types';
 import type { Viewport } from '@workbench/canvas-engine/viewport';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -50,6 +51,7 @@ const createHarness = (doc: CanvasDocumentContractV2) => {
       commits.push({ forward, inverse, label });
       return { status: 'committed' as const };
     },
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     createLayerId: () => `shape-${++idCounter}`,
     createPath2D: (d) => ({ d }) as unknown as Path2D,
     dispatch: (action) => dispatched.push(action),

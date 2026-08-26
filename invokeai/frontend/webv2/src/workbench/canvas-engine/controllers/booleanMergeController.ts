@@ -1,5 +1,7 @@
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
@@ -29,6 +31,7 @@ export interface BooleanMergeControllerOptions<Permit> {
   readonly exportBaked: (layerId: string) => Promise<ExportResult>;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
   readonly createLayerId: () => string;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
   readonly dispatchPrepared: (
     action: CanvasProjectMutation,
     expectedReducer: () => boolean,
@@ -161,13 +164,14 @@ export class BooleanMergeController<Permit> {
       ];
       const disabled = original.map(({ id }) => ({ id, isEnabled: false }));
       const selectedLayerId = liveDocument.selectedLayerId;
+      const anchor = this.deps.captureInsertionAnchor('raster', upper.id);
       const hasState = (doc: CanvasDocumentContractV2 | null, updates: typeof original): boolean =>
         updates.every((update) => doc?.layers.find((layer) => layer.id === update.id)?.isEnabled === update.isEnabled);
       const apply = (): void => {
         const prepared = this.deps.preparePixels(resultId, resultRect, pixels);
         this.deps.dispatchPrepared(
           {
-            add: { index: liveIndex, layers: [resultLayer] },
+            add: [{ anchor, layers: [resultLayer] }],
             enabledUpdates: disabled,
             selectedLayerId: resultId,
             type: 'applyCanvasLayerStackMutation',
