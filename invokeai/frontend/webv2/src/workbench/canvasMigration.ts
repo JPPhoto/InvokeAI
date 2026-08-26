@@ -3,12 +3,16 @@ import type {
   CanvasImageRef,
   CanvasInpaintMaskLayerContract,
   CanvasLayerBaseContract,
+  CanvasLayerContract,
   CanvasRasterLayerContractV2,
+  CanvasSnapshotContract,
   CanvasStagingAreaContractV2,
   CanvasStateContractV2,
 } from '@workbench/canvas-engine/api';
 
 import { z } from 'zod';
+
+import type { CanvasLoadDiagnostic, CanvasLoadResult, CanvasVersionScope } from './canvasLoadContracts';
 
 import { normalizeControlAdapter } from './controlAdapters';
 
@@ -18,7 +22,8 @@ export const DEFAULT_CANVAS_DOCUMENT_HEIGHT = 1024;
 const createMigrationId = (prefix: string): string =>
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
 
 const zFiniteNumber = z.number().finite();
 const zCoordinate = z.object({ x: zFiniteNumber, y: zFiniteNumber });
@@ -284,9 +289,9 @@ const createInitialInpaintMaskLayer = (): CanvasInpaintMaskLayerContract => ({
  * a canvas session with an inpaint mask present. The mask has no content, so it
  * does NOT flip generation-mode detection to inpaint (see `detectCanvasMode`).
  *
- * This is the NEW-canvas path only. The migration / garbage-fallback path
- * (`migrateCanvasStateToV2`) and `createEmptyCanvasStateV2` stay empty, so
- * existing and migrated documents are left untouched.
+ * This is the NEW-canvas path only. The migration / absent-input path
+ * (`loadCanvasState`) and `createEmptyCanvasStateV2` stay empty, so existing
+ * and migrated documents are left untouched.
  */
 export const createNewCanvasStateV2 = (
   width = DEFAULT_CANVAS_DOCUMENT_WIDTH,
@@ -373,8 +378,7 @@ const migrateLayerToV2 = (rawLayer: unknown, index: number): CanvasRasterLayerCo
   };
 };
 
-const migrateDocumentToV2 = (rawCanvas: Record<string, unknown>): CanvasDocumentContractV2 => {
-  const rawDocument = isRecord(rawCanvas.document) ? rawCanvas.document : rawCanvas;
+const migrateDocumentToV2 = (rawDocument: Record<string, unknown>): CanvasDocumentContractV2 => {
   const rawLayers = Array.isArray(rawDocument.layers) ? rawDocument.layers : [];
 
   return {
@@ -422,12 +426,67 @@ const migrateStagingAreaToV2 = (rawCanvas: Record<string, unknown>): CanvasStagi
   };
 };
 
-const isCanvasStateV2 = (canvas: unknown): canvas is Record<string, unknown> & { version: 2 } =>
-  isRecord(canvas) && canvas.version === 2;
+type Refusal =
+  | { status: 'unsupported-version'; scope: CanvasVersionScope; version: number }
+  | { status: 'invalid'; scope: CanvasVersionScope; diagnostics: readonly CanvasLoadDiagnostic[] };
 
-const normalizeCanvasLayer = (value: unknown): CanvasDocumentContractV2['layers'][number] | null => {
+type LoadStep<T> = Extract<CanvasLoadResult<T>, { status: 'loaded' }> | Refusal;
+
+const LEGACY_CANVAS_VERSION = 1;
+const CURRENT_CANVAS_VERSION = 2;
+
+type DeclaredVersion =
+  | { kind: 'absent' }
+  | { kind: 'legacy' }
+  | { kind: 'current' }
+  | { kind: 'future'; version: number }
+  | { kind: 'malformed' };
+
+const classifyVersion = (value: unknown): DeclaredVersion => {
+  if (value === undefined) {
+    return { kind: 'absent' };
+  }
+  if (value === LEGACY_CANVAS_VERSION) {
+    return { kind: 'legacy' };
+  }
+  if (value === CURRENT_CANVAS_VERSION) {
+    return { kind: 'current' };
+  }
+  if (typeof value === 'number' && Number.isInteger(value) && value > CURRENT_CANVAS_VERSION) {
+    return { kind: 'future', version: value };
+  }
+  return { kind: 'malformed' };
+};
+
+const describeVersion = (value: unknown): string => (typeof value === 'string' ? JSON.stringify(value) : String(value));
+
+const invalid = (scope: CanvasVersionScope, diagnostics: readonly CanvasLoadDiagnostic[]): Refusal => ({
+  diagnostics,
+  scope,
+  status: 'invalid',
+});
+
+const unsupported = (scope: CanvasVersionScope, version: number): Refusal => ({
+  scope,
+  status: 'unsupported-version',
+  version,
+});
+
+const describeLayerIssue = (value: Record<string, unknown>, path: string, issues: readonly z.core.$ZodIssue[]) => {
+  const issue = issues[0];
+  const detail = issue
+    ? `${issue.path.length > 0 ? `${issue.path.join('.')}: ` : ''}${issue.message}`
+    : 'invalid layer';
+  const type = typeof value.type === 'string' ? value.type : undefined;
+  return { message: type ? `${type} layer is invalid (${detail})` : `layer is invalid (${detail})`, path };
+};
+
+type ParsedLayer = { layer: CanvasLayerContract } | { diagnostic: CanvasLoadDiagnostic };
+
+/** Fills the known optional defaults on a v2 layer, then validates it strictly. */
+const parseCanvasLayer = (value: unknown, path: string): ParsedLayer => {
   if (!isRecord(value)) {
-    return null;
+    return { diagnostic: { message: 'layer is not an object', path } };
   }
   let candidate: Record<string, unknown> = value;
   if (value.type === 'control') {
@@ -446,87 +505,187 @@ const normalizeCanvasLayer = (value: unknown): CanvasDocumentContractV2['layers'
     };
   }
   const parsed = zCanvasLayer.safeParse(candidate);
-  return parsed.success ? (candidate as unknown as CanvasDocumentContractV2['layers'][number]) : null;
+  return parsed.success
+    ? { layer: candidate as unknown as CanvasLayerContract }
+    : { diagnostic: describeLayerIssue(value, path, parsed.error.issues) };
 };
 
-export const normalizeCanvasDocumentContract = (document: CanvasDocumentContractV2): CanvasDocumentContractV2 => ({
-  ...document,
-  ...normalizeCanvasDocumentGeometry(document.width, document.height, document.bbox),
-  layers: document.layers.flatMap((layer) => {
-    const normalized = normalizeCanvasLayer(layer);
-    return normalized ? [normalized] : [];
-  }),
-});
+type ParsedLayers = { layers: CanvasLayerContract[] } | { diagnostics: CanvasLoadDiagnostic[] };
 
-const normalizeCanvasDocumentV2 = (value: unknown, requireValidLayers: boolean): CanvasDocumentContractV2 | null => {
-  const rawDocument = isRecord(value) ? value : {};
-  const rawLayers = Array.isArray(rawDocument.layers) ? rawDocument.layers : [];
-  const layers = rawLayers.flatMap((layer) => {
-    const normalized = normalizeCanvasLayer(layer);
-    return normalized ? [normalized] : [];
+const parseCanvasLayers = (value: unknown, path: string): ParsedLayers => {
+  if (!Array.isArray(value)) {
+    return { diagnostics: [{ message: 'layers is not an array', path }] };
+  }
+  const layers: CanvasLayerContract[] = [];
+  const diagnostics: CanvasLoadDiagnostic[] = [];
+  value.forEach((entry, index) => {
+    const parsed = parseCanvasLayer(entry, `${path}[${index}]`);
+    if ('layer' in parsed) {
+      layers.push(parsed.layer);
+    } else {
+      diagnostics.push(parsed.diagnostic);
+    }
   });
-  if (requireValidLayers && (!Array.isArray(rawDocument.layers) || layers.length !== rawLayers.length)) {
-    return null;
+  return diagnostics.length > 0 ? { diagnostics } : { layers };
+};
+
+/** Re-validates an in-memory v2 document, filling known optional defaults; `null` when any layer is invalid. */
+export const normalizeCanvasDocumentContract = (
+  document: CanvasDocumentContractV2
+): CanvasDocumentContractV2 | null => {
+  const parsed = parseCanvasLayers(document.layers, 'layers');
+  return 'layers' in parsed
+    ? {
+        ...document,
+        ...normalizeCanvasDocumentGeometry(document.width, document.height, document.bbox),
+        layers: parsed.layers,
+      }
+    : null;
+};
+
+const loadCanvasDocumentV2 = (
+  value: unknown,
+  scope: CanvasVersionScope,
+  path: string
+): LoadStep<CanvasDocumentContractV2> => {
+  if (!isRecord(value)) {
+    return invalid(scope, [{ message: 'document is not an object', path }]);
+  }
+  const version = classifyVersion(value.version);
+  if (version.kind === 'future') {
+    return unsupported(scope, version.version);
+  }
+  if (version.kind === 'legacy' || version.kind === 'malformed') {
+    return invalid(scope, [
+      {
+        message: `document version ${describeVersion(value.version)} is not valid inside a version 2 canvas`,
+        path: `${path}.version`,
+      },
+    ]);
+  }
+  const layers = parseCanvasLayers(value.layers === undefined ? [] : value.layers, `${path}.layers`);
+  if ('diagnostics' in layers) {
+    return invalid(scope, layers.diagnostics);
   }
   return {
-    background:
-      rawDocument.background === 'transparent' || isRecord(rawDocument.background)
-        ? (rawDocument.background as CanvasDocumentContractV2['background'])
-        : 'transparent',
-    ...normalizeCanvasDocumentGeometry(rawDocument.width, rawDocument.height, rawDocument.bbox),
-    layers,
-    selectedLayerId: typeof rawDocument.selectedLayerId === 'string' ? rawDocument.selectedLayerId : null,
-    version: 2,
+    diagnostics: [],
+    status: 'loaded',
+    value: {
+      background:
+        value.background === 'transparent' || isRecord(value.background)
+          ? (value.background as CanvasDocumentContractV2['background'])
+          : 'transparent',
+      ...normalizeCanvasDocumentGeometry(value.width, value.height, value.bbox),
+      layers: layers.layers,
+      selectedLayerId: typeof value.selectedLayerId === 'string' ? value.selectedLayerId : null,
+      version: 2,
+    },
   };
 };
 
-const normalizeCanvasSnapshot = (value: unknown): CanvasStateContractV2['snapshots'][number] | null => {
-  if (
-    !isRecord(value) ||
-    typeof value.id !== 'string' ||
-    typeof value.name !== 'string' ||
-    typeof value.createdAt !== 'string'
-  ) {
-    return null;
+const loadCanvasSnapshot = (value: unknown, path: string): LoadStep<CanvasSnapshotContract> => {
+  if (!isRecord(value)) {
+    return invalid('snapshot', [{ message: 'snapshot is not an object', path }]);
   }
-  const document = normalizeCanvasDocumentV2(value.document, true);
-  return document ? ({ ...value, document } as CanvasStateContractV2['snapshots'][number]) : null;
+  const missing = (['id', 'name', 'createdAt'] as const).filter((key) => typeof value[key] !== 'string');
+  if (missing.length > 0) {
+    return invalid(
+      'snapshot',
+      missing.map((key) => ({ message: `snapshot ${key} is missing`, path: `${path}.${key}` }))
+    );
+  }
+  const document = loadCanvasDocumentV2(value.document, 'snapshot', `${path}.document`);
+  return document.status === 'loaded'
+    ? { diagnostics: [], status: 'loaded', value: { ...value, document: document.value } as CanvasSnapshotContract }
+    : document;
 };
 
-/** Defensively re-normalizes an already-v2 canvas state (fills in anything missing without re-deriving layers). */
-const normalizeCanvasStateV2 = (canvas: Record<string, unknown>): CanvasStateContractV2 => {
-  const document = normalizeCanvasDocumentV2(canvas.document, false) ?? createEmptyCanvasDocumentV2();
-
+const loadCanvasStateV2 = (canvas: Record<string, unknown>): LoadStep<CanvasStateContractV2> => {
+  const document = loadCanvasDocumentV2(canvas.document === undefined ? {} : canvas.document, 'document', 'document');
+  if (document.status !== 'loaded') {
+    return document;
+  }
+  const rawSnapshots = canvas.snapshots === undefined ? [] : canvas.snapshots;
+  if (!Array.isArray(rawSnapshots)) {
+    return invalid('state', [{ message: 'snapshots is not an array', path: 'snapshots' }]);
+  }
+  const snapshots: CanvasSnapshotContract[] = [];
+  for (const [index, rawSnapshot] of rawSnapshots.entries()) {
+    const snapshot = loadCanvasSnapshot(rawSnapshot, `snapshots[${index}]`);
+    if (snapshot.status !== 'loaded') {
+      return snapshot;
+    }
+    snapshots.push(snapshot.value);
+  }
   return {
-    document,
-    documentRevision: asNumber(canvas.documentRevision, 0),
-    snapshots: Array.isArray(canvas.snapshots)
-      ? canvas.snapshots.flatMap((snapshot) => {
-          const normalized = normalizeCanvasSnapshot(snapshot);
-          return normalized ? [normalized] : [];
-        })
-      : [],
-    stagingArea: migrateStagingAreaToV2(canvas),
-    version: 2,
+    diagnostics: [],
+    status: 'loaded',
+    value: {
+      document: document.value,
+      documentRevision: asNumber(canvas.documentRevision, 0),
+      snapshots,
+      stagingArea: migrateStagingAreaToV2(canvas),
+      version: 2,
+    },
   };
+};
+
+const loadLegacyCanvasState = (rawCanvas: Record<string, unknown>): LoadStep<CanvasStateContractV2> => {
+  const rawDocument = isRecord(rawCanvas.document) ? rawCanvas.document : rawCanvas;
+  if (rawDocument !== rawCanvas) {
+    const version = classifyVersion(rawDocument.version);
+    if (version.kind === 'future') {
+      return unsupported('document', version.version);
+    }
+    if (version.kind === 'current' || version.kind === 'malformed') {
+      return invalid('document', [
+        {
+          message: `document version ${describeVersion(rawDocument.version)} is not valid inside a legacy canvas`,
+          path: 'document.version',
+        },
+      ]);
+    }
+  }
+  return {
+    diagnostics: [{ message: 'migrated legacy canvas state to version 2', path: 'version' }],
+    status: 'loaded',
+    value: {
+      document: migrateDocumentToV2(rawDocument),
+      documentRevision: 0,
+      snapshots: [],
+      stagingArea: migrateStagingAreaToV2(rawCanvas),
+      version: 2,
+    },
+  };
+};
+
+const loadCanvasStateStep = (canvas: unknown): LoadStep<CanvasStateContractV2> => {
+  if (canvas === undefined || canvas === null) {
+    return loadLegacyCanvasState({});
+  }
+  if (!isRecord(canvas) || Array.isArray(canvas)) {
+    return invalid('state', [{ message: 'canvas state is not an object', path: '' }]);
+  }
+  const version = classifyVersion(canvas.version);
+  switch (version.kind) {
+    case 'future':
+      return unsupported('state', version.version);
+    case 'malformed':
+      return invalid('state', [
+        { message: `canvas version ${describeVersion(canvas.version)} is not recognized`, path: 'version' },
+      ]);
+    case 'current':
+      return loadCanvasStateV2(canvas);
+    default:
+      return loadLegacyCanvasState(canvas);
+  }
 };
 
 /**
- * Converts unknown persisted canvas state (v1, v2, or garbage) into `CanvasStateContractV2`.
- * Already-v2 input is normalized (defaults filled in) but not re-derived from placements.
+ * Version-checks persisted canvas state before anything migrates or defaults it: absent and v1
+ * state enter the known migration path, v2 is validated strictly, anything newer is refused.
  */
-export const migrateCanvasStateToV2 = (canvas: unknown): CanvasStateContractV2 => {
-  if (isCanvasStateV2(canvas)) {
-    return normalizeCanvasStateV2(canvas);
-  }
-
-  const rawCanvas = isRecord(canvas) ? canvas : {};
-
-  return {
-    document: migrateDocumentToV2(rawCanvas),
-    documentRevision: 0,
-    snapshots: [],
-    stagingArea: migrateStagingAreaToV2(rawCanvas),
-    version: 2,
-  };
+export const loadCanvasState = (canvas: unknown): CanvasLoadResult<CanvasStateContractV2> => {
+  const step = loadCanvasStateStep(canvas);
+  return step.status === 'loaded' ? step : { ...step, raw: canvas };
 };

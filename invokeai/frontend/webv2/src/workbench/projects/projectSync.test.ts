@@ -15,6 +15,16 @@ const getProject = (overrides: Partial<Project> = {}): Project => {
   return { ...state.projects[0], ...overrides };
 };
 
+const loadDocument = (document: Record<string, unknown>): Project => {
+  const result = deserializeProjectDocument(document);
+
+  if (result.status !== 'loaded') {
+    throw new Error(`Expected the document to load, got ${result.status}.`);
+  }
+
+  return result.project;
+};
+
 describe('project document serialization', () => {
   it('strips undo/redo history and restores it empty on deserialize', () => {
     const project = getProject();
@@ -37,18 +47,35 @@ describe('project document serialization', () => {
 
     expect('undoRedo' in document).toBe(false);
 
-    const roundTripped = deserializeProjectDocument(document);
+    const roundTripped = loadDocument(document);
 
-    expect(roundTripped).not.toBeNull();
-    expect(roundTripped?.undoRedo).toEqual({ future: [], past: [] });
-    expect(roundTripped?.id).toBe(project.id);
-    expect(roundTripped?.widgetInstances).toEqual(project.widgetInstances);
+    expect(roundTripped.undoRedo).toEqual({ future: [], past: [] });
+    expect(roundTripped.id).toBe(project.id);
+    expect(roundTripped.widgetInstances).toEqual(project.widgetInstances);
   });
 
   it('rejects documents that do not look like projects', () => {
-    expect(deserializeProjectDocument({})).toBeNull();
-    expect(deserializeProjectDocument({ id: 'x' })).toBeNull();
-    expect(deserializeProjectDocument({ id: 'x', layout: null, name: 'y' })).toBeNull();
+    expect(deserializeProjectDocument({})).toEqual({ status: 'unavailable' });
+    expect(deserializeProjectDocument({ id: 'x' })).toEqual({ status: 'unavailable' });
+    expect(deserializeProjectDocument({ id: 'x', layout: null, name: 'y' })).toEqual({ status: 'unavailable' });
+  });
+
+  it('refuses a document whose canvas was written by a newer client, keeping the raw document', () => {
+    const project = getProject();
+    const document = serializeProjectDocument(project);
+    const future = { ...document, canvas: { ...(document.canvas as object), version: 3 } };
+
+    const result = deserializeProjectDocument(future);
+
+    expect(result).toMatchObject({
+      refused: {
+        projectId: project.id,
+        raw: future,
+        refusal: { scope: 'state', status: 'unsupported-version', version: 3 },
+        source: 'canvas',
+      },
+      status: 'refused',
+    });
   });
 
   it('normalizes legacy project-graph invocation sources to workflow', () => {
@@ -95,10 +122,10 @@ describe('project document serialization', () => {
       ],
     };
 
-    const deserialized = deserializeProjectDocument(document);
+    const deserialized = loadDocument(document);
 
-    expect(deserialized?.invocation.sourceId).toBe('workflow');
-    expect(deserialized?.queue.items[0]?.snapshot.sourceId).toBe('workflow');
+    expect(deserialized.invocation.sourceId).toBe('workflow');
+    expect(deserialized.queue.items[0]?.snapshot.sourceId).toBe('workflow');
   });
 });
 

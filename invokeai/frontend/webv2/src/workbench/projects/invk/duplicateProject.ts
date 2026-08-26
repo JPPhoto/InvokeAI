@@ -21,7 +21,7 @@ import {
   createStagingBoard,
   isRequestCancellation,
 } from './assetTransport';
-import { InvkFormatError } from './format';
+import { InvkFormatError, toInvkFormatReason } from './format';
 import {
   createRestoredMediaLedger,
   restoreProjectMedia,
@@ -132,11 +132,17 @@ export const duplicateProjectRecord = async (
 
   assertAccountScopeCurrent(owner);
 
-  const project = deserializeProjectDocument({ ...stripInstallationState(input.record.data), id, name });
+  const loaded = deserializeProjectDocument({ ...stripInstallationState(input.record.data), id, name });
 
-  if (!project) {
+  if (loaded.status === 'refused') {
+    throw new InvkFormatError(toInvkFormatReason(loaded.refused), 'The project document was refused.');
+  }
+
+  if (loaded.status !== 'loaded') {
     throw new InvkFormatError('damaged', 'The project document will not rehydrate.');
   }
+
+  const project = loaded.project;
 
   const { applyAuthoritativeProjectBoard, serializeProjectDocument } =
     await import('@workbench/projects/projectDocument');

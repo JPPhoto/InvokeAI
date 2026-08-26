@@ -35,6 +35,7 @@ import type {
   PromptHistoryItem,
   WorkbenchNotification,
   WorkbenchNotificationCategory,
+  ProjectLoadResult,
   WorkbenchNotificationKind,
   WorkbenchState,
 } from '@workbench/projectContracts';
@@ -83,8 +84,9 @@ import {
   type CanvasEditIntent,
   type WorkbenchActionOrigin,
 } from './autoRoutePolicy';
-import { createNewCanvasStateV2, migrateCanvasStateToV2 } from './canvasMigration';
+import { createNewCanvasStateV2, loadCanvasState } from './canvasMigration';
 import { applyCanvasProjectMutation, type CanvasProjectMutation } from './canvasProjectMutations';
+import { gateProjectCanvases } from './projectCanvasGate';
 import { getProjectWidgetValues } from './widgetState';
 export { nextLayerName } from './canvasProjectMutations';
 import { compileGenerateGraph, resolveGenerateSeed } from '@features/generation/graph';
@@ -948,7 +950,7 @@ const getGalleryItemFromPersistedValue = (values: Record<string, unknown>, value
 /**
  * Deep-clones an already-v2 canvas state and normalizes staging candidate placements. Not a
  * migration boundary: callers with genuinely unknown/legacy input must run
- * `migrateCanvasStateToV2` first (see `normalizeWorkbenchProject`).
+ * `loadCanvasState` first (see `normalizeWorkbenchProject`).
  */
 const cloneCanvas = (canvas: CanvasStateContractV2): CanvasStateContractV2 => {
   const document = structuredClone(canvas.document);
@@ -1687,7 +1689,21 @@ const normalizePromptHistory = (value: unknown): PromptHistoryItem[] => {
   }, []);
 };
 
+/** The project-ingestion path: gate every embedded canvas, then normalize. */
+export const loadWorkbenchProject = (raw: Project): ProjectLoadResult => {
+  const refused = gateProjectCanvases(raw);
+
+  return refused ? { refused, status: 'refused' } : { project: normalizeWorkbenchProject(raw), status: 'loaded' };
+};
+
+/** Normalizes an admitted project; a canvas that somehow fails to reload is kept as-is, never rewritten. */
 export const normalizeWorkbenchProject = (project: Project): Project => {
+  const canvas = loadCanvasState(project.canvas);
+
+  return assembleWorkbenchProject(project, cloneCanvas(canvas.status === 'loaded' ? canvas.value : project.canvas));
+};
+
+const assembleWorkbenchProject = (project: Project, canvas: CanvasStateContractV2): Project => {
   const legacyWidgetRegions = project.widgetRegions as
     | Partial<Record<WidgetRegion | 'left-panel' | 'right-panel' | 'status-bar', WidgetRegionState>>
     | undefined;
@@ -1749,7 +1765,6 @@ export const normalizeWorkbenchProject = (project: Project): Project => {
     };
   }
 
-  const canvas = cloneCanvas(migrateCanvasStateToV2(project.canvas));
   const placement = reconcileFloatingWidgets(
     {
       left: leftRegion,
@@ -1762,8 +1777,6 @@ export const normalizeWorkbenchProject = (project: Project): Project => {
 
   return {
     ...project,
-    // `project` may come straight from persisted storage (an unsafe cast boundary), so its
-    // canvas can still be v1-shaped, malformed, or missing — migrate before cloning.
     canvas,
     floatingWidgets: placement.floatingWidgets,
     graphHistory: normalizeGraphHistory((project as Partial<Project>).graphHistory),

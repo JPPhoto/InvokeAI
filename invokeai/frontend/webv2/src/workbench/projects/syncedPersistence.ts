@@ -1,18 +1,14 @@
 import type { HydratedWorkbenchSnapshot } from '@workbench/persistenceContracts';
-import type { Project, WorkbenchState } from '@workbench/projectContracts';
+import type { Project, ProjectLoadResult, WorkbenchState } from '@workbench/projectContracts';
 
 import { assertAccountScopeCurrent, captureAccountScope, type AccountScope } from '@platform/state/accountLifecycle';
 import { timeWorkbenchPerf } from '@workbench/performanceMarks';
-import {
-  createLocalStorageWorkbenchPersistence,
-  stripTransientWorkbenchState,
-  type WorkbenchPersistenceService,
-} from '@workbench/persistence';
+import { createLocalStorageWorkbenchPersistence, type WorkbenchPersistenceService } from '@workbench/persistence';
 import {
   createDraftProject,
   createInitialWorkbenchState,
+  loadWorkbenchProject,
   normalizeWorkbenchAccount,
-  normalizeWorkbenchProject,
   withAuthoritativeProjectBoard,
 } from '@workbench/workbenchState';
 
@@ -194,14 +190,21 @@ const getSerializedProjectDocument = (
  * `projectBoardId` is a stale-able cache, so overwriting it here means every path that reads from
  * the server agrees on one answer. The saved destination is left alone — it is a deliberate choice.
  */
-const deserializeProjectRecord = (record: ProjectRecordDTO): Project | null => {
-  const project = deserializeProjectDocument(
+const deserializeProjectRecord = (record: ProjectRecordDTO): ProjectLoadResult => {
+  const result = deserializeProjectDocument(
     applyAuthoritativeProjectBoard(record.data, record.board_id, { selectBoard: false })
   );
 
   // Again after rehydration, because the document may have had no gallery values for the first
   // patch to land in — see `withAuthoritativeProjectBoard`.
-  return project === null ? null : withAuthoritativeProjectBoard(project, record.board_id);
+  switch (result.status) {
+    case 'loaded':
+      return { project: withAuthoritativeProjectBoard(result.project, record.board_id), status: 'loaded' };
+    case 'refused':
+      return { refused: { ...result.refused, raw: record.data }, status: 'refused' };
+    default:
+      return result;
+  }
 };
 
 /**
@@ -209,17 +212,16 @@ const deserializeProjectRecord = (record: ProjectRecordDTO): Project | null => {
  * needs the aggregate reducer, so it stays here rather than in
  * `./projectDocument`; Launchpad callers reach it through a dynamic import.
  */
-export const deserializeProjectDocument = (data: Record<string, unknown>): Project | null => {
+export const deserializeProjectDocument = (data: Record<string, unknown>): ProjectLoadResult => {
   const normalizedData = normalizeLegacyProjectDocument(data);
 
   if (!isProjectDocumentShape(normalizedData)) {
-    return null;
+    return { status: 'unavailable' };
   }
 
-  return normalizeWorkbenchProject({
-    ...normalizedData,
-    undoRedo: { future: [], past: [] },
-  } as unknown as Project);
+  const result = loadWorkbenchProject({ ...normalizedData, undoRedo: { future: [], past: [] } } as unknown as Project);
+
+  return result.status === 'refused' ? { refused: { ...result.refused, raw: data }, status: 'refused' } : result;
 };
 
 const getSyncMapStorageKey = (syncState: SyncedPersistenceState): string =>
@@ -257,12 +259,6 @@ const loadPersistedRevisions = (syncState: SyncedPersistenceState): Record<strin
     return {};
   }
 };
-
-const createSnapshot = (state: WorkbenchState): HydratedWorkbenchSnapshot => ({
-  savedAt: new Date().toISOString(),
-  state: stripTransientWorkbenchState(state),
-  version: 1,
-});
 
 /** Import a never-synced project to the server; returns false when it could not reach it. */
 const pushNewProject = async (syncState: SyncedPersistenceState, project: Project): Promise<boolean> => {
@@ -374,16 +370,16 @@ const recoverConflictingProject = async (
       return { kind: 'retry' };
     }
 
-    const serverProject = deserializeProjectRecord(server);
+    const serverResult = deserializeProjectRecord(server);
 
-    if (!serverProject) {
+    if (serverResult.status !== 'loaded') {
       return { kind: 'failed' };
     }
 
     const { recoveredDocument, recoveredIdentity } = createRecoveredDocument(project, document);
-    const recoveredProject = deserializeProjectDocument(recoveredDocument);
+    const recoveredResult = deserializeProjectDocument(recoveredDocument);
 
-    if (!recoveredProject) {
+    if (recoveredResult.status !== 'loaded') {
       return { kind: 'failed' };
     }
 
@@ -404,7 +400,12 @@ const recoverConflictingProject = async (
 
     return {
       kind: 'forked',
-      resolution: { projectId: project.id, recoveredIdentity, recoveredProject, serverProject },
+      resolution: {
+        projectId: project.id,
+        recoveredIdentity,
+        recoveredProject: recoveredResult.project,
+        serverProject: serverResult.project,
+      },
     };
   } catch {
     assertOwner(syncState);
@@ -432,11 +433,13 @@ const forkDeletedProject = async (
   assertOwner(syncState);
 
   const { recoveredDocument, recoveredIdentity } = createRecoveredDocument(project, document);
-  const recoveredProject = deserializeProjectDocument(recoveredDocument);
+  const recoveredResult = deserializeProjectDocument(recoveredDocument);
 
-  if (!recoveredProject) {
+  if (recoveredResult.status !== 'loaded') {
     return { kind: 'failed' };
   }
+
+  const recoveredProject = recoveredResult.project;
 
   try {
     const created = await apiCreateProject(
@@ -705,20 +708,23 @@ const loadFromBackend = async (
 
   assertOwner(syncState);
   const serverProjects: Project[] = [];
+  const refusedById = new Map((local?.refusedProjects ?? []).map((refused) => [refused.projectId, refused]));
 
   for (const record of records) {
     if (!record) {
       continue;
     }
 
-    const project = deserializeProjectRecord(record);
+    const result = deserializeProjectRecord(record);
 
-    if (project) {
-      serverProjects.push(project);
+    if (result.status === 'loaded') {
+      serverProjects.push(result.project);
       syncState.syncEntries.set(record.project_id, {
         pushedDoc: JSON.stringify(record.data),
         revision: record.revision,
       });
+    } else if (result.status === 'refused') {
+      refusedById.set(result.refused.projectId, result.refused);
     }
   }
 
@@ -788,22 +794,20 @@ const loadFromBackend = async (
 
   persistSyncMap(syncState);
 
-  const snapshot = createSnapshot(state);
-
   // Refresh the offline cache with what the server gave us.
-  await syncState.localPersistence.saveWorkbench(state);
+  const snapshot = await syncState.localPersistence.saveWorkbench(state);
   assertOwner(syncState);
 
-  return snapshot;
+  return { ...snapshot, refusedProjects: [...refusedById.values()] };
 };
 
 export interface SyncedWorkbenchPersistence {
-  adoptProjectRecord(record: ProjectRecordDTO): Project | null;
+  adoptProjectRecord(record: ProjectRecordDTO): ProjectLoadResult;
   clearWorkbench(): Promise<void>;
   deleteProjectOnServer(projectId: string): Promise<void>;
   flushProjectToServer(project: Project): Promise<ProjectPushOutcome>;
   hasPendingChanges(): boolean;
-  hydrateProjectFromServer(projectId: string): Promise<Project | null>;
+  hydrateProjectFromServer(projectId: string): Promise<ProjectLoadResult>;
   loadWorkbench(options?: WorkbenchLoadOptions): Promise<HydratedWorkbenchSnapshot | null>;
   markProjectDeleted(projectId: string): void;
   persistEmptySession(state: WorkbenchState): Promise<void>;
@@ -912,12 +916,12 @@ export const createSyncedWorkbenchPersistence = (
     }
   };
 
-  const adoptProjectRecord = (record: ProjectRecordDTO): Project | null => {
+  const adoptProjectRecord = (record: ProjectRecordDTO): ProjectLoadResult => {
     assertOwner(syncState);
-    const project = deserializeProjectRecord(record);
+    const result = deserializeProjectRecord(record);
 
-    if (!project) {
-      return null;
+    if (result.status !== 'loaded') {
+      return result;
     }
 
     syncState.syncEntries.set(record.project_id, {
@@ -926,7 +930,7 @@ export const createSyncedWorkbenchPersistence = (
     });
     persistSyncMap(syncState);
 
-    return project;
+    return result;
   };
 
   return {
@@ -982,7 +986,7 @@ export const createSyncedWorkbenchPersistence = (
       assertOwner(syncState);
       return syncState.hasPending;
     },
-    async hydrateProjectFromServer(projectId): Promise<Project | null> {
+    async hydrateProjectFromServer(projectId): Promise<ProjectLoadResult> {
       assertOwner(syncState);
 
       try {
@@ -993,7 +997,7 @@ export const createSyncedWorkbenchPersistence = (
       } catch {
         assertOwner(syncState);
 
-        return null;
+        return { status: 'unavailable' };
       }
     },
     /**
@@ -1055,10 +1059,7 @@ export const createSyncedWorkbenchPersistence = (
           if (local.state.projects.length === 0) {
             const draft = createDraftProject([], local.state.account);
 
-            return {
-              ...local,
-              state: { ...local.state, activeProjectId: draft.id, projects: [draft] },
-            };
+            return { ...local, state: { ...local.state, activeProjectId: draft.id, projects: [draft] } };
           }
 
           // `?new=true` means a fresh draft whether or not the backend answered.
@@ -1071,11 +1072,7 @@ export const createSyncedWorkbenchPersistence = (
 
             return {
               ...local,
-              state: {
-                ...local.state,
-                activeProjectId: draft.id,
-                projects: [...local.state.projects, draft],
-              },
+              state: { ...local.state, activeProjectId: draft.id, projects: [...local.state.projects, draft] },
             };
           }
 
@@ -1122,9 +1119,7 @@ export const createSyncedWorkbenchPersistence = (
     },
     saveWorkbench(state: WorkbenchState): Promise<WorkbenchSaveResult> {
       return enqueueMutation(async () => {
-        const snapshot = createSnapshot(state);
-
-        await syncState.localPersistence.saveWorkbench(state);
+        const snapshot = await syncState.localPersistence.saveWorkbench(state);
 
         assertOwner(syncState);
         syncState.hasPending = false;

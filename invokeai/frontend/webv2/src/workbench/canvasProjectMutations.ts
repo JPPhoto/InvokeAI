@@ -687,32 +687,36 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
         width,
       }));
     }
-    case 'replaceCanvasDocument':
-      return setCanvasState(project, {
-        ...project.canvas,
-        document: repairSelectedLayerId(normalizeCanvasDocumentContract(structuredClone(mutation.document))),
-        documentRevision: project.canvas.documentRevision + 1,
-        stagingArea: clearStagingArea(project.canvas.stagingArea),
-      });
-    case 'saveCanvasSnapshot':
-      return setCanvasState(project, {
-        ...project.canvas,
-        snapshots: [
-          ...project.canvas.snapshots,
-          {
-            createdAt: mutation.createdAt,
-            document: normalizeCanvasDocumentContract(structuredClone(project.canvas.document)),
-            id: mutation.id,
-            name: mutation.name,
-          },
-        ],
-      });
-    case 'restoreCanvasSnapshot': {
-      const snapshot = project.canvas.snapshots.find((entry) => entry.id === mutation.snapshotId);
-      return snapshot
+    case 'replaceCanvasDocument': {
+      const document = normalizeCanvasDocumentContract(structuredClone(mutation.document));
+      return document
         ? setCanvasState(project, {
             ...project.canvas,
-            document: repairSelectedLayerId(normalizeCanvasDocumentContract(structuredClone(snapshot.document))),
+            document: repairSelectedLayerId(document),
+            documentRevision: project.canvas.documentRevision + 1,
+            stagingArea: clearStagingArea(project.canvas.stagingArea),
+          })
+        : project;
+    }
+    case 'saveCanvasSnapshot': {
+      const document = normalizeCanvasDocumentContract(structuredClone(project.canvas.document));
+      return document
+        ? setCanvasState(project, {
+            ...project.canvas,
+            snapshots: [
+              ...project.canvas.snapshots,
+              { createdAt: mutation.createdAt, document, id: mutation.id, name: mutation.name },
+            ],
+          })
+        : project;
+    }
+    case 'restoreCanvasSnapshot': {
+      const snapshot = project.canvas.snapshots.find((entry) => entry.id === mutation.snapshotId);
+      const document = snapshot ? normalizeCanvasDocumentContract(structuredClone(snapshot.document)) : null;
+      return document
+        ? setCanvasState(project, {
+            ...project.canvas,
+            document: repairSelectedLayerId(document),
             documentRevision: project.canvas.documentRevision + 1,
           })
         : project;

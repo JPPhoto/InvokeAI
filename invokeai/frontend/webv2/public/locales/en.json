@@ -464,6 +464,11 @@
     "importWithEllipsis": "Import…",
     "libraryDescription": "Every project saved to your account.",
     "listView": "List view",
+    "load": {
+      "invalid": "\"{{name}}\" contains canvas data this version of Invoke cannot read, and it was not opened.",
+      "multiple": "{{count}} saved projects were not opened because this version of Invoke cannot read them: {{names}}.",
+      "unsupportedVersion": "\"{{name}}\" was saved by a newer version of Invoke and cannot be opened here."
+    },
     "newProject": "New project",
     "newProjectWithLayout": "Start with a layout",
     "noSavedProjects": "No saved projects yet.",

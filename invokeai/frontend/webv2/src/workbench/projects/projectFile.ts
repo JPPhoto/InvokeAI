@@ -14,7 +14,7 @@ import type { ProjectTransferIssues } from './invk/transfer';
 import { createProjectSettled, getProjectBoardSnapshot, type ProjectRecordDTO } from './api';
 import { recordProjectCover } from './covers';
 import { createProjectId } from './ids';
-import { INVK_EXTENSION, InvkFormatError } from './invk/format';
+import { INVK_EXTENSION, InvkFormatError, toInvkFormatReason } from './invk/format';
 import { readAcknowledgedProject, upsertProjectSummary } from './library';
 import { remapAssetRefs, stripInstallationState } from './projectAssets';
 
@@ -218,11 +218,17 @@ export const importProjectFile = async (
 
   assertAccountScopeCurrent(owner);
 
-  const project = deserializeProjectDocument(candidate);
+  const loaded = deserializeProjectDocument(candidate);
 
-  if (!project) {
+  if (loaded.status === 'refused') {
+    throw new InvkFormatError(toInvkFormatReason(loaded.refused), 'The project document was refused.');
+  }
+
+  if (loaded.status !== 'loaded') {
     throw new InvkFormatError('damaged', 'The project document will not rehydrate.');
   }
+
+  const project = loaded.project;
 
   const { applyAuthoritativeProjectBoard, serializeProjectDocument } = await import('./projectDocument');
   const canonicalDocument = serializeProjectDocument(project);

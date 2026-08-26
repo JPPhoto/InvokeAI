@@ -1,17 +1,21 @@
 import type { HydratedWorkbenchSnapshot, PersistedWorkbenchSnapshotV1 } from '@workbench/persistenceContracts';
-import type { Project, WorkbenchState } from '@workbench/projectContracts';
+import type { Project, RefusedWorkbenchProject, WorkbenchState } from '@workbench/projectContracts';
 
 import { getGalleryPage, getGallerySettings } from '@features/gallery/contracts';
 
 import { timeWorkbenchPerf } from './performanceMarks';
+import { gateProjectCanvases } from './projectCanvasGate';
 
 const BASE_STORAGE_KEY = 'invokeai:v7:webv2:workbench';
+const REFUSED_STORAGE_SUFFIX = ':refused-projects';
 const WORKBENCH_SCHEMA_VERSION = 1;
 
 export interface WorkbenchPersistenceService {
   loadWorkbench(): Promise<HydratedWorkbenchSnapshot | null>;
   saveWorkbench(state: WorkbenchState): Promise<HydratedWorkbenchSnapshot>;
   clearWorkbench(): Promise<void>;
+  /** Drops a refused project's retained raw document, e.g. after the project is deleted. */
+  forgetRefusedProject(projectId: string): Promise<void>;
 }
 
 const isBrowser = (): boolean => typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
@@ -64,6 +68,7 @@ export const stripTransientWorkbenchState = (state: WorkbenchState): WorkbenchSt
 };
 
 const createSnapshot = (state: WorkbenchState): HydratedWorkbenchSnapshot => ({
+  refusedProjects: [],
   savedAt: new Date().toISOString(),
   state: stripTransientWorkbenchState(state),
   version: WORKBENCH_SCHEMA_VERSION,
@@ -91,9 +96,28 @@ export const hydratePersistedWorkbenchSnapshot = (value: unknown): HydratedWorkb
     return null;
   }
 
+  const state = record.state;
+  const projects: Project[] = [];
+  const refusedProjects: RefusedWorkbenchProject[] = [];
+
+  for (const project of state.projects) {
+    const refused = gateProjectCanvases(project);
+
+    if (refused) {
+      refusedProjects.push(refused);
+    } else {
+      projects.push(project);
+    }
+  }
+
+  const activeProjectId = projects.some((project) => project.id === state.activeProjectId)
+    ? state.activeProjectId
+    : (projects[0]?.id ?? '');
+
   return {
+    refusedProjects,
     savedAt: typeof record.savedAt === 'string' ? record.savedAt : new Date().toISOString(),
-    state: stripTransientWorkbenchState(record.state),
+    state: stripTransientWorkbenchState({ ...state, activeProjectId, projects }),
     version: WORKBENCH_SCHEMA_VERSION,
   };
 };
@@ -110,9 +134,49 @@ export const serializeWorkbenchPersistenceSnapshot = (
  * Construct one account-owned browser cache. The suffix is captured once,
  * rather than read from mutable auth state when a debounced save eventually
  * executes, so work started by account A can never land in account B's bucket.
+ *
+ * Projects the canvas version gate refuses move into a sibling bucket, untouched,
+ * until they are explicitly forgotten.
  */
 export const createLocalStorageWorkbenchPersistence = (storageSuffix: string): WorkbenchPersistenceService => {
   const storageKey = `${BASE_STORAGE_KEY}${storageSuffix}`;
+  const refusedKey = `${storageKey}${REFUSED_STORAGE_SUFFIX}`;
+
+  const readRefused = (): Record<string, unknown> => {
+    try {
+      const parsed: unknown = JSON.parse(window.localStorage.getItem(refusedKey) ?? '{}');
+
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const writeRefused = (refused: Record<string, unknown>): void => {
+    try {
+      if (Object.keys(refused).length === 0) {
+        window.localStorage.removeItem(refusedKey);
+      } else {
+        window.localStorage.setItem(refusedKey, JSON.stringify(refused));
+      }
+    } catch {
+      // Cache only; the server copy, when there is one, is untouched.
+    }
+  };
+
+  const retainRefused = (refusedProjects: readonly RefusedWorkbenchProject[]): void => {
+    if (refusedProjects.length === 0) {
+      return;
+    }
+    const refused = readRefused();
+
+    for (const project of refusedProjects) {
+      if (project.projectId) {
+        refused[project.projectId] = project.raw;
+      }
+    }
+    writeRefused(refused);
+  };
 
   return {
     clearWorkbench() {
@@ -121,6 +185,17 @@ export const createLocalStorageWorkbenchPersistence = (storageSuffix: string): W
       }
 
       window.localStorage.removeItem(storageKey);
+      window.localStorage.removeItem(refusedKey);
+
+      return Promise.resolve();
+    },
+    forgetRefusedProject(projectId) {
+      if (isBrowser()) {
+        const refused = readRefused();
+
+        delete refused[projectId];
+        writeRefused(refused);
+      }
 
       return Promise.resolve();
     },
@@ -136,7 +211,14 @@ export const createLocalStorageWorkbenchPersistence = (storageSuffix: string): W
       }
 
       try {
-        return Promise.resolve(hydratePersistedWorkbenchSnapshot(JSON.parse(value)));
+        const snapshot = hydratePersistedWorkbenchSnapshot(JSON.parse(value));
+
+        if (snapshot && snapshot.refusedProjects.length > 0) {
+          retainRefused(snapshot.refusedProjects);
+          window.localStorage.setItem(storageKey, JSON.stringify(serializeWorkbenchPersistenceSnapshot(snapshot)));
+        }
+
+        return Promise.resolve(snapshot);
       } catch {
         window.localStorage.removeItem(storageKey);
 

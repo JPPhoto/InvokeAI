@@ -1,3 +1,5 @@
+import type { RefusedWorkbenchProject } from '@workbench/projectContracts';
+
 /**
  * What an `.invk` is called and how reading one can fail.
  *
@@ -57,3 +59,7 @@ export class InvkFormatError extends Error {
     this.reason = reason;
   }
 }
+
+/** The archive-format reason that matches a project the canvas version gate refused. */
+export const toInvkFormatReason = (refused: RefusedWorkbenchProject): InvkFormatReason =>
+  refused.refusal.status === 'unsupported-version' ? 'unsupported-version' : 'damaged';

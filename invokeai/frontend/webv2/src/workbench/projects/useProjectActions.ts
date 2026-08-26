@@ -18,6 +18,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { deleteLibraryProject, refreshProjectLibrary } from './library';
+import { describeRefusedProject } from './projectLoadRefusal';
 
 /**
  * Open, close, and delete for projects, shared by the top bar and the Project
@@ -70,18 +71,26 @@ export const useProjectActions = (): {
     }
 
     try {
-      const project = await persistenceService.hydrateProjectFromServer(projectId);
+      const result = await persistenceService.hydrateProjectFromServer(projectId);
 
       assertAccountScopeCurrent(owner);
 
-      if (!project) {
+      if (result.status === 'refused') {
+        const notice = describeRefusedProject(result.refused, t);
+
+        notify.error(notice.title, notice.message);
+
+        return;
+      }
+
+      if (result.status !== 'loaded') {
         notify.error(t('projects.couldNotOpen'), t('projects.couldNotOpenDescription', { name }));
         void refreshProjectLibrary();
 
         return;
       }
 
-      commands.projects.open(project);
+      commands.projects.open(result.project);
     } catch (error) {
       if (!isAccountScopeCurrent(owner)) {
         return;

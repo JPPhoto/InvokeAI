@@ -13,6 +13,7 @@ import { Button, CloseButton, Row, Scrollable } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { formatRelativeTime } from '@workbench/launchpad/formatRelativeTime';
 import { refreshProjectLibrary, useProjectLibrarySelector, type ProjectSummary } from '@workbench/projects/library';
+import { describeRefusedProject } from '@workbench/projects/projectLoadRefusal';
 import { useImportProjectFile } from '@workbench/projects/useProjectFileActions';
 import { useNotify } from '@workbench/useNotify';
 import {
@@ -61,10 +62,17 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
       setBusyProjectId(summary.id);
 
       try {
-        const project = await persistence.hydrateProjectFromServer(summary.id);
+        const result = await persistence.hydrateProjectFromServer(summary.id);
 
         assertAccountScopeCurrent(owner);
-        if (!project) {
+        if (result.status === 'refused') {
+          const notice = describeRefusedProject(result.refused, t);
+
+          notify.error(notice.title, notice.message);
+
+          return;
+        }
+        if (result.status !== 'loaded') {
           notify.error(t('projects.couldNotOpen'), t('projects.couldNotOpenDescription', { name: summary.name }));
           void refreshProjectLibrary();
 
@@ -72,7 +80,7 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
         }
 
         flushGenerateDrafts();
-        projects.open(project);
+        projects.open(result.project);
         onClose();
       } catch (error) {
         if (!isAccountScopeCurrent(owner)) {
@@ -94,15 +102,19 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
 
   const openImportedProject = useCallback(
     (record: ProjectRecordDTO) => {
-      const project = persistence.adoptProjectRecord(record);
+      const result = persistence.adoptProjectRecord(record);
 
-      if (project) {
+      if (result.status === 'loaded') {
         flushGenerateDrafts();
-        projects.open(project);
+        projects.open(result.project);
         onClose();
+      } else if (result.status === 'refused') {
+        const notice = describeRefusedProject(result.refused, t);
+
+        notify.error(notice.title, notice.message);
       }
     },
-    [onClose, persistence, projects]
+    [notify, onClose, persistence, projects, t]
   );
   const handleImport = useImportProjectFile(openImportedProject);
 
