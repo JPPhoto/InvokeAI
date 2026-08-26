@@ -110,6 +110,7 @@
     "invocation.ts": "workbench",
     "invocationContracts.ts": "workbench",
     "invocationSubmit.ts": "workbench",
+    "layerPanelState.ts": "workbench",
     "layoutContracts.ts": "workbench",
     "layoutPresetActivation.ts": "workbench",
     "layoutPresetCollection.ts": "workbench",

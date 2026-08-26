@@ -13,6 +13,7 @@ import {
 } from '@dnd-kit/core';
 import { arrayMove, SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { system } from '@theme/system';
+import { createLayerPanelState, selectLayerInPanel } from '@workbench/layerPanelState';
 import { createInstance } from 'i18next';
 import { act, useCallback, useMemo, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -21,7 +22,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 
 import { LAYER_KEYBOARD_SENSOR_OPTIONS } from './layerDndConfig';
-import { createLayerPanelSelection, selectLayerInPanel } from './layerGroups';
 import { LayerListItem, type LayerListItemEngine } from './LayerListItem';
 import { createEmptyPaintLayer } from './layerOps';
 
@@ -79,7 +79,7 @@ const requestLayerThumbnail = vi.fn();
 
 const Harness = () => {
   const [layers, setLayers] = useState(INITIAL_LAYERS);
-  const [selection, setSelection] = useState(() => createLayerPanelSelection('test-project', null));
+  const [selection, setSelection] = useState(() => createLayerPanelState('test-project', null));
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, LAYER_KEYBOARD_SENSOR_OPTIONS)
@@ -88,7 +88,7 @@ const Harness = () => {
   const selectedLayerId = selection.primaryId;
   const dispatch = useCallback((mutation: CanvasProjectMutation) => {
     if (mutation.type === 'setCanvasSelectedLayer') {
-      setSelection(createLayerPanelSelection('test-project', mutation.id));
+      setSelection(createLayerPanelState('test-project', mutation.id));
     } else if (mutation.type === 'updateCanvasLayer' && mutation.patch.isEnabled !== undefined) {
       setLayers((current) =>
         current.map((layer) =>

@@ -1,5 +1,6 @@
 import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
+import type { LayerSelectionModifiers } from '@workbench/layerPanelState';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import type { Dispatch, KeyboardEvent, MouseEvent } from 'react';
 
@@ -13,8 +14,6 @@ import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralComm
 import { EyeIcon, EyeOffIcon, LockIcon, LockOpenIcon } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-
-import type { LayerSelectionModifiers } from './layerGroups';
 
 import { ControlLayerWarningIcon } from './ControlLayerWarningIcon';
 import {

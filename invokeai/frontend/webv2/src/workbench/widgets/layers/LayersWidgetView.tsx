@@ -1,18 +1,24 @@
 import type { LayerStackKind } from '@workbench/canvas-engine/api';
 
 import { Flex, Icon, Stack, Text } from '@chakra-ui/react';
+import {
+  publishLayerPanelSelection,
+  selectLayerInPanel,
+  toggleLayerStackCollapsed,
+  useLayerPanelState,
+  type LayerSelectionModifiers,
+} from '@workbench/layerPanelState';
 import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
 import { useActiveProjectId, useActiveProjectSelector } from '@workbench/WorkbenchContext';
-import { publishLayerPanelSelection, readLayerPanelSelection } from '@workbench/workbenchStore';
 import { LayersIcon } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { LayerSelectionModifiers } from './layerGroups';
+import type { LayerGroup } from './layerGroups';
 
-import { groupLayers, reconcileLayerPanelSelection, selectLayerInPanel } from './layerGroups';
+import { groupLayers } from './layerGroups';
 import { LayerGroupSection } from './LayerGroupSection';
 import { LayerMultiSelectionActions } from './LayerMultiSelectionActions';
 import { isLayerPropertiesGroupRequested, useCurrentLayerPropertiesRequest } from './layerPropertiesRequestStore';
@@ -41,47 +47,28 @@ export const LayersWidgetView = () => {
   );
 
   const groups = useMemo(() => groupLayers(layers), [layers]);
-  // Collapse is transient panel UI state (not part of the canvas document / undo
-  // history): a set of collapsed group keys, defaulting to expanded.
-  const [collapsedGroups, setCollapsedGroups] = useState<Partial<Record<LayerStackKind, boolean>>>({});
+  const panelState = useLayerPanelState(projectId, selectedLayerId);
+  const isCollapsed = (group: LayerGroup): boolean =>
+    panelState.collapsedStacks.includes(group.key) && !isLayerPropertiesGroupRequested(propertiesRequest, group.layers);
   const allLayerIds = useMemo(() => groups.flatMap((group) => group.layers.map((layer) => layer.id)), [groups]);
-  const visibleLayerIds = groups.flatMap((group) =>
-    collapsedGroups[group.key] === true && !isLayerPropertiesGroupRequested(propertiesRequest, group.layers)
-      ? []
-      : group.layers.map((layer) => layer.id)
-  );
-  const [storedPanelSelection, setPanelSelection] = useState(() => {
-    const shared = readLayerPanelSelection(projectId, selectedLayerId);
-    return { ...shared, anchorId: shared.primaryId };
-  });
-  const selection = useMemo(() => {
-    const shared = readLayerPanelSelection(projectId, selectedLayerId);
-    const source =
-      storedPanelSelection.projectId === projectId && storedPanelSelection.primaryId === selectedLayerId
-        ? storedPanelSelection
-        : { ...shared, anchorId: shared.primaryId };
-    return reconcileLayerPanelSelection(source, projectId, allLayerIds, selectedLayerId);
-  }, [allLayerIds, projectId, selectedLayerId, storedPanelSelection]);
-  if (selection !== storedPanelSelection) {
-    setPanelSelection(selection);
-  }
-  const selectedIds = selection.selectedIds;
+  const visibleLayerIds = groups.flatMap((group) => (isCollapsed(group) ? [] : group.layers.map((layer) => layer.id)));
+  const selectedIds = panelState.selectedIds;
 
   const handleSelectLayer = useCallback(
     (layerId: string, modifiers: LayerSelectionModifiers) => {
-      const next = selectLayerInPanel(selection, layerId, modifiers.range ? visibleLayerIds : allLayerIds, modifiers);
-      setPanelSelection(next);
+      const next = selectLayerInPanel(panelState, layerId, modifiers.range ? visibleLayerIds : allLayerIds, modifiers);
       publishLayerPanelSelection(next);
       if (next.primaryId !== selectedLayerId) {
         dispatch({ id: next.primaryId, type: 'setCanvasSelectedLayer' });
       }
     },
-    [allLayerIds, dispatch, selectedLayerId, selection, visibleLayerIds]
+    [allLayerIds, dispatch, panelState, selectedLayerId, visibleLayerIds]
   );
 
-  const handleToggleCollapse = useCallback((groupKey: LayerStackKind) => {
-    setCollapsedGroups((prev) => ({ ...prev, [groupKey]: !prev[groupKey] }));
-  }, []);
+  const handleToggleCollapse = useCallback(
+    (stack: LayerStackKind) => toggleLayerStackCollapsed(projectId, selectedLayerId, stack),
+    [projectId, selectedLayerId]
+  );
 
   return (
     <Stack h="full">
@@ -124,9 +111,7 @@ export const LayersWidgetView = () => {
               engine={engine}
               groupKey={group.key}
               groupLayers={group.layers}
-              isCollapsed={
-                collapsedGroups[group.key] === true && !isLayerPropertiesGroupRequested(propertiesRequest, group.layers)
-              }
+              isCollapsed={isCollapsed(group)}
               layers={layers}
               onSelectLayer={handleSelectLayer}
               onToggleCollapse={handleToggleCollapse}

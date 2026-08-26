@@ -8,8 +8,8 @@ import type { CanvasProjectMutationDispatch } from '@workbench/useCanvasProjectM
 
 import { isHideableLayer, isLayerHidden, moveLayersWithinStacks } from '@workbench/canvas-engine/api';
 import { deleteLayersActions, reorderLayerActions } from '@workbench/canvasLayerOps';
+import { publishLayerPanelSelection } from '@workbench/layerPanelState';
 import { canMergeLayerDown } from '@workbench/widgets/layers/layerOps';
-import { publishLayerPanelSelection } from '@workbench/workbenchStore';
 
 /** Command id → document-space nudge delta (shift variants are ×10). */
 const NUDGE_DELTAS: Record<string, { dx: number; dy: number }> = {

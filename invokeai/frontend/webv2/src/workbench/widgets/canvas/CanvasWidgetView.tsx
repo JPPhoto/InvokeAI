@@ -9,6 +9,7 @@ import { preloadCanvasInvocation } from '@workbench/activeInvocationSubmission';
 import { getCanvasImportNotice } from '@workbench/canvas-operations/api';
 import { getCanvasStagingSlots } from '@workbench/canvasStagingView';
 import { recordCanvasImportError } from '@workbench/image-actions/canvasImportError';
+import { readLayerPanelState } from '@workbench/layerPanelState';
 import { useWorkbenchSettingsSelector } from '@workbench/settings/store';
 import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 import { useNotify } from '@workbench/useNotify';
@@ -20,7 +21,6 @@ import {
   useWorkbenchCommands,
   useWorkbenchQueries,
 } from '@workbench/WorkbenchContext';
-import { readLayerPanelSelection } from '@workbench/workbenchStore';
 import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -369,7 +369,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   }, [engine]);
 
   const executeCanvasHotkey = useEffectEvent((commandId: string) => {
-    const selectedLayerIds = readLayerPanelSelection(projectId, document.selectedLayerId).selectedIds;
+    const selectedLayerIds = readLayerPanelState(projectId, document.selectedLayerId).selectedIds;
     executeCanvasHotkeyCommand(commandId, {
       copySelection,
       dispatch: canvasDispatch,

@@ -1,6 +1,7 @@
 import type { DragEndEvent } from '@dnd-kit/core';
 import type { CanvasLayerContract, LayerStackKind } from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
+import type { LayerSelectionModifiers } from '@workbench/layerPanelState';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import type { LucideIcon } from 'lucide-react';
 import type { Dispatch } from 'react';
@@ -18,8 +19,6 @@ import { useActiveProjectName } from '@workbench/WorkbenchContext';
 import { ChevronDownIcon, EyeIcon, EyeOffIcon, FileDownIcon, LayersIcon, PlusIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-
-import type { LayerSelectionModifiers } from './layerGroups';
 
 import { groupAddItemId } from './addLayerMenu';
 import { LAYER_KEYBOARD_SENSOR_OPTIONS } from './layerDndConfig';

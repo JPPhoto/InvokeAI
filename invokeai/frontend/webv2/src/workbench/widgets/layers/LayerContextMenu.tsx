@@ -18,12 +18,12 @@ import { IconButton, MenuContent, RenameDialog, Tooltip } from '@platform/ui';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/api';
 import { getCanvasOperations } from '@workbench/canvas-operations/api';
 import { deleteLayerActions, duplicateLayerActions, reorderLayerActions } from '@workbench/canvasLayerOps';
+import { publishLayerPanelSelection, readLayerPanelState } from '@workbench/layerPanelState';
 import { useNotify } from '@workbench/useNotify';
 import { isCanvasInteractionLocked } from '@workbench/widgets/canvas/canvasInteractionLock';
 import { useCanvasDocumentEditingLocked, useLayerThumbnailVersion } from '@workbench/widgets/canvas/engineStoreHooks';
 import { reportStructuralCommit, useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectId, useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
-import { publishLayerPanelSelection, readLayerPanelSelection } from '@workbench/workbenchStore';
 import {
   ArrowRightLeftIcon,
   ArrowUpDownIcon,
@@ -306,7 +306,7 @@ const LayerMenu = ({
   const getActionLabel = useCallback(
     (id: LayerContextActionId) => {
       if (id === 'duplicate') {
-        const panelSelection = readLayerPanelSelection(projectId, document.selectedLayerId);
+        const panelSelection = readLayerPanelState(projectId, document.selectedLayerId);
         if (panelSelection.selectedIds.includes(layer.id) && panelSelection.selectedIds.length > 1) {
           return t('widgets.layers.actions.duplicateSelected');
         }
@@ -324,7 +324,7 @@ const LayerMenu = ({
 
   const handleDuplicate = useCallback(async () => {
     if (engine) {
-      const panelSelection = readLayerPanelSelection(projectId, document.selectedLayerId);
+      const panelSelection = readLayerPanelState(projectId, document.selectedLayerId);
       const sourceIds = panelSelection.selectedIds.includes(layer.id) ? panelSelection.selectedIds : [layer.id];
       try {
         const result = await engine.layers.duplicateLayers(sourceIds);

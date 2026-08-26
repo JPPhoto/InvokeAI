@@ -11,10 +11,10 @@ import {
   type LayerStackMoveKind,
 } from '@workbench/canvas-engine/api';
 import { deleteLayersActions, reorderLayerActions } from '@workbench/canvasLayerOps';
+import { publishLayerPanelSelection } from '@workbench/layerPanelState';
 import { useNotify } from '@workbench/useNotify';
 import { useCanvasRasterContentEpoch } from '@workbench/widgets/canvas/engineStoreHooks';
 import { reportStructuralCommit, useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
-import { publishLayerPanelSelection } from '@workbench/workbenchStore';
 import {
   ArrowDownIcon,
   ArrowUpIcon,
