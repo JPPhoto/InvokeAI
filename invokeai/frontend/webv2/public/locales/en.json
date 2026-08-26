@@ -2300,6 +2300,11 @@
         "unverified": "The edit could not be verified or reverted. Check the canvas before continuing."
       },
       "surface": "Canvas surface",
+      "toolHints": {
+        "colorPicker": "Click the canvas to sample a color.",
+        "sam": "Click an object to select it.",
+        "view": "Drag to pan and scroll to zoom."
+      },
       "toolOptions": {
         "applyTransform": "Apply",
         "aspectRatio": "Aspect ratio",
@@ -2366,12 +2371,14 @@
       "tools": {
         "bbox": "Generation frame",
         "brush": "Brush",
+        "colorPicker": "Color picker",
         "eraser": "Eraser",
         "gradient": "Gradient",
         "label": "Tools",
         "lasso": "Lasso select",
         "marquee": "Marquee select",
         "move": "Move",
+        "sam": "Select object",
         "shape": "Shape",
         "text": "Text",
         "transform": "Transform",

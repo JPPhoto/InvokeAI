@@ -3,10 +3,11 @@ import type { CanvasOperationState } from '@workbench/canvas-operations/api';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import type { ComponentType } from 'react';
 
-import { HStack } from '@chakra-ui/react';
+import { HStack, Text } from '@chakra-ui/react';
 import { BboxDetailsBar } from '@workbench/widgets/canvas/BboxDetailsBar';
 import { CanvasFloatingBarDivider } from '@workbench/widgets/canvas/CanvasFloatingBar';
 import { useCanvasActiveTool, useCanvasOperation } from '@workbench/widgets/canvas/engineStoreHooks';
+import { useTranslation } from 'react-i18next';
 
 import { BboxOptions } from './BboxOptions';
 import { BrushOptions } from './BrushOptions';
@@ -31,11 +32,7 @@ export interface ToolOptionsComponentProps {
   engine: CanvasToolOptionsEngine;
 }
 
-/**
- * Contextual options content per active tool. Tools without an entry here
- * (view, and anything not yet implemented) render no controls, and the bar
- * itself is omitted.
- */
+/** Contextual options content per active tool; tools without an entry show their hint instead. */
 export const TOOL_OPTIONS_COMPONENTS: Partial<Record<ToolId, ComponentType<ToolOptionsComponentProps>>> = {
   bbox: BboxOptions,
   brush: BrushOptions,
@@ -49,47 +46,58 @@ export const TOOL_OPTIONS_COMPONENTS: Partial<Record<ToolId, ComponentType<ToolO
   transform: TransformOptions,
 };
 
-export const resolveCanvasOptionsContent = (
+export type ToolOptionsBarContent =
+  | { kind: 'operation' }
+  | { kind: 'options'; tool: ToolId; component: ComponentType<ToolOptionsComponentProps> }
+  | { kind: 'hint'; tool: ToolId };
+
+export const resolveToolOptionsBarContent = (
   operation: Pick<CanvasOperationState, 'status'>,
   activeTool: ToolId
-): 'operation' | ToolId | null => {
+): ToolOptionsBarContent => {
   if (operation.status === 'active') {
-    return 'operation';
+    return { kind: 'operation' };
   }
-  return TOOL_OPTIONS_COMPONENTS[activeTool] ? activeTool : null;
+  const component = TOOL_OPTIONS_COMPONENTS[activeTool];
+  return component ? { component, kind: 'options', tool: activeTool } : { kind: 'hint', tool: activeTool };
 };
 
 /**
- * The canvas's floating tool-options bar (bottom-center over the surface):
- * contextual controls for the active tool. Tool options read and write the
- * engine's transient option stores directly (`useBrushOptions` /
- * `useEraserOptions` + `engine.interaction.set(...)`) — there is no React state
- * mirror. Positioned by {@link CanvasWidgetView}; shares its look with the
- * staging bar via {@link CanvasFloatingBar}.
- *
- * The bar is purely contextual: a tool with no options renders nothing at all,
- * rather than an empty bar floating over the surface.
+ * The canvas's floating tool-options bar (bottom-center over the surface): the
+ * active tool's identity followed by its contextual controls, or its usage hint
+ * when it has none, so the bar keeps its place across tool switches.
+ * Tool options read and write the engine's transient option stores directly
+ * (`useBrushOptions` / `useEraserOptions` + `engine.interaction.set(...)`) —
+ * there is no React state mirror. Positioned by {@link CanvasWidgetView};
+ * shares its look with the staging bar via {@link CanvasFloatingBar}.
  */
 export const ToolOptionsBar = ({ engine }: { engine: CanvasToolOptionsEngine }) => {
+  const { t } = useTranslation();
   const activeTool = useCanvasActiveTool(engine);
   const operation = useCanvasOperation(engine);
-  const content = resolveCanvasOptionsContent(operation, activeTool);
-  if (content === 'operation' && operation.status === 'active') {
+  const content = resolveToolOptionsBarContent(operation, activeTool);
+  if (content.kind === 'operation' && operation.status === 'active') {
     return <CanvasOperationBar engine={engine} isExternalInteractionLocked={false} operation={operation} />;
   }
-  const OptionsComponent = content && content !== 'operation' ? TOOL_OPTIONS_COMPONENTS[content] : undefined;
+  const OptionsComponent = content.kind === 'options' ? content.component : undefined;
   const hasBboxDetails = activeTool === 'bbox';
-
-  if (!OptionsComponent && !hasBboxDetails) {
-    return null;
-  }
 
   return (
     <CanvasOptionsBar>
       <HStack align="center" gap="3" minW="0" overflow="hidden">
+        <Text color="fg.muted" flexShrink={0} fontSize="xs" whiteSpace="nowrap">
+          {t(`widgets.canvas.tools.${activeTool}`)}
+        </Text>
+        <CanvasFloatingBarDivider />
         {hasBboxDetails ? <BboxDetailsBar engine={engine} /> : null}
         {hasBboxDetails && OptionsComponent ? <CanvasFloatingBarDivider /> : null}
-        {OptionsComponent ? <OptionsComponent engine={engine} /> : null}
+        {OptionsComponent ? (
+          <OptionsComponent engine={engine} />
+        ) : (
+          <Text color="fg.subtle" fontSize="xs" minW="0" truncate>
+            {t(`widgets.canvas.toolHints.${activeTool}`)}
+          </Text>
+        )}
       </HStack>
     </CanvasOptionsBar>
   );
