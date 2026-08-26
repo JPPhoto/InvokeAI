@@ -29,6 +29,7 @@
     "test:accessibility:build": "vite build",
     "test:all": "pnpm run test && pnpm run test:browser && pnpm run test:fixtures",
     "test:browser": "vitest run --config vitest.browser.config.mts",
+    "test:browser:update-goldens": "CANVAS_GOLDEN_UPDATE=1 vitest run --config vitest.browser.config.mts src/workbench/canvas-engine/render/golden",
     "test:fixtures": "node --test scripts/mock-backend-fixtures.test.mjs scripts/run-project-file-journey.test.mjs",
     "test:performance:architecture": "pnpm run test:performance:build && pnpm run test:performance:browser",
     "test:performance:browser": "node scripts/measure-architecture-performance.mjs",
