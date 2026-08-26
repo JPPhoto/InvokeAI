@@ -1,3 +1,4 @@
+import type { StructuralCommitResult } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { TextEditSession, TextSource, TextToolOptions } from '@workbench/canvas-engine/engineStores';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
@@ -13,7 +14,11 @@ export interface TextEditingControllerOptions {
   readonly canEdit: () => boolean;
   readonly isGestureActive: () => boolean;
   readonly createLayerId: () => string;
-  readonly commitStructural: (label: string, forward: CanvasProjectMutation, inverse: CanvasProjectMutation) => void;
+  readonly commitStructural: (
+    label: string,
+    forward: CanvasProjectMutation,
+    inverse: CanvasProjectMutation
+  ) => StructuralCommitResult;
   readonly invalidate: (payload: { layers?: string[]; overlay?: true }) => void;
 }
 
@@ -111,19 +116,25 @@ export class TextEditingController {
     this.deps.invalidate(session.layerId ? { layers: [session.layerId] } : { overlay: true });
   }
 
-  commit(content: string, styleChanges?: Partial<TextToolOptions>): void {
-    if (this.disposed || !this.deps.canEdit() || this.deps.isGestureActive()) {
-      return;
+  commit(content: string, styleChanges?: Partial<TextToolOptions>): StructuralCommitResult | null {
+    if (this.disposed) {
+      return { status: 'not-ready' };
+    }
+    if (!this.deps.canEdit()) {
+      return { status: 'busy' };
+    }
+    if (this.deps.isGestureActive()) {
+      return { status: 'gesture-active' };
     }
     const session = this.deps.session.get();
     if (!session) {
-      return;
+      return null;
     }
     const finalSource: TextSource = { ...session.source, ...styleChanges, content };
     if (session.mode === 'create') {
       if (content.trim() === '') {
         this.cancel();
-        return;
+        return null;
       }
       const layerId = this.deps.createLayerId();
       const layer: CanvasLayerContract = {
@@ -137,30 +148,39 @@ export class TextEditingController {
         transform: session.transform,
         type: 'raster',
       };
-      this.deps.session.set(null);
-      this.deps.commitStructural(
+      const added = this.deps.commitStructural(
         'Add text',
         { index: 0, layer, type: 'addCanvasLayer' },
         { ids: [layerId], type: 'removeCanvasLayers' }
       );
+      this.settle(added);
       this.deps.invalidate({ overlay: true });
-      return;
+      return added;
     }
     const { layerId, startSource } = session;
     if (!layerId || !startSource) {
       this.cancel();
-      return;
+      return null;
     }
-    this.deps.session.set(null);
     if (sourcesEqual(startSource, finalSource)) {
+      this.deps.session.set(null);
       this.deps.invalidate({ layers: [layerId] });
-      return;
+      return null;
     }
-    this.deps.commitStructural(
+    const edited = this.deps.commitStructural(
       'Edit text',
       { id: layerId, source: finalSource, type: 'updateCanvasLayerSource' },
       { id: layerId, source: startSource, type: 'updateCanvasLayerSource' }
     );
+    this.settle(edited);
+    return edited;
+  }
+
+  /** A landed edit or a target that is gone ends the session; a transient refusal keeps the text for retry. */
+  private settle(result: StructuralCommitResult): void {
+    if (result.status === 'committed' || result.status === 'dispatch-rejected' || result.status === 'not-ready') {
+      this.deps.session.set(null);
+    }
   }
 
   commitOpen(): boolean {

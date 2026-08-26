@@ -107,7 +107,10 @@ const Harness = () => {
     () =>
       ({
         layers: {
-          commitStructural: (_label: string, mutation: CanvasProjectMutation) => dispatch(mutation),
+          commitStructural: (_label: string, mutation: CanvasProjectMutation) => {
+            dispatch(mutation);
+            return { status: 'committed' as const };
+          },
         },
         previews: {
           drawLayerThumbnail: () => false,

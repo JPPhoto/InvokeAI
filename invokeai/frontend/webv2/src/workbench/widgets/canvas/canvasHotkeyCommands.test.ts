@@ -68,7 +68,7 @@ const createEngine = (interaction: Partial<CanvasInteractionState> = {}) => {
         })
       ),
       mergeLayerDown: vi.fn(),
-      nudgeSelectedLayer: vi.fn(),
+      nudgeSelectedLayer: vi.fn(() => ({ status: 'committed' as const })),
     },
     selection: {
       deselect: vi.fn(),
@@ -89,6 +89,7 @@ let pasteFromClipboard: Mock<() => void>;
 const contextOf = (overrides: Partial<CanvasHotkeyContext> = {}): CanvasHotkeyContext => ({
   copySelection,
   dispatch,
+  reportStructuralCommit: () => undefined,
   document: documentOf([rasterLayer('a'), rasterLayer('b')], 'a'),
   engine: createEngine(),
   hasSelectedStagedCandidate: false,

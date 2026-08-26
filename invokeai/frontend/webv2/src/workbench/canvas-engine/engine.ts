@@ -23,6 +23,8 @@ import type {
   MergeVisibleResult,
   NewRasterLayerResult,
   PsdExportResult,
+  StructuralCommitOptions,
+  StructuralCommitResult,
 } from '@workbench/canvas-engine/capabilities';
 import type {
   CanvasCompositeExecutorDeps,
@@ -209,7 +211,15 @@ const createCleanupAccumulator = (): { run: (step: () => void) => void; throwIfF
 export interface CanvasEngineErrorReport {
   area: 'canvas-engine';
   context: { error: string; layerId: string };
-  message: 'Layer thumbnail rasterization failed' | 'Bitmap persistence failed' | 'Bitmap persistence suspended';
+  message:
+    | 'Layer thumbnail rasterization failed'
+    | 'Bitmap persistence failed'
+    | 'Bitmap persistence suspended'
+    | 'Structural edit was refused'
+    | 'Structural edit could not be reverted'
+    | 'Structural edit could not be mirrored'
+    | 'Structural history replay was refused'
+    | 'Structural history replay could not be mirrored';
   namespace: 'canvas';
   projectId: string;
 }
@@ -716,18 +726,8 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     pixelEditController?.cancel();
   };
 
-  const structuralController = new StructuralLayerController({
-    canEdit: () => canEditDocument(),
-    dispatch: (action) => dispatchCanvasMutation(action),
-    getDocument: () => mirror.getDocument(),
-    getSelectedLayerIds: resolveSelectedLayerIds,
-    history,
-    isGestureActive: () => pipeline.isGestureActive(),
-  });
+  let structuralController: StructuralLayerController;
   const endNudgeBurst = (): void => structuralController.endBurst();
-  const commitStructural = (label: string, forward: CanvasProjectMutation, inverse: CanvasProjectMutation): boolean =>
-    structuralController.commit(label, forward, inverse);
-  const nudgeSelectedLayer = (dx: number, dy: number): void => structuralController.nudge(dx, dy);
 
   /**
    * The pixel-write bridge shared by undo and redo: put the patch's pixels back
@@ -907,7 +907,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     },
     text: {
       canEdit: () => canEditDocument(),
-      commitStructural: (label, forward, inverse) => commitStructural(label, forward, inverse),
+      commitStructural: (label, forward, inverse) => commitToolStructural(label, forward, inverse),
       createLayerId,
       getDocument: () => mirror.getDocument(),
       invalidate: (payload) => scheduler.invalidate(payload),
@@ -1168,7 +1168,32 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     isGuardCurrent: (guard) => isLayerExportGuardCurrent(guard),
     preparePixels: (layerId, rect, pixels) => prepareGeneratedPaintCache(layerId, rect, pixels),
     refreshMirror: () => mirror.refresh(),
+    subscribeReducer: (listener) => mutationPort.subscribe(listener),
   });
+  structuralController = new StructuralLayerController({
+    ctx: mutationContext,
+    getSelectedLayerIds: resolveSelectedLayerIds,
+    report: (message, label, error) => reportError(message, label, error),
+  });
+  const commitStructural = (
+    label: string,
+    forward: CanvasProjectMutation,
+    inverse: CanvasProjectMutation,
+    options?: StructuralCommitOptions
+  ): StructuralCommitResult => structuralController.commit(label, forward, inverse, options);
+  const nudgeSelectedLayer = (dx: number, dy: number): StructuralCommitResult => structuralController.nudge(dx, dy);
+  // Tools commit at pointer-up with nowhere to show a refusal; contention is expected, anything else is logged.
+  const commitToolStructural = (
+    label: string,
+    forward: CanvasProjectMutation,
+    inverse: CanvasProjectMutation
+  ): StructuralCommitResult => {
+    const result = commitStructural(label, forward, inverse);
+    if (result.status !== 'committed' && result.status !== 'busy') {
+      reportError('Structural edit was refused', label, result.status);
+    }
+    return result;
+  };
   const canEditDocument = (owner?: symbol): boolean => mutationContext.canEdit(owner);
   const captureDocumentEditPermit = (owner?: symbol): DocumentEditPermit | null => mutationContext.capturePermit(owner);
   const isDocumentEditPermitCurrent = (permit: DocumentEditPermit): boolean => mutationContext.isPermitCurrent(permit);
@@ -2395,7 +2420,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   const openTextEdit = (layerId: string): void => editingController.text.openEdit(layerId);
   const updateTextEditStyle = (patch: Partial<TextToolOptions>): void => editingController.text.updateStyle(patch);
   const cancelTextEdit = (): void => editingController.text.cancel();
-  const commitTextEdit = (content: string, styleChanges?: Partial<TextToolOptions>): void =>
+  const commitTextEdit = (content: string, styleChanges?: Partial<TextToolOptions>): StructuralCommitResult | null =>
     editingController.text.commit(content, styleChanges);
   const commitOpenTextSession = (): boolean => editingController.text.commitOpen();
 
@@ -2850,6 +2875,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   const documentCapability: CanvasDocumentCapability = {
     captureSnapshot: captureDocumentSnapshot,
     getDocument: () => mirror.getDocument(),
+    getEditRevision: () => mutationContext.getEditRevision(),
   };
   const selectionCapability: CanvasEngineSelectionCapability = {
     deselect,

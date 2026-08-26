@@ -8,6 +8,7 @@ import { Box, HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { useModifierHeld } from '@platform/react/useModifierHeld';
 import { ConfirmDialog, IconButton, MenuContent, Tooltip } from '@platform/ui';
 import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
+import { useNotify } from '@workbench/useNotify';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import {
@@ -47,6 +48,7 @@ import {
 import { useCanvasCanRedo, useCanvasCanUndo, useCanvasDocumentEditingLocked, useCanvasZoom } from './engineStoreHooks';
 import { computeFitBboxToLayers, computeFitBboxToMasks } from './fitBbox';
 import { useCanvasEngine } from './useCanvasEngine';
+import { reportStructuralCommit } from './useStructuralCommit';
 import { formatZoomPercent, zoomMenuOptions } from './zoomOptions';
 
 type CanvasHeaderEngine = Pick<CanvasEngineHandle, 'diagnostics' | 'history' | 'interaction' | 'layers' | 'viewport'>;
@@ -87,6 +89,7 @@ const CanvasHeaderActionsInner = ({
   runtime: WidgetViewProps['runtime'];
 }) => {
   const { t } = useTranslation();
+  const notify = useNotify();
   const dispatch = useCanvasProjectMutationDispatch();
   const zoom = useCanvasZoom(engine);
   const canUndo = useCanvasCanUndo(engine);
@@ -119,6 +122,7 @@ const CanvasHeaderActionsInner = ({
     fitLayersRect,
     fitMasksRect,
     openNewCanvas,
+    reportStructuralCommit: (result) => reportStructuralCommit(result, notify.error, t),
     t,
   });
 

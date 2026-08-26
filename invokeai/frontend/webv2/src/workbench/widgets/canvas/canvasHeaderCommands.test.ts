@@ -29,7 +29,7 @@ const documentOf = (): CanvasDocumentContractV2 =>
 const createEngine = (viewportSize = { height: 600, width: 800 }) => {
   const zoomAtPoint = vi.fn();
   const engine = {
-    layers: { commitStructural: vi.fn(() => true) },
+    layers: { commitStructural: vi.fn(() => ({ status: 'committed' as const })) },
     viewport: {
       fitToView: vi.fn(),
       getViewport: vi.fn(() => ({ getViewportSize: () => viewportSize, zoomAtPoint })),
@@ -41,6 +41,7 @@ const createEngine = (viewportSize = { height: 600, width: 800 }) => {
 let dispatch: Mock<(mutation: CanvasProjectMutation) => boolean>;
 
 const contextOf = (overrides: Partial<CanvasHeaderCommandContext> = {}): CanvasHeaderCommandContext => ({
+  reportStructuralCommit: () => undefined,
   dispatch,
   document: documentOf(),
   editingLocked: false,

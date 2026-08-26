@@ -47,6 +47,10 @@ export interface LayerExportGuard {
  * `busy` — another edit owns the document, or a gesture started mid-flight.
  * `stale` — the guarded pixels no longer match the live layer.
  * `aborted` — the caller's signal fired.
+ *
+ * This union still mixes runtime outcomes with document refusals (`missing`,
+ * `locked`, `unsupported`); structural commits use the transaction-only
+ * {@link StructuralCommitResult} instead.
  */
 export type GuardedMutationRefusal = 'aborted' | 'busy' | 'locked' | 'missing' | 'stale' | 'unsupported';
 
@@ -135,6 +139,13 @@ export interface CanvasSurfaceCapability {
 export interface CanvasDocumentCapability {
   captureSnapshot(): CanvasDocumentSnapshot | null;
   getDocument(): CanvasDocumentContractV2 | null;
+  /**
+   * Counts every reducer document identity change, whatever its origin (user edits, previews,
+   * selection, system syncs). Unlike `documentGeneration` (raster invalidation) and the persisted
+   * `documentRevision` (wholesale swaps), it moves on each edit, so an edit prepared against a
+   * captured value can be refused as stale once anything else lands.
+   */
+  getEditRevision(): number;
 }
 
 /** Immutable reducer canvas state captured at one engine document generation. */
@@ -244,12 +255,43 @@ export type ReplaceSelectionFromImageResult =
   | { status: GuardedMutationRefusal }
   | { status: 'failed'; message: string };
 
+/**
+ * The runtime outcome of a structural document commit. `busy`, `gesture-active`, `not-ready`, and
+ * `stale` refuse before dispatch. `dispatch-rejected` means the reducer left the document unchanged,
+ * which includes a forward that would not change anything. `postcondition-failed` means the reducer
+ * accepted but the result could not be verified; `recovered` says how far the inverse got, and any
+ * outcome short of `reverted` was reported. Exactly one history entry is recorded, and only for
+ * `committed`.
+ */
+export type StructuralCommitResult =
+  | { status: 'committed' }
+  | { status: 'busy' | 'gesture-active' | 'not-ready' | 'dispatch-rejected' }
+  | { status: 'stale'; expectedRevision: number; actualRevision: number }
+  | { status: 'postcondition-failed'; recovered: 'reverted' | 'reverted-unmirrored' | 'unreverted' };
+
+export interface StructuralCommitOptions {
+  /** The edit revision the edit was prepared against; a mismatch refuses as `stale`. */
+  expectedRevision?: number;
+  /** An extra reducer postcondition beyond "the document changed". */
+  verify?: (document: CanvasDocumentContractV2) => boolean;
+}
+
+/** The narrowest engine surface a structural edit needs. */
+export interface CanvasStructuralEngine {
+  readonly layers: CanvasLayerCapability;
+}
+
 export interface CanvasLayerCapability {
   applyStructuralPreview(action: CanvasProjectMutation): boolean;
   canCommitStructural(): boolean;
   commitGeneratedImageResult(options: CommitGeneratedImageOptions): Promise<CommitGeneratedImageResult>;
   commitStagedImage(options: CommitStagedImageOptions): CommitStagedImageResult;
-  commitStructural(label: string, forward: CanvasProjectMutation, inverse: CanvasProjectMutation): boolean;
+  commitStructural(
+    label: string,
+    forward: CanvasProjectMutation,
+    inverse: CanvasProjectMutation,
+    options?: StructuralCommitOptions
+  ): StructuralCommitResult;
   invertMask(layerId: string): boolean;
 }
 
@@ -377,14 +419,16 @@ export interface CanvasEngineLayerCapability extends CanvasLayerCapability {
   commitMaskImageResult(options: CommitMaskImageResultOptions): Promise<CommitMaskImageResult>;
   commitOpenTextSession(): boolean;
   commitRasterFilterResult(options: CommitRasterFilterOptions): Promise<CommitRasterFilterResult>;
-  commitTextEdit(content: string, styleChanges?: Partial<TextToolOptions>): void;
+  /** `null` when there was nothing to commit: an empty creation or an unchanged edit. */
+  commitTextEdit(content: string, styleChanges?: Partial<TextToolOptions>): StructuralCommitResult | null;
   copyLayerToRaster(layerId: string): Promise<string | null>;
   cropLayerToBbox(layerId: string): Promise<CropLayerResult>;
   duplicateLayers(layerIds: readonly string[]): Promise<DuplicateLayersResult>;
   mergeLayerDown(upperLayerId: string): boolean;
   mergeSelectedRasterLayers(layerIds: readonly string[]): Promise<MergeVisibleResult>;
   mergeVisibleRasterLayers(): Promise<MergeVisibleResult>;
-  nudgeSelectedLayer(dx: number, dy: number): void;
+  /** `dispatch-rejected` also covers a selection with nothing eligible to move. */
+  nudgeSelectedLayer(dx: number, dy: number): StructuralCommitResult;
   openTextCreate(docPoint: Vec2): void;
   openTextEdit(layerId: string): void;
   rasterizeLayer(layerId: string): boolean;

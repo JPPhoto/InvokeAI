@@ -13,6 +13,7 @@
  * Zero React, zero import-time side effects.
  */
 
+import type { StructuralCommitResult } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { EngineStores } from '@workbench/canvas-engine/engineStores';
 import type { CreatePath2D } from '@workbench/canvas-engine/freehand';
@@ -99,7 +100,11 @@ export interface ToolContext {
    * dispatches `forward` now, and an undo dispatches `inverse` / a redo
    * re-dispatches `forward`. The move tool commits a layer nudge through this.
    */
-  commitStructural(label: string, forward: CanvasProjectMutation, inverse: CanvasProjectMutation): void;
+  commitStructural(
+    label: string,
+    forward: CanvasProjectMutation,
+    inverse: CanvasProjectMutation
+  ): StructuralCommitResult;
   /**
    * Sets (or clears with `null`) a transient per-layer transform override the
    * compositor and overlay read at render time — a live drag preview that never

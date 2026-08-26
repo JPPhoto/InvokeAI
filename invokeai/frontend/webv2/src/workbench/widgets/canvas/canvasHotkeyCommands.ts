@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV2, CanvasEngine } from '@workbench/canvas-engine/api';
+import type { CanvasDocumentContractV2, CanvasEngine, StructuralCommitResult } from '@workbench/canvas-engine/api';
 import type { LayerReorderKind, StructuralActions } from '@workbench/canvasLayerOps';
 import type { CanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 
@@ -70,6 +70,7 @@ export interface CanvasHotkeyContext {
   readonly copySelection: (cut: boolean) => void;
   readonly pasteFromClipboard: () => void;
   readonly notifyLayerDuplicateFailed: () => void;
+  readonly reportStructuralCommit: (result: StructuralCommitResult) => void;
   readonly t: (key: string) => string;
 }
 
@@ -112,7 +113,11 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
   // Arrow-key nudge: engine owns the bounds/lock logic (no-op with no/locked selection).
   const nudge = NUDGE_DELTAS[commandId];
   if (nudge) {
-    engine?.layers.nudgeSelectedLayer(nudge.dx, nudge.dy);
+    const nudged = engine?.layers.nudgeSelectedLayer(nudge.dx, nudge.dy);
+    // A nudge with nothing eligible selected is an expected no-op; only a broken commit is news.
+    if (nudged?.status === 'postcondition-failed') {
+      ctx.reportStructuralCommit(nudged);
+    }
     return;
   }
 
@@ -128,7 +133,9 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
       return;
     }
     const { forward, inverse } = reorderLayerActions(currentIds, nextIds);
-    engine.layers.commitStructural(t('widgets.canvas.commands.reorderLayer'), forward, inverse);
+    ctx.reportStructuralCommit(
+      engine.layers.commitStructural(t('widgets.canvas.commands.reorderLayer'), forward, inverse)
+    );
     return;
   }
 
@@ -140,7 +147,9 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     } else if (engine && selectedLayer && selectedIndex >= 0 && !selectedLayer.isLocked) {
       const actions = deleteSelectedLayerActions(layers, ctx.selectedLayerIds, selectedLayer.id);
       if (actions) {
-        engine.layers.commitStructural(t('widgets.canvas.commands.deleteLayer'), actions.forward, actions.inverse);
+        ctx.reportStructuralCommit(
+          engine.layers.commitStructural(t('widgets.canvas.commands.deleteLayer'), actions.forward, actions.inverse)
+        );
       }
     }
   } else if (commandId === 'canvas.copySelection' || commandId === 'canvas.cutSelection') {
@@ -153,16 +162,18 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     const hideable = layers.filter(isHideableLayer);
     if (engine && hideable.length > 0) {
       const nextHidden = hideable.every((layer) => !isLayerHidden(layer));
-      engine.layers.commitStructural(
-        t('widgets.canvas.commands.toggleNonRasterLayers'),
-        {
-          type: 'setCanvasLayersHidden',
-          updates: hideable.map((layer) => ({ id: layer.id, isHidden: nextHidden })),
-        },
-        {
-          type: 'setCanvasLayersHidden',
-          updates: hideable.map((layer) => ({ id: layer.id, isHidden: isLayerHidden(layer) })),
-        }
+      ctx.reportStructuralCommit(
+        engine.layers.commitStructural(
+          t('widgets.canvas.commands.toggleNonRasterLayers'),
+          {
+            type: 'setCanvasLayersHidden',
+            updates: hideable.map((layer) => ({ id: layer.id, isHidden: nextHidden })),
+          },
+          {
+            type: 'setCanvasLayersHidden',
+            updates: hideable.map((layer) => ({ id: layer.id, isHidden: isLayerHidden(layer) })),
+          }
+        )
       );
     }
   } else if (commandId === 'canvas.resetSelected') {

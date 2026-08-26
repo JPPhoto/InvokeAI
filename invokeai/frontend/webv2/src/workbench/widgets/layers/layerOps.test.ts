@@ -1,11 +1,9 @@
 import type { CanvasLayerContract, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
-import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   applyStructuralPreview,
-  applyStructural,
   type CanvasStructuralEngine,
   canConvertRasterControl,
   canMergeLayerDown,
@@ -171,42 +169,19 @@ describe('canMergeLayerDown', () => {
   });
 });
 
-describe('applyStructural', () => {
-  const forward: CanvasProjectMutation = { ids: ['a'], type: 'removeCanvasLayers' };
-  const inverse: CanvasProjectMutation = { index: 0, layer: paintLayer('a'), type: 'addCanvasLayer' };
-
-  it('routes through the engine history when an engine is attached', () => {
-    const commitStructural = vi.fn();
-    const engine = { layers: { commitStructural } } as unknown as CanvasStructuralEngine;
-    const dispatch = vi.fn();
-
-    applyStructural(engine, dispatch, 'Delete layer', forward, inverse);
-
-    expect(commitStructural).toHaveBeenCalledWith('Delete layer', forward, inverse);
-    expect(dispatch).not.toHaveBeenCalled();
-  });
-
-  it('falls back to a plain forward dispatch without an engine', () => {
-    const dispatch = vi.fn();
-
-    applyStructural(null, dispatch, 'Delete layer', forward, inverse);
-
-    expect(dispatch).toHaveBeenCalledWith(forward);
-    expect(dispatch).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe('applyStructuralPreview', () => {
+  const action = { id: 'layer', patch: { opacity: 0.5 }, type: 'updateCanvasLayer' } as const;
+
   it('routes a live document edit through the engine guard', () => {
-    const action = { id: 'layer', patch: { opacity: 0.5 }, type: 'updateCanvasLayer' } as const;
     const applyPreview = vi.fn(() => false);
     const engine = { layers: { applyStructuralPreview: applyPreview } } as unknown as CanvasStructuralEngine;
-    const dispatch = vi.fn();
 
-    expect(applyStructuralPreview(engine, dispatch, action)).toBe(false);
-
+    expect(applyStructuralPreview(engine, action)).toBe(false);
     expect(applyPreview).toHaveBeenCalledWith(action);
-    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('refuses a live edit without an engine', () => {
+    expect(applyStructuralPreview(null, action)).toBe(false);
   });
 });
 

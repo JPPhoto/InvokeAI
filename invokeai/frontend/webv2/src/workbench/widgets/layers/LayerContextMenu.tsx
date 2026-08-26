@@ -20,6 +20,7 @@ import { deleteLayerActions, duplicateLayerActions } from '@workbench/canvasLaye
 import { useNotify } from '@workbench/useNotify';
 import { isCanvasInteractionLocked } from '@workbench/widgets/canvas/canvasInteractionLock';
 import { useCanvasDocumentEditingLocked, useLayerThumbnailVersion } from '@workbench/widgets/canvas/engineStoreHooks';
+import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectId, useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { publishLayerPanelSelection, readLayerPanelSelection } from '@workbench/workbenchStore';
 import {
@@ -69,7 +70,6 @@ import { copyBlobToClipboard, saveLayerToAssets } from './layerExportActions';
 import { reorderWithinGroupByKind } from './layerGroups';
 import { resolveMenuTargetForRender } from './layerMenuState';
 import {
-  applyStructural,
   convertRasterToControl,
   convertRasterToInpaintMask,
   convertRasterToRegionalGuidance,
@@ -208,6 +208,7 @@ const LayerMenu = ({
   beforeDangerItems,
   showGroupLabels,
 }: LayerMenuProps) => {
+  const commitStructural = useStructuralCommit(engine);
   const { t } = useTranslation();
   const projectId = useActiveProjectId();
   const { widgets } = useWorkbenchCommands();
@@ -245,28 +246,24 @@ const LayerMenu = ({
 
   const patchBase = useCallback(
     (label: string, forward: Partial<CanvasLayerContract>, inverse: Partial<CanvasLayerContract>) => {
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         label,
         { id: layer.id, patch: forward, type: 'updateCanvasLayer' },
         { id: layer.id, patch: inverse, type: 'updateCanvasLayer' }
       );
     },
-    [dispatch, engine, layer.id]
+    [commitStructural, layer.id]
   );
 
   const patchConfig = useCallback(
     (label: string, forward: LayerConfigPatch, inverse: LayerConfigPatch) => {
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         label,
         { config: forward, id: layer.id, type: 'updateCanvasLayerConfig' },
         { config: inverse, id: layer.id, type: 'updateCanvasLayerConfig' }
       );
     },
-    [dispatch, engine, layer.id]
+    [commitStructural, layer.id]
   );
 
   const reorder = useCallback(
@@ -275,15 +272,13 @@ const LayerMenu = ({
       if (!next) {
         return;
       }
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         label,
         { orderedIds: next, type: 'reorderCanvasLayers' },
         { orderedIds: layers.map((entry) => entry.id), type: 'reorderCanvasLayers' }
       );
     },
-    [dispatch, engine, layer.id, layers]
+    [commitStructural, layer.id, layers]
   );
 
   const actionState = useMemo<LayerContextActionState>(
@@ -355,13 +350,13 @@ const LayerMenu = ({
       return;
     }
     const { forward, inverse } = duplicateLayerActions(layer.id, createLayerId());
-    applyStructural(engine, dispatch, t('widgets.layers.actions.duplicate'), forward, inverse);
-  }, [dispatch, document.selectedLayerId, engine, layer.id, notify, projectId, t]);
+    commitStructural(t('widgets.layers.actions.duplicate'), forward, inverse);
+  }, [commitStructural, document.selectedLayerId, engine, layer.id, notify, projectId, t]);
 
   const handleDelete = useCallback(() => {
     const { forward, inverse } = deleteLayerActions(layer, index);
-    applyStructural(engine, dispatch, t('widgets.layers.actions.delete'), forward, inverse);
-  }, [dispatch, engine, index, layer, t]);
+    commitStructural(t('widgets.layers.actions.delete'), forward, inverse);
+  }, [commitStructural, index, layer, t]);
 
   const handleMerge = useCallback(() => {
     // Pixel work: engine-only, and not recorded on the undo history.
@@ -379,21 +374,11 @@ const LayerMenu = ({
       if (!copied) {
         throw new Error(t('widgets.layers.actions.copyFailed'));
       }
-      if (engine) {
-        if (!engine.layers.commitLayerCopy(label, layer.id, copied, index)) {
-          throw new Error(t('widgets.layers.actions.copyFailed'));
-        }
-        return;
+      if (!engine?.layers.commitLayerCopy(label, layer.id, copied, index)) {
+        throw new Error(t('widgets.layers.actions.copyFailed'));
       }
-      applyStructural(
-        engine,
-        dispatch,
-        label,
-        { index, layer: copied, type: 'addCanvasLayer' },
-        { ids: [copied.id], type: 'removeCanvasLayers' }
-      );
     },
-    [dispatch, engine, index, layer.id, t]
+    [engine, index, layer.id, t]
   );
 
   const convert = useCallback(
@@ -411,26 +396,13 @@ const LayerMenu = ({
       if (!converted) {
         throw makeStatusError('unsupported');
       }
-      if (engine) {
-        // Pass the immutable live object: the engine rejects stale menu actions
-        // by identity and clones the inverse contract internally.
-        if (!engine.layers.commitLayerConversion(label, layer, converted)) {
-          throw makeStatusError('not-ready');
-        }
-      } else {
-        // Convert in place, preserving the pixel source + id. The inverse restores
-        // the layer verbatim (adapter/filter config and all).
-        const original = structuredClone(layer);
-        applyStructural(
-          engine,
-          dispatch,
-          label,
-          { id: layer.id, layer: converted, targetType, type: 'convertCanvasLayer' },
-          { id: layer.id, layer: original, targetType: layer.type, type: 'convertCanvasLayer' }
-        );
+      // Pass the immutable live object: the engine rejects stale menu actions
+      // by identity and clones the inverse contract internally.
+      if (!engine?.layers.commitLayerConversion(label, layer, converted)) {
+        throw makeStatusError('not-ready');
       }
     },
-    [base, defaultControlModel, dispatch, engine, layer, makeStatusError]
+    [base, defaultControlModel, engine, layer, makeStatusError]
   );
 
   const handleToggleVisibility = useCallback(() => {

@@ -12,6 +12,7 @@ import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { IconButton, toaster, Tooltip } from '@platform/ui';
 import { canMergeVisibleRasters } from '@workbench/canvas-engine/api';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
+import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectName } from '@workbench/WorkbenchContext';
 import { ChevronDownIcon, EyeIcon, EyeOffIcon, FileDownIcon, LayersIcon, PlusIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
@@ -31,7 +32,6 @@ import {
 } from './layerGroupActions';
 import { reorderSelectionWithinGroup } from './layerGroups';
 import { LayerListItem, type LayerListItemEngine } from './LayerListItem';
-import { applyStructural } from './layerOps';
 import { getPsdExportNoticeKey } from './psdExportNotice';
 import { useAddLayer } from './useAddLayer';
 
@@ -73,6 +73,7 @@ export const LayerGroupSection = ({
   selectedIds,
   selectedLayerId,
 }: LayerGroupSectionProps) => {
+  const commitStructural = useStructuralCommit(engine);
   const { t } = useTranslation();
   const editingLocked = useCanvasDocumentEditingLocked(engine);
 
@@ -102,15 +103,13 @@ export const LayerGroupSection = ({
       if (!next) {
         return;
       }
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         t('widgets.layers.actions.reorder'),
         { orderedIds: next, type: 'reorderCanvasLayers' },
         { orderedIds: layers.map((layer) => layer.id), type: 'reorderCanvasLayers' }
       );
     },
-    [dispatch, editingLocked, engine, layers, selectedIds, t]
+    [commitStructural, editingLocked, layers, selectedIds, t]
   );
 
   const handleToggleCollapse = useCallback(() => onToggleCollapse(groupKey), [groupKey, onToggleCollapse]);
@@ -155,7 +154,6 @@ export const LayerGroupSection = ({
           {t(`widgets.layers.groups.${groupKey}`)} ({groupLayers.length})
         </Text>
         <GroupActions
-          dispatch={dispatch}
           engine={engine}
           editingLocked={editingLocked}
           groupKey={groupKey}
@@ -205,20 +203,19 @@ export const LayerGroupSection = ({
  * array + this switch — no new prop wiring.
  */
 const GroupActions = ({
-  dispatch,
   editingLocked,
   engine,
   groupKey,
   groupLayers,
   layers,
 }: {
-  dispatch: Dispatch<CanvasProjectMutation>;
   editingLocked: boolean;
   engine: LayerGroupEngine | null;
   groupKey: LayerGroupKey;
   groupLayers: readonly CanvasLayerContract[];
   layers: readonly CanvasLayerContract[];
 }) => {
+  const commitStructural = useStructuralCommit(engine);
   const { t } = useTranslation();
   const addLayer = useAddLayer();
   const projectName = useActiveProjectName();
@@ -243,9 +240,7 @@ const GroupActions = ({
       if (forward.length === 0) {
         return;
       }
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         t('widgets.layers.groupActions.toggleHidden'),
         { type: 'setCanvasLayersHidden', updates: forward },
         { type: 'setCanvasLayersHidden', updates: inverse }
@@ -253,14 +248,12 @@ const GroupActions = ({
       return;
     }
     const { forward, inverse } = planGroupVisibilityToggle(groupLayers);
-    applyStructural(
-      engine,
-      dispatch,
+    commitStructural(
       t('widgets.layers.groupActions.toggleVisibility'),
       { type: 'setCanvasLayersEnabled', updates: forward },
       { type: 'setCanvasLayersEnabled', updates: inverse }
     );
-  }, [dispatch, engine, groupKey, groupLayers, t]);
+  }, [commitStructural, groupKey, groupLayers, t]);
 
   const handleMergeVisible = useCallback(() => {
     if (!engine) {

@@ -44,6 +44,7 @@ vi.mock('@features/models', () => ({
 vi.mock('@workbench/WorkbenchContext', () => ({
   useActiveProjectId: () => 'project',
   useActiveProjectSelector: () => null,
+  useOptionalWorkbenchCommands: () => null,
   useWorkbenchCommands: () => ({ canvas: { apply: vi.fn() } }),
 }));
 vi.mock('react-i18next', () => ({

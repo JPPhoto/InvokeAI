@@ -46,7 +46,10 @@ const createHarness = (doc: CanvasDocumentContractV2) => {
   let idCounter = 0;
   const ctx: ToolContext = {
     backend: null as never,
-    commitStructural: (label, forward, inverse) => commits.push({ forward, inverse, label }),
+    commitStructural: (label, forward, inverse) => {
+      commits.push({ forward, inverse, label });
+      return { status: 'committed' as const };
+    },
     createLayerId: () => `shape-${++idCounter}`,
     createPath2D: (d) => ({ d }) as unknown as Path2D,
     dispatch: (action) => dispatched.push(action),

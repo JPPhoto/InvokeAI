@@ -1,16 +1,34 @@
+import type { StructuralCommitOptions, StructuralCommitResult } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
-import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 
 import { createDocumentPatchEntry } from '@workbench/canvas-engine/history/documentPatch';
 
+import type { CanvasMutationContext } from './mutationContext';
+
+export type StructuralMutationContext = Pick<
+  CanvasMutationContext,
+  | 'canEdit'
+  | 'capturePermit'
+  | 'dispatch'
+  | 'dispatchPrepared'
+  | 'getDocument'
+  | 'getEditRevision'
+  | 'getReducerDocument'
+  | 'history'
+  | 'isGestureActive'
+>;
+
+export type StructuralFailureReport =
+  | 'Structural edit could not be reverted'
+  | 'Structural edit could not be mirrored'
+  | 'Structural history replay was refused'
+  | 'Structural history replay could not be mirrored';
+
 export interface StructuralLayerControllerOptions {
-  readonly history: History;
-  readonly dispatch: (action: CanvasProjectMutation) => void;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly ctx: StructuralMutationContext;
   readonly getSelectedLayerIds?: (document: CanvasDocumentContractV2) => readonly string[];
-  readonly canEdit: () => boolean;
-  readonly isGestureActive: () => boolean;
+  readonly report?: (message: StructuralFailureReport, label: string, error: unknown) => void;
   readonly now?: () => number;
 }
 
@@ -22,7 +40,16 @@ interface NudgeBurst {
 
 const NUDGE_COALESCE_MS = 500;
 
-/** Owns guarded structural document edits and nudge coalescing. */
+const positionMutation = (positions: readonly { id: string; x: number; y: number }[]): CanvasProjectMutation =>
+  positions.length === 1
+    ? {
+        id: positions[0]!.id,
+        patch: { transform: { x: positions[0]!.x, y: positions[0]!.y } },
+        type: 'updateCanvasLayer',
+      }
+    : { type: 'setCanvasLayerPositions', updates: [...positions] };
+
+/** Owns guarded, failure-atomic structural document edits and nudge coalescing. */
 export class StructuralLayerController {
   private burst: NudgeBurst | null = null;
   private disposed = false;
@@ -37,34 +64,45 @@ export class StructuralLayerController {
   }
 
   canCommit(): boolean {
-    return !this.disposed && this.deps.canEdit() && !this.deps.isGestureActive();
+    const { ctx } = this.deps;
+    return !this.disposed && ctx.canEdit() && !ctx.isGestureActive();
   }
 
-  commit(label: string, forward: CanvasProjectMutation, inverse: CanvasProjectMutation): boolean {
-    if (!this.canCommit()) {
-      return false;
+  commit(
+    label: string,
+    forward: CanvasProjectMutation,
+    inverse: CanvasProjectMutation,
+    options: StructuralCommitOptions = {}
+  ): StructuralCommitResult {
+    const refusal = this.refuse(options);
+    if (refusal) {
+      return refusal;
     }
     this.endBurst();
-    this.deps.dispatch(forward);
-    this.deps.history.push(createDocumentPatchEntry({ dispatch: this.deps.dispatch, forward, inverse, label }));
-    return true;
+    const applied = this.apply(label, forward, inverse, options.verify);
+    if (applied.status === 'committed') {
+      this.deps.ctx.history.push(this.entry(label, forward, inverse));
+    }
+    return applied;
   }
 
   preview(action: CanvasProjectMutation): boolean {
-    if (this.disposed || !this.deps.canEdit() || this.deps.isGestureActive()) {
+    if (!this.canCommit()) {
       return false;
     }
-    this.deps.dispatch(action);
+    this.deps.ctx.dispatch(action);
     return true;
   }
 
-  nudge(dx: number, dy: number): void {
-    if (this.disposed || !this.deps.canEdit() || this.deps.isGestureActive()) {
-      return;
+  nudge(dx: number, dy: number): StructuralCommitResult {
+    const { ctx } = this.deps;
+    const refusal = this.refuse({});
+    if (refusal) {
+      return refusal;
     }
-    const document = this.deps.getDocument();
+    const document = ctx.getDocument();
     if (!document?.selectedLayerId) {
-      return;
+      return { status: 'dispatch-rejected' };
     }
     const requested = new Set(this.deps.getSelectedLayerIds?.(document) ?? [document.selectedLayerId]);
     const layers = document.layers.filter((layer) => requested.has(layer.id));
@@ -74,7 +112,7 @@ export class StructuralLayerController {
       !requested.has(document.selectedLayerId) ||
       layers.some((layer) => layer.isLocked || !layer.isEnabled)
     ) {
-      return;
+      return { status: 'dispatch-rejected' };
     }
     const selectionKey = layers.map((layer) => layer.id).join('\0');
     const now = this.now();
@@ -84,34 +122,126 @@ export class StructuralLayerController {
         ? this.burst.origins
         : layers.map((layer) => ({ id: layer.id, x: layer.transform.x, y: layer.transform.y }));
     const next = layers.map((layer) => ({ id: layer.id, x: layer.transform.x + dx, y: layer.transform.y + dy }));
-    const forward: CanvasProjectMutation =
-      layers.length === 1
-        ? {
-            id: layers[0]!.id,
-            patch: { transform: { x: next[0]!.x, y: next[0]!.y } },
-            type: 'updateCanvasLayer',
-          }
-        : { type: 'setCanvasLayerPositions', updates: next };
-    const inverse: CanvasProjectMutation =
-      layers.length === 1
-        ? {
-            id: layers[0]!.id,
-            patch: { transform: { x: origins[0]!.x, y: origins[0]!.y } },
-            type: 'updateCanvasLayer',
-          }
-        : { type: 'setCanvasLayerPositions', updates: origins };
-    this.deps.dispatch(forward);
-    const entry = createDocumentPatchEntry({ dispatch: this.deps.dispatch, forward, inverse, label: 'Nudge layer' });
+    const label = 'Nudge layer';
+    const forward = positionMutation(next);
+    const inverse = positionMutation(origins);
+    const applied = this.apply(label, forward, inverse);
+    if (applied.status !== 'committed') {
+      this.burst = null;
+      return applied;
+    }
+    const entry = this.entry(label, forward, inverse);
     if (coalesce) {
-      this.deps.history.amendLast(entry);
+      ctx.history.amendLast(entry);
     } else {
-      this.deps.history.push(entry);
+      ctx.history.push(entry);
     }
     this.burst = { expiresAt: now + NUDGE_COALESCE_MS, origins, selectionKey };
+    return applied;
   }
 
   dispose(): void {
     this.disposed = true;
     this.endBurst();
+  }
+
+  private refuse(options: StructuralCommitOptions): StructuralCommitResult | null {
+    const { ctx } = this.deps;
+    if (this.disposed) {
+      return { status: 'not-ready' };
+    }
+    if (!ctx.capturePermit()) {
+      return { status: 'busy' };
+    }
+    if (ctx.isGestureActive()) {
+      return { status: 'gesture-active' };
+    }
+    if (!ctx.getReducerDocument()) {
+      return { status: 'not-ready' };
+    }
+    const actualRevision = ctx.getEditRevision();
+    if (options.expectedRevision !== undefined && options.expectedRevision !== actualRevision) {
+      return { actualRevision, expectedRevision: options.expectedRevision, status: 'stale' };
+    }
+    return null;
+  }
+
+  /** Dispatches `forward` once through the guarded context; a verified failure applies `inverse`. */
+  private apply(
+    label: string,
+    forward: CanvasProjectMutation,
+    inverse: CanvasProjectMutation,
+    verify: (document: CanvasDocumentContractV2) => boolean = () => true
+  ): StructuralCommitResult {
+    const { ctx } = this.deps;
+    const before = ctx.getReducerDocument();
+    const isMirrored = (): boolean => ctx.getDocument() === ctx.getReducerDocument();
+    const isApplied = (): boolean => {
+      const document = ctx.getReducerDocument();
+      return document !== null && document !== before && verify(document);
+    };
+    try {
+      ctx.dispatchPrepared(forward, isApplied, isMirrored);
+      return { status: 'committed' };
+    } catch (error) {
+      const after = ctx.getReducerDocument();
+      if (after === before) {
+        return { status: 'dispatch-rejected' };
+      }
+      let recoveryError: unknown = error;
+      try {
+        ctx.dispatchPrepared(inverse, () => ctx.getReducerDocument() !== after, isMirrored, 'system');
+      } catch (inverseError) {
+        recoveryError = inverseError;
+      }
+      const recovered =
+        ctx.getReducerDocument() === after ? 'unreverted' : isMirrored() ? 'reverted' : 'reverted-unmirrored';
+      if (recovered === 'unreverted') {
+        this.deps.report?.('Structural edit could not be reverted', label, recoveryError);
+      } else if (recovered === 'reverted-unmirrored') {
+        this.deps.report?.('Structural edit could not be mirrored', label, recoveryError);
+      }
+      return { recovered, status: 'postcondition-failed' };
+    }
+  }
+
+  private entry(label: string, forward: CanvasProjectMutation, inverse: CanvasProjectMutation) {
+    return createDocumentPatchEntry({
+      dispatch: (action) => this.replay(label, action, forward, inverse),
+      forward,
+      inverse,
+      label,
+      replayFailureAtomic: true,
+    });
+  }
+
+  /**
+   * A reducer that refuses a replay (its target changed since) is expected: the entry moves as a
+   * no-op and the refusal is reported. A mirror that cannot follow an accepted replay is not: the
+   * opposite action restores the reducer and the failure surfaces.
+   */
+  private replay(
+    label: string,
+    action: CanvasProjectMutation,
+    forward: CanvasProjectMutation,
+    inverse: CanvasProjectMutation
+  ): void {
+    const { ctx } = this.deps;
+    const before = ctx.getReducerDocument();
+    try {
+      ctx.dispatchPrepared(
+        action,
+        () => ctx.getReducerDocument() !== before,
+        () => ctx.getDocument() === ctx.getReducerDocument()
+      );
+    } catch (error) {
+      if (ctx.getReducerDocument() === before) {
+        this.deps.report?.('Structural history replay was refused', label, error);
+        return;
+      }
+      this.deps.report?.('Structural history replay could not be mirrored', label, error);
+      ctx.dispatch(action === forward ? inverse : forward, 'system');
+      throw error;
+    }
   }
 }

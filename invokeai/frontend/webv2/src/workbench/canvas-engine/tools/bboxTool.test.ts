@@ -66,7 +66,10 @@ const createHarness = (doc: CanvasDocumentContractV2): Harness => {
   const stores = createEngineStores();
   const ctx: ToolContext = {
     backend: null as never,
-    commitStructural: (label, forward, inverse) => commits.push({ forward, inverse, label }),
+    commitStructural: (label, forward, inverse) => {
+      commits.push({ forward, inverse, label });
+      return { status: 'committed' as const };
+    },
     createLayerId: () => 'x',
     createPath2D: (d) => ({ d }) as unknown as Path2D,
     dispatch: (action) => dispatched.push(action),

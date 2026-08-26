@@ -6,7 +6,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import { chakra, createListCollection, HStack, Stack, Text } from '@chakra-ui/react';
 import { Button, Field, Select, Slider } from '@platform/ui';
 import { DEFAULT_ADJUSTMENTS, buildCurveLut } from '@workbench/canvas-engine/api';
-import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
+import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -18,7 +18,7 @@ import {
   finishCurveDragResult,
   getCurveGridCoordinates,
 } from './curveEditorMath';
-import { applyStructural, applyStructuralPreview } from './layerOps';
+import { applyStructuralPreview } from './layerOps';
 
 const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: false } as const;
 
@@ -86,31 +86,29 @@ interface AdjustmentsControlsProps {
 type ScalarKey = 'brightness' | 'contrast' | 'saturation';
 
 const AdjustmentsControls = ({ adjustments, engine, layer }: AdjustmentsControlsProps) => {
+  const commitStructural = useStructuralCommit(engine);
   const { t } = useTranslation();
-  const dispatch = useCanvasProjectMutationDispatch();
 
   const patchLive = useCallback(
     (next: CanvasAdjustmentsContract) => {
-      applyStructuralPreview(engine, dispatch, {
+      applyStructuralPreview(engine, {
         config: { adjustments: next, layerType: 'raster' },
         id: layer.id,
         type: 'updateCanvasLayerConfig',
       });
     },
-    [dispatch, engine, layer.id]
+    [engine, layer.id]
   );
 
   const commit = useCallback(
     (label: string, next: CanvasAdjustmentsContract, before: CanvasAdjustmentsContract) => {
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         label,
         { config: { adjustments: next, layerType: 'raster' }, id: layer.id, type: 'updateCanvasLayerConfig' },
         { config: { adjustments: before, layerType: 'raster' }, id: layer.id, type: 'updateCanvasLayerConfig' }
       );
     },
-    [dispatch, engine, layer.id]
+    [commitStructural, layer.id]
   );
 
   const handleScalarLive = useCallback(

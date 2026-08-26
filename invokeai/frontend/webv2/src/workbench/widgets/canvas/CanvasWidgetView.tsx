@@ -11,6 +11,7 @@ import { getCanvasStagingSlots } from '@workbench/canvasStagingView';
 import { recordCanvasImportError } from '@workbench/image-actions/canvasImportError';
 import { useWorkbenchSettingsSelector } from '@workbench/settings/store';
 import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
+import { useNotify } from '@workbench/useNotify';
 import { CanvasLayerContextMenu } from '@workbench/widgets/layers/LayerContextMenu';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import {
@@ -57,6 +58,7 @@ import { ToolStrip } from './ToolStrip';
 import { useCanvasEngine } from './useCanvasEngine';
 import { useCanvasGallerySave } from './useCanvasGallerySave';
 import { useCreateFromBbox } from './useCreateFromBbox';
+import { reportStructuralCommit } from './useStructuralCommit';
 
 /**
  * The canvas widget shell. The engine owns pixels and interaction and renders
@@ -67,6 +69,7 @@ import { useCreateFromBbox } from './useCreateFromBbox';
  */
 export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   const { t } = useTranslation();
+  const notify = useNotify();
   const { canvas: canvasCommands, notifications, queue } = useWorkbenchCommands();
   const canvasDispatch = useCanvasProjectMutationDispatch();
   const queries = useWorkbenchQueries();
@@ -378,6 +381,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
       notifyLayerDuplicateFailed: () =>
         notifications.add({ kind: 'error', title: t('widgets.layers.actions.copyFailed') }),
       pasteFromClipboard,
+      reportStructuralCommit: (result) => reportStructuralCommit(result, notify.error, t),
       selectedLayerIds,
       t,
     });

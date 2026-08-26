@@ -1,8 +1,6 @@
 /**
  * Shared helpers for the layers panel: id minting, the paint-layer factory, the
- * blend-mode list, merge-down eligibility, and the single seam that routes a
- * structural edit either through the engine's canvas history (when an engine is
- * attached) or as a plain reducer dispatch (when it is not).
+ * blend-mode list, merge-down eligibility, and guarded live previews.
  */
 
 import type {
@@ -12,20 +10,19 @@ import type {
   CanvasImageRef,
   CanvasInpaintMaskLayerContract,
   CanvasLayerBaseContract,
-  CanvasLayerCapability,
   CanvasLayerContract,
   CanvasLayerSourceContract,
   CanvasMaskContract,
   CanvasMaskFillContract,
   CanvasRasterLayerContractV2,
   CanvasRegionalGuidanceLayerContract,
+  CanvasStructuralEngine,
   RegionalGuidanceReferenceImage,
   Rect,
 } from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
-import type { Dispatch } from 'react';
 
-export type CanvasStructuralEngine = { readonly layers: CanvasLayerCapability };
+export type { CanvasStructuralEngine } from '@workbench/canvas-engine/api';
 
 import { getSourceContentRect, isMergeableRasterLayer } from '@workbench/canvas-engine/api';
 import { CONTROL_ADAPTER_DEFAULTS } from '@workbench/controlAdapters';
@@ -648,34 +645,6 @@ export const canMergeLayerDown = (
   return !!layer && !!below && isMergeableRasterLayer(layer) && isMergeableRasterLayer(below);
 };
 
-/**
- * Applies a structural document edit. With an engine attached it goes through
- * `commitStructural`, joining the canvas undo stack; without one it is a plain
- * dispatch (no undo entry — acceptable when the canvas is not mounted).
- */
-export const applyStructural = (
-  engine: CanvasStructuralEngine | null,
-  dispatch: Dispatch<CanvasProjectMutation>,
-  label: string,
-  forward: CanvasProjectMutation,
-  inverse: CanvasProjectMutation
-): void => {
-  if (engine) {
-    engine.layers.commitStructural(label, forward, inverse);
-  } else {
-    dispatch(forward);
-  }
-};
-
 /** Applies a guarded live edit without recording history until the interaction ends. */
-export const applyStructuralPreview = (
-  engine: CanvasStructuralEngine | null,
-  dispatch: Dispatch<CanvasProjectMutation>,
-  action: CanvasProjectMutation
-): boolean => {
-  if (engine) {
-    return engine.layers.applyStructuralPreview(action);
-  }
-  dispatch(action);
-  return true;
-};
+export const applyStructuralPreview = (engine: CanvasStructuralEngine | null, action: CanvasProjectMutation): boolean =>
+  engine?.layers.applyStructuralPreview(action) ?? false;

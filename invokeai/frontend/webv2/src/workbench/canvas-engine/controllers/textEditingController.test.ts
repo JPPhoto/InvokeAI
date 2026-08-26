@@ -1,3 +1,4 @@
+import type { StructuralCommitResult } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
 import type { TextEditSession } from '@workbench/canvas-engine/engineStores';
 
@@ -8,7 +9,9 @@ import { TextEditingController } from './textEditingController';
 
 const createHarness = (document: CanvasDocumentContractV2) => {
   let session: TextEditSession | null = null;
-  const commitStructural = vi.fn();
+  const commitStructural = vi.fn<(label: string, forward: unknown, inverse: unknown) => StructuralCommitResult>(() => ({
+    status: 'committed',
+  }));
   const invalidate = vi.fn();
   const controller = new TextEditingController({
     canEdit: () => true,
@@ -47,5 +50,29 @@ describe('TextEditingController', () => {
     expect(h.getSession()).toBeNull();
     expect(h.commitStructural).not.toHaveBeenCalled();
     expect(h.invalidate).toHaveBeenCalledWith({ overlay: true });
+  });
+});
+
+describe('TextEditingController refusals', () => {
+  it('keeps the session for a transient refusal and drops it when the target is gone', () => {
+    const h = createHarness({ bbox: { height: 1, width: 1, x: 0, y: 0 }, height: 1, layers: [], width: 1 } as never);
+    h.commitStructural.mockReturnValueOnce({ status: 'busy' as const });
+    h.controller.openCreate({ x: 0, y: 0 });
+
+    expect(h.controller.commit('hello')).toEqual({ status: 'busy' });
+    expect(h.getSession()).not.toBeNull();
+
+    h.commitStructural.mockReturnValueOnce({ status: 'dispatch-rejected' as const });
+    expect(h.controller.commit('hello')).toEqual({ status: 'dispatch-rejected' });
+    expect(h.getSession()).toBeNull();
+  });
+
+  it('reports nothing to commit for an empty creation', () => {
+    const h = createHarness({ bbox: { height: 1, width: 1, x: 0, y: 0 }, height: 1, layers: [], width: 1 } as never);
+    h.controller.openCreate({ x: 0, y: 0 });
+
+    expect(h.controller.commit('   ')).toBeNull();
+    expect(h.getSession()).toBeNull();
+    expect(h.commitStructural).not.toHaveBeenCalled();
   });
 });

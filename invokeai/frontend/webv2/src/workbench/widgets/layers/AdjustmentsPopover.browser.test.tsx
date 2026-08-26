@@ -58,7 +58,9 @@ const Harness = () => {
     return {
       layers: {
         applyStructuralPreview: apply,
-        commitStructural: (_label: string, forward: CanvasProjectMutation) => apply(forward),
+        commitStructural: (_label: string, forward: CanvasProjectMutation) => ({
+          status: apply(forward) ? ('committed' as const) : ('dispatch-rejected' as const),
+        }),
       },
     } as unknown as CanvasStructuralEngine;
   }, []);

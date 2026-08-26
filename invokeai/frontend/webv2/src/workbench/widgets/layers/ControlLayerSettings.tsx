@@ -20,13 +20,13 @@ import {
 import { useModelsSelector } from '@features/models';
 import { Field, Select, Slider } from '@platform/ui';
 import { getCanvasOperations, resolveDefaultFilterForModel } from '@workbench/canvas-operations/api';
-import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
+import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { getCompatibleControlModels } from './controlModelOptions';
 import { LayerFilterOperationButton } from './LayerFilterOperationButton';
-import { applyStructural, applyStructuralPreview, CONTROL_ADAPTER_DEFAULTS, CONTROL_WEIGHT_BOUNDS } from './layerOps';
+import { applyStructuralPreview, CONTROL_ADAPTER_DEFAULTS, CONTROL_WEIGHT_BOUNDS } from './layerOps';
 import { runLayerFilterOperation } from './layerPropertiesOperation';
 import { useSelectedMainModel } from './useSelectedMainModel';
 
@@ -69,7 +69,7 @@ interface ControlLayerSettingsProps {
  */
 export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: ControlLayerSettingsProps) => {
   const { t } = useTranslation();
-  const dispatch = useCanvasProjectMutationDispatch();
+  const commitStructural = useStructuralCommit(engine);
   const models = useModelsSelector((snapshot) => snapshot.models);
   const mainModel = useSelectedMainModel();
   const base = mainModel?.base ?? null;
@@ -78,15 +78,13 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
 
   const commitAdapter = useCallback(
     (next: Partial<CanvasControlAdapterContract>, before: Partial<CanvasControlAdapterContract>, label: string) => {
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         label,
         { config: { adapter: next, layerType: 'control' }, id: layer.id, type: 'updateCanvasLayerConfig' },
         { config: { adapter: before, layerType: 'control' }, id: layer.id, type: 'updateCanvasLayerConfig' }
       );
     },
-    [dispatch, engine, layer.id]
+    [commitStructural, layer.id]
   );
 
   // Adapter kinds supported by the selected base. Z-Image Control is only shown
@@ -170,7 +168,7 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
         return;
       }
       if (
-        !applyStructuralPreview(engine, dispatch, {
+        !applyStructuralPreview(engine, {
           config: { adapter: { weight: next }, layerType: 'control' },
           id: layer.id,
           type: 'updateCanvasLayerConfig',
@@ -182,7 +180,7 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
         weightBeforeRef.current = adapter.weight;
       }
     },
-    [adapter.weight, dispatch, engine, layer.id]
+    [adapter.weight, engine, layer.id]
   );
   const handleWeightChangeEnd = useCallback(
     ({ value }: SliderValueChangeDetails) => {
@@ -217,7 +215,7 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
         return;
       }
       if (
-        !applyStructuralPreview(engine, dispatch, {
+        !applyStructuralPreview(engine, {
           config: { adapter: { beginEndStepPct: [value[0]!, value[1]!] }, layerType: 'control' },
           id: layer.id,
           type: 'updateCanvasLayerConfig',
@@ -229,7 +227,7 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
         rangeBeforeRef.current = adapter.beginEndStepPct;
       }
     },
-    [adapter.beginEndStepPct, dispatch, engine, layer.id]
+    [adapter.beginEndStepPct, engine, layer.id]
   );
   const handleRangeChangeEnd = useCallback(
     ({ value }: SliderValueChangeDetails) => {
@@ -249,9 +247,7 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
 
   const handleTransparencyToggle = useCallback(
     ({ checked }: { checked: boolean }) => {
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         t('widgets.layers.control.transparencyEffect'),
         {
           config: { layerType: 'control', withTransparencyEffect: checked },
@@ -265,7 +261,7 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
         }
       );
     },
-    [dispatch, engine, layer.id, t]
+    [commitStructural, layer.id, t]
   );
 
   const controlModeCollection = useMemo(

@@ -304,11 +304,13 @@ export const importGalleryImagesToCanvas = async (options: {
       return { status: 'stale-document' };
     }
 
-    if (matchingProjectEngine && isActiveProject(project.id)) {
-      if (!matchingProjectEngine.layers.commitStructural('Import gallery images', forward, inverse)) {
+    if (isActiveProject(project.id)) {
+      const committed = matchingProjectEngine?.layers.commitStructural('Import gallery images', forward, inverse);
+      if (committed?.status !== 'committed') {
         return { status: 'blocked' };
       }
     } else {
+      // A background project has no live editing session; the import lands as ingestion.
       applyCanvasMutation(project.id, forward);
     }
     return { failedImageNames, layerIds: layers.map((layer) => layer.id), status: 'imported' };

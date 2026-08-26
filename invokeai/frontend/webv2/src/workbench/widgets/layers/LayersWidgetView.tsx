@@ -86,7 +86,6 @@ export const LayersWidgetView = () => {
       <LayersPanelHeader />
       {selectedIds.length > 1 ? (
         <LayerMultiSelectionActions
-          dispatch={dispatch}
           editingLocked={editingLocked}
           engine={engine}
           layers={layers}

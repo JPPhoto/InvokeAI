@@ -4,14 +4,11 @@ import type {
   SliderValueChangeDetails,
 } from '@chakra-ui/react';
 import type { CanvasBlendMode, CanvasLayerContract, CanvasMaskFillContract } from '@workbench/canvas-engine/api';
-import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
-import type { Dispatch } from 'react';
 
 import { Box, createListCollection, Flex, HStack, NumberInput, Stack } from '@chakra-ui/react';
 import { useDebouncedDraftValue, useRegisterGenerateDraftFlusher } from '@features/generation/react';
 import { ColorPicker, Field, Select, Slider } from '@platform/ui';
-import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
 import {
   CANVAS_DENOISING_STRENGTH_KEY,
@@ -21,13 +18,14 @@ import {
   readCanvasDenoisingStrength,
 } from '@workbench/widgets/canvas/invoke/canvasStrength';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
+import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { DenoisingStrengthWave } from './DenoisingStrengthWave';
-import { applyStructural, applyStructuralPreview, CANVAS_BLEND_MODES } from './layerOps';
+import { applyStructuralPreview, CANVAS_BLEND_MODES } from './layerOps';
 
 type LayersPanelHeaderEngine = Pick<CanvasEngineHandle, 'interaction' | 'layers'>;
 
@@ -71,7 +69,6 @@ export const isLayerEditingDisabled = (layer: CanvasLayerContract | null, editin
  */
 export const LayersPanelHeader = () => {
   const engine = useCanvasEngine();
-  const dispatch = useCanvasProjectMutationDispatch();
   const layer = useActiveProjectSelector(selectSelectedLayer, isSameSelection);
   const editingLocked = useCanvasDocumentEditingLocked(engine);
 
@@ -82,8 +79,8 @@ export const LayersPanelHeader = () => {
       </Box>
       <Box borderBottomWidth={1} px="1.5" py="1">
         <Flex align="center" gap="2">
-          <BlendModeControl dispatch={dispatch} editingLocked={editingLocked} engine={engine} layer={layer} />
-          <OpacityRow dispatch={dispatch} editingLocked={editingLocked} engine={engine} layer={layer} />
+          <BlendModeControl editingLocked={editingLocked} engine={engine} layer={layer} />
+          <OpacityRow editingLocked={editingLocked} engine={engine} layer={layer} />
         </Flex>
       </Box>
     </Stack>
@@ -96,16 +93,15 @@ interface BlendModeOption {
 }
 
 const BlendModeControl = ({
-  dispatch,
   editingLocked,
   engine,
   layer,
 }: {
-  dispatch: Dispatch<CanvasProjectMutation>;
   editingLocked: boolean;
   engine: LayersPanelHeaderEngine | null;
   layer: CanvasLayerContract | null;
 }) => {
+  const commitStructural = useStructuralCommit(engine);
   const { t } = useTranslation();
   const disabled = isLayerEditingDisabled(layer, editingLocked);
   const blendMode = layer?.blendMode ?? 'normal';
@@ -124,15 +120,13 @@ const BlendModeControl = ({
       if (!layer || !mode || mode === layer.blendMode) {
         return;
       }
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         t('widgets.layers.actions.blendMode'),
         { id: layer.id, patch: { blendMode: mode }, type: 'updateCanvasLayer' },
         { id: layer.id, patch: { blendMode: layer.blendMode }, type: 'updateCanvasLayer' }
       );
     },
-    [dispatch, engine, layer, t]
+    [commitStructural, layer, t]
   );
 
   return (
@@ -154,16 +148,15 @@ const BlendModeControl = ({
 };
 
 const OpacityRow = ({
-  dispatch,
   editingLocked,
   engine,
   layer,
 }: {
-  dispatch: Dispatch<CanvasProjectMutation>;
   editingLocked: boolean;
   engine: LayersPanelHeaderEngine | null;
   layer: CanvasLayerContract | null;
 }) => {
+  const commitStructural = useStructuralCommit(engine);
   const { t } = useTranslation();
   // The uncommitted opacity edit: captured once per gesture. `before` is the
   // pre-gesture value (the undo target); `latest` tracks the live value because
@@ -182,14 +175,12 @@ const OpacityRow = ({
     if (!pending || pending.before === pending.latest) {
       return;
     }
-    applyStructural(
-      engine,
-      dispatch,
+    commitStructural(
       t('widgets.layers.actions.opacity'),
       { id: pending.id, patch: { opacity: pending.latest }, type: 'updateCanvasLayer' },
       { id: pending.id, patch: { opacity: pending.before }, type: 'updateCanvasLayer' }
     );
-  }, [dispatch, engine, t]);
+  }, [commitStructural, t]);
 
   const handleOpacityChange = useCallback(
     ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
@@ -203,7 +194,7 @@ const OpacityRow = ({
       }
       const next = clamp01(valueAsNumber / 100);
       if (
-        !applyStructuralPreview(engine, dispatch, {
+        !applyStructuralPreview(engine, {
           id: layer.id,
           patch: { opacity: next },
           type: 'updateCanvasLayer',
@@ -217,7 +208,7 @@ const OpacityRow = ({
         pendingRef.current.latest = next;
       }
     },
-    [commitPending, dispatch, engine, layer]
+    [commitPending, engine, layer]
   );
 
   // Commit per completed interaction: each spinner click (fires on release, so a
@@ -264,9 +255,7 @@ const OpacityRow = ({
             onKeyUp={handleInputKeyUp}
           />
         </NumberInput.Root>
-        {isMaskLayer(layer) ? (
-          <MaskFillSwatch disabled={editingLocked} dispatch={dispatch} engine={engine} layer={layer} />
-        ) : null}
+        {isMaskLayer(layer) ? <MaskFillSwatch disabled={editingLocked} engine={engine} layer={layer} /> : null}
       </HStack>
     </Field>
   );
@@ -278,16 +267,15 @@ const OpacityRow = ({
  * final colour lands as one undoable history entry, mirroring the slider pattern.
  */
 const MaskFillSwatch = ({
-  dispatch,
   disabled,
   engine,
   layer,
 }: {
-  dispatch: Dispatch<CanvasProjectMutation>;
   disabled: boolean;
   engine: LayersPanelHeaderEngine | null;
   layer: MaskLayer;
 }) => {
+  const commitStructural = useStructuralCommit(engine);
   const { t } = useTranslation();
   const fillBeforeRef = useRef<CanvasMaskFillContract | null>(null);
   const fill = layer.mask.fill;
@@ -302,15 +290,13 @@ const MaskFillSwatch = ({
         layer.type === 'inpaint_mask'
           ? ({ layerType: 'inpaint_mask', mask: { fill: before } } as const)
           : ({ layerType: 'regional_guidance', mask: { fill: before } } as const);
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         t('widgets.layers.maskFill.fill'),
         { config, id: layer.id, type: 'updateCanvasLayerConfig' },
         { config: inverseConfig, id: layer.id, type: 'updateCanvasLayerConfig' }
       );
     },
-    [dispatch, engine, layer.id, layer.type, t]
+    [commitStructural, layer.id, layer.type, t]
   );
 
   const handleColorChange = useCallback(
@@ -320,14 +306,14 @@ const MaskFillSwatch = ({
         layer.type === 'inpaint_mask'
           ? ({ layerType: 'inpaint_mask', mask: { fill: next } } as const)
           : ({ layerType: 'regional_guidance', mask: { fill: next } } as const);
-      if (!applyStructuralPreview(engine, dispatch, { config, id: layer.id, type: 'updateCanvasLayerConfig' })) {
+      if (!applyStructuralPreview(engine, { config, id: layer.id, type: 'updateCanvasLayerConfig' })) {
         return;
       }
       if (fillBeforeRef.current === null) {
         fillBeforeRef.current = fill;
       }
     },
-    [dispatch, engine, fill, layer.id, layer.type]
+    [engine, fill, layer.id, layer.type]
   );
 
   const handleColorChangeEnd = useCallback(

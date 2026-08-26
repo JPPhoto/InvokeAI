@@ -62,7 +62,8 @@ export class LayerController<Permit> {
       canCommitStructural: () => this.structural.canCommit(),
       commitGeneratedImageResult: (options) =>
         this.disposed ? Promise.resolve({ status: 'aborted' }) : deps.commitGeneratedImageResult(options),
-      commitStructural: (label, forward, inverse) => this.structural.commit(label, forward, inverse),
+      commitStructural: (label, forward, inverse, options) =>
+        this.disposed ? { status: 'not-ready' } : this.structural.commit(label, forward, inverse, options),
       invertMask: (layerId) => (this.disposed ? false : this.mask.invert(layerId)),
     };
     this.previews = {

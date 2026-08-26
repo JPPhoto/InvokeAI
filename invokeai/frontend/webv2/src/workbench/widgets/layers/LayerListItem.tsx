@@ -9,6 +9,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { IconButton, Row, ToggleDot } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { isHideableLayer, isLayerHidden } from '@workbench/canvas-engine/api';
+import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { EyeIcon, EyeOffIcon, LockIcon, LockOpenIcon } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -23,7 +24,6 @@ import {
   type LayerContextMenuEngine,
 } from './LayerContextMenu';
 import { createLayerMenuTargetFromContextEvent } from './layerMenuState';
-import { applyStructural } from './layerOps';
 import { LayerPropertiesPopover, type LayerPropertiesEngine } from './LayerPropertiesPopover';
 import { LayerThumbnail } from './LayerThumbnail';
 
@@ -111,6 +111,7 @@ export const LayerListItem = ({
   layers,
   onSelect,
 }: LayerListItemProps) => {
+  const commitStructural = useStructuralCommit(engine);
   const { t } = useTranslation();
   const interaction = getLayerListItemInteractionState(editingLocked);
   const { attributes, isDragging, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
@@ -149,15 +150,13 @@ export const LayerListItem = ({
 
   const patchBase = useCallback(
     (label: string, forward: Partial<CanvasLayerContract>, inverse: Partial<CanvasLayerContract>) => {
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         label,
         { id: layer.id, patch: forward, type: 'updateCanvasLayer' },
         { id: layer.id, patch: inverse, type: 'updateCanvasLayer' }
       );
     },
-    [dispatch, engine, layer.id]
+    [commitStructural, layer.id]
   );
 
   const handleToggleVisible = useCallback(
@@ -171,15 +170,13 @@ export const LayerListItem = ({
     (event: { stopPropagation: () => void }) => {
       event.stopPropagation();
       const isHidden = !isLayerHidden(layer);
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         t('widgets.layers.actions.toggleHidden'),
         { type: 'setCanvasLayersHidden', updates: [{ id: layer.id, isHidden }] },
         { type: 'setCanvasLayersHidden', updates: [{ id: layer.id, isHidden: !isHidden }] }
       );
     },
-    [dispatch, engine, layer, t]
+    [commitStructural, layer, t]
   );
 
   const handleToggleLock = useCallback(
@@ -396,7 +393,7 @@ export const LayerListItem = ({
               onContextMenu={stopPropagation}
               onPointerDown={stopPropagation}
             >
-              <LayerPropertiesPopover dispatch={dispatch} engine={engine} layer={layer} />
+              <LayerPropertiesPopover engine={engine} layer={layer} />
             </Box>
             <Box display="flex" flexShrink="0" onPointerDown={stopPropagation}>
               <LayerContextMenu dispatch={dispatch} engine={engine} index={index} layer={layer} layers={layers} />

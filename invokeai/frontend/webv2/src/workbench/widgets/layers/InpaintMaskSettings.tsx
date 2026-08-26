@@ -4,11 +4,11 @@ import type { CanvasStructuralEngine } from '@workbench/widgets/layers/layerOps'
 
 import { createListCollection, HStack, Stack } from '@chakra-ui/react';
 import { Button, ColorPicker, Field, Select, Slider } from '@platform/ui';
-import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
+import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { applyStructural, applyStructuralPreview } from './layerOps';
+import { applyStructuralPreview } from './layerOps';
 
 /** The six mask fill styles, matching `CanvasMaskFillContract['style']` / legacy `zFillStyle`. */
 const MASK_FILL_STYLES: readonly CanvasMaskFillContract['style'][] = [
@@ -36,12 +36,12 @@ interface InpaintMaskSettingsProps {
  * denoise-limit sliders (0–1), and an in-place mask invert. `noiseLevel` /
  * `denoiseLimit` are wired to the contract now (consumed by the NEXT task's graph
  * builder); they have no generation effect yet. Fill/noise/denoise edits go
- * through the canvas undo stack (`applyStructural` → `updateCanvasLayerConfig`);
+ * through the canvas undo stack (`commitStructural` → `updateCanvasLayerConfig`);
  * invert is an engine pixel op (its own undoable image patch).
  */
 export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps) => {
   const { t } = useTranslation();
-  const dispatch = useCanvasProjectMutationDispatch();
+  const commitStructural = useStructuralCommit(engine);
   const fillBeforeRef = useRef<CanvasMaskFillContract | null>(null);
   const noiseBeforeRef = useRef<number | null>(null);
   const denoiseBeforeRef = useRef<number | null>(null);
@@ -63,21 +63,19 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
 
   const commitFill = useCallback(
     (next: CanvasMaskFillContract, before: CanvasMaskFillContract) => {
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         t('widgets.layers.maskFill.fill'),
         { config: { layerType: 'inpaint_mask', mask: { fill: next } }, id: layer.id, type: 'updateCanvasLayerConfig' },
         { config: { layerType: 'inpaint_mask', mask: { fill: before } }, id: layer.id, type: 'updateCanvasLayerConfig' }
       );
     },
-    [dispatch, engine, layer.id, t]
+    [commitStructural, layer.id, t]
   );
 
   const handleColorChange = useCallback(
     (hex: string) => {
       if (
-        !applyStructuralPreview(engine, dispatch, {
+        !applyStructuralPreview(engine, {
           config: { layerType: 'inpaint_mask', mask: { fill: { ...fill, color: hex } } },
           id: layer.id,
           type: 'updateCanvasLayerConfig',
@@ -89,7 +87,7 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
         fillBeforeRef.current = fill;
       }
     },
-    [dispatch, engine, fill, layer.id]
+    [engine, fill, layer.id]
   );
 
   const handleColorChangeEnd = useCallback(
@@ -118,7 +116,7 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
         return;
       }
       if (
-        !applyStructuralPreview(engine, dispatch, {
+        !applyStructuralPreview(engine, {
           config: noiseConfig(next),
           id: layer.id,
           type: 'updateCanvasLayerConfig',
@@ -130,7 +128,7 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
         noiseBeforeRef.current = noiseLevel;
       }
     },
-    [dispatch, engine, layer.id, noiseLevel]
+    [engine, layer.id, noiseLevel]
   );
 
   const handleNoiseChangeEnd = useCallback(
@@ -141,15 +139,13 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
       if (next === undefined || !Number.isFinite(next)) {
         return;
       }
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         t('widgets.layers.maskFill.noiseLevel'),
         { config: noiseConfig(next), id: layer.id, type: 'updateCanvasLayerConfig' },
         { config: noiseConfig(before), id: layer.id, type: 'updateCanvasLayerConfig' }
       );
     },
-    [dispatch, engine, layer.id, noiseLevel, t]
+    [commitStructural, layer.id, noiseLevel, t]
   );
 
   const handleDenoiseChange = useCallback(
@@ -159,7 +155,7 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
         return;
       }
       if (
-        !applyStructuralPreview(engine, dispatch, {
+        !applyStructuralPreview(engine, {
           config: denoiseConfig(next),
           id: layer.id,
           type: 'updateCanvasLayerConfig',
@@ -171,7 +167,7 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
         denoiseBeforeRef.current = denoiseLimit;
       }
     },
-    [dispatch, denoiseLimit, engine, layer.id]
+    [denoiseLimit, engine, layer.id]
   );
 
   const handleDenoiseChangeEnd = useCallback(
@@ -182,15 +178,13 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
       if (next === undefined || !Number.isFinite(next)) {
         return;
       }
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         t('widgets.layers.maskFill.denoiseLimit'),
         { config: denoiseConfig(next), id: layer.id, type: 'updateCanvasLayerConfig' },
         { config: denoiseConfig(before), id: layer.id, type: 'updateCanvasLayerConfig' }
       );
     },
-    [dispatch, denoiseLimit, engine, layer.id, t]
+    [commitStructural, denoiseLimit, layer.id, t]
   );
 
   const handleInvert = useCallback(() => {

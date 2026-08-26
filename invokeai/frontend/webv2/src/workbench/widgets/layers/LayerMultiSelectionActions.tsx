@@ -1,6 +1,4 @@
-import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
-import type { Dispatch } from 'react';
 
 import { HStack, Text } from '@chakra-ui/react';
 import { toaster } from '@platform/ui';
@@ -9,6 +7,7 @@ import { Tooltip } from '@platform/ui/Tooltip';
 import { canMergeSelectedRasters, type CanvasLayerContract } from '@workbench/canvas-engine/api';
 import { reorderSelectionWithinGroupsByKind, type LayerReorderKind } from '@workbench/canvasLayerOps';
 import { useCanvasRasterContentEpoch } from '@workbench/widgets/canvas/engineStoreHooks';
+import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { publishLayerPanelSelection } from '@workbench/workbenchStore';
 import {
   ArrowDownIcon,
@@ -32,7 +31,6 @@ type MultiSelectionEngine = Pick<CanvasEngineHandle, 'exports' | 'interaction' |
 const BULK_TOOLTIP_POSITIONING = { placement: 'top' } as const;
 
 interface LayerMultiSelectionActionsProps {
-  dispatch: Dispatch<CanvasProjectMutation>;
   editingLocked: boolean;
   engine: MultiSelectionEngine | null;
   layers: readonly CanvasLayerContract[];
@@ -41,22 +39,7 @@ interface LayerMultiSelectionActionsProps {
   selectedLayerId: string | null;
 }
 
-const applyBulkStructural = (
-  engine: MultiSelectionEngine | null,
-  dispatch: Dispatch<CanvasProjectMutation>,
-  label: string,
-  forward: CanvasProjectMutation,
-  inverse: CanvasProjectMutation
-): void => {
-  if (engine) {
-    engine.layers.commitStructural(label, forward, inverse);
-  } else {
-    dispatch(forward);
-  }
-};
-
 export const LayerMultiSelectionActions = ({
-  dispatch,
   editingLocked,
   engine,
   layers,
@@ -64,6 +47,7 @@ export const LayerMultiSelectionActions = ({
   selectedIds,
   selectedLayerId,
 }: LayerMultiSelectionActionsProps) => {
+  const commitStructural = useStructuralCommit(engine);
   const { t } = useTranslation();
   useCanvasRasterContentEpoch(engine);
   const selected = useMemo(() => {
@@ -121,15 +105,13 @@ export const LayerMultiSelectionActions = ({
       if (!next) {
         return;
       }
-      applyBulkStructural(
-        engine,
-        dispatch,
+      commitStructural(
         label,
         { orderedIds: next, type: 'reorderCanvasLayers' },
         { orderedIds: layers.map((layer) => layer.id), type: 'reorderCanvasLayers' }
       );
     },
-    [dispatch, engine, layers, selectedIds]
+    [commitStructural, layers, selectedIds]
   );
 
   const moveToFront = useCallback(
@@ -148,9 +130,7 @@ export const LayerMultiSelectionActions = ({
 
   const toggleEnabled = useCallback(() => {
     const isEnabled = !allEnabled;
-    applyBulkStructural(
-      engine,
-      dispatch,
+    commitStructural(
       t(isEnabled ? 'widgets.layers.actions.enableSelected' : 'widgets.layers.actions.disableSelected'),
       { type: 'setCanvasLayersEnabled', updates: selected.map((layer) => ({ id: layer.id, isEnabled })) },
       {
@@ -158,13 +138,11 @@ export const LayerMultiSelectionActions = ({
         updates: selected.map((layer) => ({ id: layer.id, isEnabled: layer.isEnabled })),
       }
     );
-  }, [allEnabled, dispatch, engine, selected, t]);
+  }, [allEnabled, commitStructural, selected, t]);
 
   const toggleLocked = useCallback(() => {
     const isLocked = !allLocked;
-    applyBulkStructural(
-      engine,
-      dispatch,
+    commitStructural(
       t(isLocked ? 'widgets.layers.actions.lockSelected' : 'widgets.layers.actions.unlockSelected'),
       {
         enabledUpdates: [],
@@ -177,20 +155,14 @@ export const LayerMultiSelectionActions = ({
         type: 'applyCanvasLayerStackMutation',
       }
     );
-  }, [allLocked, dispatch, engine, selected, t]);
+  }, [allLocked, commitStructural, selected, t]);
 
   const deleteSelected = useCallback(() => {
     const actions = deleteLayersActions(layers, selectedIds, selectedLayerId);
     if (actions) {
-      applyBulkStructural(
-        engine,
-        dispatch,
-        t('widgets.layers.actions.deleteSelected'),
-        actions.forward,
-        actions.inverse
-      );
+      commitStructural(t('widgets.layers.actions.deleteSelected'), actions.forward, actions.inverse);
     }
-  }, [dispatch, engine, layers, selectedIds, selectedLayerId, t]);
+  }, [commitStructural, layers, selectedIds, selectedLayerId, t]);
 
   return (
     <HStack

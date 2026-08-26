@@ -1,11 +1,10 @@
 import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
-import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
-import type { Dispatch } from 'react';
 
 import { Box, Popover, Portal, Stack, Switch, Text } from '@chakra-ui/react';
 import { IconButton } from '@platform/ui';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
+import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { SlidersHorizontalIcon } from 'lucide-react';
 import { useCallback, useState } from 'react';
@@ -16,7 +15,6 @@ import type { LayerPropertiesRequest } from './layerPropertiesRequestStore';
 import { AdjustmentsPopover } from './AdjustmentsPopover';
 import { ControlLayerSettings } from './ControlLayerSettings';
 import { InpaintMaskSettings } from './InpaintMaskSettings';
-import { applyStructural } from './layerOps';
 import {
   closeLayerPropertiesForOperation,
   getLayerPropertiesOwnershipKey,
@@ -36,7 +34,6 @@ const POPOVER_POSITIONING = { placement: 'left-start' } as const;
 const stopPropagation = (event: { stopPropagation: () => void }): void => event.stopPropagation();
 
 interface LayerPropertiesPopoverProps {
-  dispatch: Dispatch<CanvasProjectMutation>;
   engine: LayerPropertiesEngine | null;
   layer: CanvasLayerContract;
 }
@@ -68,7 +65,6 @@ export const LayerPropertiesPopover = (props: LayerPropertiesPopoverProps) => {
 };
 
 const LayerPropertiesPopoverOwnership = ({
-  dispatch,
   editingLocked,
   engine,
   layer,
@@ -133,7 +129,6 @@ const LayerPropertiesPopoverOwnership = ({
               <Popover.Body p="2.5">
                 <Stack gap="2" inert={editingLocked}>
                   <LayerTypeSettings
-                    dispatch={dispatch}
                     documentRevision={documentRevision}
                     engine={engine}
                     layer={layer}
@@ -151,13 +146,11 @@ const LayerPropertiesPopoverOwnership = ({
 
 /** Dispatches to the correct per-type settings block for the layer. */
 const LayerTypeSettings = ({
-  dispatch,
   documentRevision,
   engine,
   layer,
   onOperationStarted,
 }: {
-  dispatch: Dispatch<CanvasProjectMutation>;
   documentRevision: number;
   engine: LayerPropertiesEngine | null;
   layer: CanvasLayerContract;
@@ -176,7 +169,6 @@ const LayerTypeSettings = ({
       return (
         <RasterLayerSettings
           key={`${engine?.projectId ?? 'none'}-${layer.id}-${documentRevision}`}
-          dispatch={dispatch}
           engine={engine}
           layer={layer}
           onOperationStarted={onOperationStarted}
@@ -187,24 +179,21 @@ const LayerTypeSettings = ({
 
 /** Raster-layer properties: transparency lock + non-destructive adjustments. */
 const RasterLayerSettings = ({
-  dispatch,
   engine,
   layer,
   onOperationStarted,
 }: {
-  dispatch: Dispatch<CanvasProjectMutation>;
   engine: LayerPropertiesEngine | null;
   layer: Extract<CanvasLayerContract, { type: 'raster' }>;
   onOperationStarted(): void;
 }) => {
+  const commitStructural = useStructuralCommit(engine);
   const { t } = useTranslation();
   const isLocked = layer.isTransparencyLocked === true;
 
   const handleTransparencyLock = useCallback(
     (details: { checked: boolean }) => {
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         t('widgets.layers.adjustments.transparencyLock'),
         {
           config: { isTransparencyLocked: details.checked, layerType: 'raster' },
@@ -218,7 +207,7 @@ const RasterLayerSettings = ({
         }
       );
     },
-    [dispatch, engine, isLocked, layer.id, t]
+    [commitStructural, isLocked, layer.id, t]
   );
 
   return (

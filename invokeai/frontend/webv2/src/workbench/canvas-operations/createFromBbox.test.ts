@@ -102,7 +102,7 @@ const createHarness = (
     order.push('commit');
     void label;
     void forward;
-    return true;
+    return { status: 'committed' as const };
   });
   const engine = {
     document: { getDocument },

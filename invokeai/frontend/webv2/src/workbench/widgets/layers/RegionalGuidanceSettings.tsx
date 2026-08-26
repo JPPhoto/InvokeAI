@@ -26,13 +26,13 @@ import {
 import { Button, ColorPicker, DropZone, Field, Select, Slider } from '@platform/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
-import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
+import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { ImageIcon, PlusIcon, XIcon } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { applyStructural, applyStructuralPreview, createRegionalReferenceImage } from './layerOps';
+import { applyStructuralPreview, createRegionalReferenceImage } from './layerOps';
 import { useSelectedModelBase } from './useSelectedModelBase';
 
 /** The regional-guidance fields patchable via `updateCanvasLayerConfig`. */
@@ -90,12 +90,12 @@ interface RegionalGuidanceSettingsProps {
  * positive + negative prompt, an Auto-Negative toggle, the mask fill colour/style
  * + invert, and a per-region reference-images section (add/remove/enable + model
  * + weight, mirroring the generate widget's IP-Adapter fields). Prompt/toggle/fill
- * edits go through the canvas undo stack (`applyStructural` →
+ * edits go through the canvas undo stack (`commitStructural` →
  * `updateCanvasLayerConfig`); invert is an engine pixel op.
  */
 export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSettingsProps) => {
   const { t } = useTranslation();
-  const dispatch = useCanvasProjectMutationDispatch();
+  const commitStructural = useStructuralCommit(engine);
   const { notifications } = useWorkbenchCommands();
   const queryClient = useQueryClient();
   const models = useModelsSelector((snapshot) => snapshot.models);
@@ -116,15 +116,13 @@ export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSett
 
   const commitConfig = useCallback(
     (label: string, next: RegionalConfigPatch, before: RegionalConfigPatch) => {
-      applyStructural(
-        engine,
-        dispatch,
+      commitStructural(
         label,
         { config: { layerType: 'regional_guidance', ...next }, id: layer.id, type: 'updateCanvasLayerConfig' },
         { config: { layerType: 'regional_guidance', ...before }, id: layer.id, type: 'updateCanvasLayerConfig' }
       );
     },
-    [dispatch, engine, layer.id]
+    [commitStructural, layer.id]
   );
 
   const handlePositiveBlur = useCallback(
@@ -203,7 +201,7 @@ export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSett
   const handleColorChange = useCallback(
     (hex: string) => {
       if (
-        !applyStructuralPreview(engine, dispatch, {
+        !applyStructuralPreview(engine, {
           config: { layerType: 'regional_guidance', mask: { fill: { ...fill, color: hex } } },
           id: layer.id,
           type: 'updateCanvasLayerConfig',
@@ -215,7 +213,7 @@ export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSett
         fillBeforeRef.current = fill;
       }
     },
-    [dispatch, engine, fill, layer.id]
+    [engine, fill, layer.id]
   );
 
   const handleColorChangeEnd = useCallback(

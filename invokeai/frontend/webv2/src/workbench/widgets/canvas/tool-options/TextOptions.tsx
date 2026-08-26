@@ -11,6 +11,7 @@ import {
 } from '@workbench/canvas-engine/api';
 import { useTextEditSession, useTextOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
+import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { AlignCenterIcon, AlignLeftIcon, AlignRightIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
@@ -87,6 +88,7 @@ const AlignButton = ({
  */
 export const TextOptions = ({ engine }: ToolOptionsComponentProps) => {
   const { t } = useTranslation();
+  const commitStructural = useStructuralCommit(engine);
   const options = useTextOptions(engine);
   const sampleColor = useColorSampler(engine);
   const session = useTextEditSession(engine);
@@ -143,14 +145,14 @@ export const TextOptions = ({ engine }: ToolOptionsComponentProps) => {
       if (selected && commit) {
         const before = selected.source;
         const after: TextSource = { ...before, ...patch };
-        engine.layers.commitStructural(
+        commitStructural(
           t('widgets.canvas.toolOptions.textEdit'),
           { id: selected.id, source: after, type: 'updateCanvasLayerSource' },
           { id: selected.id, source: before, type: 'updateCanvasLayerSource' }
         );
       }
     },
-    [engine, align, color, fontFamily, fontSize, fontWeight, lineHeight, session, selected, t]
+    [align, color, commitStructural, engine, fontFamily, fontSize, fontWeight, lineHeight, selected, session, t]
   );
 
   const onFamilyChange = useCallback(

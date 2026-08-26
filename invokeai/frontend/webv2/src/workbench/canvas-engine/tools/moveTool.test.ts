@@ -135,7 +135,10 @@ const createHarness = (doc: CanvasDocumentContractV2, options: HarnessOptions = 
   const ctx: ToolContext = {
     backend: null as never,
     commitFloatingSelection: commitFloat,
-    commitStructural: (label, forward, inverse) => commits.push({ forward, inverse, label }),
+    commitStructural: (label, forward, inverse) => {
+      commits.push({ forward, inverse, label });
+      return { status: 'committed' as const };
+    },
     createLayerId: () => 'x',
     createPath2D: (d) => ({ d }) as unknown as Path2D,
     dispatch: (action) => dispatched.push(action),

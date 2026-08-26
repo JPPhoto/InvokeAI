@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV2, Rect } from '@workbench/canvas-engine/api';
+import type { CanvasDocumentContractV2, Rect, StructuralCommitResult } from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 
 import { createNewCanvasStateV2 } from '@workbench/canvasMigration';
@@ -9,7 +9,7 @@ import { createNewCanvasStateV2 } from '@workbench/canvasMigration';
  */
 export interface CanvasHeaderCommandEngine {
   readonly layers: {
-    commitStructural(label: string, forward: unknown, inverse: unknown): boolean;
+    commitStructural(label: string, forward: unknown, inverse: unknown): StructuralCommitResult;
   };
   readonly viewport: {
     fitToView(): void;
@@ -35,6 +35,7 @@ export interface CanvasHeaderCommandContext extends NewCanvasContext {
   readonly fitMasksRect: Rect | null;
   /** Opens the confirm dialog. The destructive replace only runs from its confirm. */
   readonly openNewCanvas: () => void;
+  readonly reportStructuralCommit: (result: StructuralCommitResult) => void;
   readonly t: (key: string) => string;
 }
 
@@ -55,12 +56,13 @@ export const applyFitBbox = (ctx: CanvasHeaderCommandContext, rect: Rect | null,
   if (ctx.editingLocked || !rect) {
     return;
   }
-  ctx.engine.layers.commitStructural(
+  const result = ctx.engine.layers.commitStructural(
     ctx.t('widgets.canvas.commands.fitBbox'),
     { bbox: rect, type: 'setCanvasBbox' },
     { bbox: ctx.document.bbox, type: 'setCanvasBbox' }
   );
-  if (refit) {
+  ctx.reportStructuralCommit(result);
+  if (refit && result.status === 'committed') {
     ctx.engine.viewport.fitToView();
   }
 };

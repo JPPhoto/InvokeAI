@@ -2289,6 +2289,16 @@
         "saved": "Saved to gallery",
         "savedDescription": "{{name}} added to your gallery."
       },
+      "structural": {
+        "failed": "Canvas edit failed",
+        "gestureActive": "Finish the current canvas gesture, then try again.",
+        "notReady": "The canvas is not ready to record this edit.",
+        "rejected": "The canvas did not accept this edit. Nothing changed.",
+        "reverted": "The edit could not be verified and was reverted.",
+        "stale": "The canvas changed before this edit landed. Try again.",
+        "unmirrored": "The edit was reverted, but the canvas view may be out of date.",
+        "unverified": "The edit could not be verified or reverted. Check the canvas before continuing."
+      },
       "surface": "Canvas surface",
       "toolOptions": {
         "applyTransform": "Apply",

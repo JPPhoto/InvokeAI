@@ -17,6 +17,7 @@ vi.mock('@dnd-kit/core', () => ({ useDndMonitor: () => undefined }));
 vi.mock('@workbench/WorkbenchContext', () => ({
   useActiveProjectId: () => harness.project!.id,
   useActiveProjectSelector: (selector: (project: Project) => unknown) => selector(harness.project!),
+  useOptionalWorkbenchCommands: () => null,
   useWorkbenchCommands: () => ({
     canvas: { apply: vi.fn() },
     notifications: { add: vi.fn(), reportError: vi.fn() },

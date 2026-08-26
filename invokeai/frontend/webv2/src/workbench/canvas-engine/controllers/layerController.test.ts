@@ -37,11 +37,17 @@ describe('LayerController', () => {
     setStatus: vi.fn(),
   };
   const structural = new StructuralLayerController({
-    canEdit: () => true,
-    dispatch: vi.fn(),
-    getDocument: () => null,
-    history: { push: vi.fn() } as never,
-    isGestureActive: () => false,
+    ctx: {
+      canEdit: () => true,
+      capturePermit: () => ({ epoch: 0 }),
+      dispatch: vi.fn(() => true),
+      dispatchPrepared: vi.fn(),
+      getDocument: () => null,
+      getEditRevision: () => 0,
+      getReducerDocument: () => null,
+      history: { push: vi.fn() } as never,
+      isGestureActive: () => false,
+    },
   });
   const rasterize = {
     backend: {} as never,

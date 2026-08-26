@@ -29,6 +29,8 @@ export interface CanvasMutationContext {
   readonly history: History;
   getDocument(): CanvasDocumentContractV2 | null;
   getReducerDocument(): CanvasDocumentContractV2 | null;
+  /** Counts reducer document identities; a captured value is stale once any edit lands. */
+  getEditRevision(): number;
   canEdit(owner?: symbol): boolean;
   capturePermit(owner?: symbol): DocumentEditPermit | null;
   isPermitCurrent(permit: DocumentEditPermit): boolean;
@@ -52,6 +54,7 @@ export interface CanvasMutationContextDeps {
   readonly history: History;
   readonly getDocument: () => CanvasDocumentContractV2 | null;
   readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
+  readonly subscribeReducer: (listener: () => void) => () => void;
   readonly dispatch: (action: CanvasProjectMutation, origin?: WorkbenchActionOrigin) => boolean;
   readonly commitEdit: (intent: CanvasEditIntent) => void;
   readonly refreshMirror: () => void;
@@ -84,6 +87,16 @@ export const createCanvasMutationContext = (
     }
   };
   const unsubscribeDocumentEditingLock = deps.editingLocked.subscribe(syncDocumentEditingLock);
+  let editRevision = 0;
+  let observedDocument = deps.getReducerDocument();
+  const syncEditRevision = (): void => {
+    const document = deps.getReducerDocument();
+    if (document !== observedDocument) {
+      observedDocument = document;
+      editRevision += 1;
+    }
+  };
+  const unsubscribeReducer = deps.subscribeReducer(syncEditRevision);
   const canEdit = (owner?: symbol): boolean => owner === deps.editOwner || !deps.editingLocked.get();
   const capturePermit = (owner?: symbol): DocumentEditPermit | null =>
     canEdit(owner) ? { epoch: documentEditEpoch, owner } : null;
@@ -164,9 +177,16 @@ export const createCanvasMutationContext = (
     createLayerId: () => deps.createLayerId(),
     dispatch: (action, origin) => deps.dispatch(action, origin),
     dispatchPrepared,
-    dispose: () => unsubscribeDocumentEditingLock(),
+    dispose: () => {
+      unsubscribeDocumentEditingLock();
+      unsubscribeReducer();
+    },
     endBurst: () => deps.endBurst(),
     getDocument: () => deps.getDocument(),
+    getEditRevision: () => {
+      syncEditRevision();
+      return editRevision;
+    },
     getReducerDocument: () => deps.getReducerDocument(),
     history: deps.history,
     installPrepared: (prepared, persist) => deps.installPrepared(prepared, persist),

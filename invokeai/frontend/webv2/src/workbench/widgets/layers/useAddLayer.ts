@@ -1,6 +1,6 @@
 import { useModelsSelector } from '@features/models';
-import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
+import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { nextLayerName } from '@workbench/workbenchState';
 import { useCallback } from 'react';
@@ -11,7 +11,6 @@ import type { AddLayerItemId } from './addLayerMenu';
 import { isAddLayerItemAvailable } from './addLayerMenu';
 import { resolveDefaultControlModelForBase } from './controlModelOptions';
 import {
-  applyStructural,
   createControlLayer,
   createEmptyPaintLayer,
   createInpaintMaskLayer,
@@ -25,14 +24,14 @@ import { useSelectedModelBase } from './useSelectedModelBase';
 
 /**
  * Returns a single `addLayer(id)` callback that creates a new layer of the given
- * kind at the top of the stack via the shared `applyStructural` seam (one undoable
+ * kind at the top of the stack through the guarded structural commit (one undoable
  * history entry per add). Reused by the panel's add-layer menu AND each group
  * header's "New" button so both surfaces stay in lockstep.
  */
 export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
   const { t } = useTranslation();
   const engine = useCanvasEngine();
-  const dispatch = useCanvasProjectMutationDispatch();
+  const commitStructural = useStructuralCommit(engine);
   const base = useSelectedModelBase();
   const models = useModelsSelector((snapshot) => snapshot.models);
   const layerNames = useActiveProjectSelector(
@@ -51,9 +50,7 @@ export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
       switch (id) {
         case 'raster': {
           const layer = createEmptyPaintLayer(nextLayerName(layerNames));
-          applyStructural(
-            engine,
-            dispatch,
+          commitStructural(
             t('widgets.layers.actions.addRasterLayer'),
             { index: 0, layer, type: 'addCanvasLayer' },
             { ids: [layer.id], type: 'removeCanvasLayers' }
@@ -67,9 +64,7 @@ export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
             base,
             resolveDefaultControlModelForBase(models, base)
           );
-          applyStructural(
-            engine,
-            dispatch,
+          commitStructural(
             t('widgets.layers.actions.addControlLayer'),
             { index: 0, layer, type: 'addCanvasLayer' },
             { ids: [layer.id], type: 'removeCanvasLayers' }
@@ -78,9 +73,7 @@ export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
         }
         case 'inpaint_mask': {
           const layer = createInpaintMaskLayer(nextInpaintMaskName(layerNames));
-          applyStructural(
-            engine,
-            dispatch,
+          commitStructural(
             t('widgets.layers.actions.addInpaintMask'),
             { index: 0, layer, type: 'addCanvasLayer' },
             { ids: [layer.id], type: 'removeCanvasLayers' }
@@ -89,9 +82,7 @@ export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
         }
         case 'regional_guidance': {
           const layer = createRegionalGuidanceLayer(nextRegionalGuidanceName(layerNames), regionalGuidanceCount);
-          applyStructural(
-            engine,
-            dispatch,
+          commitStructural(
             t('widgets.layers.actions.addRegionalGuidance'),
             { index: 0, layer, type: 'addCanvasLayer' },
             { ids: [layer.id], type: 'removeCanvasLayers' }
@@ -104,9 +95,7 @@ export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
             regionalGuidanceCount,
             base
           );
-          applyStructural(
-            engine,
-            dispatch,
+          commitStructural(
             t('widgets.layers.actions.addRegionalReferenceImage'),
             { index: 0, layer, type: 'addCanvasLayer' },
             { ids: [layer.id], type: 'removeCanvasLayers' }
@@ -115,6 +104,6 @@ export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
         }
       }
     },
-    [base, dispatch, engine, layerNames, models, regionalGuidanceCount, t]
+    [base, commitStructural, layerNames, models, regionalGuidanceCount, t]
   );
 };

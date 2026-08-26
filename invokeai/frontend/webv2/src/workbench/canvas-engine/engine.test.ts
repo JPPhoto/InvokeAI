@@ -4118,7 +4118,7 @@ describe('commitStructural', () => {
     });
 
     expect(engine.layers.canCommitStructural()).toBe(true);
-    expect(engine.layers.commitStructural('Select layer', forward, inverse)).toBe(true);
+    expect(engine.layers.commitStructural('Select layer', forward, inverse)).toEqual({ status: 'committed' });
     // Forward dispatched once; the edit is now undoable but not redoable.
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenNthCalledWith(1, forward);
@@ -4139,7 +4139,82 @@ describe('commitStructural', () => {
 
     engine.lifecycle.dispose();
     expect(engine.layers.canCommitStructural()).toBe(false);
-    expect(engine.layers.commitStructural('Select layer', forward, inverse)).toBe(false);
+    expect(engine.layers.commitStructural('Select layer', forward, inverse)).toEqual({ status: 'not-ready' });
+  });
+
+  it('reports a reducer refusal as dispatch-rejected with no history entry', () => {
+    const layer = rasterLayer('L');
+    const { projectId, store } = createReducerBackedStore({ ...makeDoc(), layers: [layer], selectedLayerId: 'L' });
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId,
+      store,
+    });
+
+    expect(
+      engine.layers.commitStructural('Select', { id: 'missing', type: 'setCanvasSelectedLayer' }, inverse)
+    ).toEqual({ status: 'dispatch-rejected' });
+    expect(engine.stores.canUndo.get()).toBe(false);
+    engine.lifecycle.dispose();
+  });
+
+  it('reverts an accepted edit that fails its postcondition and records nothing', () => {
+    const layer = rasterLayer('L');
+    const { projectId, store } = createReducerBackedStore({ ...makeDoc(), layers: [layer], selectedLayerId: 'L' });
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId,
+      store,
+    });
+
+    expect(
+      engine.layers.commitStructural(
+        'Rename',
+        { id: 'L', patch: { name: 'Renamed' }, type: 'updateCanvasLayer' },
+        { id: 'L', patch: { name: 'L' }, type: 'updateCanvasLayer' },
+        { verify: () => false }
+      )
+    ).toEqual({ recovered: 'reverted', status: 'postcondition-failed' });
+    expect(engine.document.getDocument()?.layers[0]?.name).toBe('L');
+    expect(engine.stores.canUndo.get()).toBe(false);
+    engine.lifecycle.dispose();
+  });
+
+  it('moves a refused undo as a no-op instead of throwing out of history', () => {
+    const layer = rasterLayer('L');
+    const { dispatch, projectId, store } = createReducerBackedStore({
+      ...makeDoc(),
+      layers: [layer],
+      selectedLayerId: 'L',
+    });
+    const reportError = vi.fn();
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId,
+      reportError,
+      store,
+    });
+    const added = rasterLayer('added');
+
+    expect(
+      engine.layers.commitStructural(
+        'Add',
+        { index: 0, layer: added, type: 'addCanvasLayer' },
+        { ids: ['added'], type: 'removeCanvasLayers' }
+      )
+    ).toEqual({ status: 'committed' });
+    dispatch({ ids: ['added'], type: 'removeCanvasLayers' });
+
+    expect(() => engine.history.undo()).not.toThrow();
+    expect(engine.stores.canUndo.get()).toBe(false);
+    expect(engine.stores.canRedo.get()).toBe(true);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Structural history replay was refused' })
+    );
+    engine.lifecycle.dispose();
   });
 });
 
@@ -14005,20 +14080,20 @@ describe('gesture guard: nudge / commitStructural mid-stroke', () => {
     engine.lifecycle.dispose();
   });
 
-  it('no-ops commitStructural while a stroke gesture is open, then commits after it ends', () => {
+  it('refuses commitStructural as gesture-active while a stroke gesture is open, then commits after it ends', () => {
     const { dispatch, engine, overlay } = startOpenStroke();
-    const forward: EngineTestAction = { id: 'x', type: 'setCanvasSelectedLayer' };
-    const inverse: EngineTestAction = { id: null, type: 'setCanvasSelectedLayer' };
+    const forward: EngineTestAction = { id: null, type: 'setCanvasSelectedLayer' };
+    const inverse: EngineTestAction = { id: 'paint1', type: 'setCanvasSelectedLayer' };
 
     expect(engine.layers.canCommitStructural()).toBe(false);
-    expect(engine.layers.commitStructural('Select', forward, inverse)).toBe(false);
+    expect(engine.layers.commitStructural('Select', forward, inverse)).toEqual({ status: 'gesture-active' });
     // Nothing dispatched, nothing recorded on history mid-gesture.
     expect(dispatch.mock.calls.some((call) => call[0] === forward)).toBe(false);
     expect(engine.stores.canUndo.get()).toBe(false);
 
     overlay.fire('pointerup', pointerAt(30, 30, { buttons: 0 }));
     expect(engine.layers.canCommitStructural()).toBe(true);
-    expect(engine.layers.commitStructural('Select', forward, inverse)).toBe(true);
+    expect(engine.layers.commitStructural('Select', forward, inverse)).toEqual({ status: 'committed' });
     expect(dispatch.mock.calls.some((call) => call[0] === forward)).toBe(true);
     expect(engine.stores.canUndo.get()).toBe(true);
 
