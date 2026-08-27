@@ -1,16 +1,6 @@
-import type {
-  CanvasLayerContract,
-  LayerStackKind,
-  LayerStackMoveKind,
-  ReorderFlatStackCommand,
-} from '@workbench/canvas-engine/api';
+import type { CanvasLayerContract, LayerStackKind, ReorderFlatStackCommand } from '@workbench/canvas-engine/api';
 
-import {
-  getStackOrder,
-  LAYER_STACKS_TOP_FIRST,
-  layerStackOf,
-  moveLayersWithinStacks,
-} from '@workbench/canvas-engine/api';
+import { getStackOrder, LAYER_STACKS_TOP_FIRST, layerStackOf } from '@workbench/canvas-engine/api';
 
 import { moveItem } from './layersDnd';
 
@@ -129,10 +119,3 @@ export const reorderSelectionWithinGroup = (
     return [...remaining.slice(0, insertAt), ...moving, ...remaining.slice(insertAt)];
   });
 };
-
-/** Moves `layerId` within its own stack; null when it is absent or already at the boundary. */
-export const reorderWithinGroupByKind = (
-  layers: readonly CanvasLayerContract[],
-  layerId: string,
-  kind: LayerStackMoveKind
-): ReorderFlatStackCommand | null => moveLayersWithinStacks(layers, [layerId], kind)[0] ?? null;

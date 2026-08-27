@@ -1,7 +1,14 @@
-import type { StructuralCommitOptions, StructuralCommitResult } from '@workbench/canvas-engine/capabilities';
+import type { WorkbenchActionOrigin } from '@workbench/autoRoutePolicy';
+import type {
+  PreparedCommitOptions,
+  StructuralCommitOptions,
+  StructuralCommitResult,
+} from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { FlatEditOrigin, PreparedFlatEdit } from '@workbench/canvas-engine/document-model/flatDocumentCommands';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 
+import { checkFlatEditPostconditions } from '@workbench/canvas-engine/document-model/postconditions';
 import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { createDocumentPatchEntry } from '@workbench/canvas-engine/history/documentPatch';
 
@@ -19,6 +26,9 @@ const anchorRevisionOf = (mutation: CanvasProjectMutation): number | undefined =
   }
 };
 
+const toWorkbenchOrigin = (origin: FlatEditOrigin | undefined): WorkbenchActionOrigin | undefined =>
+  origin === undefined ? undefined : origin === 'system' ? 'system' : 'user';
+
 export type StructuralMutationContext = Pick<
   CanvasMutationContext,
   | 'canEdit'
@@ -30,6 +40,7 @@ export type StructuralMutationContext = Pick<
   | 'getReducerDocument'
   | 'history'
   | 'isGestureActive'
+  | 'projectId'
 >;
 
 export type StructuralFailureReport =
@@ -98,6 +109,29 @@ export class StructuralLayerController {
     const applied = this.apply(label, forward, inverse, options.verify);
     if (applied.status === 'committed') {
       this.deps.ctx.history.push(this.entry(label, forward, inverse));
+    }
+    return applied;
+  }
+
+  /** A prepared flat edit: refused as `stale` unless its revision and project still match, verified by its postconditions. */
+  commitPrepared(label: string, edit: PreparedFlatEdit, options: PreparedCommitOptions = {}): StructuralCommitResult {
+    const refusal = this.refuse({ expectedRevision: edit.expectedRevision });
+    if (refusal) {
+      return refusal;
+    }
+    if (edit.projectId !== this.deps.ctx.projectId) {
+      return { status: 'dispatch-rejected' };
+    }
+    this.endBurst();
+    const applied = this.apply(
+      label,
+      edit.forward,
+      edit.inverse,
+      (document) => checkFlatEditPostconditions(document, edit.postconditions),
+      toWorkbenchOrigin(options.origin)
+    );
+    if (applied.status === 'committed' && edit.history === 'record') {
+      this.deps.ctx.history.push(this.entry(label, edit.forward, edit.inverse));
     }
     return applied;
   }
@@ -187,7 +221,8 @@ export class StructuralLayerController {
     label: string,
     forward: CanvasProjectMutation,
     inverse: CanvasProjectMutation,
-    verify: (document: CanvasDocumentContractV2) => boolean = () => true
+    verify: (document: CanvasDocumentContractV2) => boolean = () => true,
+    origin?: WorkbenchActionOrigin
   ): StructuralCommitResult {
     const { ctx } = this.deps;
     const before = ctx.getReducerDocument();
@@ -197,7 +232,7 @@ export class StructuralLayerController {
       return document !== null && document !== before && verify(document);
     };
     try {
-      ctx.dispatchPrepared(forward, isApplied, isMirrored);
+      ctx.dispatchPrepared(forward, isApplied, isMirrored, origin);
       return { status: 'committed' };
     } catch (error) {
       const after = ctx.getReducerDocument();

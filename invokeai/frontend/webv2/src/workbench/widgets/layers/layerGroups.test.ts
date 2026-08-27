@@ -7,13 +7,7 @@ import type {
 
 import { describe, expect, it } from 'vitest';
 
-import {
-  getGroupPosition,
-  groupLayers,
-  reorderSelectionWithinGroup,
-  reorderWithinGroup,
-  reorderWithinGroupByKind,
-} from './layerGroups';
+import { getGroupPosition, groupLayers, reorderSelectionWithinGroup, reorderWithinGroup } from './layerGroups';
 import { createEmptyPaintLayer } from './layerOps';
 
 const raster = (id: string): CanvasLayerContract => createEmptyPaintLayer(id, id);
@@ -150,53 +144,5 @@ describe('reorderSelectionWithinGroup', () => {
 
   it('does not reorder when the block is dropped on one of its own members', () => {
     expect(reorderSelectionWithinGroup(layers, 'r1', 'r3', ['r1', 'r3'])).toBeNull();
-  });
-});
-
-describe('reorderWithinGroupByKind', () => {
-  const layers = [inpaint('i1'), raster('r1'), regional('g1'), raster('r2'), raster('r3')];
-
-  it('moves to front (top of the group)', () => {
-    expect(reorderWithinGroupByKind(layers, 'r3', 'front')).toEqual({
-      orderedIds: ['r3', 'r1', 'r2'],
-      stack: 'raster',
-    });
-  });
-
-  it('moves to back (bottom of the group)', () => {
-    expect(reorderWithinGroupByKind(layers, 'r1', 'back')).toEqual({ orderedIds: ['r2', 'r3', 'r1'], stack: 'raster' });
-  });
-
-  it('moves forward one within the group', () => {
-    expect(reorderWithinGroupByKind(layers, 'r2', 'forward')).toEqual({
-      orderedIds: ['r2', 'r1', 'r3'],
-      stack: 'raster',
-    });
-  });
-
-  it('moves backward one within the group', () => {
-    expect(reorderWithinGroupByKind(layers, 'r1', 'backward')).toEqual({
-      orderedIds: ['r2', 'r1', 'r3'],
-      stack: 'raster',
-    });
-  });
-
-  it('is a no-op at the group front boundary (forward)', () => {
-    expect(reorderWithinGroupByKind(layers, 'r1', 'forward')).toBeNull();
-    expect(reorderWithinGroupByKind(layers, 'r1', 'front')).toBeNull();
-  });
-
-  it('is a no-op at the group back boundary (backward)', () => {
-    expect(reorderWithinGroupByKind(layers, 'r3', 'backward')).toBeNull();
-    expect(reorderWithinGroupByKind(layers, 'r3', 'back')).toBeNull();
-  });
-
-  it('is a no-op for a lone group member', () => {
-    expect(reorderWithinGroupByKind(layers, 'i1', 'front')).toBeNull();
-    expect(reorderWithinGroupByKind(layers, 'i1', 'back')).toBeNull();
-  });
-
-  it('returns null for an absent id', () => {
-    expect(reorderWithinGroupByKind(layers, 'ghost', 'front')).toBeNull();
   });
 });

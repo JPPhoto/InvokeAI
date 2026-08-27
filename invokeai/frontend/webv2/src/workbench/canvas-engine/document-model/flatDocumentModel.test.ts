@@ -1,6 +1,7 @@
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { Project } from '@workbench/projectContracts';
 
+import { isHideableLayer } from '@workbench/canvas-engine/document/layerEligibility';
 import { haveSameStackOrders } from '@workbench/canvas-engine/document/layerStacks';
 import { createEmptyCanvasDocumentV2 } from '@workbench/canvasMigration';
 import { applyCanvasProjectMutation } from '@workbench/canvasProjectMutations';
@@ -80,6 +81,9 @@ const modelOf = (project: Project) => createFlatDocumentModel(project.canvas.doc
 
 const ids = (document: CanvasDocumentContractV2): string[] => document.layers.map((entry) => entry.id);
 const byId = (left: CanvasLayerContract, right: CanvasLayerContract): number => left.id.localeCompare(right.id);
+/** The reducer writes an explicit `isHidden: false` on undo where the original layer had no key. */
+const withExplicitHidden = (layer: CanvasLayerContract): CanvasLayerContract =>
+  isHideableLayer(layer) ? { ...layer, isHidden: layer.isHidden === true } : layer;
 
 const roundTrip = (project: Project, command: FlatDocumentCommand): { after: Project; edit: PreparedFlatEdit } => {
   const result = modelOf(project).prepare(command);
@@ -93,7 +97,9 @@ const roundTrip = (project: Project, command: FlatDocumentCommand): { after: Pro
   const restored = applyCanvasProjectMutation(after, result.edit.inverse).canvas.document;
   const original = project.canvas.document;
   expect(haveSameStackOrders(restored.layers, original.layers)).toBe(true);
-  expect([...restored.layers].sort(byId)).toEqual([...original.layers].sort(byId));
+  expect([...restored.layers].sort(byId).map(withExplicitHidden)).toEqual(
+    [...original.layers].sort(byId).map(withExplicitHidden)
+  );
   expect({ ...restored, layers: [] }).toEqual({ ...original, layers: [] });
   return { after, edit: result.edit };
 };
@@ -304,6 +310,136 @@ describe('createFlatDocumentModel', () => {
       expect(model.prepare({ id: 'locked', patch: { name: 'locked', transform: { x: 0 } }, type: 'patch' })).toEqual({
         status: 'unchanged',
       });
+    });
+
+    it('takes a pre-gesture baseline so a previewed patch still records a real inverse', () => {
+      const previewed = applyCanvasProjectMutation(projectWith(interleaved(), 'r1'), {
+        id: 'r1',
+        patch: { opacity: 0.4 },
+        type: 'updateCanvasLayer',
+      });
+      const model = modelOf(previewed);
+      expect(model.prepare({ id: 'r1', patch: { opacity: 0.4 }, type: 'patch' })).toEqual({ status: 'unchanged' });
+
+      const result = model.prepare({ before: { opacity: 1 }, id: 'r1', patch: { opacity: 0.4 }, type: 'patch' });
+      expect(result).toMatchObject({
+        edit: { inverse: { id: 'r1', patch: { opacity: 1 }, type: 'updateCanvasLayer' } },
+        status: 'prepared',
+      });
+      expect(model.prepare({ before: { opacity: 0.4 }, id: 'r1', patch: { opacity: 0.4 }, type: 'patch' })).toEqual({
+        status: 'unchanged',
+      });
+      expect(
+        model.prepare({ before: { name: 'r1', opacity: 1 }, id: 'r1', patch: { opacity: 0.4 }, type: 'patch' })
+      ).toEqual({ operation: 'patch baseline names other fields', status: 'unsupported' });
+      expect(
+        modelOf(projectWith(interleaved(), 'r1')).prepare({
+          before: { opacity: 1 },
+          id: 'r1',
+          patch: { opacity: 0.4 },
+          type: 'patch',
+        }).status
+      ).toBe('prepared');
+
+      const fillBefore = { color: '#e07575', style: 'diagonal' as const };
+      const fillNext = { color: '#00ff00', style: 'diagonal' as const };
+      const previewedFill = applyCanvasProjectMutation(projectWith(interleaved(), 'i1'), {
+        config: { layerType: 'inpaint_mask', mask: { fill: fillNext } },
+        id: 'i1',
+        type: 'updateCanvasLayerConfig',
+      });
+      const fill = modelOf(previewedFill).prepare({
+        before: { layerType: 'inpaint_mask', mask: { fill: fillBefore } },
+        config: { layerType: 'inpaint_mask', mask: { fill: { ...fillNext } } },
+        id: 'i1',
+        type: 'patch-config',
+      });
+      expect(fill).toMatchObject({
+        edit: { inverse: { config: { layerType: 'inpaint_mask', mask: { fill: fillBefore } }, id: 'i1' } },
+        status: 'prepared',
+      });
+      expect(
+        modelOf(previewedFill).prepare({
+          before: { layerType: 'inpaint_mask', mask: { fill: { ...fillNext } } },
+          config: { layerType: 'inpaint_mask', mask: { fill: { ...fillNext } } },
+          id: 'i1',
+          type: 'patch-config',
+        })
+      ).toEqual({ status: 'unchanged' });
+      expect(
+        modelOf(previewedFill).prepare({
+          config: { layerType: 'inpaint_mask', mask: { fill: { ...fillNext } } },
+          id: 'i1',
+          type: 'patch-config',
+        })
+      ).toEqual({ status: 'unchanged' });
+    });
+
+    it('round-trips config, source and flag commands through the reducer', () => {
+      const project = projectWith(interleaved(), 'r1');
+      const control = roundTrip(project, {
+        config: { adapter: { weight: 0.5 }, layerType: 'control', withTransparencyEffect: true },
+        id: 'c1',
+        type: 'patch-config',
+      });
+      expect(control.after.canvas.document.layers[2]).toMatchObject({
+        adapter: { weight: 0.5 },
+        withTransparencyEffect: true,
+      });
+      expect(control.edit.inverse).toEqual({
+        config: { adapter: { weight: 1 }, layerType: 'control', withTransparencyEffect: false },
+        id: 'c1',
+        type: 'updateCanvasLayerConfig',
+      });
+
+      const source = { bitmap: null, offset: { x: 3, y: 4 }, type: 'paint' as const };
+      const patched = roundTrip(project, { id: 'r2', source, type: 'patch-source' });
+      expect((patched.after.canvas.document.layers[3] as { source: unknown }).source).toBe(source);
+
+      const enabled = roundTrip(project, {
+        type: 'set-enabled',
+        updates: [
+          { id: 'r1', isEnabled: false },
+          { id: 'c1', isEnabled: true },
+        ],
+      });
+      expect(enabled.edit).toMatchObject({ touchedIds: ['r1'], touchedStacks: ['raster'] });
+
+      const hidden = roundTrip(project, { type: 'set-hidden', updates: [{ id: 'c1', isHidden: true }] });
+      expect(hidden.after.canvas.document.layers[2]).toMatchObject({ isHidden: true });
+
+      const locked = roundTrip(project, { type: 'set-locked', updates: [{ id: 'g1', isLocked: true }] });
+      expect(locked.after.canvas.document.layers[4]).toMatchObject({ isLocked: true });
+    });
+
+    it.each<[string, FlatDocumentCommand, PrepareFlatEditResult]>([
+      [
+        'hiding a raster layer',
+        { type: 'set-hidden', updates: [{ id: 'r1', isHidden: true }] },
+        { actual: 'raster', expected: ['control', 'inpaint_mask', 'regional_guidance'], status: 'wrong-type' },
+      ],
+      [
+        'a config patch for another layer type',
+        { config: { layerType: 'control', withTransparencyEffect: true }, id: 'r1', type: 'patch-config' },
+        { actual: 'raster', expected: ['control'], status: 'wrong-type' },
+      ],
+      [
+        'a source patch on a mask',
+        { id: 'i1', source: { bitmap: null, type: 'paint' }, type: 'patch-source' },
+        { actual: 'inpaint_mask', expected: ['raster', 'control'], status: 'wrong-type' },
+      ],
+      [
+        'an empty flag update',
+        { type: 'set-locked', updates: [] },
+        { operation: 'set-locked nothing', status: 'unsupported' },
+      ],
+      [
+        'flags that already hold',
+        { type: 'set-enabled', updates: [{ id: 'r1', isEnabled: true }] },
+        { status: 'unchanged' },
+      ],
+    ])('answers %s', (_label, command, result) => {
+      expect(modelOf(projectWith(interleaved(), 'r1')).prepare(command)).toEqual(result);
     });
 
     it('selects without recording history and reports the current selection as unchanged', () => {

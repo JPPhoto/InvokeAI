@@ -12,9 +12,8 @@ import { restrictToParentElement, restrictToVerticalAxis } from '@dnd-kit/modifi
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { IconButton, toaster, Tooltip } from '@platform/ui';
 import { canMergeVisibleRasters } from '@workbench/canvas-engine/api';
-import { reorderLayerActions } from '@workbench/canvasLayerOps';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
-import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectName } from '@workbench/WorkbenchContext';
 import { ChevronDownIcon, EyeIcon, EyeOffIcon, FileDownIcon, LayersIcon, PlusIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
@@ -73,7 +72,7 @@ export const LayerGroupSection = ({
   selectedIds,
   selectedLayerId,
 }: LayerGroupSectionProps) => {
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
   const editingLocked = useCanvasDocumentEditingLocked(engine);
 
@@ -103,10 +102,11 @@ export const LayerGroupSection = ({
       if (!next) {
         return;
       }
-      const { forward, inverse } = reorderLayerActions(layers, [next]);
-      commitStructural(t('widgets.layers.actions.reorder'), forward, inverse);
+      commitPrepared(t('widgets.layers.actions.reorder'), (model) =>
+        model.prepare({ stacks: [next], type: 'reorder' })
+      );
     },
-    [commitStructural, editingLocked, layers, selectedIds, t]
+    [commitPrepared, editingLocked, layers, selectedIds, t]
   );
 
   const handleToggleCollapse = useCallback(() => onToggleCollapse(groupKey), [groupKey, onToggleCollapse]);
@@ -212,7 +212,7 @@ const GroupActions = ({
   groupLayers: readonly CanvasLayerContract[];
   layers: readonly CanvasLayerContract[];
 }) => {
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
   const addLayer = useAddLayer();
   const projectName = useActiveProjectName();
@@ -233,24 +233,20 @@ const GroupActions = ({
     // not change the generated image. The raster group has no display axis, so
     // it keeps toggling enablement.
     if (groupVisibilityAxis(groupKey) === 'hidden') {
-      const { forward, inverse } = planGroupHiddenToggle(groupLayers);
-      if (forward.length === 0) {
+      const { updates } = planGroupHiddenToggle(groupLayers);
+      if (updates.length === 0) {
         return;
       }
-      commitStructural(
-        t('widgets.layers.groupActions.toggleHidden'),
-        { type: 'setCanvasLayersHidden', updates: forward },
-        { type: 'setCanvasLayersHidden', updates: inverse }
+      commitPrepared(t('widgets.layers.groupActions.toggleHidden'), (model) =>
+        model.prepare({ type: 'set-hidden', updates })
       );
       return;
     }
-    const { forward, inverse } = planGroupVisibilityToggle(groupLayers);
-    commitStructural(
-      t('widgets.layers.groupActions.toggleVisibility'),
-      { type: 'setCanvasLayersEnabled', updates: forward },
-      { type: 'setCanvasLayersEnabled', updates: inverse }
+    const { updates } = planGroupVisibilityToggle(groupLayers);
+    commitPrepared(t('widgets.layers.groupActions.toggleVisibility'), (model) =>
+      model.prepare({ type: 'set-enabled', updates })
     );
-  }, [commitStructural, groupKey, groupLayers, t]);
+  }, [commitPrepared, groupKey, groupLayers, t]);
 
   const handleMergeVisible = useCallback(() => {
     if (!engine) {

@@ -1,14 +1,23 @@
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { FlatLayerInsertion } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
-import type { CanvasLayerBasePatch, CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
+import type {
+  CanvasLayerBasePatch,
+  CanvasLayerConfigPatch,
+  CanvasProjectMutation,
+} from '@workbench/canvas-engine/mutationContracts';
 
 import {
   captureInsertionAnchor,
   captureRestoreAnchor,
   insertLayersAtAnchor,
 } from '@workbench/canvas-engine/document/insertionAnchors';
-import { isLayerContributing, isPixelBackedLayer } from '@workbench/canvas-engine/document/layerEligibility';
+import {
+  isHideableLayer,
+  isLayerContributing,
+  isLayerHidden,
+  isPixelBackedLayer,
+} from '@workbench/canvas-engine/document/layerEligibility';
 import {
   getStackOrder,
   LAYER_STACKS_TOP_FIRST,
@@ -28,7 +37,7 @@ import type {
 import type { FlatEditPostcondition } from './postconditions';
 import type { SemanticLeafV2 } from './semanticLeaf';
 
-import { isPatchApplied } from './postconditions';
+import { isConfigApplied, isPatchApplied, sameValue } from './postconditions';
 import { compileSemanticLeaf } from './semanticLeaf';
 
 export interface FlatDocumentModelContext {
@@ -99,13 +108,13 @@ const indexOf = (document: CanvasDocumentContractV2): DocumentIndex => {
 const compileLeaves = (
   document: CanvasDocumentContractV2,
   index: DocumentIndex,
-  previous: FlatCanvasDocumentModel | null
+  previousDocument: CanvasDocumentContractV2 | null
 ): readonly SemanticLeafV2[] => {
   if (index.leaves) {
     return index.leaves;
   }
-  const reusable = previous ? indexOf(previous.document).leaves : null;
-  if (reusable && previous?.document.layers === document.layers) {
+  const reusable = previousDocument ? indexOf(previousDocument).leaves : null;
+  if (reusable && previousDocument?.layers === document.layers) {
     index.leaves = reusable;
     return reusable;
   }
@@ -125,6 +134,23 @@ const compileLeaves = (
 };
 
 const unique = <T>(values: readonly T[]): T[] => [...new Set(values)];
+
+/** Whether two patches name the same fields, including the same transform axes and nested config fields. */
+const sameKeys = (left: Record<string, unknown>, right: Record<string, unknown>): boolean => {
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, position) => key === rightKeys[position]) &&
+    leftKeys.every((key) => {
+      const a = left[key];
+      const b = right[key];
+      return typeof a === 'object' && a !== null && !Array.isArray(a) && typeof b === 'object' && b !== null
+        ? sameKeys(a as Record<string, unknown>, b as Record<string, unknown>)
+        : true;
+    })
+  );
+};
 
 const stacksTopFirst = (stacks: readonly LayerStackKind[]): LayerStackKind[] =>
   LAYER_STACKS_TOP_FIRST.filter((stack) => stacks.includes(stack));
@@ -160,6 +186,7 @@ export const createFlatDocumentModel = (
 ): FlatCanvasDocumentModel => {
   const index = indexOf(document);
   const { layers, selectedLayerId } = document;
+  const previousDocument = previous?.document ?? null;
 
   const lookup = (ids: readonly string[]): { entries: LayerIndexEntry[] } | FlatDocumentRefusal => {
     const absent = ids.filter((id) => !index.byId.has(id));
@@ -361,12 +388,16 @@ export const createFlatDocumentModel = (
     if (Object.keys(command.patch).length === 0) {
       return { operation: 'patch nothing', status: 'unsupported' };
     }
-    if (isPatchApplied(entry.layer, command.patch)) {
+    if (command.before && !sameKeys(command.before, command.patch)) {
+      return { operation: 'patch baseline names other fields', status: 'unsupported' };
+    }
+    const inverse = command.before ?? patchInverse(entry.layer, command.patch);
+    if (command.before ? sameValue(command.before, command.patch) : isPatchApplied(entry.layer, command.patch)) {
       return { status: 'unchanged' };
     }
     return prepared(
       { id: command.id, patch: command.patch, type: 'updateCanvasLayer' },
-      { id: command.id, patch: patchInverse(entry.layer, command.patch), type: 'updateCanvasLayer' },
+      { id: command.id, patch: inverse, type: 'updateCanvasLayer' },
       {
         history: 'record',
         postconditions: [{ id: command.id, kind: 'patched', patch: command.patch }],
@@ -375,6 +406,193 @@ export const createFlatDocumentModel = (
         touchedStacks: [entry.stack],
       }
     );
+  };
+
+  const configInverse = (layer: CanvasLayerContract, config: CanvasLayerConfigPatch): CanvasLayerConfigPatch => {
+    const current = layer as unknown as Record<string, unknown>;
+    const inverse: Record<string, unknown> = { layerType: config.layerType };
+    for (const [key, value] of Object.entries(config)) {
+      if (key === 'layerType') {
+        continue;
+      }
+      const before = current[key];
+      inverse[key] =
+        (key === 'adapter' || key === 'mask') &&
+        typeof value === 'object' &&
+        value !== null &&
+        typeof before === 'object'
+          ? Object.fromEntries(Object.keys(value).map((field) => [field, (before as Record<string, unknown>)[field]]))
+          : before;
+    }
+    return inverse as CanvasLayerConfigPatch;
+  };
+
+  const preparePatchConfig = (
+    command: Extract<FlatDocumentCommand, { type: 'patch-config' }>
+  ): PrepareFlatEditResult => {
+    const entry = index.byId.get(command.id);
+    if (!entry) {
+      return missing([command.id]);
+    }
+    if (entry.layer.type !== command.config.layerType) {
+      return { actual: entry.layer.type, expected: [command.config.layerType], status: 'wrong-type' };
+    }
+    if (Object.keys(command.config).length <= 1) {
+      return { operation: 'patch nothing', status: 'unsupported' };
+    }
+    if (command.before && !sameKeys(command.before, command.config)) {
+      return { operation: 'config baseline names other fields', status: 'unsupported' };
+    }
+    if (command.before ? sameValue(command.before, command.config) : isConfigApplied(entry.layer, command.config)) {
+      return { status: 'unchanged' };
+    }
+    return prepared(
+      { config: command.config, id: command.id, type: 'updateCanvasLayerConfig' },
+      {
+        config: command.before ?? configInverse(entry.layer, command.config),
+        id: command.id,
+        type: 'updateCanvasLayerConfig',
+      },
+      {
+        history: 'record',
+        postconditions: [{ config: command.config, id: command.id, kind: 'config' }],
+        selectionAfter: selectedLayerId,
+        touchedIds: [command.id],
+        touchedStacks: [entry.stack],
+      }
+    );
+  };
+
+  const preparePatchSource = (
+    command: Extract<FlatDocumentCommand, { type: 'patch-source' }>
+  ): PrepareFlatEditResult => {
+    const entry = index.byId.get(command.id);
+    if (!entry) {
+      return missing([command.id]);
+    }
+    if (entry.layer.type !== 'raster' && entry.layer.type !== 'control') {
+      return { actual: entry.layer.type, expected: ['raster', 'control'], status: 'wrong-type' };
+    }
+    if (entry.layer.source === command.source) {
+      return { status: 'unchanged' };
+    }
+    return prepared(
+      { id: command.id, source: command.source, type: 'updateCanvasLayerSource' },
+      { id: command.id, source: entry.layer.source, type: 'updateCanvasLayerSource' },
+      {
+        history: 'record',
+        postconditions: [{ id: command.id, kind: 'source', source: command.source }],
+        selectionAfter: selectedLayerId,
+        touchedIds: [command.id],
+        touchedStacks: [entry.stack],
+      }
+    );
+  };
+
+  const prepareFlags = (
+    command: Extract<FlatDocumentCommand, { type: 'set-enabled' | 'set-hidden' | 'set-locked' }>
+  ): PrepareFlatEditResult => {
+    const ids = unique(command.updates.map((update) => update.id));
+    if (ids.length === 0) {
+      return { operation: `${command.type} nothing`, status: 'unsupported' };
+    }
+    const found = lookup(ids);
+    if ('status' in found) {
+      return found;
+    }
+    if (command.type === 'set-hidden') {
+      const notHideable = found.entries.find((entry) => !isHideableLayer(entry.layer));
+      if (notHideable) {
+        return {
+          actual: notHideable.layer.type,
+          expected: ['control', 'inpaint_mask', 'regional_guidance'],
+          status: 'wrong-type',
+        };
+      }
+    }
+    const detail = (updated: readonly { id: string }[]) => ({
+      history: 'record' as const,
+      selectionAfter: selectedLayerId,
+      touchedIds: updated.map((update) => update.id),
+      touchedStacks: stacksTopFirst(updated.map((update) => index.byId.get(update.id)!.stack)),
+    });
+    switch (command.type) {
+      case 'set-enabled': {
+        const updates = command.updates.filter(
+          (update) => index.byId.get(update.id)!.layer.isEnabled !== update.isEnabled
+        );
+        if (updates.length === 0) {
+          return { status: 'unchanged' };
+        }
+        return prepared(
+          { type: 'setCanvasLayersEnabled', updates },
+          {
+            type: 'setCanvasLayersEnabled',
+            updates: updates.map((update) => ({
+              id: update.id,
+              isEnabled: index.byId.get(update.id)!.layer.isEnabled,
+            })),
+          },
+          {
+            ...detail(updates),
+            postconditions: updates.map((update) => ({
+              id: update.id,
+              kind: 'patched',
+              patch: { isEnabled: update.isEnabled },
+            })),
+          }
+        );
+      }
+      case 'set-hidden': {
+        const updates = command.updates.filter(
+          (update) => isLayerHidden(index.byId.get(update.id)!.layer) !== update.isHidden
+        );
+        if (updates.length === 0) {
+          return { status: 'unchanged' };
+        }
+        return prepared(
+          { type: 'setCanvasLayersHidden', updates },
+          {
+            type: 'setCanvasLayersHidden',
+            updates: updates.map((update) => ({
+              id: update.id,
+              isHidden: isLayerHidden(index.byId.get(update.id)!.layer),
+            })),
+          },
+          {
+            ...detail(updates),
+            postconditions: updates.map((update) => ({ id: update.id, isHidden: update.isHidden, kind: 'hidden' })),
+          }
+        );
+      }
+      case 'set-locked': {
+        const updates = command.updates.filter(
+          (update) => index.byId.get(update.id)!.layer.isLocked !== update.isLocked
+        );
+        if (updates.length === 0) {
+          return { status: 'unchanged' };
+        }
+        return prepared(
+          { enabledUpdates: [], lockedUpdates: updates, type: 'applyCanvasLayerStackMutation' },
+          {
+            enabledUpdates: [],
+            lockedUpdates: updates.map((update) => ({
+              id: update.id,
+              isLocked: index.byId.get(update.id)!.layer.isLocked,
+            })),
+            type: 'applyCanvasLayerStackMutation',
+          },
+          {
+            ...detail(updates),
+            postconditions: updates.map((update) => ({
+              id: update.id,
+              kind: 'patched',
+              patch: { isLocked: update.isLocked },
+            })),
+          }
+        );
+      }
+    }
   };
 
   const prepareSelect = (command: Extract<FlatDocumentCommand, { type: 'select' }>): PrepareFlatEditResult => {
@@ -424,7 +642,7 @@ export const createFlatDocumentModel = (
       }
       return { lowerId: lower.id, status: 'eligible', upperId };
     },
-    compileLeaves: () => compileLeaves(document, index, previous),
+    compileLeaves: () => compileLeaves(document, index, previousDocument),
     document,
     getLayer: (id) => index.byId.get(id)?.layer ?? null,
     getStack: (kind) => index.stacks[kind],
@@ -442,6 +660,14 @@ export const createFlatDocumentModel = (
           return prepareReorder(command.stacks);
         case 'patch':
           return preparePatch(command);
+        case 'patch-config':
+          return preparePatchConfig(command);
+        case 'patch-source':
+          return preparePatchSource(command);
+        case 'set-enabled':
+        case 'set-hidden':
+        case 'set-locked':
+          return prepareFlags(command);
         case 'select':
           return prepareSelect(command);
       }

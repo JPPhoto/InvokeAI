@@ -1,7 +1,7 @@
 import type { NumberInput as ChakraNumberInput } from '@chakra-ui/react';
 
 import { HStack, NumberInput, Text } from '@chakra-ui/react';
-import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -22,7 +22,7 @@ interface SelectedTransform {
  */
 export const MoveOptions = ({ engine }: ToolOptionsComponentProps) => {
   const { t } = useTranslation();
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const selected = useActiveProjectSelector(
     (project): SelectedTransform | null => {
       const { document } = project.canvas;
@@ -39,15 +39,15 @@ export const MoveOptions = ({ engine }: ToolOptionsComponentProps) => {
       if (!selected || next === selected[axis]) {
         return;
       }
-      const forwardTransform = axis === 'x' ? { x: next } : { y: next };
-      const inverseTransform = axis === 'x' ? { x: selected.x } : { y: selected.y };
-      commitStructural(
-        t('widgets.canvas.toolOptions.movePosition'),
-        { id: selected.id, patch: { transform: forwardTransform }, type: 'updateCanvasLayer' },
-        { id: selected.id, patch: { transform: inverseTransform }, type: 'updateCanvasLayer' }
+      commitPrepared(t('widgets.canvas.toolOptions.movePosition'), (model) =>
+        model.prepare({
+          id: selected.id,
+          patch: { transform: axis === 'x' ? { x: next } : { y: next } },
+          type: 'patch',
+        })
       );
     },
-    [commitStructural, selected, t]
+    [commitPrepared, selected, t]
   );
 
   const onXChange = useCallback(

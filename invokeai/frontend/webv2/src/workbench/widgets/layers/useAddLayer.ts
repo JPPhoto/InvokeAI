@@ -1,9 +1,8 @@
 import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
 
 import { useModelsSelector } from '@features/models';
-import { useNotify } from '@workbench/useNotify';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
-import { reportStructuralCommit, useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { nextLayerName } from '@workbench/workbenchState';
 import { useCallback } from 'react';
@@ -34,8 +33,7 @@ import { useSelectedModelBase } from './useSelectedModelBase';
 export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
   const { t } = useTranslation();
   const engine = useCanvasEngine();
-  const commitStructural = useStructuralCommit(engine);
-  const notify = useNotify();
+  const commitPrepared = usePreparedCommit(engine);
   const base = useSelectedModelBase();
   const models = useModelsSelector((snapshot) => snapshot.models);
   const layerNames = useActiveProjectSelector(
@@ -52,21 +50,8 @@ export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
         return;
       }
       const add = (label: string, layer: CanvasLayerContract): void => {
-        if (!engine) {
-          reportStructuralCommit({ status: 'not-ready' }, notify.error, t);
-          return;
-        }
-        commitStructural(
-          label,
-          {
-            anchor: engine.document.captureInsertionAnchor(
-              layer.type,
-              engine.document.getDocument()?.selectedLayerId ?? null
-            ),
-            layer,
-            type: 'addCanvasLayer',
-          },
-          { ids: [layer.id], type: 'removeCanvasLayers' }
+        commitPrepared(label, (model) =>
+          model.prepare({ aboveId: model.document.selectedLayerId, layers: [layer], type: 'insert' })
         );
       };
       switch (id) {
@@ -106,6 +91,6 @@ export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
         }
       }
     },
-    [base, commitStructural, engine, layerNames, models, notify, regionalGuidanceCount, t]
+    [base, commitPrepared, layerNames, models, regionalGuidanceCount, t]
   );
 };

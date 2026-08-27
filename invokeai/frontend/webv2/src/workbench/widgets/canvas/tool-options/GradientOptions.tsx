@@ -5,7 +5,7 @@ import { createListCollection, HStack, NumberInput, Text } from '@chakra-ui/reac
 import { ColorPicker, Select } from '@platform/ui';
 import { useGradientOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
-import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -32,7 +32,7 @@ const SELECT_TRIGGER_PROPS = { minW: '6rem' } as const;
  */
 export const GradientOptions = ({ engine }: ToolOptionsComponentProps) => {
   const { t } = useTranslation();
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const options = useGradientOptions(engine);
   const sampleColor = useColorSampler(engine);
 
@@ -74,14 +74,12 @@ export const GradientOptions = ({ engine }: ToolOptionsComponentProps) => {
       if (selected && commit) {
         const before = selected.source;
         const after: GradientSource = { ...before, angle: next.angle, kind: next.kind, stops: next.stops };
-        commitStructural(
-          t('widgets.canvas.toolOptions.gradientEdit'),
-          { id: selected.id, source: after, type: 'updateCanvasLayerSource' },
-          { id: selected.id, source: before, type: 'updateCanvasLayerSource' }
+        commitPrepared(t('widgets.canvas.toolOptions.gradientEdit'), (model) =>
+          model.prepare({ id: selected.id, source: after, type: 'patch-source' })
         );
       }
     },
-    [commitStructural, engine, selected, t]
+    [commitPrepared, engine, selected, t]
   );
 
   const setStopColor = useCallback(

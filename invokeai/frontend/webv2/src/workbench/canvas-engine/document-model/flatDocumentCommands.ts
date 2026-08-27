@@ -1,10 +1,14 @@
-import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasLayerContract, CanvasLayerSourceContract } from '@workbench/canvas-engine/contracts';
 import type {
   LayerStackKind,
   LayerStackMoveKind,
   ReorderFlatStackCommand,
 } from '@workbench/canvas-engine/document/layerStacks';
-import type { CanvasLayerBasePatch, CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
+import type {
+  CanvasLayerBasePatch,
+  CanvasLayerConfigPatch,
+  CanvasProjectMutation,
+} from '@workbench/canvas-engine/mutationContracts';
 
 import type { FlatEditPostcondition } from './postconditions';
 
@@ -21,8 +25,26 @@ export type FlatDocumentCommand =
   | { readonly type: 'duplicate'; readonly sourceId: string; readonly newId: string }
   | { readonly type: 'move'; readonly ids: readonly string[]; readonly kind: LayerStackMoveKind }
   | { readonly type: 'reorder'; readonly stacks: readonly ReorderFlatStackCommand[] }
-  | { readonly type: 'patch'; readonly id: string; readonly patch: CanvasLayerBasePatch }
+  | {
+      readonly type: 'patch';
+      readonly id: string;
+      readonly patch: CanvasLayerBasePatch;
+      /** The values before a previewed gesture; the inverse restores these instead of the current ones. */
+      readonly before?: CanvasLayerBasePatch;
+    }
+  | {
+      readonly type: 'patch-config';
+      readonly id: string;
+      readonly config: CanvasLayerConfigPatch;
+      readonly before?: CanvasLayerConfigPatch;
+    }
+  | { readonly type: 'patch-source'; readonly id: string; readonly source: CanvasLayerSourceContract }
+  | { readonly type: 'set-enabled'; readonly updates: readonly { id: string; isEnabled: boolean }[] }
+  | { readonly type: 'set-hidden'; readonly updates: readonly { id: string; isHidden: boolean }[] }
+  | { readonly type: 'set-locked'; readonly updates: readonly { id: string; isLocked: boolean }[] }
   | { readonly type: 'select'; readonly id: string | null };
+
+export type FlatEditOrigin = 'human' | 'operation' | 'system' | 'ai';
 
 export type FlatDocumentRefusal =
   | { readonly status: 'missing'; readonly ids: readonly string[] }

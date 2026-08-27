@@ -90,7 +90,6 @@
     "canvasDimsSync.ts": "workbench",
     "canvasInvocationPreparation.ts": "workbench",
     "canvasLayerContent.ts": "workbench",
-    "canvasLayerOps.ts": "workbench",
     "canvasLoadContracts.ts": "workbench",
     "canvasMigration.ts": "workbench",
     "canvasProjectMutationPort.ts": "workbench",

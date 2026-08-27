@@ -10,7 +10,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { IconButton, Row, ToggleDot } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { isHideableLayer, isLayerHidden } from '@workbench/canvas-engine/api';
-import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { EyeIcon, EyeOffIcon, LockIcon, LockOpenIcon } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -110,7 +110,7 @@ export const LayerListItem = ({
   layers,
   onSelect,
 }: LayerListItemProps) => {
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
   const interaction = getLayerListItemInteractionState(editingLocked);
   const { attributes, isDragging, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
@@ -148,40 +148,34 @@ export const LayerListItem = ({
   }, [isSelected, layer.id, onSelect]);
 
   const patchBase = useCallback(
-    (label: string, forward: Partial<CanvasLayerContract>, inverse: Partial<CanvasLayerContract>) => {
-      commitStructural(
-        label,
-        { id: layer.id, patch: forward, type: 'updateCanvasLayer' },
-        { id: layer.id, patch: inverse, type: 'updateCanvasLayer' }
-      );
+    (label: string, forward: Partial<CanvasLayerContract>) => {
+      commitPrepared(label, (model) => model.prepare({ id: layer.id, patch: forward, type: 'patch' }));
     },
-    [commitStructural, layer.id]
+    [commitPrepared, layer.id]
   );
 
   const handleToggleVisible = useCallback(
     (checked: boolean) => {
-      patchBase(t('widgets.layers.actions.toggleVisibility'), { isEnabled: checked }, { isEnabled: layer.isEnabled });
+      patchBase(t('widgets.layers.actions.toggleVisibility'), { isEnabled: checked });
     },
-    [layer.isEnabled, patchBase, t]
+    [patchBase, t]
   );
 
   const handleToggleHidden = useCallback(
     (event: { stopPropagation: () => void }) => {
       event.stopPropagation();
       const isHidden = !isLayerHidden(layer);
-      commitStructural(
-        t('widgets.layers.actions.toggleHidden'),
-        { type: 'setCanvasLayersHidden', updates: [{ id: layer.id, isHidden }] },
-        { type: 'setCanvasLayersHidden', updates: [{ id: layer.id, isHidden: !isHidden }] }
+      commitPrepared(t('widgets.layers.actions.toggleHidden'), (model) =>
+        model.prepare({ type: 'set-hidden', updates: [{ id: layer.id, isHidden }] })
       );
     },
-    [commitStructural, layer, t]
+    [commitPrepared, layer, t]
   );
 
   const handleToggleLock = useCallback(
     (event: { stopPropagation: () => void }) => {
       event.stopPropagation();
-      patchBase(t('widgets.layers.actions.toggleLock'), { isLocked: !layer.isLocked }, { isLocked: layer.isLocked });
+      patchBase(t('widgets.layers.actions.toggleLock'), { isLocked: !layer.isLocked });
     },
     [layer.isLocked, patchBase, t]
   );
@@ -195,7 +189,7 @@ export const LayerListItem = ({
     setIsEditing(false);
     const name = draftName.trim();
     if (name && name !== layer.name) {
-      patchBase(t('widgets.layers.actions.rename'), { name }, { name: layer.name });
+      patchBase(t('widgets.layers.actions.rename'), { name });
     }
   }, [draftName, layer.name, patchBase, t]);
 

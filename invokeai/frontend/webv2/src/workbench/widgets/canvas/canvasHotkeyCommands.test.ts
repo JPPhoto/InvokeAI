@@ -6,6 +6,7 @@ import type {
 } from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { createFlatDocumentModel } from '@workbench/canvas-engine/api';
 import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
@@ -51,6 +52,7 @@ const createEngine = (interaction: Partial<CanvasInteractionState> = {}) => {
     projectId: 'project',
     document: {
       captureRestoreAnchor: () => stackTopAnchor('project'),
+      model: vi.fn(),
     },
     history: { redo: vi.fn(), undo: vi.fn() },
     interaction: {
@@ -61,6 +63,7 @@ const createEngine = (interaction: Partial<CanvasInteractionState> = {}) => {
     },
     layers: {
       clearMask: vi.fn(),
+      commitPrepared: vi.fn(() => ({ status: 'committed' as const })),
       commitStructural: vi.fn(),
       duplicateLayers: vi.fn(() =>
         Promise.resolve<
@@ -93,6 +96,7 @@ let pasteFromClipboard: Mock<() => void>;
 const contextOf = (overrides: Partial<CanvasHotkeyContext> = {}): CanvasHotkeyContext => ({
   copySelection,
   dispatch,
+  reportPreparedCommit: () => undefined,
   reportStructuralCommit: () => undefined,
   document: documentOf([rasterLayer('a'), rasterLayer('b')], 'a'),
   engine: createEngine(),
@@ -108,6 +112,9 @@ const contextOf = (overrides: Partial<CanvasHotkeyContext> = {}): CanvasHotkeyCo
 
 const run = (commandId: string, overrides: Partial<CanvasHotkeyContext> = {}) => {
   const ctx = contextOf(overrides);
+  (ctx.engine!.document.model as Mock).mockImplementation(() =>
+    createFlatDocumentModel(ctx.document, { editRevision: 0, projectId: 'project' })
+  );
   executeCanvasHotkeyCommand(commandId, ctx);
   return ctx.engine as ReturnType<typeof createEngine>;
 };
@@ -139,7 +146,7 @@ describe('staging precedence', () => {
   it('delete discards the selected staged candidate before touching layers', () => {
     const engine = run('canvas.deleteSelected', { hasSelectedStagedCandidate: true });
     expect(dispatch).toHaveBeenCalledWith({ type: 'discardSelectedStagedImage' });
-    expect(engine.layers.commitStructural).not.toHaveBeenCalled();
+    expect(engine.layers.commitPrepared).not.toHaveBeenCalled();
     expect(engine.selection.eraseSelection).not.toHaveBeenCalled();
   });
 
@@ -168,7 +175,7 @@ describe('interaction lock', () => {
   ])('blocks %s', (commandId) => {
     const engine = run(commandId, { isInteractionLocked: true });
     expect(engine.tools.setTool).not.toHaveBeenCalled();
-    expect(engine.layers.commitStructural).not.toHaveBeenCalled();
+    expect(engine.layers.commitPrepared).not.toHaveBeenCalled();
     expect(engine.layers.nudgeSelectedLayer).not.toHaveBeenCalled();
     expect(engine.history.undo).not.toHaveBeenCalled();
     expect(engine.selection.selectAll).not.toHaveBeenCalled();
@@ -209,22 +216,21 @@ describe('layer reorder', () => {
         document: documentOf([rasterLayer('a'), rasterLayer('b'), rasterLayer('c')], 'b'),
         selectedLayerIds: ['b'],
       });
-      expect(engine.layers.commitStructural).toHaveBeenCalledWith(
+      expect(engine.layers.commitPrepared).toHaveBeenCalledWith(
         'widgets.canvas.commands.reorderLayer',
-        expect.anything(),
-        expect.anything()
+        expect.objectContaining({ forward: expect.objectContaining({ type: 'reorderCanvasLayerStacks' }) })
       );
     }
   );
 
   it('is a no-op at the edge of the stack', () => {
     const engine = run('canvas.layerToFront', { document: documentOf([rasterLayer('a'), rasterLayer('b')], 'a') });
-    expect(engine.layers.commitStructural).not.toHaveBeenCalled();
+    expect(engine.layers.commitPrepared).not.toHaveBeenCalled();
   });
 
   it('is a no-op with no selected layer', () => {
     const engine = run('canvas.layerBackward', { document: documentOf([rasterLayer('a')], null) });
-    expect(engine.layers.commitStructural).not.toHaveBeenCalled();
+    expect(engine.layers.commitPrepared).not.toHaveBeenCalled();
   });
 
   it('is a no-op without an engine', () => {
@@ -243,22 +249,17 @@ describe('layer reorder', () => {
       selectedLayerIds: ['c2', 'r2'],
     });
 
-    expect(engine.layers.commitStructural).toHaveBeenCalledWith(
+    expect(engine.layers.commitPrepared).toHaveBeenCalledWith(
       'widgets.canvas.commands.reorderLayer',
-      {
-        stacks: [
-          { orderedIds: ['c2', 'c1'], stack: 'control' },
-          { orderedIds: ['r2', 'r1'], stack: 'raster' },
-        ],
-        type: 'reorderCanvasLayerStacks',
-      },
-      {
-        stacks: [
-          { orderedIds: ['c1', 'c2'], stack: 'control' },
-          { orderedIds: ['r1', 'r2'], stack: 'raster' },
-        ],
-        type: 'reorderCanvasLayerStacks',
-      }
+      expect.objectContaining({
+        forward: {
+          stacks: [
+            { orderedIds: ['c2', 'c1'], stack: 'control' },
+            { orderedIds: ['r2', 'r1'], stack: 'raster' },
+          ],
+          type: 'reorderCanvasLayerStacks',
+        },
+      })
     );
   });
 });
@@ -267,16 +268,15 @@ describe('delete: pixels vs layer', () => {
   it('erases the pixel selection when one exists', () => {
     const engine = run('canvas.deleteSelected', { engine: createEngine({ hasSelection: true }) });
     expect(engine.selection.eraseSelection).toHaveBeenCalled();
-    expect(engine.layers.commitStructural).not.toHaveBeenCalled();
+    expect(engine.layers.commitPrepared).not.toHaveBeenCalled();
   });
 
   it('deletes the selected layer when there is no pixel selection', () => {
     const engine = run('canvas.deleteSelected');
     expect(engine.selection.eraseSelection).not.toHaveBeenCalled();
-    expect(engine.layers.commitStructural).toHaveBeenCalledWith(
+    expect(engine.layers.commitPrepared).toHaveBeenCalledWith(
       'widgets.canvas.commands.deleteLayer',
-      expect.anything(),
-      expect.anything()
+      expect.objectContaining({ forward: { ids: ['a'], type: 'removeCanvasLayers' } })
     );
   });
 
@@ -284,12 +284,14 @@ describe('delete: pixels vs layer', () => {
     const layers = [rasterLayer('a'), rasterLayer('b'), rasterLayer('c')];
     const engine = run('canvas.deleteSelected', { document: documentOf(layers, 'a'), selectedLayerIds: ['a', 'c'] });
 
-    expect(engine.layers.commitStructural).toHaveBeenCalledWith(
+    expect(engine.layers.commitPrepared).toHaveBeenCalledWith(
       'widgets.canvas.commands.deleteLayer',
-      { ids: ['a', 'c'], type: 'removeCanvasLayers' },
       expect.objectContaining({
-        add: [expect.objectContaining({ layers: [layers[0]] }), expect.objectContaining({ layers: [layers[2]] })],
-        selectedLayerId: 'a',
+        forward: { ids: ['a', 'c'], type: 'removeCanvasLayers' },
+        inverse: expect.objectContaining({
+          add: [expect.objectContaining({ layers: [layers[0]] }), expect.objectContaining({ layers: [layers[2]] })],
+          selectedLayerId: 'a',
+        }),
       })
     );
   });
@@ -300,13 +302,13 @@ describe('delete: pixels vs layer', () => {
       selectedLayerIds: ['a', 'b'],
     });
 
-    expect(engine.layers.commitStructural).not.toHaveBeenCalled();
+    expect(engine.layers.commitPrepared).not.toHaveBeenCalled();
   });
 
   it('does nothing with neither a selection nor a selected layer', () => {
     const engine = run('canvas.deleteSelected', { document: documentOf([rasterLayer('a')], null) });
     expect(engine.selection.eraseSelection).not.toHaveBeenCalled();
-    expect(engine.layers.commitStructural).not.toHaveBeenCalled();
+    expect(engine.layers.commitPrepared).not.toHaveBeenCalled();
   });
 });
 
@@ -314,7 +316,7 @@ describe('duplicate: lift vs whole layer', () => {
   it('lifts the pixel selection into a new layer when one exists', () => {
     const engine = run('canvas.duplicateLayer', { engine: createEngine({ hasSelection: true }) });
     expect(engine.selection.liftSelectionToLayer).toHaveBeenCalled();
-    expect(engine.layers.commitStructural).not.toHaveBeenCalled();
+    expect(engine.layers.commitPrepared).not.toHaveBeenCalled();
   });
 
   it('duplicates the whole layer with no pixel selection', () => {
@@ -459,26 +461,30 @@ describe('mergeDown', () => {
 describe('toggleNonRasterLayers', () => {
   it('does nothing when there are no hideable layers', () => {
     const engine = run('canvas.toggleNonRasterLayers');
-    expect(engine.layers.commitStructural).not.toHaveBeenCalled();
+    expect(engine.layers.commitPrepared).not.toHaveBeenCalled();
   });
 
   it('hides all hideable layers when all are visible, and restores prior state on undo', () => {
     const mask = rasterLayer('m', { type: 'inpaint_mask' } as Partial<CanvasLayerContract>);
     const engine = run('canvas.toggleNonRasterLayers', { document: documentOf([rasterLayer('a'), mask], 'a') });
-    expect(engine.layers.commitStructural).toHaveBeenCalledWith(
+    expect(engine.layers.commitPrepared).toHaveBeenCalledWith(
       'widgets.canvas.commands.toggleNonRasterLayers',
-      { type: 'setCanvasLayersHidden', updates: [{ id: 'm', isHidden: true }] },
-      { type: 'setCanvasLayersHidden', updates: [{ id: 'm', isHidden: false }] }
+      expect.objectContaining({
+        forward: { type: 'setCanvasLayersHidden', updates: [{ id: 'm', isHidden: true }] },
+        inverse: { type: 'setCanvasLayersHidden', updates: [{ id: 'm', isHidden: false }] },
+      })
     );
   });
 
   it('reveals hideable layers when any is already hidden', () => {
     const mask = rasterLayer('m', { isHidden: true, type: 'inpaint_mask' } as Partial<CanvasLayerContract>);
     const engine = run('canvas.toggleNonRasterLayers', { document: documentOf([rasterLayer('a'), mask], 'a') });
-    expect(engine.layers.commitStructural).toHaveBeenCalledWith(
+    expect(engine.layers.commitPrepared).toHaveBeenCalledWith(
       'widgets.canvas.commands.toggleNonRasterLayers',
-      { type: 'setCanvasLayersHidden', updates: [{ id: 'm', isHidden: false }] },
-      { type: 'setCanvasLayersHidden', updates: [{ id: 'm', isHidden: true }] }
+      expect.objectContaining({
+        forward: { type: 'setCanvasLayersHidden', updates: [{ id: 'm', isHidden: false }] },
+        inverse: { type: 'setCanvasLayersHidden', updates: [{ id: 'm', isHidden: true }] },
+      })
     );
   });
 });
@@ -488,7 +494,7 @@ describe('robustness', () => {
     const engine = run('canvas.nonexistent');
     expect(dispatch).not.toHaveBeenCalled();
     expect(engine.tools.setTool).not.toHaveBeenCalled();
-    expect(engine.layers.commitStructural).not.toHaveBeenCalled();
+    expect(engine.layers.commitPrepared).not.toHaveBeenCalled();
   });
 
   it('never throws without an engine', () => {

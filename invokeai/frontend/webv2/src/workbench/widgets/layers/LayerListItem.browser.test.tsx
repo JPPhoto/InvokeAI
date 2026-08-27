@@ -1,4 +1,5 @@
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
+import type { PreparedFlatEdit } from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
 import { ChakraProvider } from '@chakra-ui/react';
@@ -13,6 +14,8 @@ import {
 } from '@dnd-kit/core';
 import { arrayMove, SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { system } from '@theme/system';
+import { createFlatDocumentModel } from '@workbench/canvas-engine/api';
+import { createEmptyCanvasDocumentV2 } from '@workbench/canvasMigration';
 import { createLayerPanelState, selectLayerInPanel } from '@workbench/layerPanelState';
 import { createInstance } from 'i18next';
 import { act, useCallback, useMemo, useState } from 'react';
@@ -106,7 +109,18 @@ const Harness = () => {
   const engine = useMemo(
     () =>
       ({
+        document: {
+          model: () =>
+            createFlatDocumentModel(
+              { ...createEmptyCanvasDocumentV2(), layers, selectedLayerId: selection.primaryId },
+              { editRevision: 0, projectId: 'test-project' }
+            ),
+        },
         layers: {
+          commitPrepared: (_label: string, edit: PreparedFlatEdit) => {
+            dispatch(edit.forward);
+            return { status: 'committed' as const };
+          },
           commitStructural: (_label: string, mutation: CanvasProjectMutation) => {
             dispatch(mutation);
             return { status: 'committed' as const };
@@ -118,7 +132,7 @@ const Harness = () => {
         },
         projectId: 'test-project',
       }) as unknown as LayerListItemEngine,
-    [dispatch]
+    [dispatch, layers, selection.primaryId]
   );
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     if (!event.over || event.active.id === event.over.id) {

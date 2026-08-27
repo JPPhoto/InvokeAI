@@ -60,32 +60,23 @@ export const isGroupAllVisible = (
 /**
  * Plans a group show/hide-all toggle as ONE reversible bulk action: if every
  * layer is currently visible, hide them all; otherwise show them all (legacy
- * `CanvasEntityType` toggle semantics). `forward` sets the shared target;
- * `inverse` restores each layer's prior state verbatim, so undo is a single
- * history entry.
+ * `CanvasEntityType` toggle semantics); the prepared edit restores each
+ * layer's prior state on undo.
  */
 export const planGroupVisibilityToggle = (
   groupLayers: readonly CanvasLayerContract[]
-): { forward: LayerVisibilityUpdate[]; inverse: LayerVisibilityUpdate[]; nextVisible: boolean } => {
+): { updates: LayerVisibilityUpdate[]; nextVisible: boolean } => {
   const nextVisible = !isGroupAllVisible(groupLayers);
-  return {
-    forward: groupLayers.map((layer) => ({ id: layer.id, isEnabled: nextVisible })),
-    inverse: groupLayers.map((layer) => ({ id: layer.id, isEnabled: layer.isEnabled })),
-    nextVisible,
-  };
+  return { nextVisible, updates: groupLayers.map((layer) => ({ id: layer.id, isEnabled: nextVisible })) };
 };
 
 /** The display-axis counterpart of {@link planGroupVisibilityToggle}. */
 export const planGroupHiddenToggle = (
   groupLayers: readonly CanvasLayerContract[]
-): { forward: LayerHiddenUpdate[]; inverse: LayerHiddenUpdate[]; nextVisible: boolean } => {
+): { updates: LayerHiddenUpdate[]; nextVisible: boolean } => {
   const hideable = groupLayers.filter(isHideableLayer);
   const nextVisible = !isGroupAllVisible(hideable, 'hidden');
-  return {
-    forward: hideable.map((layer) => ({ id: layer.id, isHidden: !nextVisible })),
-    inverse: hideable.map((layer) => ({ id: layer.id, isHidden: isLayerHidden(layer) })),
-    nextVisible,
-  };
+  return { nextVisible, updates: hideable.map((layer) => ({ id: layer.id, isHidden: !nextVisible })) };
 };
 
 // Merge-visible contributor selection lives in the engine's document layer

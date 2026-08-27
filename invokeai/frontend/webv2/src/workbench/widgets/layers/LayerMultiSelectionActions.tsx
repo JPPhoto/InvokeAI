@@ -6,15 +6,12 @@ import { IconButton } from '@platform/ui/Button';
 import { Tooltip } from '@platform/ui/Tooltip';
 import {
   canMergeSelectedRasters,
-  moveLayersWithinStacks,
   type CanvasLayerContract,
   type LayerStackMoveKind,
 } from '@workbench/canvas-engine/api';
-import { deleteLayersActions, reorderLayerActions } from '@workbench/canvasLayerOps';
 import { publishLayerPanelSelection } from '@workbench/layerPanelState';
-import { useNotify } from '@workbench/useNotify';
 import { useCanvasRasterContentEpoch } from '@workbench/widgets/canvas/engineStoreHooks';
-import { reportStructuralCommit, useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -40,7 +37,6 @@ interface LayerMultiSelectionActionsProps {
   layers: readonly CanvasLayerContract[];
   projectId: string;
   selectedIds: readonly string[];
-  selectedLayerId: string | null;
 }
 
 export const LayerMultiSelectionActions = ({
@@ -49,11 +45,9 @@ export const LayerMultiSelectionActions = ({
   layers,
   projectId,
   selectedIds,
-  selectedLayerId,
 }: LayerMultiSelectionActionsProps) => {
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
-  const notify = useNotify();
   useCanvasRasterContentEpoch(engine);
   const selected = useMemo(() => {
     const ids = new Set(selectedIds);
@@ -106,14 +100,9 @@ export const LayerMultiSelectionActions = ({
 
   const reorder = useCallback(
     (kind: LayerStackMoveKind, label: string) => {
-      const next = moveLayersWithinStacks(layers, selectedIds, kind);
-      if (next.length === 0) {
-        return;
-      }
-      const { forward, inverse } = reorderLayerActions(layers, next);
-      commitStructural(label, forward, inverse);
+      commitPrepared(label, (model) => model.prepare({ ids: selectedIds, kind, type: 'move' }));
     },
-    [commitStructural, layers, selectedIds]
+    [commitPrepared, selectedIds]
   );
 
   const moveToFront = useCallback(
@@ -132,41 +121,25 @@ export const LayerMultiSelectionActions = ({
 
   const toggleEnabled = useCallback(() => {
     const isEnabled = !allEnabled;
-    commitStructural(
+    commitPrepared(
       t(isEnabled ? 'widgets.layers.actions.enableSelected' : 'widgets.layers.actions.disableSelected'),
-      { type: 'setCanvasLayersEnabled', updates: selected.map((layer) => ({ id: layer.id, isEnabled })) },
-      {
-        type: 'setCanvasLayersEnabled',
-        updates: selected.map((layer) => ({ id: layer.id, isEnabled: layer.isEnabled })),
-      }
+      (model) => model.prepare({ type: 'set-enabled', updates: selected.map((layer) => ({ id: layer.id, isEnabled })) })
     );
-  }, [allEnabled, commitStructural, selected, t]);
+  }, [allEnabled, commitPrepared, selected, t]);
 
   const toggleLocked = useCallback(() => {
     const isLocked = !allLocked;
-    commitStructural(
+    commitPrepared(
       t(isLocked ? 'widgets.layers.actions.lockSelected' : 'widgets.layers.actions.unlockSelected'),
-      {
-        enabledUpdates: [],
-        lockedUpdates: selected.map((layer) => ({ id: layer.id, isLocked })),
-        type: 'applyCanvasLayerStackMutation',
-      },
-      {
-        enabledUpdates: [],
-        lockedUpdates: selected.map((layer) => ({ id: layer.id, isLocked: layer.isLocked })),
-        type: 'applyCanvasLayerStackMutation',
-      }
+      (model) => model.prepare({ type: 'set-locked', updates: selected.map((layer) => ({ id: layer.id, isLocked })) })
     );
-  }, [allLocked, commitStructural, selected, t]);
+  }, [allLocked, commitPrepared, selected, t]);
 
   const deleteSelected = useCallback(() => {
-    const actions = engine ? deleteLayersActions(layers, selectedIds, selectedLayerId, engine.document) : null;
-    if (!actions) {
-      reportStructuralCommit({ status: engine ? 'dispatch-rejected' : 'not-ready' }, notify.error, t);
-      return;
-    }
-    commitStructural(t('widgets.layers.actions.deleteSelected'), actions.forward, actions.inverse);
-  }, [commitStructural, engine, layers, notify, selectedIds, selectedLayerId, t]);
+    commitPrepared(t('widgets.layers.actions.deleteSelected'), (model) =>
+      model.prepare({ ids: selectedIds, type: 'remove' })
+    );
+  }, [commitPrepared, selectedIds, t]);
 
   return (
     <HStack

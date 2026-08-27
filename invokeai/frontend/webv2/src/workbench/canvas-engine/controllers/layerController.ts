@@ -15,7 +15,12 @@ import { ThumbnailController, type ThumbnailControllerOptions } from './thumbnai
 
 export type LayerControllerDeps = Omit<
   CanvasLayerCapability,
-  'applyStructuralPreview' | 'canCommitStructural' | 'commitStagedImage' | 'commitStructural' | 'invertMask'
+  | 'applyStructuralPreview'
+  | 'canCommitStructural'
+  | 'commitPrepared'
+  | 'commitStagedImage'
+  | 'commitStructural'
+  | 'invertMask'
 > &
   Omit<CanvasPreviewCapability, 'drawLayerThumbnail' | 'requestLayerThumbnail'> & {
     mask: MaskLayerControllerOptions;
@@ -62,6 +67,8 @@ export class LayerController {
       canCommitStructural: () => this.structural.canCommit(),
       commitGeneratedImageResult: (options) =>
         this.disposed ? Promise.resolve({ status: 'aborted' }) : deps.commitGeneratedImageResult(options),
+      commitPrepared: (label, edit, options) =>
+        this.disposed ? { status: 'not-ready' } : this.structural.commitPrepared(label, edit, options),
       commitStructural: (label, forward, inverse, options) =>
         this.disposed ? { status: 'not-ready' } : this.structural.commit(label, forward, inverse, options),
       invertMask: (layerId) => (this.disposed ? false : this.mask.invert(layerId)),

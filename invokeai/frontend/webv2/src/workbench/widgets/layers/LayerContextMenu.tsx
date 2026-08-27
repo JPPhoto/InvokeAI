@@ -17,12 +17,11 @@ import { useModelsSelector } from '@features/models';
 import { IconButton, MenuContent, RenameDialog, Tooltip } from '@platform/ui';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/api';
 import { getCanvasOperations } from '@workbench/canvas-operations/api';
-import { deleteLayerActions, duplicateLayerActions, reorderLayerActions } from '@workbench/canvasLayerOps';
 import { publishLayerPanelSelection, readLayerPanelState } from '@workbench/layerPanelState';
 import { useNotify } from '@workbench/useNotify';
 import { isCanvasInteractionLocked } from '@workbench/widgets/canvas/canvasInteractionLock';
 import { useCanvasDocumentEditingLocked, useLayerThumbnailVersion } from '@workbench/widgets/canvas/engineStoreHooks';
-import { reportStructuralCommit, useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectId, useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import {
   ArrowRightLeftIcon,
@@ -67,7 +66,6 @@ import {
   getLayerContextMenuRenderEntries,
 } from './layerContextMenuLayout';
 import { copyBlobToClipboard, saveLayerToAssets } from './layerExportActions';
-import { reorderWithinGroupByKind } from './layerGroups';
 import { resolveMenuTargetForRender } from './layerMenuState';
 import {
   convertRasterToControl,
@@ -155,7 +153,6 @@ interface LayerMenuProps {
   engine: LayerContextMenuEngine | null;
   index: number;
   layer: CanvasLayerContract;
-  layers: readonly CanvasLayerContract[];
   /** Where the menu opens: the panel anchors to its trigger; the canvas uses a
    * virtual rect at the cursor. */
   positioning: MenuPositioning;
@@ -196,7 +193,6 @@ const LayerMenu = ({
   engine,
   index,
   layer,
-  layers,
   positioning,
   withTrigger,
   open,
@@ -208,7 +204,7 @@ const LayerMenu = ({
   beforeDangerItems,
   showGroupLabels,
 }: LayerMenuProps) => {
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
   const projectId = useActiveProjectId();
   const { widgets } = useWorkbenchCommands();
@@ -245,37 +241,24 @@ const LayerMenu = ({
   );
 
   const patchBase = useCallback(
-    (label: string, forward: Partial<CanvasLayerContract>, inverse: Partial<CanvasLayerContract>) => {
-      commitStructural(
-        label,
-        { id: layer.id, patch: forward, type: 'updateCanvasLayer' },
-        { id: layer.id, patch: inverse, type: 'updateCanvasLayer' }
-      );
+    (label: string, forward: Partial<CanvasLayerContract>) => {
+      commitPrepared(label, (model) => model.prepare({ id: layer.id, patch: forward, type: 'patch' }));
     },
-    [commitStructural, layer.id]
+    [commitPrepared, layer.id]
   );
 
   const patchConfig = useCallback(
-    (label: string, forward: LayerConfigPatch, inverse: LayerConfigPatch) => {
-      commitStructural(
-        label,
-        { config: forward, id: layer.id, type: 'updateCanvasLayerConfig' },
-        { config: inverse, id: layer.id, type: 'updateCanvasLayerConfig' }
-      );
+    (label: string, forward: LayerConfigPatch) => {
+      commitPrepared(label, (model) => model.prepare({ config: forward, id: layer.id, type: 'patch-config' }));
     },
-    [commitStructural, layer.id]
+    [commitPrepared, layer.id]
   );
 
   const reorder = useCallback(
     (kind: LayerStackMoveKind, label: string) => {
-      const next = reorderWithinGroupByKind(layers, layer.id, kind);
-      if (!next) {
-        return;
-      }
-      const { forward, inverse } = reorderLayerActions(layers, [next]);
-      commitStructural(label, forward, inverse);
+      commitPrepared(label, (model) => model.prepare({ ids: [layer.id], kind, type: 'move' }));
     },
-    [commitStructural, layer.id, layers]
+    [commitPrepared, layer.id]
   );
 
   const actionState = useMemo<LayerContextActionState>(
@@ -346,18 +329,14 @@ const LayerMenu = ({
       notify.error(t('widgets.layers.actions.actionFailed'), t('widgets.layers.actions.copyFailed'));
       return;
     }
-    const { forward, inverse } = duplicateLayerActions(layer.id, createLayerId());
-    commitStructural(t('widgets.layers.actions.duplicate'), forward, inverse);
-  }, [commitStructural, document.selectedLayerId, engine, layer.id, notify, projectId, t]);
+    commitPrepared(t('widgets.layers.actions.duplicate'), (model) =>
+      model.prepare({ newId: createLayerId(), sourceId: layer.id, type: 'duplicate' })
+    );
+  }, [commitPrepared, document.selectedLayerId, engine, layer.id, notify, projectId, t]);
 
   const handleDelete = useCallback(() => {
-    const actions = engine ? deleteLayerActions(layer, engine.document) : null;
-    if (!actions) {
-      reportStructuralCommit({ status: engine ? 'dispatch-rejected' : 'not-ready' }, notify.error, t);
-      return;
-    }
-    commitStructural(t('widgets.layers.actions.delete'), actions.forward, actions.inverse);
-  }, [commitStructural, engine, layer, notify, t]);
+    commitPrepared(t('widgets.layers.actions.delete'), (model) => model.prepare({ ids: [layer.id], type: 'remove' }));
+  }, [commitPrepared, layer.id, t]);
 
   const handleMerge = useCallback(() => {
     // Pixel work: engine-only, and not recorded on the undo history.
@@ -414,15 +393,11 @@ const LayerMenu = ({
   );
 
   const handleToggleVisibility = useCallback(() => {
-    patchBase(
-      t('widgets.layers.actions.toggleVisibility'),
-      { isEnabled: !layer.isEnabled },
-      { isEnabled: layer.isEnabled }
-    );
+    patchBase(t('widgets.layers.actions.toggleVisibility'), { isEnabled: !layer.isEnabled });
   }, [layer.isEnabled, patchBase, t]);
 
   const handleToggleLock = useCallback(() => {
-    patchBase(t('widgets.layers.actions.toggleLock'), { isLocked: !layer.isLocked }, { isLocked: layer.isLocked });
+    patchBase(t('widgets.layers.actions.toggleLock'), { isLocked: !layer.isLocked });
   }, [layer.isLocked, patchBase, t]);
 
   const openRename = useCallback(() => setDialogKind('rename'), [setDialogKind]);
@@ -454,9 +429,9 @@ const LayerMenu = ({
   );
   const submitRename = useCallback(
     (name: string) => {
-      patchBase(t('widgets.layers.actions.rename'), { name }, { name: layer.name });
+      patchBase(t('widgets.layers.actions.rename'), { name });
     },
-    [layer.name, patchBase, t]
+    [patchBase, t]
   );
 
   const handleTransform = useCallback(() => {
@@ -469,7 +444,7 @@ const LayerMenu = ({
     if (!transform) {
       throw makeStatusError('empty');
     }
-    patchBase(getActionLabel('fit-to-bbox'), { transform }, { transform: layer.transform });
+    patchBase(getActionLabel('fit-to-bbox'), { transform });
   }, [bbox, documentRect, getActionLabel, layer, makeStatusError, patchBase]);
 
   const handleSaveToAssets = useCallback(async () => {
@@ -621,26 +596,19 @@ const LayerMenu = ({
   const handleLayerConfigAction = useCallback(
     (id: LayerConfigPatchKind) => {
       if (id === 'control-transparency-effect' && layer.type === 'control') {
-        const { forward, inverse } = getControlTransparencyEffectPatch(layer);
-        patchConfig(getActionLabel(id), forward, inverse);
+        patchConfig(getActionLabel(id), getControlTransparencyEffectPatch(layer));
       } else if (id === 'regional-positive-prompt' && layer.type === 'regional_guidance') {
-        const { forward, inverse } = getRegionalGuidancePositivePromptPatch(layer);
-        patchConfig(getActionLabel(id), forward, inverse);
+        patchConfig(getActionLabel(id), getRegionalGuidancePositivePromptPatch(layer));
       } else if (id === 'regional-negative-prompt' && layer.type === 'regional_guidance') {
-        const { forward, inverse } = getRegionalGuidanceNegativePromptPatch(layer);
-        patchConfig(getActionLabel(id), forward, inverse);
+        patchConfig(getActionLabel(id), getRegionalGuidanceNegativePromptPatch(layer));
       } else if (id === 'regional-reference-image' && layer.type === 'regional_guidance') {
-        const { forward, inverse } = getRegionalGuidanceReferenceImagePatch(layer, base);
-        patchConfig(getActionLabel(id), forward, inverse);
+        patchConfig(getActionLabel(id), getRegionalGuidanceReferenceImagePatch(layer, base));
       } else if (id === 'regional-auto-negative' && layer.type === 'regional_guidance') {
-        const { forward, inverse } = getRegionalGuidanceAutoNegativePatch(layer);
-        patchConfig(getActionLabel(id), forward, inverse);
+        patchConfig(getActionLabel(id), getRegionalGuidanceAutoNegativePatch(layer));
       } else if (id === 'inpaint-noise' && layer.type === 'inpaint_mask') {
-        const { forward, inverse } = getInpaintNoisePatch(layer);
-        patchConfig(getActionLabel(id), forward, inverse);
+        patchConfig(getActionLabel(id), getInpaintNoisePatch(layer));
       } else if (id === 'inpaint-denoise-limit' && layer.type === 'inpaint_mask') {
-        const { forward, inverse } = getInpaintDenoiseLimitPatch(layer);
-        patchConfig(getActionLabel(id), forward, inverse);
+        patchConfig(getActionLabel(id), getInpaintDenoiseLimitPatch(layer));
       }
     },
     [base, getActionLabel, layer, patchConfig]
@@ -896,7 +864,6 @@ export const CanvasLayerContextMenu = ({
       engine={engine}
       index={index}
       layer={layer}
-      layers={layers}
       lazyMount
       // The menu itself is visible only while the live target is set; once a
       // sibling dialog closes it (target → null), the subtree stays mounted.

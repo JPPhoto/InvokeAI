@@ -2,6 +2,10 @@ import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contract
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { Project } from '@workbench/projectContracts';
 
+import {
+  createFlatDocumentModel,
+  type FlatCanvasDocumentModel,
+} from '@workbench/canvas-engine/document-model/flatDocumentModel';
 import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { applyCanvasProjectMutation } from '@workbench/canvasProjectMutations';
@@ -206,6 +210,58 @@ describe('StructuralLayerController', () => {
     expect(layerName(document())).toBe('Layer');
     expect(history.canUndo()).toBe(false);
     expect(report).toHaveBeenCalledWith('Structural edit could not be mirrored', 'Rename', expect.any(Error));
+  });
+
+  describe('commitPrepared', () => {
+    const prepareRename = (model: FlatCanvasDocumentModel, name: string) => {
+      const result = model.prepare({ id: 'layer', patch: { name }, type: 'patch' });
+      if (result.status !== 'prepared') {
+        throw new Error(`expected a prepared edit, got ${result.status}`);
+      }
+      return result.edit;
+    };
+
+    it('applies a prepared edit, verifies its postconditions and records one entry', () => {
+      const { controller, ctx, document, history, projectId } = createHarness();
+      const model = createFlatDocumentModel(document(), { editRevision: ctx.getEditRevision(), projectId });
+
+      expect(controller.commitPrepared('Rename', prepareRename(model, 'Renamed'))).toEqual({ status: 'committed' });
+      expect(layerName(document())).toBe('Renamed');
+      expect(history.canUndo()).toBe(true);
+      history.undo();
+      expect(layerName(document())).toBe('Layer');
+    });
+
+    it('refuses an edit prepared against an older revision or another project', () => {
+      const { controller, ctx, document, history, projectId } = createHarness();
+      const stale = prepareRename(
+        createFlatDocumentModel(document(), { editRevision: ctx.getEditRevision(), projectId }),
+        'A'
+      );
+      ctx.dispatch(rename('layer', 'Elsewhere'), 'system');
+
+      expect(controller.commitPrepared('Rename', stale)).toMatchObject({ status: 'stale' });
+      const foreign = prepareRename(
+        createFlatDocumentModel(document(), { editRevision: ctx.getEditRevision(), projectId: 'other' }),
+        'B'
+      );
+      expect(controller.commitPrepared('Rename', foreign)).toEqual({ status: 'dispatch-rejected' });
+      expect(layerName(document())).toBe('Elsewhere');
+      expect(history.canUndo()).toBe(false);
+    });
+
+    it('skips history for an edit whose policy is none', () => {
+      const { controller, ctx, document, history, projectId } = createHarness();
+      const model = createFlatDocumentModel(document(), { editRevision: ctx.getEditRevision(), projectId });
+      const result = model.prepare({ id: null, type: 'select' });
+      if (result.status !== 'prepared') {
+        throw new Error('expected a prepared selection change');
+      }
+
+      expect(controller.commitPrepared('Select', result.edit)).toEqual({ status: 'committed' });
+      expect(document().selectedLayerId).toBeNull();
+      expect(history.canUndo()).toBe(false);
+    });
   });
 
   it('refuses an insertion anchored at an older edit revision as stale', () => {

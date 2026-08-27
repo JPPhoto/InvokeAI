@@ -1,4 +1,12 @@
-import type { CanvasStructuralEngine, StructuralCommitResult } from '@workbench/canvas-engine/api';
+import type {
+  CanvasDocumentCapability,
+  CanvasLayerCapability,
+  CanvasStructuralEngine,
+  FlatCanvasDocumentModel,
+  FlatDocumentRefusal,
+  PrepareFlatEditResult,
+  StructuralCommitResult,
+} from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { TFunction } from 'i18next';
 
@@ -72,6 +80,82 @@ export const useStructuralCommit = (engine: CanvasStructuralEngine | null): Stru
 
       reportStructuralCommit(result, notify.error, t);
       return result;
+    },
+    [engine, notify, t]
+  );
+};
+
+/** The engine surface a prepared edit needs: the document model and the transaction. */
+export interface CanvasPreparedEngine {
+  readonly document: Pick<CanvasDocumentCapability, 'model'>;
+  readonly layers: Pick<CanvasLayerCapability, 'commitPrepared'>;
+}
+
+export type PreparedCommitOutcome =
+  | StructuralCommitResult
+  | { status: 'refused'; refusal: FlatDocumentRefusal }
+  | { status: 'unchanged' };
+
+/** Prepares an edit against the engine's current model and commits it; refusals and no-ops never dispatch. */
+export const commitPreparedEdit = (
+  engine: CanvasPreparedEngine | null,
+  label: string,
+  prepare: (model: FlatCanvasDocumentModel) => PrepareFlatEditResult
+): PreparedCommitOutcome => {
+  const model = engine?.document.model() ?? null;
+  if (!engine || !model) {
+    return { status: 'not-ready' };
+  }
+  const result = prepare(model);
+  switch (result.status) {
+    case 'prepared':
+      return engine.layers.commitPrepared(label, result.edit);
+    case 'unchanged':
+      return result;
+    default:
+      return { refusal: result, status: 'refused' };
+  }
+};
+
+const REFUSAL_KEYS: Record<FlatDocumentRefusal['status'], string> = {
+  'invalid-target': 'widgets.canvas.structural.refusedInvalidTarget',
+  locked: 'widgets.canvas.structural.refusedLocked',
+  missing: 'widgets.canvas.structural.refusedMissing',
+  unsupported: 'widgets.canvas.structural.refusedUnsupported',
+  'wrong-type': 'widgets.canvas.structural.refusedWrongType',
+};
+
+export const reportPreparedCommit = (
+  outcome: PreparedCommitOutcome,
+  reportError: (title: string, message: string) => void,
+  t: TFunction
+): void => {
+  if (outcome.status === 'unchanged') {
+    return;
+  }
+  if (outcome.status === 'refused') {
+    reportError(t('widgets.canvas.structural.failed'), t(REFUSAL_KEYS[outcome.refusal.status]));
+    return;
+  }
+  reportStructuralCommit(outcome, reportError, t);
+};
+
+export type PreparedCommit = (
+  label: string,
+  prepare: (model: FlatCanvasDocumentModel) => PrepareFlatEditResult
+) => PreparedCommitOutcome;
+
+/** A widget-side prepared commit that reports every refusal the user needs to hear about. */
+export const usePreparedCommit = (engine: CanvasPreparedEngine | null): PreparedCommit => {
+  const notify = useNotify();
+  const { t } = useTranslation();
+
+  return useCallback(
+    (label, prepare) => {
+      const outcome = commitPreparedEdit(engine, label, prepare);
+
+      reportPreparedCommit(outcome, notify.error, t);
+      return outcome;
     },
     [engine, notify, t]
   );

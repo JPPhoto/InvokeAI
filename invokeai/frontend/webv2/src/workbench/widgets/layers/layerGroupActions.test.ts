@@ -97,30 +97,22 @@ describe('isGroupAllVisible', () => {
 describe('planGroupVisibilityToggle', () => {
   it('hides all when every layer is visible', () => {
     const layers = [inpaint('a', true), inpaint('b', true)];
-    const { forward, inverse, nextVisible } = planGroupVisibilityToggle(layers);
+    const { updates, nextVisible } = planGroupVisibilityToggle(layers);
     expect(nextVisible).toBe(false);
-    expect(forward).toEqual([
+    expect(updates).toEqual([
       { id: 'a', isEnabled: false },
       { id: 'b', isEnabled: false },
     ]);
     // Inverse restores each layer's prior visibility verbatim (single undo entry).
-    expect(inverse).toEqual([
-      { id: 'a', isEnabled: true },
-      { id: 'b', isEnabled: true },
-    ]);
   });
 
-  it('shows all when any layer is hidden, preserving the mixed prior state in the inverse', () => {
+  it('shows all when any layer is hidden, toggling every layer to the shared target', () => {
     const layers = [inpaint('a', true), inpaint('b', false)];
-    const { forward, inverse, nextVisible } = planGroupVisibilityToggle(layers);
+    const { updates, nextVisible } = planGroupVisibilityToggle(layers);
     expect(nextVisible).toBe(true);
-    expect(forward).toEqual([
+    expect(updates).toEqual([
       { id: 'a', isEnabled: true },
       { id: 'b', isEnabled: true },
-    ]);
-    expect(inverse).toEqual([
-      { id: 'a', isEnabled: true },
-      { id: 'b', isEnabled: false },
     ]);
   });
 });
@@ -147,7 +139,7 @@ describe('planGroupHiddenToggle', () => {
   it('hides every layer when all are currently shown', () => {
     const plan = planGroupHiddenToggle([control('a'), control('b')]);
     expect(plan.nextVisible).toBe(false);
-    expect(plan.forward).toEqual([
+    expect(plan.updates).toEqual([
       { id: 'a', isHidden: true },
       { id: 'b', isHidden: true },
     ]);
@@ -156,16 +148,8 @@ describe('planGroupHiddenToggle', () => {
   it('shows every layer when any is currently hidden', () => {
     const plan = planGroupHiddenToggle([control('a', true), control('b')]);
     expect(plan.nextVisible).toBe(true);
-    expect(plan.forward).toEqual([
+    expect(plan.updates).toEqual([
       { id: 'a', isHidden: false },
-      { id: 'b', isHidden: false },
-    ]);
-  });
-
-  it('restores each layer prior state verbatim, so undo is one entry', () => {
-    const plan = planGroupHiddenToggle([control('a', true), control('b')]);
-    expect(plan.inverse).toEqual([
-      { id: 'a', isHidden: true },
       { id: 'b', isHidden: false },
     ]);
   });
@@ -188,7 +172,7 @@ describe('planGroupHiddenToggle', () => {
       type: 'raster',
     };
     const plan = planGroupHiddenToggle([raster, control('a')]);
-    expect(plan.forward.map((update) => update.id)).toEqual(['a']);
+    expect(plan.updates.map((update) => update.id)).toEqual(['a']);
   });
 });
 

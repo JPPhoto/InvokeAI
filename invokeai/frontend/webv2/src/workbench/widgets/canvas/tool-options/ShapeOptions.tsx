@@ -6,7 +6,7 @@ import { ColorPicker, Select, ToggleIconButton } from '@platform/ui';
 import { MAX_SHAPE_STROKE_WIDTH } from '@workbench/canvas-engine/api';
 import { useShapeOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
-import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { PaintBucketIcon, SquareIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
@@ -37,7 +37,7 @@ const SELECT_TRIGGER_PROPS = { minW: '6rem' } as const;
  */
 export const ShapeOptions = ({ engine }: ToolOptionsComponentProps) => {
   const { t } = useTranslation();
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const options = useShapeOptions(engine);
   const sampleColor = useColorSampler(engine);
 
@@ -85,14 +85,12 @@ export const ShapeOptions = ({ engine }: ToolOptionsComponentProps) => {
       if (selected && commit) {
         const before = selected.source;
         const after: ShapeSource = { ...before, ...patch };
-        commitStructural(
-          t('widgets.canvas.toolOptions.shapeEdit'),
-          { id: selected.id, source: after, type: 'updateCanvasLayerSource' },
-          { id: selected.id, source: before, type: 'updateCanvasLayerSource' }
+        commitPrepared(t('widgets.canvas.toolOptions.shapeEdit'), (model) =>
+          model.prepare({ id: selected.id, source: after, type: 'patch-source' })
         );
       }
     },
-    [commitStructural, engine, fill, kind, selected, stroke, strokeWidth, t]
+    [commitPrepared, engine, fill, kind, selected, stroke, strokeWidth, t]
   );
 
   const onKindChange = useCallback(

@@ -42,6 +42,7 @@ describe('LayerController', () => {
     ctx: {
       canEdit: () => true,
       capturePermit: () => ({ epoch: 0 }),
+      projectId: 'p',
       dispatch: vi.fn(() => true),
       dispatchPrepared: vi.fn(),
       getDocument: () => null,

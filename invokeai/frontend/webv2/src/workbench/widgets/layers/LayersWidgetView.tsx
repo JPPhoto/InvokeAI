@@ -80,7 +80,6 @@ export const LayersWidgetView = () => {
           layers={layers}
           projectId={projectId}
           selectedIds={selectedIds}
-          selectedLayerId={selectedLayerId}
         />
       ) : null}
       {groups.length === 0 ? (

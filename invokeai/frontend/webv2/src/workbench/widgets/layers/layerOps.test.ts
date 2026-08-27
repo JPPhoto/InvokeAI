@@ -441,41 +441,29 @@ describe('menu patch helpers', () => {
   it('builds control transparency effect patches', () => {
     const layer = createControlLayer('control', 'c1');
 
-    expect(getControlTransparencyEffectPatch(layer)).toEqual({
-      forward: { layerType: 'control', withTransparencyEffect: false },
-      inverse: { layerType: 'control', withTransparencyEffect: true },
-    });
+    expect(getControlTransparencyEffectPatch(layer)).toEqual({ layerType: 'control', withTransparencyEffect: false });
   });
 
   it('builds regional prompt and reference image patches', () => {
     const layer = createRegionalGuidanceLayer('region', 0, 'r1');
 
     expect(getRegionalGuidancePositivePromptPatch(layer)).toEqual({
-      forward: { layerType: 'regional_guidance', positivePrompt: '' },
-      inverse: { layerType: 'regional_guidance', positivePrompt: null },
+      layerType: 'regional_guidance',
+      positivePrompt: '',
     });
     expect(getRegionalGuidanceNegativePromptPatch(layer)).toEqual({
-      forward: { layerType: 'regional_guidance', negativePrompt: '' },
-      inverse: { layerType: 'regional_guidance', negativePrompt: null },
+      layerType: 'regional_guidance',
+      negativePrompt: '',
     });
-    expect(getRegionalGuidanceAutoNegativePatch(layer)).toEqual({
-      forward: { autoNegative: true, layerType: 'regional_guidance' },
-      inverse: { autoNegative: false, layerType: 'regional_guidance' },
-    });
-    expect(getRegionalGuidanceReferenceImagePatch(layer, 'sdxl').forward.referenceImages).toHaveLength(1);
+    expect(getRegionalGuidanceAutoNegativePatch(layer)).toEqual({ autoNegative: true, layerType: 'regional_guidance' });
+    expect(getRegionalGuidanceReferenceImagePatch(layer, 'sdxl').referenceImages).toHaveLength(1);
   });
 
   it('builds inpaint modifier patches', () => {
     const layer = createInpaintMaskLayer('mask', 'm1');
 
-    expect(getInpaintNoisePatch(layer)).toEqual({
-      forward: { layerType: 'inpaint_mask', noiseLevel: 0.25 },
-      inverse: { layerType: 'inpaint_mask', noiseLevel: undefined },
-    });
-    expect(getInpaintDenoiseLimitPatch(layer)).toEqual({
-      forward: { denoiseLimit: 0.8, layerType: 'inpaint_mask' },
-      inverse: { denoiseLimit: undefined, layerType: 'inpaint_mask' },
-    });
+    expect(getInpaintNoisePatch(layer)).toEqual({ layerType: 'inpaint_mask', noiseLevel: 0.25 });
+    expect(getInpaintDenoiseLimitPatch(layer)).toEqual({ denoiseLimit: 0.8, layerType: 'inpaint_mask' });
   });
 });
 

@@ -110,6 +110,10 @@ import { StagedResultController } from '@workbench/canvas-engine/controllers/sta
 import { StructuralLayerController } from '@workbench/canvas-engine/controllers/structuralLayerController';
 import { createCanvasDiagnostics } from '@workbench/canvas-engine/diagnostics';
 import {
+  createFlatDocumentModel,
+  type FlatCanvasDocumentModel,
+} from '@workbench/canvas-engine/document-model/flatDocumentModel';
+import {
   createEngineStores,
   type EngineStores,
   type ScalarStore,
@@ -2865,12 +2869,28 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     hasExportableLayerContent,
     isLayerExportGuardCurrent,
   };
+  let documentModel: FlatCanvasDocumentModel | null = null;
+  const currentDocumentModel = (): FlatCanvasDocumentModel | null => {
+    const document = mutationPort.getCanvasState()?.document ?? null;
+    if (!document) {
+      return null;
+    }
+    if (documentModel?.document !== document) {
+      documentModel = createFlatDocumentModel(
+        document,
+        { editRevision: mutationContext.getEditRevision(), projectId },
+        documentModel
+      );
+    }
+    return documentModel;
+  };
   const documentCapability: CanvasDocumentCapability = {
     captureInsertionAnchor,
     captureRestoreAnchor: (layerId) => mutationContext.captureRestoreAnchor(layerId),
     captureSnapshot: captureDocumentSnapshot,
     getDocument: () => mirror.getDocument(),
     getEditRevision: () => mutationContext.getEditRevision(),
+    model: currentDocumentModel,
   };
   const selectionCapability: CanvasEngineSelectionCapability = {
     deselect,

@@ -2,7 +2,6 @@ import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 
 import { haveSameStackOrders } from '@workbench/canvas-engine/api';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
-import { deleteLayerActions, deleteLayersActions } from '@workbench/canvasLayerOps';
 import { createEmptyCanvasDocumentV2 } from '@workbench/canvasMigration';
 import { createCanvasProjectMutationPort } from '@workbench/canvasProjectMutationPort';
 import { createInpaintMaskLayer } from '@workbench/widgets/layers/layerOps';
@@ -51,8 +50,11 @@ describe('layer restore through history on an interleaved document', () => {
     expect(duplicated.status).toBe('duplicated');
 
     const r0 = document().layers.find((layer) => layer.id === 'r0')!;
-    const actions = deleteLayerActions(r0, engine.document)!;
-    expect(engine.layers.commitStructural('Delete', actions.forward, actions.inverse).status).toBe('committed');
+    const remove = engine.document.model()!.prepare({ ids: ['r0'], type: 'remove' });
+    if (remove.status !== 'prepared') {
+      throw new Error('expected a prepared removal');
+    }
+    expect(engine.layers.commitPrepared('Delete', remove.edit).status).toBe('committed');
     expect(document().layers.some((layer) => layer.id === 'r0')).toBe(false);
 
     engine.history.undo();
@@ -76,8 +78,11 @@ describe('layer restore through history on an interleaved document', () => {
     }
     const duplicateId = duplicated.duplicateIds[0]!;
 
-    const actions = deleteLayersActions(document().layers, [duplicateId, 'r0'], 'r0', engine.document)!;
-    expect(engine.layers.commitStructural('Delete', actions.forward, actions.inverse).status).toBe('committed');
+    const remove = engine.document.model()!.prepare({ ids: [duplicateId, 'r0'], type: 'remove' });
+    if (remove.status !== 'prepared') {
+      throw new Error('expected a prepared removal');
+    }
+    expect(engine.layers.commitPrepared('Delete', remove.edit).status).toBe('committed');
     expect(document().layers.map((layer) => layer.id)).toEqual(['m1', 'r1']);
 
     engine.history.undo();

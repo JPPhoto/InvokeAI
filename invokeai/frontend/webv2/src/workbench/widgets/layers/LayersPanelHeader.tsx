@@ -18,7 +18,7 @@ import {
   readCanvasDenoisingStrength,
 } from '@workbench/widgets/canvas/invoke/canvasStrength';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
-import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { useCallback, useMemo, useRef } from 'react';
@@ -27,7 +27,7 @@ import { useTranslation } from 'react-i18next';
 import { DenoisingStrengthWave } from './DenoisingStrengthWave';
 import { applyStructuralPreview, CANVAS_BLEND_MODES } from './layerOps';
 
-type LayersPanelHeaderEngine = Pick<CanvasEngineHandle, 'interaction' | 'layers'>;
+type LayersPanelHeaderEngine = Pick<CanvasEngineHandle, 'document' | 'interaction' | 'layers'>;
 
 const STRENGTH_DEBOUNCE_MS = 250;
 const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: true } as const;
@@ -101,7 +101,7 @@ const BlendModeControl = ({
   engine: LayersPanelHeaderEngine | null;
   layer: CanvasLayerContract | null;
 }) => {
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
   const disabled = isLayerEditingDisabled(layer, editingLocked);
   const blendMode = layer?.blendMode ?? 'normal';
@@ -120,13 +120,11 @@ const BlendModeControl = ({
       if (!layer || !mode || mode === layer.blendMode) {
         return;
       }
-      commitStructural(
-        t('widgets.layers.actions.blendMode'),
-        { id: layer.id, patch: { blendMode: mode }, type: 'updateCanvasLayer' },
-        { id: layer.id, patch: { blendMode: layer.blendMode }, type: 'updateCanvasLayer' }
+      commitPrepared(t('widgets.layers.actions.blendMode'), (model) =>
+        model.prepare({ id: layer.id, patch: { blendMode: mode }, type: 'patch' })
       );
     },
-    [commitStructural, layer, t]
+    [commitPrepared, layer, t]
   );
 
   return (
@@ -156,7 +154,7 @@ const OpacityRow = ({
   engine: LayersPanelHeaderEngine | null;
   layer: CanvasLayerContract | null;
 }) => {
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
   // The uncommitted opacity edit: captured once per gesture. `before` is the
   // pre-gesture value (the undo target); `latest` tracks the live value because
@@ -175,12 +173,15 @@ const OpacityRow = ({
     if (!pending || pending.before === pending.latest) {
       return;
     }
-    commitStructural(
-      t('widgets.layers.actions.opacity'),
-      { id: pending.id, patch: { opacity: pending.latest }, type: 'updateCanvasLayer' },
-      { id: pending.id, patch: { opacity: pending.before }, type: 'updateCanvasLayer' }
+    commitPrepared(t('widgets.layers.actions.opacity'), (model) =>
+      model.prepare({
+        before: { opacity: pending.before },
+        id: pending.id,
+        patch: { opacity: pending.latest },
+        type: 'patch',
+      })
     );
-  }, [commitStructural, t]);
+  }, [commitPrepared, t]);
 
   const handleOpacityChange = useCallback(
     ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
@@ -275,28 +276,22 @@ const MaskFillSwatch = ({
   engine: LayersPanelHeaderEngine | null;
   layer: MaskLayer;
 }) => {
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
   const fillBeforeRef = useRef<CanvasMaskFillContract | null>(null);
   const fill = layer.mask.fill;
 
   const patchFill = useCallback(
     (next: CanvasMaskFillContract, before: CanvasMaskFillContract) => {
-      const config =
+      const configFor = (value: CanvasMaskFillContract) =>
         layer.type === 'inpaint_mask'
-          ? ({ layerType: 'inpaint_mask', mask: { fill: next } } as const)
-          : ({ layerType: 'regional_guidance', mask: { fill: next } } as const);
-      const inverseConfig =
-        layer.type === 'inpaint_mask'
-          ? ({ layerType: 'inpaint_mask', mask: { fill: before } } as const)
-          : ({ layerType: 'regional_guidance', mask: { fill: before } } as const);
-      commitStructural(
-        t('widgets.layers.maskFill.fill'),
-        { config, id: layer.id, type: 'updateCanvasLayerConfig' },
-        { config: inverseConfig, id: layer.id, type: 'updateCanvasLayerConfig' }
+          ? ({ layerType: 'inpaint_mask', mask: { fill: value } } as const)
+          : ({ layerType: 'regional_guidance', mask: { fill: value } } as const);
+      commitPrepared(t('widgets.layers.maskFill.fill'), (model) =>
+        model.prepare({ before: configFor(before), config: configFor(next), id: layer.id, type: 'patch-config' })
       );
     },
-    [commitStructural, layer.id, layer.type, t]
+    [commitPrepared, layer.id, layer.type, t]
   );
 
   const handleColorChange = useCallback(

@@ -6,9 +6,9 @@ import type {
 } from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 
-import { isHideableLayer, isLayerHidden, moveLayersWithinStacks } from '@workbench/canvas-engine/api';
-import { deleteLayersActions, reorderLayerActions } from '@workbench/canvasLayerOps';
+import { isHideableLayer, isLayerHidden } from '@workbench/canvas-engine/api';
 import { publishLayerPanelSelection } from '@workbench/layerPanelState';
+import { commitPreparedEdit, type PreparedCommitOutcome } from '@workbench/widgets/canvas/useStructuralCommit';
 import { canMergeLayerDown } from '@workbench/widgets/layers/layerOps';
 
 /** Command id → document-space nudge delta (shift variants are ×10). */
@@ -50,6 +50,7 @@ export interface CanvasHotkeyContext {
   readonly pasteFromClipboard: () => void;
   readonly notifyLayerDuplicateFailed: () => void;
   readonly reportStructuralCommit: (result: StructuralCommitResult) => void;
+  readonly reportPreparedCommit: (outcome: PreparedCommitOutcome) => void;
   readonly t: (key: string) => string;
 }
 
@@ -100,19 +101,16 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     return;
   }
 
-  // Layer z-reorder: same forward/inverse construction as the layers panel.
+  // Layer z-reorder: the same prepared move the layers panel commits.
   const reorderKind = REORDER_KINDS[commandId];
   if (reorderKind) {
     if (!engine || selectedIndex < 0) {
       return;
     }
-    const stacks = moveLayersWithinStacks(layers, ctx.selectedLayerIds, reorderKind);
-    if (stacks.length === 0) {
-      return;
-    }
-    const { forward, inverse } = reorderLayerActions(layers, stacks);
-    ctx.reportStructuralCommit(
-      engine.layers.commitStructural(t('widgets.canvas.commands.reorderLayer'), forward, inverse)
+    ctx.reportPreparedCommit(
+      commitPreparedEdit(engine, t('widgets.canvas.commands.reorderLayer'), (model) =>
+        model.prepare({ ids: ctx.selectedLayerIds, kind: reorderKind, type: 'move' })
+      )
     );
     return;
   }
@@ -123,11 +121,10 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     if (engine?.interaction.get('hasSelection')) {
       engine.selection.eraseSelection();
     } else if (engine && selectedLayer && selectedIndex >= 0 && !selectedLayer.isLocked) {
-      const actions = deleteLayersActions(layers, ctx.selectedLayerIds, selectedLayer.id, engine.document);
-      ctx.reportStructuralCommit(
-        actions
-          ? engine.layers.commitStructural(t('widgets.canvas.commands.deleteLayer'), actions.forward, actions.inverse)
-          : { status: 'dispatch-rejected' }
+      ctx.reportPreparedCommit(
+        commitPreparedEdit(engine, t('widgets.canvas.commands.deleteLayer'), (model) =>
+          model.prepare({ ids: ctx.selectedLayerIds, type: 'remove' })
+        )
       );
     }
   } else if (commandId === 'canvas.copySelection' || commandId === 'canvas.cutSelection') {
@@ -140,17 +137,12 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     const hideable = layers.filter(isHideableLayer);
     if (engine && hideable.length > 0) {
       const nextHidden = hideable.every((layer) => !isLayerHidden(layer));
-      ctx.reportStructuralCommit(
-        engine.layers.commitStructural(
-          t('widgets.canvas.commands.toggleNonRasterLayers'),
-          {
-            type: 'setCanvasLayersHidden',
+      ctx.reportPreparedCommit(
+        commitPreparedEdit(engine, t('widgets.canvas.commands.toggleNonRasterLayers'), (model) =>
+          model.prepare({
+            type: 'set-hidden',
             updates: hideable.map((layer) => ({ id: layer.id, isHidden: nextHidden })),
-          },
-          {
-            type: 'setCanvasLayersHidden',
-            updates: hideable.map((layer) => ({ id: layer.id, isHidden: isLayerHidden(layer) })),
-          }
+          })
         )
       );
     }

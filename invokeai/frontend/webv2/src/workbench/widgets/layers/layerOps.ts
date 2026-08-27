@@ -38,8 +38,6 @@ type RegionalGuidanceConfigPatch = {
   referenceImages?: CanvasRegionalGuidanceLayerContract['referenceImages'];
 };
 type InpaintMaskConfigPatch = { layerType: 'inpaint_mask'; noiseLevel?: number; denoiseLimit?: number };
-type PatchPair<T> = { forward: T; inverse: T };
-
 /**
  * Re-exported so existing imports of `isMergeableRasterLayer` from this module
  * keep working; the canonical definition lives in the engine's `document/sources`
@@ -369,55 +367,39 @@ export const fitLayerTransformToBbox = (
   };
 };
 
-export const getControlTransparencyEffectPatch = (
-  layer: CanvasControlLayerContract
-): PatchPair<ControlConfigPatch> => ({
-  forward: { layerType: 'control', withTransparencyEffect: !layer.withTransparencyEffect },
-  inverse: { layerType: 'control', withTransparencyEffect: layer.withTransparencyEffect },
+export const getControlTransparencyEffectPatch = (layer: CanvasControlLayerContract): ControlConfigPatch => ({
+  layerType: 'control',
+  withTransparencyEffect: !layer.withTransparencyEffect,
 });
 
 export const getRegionalGuidancePositivePromptPatch = (
   layer: CanvasRegionalGuidanceLayerContract
-): PatchPair<RegionalGuidanceConfigPatch> => ({
-  forward: { layerType: 'regional_guidance', positivePrompt: layer.positivePrompt ?? '' },
-  inverse: { layerType: 'regional_guidance', positivePrompt: layer.positivePrompt },
-});
+): RegionalGuidanceConfigPatch => ({ layerType: 'regional_guidance', positivePrompt: layer.positivePrompt ?? '' });
 
 export const getRegionalGuidanceNegativePromptPatch = (
   layer: CanvasRegionalGuidanceLayerContract
-): PatchPair<RegionalGuidanceConfigPatch> => ({
-  forward: { layerType: 'regional_guidance', negativePrompt: layer.negativePrompt ?? '' },
-  inverse: { layerType: 'regional_guidance', negativePrompt: layer.negativePrompt },
-});
+): RegionalGuidanceConfigPatch => ({ layerType: 'regional_guidance', negativePrompt: layer.negativePrompt ?? '' });
 
 export const getRegionalGuidanceAutoNegativePatch = (
   layer: CanvasRegionalGuidanceLayerContract
-): PatchPair<RegionalGuidanceConfigPatch> => ({
-  forward: { autoNegative: !layer.autoNegative, layerType: 'regional_guidance' },
-  inverse: { autoNegative: layer.autoNegative, layerType: 'regional_guidance' },
-});
+): RegionalGuidanceConfigPatch => ({ autoNegative: !layer.autoNegative, layerType: 'regional_guidance' });
 
 export const getRegionalGuidanceReferenceImagePatch = (
   layer: CanvasRegionalGuidanceLayerContract,
   base: string | null
-): PatchPair<RegionalGuidanceConfigPatch> => ({
-  forward: {
-    layerType: 'regional_guidance',
-    referenceImages: [...layer.referenceImages, createRegionalReferenceImage(base)],
-  },
-  inverse: { layerType: 'regional_guidance', referenceImages: layer.referenceImages },
+): RegionalGuidanceConfigPatch => ({
+  layerType: 'regional_guidance',
+  referenceImages: [...layer.referenceImages, createRegionalReferenceImage(base)],
 });
 
-export const getInpaintNoisePatch = (layer: CanvasInpaintMaskLayerContract): PatchPair<InpaintMaskConfigPatch> => ({
-  forward: { layerType: 'inpaint_mask', noiseLevel: layer.noiseLevel === undefined ? 0.25 : undefined },
-  inverse: { layerType: 'inpaint_mask', noiseLevel: layer.noiseLevel },
+export const getInpaintNoisePatch = (layer: CanvasInpaintMaskLayerContract): InpaintMaskConfigPatch => ({
+  layerType: 'inpaint_mask',
+  noiseLevel: layer.noiseLevel === undefined ? 0.25 : undefined,
 });
 
-export const getInpaintDenoiseLimitPatch = (
-  layer: CanvasInpaintMaskLayerContract
-): PatchPair<InpaintMaskConfigPatch> => ({
-  forward: { denoiseLimit: layer.denoiseLimit === undefined ? 0.8 : undefined, layerType: 'inpaint_mask' },
-  inverse: { denoiseLimit: layer.denoiseLimit, layerType: 'inpaint_mask' },
+export const getInpaintDenoiseLimitPatch = (layer: CanvasInpaintMaskLayerContract): InpaintMaskConfigPatch => ({
+  denoiseLimit: layer.denoiseLimit === undefined ? 0.8 : undefined,
+  layerType: 'inpaint_mask',
 });
 
 /**

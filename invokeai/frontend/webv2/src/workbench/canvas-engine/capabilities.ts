@@ -9,6 +9,8 @@ import type { StrokeCommittedEvent } from '@workbench/canvas-engine/tools/tool';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 
 import type { NewRasterLayerResult } from './controllers/newRasterLayerController';
+import type { FlatEditOrigin, PreparedFlatEdit } from './document-model/flatDocumentCommands';
+import type { FlatCanvasDocumentModel } from './document-model/flatDocumentModel';
 import type { CanvasCommandRefusal } from './document/commandRefusal';
 import type { FlatLayerInsertionAnchor } from './document/insertionAnchors';
 import type { LayerStackKind } from './document/layerStacks';
@@ -150,6 +152,8 @@ export interface CanvasDocumentCapability {
   captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): FlatLayerInsertionAnchor;
   /** The anchor that restores `layerId` between its current same-stack neighbours; null when absent. */
   captureRestoreAnchor(layerId: string): FlatLayerInsertionAnchor | null;
+  /** The pure model over the current document; the same instance until the document changes. */
+  model(): FlatCanvasDocumentModel | null;
 }
 
 /** Immutable reducer canvas state captured at one engine document generation. */
@@ -313,7 +317,13 @@ export interface CanvasLayerCapability {
     inverse: CanvasProjectMutation,
     options?: StructuralCommitOptions
   ): StructuralCommitResult;
+  /** Runs a prepared flat edit through the transaction: refusals, dispatch, verification and history. */
+  commitPrepared(label: string, edit: PreparedFlatEdit, options?: PreparedCommitOptions): StructuralCommitResult;
   invertMask(layerId: string): boolean;
+}
+
+export interface PreparedCommitOptions {
+  readonly origin?: FlatEditOrigin;
 }
 
 export interface CommitStagedImageOptions {
@@ -597,6 +607,22 @@ export {
   isPixelBackedLayer,
 } from './document/layerEligibility';
 export { repairSelectedLayerId } from './document/selectionRepair';
+export {
+  type FlatDocumentCommand,
+  type FlatDocumentRefusal,
+  type FlatEditOrigin,
+  type MergeDownEligibility,
+  type PreparedFlatEdit,
+  type PrepareFlatEditResult,
+} from './document-model/flatDocumentCommands';
+export { createFlatDocumentModel, type FlatCanvasDocumentModel } from './document-model/flatDocumentModel';
+export { checkFlatEditPostconditions, type FlatEditPostcondition } from './document-model/postconditions';
+export {
+  planScreenComposition,
+  type CanvasScreenViewState,
+  type ScreenCompositionPlan,
+} from './document-model/screenComposition';
+export { type SemanticLeafV2 } from './document-model/semanticLeaf';
 export {
   captureInsertionAnchor,
   captureRestoreAnchor,

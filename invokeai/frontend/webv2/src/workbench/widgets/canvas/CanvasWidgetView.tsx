@@ -58,7 +58,7 @@ import { ToolStrip } from './ToolStrip';
 import { useCanvasEngine } from './useCanvasEngine';
 import { useCanvasGallerySave } from './useCanvasGallerySave';
 import { useCreateFromBbox } from './useCreateFromBbox';
-import { reportStructuralCommit } from './useStructuralCommit';
+import { reportPreparedCommit, reportStructuralCommit } from './useStructuralCommit';
 
 /**
  * The canvas widget shell. The engine owns pixels and interaction and renders
@@ -381,6 +381,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
       notifyLayerDuplicateFailed: () =>
         notifications.add({ kind: 'error', title: t('widgets.layers.actions.copyFailed') }),
       pasteFromClipboard,
+      reportPreparedCommit: (outcome) => reportPreparedCommit(outcome, notify.error, t),
       reportStructuralCommit: (result) => reportStructuralCommit(result, notify.error, t),
       selectedLayerIds,
       t,
