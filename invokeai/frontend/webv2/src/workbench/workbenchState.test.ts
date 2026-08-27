@@ -2938,6 +2938,83 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(getProjectWidgetValues(getActiveProject(nextState), 'upscale')).toBe(beforeUpscale);
   });
 
+  it('keeps the Video prompt independent of the Generate prompt in both directions', () => {
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, {
+      sourceId: 'generate',
+      type: 'patchProjectPromptDraft',
+      values: { negativePrompt: 'blurry', negativePromptEnabled: true, positivePrompt: 'a still portrait' },
+    });
+    state = workbenchReducer(state, {
+      type: 'patchWidgetValues',
+      values: { negativePrompt: 'static camera', negativePromptEnabled: false, positivePrompt: 'a fox running' },
+      widgetId: 'video',
+    });
+
+    // Video writes its own widget values and leaves the shared draft alone...
+    expect(getProjectWidgetValues(getActiveProject(state), 'generate')).toMatchObject({
+      negativePrompt: 'blurry',
+      negativePromptEnabled: true,
+      positivePrompt: 'a still portrait',
+    });
+    expect(getProjectWidgetValues(getActiveProject(state), 'video')).toMatchObject({
+      negativePrompt: 'static camera',
+      negativePromptEnabled: false,
+      positivePrompt: 'a fox running',
+    });
+
+    // ...and a later Generate edit does not reach back into Video.
+    const beforeVideo = getProjectWidgetValues(getActiveProject(state), 'video');
+
+    state = workbenchReducer(state, {
+      sourceId: 'generate',
+      type: 'patchProjectPromptDraft',
+      values: { positivePrompt: 'a still landscape' },
+    });
+
+    expect(getProjectWidgetValues(getActiveProject(state), 'video')).toBe(beforeVideo);
+  });
+
+  it('submits the Video prompt, not the Generate prompt, on a video invocation', () => {
+    const wanModel: ModelConfig = {
+      base: 'wan',
+      file_size: 1,
+      format: 'diffusers',
+      hash: 'wan-t2v-hash',
+      key: 'wan-t2v_a14b-diffusers',
+      name: 'Wan 2.2 t2v_a14b',
+      path: 'wan-t2v_a14b-diffusers',
+      source: 'wan-t2v_a14b-diffusers',
+      source_type: 'path',
+      type: 'main',
+      variant: 't2v_a14b',
+    };
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, {
+      sourceId: 'generate',
+      type: 'patchProjectPromptDraft',
+      values: { negativePrompt: 'blurry', positivePrompt: 'a still portrait' },
+    });
+    state = workbenchReducer(state, {
+      type: 'patchWidgetValues',
+      values: { model: wanModel, negativePrompt: 'static camera', positivePrompt: 'a fox running' },
+      widgetId: 'video',
+    });
+    state = workbenchReducer(state, { sourceId: 'video', type: 'setInvocationSource' });
+    state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
+    state = workbenchReducer(state, {
+      backendSupportsCancellation: true,
+      models: [wanModel],
+      type: 'submitInvocationSnapshot',
+    });
+
+    const submission = getActiveProject(state).queue.items[0]?.snapshot.widgetStates.video.values;
+
+    expect(submission).toMatchObject({ negativePrompt: 'static camera', positivePrompt: 'a fox running' });
+  });
+
   it('deduplicates prompt history by prompt pair and moves the newest submission to the top', () => {
     let state = primeGenerate(undefined, { negativePrompt: 'low quality', positivePrompt: 'a cat' });
 
