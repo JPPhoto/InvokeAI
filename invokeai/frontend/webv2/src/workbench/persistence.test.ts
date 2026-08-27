@@ -99,6 +99,46 @@ describe('workbench persistence migration', () => {
     ]);
   });
 
+  it('preserves a project with an invalid queued canvas verbatim in the recovery bucket', async () => {
+    const state = createInitialWorkbenchState();
+    const project = state.projects[0]!;
+    const invalid = {
+      ...project,
+      queue: {
+        items: [
+          {
+            id: 'invalid-queue-item',
+            snapshot: {
+              canvas: {
+                ...project.canvas,
+                document: { ...project.canvas.document, layers: [{ id: 'unknown', type: 'future-layer' }] },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    storage.set(
+      'invokeai:v7:webv2:workbench',
+      JSON.stringify({ savedAt: '2026-06-09T00:00:00.000Z', state: { ...state, projects: [invalid] }, version: 1 })
+    );
+
+    const hydrated = await localStorageWorkbenchPersistence.loadWorkbench();
+    const refused = JSON.parse(storage.get('invokeai:v7:webv2:workbench:refused-projects')!) as Record<string, unknown>;
+
+    expect(hydrated?.state.projects).toEqual([]);
+    expect(hydrated?.refusedProjects).toMatchObject([
+      {
+        projectId: project.id,
+        queueItem: { index: 0, itemId: 'invalid-queue-item' },
+        refusal: { status: 'invalid' },
+        source: 'queue-item',
+      },
+    ]);
+    expect(refused[project.id]).toEqual(JSON.parse(JSON.stringify(invalid)));
+  });
+
   it('repoints a refused active project at the first loadable one', () => {
     const state = createInitialWorkbenchState();
     const supported = state.projects[0]!;

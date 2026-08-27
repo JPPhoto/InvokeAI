@@ -27,9 +27,14 @@ const isStackShown = (stack: LayerStackKind, view: CanvasScreenViewState): boole
   stack === 'raster' || view.showOverlayStacks[stack];
 
 /**
- * Isolation narrows the frame to one leaf; it never draws a leaf the document itself would not
- * draw, so a disabled or hidden isolated leaf produces an empty plan.
+ * Whether document visibility admits a leaf to the screen. Isolation deliberately overrides both
+ * contribution and display visibility because isolated operations act on the named layer itself.
+ * Frame-demand planning consumes this same predicate so allocation and composition cannot drift.
  */
+export const isLeafDrawableForScreen = (leaf: SemanticLeafV2, isIsolated: boolean): boolean =>
+  isIsolated || (leaf.contributionEnabled && !leaf.documentHidden);
+
+/** Isolation narrows the frame to one leaf and overrides the document's visibility flags. */
 export const planScreenComposition = (
   leaves: readonly SemanticLeafV2[],
   view: CanvasScreenViewState
@@ -38,10 +43,11 @@ export const planScreenComposition = (
   for (const stack of LAYER_STACK_ORDER) {
     for (let index = leaves.length - 1; index >= 0; index -= 1) {
       const leaf = leaves[index]!;
-      if (leaf.stack !== stack || !leaf.contributionEnabled || leaf.documentHidden) {
+      const isIsolated = view.isolationLayerId === leaf.id;
+      if (leaf.stack !== stack || !isLeafDrawableForScreen(leaf, isIsolated)) {
         continue;
       }
-      if (view.isolationLayerId === null ? isStackShown(stack, view) : leaf.id === view.isolationLayerId) {
+      if (view.isolationLayerId === null ? isStackShown(stack, view) : isIsolated) {
         drawn.push(leaf);
       }
     }

@@ -42,6 +42,7 @@ import type {
   ExecuteCompositePlanDeps,
 } from '@workbench/canvas-operations/compositeForGeneration';
 
+import { lookupDocumentLayer } from '@workbench/canvas-engine/document-model/flatDocumentModel';
 import { intersect } from '@workbench/canvas-engine/math/rect';
 import {
   computeCompositeContentBounds,
@@ -263,14 +264,12 @@ export const composeForGeneration = async (
       }
     }
 
-    const layerById = new Map(document.layers.map((layer) => [layer.id, layer]));
-
     // Control layers apply in every mode, independent of the base composite —
     // composite each accepted layer regardless of whether raster content
     // overlaps. Each layer is composited SEPARATELY (never blended).
     const controlImages: { layerId: string; imageName: string }[] = [];
     for (const { entry, layerId } of controlPlan) {
-      const layer = layerById.get(layerId);
+      const layer = lookupDocumentLayer(document, layerId);
       if (!layer || layer.type !== 'control') {
         continue;
       }
@@ -285,7 +284,7 @@ export const composeForGeneration = async (
     // mask is composited separately (its alpha feeds its own tensor).
     const regionalMaskImages: { layerId: string; imageName: string }[] = [];
     for (const { entry, layerId } of regionalPlan) {
-      const layer = layerById.get(layerId);
+      const layer = lookupDocumentLayer(document, layerId);
       if (!layer || layer.type !== 'regional_guidance') {
         continue;
       }

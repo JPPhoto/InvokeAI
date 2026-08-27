@@ -118,3 +118,9 @@ export type CanvasProjectMutation =
   | { type: 'restoreCanvasSnapshot'; snapshotId: string }
   | { type: 'deleteCanvasSnapshot'; snapshotId: string }
   | { type: 'setCanvasStagingAutoSwitch'; mode: CanvasStagingAreaContractV2['autoSwitchMode'] };
+
+/** Why a canvas mutation is dispatched; system work never triggers user-routing policy. */
+export type CanvasMutationOrigin = 'user' | 'system';
+
+/** A completed canvas edit that may update aggregate invocation routing. */
+export type CanvasEditIntent = { kind: 'paint' } | { kind: 'mutation'; mutation: CanvasProjectMutation };

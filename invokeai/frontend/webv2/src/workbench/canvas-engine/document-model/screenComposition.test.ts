@@ -7,23 +7,15 @@ import type { CanvasScreenViewState } from './screenComposition';
 import { planScreenComposition } from './screenComposition';
 import { compileSemanticLeaf } from './semanticLeaf';
 
-const leaf = (
-  id: string,
-  type: CanvasLayerContract['type'],
-  overrides: Partial<CanvasLayerContract> = {},
-  stackIndex = 0
-) =>
-  compileSemanticLeaf(
-    {
-      id,
-      isEnabled: true,
-      isLocked: false,
-      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
-      type,
-      ...overrides,
-    } as CanvasLayerContract,
-    stackIndex
-  );
+const leaf = (id: string, type: CanvasLayerContract['type'], overrides: Partial<CanvasLayerContract> = {}) =>
+  compileSemanticLeaf({
+    id,
+    isEnabled: true,
+    isLocked: false,
+    transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+    type,
+    ...overrides,
+  } as CanvasLayerContract);
 
 const view = (overrides: Partial<CanvasScreenViewState> = {}): CanvasScreenViewState => ({
   isolationLayerId: null,
@@ -35,9 +27,9 @@ const leaves = [
   leaf('i1', 'inpaint_mask'),
   leaf('r1', 'raster'),
   leaf('c1', 'control', { isHidden: true } as Partial<CanvasLayerContract>),
-  leaf('r2', 'raster', { isEnabled: false }, 1),
+  leaf('r2', 'raster', { isEnabled: false }),
   leaf('g1', 'regional_guidance'),
-  leaf('r3', 'raster', {}, 2),
+  leaf('r3', 'raster'),
 ];
 
 const drawn = (plan: ReturnType<typeof planScreenComposition>): string[] => plan.leaves.map((leaf) => leaf.id);
@@ -67,9 +59,9 @@ describe('planScreenComposition', () => {
     expect(drawn(planScreenComposition(leaves, view({ isolationLayerId: 'r1' })))).toEqual(['r1']);
   });
 
-  it('draws nothing when the isolated leaf is hidden, disabled or absent', () => {
-    for (const isolationLayerId of ['c1', 'r2', 'ghost']) {
-      expect(planScreenComposition(leaves, view({ isolationLayerId })).leaves).toEqual([]);
-    }
+  it('lets isolation override document visibility while an absent target draws nothing', () => {
+    expect(drawn(planScreenComposition(leaves, view({ isolationLayerId: 'c1' })))).toEqual(['c1']);
+    expect(drawn(planScreenComposition(leaves, view({ isolationLayerId: 'r2' })))).toEqual(['r2']);
+    expect(planScreenComposition(leaves, view({ isolationLayerId: 'ghost' })).leaves).toEqual([]);
   });
 });

@@ -48,8 +48,8 @@ export interface FlatDocumentModelContext {
 /**
  * The pure document seam over a v2 canvas document: lookup, stack order, semantic leaves and
  * prepared flat edits, with no knowledge of the engine, the screen or the panel. Indexes are built
- * once per document identity and leaves keep their identity while their layer and stack position
- * are unchanged.
+ * once per layer-array identity and leaves keep their identity while their immutable layer object is
+ * unchanged. Ordering belongs to the returned sequence rather than being duplicated into each leaf.
  */
 export interface FlatCanvasDocumentModel {
   readonly document: CanvasDocumentContractV2;
@@ -73,26 +73,32 @@ interface DocumentIndex {
   leaves: readonly SemanticLeafV2[] | null;
 }
 
-/** Deterministic work counters for budget tests; never consulted by production logic. */
-export const flatDocumentModelCounters = { indexBuilds: 0, leafCompilations: 0, leavesCompiled: 0 };
+export interface FlatDocumentModelDiagnostics {
+  readonly indexBuilds: number;
+  readonly leafCompilations: number;
+  readonly leavesCompiled: number;
+}
+
+/** Internal deterministic instrumentation; production logic never reads it. */
+const diagnostics = { indexBuilds: 0, leafCompilations: 0, leavesCompiled: 0 };
+
+/** Immutable snapshot for deterministic budget tests and diagnostics. */
+export const getFlatDocumentModelDiagnostics = (): FlatDocumentModelDiagnostics => ({ ...diagnostics });
+
+/** Test seam that resets counters without exposing mutable production state. */
+export const resetFlatDocumentModelDiagnostics = (): void => {
+  diagnostics.indexBuilds = 0;
+  diagnostics.leafCompilations = 0;
+  diagnostics.leavesCompiled = 0;
+};
 
 type LayerArray = CanvasDocumentContractV2['layers'];
 
 const indexes = new WeakMap<LayerArray, DocumentIndex>();
-
-/** The most recent compilation, reused when a caller has no previous document to offer. */
-let latestLeaves: {
-  readonly layers: CanvasDocumentContractV2['layers'];
-  readonly leaves: readonly SemanticLeafV2[];
-} | null = null;
-
-/** Test seam: forgets the latest compilation so budgets measure one document chain at a time. */
-export const resetLatestLeafCompilation = (): void => {
-  latestLeaves = null;
-};
+const leavesByLayer = new WeakMap<CanvasLayerContract, SemanticLeafV2>();
 
 const buildIndex = (layers: LayerArray): DocumentIndex => {
-  flatDocumentModelCounters.indexBuilds += 1;
+  diagnostics.indexBuilds += 1;
   const byId = new Map<string, LayerIndexEntry>();
   const stacks: Record<LayerStackKind, CanvasLayerContract[]> = {
     control: [],
@@ -119,35 +125,22 @@ const indexOf = (document: CanvasDocumentContractV2): DocumentIndex => {
   return built;
 };
 
-const compileLeaves = (
-  document: CanvasDocumentContractV2,
-  index: DocumentIndex,
-  previousDocument: CanvasDocumentContractV2 | null
-): readonly SemanticLeafV2[] => {
+const compileLeaves = (document: CanvasDocumentContractV2, index: DocumentIndex): readonly SemanticLeafV2[] => {
   if (index.leaves) {
     return index.leaves;
   }
-  const previous = previousDocument
-    ? { layers: previousDocument.layers, leaves: indexOf(previousDocument).leaves }
-    : latestLeaves;
-  const reusable = previous?.leaves ?? null;
-  if (reusable && previous?.layers === document.layers) {
-    index.leaves = reusable;
-    return reusable;
-  }
-  flatDocumentModelCounters.leafCompilations += 1;
-  const previousById = new Map(reusable?.map((leaf) => [leaf.id, leaf]) ?? []);
+  diagnostics.leafCompilations += 1;
   const leaves = document.layers.map((layer) => {
-    const entry = index.byId.get(layer.id)!;
-    const before = previousById.get(layer.id);
-    if (before && before.layer === layer && before.stackIndex === entry.stackIndex) {
-      return before;
+    const cached = leavesByLayer.get(layer);
+    if (cached) {
+      return cached;
     }
-    flatDocumentModelCounters.leavesCompiled += 1;
-    return compileSemanticLeaf(layer, entry.stackIndex);
+    diagnostics.leavesCompiled += 1;
+    const leaf = compileSemanticLeaf(layer);
+    leavesByLayer.set(layer, leaf);
+    return leaf;
   });
   index.leaves = leaves;
-  latestLeaves = { layers: document.layers, leaves };
   return leaves;
 };
 
@@ -157,11 +150,9 @@ const missing = (ids: readonly string[]): FlatDocumentRefusal => ({ ids, status:
 export const lookupDocumentLayer = (document: CanvasDocumentContractV2, id: string): CanvasLayerContract | null =>
   indexOf(document).byId.get(id)?.layer ?? null;
 
-/** The document's semantic leaves in flat order; `previousDocument` lets unchanged leaves keep their identity. */
-export const compileDocumentLeaves = (
-  document: CanvasDocumentContractV2,
-  previousDocument: CanvasDocumentContractV2 | null = null
-): readonly SemanticLeafV2[] => compileLeaves(document, indexOf(document), previousDocument);
+/** The document's semantic leaves in flat order. Immutable layer identity provides cross-edit reuse. */
+export const compileDocumentLeaves = (document: CanvasDocumentContractV2): readonly SemanticLeafV2[] =>
+  compileLeaves(document, indexOf(document));
 
 /** The leaf for `id`, or `null` when the document has no such layer. */
 export const lookupDocumentLeaf = (document: CanvasDocumentContractV2, id: string): SemanticLeafV2 | null => {
@@ -264,12 +255,10 @@ const patchInverse = (layer: CanvasLayerContract, patch: CanvasLayerBasePatch): 
 
 export const createFlatDocumentModel = (
   document: CanvasDocumentContractV2,
-  context: FlatDocumentModelContext,
-  previous: FlatCanvasDocumentModel | null = null
+  context: FlatDocumentModelContext
 ): FlatCanvasDocumentModel => {
   const index = indexOf(document);
   const { layers, selectedLayerId } = document;
-  const previousDocument = previous?.document ?? null;
 
   const lookup = (ids: readonly string[]): { entries: LayerIndexEntry[] } | FlatDocumentRefusal => {
     const absent = ids.filter((id) => !index.byId.has(id));
@@ -703,7 +692,7 @@ export const createFlatDocumentModel = (
 
   return {
     canMergeDown: (upperId) => mergeDownEligibility(document, upperId),
-    compileLeaves: () => compileLeaves(document, index, previousDocument),
+    compileLeaves: () => compileLeaves(document, index),
     document,
     getLayer: (id) => index.byId.get(id)?.layer ?? null,
     getStack: (kind) => index.stacks[kind],

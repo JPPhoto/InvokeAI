@@ -339,8 +339,9 @@ const unplaceableCanvas = (canvas: CanvasStateContractV2): CanvasStateContractV2
 /**
  * Upgrades legacy nested snapshots at Workbench's project-ingestion boundary. Every item's
  * `snapshot.canvas` is validated whether or not the rest of the snapshot is already current-shaped.
- * Future-version canvases were refused upstream by `gateProjectCanvases`; an invalid or missing one
- * keeps its item but can neither be resubmitted nor place results.
+ * Invalid and future-version canvas records are refused upstream by `gateProjectCanvases`. The
+ * defensive invalid branch below protects trusted in-memory callers that bypass project ingestion;
+ * it must never be the persistence path for raw project data.
  */
 export const normalizeWorkbenchQueueHistory = (
   value: unknown,

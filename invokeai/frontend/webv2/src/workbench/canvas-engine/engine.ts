@@ -2876,11 +2876,10 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       return null;
     }
     if (documentModel?.document !== document) {
-      documentModel = createFlatDocumentModel(
-        document,
-        { editRevision: mutationContext.getEditRevision(), projectId },
-        documentModel
-      );
+      documentModel = createFlatDocumentModel(document, {
+        editRevision: mutationContext.getEditRevision(),
+        projectId,
+      });
     }
     return documentModel;
   };

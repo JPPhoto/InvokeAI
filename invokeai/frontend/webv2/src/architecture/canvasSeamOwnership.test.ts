@@ -30,11 +30,9 @@ const SEAM_MODULES = [
 ];
 
 /**
- * Mutations that restructure the layer list. Outside the engine and the reducer only gallery import
- * builds them, because it ingests into projects that have no mounted engine. The engine grant covers
- * every engine module: controllers build these as forward/inverse pairs for the prepared-dispatch
- * protocol, history replays them raw, and the paint tool creates and rolls back its auto-created
- * layer outside history by design. The scan matches the formatted literal `type: '…'`.
+ * Mutations that restructure the layer list. Controllers build some as forward/inverse pairs for
+ * prepared raster dispatch, while paint creates and rolls back its pointer-down layer by design.
+ * Every current owner is enumerated below; the scan matches the formatted literal `type: '…'`.
  */
 const STRUCTURAL_MUTATION_TYPES = [
   'addCanvasLayer',
@@ -52,11 +50,37 @@ const STRUCTURAL_MUTATION_TYPES = [
   'setCanvasLayersHidden',
   'updateCanvasLayerSource',
 ];
-const STRUCTURAL_MUTATION_OWNERS = [
-  /^workbench\/canvasProjectMutations\.ts$/,
-  /^workbench\/canvas-engine\//,
-  /^workbench\/canvas-operations\/importGalleryImages\.ts$/,
-];
+/**
+ * The finite set of modules that still construct the v2 flat mutation vocabulary. Keeping this
+ * explicit prevents new bypasses and is the migration checklist for the hierarchy tree reducer.
+ */
+const STRUCTURAL_MUTATION_OWNER_PATHS = new Set([
+  'workbench/canvasProjectMutations.ts',
+  'workbench/canvas-engine/controllers/booleanMergeController.ts',
+  'workbench/canvas-engine/controllers/copyLayerController.ts',
+  'workbench/canvas-engine/controllers/cropLayerController.ts',
+  'workbench/canvas-engine/controllers/extractMaskedAreaController.ts',
+  'workbench/canvas-engine/controllers/filterResultController.ts',
+  'workbench/canvas-engine/controllers/generatedResultController.ts',
+  'workbench/canvas-engine/controllers/layerMutationController.ts',
+  'workbench/canvas-engine/controllers/maskResultController.ts',
+  'workbench/canvas-engine/controllers/mergeLayerController.ts',
+  'workbench/canvas-engine/controllers/newRasterLayerController.ts',
+  'workbench/canvas-engine/controllers/rasterizeLayerController.ts',
+  'workbench/canvas-engine/controllers/stagedResultController.ts',
+  'workbench/canvas-engine/controllers/structuralLayerController.ts',
+  'workbench/canvas-engine/controllers/textEditingController.ts',
+  'workbench/canvas-engine/document-model/flatDocumentModel.ts',
+  'workbench/canvas-engine/document/bitmapStore.ts',
+  'workbench/canvas-engine/engine.ts',
+  'workbench/canvas-engine/mutationContracts.ts',
+  'workbench/canvas-engine/strokeCommit.ts',
+  'workbench/canvas-engine/tools/gradientTool.ts',
+  'workbench/canvas-engine/tools/moveTool.ts',
+  'workbench/canvas-engine/tools/paintTool.ts',
+  'workbench/canvas-engine/tools/shapeTool.ts',
+  'workbench/canvas-operations/importGalleryImages.ts',
+]);
 const structuralLiteral = new RegExp(`type: '(?:${STRUCTURAL_MUTATION_TYPES.join('|')})'`, 'g');
 
 const SEAM_ONLY_SYMBOLS = ['repairSelectedLayerId', 'moveLayersWithinStacks', 'reorderLayerStack'];
@@ -68,7 +92,12 @@ const MODEL_CONSUMERS = [
   'workbench/canvas-engine/render/overlayFrame.ts',
   'workbench/canvas-engine/render/floatingSelectionFrame.ts',
   'workbench/canvas-engine/render/rasterComposite.ts',
+  'workbench/canvas-engine/rasterSnapshotCapture.ts',
+  'workbench/canvas-engine/controllers/psdExportController.ts',
+  'workbench/canvas-engine/controllers/rasterExportController.ts',
+  'workbench/canvas-engine/controllers/thumbnailController.ts',
   'workbench/canvas-engine/controllers/mergeLayerController.ts',
+  'workbench/canvas-operations/generationComposite.ts',
   'workbench/canvas-operations/generationCompositePlan.ts',
 ];
 
@@ -98,10 +127,10 @@ describe('canvas document seam ownership', () => {
     expect(offenders).toEqual([]);
   }, 60_000);
 
-  it('keeps structural mutations behind the engine transaction', () => {
+  it('keeps flat structural mutation construction in explicit owners', () => {
     const offenders: string[] = [];
     for (const [path, source] of productionSources) {
-      if (STRUCTURAL_MUTATION_OWNERS.some((owner) => owner.test(path))) {
+      if (STRUCTURAL_MUTATION_OWNER_PATHS.has(path)) {
         continue;
       }
       for (const match of source.matchAll(structuralLiteral)) {

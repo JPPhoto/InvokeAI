@@ -5,11 +5,12 @@ import type {
   CanvasStagingCandidateContract,
   CanvasStateContractV2,
 } from '@workbench/canvas-engine/contracts';
+import type { CanvasMutationOrigin } from '@workbench/canvas-engine/mutationContracts';
 import type { StrokeCommittedEvent } from '@workbench/canvas-engine/tools/tool';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 
 import type { NewRasterLayerResult } from './controllers/newRasterLayerController';
-import type { FlatEditOrigin, PreparedFlatEdit } from './document-model/flatDocumentCommands';
+import type { PreparedFlatEdit } from './document-model/flatDocumentCommands';
 import type { FlatCanvasDocumentModel } from './document-model/flatDocumentModel';
 import type { CanvasCommandRefusal } from './document/commandRefusal';
 import type { FlatLayerInsertionAnchor } from './document/insertionAnchors';
@@ -225,7 +226,13 @@ export type { RasterCompositeExportRequest, RasterCompositeExportResult } from '
  * `mutationContracts.ts`) and surfaced here so workbench callers reach it
  * through the public API instead of the engine importing upward for it.
  */
-export type { CanvasLayerBasePatch, CanvasLayerConfigPatch, CanvasProjectMutation } from './mutationContracts';
+export type {
+  CanvasEditIntent,
+  CanvasLayerBasePatch,
+  CanvasLayerConfigPatch,
+  CanvasMutationOrigin,
+  CanvasProjectMutation,
+} from './mutationContracts';
 
 export interface ExportLayerPixelsOptions {
   includeDisabled?: boolean;
@@ -331,7 +338,7 @@ export interface CanvasLayerCapability {
 }
 
 export interface PreparedCommitOptions {
-  readonly origin?: FlatEditOrigin;
+  readonly origin?: CanvasMutationOrigin;
 }
 
 export interface CommitStagedImageOptions {
@@ -614,7 +621,6 @@ export {
 export {
   type FlatDocumentCommand,
   type FlatDocumentRefusal,
-  type FlatEditOrigin,
   type MergeDownEligibility,
   type PreparedFlatEdit,
   type PrepareFlatEditResult,

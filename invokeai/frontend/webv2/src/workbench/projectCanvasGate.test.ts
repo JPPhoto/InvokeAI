@@ -31,16 +31,36 @@ describe('gateProjectCanvases', () => {
     });
   });
 
-  it('refuses a project only for a future-version queue canvas, naming the item', () => {
+  it('refuses a project for any invalid queue canvas before normalization, naming the item', () => {
     const invalidItem = queueItem('invalid', { ...canvas, version: '2' });
     const futureItem = queueItem('future', { ...canvas, version: 3 });
+    const invalidProject = { canvas, id: 'p', name: 'P', queue: { items: [invalidItem] } };
 
-    expect(gateProjectCanvases({ canvas, id: 'p', name: 'P', queue: { items: [invalidItem] } })).toBeNull();
-    expect(
-      gateProjectCanvases({ canvas, id: 'p', name: 'P', queue: { items: [invalidItem, futureItem] } })
-    ).toMatchObject({
-      queueItem: { index: 1, itemId: 'future' },
+    expect(gateProjectCanvases(invalidProject)).toMatchObject({
+      queueItem: { index: 0, itemId: 'invalid' },
+      raw: invalidProject,
+      refusal: { status: 'invalid' },
+      source: 'queue-item',
+    });
+    expect(gateProjectCanvases({ canvas, id: 'p', name: 'P', queue: { items: [futureItem] } })).toMatchObject({
+      queueItem: { index: 0, itemId: 'future' },
       refusal: { status: 'unsupported-version', version: 3 },
+      source: 'queue-item',
+    });
+
+    expect(
+      gateProjectCanvases({ canvas, id: 'p', name: 'P', queue: { items: [{ id: 'missing', snapshot: {} }] } })
+    ).toMatchObject({
+      queueItem: { index: 0, itemId: 'missing' },
+      refusal: { status: 'invalid' },
+      source: 'queue-item',
+    });
+
+    expect(
+      gateProjectCanvases({ canvas, id: 'p', name: 'P', queue: { items: [{ id: 'missing', snapshot: null }] } })
+    ).toMatchObject({
+      queueItem: { index: 0, itemId: 'missing' },
+      refusal: { status: 'invalid' },
       source: 'queue-item',
     });
   });

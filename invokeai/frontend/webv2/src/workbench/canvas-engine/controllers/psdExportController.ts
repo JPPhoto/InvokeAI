@@ -5,6 +5,7 @@ import type {
 } from '@workbench/canvas-engine/rasterTransactions';
 import type { RasterBackend } from '@workbench/canvas-engine/render/raster';
 
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/flatDocumentModel';
 import {
   executePsdExport,
   planPsdExport,
@@ -65,7 +66,9 @@ export class PsdExportController {
         return 'stale';
       }
       const document = documentSnapshot.canvas.document;
-      const layers = document.layers.filter(isExportableRasterLayer);
+      const layers = compileDocumentLeaves(document)
+        .map((leaf) => leaf.layer)
+        .filter(isExportableRasterLayer);
       if (layers.length === 0) {
         return 'nothing';
       }

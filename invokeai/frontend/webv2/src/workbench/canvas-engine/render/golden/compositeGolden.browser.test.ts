@@ -184,7 +184,7 @@ describe('compositor goldens', () => {
     });
   }
 
-  it('skips a hidden control layer, isolated or not', async () => {
+  it('skips a hidden control layer normally but draws it while isolated', async () => {
     const layers = [control('control', { isHidden: true }), raster('base')];
     const paint = { base: BASE, control: { paint: solid('#8a2be2'), rect: { height: 30, width: 90, x: 35, y: 30 } } };
     await expectGolden('hidden-overlay', render(layers, paint));

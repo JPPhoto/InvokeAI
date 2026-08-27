@@ -1,6 +1,5 @@
 import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
 
-import { getStackOrder, layerStackOf } from '@workbench/canvas-engine/document/layerStacks';
 import { applyCanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import { createInitialWorkbenchState } from '@workbench/workbenchState';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -11,8 +10,8 @@ import { createLargeFlatDocument } from './documentFixtures.testStub';
 import {
   compileDocumentLeaves,
   createFlatDocumentModel,
-  flatDocumentModelCounters,
-  resetLatestLeafCompilation,
+  getFlatDocumentModelDiagnostics,
+  resetFlatDocumentModelDiagnostics,
 } from './flatDocumentModel';
 import { ALL_OVERLAY_STACKS_SHOWN, planScreenComposition } from './screenComposition';
 
@@ -20,9 +19,7 @@ const LAYER_COUNT = 2_000;
 const context = { editRevision: 0, projectId: 'budget' };
 
 const resetCounters = (): void => {
-  flatDocumentModelCounters.indexBuilds = 0;
-  flatDocumentModelCounters.leafCompilations = 0;
-  flatDocumentModelCounters.leavesCompiled = 0;
+  resetFlatDocumentModelDiagnostics();
 };
 
 /** Runs the reducer over a fixture so the next document is the one production consumers see. */
@@ -53,7 +50,6 @@ const timed = <T>(annotate: Annotate, label: string, run: () => T): T => {
 
 describe(`flat document model budgets over ${LAYER_COUNT} layers`, () => {
   beforeEach(() => {
-    resetLatestLeafCompilation();
     resetCounters();
   });
 
@@ -75,10 +71,9 @@ describe(`flat document model budgets over ${LAYER_COUNT} layers`, () => {
       .document;
     expect(reselected).not.toBe(document);
     expect(reselected.selectedLayerId).toBe('l7');
-    expect(createFlatDocumentModel(reselected, context, model).compileLeaves()).toBe(leaves);
+    expect(createFlatDocumentModel(reselected, context).compileLeaves()).toBe(leaves);
     expect(compileDocumentLeaves(reselected)).toBe(leaves);
-    expect(flatDocumentModelCounters.indexBuilds).toBe(1);
-    expect(flatDocumentModelCounters.leafCompilations).toBe(1);
+    expect(getFlatDocumentModelDiagnostics()).toMatchObject({ indexBuilds: 1, leafCompilations: 1 });
   });
 
   it('compiles leaves once per document and plans the screen from them', ({ annotate }) => {
@@ -86,8 +81,10 @@ describe(`flat document model budgets over ${LAYER_COUNT} layers`, () => {
     const leaves = timed(annotate, 'leaf compilation', () => compileDocumentLeaves(document));
     expect(compileDocumentLeaves(document)).toBe(leaves);
     expect(createFlatDocumentModel(document, context).compileLeaves()).toBe(leaves);
-    expect(flatDocumentModelCounters.leafCompilations).toBe(1);
-    expect(flatDocumentModelCounters.leavesCompiled).toBe(LAYER_COUNT);
+    expect(getFlatDocumentModelDiagnostics()).toMatchObject({
+      leafCompilations: 1,
+      leavesCompiled: LAYER_COUNT,
+    });
 
     const plan = timed(annotate, 'screen plan', () =>
       planScreenComposition(leaves, { isolationLayerId: null, showOverlayStacks: ALL_OVERLAY_STACKS_SHOWN })
@@ -104,9 +101,8 @@ describe(`flat document model budgets over ${LAYER_COUNT} layers`, () => {
     });
     const before = model.compileLeaves();
     resetCounters();
-    const after = timed(annotate, 'representative edit recompile', () => compileDocumentLeaves(next, model.document));
-    expect(flatDocumentModelCounters.leafCompilations).toBe(1);
-    expect(flatDocumentModelCounters.leavesCompiled).toBe(1);
+    const after = timed(annotate, 'representative edit recompile', () => compileDocumentLeaves(next));
+    expect(getFlatDocumentModelDiagnostics()).toMatchObject({ leafCompilations: 1, leavesCompiled: 1 });
     after.forEach((leaf, index) => {
       if (leaf.id === 'l5') {
         expect(leaf).not.toBe(before[index]);
@@ -117,7 +113,7 @@ describe(`flat document model budgets over ${LAYER_COUNT} layers`, () => {
     });
   });
 
-  it('reuses the latest compilation when a consumer has no previous document to offer', () => {
+  it('reuses immutable layer leaves without a previous-document argument', () => {
     const { model, next } = reduce(createLargeFlatDocument(LAYER_COUNT), {
       id: 'l5',
       patch: { name: 'x' },
@@ -126,17 +122,17 @@ describe(`flat document model budgets over ${LAYER_COUNT} layers`, () => {
     const before = compileDocumentLeaves(model.document);
     resetCounters();
     const after = compileDocumentLeaves(next);
-    expect(flatDocumentModelCounters.leavesCompiled).toBe(1);
+    expect(getFlatDocumentModelDiagnostics().leavesCompiled).toBe(1);
     expect(after[6]).toBe(before[6]);
   });
 
-  it('recompiles exactly the leaves whose stack position moved', () => {
+  it('preserves every leaf identity when only stack order changes', () => {
     const { model, next } = reduce(createLargeFlatDocument(LAYER_COUNT), { ids: ['l0'], kind: 'back', type: 'move' });
-    model.compileLeaves();
+    const before = model.compileLeaves();
     resetCounters();
-    compileDocumentLeaves(next, model.document);
-    const movedStack = layerStackOf(model.getLayer('l0')!);
-    expect(flatDocumentModelCounters.leavesCompiled).toBe(getStackOrder(next.layers, movedStack).orderedIds.length);
+    const after = compileDocumentLeaves(next);
+    expect(getFlatDocumentModelDiagnostics().leavesCompiled).toBe(0);
+    expect(after.every((leaf) => before.includes(leaf))).toBe(true);
   });
 
   it.each<[string, FlatDocumentCommand, { ids: number; stacks: number }]>([
@@ -160,7 +156,7 @@ describe(`flat document model budgets over ${LAYER_COUNT} layers`, () => {
     const edit = (result as { edit: PreparedFlatEdit }).edit;
     expect(edit.touchedIds).toHaveLength(expected.ids);
     expect(edit.touchedStacks).toHaveLength(expected.stacks);
-    expect(flatDocumentModelCounters.indexBuilds).toBe(1);
-    expect(flatDocumentModelCounters.leafCompilations).toBe(0);
+    expect(edit.rasterWork).toBeNull();
+    expect(getFlatDocumentModelDiagnostics()).toMatchObject({ indexBuilds: 1, leafCompilations: 0 });
   });
 });

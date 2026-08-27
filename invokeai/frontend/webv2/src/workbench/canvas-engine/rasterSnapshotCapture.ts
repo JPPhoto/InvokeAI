@@ -10,6 +10,7 @@ import type { CanvasRasterSnapshot, CaptureRasterSnapshotResult } from '@workben
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { lookupDocumentLayer } from '@workbench/canvas-engine/document-model/flatDocumentModel';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { isSupportedExportSource } from '@workbench/canvas-engine/layerExportGuards';
 
@@ -131,10 +132,9 @@ export const createRasterSnapshotCapture = (deps: CreateRasterSnapshotCaptureDep
 
     const document = documentSnapshot.canvas.document;
     const uniqueLayerIds = [...new Set(layerIds)];
-    const layerById = new Map(document.layers.map((layer) => [layer.id, layer]));
     let requestedBytes = 0;
     for (const layerId of uniqueLayerIds) {
-      const layer = layerById.get(layerId);
+      const layer = lookupDocumentLayer(document, layerId);
       const source = layer ? renderableSourceOf(layer) : null;
       if (!layer || !source || !isSupportedExportSource(source)) {
         return { status: 'not-ready' };
@@ -191,7 +191,8 @@ export const createRasterSnapshotCapture = (deps: CreateRasterSnapshotCaptureDep
           const actualBytes = live.surface.width * live.surface.height * BYTES_PER_PIXEL;
           // The up-front reservation was an estimate from the source; a surface
           // that rasterized larger has to be paid for before it is detached.
-          const additionalBytes = Math.max(0, actualBytes - estimatedLayerBytes(layerById.get(layerId)!, document));
+          const snapshotLayer = lookupDocumentLayer(document, layerId)!;
+          const additionalBytes = Math.max(0, actualBytes - estimatedLayerBytes(snapshotLayer, document));
           if (additionalBytes > 0) {
             const additional = reserveBytes(additionalBytes, captureLifecycleGeneration);
             if (additional.status === 'over-budget') {

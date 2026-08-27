@@ -1,4 +1,5 @@
 import type { ProjectGraphAction } from '@features/workflow/utility';
+import type { CanvasEditIntent, CanvasMutationOrigin } from '@workbench/canvas-engine/api';
 import type { InvocationRoute, InvocationSourceId, ResultDestination } from '@workbench/invocationContracts';
 
 import { GENERATE_UI_STATE_KEYS } from '@features/generation/settings';
@@ -8,8 +9,10 @@ import type { CanvasProjectMutation } from './canvasProjectMutations';
 
 import { isInvocationSourceAvailable } from './invocation';
 
+export type { CanvasEditIntent };
+
 /** Programmatic dispatches never auto-switch the Invoke route; absent means user. */
-export type WorkbenchActionOrigin = 'user' | 'system';
+export type WorkbenchActionOrigin = CanvasMutationOrigin;
 
 /** Destination each surface maps to when the source auto-switches. */
 export const autoSwitchDestinations: Record<InvocationSourceId, ResultDestination> = {
@@ -169,8 +172,6 @@ export const isHighConfidenceCanvasEdit = (mutation: CanvasProjectMutation): boo
 
   return false;
 };
-
-export type CanvasEditIntent = { kind: 'paint' } | { kind: 'mutation'; mutation: CanvasProjectMutation };
 
 export const isHighConfidenceCanvasEditIntent = (intent: CanvasEditIntent): boolean =>
   intent.kind === 'paint' || isHighConfidenceCanvasEdit(intent.mutation);

@@ -13,6 +13,7 @@ import type { LayerCacheEntry, LayerCacheStore } from '@workbench/canvas-engine/
 import type { RasterBackend } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { lookupDocumentLayer } from '@workbench/canvas-engine/document-model/flatDocumentModel';
 import { isLayerContributing } from '@workbench/canvas-engine/document/layerEligibility';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { fromTRS } from '@workbench/canvas-engine/math/mat2d';
@@ -111,7 +112,7 @@ export class RasterExportController {
     if (!document) {
       return { status: 'missing' };
     }
-    const layer = document.layers.find((candidate) => candidate.id === layerId);
+    const layer = lookupDocumentLayer(document, layerId);
     const source = layer ? renderableSourceOf(layer) : null;
     if (!layer || !source) {
       return { status: 'missing' };
@@ -156,7 +157,7 @@ export class RasterExportController {
       }
     }
     const currentDocument = this.options.getDocument();
-    const currentLayer = currentDocument?.layers.find((candidate) => candidate.id === layerId);
+    const currentLayer = currentDocument ? lookupDocumentLayer(currentDocument, layerId) : null;
     const entry = this.options.layers.get(layerId);
     if (!currentLayer || !entry || entry.stale) {
       return { status: 'not-ready' };

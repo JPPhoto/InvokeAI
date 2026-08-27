@@ -2,6 +2,7 @@ import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contract
 import type { Rect } from '@workbench/canvas-engine/types';
 
 import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/flatDocumentModel';
+import { isLeafDrawableForScreen } from '@workbench/canvas-engine/document-model/screenComposition';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { fromTRS } from '@workbench/canvas-engine/math/mat2d';
 import { intersect, isEmpty, transformBounds, union } from '@workbench/canvas-engine/math/rect';
@@ -28,13 +29,11 @@ export const calculateActiveFrameLayerIds = ({
   const active = new Set<string>();
   for (const leaf of compileDocumentLeaves(document)) {
     const { layer } = leaf;
-    // A hidden layer draws nothing, so it needs no cache — unless an isolated
-    // operation reads its pixels, which still requires them rasterized.
+    const isIsolated = isolationLayerIds?.has(layer.id) ?? false;
     if (
-      !leaf.contributionEnabled ||
-      (leaf.documentHidden && !isolationLayerIds?.has(layer.id)) ||
+      !isLeafDrawableForScreen(leaf, isIsolated) ||
       !renderableSourceOf(layer) ||
-      (isolationLayerIds && !isolationLayerIds.has(layer.id))
+      (isolationLayerIds && !isIsolated)
     ) {
       continue;
     }

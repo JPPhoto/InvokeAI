@@ -44,8 +44,6 @@ export type FlatDocumentCommand =
   | { readonly type: 'set-locked'; readonly updates: readonly { id: string; isLocked: boolean }[] }
   | { readonly type: 'select'; readonly id: string | null };
 
-export type FlatEditOrigin = 'human' | 'operation' | 'system' | 'ai';
-
 export type FlatDocumentRefusal =
   | { readonly status: 'missing'; readonly ids: readonly string[] }
   | { readonly status: 'locked'; readonly ids: readonly string[] }

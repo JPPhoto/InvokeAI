@@ -7,6 +7,7 @@ import type {
 import type { LayerCacheEntry } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 
+import { lookupDocumentLayer } from '@workbench/canvas-engine/document-model/flatDocumentModel';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
 import { renderControlTransparency } from '@workbench/canvas-engine/render/controlTransparency';
@@ -48,7 +49,8 @@ export class ThumbnailController {
       return false;
     }
     const entry = this.deps.getEntry(layerId);
-    const layer = this.deps.getDocument()?.layers.find((candidate) => candidate.id === layerId);
+    const document = this.deps.getDocument();
+    const layer = document ? lookupDocumentLayer(document, layerId) : null;
     if (!entry?.hasPublishedPixels || !layer) {
       return false;
     }
@@ -112,7 +114,7 @@ export class ThumbnailController {
       return this.disposed || this.deps.isDisposed() ? 'missing' : 'stale';
     }
     const document = this.deps.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === layerId);
+    const layer = document ? lookupDocumentLayer(document, layerId) : null;
     if (!document || !layer) {
       this.deps.setStatus(layerId, null);
       return 'missing';

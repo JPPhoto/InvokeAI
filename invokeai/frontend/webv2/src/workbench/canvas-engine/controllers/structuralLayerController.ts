@@ -1,12 +1,11 @@
-import type { WorkbenchActionOrigin } from '@workbench/autoRoutePolicy';
 import type {
   PreparedCommitOptions,
   StructuralCommitOptions,
   StructuralCommitResult,
 } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
-import type { FlatEditOrigin, PreparedFlatEdit } from '@workbench/canvas-engine/document-model/flatDocumentCommands';
-import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
+import type { PreparedFlatEdit } from '@workbench/canvas-engine/document-model/flatDocumentCommands';
+import type { CanvasMutationOrigin, CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 
 import { checkFlatEditPostconditions } from '@workbench/canvas-engine/document-model/postconditions';
 import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
@@ -25,9 +24,6 @@ const anchorRevisionOf = (mutation: CanvasProjectMutation): number | undefined =
       return undefined;
   }
 };
-
-const toWorkbenchOrigin = (origin: FlatEditOrigin | undefined): WorkbenchActionOrigin | undefined =>
-  origin === undefined ? undefined : origin === 'system' ? 'system' : 'user';
 
 export type StructuralMutationContext = Pick<
   CanvasMutationContext,
@@ -128,7 +124,7 @@ export class StructuralLayerController {
       edit.forward,
       edit.inverse,
       (document) => checkFlatEditPostconditions(document, edit.postconditions),
-      toWorkbenchOrigin(options.origin)
+      options.origin
     );
     if (applied.status === 'committed' && edit.history === 'record') {
       this.deps.ctx.history.push(this.entry(label, edit.forward, edit.inverse));
@@ -222,7 +218,7 @@ export class StructuralLayerController {
     forward: CanvasProjectMutation,
     inverse: CanvasProjectMutation,
     verify: (document: CanvasDocumentContractV2) => boolean = () => true,
-    origin?: WorkbenchActionOrigin
+    origin?: CanvasMutationOrigin
   ): StructuralCommitResult {
     const { ctx } = this.deps;
     const before = ctx.getReducerDocument();

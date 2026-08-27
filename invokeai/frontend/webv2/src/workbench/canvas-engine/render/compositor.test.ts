@@ -721,7 +721,7 @@ describe('compositeDocument — hidden layers', () => {
     expect(maskCache.surface.width).toBe(10);
   });
 
-  it('draws nothing for a disabled layer even while it is the isolated target', () => {
+  it('draws a disabled layer while it is the isolated target', () => {
     const backend = createTestStubRasterBackend();
     const caches = createLayerCacheStore(backend);
     caches.getOrCreate('isolated', 10, 10);
@@ -731,10 +731,10 @@ describe('compositeDocument — hidden layers', () => {
       isolationLayerId: 'isolated',
     });
 
-    expect(target.callLog.some((e) => e.op === 'drawImage')).toBe(false);
+    expect(target.callLog.some((e) => e.op === 'drawImage')).toBe(true);
   });
 
-  it('draws nothing for a hidden layer even while it is the isolated target', () => {
+  it('draws a hidden layer while it is the isolated target', () => {
     const backend = createTestStubRasterBackend();
     const caches = createLayerCacheStore(backend);
     caches.getOrCreate('m', 10, 10);
@@ -742,6 +742,6 @@ describe('compositeDocument — hidden layers', () => {
 
     compositeDocument(target, makeDoc([hiddenMask('m')]), caches, VIEW, { backend, isolationLayerId: 'm' });
 
-    expect(target.callLog.some((e) => e.op === 'drawImage')).toBe(false);
+    expect(target.callLog.some((e) => e.op === 'drawImage')).toBe(true);
   });
 });

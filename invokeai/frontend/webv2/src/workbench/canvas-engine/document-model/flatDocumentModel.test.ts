@@ -14,7 +14,7 @@ import { layerContract } from './documentFixtures.testStub';
 import {
   compileDocumentLeaves,
   createFlatDocumentModel,
-  flatDocumentModelCounters,
+  getFlatDocumentModelDiagnostics,
   lookupDocumentLayer,
   lookupDocumentLeaf,
   lookupLayerBelow,
@@ -76,18 +76,18 @@ const roundTrip = (project: Project, command: FlatDocumentCommand): { after: Pro
 describe('createFlatDocumentModel', () => {
   it('indexes lookup and stack order once per document identity', () => {
     const project = projectWith(interleaved(), 'r2');
-    const before = flatDocumentModelCounters.indexBuilds;
+    const before = getFlatDocumentModelDiagnostics().indexBuilds;
     const model = modelOf(project);
     const again = modelOf(project);
 
-    expect(flatDocumentModelCounters.indexBuilds).toBe(before + 1);
+    expect(getFlatDocumentModelDiagnostics().indexBuilds).toBe(before + 1);
     expect(model.getLayer('r2')?.id).toBe('r2');
     expect(model.getLayer('ghost')).toBeNull();
     expect(model.getStack('raster').map((entry) => entry.id)).toEqual(['r1', 'r2', 'r3']);
     expect(again.getStack('raster')).toBe(model.getStack('raster'));
   });
 
-  it('compiles semantic leaves with stack positions and world transforms', () => {
+  it('compiles semantic leaves in document order with world transforms', () => {
     const project = projectWith(
       [
         layer('i1', 'inpaint_mask', { isHidden: true } as Partial<CanvasLayerContract>),
@@ -97,9 +97,9 @@ describe('createFlatDocumentModel', () => {
     );
     const leaves = modelOf(project).compileLeaves();
 
-    expect(leaves.map((leaf) => [leaf.id, leaf.stack, leaf.stackIndex])).toEqual([
-      ['i1', 'inpaint_mask', 0],
-      ['r1', 'raster', 0],
+    expect(leaves.map((leaf) => [leaf.id, leaf.stack])).toEqual([
+      ['i1', 'inpaint_mask'],
+      ['r1', 'raster'],
     ]);
     expect(leaves[0]).toMatchObject({ contributionEnabled: true, documentHidden: true, locked: false });
     expect(leaves[1]).toMatchObject({ documentHidden: false, locked: true });
@@ -110,23 +110,22 @@ describe('createFlatDocumentModel', () => {
     const project = projectWith(interleaved(), 'r2');
     const first = modelOf(project);
     const leaves = first.compileLeaves();
-    const compilations = flatDocumentModelCounters.leafCompilations;
-    const compiled = flatDocumentModelCounters.leavesCompiled;
+    const beforeDiagnostics = getFlatDocumentModelDiagnostics();
 
     const selected = applyCanvasProjectMutation(project, { id: 'r1', type: 'setCanvasSelectedLayer' });
-    const second = createFlatDocumentModel(selected.canvas.document, context(project), first);
+    const second = createFlatDocumentModel(selected.canvas.document, context(project));
     expect(second.compileLeaves()).toBe(leaves);
-    expect(flatDocumentModelCounters.leafCompilations).toBe(compilations);
+    expect(getFlatDocumentModelDiagnostics().leafCompilations).toBe(beforeDiagnostics.leafCompilations);
 
     const renamed = applyCanvasProjectMutation(selected, {
       id: 'r2',
       patch: { name: 'Renamed' },
       type: 'updateCanvasLayer',
     });
-    const third = createFlatDocumentModel(renamed.canvas.document, context(project), second);
+    const third = createFlatDocumentModel(renamed.canvas.document, context(project));
     const next = third.compileLeaves();
-    expect(flatDocumentModelCounters.leafCompilations).toBe(compilations + 1);
-    expect(flatDocumentModelCounters.leavesCompiled).toBe(compiled + 1);
+    expect(getFlatDocumentModelDiagnostics().leafCompilations).toBe(beforeDiagnostics.leafCompilations + 1);
+    expect(getFlatDocumentModelDiagnostics().leavesCompiled).toBe(beforeDiagnostics.leavesCompiled + 1);
     expect(next.filter((leaf, index) => leaf === leaves[index]).map((leaf) => leaf.id)).toEqual([
       'i1',
       'r1',
@@ -140,8 +139,8 @@ describe('createFlatDocumentModel', () => {
       stacks: [{ orderedIds: ['r3', 'r1', 'r2'], stack: 'raster' }],
       type: 'reorderCanvasLayerStacks',
     });
-    const fourth = createFlatDocumentModel(moved.canvas.document, context(project), third).compileLeaves();
-    expect(fourth.filter((leaf) => next.includes(leaf)).map((leaf) => leaf.id)).toEqual(['i1', 'c1', 'g1']);
+    const fourth = createFlatDocumentModel(moved.canvas.document, context(project)).compileLeaves();
+    expect(fourth.every((leaf) => next.includes(leaf))).toBe(true);
   });
 
   describe('prepare', () => {
@@ -638,18 +637,18 @@ describe('document-level seam', () => {
     expect(lookupDocumentLeaf(document, 'nope')).toBeNull();
   });
 
-  it('keeps leaf identity across documents when a layer and its stack position are unchanged', () => {
+  it('keeps leaf identity across documents while the immutable layer is unchanged', () => {
     const before = projectWith(interleaved(), 'r1').canvas.document;
     const after: CanvasDocumentContractV2 = { ...before, selectedLayerId: 'c1' };
     const untouched = compileDocumentLeaves(before);
-    const reused = compileDocumentLeaves(after, before);
+    const reused = compileDocumentLeaves(after);
     expect(reused).toBe(untouched);
 
     const renamed: CanvasDocumentContractV2 = {
       ...before,
       layers: before.layers.map((layer) => (layer.id === 'r1' ? { ...layer, name: 'renamed' } : layer)),
     };
-    const recompiled = compileDocumentLeaves(renamed, before);
+    const recompiled = compileDocumentLeaves(renamed);
     expect(recompiled.find((leaf) => leaf.id === 'c1')).toBe(untouched.find((leaf) => leaf.id === 'c1'));
     expect(recompiled.find((leaf) => leaf.id === 'r1')).not.toBe(untouched.find((leaf) => leaf.id === 'r1'));
   });

@@ -77,7 +77,7 @@ Canvas invocation first crosses the paint-flush barrier, then captures the post-
 
 ## Frame demand before allocation
 
-`calculateActiveFrameLayerIds` is a pure pre-allocation pass. For each enabled renderable layer it combines persisted source bounds with any larger live cache rect, applies the committed or transient transform (including rotation), respects isolation, and intersects the result with the document-space viewport.
+`calculateActiveFrameLayerIds` is a pure pre-allocation pass. For each enabled renderable layer it combines persisted source bounds with any larger live cache rect, applies the committed or transient transform (including rotation), respects isolation, and intersects the result with the document-space viewport. An explicitly isolated operation target is the one exception to normal document visibility: it remains demanded and drawable when disabled or display-hidden because the user is acting on that named layer directly.
 
 The render path computes this set before `ensureLayerCaches`. Only demanded layers are rasterized for the frame. Offscreen enabled layers are not eagerly allocated; they remain on-demand and LRU-evictable, then rasterize again when panning or a transform reveals them.
 

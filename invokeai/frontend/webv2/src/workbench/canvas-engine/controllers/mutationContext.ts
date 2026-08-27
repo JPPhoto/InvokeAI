@@ -1,11 +1,14 @@
-import type { CanvasEditIntent, WorkbenchActionOrigin } from '@workbench/autoRoutePolicy';
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { CanvasEditConcurrency, DocumentEditPermit } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
-import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
+import type {
+  CanvasEditIntent,
+  CanvasMutationOrigin,
+  CanvasProjectMutation,
+} from '@workbench/canvas-engine/mutationContracts';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
@@ -27,12 +30,12 @@ export interface CanvasMutationContext extends CanvasEditConcurrency {
   /** The anchor that restores `layerId` between its current same-stack neighbours; null when absent. */
   captureRestoreAnchor(layerId: string): FlatLayerInsertionAnchor | null;
   isGuardCurrent(guard: LayerExportGuard): boolean;
-  dispatch(action: CanvasProjectMutation, origin?: WorkbenchActionOrigin): boolean;
+  dispatch(action: CanvasProjectMutation, origin?: CanvasMutationOrigin): boolean;
   dispatchPrepared(
     action: CanvasProjectMutation,
     reducerAccepted: () => boolean,
     mirrorAccepted: () => boolean,
-    origin?: WorkbenchActionOrigin
+    origin?: CanvasMutationOrigin
   ): void;
   preparePixels(layerId: string, rect: Rect, pixels: RasterSurface): PreparedLayerCacheReplacement;
   installPrepared(prepared: PreparedLayerCacheReplacement, persist?: boolean): void;
@@ -47,7 +50,7 @@ export interface CanvasMutationContextDeps {
   readonly getDocument: () => CanvasDocumentContractV2 | null;
   readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
   readonly subscribeReducer: (listener: () => void) => () => void;
-  readonly dispatch: (action: CanvasProjectMutation, origin?: WorkbenchActionOrigin) => boolean;
+  readonly dispatch: (action: CanvasProjectMutation, origin?: CanvasMutationOrigin) => boolean;
   readonly commitEdit: (intent: CanvasEditIntent) => void;
   readonly refreshMirror: () => void;
   readonly editingLocked: { get(): boolean; subscribe(listener: () => void): () => void };
@@ -104,7 +107,7 @@ export const createCanvasMutationContext = (
     action: CanvasProjectMutation,
     isApplied: () => boolean,
     isMirrored: () => boolean,
-    origin: WorkbenchActionOrigin = deps.history.isApplying() ? 'system' : 'user'
+    origin: CanvasMutationOrigin = deps.history.isApplying() ? 'system' : 'user'
   ): void => {
     try {
       // Prepared mutations are not route-worthy until both reducer and mirror

@@ -10,8 +10,6 @@ import { fromTRS } from '@workbench/canvas-engine/math/mat2d';
 export interface SemanticLeafV2 {
   readonly id: string;
   readonly stack: LayerStackKind;
-  /** Position within its own stack, 0 = top. */
-  readonly stackIndex: number;
   readonly layer: CanvasLayerContract;
   readonly contributionEnabled: boolean;
   readonly documentHidden: boolean;
@@ -19,14 +17,13 @@ export interface SemanticLeafV2 {
   readonly worldTransform: Mat2d;
 }
 
-export const compileSemanticLeaf = (layer: CanvasLayerContract, stackIndex: number): SemanticLeafV2 => ({
+export const compileSemanticLeaf = (layer: CanvasLayerContract): SemanticLeafV2 => ({
   contributionEnabled: isLayerContributing(layer),
   documentHidden: isLayerHidden(layer),
   id: layer.id,
   layer,
   locked: layer.isLocked,
   stack: layerStackOf(layer),
-  stackIndex,
   worldTransform: fromTRS(
     { x: layer.transform.x, y: layer.transform.y },
     layer.transform.rotation,

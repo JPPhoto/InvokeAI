@@ -84,7 +84,7 @@ describe('calculateActiveFrameLayerIds', () => {
         isolationLayerIds: new Set(['off']),
         viewport,
       })
-    ).toEqual(new Set());
+    ).toEqual(new Set(['off']));
   });
 
   it('limits demand to isolated layers', () => {
