@@ -28,6 +28,30 @@ from invokeai.backend.util.logging import InvokeAILogger
 PROFILE_ENV_VAR = "INVOKEAI_PROFILE_H3_DENOISE"
 
 
+def _kineto_gpu_events_visible(device: torch.device) -> bool:
+    """Probe whether torch.profiler (kineto) can actually see GPU kernels here.
+
+    Accepting ``ProfilerActivity.CUDA`` is no guarantee: CUPTI can fail to initialize with
+    ``CUPTI_ERROR_INVALID_DEVICE`` (observed on consumer Blackwell cards), and the first
+    profiler session starting on a session-worker thread trips kineto's "External init
+    callback must run in same thread as registerClient" — in both cases the profile comes
+    back with zero GPU events and only CPU-side times. The probe pays a few milliseconds
+    once; when it sees no GPU events the step is profiled with the legacy cudaEvent
+    fallback instead, which times each op without CUPTI. ROCm (roctracer) passes the probe.
+    """
+    from torch.profiler import ProfilerActivity, profile
+
+    try:
+        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+            (torch.ones(8, device=device) + 1).sum().item()
+        return any(
+            (getattr(evt, "self_device_time_total", 0) or getattr(evt, "self_cuda_time_total", 0)) > 0
+            for evt in prof.key_averages()
+        )
+    except Exception:
+        return False
+
+
 def _profile_one_step(trace_target: str, device: torch.device, run_step: Callable[[], None]) -> None:
     """Run one denoise step under torch.profiler; log the kernel table and write a chrome trace.
 
@@ -38,12 +62,27 @@ def _profile_one_step(trace_target: str, device: torch.device, run_step: Callabl
 
     logger = InvokeAILogger.get_logger(__name__)
     is_gpu = device.type == "cuda"
-    activities = [ProfilerActivity.CPU] + ([ProfilerActivity.CUDA] if is_gpu else [])
+
+    if is_gpu and _kineto_gpu_events_visible(device):
+        profiler_cm = profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA])
+    elif is_gpu:
+        logger.warning(
+            "MiniMax H3 denoise: torch.profiler cannot see GPU kernels on this device (CUPTI unavailable or "
+            "mis-initialized); profiling with the cudaEvent fallback instead. GPU times below are per-op event "
+            "timings rather than true kernel activities."
+        )
+        try:
+            profiler_cm = torch.autograd.profiler.profile(use_device="cuda")
+        except TypeError:
+            # Older torch spells it use_cuda.
+            profiler_cm = torch.autograd.profiler.profile(use_cuda=True)
+    else:
+        profiler_cm = profile(activities=[ProfilerActivity.CPU])
 
     if is_gpu:
         torch.cuda.synchronize(device)
     wall_start = time.time()
-    with profile(activities=activities) as prof:
+    with profiler_cm as prof:
         run_step()
         if is_gpu:
             torch.cuda.synchronize(device)
