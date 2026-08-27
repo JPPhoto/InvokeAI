@@ -5,14 +5,71 @@ First-party port of ``modular_pipelines/minimax_h3/denoise.py`` (commit recorded
 noise level — followed by one scheduler step per modality on the *generated* rows only. The
 conditioning rows are never written, so the anchors survive the loop by construction. The
 checkpoint is guidance-distilled: no unconditional pass, no CFG.
+
+Diagnostics: set ``INVOKEAI_PROFILE_H3_DENOISE`` to profile exactly one denoise step with
+``torch.profiler`` — the second step when there is one (the first step pays allocator warm-up
+and, under partial loading, first-touch weight streaming). The kernel-level summary table is
+logged at INFO and a chrome trace (viewable at ``chrome://tracing`` or https://ui.perfetto.dev)
+is written to the directory the variable names (or the working directory when set to ``1``).
+Unset, the loop behaves exactly as before.
 """
 
+import os
+import time
+from pathlib import Path
 from typing import Callable
 
 import torch
 
 from invokeai.backend.minimax_h3.sampling import MiniMaxH3DenoiseState
 from invokeai.backend.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
+from invokeai.backend.util.logging import InvokeAILogger
+
+PROFILE_ENV_VAR = "INVOKEAI_PROFILE_H3_DENOISE"
+
+
+def _profile_one_step(trace_target: str, device: torch.device, run_step: Callable[[], None]) -> None:
+    """Run one denoise step under torch.profiler; log the kernel table and write a chrome trace.
+
+    The device is synchronized before and after the profiled region so the window contains this
+    step's kernels only (not the tail of the previous step's asynchronous queue).
+    """
+    from torch.profiler import ProfilerActivity, profile
+
+    logger = InvokeAILogger.get_logger(__name__)
+    is_gpu = device.type == "cuda"
+    activities = [ProfilerActivity.CPU] + ([ProfilerActivity.CUDA] if is_gpu else [])
+
+    if is_gpu:
+        torch.cuda.synchronize(device)
+    wall_start = time.time()
+    with profile(activities=activities) as prof:
+        run_step()
+        if is_gpu:
+            torch.cuda.synchronize(device)
+    wall_elapsed = time.time() - wall_start
+
+    # The sort key was renamed cuda -> device across torch releases; try newest first. The CPU
+    # key always exists, so the loop cannot fall through with `table` still empty.
+    table = ""
+    for sort_key in ("self_device_time_total", "self_cuda_time_total", "self_cpu_time_total"):
+        try:
+            table = prof.key_averages().table(sort_by=sort_key, row_limit=40)
+            break
+        except Exception:
+            continue
+    logger.info(f"MiniMax H3 denoise: profiled one step in {wall_elapsed:.2f}s wall time. Kernel summary:\n{table}")
+
+    trace_dir = Path(trace_target) if trace_target.lower() not in ("1", "true", "yes") else Path.cwd()
+    trace_path = trace_dir / "h3_denoise_step_trace.json"
+    try:
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        prof.export_chrome_trace(str(trace_path))
+        logger.info(f"MiniMax H3 denoise: wrote chrome trace to {trace_path}")
+    except Exception:
+        # The table above is the primary deliverable; a failed trace export must not kill the
+        # generation mid-denoise.
+        logger.warning(f"MiniMax H3 denoise: failed to write chrome trace to {trace_path}", exc_info=True)
 
 
 def denoise(
@@ -48,10 +105,11 @@ def denoise(
     prompt_embeds = prompt_embeds.to(latents.device)
 
     total_steps = len(state.timesteps)
-    for i, t in enumerate(state.timesteps):
-        if is_canceled is not None and is_canceled():
-            raise CanceledException
 
+    profile_target = os.environ.get(PROFILE_ENV_VAR)
+    profile_step_index = (1 if total_steps > 1 else 0) if profile_target else None
+
+    def run_step(i: int, t: torch.Tensor) -> None:
         unique_timesteps, timestep_indices = state.row_timestep_plan[i]
         noise_pred, audio_noise_pred = transformer(
             hidden_states=latents[None],
@@ -93,5 +151,15 @@ def denoise(
         if step_callback is not None:
             assert pred_x0_video_rows is not None
             step_callback(i + 1, total_steps, pred_x0_video_rows)
+
+    for i, t in enumerate(state.timesteps):
+        if is_canceled is not None and is_canceled():
+            raise CanceledException
+
+        if i == profile_step_index:
+            assert profile_target is not None
+            _profile_one_step(profile_target, latents.device, lambda i=i, t=t: run_step(i, t))
+        else:
+            run_step(i, t)
 
     return latents, audio_latents
