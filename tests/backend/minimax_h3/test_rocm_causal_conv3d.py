@@ -82,24 +82,23 @@ def test_class_patch_is_idempotent_and_preserves_behavior() -> None:
             delattr(MiniMaxH3VideoCausalConv3d, "_invokeai_rocm_conv2d_decomposition")
 
 
-def test_decomposed_conv3d_feeds_contiguous_conv2d_inputs(monkeypatch) -> None:
-    """At B=1 (every real encode) the tap reshape can be satisfied as a zero-copy view whose
-    channel stride exceeds its batch stride. The MIOpen shipped with torch's rocm7.2 wheels
-    mis-addresses rows of such inputs when H != W (observed as horizontal tearing via the Wan
-    VAE's identical decomposition), so conv2d must receive standard-contiguous tensors."""
+def test_patch_gates_on_hip_version(monkeypatch) -> None:
+    """Mirrors the Wan decomposition's HIP gate: >= 7.2 keeps the stock conv3d forward (fast
+    native kernels; the shared decomposition code corrupted decodes there), older HIP keeps
+    the decomposition, non-HIP builds are never patched."""
     import invokeai.backend.minimax_h3.rocm_causal_conv3d as mod
 
-    seen: list[bool] = []
-    original_conv2d = mod.F.conv2d
+    calls: list[bool] = []
+    monkeypatch.setattr(mod, "_patch_minimax_h3_causal_conv3d", lambda: calls.append(True))
 
-    def checked_conv2d(x: torch.Tensor, weight: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-        seen.append(x.is_contiguous() and weight.is_contiguous())
-        return original_conv2d(x, weight, *args, **kwargs)
+    monkeypatch.setattr(torch.version, "hip", "7.2.10101")
+    mod.patch_minimax_h3_causal_conv3d_for_rocm()
+    assert calls == [], "must not decompose on HIP 7.2+"
 
-    monkeypatch.setattr(mod.F, "conv2d", checked_conv2d)
-    conv = torch.nn.Conv3d(6, 10, kernel_size=(3, 3, 3))
-    x = torch.randn(1, 6, 5, 12, 16)  # B=1 and H != W: the exotic-view case
-    result = _decomposed_conv3d(conv, x)
-    assert seen, "decomposition never called conv2d"
-    assert all(seen), "conv2d received a non-contiguous input or weight"
-    assert result.is_contiguous(), "decomposition returned a non-contiguous activation"
+    monkeypatch.setattr(torch.version, "hip", "7.1.25424")
+    mod.patch_minimax_h3_causal_conv3d_for_rocm()
+    assert calls == [True], "must decompose on HIP < 7.2"
+
+    monkeypatch.setattr(torch.version, "hip", None)
+    mod.patch_minimax_h3_causal_conv3d_for_rocm()
+    assert calls == [True], "CUDA/CPU builds are never patched"

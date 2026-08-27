@@ -89,24 +89,46 @@ def test_class_patch_is_idempotent_and_preserves_behavior() -> None:
             delattr(WanCausalConv3d, "_invokeai_rocm_conv2d_decomposition")
 
 
-def test_decomposed_conv3d_feeds_contiguous_conv2d_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
-    """At B=1 (every real decode) the tap reshape can be satisfied as a zero-copy view whose
-    channel stride exceeds its batch stride. The MIOpen shipped with torch's rocm7.2 wheels
-    mis-addresses rows of such inputs when H != W (horizontal tearing in decoded images), so
-    the decomposition must hand conv2d standard-contiguous tensors."""
+def test_patch_gates_on_hip_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HIP >= 7.2 keeps the stock conv3d forward: its MIOpen is fast for these convs, and the
+    decomposition exhibited allocator-state-dependent row corruption there (heisenbug: clean in
+    every isolated repro and under per-call verification, corrupt in the live decode). Older
+    HIP keeps the decomposition (native conv3d is ~48x slower there); unparseable versions play
+    it safe and keep the proven old-stack behavior."""
     import invokeai.backend.wan.rocm_causal_conv3d as mod
 
-    seen: list[bool] = []
-    original_conv2d = mod.F.conv2d
+    calls: list[bool] = []
+    monkeypatch.setattr(mod, "_patch_wan_causal_conv3d", lambda: calls.append(True))
+    monkeypatch.setattr(mod, "_MODE", "decomposed")
 
-    def checked_conv2d(x: torch.Tensor, weight: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-        seen.append(x.is_contiguous() and weight.is_contiguous())
-        return original_conv2d(x, weight, *args, **kwargs)
+    monkeypatch.setattr(torch.version, "hip", "7.2.10101")
+    mod.patch_wan_causal_conv3d_for_rocm()
+    assert calls == [], "must not decompose on HIP 7.2+"
 
-    monkeypatch.setattr(mod.F, "conv2d", checked_conv2d)
-    conv = torch.nn.Conv3d(6, 10, kernel_size=(3, 3, 3))
-    x = torch.randn(1, 6, 5, 12, 16)  # B=1 and H != W: the exotic-view case
-    result = _decomposed_conv3d(conv, x)
-    assert seen, "decomposition never called conv2d"
-    assert all(seen), "conv2d received a non-contiguous input or weight"
-    assert result.is_contiguous(), "decomposition returned a non-contiguous activation"
+    monkeypatch.setattr(torch.version, "hip", "10.0.999")
+    mod.patch_wan_causal_conv3d_for_rocm()
+    assert calls == [], "must not decompose on later major versions either"
+
+    monkeypatch.setattr(torch.version, "hip", "7.1.25424")
+    mod.patch_wan_causal_conv3d_for_rocm()
+    assert calls == [True], "must decompose on HIP < 7.2"
+
+    monkeypatch.setattr(torch.version, "hip", "weird-version-string")
+    mod.patch_wan_causal_conv3d_for_rocm()
+    assert calls == [True, True], "unparseable version keeps the proven old-stack behavior"
+
+    monkeypatch.setattr(torch.version, "hip", None)
+    mod.patch_wan_causal_conv3d_for_rocm()
+    assert calls == [True, True], "CUDA/CPU builds are never patched"
+
+    # verify mode patches regardless of HIP version (diagnostics must be able to run anywhere).
+    monkeypatch.setattr(mod, "_MODE", "verify")
+    monkeypatch.setattr(torch.version, "hip", "7.2.10101")
+    mod.patch_wan_causal_conv3d_for_rocm()
+    assert calls == [True, True, True]
+
+    # native mode never patches.
+    monkeypatch.setattr(mod, "_MODE", "native")
+    monkeypatch.setattr(torch.version, "hip", "7.1.25424")
+    mod.patch_wan_causal_conv3d_for_rocm()
+    assert calls == [True, True, True]

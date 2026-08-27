@@ -36,28 +36,16 @@ def _decomposed_conv3d(module: torch.nn.Conv3d, x: torch.Tensor) -> torch.Tensor
     b, c, t, h, w = x.shape
     k_t = module.weight.shape[2]
     t_out = t - k_t + 1
-    # Every tensor this decomposition hands to a kernel (or returns to the caller) MUST be
-    # standard-contiguous. The naive expressions produce three legal-but-exotic strided views
-    # that old MIOpen tolerated (it copied internally) but the MIOpen in torch's rocm7.2 wheels
-    # consumes directly and mis-addresses, corrupting rows whenever H != W (horizontal
-    # line/tearing artifacts in decoded images):
-    #   1. the tap input — at B=1 (every real decode) the reshape is satisfiable as a zero-copy
-    #      view whose channel stride (T*H*W) exceeds its batch stride (H*W);
-    #   2. the tap weight — weight[:, :, k] is a strided view over the temporal dim for every
-    #      kT > 1 conv;
-    #   3. the returned activation — reshape+transpose yields a transposed view consumed by
-    #      downstream norm/upsample kernels.
-    # The explicit copies cost a small fraction of the conv itself.
     out = None
     for k in range(k_t):
-        xs = x[:, :, k : k + t_out].transpose(1, 2).reshape(b * t_out, c, h, w).contiguous()
-        o = F.conv2d(xs, module.weight[:, :, k].contiguous(), None)
+        xs = x[:, :, k : k + t_out].transpose(1, 2).reshape(b * t_out, c, h, w)
+        o = F.conv2d(xs, module.weight[:, :, k], None)
         out = o if out is None else out + o
     assert out is not None
     if module.bias is not None:
         out = out + module.bias.view(1, -1, 1, 1)
     oh, ow = out.shape[-2:]
-    return out.reshape(b, t_out, -1, oh, ow).transpose(1, 2).contiguous()
+    return out.reshape(b, t_out, -1, oh, ow).transpose(1, 2)
 
 
 def _decomposed_forward(self, x: torch.Tensor, cache_x: torch.Tensor | None = None) -> torch.Tensor:
@@ -130,15 +118,43 @@ def _patch_wan_causal_conv3d() -> None:
     setattr(WanCausalConv3d, _SENTINEL, True)
 
 
+def hip_version_at_least(major: int, minor: int) -> bool:
+    """True when this is a ROCm/HIP torch build at least as new as ``major.minor``.
+
+    Parse failures return False (keep the proven old-stack behavior).
+    """
+    hip = torch.version.hip
+    if hip is None:
+        return False
+    try:
+        parts = hip.split(".")
+        return (int(parts[0]), int(parts[1])) >= (major, minor)
+    except (ValueError, IndexError):
+        return False
+
+
 def patch_wan_causal_conv3d_for_rocm() -> None:
-    """Apply the conv2d decomposition on ROCm builds; no-op elsewhere.
+    """Apply the conv2d decomposition on ROCm builds older than HIP 7.2; no-op elsewhere.
 
     Call from any loader that constructs an ``AutoencoderKLWan``. cuDNN has real
-    implicit-GEMM conv3d kernels, so CUDA builds keep the stock path. See _MODE above for
-    the diagnostic overrides (INVOKEAI_ROCM_CONV3D=native|verify).
+    implicit-GEMM conv3d kernels, so CUDA builds keep the stock path.
+
+    HIP >= 7.2 also keeps the stock path: its MIOpen runs these conv3ds at full speed
+    (making the decomposition unnecessary), and with the decomposition active it produces
+    allocator-state-dependent row corruption in decoded images — horizontal line/tearing
+    artifacts, observed on non-square Anima/Wan decodes on a W7900 with torch
+    2.13.0+rocm7.2. The corruption is a heisenbug: every isolated repro of the
+    decomposition's kernels is numerically clean, and instrumenting the live decode to
+    compare both implementations per call (INVOKEAI_ROCM_CONV3D=verify) finds no
+    divergence AND yields a clean image — the signature of a kernel reading memory whose
+    content depends on allocation history. Native conv3d is deterministic-clean and fast
+    there, so it wins outright. See _MODE above for the diagnostic overrides
+    (INVOKEAI_ROCM_CONV3D=native|verify; verify still patches on any HIP version).
     """
     if torch.version.hip is None:
         return
     if _MODE == "native":
+        return
+    if _MODE != "verify" and hip_version_at_least(7, 2):
         return
     _patch_wan_causal_conv3d()
