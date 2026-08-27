@@ -4,7 +4,7 @@ import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngi
 import { Box, Popover, Portal, Stack, Switch, Text } from '@chakra-ui/react';
 import { IconButton } from '@platform/ui';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
-import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { SlidersHorizontalIcon } from 'lucide-react';
 import { useCallback, useState } from 'react';
@@ -187,27 +187,22 @@ const RasterLayerSettings = ({
   layer: Extract<CanvasLayerContract, { type: 'raster' }>;
   onOperationStarted(): void;
 }) => {
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
   const isLocked = layer.isTransparencyLocked === true;
 
   const handleTransparencyLock = useCallback(
     (details: { checked: boolean }) => {
-      commitStructural(
-        t('widgets.layers.adjustments.transparencyLock'),
-        {
+      commitPrepared(t('widgets.layers.adjustments.transparencyLock'), (model) =>
+        model.prepare({
+          before: { isTransparencyLocked: isLocked, layerType: 'raster' },
           config: { isTransparencyLocked: details.checked, layerType: 'raster' },
           id: layer.id,
-          type: 'updateCanvasLayerConfig',
-        },
-        {
-          config: { isTransparencyLocked: isLocked, layerType: 'raster' },
-          id: layer.id,
-          type: 'updateCanvasLayerConfig',
-        }
+          type: 'patch-config',
+        })
       );
     },
-    [commitStructural, isLocked, layer.id, t]
+    [commitPrepared, isLocked, layer.id, t]
   );
 
   return (

@@ -1,5 +1,4 @@
 import type { CanvasDocumentSnapshot, PsdExportResult } from '@workbench/canvas-engine/capabilities';
-import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type {
   CanvasDetachedLayerSurface,
   CaptureRasterSnapshotResult,
@@ -13,6 +12,7 @@ import {
   type PsdExportLayerInput,
   type PsdExportPlan,
 } from '@workbench/canvas-engine/export/psdExport';
+import { isExportableRasterLayer } from '@workbench/canvas-engine/layerExportGuards';
 
 type RasterMemoryReservationResult =
   | { status: 'ok'; lease: { release(): void } }
@@ -31,23 +31,6 @@ export interface PsdExportControllerOptions {
   readonly isDocumentSnapshotCurrent: (snapshot: CanvasDocumentSnapshot) => boolean;
   readonly reserve: (bytes: number) => RasterMemoryReservationResult;
 }
-
-const isExportable = (layer: CanvasLayerContract): boolean => {
-  if (layer.type !== 'raster') {
-    return false;
-  }
-  switch (layer.source.type) {
-    case 'paint':
-    case 'image':
-    case 'gradient':
-    case 'text':
-      return true;
-    case 'shape':
-      return layer.source.kind !== 'polygon';
-    default:
-      return false;
-  }
-};
 
 export const PSD_ALLOCATION_BYTES_PER_PIXEL = 8;
 
@@ -82,7 +65,7 @@ export class PsdExportController {
         return 'stale';
       }
       const document = documentSnapshot.canvas.document;
-      const layers = document.layers.filter(isExportable);
+      const layers = document.layers.filter(isExportableRasterLayer);
       if (layers.length === 0) {
         return 'nothing';
       }

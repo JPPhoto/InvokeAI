@@ -150,10 +150,11 @@ describe('SAM isolation', () => {
       rect: { height: 8, width: 8, x: 0, y: 0 },
     }) as unknown as SamPreviewState;
 
-  it('composites only the isolated layer', () => {
+  it('isolates the layer through the composition plan', () => {
     draw(documentOf([layer('a'), layer('b')]), null, isolated());
     const doc = composite.mock.calls.at(-1)?.[1] as CanvasDocumentContractV2;
-    expect(doc.layers.map((entry) => entry.id)).toEqual(['a']);
+    expect(doc.layers.map((entry) => entry.id)).toEqual(['a', 'b']);
+    expect(lastCompositeOptions().isolationLayerId).toBe('a');
   });
 
   it('clips to the preview rect', () => {

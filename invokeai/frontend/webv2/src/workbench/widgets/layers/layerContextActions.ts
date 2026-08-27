@@ -220,7 +220,7 @@ const canMoveBackward = (context: LayerContextActionState): boolean => {
 };
 
 const hasMergeableLayerBelow = (context: LayerContextActionState): boolean =>
-  canMergeLayerDown(context.document.layers, context.index, true);
+  canMergeLayerDown(context.document, context.layer.id, true);
 
 const isBooleanRasterLayer = (layer: CanvasLayerContract | undefined): boolean =>
   !!layer && layer.isEnabled && layer.type === 'raster' && isPixelBackedLayer(layer);

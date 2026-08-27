@@ -10,8 +10,13 @@ import type { FloatingSelection } from '@workbench/canvas-engine/selection/float
 import type { SelectionState } from '@workbench/canvas-engine/selection/selectionState';
 import type { Mat2d, ToolId, Vec2 } from '@workbench/canvas-engine/types';
 
+import {
+  compileDocumentLeaves,
+  lookupDocumentLayer,
+  lookupDocumentLeaf,
+} from '@workbench/canvas-engine/document-model/flatDocumentModel';
 import { applyToPoint } from '@workbench/canvas-engine/math/mat2d';
-import { hittableLayerRect, layerMatrix, layerOutlineCorners } from '@workbench/canvas-engine/tools/moveHitTest';
+import { hittableLayerRect, layerOutlineCorners } from '@workbench/canvas-engine/tools/moveHitTest';
 import { transformOverlayGeometry } from '@workbench/canvas-engine/transform/transformMath';
 
 import type { FloatingSelectionFrame } from './floatingSelectionFrame';
@@ -66,8 +71,8 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
     if (getActiveToolId() !== 'move') {
       return null;
     }
-    const overridden = doc.layers.find((layer) => transformOverrides.has(layer.id));
-    const target = overridden ?? doc.layers.find((layer) => layer.id === doc.selectedLayerId);
+    const overridden = compileDocumentLeaves(doc).find((leaf) => transformOverrides.has(leaf.id))?.layer;
+    const target = overridden ?? (doc.selectedLayerId ? lookupDocumentLayer(doc, doc.selectedLayerId) : null);
     if (!target) {
       return null;
     }
@@ -84,11 +89,11 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
       // The float frames its own pixels. Its rect and transform are LAYER-LOCAL,
       // so the resulting geometry is projected out through the layer's matrix to
       // reach the document space the overlay draws in.
-      const floatLayer = doc.layers.find((candidate) => candidate.id === float.layerId);
-      if (!floatLayer) {
+      const floatLeaf = lookupDocumentLeaf(doc, float.layerId);
+      if (!floatLeaf) {
         return null;
       }
-      const toDocument = layerMatrix(floatLayer.transform);
+      const toDocument = floatLeaf.worldTransform;
       const geometry = transformOverlayGeometry(float.transform, float.pixels.rect);
       return {
         center: applyToPoint(toDocument, geometry.center),
@@ -101,7 +106,7 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
     if (!session) {
       return null;
     }
-    const layer = doc.layers.find((candidate) => candidate.id === session.layerId);
+    const layer = lookupDocumentLayer(doc, session.layerId);
     // The layer's LOCAL content rect (off-origin aware): the frame must wrap the
     // pixels where the compositor draws them, not an assumed origin-anchored box.
     const rect = layer ? hittableLayerRect(layer, doc) : null;

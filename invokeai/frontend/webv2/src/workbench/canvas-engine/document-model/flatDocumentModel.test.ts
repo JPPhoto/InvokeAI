@@ -10,50 +10,18 @@ import { describe, expect, it } from 'vitest';
 
 import type { FlatDocumentCommand, PreparedFlatEdit, PrepareFlatEditResult } from './flatDocumentCommands';
 
-import { createFlatDocumentModel, flatDocumentModelCounters } from './flatDocumentModel';
+import { layerContract } from './documentFixtures.testStub';
+import {
+  compileDocumentLeaves,
+  createFlatDocumentModel,
+  flatDocumentModelCounters,
+  lookupDocumentLayer,
+  lookupDocumentLeaf,
+  mergeDownEligibility,
+} from './flatDocumentModel';
 import { checkFlatEditPostconditions } from './postconditions';
 
-const base = (id: string) => ({
-  blendMode: 'normal' as const,
-  id,
-  isEnabled: true,
-  isLocked: false,
-  name: id,
-  opacity: 1,
-  transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
-});
-const mask = { bitmap: null, fill: { color: '#e07575', style: 'diagonal' as const } };
-const contract = (id: string, type: CanvasLayerContract['type']): CanvasLayerContract => {
-  switch (type) {
-    case 'raster':
-      return { ...base(id), source: { bitmap: null, type: 'paint' }, type };
-    case 'control':
-      return {
-        ...base(id),
-        adapter: { beginEndStepPct: [0, 1], controlMode: 'balanced', kind: 'controlnet', model: null, weight: 1 },
-        source: { bitmap: null, type: 'paint' },
-        type,
-        withTransparencyEffect: false,
-      };
-    case 'inpaint_mask':
-      return { ...base(id), mask, type };
-    case 'regional_guidance':
-      return {
-        ...base(id),
-        autoNegative: false,
-        mask,
-        negativePrompt: null,
-        positivePrompt: null,
-        referenceImages: [],
-        type,
-      };
-  }
-};
-const layer = (
-  id: string,
-  type: CanvasLayerContract['type'] = 'raster',
-  overrides: Partial<CanvasLayerContract> = {}
-) => ({ ...contract(id, type), ...overrides }) as CanvasLayerContract;
+const layer = layerContract;
 
 const interleaved = (): CanvasLayerContract[] => [
   layer('i1', 'inpaint_mask'),
@@ -333,6 +301,90 @@ describe('createFlatDocumentModel', () => {
         model.prepare({ before: { name: 'r1', opacity: 1 }, id: 'r1', patch: { opacity: 0.4 }, type: 'patch' })
       ).toEqual({ operation: 'patch baseline names other fields', status: 'unsupported' });
       expect(
+        model.prepare({
+          before: { adjustments: { brightness: 0, contrast: 0, saturation: 0 }, layerType: 'raster' },
+          config: {
+            adjustments: { brightness: 0.2, contrast: 0, curves: { b: [], g: [], r: [[0, 0]] }, saturation: 0 },
+            layerType: 'raster',
+          },
+          id: 'r1',
+          type: 'patch-config',
+        }).status
+      ).toBe('prepared');
+      expect(
+        model.prepare({
+          before: { layerType: 'inpaint_mask', mask: { fill: { color: '#000000', style: 'solid' } } },
+          config: { layerType: 'inpaint_mask', mask: { offset: { x: 4, y: 4 } } },
+          id: 'i1',
+          type: 'patch-config',
+        })
+      ).toEqual({ operation: 'config baseline names other fields', status: 'unsupported' });
+      expect(
+        model.prepare({
+          before: { transform: { x: 0 } },
+          id: 'r1',
+          patch: { transform: { x: 1, y: 2 } },
+          type: 'patch',
+        })
+      ).toEqual({ operation: 'patch baseline names other fields', status: 'unsupported' });
+      expect(
+        model.prepare({
+          before: { adapter: { weight: 1 }, layerType: 'control' },
+          config: { adapter: { model: null, weight: 1 }, layerType: 'control' },
+          id: 'c1',
+          type: 'patch-config',
+        })
+      ).toEqual({ operation: 'config baseline names other fields', status: 'unsupported' });
+      expect(
+        model.prepare({
+          before: { adapter: undefined, layerType: 'control' },
+          config: { adapter: { weight: 1 }, layerType: 'control' },
+          id: 'c1',
+          type: 'patch-config',
+        })
+      ).toEqual({ operation: 'config baseline names other fields', status: 'unsupported' });
+      expect(
+        model.prepare({
+          before: { layerType: 'inpaint_mask', mask: { fill: { color: '#000000' } as never } },
+          config: { layerType: 'inpaint_mask', mask: { fill: { color: '#000000', style: 'solid' } } },
+          id: 'i1',
+          type: 'patch-config',
+        })
+      ).toEqual({ operation: 'config baseline names other fields', status: 'unsupported' });
+      expect(
+        model.prepare({
+          before: { isTransparencyLocked: false, layerType: 'control' } as never,
+          config: { isTransparencyLocked: true, layerType: 'raster' },
+          id: 'r1',
+          type: 'patch-config',
+        })
+      ).toEqual({ operation: 'config baseline names another layer type', status: 'unsupported' });
+      const defaults = {
+        beginEndStepPct: [0, 1] as [number, number],
+        controlMode: null,
+        kind: 't2i_adapter' as const,
+        model: null,
+        weight: 0.5,
+      };
+      const baseline = {
+        beginEndStepPct: [0, 1] as [number, number],
+        controlMode: 'balanced' as const,
+        kind: 'controlnet' as const,
+        model: null,
+        weight: 1,
+      };
+      expect(
+        model.prepare({
+          before: { adapter: baseline, layerType: 'control' },
+          config: { adapter: defaults, layerType: 'control' },
+          id: 'c1',
+          type: 'patch-config',
+        })
+      ).toMatchObject({
+        edit: { inverse: { config: { adapter: baseline, layerType: 'control' } } },
+        status: 'prepared',
+      });
+      expect(
         modelOf(projectWith(interleaved(), 'r1')).prepare({
           before: { opacity: 1 },
           id: 'r1',
@@ -573,6 +625,40 @@ describe('createFlatDocumentModel', () => {
     ])('refuses %s', (_label, layers, upperId, refusal) => {
       expect(modelOf(projectWith(layers, null)).canMergeDown(upperId)).toEqual(refusal);
     });
+  });
+});
+
+describe('document-level seam', () => {
+  it('looks layers and leaves up through the same index the model uses', () => {
+    const document = projectWith(interleaved(), 'r1').canvas.document;
+    expect(lookupDocumentLayer(document, 'c1')).toBe(document.layers.find((layer) => layer.id === 'c1'));
+    expect(lookupDocumentLayer(document, 'nope')).toBeNull();
+    expect(lookupDocumentLeaf(document, 'c1')).toBe(compileDocumentLeaves(document).find((leaf) => leaf.id === 'c1'));
+    expect(lookupDocumentLeaf(document, 'nope')).toBeNull();
+  });
+
+  it('keeps leaf identity across documents when a layer and its stack position are unchanged', () => {
+    const before = projectWith(interleaved(), 'r1').canvas.document;
+    const after: CanvasDocumentContractV2 = { ...before, selectedLayerId: 'c1' };
+    const untouched = compileDocumentLeaves(before);
+    const reused = compileDocumentLeaves(after, before);
+    expect(reused).toBe(untouched);
+
+    const renamed: CanvasDocumentContractV2 = {
+      ...before,
+      layers: before.layers.map((layer) => (layer.id === 'r1' ? { ...layer, name: 'renamed' } : layer)),
+    };
+    const recompiled = compileDocumentLeaves(renamed, before);
+    expect(recompiled.find((leaf) => leaf.id === 'c1')).toBe(untouched.find((leaf) => leaf.id === 'c1'));
+    expect(recompiled.find((leaf) => leaf.id === 'r1')).not.toBe(untouched.find((leaf) => leaf.id === 'r1'));
+  });
+
+  it('shares the merge-down rule with the model', () => {
+    const project = projectWith(interleaved(), 'r1');
+    const model = modelOf(project);
+    for (const layer of project.canvas.document.layers) {
+      expect(mergeDownEligibility(project.canvas.document, layer.id)).toEqual(model.canMergeDown(layer.id));
+    }
   });
 });
 

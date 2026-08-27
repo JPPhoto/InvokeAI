@@ -135,7 +135,7 @@ describe('compositeDocument', () => {
     expect(drawImages[0]!.args[0]).toBe(caches.get('b')!.surface.canvas);
   });
 
-  it('isolates the named layer even when disabled and suppresses unrelated staged content', () => {
+  it('isolates the named layer and suppresses staged content and filter previews', () => {
     const backend = createTestStubRasterBackend();
     const caches = createLayerCacheStore(backend);
     const isolated = caches.getOrCreate('isolated', 10, 10);
@@ -144,17 +144,11 @@ describe('compositeDocument', () => {
     const staged = backend.createSurface(10, 10);
     const target = backend.createSurface(200, 200);
 
-    compositeDocument(
-      target,
-      makeDoc([rasterLayer('isolated', { isEnabled: false }), rasterLayer('other')]),
-      caches,
-      VIEW,
-      {
-        layerPreviews: new Map([['isolated', { rect: { height: 10, width: 10, x: 0, y: 0 }, surface: filterPreview }]]),
-        onlyLayerId: 'isolated',
-        stagedPreview: { rect: { height: 10, width: 10, x: 0, y: 0 }, surface: staged },
-      }
-    );
+    compositeDocument(target, makeDoc([rasterLayer('isolated'), rasterLayer('other')]), caches, VIEW, {
+      layerPreviews: new Map([['isolated', { rect: { height: 10, width: 10, x: 0, y: 0 }, surface: filterPreview }]]),
+      isolationLayerId: 'isolated',
+      stagedPreview: { rect: { height: 10, width: 10, x: 0, y: 0 }, surface: staged },
+    });
 
     const drawImages = target.callLog.filter((entry) => entry.op === 'drawImage');
     expect(drawImages).toHaveLength(1);
@@ -727,16 +721,27 @@ describe('compositeDocument — hidden layers', () => {
     expect(maskCache.surface.width).toBe(10);
   });
 
-  it('still draws a hidden layer while it is the isolated operation target', () => {
-    // An operation preview acts ON that layer; suppressing it would leave the
-    // user editing something they cannot see.
+  it('draws nothing for a disabled layer even while it is the isolated target', () => {
+    const backend = createTestStubRasterBackend();
+    const caches = createLayerCacheStore(backend);
+    caches.getOrCreate('isolated', 10, 10);
+    const target = backend.createSurface(200, 200);
+
+    compositeDocument(target, makeDoc([rasterLayer('isolated', { isEnabled: false })]), caches, VIEW, {
+      isolationLayerId: 'isolated',
+    });
+
+    expect(target.callLog.some((e) => e.op === 'drawImage')).toBe(false);
+  });
+
+  it('draws nothing for a hidden layer even while it is the isolated target', () => {
     const backend = createTestStubRasterBackend();
     const caches = createLayerCacheStore(backend);
     caches.getOrCreate('m', 10, 10);
     const target = backend.createSurface(200, 200);
 
-    compositeDocument(target, makeDoc([hiddenMask('m')]), caches, VIEW, { backend, onlyLayerId: 'm' });
+    compositeDocument(target, makeDoc([hiddenMask('m')]), caches, VIEW, { backend, isolationLayerId: 'm' });
 
-    expect(target.callLog.some((e) => e.op === 'drawImage')).toBe(true);
+    expect(target.callLog.some((e) => e.op === 'drawImage')).toBe(false);
   });
 });

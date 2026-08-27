@@ -21,6 +21,7 @@ const documentOf = (layerIds: readonly string[]): CanvasDocumentContractV2 =>
   ({
     layers: layerIds.map((id) => ({
       id,
+      type: 'raster',
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 10, y: 20 },
     })),
   }) as unknown as CanvasDocumentContractV2;
@@ -63,7 +64,7 @@ describe('floatingSelectionFrame', () => {
 
   it('reports nothing when the layer transform cannot be inverted', () => {
     const collapsed = {
-      layers: [{ id: 'layer-1', transform: { rotation: 0, scaleX: 0, scaleY: 0, x: 0, y: 0 } }],
+      layers: [{ id: 'layer-1', type: 'raster', transform: { rotation: 0, scaleX: 0, scaleY: 0, x: 0, y: 0 } }],
     } as unknown as CanvasDocumentContractV2;
     expect(floatingSelectionFrame(float(), collapsed)).toBeNull();
   });

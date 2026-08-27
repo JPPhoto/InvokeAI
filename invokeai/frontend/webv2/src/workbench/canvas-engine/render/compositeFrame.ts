@@ -70,8 +70,8 @@ export interface CompositeFrame {
  * the one evicted.
  *
  * SAM isolation makes this frame describe one layer instead of the document:
- * the composite is filtered down to the isolated layer and clipped to the
- * preview rect, and every other in-flight embellishment — filter previews, the
+ * the composite is narrowed to the isolated layer through `isolationLayerId`
+ * and clipped to the preview rect, and every other in-flight embellishment — filter previews, the
  * staged candidate, the floating selection, transform overrides — is suppressed,
  * because none of them describe what the user is being asked to judge.
  */
@@ -174,10 +174,7 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
       });
       ensureLayerCaches(doc, activeFrameLayerIds);
 
-      const compositeDoc = isolatedIds
-        ? { ...doc, layers: doc.layers.filter((layer) => isolatedIds.has(layer.id)) }
-        : doc;
-      compositeDocument(screen, compositeDoc, layerCache, view, {
+      compositeDocument(screen, doc, layerCache, view, {
         // Confines the clear, the checkerboard and every layer blit to the pixels
         // that actually changed; `null` repaints the whole viewport.
         damage: isolatedGuard ? null : damage,
@@ -202,6 +199,7 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
         // Crisp + cheap when zoomed in (nearest-neighbor up-scale), smooth when
         // shrinking (bilinear down-scale). See `shouldSmoothAtZoom`.
         imageSmoothing: shouldSmoothAtZoom(viewport.getZoom()),
+        isolationLayerId: isolatedGuard?.layerId ?? null,
         // Non-destructive control-filter previews, drawn in place of the layer's
         // committed pixels. Snapshotted only when one is actually active — this
         // runs every composite frame, so an unconditional copy would allocate a

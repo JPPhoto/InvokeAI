@@ -24,7 +24,7 @@ import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
 export type { CanvasStructuralEngine } from '@workbench/canvas-engine/api';
 
-import { getSourceContentRect, isMergeableRasterLayer } from '@workbench/canvas-engine/api';
+import { getSourceContentRect, isMergeableRasterLayer, mergeDownEligibility } from '@workbench/canvas-engine/api';
 import { CONTROL_ADAPTER_DEFAULTS } from '@workbench/controlAdapters';
 
 type LayerTransform = CanvasLayerBaseContract['transform'];
@@ -609,23 +609,9 @@ export const convertRasterControlLayer = (
   return null;
 };
 
-/**
- * Whether the layer at `index` can be merged down: an engine must be attached
- * (merge is pixel work), a layer must exist directly below it, and both that
- * layer and the one below must be mergeable raster layers.
- */
-export const canMergeLayerDown = (
-  layers: readonly CanvasLayerContract[],
-  index: number,
-  hasEngine: boolean
-): boolean => {
-  if (!hasEngine) {
-    return false;
-  }
-  const layer = layers[index];
-  const below = layers[index + 1];
-  return !!layer && !!below && isMergeableRasterLayer(layer) && isMergeableRasterLayer(below);
-};
+/** Whether the layers panel may offer merge-down for `layerId`; merging is pixel work, so it needs an engine. */
+export const canMergeLayerDown = (document: CanvasDocumentContractV2, layerId: string, hasEngine: boolean): boolean =>
+  hasEngine && mergeDownEligibility(document, layerId).status === 'eligible';
 
 /** Applies a guarded live edit without recording history until the interaction ends. */
 export const applyStructuralPreview = (engine: CanvasStructuralEngine | null, action: CanvasProjectMutation): boolean =>

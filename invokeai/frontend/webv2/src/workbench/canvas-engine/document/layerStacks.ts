@@ -15,8 +15,6 @@ export const LAYER_STACKS_TOP_FIRST: readonly LayerStackKind[] = [...LAYER_STACK
 
 export const layerStackOf = (layer: CanvasLayerContract): LayerStackKind => layer.type;
 
-export const layerStackRank = (layer: CanvasLayerContract): number => LAYER_STACK_ORDER.indexOf(layer.type);
-
 /** Reorders one stack; `orderedIds` must be exactly the stack's current members, top first. */
 export interface ReorderFlatStackCommand {
   readonly stack: LayerStackKind;

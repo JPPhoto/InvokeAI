@@ -588,7 +588,6 @@ export {
   LAYER_STACK_ORDER,
   LAYER_STACKS_TOP_FIRST,
   layerStackOf,
-  layerStackRank,
   moveLayersWithinStacks,
   reorderLayerStack,
   type LayerStackKind,
@@ -615,7 +614,11 @@ export {
   type PreparedFlatEdit,
   type PrepareFlatEditResult,
 } from './document-model/flatDocumentCommands';
-export { createFlatDocumentModel, type FlatCanvasDocumentModel } from './document-model/flatDocumentModel';
+export {
+  createFlatDocumentModel,
+  type FlatCanvasDocumentModel,
+  mergeDownEligibility,
+} from './document-model/flatDocumentModel';
 export { checkFlatEditPostconditions, type FlatEditPostcondition } from './document-model/postconditions';
 export {
   planScreenComposition,

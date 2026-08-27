@@ -19,10 +19,14 @@ import type {
   CanvasLayerContract,
 } from '@workbench/canvas-engine/contracts';
 import type { CanvasDiagnostics } from '@workbench/canvas-engine/diagnostics';
+import type { SemanticLeafV2 } from '@workbench/canvas-engine/document-model/semanticLeaf';
 import type { LayerDamage, Mat2d, Rect, Vec2 } from '@workbench/canvas-engine/types';
 
-import { isLayerContributing, isLayerHidden } from '@workbench/canvas-engine/document/layerEligibility';
-import { LAYER_STACK_ORDER, layerStackRank } from '@workbench/canvas-engine/document/layerStacks';
+import { compileDocumentLeaves, lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/flatDocumentModel';
+import {
+  ALL_OVERLAY_STACKS_SHOWN,
+  planScreenComposition,
+} from '@workbench/canvas-engine/document-model/screenComposition';
 import { fromTRS, multiply } from '@workbench/canvas-engine/math/mat2d';
 import { intersect, isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 
@@ -157,8 +161,11 @@ export interface CompositeOptions {
    * `null`/absent ⇒ no previews.
    */
   layerPreviews?: ReadonlyMap<string, { surface: RasterSurface; rect: Rect }> | null;
-  /** When set, transiently composites only this layer (even if disabled) and suppresses staged content. */
-  onlyLayerId?: string | null;
+  /**
+   * Draws only this leaf and suppresses staged content and filter previews. A leaf the document
+   * would not draw (disabled or hidden) stays undrawn even while isolated.
+   */
+  isolationLayerId?: string | null;
   /**
    * Returns a raster layer's ADJUSTED cache surface (brightness/contrast/
    * saturation/curves applied), or `null` when the layer has identity (or no)
@@ -190,6 +197,9 @@ type Ctx = RasterSurface['ctx'];
 export const blendToComposite = (mode: CanvasBlendMode): GlobalCompositeOperation =>
   mode === 'normal' ? 'source-over' : (mode as GlobalCompositeOperation);
 
+const isIsolated = (opts: CompositeOptions): boolean =>
+  opts.isolationLayerId !== null && opts.isolationLayerId !== undefined;
+
 const setTransformFromMat = (ctx: Ctx, m: Mat2d): void => {
   ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
 };
@@ -198,8 +208,12 @@ const identityTransform = (ctx: Ctx): void => {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 };
 
-const getEffectiveLayerMatrix = (layer: CanvasLayerContract, opts: CompositeOptions): Mat2d => {
-  const override = opts.transformOverrides?.get(layer.id);
+const getEffectiveLayerMatrix = (leaf: SemanticLeafV2, opts: CompositeOptions): Mat2d => {
+  const override = opts.transformOverrides?.get(leaf.id);
+  if (!override) {
+    return leaf.worldTransform;
+  }
+  const { layer } = leaf;
   return fromTRS(
     { x: override?.x ?? layer.transform.x, y: override?.y ?? layer.transform.y },
     override?.rotation ?? layer.transform.rotation,
@@ -209,13 +223,13 @@ const getEffectiveLayerMatrix = (layer: CanvasLayerContract, opts: CompositeOpti
 };
 
 const isDefinitelyOffscreen = (
-  layer: CanvasLayerContract,
+  leaf: SemanticLeafV2,
   entry: LayerCacheEntry,
   view: Mat2d,
   target: RasterSurface,
   opts: CompositeOptions
 ): boolean => {
-  const bounds = transformBounds(multiply(view, getEffectiveLayerMatrix(layer, opts)), entry.rect);
+  const bounds = transformBounds(multiply(view, getEffectiveLayerMatrix(leaf, opts)), entry.rect);
   if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) {
     return false;
   }
@@ -298,11 +312,11 @@ const resolveDamage = (
   }
   let accumulated: Rect | null = null;
   for (const region of damage) {
-    const layer = doc.layers.find((candidate) => candidate.id === region.layerId);
-    if (!layer) {
+    const leaf = lookupDocumentLeaf(doc, region.layerId);
+    if (!leaf) {
       return null;
     }
-    const bounds = transformBounds(multiply(view, getEffectiveLayerMatrix(layer, opts)), region.rect);
+    const bounds = transformBounds(multiply(view, getEffectiveLayerMatrix(leaf, opts)), region.rect);
     accumulated = accumulated ? union(accumulated, bounds) : bounds;
   }
   if (!accumulated) {
@@ -382,22 +396,23 @@ const drawMaskLayer = (
  */
 const drawCachedLayer = (
   ctx: Ctx,
-  layer: CanvasLayerContract,
+  leaf: SemanticLeafV2,
   entry: LayerCacheEntry,
   view: Mat2d,
   opts: CompositeOptions
 ): void => {
+  const { layer } = leaf;
   ctx.save();
   ctx.globalAlpha = layer.opacity;
   ctx.globalCompositeOperation = blendToComposite(layer.blendMode);
 
-  const layerMat = getEffectiveLayerMatrix(layer, opts);
+  const layerMat = getEffectiveLayerMatrix(leaf, opts);
   setTransformFromMat(ctx, multiply(view, layerMat));
 
   // The cache surface holds pixels for `entry.rect` in layer-local space; draw
   // it at that local origin (offset paint/mask layers place their content off-zero).
   const origin = { x: entry.rect.x, y: entry.rect.y };
-  const preview = opts.onlyLayerId ? null : (opts.layerPreviews?.get(layer.id) ?? null);
+  const preview = isIsolated(opts) ? null : (opts.layerPreviews?.get(layer.id) ?? null);
   if (preview) {
     // Non-destructive filter preview: draw the full backend output at its
     // layer-local rect (through the already-applied layer transform), including
@@ -461,15 +476,16 @@ const drawCachedLayer = (
  */
 const drawFloatingSelection = (
   ctx: Ctx,
-  layer: CanvasLayerContract,
+  leaf: SemanticLeafV2,
   view: Mat2d,
   opts: CompositeOptions,
   float: NonNullable<CompositeOptions['floatingSelection']>
 ): void => {
+  const { layer } = leaf;
   ctx.save();
   ctx.globalAlpha = layer.opacity;
   ctx.globalCompositeOperation = blendToComposite(layer.blendMode);
-  setTransformFromMat(ctx, multiply(multiply(view, getEffectiveLayerMatrix(layer, opts)), float.matrix));
+  setTransformFromMat(ctx, multiply(multiply(view, getEffectiveLayerMatrix(leaf, opts)), float.matrix));
   ctx.drawImage(float.surface.canvas, float.rect.x, float.rect.y);
   ctx.restore();
 };
@@ -527,48 +543,36 @@ export const compositeDocument = (
     ctx.clip();
   }
 
-  // Composite stack by stack in `LAYER_STACK_ORDER`; within a stack the flat
-  // array order holds (index 0 is top-most, so iterate in reverse). The
-  // `stagedPreview` lands on top of every stack.
-  const drawStack = (rank: number): void => {
-    for (let i = doc.layers.length - 1; i >= 0; i--) {
-      const layer = doc.layers[i];
-      if (
-        !layer ||
-        // Disabled OR hidden: neither draws. `onlyLayerId` (an isolated
-        // operation preview) overrides both — the user is acting on that layer.
-        ((!isLayerContributing(layer) || isLayerHidden(layer)) && layer.id !== opts.onlyLayerId) ||
-        layer.id === opts.skipLayerId ||
-        (opts.onlyLayerId && layer.id !== opts.onlyLayerId) ||
-        layerStackRank(layer) !== rank
-      ) {
-        continue;
-      }
-      opts.diagnostics?.increment('layersConsidered');
-      const float = opts.floatingSelection?.layerId === layer.id ? opts.floatingSelection : null;
-      const entry = caches.get(layer.id);
-      // Skip layers with no cache or an empty content rect (a brand-new / cleared
-      // paint / mask layer holds no pixels — nothing to draw). A float still draws:
-      // its pixels are detached, so an emptied source layer must not hide them.
-      if (!entry || entry.rect.width <= 0 || entry.rect.height <= 0) {
-        if (float) {
-          drawFloatingSelection(ctx, layer, view, opts, float);
-        }
-        continue;
-      }
-      if (isDefinitelyOffscreen(layer, entry, view, target, opts) && !float) {
-        opts.diagnostics?.increment('layersCulled');
-        continue;
-      }
-      drawCachedLayer(ctx, layer, entry, view, opts);
-      if (float) {
-        drawFloatingSelection(ctx, layer, view, opts, float);
-      }
-      opts.diagnostics?.increment('layersDrawn');
+  // The plan lists the leaves to draw bottom first; the `stagedPreview` lands on top of every stack.
+  const plan = planScreenComposition(compileDocumentLeaves(doc), {
+    isolationLayerId: opts.isolationLayerId ?? null,
+    showOverlayStacks: ALL_OVERLAY_STACKS_SHOWN,
+  });
+  for (const leaf of plan.leaves) {
+    if (leaf.id === opts.skipLayerId) {
+      continue;
     }
-  };
-  for (let rank = 0; rank < LAYER_STACK_ORDER.length; rank++) {
-    drawStack(rank);
+    opts.diagnostics?.increment('layersConsidered');
+    const float = opts.floatingSelection?.layerId === leaf.id ? opts.floatingSelection : null;
+    const entry = caches.get(leaf.id);
+    // Skip layers with no cache or an empty content rect (a brand-new / cleared
+    // paint / mask layer holds no pixels — nothing to draw). A float still draws:
+    // its pixels are detached, so an emptied source layer must not hide them.
+    if (!entry || entry.rect.width <= 0 || entry.rect.height <= 0) {
+      if (float) {
+        drawFloatingSelection(ctx, leaf, view, opts, float);
+      }
+      continue;
+    }
+    if (isDefinitelyOffscreen(leaf, entry, view, target, opts) && !float) {
+      opts.diagnostics?.increment('layersCulled');
+      continue;
+    }
+    drawCachedLayer(ctx, leaf, entry, view, opts);
+    if (float) {
+      drawFloatingSelection(ctx, leaf, view, opts, float);
+    }
+    opts.diagnostics?.increment('layersDrawn');
   }
 
   if (opts.clipRect) {
@@ -577,7 +581,7 @@ export const compositeDocument = (
 
   // Staged generation preview over its bbox (document space), with a subtle
   // dashed outline so the pending result reads distinctly from committed pixels.
-  const staged = opts.onlyLayerId ? null : opts.stagedPreview;
+  const staged = isIsolated(opts) ? null : opts.stagedPreview;
   if (staged) {
     ctx.save();
     setTransformFromMat(ctx, view);

@@ -20,7 +20,7 @@ import {
 import { useModelsSelector } from '@features/models';
 import { Field, Select, Slider } from '@platform/ui';
 import { getCanvasOperations, resolveDefaultFilterForModel } from '@workbench/canvas-operations/api';
-import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -69,7 +69,7 @@ interface ControlLayerSettingsProps {
  */
 export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: ControlLayerSettingsProps) => {
   const { t } = useTranslation();
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const models = useModelsSelector((snapshot) => snapshot.models);
   const mainModel = useSelectedMainModel();
   const base = mainModel?.base ?? null;
@@ -78,13 +78,16 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
 
   const commitAdapter = useCallback(
     (next: Partial<CanvasControlAdapterContract>, before: Partial<CanvasControlAdapterContract>, label: string) => {
-      commitStructural(
-        label,
-        { config: { adapter: next, layerType: 'control' }, id: layer.id, type: 'updateCanvasLayerConfig' },
-        { config: { adapter: before, layerType: 'control' }, id: layer.id, type: 'updateCanvasLayerConfig' }
+      commitPrepared(label, (model) =>
+        model.prepare({
+          before: { adapter: before, layerType: 'control' },
+          config: { adapter: next, layerType: 'control' },
+          id: layer.id,
+          type: 'patch-config',
+        })
       );
     },
-    [commitStructural, layer.id]
+    [commitPrepared, layer.id]
   );
 
   // Adapter kinds supported by the selected base. Z-Image Control is only shown
@@ -247,21 +250,16 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
 
   const handleTransparencyToggle = useCallback(
     ({ checked }: { checked: boolean }) => {
-      commitStructural(
-        t('widgets.layers.control.transparencyEffect'),
-        {
+      commitPrepared(t('widgets.layers.control.transparencyEffect'), (model) =>
+        model.prepare({
+          before: { layerType: 'control', withTransparencyEffect: layer.withTransparencyEffect },
           config: { layerType: 'control', withTransparencyEffect: checked },
           id: layer.id,
-          type: 'updateCanvasLayerConfig',
-        },
-        {
-          config: { layerType: 'control', withTransparencyEffect: !checked },
-          id: layer.id,
-          type: 'updateCanvasLayerConfig',
-        }
+          type: 'patch-config',
+        })
       );
     },
-    [commitStructural, layer.id, t]
+    [commitPrepared, layer.id, layer.withTransparencyEffect, t]
   );
 
   const controlModeCollection = useMemo(

@@ -1,12 +1,13 @@
 import type { SliderValueChangeDetails } from '@chakra-ui/react';
 import type { CanvasAdjustmentsContract, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/api';
+import type { CanvasPreparedEngine } from '@workbench/widgets/canvas/useStructuralCommit';
 import type { CanvasStructuralEngine } from '@workbench/widgets/layers/layerOps';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 
 import { chakra, createListCollection, HStack, Stack, Text } from '@chakra-ui/react';
 import { Button, Field, Select, Slider } from '@platform/ui';
 import { DEFAULT_ADJUSTMENTS, buildCurveLut } from '@workbench/canvas-engine/api';
-import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -68,7 +69,7 @@ const withCurve = (
 const formatSigned = (value: number): string => `${value > 0 ? '+' : ''}${Math.round(value * 100)}`;
 
 interface AdjustmentsPopoverProps {
-  engine: CanvasStructuralEngine | null;
+  engine: AdjustmentsEngine | null;
   layer: CanvasRasterLayerContractV2;
 }
 
@@ -77,38 +78,49 @@ export const AdjustmentsPopover = ({ engine, layer }: AdjustmentsPopoverProps) =
   return <AdjustmentsControls adjustments={adjustments} engine={engine} layer={layer} />;
 };
 
+export type AdjustmentsEngine = CanvasStructuralEngine & CanvasPreparedEngine;
+
 interface AdjustmentsControlsProps {
   adjustments: CanvasAdjustmentsContract;
-  engine: CanvasStructuralEngine | null;
+  engine: AdjustmentsEngine | null;
   layer: CanvasRasterLayerContractV2;
 }
 
 type ScalarKey = 'brightness' | 'contrast' | 'saturation';
 
 const AdjustmentsControls = ({ adjustments, engine, layer }: AdjustmentsControlsProps) => {
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
+  // The layer's adjustments when the current gesture started; `undefined` when it had none, so undo
+  // restores "no adjustments" rather than the defaults the controls display.
+  const gestureBaselineRef = useRef<{ adjustments: CanvasAdjustmentsContract | undefined } | null>(null);
 
   const patchLive = useCallback(
     (next: CanvasAdjustmentsContract) => {
+      gestureBaselineRef.current ??= { adjustments: layer.adjustments };
       applyStructuralPreview(engine, {
         config: { adjustments: next, layerType: 'raster' },
         id: layer.id,
         type: 'updateCanvasLayerConfig',
       });
     },
-    [engine, layer.id]
+    [engine, layer]
   );
 
   const commit = useCallback(
     (label: string, next: CanvasAdjustmentsContract, before: CanvasAdjustmentsContract) => {
-      commitStructural(
-        label,
-        { config: { adjustments: next, layerType: 'raster' }, id: layer.id, type: 'updateCanvasLayerConfig' },
-        { config: { adjustments: before, layerType: 'raster' }, id: layer.id, type: 'updateCanvasLayerConfig' }
+      const baseline = gestureBaselineRef.current ? gestureBaselineRef.current.adjustments : before;
+      gestureBaselineRef.current = null;
+      commitPrepared(label, (model) =>
+        model.prepare({
+          before: { adjustments: baseline, layerType: 'raster' },
+          config: { adjustments: next, layerType: 'raster' },
+          id: layer.id,
+          type: 'patch-config',
+        })
       );
     },
-    [commitStructural, layer.id]
+    [commitPrepared, layer.id]
   );
 
   const handleScalarLive = useCallback(
@@ -134,7 +146,13 @@ const AdjustmentsControls = ({ adjustments, engine, layer }: AdjustmentsControls
     [adjustments, patchLive]
   );
 
-  const handleCurveCancel = useCallback((before: CanvasAdjustmentsContract) => patchLive(before), [patchLive]);
+  const handleCurveCancel = useCallback(
+    (before: CanvasAdjustmentsContract) => {
+      patchLive(before);
+      gestureBaselineRef.current = null;
+    },
+    [patchLive]
+  );
 
   const handleCurveCommit = useCallback(
     (current: CanvasAdjustmentsContract, before: CanvasAdjustmentsContract) => {

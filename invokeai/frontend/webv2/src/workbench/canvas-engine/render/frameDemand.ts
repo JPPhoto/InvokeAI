@@ -1,7 +1,7 @@
 import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
 import type { Rect } from '@workbench/canvas-engine/types';
 
-import { isLayerContributing, isLayerHidden } from '@workbench/canvas-engine/document/layerEligibility';
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/flatDocumentModel';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { fromTRS } from '@workbench/canvas-engine/math/mat2d';
 import { intersect, isEmpty, transformBounds, union } from '@workbench/canvas-engine/math/rect';
@@ -26,12 +26,13 @@ export const calculateActiveFrameLayerIds = ({
   viewport,
 }: FrameDemandInput): Set<string> => {
   const active = new Set<string>();
-  for (const layer of document.layers) {
-    // A hidden layer draws nothing this frame, so it needs no cache allocated —
-    // but an isolated operation preview still targets it.
+  for (const leaf of compileDocumentLeaves(document)) {
+    const { layer } = leaf;
+    // A hidden layer draws nothing, so it needs no cache — unless an isolated
+    // operation reads its pixels, which still requires them rasterized.
     if (
-      !isLayerContributing(layer) ||
-      (isLayerHidden(layer) && !isolationLayerIds?.has(layer.id)) ||
+      !leaf.contributionEnabled ||
+      (leaf.documentHidden && !isolationLayerIds?.has(layer.id)) ||
       !renderableSourceOf(layer) ||
       (isolationLayerIds && !isolationLayerIds.has(layer.id))
     ) {
@@ -42,16 +43,14 @@ export const calculateActiveFrameLayerIds = ({
     const localRect =
       liveRect && !isEmpty(liveRect) ? (isEmpty(sourceRect) ? liveRect : union(sourceRect, liveRect)) : sourceRect;
     const override = transformOverrides?.get(layer.id);
-    const transform = override
-      ? {
-          rotation: override.rotation ?? layer.transform.rotation,
-          scaleX: override.scaleX ?? layer.transform.scaleX,
-          scaleY: override.scaleY ?? layer.transform.scaleY,
-          x: override.x,
-          y: override.y,
-        }
-      : layer.transform;
-    const matrix = fromTRS({ x: transform.x, y: transform.y }, transform.rotation, transform.scaleX, transform.scaleY);
+    const matrix = override
+      ? fromTRS(
+          { x: override.x, y: override.y },
+          override.rotation ?? layer.transform.rotation,
+          override.scaleX ?? layer.transform.scaleX,
+          override.scaleY ?? layer.transform.scaleY
+        )
+      : leaf.worldTransform;
     if (intersect(transformBounds(matrix, localRect), viewport)) {
       active.add(layer.id);
     }

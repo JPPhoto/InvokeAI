@@ -5,8 +5,8 @@ import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { lookupDocumentLayer, mergeDownEligibility } from '@workbench/canvas-engine/document-model/flatDocumentModel';
 import { insertLayersAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
-import { isMergeableRasterLayer } from '@workbench/canvas-engine/document/layerEligibility';
 import { haveSameStackOrders } from '@workbench/canvas-engine/document/layerStacks';
 import { mergeDownMatrix } from '@workbench/canvas-engine/document/mergeDown';
 import { canMergeSelectedRasters, getMergeVisibleRasterLayers } from '@workbench/canvas-engine/document/mergeVisible';
@@ -51,12 +51,12 @@ export class MergeLayerController {
     if (!document) {
       return false;
     }
-    const upperIndex = document.layers.findIndex((layer) => layer.id === upperLayerId);
-    const upper = document.layers[upperIndex];
-    const below = document.layers[upperIndex + 1];
-    if (upperIndex < 0 || !upper || !below || !isMergeableRasterLayer(upper) || !isMergeableRasterLayer(below)) {
+    const eligibility = mergeDownEligibility(document, upperLayerId);
+    if (eligibility.status !== 'eligible') {
       return false;
     }
+    const upper = lookupDocumentLayer(document, eligibility.upperId)!;
+    const below = lookupDocumentLayer(document, eligibility.lowerId)!;
     const upperCache = this.deps.layers.get(upper.id);
     const belowCache = this.deps.layers.get(below.id);
     const upperHasContent = this.deps.hasExportableContent(upper.id);

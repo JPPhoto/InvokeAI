@@ -16,6 +16,13 @@ export interface ScreenCompositionPlan {
   readonly isolationLayerId: string | null;
 }
 
+/** Every overlay stack visible: the view state of a screen with no stack switched off. */
+export const ALL_OVERLAY_STACKS_SHOWN: Readonly<Record<OverlayStackKind, boolean>> = {
+  control: true,
+  inpaint_mask: true,
+  regional_guidance: true,
+};
+
 const isStackShown = (stack: LayerStackKind, view: CanvasScreenViewState): boolean =>
   stack === 'raster' || view.showOverlayStacks[stack];
 

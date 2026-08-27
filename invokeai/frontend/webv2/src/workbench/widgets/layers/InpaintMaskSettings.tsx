@@ -4,7 +4,7 @@ import type { CanvasStructuralEngine } from '@workbench/widgets/layers/layerOps'
 
 import { createListCollection, HStack, Stack } from '@chakra-ui/react';
 import { Button, ColorPicker, Field, Select, Slider } from '@platform/ui';
-import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { type CanvasPreparedEngine, usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -22,11 +22,11 @@ const MASK_FILL_STYLES: readonly CanvasMaskFillContract['style'][] = [
 
 const formatUnitPercent = (value: number): string => `${Math.round(value * 100)}%`;
 
-const noiseConfig = (value: number) => ({ layerType: 'inpaint_mask', noiseLevel: value }) as const;
-const denoiseConfig = (value: number) => ({ layerType: 'inpaint_mask', denoiseLimit: value }) as const;
+const noiseConfig = (value: number | undefined) => ({ layerType: 'inpaint_mask', noiseLevel: value }) as const;
+const denoiseConfig = (value: number | undefined) => ({ layerType: 'inpaint_mask', denoiseLimit: value }) as const;
 
 interface InpaintMaskSettingsProps {
-  engine: CanvasStructuralEngine | null;
+  engine: (CanvasStructuralEngine & CanvasPreparedEngine) | null;
   layer: CanvasInpaintMaskLayerContract;
 }
 
@@ -36,15 +36,15 @@ interface InpaintMaskSettingsProps {
  * denoise-limit sliders (0–1), and an in-place mask invert. `noiseLevel` /
  * `denoiseLimit` are wired to the contract now (consumed by the NEXT task's graph
  * builder); they have no generation effect yet. Fill/noise/denoise edits go
- * through the canvas undo stack (`commitStructural` → `updateCanvasLayerConfig`);
+ * through the canvas undo stack as prepared `patch-config` edits;
  * invert is an engine pixel op (its own undoable image patch).
  */
 export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps) => {
   const { t } = useTranslation();
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const fillBeforeRef = useRef<CanvasMaskFillContract | null>(null);
-  const noiseBeforeRef = useRef<number | null>(null);
-  const denoiseBeforeRef = useRef<number | null>(null);
+  const noiseBeforeRef = useRef<{ value: number | undefined } | null>(null);
+  const denoiseBeforeRef = useRef<{ value: number | undefined } | null>(null);
 
   const fill = layer.mask.fill;
   const noiseLevel = layer.noiseLevel ?? 0;
@@ -63,13 +63,16 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
 
   const commitFill = useCallback(
     (next: CanvasMaskFillContract, before: CanvasMaskFillContract) => {
-      commitStructural(
-        t('widgets.layers.maskFill.fill'),
-        { config: { layerType: 'inpaint_mask', mask: { fill: next } }, id: layer.id, type: 'updateCanvasLayerConfig' },
-        { config: { layerType: 'inpaint_mask', mask: { fill: before } }, id: layer.id, type: 'updateCanvasLayerConfig' }
+      commitPrepared(t('widgets.layers.maskFill.fill'), (model) =>
+        model.prepare({
+          before: { layerType: 'inpaint_mask', mask: { fill: before } },
+          config: { layerType: 'inpaint_mask', mask: { fill: next } },
+          id: layer.id,
+          type: 'patch-config',
+        })
       );
     },
-    [commitStructural, layer.id, t]
+    [commitPrepared, layer.id, t]
   );
 
   const handleColorChange = useCallback(
@@ -124,28 +127,24 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
       ) {
         return;
       }
-      if (noiseBeforeRef.current === null) {
-        noiseBeforeRef.current = noiseLevel;
-      }
+      noiseBeforeRef.current ??= { value: layer.noiseLevel };
     },
-    [engine, layer.id, noiseLevel]
+    [engine, layer]
   );
 
   const handleNoiseChangeEnd = useCallback(
     ({ value }: SliderValueChangeDetails) => {
       const next = value[0];
-      const before = noiseBeforeRef.current ?? noiseLevel;
+      const before = noiseBeforeRef.current ? noiseBeforeRef.current.value : layer.noiseLevel;
       noiseBeforeRef.current = null;
       if (next === undefined || !Number.isFinite(next)) {
         return;
       }
-      commitStructural(
-        t('widgets.layers.maskFill.noiseLevel'),
-        { config: noiseConfig(next), id: layer.id, type: 'updateCanvasLayerConfig' },
-        { config: noiseConfig(before), id: layer.id, type: 'updateCanvasLayerConfig' }
+      commitPrepared(t('widgets.layers.maskFill.noiseLevel'), (model) =>
+        model.prepare({ before: noiseConfig(before), config: noiseConfig(next), id: layer.id, type: 'patch-config' })
       );
     },
-    [commitStructural, layer.id, noiseLevel, t]
+    [commitPrepared, layer.id, layer.noiseLevel, t]
   );
 
   const handleDenoiseChange = useCallback(
@@ -163,28 +162,29 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
       ) {
         return;
       }
-      if (denoiseBeforeRef.current === null) {
-        denoiseBeforeRef.current = denoiseLimit;
-      }
+      denoiseBeforeRef.current ??= { value: layer.denoiseLimit };
     },
-    [denoiseLimit, engine, layer.id]
+    [engine, layer]
   );
 
   const handleDenoiseChangeEnd = useCallback(
     ({ value }: SliderValueChangeDetails) => {
       const next = value[0];
-      const before = denoiseBeforeRef.current ?? denoiseLimit;
+      const before = denoiseBeforeRef.current ? denoiseBeforeRef.current.value : layer.denoiseLimit;
       denoiseBeforeRef.current = null;
       if (next === undefined || !Number.isFinite(next)) {
         return;
       }
-      commitStructural(
-        t('widgets.layers.maskFill.denoiseLimit'),
-        { config: denoiseConfig(next), id: layer.id, type: 'updateCanvasLayerConfig' },
-        { config: denoiseConfig(before), id: layer.id, type: 'updateCanvasLayerConfig' }
+      commitPrepared(t('widgets.layers.maskFill.denoiseLimit'), (model) =>
+        model.prepare({
+          before: denoiseConfig(before),
+          config: denoiseConfig(next),
+          id: layer.id,
+          type: 'patch-config',
+        })
       );
     },
-    [commitStructural, denoiseLimit, layer.id, t]
+    [commitPrepared, layer.denoiseLimit, layer.id, t]
   );
 
   const handleInvert = useCallback(() => {

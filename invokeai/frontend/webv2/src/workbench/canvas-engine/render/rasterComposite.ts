@@ -2,14 +2,14 @@ import type {
   CanvasAdjustmentsContract,
   CanvasBlendMode,
   CanvasDocumentContractV2,
-  CanvasLayerContract,
   CanvasLayerSourceContract,
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
+import type { SemanticLeafV2 } from '@workbench/canvas-engine/document-model/semanticLeaf';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Mat2d, Rect } from '@workbench/canvas-engine/types';
 
-import { isLayerContributing } from '@workbench/canvas-engine/document/layerEligibility';
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/flatDocumentModel';
 import { fromTRS, multiply } from '@workbench/canvas-engine/math/mat2d';
 import { roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 import { adjustmentsKey, applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
@@ -56,9 +56,10 @@ const defaultReadImageData = (surface: RasterSurface, rect: Rect): ImageData =>
 const defaultWriteImageData = (surface: RasterSurface, imageData: ImageData, x: number, y: number): void =>
   surface.ctx.putImageData(imageData, x, y);
 
-/** True when a layer is an enabled raster layer with rasterizable, non-empty pixels. */
-const isBaseRasterLayer = (layer: CanvasLayerContract): layer is CanvasRasterLayerContractV2 => {
-  if (!isLayerContributing(layer) || layer.type !== 'raster') {
+/** True when a leaf is a contributing raster layer with rasterizable, non-empty pixels. */
+const isBaseRasterLeaf = (leaf: SemanticLeafV2): leaf is SemanticLeafV2 & { layer: CanvasRasterLayerContractV2 } => {
+  const { layer } = leaf;
+  if (!leaf.contributionEnabled || layer.type !== 'raster') {
     return false;
   }
   if (layer.source.type === 'image') {
@@ -153,7 +154,9 @@ export const getCompositeLayerBounds = (layers: readonly CompositeLayerRef[]): R
 
 /** Plans the enabled base-raster layers over an exact document-space rectangle. */
 export const planBaseRasterComposite = (document: CanvasDocumentContractV2, rect: Rect): BaseRasterCompositeEntry => {
-  const layers = document.layers.filter(isBaseRasterLayer).map((layer) => toLayerRef(layer, document));
+  const layers = compileDocumentLeaves(document)
+    .filter(isBaseRasterLeaf)
+    .map((leaf) => toLayerRef(leaf.layer, document));
   return {
     bbox: rect,
     key: `base-raster|${rectKey(rect)}|${layers.map(layerKey).join('|')}`,

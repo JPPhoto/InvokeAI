@@ -7,7 +7,6 @@ import {
   haveSameStackOrders,
   LAYER_STACK_ORDER,
   LAYER_STACKS_TOP_FIRST,
-  layerStackRank,
   moveLayersWithinStacks,
   reorderLayerStack,
 } from './layerStacks';
@@ -23,7 +22,6 @@ describe('layer stacks', () => {
   it('declares one composite order and its panel mirror', () => {
     expect(LAYER_STACK_ORDER).toEqual(['raster', 'control', 'regional_guidance', 'inpaint_mask']);
     expect(LAYER_STACKS_TOP_FIRST).toEqual([...LAYER_STACK_ORDER].reverse());
-    expect(layers.map(layerStackRank)).toEqual([3, 0, 1, 0]);
   });
 
   it('reads a stack in flat order, empty stacks included', () => {

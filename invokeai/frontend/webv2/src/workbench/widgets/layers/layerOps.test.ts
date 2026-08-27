@@ -1,4 +1,8 @@
-import type { CanvasLayerContract, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
+import type {
+  CanvasDocumentContractV2,
+  CanvasLayerContract,
+  CanvasRasterLayerContractV2,
+} from '@workbench/canvas-engine/contracts';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -139,33 +143,41 @@ describe('isMergeableRasterLayer', () => {
 });
 
 describe('canMergeLayerDown', () => {
-  const layers = [paintLayer('top'), imageLayer('mid'), maskLayer('bottom')];
+  const documentOf = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
+    background: 'transparent',
+    bbox: { height: 100, width: 100, x: 0, y: 0 },
+    height: 100,
+    layers,
+    selectedLayerId: null,
+    version: 2,
+    width: 100,
+  });
+  const document = documentOf([paintLayer('top'), imageLayer('mid'), maskLayer('bottom')]);
 
   it('requires an engine (merge is pixel work)', () => {
-    expect(canMergeLayerDown(layers, 0, false)).toBe(false);
+    expect(canMergeLayerDown(document, 'top', false)).toBe(false);
   });
 
   it('allows merging when the layer and the one below are both mergeable', () => {
-    expect(canMergeLayerDown(layers, 0, true)).toBe(true);
+    expect(canMergeLayerDown(document, 'top', true)).toBe(true);
   });
 
   it('disallows merging into a non-mergeable below layer', () => {
-    // index 1 (mid, image) sits above the mask layer, which cannot be merged into.
-    expect(canMergeLayerDown(layers, 1, true)).toBe(false);
+    expect(canMergeLayerDown(document, 'mid', true)).toBe(false);
   });
 
   it('disallows merging the bottom-most layer (nothing below)', () => {
-    expect(canMergeLayerDown(layers, 2, true)).toBe(false);
+    expect(canMergeLayerDown(document, 'bottom', true)).toBe(false);
   });
 
   it('disallows merging when the upper layer is locked', () => {
-    const lockedTop = [paintLayer('top', { isLocked: true }), imageLayer('mid'), maskLayer('bottom')];
-    expect(canMergeLayerDown(lockedTop, 0, true)).toBe(false);
+    const lockedTop = documentOf([paintLayer('top', { isLocked: true }), imageLayer('mid'), maskLayer('bottom')]);
+    expect(canMergeLayerDown(lockedTop, 'top', true)).toBe(false);
   });
 
   it('disallows merging when the below layer is locked', () => {
-    const lockedMid = [paintLayer('top'), { ...imageLayer('mid'), isLocked: true }, maskLayer('bottom')];
-    expect(canMergeLayerDown(lockedMid, 0, true)).toBe(false);
+    const lockedMid = documentOf([paintLayer('top'), { ...imageLayer('mid'), isLocked: true }, maskLayer('bottom')]);
+    expect(canMergeLayerDown(lockedMid, 'top', true)).toBe(false);
   });
 });
 

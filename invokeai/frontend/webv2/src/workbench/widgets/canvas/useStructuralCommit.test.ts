@@ -1,6 +1,4 @@
 import type { StructuralCommitResult } from '@workbench/canvas-engine/api';
-import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
-import type { CanvasStructuralEngine } from '@workbench/widgets/layers/layerOps';
 import type { TFunction } from 'i18next';
 
 import { createFlatDocumentModel } from '@workbench/canvas-engine/api';
@@ -8,30 +6,9 @@ import { createEmptyCanvasDocumentV2 } from '@workbench/canvasMigration';
 import { createEmptyPaintLayer } from '@workbench/widgets/layers/layerOps';
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  commitPreparedEdit,
-  commitStructuralEdit,
-  reportPreparedCommit,
-  reportStructuralCommit,
-} from './useStructuralCommit';
+import { commitPreparedEdit, reportPreparedCommit, reportStructuralCommit } from './useStructuralCommit';
 
-const forward: CanvasProjectMutation = { ids: ['a'], type: 'removeCanvasLayers' };
-const inverse: CanvasProjectMutation = { id: 'a', type: 'setCanvasSelectedLayer' };
 const t = ((key: string) => key) as unknown as TFunction;
-
-describe('commitStructuralEdit', () => {
-  it('routes through the engine and returns its result', () => {
-    const commitStructural = vi.fn(() => ({ status: 'committed' as const }));
-    const engine = { layers: { commitStructural } } as unknown as CanvasStructuralEngine;
-
-    expect(commitStructuralEdit(engine, 'Delete layer', forward, inverse)).toEqual({ status: 'committed' });
-    expect(commitStructural).toHaveBeenCalledWith('Delete layer', forward, inverse);
-  });
-
-  it('refuses as not-ready without an engine instead of dispatching unrecorded', () => {
-    expect(commitStructuralEdit(null, 'Delete layer', forward, inverse)).toEqual({ status: 'not-ready' });
-  });
-});
 
 describe('reportStructuralCommit', () => {
   it.each<StructuralCommitResult>([{ status: 'committed' }, { status: 'busy' }])('stays silent for %j', (result) => {

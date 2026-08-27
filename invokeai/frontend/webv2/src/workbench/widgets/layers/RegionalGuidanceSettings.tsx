@@ -26,7 +26,7 @@ import {
 import { Button, ColorPicker, DropZone, Field, Select, Slider } from '@platform/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
-import { useStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { type CanvasPreparedEngine, usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { ImageIcon, PlusIcon, XIcon } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -81,7 +81,7 @@ const createReferenceImage = (base: string | null): RegionalGuidanceReferenceIma
   createRegionalReferenceImage(base);
 
 interface RegionalGuidanceSettingsProps {
-  engine: CanvasStructuralEngine | null;
+  engine: (CanvasStructuralEngine & CanvasPreparedEngine) | null;
   layer: CanvasRegionalGuidanceLayerContract;
 }
 
@@ -90,12 +90,12 @@ interface RegionalGuidanceSettingsProps {
  * positive + negative prompt, an Auto-Negative toggle, the mask fill colour/style
  * + invert, and a per-region reference-images section (add/remove/enable + model
  * + weight, mirroring the generate widget's IP-Adapter fields). Prompt/toggle/fill
- * edits go through the canvas undo stack (`commitStructural` →
- * `updateCanvasLayerConfig`); invert is an engine pixel op.
+ * edits go through the canvas undo stack as prepared `patch-config` edits;
+ * invert is an engine pixel op.
  */
 export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSettingsProps) => {
   const { t } = useTranslation();
-  const commitStructural = useStructuralCommit(engine);
+  const commitPrepared = usePreparedCommit(engine);
   const { notifications } = useWorkbenchCommands();
   const queryClient = useQueryClient();
   const models = useModelsSelector((snapshot) => snapshot.models);
@@ -116,13 +116,16 @@ export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSett
 
   const commitConfig = useCallback(
     (label: string, next: RegionalConfigPatch, before: RegionalConfigPatch) => {
-      commitStructural(
-        label,
-        { config: { layerType: 'regional_guidance', ...next }, id: layer.id, type: 'updateCanvasLayerConfig' },
-        { config: { layerType: 'regional_guidance', ...before }, id: layer.id, type: 'updateCanvasLayerConfig' }
+      commitPrepared(label, (model) =>
+        model.prepare({
+          before: { layerType: 'regional_guidance', ...before },
+          config: { layerType: 'regional_guidance', ...next },
+          id: layer.id,
+          type: 'patch-config',
+        })
       );
     },
-    [commitStructural, layer.id]
+    [commitPrepared, layer.id]
   );
 
   const handlePositiveBlur = useCallback(

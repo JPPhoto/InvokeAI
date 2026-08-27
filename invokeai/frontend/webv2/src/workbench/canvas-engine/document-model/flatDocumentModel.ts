@@ -78,6 +78,12 @@ export const flatDocumentModelCounters = { indexBuilds: 0, leafCompilations: 0, 
 
 const indexes = new WeakMap<CanvasDocumentContractV2, DocumentIndex>();
 
+/** The most recent compilation, reused when a caller has no previous document to offer. */
+let latestLeaves: {
+  readonly layers: CanvasDocumentContractV2['layers'];
+  readonly leaves: readonly SemanticLeafV2[];
+} | null = null;
+
 const buildIndex = (document: CanvasDocumentContractV2): DocumentIndex => {
   flatDocumentModelCounters.indexBuilds += 1;
   const byId = new Map<string, LayerIndexEntry>();
@@ -113,8 +119,11 @@ const compileLeaves = (
   if (index.leaves) {
     return index.leaves;
   }
-  const reusable = previousDocument ? indexOf(previousDocument).leaves : null;
-  if (reusable && previousDocument?.layers === document.layers) {
+  const previous = previousDocument
+    ? { layers: previousDocument.layers, leaves: indexOf(previousDocument).leaves }
+    : latestLeaves;
+  const reusable = previous?.leaves ?? null;
+  if (reusable && previous?.layers === document.layers) {
     index.leaves = reusable;
     return reusable;
   }
@@ -130,32 +139,92 @@ const compileLeaves = (
     return compileSemanticLeaf(layer, entry.stackIndex);
   });
   index.leaves = leaves;
+  latestLeaves = { layers: document.layers, leaves };
   return leaves;
+};
+
+const missing = (ids: readonly string[]): FlatDocumentRefusal => ({ ids, status: 'missing' });
+
+/** The layer with `id`, through the per-document index. */
+export const lookupDocumentLayer = (document: CanvasDocumentContractV2, id: string): CanvasLayerContract | null =>
+  indexOf(document).byId.get(id)?.layer ?? null;
+
+/** The document's semantic leaves in flat order; `previousDocument` lets unchanged leaves keep their identity. */
+export const compileDocumentLeaves = (
+  document: CanvasDocumentContractV2,
+  previousDocument: CanvasDocumentContractV2 | null = null
+): readonly SemanticLeafV2[] => compileLeaves(document, indexOf(document), previousDocument);
+
+/** The leaf for `id`, or `null` when the document has no such layer. */
+export const lookupDocumentLeaf = (document: CanvasDocumentContractV2, id: string): SemanticLeafV2 | null => {
+  const entry = indexOf(document).byId.get(id);
+  return entry ? (compileDocumentLeaves(document)[entry.index] ?? null) : null;
+};
+
+/** Merge-down joins a raster layer with the layer directly below it in flat order, mirroring the reducer. */
+export const mergeDownEligibility = (document: CanvasDocumentContractV2, upperId: string): MergeDownEligibility => {
+  const upper = indexOf(document).byId.get(upperId);
+  if (!upper) {
+    return missing([upperId]);
+  }
+  if (upper.stack !== 'raster') {
+    return { actual: upper.stack, expected: ['raster'], status: 'wrong-type' };
+  }
+  const lower = document.layers[upper.index + 1];
+  if (!lower) {
+    return { reason: 'no-layer-below', status: 'invalid-target', targetId: upperId };
+  }
+  const unmergeable = [upper.layer, lower].find((layer) => layer.type !== 'raster' || !isPixelBackedLayer(layer));
+  if (unmergeable) {
+    return { reason: 'not-mergeable', status: 'invalid-target', targetId: unmergeable.id };
+  }
+  const locked = [upper.layer, lower].filter((layer) => layer.isLocked).map((layer) => layer.id);
+  if (locked.length > 0) {
+    return { ids: locked, status: 'locked' };
+  }
+  const disabled = [upper.layer, lower].find((layer) => !isLayerContributing(layer));
+  if (disabled) {
+    return { reason: 'not-mergeable', status: 'invalid-target', targetId: disabled.id };
+  }
+  return { lowerId: lower.id, status: 'eligible', upperId };
 };
 
 const unique = <T>(values: readonly T[]): T[] => [...new Set(values)];
 
-/** Whether two patches name the same fields, including the same transform axes and nested config fields. */
-const sameKeys = (left: Record<string, unknown>, right: Record<string, unknown>): boolean => {
+/**
+ * Whether two patches name the same fields, descending only into the partial containers listed in
+ * `containers` as dotted paths; every other value is compared as a whole.
+ */
+const sameKeys = (
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+  containers: readonly string[],
+  path = ''
+): boolean => {
   const leftKeys = Object.keys(left).sort();
   const rightKeys = Object.keys(right).sort();
   return (
     leftKeys.length === rightKeys.length &&
     leftKeys.every((key, position) => key === rightKeys[position]) &&
     leftKeys.every((key) => {
+      const keyPath = path ? `${path}.${key}` : key;
+      if (!containers.includes(keyPath)) {
+        return true;
+      }
       const a = left[key];
       const b = right[key];
-      return typeof a === 'object' && a !== null && !Array.isArray(a) && typeof b === 'object' && b !== null
-        ? sameKeys(a as Record<string, unknown>, b as Record<string, unknown>)
-        : true;
+      return typeof a === 'object' && a !== null && typeof b === 'object' && b !== null
+        ? sameKeys(a as Record<string, unknown>, b as Record<string, unknown>, containers, keyPath)
+        : a === undefined && b === undefined;
     })
   );
 };
 
+const PATCH_CONTAINERS = ['transform'] as const;
+const CONFIG_CONTAINERS = ['adapter', 'mask', 'mask.fill'] as const;
+
 const stacksTopFirst = (stacks: readonly LayerStackKind[]): LayerStackKind[] =>
   LAYER_STACKS_TOP_FIRST.filter((stack) => stacks.includes(stack));
-
-const missing = (ids: readonly string[]): FlatDocumentRefusal => ({ ids, status: 'missing' });
 
 const stackOrders = (
   layers: readonly CanvasLayerContract[],
@@ -388,7 +457,7 @@ export const createFlatDocumentModel = (
     if (Object.keys(command.patch).length === 0) {
       return { operation: 'patch nothing', status: 'unsupported' };
     }
-    if (command.before && !sameKeys(command.before, command.patch)) {
+    if (command.before && !sameKeys(command.before, command.patch, PATCH_CONTAINERS)) {
       return { operation: 'patch baseline names other fields', status: 'unsupported' };
     }
     const inverse = command.before ?? patchInverse(entry.layer, command.patch);
@@ -440,7 +509,10 @@ export const createFlatDocumentModel = (
     if (Object.keys(command.config).length <= 1) {
       return { operation: 'patch nothing', status: 'unsupported' };
     }
-    if (command.before && !sameKeys(command.before, command.config)) {
+    if (command.before && command.before.layerType !== command.config.layerType) {
+      return { operation: 'config baseline names another layer type', status: 'unsupported' };
+    }
+    if (command.before && !sameKeys(command.before, command.config, CONFIG_CONTAINERS)) {
       return { operation: 'config baseline names other fields', status: 'unsupported' };
     }
     if (command.before ? sameValue(command.before, command.config) : isConfigApplied(entry.layer, command.config)) {
@@ -616,32 +688,7 @@ export const createFlatDocumentModel = (
   };
 
   return {
-    canMergeDown: (upperId) => {
-      const upper = index.byId.get(upperId);
-      if (!upper) {
-        return missing([upperId]);
-      }
-      if (upper.stack !== 'raster') {
-        return { actual: upper.stack, expected: ['raster'], status: 'wrong-type' };
-      }
-      const lower = layers[upper.index + 1];
-      if (!lower) {
-        return { reason: 'no-layer-below', status: 'invalid-target', targetId: upperId };
-      }
-      const unmergeable = [upper.layer, lower].find((layer) => layer.type !== 'raster' || !isPixelBackedLayer(layer));
-      if (unmergeable) {
-        return { reason: 'not-mergeable', status: 'invalid-target', targetId: unmergeable.id };
-      }
-      const locked = [upper.layer, lower].filter((layer) => layer.isLocked).map((layer) => layer.id);
-      if (locked.length > 0) {
-        return { ids: locked, status: 'locked' };
-      }
-      const disabled = [upper.layer, lower].find((layer) => !isLayerContributing(layer));
-      if (disabled) {
-        return { reason: 'not-mergeable', status: 'invalid-target', targetId: disabled.id };
-      }
-      return { lowerId: lower.id, status: 'eligible', upperId };
-    },
+    canMergeDown: (upperId) => mergeDownEligibility(document, upperId),
     compileLeaves: () => compileLeaves(document, index, previousDocument),
     document,
     getLayer: (id) => index.byId.get(id)?.layer ?? null,

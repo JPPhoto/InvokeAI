@@ -11,10 +11,10 @@ import {
   adjustmentsKey,
   getBaseRasterContentBounds,
   getCompositeLayerBounds,
-  isLayerContributing,
   planBaseRasterComposite,
 } from '@workbench/canvas-engine/api';
-import { isCompositableControlLayer, isCompositableRegionalGuidanceLayer } from '@workbench/canvasLayerContent';
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/flatDocumentModel';
+import { hasControlLayerContent, hasRegionalGuidanceMaskContent } from '@workbench/canvasLayerContent';
 
 import type {
   CompositeEntry,
@@ -63,9 +63,24 @@ const layerKey = (ref: CompositeLayerRef): string => {
 
 export { getBaseRasterContentBounds, getCompositeLayerBounds, planBaseRasterComposite };
 
-/** True when a layer is an enabled inpaint mask with persisted (non-empty) alpha. */
-const isActiveInpaintMaskLayer = (layer: CanvasLayerContract): layer is CanvasInpaintMaskLayerContract =>
-  isLayerContributing(layer) && layer.type === 'inpaint_mask' && layer.mask.bitmap !== null;
+/** The contributing layers, in flat order, narrowed to the ones that satisfy `hasContent`. */
+const contributingLayers = <T extends CanvasLayerContract>(
+  document: CanvasDocumentContractV2,
+  hasContent: (layer: CanvasLayerContract) => layer is T
+): T[] =>
+  compileDocumentLeaves(document)
+    .filter((leaf) => leaf.contributionEnabled)
+    .map((leaf) => leaf.layer)
+    .filter(hasContent);
+
+const isInpaintMaskWithContent = (layer: CanvasLayerContract): layer is CanvasInpaintMaskLayerContract =>
+  layer.type === 'inpaint_mask' && layer.mask.bitmap !== null;
+
+const isControlLayerWithContent = (layer: CanvasLayerContract): layer is CanvasControlLayerContract =>
+  layer.type === 'control' && hasControlLayerContent(layer);
+
+const isRegionalGuidanceWithMask = (layer: CanvasLayerContract): layer is CanvasRegionalGuidanceLayerContract =>
+  layer.type === 'regional_guidance' && hasRegionalGuidanceMaskContent(layer);
 
 /** The native content rect of a mask layer's persisted bitmap (layer-local, at its offset). */
 const maskContentRect = (
@@ -122,7 +137,7 @@ const deriveMaskKey = (kind: string, bbox: Rect, layers: CompositeMaskLayerRef[]
 export const planComposites = (document: CanvasDocumentContractV2, bbox: Rect): CompositePlan => {
   const entries: CompositeEntry[] = [planBaseRasterComposite(document, bbox)];
 
-  const maskLayers = document.layers.filter(isActiveInpaintMaskLayer);
+  const maskLayers = contributingLayers(document, isInpaintMaskWithContent);
 
   if (maskLayers.length > 0) {
     const denoiseRefs = maskLayers.map((layer) =>
@@ -211,7 +226,7 @@ export interface ControlCompositeEntry {
  * paint into the img2img/inpaint source.
  */
 export const planControlComposites = (document: CanvasDocumentContractV2, bbox: Rect): ControlCompositeEntry[] =>
-  document.layers.filter(isCompositableControlLayer).map((layer) => {
+  contributingLayers(document, isControlLayerWithContent).map((layer) => {
     const ref = toControlLayerRef(layer, document);
     return {
       entry: {
@@ -280,7 +295,7 @@ export const planRegionalMaskComposites = (
   document: CanvasDocumentContractV2,
   bbox: Rect
 ): RegionalMaskCompositeEntry[] =>
-  document.layers.filter(isCompositableRegionalGuidanceLayer).map((layer) => {
+  contributingLayers(document, isRegionalGuidanceWithMask).map((layer) => {
     const ref = toRegionalMaskRef(layer);
     return {
       entry: {

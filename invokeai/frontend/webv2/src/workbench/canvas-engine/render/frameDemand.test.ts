@@ -1,4 +1,9 @@
-import type { CanvasDocumentContractV2, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
+import type {
+  CanvasControlLayerContract,
+  CanvasDocumentContractV2,
+  CanvasLayerContract,
+  CanvasRasterLayerContractV2,
+} from '@workbench/canvas-engine/contracts';
 
 import { describe, expect, it } from 'vitest';
 
@@ -16,7 +21,22 @@ const layer = (id: string, x: number, y: number, width = 100, height = 100): Can
   type: 'raster',
 });
 
-const document = (layers: CanvasRasterLayerContractV2[]): CanvasDocumentContractV2 => ({
+const hiddenControl = (id: string): CanvasControlLayerContract => ({
+  adapter: { beginEndStepPct: [0, 1], controlMode: 'balanced', kind: 'controlnet', model: null, weight: 1 },
+  blendMode: 'normal',
+  id,
+  isEnabled: true,
+  isHidden: true,
+  isLocked: false,
+  name: id,
+  opacity: 1,
+  source: { image: { height: 100, imageName: `${id}.png`, width: 100 }, type: 'image' },
+  transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+  type: 'control',
+  withTransparencyEffect: false,
+});
+
+const document = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 1_000,
@@ -48,6 +68,23 @@ describe('calculateActiveFrameLayerIds', () => {
         viewport: { height: 100, width: 100, x: 0, y: 0 },
       })
     ).toEqual(new Set(['paint']));
+  });
+
+  it('demands a hidden layer only while an isolated operation reads it', () => {
+    const doc = document([hiddenControl('hidden'), layer('base', 0, 0)]);
+    const viewport = { height: 200, width: 200, x: 0, y: 0 };
+
+    expect(calculateActiveFrameLayerIds({ document: doc, viewport })).toEqual(new Set(['base']));
+    expect(calculateActiveFrameLayerIds({ document: doc, isolationLayerIds: new Set(['hidden']), viewport })).toEqual(
+      new Set(['hidden'])
+    );
+    expect(
+      calculateActiveFrameLayerIds({
+        document: document([{ ...hiddenControl('off'), isEnabled: false }]),
+        isolationLayerIds: new Set(['off']),
+        viewport,
+      })
+    ).toEqual(new Set());
   });
 
   it('limits demand to isolated layers', () => {

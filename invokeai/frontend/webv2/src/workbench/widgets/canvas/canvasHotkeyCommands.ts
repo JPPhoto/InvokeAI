@@ -250,7 +250,7 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     // or a mask directly below the selection. `engine.layers.mergeLayerDown` also
     // guards this itself (defense in depth for callers other than this hotkey),
     // but checking here keeps the two surfaces visibly in lockstep.
-    if (engine && selectedLayer && canMergeLayerDown(layers, selectedIndex, true)) {
+    if (engine && selectedLayer && canMergeLayerDown(document, selectedLayer.id, true)) {
       engine.layers.mergeLayerDown(selectedLayer.id);
     }
   }

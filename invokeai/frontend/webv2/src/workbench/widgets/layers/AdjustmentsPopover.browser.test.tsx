@@ -1,18 +1,19 @@
-import type { CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/api';
+import type { CanvasRasterLayerContractV2, PreparedFlatEdit } from '@workbench/canvas-engine/api';
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
-import type { CanvasStructuralEngine } from '@workbench/widgets/layers/layerOps';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { applyThemeToRoot } from '@theme/applyTheme';
 import { system } from '@theme/system';
+import { createFlatDocumentModel } from '@workbench/canvas-engine/api';
+import { createEmptyCanvasDocumentV2 } from '@workbench/canvasMigration';
 import { createInstance } from 'i18next';
 import { act, useMemo, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { AdjustmentsPopover } from './AdjustmentsPopover';
+import { type AdjustmentsEngine, AdjustmentsPopover } from './AdjustmentsPopover';
 import { CURVE_SIZE } from './curveEditorMath';
 
 const i18n = createInstance();
@@ -41,6 +42,8 @@ const createLayer = (): CanvasRasterLayerContractV2 =>
     type: 'raster',
   }) as unknown as CanvasRasterLayerContractV2;
 
+const commits: PreparedFlatEdit[] = [];
+
 const Harness = () => {
   const [layer, setLayer] = useState(createLayer);
 
@@ -56,14 +59,23 @@ const Harness = () => {
     };
 
     return {
+      document: {
+        model: () =>
+          createFlatDocumentModel(
+            { ...createEmptyCanvasDocumentV2(), layers: [layer], selectedLayerId: layer.id },
+            { editRevision: 0, projectId: 'test-project' }
+          ),
+      },
       layers: {
         applyStructuralPreview: apply,
-        commitStructural: (_label: string, forward: CanvasProjectMutation) => ({
-          status: apply(forward) ? ('committed' as const) : ('dispatch-rejected' as const),
-        }),
+        commitPrepared: (_label: string, edit: PreparedFlatEdit) => {
+          commits.push(edit);
+          return { status: apply(edit.forward) ? ('committed' as const) : ('dispatch-rejected' as const) };
+        },
       },
-    } as unknown as CanvasStructuralEngine;
-  }, []);
+    } as unknown as AdjustmentsEngine;
+    // Rebuilt per layer change so the stub's model reflects the previewed layer, as the engine's does.
+  }, [layer]);
 
   return <AdjustmentsPopover engine={engine} layer={layer} />;
 };
@@ -110,6 +122,7 @@ const pointer = (target: Element, type: string, x: number, y: number): void => {
 };
 
 afterEach(async () => {
+  commits.length = 0;
   await settle(() => root?.unmount());
   host?.remove();
   host = null;
@@ -131,6 +144,29 @@ describe('curves editor', () => {
 
     await settle(() => pointer(target, 'pointerup', start.x, start.y + 40));
     expect(Number(handles(svg).at(-1)!.getAttribute('cy'))).toBeCloseTo(during, 5);
+    expect(commits).toHaveLength(1);
+    const edit = commits[0]!;
+    expect(edit.inverse).toMatchObject({ id: 'layer-1', type: 'updateCanvasLayerConfig' });
+    expect((edit.inverse as { config: { adjustments?: unknown } }).config.adjustments).toEqual(
+      createLayer().adjustments
+    );
+    expect(
+      (edit.forward as { config: { adjustments: { curves: { r: unknown[] } } } }).config.adjustments.curves.r
+    ).not.toEqual(createLayer().adjustments?.curves?.r);
+  });
+
+  it('restores the pre-drag curve and records nothing when the drag is cancelled', async () => {
+    const svg = await render();
+    const target = handles(svg).at(-1)!;
+    const before = Number(target.getAttribute('cy'));
+    const start = centreOf(target);
+
+    await settle(() => pointer(target, 'pointerdown', start.x, start.y));
+    await settle(() => pointer(target, 'pointermove', start.x, start.y + 40));
+    await settle(() => pointer(target, 'pointercancel', start.x, start.y + 40));
+
+    expect(Number(handles(svg).at(-1)!.getAttribute('cy'))).toBeCloseTo(before, 5);
+    expect(commits).toHaveLength(0);
   });
 
   it('adds a point under the pointer rather than offset from it', async () => {
