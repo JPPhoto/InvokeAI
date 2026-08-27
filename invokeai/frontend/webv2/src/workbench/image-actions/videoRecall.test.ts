@@ -124,7 +124,6 @@ describe('getVideoSizeRecall', () => {
 });
 
 describe('deriveAcceleratorRecallState', () => {
-  const catalog = [WAN_T2V, LIGHTNING_HIGH, LIGHTNING_LOW];
   const settings = createDefaultVideoWidgetValues([WAN_T2V]);
   const pairEntries = [
     { isEnabled: true, model: LIGHTNING_HIGH as never, weight: 1 },
@@ -132,18 +131,18 @@ describe('deriveAcceleratorRecallState', () => {
   ];
 
   it('re-enables the fast path when the recalled LoRAs are exactly the accelerator set at its steps', () => {
-    expect(deriveAcceleratorRecallState(WAN_T2V, catalog, pairEntries, 4, settings)).toEqual({
+    expect(deriveAcceleratorRecallState(WAN_T2V, pairEntries, 4, settings)).toEqual({
       acceleratorEnabled: true,
       acceleratorLoraKeys: [LIGHTNING_HIGH.key, LIGHTNING_LOW.key],
     });
   });
 
   it('stays off at non-accelerator steps or with a partial pair', () => {
-    expect(deriveAcceleratorRecallState(WAN_T2V, catalog, pairEntries, 40, settings)).toEqual({
+    expect(deriveAcceleratorRecallState(WAN_T2V, pairEntries, 40, settings)).toEqual({
       acceleratorEnabled: false,
       acceleratorLoraKeys: [],
     });
-    expect(deriveAcceleratorRecallState(WAN_T2V, catalog, [pairEntries[0]!], 4, settings)).toEqual({
+    expect(deriveAcceleratorRecallState(WAN_T2V, [pairEntries[0]!], 4, settings)).toEqual({
       acceleratorEnabled: false,
       acceleratorLoraKeys: [],
     });

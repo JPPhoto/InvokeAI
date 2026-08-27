@@ -7,6 +7,7 @@ import type { VideoSettings } from './types';
 import {
   findMiniMaxH3TurboLora,
   findWanLightningLoraPair,
+  getAcceleratorLoraChangeResult,
   getDefaultVideoSettings,
   getAcceleratorToggleResult,
   getVideoComponentSectionPolicy,
@@ -353,6 +354,15 @@ describe('Lightning', () => {
 
 describe('MiniMax H3 Turbo', () => {
   const TURBO = { base: 'minimax-h3', key: 'turbo', name: 'MiniMax H3 Turbo LoRA', type: 'lora' as const };
+  // The second installed Turbo LoRA: same family, a different step schedule,
+  // and nothing but the org name in it to say so.
+  const LIGHTX2V = {
+    base: 'minimax-h3',
+    key: 'lightx2v',
+    name: 'MiniMax H3 LightX2V Turbo LoRA',
+    type: 'lora' as const,
+  };
+  const H3_CATALOG = [TURBO, LIGHTX2V];
 
   it('finds the installed Turbo LoRA by name, ignoring Wan Lightning models', () => {
     expect(findMiniMaxH3TurboLora([LIGHTNING_T2V_HIGH, TURBO])).toMatchObject({ key: 'turbo' });
@@ -395,6 +405,137 @@ describe('MiniMax H3 Turbo', () => {
     // Only the recorded Turbo entry is removed; "Turbo Rider" is the user's.
     expect(off.loras.map((entry) => entry.model.key)).toEqual(['rider']);
     expect(off.acceleratorLoraKeys).toEqual([]);
+  });
+
+  it('runs the LightX2V release at the 8 steps it was distilled for, not the repack default of 6', () => {
+    const model = h3Model();
+    const on = getAcceleratorToggleResult(settingsFor(model), model, [LIGHTX2V], true).settings;
+
+    expect(on).toMatchObject({ acceleratorEnabled: true, steps: 8 });
+    expect(on.acceleratorLoraKeys).toEqual([LIGHTX2V.key]);
+    // The help text quotes the running LoRA's count, not the family default.
+    expect(getVideoModelPolicy(model, on).ui.accelerator).toMatchObject({ label: 'Turbo', steps: 8 });
+  });
+
+  it('re-anchors the fast path on the other Turbo LoRA instead of tearing it down', () => {
+    const model = h3Model();
+    // Both are installed, so the toggle picks one; the user then swaps in the
+    // other by enabling it and switching the first off.
+    const on = getAcceleratorToggleResult(settingsFor(model), model, H3_CATALOG, true).settings;
+
+    expect(on.acceleratorLoraKeys).toEqual([LIGHTX2V.key]);
+
+    const swapped = getAcceleratorLoraChangeResult(on, model, H3_CATALOG, [
+      { isEnabled: false, model: LIGHTX2V as never, weight: 1 },
+      { isEnabled: true, model: TURBO as never, weight: 1 },
+    ]);
+
+    expect(swapped.outcome).toBe('switched');
+    expect(swapped.settings).toMatchObject({ acceleratorEnabled: true, cfgScale: 1, steps: 6 });
+    expect(swapped.settings.acceleratorLoraKeys).toEqual([TURBO.key]);
+    expect(swapped.acceleratorLoras?.map((entry) => entry.key)).toEqual([TURBO.key]);
+  });
+
+  it('adopts a Turbo LoRA the user enables on their own, and honors it on the next toggle', () => {
+    const model = h3Model();
+    const off = settingsFor(model);
+
+    expect(off).toMatchObject({ acceleratorEnabled: false, steps: 50 });
+
+    const adopted = getAcceleratorLoraChangeResult(off, model, H3_CATALOG, [
+      { isEnabled: true, model: TURBO as never, weight: 1 },
+    ]);
+
+    expect(adopted.outcome).toBe('switched');
+    expect(adopted.settings).toMatchObject({ acceleratorEnabled: true, steps: 6 });
+    expect(adopted.settings.acceleratorLoraKeys).toEqual([TURBO.key]);
+
+    // Toggling off drops the user's pick from the list, and toggling back on
+    // is free to take the catalog's again.
+    const cycled = getAcceleratorToggleResult(adopted.settings, model, H3_CATALOG, false).settings;
+
+    expect(cycled).toMatchObject({ acceleratorEnabled: false, steps: 50 });
+    expect(cycled.loras).toEqual([]);
+  });
+
+  it('honors a Turbo LoRA the user already has enabled when the toggle goes on', () => {
+    const model = h3Model();
+    const withTurbo = settingsFor(model, { loras: [{ isEnabled: true, model: TURBO as never, weight: 1 }] });
+    const on = getAcceleratorToggleResult(withTurbo, model, H3_CATALOG, true).settings;
+
+    expect(on.acceleratorLoraKeys).toEqual([TURBO.key]);
+    expect(on.steps).toBe(6);
+  });
+
+  it('never adopts a look-alike LoRA, and never adopts at all on a background sync', () => {
+    const model = h3Model();
+    const turboRider = { base: 'minimax-h3', key: 'rider', name: 'Turbo Rider', type: 'lora' as const };
+    const off = settingsFor(model);
+
+    expect(
+      getAcceleratorLoraChangeResult(off, model, H3_CATALOG, [
+        { isEnabled: true, model: turboRider as never, weight: 0.8 },
+      ]).outcome
+    ).toBe('unchanged');
+    expect(
+      getAcceleratorLoraChangeResult(off, model, H3_CATALOG, [{ isEnabled: true, model: TURBO as never, weight: 1 }], {
+        adopt: false,
+      }).outcome
+    ).toBe('unchanged');
+  });
+
+  it('keeps an oddly named Turbo LoRA running while it is the only one installed', () => {
+    const model = h3Model();
+    const turboRider = { base: 'minimax-h3', key: 'rider', name: 'Turbo Rider', type: 'lora' as const };
+    const on = getDefaultVideoSettings(model, [turboRider]);
+
+    expect(on.acceleratorLoraKeys).toEqual(['rider']);
+
+    // An unrelated list edit must not tear down a fast path that is still on.
+    const result = getAcceleratorLoraChangeResult(
+      on,
+      model,
+      [turboRider],
+      [...on.loras, { isEnabled: true, model: lora('Style LoRA') as never, weight: 0.5 }]
+    );
+
+    expect(result.outcome).toBe('unchanged');
+    expect(result.settings.acceleratorEnabled).toBe(true);
+  });
+
+  it('turns the fast path off with the model defaults when no Turbo LoRA is left enabled', () => {
+    const model = h3Model();
+    const on = getDefaultVideoSettings(model, [TURBO]);
+    const result = getAcceleratorLoraChangeResult(on, model, H3_CATALOG, []);
+
+    expect(result.outcome).toBe('disabled');
+    expect(result.settings).toMatchObject({ acceleratorEnabled: false, steps: 50 });
+  });
+
+  it('leaves user-tuned steps alone while its own LoRA is still enabled', () => {
+    const model = h3Model();
+    const on = { ...getDefaultVideoSettings(model, [TURBO]), steps: 9 };
+    const result = getAcceleratorLoraChangeResult(on, model, H3_CATALOG, [
+      ...on.loras,
+      { isEnabled: true, model: lora('Style LoRA') as never, weight: 0.5 },
+    ]);
+
+    expect(result.outcome).toBe('unchanged');
+    expect(result.settings).toMatchObject({ acceleratorEnabled: true, steps: 9 });
+  });
+
+  it('swaps a T2V Lightning pair for the I2V one when the main changes family', () => {
+    const catalog = [LIGHTNING_T2V_HIGH, LIGHTNING_T2V_LOW, LIGHTNING_I2V_HIGH, LIGHTNING_I2V_LOW];
+    const t2v = wanModel('t2v_a14b');
+    const on = getAcceleratorToggleResult(settingsFor(t2v), t2v, catalog, true).settings;
+    const result = getVideoModelSelectionResult({
+      currentSettings: on,
+      model: wanModel('i2v_a14b'),
+      models: catalog,
+    });
+
+    expect(result.settings.acceleratorLoraKeys).toEqual([LIGHTNING_I2V_HIGH.key, LIGHTNING_I2V_LOW.key]);
+    expect(result.clearedLabels).toContain('Acceleration');
   });
 
   it('carries the fast-path intent across a family switch (Lightning → Turbo)', () => {
