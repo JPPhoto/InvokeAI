@@ -482,13 +482,18 @@ export const findWanLightningLoraPair = (
 
 const TURBO_PATTERN = /(?:^|[^a-z0-9])turbo(?:[^a-z0-9]|$)/i;
 const MINIMAX_H3_NAME_PATTERN = /(?:^|[^a-z0-9])(?:minimax|h3)(?:[^a-z0-9]|$)/i;
+// Ref2VA-trained distillation LoRAs (delimited "ref2v"/"ref2va" token). They must never
+// auto-apply to an FL2VA generation - the Ref2V Turbo repack is trained against the Ref2VA
+// transformer only.
+const MINIMAX_H3_REF2V_PATTERN = /(?:^|[^a-z0-9])ref2va?(?:[^a-z0-9]|$)/i;
 
 /**
  * The installed MiniMax H3 Turbo distillation LoRA, if any. Distillation LoRAs
  * carry no dedicated taxonomy, so this is a name heuristic: a delimited
  * "turbo" token, preferring names that also name the model family, with a
  * deterministic tie-break — a user's own "Turbo …" style LoRA loses to the
- * real repack whenever one is installed.
+ * real repack whenever one is installed. Ref2VA-trained turbo LoRAs are
+ * excluded: the FL2VA accelerator must not pick them.
  */
 export const findMiniMaxH3TurboLora = (models: readonly ModelConfig[]): LoraModelConfig | null => {
   const score = (model: LoraModelConfig): number => (MINIMAX_H3_NAME_PATTERN.test(model.name) ? 0 : 1);
@@ -497,7 +502,10 @@ export const findMiniMaxH3TurboLora = (models: readonly ModelConfig[]): LoraMode
     models
       .filter(
         (model): model is ModelConfig & LoraModelConfig =>
-          isLoraModelConfig(model) && model.base === 'minimax-h3' && TURBO_PATTERN.test(model.name)
+          isLoraModelConfig(model) &&
+          model.base === 'minimax-h3' &&
+          TURBO_PATTERN.test(model.name) &&
+          !MINIMAX_H3_REF2V_PATTERN.test(model.name)
       )
       .sort((a, b) => score(a) - score(b) || a.name.localeCompare(b.name))[0] ?? null
   );
@@ -783,8 +791,13 @@ export const getVideoComponentSectionPolicy = (
 
   return createComponentPolicy(componentsOnly, [
     {
+      // TODO(ref2va): remove the variant exclusion when the reference generation mode lands —
+      // until then a Ref2VA transformer must not silently generate under FL2VA's config.
       filter: (candidate) =>
-        candidate.type === 'main' && candidate.base === 'minimax-h3' && candidate.format === 'checkpoint',
+        candidate.type === 'main' &&
+        candidate.base === 'minimax-h3' &&
+        candidate.format === 'checkpoint' &&
+        candidate.variant !== 'ref2va',
       helpText: componentsOnly
         ? 'Required: this main model is a components-only install, so the transformer must come from a single-file checkpoint (e.g. pruned int8).'
         : 'Optional single-file transformer (e.g. pruned int8) used in place of the main model’s transformer.',
