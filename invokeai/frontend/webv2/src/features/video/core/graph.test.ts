@@ -451,3 +451,96 @@ describe('compileVideoGraph — MiniMax H3', () => {
     expect(() => compileVideoGraph(settingsFor(model, { numFrames: 100 }), model)).toThrow(/17·n \+ 5/);
   });
 });
+
+describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
+  const model = h3Model();
+  const ref2vaTransformer: MainModelConfig = {
+    base: 'minimax-h3',
+    format: 'checkpoint',
+    key: 'h3-ref2va-ckpt',
+    name: 'MiniMax H3 Ref2VA Transformer (int8, pruned)',
+    type: 'main',
+    variant: 'ref2va',
+  };
+  const referenceSettings = settingsFor(model, {
+    h3TransformerModel: ref2vaTransformer,
+    references: [
+      {
+        clip: { endFrame: 47, fps: 24, height: 480, numFrames: 48, startFrame: 2, video_name: 'ref.mp4', width: 832 },
+        conditioning: 'video_audio',
+        kind: 'video',
+      },
+      { detail: 'match', image: { height: 512, image_name: 'ref.png', width: 512 }, kind: 'image' },
+    ],
+  });
+
+  it('builds the reference graph: ordered chained collect into conditioning AND prompt, no frame conditioning', () => {
+    const { backendGraph } = compileVideoGraph(referenceSettings, model);
+
+    const video = nodeOfType(backendGraph, 'minimax_h3_video_reference');
+    const image = nodeOfType(backendGraph, 'minimax_h3_image_reference');
+
+    expect(video.id).toBe('reference_1');
+    expect(video.conditioning).toBe('video_audio');
+    expect(video.start_frame).toBe(2);
+    // The end bound sits in the estimate's tail window, so it compiles as a negative
+    // index the backend resolves against the clip's REAL frame count (the panel's count
+    // is an estimate that can overshoot on VFR uploads) - same rule as the extend path.
+    expect(video.end_frame).toBe(-1);
+    expect(image.id).toBe('reference_2');
+    expect(image.detail).toBe('match');
+
+    // Order is contractual: chained collectors, each appending its item after the
+    // inherited collection.
+    expect(hasEdge(backendGraph, 'reference_1', 'reference', 'reference_collect_1', 'item')).toBe(true);
+    expect(hasEdge(backendGraph, 'reference_collect_1', 'collection', 'reference_collect_2', 'collection')).toBe(true);
+    expect(hasEdge(backendGraph, 'reference_2', 'reference', 'reference_collect_2', 'item')).toBe(true);
+
+    // The final collection fans out to BOTH consumers.
+    expect(hasEdge(backendGraph, 'reference_collect_2', 'collection', 'reference_conditioning', 'references')).toBe(
+      true
+    );
+    expect(hasEdge(backendGraph, 'reference_collect_2', 'collection', 'pos_cond', 'references')).toBe(true);
+    expect(
+      hasEdge(
+        backendGraph,
+        'reference_conditioning',
+        'reference_conditioning',
+        'denoise_latents',
+        'reference_conditioning'
+      )
+    ).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'vae', 'reference_conditioning', 'vae')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'audio_vae', 'reference_conditioning', 'audio_vae')).toBe(true);
+
+    // num_frames rides on prompt + reference conditioning; frame conditioning is absent.
+    const posCond = nodeOfType(backendGraph, 'minimax_h3_text_encoder');
+    const referenceConditioning = nodeOfType(backendGraph, 'minimax_h3_reference_conditioning');
+
+    expect(posCond.num_frames).toBe(referenceSettings.numFrames);
+    expect(referenceConditioning.num_frames).toBe(referenceSettings.numFrames);
+    expect(nodesOfType(backendGraph, 'minimax_h3_frame_conditioning')).toHaveLength(0);
+
+    // Metadata records the mode and the ordered reference payload for recall.
+    const metadata = nodeOfType(backendGraph, 'core_metadata');
+
+    expect(metadata.generation_mode).toBe('minimax_h3_ref2v');
+    expect(metadata.minimax_h3_references).toEqual([
+      { conditioning: 'video_audio', end_frame: 47, kind: 'video', start_frame: 2, video_name: 'ref.mp4' },
+      { detail: 'match', image_name: 'ref.png', kind: 'image' },
+    ]);
+  });
+
+  it('refuses to compile references on an fl2va transformer', () => {
+    const fl2vaSettings = { ...referenceSettings, h3TransformerModel: null };
+
+    expect(() => compileVideoGraph(fl2vaSettings, model)).toThrow(/reference-conditioned/);
+  });
+
+  it('fl2va graphs are unchanged by the ref2va machinery', () => {
+    const { backendGraph } = compileVideoGraph(settingsFor(model), model);
+
+    expect(nodesOfType(backendGraph, 'minimax_h3_reference_conditioning')).toHaveLength(0);
+    expect(nodesOfType(backendGraph, 'collect')).toHaveLength(0);
+  });
+});

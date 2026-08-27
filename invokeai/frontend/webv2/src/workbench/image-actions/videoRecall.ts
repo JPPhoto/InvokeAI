@@ -14,6 +14,7 @@ import {
   getVideoAspectRatioOptions,
   getVideoDimensions,
   getVideoModelPolicy,
+  resolveEffectiveVideoModel,
   getVideoModelSelectionResult,
   getVideoTargetResolutionOptions,
   isSupportedVideoModel,
@@ -42,6 +43,7 @@ const VIDEO_GENERATION_MODE_IDS: ReadonlySet<string> = new Set([
   'minimax_h3_lf2v',
   'minimax_h3_flf2v',
   'minimax_h3_extend_video',
+  'minimax_h3_ref2v',
 ]);
 
 export type VideoRecallKind = 'all' | 'remix' | 'prompts' | 'seed';
@@ -279,6 +281,11 @@ export const deriveAcceleratorRecallState = (
   steps: number,
   settings: VideoWidgetValues
 ): Pick<VideoWidgetValues, 'acceleratorEnabled' | 'acceleratorLoraKeys'> => {
+  // The H3 task variant lives on the recalled transformer override, and the two tasks have
+  // DIFFERENT accelerators (fl2va Turbo at 6 steps, ref2v Turbo at 4) - so both the policy
+  // and the expected-LoRA lookup must go through the effective model. Callers must recall
+  // the component overrides into `settings` before deriving this.
+  const effectiveModel = resolveEffectiveVideoModel(model, settings);
   const accelerator = getVideoModelPolicy(model, settings).ui.accelerator;
 
   if (!accelerator || steps !== accelerator.steps) {
@@ -286,10 +293,12 @@ export const deriveAcceleratorRecallState = (
   }
 
   const expected =
-    model.base === 'minimax-h3'
-      ? [findMiniMaxH3TurboLora(models)].flatMap((lora) => (lora ? [lora.key] : []))
+    effectiveModel.base === 'minimax-h3'
+      ? [
+          findMiniMaxH3TurboLora(models, typeof effectiveModel.variant === 'string' ? effectiveModel.variant : 'fl2va'),
+        ].flatMap((lora) => (lora ? [lora.key] : []))
       : (() => {
-          const pair = findWanLightningLoraPair(models, model.variant);
+          const pair = findWanLightningLoraPair(models, effectiveModel.variant);
 
           return pair ? [pair.high.key, pair.low.key] : [];
         })();
@@ -342,7 +351,52 @@ export interface VideoRecallMediaNames {
    * without them a recalled extension would start from the wrong frame.
    */
   sourceVideoTrim: { endFrame: number; startFrame: number } | null;
+  /**
+   * The recorded Ref2VA references, in conditioning order. Names and options only — the
+   * executor re-resolves each against the gallery and drops missing media, preserving order.
+   */
+  references: VideoRecallReferenceName[];
 }
+
+export type VideoRecallReferenceName =
+  | { kind: 'image'; name: string; detail: string | null }
+  | { kind: 'video'; name: string; conditioning: string | null; trim: { endFrame: number; startFrame: number } | null };
+
+/** Tolerant parser for the `minimax_h3_references` metadata extra: skips malformed entries, keeps order. */
+const getRecallableReferences = (metadata: unknown): VideoRecallReferenceName[] => {
+  if (!isRecord(metadata) || !Array.isArray(metadata.minimax_h3_references)) {
+    return [];
+  }
+
+  // Cap at the request maximum (3 videos + 9 images): corrupt metadata must not drive an
+  // unbounded chain of gallery resolves in the executor.
+  return metadata.minimax_h3_references.slice(0, 12).flatMap((entry): VideoRecallReferenceName[] => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+    if (entry.kind === 'image' && typeof entry.image_name === 'string') {
+      return [
+        { detail: typeof entry.detail === 'string' ? entry.detail : null, kind: 'image', name: entry.image_name },
+      ];
+    }
+    if (entry.kind === 'video' && typeof entry.video_name === 'string') {
+      const startFrame =
+        typeof entry.start_frame === 'number' && Number.isInteger(entry.start_frame) ? entry.start_frame : null;
+      const endFrame =
+        typeof entry.end_frame === 'number' && Number.isInteger(entry.end_frame) ? entry.end_frame : null;
+
+      return [
+        {
+          conditioning: typeof entry.conditioning === 'string' ? entry.conditioning : null,
+          kind: 'video',
+          name: entry.video_name,
+          trim: startFrame !== null && endFrame !== null ? { endFrame, startFrame } : null,
+        },
+      ];
+    }
+    return [];
+  });
+};
 
 export const buildVideoRecallSettings = ({
   currentValues,
@@ -365,6 +419,7 @@ export const buildVideoRecallSettings = ({
   const mediaNames: VideoRecallMediaNames = {
     firstFrameName: null,
     lastFrameName: null,
+    references: [],
     sourceVideoName: null,
     sourceVideoTrim: null,
   };
@@ -481,27 +536,8 @@ export const buildVideoRecallSettings = ({
     fields.push('size');
   }
 
-  const recordedLoras = getMetadataLoras(metadata);
-  const resolvedLoras = recordedLoras.flatMap((entry) => {
-    const installed = models.find((candidate) => candidate.key === entry.key);
-
-    return installed && isLoraModelConfig(installed) && isLoraCompatibleWithModel(installed, model)
-      ? [{ isEnabled: true, model: installed as LoraModelConfig, weight: entry.weight }]
-      : [];
-  });
-
-  // The recall reproduces the recorded LoRA set: empty when the video ran
-  // without LoRAs, and also when the recorded ones are no longer installed —
-  // keeping the panel's current LoRAs would misrepresent the run either way.
-  if (resolvedLoras.length > 0 || values.loras.length > 0) {
-    values = {
-      ...values,
-      loras: resolvedLoras,
-      ...deriveAcceleratorRecallState(model, models, resolvedLoras, values.steps, values),
-    };
-    fields.push('loras');
-  }
-
+  // Components recall FIRST: the accelerator derivation below resolves the H3 task off the
+  // recalled transformer override, so `values` must already hold it.
   let componentsRecalled = false;
 
   for (const [metadataKey, valuesKey] of VIDEO_COMPONENT_METADATA_KEYS) {
@@ -523,20 +559,51 @@ export const buildVideoRecallSettings = ({
     fields.push('components');
   }
 
+  const recordedLoras = getMetadataLoras(metadata);
+  const resolvedLoras = recordedLoras.flatMap((entry) => {
+    const installed = models.find((candidate) => candidate.key === entry.key);
+
+    return installed && isLoraModelConfig(installed) && isLoraCompatibleWithModel(installed, model)
+      ? [{ isEnabled: true, model: installed as LoraModelConfig, weight: entry.weight }]
+      : [];
+  });
+
+  // The recall reproduces the recorded LoRA set: empty when the video ran
+  // without LoRAs, and also when the recorded ones are no longer installed —
+  // keeping the panel's current LoRAs would misrepresent the run either way.
+  if (resolvedLoras.length > 0 || values.loras.length > 0) {
+    values = {
+      ...values,
+      loras: resolvedLoras,
+      ...deriveAcceleratorRecallState(model, models, resolvedLoras, values.steps, values),
+    };
+    fields.push('loras');
+  }
+
   const media = getRecallableMediaNames(metadata);
+  const references = getRecallableReferences(metadata);
   // Judged against the ORIGINAL panel state: the model transition above may
   // already have cleared media the new family cannot consume, and that change
   // is still part of what this recall did.
-  const hadMedia = Boolean(currentValues.firstFrameImage || currentValues.lastFrameImage || currentValues.sourceVideo);
+  const hadMedia = Boolean(
+    currentValues.firstFrameImage ||
+    currentValues.lastFrameImage ||
+    currentValues.sourceVideo ||
+    currentValues.references.length > 0
+  );
 
-  // Media selects the graph family (t2v vs i2v vs extend), so an all/remix
+  // Media selects the graph family (t2v vs i2v vs extend vs reference), so an all/remix
   // recall must reproduce the recorded media EXACTLY: whatever the panel held
   // is cleared, and the executor re-hydrates the recorded names on top.
   if (hadMedia) {
-    values = { ...values, firstFrameImage: null, lastFrameImage: null, sourceVideo: null };
+    values = { ...values, firstFrameImage: null, lastFrameImage: null, references: [], sourceVideo: null };
   }
 
-  if (media.firstFrameName || media.lastFrameName || media.sourceVideoName) {
+  if (references.length > 0) {
+    // References replace every frame/source slot — the modes are mutually exclusive.
+    mediaNames.references = references;
+    fields.push('media');
+  } else if (media.firstFrameName || media.lastFrameName || media.sourceVideoName) {
     mediaNames.firstFrameName = media.firstFrameName;
     mediaNames.lastFrameName = media.lastFrameName;
     mediaNames.sourceVideoName = media.sourceVideoName;

@@ -33,6 +33,7 @@ const TRACKED_GALLERY_REMOVAL_FIELDS: ReadonlyArray<{ key: string; widgetId: Wid
   { key: 'inputImage', widgetId: 'upscale' },
   { key: 'firstFrameImage', widgetId: 'video' },
   { key: 'lastFrameImage', widgetId: 'video' },
+  { key: 'references', widgetId: 'video' },
   { key: 'sourceVideo', widgetId: 'video' },
 ];
 
@@ -47,7 +48,13 @@ const TRACKED_GALLERY_REMOVAL_FIELDS: ReadonlyArray<{ key: string; widgetId: Wid
  */
 const EXCLUSIVE_RIVAL_FIELDS: ReadonlyArray<{ key: string; rivalKey: string; widgetId: WidgetTypeId }> = [
   { key: 'firstFrameImage', rivalKey: 'sourceVideo', widgetId: 'video' },
+  { key: 'firstFrameImage', rivalKey: 'references', widgetId: 'video' },
+  { key: 'lastFrameImage', rivalKey: 'references', widgetId: 'video' },
   { key: 'sourceVideo', rivalKey: 'firstFrameImage', widgetId: 'video' },
+  { key: 'sourceVideo', rivalKey: 'references', widgetId: 'video' },
+  { key: 'references', rivalKey: 'firstFrameImage', widgetId: 'video' },
+  { key: 'references', rivalKey: 'lastFrameImage', widgetId: 'video' },
+  { key: 'references', rivalKey: 'sourceVideo', widgetId: 'video' },
 ];
 
 const trackedFieldKey = (projectId: string, widgetId: WidgetTypeId, key: string): string =>
@@ -153,13 +160,20 @@ export const selectRestorableGalleryWidgetPatches = (
     liveEntries,
     (candidate) => getProjectWidgetValues(projectsById.get(candidate.projectId)!, candidate.widgetId)[candidate.key]
   )) {
-    const rival = EXCLUSIVE_RIVAL_FIELDS.find((field) => field.widgetId === entry.widgetId && field.key === entry.key);
-    const isOccupied = (value: unknown): boolean => value !== null && value !== undefined;
+    const rivals = EXCLUSIVE_RIVAL_FIELDS.filter(
+      (field) => field.widgetId === entry.widgetId && field.key === entry.key
+    );
+    // An ordered-list slot (the video references) is "occupied" only when non-empty; a
+    // nullable slot when non-null.
+    const isOccupied = (value: unknown): boolean =>
+      Array.isArray(value) ? value.length > 0 : value !== null && value !== undefined;
 
     if (
-      rival &&
+      rivals.length > 0 &&
       isOccupied(entry.before) &&
-      isOccupied(getProjectWidgetValues(projectsById.get(entry.projectId)!, entry.widgetId)[rival.rivalKey])
+      rivals.some((rival) =>
+        isOccupied(getProjectWidgetValues(projectsById.get(entry.projectId)!, entry.widgetId)[rival.rivalKey])
+      )
     ) {
       continue;
     }

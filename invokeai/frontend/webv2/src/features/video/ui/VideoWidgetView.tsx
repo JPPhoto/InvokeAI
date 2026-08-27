@@ -1,6 +1,6 @@
 import type { ImageWithDims } from '@features/generation/contracts';
 import type { ModelConfig, ModelTaxonomyType } from '@features/models';
-import type { VideoSourceClip, VideoWidgetValues } from '@features/video/core/types';
+import type { VideoReferenceItem, VideoSourceClip, VideoWidgetValues } from '@features/video/core/types';
 
 import { createListCollection, HStack, NumberInput, Stack, Switch, Text } from '@chakra-ui/react';
 import { GenerationSettingsSection } from '@features/generation/components';
@@ -31,6 +31,7 @@ import { VideoComponentsSection } from './VideoComponentsSection';
 import { VideoConceptsSection } from './VideoConceptsSection';
 import { VideoPromptFields } from './VideoFormFields';
 import { VideoFrameImageField } from './VideoFrameImageField';
+import { VideoReferenceListField } from './VideoReferenceListField';
 import { VideoSourceClipField } from './VideoSourceClipField';
 import { useVideoUi, useVideoUiActions } from './VideoUiContext';
 
@@ -244,6 +245,15 @@ export const VideoWidgetView = () => {
     (sourceVideo: VideoSourceClip | null) => patch({ sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) }),
     [patch]
   );
+  const setReferences = useCallback(
+    (references: VideoReferenceItem[]) =>
+      patch({
+        references,
+        ...(references.length > 0 ? { firstFrameImage: null, lastFrameImage: null, sourceVideo: null } : {}),
+      }),
+    [patch]
+  );
+  const clearReferences = useCallback(() => patch({ references: [] }), [patch]);
   const setLoras = useCallback(
     (loras: VideoWidgetValues['loras']) => {
       // Removing or disabling one of the accelerator's LoRAs breaks the fast
@@ -304,6 +314,7 @@ export const VideoWidgetView = () => {
   const supportsFirstFrame = policy.modes.includes('first-frame') || policy.modes.includes('first-last');
   const supportsLastFrame = policy.modes.includes('first-last') || policy.modes.includes('last-frame');
   const supportsExtend = policy.modes.includes('extend');
+  const supportsReferences = policy.modes.includes('reference');
   const hasConditioningMedia = Boolean(values.firstFrameImage || values.lastFrameImage || values.sourceVideo);
   const derivedSourceText = dimensions ? t(`widgets.video.dimensionSource.${dimensions.source}`) : undefined;
   const derivedSizeText = dimensions
@@ -384,6 +395,22 @@ export const VideoWidgetView = () => {
       ) : null}
       {!supportsExtend && values.sourceVideo ? (
         <StaleMediaStub label={t('widgets.video.staleSourceVideo')} onClear={clearSourceVideo} />
+      ) : null}
+      {!supportsReferences && values.references.length > 0 ? (
+        <StaleMediaStub label={t('widgets.video.staleReferences')} onClear={clearReferences} />
+      ) : null}
+
+      {supportsReferences ? (
+        <GenerationSettingsSection label={t('widgets.video.references')} sectionId="video-references" defaultOpen>
+          <Stack gap="3" p="2">
+            <VideoReferenceListField
+              maxImages={policy.references?.maxImages ?? 9}
+              maxVideos={policy.references?.maxVideos ?? 3}
+              references={values.references}
+              onChange={setReferences}
+            />
+          </Stack>
+        </GenerationSettingsSection>
       ) : null}
 
       {supportsExtend ? (

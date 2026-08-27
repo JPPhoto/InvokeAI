@@ -109,6 +109,8 @@ interface VideoVariantConfig {
   negativePrompt: { visible: boolean; usage: VideoNegativePromptUsage };
   accelerator: VideoAcceleratorConfig | null;
   audioOutput: boolean;
+  /** Ref2VA reference caps; present only on variants whose modes include 'reference'. */
+  references?: { maxVideos: number; maxImages: number };
 }
 
 export const WAN_LIGHTNING_ACCELERATOR: VideoAcceleratorConfig = {
@@ -123,6 +125,14 @@ export const MINIMAX_H3_TURBO_ACCELERATOR: VideoAcceleratorConfig = {
   cfgScaleLowNoise: null,
   label: 'Turbo',
   steps: 6,
+};
+
+/** The Ref2VA-trained 4-step Turbo distillation (Comfy-Org's ref2v turbo repack). */
+export const MINIMAX_H3_REF2V_TURBO_ACCELERATOR: VideoAcceleratorConfig = {
+  cfgScale: 1,
+  cfgScaleLowNoise: null,
+  label: 'Turbo',
+  steps: 4,
 };
 
 const WAN_TARGET_RESOLUTION_OPTIONS: readonly VideoTargetResolutionOption[] = [
@@ -202,11 +212,22 @@ const MINIMAX_H3_FL2VA: VideoVariantConfig = {
   targetResolutions: MINIMAX_H3_TARGET_RESOLUTION_OPTIONS,
 };
 
+// The Ref2VA task transformer supports ONLY reference-conditioned generation (upstream
+// declares tasks: ["ref2va"]); everything else it inherits from the FL2VA panel policy.
+const MINIMAX_H3_REF2VA: VideoVariantConfig = {
+  ...MINIMAX_H3_FL2VA,
+  accelerator: MINIMAX_H3_REF2V_TURBO_ACCELERATOR,
+  modes: ['reference'],
+  references: { maxImages: 9, maxVideos: 3 },
+};
+
 export const VIDEO_GENERATION: Record<
   SupportedVideoBase,
   { variants: Record<string, VideoVariantConfig>; fallback: VideoVariantConfig }
 > = {
-  'minimax-h3': { fallback: MINIMAX_H3_FL2VA, variants: { fl2va: MINIMAX_H3_FL2VA } },
+  // ref2va is REGISTERED, never the fallback: an unknown future variant may fall back to
+  // fl2va's config, but a known ref2va transformer must not silently get fl2va's modes.
+  'minimax-h3': { fallback: MINIMAX_H3_FL2VA, variants: { fl2va: MINIMAX_H3_FL2VA, ref2va: MINIMAX_H3_REF2VA } },
   wan: { fallback: WAN_FALLBACK_VARIANT, variants: WAN_VARIANTS },
 };
 
@@ -235,6 +256,26 @@ export const isComponentsOnlyH3Main = (model: MainModelConfig): boolean =>
   // here but silently read `components_only` as absent — a false negative
   // that re-opens the fail-mid-generation hole this helper exists to close.
   model.base === 'minimax-h3' && model.format === 'diffusers' && model.components_only === true;
+
+/**
+ * The model whose variant decides the panel's policy. For MiniMax H3 the TASK lives on the
+ * transformer: selecting a single-file Ref2VA transformer switches the whole panel to the
+ * reference mode, whatever the (components) main model's variant says. Everything that maps a
+ * model to a VideoVariantConfig and has the settings at hand must resolve through this first.
+ */
+export const resolveEffectiveVideoModel = <T extends MainModelConfig | undefined>(
+  model: T,
+  settings: Pick<VideoSettings, 'h3TransformerModel'> | null | undefined
+): T => {
+  if (!model || model.base !== 'minimax-h3') {
+    return model;
+  }
+  const variant = settings?.h3TransformerModel?.variant;
+  if (typeof variant === 'string' && variant.length > 0 && variant !== model.variant) {
+    return { ...model, variant };
+  }
+  return model;
+};
 
 const getVideoVariantConfig = (
   model: Pick<MainModelConfig, 'base' | 'type' | 'variant' | 'format'> | undefined
@@ -401,6 +442,8 @@ export interface VideoModelPolicy {
     negativeUsedInGraph: boolean;
     negativeHelpText?: string;
   };
+  /** Ref2VA reference caps; null unless the effective variant has a reference mode. */
+  references: { maxVideos: number; maxImages: number } | null;
   ui: {
     cfgVisible: boolean;
     cfgLowNoiseVisible: boolean;
@@ -412,10 +455,13 @@ export interface VideoModelPolicy {
 }
 
 export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings: VideoSettings): VideoModelPolicy => {
-  const config = getVideoConfig(model);
+  // The transformer override can redefine the task (fl2va vs ref2va): the panel policy
+  // always comes from the effective model.
+  const effectiveModel = resolveEffectiveVideoModel(model, settings);
+  const config = getVideoConfig(effectiveModel);
 
   return {
-    aspectRatioOptions: getVideoAspectRatioOptions(model),
+    aspectRatioOptions: getVideoAspectRatioOptions(effectiveModel),
     defaults: config.defaults,
     fps: config.fps,
     frames: config.frames,
@@ -423,7 +469,8 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
     minSteps: config.minSteps,
     modes: config.modes,
     pixelMultiple: config.pixelMultiple,
-    prompt: getVideoPromptPolicy(model, settings),
+    prompt: getVideoPromptPolicy(effectiveModel, settings),
+    references: config.references ?? null,
     targetResolutions: config.targetResolutions,
     ui: {
       accelerator: config.accelerator,
@@ -495,8 +542,15 @@ const MINIMAX_H3_REF2V_PATTERN = /(?:^|[^a-z0-9])ref2va?(?:[^a-z0-9]|$)/i;
  * real repack whenever one is installed. Ref2VA-trained turbo LoRAs are
  * excluded: the FL2VA accelerator must not pick them.
  */
-export const findMiniMaxH3TurboLora = (models: readonly ModelConfig[]): LoraModelConfig | null => {
+export const findMiniMaxH3TurboLora = (
+  models: readonly ModelConfig[],
+  variant: string | null | undefined = 'fl2va'
+): LoraModelConfig | null => {
   const score = (model: LoraModelConfig): number => (MINIMAX_H3_NAME_PATTERN.test(model.name) ? 0 : 1);
+  // The task decides which distillation qualifies: ref2va REQUIRES the ref2v-token repack,
+  // every other variant excludes it — the two are trained against different transformers.
+  const matchesTask = (name: string): boolean =>
+    variant === 'ref2va' ? MINIMAX_H3_REF2V_PATTERN.test(name) : !MINIMAX_H3_REF2V_PATTERN.test(name);
 
   return (
     models
@@ -505,16 +559,16 @@ export const findMiniMaxH3TurboLora = (models: readonly ModelConfig[]): LoraMode
           isLoraModelConfig(model) &&
           model.base === 'minimax-h3' &&
           TURBO_PATTERN.test(model.name) &&
-          !MINIMAX_H3_REF2V_PATTERN.test(model.name)
+          matchesTask(model.name)
       )
       .sort((a, b) => score(a) - score(b) || a.name.localeCompare(b.name))[0] ?? null
   );
 };
 
-/** The accelerator LoRA entries for a model, or null when they are not installed. */
+/** The accelerator LoRA entries for the EFFECTIVE model, or null when they are not installed. */
 const findAcceleratorLoraEntries = (model: MainModelConfig, models: readonly ModelConfig[]): GenerateLora[] | null => {
   if (model.base === 'minimax-h3') {
-    const turbo = findMiniMaxH3TurboLora(models);
+    const turbo = findMiniMaxH3TurboLora(models, typeof model.variant === 'string' ? model.variant : 'fl2va');
 
     return turbo ? [{ isEnabled: true, model: turbo, weight: 1 }] : null;
   }
@@ -546,7 +600,8 @@ export const getAcceleratorToggleResult = (
   models: readonly ModelConfig[],
   enabled: boolean
 ): AcceleratorToggleResult => {
-  const config = getVideoConfig(model);
+  const effectiveModel = resolveEffectiveVideoModel(model, settings);
+  const config = getVideoConfig(effectiveModel);
   // Remove exactly the entries a previous toggle added — never a user's own
   // LoRA that happens to share a Lightning/Turbo-style name.
   const previousKeys = new Set(settings.acceleratorLoraKeys);
@@ -567,7 +622,7 @@ export const getAcceleratorToggleResult = (
     };
   }
 
-  const entries = findAcceleratorLoraEntries(model, models);
+  const entries = findAcceleratorLoraEntries(effectiveModel, models);
 
   if (!entries) {
     // Never leave the flag claiming a fast path that has no LoRAs behind it.
@@ -791,16 +846,14 @@ export const getVideoComponentSectionPolicy = (
 
   return createComponentPolicy(componentsOnly, [
     {
-      // TODO(ref2va): remove the variant exclusion when the reference generation mode lands —
-      // until then a Ref2VA transformer must not silently generate under FL2VA's config.
+      // Both task variants stay pickable: selecting a Ref2VA transformer is HOW the panel
+      // switches to reference-conditioned generation (the variant drives the effective
+      // policy — see resolveEffectiveVideoModel).
       filter: (candidate) =>
-        candidate.type === 'main' &&
-        candidate.base === 'minimax-h3' &&
-        candidate.format === 'checkpoint' &&
-        candidate.variant !== 'ref2va',
+        candidate.type === 'main' && candidate.base === 'minimax-h3' && candidate.format === 'checkpoint',
       helpText: componentsOnly
-        ? 'Required: this main model is a components-only install, so the transformer must come from a single-file checkpoint (e.g. pruned int8).'
-        : 'Optional single-file transformer (e.g. pruned int8) used in place of the main model’s transformer.',
+        ? 'Required: this main model is a components-only install, so the transformer must come from a single-file checkpoint (e.g. pruned int8). Its task variant (FL2VA vs Ref2VA) decides the panel’s generation mode.'
+        : 'Optional single-file transformer (e.g. pruned int8) used in place of the main model’s transformer. Its task variant (FL2VA vs Ref2VA) decides the panel’s generation mode.',
       key: 'h3TransformerModel',
       label: 'Transformer (single file)',
       missingMessage: `${model.name} is a components-only install — select a single-file Transformer.`,
@@ -928,6 +981,7 @@ export const getDefaultVideoSettings = (
     numFrames: config.frames.defaultValue,
     positivePrompt: '',
     positivePromptHeightPx: 96,
+    references: [],
     seed: Math.floor(Math.random() * SEED_MAX),
     shouldRandomizeSeed: true,
     sourceVideo: null,
@@ -982,6 +1036,12 @@ export const getVideoSettingsWithModelDefaults = (
     ].map((lora) => (isLoraCompatibleWithModel(lora.model, model) ? lora : { ...lora, isEnabled: false })),
     modelKey: model.key,
     numFrames: modelDefaults.numFrames,
+    // Resetting nulls the transformer override, and the override is what makes Ref2VA
+    // references consumable - keeping them would leave an orphaned list for the widget
+    // sync to sweep away silently. Clearing here keeps the reset's effects in one place.
+    // (Frame/source conditioning media stay untouched: they remain valid under the
+    // default FL2VA policy.)
+    references: modelDefaults.references,
     steps: modelDefaults.steps,
     targetResolution: modelDefaults.targetResolution,
     vae: modelDefaults.vae,
@@ -1016,7 +1076,12 @@ export const getVideoModelSelectionResult = ({
   model: MainModelConfig;
   models: readonly ModelConfig[];
 }): VideoModelSelectionResult => {
-  const config = getVideoConfig(model);
+  // The transformer override can redefine the task (fl2va vs ref2va), so the policy comes
+  // from the EFFECTIVE model. The override itself is reconciled at the end of this
+  // transition; if it is dropped there, the caller re-runs selection through
+  // getVideoTransformerSelectionResult on the next change anyway.
+  const effectiveModel = resolveEffectiveVideoModel(model, currentSettings);
+  const config = getVideoConfig(effectiveModel);
   // A record without a modelKey was healed from a store the panel never
   // seeded (a fresh project, or a pre-open "Send to Video" payload): its
   // sampling values are the model-agnostic healing fallbacks, not user
@@ -1029,6 +1094,11 @@ export const getVideoModelSelectionResult = ({
   const next: VideoSettings = { ...start, modelKey: model.key };
   const clearedLabels: string[] = [];
   const modes = config.modes;
+
+  if (next.references.length > 0 && !modes.includes('reference')) {
+    next.references = [];
+    addClearedLabel(clearedLabels, 'References');
+  }
 
   if (next.sourceVideo && !modes.includes('extend')) {
     next.sourceVideo = null;
@@ -1057,7 +1127,7 @@ export const getVideoModelSelectionResult = ({
     addClearedLabel(clearedLabels, 'Target resolution');
   }
 
-  const snappedFrames = snapVideoNumFrames(model, next.numFrames);
+  const snappedFrames = snapVideoNumFrames(effectiveModel, next.numFrames);
 
   if (snappedFrames !== next.numFrames) {
     next.numFrames = snappedFrames;
@@ -1081,7 +1151,7 @@ export const getVideoModelSelectionResult = ({
     // changes (Lightning ↔ Turbo) is the toggle re-applied, and when the new
     // model has no accelerator — or its LoRAs are not installed — the fast
     // path turns off, restoring the model's own steps/CFG.
-    const targetEntries = config.accelerator ? findAcceleratorLoraEntries(model, models) : null;
+    const targetEntries = config.accelerator ? findAcceleratorLoraEntries(effectiveModel, models) : null;
     const targetKeys = targetEntries?.map((entry) => entry.model.key).sort() ?? null;
     const currentKeys = [...next.acceleratorLoraKeys].sort();
     const sameAccelerator =
@@ -1135,6 +1205,29 @@ export const getVideoModelSelectionResult = ({
   return { clearedLabels, settings: next };
 };
 
+/**
+ * Canonical transition for the H3 transformer slot. The transformer decides the TASK
+ * (fl2va's five modes vs ref2va's reference mode), so changing it must run the same
+ * media/accelerator/frames reconciliation a model selection runs — with the new override
+ * already in place so the effective policy is the new task's.
+ */
+export const getVideoTransformerSelectionResult = ({
+  currentSettings,
+  model,
+  models,
+  transformer,
+}: {
+  currentSettings: VideoSettings;
+  model: MainModelConfig;
+  models: readonly ModelConfig[];
+  transformer: MainModelConfig | null;
+}): VideoModelSelectionResult =>
+  getVideoModelSelectionResult({
+    currentSettings: { ...currentSettings, h3TransformerModel: transformer },
+    model,
+    models,
+  });
+
 // ---------------------------------------------------------------------------
 // Validation
 
@@ -1143,6 +1236,7 @@ const VIDEO_MODE_DESCRIPTIONS: Record<VideoGenerationMode, string> = {
   'first-frame': 'starting from a first frame',
   'first-last': 'first-to-last-frame interpolation',
   'last-frame': 'ending on a last frame',
+  reference: 'reference-conditioned generation',
   txt2vid: 'text-to-video',
 };
 
@@ -1182,21 +1276,71 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
     return ['Video needs a supported video model before it can be invoked.'];
   }
 
-  const config = getVideoConfig(model);
+  const effectiveModel = resolveEffectiveVideoModel(model, settings);
+  const config = getVideoConfig(effectiveModel);
   const reasons: string[] = [];
   const mode = resolveVideoMode(settings);
+  const referenceOnly = config.modes.length === 1 && config.modes[0] === 'reference';
 
   if (settings.firstFrameImage && settings.sourceVideo) {
     reasons.push('A first frame and an initial video cannot be combined. Clear one of them.');
   }
 
+  if (settings.references.length > 0 && (settings.firstFrameImage || settings.lastFrameImage || settings.sourceVideo)) {
+    reasons.push('References cannot be combined with first/last frames or an initial video. Clear one side.');
+  }
+
   if (!config.modes.includes(mode)) {
-    reasons.push(`${model.name} does not support ${VIDEO_MODE_DESCRIPTIONS[mode]}.`);
+    if (referenceOnly && settings.references.length === 0) {
+      // The generic message would say "does not support text-to-video", which reads as a
+      // model defect; the actual fix is to add a reference.
+      reasons.push('Reference-to-video needs at least one image or video reference.');
+    } else {
+      reasons.push(`${model.name} does not support ${VIDEO_MODE_DESCRIPTIONS[mode]}.`);
+    }
   } else if (mode === 'extend' && settings.lastFrameImage && !config.modes.includes('first-last')) {
     reasons.push(`${model.name} cannot target a destination image while extending a video.`);
   }
 
-  if (!isValidVideoNumFrames(model, settings.numFrames)) {
+  if (mode === 'reference') {
+    const caps = config.references;
+    const videoCount = settings.references.filter((reference) => reference.kind === 'video').length;
+    const imageCount = settings.references.length - videoCount;
+    const allAudioOnly =
+      settings.references.length > 0 &&
+      settings.references.every((reference) => reference.kind === 'video' && reference.conditioning === 'audio');
+
+    if (allAudioOnly) {
+      reasons.push(
+        'At least one reference must contribute visuals — add an image, or set a video reference to include video.'
+      );
+    }
+    if (caps && videoCount > caps.maxVideos) {
+      reasons.push(`At most ${caps.maxVideos} video references are supported.`);
+    }
+    if (caps && imageCount > caps.maxImages) {
+      reasons.push(`At most ${caps.maxImages} image references are supported.`);
+    }
+    for (const reference of settings.references) {
+      if (reference.kind !== 'video') {
+        continue;
+      }
+      if (!Number.isInteger(reference.clip.startFrame) || !Number.isInteger(reference.clip.endFrame)) {
+        reasons.push('Reference video trim bounds must be whole frame numbers.');
+        break;
+      }
+      if (
+        reference.clip.startFrame < 0 ||
+        reference.clip.endFrame > reference.clip.numFrames - 1 ||
+        reference.clip.endFrame < reference.clip.startFrame
+      ) {
+        reasons.push('A reference video trim is outside its clip.');
+        break;
+      }
+    }
+  }
+
+  if (!isValidVideoNumFrames(effectiveModel, settings.numFrames)) {
     reasons.push(
       config.frames.kind === 'grid'
         ? `Frame count must be between ${config.frames.min} and ${config.frames.max} in steps of ${config.frames.step} (4·n + 1).`
@@ -1265,7 +1409,7 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
     }
   }
 
-  if (!getVideoDimensions(model, settings)) {
+  if (!getVideoDimensions(effectiveModel, settings)) {
     reasons.push(
       model.base === 'minimax-h3'
         ? 'MiniMax H3 supports aspect ratios from 1:4 to 4:1. The conditioning media is outside that range.'

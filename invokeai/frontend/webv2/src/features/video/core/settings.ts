@@ -18,6 +18,7 @@ import type {
   MiniMaxH3TargetResolution,
   VideoAspectRatioId,
   VideoGenerationMode,
+  VideoReferenceItem,
   VideoSettings,
   VideoSourceClip,
   VideoTargetResolution,
@@ -72,6 +73,60 @@ export const isVideoSourceClip = (value: unknown): value is VideoSourceClip =>
   hasFiniteNumber(value, 'startFrame') &&
   hasFiniteNumber(value, 'endFrame');
 
+/** Upstream Ref2VA's reference caps (mirrored by the backend's validate_reference_kinds). */
+export const VIDEO_REFERENCE_MAX_VIDEOS = 3;
+export const VIDEO_REFERENCE_MAX_IMAGES = 9;
+
+const VIDEO_REFERENCE_CONDITIONINGS = ['video_audio', 'video', 'audio'] as const;
+const VIDEO_REFERENCE_IMAGE_DETAILS = ['max', 'match'] as const;
+
+export const isVideoReferenceItem = (value: unknown): value is VideoReferenceItem => {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.kind === 'video') {
+    return (
+      isVideoSourceClip(value.clip) &&
+      VIDEO_REFERENCE_CONDITIONINGS.includes(value.conditioning as (typeof VIDEO_REFERENCE_CONDITIONINGS)[number])
+    );
+  }
+  if (value.kind === 'image') {
+    return (
+      isImageWithDims(value.image) &&
+      VIDEO_REFERENCE_IMAGE_DETAILS.includes(value.detail as (typeof VIDEO_REFERENCE_IMAGE_DETAILS)[number])
+    );
+  }
+  return false;
+};
+
+/** Drops invalid entries and enforces the per-kind caps, preserving order. */
+const sanitizeVideoReferences = (value: unknown): VideoReferenceItem[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const result: VideoReferenceItem[] = [];
+  let videos = 0;
+  let images = 0;
+  for (const entry of value) {
+    if (!isVideoReferenceItem(entry)) {
+      continue;
+    }
+    if (entry.kind === 'image') {
+      if (images >= VIDEO_REFERENCE_MAX_IMAGES) {
+        continue;
+      }
+      images += 1;
+    } else {
+      if (videos >= VIDEO_REFERENCE_MAX_VIDEOS) {
+        continue;
+      }
+      videos += 1;
+    }
+    result.push(entry);
+  }
+  return result;
+};
+
 const isVideoLora = (value: unknown): value is GenerateLora =>
   isRecord(value) &&
   isLoraModelConfig(value.model) &&
@@ -93,8 +148,12 @@ const areAcceleratorLorasPresent = (keys: readonly string[], loras: readonly Gen
  * the destination the extension should land on.
  */
 export const resolveVideoMode = (
-  settings: Pick<VideoSettings, 'firstFrameImage' | 'lastFrameImage' | 'sourceVideo'>
+  settings: Pick<VideoSettings, 'firstFrameImage' | 'lastFrameImage' | 'sourceVideo' | 'references'>
 ): VideoGenerationMode => {
+  if (settings.references.length > 0) {
+    return 'reference';
+  }
+
   if (settings.sourceVideo) {
     return 'extend';
   }
@@ -140,10 +199,16 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
     return null;
   }
 
-  const firstFrameImage = isImageWithDims(values.firstFrameImage) ? values.firstFrameImage : null;
+  // References are mutually exclusive with every frame/source-video slot; when a stale
+  // record somehow holds both, the references win deterministically (mirroring the
+  // first-frame-beats-source rule below).
+  const references = sanitizeVideoReferences(values.references);
+  const hasReferences = references.length > 0;
+  const firstFrameImage = !hasReferences && isImageWithDims(values.firstFrameImage) ? values.firstFrameImage : null;
   // A first frame and a source video are mutually exclusive; if a stale
   // project somehow holds both, the first frame wins deterministically.
-  const sourceVideo = !firstFrameImage && isVideoSourceClip(values.sourceVideo) ? values.sourceVideo : null;
+  const sourceVideo =
+    !firstFrameImage && !hasReferences && isVideoSourceClip(values.sourceVideo) ? values.sourceVideo : null;
   const loras = Array.isArray(values.loras) ? values.loras.filter(isVideoLora) : [];
   const acceleratorLoraKeys = getStringArray(values.acceleratorLoraKeys);
   // The flag means "the accelerator LoRAs the toggle added are active": if any
@@ -163,7 +228,7 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
     h3TransformerModel: isMainModelConfig(values.h3TransformerModel) ? values.h3TransformerModel : null,
     acceleratorEnabled,
     acceleratorLoraKeys: acceleratorEnabled ? acceleratorLoraKeys : [],
-    lastFrameImage: isImageWithDims(values.lastFrameImage) ? values.lastFrameImage : null,
+    lastFrameImage: !hasReferences && isImageWithDims(values.lastFrameImage) ? values.lastFrameImage : null,
     loras,
     modelKey: typeof values.modelKey === 'string' ? values.modelKey : '',
     negativePrompt: typeof values.negativePrompt === 'string' ? values.negativePrompt : '',
@@ -184,6 +249,7 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
       MAX_POSITIVE_PROMPT_HEIGHT_PX,
       DEFAULT_POSITIVE_PROMPT_HEIGHT_PX
     ),
+    references,
     seed: hasFiniteNumber(values, 'seed') ? (values.seed as number) : 0,
     shouldRandomizeSeed: typeof values.shouldRandomizeSeed === 'boolean' ? values.shouldRandomizeSeed : true,
     sourceVideo,
@@ -224,6 +290,12 @@ export const isVideoSettings = (values: unknown): values is VideoSettings => {
     (values.lastFrameImage === null || isImageWithDims(values.lastFrameImage)) &&
     (values.sourceVideo === null || isVideoSourceClip(values.sourceVideo)) &&
     !(values.firstFrameImage !== null && values.sourceVideo !== null) &&
+    Array.isArray(values.references) &&
+    values.references.every(isVideoReferenceItem) &&
+    !(
+      (values.references as unknown[]).length > 0 &&
+      (values.firstFrameImage !== null || values.lastFrameImage !== null || values.sourceVideo !== null)
+    ) &&
     Array.isArray(values.loras) &&
     values.loras.every(isVideoLora) &&
     (values.vae === null || isVaeModelConfig(values.vae)) &&
@@ -265,6 +337,11 @@ export const cloneVideoWidgetValues = (values: VideoWidgetValues): VideoWidgetVa
   lastFrameImage: values.lastFrameImage ? { ...values.lastFrameImage } : null,
   loras: values.loras.map((lora) => ({ ...lora, model: { ...lora.model } })),
   model: values.model ? { ...values.model } : null,
+  references: values.references.map((reference) =>
+    reference.kind === 'video'
+      ? { ...reference, clip: { ...reference.clip } }
+      : { ...reference, image: { ...reference.image } }
+  ),
   sourceVideo: values.sourceVideo ? { ...values.sourceVideo } : null,
   vae: values.vae ? { ...values.vae } : null,
   wanLowNoiseModel: values.wanLowNoiseModel ? { ...values.wanLowNoiseModel } : null,
@@ -321,12 +398,26 @@ export const clearDeletedVideoMedia = <T extends object>(
   removedImageNames: ReadonlySet<string>,
   removedVideoNames: ReadonlySet<string>
 ): T => {
-  const slots = values as { firstFrameImage?: unknown; lastFrameImage?: unknown; sourceVideo?: unknown };
+  const slots = values as {
+    firstFrameImage?: unknown;
+    lastFrameImage?: unknown;
+    sourceVideo?: unknown;
+    references?: unknown;
+  };
   const clearFirst = isImageWithDims(slots.firstFrameImage) && removedImageNames.has(slots.firstFrameImage.image_name);
   const clearLast = isImageWithDims(slots.lastFrameImage) && removedImageNames.has(slots.lastFrameImage.image_name);
   const clearSource = isVideoSourceClip(slots.sourceVideo) && removedVideoNames.has(slots.sourceVideo.video_name);
+  const references = Array.isArray(slots.references) ? slots.references : null;
+  const keptReferences = references?.filter(
+    (entry) =>
+      !isVideoReferenceItem(entry) ||
+      (entry.kind === 'video'
+        ? !removedVideoNames.has(entry.clip.video_name)
+        : !removedImageNames.has(entry.image.image_name))
+  );
+  const clearReferences = keptReferences !== undefined && keptReferences.length !== references?.length;
 
-  if (!clearFirst && !clearLast && !clearSource) {
+  if (!clearFirst && !clearLast && !clearSource && !clearReferences) {
     return values;
   }
 
@@ -337,5 +428,6 @@ export const clearDeletedVideoMedia = <T extends object>(
     ...(clearFirst ? { firstFrameImage: null } : {}),
     ...(clearLast ? { lastFrameImage: null } : {}),
     ...(clearSource ? { sourceVideo: null } : {}),
+    ...(clearReferences ? { references: keptReferences } : {}),
   } as T;
 };
