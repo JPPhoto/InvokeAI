@@ -137,6 +137,32 @@ describe('deriveAcceleratorRecallState', () => {
     });
   });
 
+  it('reads the step count off the recalled LoRAs, not off what the panel is running', () => {
+    // A panel already running an 8-step Turbo LoRA must not shift the step
+    // count a 6-step one is checked against.
+    const turbo = { base: 'minimax-h3', key: 'turbo', name: 'MiniMax H3 Turbo LoRA', type: 'lora' as const };
+    const lightx2v = {
+      base: 'minimax-h3',
+      key: 'lightx2v',
+      name: 'MiniMax H3 LightX2V Turbo LoRA',
+      type: 'lora' as const,
+    };
+    const model = h3Model();
+    const running = {
+      ...createDefaultVideoWidgetValues([model, lightx2v as never]),
+      acceleratorEnabled: true,
+      acceleratorLoraKeys: [lightx2v.key],
+      loras: [{ isEnabled: true, model: lightx2v as never, weight: 1 }],
+      steps: 8,
+    };
+    const recalled = [{ isEnabled: true, model: turbo as never, weight: 1 }];
+
+    expect(deriveAcceleratorRecallState(model, recalled, 6, running)).toEqual({
+      acceleratorEnabled: true,
+      acceleratorLoraKeys: [turbo.key],
+    });
+  });
+
   it('stays off at non-accelerator steps or with a partial pair', () => {
     expect(deriveAcceleratorRecallState(WAN_T2V, pairEntries, 40, settings)).toEqual({
       acceleratorEnabled: false,

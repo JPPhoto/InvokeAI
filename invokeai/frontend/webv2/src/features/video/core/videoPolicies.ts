@@ -421,21 +421,14 @@ export interface VideoModelPolicy {
     fpsVisible: boolean;
     /** The family's distillation fast path, or null when it has none. */
     accelerator: VideoAcceleratorConfig | null;
+    /** Steps for the fast path as currently configured, or null when it has none. */
+    acceleratorSteps: number | null;
     audioOutput: boolean;
   };
 }
 
 export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings: VideoSettings): VideoModelPolicy => {
   const config = getVideoConfig(model);
-  // The step count the help text quotes is the one the *running* accelerator
-  // LoRA was distilled for, not the family's reference count — with the
-  // 8-step LightX2V Turbo LoRA on, "6 steps" would be a lie.
-  const accelerator = config.accelerator
-    ? {
-        ...config.accelerator,
-        steps: getAcceleratorSteps(config.accelerator, getRecordedAcceleratorLoras(settings)),
-      }
-    : null;
 
   return {
     aspectRatioOptions: getVideoAspectRatioOptions(model),
@@ -449,7 +442,15 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
     prompt: getVideoPromptPolicy(model, settings),
     targetResolutions: config.targetResolutions,
     ui: {
-      accelerator,
+      accelerator: config.accelerator,
+      // The step count the help text quotes is the one the *running*
+      // accelerator LoRA was distilled for — with the 8-step LightX2V Turbo
+      // LoRA on, "6 steps" would be a lie. It is deliberately NOT folded into
+      // `accelerator`: that stays the family config, so callers can keep using
+      // it as the reference other counts are resolved against.
+      acceleratorSteps: config.accelerator
+        ? getAcceleratorSteps(config.accelerator, getRecordedAcceleratorLoras(settings))
+        : null,
       audioOutput: config.audioOutput,
       cfgLowNoiseVisible: config.cfg.lowNoiseVisible,
       cfgVisible: config.cfg.visible,
@@ -492,7 +493,8 @@ const LOW_NOISE_PATTERN = /(?:^|[^a-z0-9])low(?:[^a-z0-9]|$)/i;
  * `requireFamilyName` drops the fallback and demands the family token, so a
  * T2V pair is not read as a valid accelerator for an I2V main — the question
  * asked when the candidates are LoRAs already in the panel rather than the
- * catalog the toggle is free to pick from.
+ * catalog the toggle is free to pick from. With no family token to demand it
+ * matches nothing, leaving the answer to the catalog.
  */
 export const findWanLightningLoraPair = (
   models: readonly ModelConfig[],
@@ -511,9 +513,13 @@ export const findWanLightningLoraPair = (
   const familyToken = typeof mainVariant === 'string' ? mainVariant.split('_')[0] : undefined;
   const familyPattern = familyToken ? new RegExp(`(?:^|[^a-z0-9])${familyToken}(?:[^a-z0-9]|$)`, 'i') : null;
   const score = (model: LoraModelConfig): number => (familyPattern?.test(model.name) ? 0 : 1);
+  // With `requireFamilyName` and no family token to check against (an unprobed
+  // Wan release on the fallback variant) there is nothing to verify, so this
+  // fails closed rather than accepting everything — the caller falls back to
+  // the catalog pick, which is a real answer.
   const pick = (pattern: RegExp): LoraModelConfig | null =>
     candidates
-      .filter((model) => pattern.test(model.name) && (!requireFamilyName || !familyPattern || score(model) === 0))
+      .filter((model) => pattern.test(model.name) && (!requireFamilyName || score(model) === 0))
       .sort((a, b) => score(a) - score(b))[0] ?? null;
 
   const high = pick(HIGH_NOISE_PATTERN);
@@ -661,28 +667,30 @@ const isRecordedAcceleratorIntact = (
     return false;
   }
 
-  const live = getEnabledLoraModels(settings).filter((lora) => recorded.has(lora.key));
+  // Deduplicated by key: a list holding the same LoRA twice (a hand-edited
+  // project file, metadata whose graph listed one twice) must not make this
+  // permanently false — the identity guarantee in `syncVideoWidgetValuesWithModels`
+  // depends on an unchanged value reaching the 'unchanged' outcome.
+  const live = [
+    ...new Map(
+      getEnabledLoraModels(settings)
+        .filter((lora) => recorded.has(lora.key))
+        .map((lora) => [lora.key, lora])
+    ).values(),
+  ];
 
   return live.length === recorded.size && findAcceleratorAmong(model, live, models)?.length === recorded.size;
 };
 
 /**
  * The accelerator LoRA entries for a model, or null when they are not
- * installed. A complete set the user already has enabled in the Concepts list
- * wins over the catalog pick: with two Turbo LoRAs installed, the toggle must
- * honor the one the user chose rather than swapping in its own.
+ * installed. Deliberately catalog-only: the family name test is all that
+ * separates a distillation LoRA from any other, and "MiniMax H3 …" is how a
+ * user names their OWN H3 LoRA too, so letting the panel's list steer this
+ * would let the toggle arm itself on a LoRA with no distillation in it.
  */
-const findAcceleratorLoraEntries = (
-  model: MainModelConfig,
-  models: readonly ModelConfig[],
-  settings?: Pick<VideoSettings, 'loras'>
-): GenerateLora[] | null => {
-  const chosen =
-    (settings ? findAcceleratorLorasIn(model, getEnabledLoraModels(settings), { requireFamilyName: true }) : null) ??
-    findAcceleratorLorasIn(model, models);
-
-  return chosen?.map((lora) => ({ isEnabled: true, model: lora, weight: 1 })) ?? null;
-};
+const findAcceleratorLoraEntries = (model: MainModelConfig, models: readonly ModelConfig[]): GenerateLora[] | null =>
+  findAcceleratorLorasIn(model, models)?.map((lora) => ({ isEnabled: true, model: lora, weight: 1 })) ?? null;
 
 export interface AcceleratorToggleResult {
   settings: VideoSettings;
@@ -722,7 +730,7 @@ export const getAcceleratorToggleResult = (
     };
   }
 
-  const entries = findAcceleratorLoraEntries(model, models, { loras: withoutAccelerators });
+  const entries = findAcceleratorLoraEntries(model, models);
 
   if (!entries) {
     // Never leave the flag claiming a fast path that has no LoRAs behind it.
@@ -772,30 +780,32 @@ export interface AcceleratorLoraChangeResult {
  * sampling defaults: a silent 6-step run with no distillation LoRA behind it
  * just reads as a broken model.
  *
- * `adopt` lets an explicit user edit turn the fast path ON when the list gains
- * a complete accelerator set. Background catalog reconciliation passes false,
- * so a stored off-with-a-Turbo-LoRA state is never rewritten behind the user's
- * back — only repaired when it was on.
+ * Strictly a repair of a fast path that is already ON. An off accelerator is
+ * never armed by a list edit, however accelerator-shaped the LoRA that lands
+ * in it looks: the name heuristic cannot tell a distillation release from a
+ * user's own "… Turbo …" LoRA, and arming on it would silently drop a
+ * hand-tuned step count onto a LoRA that does not support it.
  */
 export const getAcceleratorLoraChangeResult = (
   settings: VideoSettings,
   model: MainModelConfig,
   models: readonly ModelConfig[],
-  loras: GenerateLora[],
-  { adopt = true }: { adopt?: boolean } = {}
+  loras: GenerateLora[]
 ): AcceleratorLoraChangeResult => {
   const config = getVideoConfig(model);
   const next: VideoSettings = { ...settings, loras };
+
+  // Nothing to repair, and nothing this function is allowed to start.
+  if (!settings.acceleratorEnabled) {
+    return { acceleratorLoras: null, outcome: 'unchanged', settings: next };
+  }
 
   // The recorded set is still running: leave everything the user tuned alone.
   if (isRecordedAcceleratorIntact(next, model, models, config)) {
     return { acceleratorLoras: null, outcome: 'unchanged', settings: next };
   }
 
-  const replacement =
-    config.accelerator && (settings.acceleratorEnabled || adopt)
-      ? findAcceleratorAmong(model, getEnabledLoraModels(next), models)
-      : null;
+  const replacement = config.accelerator ? findAcceleratorAmong(model, getEnabledLoraModels(next), models) : null;
 
   if (replacement && config.accelerator) {
     return {
@@ -810,10 +820,6 @@ export const getAcceleratorLoraChangeResult = (
         steps: getAcceleratorSteps(config.accelerator, replacement),
       },
     };
-  }
-
-  if (!settings.acceleratorEnabled) {
-    return { acceleratorLoras: null, outcome: 'unchanged', settings: next };
   }
 
   return {
@@ -1312,7 +1318,7 @@ export const getVideoModelSelectionResult = ({
     // new model has no accelerator, or its LoRAs are not installed, the fast
     // path turns off, restoring the model's own steps/CFG.
     if (!isRecordedAcceleratorIntact(next, model, models, config)) {
-      const targetEntries = config.accelerator ? findAcceleratorLoraEntries(model, models, next) : null;
+      const targetEntries = config.accelerator ? findAcceleratorLoraEntries(model, models) : null;
       const result = getAcceleratorToggleResult(next, model, models, targetEntries !== null);
 
       Object.assign(next, result.settings);

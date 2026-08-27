@@ -247,13 +247,13 @@ export const VideoWidgetView = () => {
   );
   const setLoras = useCallback(
     (loras: VideoWidgetValues['loras']) => {
-      // The fast path follows the list: a different complete accelerator set
-      // in it re-anchors the toggle onto that set at its own step count, and
-      // losing the last one turns the toggle off and restores the model's own
-      // sampling defaults (the accelerator wrote steps/CFG). Either way the
-      // user's list edit stands, and either way they are told — a silent
-      // 6-step run with no distillation LoRA behind it just looks like a
-      // broken model.
+      // While the fast path is on it follows the list: a different complete
+      // accelerator set in it re-anchors the toggle onto that set at its own
+      // step count, and losing the last one turns the toggle off and restores
+      // the model's own sampling defaults (the accelerator wrote steps/CFG).
+      // Either way the user's list edit stands, and either way they are told —
+      // a silent 6-step run with no distillation LoRA behind it just looks
+      // like a broken model. An off accelerator is never armed from here.
       if (!values.model) {
         patch({ loras });
         return;
@@ -502,7 +502,7 @@ export const VideoWidgetView = () => {
             <Field
               helpText={t('widgets.video.acceleratorHelp', {
                 label: policy.ui.accelerator.label,
-                steps: policy.ui.accelerator.steps,
+                steps: policy.ui.acceleratorSteps ?? policy.ui.accelerator.steps,
               })}
               label={t('widgets.video.accelerator', { label: policy.ui.accelerator.label })}
             >

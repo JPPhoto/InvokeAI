@@ -27,6 +27,9 @@ import {
  * validation the invoke route consumes, and seed resolution at submit.
  */
 
+// Shared empty array, so clearing already-clear keys keeps its identity.
+const EMPTY_ACCELERATOR_LORA_KEYS: string[] = [];
+
 export const createDefaultVideoWidgetValues = (models: readonly ModelConfig[] = []): VideoWidgetValues => {
   const model = (models.find((candidate) => isSupportedVideoModel(candidate)) as MainModelConfig | undefined) ?? null;
 
@@ -99,27 +102,41 @@ export const syncVideoWidgetValuesWithModels = (
   // back. Clearing only the flag would leave steps 4 / CFG 1 with no
   // distillation LoRA — a silent run that reads as a broken model.
   //
-  // `adopt: false`: a catalog sync runs on every render and on mount, so it
-  // may only repair a fast path the user turned on, never start one.
-  const acceleratorSync = model ? getAcceleratorLoraChangeResult(base, model, models, loras, { adopt: false }) : null;
-  const accelerator =
-    acceleratorSync && acceleratorSync.outcome !== 'unchanged'
-      ? {
-          acceleratorEnabled: acceleratorSync.settings.acceleratorEnabled,
-          acceleratorLoraKeys: acceleratorSync.settings.acceleratorLoraKeys,
-          cfgScale: acceleratorSync.settings.cfgScale,
-          cfgScaleLowNoise: acceleratorSync.settings.cfgScaleLowNoise,
-          steps: acceleratorSync.settings.steps,
-        }
-      : // Reuse the stored values whenever nothing changed — the identity
-        // guarantee below depends on `acceleratorLoraKeys` keeping its array.
-        {
-          acceleratorEnabled: base.acceleratorEnabled,
-          acceleratorLoraKeys: base.acceleratorLoraKeys,
-          cfgScale: base.cfgScale,
-          cfgScaleLowNoise: base.cfgScaleLowNoise,
-          steps: base.steps,
-        };
+  // The reconcile only ever repairs a fast path that is already on, so a sync
+  // running on every render cannot arm one behind the user's back.
+  //
+  // Reuse the stored values whenever nothing changed — the identity guarantee
+  // below depends on `acceleratorLoraKeys` keeping its array.
+  const unchangedAccelerator = {
+    acceleratorEnabled: base.acceleratorEnabled,
+    acceleratorLoraKeys: base.acceleratorLoraKeys,
+    cfgScale: base.cfgScale,
+    cfgScaleLowNoise: base.cfgScaleLowNoise,
+    steps: base.steps,
+  };
+  const acceleratorSync = model ? getAcceleratorLoraChangeResult(base, model, models, loras) : null;
+  let accelerator = unchangedAccelerator;
+
+  if (!model) {
+    // No video main at all: `loras` above is empty, so a surviving flag would
+    // name keys that are not in the list — a record `isVideoSettings` rejects
+    // on reload. There is no model to take sampling defaults from.
+    if (base.acceleratorEnabled || base.acceleratorLoraKeys.length > 0) {
+      accelerator = {
+        ...unchangedAccelerator,
+        acceleratorEnabled: false,
+        acceleratorLoraKeys: EMPTY_ACCELERATOR_LORA_KEYS,
+      };
+    }
+  } else if (acceleratorSync && acceleratorSync.outcome !== 'unchanged') {
+    accelerator = {
+      acceleratorEnabled: acceleratorSync.settings.acceleratorEnabled,
+      acceleratorLoraKeys: acceleratorSync.settings.acceleratorLoraKeys,
+      cfgScale: acceleratorSync.settings.cfgScale,
+      cfgScaleLowNoise: acceleratorSync.settings.cfgScaleLowNoise,
+      steps: acceleratorSync.settings.steps,
+    };
+  }
 
   const next: VideoWidgetValues = {
     ...base,
