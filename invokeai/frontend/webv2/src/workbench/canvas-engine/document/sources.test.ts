@@ -6,12 +6,11 @@ import type {
 
 import { describe, expect, it } from 'vitest';
 
+import { isHideableLayer, isLayerHidden } from './layerEligibility';
 import {
   getSourceBounds,
   getSourceContentRect,
   getSourcePixelSize,
-  isHideableLayer,
-  isLayerHidden,
   isMaskLayer,
   isRenderableLayer,
   maskAsPaintSource,

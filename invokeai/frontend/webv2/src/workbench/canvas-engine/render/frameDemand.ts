@@ -1,8 +1,8 @@
 import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
 import type { Rect } from '@workbench/canvas-engine/types';
 
-import { isLayerContributing } from '@workbench/canvas-engine/document/layerEligibility';
-import { getSourceContentRect, isLayerHidden, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
+import { isLayerContributing, isLayerHidden } from '@workbench/canvas-engine/document/layerEligibility';
+import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { fromTRS } from '@workbench/canvas-engine/math/mat2d';
 import { intersect, isEmpty, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 

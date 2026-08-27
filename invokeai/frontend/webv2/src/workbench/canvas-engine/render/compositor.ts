@@ -21,9 +21,8 @@ import type {
 import type { CanvasDiagnostics } from '@workbench/canvas-engine/diagnostics';
 import type { LayerDamage, Mat2d, Rect, Vec2 } from '@workbench/canvas-engine/types';
 
-import { isLayerContributing } from '@workbench/canvas-engine/document/layerEligibility';
+import { isLayerContributing, isLayerHidden } from '@workbench/canvas-engine/document/layerEligibility';
 import { LAYER_STACK_ORDER, layerStackRank } from '@workbench/canvas-engine/document/layerStacks';
-import { isLayerHidden } from '@workbench/canvas-engine/document/sources';
 import { fromTRS, multiply } from '@workbench/canvas-engine/math/mat2d';
 import { intersect, isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 

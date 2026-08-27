@@ -572,7 +572,6 @@ export { bboxEquals, constrainBboxToRatio, roundBbox } from './tools/bboxHitTest
 export { isEmpty, union } from './math/rect';
 export { ZOOM_PRESETS } from './math/snapping';
 export { isLayerPixelEditEligible } from './editing/controlPixelEdit';
-export { type HideableLayer, isHideableLayer, isLayerHidden } from './document/sources';
 export {
   getStackOrder,
   haveSameStackOrders,
@@ -587,8 +586,11 @@ export {
   type ReorderFlatStackCommand,
 } from './document/layerStacks';
 export {
+  type HideableLayer,
+  isHideableLayer,
   isLayerContributing,
   isLayerEditable,
+  isLayerHidden,
   isLayerPaintable,
   isMergeableRasterLayer,
   isLayerTransparencyLocked,
