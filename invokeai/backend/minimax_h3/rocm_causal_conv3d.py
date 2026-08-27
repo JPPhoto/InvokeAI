@@ -35,23 +35,29 @@ def _decomposed_conv3d(module: torch.nn.Conv3d, x: torch.Tensor) -> torch.Tensor
     b, c, t, h, w = x.shape
     k_t = module.weight.shape[2]
     t_out = t - k_t + 1
+    # Every tensor this decomposition hands to a kernel (or returns to the caller) MUST be
+    # standard-contiguous. The naive expressions produce three legal-but-exotic strided views
+    # that old MIOpen tolerated (it copied internally) but the MIOpen in torch's rocm7.2 wheels
+    # consumes directly and mis-addresses, corrupting rows whenever H != W (observed as
+    # horizontal line/tearing artifacts via the Wan VAE's identical decomposition; this encoder
+    # shares the bug for non-square canvases):
+    #   1. the tap input — at B=1 (every real encode) the reshape is satisfiable as a zero-copy
+    #      view whose channel stride (T*H*W) exceeds its batch stride (H*W);
+    #   2. the tap weight — weight[:, :, k] is a strided view over the temporal dim for every
+    #      kT > 1 conv;
+    #   3. the returned activation — reshape+transpose yields a transposed view consumed by
+    #      downstream norm/resample kernels.
+    # The explicit copies cost a small fraction of the conv itself.
     out = None
     for k in range(k_t):
-        # The conv2d input MUST be standard-NCHW contiguous. At B=1 (every real encode) the
-        # reshape below is satisfiable as a zero-copy VIEW whose channel stride (T*H*W) exceeds
-        # its batch stride (H*W) — a legal but exotic layout. Old MIOpen copied such inputs
-        # internally; the MIOpen shipped with torch's rocm7.2 wheels consumes the strides
-        # directly and mis-addresses rows whenever H != W (observed as horizontal line/tearing
-        # artifacts in the Wan VAE's identical decomposition; this encoder shares the bug for
-        # non-square canvases). The explicit copy costs a small fraction of the conv itself.
         xs = x[:, :, k : k + t_out].transpose(1, 2).reshape(b * t_out, c, h, w).contiguous()
-        o = F.conv2d(xs, module.weight[:, :, k], None)
+        o = F.conv2d(xs, module.weight[:, :, k].contiguous(), None)
         out = o if out is None else out + o
     assert out is not None
     if module.bias is not None:
         out = out + module.bias.view(1, -1, 1, 1)
     oh, ow = out.shape[-2:]
-    return out.reshape(b, t_out, -1, oh, ow).transpose(1, 2)
+    return out.reshape(b, t_out, -1, oh, ow).transpose(1, 2).contiguous()
 
 
 def _decomposed_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:

@@ -99,13 +99,14 @@ def test_decomposed_conv3d_feeds_contiguous_conv2d_inputs(monkeypatch: pytest.Mo
     seen: list[bool] = []
     original_conv2d = mod.F.conv2d
 
-    def checked_conv2d(x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-        seen.append(x.is_contiguous())
-        return original_conv2d(x, *args, **kwargs)
+    def checked_conv2d(x: torch.Tensor, weight: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        seen.append(x.is_contiguous() and weight.is_contiguous())
+        return original_conv2d(x, weight, *args, **kwargs)
 
     monkeypatch.setattr(mod.F, "conv2d", checked_conv2d)
     conv = torch.nn.Conv3d(6, 10, kernel_size=(3, 3, 3))
     x = torch.randn(1, 6, 5, 12, 16)  # B=1 and H != W: the exotic-view case
-    _decomposed_conv3d(conv, x)
+    result = _decomposed_conv3d(conv, x)
     assert seen, "decomposition never called conv2d"
-    assert all(seen), "conv2d received a non-contiguous input"
+    assert all(seen), "conv2d received a non-contiguous input or weight"
+    assert result.is_contiguous(), "decomposition returned a non-contiguous activation"
