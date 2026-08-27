@@ -17,6 +17,7 @@ import {
   flatDocumentModelCounters,
   lookupDocumentLayer,
   lookupDocumentLeaf,
+  lookupLayerBelow,
   mergeDownEligibility,
 } from './flatDocumentModel';
 import { checkFlatEditPostconditions } from './postconditions';
@@ -651,6 +652,13 @@ describe('document-level seam', () => {
     const recompiled = compileDocumentLeaves(renamed, before);
     expect(recompiled.find((leaf) => leaf.id === 'c1')).toBe(untouched.find((leaf) => leaf.id === 'c1'));
     expect(recompiled.find((leaf) => leaf.id === 'r1')).not.toBe(untouched.find((leaf) => leaf.id === 'r1'));
+  });
+
+  it('finds the layer directly below in flat order across stacks', () => {
+    const document = projectWith(interleaved(), 'r1').canvas.document;
+    expect(lookupLayerBelow(document, 'r1')?.id).toBe('c1');
+    expect(lookupLayerBelow(document, 'r3')).toBeNull();
+    expect(lookupLayerBelow(document, 'nope')).toBeNull();
   });
 
   it('shares the merge-down rule with the model', () => {

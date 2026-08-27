@@ -151,7 +151,6 @@ const hasPureExportableLayerContent = (layer: CanvasLayerContract, document: Can
 interface LayerMenuProps {
   dispatch: Dispatch<CanvasProjectMutation>;
   engine: LayerContextMenuEngine | null;
-  index: number;
   layer: CanvasLayerContract;
   /** Where the menu opens: the panel anchors to its trigger; the canvas uses a
    * virtual rect at the cursor. */
@@ -191,7 +190,6 @@ interface LayerMenuProps {
 const LayerMenu = ({
   dispatch,
   engine,
-  index,
   layer,
   positioning,
   withTrigger,
@@ -268,7 +266,6 @@ const LayerMenu = ({
       hasEngine: engine !== null,
       hasSupportedContent,
       hasWorkflowBindings: workflowAvailability.hasWorkflowBindings,
-      index,
       interactionLocked,
       layer,
     }),
@@ -276,7 +273,6 @@ const LayerMenu = ({
       document,
       engine,
       hasSupportedContent,
-      index,
       interactionLocked,
       layer,
       workflowAvailability.canRunWorkflow,
@@ -772,7 +768,6 @@ const LayerMenu = ({
 interface LayerRowMenuProps {
   dispatch: Dispatch<CanvasProjectMutation>;
   engine: LayerContextMenuEngine | null;
-  index: number;
   layer: CanvasLayerContract;
   layers: readonly CanvasLayerContract[];
 }
@@ -793,7 +788,7 @@ export interface CanvasLayerContextMenuTarget {
  * The canvas-surface right-click menu: the SAME {@link LayerMenu}, anchored at the
  * cursor via a 1×1 virtual rect (no trigger DOM), controlled by `target`. The
  * canvas widget sets `target` to the hit layer + pointer position after selecting
- * it; `null` closes the menu. The layer and its global index are resolved from
+ * it; `null` closes the menu. The layer is resolved from
  * `target.layerId` against the live layer list, so the shared items get the exact
  * same inputs the panel passes. Keyed by layer id so switching target resets the
  * menu's sibling-dialog state.
@@ -824,8 +819,7 @@ export const CanvasLayerContextMenu = ({
   const [dialogState, setDialogState] = useState<LayerMenuDialogState | null>(null);
   const renderTarget = resolveMenuTargetForRender(target, dialogState);
 
-  const index = renderTarget ? layers.findIndex((entry) => entry.id === renderTarget.layerId) : -1;
-  const layer = index >= 0 ? layers[index] : undefined;
+  const layer = renderTarget ? layers.find((entry) => entry.id === renderTarget.layerId) : undefined;
 
   const anchorX = renderTarget?.x ?? 0;
   const anchorY = renderTarget?.y ?? 0;
@@ -862,7 +856,6 @@ export const CanvasLayerContextMenu = ({
       dispatch={dispatch}
       dialogKind={dialogState?.kind ?? null}
       engine={engine}
-      index={index}
       layer={layer}
       lazyMount
       // The menu itself is visible only while the live target is set; once a

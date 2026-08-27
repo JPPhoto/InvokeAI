@@ -154,6 +154,14 @@ const isFeatureCoreForbiddenDependency = (specifier: string, target: string | nu
       /\/(?:data|ui)(?:\/|$)/.test(target))
   );
 
+/** The reducer shares the document seam's stack, anchor and repair helpers instead of the public API. */
+const CANVAS_REDUCER = 'workbench/canvasProjectMutations.ts';
+const REDUCER_DOCUMENT_MODULES = [
+  'workbench/canvas-engine/document/insertionAnchors',
+  'workbench/canvas-engine/document/layerStacks',
+  'workbench/canvas-engine/document/selectionRepair',
+];
+
 const DOCUMENT_MODEL_ROOT = 'workbench/canvas-engine/document-model/';
 const DOCUMENT_MODEL_DEPENDENCY_ROOTS = [DOCUMENT_MODEL_ROOT, 'workbench/canvas-engine/math/'];
 const DOCUMENT_MODEL_DEPENDENCY_MODULES = [
@@ -230,7 +238,11 @@ export const checkDependency = (source: string, specifier: string): DependencyVi
     add('feature-private-interface');
   }
 
-  if (!isCanvasOwnedPath(sourcePath) && isCanvasPrivatePath(target)) {
+  if (
+    !isCanvasOwnedPath(sourcePath) &&
+    isCanvasPrivatePath(target) &&
+    !(sourcePath === CANVAS_REDUCER && REDUCER_DOCUMENT_MODULES.includes(target))
+  ) {
     add('canvas-private-interface');
   }
 

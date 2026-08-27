@@ -83,7 +83,6 @@ interface LayerListItemProps {
   dispatch: Dispatch<CanvasProjectMutation>;
   editingLocked: boolean;
   engine: LayerListItemEngine | null;
-  index: number;
   isPrimarySelected: boolean;
   isSelected: boolean;
   layer: CanvasLayerContract;
@@ -103,7 +102,6 @@ export const LayerListItem = ({
   dispatch,
   editingLocked,
   engine,
-  index,
   isPrimarySelected,
   isSelected,
   layer,
@@ -389,7 +387,7 @@ export const LayerListItem = ({
               <LayerPropertiesPopover engine={engine} layer={layer} />
             </Box>
             <Box display="flex" flexShrink="0" onPointerDown={stopPropagation}>
-              <LayerContextMenu dispatch={dispatch} engine={engine} index={index} layer={layer} layers={layers} />
+              <LayerContextMenu dispatch={dispatch} engine={engine} layer={layer} layers={layers} />
             </Box>
           </HStack>
         </HStack>

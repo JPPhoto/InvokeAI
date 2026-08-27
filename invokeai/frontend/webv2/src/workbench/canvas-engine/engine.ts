@@ -2891,6 +2891,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     getDocument: () => mirror.getDocument(),
     getEditRevision: () => mutationContext.getEditRevision(),
     model: currentDocumentModel,
+    replaceDocument: (document) => dispatchCanvasMutation({ document, type: 'replaceCanvasDocument' }, 'user'),
   };
   const selectionCapability: CanvasEngineSelectionCapability = {
     deselect,

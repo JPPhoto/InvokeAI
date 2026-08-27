@@ -148,13 +148,12 @@ const Harness = () => {
   return (
     <DndContext collisionDetection={closestCenter} sensors={sensors} onDragEnd={handleDragEnd}>
       <SortableContext items={layerIds} strategy={verticalListSortingStrategy}>
-        {layers.map((layer, index) => (
+        {layers.map((layer) => (
           <LayerListItem
             key={layer.id}
             dispatch={dispatch}
             editingLocked={false}
             engine={engine}
-            index={index}
             isPrimarySelected={selectedLayerId === layer.id}
             isSelected={selection.selectedIds.includes(layer.id)}
             layer={layer}

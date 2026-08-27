@@ -1,5 +1,9 @@
-import type { CanvasDocumentContractV2, Rect, StructuralCommitResult } from '@workbench/canvas-engine/api';
-import type { CanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
+import type {
+  CanvasDocumentCapability,
+  CanvasDocumentContractV2,
+  Rect,
+  StructuralCommitResult,
+} from '@workbench/canvas-engine/api';
 
 import { createNewCanvasStateV2 } from '@workbench/canvasMigration';
 
@@ -8,6 +12,7 @@ import { createNewCanvasStateV2 } from '@workbench/canvasMigration';
  * full handle, so this module stays React-free and testable with a plain double.
  */
 export interface CanvasHeaderCommandEngine {
+  readonly document: Pick<CanvasDocumentCapability, 'replaceDocument'>;
   readonly layers: {
     commitStructural(label: string, forward: unknown, inverse: unknown): StructuralCommitResult;
   };
@@ -25,7 +30,7 @@ export interface NewCanvasContext {
   readonly document: Pick<CanvasDocumentContractV2, 'width' | 'height'>;
   /** An in-flight operation owns the document; every mutating header action is inert. */
   readonly editingLocked: boolean;
-  readonly dispatch: CanvasProjectMutationDispatch;
+  readonly engine: Pick<CanvasHeaderCommandEngine, 'document'>;
 }
 
 export interface CanvasHeaderCommandContext extends NewCanvasContext {
@@ -77,10 +82,7 @@ export const confirmNewCanvas = (ctx: NewCanvasContext): void => {
   if (ctx.editingLocked) {
     return;
   }
-  ctx.dispatch({
-    document: createNewCanvasStateV2(ctx.document.width, ctx.document.height).document,
-    type: 'replaceCanvasDocument',
-  });
+  ctx.engine.document.replaceDocument(createNewCanvasStateV2(ctx.document.width, ctx.document.height).document);
 };
 
 /**

@@ -75,7 +75,6 @@ const makeState = (
     hasEngine: true,
     hasSupportedContent: true,
     hasWorkflowBindings: true,
-    index: document.layers.findIndex((entry) => entry.id === layer.id),
     interactionLocked: false,
     layer,
     ...overrides,

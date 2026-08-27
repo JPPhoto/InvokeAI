@@ -66,6 +66,13 @@ const withCurve = (
   },
 });
 
+const sameCurves = (left: CanvasAdjustmentsContract, right: CanvasAdjustmentsContract): boolean =>
+  CURVE_CHANNELS.every(
+    (channel) =>
+      JSON.stringify(left.curves?.[channel] ?? IDENTITY_CURVE) ===
+      JSON.stringify(right.curves?.[channel] ?? IDENTITY_CURVE)
+  );
+
 const formatSigned = (value: number): string => `${value > 0 ? '+' : ''}${Math.round(value * 100)}`;
 
 interface AdjustmentsPopoverProps {
@@ -148,17 +155,26 @@ const AdjustmentsControls = ({ adjustments, engine, layer }: AdjustmentsControls
 
   const handleCurveCancel = useCallback(
     (before: CanvasAdjustmentsContract) => {
-      patchLive(before);
+      const baseline = gestureBaselineRef.current ? gestureBaselineRef.current.adjustments : before;
       gestureBaselineRef.current = null;
+      applyStructuralPreview(engine, {
+        config: { adjustments: baseline, layerType: 'raster' },
+        id: layer.id,
+        type: 'updateCanvasLayerConfig',
+      });
     },
-    [patchLive]
+    [engine, layer.id]
   );
 
   const handleCurveCommit = useCallback(
     (current: CanvasAdjustmentsContract, before: CanvasAdjustmentsContract) => {
+      if (sameCurves(current, before)) {
+        handleCurveCancel(before);
+        return;
+      }
       commit(t('widgets.layers.adjustments.curves'), current, before);
     },
-    [commit, t]
+    [commit, handleCurveCancel, t]
   );
 
   return (

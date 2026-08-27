@@ -19,26 +19,22 @@ afterAll(closeSourceAnalysis);
 /** Modules that may take part in stack order and selection repair: the reducer and the document seam. */
 const DOCUMENT_SEAM_OWNERS = [
   /^workbench\/canvasProjectMutations\.ts$/,
-  /^workbench\/canvas-engine\/(?:api|capabilities)\.ts$/,
   /^workbench\/canvas-engine\/document\//,
   /^workbench\/canvas-engine\/document-model\//,
 ];
 
 /** Modules whose namespace import would hide a seam-only symbol behind a qualifier. */
 const SEAM_MODULES = [
-  'workbench/canvas-engine/api',
-  'workbench/canvas-engine/capabilities',
   'workbench/canvas-engine/document/layerStacks',
   'workbench/canvas-engine/document/selectionRepair',
 ];
 
 /**
- * Mutations that restructure the layer list. Outside the engine and the reducer they may only be
- * built by gallery import, which ingests into projects that have no mounted engine, and by the
- * new-canvas confirmation, which swaps the whole document rather than editing layers. The engine
- * grant covers every engine module: tools and raster controllers still dispatch some of these
- * through the mutation port rather than the structural controller, which is engine-owned but not
- * yet the single transaction module. The scan matches the formatted literal `type: '…'`.
+ * Mutations that restructure the layer list. Outside the engine and the reducer only gallery import
+ * builds them, because it ingests into projects that have no mounted engine. The engine grant covers
+ * every engine module: controllers build these as forward/inverse pairs for the prepared-dispatch
+ * protocol, history replays them raw, and the paint tool creates and rolls back its auto-created
+ * layer outside history by design. The scan matches the formatted literal `type: '…'`.
  */
 const STRUCTURAL_MUTATION_TYPES = [
   'addCanvasLayer',
@@ -60,7 +56,6 @@ const STRUCTURAL_MUTATION_OWNERS = [
   /^workbench\/canvasProjectMutations\.ts$/,
   /^workbench\/canvas-engine\//,
   /^workbench\/canvas-operations\/importGalleryImages\.ts$/,
-  /^workbench\/widgets\/canvas\/canvasHeaderCommands\.ts$/,
 ];
 const structuralLiteral = new RegExp(`type: '(?:${STRUCTURAL_MUTATION_TYPES.join('|')})'`, 'g');
 

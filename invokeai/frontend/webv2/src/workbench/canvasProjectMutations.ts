@@ -11,11 +11,11 @@ import {
   type FlatLayerInsertion,
   type FlatLayerInsertionAnchor,
   type ReorderFlatStackCommand,
-  insertLayersAtAnchor,
   isHideableLayer,
-  reorderLayerStack,
-  repairSelectedLayerId,
 } from '@workbench/canvas-engine/api';
+import { insertLayersAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import { reorderLayerStack } from '@workbench/canvas-engine/document/layerStacks';
+import { repairSelectedLayerId } from '@workbench/canvas-engine/document/selectionRepair';
 
 import { normalizeCanvasDocumentContract } from './canvasMigration';
 import {

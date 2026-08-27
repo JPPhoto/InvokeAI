@@ -44,7 +44,6 @@ const actionsFor = (layer: CanvasLayerContract, layers: readonly CanvasLayerCont
     hasEngine: true,
     hasSupportedContent: true,
     hasWorkflowBindings: true,
-    index: layers.indexOf(layer),
     interactionLocked: false,
     layer,
   });

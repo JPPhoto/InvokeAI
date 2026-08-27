@@ -143,6 +143,19 @@ describe('dependency policy rules', () => {
     );
   });
 
+  it('lets the reducer share the document seam helpers without widening the public API', () => {
+    const reducer = 'workbench/canvasProjectMutations.ts';
+    expect(checkDependency(reducer, '@workbench/canvas-engine/document/layerStacks')).toEqual([]);
+    expect(checkDependency(reducer, '@workbench/canvas-engine/document/selectionRepair')).toEqual([]);
+    expect(checkDependency(reducer, '@workbench/canvas-engine/document/insertionAnchors')).toEqual([]);
+    expect(checkDependency(reducer, '@workbench/canvas-engine/document/sources')).toContainEqual(
+      expect.objectContaining({ rule: 'canvas-private-interface' })
+    );
+    expect(
+      checkDependency('workbench/widgets/layers/layerGroups.ts', '@workbench/canvas-engine/document/layerStacks')
+    ).toContainEqual(expect.objectContaining({ rule: 'canvas-private-interface' }));
+  });
+
   it('permits the pure document model to read document facts, math and contracts', () => {
     const source = 'workbench/canvas-engine/document-model/flatDocumentModel.ts';
     expect(checkDependency(source, './semanticLeaf')).toEqual([]);

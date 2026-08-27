@@ -6,7 +6,7 @@ import type {
 } from '@workbench/canvas-engine/api';
 import type { LucideIcon } from 'lucide-react';
 
-import { getSourceContentRect, isPixelBackedLayer } from '@workbench/canvas-engine/api';
+import { getSourceContentRect, isPixelBackedLayer, lookupLayerBelow } from '@workbench/canvas-engine/api';
 import {
   ArrowDownIcon,
   ArrowDownToLineIcon,
@@ -85,7 +85,6 @@ export interface LayerContextActionState {
   hasEngine: boolean;
   hasSupportedContent: boolean;
   hasWorkflowBindings: boolean;
-  index: number;
   interactionLocked: boolean;
   layer: CanvasLayerContract;
 }
@@ -222,12 +221,11 @@ const canMoveBackward = (context: LayerContextActionState): boolean => {
 const hasMergeableLayerBelow = (context: LayerContextActionState): boolean =>
   canMergeLayerDown(context.document, context.layer.id, true);
 
-const isBooleanRasterLayer = (layer: CanvasLayerContract | undefined): boolean =>
+const isBooleanRasterLayer = (layer: CanvasLayerContract | null): boolean =>
   !!layer && layer.isEnabled && layer.type === 'raster' && isPixelBackedLayer(layer);
 
 const hasBooleanRasterPair = (context: LayerContextActionState): boolean =>
-  isBooleanRasterLayer(context.document.layers[context.index]) &&
-  isBooleanRasterLayer(context.document.layers[context.index + 1]);
+  isBooleanRasterLayer(context.layer) && isBooleanRasterLayer(lookupLayerBelow(context.document, context.layer.id));
 
 export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefinition[] = [
   {

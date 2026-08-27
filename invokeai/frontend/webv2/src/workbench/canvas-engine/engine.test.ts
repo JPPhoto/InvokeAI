@@ -627,6 +627,25 @@ describe('createCanvasEngine', () => {
     engine.lifecycle.dispose();
   });
 
+  it('replaces the whole document through its own mutation port', () => {
+    const document = makeDoc();
+    const { store } = createFakeStore(document);
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId: 'p1',
+      store,
+    });
+    const replacement = { ...makeDoc(), height: 32, width: 32 };
+
+    engine.document.replaceDocument(replacement);
+
+    expect(store.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ document: replacement, type: 'replaceCanvasDocument' })
+    );
+    engine.lifecycle.dispose();
+  });
+
   it('returns stale and releases a partial raster snapshot when the document changes during detachment', async () => {
     const pending = createDeferred<Blob>();
     const document = makeDoc();

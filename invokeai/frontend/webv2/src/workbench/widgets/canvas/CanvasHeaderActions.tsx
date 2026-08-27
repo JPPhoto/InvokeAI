@@ -7,7 +7,6 @@ import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngi
 import { Box, HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { useModifierHeld } from '@platform/react/useModifierHeld';
 import { ConfirmDialog, IconButton, MenuContent, Tooltip } from '@platform/ui';
-import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 import { useNotify } from '@workbench/useNotify';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
@@ -51,7 +50,10 @@ import { useCanvasEngine } from './useCanvasEngine';
 import { reportStructuralCommit } from './useStructuralCommit';
 import { formatZoomPercent, zoomMenuOptions } from './zoomOptions';
 
-type CanvasHeaderEngine = Pick<CanvasEngineHandle, 'diagnostics' | 'history' | 'interaction' | 'layers' | 'viewport'>;
+type CanvasHeaderEngine = Pick<
+  CanvasEngineHandle,
+  'diagnostics' | 'document' | 'history' | 'interaction' | 'layers' | 'viewport'
+>;
 
 const ZOOM_OPTIONS = zoomMenuOptions();
 const MENU_POSITIONING = { placement: 'bottom-end' } as const;
@@ -90,7 +92,6 @@ const CanvasHeaderActionsInner = ({
 }) => {
   const { t } = useTranslation();
   const notify = useNotify();
-  const dispatch = useCanvasProjectMutationDispatch();
   const zoom = useCanvasZoom(engine);
   const canUndo = useCanvasCanUndo(engine);
   const canRedo = useCanvasCanRedo(engine);
@@ -115,7 +116,6 @@ const CanvasHeaderActionsInner = ({
   const fitMasksRect = useMemo(() => computeFitBboxToMasks(document, gridSize), [document, gridSize]);
 
   const commandContext = (): CanvasHeaderCommandContext => ({
-    dispatch,
     document,
     editingLocked,
     engine,
@@ -129,8 +129,8 @@ const CanvasHeaderActionsInner = ({
   const applyFit = (rect: Rect | null, refit: boolean) => applyFitBbox(commandContext(), rect, refit);
 
   const confirmNewCanvas = useCallback(
-    () => confirmNewCanvasDocument({ dispatch, document, editingLocked }),
-    [dispatch, document, editingLocked]
+    () => confirmNewCanvasDocument({ document, editingLocked, engine }),
+    [document, editingLocked, engine]
   );
 
   // Commands (hotkey-assignable; catalog ids `canvas.fitBboxToLayers` /

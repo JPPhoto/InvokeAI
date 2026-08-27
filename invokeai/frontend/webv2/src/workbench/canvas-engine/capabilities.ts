@@ -152,6 +152,8 @@ export interface CanvasDocumentCapability {
   captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): FlatLayerInsertionAnchor;
   /** The anchor that restores `layerId` between its current same-stack neighbours; null when absent. */
   captureRestoreAnchor(layerId: string): FlatLayerInsertionAnchor | null;
+  /** Swaps in a whole new document; the mirror treats it as a document swap and history clears. */
+  replaceDocument(document: CanvasDocumentContractV2): boolean;
   /** The pure model over the current document; the same instance until the document changes. */
   model(): FlatCanvasDocumentModel | null;
 }
@@ -596,10 +598,8 @@ export {
   layerStackOf,
   type LayerStackKind,
   type LayerStackMoveKind,
-  reorderLayerStack,
   type ReorderFlatStackCommand,
 } from './document/layerStacks';
-export { repairSelectedLayerId } from './document/selectionRepair';
 export {
   type HideableLayer,
   isHideableLayer,
@@ -622,6 +622,7 @@ export {
 export {
   createFlatDocumentModel,
   type FlatCanvasDocumentModel,
+  lookupLayerBelow,
   mergeDownEligibility,
 } from './document-model/flatDocumentModel';
 export { checkFlatEditPostconditions, type FlatEditPostcondition } from './document-model/postconditions';
@@ -634,7 +635,6 @@ export { type SemanticLeafV2 } from './document-model/semanticLeaf';
 export {
   captureInsertionAnchor,
   captureRestoreAnchor,
-  insertLayersAtAnchor,
   resolveInsertionIndex,
   type FlatLayerInsertion,
   type FlatLayerInsertionAnchor,

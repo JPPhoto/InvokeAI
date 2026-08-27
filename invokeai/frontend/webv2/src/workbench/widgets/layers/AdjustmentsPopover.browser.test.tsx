@@ -43,6 +43,7 @@ const createLayer = (): CanvasRasterLayerContractV2 =>
   }) as unknown as CanvasRasterLayerContractV2;
 
 const commits: PreparedFlatEdit[] = [];
+let latestAdjustments: unknown = 'untouched';
 
 const Harness = () => {
   const [layer, setLayer] = useState(createLayer);
@@ -51,6 +52,7 @@ const Harness = () => {
     const apply = (mutation: CanvasProjectMutation): boolean => {
       const candidate = mutation as { type: string; config?: { adjustments?: unknown } };
       if (candidate.type === 'updateCanvasLayerConfig') {
+        latestAdjustments = candidate.config?.adjustments;
         setLayer(
           (current) => ({ ...current, adjustments: candidate.config?.adjustments }) as CanvasRasterLayerContractV2
         );
@@ -123,6 +125,7 @@ const pointer = (target: Element, type: string, x: number, y: number): void => {
 
 afterEach(async () => {
   commits.length = 0;
+  latestAdjustments = 'untouched';
   await settle(() => root?.unmount());
   host?.remove();
   host = null;
@@ -155,6 +158,22 @@ describe('curves editor', () => {
     ).not.toEqual(createLayer().adjustments?.curves?.r);
   });
 
+  it('records nothing when a drag ends where it started', async () => {
+    const svg = await render();
+    const target = handles(svg).at(-1)!;
+    const before = Number(target.getAttribute('cy'));
+    const start = centreOf(target);
+
+    await settle(() => pointer(target, 'pointerdown', start.x, start.y));
+    await settle(() => pointer(target, 'pointermove', start.x, start.y + 40));
+    await settle(() => pointer(target, 'pointermove', start.x, start.y));
+    await settle(() => pointer(target, 'pointerup', start.x, start.y));
+
+    expect(Number(handles(svg).at(-1)!.getAttribute('cy'))).toBeCloseTo(before, 5);
+    expect(commits).toHaveLength(0);
+    expect(latestAdjustments).toBeUndefined();
+  });
+
   it('restores the pre-drag curve and records nothing when the drag is cancelled', async () => {
     const svg = await render();
     const target = handles(svg).at(-1)!;
@@ -167,6 +186,7 @@ describe('curves editor', () => {
 
     expect(Number(handles(svg).at(-1)!.getAttribute('cy'))).toBeCloseTo(before, 5);
     expect(commits).toHaveLength(0);
+    expect(latestAdjustments).toBeUndefined();
   });
 
   it('adds a point under the pointer rather than offset from it', async () => {

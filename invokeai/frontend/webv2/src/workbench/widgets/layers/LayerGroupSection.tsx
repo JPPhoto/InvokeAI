@@ -81,12 +81,6 @@ export const LayerGroupSection = ({
     useSensor(KeyboardSensor, LAYER_KEYBOARD_SENSOR_OPTIONS)
   );
 
-  const globalIndexById = useMemo(() => {
-    const map = new Map<string, number>();
-    layers.forEach((layer, index) => map.set(layer.id, index));
-    return map;
-  }, [layers]);
-
   const groupIds = useMemo(() => groupLayers.map((layer) => layer.id), [groupLayers]);
 
   const handleDragEnd = useCallback(
@@ -177,7 +171,6 @@ export const LayerGroupSection = ({
                     dispatch={dispatch}
                     editingLocked={editingLocked}
                     engine={engine}
-                    index={globalIndexById.get(layer.id) ?? 0}
                     isPrimarySelected={layer.id === selectedLayerId}
                     isSelected={selectedIds.includes(layer.id)}
                     layer={layer}

@@ -169,6 +169,12 @@ export const lookupDocumentLeaf = (document: CanvasDocumentContractV2, id: strin
   return entry ? (compileDocumentLeaves(document)[entry.index] ?? null) : null;
 };
 
+/** The layer directly below `id` in flat order, whatever its stack; `null` at the bottom or when absent. */
+export const lookupLayerBelow = (document: CanvasDocumentContractV2, id: string): CanvasLayerContract | null => {
+  const entry = indexOf(document).byId.get(id);
+  return entry ? (document.layers[entry.index + 1] ?? null) : null;
+};
+
 /** Merge-down joins a raster layer with the layer directly below it in flat order, mirroring the reducer. */
 export const mergeDownEligibility = (document: CanvasDocumentContractV2, upperId: string): MergeDownEligibility => {
   const upper = indexOf(document).byId.get(upperId);
@@ -178,7 +184,7 @@ export const mergeDownEligibility = (document: CanvasDocumentContractV2, upperId
   if (upper.stack !== 'raster') {
     return { actual: upper.stack, expected: ['raster'], status: 'wrong-type' };
   }
-  const lower = document.layers[upper.index + 1];
+  const lower = lookupLayerBelow(document, upperId);
   if (!lower) {
     return { reason: 'no-layer-below', status: 'invalid-target', targetId: upperId };
   }
