@@ -87,3 +87,25 @@ def test_class_patch_is_idempotent_and_preserves_behavior() -> None:
         WanCausalConv3d.forward = stock_forward
         if hasattr(WanCausalConv3d, "_invokeai_rocm_conv2d_decomposition"):
             delattr(WanCausalConv3d, "_invokeai_rocm_conv2d_decomposition")
+
+
+def test_decomposed_conv3d_feeds_contiguous_conv2d_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """At B=1 (every real decode) the tap reshape can be satisfied as a zero-copy view whose
+    channel stride exceeds its batch stride. The MIOpen shipped with torch's rocm7.2 wheels
+    mis-addresses rows of such inputs when H != W (horizontal tearing in decoded images), so
+    the decomposition must hand conv2d standard-contiguous tensors."""
+    import invokeai.backend.wan.rocm_causal_conv3d as mod
+
+    seen: list[bool] = []
+    original_conv2d = mod.F.conv2d
+
+    def checked_conv2d(x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        seen.append(x.is_contiguous())
+        return original_conv2d(x, *args, **kwargs)
+
+    monkeypatch.setattr(mod.F, "conv2d", checked_conv2d)
+    conv = torch.nn.Conv3d(6, 10, kernel_size=(3, 3, 3))
+    x = torch.randn(1, 6, 5, 12, 16)  # B=1 and H != W: the exotic-view case
+    _decomposed_conv3d(conv, x)
+    assert seen, "decomposition never called conv2d"
+    assert all(seen), "conv2d received a non-contiguous input"

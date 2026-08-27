@@ -34,7 +34,15 @@ def _decomposed_conv3d(module: torch.nn.Conv3d, x: torch.Tensor) -> torch.Tensor
     t_out = t - k_t + 1
     out = None
     for k in range(k_t):
-        xs = x[:, :, k : k + t_out].transpose(1, 2).reshape(b * t_out, c, h, w)
+        # The conv2d input MUST be standard-NCHW contiguous. At B=1 (every real decode) the
+        # reshape below is satisfiable as a zero-copy VIEW whose channel stride (T*H*W) exceeds
+        # its batch stride (H*W) — a legal but exotic layout. Old MIOpen copied such inputs
+        # internally; the MIOpen shipped with torch's rocm7.2 wheels consumes the strides
+        # directly and mis-addresses rows whenever H != W, producing horizontal line/tearing
+        # artifacts in decoded images. (At B > 1 the reshape is forced to copy, which is why
+        # the corruption never appeared in batched paths.) The explicit copy costs a small
+        # fraction of the conv itself.
+        xs = x[:, :, k : k + t_out].transpose(1, 2).reshape(b * t_out, c, h, w).contiguous()
         o = F.conv2d(xs, module.weight[:, :, k], None)
         out = o if out is None else out + o
     assert out is not None
