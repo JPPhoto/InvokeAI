@@ -184,3 +184,4 @@ def test_profiling_env_var_preserves_results_and_writes_trace(tiny_transformer, 
     assert torch.equal(reference_video, profiled_video)
     assert torch.equal(reference_audio, profiled_audio)
     assert (tmp_path / "h3_denoise_step_trace.json").exists()
+    assert (tmp_path / "h3_denoise_step_profile.txt").exists()

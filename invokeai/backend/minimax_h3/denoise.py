@@ -101,14 +101,25 @@ def _profile_one_step(trace_target: str, device: torch.device, run_step: Callabl
 
     trace_dir = Path(trace_target) if trace_target.lower() not in ("1", "true", "yes") else Path.cwd()
     trace_path = trace_dir / "h3_denoise_step_trace.json"
+    table_path = trace_dir / "h3_denoise_step_profile.txt"
     try:
         trace_dir.mkdir(parents=True, exist_ok=True)
+        # Persist the table too: the log line above can scroll away, and the cudaEvent fallback's
+        # chrome trace carries no GPU lanes — on that path this file is the only durable record of
+        # the GPU times.
+        table_path.write_text(
+            f"MiniMax H3 denoise step profile ({time.strftime('%Y-%m-%d %H:%M:%S')})\n"
+            f"device: {torch.cuda.get_device_name(device) if is_gpu else device}\n"
+            f"wall time for the profiled step: {wall_elapsed:.2f}s (includes profiler overhead)\n\n"
+            f"{table}\n",
+            encoding="utf-8",
+        )
         prof.export_chrome_trace(str(trace_path))
-        logger.info(f"MiniMax H3 denoise: wrote chrome trace to {trace_path}")
+        logger.info(f"MiniMax H3 denoise: wrote {table_path} and chrome trace {trace_path}")
     except Exception:
-        # The table above is the primary deliverable; a failed trace export must not kill the
+        # The table above is the primary deliverable; a failed file export must not kill the
         # generation mid-denoise.
-        logger.warning(f"MiniMax H3 denoise: failed to write chrome trace to {trace_path}", exc_info=True)
+        logger.warning(f"MiniMax H3 denoise: failed to write profile files to {trace_dir}", exc_info=True)
 
 
 def denoise(
