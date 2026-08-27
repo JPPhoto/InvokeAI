@@ -16,11 +16,11 @@ import type {
   CanvasMaskFillContract,
   CanvasRasterLayerContractV2,
   CanvasRegionalGuidanceLayerContract,
+  CanvasLayerPreviewMutation,
   CanvasStructuralEngine,
   RegionalGuidanceReferenceImage,
   Rect,
 } from '@workbench/canvas-engine/api';
-import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
 export type { CanvasStructuralEngine } from '@workbench/canvas-engine/api';
 
@@ -614,5 +614,7 @@ export const canMergeLayerDown = (document: CanvasDocumentContractV2, layerId: s
   hasEngine && mergeDownEligibility(document, layerId).status === 'eligible';
 
 /** Applies a guarded live edit without recording history until the interaction ends. */
-export const applyStructuralPreview = (engine: CanvasStructuralEngine | null, action: CanvasProjectMutation): boolean =>
-  engine?.layers.applyStructuralPreview(action) ?? false;
+export const applyStructuralPreview = (
+  engine: CanvasStructuralEngine | null,
+  action: CanvasLayerPreviewMutation
+): boolean => engine?.layers.applyStructuralPreview(action) ?? false;

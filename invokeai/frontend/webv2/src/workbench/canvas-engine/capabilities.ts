@@ -302,12 +302,18 @@ export interface StructuralCommitOptions {
 }
 
 /** The narrowest engine surface a structural edit needs. */
+/** The only mutations a widget may preview live; every other structural edit is prepared and committed. */
+export type CanvasLayerPreviewMutation = Extract<
+  CanvasProjectMutation,
+  { type: 'updateCanvasLayer' | 'updateCanvasLayerConfig' }
+>;
+
 export interface CanvasStructuralEngine {
   readonly layers: CanvasLayerCapability;
 }
 
 export interface CanvasLayerCapability {
-  applyStructuralPreview(action: CanvasProjectMutation): boolean;
+  applyStructuralPreview(action: CanvasLayerPreviewMutation): boolean;
   canCommitStructural(): boolean;
   commitGeneratedImageResult(options: CommitGeneratedImageOptions): Promise<CommitGeneratedImageResult>;
   commitStagedImage(options: CommitStagedImageOptions): CommitStagedImageResult;
@@ -588,12 +594,12 @@ export {
   LAYER_STACK_ORDER,
   LAYER_STACKS_TOP_FIRST,
   layerStackOf,
-  moveLayersWithinStacks,
-  reorderLayerStack,
   type LayerStackKind,
   type LayerStackMoveKind,
+  reorderLayerStack,
   type ReorderFlatStackCommand,
 } from './document/layerStacks';
+export { repairSelectedLayerId } from './document/selectionRepair';
 export {
   type HideableLayer,
   isHideableLayer,
@@ -605,7 +611,6 @@ export {
   isLayerTransparencyLocked,
   isPixelBackedLayer,
 } from './document/layerEligibility';
-export { repairSelectedLayerId } from './document/selectionRepair';
 export {
   type FlatDocumentCommand,
   type FlatDocumentRefusal,

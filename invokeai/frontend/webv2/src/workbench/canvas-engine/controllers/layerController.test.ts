@@ -1,3 +1,4 @@
+import type { CanvasLayerPreviewMutation } from '@workbench/canvas-engine/capabilities';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
 import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
@@ -181,7 +182,9 @@ describe('LayerController', () => {
     };
     const controller = new LayerController(deps);
 
-    expect(controller.layers.applyStructuralPreview(forward)).toBe(true);
+    expect(
+      controller.layers.applyStructuralPreview({ id: 'layer', patch: { opacity: 0.5 }, type: 'updateCanvasLayer' })
+    ).toBe(true);
     controller.layers.commitStructural('edit', forward, inverse);
     expect(controller.previews.drawLayerThumbnail('layer', {} as HTMLCanvasElement, 96)).toBe(false);
     await expect(controller.previews.requestLayerThumbnail('layer')).resolves.toBe('stale');
@@ -205,7 +208,7 @@ describe('LayerController', () => {
     controller.dispose();
     controller.dispose();
 
-    expect(controller.layers.applyStructuralPreview({} as CanvasProjectMutation)).toBe(false);
+    expect(controller.layers.applyStructuralPreview({} as CanvasLayerPreviewMutation)).toBe(false);
     controller.layers.commitStructural('late', {} as CanvasProjectMutation, {} as CanvasProjectMutation);
     expect(controller.previews.drawLayerThumbnail('layer', {} as HTMLCanvasElement, 96)).toBe(false);
   });

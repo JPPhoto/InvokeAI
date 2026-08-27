@@ -76,7 +76,9 @@ interface DocumentIndex {
 /** Deterministic work counters for budget tests; never consulted by production logic. */
 export const flatDocumentModelCounters = { indexBuilds: 0, leafCompilations: 0, leavesCompiled: 0 };
 
-const indexes = new WeakMap<CanvasDocumentContractV2, DocumentIndex>();
+type LayerArray = CanvasDocumentContractV2['layers'];
+
+const indexes = new WeakMap<LayerArray, DocumentIndex>();
 
 /** The most recent compilation, reused when a caller has no previous document to offer. */
 let latestLeaves: {
@@ -84,7 +86,12 @@ let latestLeaves: {
   readonly leaves: readonly SemanticLeafV2[];
 } | null = null;
 
-const buildIndex = (document: CanvasDocumentContractV2): DocumentIndex => {
+/** Test seam: forgets the latest compilation so budgets measure one document chain at a time. */
+export const resetLatestLeafCompilation = (): void => {
+  latestLeaves = null;
+};
+
+const buildIndex = (layers: LayerArray): DocumentIndex => {
   flatDocumentModelCounters.indexBuilds += 1;
   const byId = new Map<string, LayerIndexEntry>();
   const stacks: Record<LayerStackKind, CanvasLayerContract[]> = {
@@ -93,7 +100,7 @@ const buildIndex = (document: CanvasDocumentContractV2): DocumentIndex => {
     raster: [],
     regional_guidance: [],
   };
-  document.layers.forEach((layer, index) => {
+  layers.forEach((layer, index) => {
     const stack = layerStackOf(layer);
     byId.set(layer.id, { index, layer, stack, stackIndex: stacks[stack].length });
     stacks[stack].push(layer);
@@ -101,13 +108,14 @@ const buildIndex = (document: CanvasDocumentContractV2): DocumentIndex => {
   return { byId, leaves: null, stacks };
 };
 
+/** Indexes are keyed on the layer array, so a selection-only document change reuses them. */
 const indexOf = (document: CanvasDocumentContractV2): DocumentIndex => {
-  const existing = indexes.get(document);
+  const existing = indexes.get(document.layers);
   if (existing) {
     return existing;
   }
-  const built = buildIndex(document);
-  indexes.set(document, built);
+  const built = buildIndex(document.layers);
+  indexes.set(document.layers, built);
   return built;
 };
 

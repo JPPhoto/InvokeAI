@@ -74,6 +74,7 @@ export interface PreparedFlatEdit {
   readonly expectedRevision: number;
   readonly selectionBefore: string | null;
   readonly selectionAfter: string | null;
+  /** Layers the edit changes, including neighbours whose stack position it displaces. */
   readonly touchedIds: readonly string[];
   readonly touchedStacks: readonly LayerStackKind[];
   readonly postconditions: readonly FlatEditPostcondition[];
