@@ -332,22 +332,41 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   // swapping a top-of-board image in moves the window to the top — so a swap
   // back could only guess at its page. This is not a guess: it is the window
   // the item was navigated in, and restoring it puts the arrows back where
-  // they were before the first swap.
-  const swappedOutRef = useRef<{ key: GalleryItemKey; page: number } | null>(null);
+  // they were before the first swap. A page names a window of ONE query,
+  // though: restored into a different board, view, order, mode or search it
+  // would anchor that listing 1800 rows down around an image from another,
+  // so the memo is only honoured in the query it was recorded in.
+  const swappedOutRef = useRef<{ key: GalleryItemKey; page: number; queryKey: string } | null>(null);
   const swapCompareImages = useCallback(() => {
     if (selectedItem?.kind === 'image' && compareImage) {
       const compareItem = legacyGeneratedImageToGalleryItem(compareImage);
       const swappedOut = swappedOutRef.current;
 
-      swappedOutRef.current = { key: toGalleryItemKey(selectedItem), page: selectedImageQuery.page };
-      if (swappedOut && swappedOut.key === toGalleryItemKey(compareItem)) {
+      swappedOutRef.current = {
+        key: toGalleryItemKey(selectedItem),
+        page: selectedImageQuery.page,
+        queryKey: navigationQueryKey,
+      };
+      if (
+        swappedOut &&
+        swappedOut.key === toGalleryItemKey(compareItem) &&
+        swappedOut.queryKey === navigationQueryKey
+      ) {
         selectGalleryItemAtPage(compareItem, swappedOut.page);
       } else {
         selectPreviewItem(compareItem);
       }
       gallery.setCompareItem(selectedItem);
     }
-  }, [compareImage, gallery, selectGalleryItemAtPage, selectPreviewItem, selectedImageQuery.page, selectedItem]);
+  }, [
+    compareImage,
+    gallery,
+    navigationQueryKey,
+    selectGalleryItemAtPage,
+    selectPreviewItem,
+    selectedImageQuery.page,
+    selectedItem,
+  ]);
   const isItemCurrent = useCallback(
     (itemKey: GalleryItemKey) => {
       const currentValues = getProjectWidgetValues(queries.getSnapshot().activeProject, 'gallery');

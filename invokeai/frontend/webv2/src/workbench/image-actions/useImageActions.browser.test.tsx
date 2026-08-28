@@ -428,6 +428,7 @@ type ExpectedItemActions = {
     loadedItems?: Array<{ fullUrl: string; kind: 'image' | 'video'; name: string }>
   ): Promise<void>;
   moveItemsToBoard(refs: Array<{ kind: 'image' | 'video'; name: string }>, boardId: string): Promise<void>;
+  openItemInPreview(item: { fullUrl: string; kind: 'image' | 'video'; name: string }): void;
   setItemsStarred(refs: Array<{ kind: 'image' | 'video'; name: string }>, starred: boolean): Promise<void>;
 };
 
@@ -1040,6 +1041,24 @@ describe('primary successor after confirmed deletion', () => {
     });
 
     expect(mocks.gallerySelectItem).toHaveBeenCalledWith(before, 'project-1', 30, true);
+  });
+
+  it('opens an item in Preview at the page the host navigates from', () => {
+    const item = galleryItem('image', 'deep.png');
+
+    currentItemActionContext = {
+      filterIdentity: 'filter-a',
+      getItemSelectionPage: () => 30,
+      items: [item],
+      loadOrderedRefs: () => Promise.resolve([{ kind: 'image' as const, name: item.name }]),
+      selectedItemKey: 'image:deep.png',
+    };
+
+    act(() => {
+      getItemActions().openItemInPreview(item);
+    });
+
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(item, 'project-1', 30, true);
   });
 
   it('carries the host page into a retained multi-selection after a partial failure', async () => {

@@ -3510,16 +3510,20 @@ describe('workbenchReducer Phase 5 generation flow', () => {
   it('stamps an explicit page into the navigation query already on a multi-selection', () => {
     // A host navigating its own window passes the page that keeps the primary
     // item in that window — the same contract as selectGalleryItem with
-    // preserveNavigationQuery — rather than the grid's page.
+    // preserveNavigationQuery — rather than the grid's page. The query it goes
+    // into is the one already on the selection: the grid may have moved to
+    // another board and search since, and the host's list is not that.
     let state = createInitialWorkbenchState();
 
-    state = workbenchReducer(state, { page: 0, type: 'setGalleryPage' });
+    state = workbenchReducer(state, { boardId: 'board-deep', type: 'selectGalleryBoard' });
     state = workbenchReducer(state, {
       item: createGalleryImageItem('deep.png'),
       preserveNavigationQuery: false,
       selectionPage: 30,
       type: 'selectGalleryItem',
     });
+    state = workbenchReducer(state, { boardId: 'board-elsewhere', type: 'selectGalleryBoard' });
+    state = workbenchReducer(state, { searchTerm: 'sunset', type: 'setGallerySearchTerm' });
     state = workbenchReducer(state, {
       itemKeys: ['image:failed.png', 'image:successor.png'],
       primaryItem: createGalleryImageItem('successor.png'),
@@ -3528,9 +3532,12 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     });
 
     const values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+    const query = values.selectedImageQuery as { boardId: string; page: number; searchTerm: string };
 
     expect(values.selectedImagePage).toBe(30);
-    expect((values.selectedImageQuery as { page: number }).page).toBe(30);
+    expect(query.page).toBe(30);
+    expect(query.boardId).toBe('board-deep');
+    expect(query.searchTerm).toBe('');
     expect(values.galleryPage).toBe(0);
   });
 

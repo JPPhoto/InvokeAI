@@ -820,6 +820,114 @@ describe('preview keyboard navigation boundary', () => {
     );
   });
 
+  it('does not restore a remembered page into a different listing', async () => {
+    // Between the swap and the swap back the user moved to another board.
+    // The remembered page named a window of the first board's listing;
+    // stamped into the second board's query it would anchor that listing
+    // 1800 rows down around an image that is not in it.
+    setGalleryValues({
+      compareImage: legacyImage('compare-top', '2026-07-24T00:00:00.000Z'),
+      galleryPage: 0,
+      recentImages: [],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([createImageItem('deep-newer', '2026-07-20T00:00:02.000Z')]);
+    mocks.galleryItemPages[0] = { items: [createImageItem('compare-top', '2026-07-24T00:00:00.000Z')], total: 2 };
+
+    await render();
+
+    const swap = () =>
+      act(async () => {
+        registeredCommands.get('viewer.swapImages')?.();
+        await Promise.resolve();
+      });
+
+    await swap();
+    await commitLastSelection();
+    // The grid: another board, a click on one of its images. The compare slot
+    // survives that, still holding the deep image from the first board.
+    setGalleryValues({
+      compareImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImage: { ...legacyImage('other-board-image', '2026-07-25T00:00:00.000Z'), boardId: 'board-b' },
+      selectedImageName: 'other-board-image',
+      selectedImageQuery: { ...deepQuery, boardId: 'board-b', page: 0 },
+    });
+    await rerender();
+    await swap();
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'deep-newer' }),
+      undefined,
+      0,
+      true
+    );
+  });
+
+  it('only restores a remembered page for the item it was remembered for', async () => {
+    setGalleryValues({
+      compareImage: legacyImage('compare-top', '2026-07-24T00:00:00.000Z'),
+      galleryPage: 0,
+      recentImages: [],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([createImageItem('deep-newer', '2026-07-20T00:00:02.000Z')]);
+    mocks.galleryItemPages[0] = { items: [createImageItem('compare-top', '2026-07-24T00:00:00.000Z')], total: 2 };
+
+    await render();
+
+    const swap = () =>
+      act(async () => {
+        registeredCommands.get('viewer.swapImages')?.();
+        await Promise.resolve();
+      });
+
+    await swap();
+    await commitLastSelection();
+    // A different image lands in the compare slot before the swap back.
+    setGalleryValues({ compareImage: legacyImage('another-top', '2026-07-24T00:00:01.000Z') });
+    await rerender();
+    await swap();
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'another-top' }),
+      undefined,
+      0,
+      true
+    );
+  });
+
+  it('hands image actions the window anchor for an item on a later page of the window', async () => {
+    // The stamp is the anchor of the window holding the item, not the page
+    // the item happens to sit on: a successor from page 31 of a window
+    // anchored at page 30 is stamped 30.
+    const deepA = createImageItem('deep-a', '2026-07-20T00:00:04.000Z');
+    const deepB = createImageItem('deep-b', '2026-07-20T00:00:03.000Z');
+    const deepC = createImageItem('deep-c', '2026-07-20T00:00:02.000Z');
+
+    setGalleryValues({
+      galleryPage: 0,
+      recentImages: [],
+      selectedImage: legacyImage('deep-b', '2026-07-20T00:00:03.000Z'),
+      selectedImageName: 'deep-b',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([deepA, deepB], [deepC]);
+
+    await render();
+    // Cross the boundary so page 31 is part of the window.
+    await pressArrow('ArrowRight');
+    await commitLastSelection();
+
+    const context = mocks.imageActionOptions?.getItemActionContext?.();
+
+    expect(context?.items.map((item) => item.name)).toContain('deep-c');
+    expect(context?.getItemSelectionPage?.(deepC)).toBe(30);
+  });
+
   it('fetches the next infinite page before stepping past the loaded backend boundary', async () => {
     const newest: GalleryImage = {
       ...mocks.recentImages[0],
