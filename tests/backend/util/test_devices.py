@@ -673,3 +673,44 @@ def test_empty_cache_skips_while_peer_device_busy(monkeypatch):
             TorchDevice.clear_session_device()
     finally:
         GENERATION_DEVICE_POOL.reset()
+
+
+def test_install_peer_aware_empty_cache_wraps_torch_entry_point(monkeypatch):
+    """Third-party callers (diffusers' internal empty_device_cache) invoke
+    torch.cuda.empty_cache directly; the installed wrapper must apply the same
+    skip-while-a-peer-generates policy, idempotently, and pass through when quiet."""
+    import torch as torch_mod
+
+    from invokeai.backend.util.device_pool import GENERATION_DEVICE_POOL
+    from invokeai.backend.util.devices import TorchDevice, install_peer_aware_empty_cache
+
+    calls: list[str] = []
+    original = torch_mod.cuda.empty_cache
+    monkeypatch.setattr(torch_mod.cuda, "empty_cache", lambda: calls.append("cuda"))
+    try:
+        install_peer_aware_empty_cache()
+        wrapped = torch_mod.cuda.empty_cache
+        assert wrapped is not original
+        install_peer_aware_empty_cache()
+        assert torch_mod.cuda.empty_cache is wrapped, "install must be idempotent"
+
+        GENERATION_DEVICE_POOL.set_generation_devices([torch.device("cuda:0"), torch.device("cuda:1")])
+        try:
+            TorchDevice.set_session_device(torch.device("cuda:1"))
+            try:
+                GENERATION_DEVICE_POOL.acquire_session(torch.device("cuda:0"))
+                try:
+                    torch_mod.cuda.empty_cache()  # what diffusers calls
+                    assert calls == [], "wrapper ran empty_cache while a peer was mid-session"
+                finally:
+                    GENERATION_DEVICE_POOL.release_session(torch.device("cuda:0"))
+                torch_mod.cuda.empty_cache()
+                assert calls == ["cuda"], "wrapper did not pass through once quiet"
+            finally:
+                TorchDevice.clear_session_device()
+        finally:
+            GENERATION_DEVICE_POOL.reset()
+    finally:
+        # monkeypatch restores the attribute we set; make sure the true original is back for
+        # other tests regardless of ordering.
+        torch_mod.cuda.empty_cache = original
