@@ -174,6 +174,21 @@ export const pruneImageClusterMembers = (imageNames: readonly string[]): (() => 
  * legacy bare-image-name shape, and reads a file key that no longer resolves
  * in the registry as no search at all.
  */
+/**
+ * A reference that only this session can resolve — a dropped file or an
+ * image-map cluster.
+ *
+ * Both kinds name an entry in an in-memory registry, and their ids carry a
+ * per-realm token, so a persisted one can never resolve again: a reload, or a
+ * second tab, reads it as no search at all. Anything set against the ranking
+ * it named — the page the footer was on, above all — describes a list that
+ * will not exist there either.
+ */
+export const isSessionScopedGallerySemanticReference = (value: unknown): boolean =>
+  !!value &&
+  typeof value === 'object' &&
+  ((value as Record<string, unknown>).kind === 'file' || (value as Record<string, unknown>).kind === 'cluster');
+
 export const parseGallerySemanticReference = (value: unknown): GallerySemanticReference | null => {
   // Legacy shape: a bare image name.
   if (typeof value === 'string' && value) {

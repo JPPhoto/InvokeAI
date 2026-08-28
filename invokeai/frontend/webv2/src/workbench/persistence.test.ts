@@ -72,6 +72,78 @@ describe('workbench persistence migration', () => {
     expect(hydratePersistedWorkbenchSnapshot(persisted)?.state).toEqual(state);
   });
 
+  it('does not persist a search only this session can resolve, nor the page it left behind', async () => {
+    // The footer paginates the RANKING while a similarity search is on
+    // screen, so this page is a rank page. Cluster members live in an
+    // in-memory registry the next session cannot read, so the ranking is gone
+    // over there — and a rank page read as a board page lands the grid on an
+    // unrelated slice.
+    const state = createInitialWorkbenchState();
+    const project = state.projects[0];
+    const galleryEntry = Object.entries(project?.widgetInstances ?? {}).find(
+      ([, instance]) => instance.typeId === 'gallery'
+    );
+
+    expect(galleryEntry).toBeDefined();
+
+    const [galleryInstanceId, galleryInstance] = galleryEntry!;
+    const values = {
+      ...galleryInstance.state.values,
+      galleryPage: 3,
+      paginationMode: 'paginated',
+      semanticImageQuery: { clusterId: 'cluster-1', kind: 'cluster', label: 'beaches' },
+    };
+    const snapshot = await localStorageWorkbenchPersistence.saveWorkbench({
+      ...state,
+      projects: [
+        {
+          ...project!,
+          widgetInstances: {
+            ...project!.widgetInstances,
+            [galleryInstanceId]: { ...galleryInstance, state: { ...galleryInstance.state, values } },
+          },
+        },
+      ],
+    });
+    const persistedValues = snapshot.state.projects[0]?.widgetInstances[galleryInstanceId]?.state.values;
+
+    expect(persistedValues?.semanticImageQuery).toBeNull();
+    expect(persistedValues?.galleryPage).toBe(0);
+  });
+
+  it('keeps a paginated page whose search survives the reload', async () => {
+    // A text search is rebuilt from the persisted value, so the page the user
+    // was reading is still a page of the same list.
+    const state = createInitialWorkbenchState();
+    const project = state.projects[0];
+    const galleryEntry = Object.entries(project?.widgetInstances ?? {}).find(
+      ([, instance]) => instance.typeId === 'gallery'
+    );
+    const [galleryInstanceId, galleryInstance] = galleryEntry!;
+    const values = {
+      ...galleryInstance.state.values,
+      galleryPage: 3,
+      paginationMode: 'paginated',
+      semanticImageQuery: { kind: 'text', query: 'sunset' },
+    };
+    const snapshot = await localStorageWorkbenchPersistence.saveWorkbench({
+      ...state,
+      projects: [
+        {
+          ...project!,
+          widgetInstances: {
+            ...project!.widgetInstances,
+            [galleryInstanceId]: { ...galleryInstance, state: { ...galleryInstance.state, values } },
+          },
+        },
+      ],
+    });
+    const persistedValues = snapshot.state.projects[0]?.widgetInstances[galleryInstanceId]?.state.values;
+
+    expect(persistedValues?.semanticImageQuery).toEqual({ kind: 'text', query: 'sunset' });
+    expect(persistedValues?.galleryPage).toBe(3);
+  });
+
   it('drops corrupt localStorage snapshots instead of throwing', async () => {
     storage.set('invokeai:v7:webv2:workbench', '{not json');
 

@@ -1,7 +1,11 @@
 import type { HydratedWorkbenchSnapshot, PersistedWorkbenchSnapshotV1 } from '@workbench/persistenceContracts';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
-import { getGalleryPage, getGallerySettings } from '@features/gallery/contracts';
+import {
+  getGalleryPage,
+  getGallerySettings,
+  isSessionScopedGallerySemanticReference,
+} from '@features/gallery/contracts';
 
 import { timeWorkbenchPerf } from './performanceMarks';
 
@@ -17,30 +21,58 @@ export interface WorkbenchPersistenceService {
 const isBrowser = (): boolean => typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 
 /**
- * In infinite mode the gallery's `galleryPage` is not a page number but the
- * anchor of a mid-board window, set by a reveal from the image map. That is a
- * "you are here" position for the current session: restored a day later it
- * would open the gallery stranded in the middle of a board, with no page
- * control (the footer's is paginated-only) and no way back to the top short of
- * switching boards. Paginated pages stay persisted — there the value really is
- * the page the user was reading.
+ * Two gallery positions describe the current session only, and both are read
+ * on reload as if they described the board.
+ *
+ * In infinite mode `galleryPage` is not a page number but the anchor of a
+ * mid-board window, set by a reveal from the image map. That is a "you are
+ * here" for this session: restored a day later it would open the gallery
+ * stranded in the middle of a board, with no page control (the footer's is
+ * paginated-only) and no way back to the top short of switching boards.
+ * Paginated pages stay persisted — there the value really is the page the
+ * user was reading.
+ *
+ * A dropped file or an image-map cluster is likewise session-scoped: it names
+ * an entry in an in-memory registry that the next session cannot resolve, so
+ * the ranking evaporates on the first parse over there. Nothing observes that
+ * moment, so anything set against the ranking outlives it — and in paginated
+ * mode the footer paginates the RANKING, which makes `galleryPage` a rank
+ * page that the board listing would then read as its own and answer with an
+ * unrelated slice. The reference cannot survive the reload, so neither may
+ * the page it named.
  */
-const stripInfiniteWindowAnchor = (project: Project): Project => {
+const stripSessionScopedGalleryState = (project: Project): Project => {
   let didChange = false;
   const widgetInstances = Object.fromEntries(
     Object.entries(project.widgetInstances).map(([instanceId, instance]) => {
       const values = instance.state.values;
 
-      if (
-        instance.typeId !== 'gallery' ||
-        getGallerySettings(values).paginationMode !== 'infinite' ||
-        getGalleryPage(values) === 0
-      ) {
+      if (instance.typeId !== 'gallery') {
+        return [instanceId, instance];
+      }
+
+      const hasSessionScopedSearch = isSessionScopedGallerySemanticReference(values.semanticImageQuery);
+      const hasWindowAnchor = getGallerySettings(values).paginationMode === 'infinite' && getGalleryPage(values) > 0;
+
+      if (!hasSessionScopedSearch && !hasWindowAnchor) {
         return [instanceId, instance];
       }
 
       didChange = true;
-      return [instanceId, { ...instance, state: { ...instance.state, values: { ...values, galleryPage: 0 } } }];
+      return [
+        instanceId,
+        {
+          ...instance,
+          state: {
+            ...instance.state,
+            values: {
+              ...values,
+              galleryPage: 0,
+              ...(hasSessionScopedSearch ? { semanticImageQuery: null } : {}),
+            },
+          },
+        },
+      ];
     })
   );
 
@@ -57,7 +89,7 @@ export const stripTransientWorkbenchState = (state: WorkbenchState): WorkbenchSt
     // snapshots immediately and never let full-project undo entries consume
     // localStorage quota or grow across browser sessions.
     projects: nextState.projects.map((project) => ({
-      ...stripInfiniteWindowAnchor(project),
+      ...stripSessionScopedGalleryState(project),
       undoRedo: { future: [], past: [] },
     })),
   };

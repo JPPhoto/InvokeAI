@@ -36,6 +36,7 @@ export {
 export { GALLERY_RECENT_IMAGE_LIMIT, getBoundedRecentImages } from './core/recentImages';
 export {
   getImageCluster,
+  isSessionScopedGallerySemanticReference,
   parseGallerySemanticReference,
   registerImageCluster,
   type GallerySemanticReference,
