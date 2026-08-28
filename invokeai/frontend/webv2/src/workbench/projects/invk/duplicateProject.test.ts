@@ -86,6 +86,7 @@ const sourceRecord = (document: Record<string, unknown> = {}): ProjectRecordDTO 
       ...document,
     },
     name: 'Source',
+    minimum_canvas_schema_version: 2,
     project_id: 'source',
     revision: 4,
     updated_at: '2026-06-10 10:00:00.000',
@@ -131,11 +132,18 @@ beforeEach(async () => {
   transport.copyImagesToBoard.mockImplementation((names: readonly string[]) => Promise.resolve(copiesOf(names)));
   transport.copyVideosToBoard.mockImplementation((names: readonly string[]) => Promise.resolve(copiesOf(names)));
   api.createProjectSettled.mockImplementation(
-    (request: { board_id?: string; data: Record<string, unknown>; name: string; project_id: string }) =>
+    (request: {
+      board_id?: string;
+      data: Record<string, unknown>;
+      minimum_canvas_schema_version?: number;
+      name: string;
+      project_id: string;
+    }) =>
       Promise.resolve({
         board_id: request.board_id ?? 'server-created-board',
         created_at: '2026-06-10 11:00:00.000',
         data: request.data,
+        minimum_canvas_schema_version: request.minimum_canvas_schema_version ?? 2,
         name: request.name,
         project_id: request.project_id,
         revision: 1,
@@ -162,6 +170,7 @@ describe('duplicateProjectRecord', () => {
     );
     expect(api.createProjectSettled.mock.calls[0]![0]).toMatchObject({
       board_id: 'staging-board',
+      minimum_canvas_schema_version: 2,
       name: 'Source copy',
     });
     expect(result.record.project_id).not.toBe('source');

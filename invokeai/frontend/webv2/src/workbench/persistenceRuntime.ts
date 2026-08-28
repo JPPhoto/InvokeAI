@@ -24,6 +24,8 @@ export interface PersistenceAggregatePort {
 }
 
 export interface WorkbenchPersistencePort {
+  /** Confirms the aggregate replaced a divergent project with the server/recovery pair. */
+  acknowledgeConflictResolution(projectId: string): void;
   hasPendingChanges(): boolean;
   loadWorkbench(options?: WorkbenchLoadOptions): Promise<HydratedWorkbenchSnapshot | null>;
   saveWorkbench(state: WorkbenchState): Promise<WorkbenchSaveResult>;
@@ -104,6 +106,7 @@ export const createWorkbenchPersistenceRuntime = ({
   const applySaveResult = (result: WorkbenchSaveResult): void => {
     for (const conflict of result.conflicts) {
       aggregate.reconcileConflict(conflict);
+      persistence.acknowledgeConflictResolution(conflict.projectId);
     }
 
     for (const fork of result.deletedProjectForks) {

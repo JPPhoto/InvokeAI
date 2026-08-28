@@ -140,11 +140,18 @@ const capturedArchive = (): File => {
 /** The server answers with the board it claimed, or with the one it created for a boardless create. */
 const acceptCreate = (): void => {
   api.createProjectSettled.mockImplementation(
-    (request: { board_id?: string; data?: Record<string, unknown>; name: string; project_id?: string }) =>
+    (request: {
+      board_id?: string;
+      data?: Record<string, unknown>;
+      minimum_canvas_schema_version?: number;
+      name: string;
+      project_id?: string;
+    }) =>
       Promise.resolve({
         board_id: request.board_id ?? 'server-created-board',
         created_at: '2026-06-10 10:00:00.000',
         data: request.data ?? {},
+        minimum_canvas_schema_version: request.minimum_canvas_schema_version ?? 2,
         name: request.name,
         project_id: request.project_id ?? '',
         revision: 1,
@@ -206,6 +213,27 @@ describe('exportLibraryProject', () => {
 
     expect(api.getProject).toHaveBeenCalledWith('p1', expect.anything());
     expect(downloads.downloadBlob.mock.calls[0]![1]).toBe('Closed.invk');
+  });
+
+  it('records the source project compatibility floor in the archive', async () => {
+    const document = persistence.serializeProjectDocument({ ...createDraftProject([]), name: 'Future history' });
+
+    api.getProject.mockResolvedValue({
+      data: document,
+      minimum_canvas_schema_version: 3,
+      name: 'Future history',
+      project_id: 'p1',
+      revision: 3,
+    });
+
+    await projectFile.exportLibraryProject('p1');
+
+    const { readArchive, readEntryText } = await import('./invk/archive');
+    const [blob] = downloads.downloadBlob.mock.calls.at(-1)! as [Blob];
+    const entries = await readArchive(new Uint8Array(await blob.arrayBuffer()));
+    const manifest = JSON.parse(readEntryText(entries.get('manifest.json')!)) as Record<string, unknown>;
+
+    expect(manifest.minimumCanvasSchemaVersion).toBe(3);
   });
 
   /**
@@ -510,7 +538,30 @@ describe('importing a project board', () => {
     await projectFile.importProjectFile(capturedArchive());
 
     expect(transport.createStagingBoard).not.toHaveBeenCalled();
+    expect(api.createProjectSettled.mock.calls[0]![0]).toMatchObject({ minimum_canvas_schema_version: 2 });
     expect(api.createProjectSettled.mock.calls[0]![0]).not.toHaveProperty('board_id');
+  });
+
+  it('refuses an incompatible archive before staging or restoring any media', async () => {
+    const { binaryEntry, readArchive, readEntryText, textEntry, writeArchive } = await import('./invk/archive');
+
+    await projectFile.exportOpenProject(boardProject());
+
+    const original = capturedArchive();
+    const entries = await readArchive(new Uint8Array(await original.arrayBuffer()));
+    const manifest = JSON.parse(readEntryText(entries.get('manifest.json')!)) as Record<string, unknown>;
+
+    const rewrittenEntries = new Map([...entries].map(([path, bytes]) => [path, binaryEntry(bytes)]));
+
+    rewrittenEntries.set('manifest.json', textEntry(JSON.stringify({ ...manifest, minimumCanvasSchemaVersion: 3 })));
+    const archive = new File([await writeArchive(rewrittenEntries)], original.name);
+
+    await expect(projectFile.importProjectFile(archive)).rejects.toMatchObject({ reason: 'unsupported-version' });
+
+    expect(transport.createStagingBoard).not.toHaveBeenCalled();
+    expect(transport.uploadBoardImage).not.toHaveBeenCalled();
+    expect(transport.uploadBoardVideo).not.toHaveBeenCalled();
+    expect(api.createProjectSettled).not.toHaveBeenCalled();
   });
 
   it('deletes the media it created and then the staging board when the create fails', async () => {

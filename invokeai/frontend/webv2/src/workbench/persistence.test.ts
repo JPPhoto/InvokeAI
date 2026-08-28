@@ -38,7 +38,13 @@ describe('workbench persistence migration', () => {
       version: 1,
     });
 
-    expect(snapshot).toEqual({ refusedProjects: [], savedAt: '2026-06-09T00:00:00.000Z', state, version: 1 });
+    expect(snapshot).toEqual({
+      hasUnretainedRefusedProjects: false,
+      refusedProjects: [],
+      savedAt: '2026-06-09T00:00:00.000Z',
+      state,
+      version: 1,
+    });
   });
 
   it('migrates legacy schemaVersion snapshots to the authoritative version field', () => {
@@ -73,6 +79,7 @@ describe('workbench persistence migration', () => {
   it('maps the trusted live snapshot to a versioned untrusted storage contract', () => {
     const state = createInitialWorkbenchState();
     const persisted = serializeWorkbenchPersistenceSnapshot({
+      hasUnretainedRefusedProjects: false,
       refusedProjects: [],
       savedAt: '2026-06-09T00:00:00.000Z',
       state,
@@ -181,6 +188,93 @@ describe('workbench persistence migration', () => {
     expect(storage.get('invokeai:v7:webv2:workbench:refused-projects')).toBeUndefined();
   });
 
+  it('does not remove an unsupported project from the primary cache if recovery retention fails', async () => {
+    const state = createInitialWorkbenchState();
+    const supported = state.projects[0]!;
+    const future = { ...supported, id: 'future', name: 'Future', canvas: { ...supported.canvas, version: 3 } };
+    const storageKey = 'invokeai:v7:webv2:workbench';
+
+    storage.set(
+      storageKey,
+      JSON.stringify({
+        savedAt: '2026-06-09T00:00:00.000Z',
+        state: { ...state, projects: [supported, future] },
+        version: 1,
+      })
+    );
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key.endsWith(':refused-projects')) {
+        throw new DOMException('quota', 'QuotaExceededError');
+      }
+      storage.set(key, value);
+    });
+
+    try {
+      await localStorageWorkbenchPersistence.loadWorkbench();
+    } finally {
+      setItem.mockRestore();
+    }
+
+    const cached = JSON.parse(storage.get(storageKey)!) as { state: WorkbenchState };
+
+    expect(cached.state.projects.map((project) => project.id)).toEqual([supported.id, future.id]);
+    expect(storage.has(`${storageKey}:refused-projects`)).toBe(false);
+  });
+
+  it('does not classify a failed primary-cache compaction as corrupt input', async () => {
+    const state = createInitialWorkbenchState();
+    const supported = state.projects[0]!;
+    const future = { ...supported, id: 'future', name: 'Future', canvas: { ...supported.canvas, version: 3 } };
+    const storageKey = 'invokeai:v7:webv2:workbench';
+
+    storage.set(
+      storageKey,
+      JSON.stringify({
+        savedAt: '2026-06-09T00:00:00.000Z',
+        state: { ...state, projects: [supported, future] },
+        version: 1,
+      })
+    );
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === storageKey) {
+        throw new DOMException('quota', 'QuotaExceededError');
+      }
+      storage.set(key, value);
+    });
+
+    let hydrated;
+
+    try {
+      hydrated = await localStorageWorkbenchPersistence.loadWorkbench();
+    } finally {
+      setItem.mockRestore();
+    }
+
+    const cached = JSON.parse(storage.get(storageKey)!) as { state: WorkbenchState };
+
+    expect(hydrated?.state.projects.map((project) => project.id)).toEqual([supported.id]);
+    expect(cached.state.projects.map((project) => project.id)).toEqual([supported.id, future.id]);
+    expect(storage.has(`${storageKey}:refused-projects`)).toBe(true);
+  });
+
+  it('does not let a metadata-only refusal erase an existing raw recovery document', async () => {
+    storage.set('invokeai:v7:webv2:workbench:refused-projects', '{"future":{"name":"Local work"}}');
+
+    await localStorageWorkbenchPersistence.retainRefusedProjects([
+      {
+        projectId: 'future',
+        projectName: 'Future',
+        raw: null,
+        refusal: { raw: null, scope: 'document', status: 'unsupported-version', version: 3 },
+        source: 'canvas',
+      },
+    ]);
+
+    expect(JSON.parse(storage.get('invokeai:v7:webv2:workbench:refused-projects')!)).toEqual({
+      future: { name: 'Local work' },
+    });
+  });
+
   it('clears the refused bucket with the cache', async () => {
     storage.set('invokeai:v7:webv2:workbench:refused-projects', '{"future":{}}');
 
@@ -233,7 +327,7 @@ describe('workbench persistence migration', () => {
     expect(hydrated?.state.projects[0]?.undoRedo).toEqual({ future: [], past: [] });
   });
 
-  it('treats localStorage quota failures as cache misses, not save failures', async () => {
+  it('rejects localStorage quota failures instead of reporting a non-durable save', async () => {
     const originalSet = window.localStorage.setItem;
 
     try {
@@ -245,11 +339,9 @@ describe('workbench persistence migration', () => {
         originalSet.call(window.localStorage, key, value);
       };
 
-      await expect(
-        localStorageWorkbenchPersistence.saveWorkbench(createInitialWorkbenchState())
-      ).resolves.toMatchObject({
-        version: 1,
-      });
+      await expect(localStorageWorkbenchPersistence.saveWorkbench(createInitialWorkbenchState())).rejects.toThrow(
+        'Quota exceeded'
+      );
     } finally {
       window.localStorage.setItem = originalSet;
     }

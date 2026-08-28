@@ -188,6 +188,7 @@ export const duplicateProjectRecord = async (
     const record = await createProjectSettled(
       {
         data: remapAssetRefs(canonicalDocument, restored.mappings),
+        minimum_canvas_schema_version: input.record.minimum_canvas_schema_version,
         name,
         project_id: id,
         ...(stagingBoardId === null ? {} : { board_id: stagingBoardId }),

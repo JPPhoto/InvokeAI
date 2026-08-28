@@ -411,6 +411,7 @@
   "projects": {
     "allSavedAlreadyOpen": "All saved projects are already open.",
     "closeProjectLabel": "Close {{name}}",
+    "closeBlocked": "Project not closed",
     "couldNotOpen": "Could not open project",
     "couldNotOpenDescription": "\"{{name}}\" could not be loaded from the server.",
     "createNewProject": "Create new project",
@@ -428,6 +429,7 @@
     "exported": "Exported \"{{name}}\"",
     "exporting": "Exporting \"{{name}}\"…",
     "failedToLoad": "Failed to load your projects.",
+    "requiresNewerInvoke": "Requires a newer Invoke",
     "file": {
       "bundlingProgress": "Bundling {{completed}} of {{total}} assets…",
       "damaged": "This project file is damaged and cannot be opened.",
@@ -439,6 +441,7 @@
       "missingReferences_other": "{{count}} project references could not be included.",
       "notAProject": "This file is not an Invoke project.",
       "notSynced": "This project has changes that have not reached the server yet. Try again once it reconnects.",
+      "updateClient": "This project now requires a newer version of Invoke. Your local changes remain saved in this browser.",
       "supersededElsewhere": "This project was changed on another device. Your local edits continue in the recovered copy — use that one instead.",
       "packing": "Packing the archive…",
       "restoringProgress": "Restoring {{completed}} of {{total}} assets…",
@@ -1986,6 +1989,7 @@
       "sync": "Sync",
       "syncOffline": "Offline — saved in this browser",
       "syncSynced": "Synced (revision {{revision}})",
+      "syncUpdateClient": "Update Invoke to sync — saved in this browser",
       "syncWaiting": "Waiting to sync"
     },
     "preview": {

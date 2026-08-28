@@ -92,6 +92,7 @@
     "canvasLayerContent.ts": "workbench",
     "canvasLoadContracts.ts": "workbench",
     "canvasMigration.ts": "workbench",
+    "canvasSchemaVersion.ts": "workbench",
     "canvasProjectMutationPort.ts": "workbench",
     "canvasProjectMutations.ts": "workbench",
     "canvasStagingView.ts": "workbench",

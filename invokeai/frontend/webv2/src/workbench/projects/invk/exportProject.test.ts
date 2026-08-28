@@ -33,6 +33,7 @@ const planInput = {
   appVersion: '7.0',
   boardItems: [],
   createdAt: '2026-08-04T00:00:00.000Z',
+  minimumCanvasSchemaVersion: 3,
   name: 'My project',
   projectDocument: projectDocument(),
 };
@@ -49,6 +50,7 @@ describe('planInvkExport', () => {
     const plan = planInvkExport(planInput);
 
     expect(plan.fileName).toBe('My project.invk');
+    expect(plan.manifestInput.minimumCanvasSchemaVersion).toBe(3);
     expect(plan.manifestInput.sourceProjectId).toBe('project-1');
   });
 
@@ -131,6 +133,7 @@ describe('executeInvkExport', () => {
       contents: 'workbench-project',
       cover: 'cover.webp',
       name: 'My project',
+      minimumCanvasSchemaVersion: 3,
       sourceProjectId: 'project-1',
       version: 2,
     });

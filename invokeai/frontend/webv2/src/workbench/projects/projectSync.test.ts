@@ -2,7 +2,7 @@ import type { Project } from '@workbench/projectContracts';
 
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { createInitialWorkbenchState, workbenchReducer } from '@workbench/workbenchState.testing';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProjectRecoveredIdentity } from './projectFlush';
 
@@ -130,6 +130,10 @@ describe('project document serialization', () => {
 });
 
 describe('createRecoveredDocument', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('keys the fork to the original and stamps the recovery time', () => {
     const project = getProject({ name: 'My Project' });
     const { recoveredDocument, recoveredIdentity } = createRecoveredDocument(
@@ -138,7 +142,7 @@ describe('createRecoveredDocument', () => {
     );
 
     expect(recoveredDocument.recoveryOf).toBe(project.id);
-    expect(recoveredIdentity.id.startsWith(`${project.id}-recovered-`)).toBe(true);
+    expect(recoveredIdentity.id.startsWith('project-')).toBe(true);
     expect(recoveredIdentity.name).toBe('My Project (recovered)');
     expect(typeof recoveredDocument.recoveredAt).toBe('string');
     // The identity is what the reducer re-labels the live project with, so it has to agree with the
@@ -147,6 +151,19 @@ describe('createRecoveredDocument', () => {
     expect(recoveredDocument.name).toBe(recoveredIdentity.name);
     expect(recoveredDocument.recoveredAt).toBe(recoveredIdentity.recoveredAt);
     expect(recoveredDocument.recoveryOf).toBe(recoveredIdentity.recoveryOf);
+  });
+
+  it('gives simultaneous recoveries distinct project ids', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
+    const project = getProject({ name: 'Concurrent recovery' });
+    const document = serializeProjectDocument(project);
+
+    const first = createRecoveredDocument(project, document);
+    const second = createRecoveredDocument(project, document);
+
+    expect(first.recoveredIdentity.id).not.toBe(second.recoveredIdentity.id);
+    expect(first.recoveredIdentity.recoveryOf).toBe(second.recoveredIdentity.recoveryOf);
   });
 
   it('collapses recovery chains to the root and never stacks name suffixes', () => {

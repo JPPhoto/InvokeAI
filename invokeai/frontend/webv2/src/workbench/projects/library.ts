@@ -8,6 +8,10 @@ import {
 import { createExternalStore } from '@platform/state/externalStore';
 import { createSingleFlight } from '@platform/state/singleFlight';
 import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
+import {
+  DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
+  MAX_SUPPORTED_CANVAS_SCHEMA_VERSION,
+} from '@workbench/canvasSchemaVersion';
 import { createLocalStorageWorkbenchPersistence } from '@workbench/persistence';
 
 import type { ProjectTransferIssues } from './invk/transfer';
@@ -50,6 +54,7 @@ export interface ProjectSummary {
   id: string;
   name: string;
   revision: number;
+  minimumCanvasSchemaVersion: number;
   createdAt: string;
   updatedAt: string;
   /**
@@ -89,6 +94,7 @@ const toSummary = (dto: ProjectSummaryDTO): ProjectSummary =>
   withCover({
     createdAt: normalizeServerTimestamp(dto.created_at),
     id: dto.project_id,
+    minimumCanvasSchemaVersion: dto.minimum_canvas_schema_version,
     name: dto.name,
     revision: dto.revision,
     updatedAt: normalizeServerTimestamp(dto.updated_at),
@@ -172,7 +178,7 @@ export const refreshProjectLibrary = (): Promise<void> =>
  * with the server's value.
  */
 export const upsertProjectSummary = (
-  entry: { id: string; name: string; revision: number | null },
+  entry: { id: string; minimumCanvasSchemaVersion?: number; name: string; revision: number | null },
   owner: AccountScope
 ): void => {
   if (!isAccountScopeCurrent(owner)) {
@@ -185,6 +191,8 @@ export const upsertProjectSummary = (
   const next: ProjectSummary = withCover({
     createdAt: existing?.createdAt ?? updatedAt,
     id: entry.id,
+    minimumCanvasSchemaVersion:
+      entry.minimumCanvasSchemaVersion ?? existing?.minimumCanvasSchemaVersion ?? DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
     name: entry.name,
     revision: entry.revision ?? existing?.revision ?? 0,
     updatedAt,
@@ -195,6 +203,9 @@ export const upsertProjectSummary = (
     summaries: sortSummaries([...summaries.filter((summary) => summary.id !== entry.id), next]),
   });
 };
+
+export const isProjectSummaryCompatible = (summary: ProjectSummary): boolean =>
+  summary.minimumCanvasSchemaVersion <= MAX_SUPPORTED_CANVAS_SCHEMA_VERSION;
 
 /**
  * Every mutation below branches on one question: does the workbench hold this project? If so it
@@ -289,7 +300,15 @@ export const readAcknowledgedProject = async (projectId: string, owner: AccountS
 export const adoptCreatedProject = (record: ProjectRecordDTO, owner: AccountScope): ProjectSummary => {
   const summary = toSummary(record);
 
-  upsertProjectSummary({ id: summary.id, name: summary.name, revision: summary.revision }, owner);
+  upsertProjectSummary(
+    {
+      id: summary.id,
+      minimumCanvasSchemaVersion: summary.minimumCanvasSchemaVersion,
+      name: summary.name,
+      revision: summary.revision,
+    },
+    owner
+  );
 
   return summary;
 };

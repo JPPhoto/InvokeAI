@@ -14,6 +14,7 @@ import { z } from 'zod';
 
 import type { CanvasLoadDiagnostic, CanvasLoadResult, CanvasVersionScope } from './canvasLoadContracts';
 
+import { MAX_SUPPORTED_CANVAS_SCHEMA_VERSION } from './canvasSchemaVersion';
 import { normalizeControlAdapter } from './controlAdapters';
 
 export const DEFAULT_CANVAS_DOCUMENT_WIDTH = 1024;
@@ -433,7 +434,6 @@ type Refusal =
 type LoadStep<T> = Extract<CanvasLoadResult<T>, { status: 'loaded' }> | Refusal;
 
 const LEGACY_CANVAS_VERSION = 1;
-const CURRENT_CANVAS_VERSION = 2;
 
 type DeclaredVersion =
   | { kind: 'absent' }
@@ -449,10 +449,10 @@ const classifyVersion = (value: unknown): DeclaredVersion => {
   if (value === LEGACY_CANVAS_VERSION) {
     return { kind: 'legacy' };
   }
-  if (value === CURRENT_CANVAS_VERSION) {
+  if (value === MAX_SUPPORTED_CANVAS_SCHEMA_VERSION) {
     return { kind: 'current' };
   }
-  if (typeof value === 'number' && Number.isInteger(value) && value > CURRENT_CANVAS_VERSION) {
+  if (typeof value === 'number' && Number.isInteger(value) && value > MAX_SUPPORTED_CANVAS_SCHEMA_VERSION) {
     return { kind: 'future', version: value };
   }
   return { kind: 'malformed' };

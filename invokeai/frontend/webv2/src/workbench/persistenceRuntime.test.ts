@@ -30,6 +30,7 @@ const deferred = <T>() => {
 };
 
 const snapshot = (state: WorkbenchState, savedAt = '2026-07-17T00:00:00.000Z'): HydratedWorkbenchSnapshot => ({
+  hasUnretainedRefusedProjects: false,
   refusedProjects: [],
   savedAt,
   state,
@@ -196,6 +197,7 @@ const createAggregate = (initialState = createInitialWorkbenchState()) => {
 const createPersistence = (load: WorkbenchPersistencePort['loadWorkbench']) => {
   let pending = false;
   const persistence: WorkbenchPersistencePort = {
+    acknowledgeConflictResolution: vi.fn(),
     hasPendingChanges: () => pending,
     loadWorkbench: vi.fn(load),
     saveWorkbench: vi.fn((state) => Promise.resolve(saveResult(state))),
@@ -548,6 +550,7 @@ describe('Workbench persistence runtime', () => {
 
     expect(aggregate.events).toContain('conflict');
     expect(aggregate.state.projects.map((project) => project.name)).toEqual(['Server', 'Recovered']);
+    expect(persistence.acknowledgeConflictResolution).toHaveBeenCalledWith(original.id);
     clock.runAll();
     expect(persistence.saveWorkbench).toHaveBeenCalledTimes(2);
   });

@@ -1,6 +1,6 @@
 import type { ProjectRecordDTO } from '@workbench/projects/api';
 
-import { Dialog, Icon, Portal, Spinner, Stack, Text } from '@chakra-ui/react';
+import { Badge, Dialog, Icon, Portal, Spinner, Stack, Text } from '@chakra-ui/react';
 import { flushGenerateDrafts } from '@features/generation/react';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import {
@@ -9,10 +9,16 @@ import {
   isAccountScopeCurrent,
 } from '@platform/state/accountLifecycle';
 import { areArraysEqual } from '@platform/state/selectors';
+import { getApiErrorMessage } from '@platform/transport/http';
 import { Button, CloseButton, Row, Scrollable } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { formatRelativeTime } from '@workbench/launchpad/formatRelativeTime';
-import { refreshProjectLibrary, useProjectLibrarySelector, type ProjectSummary } from '@workbench/projects/library';
+import {
+  isProjectSummaryCompatible,
+  refreshProjectLibrary,
+  useProjectLibrarySelector,
+  type ProjectSummary,
+} from '@workbench/projects/library';
 import { describeRefusedProject } from '@workbench/projects/projectLoadRefusal';
 import { useImportProjectFile } from '@workbench/projects/useProjectFileActions';
 import { useNotify } from '@workbench/useNotify';
@@ -59,10 +65,16 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
     async (summary: ProjectSummary) => {
       const owner = captureAccountScope();
 
+      if (!isProjectSummaryCompatible(summary)) {
+        notify.error(t('projects.couldNotOpen'), t('projects.file.updateClient'));
+
+        return;
+      }
+
       setBusyProjectId(summary.id);
 
       try {
-        const result = await persistence.hydrateProjectFromServer(summary.id);
+        const result = await persistence.hydrateProjectFromServer(summary.id, summary.name);
 
         assertAccountScopeCurrent(owner);
         if (result.status === 'refused') {
@@ -89,7 +101,7 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
 
         notify.error(
           t('projects.couldNotOpen'),
-          error instanceof Error ? error.message : t('projects.couldNotOpenDescription', { name: summary.name })
+          getApiErrorMessage(error, t('projects.couldNotOpenDescription', { name: summary.name }))
         );
       } finally {
         if (isAccountScopeCurrent(owner)) {
@@ -146,7 +158,7 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
                     <OpenProjectRow
                       key={summary.id}
                       isBusy={busyProjectId === summary.id}
-                      isDisabled={busyProjectId !== null}
+                      isDisabled={busyProjectId !== null || !isProjectSummaryCompatible(summary)}
                       summary={summary}
                       onOpen={openProject}
                     />
@@ -191,6 +203,7 @@ const OpenProjectRow = ({
 }) => {
   const open = useCallback(() => void onOpen(summary), [onOpen, summary]);
   const { t } = useTranslation();
+  const isCompatible = isProjectSummaryCompatible(summary);
 
   return (
     <Row asChild gap="2.5" px="2.5" py="2" rounded="md" _disabled={disabledRowStyles}>
@@ -200,6 +213,11 @@ const OpenProjectRow = ({
           <Text color="fg.muted" fontSize="2xs">
             {t('projects.editedRelative', { time: formatRelativeTime(summary.updatedAt) })}
           </Text>
+          {!isCompatible ? (
+            <Badge alignSelf="flex-start" colorPalette="orange" size="xs" variant="surface">
+              {t('projects.requiresNewerInvoke')}
+            </Badge>
+          ) : null}
         </Stack>
         {isBusy ? <Spinner color="fg.muted" size="xs" /> : <Icon as={ArrowRightIcon} boxSize="3.5" color="fg.muted" />}
       </button>

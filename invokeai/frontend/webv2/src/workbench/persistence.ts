@@ -16,6 +16,11 @@ export interface WorkbenchPersistenceService {
   clearWorkbench(): Promise<void>;
   /** Drops a refused project's retained raw document, e.g. after the project is deleted. */
   forgetRefusedProject(projectId: string): Promise<void>;
+  /**
+   * Moves raw documents this client cannot open into the recovery bucket without rewriting them.
+   * Returns false when the recovery bucket could not be written.
+   */
+  retainRefusedProjects(refusedProjects: readonly RefusedWorkbenchProject[]): Promise<boolean>;
 }
 
 const isBrowser = (): boolean => typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
@@ -68,6 +73,7 @@ export const stripTransientWorkbenchState = (state: WorkbenchState): WorkbenchSt
 };
 
 const createSnapshot = (state: WorkbenchState): HydratedWorkbenchSnapshot => ({
+  hasUnretainedRefusedProjects: false,
   refusedProjects: [],
   savedAt: new Date().toISOString(),
   state: stripTransientWorkbenchState(state),
@@ -115,6 +121,7 @@ export const hydratePersistedWorkbenchSnapshot = (value: unknown): HydratedWorkb
     : (projects[0]?.id ?? '');
 
   return {
+    hasUnretainedRefusedProjects: false,
     refusedProjects,
     savedAt: typeof record.savedAt === 'string' ? record.savedAt : new Date().toISOString(),
     state: stripTransientWorkbenchState({ ...state, activeProjectId, projects }),
@@ -152,30 +159,33 @@ export const createLocalStorageWorkbenchPersistence = (storageSuffix: string): W
     }
   };
 
-  const writeRefused = (refused: Record<string, unknown>): void => {
+  const writeRefused = (refused: Record<string, unknown>): boolean => {
     try {
       if (Object.keys(refused).length === 0) {
         window.localStorage.removeItem(refusedKey);
       } else {
         window.localStorage.setItem(refusedKey, JSON.stringify(refused));
       }
+      return true;
     } catch {
-      // Cache only; the server copy, when there is one, is untouched.
+      return false;
     }
   };
 
-  const retainRefused = (refusedProjects: readonly RefusedWorkbenchProject[]): void => {
+  const retainRefused = (refusedProjects: readonly RefusedWorkbenchProject[]): boolean => {
     if (refusedProjects.length === 0) {
-      return;
+      return true;
     }
     const refused = readRefused();
 
     for (const project of refusedProjects) {
-      if (project.projectId) {
+      // A server refusal carries metadata only. Never let it erase a raw local recovery document
+      // retained for the same id.
+      if (project.projectId && project.raw !== null && project.raw !== undefined) {
         refused[project.projectId] = project.raw;
       }
     }
-    writeRefused(refused);
+    return writeRefused(refused);
   };
 
   return {
@@ -210,20 +220,34 @@ export const createLocalStorageWorkbenchPersistence = (storageSuffix: string): W
         return Promise.resolve(null);
       }
 
+      let snapshot: HydratedWorkbenchSnapshot | null;
+
       try {
-        const snapshot = hydratePersistedWorkbenchSnapshot(JSON.parse(value));
-
-        if (snapshot && snapshot.refusedProjects.length > 0) {
-          retainRefused(snapshot.refusedProjects);
-          window.localStorage.setItem(storageKey, JSON.stringify(serializeWorkbenchPersistenceSnapshot(snapshot)));
-        }
-
-        return Promise.resolve(snapshot);
+        snapshot = hydratePersistedWorkbenchSnapshot(JSON.parse(value));
       } catch {
         window.localStorage.removeItem(storageKey);
 
         return Promise.resolve(null);
       }
+
+      if (snapshot && snapshot.refusedProjects.length > 0) {
+        if (retainRefused(snapshot.refusedProjects)) {
+          // The raw recovery copy is durable. Only now is it safe to compact the ordinary cache. A
+          // compaction failure leaves the original value intact; it is not evidence of corrupt input.
+          try {
+            window.localStorage.setItem(storageKey, JSON.stringify(serializeWorkbenchPersistenceSnapshot(snapshot)));
+          } catch {
+            // Retaining the original primary cache is the recovery path.
+          }
+        } else {
+          snapshot = { ...snapshot, hasUnretainedRefusedProjects: true };
+        }
+      }
+
+      return Promise.resolve(snapshot);
+    },
+    retainRefusedProjects(refusedProjects) {
+      return Promise.resolve(!isBrowser() || retainRefused(refusedProjects));
     },
     saveWorkbench(state) {
       const snapshot = createSnapshot(state);
@@ -241,8 +265,8 @@ export const createLocalStorageWorkbenchPersistence = (storageSuffix: string): W
             () => JSON.stringify(serializeWorkbenchPersistenceSnapshot(snapshot))
           )
         );
-      } catch {
-        // The backend remains the source of truth; localStorage is only an offline cache.
+      } catch (error) {
+        return Promise.reject(error);
       }
 
       return Promise.resolve(snapshot);

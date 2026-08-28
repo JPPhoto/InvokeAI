@@ -71,7 +71,7 @@ export const useProjectActions = (): {
     }
 
     try {
-      const result = await persistenceService.hydrateProjectFromServer(projectId);
+      const result = await persistenceService.hydrateProjectFromServer(projectId, name);
 
       assertAccountScopeCurrent(owner);
 
@@ -108,21 +108,36 @@ export const useProjectActions = (): {
 
     const projectToFlush = queries.getProject(project.id) ?? project;
 
-    // `.finally()` forwards the rejection it was chained onto, so `void` alone left an unhandled
-    // one behind — reachable by closing a tab while the account is going away, which is when the
-    // flush rejects. The tab is closing either way; the flush was best-effort.
+    const finishClose = (): void => {
+      persistenceService.releaseProjectSync(project.id);
+
+      if (leaveEditorIfLast(project.id)) {
+        return;
+      }
+
+      commands.projects.close(project.id);
+    };
+
+    // A desktop editor must not close the only live copy of edits it knows the server did not take.
+    // Schema-refused bytes have already been copied into the raw recovery bucket by the sync seam,
+    // but keeping the tab open makes the required upgrade explicit and prevents more invisible
+    // divergence. Ordinary connection failures follow the same no-data-loss rule.
     void persistenceService
       .flushProjectToServer(projectToFlush)
-      .finally(() => {
-        persistenceService.releaseProjectSync(project.id);
+      .then((outcome) => {
+        if (outcome.kind === 'schema-refused') {
+          notify.error(t('projects.closeBlocked'), t('projects.file.updateClient'));
+          return;
+        }
+
+        if (outcome.kind === 'unsynced') {
+          notify.error(t('projects.closeBlocked'), t('projects.file.notSynced'));
+          return;
+        }
+
+        finishClose();
       })
       .catch(() => undefined);
-
-    if (leaveEditorIfLast(project.id)) {
-      return;
-    }
-
-    commands.projects.close(project.id);
   };
 
   const deleteProject = async (project: Project): Promise<void> => {
