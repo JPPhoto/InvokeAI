@@ -642,3 +642,34 @@ def test_session_device_index_on_xpu():
         assert TorchDevice.get_session_device_label() == " (#1)"
     finally:
         TorchDevice.clear_session_device()
+
+
+def test_empty_cache_skips_while_peer_device_busy(monkeypatch):
+    """TorchDevice.empty_cache() must not run the process-global (peer-convoying) empty_cache
+    while another generation device is mid-session, and must run it when the pool is quiet."""
+    import torch as torch_mod
+
+    from invokeai.backend.util.device_pool import GENERATION_DEVICE_POOL
+    from invokeai.backend.util.devices import TorchDevice
+
+    calls: list[str] = []
+    monkeypatch.setattr(torch_mod.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch_mod.cuda, "empty_cache", lambda: calls.append("cuda"))
+    monkeypatch.setattr(torch_mod.backends.mps, "is_available", lambda: False)
+
+    GENERATION_DEVICE_POOL.set_generation_devices([torch.device("cuda:0"), torch.device("cuda:1")])
+    try:
+        TorchDevice.set_session_device(torch.device("cuda:1"))
+        try:
+            GENERATION_DEVICE_POOL.acquire_session(torch.device("cuda:0"))
+            try:
+                TorchDevice.empty_cache()
+                assert calls == [], "empty_cache ran while a peer device was mid-session"
+            finally:
+                GENERATION_DEVICE_POOL.release_session(torch.device("cuda:0"))
+            TorchDevice.empty_cache()
+            assert calls == ["cuda"], "empty_cache did not run once the pool was quiet"
+        finally:
+            TorchDevice.clear_session_device()
+    finally:
+        GENERATION_DEVICE_POOL.reset()
