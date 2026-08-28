@@ -91,6 +91,15 @@ describe('workbench persistence migration', () => {
       ...galleryInstance.state.values,
       galleryPage: 3,
       paginationMode: 'paginated',
+      selectedImagePage: 3,
+      selectedImageQuery: {
+        boardId: 'none',
+        galleryView: 'images',
+        imageOrderDir: 'DESC',
+        page: 3,
+        paginationMode: 'paginated',
+        searchTerm: '',
+      },
       semanticImageQuery: { clusterId: 'cluster-1', kind: 'cluster', label: 'beaches' },
     };
     const snapshot = await localStorageWorkbenchPersistence.saveWorkbench({
@@ -109,6 +118,11 @@ describe('workbench persistence migration', () => {
 
     expect(persistedValues?.semanticImageQuery).toBeNull();
     expect(persistedValues?.galleryPage).toBe(0);
+    // The selection's page is stamped from the gallery's, so under a ranking
+    // it is a rank page too — dropping only the grid's would leave Preview
+    // anchored 180 rows from what the grid shows.
+    expect(persistedValues?.selectedImagePage).toBe(0);
+    expect((persistedValues?.selectedImageQuery as { page: number } | undefined)?.page).toBe(0);
   });
 
   it('keeps a paginated page whose search survives the reload', async () => {

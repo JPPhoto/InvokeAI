@@ -31,6 +31,7 @@ import {
   normalizeGraphHistory,
   shouldSnapPanelShut,
   normalizeWorkbenchAccount,
+  normalizeWorkbenchProject,
 } from './workbenchState';
 import {
   createInitialWorkbenchState,
@@ -791,6 +792,66 @@ describe('workbench widget region opening', () => {
     expect(getActiveProject(state).widgetRegions.bottom.activeInstanceId).toBe('queue');
     expect(getActiveProject(state).widgetRegions.bottom.instanceIds).toEqual(['diagnostics', 'queue']);
     expect(getActiveProject(state).widgetRegions.bottom.isCollapsed).toBe(false);
+  });
+});
+
+describe('adopting a project from another realm', () => {
+  const galleryProject = (values: Record<string, unknown>) => {
+    const project = createInitialWorkbenchState().projects[0]!;
+    const galleryInstance = Object.values(project.widgetInstances).find((instance) => instance.typeId === 'gallery')!;
+    const galleryInstanceId = Object.keys(project.widgetInstances).find(
+      (instanceId) => project.widgetInstances[instanceId]?.typeId === 'gallery'
+    )!;
+
+    return normalizeWorkbenchProject({
+      ...project,
+      widgetInstances: {
+        ...project.widgetInstances,
+        [galleryInstanceId]: {
+          ...galleryInstance,
+          state: { ...galleryInstance.state, values: { ...galleryInstance.state.values, ...values } },
+        },
+      },
+    });
+  };
+  const galleryValuesOf = (project: Project) =>
+    Object.values(project.widgetInstances).find((instance) => instance.typeId === 'gallery')!.state.values;
+
+  it('drops a session-scoped search and the rank pages set against it', () => {
+    // A project opened from the server — the Open dialog, a deep link, or a
+    // conflict fork — arrives in a realm that never ran the session its values
+    // describe, and never passes the save path where this rule also runs. The
+    // ranking cannot be rebuilt here, so the pages indexing it would be read
+    // as board positions.
+    const values = galleryValuesOf(
+      galleryProject({
+        galleryPage: 3,
+        selectedImagePage: 3,
+        selectedImageQuery: {
+          boardId: 'none',
+          galleryView: 'images',
+          imageOrderDir: 'DESC',
+          page: 3,
+          paginationMode: 'paginated',
+          searchTerm: '',
+        },
+        semanticImageQuery: { fileId: 'file-1', kind: 'file', label: 'dropped.png' },
+      })
+    );
+
+    expect(values.semanticImageQuery).toBeNull();
+    expect(values.galleryPage).toBe(0);
+    expect(values.selectedImagePage).toBe(0);
+    expect((values.selectedImageQuery as { page: number }).page).toBe(0);
+  });
+
+  it('keeps a search the new realm can rebuild, and the page it was read on', () => {
+    const values = galleryValuesOf(
+      galleryProject({ galleryPage: 3, semanticImageQuery: { kind: 'text', query: 'sunset' } })
+    );
+
+    expect(values.semanticImageQuery).toEqual({ kind: 'text', query: 'sunset' });
+    expect(values.galleryPage).toBe(3);
   });
 });
 

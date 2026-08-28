@@ -184,10 +184,49 @@ export const pruneImageClusterMembers = (imageNames: readonly string[]): (() => 
  * it named — the page the footer was on, above all — describes a list that
  * will not exist there either.
  */
-export const isSessionScopedGallerySemanticReference = (value: unknown): boolean =>
+const isSessionScopedGallerySemanticReference = (value: unknown): boolean =>
   !!value &&
   typeof value === 'object' &&
   ((value as Record<string, unknown>).kind === 'file' || (value as Record<string, unknown>).kind === 'cluster');
+
+/**
+ * The same values with every position that was set against a session-scoped
+ * ranking dropped, or null when there is nothing to drop.
+ *
+ * While such a search is on screen the footer paginates the RANKING, so the
+ * gallery's page and the page stamped on the selection are both indexes into
+ * a list no other realm can rebuild. Left behind, they are read as board pages
+ * and answer with an unrelated slice, so the reference and the positions set
+ * against it are dropped together. Only keys that are actually carrying a
+ * position are rewritten: normalizing must not mint state that was never
+ * stored.
+ */
+export const stripSessionScopedGallerySearch = (values: Record<string, unknown>): Record<string, unknown> | null => {
+  if (!isSessionScopedGallerySemanticReference(values.semanticImageQuery)) {
+    return null;
+  }
+
+  const nextValues: Record<string, unknown> = { ...values, semanticImageQuery: null };
+
+  if (typeof values.galleryPage === 'number' && values.galleryPage !== 0) {
+    nextValues.galleryPage = 0;
+  }
+
+  if (typeof values.selectedImagePage === 'number' && values.selectedImagePage !== 0) {
+    nextValues.selectedImagePage = 0;
+  }
+
+  const selectedImageQuery =
+    values.selectedImageQuery && typeof values.selectedImageQuery === 'object'
+      ? (values.selectedImageQuery as Record<string, unknown>)
+      : null;
+
+  if (selectedImageQuery && typeof selectedImageQuery.page === 'number' && selectedImageQuery.page !== 0) {
+    nextValues.selectedImageQuery = { ...selectedImageQuery, page: 0 };
+  }
+
+  return nextValues;
+};
 
 export const parseGallerySemanticReference = (value: unknown): GallerySemanticReference | null => {
   // Legacy shape: a bare image name.

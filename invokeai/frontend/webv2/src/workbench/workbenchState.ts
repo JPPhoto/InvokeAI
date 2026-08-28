@@ -54,6 +54,7 @@ import {
   getBoundedRecentImages,
   getGalleryPage,
   getPersistedSelectedGalleryItemKeys,
+  stripSessionScopedGallerySearch,
   getGallerySettings,
   getSelectedGalleryItemFromValues,
   legacyGeneratedImageToGalleryItem,
@@ -1734,18 +1735,29 @@ export const normalizeWorkbenchProject = (project: Project): Project => {
   }
 
   for (const [instanceId, instance] of Object.entries(widgetInstances)) {
-    if (instance.typeId !== 'gallery' || !('recentImages' in instance.state.values)) {
+    if (instance.typeId !== 'gallery') {
       continue;
     }
+
+    // A project adopted from the server arrives in a realm that never ran the
+    // session its values describe: opening one from the dialog, from a deep
+    // link, or from a conflict fork all land here without passing the save
+    // path. A search only that session could resolve, and the rank pages set
+    // against it, are meaningless here and would be read as board positions.
+    const strippedValues = stripSessionScopedGallerySearch(instance.state.values);
+    const hasRecentImages = 'recentImages' in instance.state.values;
+
+    if (strippedValues === null && !hasRecentImages) {
+      continue;
+    }
+
+    const values = strippedValues ?? instance.state.values;
 
     widgetInstances[instanceId] = {
       ...instance,
       state: {
         ...instance.state,
-        values: {
-          ...instance.state.values,
-          recentImages: getBoundedRecentImages(instance.state.values.recentImages),
-        },
+        values: hasRecentImages ? { ...values, recentImages: getBoundedRecentImages(values.recentImages) } : values,
       },
     };
   }

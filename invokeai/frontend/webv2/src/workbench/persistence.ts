@@ -1,11 +1,7 @@
 import type { HydratedWorkbenchSnapshot, PersistedWorkbenchSnapshotV1 } from '@workbench/persistenceContracts';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
-import {
-  getGalleryPage,
-  getGallerySettings,
-  isSessionScopedGallerySemanticReference,
-} from '@features/gallery/contracts';
+import { getGalleryPage, getGallerySettings, stripSessionScopedGallerySearch } from '@features/gallery/contracts';
 
 import { timeWorkbenchPerf } from './performanceMarks';
 
@@ -33,13 +29,14 @@ const isBrowser = (): boolean => typeof window !== 'undefined' && typeof window.
  * user was reading.
  *
  * A dropped file or an image-map cluster is likewise session-scoped: it names
- * an entry in an in-memory registry that the next session cannot resolve, so
- * the ranking evaporates on the first parse over there. Nothing observes that
- * moment, so anything set against the ranking outlives it — and in paginated
- * mode the footer paginates the RANKING, which makes `galleryPage` a rank
- * page that the board listing would then read as its own and answer with an
- * unrelated slice. The reference cannot survive the reload, so neither may
- * the page it named.
+ * an entry in an in-memory registry that no other realm can resolve, so the
+ * ranking evaporates on the first parse over there. Nothing observes that
+ * moment, so anything set against the ranking outlives it — and the footer
+ * paginates the RANKING, which makes both the gallery's page and the page
+ * stamped on the selection rank pages that the board listing would then read
+ * as its own. `stripSessionScopedGallerySearch` drops the reference and those
+ * positions together; the same rule runs again when a project is adopted from
+ * the server, which is a route into a fresh realm that never passes here.
  */
 const stripSessionScopedGalleryState = (project: Project): Project => {
   let didChange = false;
@@ -51,10 +48,10 @@ const stripSessionScopedGalleryState = (project: Project): Project => {
         return [instanceId, instance];
       }
 
-      const hasSessionScopedSearch = isSessionScopedGallerySemanticReference(values.semanticImageQuery);
+      const strippedValues = stripSessionScopedGallerySearch(values);
       const hasWindowAnchor = getGallerySettings(values).paginationMode === 'infinite' && getGalleryPage(values) > 0;
 
-      if (!hasSessionScopedSearch && !hasWindowAnchor) {
+      if (strippedValues === null && !hasWindowAnchor) {
         return [instanceId, instance];
       }
 
@@ -66,9 +63,8 @@ const stripSessionScopedGalleryState = (project: Project): Project => {
           state: {
             ...instance.state,
             values: {
-              ...values,
-              galleryPage: 0,
-              ...(hasSessionScopedSearch ? { semanticImageQuery: null } : {}),
+              ...(strippedValues ?? values),
+              ...(hasWindowAnchor ? { galleryPage: 0 } : {}),
             },
           },
         },
