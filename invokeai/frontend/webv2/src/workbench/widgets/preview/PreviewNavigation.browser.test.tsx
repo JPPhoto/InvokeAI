@@ -111,6 +111,7 @@ const mocks = vi.hoisted(() => {
     galleryItemPages: [] as GalleryItemsPage[],
     imageActionOptions: null as null | {
       getItemActionContext?: () => {
+        getItemSelectionPage?: (item: GalleryImageItem | GalleryVideoItem) => number;
         items: Array<GalleryImageItem | GalleryVideoItem>;
         loadOrderedRefs: (signal: AbortSignal) => Promise<Array<{ kind: 'image' | 'video'; name: string }>>;
         selectedItemKey: string | null;
@@ -742,6 +743,79 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'top-older' }),
       undefined,
       0,
+      true
+    );
+  });
+
+  it('hands image actions a page that keeps a deletion successor in the deep window', async () => {
+    // A successor is chosen from Preview's own list. Selected without a page
+    // it is stamped with the GRID's page — 0 once a result has landed on the
+    // board or the project was reloaded — and lands outside the window it
+    // came from: forward arrow dead, back arrow a 1800-row teleport.
+    const deepNewer = createImageItem('deep-newer', '2026-07-20T00:00:02.000Z');
+    const deepOlder = createImageItem('deep-older', '2026-07-20T00:00:01.000Z');
+
+    setGalleryValues({
+      galleryPage: 0,
+      recentImages: [legacyImage('fresh-generation', '2026-07-23T00:00:00.000Z', 'queue-item-done')],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([deepNewer, deepOlder]);
+
+    await render();
+
+    const context = mocks.imageActionOptions?.getItemActionContext?.();
+
+    expect(context?.getItemSelectionPage?.(deepOlder)).toBe(30);
+    // A recent is not in the window; it lives at the top of the listing.
+    expect(context?.getItemSelectionPage?.(createImageItem('fresh-generation', '2026-07-23T00:00:00.000Z'))).toBe(0);
+  });
+
+  it('swaps the compare image in and back out without losing the deep window', async () => {
+    // Swapping a top-of-board image in moves the window to the top, and the
+    // deep image goes into the compare slot. Swapping back must return to the
+    // window that image was navigated in, not guess at one.
+    setGalleryValues({
+      compareImage: legacyImage('compare-top', '2026-07-24T00:00:00.000Z'),
+      galleryPage: 0,
+      recentImages: [],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([createImageItem('deep-newer', '2026-07-20T00:00:02.000Z')]);
+    mocks.galleryItemPages[0] = { items: [createImageItem('compare-top', '2026-07-24T00:00:00.000Z')], total: 2 };
+
+    await render();
+
+    const swap = () =>
+      act(async () => {
+        registeredCommands.get('viewer.swapImages')?.();
+        await Promise.resolve();
+      });
+
+    await swap();
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'compare-top' }),
+      undefined,
+      0,
+      true
+    );
+
+    // Commit the swap as the reducer would: the top image is selected at page
+    // 0, and the deep image is now in the compare slot.
+    await commitLastSelection();
+    setGalleryValues({ compareImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z') });
+    await rerender();
+    await swap();
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'deep-newer' }),
+      undefined,
+      30,
       true
     );
   });

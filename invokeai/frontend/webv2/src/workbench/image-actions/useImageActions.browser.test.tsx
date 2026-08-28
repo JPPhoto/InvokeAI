@@ -165,6 +165,7 @@ let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 const actionsRef = createRef<ImageActions>();
 interface ItemActionContext {
+  getItemSelectionPage?: (item: GalleryItem) => number;
   filterIdentity: string;
   items: GalleryItem[];
   loadOrderedRefs(): Promise<GalleryItemRef[]>;
@@ -1011,6 +1012,72 @@ describe('primary successor after confirmed deletion', () => {
 
     expect(mocks.gallerySetItemMultiSelection).not.toHaveBeenCalled();
     expect(mocks.gallerySelectItem).not.toHaveBeenCalled();
+  });
+
+  it('stamps the successor with the page the host navigates from, when the host provides one', async () => {
+    // The successor comes from the host's own list. Preview anchored deep in a
+    // board the grid shows from the top would otherwise have it stamped with
+    // the grid's page, outside the window it came from.
+    const before = galleryItem('video', 'before.mp4');
+    const primary = galleryItem('image', 'primary.png');
+    const after = galleryItem('image', 'after.png');
+    const refs = [before, primary, after].map(({ kind, name }) => ({ kind, name }));
+    currentItemActionContext = {
+      filterIdentity: 'filter-a',
+      getItemSelectionPage: () => 30,
+      items: [before, primary, after],
+      loadOrderedRefs: () => Promise.resolve(refs),
+      selectedItemKey: 'image:primary.png',
+    };
+    mocks.itemDelete.mockResolvedValue({
+      affectedBoardIds: ['board-1'],
+      failed: [],
+      succeeded: [{ kind: 'image', name: 'primary.png' }],
+    });
+
+    await act(async () => {
+      await getItemActions().deleteItems([{ kind: 'image', name: 'primary.png' }]);
+    });
+
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(before, 'project-1', 30, true);
+  });
+
+  it('carries the host page into a retained multi-selection after a partial failure', async () => {
+    const successor = galleryItem('image', 'successor.png');
+    const primary = galleryItem('image', 'primary.png');
+    const failedImage = galleryItem('image', 'failed.png');
+    const requested = [
+      { kind: 'image' as const, name: failedImage.name },
+      { kind: 'image' as const, name: primary.name },
+    ];
+    currentItemActionContext = {
+      filterIdentity: 'filter-a',
+      getItemSelectionPage: () => 30,
+      items: [successor, primary, failedImage],
+      loadOrderedRefs: () =>
+        Promise.resolve([
+          { kind: 'image' as const, name: successor.name },
+          { kind: 'image' as const, name: primary.name },
+          { kind: 'image' as const, name: failedImage.name },
+        ]),
+      selectedItemKey: 'image:primary.png',
+    };
+    mocks.itemDelete.mockResolvedValue({
+      affectedBoardIds: ['board-1'],
+      failed: [requested[0]],
+      succeeded: [requested[1]],
+    });
+
+    await act(async () => {
+      await getItemActions().deleteItems(requested);
+    });
+
+    expect(mocks.gallerySetItemMultiSelection).toHaveBeenCalledWith(
+      ['image:failed.png', 'image:successor.png'],
+      successor,
+      'project-1',
+      30
+    );
   });
 
   it('atomically retains failed qualified selections while promoting a surviving successor', async () => {

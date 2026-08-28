@@ -128,6 +128,8 @@ export interface PreviewNavigationState {
   /** Identity of the backing query — the action context's filter identity. */
   navigationQueryKey: string;
   navigationSequence: PreviewNavigationItem<GalleryItem>[];
+  /** The page a selection of `item` is stamped with — see the action context's `getItemSelectionPage`. */
+  getSelectionPage: (item: GalleryItem) => number;
   selectPreviewItem: (item: GalleryItem) => void;
 }
 
@@ -295,8 +297,8 @@ export const usePreviewNavigation = ({
     enabled: hasNavigationContext,
   });
 
-  const stampSelection = useCallback(
-    (item: GalleryItem, data: typeof boardItemsData) => {
+  const getSelectionPageIn = useCallback(
+    (item: GalleryItem, data: typeof boardItemsData): number => {
       const itemKey = toGalleryItemKey(item);
       const pageIndex = data?.pages.findIndex((page) =>
         page.items.some((candidate) => toGalleryItemKey(candidate) === itemKey)
@@ -323,26 +325,25 @@ export const usePreviewNavigation = ({
       // at all (a recent the listing has not caught up with, the compare
       // slot's image) is stamped at the top: that is where a recent lives,
       // and the base window's reach is the best guess for anything else.
-      const selectionPage =
-        navigationSemanticQuery !== null
-          ? 0
-          : selectedImageQuery.paginationMode === 'paginated'
-            ? typeof pageParam === 'number'
-              ? Math.floor(pageParam / GALLERY_PAGE_SIZE)
-              : selectedImageQuery.page
-            : typeof pageParam === 'number'
-              ? deepAnchorOffset / GALLERY_PAGE_SIZE
-              : 0;
-
-      selectGalleryItem(item, selectionPage);
+      return navigationSemanticQuery !== null
+        ? 0
+        : selectedImageQuery.paginationMode === 'paginated'
+          ? typeof pageParam === 'number'
+            ? Math.floor(pageParam / GALLERY_PAGE_SIZE)
+            : selectedImageQuery.page
+          : typeof pageParam === 'number'
+            ? deepAnchorOffset / GALLERY_PAGE_SIZE
+            : 0;
     },
-    [
-      deepAnchorOffset,
-      navigationSemanticQuery,
-      selectGalleryItem,
-      selectedImageQuery.page,
-      selectedImageQuery.paginationMode,
-    ]
+    [deepAnchorOffset, navigationSemanticQuery, selectedImageQuery.page, selectedImageQuery.paginationMode]
+  );
+  const stampSelection = useCallback(
+    (item: GalleryItem, data: typeof boardItemsData) => selectGalleryItem(item, getSelectionPageIn(item, data)),
+    [getSelectionPageIn, selectGalleryItem]
+  );
+  const getSelectionPage = useCallback(
+    (item: GalleryItem) => getSelectionPageIn(item, boardItemsData),
+    [boardItemsData, getSelectionPageIn]
   );
   const selectPreviewItem = useCallback(
     (item: GalleryItem) => stampSelection(item, boardItemsData),
@@ -606,6 +607,7 @@ export const usePreviewNavigation = ({
     navigationCursor,
     navigationQueryKey,
     navigationSequence,
+    getSelectionPage,
     selectPreviewItem,
   };
 };

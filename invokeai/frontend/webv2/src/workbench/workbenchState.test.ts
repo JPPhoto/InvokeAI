@@ -3507,6 +3507,33 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImageName).toBe('image:selected.png');
   });
 
+  it('stamps an explicit page into the navigation query already on a multi-selection', () => {
+    // A host navigating its own window passes the page that keeps the primary
+    // item in that window — the same contract as selectGalleryItem with
+    // preserveNavigationQuery — rather than the grid's page.
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, { page: 0, type: 'setGalleryPage' });
+    state = workbenchReducer(state, {
+      item: createGalleryImageItem('deep.png'),
+      preserveNavigationQuery: false,
+      selectionPage: 30,
+      type: 'selectGalleryItem',
+    });
+    state = workbenchReducer(state, {
+      itemKeys: ['image:failed.png', 'image:successor.png'],
+      primaryItem: createGalleryImageItem('successor.png'),
+      selectionPage: 30,
+      type: 'setGalleryMultiSelection',
+    });
+
+    const values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+
+    expect(values.selectedImagePage).toBe(30);
+    expect((values.selectedImageQuery as { page: number }).page).toBe(30);
+    expect(values.galleryPage).toBe(0);
+  });
+
   it('pauses live-follow for saved Gallery multi-selection and comparison intents', () => {
     const primaryImage = createGalleryImageItem('primary.png');
     const compareImage = createGalleryImageItem('compare.png');
