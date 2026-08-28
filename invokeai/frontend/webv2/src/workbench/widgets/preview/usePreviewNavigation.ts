@@ -282,12 +282,17 @@ export const usePreviewNavigation = ({
       const pageParam = pageIndex === undefined || pageIndex < 0 ? undefined : boardItemsData?.pageParams[pageIndex];
       // `page` is stamped as a BOARD page and read as one everywhere else, so
       // a ranked window's page params — offsets into the ranking — must not be
-      // written into it. Stepping through a ranked list therefore leaves the
-      // board context it was opened from untouched, ready for the moment the
-      // search is cleared.
+      // written into it. Neither may the grid's own page: in paginated mode
+      // the footer paginates the RANKING, so that number is a rank page too.
+      // Carrying the page the preview opened on is no better — the item
+      // picked out of a ranking is nowhere near the board slice it names, and
+      // a deep one strands navigation there once the chip is cleared. What
+      // holds in both modes is the top of the listing: setting a search and
+      // clearing it both reset the grid to page 0, so that is the board
+      // context a ranked session hands back.
       const selectionPage =
         navigationSemanticQuery !== null
-          ? selectedImageQuery.page
+          ? 0
           : typeof pageParam === 'number'
             ? Math.floor(pageParam / GALLERY_PAGE_SIZE)
             : selectedImageQuery.page;
