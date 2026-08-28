@@ -1,5 +1,6 @@
 import type { WorkbenchState } from '@workbench/projectContracts';
 
+import { registerImageCluster } from '@features/gallery/contracts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -151,6 +152,46 @@ describe('workbench persistence migration', () => {
                   galleryPage: 3,
                   paginationMode: 'paginated',
                   semanticImageQuery: { kind: 'text', query: '' },
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+    const persistedValues = snapshot.state.projects[0]?.widgetInstances[galleryInstanceId]?.state.values;
+
+    expect(persistedValues?.semanticImageQuery).toBeNull();
+    expect(persistedValues?.galleryPage).toBe(0);
+  });
+
+  it('drops a session-scoped search on save even while this session can still resolve it', async () => {
+    // In the owning session the registry entry is live, so a test of whether
+    // the reference resolves would strip nothing — and the realm reading this
+    // back cannot resolve it. The save path has to ask what the value IS.
+    const clusterId = registerImageCluster(['a.png', 'b.png'], 'beaches');
+    const state = createInitialWorkbenchState();
+    const project = state.projects[0];
+    const galleryEntry = Object.entries(project?.widgetInstances ?? {}).find(
+      ([, instance]) => instance.typeId === 'gallery'
+    );
+    const [galleryInstanceId, galleryInstance] = galleryEntry!;
+    const snapshot = await localStorageWorkbenchPersistence.saveWorkbench({
+      ...state,
+      projects: [
+        {
+          ...project!,
+          widgetInstances: {
+            ...project!.widgetInstances,
+            [galleryInstanceId]: {
+              ...galleryInstance,
+              state: {
+                ...galleryInstance.state,
+                values: {
+                  ...galleryInstance.state.values,
+                  galleryPage: 3,
+                  paginationMode: 'paginated',
+                  semanticImageQuery: { clusterId, kind: 'cluster', label: 'beaches' },
                 },
               },
             },
