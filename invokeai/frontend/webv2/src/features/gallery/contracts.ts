@@ -34,7 +34,13 @@ export {
   type GalleryVideoItem,
 } from './core/items';
 export { GALLERY_RECENT_IMAGE_LIMIT, getBoundedRecentImages } from './core/recentImages';
-export { gallerySemanticReferenceKey, type GallerySemanticReference } from './core/semanticImageQuery';
+export {
+  gallerySemanticReferenceKey,
+  getImageCluster,
+  parseGallerySemanticReference,
+  registerImageCluster,
+  type GallerySemanticReference,
+} from './core/semanticImageQuery';
 export {
   DEFAULT_GALLERY_SETTINGS,
   getGallerySettings,
@@ -62,4 +68,5 @@ export {
   getPersistedSelectedGalleryItemKeys,
   getSelectedGalleryImageFromValues,
   getSelectedGalleryItemFromValues,
+  requestGalleryItemReveal,
 } from './core/selection';

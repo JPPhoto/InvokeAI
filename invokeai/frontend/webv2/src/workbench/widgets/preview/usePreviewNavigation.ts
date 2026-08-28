@@ -230,10 +230,21 @@ export const usePreviewNavigation = ({
     : navigationSemanticQuery !== null
       ? galleryPaginationMode === 'paginated'
         ? ({ kind: 'anchor', offset: galleryPage * GALLERY_PAGE_SIZE } as const)
-        : ({ kind: 'infinite' } as const)
+        : // In infinite mode the grid's page IS its window offset, so mirroring
+          // it covers the deep-reveal case below without a separate test.
+          ({ kind: 'infinite', offset: galleryPage * GALLERY_PAGE_SIZE } as const)
       : selectedImageQuery.paginationMode === 'paginated'
         ? ({ kind: 'anchor', offset: navigationAnchorPage * GALLERY_PAGE_SIZE } as const)
-        : ({ kind: 'infinite' } as const);
+        : ({
+            kind: 'infinite',
+            // A selection deeper than the base window's reach (a deep reveal
+            // from the image map) anchors navigation at its own page —
+            // walking from offset 0 could never arrive at the cursor.
+            offset:
+              navigationAnchorPage * GALLERY_PAGE_SIZE >= GALLERY_MAX_ROWS
+                ? navigationAnchorPage * GALLERY_PAGE_SIZE
+                : 0,
+          } as const);
 
   const {
     data: boardItemsData,

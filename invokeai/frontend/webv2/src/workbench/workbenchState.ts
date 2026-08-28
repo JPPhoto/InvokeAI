@@ -52,6 +52,7 @@ import type {
 
 import {
   getBoundedRecentImages,
+  getGalleryPage,
   getPersistedSelectedGalleryItemKeys,
   getGallerySettings,
   getSelectedGalleryItemFromValues,
@@ -142,8 +143,10 @@ import {
   getCanvasStagingSlotCount,
   getCanvasStagingSlots,
   getFirstCanvasPlaceholderSlotIndex,
+  type CanvasStagingSlot,
 } from './canvasStagingView';
 import { cascadeDefaultGeometry, clampSizeToMinimum, nextStackOrder } from './floatingWindows';
+import { getSourceIdForWidgetTypeId } from './graphWidgets';
 import {
   defaultInvocationRoute,
   isInvocationRouteValid,
@@ -251,7 +254,7 @@ type WorkbenchReducerAction =
   | {
       type: 'patchProjectPromptDraft';
       values: ProjectPromptDraftPatch;
-      sourceId: 'generate' | 'upscale' | 'video';
+      sourceId: 'generate' | 'upscale';
       projectId?: string;
       origin?: WorkbenchActionOrigin;
     }
@@ -695,6 +698,42 @@ const getCanvasWithPendingImages = (
   },
 });
 
+const getSelectedCanvasStagingSlot = (project: Project): CanvasStagingSlot | undefined =>
+  getCanvasStagingSlots(project.canvas, project.queue.items)[project.canvas.stagingArea.selectedImageIndex];
+
+const findPreservedCanvasStagingSlotIndex = (
+  slots: CanvasStagingSlot[],
+  selectedSlot: CanvasStagingSlot | undefined
+): number => {
+  if (!selectedSlot) {
+    return -1;
+  }
+
+  if (selectedSlot.kind === 'candidate') {
+    const exactCandidateIndex = slots.findIndex(
+      (slot) => slot.kind === 'candidate' && slot.candidate === selectedSlot.candidate
+    );
+
+    if (exactCandidateIndex !== -1) {
+      return exactCandidateIndex;
+    }
+  }
+
+  const exactIdIndex = slots.findIndex((slot) => slot.id === selectedSlot.id);
+
+  if (exactIdIndex !== -1) {
+    return exactIdIndex;
+  }
+
+  if (selectedSlot.itemIndex === undefined) {
+    return -1;
+  }
+
+  return slots.findIndex(
+    (slot) => slot.queueItemId === selectedSlot.queueItemId && slot.itemIndex === selectedSlot.itemIndex
+  );
+};
+
 const getCanvasStagingCandidateSlotIndex = (
   project: Project,
   pendingImages: CanvasStagingCandidateContract[],
@@ -704,10 +743,14 @@ const getCanvasStagingCandidateSlotIndex = (
     return -1;
   }
 
-  return getCanvasStagingSlots(
-    getCanvasWithPendingImages(project.canvas, pendingImages),
-    project.queue.items
-  ).findIndex(
+  const slots = getCanvasStagingSlots(getCanvasWithPendingImages(project.canvas, pendingImages), project.queue.items);
+  const exactIndex = slots.findIndex((slot) => slot.kind === 'candidate' && slot.candidate === target);
+
+  if (exactIndex !== -1) {
+    return exactIndex;
+  }
+
+  return slots.findIndex(
     (slot) =>
       slot.kind === 'candidate' &&
       slot.candidate.sourceQueueItemId === target.sourceQueueItemId &&
@@ -718,11 +761,13 @@ const getCanvasStagingCandidateSlotIndex = (
 const resolveStagingSelectionIndexForSlots = ({
   incomingImages,
   pendingImages,
+  previousSelectedSlot,
   project,
   slotCount,
 }: {
   incomingImages: CanvasStagingCandidateContract[];
   pendingImages: CanvasStagingCandidateContract[];
+  previousSelectedSlot?: CanvasStagingSlot;
   project: Project;
   slotCount: number;
 }): number => {
@@ -743,14 +788,21 @@ const resolveStagingSelectionIndexForSlots = ({
       : clampStagedImageIndex(project.canvas.stagingArea.selectedImageIndex, slotCount);
   }
 
-  if (incomingImages.length === 0) {
+  if (project.canvas.stagingArea.autoSwitchMode === 'off' || incomingImages.length === 0) {
+    const selectedSlot = previousSelectedSlot ?? getSelectedCanvasStagingSlot(project);
+    const preservedSlotIndex = findPreservedCanvasStagingSlotIndex(
+      getCanvasStagingSlots(getCanvasWithPendingImages(project.canvas, pendingImages), project.queue.items),
+      selectedSlot
+    );
+
+    if (preservedSlotIndex !== -1) {
+      return preservedSlotIndex;
+    }
+
     return clampStagedImageIndex(project.canvas.stagingArea.selectedImageIndex, slotCount);
   }
 
-  const selectedImage =
-    project.canvas.stagingArea.autoSwitchMode === 'latest'
-      ? (pendingImages[pendingImages.length - 1] ?? incomingImages[incomingImages.length - 1])
-      : incomingImages[0];
+  const selectedImage = pendingImages[pendingImages.length - 1] ?? incomingImages[incomingImages.length - 1];
   const selectedSlotIndex = getCanvasStagingCandidateSlotIndex(project, pendingImages, selectedImage);
 
   return selectedSlotIndex === -1
@@ -762,7 +814,8 @@ const stageCanvasResultImages = (
   project: Project,
   queueItemId: string,
   images: GeneratedImageContract[],
-  sourceBackendItemIds?: readonly (number | undefined)[]
+  sourceBackendItemIds?: readonly (number | undefined)[],
+  previousSelectedSlot?: CanvasStagingSlot
 ): Project => {
   const queueItem = project.queue.items.find((item) => item.id === queueItemId);
 
@@ -807,6 +860,7 @@ const stageCanvasResultImages = (
         selectedImageIndex: resolveStagingSelectionIndexForSlots({
           incomingImages: newImages,
           pendingImages,
+          previousSelectedSlot,
           project,
           slotCount,
         }),
@@ -819,11 +873,13 @@ const stageCanvasResultImages = (
 const appendCanvasStagingCandidate = (project: Project, candidate: CanvasStagingCandidateContract): Project => {
   const appendedCandidate = normalizeStagingCandidate(candidate, project.canvas.document);
   const pendingImages = [...project.canvas.stagingArea.pendingImages, appendedCandidate];
-  const candidateKey = `${appendedCandidate.sourceQueueItemId}:${appendedCandidate.imageName}`;
   const slots = getCanvasStagingSlots(getCanvasWithPendingImages(project.canvas, pendingImages), project.queue.items);
-  const selectedImageIndex = slots
-    .map((slot) => (slot.kind === 'candidate' ? `${slot.candidate.sourceQueueItemId}:${slot.candidate.imageName}` : ''))
-    .lastIndexOf(candidateKey);
+  const selectedImageIndex = resolveStagingSelectionIndexForSlots({
+    incomingImages: [appendedCandidate],
+    pendingImages,
+    project,
+    slotCount: slots.length,
+  });
 
   return {
     ...project,
@@ -842,16 +898,20 @@ const appendCanvasStagingCandidate = (project: Project, candidate: CanvasStaging
   };
 };
 
-const clampCanvasStagingSelection = (project: Project): Project => {
-  const slotCount = getCanvasStagingSlotCount(project.canvas, project.queue.items);
+const clampCanvasStagingSelection = (project: Project, previousSelectedSlot?: CanvasStagingSlot): Project => {
+  const slots = getCanvasStagingSlots(project.canvas, project.queue.items);
+  const slotCount = slots.length;
   const placeholderIndex =
     project.canvas.stagingArea.autoSwitchMode === 'progress'
       ? getFirstCanvasPlaceholderSlotIndex(project.canvas, project.queue.items)
       : -1;
+  const preservedSlotIndex = findPreservedCanvasStagingSlotIndex(slots, previousSelectedSlot);
   const selectedImageIndex =
-    placeholderIndex === -1
-      ? clampStagedImageIndex(project.canvas.stagingArea.selectedImageIndex, slotCount)
-      : placeholderIndex;
+    placeholderIndex !== -1
+      ? placeholderIndex
+      : preservedSlotIndex !== -1
+        ? preservedSlotIndex
+        : clampStagedImageIndex(project.canvas.stagingArea.selectedImageIndex, slotCount);
   const isVisible = slotCount > 0 ? project.canvas.stagingArea.isVisible : false;
 
   if (
@@ -2293,6 +2353,70 @@ const applyAutoRouteForEdit = (
 const applyAutoRouteForGenerateEdit = (project: Project, context: WorkbenchReducerContext): Project =>
   project.invocation.sourceId === 'canvas' ? project : applyAutoRouteForEdit(project, 'generate', context);
 
+/**
+ * Bringing a graph-bearing widget to the front is as strong a statement of
+ * intent as editing one: someone who clicks the Video tab and presses Invoke
+ * means the video parameters, not whichever surface they last touched. Reveal
+ * therefore feeds the same policy as an edit, through the same preference and
+ * lock gates, so the surface in front of you is the surface that runs.
+ *
+ * Non-graph widgets (gallery, layers, ...) resolve to no source and leave the
+ * route alone, and generate keeps its canvas exception for the reason given
+ * above -- the canvas parameter panel *is* the generate widget, so revealing it
+ * must not steal the route from an active canvas source.
+ */
+const applyAutoRouteForWidgetReveal = (
+  project: Project,
+  typeId: WidgetTypeId | undefined,
+  context: WorkbenchReducerContext
+): Project => {
+  const sourceId = typeId ? getSourceIdForWidgetTypeId(typeId) : null;
+
+  if (!sourceId) {
+    return project;
+  }
+
+  return sourceId === 'generate'
+    ? applyAutoRouteForGenerateEdit(project, context)
+    : applyAutoRouteForEdit(project, sourceId, context);
+};
+
+/** `applyAutoRouteForWidgetReveal` for the instance-addressed reveal actions. */
+const applyAutoRouteForRevealedInstance = (
+  project: Project,
+  instanceId: WidgetInstanceId,
+  context: WorkbenchReducerContext
+): Project => applyAutoRouteForWidgetReveal(project, project.widgetInstances[instanceId]?.typeId, context);
+
+/**
+ * Reveal for the paths where the front widget changes as a *consequence* of
+ * something else — closing a tab, dragging one out of a rail, reordering — as
+ * opposed to the paths where the gesture names the widget outright.
+ *
+ * Only an actual change of the visible front widget counts. Closing a
+ * background tab leaves the same panel in front and must not re-target Invoke,
+ * and a region that ends collapsed (or whose `activeInstanceId` is left
+ * dangling by the last removal) has revealed nothing at all.
+ */
+const applyAutoRouteForRegionFront = (
+  project: Project,
+  previousRegion: WidgetRegionState,
+  region: WidgetRegion,
+  context: WorkbenchReducerContext
+): Project => {
+  const nextRegion = project.widgetRegions[region];
+
+  if (
+    nextRegion.isCollapsed ||
+    nextRegion.activeInstanceId === previousRegion.activeInstanceId ||
+    !nextRegion.instanceIds.includes(nextRegion.activeInstanceId)
+  ) {
+    return project;
+  }
+
+  return applyAutoRouteForRevealedInstance(project, nextRegion.activeInstanceId, context);
+};
+
 const compileInvocationSnapshot = (
   project: Project,
   route: InvocationRoute,
@@ -2349,11 +2473,9 @@ const compileInvocationSnapshot = (
       return null;
     }
 
-    const syncedValues = models ? syncVideoWidgetValuesWithModels(values, models) : values;
-    const currentValues: VideoWidgetValues = {
-      ...syncedValues,
-      ...getPromptDraftFromValues(getProjectWidgetValues(project, 'generate')),
-    };
+    // Video's prompt is its own widget value, deliberately independent of the
+    // draft Generate and Upscale share: no draft is merged in here.
+    const currentValues: VideoWidgetValues = models ? syncVideoWidgetValuesWithModels(values, models) : values;
 
     if (!currentValues.model || getVideoWidgetValidationReasons(currentValues, models).length > 0) {
       return null;
@@ -2792,9 +2914,22 @@ const updateGalleryWithResultImages = (project: Project, images: GeneratedImageC
   const nextSelectedItem = nextSelectedImage ? legacyGeneratedImageToGalleryItem(nextSelectedImage) : undefined;
   const nextSelectedItemKey = nextSelectedItem ? toGalleryItemKey(nextSelectedItem) : undefined;
   const gallerySettings = getGallerySettings(galleryValues);
+  // A deep reveal from the image map anchors the infinite window mid-board.
+  // New images land at the TOP of that board's listing, which such a window
+  // never covers — and an anchored window also suppresses the recents overlay
+  // and the queue placeholders. Release the anchor when an incoming image
+  // belongs to the board being viewed, or the user would never see their own
+  // generation appear. Scoped to that board: an anchor on some other board's
+  // listing has nothing to do with this result.
+  const viewedBoardId = typeof galleryValues.selectedBoardId === 'string' ? galleryValues.selectedBoardId : 'none';
+  const releasesWindowAnchor =
+    gallerySettings.paginationMode === 'infinite' &&
+    getGalleryPage(galleryValues) > 0 &&
+    newImages.some((image) => image.boardId === viewedBoardId);
 
   return updateProjectWidgetValues(project, 'gallery', () => ({
     ...galleryValues,
+    ...(releasesWindowAnchor ? { galleryPage: 0 } : {}),
     recentImages: getBoundedRecentImages([...newImages, ...previousImages]),
     selectedImage: nextSelectedItem ?? galleryValues.selectedImage,
     selectedImageName: nextSelectedItemKey ?? galleryValues.selectedImageName,
@@ -2825,6 +2960,7 @@ const routeQueueItemPartialResults = (
 ): Project => {
   const queueItem = project.queue.items.find((item) => item.id === queueItemId);
   const destination = queueItem?.snapshot.destination ?? project.invocation.destination;
+  const previousSelectedSlot = getSelectedCanvasStagingSlot(project);
   const nextProject = updateQueueItem(project, queueItemId, (item) => ({
     ...item,
     completedBackendItemIds: item.completedBackendItemIds?.includes(backendItemId)
@@ -2837,12 +2973,17 @@ const routeQueueItemPartialResults = (
     return updateGalleryWithResultImages(nextProject, images);
   }
 
+  if (images.length === 0) {
+    return clampCanvasStagingSelection(nextProject, previousSelectedSlot);
+  }
+
   return clampCanvasStagingSelection(
     stageCanvasResultImages(
       nextProject,
       queueItemId,
       images,
-      images.map(() => backendItemId)
+      images.map(() => backendItemId),
+      previousSelectedSlot
     )
   );
 };
@@ -2850,6 +2991,7 @@ const routeQueueItemPartialResults = (
 const routeQueueItemResults = (project: Project, queueItemId: string, images: GeneratedImageContract[]): Project => {
   const queueItem = project.queue.items.find((item) => item.id === queueItemId);
   const destination = queueItem?.snapshot.destination ?? project.invocation.destination;
+  const previousSelectedSlot = getSelectedCanvasStagingSlot(project);
   const nextProject = updateQueueItem(project, queueItemId, (item) => ({
     ...item,
     completedBackendItemIds: item.backendItemIds
@@ -2874,11 +3016,15 @@ const routeQueueItemResults = (project: Project, queueItemId: string, images: Ge
     return nextProject;
   }
 
+  if (images.length === 0) {
+    return clampCanvasStagingSelection(nextProject, previousSelectedSlot);
+  }
+
   const sourceBackendItemIds = queueItem?.backendItemIds?.filter(
     (backendItemId) => !queueItem.cancelledBackendItemIds?.includes(backendItemId)
   );
 
-  return stageCanvasResultImages(nextProject, queueItemId, images, sourceBackendItemIds);
+  return stageCanvasResultImages(nextProject, queueItemId, images, sourceBackendItemIds, previousSelectedSlot);
 };
 
 /**
@@ -3466,21 +3612,25 @@ export const __workbenchReducerInternal = (
         // must never render in a panel and a floating window at once.
         const { [instanceId]: _floated, ...floatingWidgets } = project.floatingWidgets ?? {};
 
-        return {
-          ...project,
-          floatingWidgets,
-          layout: openPanelForRegion(project.layout, action.region),
-          widgetInstances,
-          widgetRegions: {
-            ...project.widgetRegions,
-            [action.region]: {
-              ...region,
-              activeInstanceId: instanceId,
-              instanceIds,
-              isCollapsed: false,
+        return applyAutoRouteForWidgetReveal(
+          {
+            ...project,
+            floatingWidgets,
+            layout: openPanelForRegion(project.layout, action.region),
+            widgetInstances,
+            widgetRegions: {
+              ...project.widgetRegions,
+              [action.region]: {
+                ...region,
+                activeInstanceId: instanceId,
+                instanceIds,
+                isCollapsed: false,
+              },
             },
           },
-        };
+          action.widgetId,
+          context
+        );
       });
     }
     case 'selectRegionWidget': {
@@ -3488,30 +3638,56 @@ export const __workbenchReducerInternal = (
         const region = project.widgetRegions[action.region];
 
         if (action.region === 'center') {
-          return {
-            ...project,
-            widgetRegions: {
-              ...project.widgetRegions,
-              center: { ...region, activeInstanceId: action.widgetId, isCollapsed: false },
+          return applyAutoRouteForRevealedInstance(
+            {
+              ...project,
+              widgetRegions: {
+                ...project.widgetRegions,
+                center: { ...region, activeInstanceId: action.widgetId, isCollapsed: false },
+              },
             },
-          };
+            action.widgetId,
+            context
+          );
         }
 
-        const widgetRegion =
-          region.activeInstanceId === action.widgetId
-            ? { ...region, isCollapsed: !region.isCollapsed }
-            : { ...region, activeInstanceId: action.widgetId, isCollapsed: false };
+        // Clicking the already-active tab toggles the rail's disclosure rather
+        // than switching tabs. Expanding it puts that panel back on screen and
+        // is a reveal like any other; collapsing it puts nothing in front, so
+        // the route stays exactly where it is.
+        if (region.activeInstanceId === action.widgetId) {
+          const disclosed = {
+            ...project,
+            layout: openPanelForRegion(project.layout, action.region),
+            widgetRegions: {
+              ...project.widgetRegions,
+              [action.region]: { ...region, isCollapsed: !region.isCollapsed },
+            },
+          };
 
-        return {
-          ...project,
-          layout: openPanelForRegion(project.layout, action.region),
-          widgetRegions: { ...project.widgetRegions, [action.region]: widgetRegion },
-        };
+          return region.isCollapsed
+            ? applyAutoRouteForRevealedInstance(disclosed, action.widgetId, context)
+            : disclosed;
+        }
+
+        return applyAutoRouteForRevealedInstance(
+          {
+            ...project,
+            layout: openPanelForRegion(project.layout, action.region),
+            widgetRegions: {
+              ...project.widgetRegions,
+              [action.region]: { ...region, activeInstanceId: action.widgetId, isCollapsed: false },
+            },
+          },
+          action.widgetId,
+          context
+        );
       });
     }
     case 'toggleRegionWidget': {
-      return updateProjectById(state, action.projectId ?? state.activeProjectId, (project) =>
-        updateProjectWidgetRegion(project, action.region, (region) => {
+      return updateProjectById(state, action.projectId ?? state.activeProjectId, (project) => {
+        const previousRegion = project.widgetRegions[action.region];
+        const nextProject = updateProjectWidgetRegion(project, action.region, (region) => {
           const isEnabled = region.instanceIds.includes(action.widgetId);
 
           if (action.region === 'center' && isEnabled && region.instanceIds.length === 1) {
@@ -3529,8 +3705,20 @@ export const __workbenchReducerInternal = (
             instanceIds,
             isCollapsed: action.region === 'center' ? false : instanceIds.length === 0 ? true : region.isCollapsed,
           };
-        })
-      );
+        });
+
+        // A refused toggle (the work surface keeping its last view) must stay a
+        // no-op down to object identity: the persistence layer treats any new
+        // `projects` reference as a change worth autosaving.
+        if (nextProject === project) {
+          return project;
+        }
+
+        // Closing the front tab promotes a new one, which is a reveal; closing
+        // a background tab changes nothing on screen and must leave the route
+        // alone. `applyAutoRouteForRegionFront` draws exactly that line.
+        return applyAutoRouteForRegionFront(nextProject, previousRegion, action.region, context);
+      });
     }
     case 'floatWidget': {
       return updateActiveProject(state, (project) => {
@@ -3565,25 +3753,31 @@ export const __workbenchReducerInternal = (
           stackOrder: nextStackOrder(project.floatingWidgets),
         };
 
-        return {
-          ...project,
-          floatingWidgets: { ...project.floatingWidgets, [action.instanceId]: floating },
-          widgetRegions: {
-            ...project.widgetRegions,
-            [hostRegionId]: {
-              ...hostRegion,
-              activeInstanceId:
-                hostRegion.activeInstanceId === action.instanceId && fallbackInstanceId
-                  ? fallbackInstanceId
-                  : hostRegion.activeInstanceId,
-              instanceIds,
-              // Floating the last widget out of a rail leaves nothing to show,
-              // so the rail collapses rather than standing open and empty —
-              // the same repair `toggleRegionWidget` makes.
-              isCollapsed: instanceIds.length === 0 ? true : hostRegion.isCollapsed,
+        return applyAutoRouteForRevealedInstance(
+          {
+            ...project,
+            floatingWidgets: { ...project.floatingWidgets, [action.instanceId]: floating },
+            widgetRegions: {
+              ...project.widgetRegions,
+              [hostRegionId]: {
+                ...hostRegion,
+                activeInstanceId:
+                  hostRegion.activeInstanceId === action.instanceId && fallbackInstanceId
+                    ? fallbackInstanceId
+                    : hostRegion.activeInstanceId,
+                instanceIds,
+                // Floating the last widget out of a rail leaves nothing to show,
+                // so the rail collapses rather than standing open and empty —
+                // the same repair `toggleRegionWidget` makes.
+                isCollapsed: instanceIds.length === 0 ? true : hostRegion.isCollapsed,
+              },
             },
           },
-        };
+          // The window lands on top of everything, so it is the revealed
+          // surface — not the tab the rail promotes behind it.
+          action.instanceId,
+          context
+        );
       });
     }
     case 'dockFloatingWidget': {
@@ -3600,20 +3794,24 @@ export const __workbenchReducerInternal = (
           ? region.instanceIds
           : insertAtReturnIndex(region.instanceIds, action.instanceId, floating.returnIndex);
 
-        return {
-          ...project,
-          floatingWidgets: remaining,
-          layout: openPanelForRegion(project.layout, floating.returnRegion),
-          widgetRegions: {
-            ...project.widgetRegions,
-            [floating.returnRegion]: {
-              ...region,
-              activeInstanceId: action.instanceId,
-              instanceIds,
-              isCollapsed: false,
+        return applyAutoRouteForRevealedInstance(
+          {
+            ...project,
+            floatingWidgets: remaining,
+            layout: openPanelForRegion(project.layout, floating.returnRegion),
+            widgetRegions: {
+              ...project.widgetRegions,
+              [floating.returnRegion]: {
+                ...region,
+                activeInstanceId: action.instanceId,
+                instanceIds,
+                isCollapsed: false,
+              },
             },
           },
-        };
+          action.instanceId,
+          context
+        );
       });
     }
     case 'setFloatingWidgetGeometry': {
@@ -3668,6 +3866,12 @@ export const __workbenchReducerInternal = (
         const floating = project.floatingWidgets?.[action.instanceId];
         const topOrder = nextStackOrder(project.floatingWidgets) - 1;
 
+        // `focusFloatingWidget` is bound to `onPointerDownCapture` on the window
+        // root, so it fires on every scroll, drag, and button press inside the
+        // window — not just on a raise. Routing therefore stays behind this
+        // shortcut: raising a window reveals it, but touching the window that
+        // is already on top reveals nothing and must not re-target Invoke or
+        // dirty the project.
         if (!floating || floating.stackOrder === topOrder) {
           return project;
         }
@@ -3687,7 +3891,7 @@ export const __workbenchReducerInternal = (
 
         floatingWidgets[action.instanceId] = { ...floating, stackOrder: below.length + 1 };
 
-        return { ...project, floatingWidgets };
+        return applyAutoRouteForRevealedInstance({ ...project, floatingWidgets }, action.instanceId, context);
       });
     }
     case 'moveWidgetInstance': {
@@ -3697,37 +3901,50 @@ export const __workbenchReducerInternal = (
         const nextFromInstanceIds = fromRegion.instanceIds.filter((instanceId) => instanceId !== action.instanceId);
         const nextToInstanceIds = insertAt(toRegion.instanceIds, action.instanceId, action.toIndex);
 
-        return {
-          ...project,
-          layout: openPanelForRegion(project.layout, action.toRegion),
-          widgetRegions: {
-            ...project.widgetRegions,
-            [action.fromRegion]: {
-              ...fromRegion,
-              activeInstanceId:
-                fromRegion.activeInstanceId === action.instanceId
-                  ? (nextFromInstanceIds[0] ?? fromRegion.activeInstanceId)
-                  : fromRegion.activeInstanceId,
-              instanceIds: nextFromInstanceIds,
-              isCollapsed:
-                action.fromRegion === 'center' ? false : nextFromInstanceIds.length === 0 || fromRegion.isCollapsed,
-            },
-            [action.toRegion]: {
-              ...toRegion,
-              activeInstanceId: action.instanceId,
-              instanceIds: nextToInstanceIds,
-              isCollapsed: false,
+        return applyAutoRouteForRevealedInstance(
+          {
+            ...project,
+            layout: openPanelForRegion(project.layout, action.toRegion),
+            widgetRegions: {
+              ...project.widgetRegions,
+              [action.fromRegion]: {
+                ...fromRegion,
+                activeInstanceId:
+                  fromRegion.activeInstanceId === action.instanceId
+                    ? (nextFromInstanceIds[0] ?? fromRegion.activeInstanceId)
+                    : fromRegion.activeInstanceId,
+                instanceIds: nextFromInstanceIds,
+                isCollapsed:
+                  action.fromRegion === 'center' ? false : nextFromInstanceIds.length === 0 || fromRegion.isCollapsed,
+              },
+              [action.toRegion]: {
+                ...toRegion,
+                activeInstanceId: action.instanceId,
+                instanceIds: nextToInstanceIds,
+                isCollapsed: false,
+              },
             },
           },
-        };
+          // The dragged widget lands expanded and selected in the target
+          // region; the tab the source region promotes behind it did not move.
+          action.instanceId,
+          context
+        );
       });
     }
     case 'reorderWidgetInstances': {
-      return updateActiveWidgetRegion(state, action.region, (region) => ({
-        ...region,
-        activeInstanceId: action.activeInstanceId ?? region.activeInstanceId,
-        instanceIds: action.instanceIds,
-      }));
+      return updateActiveProject(state, (project) => {
+        const previousRegion = project.widgetRegions[action.region];
+        const nextProject = updateProjectWidgetRegion(project, action.region, (region) => ({
+          ...region,
+          activeInstanceId: action.activeInstanceId ?? region.activeInstanceId,
+          instanceIds: action.instanceIds,
+        }));
+
+        // A reorder that also changes which tab is selected reveals that tab;
+        // a pure reorder leaves the same panel in front and must not re-route.
+        return applyAutoRouteForRegionFront(nextProject, previousRegion, action.region, context);
+      });
     }
     case 'setRegionWidgetCollapsed': {
       if (action.region === 'center') {
@@ -3983,20 +4200,21 @@ export const __workbenchReducerInternal = (
       );
     }
     case 'markQueueItemBackendSubmitted': {
-      return updateProjectById(state, action.projectId, (project) =>
-        clampCanvasStagingSelection(
-          updateQueueItem(project, action.queueItemId, (item) => {
-            const status = item.status === 'cancelled' ? 'cancelled' : 'running';
-            const hasSameBackendItemIds =
-              item.backendItemIds?.length === action.backendItemIds.length &&
-              item.backendItemIds.every((id, index) => id === action.backendItemIds[index]);
+      return updateProjectById(state, action.projectId, (project) => {
+        const previousSelectedSlot = getSelectedCanvasStagingSlot(project);
+        const nextProject = updateQueueItem(project, action.queueItemId, (item) => {
+          const status = item.status === 'cancelled' ? 'cancelled' : 'running';
+          const hasSameBackendItemIds =
+            item.backendItemIds?.length === action.backendItemIds.length &&
+            item.backendItemIds.every((id, index) => id === action.backendItemIds[index]);
 
-            return item.backendBatchId === action.backendBatchId && hasSameBackendItemIds && item.status === status
-              ? item
-              : { ...item, backendBatchId: action.backendBatchId, backendItemIds: action.backendItemIds, status };
-          })
-        )
-      );
+          return item.backendBatchId === action.backendBatchId && hasSameBackendItemIds && item.status === status
+            ? item
+            : { ...item, backendBatchId: action.backendBatchId, backendItemIds: action.backendItemIds, status };
+        });
+
+        return clampCanvasStagingSelection(nextProject, previousSelectedSlot);
+      });
     }
     case 'setQueueItemStatus': {
       const project = state.projects.find((project) => project.id === action.projectId);
@@ -4010,15 +4228,16 @@ export const __workbenchReducerInternal = (
         return state;
       }
 
-      const nextState = updateProjectById(state, action.projectId, (project) =>
-        clampCanvasStagingSelection(
-          updateQueueItem(project, action.queueItemId, (item) => ({
-            ...item,
-            error: action.error,
-            status: action.status,
-          }))
-        )
-      );
+      const nextState = updateProjectById(state, action.projectId, (project) => {
+        const previousSelectedSlot = getSelectedCanvasStagingSlot(project);
+        const nextProject = updateQueueItem(project, action.queueItemId, (item) => ({
+          ...item,
+          error: action.error,
+          status: action.status,
+        }));
+
+        return clampCanvasStagingSelection(nextProject, previousSelectedSlot);
+      });
 
       if (action.notify === false || (action.status !== 'failed' && action.status !== 'cancelled')) {
         return nextState;
@@ -4055,6 +4274,7 @@ export const __workbenchReducerInternal = (
       }
 
       return updateProjectById(state, action.projectId, (project) => {
+        const previousSelectedSlot = getSelectedCanvasStagingSlot(project);
         const nextProject = updateQueueItem(project, action.queueItemId, (item) => {
           const cancelledBackendItemIds = mergeBackendItemId(item.cancelledBackendItemIds, action.backendItemId);
 
@@ -4065,7 +4285,7 @@ export const __workbenchReducerInternal = (
           };
         });
 
-        return clampCanvasStagingSelection(nextProject);
+        return clampCanvasStagingSelection(nextProject, previousSelectedSlot);
       });
     }
     case 'routeQueueItemResults': {
@@ -4383,8 +4603,9 @@ export const __workbenchReducerInternal = (
       const targetProject = state.projects.find((project) => project.id === targetProjectId);
       const queueItem = targetProject?.queue.items.find((item) => item.id === action.queueItemId);
       const canCancelQueueItem = queueItem ? isCancellableQueueItem(queueItem) : false;
-      const nextState = updateProjectById(state, targetProjectId, (project) =>
-        clampCanvasStagingSelection({
+      const nextState = updateProjectById(state, targetProjectId, (project) => {
+        const previousSelectedSlot = getSelectedCanvasStagingSlot(project);
+        const nextProject: Project = {
           ...project,
           queue: {
             items: project.queue.items.map((item) => {
@@ -4395,8 +4616,10 @@ export const __workbenchReducerInternal = (
               return { ...item, status: 'cancelled' };
             }),
           },
-        })
-      );
+        };
+
+        return clampCanvasStagingSelection(nextProject, previousSelectedSlot);
+      });
 
       if (!targetProject || !queueItem || !canCancelQueueItem) {
         return nextState;
@@ -4427,8 +4650,9 @@ export const __workbenchReducerInternal = (
 
       const nextState: WorkbenchState = {
         ...state,
-        projects: state.projects.map((project) =>
-          clampCanvasStagingSelection({
+        projects: state.projects.map((project) => {
+          const previousSelectedSlot = getSelectedCanvasStagingSlot(project);
+          const nextProject: Project = {
             ...project,
             queue: {
               items: shouldApplyQueueBulkActionToProject(project, action.projectId)
@@ -4437,8 +4661,10 @@ export const __workbenchReducerInternal = (
                   )
                 : project.queue.items,
             },
-          })
-        ),
+          };
+
+          return clampCanvasStagingSelection(nextProject, previousSelectedSlot);
+        }),
       };
 
       return addNotification(
@@ -4468,8 +4694,9 @@ export const __workbenchReducerInternal = (
 
       const nextState: WorkbenchState = {
         ...state,
-        projects: state.projects.map((project) =>
-          clampCanvasStagingSelection({
+        projects: state.projects.map((project) => {
+          const previousSelectedSlot = getSelectedCanvasStagingSlot(project);
+          const nextProject: Project = {
             ...project,
             queue: {
               items: shouldApplyQueueBulkActionToProject(project, action.projectId)
@@ -4480,8 +4707,10 @@ export const __workbenchReducerInternal = (
                   )
                 : project.queue.items,
             },
-          })
-        ),
+          };
+
+          return clampCanvasStagingSelection(nextProject, previousSelectedSlot);
+        }),
       };
 
       return addNotification(
@@ -4496,10 +4725,15 @@ export const __workbenchReducerInternal = (
     case 'clearCompletedQueueItems': {
       return {
         ...state,
-        projects: state.projects.map((project) => ({
-          ...project,
-          queue: { items: project.queue.items.filter((item) => !isClearableQueueItem(item)) },
-        })),
+        projects: state.projects.map((project) => {
+          const previousSelectedSlot = getSelectedCanvasStagingSlot(project);
+          const nextProject: Project = {
+            ...project,
+            queue: { items: project.queue.items.filter((item) => !isClearableQueueItem(item)) },
+          };
+
+          return clampCanvasStagingSelection(nextProject, previousSelectedSlot);
+        }),
       };
     }
     case 'undoProjectChange': {
