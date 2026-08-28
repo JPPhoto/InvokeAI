@@ -834,28 +834,32 @@ describe('authoritative project boards', () => {
     expect(api.__records.get(draft.id)?.revision).toBe(1);
   });
 
-  it('retries rather than forks when the revision moved but the document did not', async () => {
-    // A rename elsewhere bumps the revision and leaves the data alone. The
-    // server's copy still carries the other session's search; compared as
-    // this realm holds it, it is the baseline this edit started from.
+  it("retries rather than forks when only the other session's ranking moved", async () => {
+    // The other tab paged its ranking: the revision moved and the data changed
+    // only in the positions set against a search this realm cannot resolve.
+    // Compared as this realm holds it, the server's copy is the baseline this
+    // edit started from — a rename here is not in conflict with that.
     const draft = { ...createDraftProject([]), name: 'Ranked elsewhere' };
     const document = persistence.serializeProjectDocument(draft);
     const widgetInstances = document.widgetInstances as Record<string, { state: { values: Record<string, unknown> } }>;
-
-    widgetInstances.gallery!.state.values = {
+    const rankedValues = (galleryPage: number) => ({
       ...widgetInstances.gallery!.state.values,
-      galleryPage: 3,
+      galleryPage,
       paginationMode: 'paginated',
       semanticImageQuery: { fileId: 'external-1-other-realm', kind: 'file', label: 'dropped.png' },
-    };
+    });
+
+    widgetInstances.gallery!.state.values = rankedValues(3);
     api.__seed(document);
     seedSessionBlob({ openProjectIds: [draft.id] });
 
     const loaded = await service.loadWorkbench();
     const opened = loaded!.state.projects.find((project) => project.id === draft.id)!;
     const record = api.__records.get(draft.id)!;
+    const pagedElsewhere = structuredClone(record.data) as typeof document;
 
-    api.__records.set(draft.id, { ...record, name: 'Renamed elsewhere', revision: record.revision + 1 });
+    (pagedElsewhere.widgetInstances as typeof widgetInstances).gallery!.state.values = rankedValues(4);
+    api.__records.set(draft.id, { ...record, data: pagedElsewhere, revision: record.revision + 1 });
 
     const result = await service.saveWorkbench(stateWithProjects([{ ...opened, name: 'Edited here' }]));
 
@@ -914,8 +918,8 @@ describe('authoritative project boards', () => {
   describe('what a flush reports', () => {
     /**
      * `arrange` runs after the project is open and before the flush, so each row states exactly
-     * what makes its outcome different. The un-renamed row still pushes: hydration normalizes the
-     * document, so its serialized form differs from what the server holds.
+     * what makes its outcome different. The un-renamed row does not push: the baseline is the
+     * hydrated document, so a project that has only been opened has nothing to send.
      */
     it.each([
       ['acknowledged', 'a push the server took', 'Edited', () => undefined],

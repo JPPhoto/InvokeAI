@@ -208,15 +208,17 @@ const getSerializedProjectDocument = (
  * that has only been opened is never pushed, and a real edit here conflicts
  * with a real edit there exactly as before.
  */
-const adoptRecordBaseline = (
-  syncState: SyncedPersistenceState,
-  record: ProjectRecordDTO
-): { project: Project | null; pushedDoc: string } => {
+const adoptRecordBaseline = (record: ProjectRecordDTO): { project: Project | null; pushedDoc: string } => {
   const project = deserializeProjectRecord(record);
 
+  // Serialized directly, not through `getSerializedProjectDocument`: that
+  // records the document's cover as a side effect, and a baseline is taken for
+  // documents this realm may never adopt — the server's copy during conflict
+  // recovery, which on a retry would leave the cover index naming the version
+  // the retry then overwrites.
   return {
     project,
-    pushedDoc: project === null ? JSON.stringify(record.data) : getSerializedProjectDocument(syncState, project).json,
+    pushedDoc: project === null ? JSON.stringify(record.data) : JSON.stringify(serializeProjectDocument(project)),
   };
 };
 
@@ -317,7 +319,7 @@ const pushNewProject = async (syncState: SyncedPersistenceState, project: Projec
 
         assertOwner(syncState);
         syncState.syncEntries.set(project.id, {
-          pushedDoc: adoptRecordBaseline(syncState, existing).pushedDoc,
+          pushedDoc: adoptRecordBaseline(existing).pushedDoc,
           revision: existing.revision,
         });
         syncState.pendingBoardAssignments.push({ boardId: existing.board_id, projectId: project.id });
@@ -392,7 +394,7 @@ const recoverConflictingProject = async (
     // taken: the wire bytes of an unchanged document differ from the baseline
     // whenever hydration changes it, and that would read a revision that
     // merely drifted as a divergence.
-    const { project: serverProject, pushedDoc: serverDocJson } = adoptRecordBaseline(syncState, server);
+    const { project: serverProject, pushedDoc: serverDocJson } = adoptRecordBaseline(server);
 
     syncState.syncEntries.set(project.id, { pushedDoc: serverDocJson, revision: server.revision });
 
@@ -739,7 +741,7 @@ const loadFromBackend = async (
       continue;
     }
 
-    const { project, pushedDoc } = adoptRecordBaseline(syncState, record);
+    const { project, pushedDoc } = adoptRecordBaseline(record);
 
     if (project) {
       serverProjects.push(project);
@@ -939,7 +941,7 @@ export const createSyncedWorkbenchPersistence = (
 
   const adoptProjectRecord = (record: ProjectRecordDTO): Project | null => {
     assertOwner(syncState);
-    const { project, pushedDoc } = adoptRecordBaseline(syncState, record);
+    const { project, pushedDoc } = adoptRecordBaseline(record);
 
     if (!project) {
       return null;
