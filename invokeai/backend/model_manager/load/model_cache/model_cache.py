@@ -1747,7 +1747,16 @@ class ModelCache:
 
         self._sync_current_stats()
 
-        TorchDevice.empty_cache()
+        # Only pay for empty_cache() when this make_room actually dropped something. It is a
+        # GLOBAL operation: it takes every device's caching-allocator mutex and hipFree/cudaFrees
+        # their cached blocks, and freeing on a device with a long kernel in flight blocks until
+        # that kernel completes — with the mutex held, so even a peer worker's ordinary tensor
+        # deallocations stall until the step boundary (observed via py-spy on a dual-GPU ROCm
+        # box: a no-op make_room during one worker's model load froze the other worker's denoise
+        # step for its full duration). make_room runs on every put(), and most of those evict
+        # nothing, so the unconditional call turned every submodel load into a cross-GPU stall.
+        if models_cleared > 0:
+            TorchDevice.empty_cache()
         self._logger.debug(f"Dropped {models_cleared} models to free {ram_bytes_freed / MB:.2f}MB of RAM.")
         self._log_cache_state(title="After dropping models:")
         return CacheClearResult(models_cleared=models_cleared, bytes_freed=ram_bytes_freed)
