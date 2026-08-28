@@ -11,7 +11,11 @@ import type {
 import type { GraphContract } from '@workbench/graphContracts';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
-import { GALLERY_RECENT_IMAGE_LIMIT, legacyGeneratedImageToGalleryItem } from '@features/gallery/contracts';
+import {
+  GALLERY_RECENT_IMAGE_LIMIT,
+  legacyGeneratedImageToGalleryItem,
+  registerImageCluster,
+} from '@features/gallery/contracts';
 import { MAX_PROMPT_HISTORY } from '@features/generation/settings';
 import { createDefaultUpscaleWidgetValues } from '@features/upscale';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -843,6 +847,23 @@ describe('adopting a project from another realm', () => {
     expect(values.galleryPage).toBe(0);
     expect(values.selectedImagePage).toBe(0);
     expect((values.selectedImageQuery as { page: number }).page).toBe(0);
+  });
+
+  it('keeps a session-scoped search this realm can still resolve', () => {
+    // Adoption is not only a foreign document arriving: closing and reopening
+    // a project runs it, and so does the conflict fork that rescues the LIVE
+    // copy. The registry entry is still here, the ranking is still on screen,
+    // and deleting it would take the user's search with it.
+    const clusterId = registerImageCluster(['a.png', 'b.png'], 'beaches');
+    const values = galleryValuesOf(
+      galleryProject({
+        galleryPage: 3,
+        semanticImageQuery: { clusterId, kind: 'cluster', label: 'beaches' },
+      })
+    );
+
+    expect(values.semanticImageQuery).toEqual({ clusterId, kind: 'cluster', label: 'beaches' });
+    expect(values.galleryPage).toBe(3);
   });
 
   it('keeps a search the new realm can rebuild, and the page it was read on', () => {

@@ -125,6 +125,45 @@ describe('workbench persistence migration', () => {
     expect((persistedValues?.selectedImageQuery as { page: number } | undefined)?.page).toBe(0);
   });
 
+  it('drops a stored search that no longer parses, and the page it left', async () => {
+    // A value that cannot be read back is a search that is gone, whatever
+    // kind it claims: the page indexing its results is as stranded as one
+    // left by a reference this realm cannot resolve.
+    const state = createInitialWorkbenchState();
+    const project = state.projects[0];
+    const galleryEntry = Object.entries(project?.widgetInstances ?? {}).find(
+      ([, instance]) => instance.typeId === 'gallery'
+    );
+    const [galleryInstanceId, galleryInstance] = galleryEntry!;
+    const snapshot = await localStorageWorkbenchPersistence.saveWorkbench({
+      ...state,
+      projects: [
+        {
+          ...project!,
+          widgetInstances: {
+            ...project!.widgetInstances,
+            [galleryInstanceId]: {
+              ...galleryInstance,
+              state: {
+                ...galleryInstance.state,
+                values: {
+                  ...galleryInstance.state.values,
+                  galleryPage: 3,
+                  paginationMode: 'paginated',
+                  semanticImageQuery: { kind: 'text', query: '' },
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+    const persistedValues = snapshot.state.projects[0]?.widgetInstances[galleryInstanceId]?.state.values;
+
+    expect(persistedValues?.semanticImageQuery).toBeNull();
+    expect(persistedValues?.galleryPage).toBe(0);
+  });
+
   it('keeps a paginated page whose search survives the reload', async () => {
     // A text search is rebuilt from the persisted value, so the page the user
     // was reading is still a page of the same list.

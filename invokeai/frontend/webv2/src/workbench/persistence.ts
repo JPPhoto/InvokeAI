@@ -35,8 +35,12 @@ const isBrowser = (): boolean => typeof window !== 'undefined' && typeof window.
  * paginates the RANKING, which makes both the gallery's page and the page
  * stamped on the selection rank pages that the board listing would then read
  * as its own. `stripSessionScopedGallerySearch` drops the reference and those
- * positions together; the same rule runs again when a project is adopted from
- * the server, which is a route into a fresh realm that never passes here.
+ * positions together.
+ *
+ * Adoption applies a narrower version of this (see `normalizeWorkbenchProject`):
+ * it can only drop a reference that fails to resolve, because it also runs on
+ * projects that never left this realm. The window anchor below is dropped here
+ * only — telling a foreign document from a live one is what that would need.
  */
 const stripSessionScopedGalleryState = (project: Project): Project => {
   let didChange = false;

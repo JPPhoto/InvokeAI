@@ -190,19 +190,24 @@ const isSessionScopedGallerySemanticReference = (value: unknown): boolean =>
   ((value as Record<string, unknown>).kind === 'file' || (value as Record<string, unknown>).kind === 'cluster');
 
 /**
- * The same values with every position that was set against a session-scoped
- * ranking dropped, or null when there is nothing to drop.
+ * The same values with every position that was set against a ranking the
+ * caller's test rejects, or null when there is nothing to drop.
  *
- * While such a search is on screen the footer paginates the RANKING, so the
- * gallery's page and the page stamped on the selection are both indexes into
- * a list no other realm can rebuild. Left behind, they are read as board pages
- * and answer with an unrelated slice, so the reference and the positions set
- * against it are dropped together. Only keys that are actually carrying a
+ * While a similarity search is on screen the footer paginates the RANKING, so
+ * the gallery's page and the page stamped on the selection are both indexes
+ * into it. Left behind by a search that is gone, they are read as board pages
+ * and answer with an unrelated slice. Only keys that are actually carrying a
  * position are rewritten: normalizing must not mint state that was never
  * stored.
+ *
+ * The test differs by caller, and the difference matters. See
+ * `stripSessionScopedGallerySearch` and `stripUnresolvableGallerySearch`.
  */
-export const stripSessionScopedGallerySearch = (values: Record<string, unknown>): Record<string, unknown> | null => {
-  if (!isSessionScopedGallerySemanticReference(values.semanticImageQuery)) {
+const stripGallerySearchPositions = (
+  values: Record<string, unknown>,
+  shouldStrip: (value: unknown) => boolean
+): Record<string, unknown> | null => {
+  if (!shouldStrip(values.semanticImageQuery)) {
     return null;
   }
 
@@ -227,6 +232,38 @@ export const stripSessionScopedGallerySearch = (values: Record<string, unknown>)
 
   return nextValues;
 };
+
+/**
+ * For the SAVE path: drop what the realm reading this back will not have.
+ *
+ * A dropped file or an image-map cluster names an entry in an in-memory
+ * registry, and its id carries a per-realm token, so it resolves here and
+ * nowhere else — the test has to be what the value IS, not whether it works
+ * right now, because right now it does.
+ */
+export const stripSessionScopedGallerySearch = (values: Record<string, unknown>): Record<string, unknown> | null =>
+  stripGallerySearchPositions(
+    values,
+    (value) =>
+      isSessionScopedGallerySemanticReference(value) ||
+      (value !== null && value !== undefined && parseGallerySemanticReference(value) === null)
+  );
+
+/**
+ * For the ADOPTION path: drop only what this realm cannot resolve.
+ *
+ * `normalizeWorkbenchProject` runs on projects that never left — closing and
+ * reopening one, a conflict fork rescuing the live copy, an export re-imported
+ * into the same session. There the registry entry is still live and the
+ * ranking is still on screen, so asking what the value IS would delete the
+ * search the user is looking at. Asking whether it resolves HERE answers both
+ * cases with one test.
+ */
+export const stripUnresolvableGallerySearch = (values: Record<string, unknown>): Record<string, unknown> | null =>
+  stripGallerySearchPositions(
+    values,
+    (value) => value !== null && value !== undefined && parseGallerySemanticReference(value) === null
+  );
 
 export const parseGallerySemanticReference = (value: unknown): GallerySemanticReference | null => {
   // Legacy shape: a bare image name.

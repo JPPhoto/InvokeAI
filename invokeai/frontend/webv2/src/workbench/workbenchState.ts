@@ -54,7 +54,7 @@ import {
   getBoundedRecentImages,
   getGalleryPage,
   getPersistedSelectedGalleryItemKeys,
-  stripSessionScopedGallerySearch,
+  stripUnresolvableGallerySearch,
   getGallerySettings,
   getSelectedGalleryItemFromValues,
   legacyGeneratedImageToGalleryItem,
@@ -1739,12 +1739,15 @@ export const normalizeWorkbenchProject = (project: Project): Project => {
       continue;
     }
 
-    // A project adopted from the server arrives in a realm that never ran the
-    // session its values describe: opening one from the dialog, from a deep
-    // link, or from a conflict fork all land here without passing the save
-    // path. A search only that session could resolve, and the rank pages set
-    // against it, are meaningless here and would be read as board positions.
-    const strippedValues = stripSessionScopedGallerySearch(instance.state.values);
+    // A project can arrive here from a realm that never ran the session its
+    // values describe — the Open dialog, a deep link — where a search only
+    // that session could resolve, and the rank pages set against it, would be
+    // read as board positions. But this also runs on projects that never
+    // left: closing and reopening one, and the conflict fork that deliberately
+    // rescues the LIVE copy. So the test is whether the reference resolves
+    // here, not what kind it is; the latter would delete the ranking the user
+    // is looking at.
+    const strippedValues = stripUnresolvableGallerySearch(instance.state.values);
     const hasRecentImages = 'recentImages' in instance.state.values;
 
     if (strippedValues === null && !hasRecentImages) {
