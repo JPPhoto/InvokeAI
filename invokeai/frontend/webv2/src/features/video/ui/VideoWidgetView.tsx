@@ -112,7 +112,7 @@ export const VideoWidgetView = () => {
   const selection = useVideoUi();
   const models = useModelsSelector((snapshot) => snapshot.models);
   const modelsStatus = useModelsSelector((snapshot) => snapshot.status);
-  const { patchPromptDraft: patchDraft, patchValues, projectId, promptDraft, rawValues } = selection;
+  const { patchValues, projectId, rawValues } = selection;
   // Normalizing and reconciling against the model list is the widget's most
   // expensive derivation; it must not run on unrelated re-renders, and a fresh
   // `values` identity would re-render every section below.
@@ -353,13 +353,14 @@ export const VideoWidgetView = () => {
         loras={values.loras}
         model={values.model}
         negativeHelpText={policy.prompt.negativeHelpText}
+        negativePrompt={values.negativePrompt}
+        negativePromptEnabled={values.negativePromptEnabled}
         negativePromptHeightPx={values.negativePromptHeightPx}
         negativeVisible={policy.prompt.negativeVisible}
+        positivePrompt={values.positivePrompt}
         positivePromptHeightPx={values.positivePromptHeightPx}
         projectId={projectId}
-        promptDraft={promptDraft}
         showSyntaxHighlighting={selection.showPromptSyntaxHighlighting}
-        onPatchPromptDraft={patchDraft}
         onPatchValues={patch}
       />
 

@@ -3090,7 +3090,6 @@
       "selectModel": "Select a video model…",
       "settingsAdjusted": "Settings adjusted",
       "settingsAdjustedDescription": "Adjusted for the selected model: {{labels}}.",
-      "sharedPromptDescription": "The prompt is shared with the Generate panel.",
       "shuffleSeed": "New random seed",
       "steps": "Steps",
       "swapAspectRatio": "Swap orientation",
