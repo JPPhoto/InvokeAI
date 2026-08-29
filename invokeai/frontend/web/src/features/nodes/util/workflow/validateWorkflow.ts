@@ -283,6 +283,12 @@ export const validateWorkflow = async (args: ValidateWorkflowArgs): Promise<Vali
       }
     }
 
+    // Prepared For executions carry an internal index input that is not part of the editable workflow template.
+    // Strip it when loading so an execution artifact cannot become an "unexpected field" in the editor.
+    if (node.data.type === 'for') {
+      delete node.data.inputs.index;
+    }
+
     for (const input of Object.values(node.data.inputs)) {
       const fieldTemplate = getInvocationNodeInputTemplate(node.data, template, input.name);
 

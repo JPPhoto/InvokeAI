@@ -50,13 +50,17 @@ class StateGetInvocation(BaseInvocation):
         return LoopStateValueOutput(value=_copy_value(self.state.values.get(self.key, self.default)))
 
 
-@invocation("state_set", title="Set Loop State Value", tags=["loop", "state"], category="workflow", version="1.0.0")
+@invocation("state_set", title="Set Loop State Value", tags=["loop", "state"], category="workflow", version="1.0.1")
 class StateSetInvocation(BaseInvocation):
     """Returns loop state with one value set."""
 
     state: Optional[LoopState] = InputField(default=None, description="The loop state to update")
     key: str = InputField(default="", description="The state key to set")
-    value: Any = InputField(default=None, description="The value to set")
+    value: Any = InputField(
+        default=None,
+        description="The value to set. Connect an output to this input.",
+        ui_type=UIType.Any,
+    )
 
     def invoke(self, context: InvocationContext) -> LoopStateOutput:
         values = _copy_value((self.state or LoopState()).values)

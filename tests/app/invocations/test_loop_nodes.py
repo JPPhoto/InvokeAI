@@ -36,6 +36,12 @@ def test_for_invocation_is_not_directly_executable() -> None:
         node.invoke(None)  # type: ignore[arg-type]
 
 
+def test_state_set_invocation_schema_exposes_any_value_input() -> None:
+    schema = StateSetInvocation.model_json_schema()
+
+    assert schema["properties"]["value"]["ui_type"] == "AnyField"
+
+
 def test_for_return_invocation_returns_body_output_and_state() -> None:
     state = LoopState(values={"count": 1})
     node = ForReturnInvocation(id="return", output="value", state=state)

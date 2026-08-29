@@ -4,6 +4,7 @@ import { CONNECTOR_INPUT_HANDLE, CONNECTOR_OUTPUT_HANDLE } from 'features/nodes/
 import {
   add,
   call_saved_workflow,
+  for_loop,
   img_resize,
   main_model_loader,
   workflow_return,
@@ -698,5 +699,45 @@ describe('validateWorkflow', () => {
     });
 
     expect(validationResult.warnings.length).toBe(1);
+  });
+
+  it('should remove the internal For index from a loaded workflow', async () => {
+    const forNode = buildInvocationNode({ x: 0, y: 0 }, for_loop);
+    forNode.data.inputs.index = {
+      name: 'index',
+      label: '',
+      description: '',
+      value: -1,
+    };
+    const workflow: WorkflowV3 = {
+      name: '',
+      author: '',
+      description: '',
+      version: '',
+      contact: '',
+      tags: '',
+      notes: '',
+      exposedFields: [],
+      form: getDefaultForm(),
+      meta: { version: '4.0.0', category: 'user' },
+      nodes: [forNode],
+      edges: [],
+    };
+
+    const validationResult = await validateWorkflow({
+      workflow,
+      templates: { for: for_loop },
+      checkImageAccess: resolveTrue,
+      checkVideoAccess: resolveTrue,
+      checkBoardAccess: resolveTrue,
+      checkModelAccess: resolveTrue,
+    });
+
+    expect(validationResult.warnings).toEqual([]);
+    expect(validationResult.workflow.nodes[0]?.type).toBe('invocation');
+    if (validationResult.workflow.nodes[0]?.type !== 'invocation') {
+      throw new Error('expected an invocation node');
+    }
+    expect(validationResult.workflow.nodes[0].data.inputs.index).toBeUndefined();
   });
 });

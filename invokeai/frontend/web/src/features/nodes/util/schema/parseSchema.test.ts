@@ -86,4 +86,16 @@ describe('parseSchema', () => {
       type: { name: 'BooleanField' },
     });
   });
+  it('should expose state_set.value as an AnyField connection input', () => {
+    const generatedSchema = JSON.parse(generatedSchemaJSON) as OpenAPIV3_1.Document;
+    const parsed = parseSchema(generatedSchema, ['state_set']);
+    const valueInput = parsed.state_set?.inputs.value;
+
+    expect(valueInput).toMatchObject({
+      input: 'connection',
+      ui_type: 'AnyField',
+      type: { name: 'AnyField', cardinality: 'SINGLE', batch: false },
+    });
+    expect(valueInput?.default).toBeUndefined();
+  });
 });

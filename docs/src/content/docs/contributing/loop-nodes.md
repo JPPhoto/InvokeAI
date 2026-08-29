@@ -444,6 +444,10 @@ Useful helpers:
 
 These helpers let workflows opt into state without making every loop body handle dictionaries manually.
 
+`state_set.value` is an `AnyField` connection input. Connect `For.item` to store the current item, or connect any
+other node output to store a computed value. It does not provide a generic literal editor; to store a constant, add
+the appropriate typed value node (for example, an Integer or String node) and connect its output to `value`.
+
 ## Execution Contract
 
 ### 1. Loop Source

@@ -83767,12 +83767,13 @@
               }
             ],
             "default": null,
-            "description": "The value to set",
+            "description": "The value to set. Connect an output to this input.",
             "field_kind": "input",
             "input": "any",
             "orig_default": null,
             "orig_required": false,
-            "title": "Value"
+            "title": "Value",
+            "ui_type": "AnyField"
           },
           "type": {
             "const": "state_set",
@@ -83786,7 +83787,7 @@
         "tags": ["loop", "state"],
         "title": "Set Loop State Value",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "output": {
           "$ref": "#/components/schemas/LoopStateOutput"
         }
