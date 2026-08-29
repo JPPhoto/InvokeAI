@@ -128,6 +128,8 @@ vi.mock('@workbench/WorkbenchContext', () => ({
   useWidgetValuesSelector: () => ({}),
   useWorkbenchCommands: () => mocks.commands,
   useWorkbenchQueries: () => ({ getSnapshot: () => ({ activeProject: mocks.project }) }),
+  useWorkbenchSelector: (selector: (snapshot: unknown) => unknown) =>
+    selector({ backendConnection: { status: 'connected' } }),
 }));
 
 vi.mock('@features/queue/react', async (importOriginal) => ({

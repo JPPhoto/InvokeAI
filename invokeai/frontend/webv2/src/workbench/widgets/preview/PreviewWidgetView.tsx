@@ -1,3 +1,4 @@
+import type { SystemStyleObject } from '@chakra-ui/react';
 import type { QueueItem } from '@features/queue/contracts';
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
@@ -55,6 +56,7 @@ import {
   type ImageActions,
   type ImageContextMenuTarget,
 } from '@workbench/image-actions';
+import { QueueProgressRail } from '@workbench/queue-integration/QueueProgressRail';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import {
   useActiveProjectId,
@@ -183,6 +185,18 @@ const PREVIEW_OVERLAY_RESERVE = '5.5rem';
  */
 const PREVIEW_TILE_OVERLAY_RESERVE = '3.25rem';
 const PREVIEW_TILE_STAGE_PADDING = '3';
+
+/** Pinned to the floating window body's top edge, under the title bar's divider. */
+const FLOATING_RAIL_SX: SystemStyleObject = {
+  display: 'flex',
+  gap: '1px',
+  height: '3px',
+  insetInline: 0,
+  pointerEvents: 'none',
+  position: 'absolute',
+  top: 0,
+  zIndex: 3,
+};
 
 export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const galleryValues = useActiveProjectSelector((project) => getProjectWidgetValues(project, 'gallery'));
@@ -544,6 +558,13 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     // and runs to every edge. `containerType` anchors the details panel's
     // `cqh` cap to the widget rather than the viewport.
     <Box ref={rootRef} containerType="size" h="full" position="relative" w="full">
+      {/* Floated, the window is usually parked over a maximized work surface
+          or on another display, where the top bar's rail is out of view — so
+          the window that shows the result also shows that it is coming. It
+          overlays the body's top edge, directly under the title bar's divider,
+          so appearing costs no reflow. Docked, the top bar's rail is in view
+          and a second one would only be noise. */}
+      {region === 'floating' ? <QueueProgressRail css={FLOATING_RAIL_SX} /> : null}
       {/* Single always-mounted keyboard boundary: DOM focus survives swaps
           between the live, selected, and compare branches, so arrow
           navigation keeps working across them. */}
