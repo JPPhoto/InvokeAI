@@ -291,11 +291,20 @@ export const WorkbenchShell = () => {
         </Flex>
         <FloatingWidgetLayer />
         <GalleryDragCursor />
-        <DragOverlay>{activeDrag ? <WidgetDragPreview activeDrag={activeDrag} /> : null}</DragOverlay>
+        {/* The overlay renders whenever anything is being dragged, even with no
+            preview to show — and it is a fixed, full-size div over the dragged
+            element. Without this it swallows every pointer event aimed at what
+            is underneath, which is how a second finger meant for the preview's
+            pinch never reaches the preview. */}
+        <DragOverlay style={DRAG_OVERLAY_STYLE}>
+          {activeDrag ? <WidgetDragPreview activeDrag={activeDrag} /> : null}
+        </DragOverlay>
       </DndContext>
     </FocusRegionProvider>
   );
 };
+
+const DRAG_OVERLAY_STYLE = { pointerEvents: 'none' } as const;
 
 const WidgetDragPreview = ({ activeDrag }: { activeDrag: ActiveWidgetDrag }) => (
   <HStack bg="bg" borderWidth="1px" gap="2" px="3" py="2" rounded="md" shadow="lg">
