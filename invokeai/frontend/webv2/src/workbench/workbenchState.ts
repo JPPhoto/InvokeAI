@@ -1690,7 +1690,20 @@ const normalizePromptHistory = (value: unknown): PromptHistoryItem[] => {
   }, []);
 };
 
-export const normalizeWorkbenchProject = (project: Project): Project => {
+export const normalizeWorkbenchProject = (
+  project: Project,
+  options: {
+    /**
+     * Whether the document is arriving from another realm (a server record,
+     * an import) rather than being kept by this one (the conflict fork that
+     * rescues the live copy). An infinite window's mid-board anchor is a
+     * "you are here" for the session that revealed it: it is dropped from a
+     * document that arrives, and kept for one that stays.
+     */
+    isArriving?: boolean;
+  } = {}
+): Project => {
+  const { isArriving = true } = options;
   const legacyWidgetRegions = project.widgetRegions as
     | Partial<Record<WidgetRegion | 'left-panel' | 'right-panel' | 'status-bar', WidgetRegionState>>
     | undefined;
@@ -1755,8 +1768,9 @@ export const normalizeWorkbenchProject = (project: Project): Project => {
     // store is hydrated from the snapshot — a project that has only been
     // opened must serialize to its baseline, or the next autosave pushes it.
     const strippedSearchValues = stripUnresolvableGallerySearch(instance.state.values);
-    const strippedValues =
-      stripInfiniteWindowAnchor(strippedSearchValues ?? instance.state.values) ?? strippedSearchValues;
+    const strippedValues = isArriving
+      ? (stripInfiniteWindowAnchor(strippedSearchValues ?? instance.state.values) ?? strippedSearchValues)
+      : strippedSearchValues;
     const hasRecentImages = 'recentImages' in instance.state.values;
 
     if (strippedValues === null && !hasRecentImages) {
@@ -1842,17 +1856,20 @@ const recoverProjectUnderNewIdentity = (
   snapshotProject: Project,
   identity: ProjectRecoveredIdentity
 ): Project =>
-  normalizeWorkbenchProject(
-    localProject
-      ? {
+  // The fork rescues the LIVE copy, edits and position included; only a
+  // fallback to the snapshot is a document arriving from elsewhere.
+  localProject
+    ? normalizeWorkbenchProject(
+        {
           ...localProject,
           id: identity.id,
           name: identity.name,
           recoveredAt: identity.recoveredAt,
           recoveryOf: identity.recoveryOf,
-        }
-      : snapshotProject
-  );
+        },
+        { isArriving: false }
+      )
+    : normalizeWorkbenchProject(snapshotProject);
 
 export const clampPanelSize = (region: WidgetRegion, sizePx: number): number => {
   const { max, min } = getPanelSizeBounds(region);
@@ -2215,7 +2232,7 @@ const normalizeWorkbenchState = (state: WorkbenchState): WorkbenchState => ({
   // (they live in the settings store now) and must not resurface here.
   account: normalizeWorkbenchAccount(state.account),
   notifications: [],
-  projects: state.projects.map(normalizeWorkbenchProject),
+  projects: state.projects.map((project) => normalizeWorkbenchProject(project)),
 });
 
 const updateActiveLayout = (

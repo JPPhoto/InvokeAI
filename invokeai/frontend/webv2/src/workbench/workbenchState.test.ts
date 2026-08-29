@@ -870,9 +870,65 @@ describe('adopting a project from another realm', () => {
   it('drops an infinite window anchor on adoption, and keeps a paginated page', () => {
     // A reveal anchors the infinite window mid-board for the session that
     // made it; adopted anywhere else it strands the gallery there. A
-    // paginated page is the page the user was reading and survives.
+    // paginated page is the page the user was reading and survives. A
+    // gallery that never touched the setting has no paginationMode at all,
+    // and the default is infinite — that is the common shape.
     expect(galleryValuesOf(galleryProject({ galleryPage: 5, paginationMode: 'infinite' })).galleryPage).toBe(0);
+    expect(galleryValuesOf(galleryProject({ galleryPage: 5 })).galleryPage).toBe(0);
     expect(galleryValuesOf(galleryProject({ galleryPage: 5, paginationMode: 'paginated' })).galleryPage).toBe(5);
+  });
+
+  it('drops the anchor and an unresolvable search together on adoption', () => {
+    const values = galleryValuesOf(
+      galleryProject({
+        galleryPage: 5,
+        paginationMode: 'infinite',
+        semanticImageQuery: { clusterId: 'evicted', kind: 'cluster', label: 'beaches' },
+      })
+    );
+
+    expect(values.semanticImageQuery).toBeNull();
+    expect(values.galleryPage).toBe(0);
+  });
+
+  it('keeps the window anchor when a conflict fork rescues the live copy', () => {
+    // The fork keeps the user's edits AND their position: they were deep in
+    // a board when the conflict hit, and the recovered project is the one
+    // they keep working in.
+    const clusterId = registerImageCluster(['a.png', 'b.png'], 'beaches');
+    let state = createInitialWorkbenchState();
+    const project = getActiveProject(state);
+    const serverCopy = { ...project, name: 'Renamed elsewhere' };
+
+    state = workbenchReducer(state, {
+      projectId: project.id,
+      type: 'patchWidgetValues',
+      values: {
+        galleryPage: 7,
+        paginationMode: 'infinite',
+        semanticImageQuery: { clusterId, kind: 'cluster', label: 'beaches' },
+      },
+      widgetId: 'gallery',
+    });
+    state = workbenchReducer(state, {
+      projectId: project.id,
+      recoveredIdentity: {
+        id: `${project.id}-recovered-1`,
+        name: `${project.name} (recovered)`,
+        recoveredAt: '2026-08-29T00:00:00.000Z',
+        recoveryOf: project.id,
+      },
+      recoveredProject: serverCopy,
+      serverProject: serverCopy,
+      type: 'reconcileProjectConflict',
+    });
+
+    const fork = getActiveProject(state);
+    const values = getProjectWidgetValues(fork, 'gallery');
+
+    expect(fork.id).toBe(`${project.id}-recovered-1`);
+    expect(values.galleryPage).toBe(7);
+    expect(values.semanticImageQuery).toEqual({ clusterId, kind: 'cluster', label: 'beaches' });
   });
 
   it('keeps a search the new realm can rebuild, and the page it was read on', () => {

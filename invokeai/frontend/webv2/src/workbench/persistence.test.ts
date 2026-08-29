@@ -205,6 +205,36 @@ describe('workbench persistence migration', () => {
     expect(persistedValues?.galleryPage).toBe(0);
   });
 
+  it('drops an infinite window anchor from the local cache on its own', async () => {
+    // The cache is what an offline boot restores from. It has not been
+    // through adoption, so the strip here is the only thing between a
+    // persisted anchor and a gallery reopened stranded mid-board.
+    const state = createInitialWorkbenchState();
+    const project = state.projects[0];
+    const galleryEntry = Object.entries(project?.widgetInstances ?? {}).find(
+      ([, instance]) => instance.typeId === 'gallery'
+    );
+    const [galleryInstanceId, galleryInstance] = galleryEntry!;
+    const snapshot = await localStorageWorkbenchPersistence.saveWorkbench({
+      ...state,
+      projects: [
+        {
+          ...project!,
+          widgetInstances: {
+            ...project!.widgetInstances,
+            [galleryInstanceId]: {
+              ...galleryInstance,
+              state: { ...galleryInstance.state, values: { ...galleryInstance.state.values, galleryPage: 5 } },
+            },
+          },
+        },
+      ],
+    });
+    const persistedValues = snapshot.state.projects[0]?.widgetInstances[galleryInstanceId]?.state.values;
+
+    expect(persistedValues?.galleryPage).toBe(0);
+  });
+
   it('keeps a paginated page whose search survives the reload', async () => {
     // A text search is rebuilt from the persisted value, so the page the user
     // was reading is still a page of the same list.
