@@ -18,6 +18,7 @@ from invokeai.app.services.events.events_common import ImageIndexStatusEvent, Im
 from invokeai.app.services.image_index import image_index_default
 from invokeai.app.services.image_index.image_index_common import EMBEDDING_DTYPE
 from invokeai.app.services.image_index.image_index_default import (
+    _ACTIVATION_RETRY_INTERVAL_S,
     _MAX_ATTEMPTS,
     _MAX_BACKOFF_SECONDS,
     _POLL_SECONDS,
@@ -314,6 +315,131 @@ def test_model_not_installed_message_flags_same_name_wrong_type() -> None:
     service._invoker.services.model_manager.store.search_by_attr = lambda model_name=None: []
     message = service._model_not_installed_message("clip-vit-large-patch14")
     assert "is not installed" in message
+
+
+def test_try_activate_picks_up_a_model_installed_after_startup(
+    images_service: ImageService,
+    index_records: ImageIndexRecordsSqlite,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The encoder is usually installed from the image map itself, long after
+    # the server came up; that must not need a restart.
+    from invokeai.backend.model_manager.taxonomy import ModelType
+
+    installed: list[object] = []
+    resolutions = 0
+
+    def resolve(self, model_name: str):
+        nonlocal resolutions
+        resolutions += 1
+        return installed[0] if installed else None
+
+    monkeypatch.setattr(ImageIndexService, "_resolve_model_config", resolve)
+    store = SimpleNamespace(search_by_attr=lambda **kwargs: [])
+    invoker = _make_invoker(images_service, index_records, model_manager=SimpleNamespace(store=store))
+    service = ImageIndexService()
+    try:
+        service.start(invoker)
+        assert service.model_id is None
+
+        # Throttled: start() has just resolved, so a poll cannot re-query the
+        # model store on its heels.
+        assert service.try_activate() is False
+        assert resolutions == 1
+
+        service._last_activation_attempt = time.monotonic() - _ACTIVATION_RETRY_INTERVAL_S - 1
+        assert service.try_activate() is False
+        assert resolutions == 2
+
+        installed.append(SimpleNamespace(hash=MODEL_ID, type=ModelType.CLIPVision, path="/models/encoder"))
+        service._last_activation_attempt = time.monotonic() - _ACTIVATION_RETRY_INTERVAL_S - 1
+
+        assert service.try_activate() is True
+        assert service.model_id == MODEL_ID
+        _wait_until(lambda: service._worker is not None and service._worker.is_alive())
+        # The fast path: no further model-store queries once it is running.
+        assert service.try_activate() is True
+        assert resolutions == 3
+    finally:
+        service.stop()
+
+    # A request racing shutdown must not start a worker the invoker will never join.
+    service._worker = None
+    service._model_id = None
+    service._last_activation_attempt = time.monotonic() - _ACTIVATION_RETRY_INTERVAL_S - 1
+    assert service.try_activate() is False
+
+
+def test_failed_late_activation_rolls_back_rather_than_wedging_the_service(
+    images_service: ImageService,
+    index_records: ImageIndexRecordsSqlite,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Publishing the model before the worker exists would leave the service
+    # claiming to run with nothing consuming the queue — and try_activate's
+    # fast path would answer True forever, so no later request would retry.
+    from invokeai.backend.model_manager.taxonomy import ModelType
+
+    resolved = SimpleNamespace(hash=MODEL_ID, type=ModelType.CLIPVision, path="/models/encoder")
+    monkeypatch.setattr(ImageIndexService, "_resolve_model_config", lambda self, model_name: resolved)
+    launches = 0
+
+    def launch(self, invoker):
+        nonlocal launches
+        launches += 1
+        if launches == 1:
+            raise RuntimeError("sqlite write failed")
+        return original_launch(self, invoker)
+
+    original_launch = ImageIndexService._launch_worker
+    store = SimpleNamespace(search_by_attr=lambda **kwargs: [])
+    invoker = _make_invoker(images_service, index_records, model_manager=SimpleNamespace(store=store))
+    service = ImageIndexService()
+    try:
+        # Inert at start: the encoder was not installed yet.
+        monkeypatch.setattr(ImageIndexService, "_resolve_model_config", lambda self, model_name: None)
+        service.start(invoker)
+        assert service.model_id is None
+
+        monkeypatch.setattr(ImageIndexService, "_resolve_model_config", lambda self, model_name: resolved)
+        monkeypatch.setattr(ImageIndexService, "_launch_worker", launch)
+        service._last_activation_attempt = time.monotonic() - _ACTIVATION_RETRY_INTERVAL_S - 1
+
+        assert service.try_activate() is False
+        # Rolled back, so the state a request reads still says "not running".
+        assert service.model_id is None
+        assert service._encode_fn is None
+        assert service.get_status() is None
+
+        service._last_activation_attempt = time.monotonic() - _ACTIVATION_RETRY_INTERVAL_S - 1
+
+        assert service.try_activate() is True
+        assert service.model_id == MODEL_ID
+        _wait_until(lambda: service._worker is not None and service._worker.is_alive())
+    finally:
+        service.stop()
+
+
+def test_late_activation_survives_a_model_store_failure(
+    images_service: ImageService,
+    index_records: ImageIndexRecordsSqlite,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # These endpoints reported `model_missing` before they resolved anything;
+    # a model-store failure must not turn them into 500s.
+    def explode(self, model_name):
+        raise RuntimeError("model store unavailable")
+
+    store = SimpleNamespace(search_by_attr=lambda **kwargs: [])
+    invoker = _make_invoker(images_service, index_records, model_manager=SimpleNamespace(store=store))
+    service = ImageIndexService()
+    monkeypatch.setattr(ImageIndexService, "_resolve_model_config", lambda self, model_name: None)
+    service.start(invoker)
+    monkeypatch.setattr(ImageIndexService, "_resolve_model_config", explode)
+    service._last_activation_attempt = time.monotonic() - _ACTIVATION_RETRY_INTERVAL_S - 1
+
+    assert service.try_activate() is False
+    assert service.model_id is None
 
 
 def test_broken_encoder_leaves_images_pending_rather_than_quarantined(
