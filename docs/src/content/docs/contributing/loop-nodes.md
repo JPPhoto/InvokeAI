@@ -1023,7 +1023,9 @@ Answered branch-local decisions:
 
 Steps 1 through 18 are complete for the current recursive body-path contract. Step 11 now includes output grouping,
 contextual `ForReturn` discovery/wiring, a structured visual body boundary, and mounted `happy-dom` interaction
-coverage. Full browser geometry, drag, and zoom behavior remains outside this test environment.
+coverage. Full browser geometry, drag, and zoom behavior remains outside this test environment. Final cleanup is
+complete: no branch-specific temporary browser-test dependencies or configuration remain, and the mounted tests use
+the existing `happy-dom` dependency.
 
 The durable endpoint identity slice, bounded internal `Iterate` slice, recursive identity-bearing nested `For` slice,
 deterministic nested final-output continuation slice, explicit sibling fan-in slice, positional `CollectionZip` slice,
@@ -1036,7 +1038,6 @@ stateless loops and richer collection producers remain later work.
 
 ## Next Development Slice
 
-After the final adversarial review and full PR validation, the next development slice is final cleanup: confirm that no
-branch-specific temporary browser-test dependencies or configuration remain, then complete PR validation. The current
-mounted tests use the existing `happy-dom` dependency and require no package changes. Parallel stateless loops and
-richer collection producers remain later architecture work.
+The final cleanup slice is complete. No additional `For` implementation slice is required before PR validation. The
+next code work after this branch is parallel stateless loops and richer collection producers; those remain separate
+architecture work and are not started here.
