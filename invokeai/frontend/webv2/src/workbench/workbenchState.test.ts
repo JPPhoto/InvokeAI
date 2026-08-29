@@ -3658,6 +3658,40 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImageName).toBe('image:selected.png');
   });
 
+  it('stamps an explicit page into the navigation query already on a multi-selection', () => {
+    // A host navigating its own window passes the page that keeps the primary
+    // item in that window — the same contract as selectGalleryItem with
+    // preserveNavigationQuery — rather than the grid's page. The query it goes
+    // into is the one already on the selection: the grid may have moved to
+    // another board and search since, and the host's list is not that.
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, { boardId: 'board-deep', type: 'selectGalleryBoard' });
+    state = workbenchReducer(state, {
+      item: createGalleryImageItem('deep.png'),
+      preserveNavigationQuery: false,
+      selectionPage: 30,
+      type: 'selectGalleryItem',
+    });
+    state = workbenchReducer(state, { boardId: 'board-elsewhere', type: 'selectGalleryBoard' });
+    state = workbenchReducer(state, { searchTerm: 'sunset', type: 'setGallerySearchTerm' });
+    state = workbenchReducer(state, {
+      itemKeys: ['image:failed.png', 'image:successor.png'],
+      primaryItem: createGalleryImageItem('successor.png'),
+      selectionPage: 30,
+      type: 'setGalleryMultiSelection',
+    });
+
+    const values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+    const query = values.selectedImageQuery as { boardId: string; page: number; searchTerm: string };
+
+    expect(values.selectedImagePage).toBe(30);
+    expect(query.page).toBe(30);
+    expect(query.boardId).toBe('board-deep');
+    expect(query.searchTerm).toBe('');
+    expect(values.galleryPage).toBe(0);
+  });
+
   it('pauses live-follow for saved Gallery multi-selection and comparison intents', () => {
     const primaryImage = createGalleryImageItem('primary.png');
     const compareImage = createGalleryImageItem('compare.png');
