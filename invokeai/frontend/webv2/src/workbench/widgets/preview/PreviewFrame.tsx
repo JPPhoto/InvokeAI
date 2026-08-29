@@ -182,8 +182,9 @@ const PreviewImageFrame = ({
       // The whole stage is the loupe's viewport, so it — not just the media
       // card — has to keep the browser's own pan and pinch off the surface:
       // otherwise the first finger of a pinch is claimed as a page gesture and
-      // the pointer stream stops mid-zoom.
-      touchAction="none"
+      // the pointer stream stops mid-zoom. A live render has no loupe to put in
+      // their place, so it leaves them alone.
+      touchAction={isLive ? undefined : 'none'}
       {...loupe.stageProps}
     >
       {/* Never armed over a live render: arming a comparison pauses live-follow
