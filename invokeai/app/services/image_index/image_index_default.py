@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 from pathlib import Path
 from queue import Empty, Queue
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -196,6 +197,12 @@ def warm_up_attention(config: "InvokeAIAppConfig", logger: "Logger") -> None:
         logger.warning("Attention warm-up failed", exc_info=True)
 
 
+# Minimum gap between re-resolutions of a missing embedding model. The map's
+# status endpoint is polled, and each attempt is a model-store query, so the
+# retry is throttled rather than run per request.
+_ACTIVATION_RETRY_INTERVAL_S = 5.0
+
+
 class ImageIndexService(ImageIndexServiceBase):
     """Embeds gallery images on a daemon worker thread.
 
@@ -249,6 +256,14 @@ class ImageIndexService(ImageIndexServiceBase):
         self._invoker: Optional["Invoker"] = None
         self._model_config: Optional["AnyModelConfig"] = None
         self._model_id: Optional[str] = None
+        # Serializes late activation (try_activate) against itself and stop():
+        # it registers image callbacks and starts the worker, and two concurrent
+        # map requests must not do either twice.
+        self._activation_lock = threading.Lock()
+        self._last_activation_attempt: float = 0.0
+        # Set by stop() so a request that raced shutdown cannot start a worker
+        # the invoker will never join.
+        self._stopped = False
         self._encode_fn: Optional[EncodeFn] = None
         # RAM-resident model used only in CPU mode; see _encode_with_model.
         self._cpu_model: Optional[Any] = None
@@ -699,18 +714,109 @@ class ImageIndexService(ImageIndexServiceBase):
                 "only 'cpu' selects CPU mode"
             )
 
-        if self._encode_fn_override is not None:
-            self._encode_fn = self._encode_fn_override
-            self._model_id = self._model_id_override
-        else:
-            model_config = self._resolve_model_config(config.image_index_model)
-            if model_config is None:
-                invoker.services.logger.warning(self._model_not_installed_message(config.image_index_model))
+        # The whole activation under the same lock the late-activation path
+        # takes: `self._invoker` is assigned above, so a map request arriving
+        # mid-start can reach try_activate, and two unsynchronized activations
+        # would register the image callbacks twice and leave a second worker
+        # that stop() never joins.
+        with self._activation_lock:
+            if self._model_id is not None:
+                # A request beat the invoker to it; that path did the whole job.
                 return
-            self._model_config = model_config
-            self._model_id = model_config.hash
-            self._encode_fn = self._encode_with_model
+            self._last_activation_attempt = time.monotonic()
+            if self._encode_fn_override is not None:
+                self._encode_fn = self._encode_fn_override
+                self._model_id = self._model_id_override
+            else:
+                model_config = self._resolve_model_config(config.image_index_model)
+                if model_config is None:
+                    # Not fatal: the model can be installed while the server runs
+                    # (the image map offers exactly that), and try_activate picks
+                    # it up from the next map request.
+                    invoker.services.logger.warning(self._model_not_installed_message(config.image_index_model))
+                    return
+                # `_model_id` last: it is what every other thread reads as
+                # "the indexer is running", and embed_image/embed_text raise if
+                # they see it before the encoder behind it.
+                self._model_config = model_config
+                self._encode_fn = self._encode_with_model
+                self._model_id = model_config.hash
 
+            # Unguarded, unlike try_activate's: a failure here aborts the
+            # invoker's start and the server fails to boot, loudly, rather
+            # than serving with a half-started indexer.
+            self._launch_worker(invoker)
+
+    def try_activate(self) -> bool:
+        """Resolve the configured encoder again and start indexing if it is now installed.
+
+        `start()` resolves the model once, at server start, and leaves the
+        service inert when it is missing — so a model installed afterwards (the
+        image map's own message offers that install) would not be indexed until
+        the next restart. The image map endpoints call this, so opening the
+        panel is enough to pick the model up. Throttled, because those
+        endpoints are polled.
+        """
+        # Fast path, unlocked: the overwhelmingly common case is a running
+        # indexer, and every map request would otherwise queue on the lock.
+        if self._model_id is not None:
+            return True
+        invoker = self._invoker
+        if invoker is None or not invoker.services.configuration.image_index_enabled:
+            return False
+
+        with self._activation_lock:
+            if self._model_id is not None:
+                return True
+            if self._stopped or (self._worker is not None and self._worker.is_alive()):
+                return False
+            now = time.monotonic()
+            if now - self._last_activation_attempt < _ACTIVATION_RETRY_INTERVAL_S:
+                return False
+            self._last_activation_attempt = now
+
+            config = invoker.services.configuration
+            try:
+                model_config = self._resolve_model_config(config.image_index_model)
+            except Exception:
+                # Unlike start(), this runs on a request thread: a model-store
+                # failure must degrade the map to `model_missing`, which is
+                # what these endpoints reported before they resolved anything,
+                # rather than turning three read endpoints into 500s.
+                invoker.services.logger.warning("Image index: could not resolve the embedding model", exc_info=True)
+                return False
+            if model_config is None:
+                # Silent: start() already logged the diagnosis once, and this
+                # runs on a polled endpoint.
+                return False
+
+            invoker.services.logger.info(
+                f"Image index: embedding model '{config.image_index_model}' is now installed; starting the indexer"
+            )
+            # `_model_id` last, and rolled back as a set: it is the flag every
+            # other thread reads as "the indexer is running". Published before
+            # the worker exists, a failed launch would wedge the service there
+            # permanently — the fast path above would answer True forever while
+            # nothing consumed the queue, and no later request would retry.
+            self._model_config = model_config
+            self._encode_fn = self._encode_with_model
+            self._model_id = model_config.hash
+            try:
+                self._launch_worker(invoker)
+            except Exception:
+                self._model_config = None
+                self._encode_fn = None
+                self._model_id = None
+                invoker.services.logger.warning(
+                    "Image index: could not start the indexer after the model became available; "
+                    "the next image map request will retry",
+                    exc_info=True,
+                )
+                return False
+            return True
+
+    def _launch_worker(self, invoker: "Invoker") -> None:
+        """Wire the image callbacks and start the worker thread. Runs once per active model."""
         discarded = invoker.services.image_index_records.delete_embeddings_for_other_models(self._model_id)
         if discarded:
             invoker.services.logger.info(
@@ -726,6 +832,10 @@ class ImageIndexService(ImageIndexServiceBase):
         self._worker.start()
 
     def stop(self, invoker: Optional["Invoker"] = None) -> None:
+        # Under the lock so a map request cannot be midway through starting a
+        # worker that this stop would then never see.
+        with self._activation_lock:
+            self._stopped = True
         self._stop_event.set()
         if self._worker is not None and self._worker.is_alive():
             self._worker.join(timeout=10)
