@@ -91,14 +91,17 @@ export interface DocumentModelDiagnostics {
   readonly leavesCompiled: number;
   /** Semantic nodes built rather than reused across compilations. */
   readonly nodesCompiled: number;
+  /** Prepared edits built with their inverse and postconditions; eligibility checks never add one. */
+  readonly editsMaterialized: number;
 }
 
-const diagnostics = { leafCompilations: 0, leavesCompiled: 0, nodesCompiled: 0 };
+const diagnostics = { editsMaterialized: 0, leafCompilations: 0, leavesCompiled: 0, nodesCompiled: 0 };
 
 /** Immutable snapshot for deterministic budget tests and diagnostics. */
 export const getDocumentModelDiagnostics = (): DocumentModelDiagnostics => ({ ...diagnostics });
 
 export const resetDocumentModelDiagnostics = (): void => {
+  diagnostics.editsMaterialized = 0;
   diagnostics.leafCompilations = 0;
   diagnostics.leavesCompiled = 0;
   diagnostics.nodesCompiled = 0;
@@ -106,15 +109,42 @@ export const resetDocumentModelDiagnostics = (): void => {
 
 const leavesByIndex = new WeakMap<CanvasDocumentIndex, readonly SemanticLeaf[]>();
 const leavesByLayer = new WeakMap<CanvasLayerContract, SemanticLeaf>();
-const leafByIdByIndex = new WeakMap<CanvasDocumentIndex, ReadonlyMap<string, SemanticLeaf>>();
+const contributingByIndex = new WeakMap<CanvasDocumentIndex, readonly CanvasLayerContract[]>();
 const nodesByIndex = new WeakMap<CanvasDocumentIndex, readonly SemanticNode[]>();
 const nodeByContract = new WeakMap<CanvasNodeContract, SemanticNode>();
-const nodeByIdByIndex = new WeakMap<CanvasDocumentIndex, ReadonlyMap<string, SemanticNode>>();
+/** Leaf id → position in `index.leaves`; a derived index shares its previous index's map. */
+const leafPositionsByIndex = new WeakMap<CanvasDocumentIndex, ReadonlyMap<string, number>>();
+
+const leafPositions = (index: CanvasDocumentIndex): ReadonlyMap<string, number> => {
+  const cached = leafPositionsByIndex.get(index);
+  if (cached) {
+    return cached;
+  }
+  const positions = index.derivedFrom
+    ? leafPositions(index.derivedFrom.previous)
+    : new Map(index.leaves.map((leaf, position) => [leaf.id, position]));
+  leafPositionsByIndex.set(index, positions);
+  return positions;
+};
 
 const compileNodes = (index: CanvasDocumentIndex): readonly SemanticNode[] => {
   const cached = nodesByIndex.get(index);
   if (cached) {
     return cached;
+  }
+  // After a value edit only the replaced entries compile; every other node is the previous one.
+  const inherited = index.derivedFrom ? nodesByIndex.get(index.derivedFrom.previous) : undefined;
+  if (index.derivedFrom && inherited) {
+    const nodes = inherited.slice();
+    for (const id of index.derivedFrom.changedIds) {
+      const entry = index.byId.get(id)!;
+      diagnostics.nodesCompiled += 1;
+      const semantic = compileSemanticNode(entry, inherited[entry.order]);
+      nodeByContract.set(entry.node, semantic);
+      nodes[entry.order] = semantic;
+    }
+    nodesByIndex.set(index, nodes);
+    return nodes;
   }
   const nodes = index.nodes.map((entry) => {
     const previous = nodeByContract.get(entry.node);
@@ -129,7 +159,6 @@ const compileNodes = (index: CanvasDocumentIndex): readonly SemanticNode[] => {
   nodesByIndex.set(index, nodes);
   return nodes;
 };
-const contributingByIndex = new WeakMap<CanvasDocumentIndex, readonly CanvasLayerContract[]>();
 
 const compileLeaves = (index: CanvasDocumentIndex): readonly SemanticLeaf[] => {
   const cached = leavesByIndex.get(index);
@@ -137,6 +166,24 @@ const compileLeaves = (index: CanvasDocumentIndex): readonly SemanticLeaf[] => {
     return cached;
   }
   diagnostics.leafCompilations += 1;
+  const inherited = index.derivedFrom ? leavesByIndex.get(index.derivedFrom.previous) : undefined;
+  if (index.derivedFrom && inherited) {
+    const leaves = inherited.slice();
+    const positions = leafPositions(index);
+    for (const id of index.derivedFrom.changedIds) {
+      const position = positions.get(id);
+      if (position === undefined) {
+        continue;
+      }
+      const entry = index.byId.get(id)!;
+      diagnostics.leavesCompiled += 1;
+      const leaf = compileSemanticLeaf(entry.node as CanvasLayerContract, entry);
+      leavesByLayer.set(entry.node as CanvasLayerContract, leaf);
+      leaves[position] = leaf;
+    }
+    leavesByIndex.set(index, leaves);
+    return leaves;
+  }
   const leaves: SemanticLeaf[] = [];
   for (const entry of index.nodes) {
     if (isGroupNode(entry.node)) {
@@ -183,12 +230,8 @@ export const lookupDocumentNodeState = (document: DocumentView, id: string): Sem
     return null;
   }
   const index = getDocumentIndex(document);
-  let byId = nodeByIdByIndex.get(index);
-  if (!byId) {
-    byId = new Map(compileNodes(index).map((semantic) => [semantic.id, semantic]));
-    nodeByIdByIndex.set(index, byId);
-  }
-  return byId.get(id) ?? null;
+  const entry = index.byId.get(id);
+  return entry ? (compileNodes(index)[entry.order] ?? null) : null;
 };
 
 /** The layers of every contributing leaf, in leaf order; the same array while the forests are unchanged. */
@@ -211,12 +254,8 @@ export const lookupDocumentLeaf = (document: DocumentView, id: string): Semantic
     return null;
   }
   const index = getDocumentIndex(document);
-  let byId = leafByIdByIndex.get(index);
-  if (!byId) {
-    byId = new Map(compileLeaves(index).map((leaf) => [leaf.id, leaf]));
-    leafByIdByIndex.set(index, byId);
-  }
-  return byId.get(id) ?? null;
+  const position = leafPositions(index).get(id);
+  return position === undefined ? null : (compileLeaves(index)[position] ?? null);
 };
 
 /** The sibling directly below `id` when it is a leaf; `null` at the bottom, below a group, or when absent. */
@@ -414,20 +453,23 @@ export const createDocumentModel = (
     inverse: CanvasProjectMutation,
     detail: Partial<Pick<PreparedDocumentEdit, 'createdIds' | 'history'>> &
       Pick<PreparedDocumentEdit, 'postconditions' | 'selectionAfter' | 'touchedIds' | 'touchedStacks'>
-  ): PrepareEditResult => ({
-    edit: {
-      createdIds: [],
-      history: 'record',
-      ...detail,
-      expectedRevision: context.editRevision,
-      forward,
-      inverse,
-      projectId: context.projectId,
-      rasterWork: null,
-      selectionBefore: selectedLayerId,
-    },
-    status: 'prepared',
-  });
+  ): PrepareEditResult => {
+    diagnostics.editsMaterialized += 1;
+    return {
+      edit: {
+        createdIds: [],
+        history: 'record',
+        ...detail,
+        expectedRevision: context.editRevision,
+        forward,
+        inverse,
+        projectId: context.projectId,
+        rasterWork: null,
+        selectionBefore: selectedLayerId,
+      },
+      status: 'prepared',
+    };
+  };
 
   const structural = (
     mutation: Omit<Extract<CanvasProjectMutation, { type: 'applyCanvasLayerStackMutation' }>, 'type' | 'enabledUpdates'>
@@ -439,7 +481,7 @@ export const createDocumentModel = (
     alreadyAdded: number
   ): DocumentRefusal | null => {
     const addedNodes = added.flatMap((node) => collectSubtree(node));
-    if (index.nodes.length + alreadyAdded + addedNodes.length > CANVAS_MAX_NODE_COUNT) {
+    if (index.byId.size + alreadyAdded + addedNodes.length > CANVAS_MAX_NODE_COUNT) {
       return { reason: 'node-limit', status: 'invalid-target', targetId: added[0]?.id ?? '' };
     }
     const deepest = added.reduce((depth, node) => Math.max(depth, levelsBelow(node)), 0);
@@ -543,7 +585,10 @@ export const createDocumentModel = (
     );
   };
 
-  const prepareRemove = (command: Extract<DocumentCommand, { type: 'remove' }>): PrepareEditResult => {
+  /** Everything `remove` refuses, decided without building the edit. */
+  const checkRemove = (
+    command: Extract<DocumentCommand, { type: 'remove' }>
+  ): DocumentRefusal | { outer: CanvasNodeEntry[] } => {
     const ids = unique(command.ids);
     if (ids.length === 0) {
       return { operation: 'remove nothing', status: 'unsupported' };
@@ -557,6 +602,15 @@ export const createDocumentModel = (
     if (locked.length > 0) {
       return { ids: locked, status: 'locked' };
     }
+    return { outer };
+  };
+
+  const prepareRemove = (command: Extract<DocumentCommand, { type: 'remove' }>): PrepareEditResult => {
+    const checked = checkRemove(command);
+    if ('status' in checked) {
+      return checked;
+    }
+    const { outer } = checked;
     const removedIds = outer.flatMap((entry) => collectSubtree(entry.node).map((node) => node.id));
     const removedSet = new Set(removedIds);
     const remaining = { ...stacks };
@@ -740,7 +794,20 @@ export const createDocumentModel = (
     return orders.length === 0 ? { status: 'unchanged' } : prepareReorder(orders, new Set(ids));
   };
 
-  const prepareReparent = (command: Extract<DocumentCommand, { type: 'reparent' }>): PrepareEditResult => {
+  interface ReparentPlacement {
+    outer: CanvasNodeEntry[];
+    parent: CanvasNodeEntry | null;
+    stack: LayerStackKind;
+    moving: Set<string>;
+    targetChildren: CanvasNodeContract[];
+    position: number;
+    orderedIds: string[];
+  }
+
+  /** Everything `reparent` refuses, and where the block would land, decided without building the edit. */
+  const checkReparent = (
+    command: Extract<DocumentCommand, { type: 'reparent' }>
+  ): DocumentRefusal | { status: 'unchanged' } | ReparentPlacement => {
     const ids = unique(command.ids);
     if (ids.length === 0) {
       return { operation: 'reparent nothing', status: 'unsupported' };
@@ -801,6 +868,15 @@ export const createDocumentModel = (
     if (sameValue(orderedIds, siblingOrderOf(stack, command.parentId).orderedIds)) {
       return { status: 'unchanged' };
     }
+    return { moving, orderedIds, outer, parent, position, stack, targetChildren };
+  };
+
+  const prepareReparent = (command: Extract<DocumentCommand, { type: 'reparent' }>): PrepareEditResult => {
+    const checked = checkReparent(command);
+    if ('status' in checked) {
+      return checked;
+    }
+    const { moving, orderedIds, outer, parent, position, stack, targetChildren } = checked;
     const anchor: CanvasNodeInsertionAnchor = {
       afterId: targetChildren[position - 1]?.id ?? null,
       beforeId: targetChildren[position]?.id ?? null,
@@ -842,7 +918,10 @@ export const createDocumentModel = (
     );
   };
 
-  const prepareGroup = (command: Extract<DocumentCommand, { type: 'group' }>): PrepareEditResult => {
+  /** Everything `group` refuses, decided without building the edit. */
+  const checkGroup = (
+    command: Extract<DocumentCommand, { type: 'group' }>
+  ): DocumentRefusal | { outer: CanvasNodeEntry[]; first: CanvasNodeEntry } => {
     const ids = unique(command.ids);
     if (ids.length === 0) {
       return { operation: 'group nothing', status: 'unsupported' };
@@ -868,9 +947,18 @@ export const createDocumentModel = (
     if (first.path.length + 1 + deepest > CANVAS_MAX_NODE_DEPTH) {
       return { reason: 'depth-exceeded', status: 'invalid-target', targetId: first.node.id };
     }
-    if (index.nodes.length + 1 > CANVAS_MAX_NODE_COUNT) {
+    if (index.byId.size + 1 > CANVAS_MAX_NODE_COUNT) {
       return { reason: 'node-limit', status: 'invalid-target', targetId: command.groupId };
     }
+    return { first, outer };
+  };
+
+  const prepareGroup = (command: Extract<DocumentCommand, { type: 'group' }>): PrepareEditResult => {
+    const checked = checkGroup(command);
+    if ('status' in checked) {
+      return checked;
+    }
+    const { first, outer } = checked;
     const group: CanvasGroupContract = {
       children: [],
       id: command.groupId,
@@ -919,7 +1007,10 @@ export const createDocumentModel = (
     );
   };
 
-  const prepareUngroup = (command: Extract<DocumentCommand, { type: 'ungroup' }>): PrepareEditResult => {
+  /** Everything `ungroup` refuses, decided without building the edit. */
+  const checkUngroup = (
+    command: Extract<DocumentCommand, { type: 'ungroup' }>
+  ): DocumentRefusal | { groups: CanvasNodeEntry[] } => {
     const ids = unique(command.ids);
     if (ids.length === 0) {
       return { operation: 'ungroup nothing', status: 'unsupported' };
@@ -938,6 +1029,15 @@ export const createDocumentModel = (
     if (locked.length > 0) {
       return { ids: locked, status: 'locked' };
     }
+    return { groups };
+  };
+
+  const prepareUngroup = (command: Extract<DocumentCommand, { type: 'ungroup' }>): PrepareEditResult => {
+    const checked = checkUngroup(command);
+    if ('status' in checked) {
+      return checked;
+    }
+    const { groups } = checked;
     const forward: CanvasNodeMove[] = [];
     const inverseAdd: CanvasNodeInsertion[] = [];
     const inverseMove: CanvasNodeMove[] = [];
@@ -1362,6 +1462,20 @@ export const createDocumentModel = (
       }
     },
     refusalFor: (command) => {
+      // The hot paths (drag hover, toolbar enablement) validate without materializing an edit.
+      const checked =
+        command.type === 'reparent'
+          ? checkReparent(command)
+          : command.type === 'group'
+            ? checkGroup(command)
+            : command.type === 'ungroup'
+              ? checkUngroup(command)
+              : command.type === 'remove'
+                ? checkRemove(command)
+                : null;
+      if (checked) {
+        return 'status' in checked && checked.status !== 'unchanged' ? (checked as DocumentRefusal) : null;
+      }
       const result = model.prepare(command);
       return result.status === 'prepared' || result.status === 'unchanged' ? null : result;
     },

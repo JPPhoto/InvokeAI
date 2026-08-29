@@ -9,7 +9,7 @@ import type {
 
 import { LAYER_STACKS_TOP_FIRST } from '@workbench/canvas-engine/contracts';
 
-import { isGroupNode } from './documentTree';
+import { collectSubtree, isGroupNode } from './documentTree';
 
 /** Document facts about one node's place in its forest. */
 export interface CanvasNodeEntry {
@@ -34,23 +34,186 @@ export interface CanvasNodeEntry {
 export interface CanvasDocumentIndex {
   readonly stacks: CanvasStackForests;
   readonly byId: ReadonlyMap<string, CanvasNodeEntry>;
-  /** Every node, stacks top first, each in preorder. */
+  /** Every node, stacks top first, each in preorder. A derived index materializes this on first read. */
   readonly nodes: readonly CanvasNodeEntry[];
   /** Every leaf, in the same order. */
   readonly leaves: readonly CanvasLayerContract[];
   readonly maxDepth: number;
+  /** Set on an index derived from a value edit: the index it extends and the ids whose entries changed. */
+  readonly derivedFrom?: { readonly previous: CanvasDocumentIndex; readonly changedIds: ReadonlySet<string> };
 }
 
-const diagnostics = { indexBuilds: 0, indexDerivations: 0 };
+const diagnostics = { entriesVisited: 0, indexBuilds: 0, indexDerivations: 0, nodesMaterialized: 0 };
 
 export const getDocumentIndexBuildCount = (): number => diagnostics.indexBuilds;
 
 /** Indexes derived from a previous one after a value edit, without walking the forests. */
 export const getDocumentIndexDerivationCount = (): number => diagnostics.indexDerivations;
 
+/** Entries constructed, by a build or a derivation: the work an edit actually costs. */
+export const getDocumentIndexVisitCount = (): number => diagnostics.entriesVisited;
+
+/** Times a derived index had to materialize its full `nodes` array for a consumer. */
+export const getDocumentIndexMaterializationCount = (): number => diagnostics.nodesMaterialized;
+
 export const resetDocumentIndexBuildCount = (): void => {
+  diagnostics.entriesVisited = 0;
   diagnostics.indexBuilds = 0;
   diagnostics.indexDerivations = 0;
+  diagnostics.nodesMaterialized = 0;
+};
+
+/** How many derivations may chain before the next one flattens onto the plain root. */
+const MAX_DERIVATION_DEPTH = 8;
+/** Overrides may cover this fraction of the root before flattening rebuilds a plain index instead. */
+const MAX_OVERRIDE_RATIO = 0.25;
+
+/**
+ * A map that reads through to the previous index's map for every entry a value edit did not touch.
+ * Lookups cost one extra step per derivation; iteration substitutes overrides on the fly.
+ */
+class LayeredEntryMap implements ReadonlyMap<string, CanvasNodeEntry> {
+  readonly [Symbol.toStringTag] = 'LayeredEntryMap';
+
+  constructor(
+    private readonly base: ReadonlyMap<string, CanvasNodeEntry>,
+    private readonly overrides: ReadonlyMap<string, CanvasNodeEntry>
+  ) {}
+
+  get size(): number {
+    return this.base.size;
+  }
+
+  get(key: string): CanvasNodeEntry | undefined {
+    return this.overrides.get(key) ?? this.base.get(key);
+  }
+
+  has(key: string): boolean {
+    return this.base.has(key);
+  }
+
+  forEach(
+    callback: (value: CanvasNodeEntry, key: string, map: ReadonlyMap<string, CanvasNodeEntry>) => void,
+    thisArg?: unknown
+  ): void {
+    for (const [key, value] of this) {
+      callback.call(thisArg, value, key, this);
+    }
+  }
+
+  *entries(): MapIterator<[string, CanvasNodeEntry]> {
+    for (const [key, value] of this.base) {
+      yield [key, this.overrides.get(key) ?? value];
+    }
+  }
+
+  keys(): MapIterator<string> {
+    return this.base.keys();
+  }
+
+  *values(): MapIterator<CanvasNodeEntry> {
+    for (const [, value] of this) {
+      yield value;
+    }
+  }
+
+  [Symbol.iterator](): MapIterator<[string, CanvasNodeEntry]> {
+    return this.entries();
+  }
+}
+
+/**
+ * An index that extends a source index by the entries a value edit replaced; the rest reads through.
+ * Chains read through their predecessors; every ninth derivation flattens onto the plain root so
+ * lookups stay bounded and nothing older than the root is retained.
+ */
+class DerivedIndex implements CanvasDocumentIndex {
+  readonly byId: ReadonlyMap<string, CanvasNodeEntry>;
+  readonly derivedFrom: { readonly previous: CanvasDocumentIndex; readonly changedIds: ReadonlySet<string> };
+  readonly maxDepth: number;
+  private nodesCache: readonly CanvasNodeEntry[] | null = null;
+  private leavesCache: readonly CanvasLayerContract[] | null = null;
+
+  constructor(
+    readonly stacks: CanvasStackForests,
+    private readonly source: CanvasDocumentIndex,
+    readonly overrides: ReadonlyMap<string, CanvasNodeEntry>,
+    readonly leafChanged: boolean
+  ) {
+    this.byId = new LayeredEntryMap(source.byId, overrides);
+    this.derivedFrom = { changedIds: new Set(overrides.keys()), previous: source };
+    this.maxDepth = source.maxDepth;
+  }
+
+  get nodes(): readonly CanvasNodeEntry[] {
+    if (this.nodesCache === null) {
+      diagnostics.nodesMaterialized += 1;
+      this.nodesCache = this.patchedNodes();
+    }
+    return this.nodesCache;
+  }
+
+  /** The same content as a plain index; building it is part of flattening, not a consumer read. */
+  plain(): CanvasDocumentIndex {
+    return {
+      byId: new Map(this.byId),
+      leaves: this.leaves,
+      maxDepth: this.maxDepth,
+      nodes: this.nodesCache ?? this.patchedNodes(),
+      stacks: this.stacks,
+    };
+  }
+
+  private patchedNodes(): readonly CanvasNodeEntry[] {
+    const nodes = this.source.nodes.slice();
+    for (const entry of this.overrides.values()) {
+      nodes[entry.order] = entry;
+    }
+    return nodes;
+  }
+
+  get leaves(): readonly CanvasLayerContract[] {
+    if (!this.leafChanged) {
+      return this.source.leaves;
+    }
+    if (this.leavesCache === null) {
+      this.leavesCache = this.source.leaves.map(
+        (leaf) => (this.overrides.get(leaf.id)?.node as CanvasLayerContract | undefined) ?? leaf
+      );
+    }
+    return this.leavesCache;
+  }
+}
+
+const derivationDepth = (index: CanvasDocumentIndex): number => {
+  let depth = 0;
+  let current: CanvasDocumentIndex | undefined = index;
+  while (current?.derivedFrom) {
+    depth += 1;
+    current = current.derivedFrom.previous;
+  }
+  return depth;
+};
+
+/**
+ * Folds a chain onto its plain root: one override layer holding the newest entry of every id the
+ * chain touched. Once overrides cover too much of the root, a plain index is cheaper than the layer.
+ */
+const flatten = (index: DerivedIndex): CanvasDocumentIndex => {
+  const overrides = new Map<string, CanvasNodeEntry>();
+  let leafChanged = false;
+  let current: CanvasDocumentIndex = index;
+  while (current instanceof DerivedIndex) {
+    for (const [id, entry] of current.overrides) {
+      if (!overrides.has(id)) {
+        overrides.set(id, entry);
+      }
+    }
+    leafChanged ||= current.leafChanged;
+    current = current.derivedFrom.previous;
+  }
+  const flat = new DerivedIndex(index.stacks, current, overrides, leafChanged);
+  return overrides.size <= current.byId.size * MAX_OVERRIDE_RATIO ? flat : flat.plain();
 };
 
 type DocumentView = Pick<CanvasDocumentContractV3, 'stacks'> | null | undefined;
@@ -76,6 +239,7 @@ const build = (stacks: CanvasStackForests): CanvasDocumentIndex => {
   ): void => {
     maxDepth = Math.max(maxDepth, path.length);
     children.forEach((node, siblingIndex) => {
+      diagnostics.entriesVisited += 1;
       const entry: CanvasNodeEntry = {
         ancestorsEnabled,
         ancestorsHidden,
@@ -120,10 +284,10 @@ const flagsChanged = (previous: CanvasNodeContract, next: CanvasNodeContract): b
 /**
  * Registers the index of `nextStacks` as a derivation of `previousStacks`' index after a value edit
  * that rewrote exactly the nodes in `changed` (and, through structural sharing, their ancestors).
- * Structure is untouched, so every entry keeps its place and every unaffected entry, and the leaves
- * array when no leaf changed, keep their identity; only a group whose flags changed re-derives the
- * ancestor-effective flags of its subtree. Returns `null` when no previous index exists or the edit
- * was not a value edit, leaving the next lookup to build from scratch.
+ * Structure is untouched, so every entry keeps its place; only the replaced nodes, their ancestors,
+ * and the subtree under a group whose flags changed get new entries. Everything else reads through
+ * to the previous index, so the cost is the changed paths, never the document. Returns `null` when
+ * no previous index exists or the edit was not a value edit, leaving the next lookup to build.
  */
 export const deriveIndexForValueEdit = (
   previousStacks: CanvasStackForests,
@@ -138,16 +302,16 @@ export const deriveIndexForValueEdit = (
   if (!previous || previousStacks === nextStacks) {
     return null;
   }
-  const replaced = new Map<string, CanvasNodeContract>();
-  const reflagged = new Set<string>();
+  const replacedNodes = new Map<string, CanvasNodeContract>();
+  const reflagged: CanvasGroupContract[] = [];
   for (const [id, node] of changed) {
     const entry = previous.byId.get(id);
     if (!entry || entry.node.id !== node.id || isGroupNode(entry.node) !== isGroupNode(node)) {
       return null;
     }
-    replaced.set(id, node);
-    if (flagsChanged(entry.node, node)) {
-      reflagged.add(id);
+    replacedNodes.set(id, node);
+    if (flagsChanged(entry.node, node) && isGroupNode(node)) {
+      reflagged.push(node);
     }
   }
   // Ancestors were rebuilt along each changed path; find their new objects from the new roots.
@@ -155,49 +319,54 @@ export const deriveIndexForValueEdit = (
     const entry = previous.byId.get(id)!;
     let siblings: readonly CanvasNodeContract[] = nextStacks[entry.stack];
     for (const ancestorId of entry.path) {
-      const known = replaced.get(ancestorId);
+      const known = replacedNodes.get(ancestorId);
       const ancestor = known ?? siblings.find((node) => node.id === ancestorId);
       if (!ancestor || !isGroupNode(ancestor)) {
         return null;
       }
-      replaced.set(ancestorId, ancestor);
+      replacedNodes.set(ancestorId, ancestor);
       siblings = ancestor.children;
     }
   }
   diagnostics.indexDerivations += 1;
-  const nodeOf = (id: string): CanvasNodeContract => replaced.get(id) ?? previous.byId.get(id)!.node;
+  const nodeOf = (id: string): CanvasNodeContract => replacedNodes.get(id) ?? previous.byId.get(id)!.node;
+  const replaced = new Map<string, CanvasNodeEntry>();
   let leafChanged = false;
-  const nodes = previous.nodes.map((entry) => {
-    const node = replaced.get(entry.node.id);
-    const underReflagged = reflagged.size > 0 && entry.path.some((ancestorId) => reflagged.has(ancestorId));
-    if (!node && !underReflagged) {
-      return entry;
-    }
-    if (node && !isGroupNode(node)) {
+  const replaceEntry = (id: string, node: CanvasNodeContract, reflag: boolean): void => {
+    const entry = previous.byId.get(id)!;
+    diagnostics.entriesVisited += 1;
+    if (node !== entry.node && !isGroupNode(node)) {
       leafChanged = true;
     }
-    const ancestors = underReflagged ? entry.path.map(nodeOf) : null;
-    return {
+    const ancestors = reflag ? entry.path.map(nodeOf) : null;
+    replaced.set(id, {
       ...entry,
       ancestorsEnabled: ancestors ? ancestors.every((ancestor) => ancestor.isEnabled) : entry.ancestorsEnabled,
       ancestorsHidden: ancestors
         ? ancestors.some((ancestor) => isGroupNode(ancestor) && ancestor.isHidden === true)
         : entry.ancestorsHidden,
       ancestorsLocked: ancestors ? ancestors.some((ancestor) => ancestor.isLocked) : entry.ancestorsLocked,
-      node: node ?? entry.node,
-    };
-  });
-  const derived: CanvasDocumentIndex = {
-    byId: new Map(nodes.map((entry) => [entry.node.id, entry])),
-    leaves: leafChanged
-      ? previous.leaves.map((leaf) => (replaced.get(leaf.id) as CanvasLayerContract | undefined) ?? leaf)
-      : previous.leaves,
-    maxDepth: previous.maxDepth,
-    nodes,
-    stacks: nextStacks,
+      node,
+    });
   };
-  indexes.set(nextStacks, derived);
-  return derived;
+  // Only the subtree under a group whose flags changed re-derives its ancestor-effective flags;
+  // a replaced node inside such a subtree is entered there once, with the new ancestors.
+  for (const group of reflagged) {
+    for (const member of collectSubtree(group)) {
+      if (member.id !== group.id) {
+        replaceEntry(member.id, member, true);
+      }
+    }
+  }
+  for (const [id, node] of replacedNodes) {
+    if (!replaced.has(id)) {
+      replaceEntry(id, node, false);
+    }
+  }
+  const derived = new DerivedIndex(nextStacks, previous, replaced, leafChanged);
+  const registered = derivationDepth(derived) > MAX_DERIVATION_DEPTH ? flatten(derived) : derived;
+  indexes.set(nextStacks, registered);
+  return registered;
 };
 
 export const indexStacks = (stacks: CanvasStackForests): CanvasDocumentIndex => {

@@ -129,7 +129,7 @@ const withStacks = (document: CanvasDocumentContractV3, stacks: CanvasStackFores
 
 const withinLimits = (stacks: CanvasStackForests): boolean => {
   const index = indexStacks(stacks);
-  return index.maxDepth <= CANVAS_MAX_NODE_DEPTH && index.nodes.length <= CANVAS_MAX_NODE_COUNT;
+  return index.maxDepth <= CANVAS_MAX_NODE_DEPTH && index.byId.size <= CANVAS_MAX_NODE_COUNT;
 };
 
 /** Value edits keep the structure, so the next forests inherit the index instead of rebuilding it. */

@@ -1,7 +1,7 @@
 import type { CanvasDocumentContractV3, CanvasNodeContract } from '@workbench/canvas-engine/contracts';
 import type { Project } from '@workbench/projectContracts';
 
-import { CANVAS_MAX_NODE_DEPTH, LAYER_STACK_ORDER } from '@workbench/canvas-engine/contracts';
+import { CANVAS_MAX_NODE_COUNT, CANVAS_MAX_NODE_DEPTH, LAYER_STACK_ORDER } from '@workbench/canvas-engine/contracts';
 import { getDocumentIndex } from '@workbench/canvas-engine/document/documentIndex';
 import { collectSubtree, isGroupNode } from '@workbench/canvas-engine/document/documentTree';
 import { haveSameStructure } from '@workbench/canvas-engine/document/layerStacks';
@@ -367,5 +367,56 @@ describe('document model fuzzing', () => {
     expect(refusals.reparent).toBeGreaterThan(0);
     expect(refusals.group).toBeGreaterThan(0);
     expect(refusals.insert).toBeGreaterThan(0);
+  });
+});
+
+describe('node-count boundary', () => {
+  it('refuses every insert, duplicate and group that would pass 10,000 nodes and agrees with the reducer', () => {
+    const random = rng(7);
+    created = 0;
+    const nodes = Array.from({ length: CANVAS_MAX_NODE_COUNT - 3 }, (_, index) =>
+      layerContract(`b${index}`, index % 2 === 0 ? 'raster' : 'control')
+    );
+    let project = projectFor({ ...createEmptyCanvasDocument(), selectedLayerId: 'b0', stacks: stacksFrom(nodes) });
+    const refusals = { duplicate: 0, group: 0, insert: 0 };
+    let applied = 0;
+    for (let step = 0; step < 40; step += 1) {
+      const model = createDocumentModel(project.canvas.document, { editRevision: step, projectId: project.id });
+      const roll = random();
+      const count = 1 + Math.floor(random() * 5);
+      const command: DocumentCommand =
+        roll < 0.4
+          ? {
+              aboveId: null,
+              nodes: Array.from({ length: count }, () => layerContract(nextId(), 'raster')),
+              stack: 'raster',
+              type: 'insert',
+            }
+          : roll < 0.8
+            ? { createId: nextId, ids: Array.from({ length: count }, (_, i) => `b${i}`), type: 'duplicate' }
+            : { groupId: nextId(), ids: ['b0', 'b2'], name: 'g', type: 'group' };
+      const result = model.prepare(command);
+      const size = getDocumentIndex(project.canvas.document).byId.size;
+      const added =
+        command.type === 'insert' ? command.nodes.length : command.type === 'duplicate' ? command.ids.length : 1;
+      if (size + added > CANVAS_MAX_NODE_COUNT) {
+        expect(result).toMatchObject({ reason: 'node-limit', status: 'invalid-target' });
+        refusals[command.type as keyof typeof refusals] += 1;
+        continue;
+      }
+      if (result.status !== 'prepared') {
+        continue;
+      }
+      const next = applyCanvasProjectMutation(project, result.edit.forward);
+      expect(next.canvas.document, `${command.type} was prepared but the reducer refused it`).not.toBe(
+        project.canvas.document
+      );
+      expect(getDocumentIndex(next.canvas.document).byId.size).toBeLessThanOrEqual(CANVAS_MAX_NODE_COUNT);
+      project = next;
+      applied += 1;
+    }
+    expect(applied).toBeGreaterThan(0);
+    expect(refusals.insert + refusals.duplicate + refusals.group).toBeGreaterThan(10);
+    expect(getDocumentIndex(project.canvas.document).byId.size).toBe(CANVAS_MAX_NODE_COUNT);
   });
 });

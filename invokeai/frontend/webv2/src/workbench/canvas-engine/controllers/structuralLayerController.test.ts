@@ -3,8 +3,9 @@ import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationCon
 import type { Project } from '@workbench/projectContracts';
 
 import { createDocumentModel, type CanvasDocumentModel } from '@workbench/canvas-engine/document-model/documentModel';
-import { getDocumentLayer, getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
+import { getDocumentIndex, getDocumentLayer, getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
 import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
+import { haveSameStructure } from '@workbench/canvas-engine/document/layerStacks';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { applyCanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import { createEmptyPaintLayer } from '@workbench/widgets/layers/layerOps';
@@ -320,5 +321,66 @@ describe('StructuralLayerController', () => {
       { id: 'layer', type: 'setCanvasSelectedLayer' }
     );
     expect(controller.nudge(1, 0)).toEqual({ status: 'dispatch-rejected' });
+  });
+});
+
+describe('hierarchy recovery', () => {
+  it('reverts a reparent whose postconditions fail and leaves the tree, selection and history untouched', () => {
+    const { controller, ctx, document, history, projectId } = createHarness();
+    const inner = createEmptyPaintLayer('Inner', 'inner');
+    const group = {
+      children: [inner],
+      id: 'g',
+      isEnabled: true,
+      isLocked: false,
+      name: 'Group',
+      type: 'group' as const,
+    };
+    ctx.dispatch(
+      {
+        add: [{ anchor: stackTopAnchor(projectId), nodes: [group] }],
+        enabledUpdates: [],
+        type: 'applyCanvasLayerStackMutation',
+      },
+      'system'
+    );
+    const before = document();
+    const parentOf = (id: string) => getDocumentIndex(document()).byId.get(id)?.parentId;
+    expect(parentOf('layer')).toBeNull();
+
+    const model = createDocumentModel(before, { editRevision: ctx.getEditRevision(), projectId });
+    const result = model.prepare({ beforeId: null, ids: ['layer'], parentId: 'g', type: 'reparent' });
+    if (result.status !== 'prepared') {
+      throw new Error(result.status);
+    }
+    // Fault injection: the edit lands but claims an order the reducer did not produce.
+    const tampered = {
+      ...result.edit,
+      postconditions: [
+        { kind: 'sibling-order' as const, orderedIds: ['layer', 'inner'], parentId: 'g', stack: 'raster' as const },
+      ],
+    };
+    expect(controller.commitPrepared('Reparent', tampered)).toEqual({
+      recovered: 'reverted',
+      status: 'postcondition-failed',
+    });
+    expect(haveSameStructure(document().stacks, before.stacks)).toBe(true);
+    expect(document().selectedLayerId).toBe(before.selectedLayerId);
+    expect(history.canUndo()).toBe(false);
+
+    // Prepared afresh against the reverted document, the same edit lands and undoes exactly.
+    const fresh = createDocumentModel(document(), { editRevision: ctx.getEditRevision(), projectId }).prepare({
+      beforeId: null,
+      ids: ['layer'],
+      parentId: 'g',
+      type: 'reparent',
+    });
+    if (fresh.status !== 'prepared') {
+      throw new Error(fresh.status);
+    }
+    expect(controller.commitPrepared('Reparent', fresh.edit)).toEqual({ status: 'committed' });
+    expect(parentOf('layer')).toBe('g');
+    history.undo();
+    expect(haveSameStructure(document().stacks, before.stacks)).toBe(true);
   });
 });

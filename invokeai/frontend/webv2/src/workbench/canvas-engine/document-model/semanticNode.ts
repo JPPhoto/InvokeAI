@@ -35,9 +35,14 @@ export interface SemanticNode {
   readonly subtreeDepth: number;
 }
 
-export const compileSemanticNode = (entry: CanvasNodeEntry): SemanticNode => {
+/**
+ * Compiles the node for `entry`. `previous` is the node compiled for the same id before a value
+ * edit: structure is unchanged then, so its counts and depth carry over instead of a subtree walk.
+ */
+export const compileSemanticNode = (entry: CanvasNodeEntry, previous?: SemanticNode): SemanticNode => {
   const { node } = entry;
   const group = isGroupNode(node);
+  const reuse = previous && previous.id === node.id && (previous.kind === 'group') === group ? previous : null;
   return {
     ancestorsEnabled: entry.ancestorsEnabled,
     ancestorsHidden: entry.ancestorsHidden,
@@ -49,13 +54,13 @@ export const compileSemanticNode = (entry: CanvasNodeEntry): SemanticNode => {
     effectiveLocked: entry.ancestorsLocked || node.isLocked,
     id: node.id,
     kind: group ? 'group' : 'leaf',
-    leafCount: group ? collectSubtreeLeaves(node).length : 1,
+    leafCount: reuse ? reuse.leafCount : group ? collectSubtreeLeaves(node).length : 1,
     node,
     parentId: entry.parentId,
     parentIds: entry.path,
     siblingIndex: entry.siblingIndex,
     stack: entry.stack,
-    subtreeDepth: group ? Math.max(1, subtreeDepth(node)) : 0,
+    subtreeDepth: reuse ? reuse.subtreeDepth : group ? Math.max(1, subtreeDepth(node)) : 0,
   };
 };
 

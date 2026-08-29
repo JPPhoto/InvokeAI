@@ -4,6 +4,8 @@ import {
   getDocumentIndex,
   getDocumentIndexBuildCount,
   getDocumentIndexDerivationCount,
+  getDocumentIndexMaterializationCount,
+  getDocumentIndexVisitCount,
   resetDocumentIndexBuildCount,
 } from '@workbench/canvas-engine/document/documentIndex';
 import { applyCanvasProjectMutation } from '@workbench/canvasProjectMutations';
@@ -17,6 +19,8 @@ import {
   compileDocumentLeaves,
   compileDocumentNodes,
   createDocumentModel,
+  lookupDocumentLeaf,
+  lookupDocumentNodeState,
   getDocumentModelDiagnostics,
   resetDocumentModelDiagnostics,
 } from './documentModel';
@@ -32,8 +36,10 @@ const resetCounters = (): void => {
 
 const counters = () => ({
   ...getDocumentModelDiagnostics(),
+  entriesVisited: getDocumentIndexVisitCount(),
   indexBuilds: getDocumentIndexBuildCount(),
   indexDerivations: getDocumentIndexDerivationCount(),
+  nodesMaterialized: getDocumentIndexMaterializationCount(),
 });
 
 /** Runs the reducer over a fixture so the next document is the one production consumers see. */
@@ -271,5 +277,112 @@ describe(`value edits over ${NODE_COUNT} nodes`, () => {
     expect(getDocumentIndex(next).leaves).toBe(getDocumentIndex(model.document).leaves);
     compileDocumentLeaves(next).forEach((leaf, position) => expect(leaf).toBe(before[position]));
     expect(counters()).toMatchObject({ indexBuilds: 0, indexDerivations: 0, leavesCompiled: 0 });
+  });
+});
+
+describe('value edits at the 10,000-node limit', () => {
+  const LIMIT_COUNT = 10_000;
+  beforeEach(resetCounters);
+
+  it('costs one entry per changed path, and nothing else, per value edit', () => {
+    const fixture = createLargeTreeDocument(LIMIT_COUNT);
+    const initial = createInitialWorkbenchState().projects[0]!;
+    const project = applyCanvasProjectMutation(initial, { document: fixture, type: 'replaceCanvasDocument' });
+    const before = project.canvas.document;
+    compileDocumentNodes(before);
+    compileDocumentLeaves(before);
+    lookupDocumentLeaf(before, 'l5');
+    const depth = getDocumentIndex(before).byId.get('l5')!.path.length;
+    resetCounters();
+
+    const next = applyCanvasProjectMutation(project, {
+      id: 'l5',
+      patch: { transform: { x: 40 } },
+      type: 'updateCanvasLayer',
+    }).canvas.document;
+    expect(counters()).toMatchObject({ entriesVisited: depth + 1, indexBuilds: 0, indexDerivations: 1 });
+    expect(lookupDocumentLeaf(next, 'l5')?.layer.transform.x).toBe(40);
+    expect(lookupDocumentNodeState(next, 'l5')?.node).toBe(getDocumentIndex(next).byId.get('l5')!.node);
+    expect(lookupDocumentNodeState(next, 'l6')).toBe(lookupDocumentNodeState(before, 'l6'));
+    expect(counters()).toMatchObject({ leavesCompiled: 1, nodesCompiled: depth + 1, nodesMaterialized: 0 });
+    // The ancestors compiled again kept their counts without walking their subtrees.
+    const parentId = getDocumentIndex(next).byId.get('l5')!.parentId!;
+    expect(lookupDocumentNodeState(next, parentId)?.leafCount).toBe(
+      lookupDocumentNodeState(before, parentId)?.leafCount
+    );
+  });
+
+  it('costs the subtree, and only the subtree, for a group flag flip', () => {
+    const fixture = createLargeTreeDocument(LIMIT_COUNT);
+    const initial = createInitialWorkbenchState().projects[0]!;
+    const project = applyCanvasProjectMutation(initial, { document: fixture, type: 'replaceCanvasDocument' });
+    const before = project.canvas.document;
+    const subtree = getDocumentIndex(before).nodes.filter((entry) => entry.path.includes('g0')).length;
+    compileDocumentNodes(before);
+    resetCounters();
+    const next = applyCanvasProjectMutation(project, {
+      type: 'setCanvasLayersEnabled',
+      updates: [{ id: 'g0', isEnabled: false }],
+    }).canvas.document;
+    expect(counters()).toMatchObject({ entriesVisited: subtree + 1, indexBuilds: 0, indexDerivations: 1 });
+    expect(getDocumentIndex(next).leaves).toBe(getDocumentIndex(before).leaves);
+    compileDocumentNodes(next);
+    expect(counters()).toMatchObject({ nodesCompiled: subtree + 1, nodesMaterialized: 0 });
+  });
+
+  it('flattens the derivation chain so lookups stay bounded and compiles stay incremental across many edits', () => {
+    const fixture = createLargeTreeDocument(LIMIT_COUNT);
+    const initial = createInitialWorkbenchState().projects[0]!;
+    let project = applyCanvasProjectMutation(initial, { document: fixture, type: 'replaceCanvasDocument' });
+    compileDocumentNodes(project.canvas.document);
+    resetCounters();
+    let deepest = 0;
+    let compiledMost = 0;
+    for (let step = 0; step < 20; step += 1) {
+      const id = `l${step}`;
+      const depth = getDocumentIndex(project.canvas.document).byId.get(id)!.path.length;
+      project = applyCanvasProjectMutation(project, { id, patch: { opacity: 0.5 }, type: 'updateCanvasLayer' });
+      const before = counters().nodesCompiled;
+      compileDocumentNodes(project.canvas.document);
+      compiledMost = Math.max(compiledMost, (counters().nodesCompiled - before) / (depth + 1));
+      let chain = 0;
+      for (
+        let index = getDocumentIndex(project.canvas.document);
+        index.derivedFrom;
+        index = index.derivedFrom.previous
+      ) {
+        chain += 1;
+      }
+      deepest = Math.max(deepest, chain);
+    }
+    expect(deepest).toBeLessThanOrEqual(9);
+    // The flattening step recompiles what the chain touched, never the document.
+    expect(compiledMost).toBeLessThanOrEqual(9);
+    expect(counters()).toMatchObject({ indexBuilds: 0, nodesMaterialized: 0 });
+    expect(getDocumentIndex(project.canvas.document).byId.get('l19')!.node).toMatchObject({ opacity: 0.5 });
+    expect(getDocumentIndex(project.canvas.document).byId.size).toBe(LIMIT_COUNT);
+  });
+});
+
+describe('eligibility without materialization', () => {
+  beforeEach(resetCounters);
+
+  it('answers reparent, group, ungroup and remove eligibility without building an edit', () => {
+    const document = createLargeTreeDocument(NODE_COUNT);
+    const model = createDocumentModel(document, context);
+    const index = getDocumentIndex(document);
+    const stack = index.byId.get('l0')!.stack;
+    const groupId = index.nodes.find((entry) => entry.node.type === 'group' && entry.stack === stack)!.node.id;
+    resetCounters();
+    expect(model.refusalFor({ beforeId: null, ids: ['l0'], parentId: groupId, type: 'reparent' })).toBeNull();
+    expect(model.refusalFor({ beforeId: null, ids: [groupId], parentId: groupId, type: 'reparent' })).toMatchObject({
+      reason: 'cycle',
+    });
+    expect(model.refusalFor({ groupId: '\0probe', ids: ['l0', 'l1'], name: '', type: 'group' })).toBeDefined();
+    expect(model.refusalFor({ ids: [groupId], type: 'ungroup' })).toBeNull();
+    expect(model.refusalFor({ ids: ['l0'], type: 'remove' })).toBeNull();
+    expect(counters().editsMaterialized).toBe(0);
+    expect(model.prepare({ ids: ['l0'], type: 'remove' }).status).toBe('prepared');
+    expect(counters().editsMaterialized).toBe(1);
   });
 });
