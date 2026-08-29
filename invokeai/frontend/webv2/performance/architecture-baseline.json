@@ -2,10 +2,10 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 837704,
+        "brotliBytes": 837736,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 836643,
+        "gzipBytes": 836629,
         "imageRawBytes": 156376,
         "initialRawBytes": 1948187,
         "largestAssetRawBytes": 746355,
@@ -287,10 +287,10 @@
         ]
       },
       "limits": {
-        "brotliBytes": 846082,
+        "brotliBytes": 846114,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 845010,
+        "gzipBytes": 844996,
         "imageRawBytes": 157940,
         "initialRawBytes": 1967669,
         "largestAssetRawBytes": 753819,
@@ -305,15 +305,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1054956,
+        "brotliBytes": 1056326,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1050393,
+        "gzipBytes": 1051792,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2594261,
+        "initialRawBytes": 2598723,
         "largestAssetRawBytes": 746355,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 109424,
+        "ownedRawBytes": 113886,
         "requestCount": 96,
         "scriptRequestCount": 80,
         "sourceOwners": [
@@ -781,6 +781,7 @@
           "source:src/workbench/shell/StatusBar.tsx",
           "source:src/workbench/shell/WorkbenchShell.tsx",
           "source:src/workbench/shell/documentTitle.ts",
+          "source:src/workbench/shell/holdToDragSensor.ts",
           "source:src/workbench/shell/index.ts",
           "source:src/workbench/shell/notifications/WorkbenchNotificationToaster.tsx",
           "source:src/workbench/shell/notifications/index.ts",
@@ -865,15 +866,15 @@
         ]
       },
       "limits": {
-        "brotliBytes": 1065506,
+        "brotliBytes": 1066890,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 1060897,
+        "gzipBytes": 1062310,
         "imageRawBytes": 157940,
-        "initialRawBytes": 2620204,
+        "initialRawBytes": 2624711,
         "largestAssetRawBytes": 753819,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 109424,
+        "ownedRawBytes": 113886,
         "requestCount": 96,
         "scriptRequestCount": 80
       },
