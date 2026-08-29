@@ -1042,7 +1042,7 @@ describe('lock coherence and limits', () => {
     expect(model.prepare({ id: 'L', patch: { isLocked: false }, type: 'patch' }).status).toBe('prepared');
   });
 
-  it('refuses inserting into or reordering inside a locked group, but moves a locked node among free siblings', () => {
+  it('refuses inserting into a locked group and every structural move that touches a locked subtree', () => {
     const model = modelOf(projectWith(lockedTree(), 'r2'));
     expect(model.prepare({ aboveId: 'r2', nodes: [layer('new')], type: 'insert' })).toEqual({
       ids: ['L'],
@@ -1053,8 +1053,21 @@ describe('lock coherence and limits', () => {
       status: 'locked',
     });
     expect(model.prepare({ ids: ['r2'], kind: 'back', type: 'move' })).toEqual({ ids: ['L'], status: 'locked' });
-    expect(model.prepare({ ids: ['r4'], kind: 'front', type: 'move' }).status).toBe('prepared');
+    expect(model.prepare({ ids: ['r4'], kind: 'front', type: 'move' })).toEqual({ ids: ['r4'], status: 'locked' });
+    // A locked sibling may be passed; only the moving subtree has to be free.
+    expect(model.prepare({ ids: ['r1'], kind: 'back', type: 'move' }).status).toBe('prepared');
+    expect(model.prepare({ beforeId: null, ids: ['L'], parentId: null, type: 'reparent' })).toEqual({
+      ids: ['L'],
+      status: 'locked',
+    });
+    expect(model.prepare({ groupId: 'N', ids: ['r1', 'L'], name: 'n', type: 'group' })).toEqual({
+      ids: ['L'],
+      status: 'locked',
+    });
+    expect(model.prepare({ ids: ['L'], type: 'ungroup' })).toEqual({ ids: ['L'], status: 'locked' });
     expect(model.prepare({ aboveId: 'r1', nodes: [layer('new')], type: 'insert' }).status).toBe('prepared');
+    expect(model.refusalFor({ ids: ['r1'], kind: 'front', type: 'move' })).toBeNull();
+    expect(model.refusalFor({ ids: ['r4'], kind: 'front', type: 'move' })).toEqual({ ids: ['r4'], status: 'locked' });
   });
 
   it('counts every node of a multi-stack insert and a multi-root duplicate against the node limit', () => {

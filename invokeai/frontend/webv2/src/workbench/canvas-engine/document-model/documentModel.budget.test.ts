@@ -3,6 +3,7 @@ import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contract
 import {
   getDocumentIndex,
   getDocumentIndexBuildCount,
+  getDocumentIndexDerivationCount,
   resetDocumentIndexBuildCount,
 } from '@workbench/canvas-engine/document/documentIndex';
 import { applyCanvasProjectMutation } from '@workbench/canvasProjectMutations';
@@ -14,6 +15,7 @@ import type { DocumentCommand, PreparedDocumentEdit } from './documentCommands';
 import { createLargeFlatDocument, createLargeTreeDocument } from './documentFixtures.testStub';
 import {
   compileDocumentLeaves,
+  compileDocumentNodes,
   createDocumentModel,
   getDocumentModelDiagnostics,
   resetDocumentModelDiagnostics,
@@ -28,7 +30,11 @@ const resetCounters = (): void => {
   resetDocumentIndexBuildCount();
 };
 
-const counters = () => ({ ...getDocumentModelDiagnostics(), indexBuilds: getDocumentIndexBuildCount() });
+const counters = () => ({
+  ...getDocumentModelDiagnostics(),
+  indexBuilds: getDocumentIndexBuildCount(),
+  indexDerivations: getDocumentIndexDerivationCount(),
+});
 
 /** Runs the reducer over a fixture so the next document is the one production consumers see. */
 const reduce = (document: CanvasDocumentContractV3, command: DocumentCommand) => {
@@ -105,7 +111,7 @@ describe(`document model budgets over ${NODE_COUNT} nodes`, () => {
     const before = model.compileLeaves();
     resetCounters();
     const after = timed(annotate, 'representative edit recompile', () => compileDocumentLeaves(next));
-    expect(counters()).toMatchObject({ indexBuilds: 1, leafCompilations: 1, leavesCompiled: 1 });
+    expect(counters()).toMatchObject({ indexBuilds: 0, leafCompilations: 1, leavesCompiled: 1 });
     after.forEach((leaf, index) => {
       if (leaf.id === 'l5') {
         expect(leaf).not.toBe(before[index]);
@@ -121,7 +127,7 @@ describe(`document model budgets over ${NODE_COUNT} nodes`, () => {
     const before = renamed.model.compileLeaves();
     resetCounters();
     expect(compileDocumentLeaves(renamed.next)).toEqual(before);
-    expect(counters()).toMatchObject({ indexBuilds: 1, leavesCompiled: 0 });
+    expect(counters()).toMatchObject({ indexBuilds: 0, leavesCompiled: 0 });
 
     const gated = reduce(createLargeTreeDocument(NODE_COUNT), {
       type: 'set-enabled',
@@ -198,5 +204,72 @@ describe(`document model budgets over ${NODE_COUNT} nodes`, () => {
     expect(model.prepare({ ids: ['g0'], type: 'ungroup' }).status).toBe('prepared');
     expect(model.prepare({ beforeId: null, ids: ['l0'], parentId: 'g0', type: 'reparent' }).status).toBe('prepared');
     expect(counters()).toMatchObject({ indexBuilds: 1, leafCompilations: 0 });
+  });
+});
+
+describe(`value edits over ${NODE_COUNT} nodes`, () => {
+  beforeEach(resetCounters);
+
+  it('derives the index for a geometry edit instead of rebuilding it, keeping every other leaf and node', ({
+    annotate,
+  }) => {
+    const fixture = createLargeTreeDocument(NODE_COUNT);
+    resetCounters();
+    const { model, next } = reduce(fixture, { id: 'l5', patch: { transform: { x: 40 } }, type: 'patch' });
+    const leavesBefore = model.compileLeaves();
+    const nodesBefore = compileDocumentNodes(model.document);
+    // One build for the accepted fixture, one derivation for the edit, and nothing on lookup.
+    const index = timed(annotate, 'derived index lookup', () => getDocumentIndex(next));
+    expect(counters()).toMatchObject({ indexBuilds: 1, indexDerivations: 1 });
+    expect(index.byId.get('l5')!.node).not.toBe(model.getLayer('l5'));
+    expect(model.getLayer('l5')).not.toBeNull();
+    expect((index.byId.get('l5')!.node as { transform: { x: number } }).transform).toMatchObject({ x: 40 });
+    expect(index.byId.get('l6')).toBe(model.getEntry('l6'));
+
+    resetCounters();
+    const leavesAfter = compileDocumentLeaves(next);
+    const nodesAfter = compileDocumentNodes(next);
+    // The leaf and the ancestors rebuilt along its path are new contract objects; nothing else is.
+    expect(counters()).toMatchObject({
+      indexBuilds: 0,
+      indexDerivations: 0,
+      leavesCompiled: 1,
+      nodesCompiled: 1 + index.byId.get('l5')!.path.length,
+    });
+    const path = new Set(index.byId.get('l5')!.path);
+    expect(leavesAfter.filter((leaf) => leaf.id !== 'l5').every((leaf) => leavesBefore.includes(leaf))).toBe(true);
+    expect(
+      nodesAfter.filter((node) => node.id !== 'l5' && !path.has(node.id)).every((node) => nodesBefore.includes(node))
+    ).toBe(true);
+  });
+
+  it('re-derives only the subtree under a group whose flags change', () => {
+    resetCounters();
+    const { model, next } = reduce(createLargeTreeDocument(NODE_COUNT), {
+      type: 'set-locked',
+      updates: [{ id: 'g0', isLocked: true }],
+    });
+    const before = getDocumentIndex(model.document);
+    const after = getDocumentIndex(next);
+    expect(counters()).toMatchObject({ indexBuilds: 1, indexDerivations: 1 });
+    const subtree = before.nodes.filter((entry) => entry.path.includes('g0'));
+    expect(subtree.length).toBeGreaterThan(0);
+    expect(subtree.every((entry) => after.byId.get(entry.node.id)!.ancestorsLocked)).toBe(true);
+    const untouched = before.nodes.filter((entry) => !entry.path.includes('g0') && entry.node.id !== 'g0');
+    expect(untouched.every((entry) => after.byId.get(entry.node.id) === entry)).toBe(true);
+    expect(after.leaves).toBe(before.leaves);
+  });
+
+  it('keeps the leaves array identity when a group is renamed', () => {
+    const { model, next } = reduce(createLargeTreeDocument(NODE_COUNT), {
+      id: 'g0',
+      patch: { name: 'renamed' },
+      type: 'patch',
+    });
+    const before = compileDocumentLeaves(model.document);
+    resetCounters();
+    expect(getDocumentIndex(next).leaves).toBe(getDocumentIndex(model.document).leaves);
+    compileDocumentLeaves(next).forEach((leaf, position) => expect(leaf).toBe(before[position]));
+    expect(counters()).toMatchObject({ indexBuilds: 0, indexDerivations: 0, leavesCompiled: 0 });
   });
 });

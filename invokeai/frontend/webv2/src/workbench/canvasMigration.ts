@@ -490,7 +490,7 @@ const parseNode = (value: unknown, path: string, depth: number, context: ParseCo
     context.diagnostics.push({ message: 'a raster group has no display-only hidden state', path: `${path}.isHidden` });
     return null;
   }
-  if (context.stack === 'raster') {
+  if (context.stack === 'raster' || shell.data.isHidden === false) {
     delete shell.data.isHidden;
   }
   if (depth >= CANVAS_MAX_NODE_DEPTH) {

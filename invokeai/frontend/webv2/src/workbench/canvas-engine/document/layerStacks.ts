@@ -17,9 +17,7 @@ export type LayerStackKind = CanvasLayerStackKind;
 
 export type OverlayStackKind = Exclude<LayerStackKind, 'raster'>;
 
-export const LAYER_STACK_ORDER: readonly LayerStackKind[] = ['raster', 'control', 'regional_guidance', 'inpaint_mask'];
-
-export const LAYER_STACKS_TOP_FIRST: readonly LayerStackKind[] = [...LAYER_STACK_ORDER].reverse();
+export { LAYER_STACK_ORDER, LAYER_STACKS_TOP_FIRST } from '@workbench/canvas-engine/contracts';
 
 export const layerStackOf = (layer: CanvasLayerContract): LayerStackKind => layer.type;
 

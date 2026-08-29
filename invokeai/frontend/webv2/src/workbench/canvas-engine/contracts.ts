@@ -292,6 +292,17 @@ export type CanvasNodeContract = CanvasLayerContract | CanvasGroupContract;
 /** One top-first forest per stack; a node's stack is the forest it lives in. */
 export type CanvasStackForests = Record<CanvasLayerStackKind, CanvasNodeContract[]>;
 
+/** The composition order, bottom stack first; the one table every consumer reads. */
+export const LAYER_STACK_ORDER: readonly CanvasLayerStackKind[] = [
+  'raster',
+  'control',
+  'regional_guidance',
+  'inpaint_mask',
+];
+
+/** The same stacks as the panel lists them, top first. */
+export const LAYER_STACKS_TOP_FIRST: readonly CanvasLayerStackKind[] = [...LAYER_STACK_ORDER].reverse();
+
 export const CANVAS_MAX_NODE_DEPTH = 10;
 export const CANVAS_MAX_NODE_COUNT = 10_000;
 

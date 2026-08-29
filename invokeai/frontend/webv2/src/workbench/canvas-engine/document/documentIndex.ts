@@ -7,6 +7,8 @@ import type {
   CanvasStackForests,
 } from '@workbench/canvas-engine/contracts';
 
+import { LAYER_STACKS_TOP_FIRST } from '@workbench/canvas-engine/contracts';
+
 import { isGroupNode } from './documentTree';
 
 /** Document facts about one node's place in its forest. */
@@ -39,14 +41,16 @@ export interface CanvasDocumentIndex {
   readonly maxDepth: number;
 }
 
-const STACKS_TOP_FIRST: readonly CanvasLayerStackKind[] = ['inpaint_mask', 'regional_guidance', 'control', 'raster'];
-
-const diagnostics = { indexBuilds: 0 };
+const diagnostics = { indexBuilds: 0, indexDerivations: 0 };
 
 export const getDocumentIndexBuildCount = (): number => diagnostics.indexBuilds;
 
+/** Indexes derived from a previous one after a value edit, without walking the forests. */
+export const getDocumentIndexDerivationCount = (): number => diagnostics.indexDerivations;
+
 export const resetDocumentIndexBuildCount = (): void => {
   diagnostics.indexBuilds = 0;
+  diagnostics.indexDerivations = 0;
 };
 
 type DocumentView = Pick<CanvasDocumentContractV3, 'stacks'> | null | undefined;
@@ -100,10 +104,100 @@ const build = (stacks: CanvasStackForests): CanvasDocumentIndex => {
       }
     });
   };
-  for (const stack of STACKS_TOP_FIRST) {
+  for (const stack of LAYER_STACKS_TOP_FIRST) {
     visit(stacks[stack], stack, null, [], true, false, false);
   }
   return { byId, leaves, maxDepth, nodes, stacks };
+};
+
+const flagsChanged = (previous: CanvasNodeContract, next: CanvasNodeContract): boolean =>
+  isGroupNode(previous) &&
+  isGroupNode(next) &&
+  (previous.isEnabled !== next.isEnabled ||
+    previous.isLocked !== next.isLocked ||
+    (previous.isHidden === true) !== (next.isHidden === true));
+
+/**
+ * Registers the index of `nextStacks` as a derivation of `previousStacks`' index after a value edit
+ * that rewrote exactly the nodes in `changed` (and, through structural sharing, their ancestors).
+ * Structure is untouched, so every entry keeps its place and every unaffected entry, and the leaves
+ * array when no leaf changed, keep their identity; only a group whose flags changed re-derives the
+ * ancestor-effective flags of its subtree. Returns `null` when no previous index exists or the edit
+ * was not a value edit, leaving the next lookup to build from scratch.
+ */
+export const deriveIndexForValueEdit = (
+  previousStacks: CanvasStackForests,
+  nextStacks: CanvasStackForests,
+  changed: ReadonlyMap<string, CanvasNodeContract>
+): CanvasDocumentIndex | null => {
+  const existing = indexes.get(nextStacks);
+  if (existing) {
+    return existing;
+  }
+  const previous = indexes.get(previousStacks);
+  if (!previous || previousStacks === nextStacks) {
+    return null;
+  }
+  const replaced = new Map<string, CanvasNodeContract>();
+  const reflagged = new Set<string>();
+  for (const [id, node] of changed) {
+    const entry = previous.byId.get(id);
+    if (!entry || entry.node.id !== node.id || isGroupNode(entry.node) !== isGroupNode(node)) {
+      return null;
+    }
+    replaced.set(id, node);
+    if (flagsChanged(entry.node, node)) {
+      reflagged.add(id);
+    }
+  }
+  // Ancestors were rebuilt along each changed path; find their new objects from the new roots.
+  for (const id of changed.keys()) {
+    const entry = previous.byId.get(id)!;
+    let siblings: readonly CanvasNodeContract[] = nextStacks[entry.stack];
+    for (const ancestorId of entry.path) {
+      const known = replaced.get(ancestorId);
+      const ancestor = known ?? siblings.find((node) => node.id === ancestorId);
+      if (!ancestor || !isGroupNode(ancestor)) {
+        return null;
+      }
+      replaced.set(ancestorId, ancestor);
+      siblings = ancestor.children;
+    }
+  }
+  diagnostics.indexDerivations += 1;
+  const nodeOf = (id: string): CanvasNodeContract => replaced.get(id) ?? previous.byId.get(id)!.node;
+  let leafChanged = false;
+  const nodes = previous.nodes.map((entry) => {
+    const node = replaced.get(entry.node.id);
+    const underReflagged = reflagged.size > 0 && entry.path.some((ancestorId) => reflagged.has(ancestorId));
+    if (!node && !underReflagged) {
+      return entry;
+    }
+    if (node && !isGroupNode(node)) {
+      leafChanged = true;
+    }
+    const ancestors = underReflagged ? entry.path.map(nodeOf) : null;
+    return {
+      ...entry,
+      ancestorsEnabled: ancestors ? ancestors.every((ancestor) => ancestor.isEnabled) : entry.ancestorsEnabled,
+      ancestorsHidden: ancestors
+        ? ancestors.some((ancestor) => isGroupNode(ancestor) && ancestor.isHidden === true)
+        : entry.ancestorsHidden,
+      ancestorsLocked: ancestors ? ancestors.some((ancestor) => ancestor.isLocked) : entry.ancestorsLocked,
+      node: node ?? entry.node,
+    };
+  });
+  const derived: CanvasDocumentIndex = {
+    byId: new Map(nodes.map((entry) => [entry.node.id, entry])),
+    leaves: leafChanged
+      ? previous.leaves.map((leaf) => (replaced.get(leaf.id) as CanvasLayerContract | undefined) ?? leaf)
+      : previous.leaves,
+    maxDepth: previous.maxDepth,
+    nodes,
+    stacks: nextStacks,
+  };
+  indexes.set(nextStacks, derived);
+  return derived;
 };
 
 export const indexStacks = (stacks: CanvasStackForests): CanvasDocumentIndex => {

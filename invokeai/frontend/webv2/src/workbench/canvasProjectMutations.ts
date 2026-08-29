@@ -22,6 +22,7 @@ import {
 } from '@workbench/canvas-engine/api';
 import {
   childrenAt,
+  deriveIndexForValueEdit,
   getDocumentIndex,
   getDocumentLayer,
   hasDocumentNode,
@@ -36,6 +37,7 @@ import {
   isGroupNode,
   removeNodes,
   updateNodes,
+  updateNodesTracked,
 } from '@workbench/canvas-engine/document/documentTree';
 import { insertNodesAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import { isOverlayStack, layerStackOf, reorderSiblings } from '@workbench/canvas-engine/document/layerStacks';
@@ -130,11 +132,23 @@ const withinLimits = (stacks: CanvasStackForests): boolean => {
   return index.maxDepth <= CANVAS_MAX_NODE_DEPTH && index.nodes.length <= CANVAS_MAX_NODE_COUNT;
 };
 
+/** Value edits keep the structure, so the next forests inherit the index instead of rebuilding it. */
+const updateNodeValues = (
+  stacks: CanvasStackForests,
+  updates: Iterable<[string, (node: CanvasNodeContract) => CanvasNodeContract]>
+): CanvasStackForests => {
+  const next = updateNodesTracked(stacks, new Map(updates));
+  if (next.stacks !== stacks) {
+    deriveIndexForValueEdit(stacks, next.stacks, next.changed);
+  }
+  return next.stacks;
+};
+
 const mapNode = (
   document: CanvasDocumentContractV3,
   id: string,
   update: (node: CanvasNodeContract) => CanvasNodeContract
-): CanvasDocumentContractV3 => withStacks(document, updateNodes(document.stacks, new Map([[id, update]])));
+): CanvasDocumentContractV3 => withStacks(document, updateNodeValues(document.stacks, [[id, update]]));
 
 const mapLayer = (
   document: CanvasDocumentContractV3,
@@ -145,7 +159,7 @@ const mapLayer = (
 const mapNodes = (
   document: CanvasDocumentContractV3,
   updates: Iterable<[string, (node: CanvasNodeContract) => CanvasNodeContract]>
-): CanvasDocumentContractV3 => withStacks(document, updateNodes(document.stacks, new Map(updates)));
+): CanvasDocumentContractV3 => withStacks(document, updateNodeValues(document.stacks, updates));
 
 const setCanvasLayersEnabled = (
   document: CanvasDocumentContractV3,
@@ -169,7 +183,17 @@ const setCanvasLayersHidden = (
     document,
     updates.map(({ id, isHidden }) => [
       id,
-      (node) => (!isHideableNode(index, node) || isHidden === isNodeHidden(node) ? node : { ...node, isHidden }),
+      (node) => {
+        if (!isHideableNode(index, node) || isHidden === isNodeHidden(node)) {
+          return node;
+        }
+        // Absence is the one spelling of "not hidden", so an undo restores the exact node.
+        if (!isHidden) {
+          const { isHidden: _hidden, ...shown } = node as CanvasNodeContract & { isHidden?: boolean };
+          return shown as CanvasNodeContract;
+        }
+        return { ...node, isHidden };
+      },
     ])
   );
 };
@@ -408,17 +432,17 @@ const applyLayerStackMutation = (
   }
   const enabledById = new Map(mutation.enabledUpdates.map((update) => [update.id, update.isEnabled]));
   const lockedById = new Map(mutation.lockedUpdates?.map((update) => [update.id, update.isLocked]) ?? []);
-  stacks = updateNodes(
+  stacks = updateNodeValues(
     stacks,
-    new Map(
-      [...new Set([...enabledById.keys(), ...lockedById.keys()])].map((id) => [
+    [...new Set([...enabledById.keys(), ...lockedById.keys()])].map(
+      (id): [string, (node: CanvasNodeContract) => CanvasNodeContract] => [
         id,
         (node) => {
           const isEnabled = enabledById.get(id) ?? node.isEnabled;
           const isLocked = lockedById.get(id) ?? node.isLocked;
           return isEnabled === node.isEnabled && isLocked === node.isLocked ? node : { ...node, isEnabled, isLocked };
         },
-      ])
+      ]
     )
   );
   if (stacks !== document.stacks && !withinLimits(stacks)) {
@@ -832,10 +856,10 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
         stacks:
           offsetX === 0 && offsetY === 0
             ? document.stacks
-            : updateNodes(
+            : updateNodeValues(
                 document.stacks,
-                new Map(
-                  getDocumentIndex(document).leaves.map((leaf) => [
+                getDocumentIndex(document).leaves.map(
+                  (leaf): [string, (node: CanvasNodeContract) => CanvasNodeContract] => [
                     leaf.id,
                     (node) =>
                       isGroupNode(node)
@@ -848,7 +872,7 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
                               y: node.transform.y + offsetY,
                             },
                           },
-                  ])
+                  ]
                 )
               ),
         width,

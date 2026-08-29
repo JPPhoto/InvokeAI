@@ -653,6 +653,8 @@ export {
 } from './document-model/documentCommands';
 export {
   compileContributingLayers,
+  compileDocumentNodes,
+  lookupDocumentNodeState,
   compileDocumentLeaves,
   createDocumentModel,
   type CanvasDocumentModel,
@@ -670,6 +672,7 @@ export {
   type ScreenCompositionPlan,
 } from './document-model/screenComposition';
 export { type SemanticLeaf } from './document-model/semanticLeaf';
+export { type SemanticNode } from './document-model/semanticNode';
 export {
   captureInsertionAnchor,
   captureRestoreAnchor,

@@ -53,9 +53,11 @@ import type {
 } from './documentCommands';
 import type { EditPostcondition } from './postconditions';
 import type { SemanticLeaf } from './semanticLeaf';
+import type { SemanticNode } from './semanticNode';
 
 import { isConfigApplied, isPatchApplied, sameValue } from './postconditions';
 import { compileSemanticLeaf, isSemanticLeafCurrent } from './semanticLeaf';
+import { compileSemanticNode, isSemanticNodeCurrent } from './semanticNode';
 
 export interface DocumentModelContext {
   readonly projectId: string;
@@ -76,16 +78,22 @@ export interface CanvasDocumentModel {
   getEntry(id: string): CanvasNodeEntry | null;
   getStack(kind: LayerStackKind): readonly CanvasNodeContract[];
   compileLeaves(): readonly SemanticLeaf[];
+  /** Every node, leaf or group, stacks top first in preorder, with ancestor-effective state applied. */
+  compileNodes(): readonly SemanticNode[];
   canMergeDown(upperId: string): MergeDownEligibility;
   prepare(command: DocumentCommand): PrepareEditResult;
+  /** Why `command` would be refused, or `null` when it would prepare or change nothing: the one eligibility authority. */
+  refusalFor(command: DocumentCommand): DocumentRefusal | null;
 }
 
 export interface DocumentModelDiagnostics {
   readonly leafCompilations: number;
   readonly leavesCompiled: number;
+  /** Semantic nodes built rather than reused across compilations. */
+  readonly nodesCompiled: number;
 }
 
-const diagnostics = { leafCompilations: 0, leavesCompiled: 0 };
+const diagnostics = { leafCompilations: 0, leavesCompiled: 0, nodesCompiled: 0 };
 
 /** Immutable snapshot for deterministic budget tests and diagnostics. */
 export const getDocumentModelDiagnostics = (): DocumentModelDiagnostics => ({ ...diagnostics });
@@ -93,11 +101,34 @@ export const getDocumentModelDiagnostics = (): DocumentModelDiagnostics => ({ ..
 export const resetDocumentModelDiagnostics = (): void => {
   diagnostics.leafCompilations = 0;
   diagnostics.leavesCompiled = 0;
+  diagnostics.nodesCompiled = 0;
 };
 
 const leavesByIndex = new WeakMap<CanvasDocumentIndex, readonly SemanticLeaf[]>();
 const leavesByLayer = new WeakMap<CanvasLayerContract, SemanticLeaf>();
 const leafByIdByIndex = new WeakMap<CanvasDocumentIndex, ReadonlyMap<string, SemanticLeaf>>();
+const nodesByIndex = new WeakMap<CanvasDocumentIndex, readonly SemanticNode[]>();
+const nodeByContract = new WeakMap<CanvasNodeContract, SemanticNode>();
+const nodeByIdByIndex = new WeakMap<CanvasDocumentIndex, ReadonlyMap<string, SemanticNode>>();
+
+const compileNodes = (index: CanvasDocumentIndex): readonly SemanticNode[] => {
+  const cached = nodesByIndex.get(index);
+  if (cached) {
+    return cached;
+  }
+  const nodes = index.nodes.map((entry) => {
+    const previous = nodeByContract.get(entry.node);
+    if (previous && isSemanticNodeCurrent(previous, entry)) {
+      return previous;
+    }
+    diagnostics.nodesCompiled += 1;
+    const semantic = compileSemanticNode(entry);
+    nodeByContract.set(entry.node, semantic);
+    return semantic;
+  });
+  nodesByIndex.set(index, nodes);
+  return nodes;
+};
 const contributingByIndex = new WeakMap<CanvasDocumentIndex, readonly CanvasLayerContract[]>();
 
 const compileLeaves = (index: CanvasDocumentIndex): readonly SemanticLeaf[] => {
@@ -141,6 +172,24 @@ export const lookupDocumentLayer = (document: DocumentView, id: string): CanvasL
 /** The document's semantic leaves, stacks top first, each in preorder. */
 export const compileDocumentLeaves = (document: CanvasDocumentContractV3): readonly SemanticLeaf[] =>
   compileLeaves(getDocumentIndex(document));
+
+/** Every node with ancestor-effective state applied; the same array while the forests are unchanged. */
+export const compileDocumentNodes = (document: Pick<CanvasDocumentContractV3, 'stacks'>): readonly SemanticNode[] =>
+  compileNodes(getDocumentIndex(document));
+
+/** The semantic node for `id`, or `null` when absent. */
+export const lookupDocumentNodeState = (document: DocumentView, id: string): SemanticNode | null => {
+  if (!document) {
+    return null;
+  }
+  const index = getDocumentIndex(document);
+  let byId = nodeByIdByIndex.get(index);
+  if (!byId) {
+    byId = new Map(compileNodes(index).map((semantic) => [semantic.id, semantic]));
+    nodeByIdByIndex.set(index, byId);
+  }
+  return byId.get(id) ?? null;
+};
 
 /** The layers of every contributing leaf, in leaf order; the same array while the forests are unchanged. */
 export const compileContributingLayers = (document: CanvasDocumentContractV3): readonly CanvasLayerContract[] => {
@@ -551,9 +600,18 @@ export const createDocumentModel = (
       return found;
     }
     const outer = outermostNodes(index, ids);
-    const locked = unique(outer.flatMap((entry) => lockedAlong(index, entry.path)));
+    const locked = unique(outer.flatMap((entry) => lockedWithin(index, entry)));
     if (locked.length > 0) {
       return { ids: locked, status: 'locked' };
+    }
+    // Every refusal is decided before an id is minted, so asking is free of side effects.
+    let budgeted = 0;
+    for (const entry of outer) {
+      const refusal = limits([entry.node], entry.path.length, budgeted);
+      if (refusal) {
+        return refusal;
+      }
+      budgeted += collectSubtree(entry.node).length;
     }
     const add: CanvasNodeInsertion[] = [];
     const createdIds: string[] = [];
@@ -565,10 +623,6 @@ export const createDocumentModel = (
       const clash = collectSubtree(clone).find((created) => index.byId.has(created.id));
       if (clash) {
         return { reason: 'id-exists', status: 'invalid-target', targetId: clash.id };
-      }
-      const refusal = limits([clone], entry.path.length, createdIds.length);
-      if (refusal) {
-        return refusal;
       }
       const anchor = captureInsertionAnchor(expected, {
         aboveId: entry.node.id,
@@ -598,7 +652,11 @@ export const createDocumentModel = (
     );
   };
 
-  const prepareReorder = (orders: readonly ReorderSiblingsCommand[]): PrepareEditResult => {
+  /** `movingIds` names the nodes a move selected; a raw reorder treats every displaced node as moved. */
+  const prepareReorder = (
+    orders: readonly ReorderSiblingsCommand[],
+    movingIds?: ReadonlySet<string>
+  ): PrepareEditResult => {
     if (orders.length === 0) {
       return { operation: 'reorder nothing', status: 'unsupported' };
     }
@@ -646,6 +704,11 @@ export const createDocumentModel = (
     if (touchedIds.length === 0) {
       return { status: 'unchanged' };
     }
+    const moving = movingIds ? touchedIds.filter((id) => movingIds.has(id)) : touchedIds;
+    const lockedMoving = unique(moving.flatMap((id) => lockedWithin(index, index.byId.get(id)!)));
+    if (lockedMoving.length > 0) {
+      return { ids: lockedMoving, status: 'locked' };
+    }
     return prepared(
       {
         orders: orders.map((order) => ({ ...order, orderedIds: [...order.orderedIds] })),
@@ -674,7 +737,7 @@ export const createDocumentModel = (
       return found;
     }
     const orders = moveNodesWithinSiblings(index, ids, command.kind);
-    return orders.length === 0 ? { status: 'unchanged' } : prepareReorder(orders);
+    return orders.length === 0 ? { status: 'unchanged' } : prepareReorder(orders, new Set(ids));
   };
 
   const prepareReparent = (command: Extract<DocumentCommand, { type: 'reparent' }>): PrepareEditResult => {
@@ -707,7 +770,7 @@ export const createDocumentModel = (
       return { reason: 'cycle', status: 'invalid-target', targetId: parent.node.id };
     }
     const locked = unique([
-      ...outer.flatMap((entry) => lockedAlong(index, entry.path)),
+      ...outer.flatMap((entry) => lockedWithin(index, entry)),
       ...(parent ? frozenBy(index, parent) : []),
     ]);
     if (locked.length > 0) {
@@ -797,7 +860,7 @@ export const createDocumentModel = (
     if (stranger) {
       return { reason: 'not-siblings', status: 'invalid-target', targetId: stranger.node.id };
     }
-    const locked = lockedAlong(index, first.path);
+    const locked = unique([...lockedAlong(index, first.path), ...outer.flatMap((entry) => lockedWithin(index, entry))]);
     if (locked.length > 0) {
       return { ids: locked, status: 'locked' };
     }
@@ -871,7 +934,7 @@ export const createDocumentModel = (
     }
     const named = new Set(ids);
     const groups = index.nodes.filter((entry) => named.has(entry.node.id));
-    const locked = unique(groups.flatMap((entry) => frozenBy(index, entry)));
+    const locked = unique(groups.flatMap((entry) => [...frozenBy(index, entry), ...lockedWithin(index, entry)]));
     if (locked.length > 0) {
       return { ids: locked, status: 'locked' };
     }
@@ -1252,9 +1315,10 @@ export const createDocumentModel = (
     );
   };
 
-  return {
+  const model: CanvasDocumentModel = {
     canMergeDown: (upperId) => mergeDownEligibility(document, upperId),
     compileLeaves: () => compileLeaves(index),
+    compileNodes: () => compileNodes(index),
     document,
     getEntry: (id) => index.byId.get(id) ?? null,
     getLayer: (id) => {
@@ -1297,7 +1361,12 @@ export const createDocumentModel = (
           return prepareSelect(command);
       }
     },
+    refusalFor: (command) => {
+      const result = model.prepare(command);
+      return result.status === 'prepared' || result.status === 'unchanged' ? null : result;
+    },
   };
+  return model;
 };
 
 const stripRemoved = (node: CanvasNodeContract, removed: ReadonlySet<string>): CanvasNodeContract =>

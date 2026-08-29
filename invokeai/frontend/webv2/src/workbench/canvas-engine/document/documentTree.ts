@@ -118,16 +118,18 @@ export const replaceChildren = (
 /**
  * Rewrites every node named by `updates` in place, sharing every untouched node. Groups are
  * rebuilt only along the paths to a changed node; the same forests come back when nothing changed.
+ * `changed` holds the nodes an update actually replaced, keyed by id.
  */
-export const updateNodes = (
+export const updateNodesTracked = (
   stacks: CanvasStackForests,
   updates: ReadonlyMap<string, (node: CanvasNodeContract) => CanvasNodeContract>
-): CanvasStackForests => {
+): { stacks: CanvasStackForests; changed: Map<string, CanvasNodeContract> } => {
+  const changed = new Map<string, CanvasNodeContract>();
   if (updates.size === 0) {
-    return stacks;
+    return { changed, stacks };
   }
   const visit = (nodes: readonly CanvasNodeContract[]): readonly CanvasNodeContract[] => {
-    let changed = false;
+    let rebuilt = false;
     const next = nodes.map((node) => {
       let current = node;
       if (isGroupNode(current)) {
@@ -138,12 +140,16 @@ export const updateNodes = (
       }
       const update = updates.get(current.id);
       if (update) {
-        current = update(current);
+        const updated = update(current);
+        if (updated !== current) {
+          changed.set(updated.id, updated);
+          current = updated;
+        }
       }
-      changed ||= current !== node;
+      rebuilt ||= current !== node;
       return current;
     });
-    return changed ? next : nodes;
+    return rebuilt ? next : nodes;
   };
   let result = stacks;
   for (const stack of Object.keys(stacks) as CanvasLayerStackKind[]) {
@@ -153,8 +159,13 @@ export const updateNodes = (
       result[stack] = [...roots];
     }
   }
-  return result;
+  return { changed, stacks: result };
 };
+
+export const updateNodes = (
+  stacks: CanvasStackForests,
+  updates: ReadonlyMap<string, (node: CanvasNodeContract) => CanvasNodeContract>
+): CanvasStackForests => updateNodesTracked(stacks, updates).stacks;
 
 /** Removes the subtrees rooted at `ids`, sharing every untouched node. */
 export const removeNodes = (stacks: CanvasStackForests, ids: ReadonlySet<string>): CanvasStackForests => {
