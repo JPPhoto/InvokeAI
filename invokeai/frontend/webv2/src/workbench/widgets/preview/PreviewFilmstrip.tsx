@@ -91,7 +91,7 @@ const FilmstripThumb = ({
   const itemRef = useMemo(() => toGalleryItemRef(item), [item]);
   const dragData = useMemo(() => getGalleryItemDragData([itemRef]), [itemRef]);
   const thumbnailSrc = item.thumbnailUrl || (item.kind === 'image' ? item.fullUrl : null);
-  const { listeners, setNodeRef } = useDraggable({
+  const { isDragging, listeners, setNodeRef } = useDraggable({
     data: dragData,
     id: getGalleryItemDragId(itemRef, 'preview-filmstrip'),
   });
@@ -119,12 +119,17 @@ const FilmstripThumb = ({
       borderColor={isSelected ? 'accent.solid' : 'border.subtle'}
       borderWidth="2px"
       boxSize={size}
+      css={isDragging ? FILMSTRIP_THUMB_DRAG_CSS : undefined}
       cursor="pointer"
       flexShrink={0}
+      opacity={isDragging ? 0.4 : undefined}
       overflow="hidden"
       position="relative"
       rounded="sm"
-      touchAction="none"
+      // Pan, don't drag: the strip scrolls horizontally, so a moving finger
+      // must scroll it (the drag sensor detaches on touchcancel); dragging
+      // still works via the TouchSensor's hold delay.
+      touchAction="pan-x"
       onClick={handleClick}
     >
       {thumbnailSrc ? (
@@ -137,6 +142,9 @@ const FilmstripThumb = ({
 };
 
 const FILMSTRIP_CONTAIN_CSS = { contain: 'inline-size' } as const;
+
+/** Same touch drag cue as the gallery grid: the source thumb desaturates while dragged. */
+const FILMSTRIP_THUMB_DRAG_CSS = { filter: 'saturate(0.4)' } as const;
 
 // The thumb row centers itself with `h="full"`, which needs the content
 // wrapper to actually span the viewport height rather than shrink to it.

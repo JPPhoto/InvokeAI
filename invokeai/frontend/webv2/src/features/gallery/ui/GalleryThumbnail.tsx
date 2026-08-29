@@ -18,9 +18,21 @@ const THUMBNAIL_HOVER_CSS = {
   '&:hover .gallery-thumb-overlay, &:focus-within .gallery-thumb-overlay': { opacity: 1 },
 } as const;
 
+/**
+ * The tile while its image is being dragged: desaturated, the visible half of
+ * the touch drag cue. The other half is the portalled drag preview, which
+ * carries the same desaturation so the change is visible under a finger that
+ * has not moved yet — the moment the drag hold completes.
+ */
+const THUMBNAIL_DRAG_CSS = {
+  ...THUMBNAIL_HOVER_CSS,
+  filter: 'saturate(0.4)',
+} as const;
+
 const PREVIEW_IMAGE_STYLE = {
   borderRadius: '0.375rem',
   boxShadow: '0 8px 24px rgb(0 0 0 / 45%)',
+  filter: 'saturate(0.4)',
   height: '100%',
   objectFit: 'cover',
   width: '100%',
@@ -161,14 +173,18 @@ const GalleryThumbnail = ({
       borderColor={isSelected || isCompared ? 'accent.solid' : 'border.subtle'}
       borderWidth="2px"
       boxShadow={isCompared ? 'inset 0 0 0 1px {colors.accent.solid}' : undefined}
-      css={THUMBNAIL_HOVER_CSS}
+      css={isDragging ? THUMBNAIL_DRAG_CSS : THUMBNAIL_HOVER_CSS}
       minW="0"
       opacity={isDragging ? 0.4 : undefined}
       overflow="hidden"
       position="relative"
       role="listitem"
       rounded="md"
-      touchAction="none"
+      // Pan, don't drag: `none` would hand every touch-drag to the drag
+      // sensor before the browser could scroll the grid. Allowing the pan
+      // lets a moving finger scroll (the sensor detaches on touchcancel);
+      // dragging still works via the TouchSensor's hold delay.
+      touchAction="pan-y"
       w="full"
       onContextMenu={handleContextMenu}
     >
