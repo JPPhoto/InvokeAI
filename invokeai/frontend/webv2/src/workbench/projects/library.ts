@@ -9,7 +9,7 @@ import { createExternalStore } from '@platform/state/externalStore';
 import { createSingleFlight } from '@platform/state/singleFlight';
 import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
 import { DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION, isCanvasSchemaVersionSupported } from '@workbench/canvasSchemaVersion';
-import { createLocalStorageWorkbenchPersistence } from '@workbench/persistence';
+import { createRefusedProjectStorage } from '@workbench/refusedProjectStorage';
 
 import type { ProjectTransferIssues } from './invk/transfer';
 
@@ -231,7 +231,7 @@ export const deleteLibraryProject = async (projectId: string): Promise<void> => 
 
   assertAccountScopeCurrent(owner);
   openProject?.close();
-  await createLocalStorageWorkbenchPersistence(owner.storageSuffix).forgetRefusedProject(projectId);
+  createRefusedProjectStorage(owner.storageSuffix).forget(projectId);
   forgetProjectCover(projectId, owner);
   store.patchSnapshot({ summaries: store.getSnapshot().summaries.filter((summary) => summary.id !== projectId) });
 

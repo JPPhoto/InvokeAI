@@ -5,9 +5,12 @@ import { getGalleryPage, getGallerySettings } from '@features/gallery/contracts'
 
 import { timeWorkbenchPerf } from './performanceMarks';
 import { gateProjectCanvases } from './projectCanvasGate';
+import {
+  createRefusedProjectStorage,
+  isBrowserStorageAvailable,
+  WORKBENCH_STORAGE_KEY_BASE,
+} from './refusedProjectStorage';
 
-const BASE_STORAGE_KEY = 'invokeai:v7:webv2:workbench';
-const REFUSED_STORAGE_SUFFIX = ':refused-projects';
 const WORKBENCH_SCHEMA_VERSION = 1;
 
 export interface WorkbenchPersistenceService {
@@ -23,7 +26,7 @@ export interface WorkbenchPersistenceService {
   retainRefusedProjects(refusedProjects: readonly RefusedWorkbenchProject[]): Promise<boolean>;
 }
 
-const isBrowser = (): boolean => typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+const isBrowser = isBrowserStorageAvailable;
 
 /**
  * In infinite mode the gallery's `galleryPage` is not a page number but the
@@ -146,47 +149,8 @@ export const serializeWorkbenchPersistenceSnapshot = (
  * until they are explicitly forgotten.
  */
 export const createLocalStorageWorkbenchPersistence = (storageSuffix: string): WorkbenchPersistenceService => {
-  const storageKey = `${BASE_STORAGE_KEY}${storageSuffix}`;
-  const refusedKey = `${storageKey}${REFUSED_STORAGE_SUFFIX}`;
-
-  const readRefused = (): Record<string, unknown> => {
-    try {
-      const parsed: unknown = JSON.parse(window.localStorage.getItem(refusedKey) ?? '{}');
-
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
-    } catch {
-      return {};
-    }
-  };
-
-  const writeRefused = (refused: Record<string, unknown>): boolean => {
-    try {
-      if (Object.keys(refused).length === 0) {
-        window.localStorage.removeItem(refusedKey);
-      } else {
-        window.localStorage.setItem(refusedKey, JSON.stringify(refused));
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  const retainRefused = (refusedProjects: readonly RefusedWorkbenchProject[]): boolean => {
-    if (refusedProjects.length === 0) {
-      return true;
-    }
-    const refused = readRefused();
-
-    for (const project of refusedProjects) {
-      // A server refusal carries metadata only. Never let it erase a raw local recovery document
-      // retained for the same id.
-      if (project.projectId && project.raw !== null && project.raw !== undefined) {
-        refused[project.projectId] = project.raw;
-      }
-    }
-    return writeRefused(refused);
-  };
+  const storageKey = `${WORKBENCH_STORAGE_KEY_BASE}${storageSuffix}`;
+  const refused = createRefusedProjectStorage(storageSuffix);
 
   return {
     clearWorkbench() {
@@ -195,17 +159,12 @@ export const createLocalStorageWorkbenchPersistence = (storageSuffix: string): W
       }
 
       window.localStorage.removeItem(storageKey);
-      window.localStorage.removeItem(refusedKey);
+      refused.clear();
 
       return Promise.resolve();
     },
     forgetRefusedProject(projectId) {
-      if (isBrowser()) {
-        const refused = readRefused();
-
-        delete refused[projectId];
-        writeRefused(refused);
-      }
+      refused.forget(projectId);
 
       return Promise.resolve();
     },
@@ -231,7 +190,7 @@ export const createLocalStorageWorkbenchPersistence = (storageSuffix: string): W
       }
 
       if (snapshot && snapshot.refusedProjects.length > 0) {
-        if (retainRefused(snapshot.refusedProjects)) {
+        if (refused.retain(snapshot.refusedProjects)) {
           // The raw recovery copy is durable. Only now is it safe to compact the ordinary cache. A
           // compaction failure leaves the original value intact; it is not evidence of corrupt input.
           try {
@@ -247,7 +206,7 @@ export const createLocalStorageWorkbenchPersistence = (storageSuffix: string): W
       return Promise.resolve(snapshot);
     },
     retainRefusedProjects(refusedProjects) {
-      return Promise.resolve(!isBrowser() || retainRefused(refusedProjects));
+      return Promise.resolve(!isBrowser() || refused.retain(refusedProjects));
     },
     saveWorkbench(state) {
       const snapshot = createSnapshot(state);
