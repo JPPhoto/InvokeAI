@@ -898,6 +898,43 @@ describe('authoritative project boards', () => {
     expect(api.__records.get(draft.id)?.revision).toBe(3);
   });
 
+  it('gives a fork a baseline it will serialize to, so it is not pushed unprompted', async () => {
+    // The fork's store copy is hydrated from the recovered document, which
+    // drops an infinite window anchor. A baseline taken from the wire bytes
+    // would still carry it, and the fork's first autosave would read the drop
+    // as an edit.
+    const project = seedServerProject('Deleted elsewhere');
+    const opened = await service.hydrateProjectFromServer(project.id);
+    const galleryEntry = Object.entries(opened!.widgetInstances).find(([, instance]) => instance.typeId === 'gallery')!;
+    const [galleryInstanceId, galleryInstance] = galleryEntry;
+    const edited = {
+      ...opened!,
+      name: 'Edited locally',
+      widgetInstances: {
+        ...opened!.widgetInstances,
+        [galleryInstanceId]: {
+          ...galleryInstance,
+          state: {
+            ...galleryInstance.state,
+            values: { ...galleryInstance.state.values, galleryPage: 7, paginationMode: 'infinite' },
+          },
+        },
+      },
+    };
+
+    api.__records.delete(project.id);
+
+    const result = await service.saveWorkbench(stateWithProjects([edited]));
+    const [fork] = result.deletedProjectForks;
+
+    expect(fork!.recoveredProject.widgetInstances[galleryInstanceId]?.state.values.galleryPage).toBe(0);
+    api.updateProject.mockClear();
+
+    await service.saveWorkbench(stateWithProjects([fork!.recoveredProject]));
+
+    expect(api.updateProject).not.toHaveBeenCalled();
+  });
+
   it('forks rather than resurrects a project deleted on another device', async () => {
     const project = seedServerProject('Deleted elsewhere');
     const opened = await service.hydrateProjectFromServer(project.id);

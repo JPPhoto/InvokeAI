@@ -424,7 +424,10 @@ const recoverConflictingProject = async (
 
     assertOwner(syncState);
     syncState.syncEntries.set(recoveredIdentity.id, {
-      pushedDoc: JSON.stringify(recoveredDocument),
+      // As this realm holds it, not the wire bytes: the fork's store copy is
+      // hydrated from this document, and a fork whose tab is already closed
+      // is a document arriving like any other.
+      pushedDoc: JSON.stringify(serializeProjectDocument(recoveredProject)),
       revision: created.revision,
     });
     // Recorded for the same reason the deletion fork records it: the fork is a project the server
@@ -495,7 +498,10 @@ const forkDeletedProject = async (
     }
 
     syncState.syncEntries.set(recoveredIdentity.id, {
-      pushedDoc: JSON.stringify(recoveredDocument),
+      // As this realm holds it, not the wire bytes: the fork's store copy is
+      // hydrated from this document, and a fork whose tab is already closed
+      // is a document arriving like any other.
+      pushedDoc: JSON.stringify(serializeProjectDocument(recoveredProject)),
       revision: created.revision,
     });
     syncState.pendingBoardAssignments.push({ boardId: created.board_id, projectId: recoveredIdentity.id });
