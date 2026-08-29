@@ -1564,8 +1564,8 @@
         "forLoopBodyIdentityDuplicate": "For loop body identity must be unique",
         "forLoopBodyIdentityMismatch": "For loop body identity does not match its return",
         "forReturnOwnership": "For return must belong to exactly one For loop",
-        "forLoopBodyBoundaryLegacy": "For body (legacy identity)",
-        "forLoopBodyBoundaryWithIdentity": "For body ({{bodyId}})",
+        "forLoopBodyBoundaryLegacy": "For loop body (legacy identity)",
+        "forLoopBodyBoundaryWithIdentity": "For loop body ({{bodyId}})",
         "forLoopBodyBoundaryStatus": {
             "missing_return": "missing ForReturn",
             "multiple_returns": "multiple ForReturns",
