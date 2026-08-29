@@ -80,4 +80,49 @@ describe('useCompareLoupe', () => {
 
     expect(images.map((image) => image.style.transform)).toEqual(transformsAtMaximum);
   });
+
+  it('pinches both panes together around the fingers on one of them', async () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    await interact(() => root?.render(<Harness />));
+
+    const frame = host.querySelector<HTMLElement>('[data-testid="frame-0"]')!;
+    const images = Array.from(host.querySelectorAll<HTMLImageElement>('img'));
+    const rect = frame.getBoundingClientRect();
+    const touch = (
+      type: 'pointerdown' | 'pointermove' | 'pointerup',
+      pointerId: number,
+      paneX: number,
+      { isPrimary = false }: { isPrimary?: boolean } = {}
+    ) =>
+      frame.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          button: type === 'pointermove' ? -1 : 0,
+          cancelable: true,
+          clientX: rect.left + paneX,
+          clientY: rect.top + 75,
+          isPrimary,
+          pointerId,
+          pointerType: 'touch',
+        })
+      );
+
+    await interact(() => {
+      touch('pointerdown', 1, 50, { isPrimary: true });
+      touch('pointerdown', 2, 150);
+    });
+    // The fingers double their 100px spread around the pane's centre, and the
+    // pane that was not touched follows — one transform drives both eyes.
+    await interact(() => {
+      touch('pointermove', 1, 0);
+      touch('pointermove', 2, 200);
+    });
+
+    expect(images.map((image) => image.style.transform)).toEqual([
+      'translate(-100px, -75px) scale(2)',
+      'translate(-100px, -75px) scale(2)',
+    ]);
+  });
 });

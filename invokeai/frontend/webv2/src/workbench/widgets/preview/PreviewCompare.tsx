@@ -403,6 +403,9 @@ const CompareSidePane = ({
       overflow="hidden"
       position="relative"
       rounded="lg"
+      // Keeps the browser's own pan and pinch off the pane, so a two-finger
+      // gesture reaches the shared loupe instead of scrolling the page.
+      touchAction="none"
       {...pane?.frameProps}
     >
       <img

@@ -1,4 +1,12 @@
-import { panBy, WHEEL_ZOOM_STEP, zoomAtPoint as calculateZoomAtPoint } from '@workbench/panZoom';
+import {
+  distanceBetween,
+  midpointOf,
+  panBy,
+  pinchZoomAtPoints,
+  WHEEL_ZOOM_STEP,
+  zoomAtPoint as calculateZoomAtPoint,
+  type PanZoomPoint,
+} from '@workbench/panZoom';
 import {
   useCallback,
   useImperativeHandle,
@@ -9,16 +17,19 @@ import {
   type Ref,
 } from 'react';
 
+import { capturePointer, releasePointer, trackPointerDown } from './loupeGestures';
+
 /**
  * Lightweight zoom/pan for the preview: wheel zooms around the cursor,
- * left-drag pans, double-click toggles fit ⇄ 100%. The *stage* (the dot-grid
- * area) is the viewport — the fitted, framed image scales and pans across the
- * whole stage and clips at its edges, instead of being inspected through its
- * own small wrapper. Implemented as a CSS transform applied imperatively
- * (rAF-batched) to the fitted content box; high-frequency pointer data never
- * passes through React state — only the rounded zoom percent does, for the
- * corner chip. `scale === 1` is "fit"; the chip reports percent of the image's
- * actual pixels.
+ * left-drag pans, double-click toggles fit ⇄ 100%, and on a touch screen two
+ * fingers pinch (zooming and panning in one gesture) while one finger pans an
+ * already-zoomed image. The *stage* (the dot-grid area) is the viewport — the
+ * fitted, framed image scales and pans across the whole stage and clips at its
+ * edges, instead of being inspected through its own small wrapper. Implemented
+ * as a CSS transform applied imperatively (rAF-batched) to the fitted content
+ * box; high-frequency pointer data never passes through React state — only the
+ * rounded zoom percent does, for the corner chip. `scale === 1` is "fit"; the
+ * chip reports percent of the image's actual pixels.
  */
 
 /** Max zoom, as a fraction of the image's actual pixel size. */
@@ -36,6 +47,23 @@ interface LoupeTransform {
   /** Stage-space translation applied to the content box (origin 0 0). */
   tx: number;
   ty: number;
+}
+
+/**
+ * A live two-finger pinch. Everything the gesture needs is captured when it
+ * starts — the transform it grew from, the pointers' separation and midpoint,
+ * and the client-space origin of the content box — so each move resolves to a
+ * single transition from that origin instead of compounding deltas.
+ */
+interface PinchGesture {
+  /** Client-space position of the content box's untransformed origin. */
+  originLeft: number;
+  originTop: number;
+  pointerIds: [number, number];
+  /** Midpoint at gesture start, in content-box space. */
+  startCenter: PanZoomPoint;
+  startDistance: number;
+  startTransform: LoupeTransform;
 }
 
 /**
@@ -62,6 +90,9 @@ export const usePreviewLoupe = ({
   const panPointerRef = useRef<{ pointerId: number; startX: number; startY: number; tx: number; ty: number } | null>(
     null
   );
+  /** Every pointer currently down on the stage, in client space, in arrival order. */
+  const pointersRef = useRef(new Map<number, PanZoomPoint>());
+  const pinchRef = useRef<PinchGesture | null>(null);
   const lastSourceTokenRef = useRef<string | null | undefined>(undefined);
   const [zoomPercent, setZoomPercent] = useState<number | null>(null);
 
@@ -124,6 +155,9 @@ export const usePreviewLoupe = ({
 
     transformRef.current = { scale: 1, tx: 0, ty: 0 };
     panPointerRef.current = null;
+    // A gesture in flight is measured against a transform that no longer
+    // exists; dropping it leaves the fresh fit alone until the fingers lift.
+    pinchRef.current = null;
 
     if (rafRef.current === null) {
       rafRef.current = requestAnimationFrame(() => {
@@ -164,6 +198,17 @@ export const usePreviewLoupe = ({
     [apply]
   );
 
+  /** Never below fit, never past `MAX_ACTUAL_ZOOM` of the image's own pixels. */
+  const constrainScale = useCallback(
+    (scale: number): number => {
+      const renderedWidth = contentRef.current?.clientWidth ?? 0;
+      const maxScale = renderedWidth > 0 ? Math.max(1, (MAX_ACTUAL_ZOOM * naturalWidth) / renderedWidth) : 1;
+
+      return Math.max(1, Math.min(scale, maxScale));
+    },
+    [naturalWidth]
+  );
+
   /** Zoom keeping the content point under the given stage-space coordinates fixed. */
   const zoomAroundPoint = useCallback(
     (stageX: number, stageY: number, nextScale: number) => {
@@ -174,12 +219,11 @@ export const usePreviewLoupe = ({
       }
 
       const { scale, tx, ty } = transformRef.current;
-      const maxScale = Math.max(1, (MAX_ACTUAL_ZOOM * naturalWidth) / content.clientWidth);
       const next = calculateZoomAtPoint(
         { pan: { x: tx, y: ty }, zoom: scale },
         nextScale,
         { x: stageX - content.offsetLeft, y: stageY - content.offsetTop },
-        (zoom) => Math.max(1, Math.min(zoom, maxScale))
+        constrainScale
       );
 
       setTransform({
@@ -188,7 +232,7 @@ export const usePreviewLoupe = ({
         ty: next.pan.y,
       });
     },
-    [naturalWidth, setTransform]
+    [constrainScale, setTransform]
   );
 
   const reset = useCallback(() => setTransform({ scale: 1, tx: 0, ty: 0 }), [setTransform]);
@@ -245,23 +289,140 @@ export const usePreviewLoupe = ({
     [zoomAroundPoint]
   );
 
-  const handlePointerDown = (event: PointerEvent<HTMLDivElement>): void => {
-    if (event.button !== 0 || transformRef.current.scale === 1) {
-      return;
-    }
-
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
+  /** Starts a pan from the given pointer's current position, at the current transform. */
+  const beginPan = (pointerId: number, from: PanZoomPoint): void => {
     panPointerRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
+      pointerId,
+      startX: from.x,
+      startY: from.y,
       tx: transformRef.current.tx,
       ty: transformRef.current.ty,
     };
   };
 
+  /**
+   * Arms a pinch on two down pointers and returns it, or null — leaving no
+   * gesture — if the stage cannot be measured or the fingers landed on the
+   * same spot.
+   */
+  const beginPinch = (stage: HTMLDivElement, pointerIds: [number, number]): PinchGesture | null => {
+    const content = contentRef.current;
+    const first = pointersRef.current.get(pointerIds[0]);
+    const second = pointersRef.current.get(pointerIds[1]);
+
+    if (!content || content.clientWidth === 0 || !first || !second) {
+      return null;
+    }
+
+    const distance = distanceBetween(first, second);
+
+    if (distance === 0) {
+      return null;
+    }
+
+    const rect = stage.getBoundingClientRect();
+    const originLeft = rect.left + content.offsetLeft;
+    const originTop = rect.top + content.offsetTop;
+    const center = midpointOf(first, second);
+
+    panPointerRef.current = null;
+    pinchRef.current = {
+      originLeft,
+      originTop,
+      pointerIds,
+      startCenter: { x: center.x - originLeft, y: center.y - originTop },
+      startDistance: distance,
+      startTransform: transformRef.current,
+    };
+
+    return pinchRef.current;
+  };
+
+  /**
+   * A pinch begins with one finger already down, which dnd-kit's pointer sensor
+   * has taken as the start of dragging the image out of the preview. The sensor
+   * listens for `pointercancel` on the document, so dispatching one there aborts
+   * that drag — pending or already started — without disturbing the stage's own
+   * handlers, which never see a document-targeted, non-bubbling event.
+   */
+  const cancelPointerDrag = (stage: HTMLDivElement): void => {
+    stage.ownerDocument.dispatchEvent(new PointerEvent('pointercancel'));
+  };
+
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    const pointers = pointersRef.current;
+
+    if (event.isPrimary) {
+      pinchRef.current = null;
+    }
+
+    const pair = trackPointerDown(pointers, event);
+
+    if (pair && !pinchRef.current) {
+      event.preventDefault();
+      const stage = event.currentTarget;
+      const pinch = beginPinch(stage, pair);
+
+      if (pinch) {
+        // Both fingers are captured for the whole gesture, so a finger that
+        // strays off the stage keeps reporting instead of silently sticking.
+        for (const pointerId of pinch.pointerIds) {
+          capturePointer(stage, pointerId);
+        }
+
+        cancelPointerDrag(stage);
+      }
+
+      return;
+    }
+
+    if (pointers.size !== 1 || transformRef.current.scale === 1) {
+      return;
+    }
+
+    event.preventDefault();
+    capturePointer(event.currentTarget, event.pointerId);
+    beginPan(event.pointerId, { x: event.clientX, y: event.clientY });
+  };
+
   const handlePointerMove = (event: PointerEvent<HTMLDivElement>): void => {
+    const pointers = pointersRef.current;
+
+    if (pointers.has(event.pointerId)) {
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
+
+    const pinch = pinchRef.current;
+
+    if (pinch) {
+      const first = pointers.get(pinch.pointerIds[0]);
+      const second = pointers.get(pinch.pointerIds[1]);
+
+      if (!pinch.pointerIds.includes(event.pointerId) || !first || !second) {
+        return;
+      }
+
+      event.preventDefault();
+      const center = midpointOf(first, second);
+      const next = pinchZoomAtPoints(
+        { pan: { x: pinch.startTransform.tx, y: pinch.startTransform.ty }, zoom: pinch.startTransform.scale },
+        {
+          center: { x: center.x - pinch.originLeft, y: center.y - pinch.originTop },
+          distance: distanceBetween(first, second),
+          startCenter: pinch.startCenter,
+          startDistance: pinch.startDistance,
+        },
+        constrainScale
+      );
+
+      setTransform({ scale: next.zoom, tx: next.pan.x, ty: next.pan.y });
+      return;
+    }
+
     const pan = panPointerRef.current;
 
     if (!pan || pan.pointerId !== event.pointerId) {
@@ -277,12 +438,44 @@ export const usePreviewLoupe = ({
   };
 
   const handlePointerEnd = (event: PointerEvent<HTMLDivElement>): void => {
-    if (panPointerRef.current?.pointerId !== event.pointerId) {
+    const pointers = pointersRef.current;
+
+    if (pointers.delete(event.pointerId)) {
+      releasePointer(event.currentTarget, event.pointerId);
+    }
+
+    const pinch = pinchRef.current;
+
+    if (pinch?.pointerIds.includes(event.pointerId)) {
+      pinchRef.current = null;
+      const remaining = [...pointers.keys()];
+
+      // Lifting one finger of a three-finger gesture re-pinches on what is
+      // left; lifting to a single finger hands the gesture over to a pan, so
+      // the image keeps following that finger without a release and re-touch.
+      if (remaining.length >= 2) {
+        const stage = event.currentTarget;
+        const next = beginPinch(stage, [remaining[0]!, remaining[1]!]);
+
+        for (const pointerId of next?.pointerIds ?? []) {
+          capturePointer(stage, pointerId);
+        }
+
+        return;
+      }
+
+      const last = remaining[0];
+      const lastPoint = last === undefined ? undefined : pointers.get(last);
+
+      if (last !== undefined && lastPoint && transformRef.current.scale !== 1) {
+        beginPan(last, lastPoint);
+      }
+
       return;
     }
 
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
+    if (panPointerRef.current?.pointerId !== event.pointerId) {
+      return;
     }
 
     panPointerRef.current = null;
