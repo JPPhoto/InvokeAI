@@ -266,6 +266,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   );
   const {
     boardItems,
+    getSelectionPage,
     handleNavigationKeyDown,
     isLoadingBoard,
     navigate,
@@ -294,6 +295,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const getItemActionContext = useCallback(
     () => ({
       filterIdentity: navigationQueryKey,
+      getItemSelectionPage: getSelectionPage,
       items: boardItems,
       loadOrderedRefs: (signal: AbortSignal) => {
         signal.throwIfAborted();
@@ -301,7 +303,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
       },
       selectedItemKey,
     }),
-    [boardItems, navigationQueryKey, selectedItemKey]
+    [boardItems, getSelectionPage, navigationQueryKey, selectedItemKey]
   );
   const projectId = useActiveProjectId();
   const { dialog: deletionConfirmationDialog, requestDeletionConfirmation } = useDeletionConfirmation();
@@ -325,12 +327,51 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     [contextMenuItem]
   );
   const exitCompare = useCallback(() => gallery.setCompareItem(null), [gallery]);
+  // The page the item now in the compare slot was selected at, when Preview
+  // put it there by swapping. The window may not hold that item any more —
+  // swapping a top-of-board image in moves the window to the top — so a swap
+  // back could only guess at its page. This is not a guess: it is the window
+  // the item was navigated in, and restoring it puts the arrows back where
+  // they were before the first swap. A page names a window of ONE query,
+  // though: restored into a different board, view, order, mode or search it
+  // would anchor that listing 1800 rows down around an image from another,
+  // so the memo is only honoured in the query it was recorded in — and only
+  // while the item is still in that query's board. Moving the compare image
+  // to another board re-boards it in place without touching the selection's
+  // query, so the key alone would still match.
+  const swappedOutRef = useRef<{ boardId: string; key: GalleryItemKey; page: number; queryKey: string } | null>(null);
   const swapCompareImages = useCallback(() => {
     if (selectedItem?.kind === 'image' && compareImage) {
-      selectPreviewItem(legacyGeneratedImageToGalleryItem(compareImage));
+      const compareItem = legacyGeneratedImageToGalleryItem(compareImage);
+      const swappedOut = swappedOutRef.current;
+
+      swappedOutRef.current = {
+        boardId: selectedItem.boardId,
+        key: toGalleryItemKey(selectedItem),
+        page: selectedImageQuery.page,
+        queryKey: navigationQueryKey,
+      };
+      if (
+        swappedOut &&
+        swappedOut.key === toGalleryItemKey(compareItem) &&
+        swappedOut.queryKey === navigationQueryKey &&
+        swappedOut.boardId === compareItem.boardId
+      ) {
+        selectGalleryItemAtPage(compareItem, swappedOut.page);
+      } else {
+        selectPreviewItem(compareItem);
+      }
       gallery.setCompareItem(selectedItem);
     }
-  }, [compareImage, gallery, selectPreviewItem, selectedItem]);
+  }, [
+    compareImage,
+    gallery,
+    navigationQueryKey,
+    selectGalleryItemAtPage,
+    selectPreviewItem,
+    selectedImageQuery.page,
+    selectedItem,
+  ]);
   const isItemCurrent = useCallback(
     (itemKey: GalleryItemKey) => {
       const currentValues = getProjectWidgetValues(queries.getSnapshot().activeProject, 'gallery');
@@ -491,8 +532,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     }
 
     if (commandId === 'viewer.swapImages' && selectedItem?.kind === 'image' && compareImage) {
-      selectPreviewItem(legacyGeneratedImageToGalleryItem(compareImage));
-      gallery.setCompareItem(selectedItem);
+      swapCompareImages();
       return;
     }
 
