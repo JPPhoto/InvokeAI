@@ -3,8 +3,6 @@ import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
-  MouseSensor,
-  TouchSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -44,6 +42,12 @@ import { useTranslation } from 'react-i18next';
 import { BottomPanel } from './BottomPanel';
 import { CenterArea } from './CenterArea';
 import { DocumentTitleProgress } from './DocumentTitleProgress';
+import {
+  HoldToDragSensor,
+  PrimaryMouseSensor,
+  TOUCH_DRAG_HOLD_DELAY_MS,
+  TOUCH_DRAG_MOVE_TOLERANCE_PX,
+} from './holdToDragSensor';
 import { WorkbenchNotificationToaster } from './notifications';
 import { LeftPanel, RightPanel } from './Panels';
 import { StatusBar } from './StatusBar';
@@ -61,21 +65,6 @@ const DND_MODIFIERS = [restrictToWindowEdges];
  * scrolls from afar are prevented by the visibility check inside
  * widgetCollisionDetection, not by shrinking zones.
  */
-/**
- * Touch drags activate only after a sustained hold: a `PointerSensor` with a
- * distance constraint claims a touch-drag at 6px, which makes every
- * scrollable surface of draggable items (the gallery grid, the filmstrip)
- * unscrollable by touch — the drag wins the gesture before the browser can
- * pan. The `TouchSensor`'s delay constraint leaves the gesture alone while
- * the hold is pending (its touchmove listener does not preventDefault until
- * activated), so an early move pans the surface and the sensor detaches on
- * `touchcancel`; a hold that outlasts the delay — moving no more than
- * `TOUCH_DRAG_MOVE_TOLERANCE_PX` — activates the drag, which then owns the
- * gesture. Mouse pointers keep the immediate distance activation.
- */
-const TOUCH_DRAG_HOLD_DELAY_MS = 400;
-const TOUCH_DRAG_MOVE_TOLERANCE_PX = 10;
-
 const DND_AUTO_SCROLL = { acceleration: 5 };
 
 export const WorkbenchShell = () => {
@@ -87,8 +76,10 @@ export const WorkbenchShell = () => {
   const rightRegion = useActiveProjectSelector((project) => project.widgetRegions.right);
   const placementProject = useActiveProjectSelector(getWidgetPlacementProject, areWidgetPlacementProjectsEqual);
   const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(TouchSensor, {
+    // `PrimaryMouseSensor`/`HoldToDragSensor` replace the stock `PointerSensor`:
+    // see holdToDragSensor.ts for why touch gestures need the hold gate.
+    useSensor(PrimaryMouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(HoldToDragSensor, {
       activationConstraint: { delay: TOUCH_DRAG_HOLD_DELAY_MS, tolerance: TOUCH_DRAG_MOVE_TOLERANCE_PX },
     }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })

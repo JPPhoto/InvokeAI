@@ -119,7 +119,7 @@ const FilmstripThumb = ({
       borderColor={isSelected ? 'accent.solid' : 'border.subtle'}
       borderWidth="2px"
       boxSize={size}
-      css={isDragging ? FILMSTRIP_THUMB_DRAG_CSS : undefined}
+      css={isDragging ? FILMSTRIP_THUMB_DRAG_CSS : FILMSTRIP_THUMB_ARMED_CSS}
       cursor="pointer"
       flexShrink={0}
       opacity={isDragging ? 0.4 : undefined}
@@ -127,8 +127,8 @@ const FilmstripThumb = ({
       position="relative"
       rounded="sm"
       // Pan, don't drag: the strip scrolls horizontally, so a moving finger
-      // must scroll it (the drag sensor detaches on touchcancel); dragging
-      // still works via the TouchSensor's hold delay.
+      // must scroll it (the hold-to-drag sensor releases the gesture when the
+      // browser claims it); dragging still works after a sustained hold.
       touchAction="pan-x"
       onClick={handleClick}
     >
@@ -145,6 +145,13 @@ const FILMSTRIP_CONTAIN_CSS = { contain: 'inline-size' } as const;
 
 /** Same touch drag cue as the gallery grid: the source thumb desaturates while dragged. */
 const FILMSTRIP_THUMB_DRAG_CSS = { filter: 'saturate(0.4)' } as const;
+
+/**
+ * Same armed cue as the gallery grid: desaturation while a sustained touch
+ * hold has armed the drag gate (before movement starts the drag). Set as
+ * `data-drag-armed` by the hold-to-drag sensor.
+ */
+const FILMSTRIP_THUMB_ARMED_CSS = { '&[data-drag-armed=true]': { filter: 'saturate(0.4)' } } as const;
 
 // The thumb row centers itself with `h="full"`, which needs the content
 // wrapper to actually span the viewport height rather than shrink to it.
