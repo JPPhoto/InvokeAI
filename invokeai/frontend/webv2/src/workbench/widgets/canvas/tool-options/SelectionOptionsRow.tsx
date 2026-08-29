@@ -2,7 +2,8 @@ import type { SelectionOp } from '@workbench/canvas-engine/api';
 import type { ToolbarRegionProps } from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { HStack } from '@chakra-ui/react';
-import { Button, IconButton, Tooltip } from '@platform/ui';
+import { Button, IconButton } from '@platform/ui/Button';
+import { Tooltip } from '@platform/ui/Tooltip';
 import { isLeafPixelEditEligible, lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import { useCanvasHasSelection } from '@workbench/widgets/canvas/engineStoreHooks';
 import { ToolbarHint } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';

@@ -2,7 +2,7 @@ import type { WidgetRegion } from '@workbench/layoutContracts';
 import type { RegisteredWidget, WidgetIconComponent, WidgetInstanceId, WidgetTypeId } from '@workbench/widgetContracts';
 
 import { Flex, Icon, Menu, Portal, Text } from '@chakra-ui/react';
-import { IconButton } from '@platform/ui';
+import { IconButton } from '@platform/ui/Button';
 import { WidgetIcon } from '@workbench/iconResolver';
 import { CheckIcon, MoreHorizontalIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';

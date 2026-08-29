@@ -1,7 +1,7 @@
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { Flex, Stack, Text } from '@chakra-ui/react';
-import { Scrollable } from '@platform/ui';
+import { Scrollable } from '@platform/ui/Scrollable';
 import { isCanvasInteractionLocked } from '@workbench/widgets/canvas/canvasInteractionLock';
 import { useCanvasActiveTool, useCanvasOperation } from '@workbench/widgets/canvas/engineStoreHooks';
 import {

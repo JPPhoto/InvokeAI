@@ -24,7 +24,7 @@ const { activeProject, buttons, hasSelection } = vi.hoisted(() => ({
   hasSelection: { current: true },
 }));
 
-vi.mock('@platform/ui', () => ({
+vi.mock('@platform/ui/Button', () => ({
   Button: (props: CapturedButton) => {
     buttons.set(String(props.children), props);
     return <button disabled={props.disabled}>{props.children}</button>;

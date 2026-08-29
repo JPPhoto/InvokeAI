@@ -8,7 +8,8 @@ import { Box, chakra, Flex, HStack, Icon, Text } from '@chakra-ui/react';
 import { useDndContext } from '@dnd-kit/core';
 import { horizontalListSortingStrategy } from '@dnd-kit/sortable';
 import { useMountEffect } from '@platform/react/useMountEffect';
-import { IconButton, Tooltip } from '@platform/ui';
+import { IconButton } from '@platform/ui/Button';
+import { Tooltip } from '@platform/ui/Tooltip';
 import { useFocusRegionProps } from '@workbench/focusRegions';
 import { RIGHT_RAIL_DOCKS } from '@workbench/layoutContracts';
 import {

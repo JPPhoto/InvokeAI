@@ -6,7 +6,7 @@ import type {
 } from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { createListCollection } from '@chakra-ui/react';
-import { Select } from '@platform/ui';
+import { Select } from '@platform/ui/Select';
 import { useMarqueeOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';

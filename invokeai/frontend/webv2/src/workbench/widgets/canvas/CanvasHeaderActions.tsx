@@ -6,7 +6,10 @@ import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngi
 
 import { Box, HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { useModifierHeld } from '@platform/react/useModifierHeld';
-import { ConfirmDialog, IconButton, MenuContent, Tooltip } from '@platform/ui';
+import { IconButton } from '@platform/ui/Button';
+import { ConfirmDialog } from '@platform/ui/ConfirmDialog';
+import { MenuContent } from '@platform/ui/Menu';
+import { Tooltip } from '@platform/ui/Tooltip';
 import { useNotify } from '@workbench/useNotify';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';

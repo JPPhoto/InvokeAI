@@ -6,7 +6,8 @@ import type {
 } from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { createListCollection } from '@chakra-ui/react';
-import { ColorPicker, Select } from '@platform/ui';
+import { ColorPicker } from '@platform/ui/ColorPicker';
+import { Select } from '@platform/ui/Select';
 import { getDocumentLayer } from '@workbench/canvas-engine/api';
 import { useGradientOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';

@@ -7,7 +7,8 @@ import type {
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
 import { HStack, Stack } from '@chakra-ui/react';
 import { galleryDurability } from '@features/gallery';
-import { Button, Tooltip } from '@platform/ui';
+import { Button } from '@platform/ui/Button';
+import { Tooltip } from '@platform/ui/Tooltip';
 import {
   buildFilterDefaults,
   getCanvasOperations,

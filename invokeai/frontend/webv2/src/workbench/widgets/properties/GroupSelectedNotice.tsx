@@ -1,5 +1,5 @@
 import { Flex, Text } from '@chakra-ui/react';
-import { Button } from '@platform/ui';
+import { Button } from '@platform/ui/Button';
 import { collectSubtreeLeaves, getDocumentNode } from '@workbench/canvas-engine/api';
 import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';

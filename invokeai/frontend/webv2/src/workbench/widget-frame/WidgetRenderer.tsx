@@ -12,7 +12,7 @@ import type {
 import { Box, Flex, Text } from '@chakra-ui/react';
 import { getWidgetReadyMark, markSemanticReady } from '@platform/performance/semanticReady';
 import { useMountEffect } from '@platform/react/useMountEffect';
-import { Scrollable } from '@platform/ui';
+import { Scrollable } from '@platform/ui/Scrollable';
 import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from '@workbench/widgetPlacementMeta';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { useWorkbenchWidgetRegistry } from '@workbench/WorkbenchWidgetRegistryContext';

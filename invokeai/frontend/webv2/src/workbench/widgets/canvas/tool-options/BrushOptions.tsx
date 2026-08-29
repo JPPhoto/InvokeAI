@@ -7,7 +7,8 @@ import type {
 import type { KeyboardEvent } from 'react';
 
 import { HStack } from '@chakra-ui/react';
-import { ColorPicker, ToggleIconButton } from '@platform/ui';
+import { ToggleIconButton } from '@platform/ui/Button';
+import { ColorPicker } from '@platform/ui/ColorPicker';
 import { MAX_BRUSH_SIZE, MIN_BRUSH_SIZE } from '@workbench/canvas-engine/api';
 import { useBrushOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import {

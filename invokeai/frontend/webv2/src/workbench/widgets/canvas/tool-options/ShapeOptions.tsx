@@ -6,7 +6,9 @@ import type {
 } from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { createListCollection } from '@chakra-ui/react';
-import { ColorPicker, Select, ToggleIconButton } from '@platform/ui';
+import { ToggleIconButton } from '@platform/ui/Button';
+import { ColorPicker } from '@platform/ui/ColorPicker';
+import { Select } from '@platform/ui/Select';
 import { MAX_SHAPE_STROKE_WIDTH, getDocumentLayer } from '@workbench/canvas-engine/api';
 import { useShapeOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import {

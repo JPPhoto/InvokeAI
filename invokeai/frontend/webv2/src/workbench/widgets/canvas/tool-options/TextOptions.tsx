@@ -6,7 +6,9 @@ import type {
 } from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { createListCollection, HStack } from '@chakra-ui/react';
-import { ColorPicker, IconButton, Select } from '@platform/ui';
+import { IconButton } from '@platform/ui/Button';
+import { ColorPicker } from '@platform/ui/ColorPicker';
+import { Select } from '@platform/ui/Select';
 import {
   MAX_TEXT_FONT_SIZE,
   MIN_TEXT_FONT_SIZE,

@@ -1,7 +1,7 @@
 import type { CanvasCoreStoreCapability, CanvasToolCapability, ToolId } from '@workbench/canvas-engine/api';
 
 import { Box } from '@chakra-ui/react';
-import { Toolbar, ToolbarButton } from '@platform/ui';
+import { Toolbar, ToolbarButton } from '@platform/ui/Toolbar';
 import {
   BrushIcon,
   EraserIcon,

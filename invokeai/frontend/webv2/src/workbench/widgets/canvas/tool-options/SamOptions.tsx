@@ -7,8 +7,10 @@ import type {
 import type { ChangeEvent } from 'react';
 
 import { createListCollection, HStack, Input, Stack, Switch, Text, VisuallyHidden } from '@chakra-ui/react';
-import { Button, Select, Tooltip } from '@platform/ui';
+import { Button } from '@platform/ui/Button';
 import { Group } from '@platform/ui/Group';
+import { Select } from '@platform/ui/Select';
+import { Tooltip } from '@platform/ui/Tooltip';
 import {
   getCanvasOperations,
   isSamDocumentInputValid,

@@ -3,7 +3,8 @@ import type { NumberInput as ChakraNumberInput, SliderValueChangeDetails } from 
 import type { KeyboardEvent, ReactNode } from 'react';
 
 import { Box, Flex, Icon, InputGroup, NumberInput, Text } from '@chakra-ui/react';
-import { Button, Slider } from '@platform/ui';
+import { Button } from '@platform/ui/Button';
+import { Slider } from '@platform/ui/Slider';
 import { MoveHorizontalIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';

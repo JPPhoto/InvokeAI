@@ -5,7 +5,8 @@ import type { WidgetPlacementInstanceMeta, WidgetRegionItem } from '@workbench/w
 
 import { Box, Flex, type SystemStyleObject } from '@chakra-ui/react';
 import { verticalListSortingStrategy } from '@dnd-kit/sortable';
-import { Row, Tooltip } from '@platform/ui';
+import { Row } from '@platform/ui/Row';
+import { Tooltip } from '@platform/ui/Tooltip';
 import { WidgetIcon } from '@workbench/iconResolver';
 import { type MouseEvent, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';

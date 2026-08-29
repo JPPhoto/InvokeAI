@@ -2,7 +2,7 @@ import type { LayerTransform } from '@workbench/canvas-engine/api';
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { Flex, Stack, Text } from '@chakra-ui/react';
-import { Button } from '@platform/ui';
+import { Button } from '@platform/ui/Button';
 import { getDocumentNode, lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import { useCanvasHasFloatingSelection, useTransformSession } from '@workbench/widgets/canvas/engineStoreHooks';
 import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';

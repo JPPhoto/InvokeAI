@@ -1,7 +1,7 @@
 import type { ReactNode, Ref } from 'react';
 
 import { Flex, Stack, Text } from '@chakra-ui/react';
-import { FieldLabel } from '@platform/ui';
+import { FieldLabel } from '@platform/ui/Field';
 
 /** A headed group of rows in the Properties widget: Operation, Tool, Layer. */
 export const PropertiesSection = ({

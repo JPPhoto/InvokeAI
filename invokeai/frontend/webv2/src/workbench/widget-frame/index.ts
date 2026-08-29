@@ -4,7 +4,7 @@ export { WidgetEnableMenu, type WidgetEnableMenuItem } from './WidgetEnableMenu'
 export { WidgetFailureBoundary } from './WidgetFailureBoundary';
 export { WidgetIdentityIcon } from './WidgetIdentityIcon';
 export { FieldPlaceholder, WidgetHeader, WidgetHeaderActionsGroup, WidgetPanelFrame } from './WidgetFrames';
-export { StatusWidgetChip } from '@platform/ui';
+export { StatusWidgetChip } from '@platform/ui/StatusWidgetChip';
 export { WidgetInstanceContextMenu, type WidgetInstanceContextMenuTarget } from './WidgetInstanceContextMenu';
 export { WidgetRegionDropOverlay } from './WidgetRegionDropOverlay';
 export { WidgetSourceLockBadge } from './WidgetSourceLockBadge';
