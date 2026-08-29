@@ -333,7 +333,14 @@ type WorkbenchReducerAction =
       nextPrimaryItem: GalleryItem | null;
       projectId?: string;
     }
-  | { type: 'setGalleryMultiSelection'; itemKeys: GalleryItemKey[]; primaryItem: GalleryItem; projectId?: string }
+  | {
+      type: 'setGalleryMultiSelection';
+      itemKeys: GalleryItemKey[];
+      primaryItem: GalleryItem;
+      projectId?: string;
+      /** Stamps this page, in the navigation query already on the selection, instead of the grid's. */
+      selectionPage?: number;
+    }
   | { type: 'setGalleryCompareImage'; image: GalleryImageItem | null; projectId?: string }
   | { type: 'selectGalleryBoard'; boardId: string; projectId?: string }
   | { type: 'setGalleryView'; galleryView: 'images' | 'assets'; projectId?: string }
@@ -4434,10 +4441,16 @@ export const __workbenchReducerInternal = (
         state,
         (values) => {
           const settings = getGallerySettings(values);
-          const selectedImagePage =
-            typeof values.galleryPage === 'number' && Number.isFinite(values.galleryPage)
+          const hasSelectionPage = typeof action.selectionPage === 'number' && Number.isFinite(action.selectionPage);
+          const selectedImagePage = hasSelectionPage
+            ? Math.max(0, Math.floor(action.selectionPage as number))
+            : typeof values.galleryPage === 'number' && Number.isFinite(values.galleryPage)
               ? Math.max(0, Math.floor(values.galleryPage))
               : 0;
+          const existingNavigationQuery =
+            values.selectedImageQuery && typeof values.selectedImageQuery === 'object'
+              ? (values.selectedImageQuery as Record<string, unknown>)
+              : null;
 
           return {
             ...values,
@@ -4446,14 +4459,20 @@ export const __workbenchReducerInternal = (
             selectedImageName: toGalleryItemKey(action.primaryItem),
             selectedImageNames: action.itemKeys,
             selectedImagePage,
-            selectedImageQuery: {
-              boardId: typeof values.selectedBoardId === 'string' ? values.selectedBoardId : 'none',
-              galleryView: values.galleryView === 'assets' ? 'assets' : 'images',
-              imageOrderDir: settings.imageOrderDir,
-              page: selectedImagePage,
-              paginationMode: settings.paginationMode,
-              searchTerm: typeof values.searchTerm === 'string' ? values.searchTerm : '',
-            },
+            // An explicit page comes from a host navigating its own window, and
+            // names a page of the query already on the selection — the same
+            // contract as `selectGalleryItem` with `preserveNavigationQuery`.
+            selectedImageQuery:
+              hasSelectionPage && existingNavigationQuery
+                ? { ...existingNavigationQuery, page: selectedImagePage }
+                : {
+                    boardId: typeof values.selectedBoardId === 'string' ? values.selectedBoardId : 'none',
+                    galleryView: values.galleryView === 'assets' ? 'assets' : 'images',
+                    imageOrderDir: settings.imageOrderDir,
+                    page: selectedImagePage,
+                    paginationMode: settings.paginationMode,
+                    searchTerm: typeof values.searchTerm === 'string' ? values.searchTerm : '',
+                  },
           };
         },
         action.projectId
