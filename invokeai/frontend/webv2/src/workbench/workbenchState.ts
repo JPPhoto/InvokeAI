@@ -461,7 +461,20 @@ export const getPanelCollapseThreshold = (region: WidgetRegion): number =>
  * has hysteresis instead of flapping a whole panel on one pixel.
  */
 export const shouldSnapPanelShut = (region: WidgetRegion, rawSizePx: number, isSnapped: boolean): boolean =>
-  rawSizePx <= getPanelCollapseThreshold(region) + (isSnapped ? PANEL_COLLAPSE_OVERSHOOT_PX / 2 : 0);
+  shouldSnapPanelShutAt(getPanelCollapseThreshold(region), rawSizePx, isSnapped);
+
+/**
+ * `shouldSnapPanelShut` against an explicit threshold, for a panel the
+ * viewport has squeezed below its floor: the overshoot is then measured from
+ * the width actually on screen, so a drag on a 213px panel collapses it after
+ * 80px instead of demanding the pointer travel to where the floor would be.
+ */
+export const shouldSnapPanelShutAt = (thresholdPx: number, rawSizePx: number, isSnapped: boolean): boolean =>
+  rawSizePx <= thresholdPx + (isSnapped ? PANEL_COLLAPSE_OVERSHOOT_PX / 2 : 0);
+
+/** The collapse threshold for a panel currently rendered at `visibleSizePx`. */
+export const getVisiblePanelCollapseThreshold = (region: WidgetRegion, visibleSizePx: number): number =>
+  Math.min(getPanelCollapseThreshold(region), visibleSizePx - PANEL_COLLAPSE_OVERSHOOT_PX);
 
 const now = (): string => new Date().toISOString();
 
