@@ -10,6 +10,7 @@ import {
   type ClientRect,
 } from '@dnd-kit/core';
 import { arrayMove } from '@dnd-kit/sortable';
+import { isWidgetRegion as isKnownWidgetRegion } from '@workbench/layoutContracts';
 
 const clipsOverflow = (value: string): boolean => value !== 'visible';
 
@@ -110,10 +111,18 @@ export type WidgetDragEndResolution =
       type: 'move';
     };
 
-export const getWidgetInstanceDragId = (region: WidgetRegion, instanceId: WidgetInstanceId): string =>
-  `widget-instance:${region}:${instanceId}`;
+/** The rail lists a region and a dock strip shows the same region; each surface registers its own dnd ids. */
+export type WidgetDndSurface = 'rail' | 'dock';
 
-export const getWidgetRegionDropId = (region: WidgetRegion): string => `widget-region:${region}`;
+export const getWidgetInstanceDragId = (
+  region: WidgetRegion,
+  instanceId: WidgetInstanceId,
+  surface: WidgetDndSurface = 'rail'
+): string =>
+  surface === 'rail' ? `widget-instance:${region}:${instanceId}` : `widget-instance:dock:${region}:${instanceId}`;
+
+export const getWidgetRegionDropId = (region: WidgetRegion, surface: WidgetDndSurface = 'rail'): string =>
+  surface === 'rail' ? `widget-region:${region}` : `widget-region:dock:${region}`;
 
 export const getWidgetInstanceDragData = (
   region: WidgetRegion,
@@ -357,5 +366,4 @@ const getCollisionData = (args: Parameters<CollisionDetection>[0], id: unknown):
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
-const isWidgetRegion = (value: unknown): value is WidgetRegion =>
-  value === 'left' || value === 'right' || value === 'center' || value === 'bottom';
+const isWidgetRegion = (value: unknown): value is WidgetRegion => isKnownWidgetRegion(value);

@@ -19,7 +19,30 @@ export interface PanelState {
   isBottomOpen: boolean;
 }
 
-export type WidgetRegion = 'left' | 'right' | 'bottom' | 'center';
+/**
+ * The right rail is three docks stacked vertically, each its own tab group:
+ * `rightTop`, `right` (the flexible middle) and `rightBottom`. A widget that
+ * may dock on the right may dock in any of the three.
+ */
+export type RightRailDock = 'rightTop' | 'right' | 'rightBottom';
+
+export type WidgetRegion = 'left' | RightRailDock | 'bottom' | 'center';
+
+/** The four rails a widget manifest addresses; the right rail's docks share one. */
+export type WidgetRail = 'left' | 'right' | 'bottom' | 'center';
+
+export const WIDGET_REGIONS: readonly WidgetRegion[] = ['left', 'rightTop', 'right', 'rightBottom', 'bottom', 'center'];
+
+/** Top to bottom. */
+export const RIGHT_RAIL_DOCKS: readonly RightRailDock[] = ['rightTop', 'right', 'rightBottom'];
+
+export const isRightRailDock = (region: WidgetRegion): region is RightRailDock =>
+  region === 'rightTop' || region === 'right' || region === 'rightBottom';
+
+export const getWidgetRail = (region: WidgetRegion): WidgetRail => (isRightRailDock(region) ? 'right' : region);
+
+export const isWidgetRegion = (value: unknown): value is WidgetRegion =>
+  typeof value === 'string' && (WIDGET_REGIONS as readonly string[]).includes(value);
 
 export type FloatingWidgetMode = 'windowed' | 'maximized' | 'shaded';
 

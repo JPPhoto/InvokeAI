@@ -6,7 +6,7 @@ import { useMemo, useSyncExternalStore } from 'react';
 
 import type { HotkeyDefinition } from './types';
 
-const widgetRegions = new Set<WorkbenchRegion>(['bottom', 'center', 'left', 'right']);
+const widgetRegions = new Set<WorkbenchRegion>(['bottom', 'center', 'left', 'right', 'rightTop', 'rightBottom']);
 const NO_EXTENSION_HOTKEYS: WidgetHotkeyContribution[] = [];
 const subscribeToNothing = (): (() => void) => () => {};
 const getNoExtensionHotkeys = (): WidgetHotkeyContribution[] => NO_EXTENSION_HOTKEYS;

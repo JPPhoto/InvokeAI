@@ -5,7 +5,7 @@ import type { DeferredResource, DeferredResourceStatus } from './deferredResourc
 import type { DeveloperLogNamespace } from './diagnostics/contracts';
 import type { GraphId } from './graphContracts';
 import type { InvocationSourceId } from './invocationContracts';
-import type { WidgetRegion } from './layoutContracts';
+import type { RightRailDock, WidgetRegion } from './layoutContracts';
 
 export type FirstPartyWidgetTypeId =
   | 'autosave-status'
@@ -34,7 +34,16 @@ export type WidgetInstanceId = string;
 
 export type WidgetId = WidgetTypeId;
 
-export type WorkbenchRegion = 'left' | 'right' | 'center' | 'bottom' | 'dialog' | 'popover' | 'floating';
+export type WorkbenchRegion =
+  | 'left'
+  | 'right'
+  | 'rightTop'
+  | 'rightBottom'
+  | 'center'
+  | 'bottom'
+  | 'dialog'
+  | 'popover'
+  | 'floating';
 
 export interface WidgetStateContract {
   id: WidgetTypeId;
@@ -293,7 +302,10 @@ export interface WidgetManifest {
   label: WidgetLabel;
   headerLabel?: WidgetHeaderLabel;
   version: 1;
+  /** Rails the widget may dock in; `right` covers every dock of the right rail. */
   allowedRegions: WidgetRegion[];
+  /** The right-rail dock a newly opened instance prefers; `right` (the middle) unless said otherwise. */
+  rightDock?: RightRailDock;
   allowMultiple: boolean;
   icon: WidgetIconComponent;
   bottomPanel?: 'expandable' | 'tooltip';

@@ -1,4 +1,4 @@
-import type { WidgetRegion } from '@workbench/layoutContracts';
+import type { RightRailDock, WidgetRegion } from '@workbench/layoutContracts';
 import type {
   WidgetInstanceId,
   WidgetInstanceRuntimeMeta,
@@ -15,6 +15,7 @@ import { flushWorkbenchDrafts } from '@platform/react/draftRegistry';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { IconButton, Tooltip } from '@platform/ui';
 import { useFocusRegionProps } from '@workbench/focusRegions';
+import { RIGHT_RAIL_DOCKS } from '@workbench/layoutContracts';
 import { openWorkbenchSettings } from '@workbench/settings/settingsDialogStore';
 import { resolveWidgetInstanceLabel } from '@workbench/widgetLabels';
 import { getEnabledCenterViewCount } from '@workbench/widgetPlacementCommands';
@@ -91,6 +92,12 @@ export const WidgetPanelFrame = ({
     },
     [layout, region, regionState.sizePx]
   );
+  // The right panel frames every dock of its rail, so shutting it shuts them all.
+  const collapse = useCallback(() => {
+    for (const target of region === 'right' ? RIGHT_RAIL_DOCKS : [region]) {
+      layout.setRegionCollapsed(target, true);
+    }
+  }, [layout, region]);
 
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -133,7 +140,7 @@ export const WidgetPanelFrame = ({
         if (nextDrag.isSnappedShut) {
           // Visibility change, not a resize — `sizePx` keeps the width the user
           // chose so the rail button reopens the panel where they left it.
-          layout.setRegionCollapsed(region, true);
+          collapse();
 
           return;
         }
@@ -152,7 +159,7 @@ export const WidgetPanelFrame = ({
       window.addEventListener('pointerup', handlePointerUp, { signal: pointerSession.signal });
       window.addEventListener('pointercancel', handlePointerCancel, { signal: pointerSession.signal });
     },
-    [commitSize, isBottom, isLeft, layout, region, regionState.sizePx]
+    [collapse, commitSize, isBottom, isLeft, region, regionState.sizePx]
   );
 
   const handleKeyDown = useCallback(
@@ -182,14 +189,14 @@ export const WidgetPanelFrame = ({
       // Keyboard parity with the drag: a further collapse-ward step at the
       // floor collapses, instead of silently clamping forever.
       if (sizeChange < 0 && displaySizePx <= minPanelSizePx) {
-        layout.setRegionCollapsed(region, true);
+        collapse();
 
         return;
       }
 
       commitSize(displaySizePx + sizeChange);
     },
-    [commitSize, displaySizePx, isBottom, isLeft, layout, maxPanelSizePx, minPanelSizePx, region]
+    [collapse, commitSize, displaySizePx, isBottom, isLeft, maxPanelSizePx, minPanelSizePx]
   );
   const panelSizeProps = useMemo(
     () => (isBottom ? { h: `${renderSizePx}px`, w: 'full' } : { h: 'full', w: `${renderSizePx}px` }),
@@ -249,6 +256,42 @@ export const WidgetPanelFrame = ({
         onKeyDown={handleKeyDown}
         onPointerDown={handlePointerDown}
       />
+    </Flex>
+  );
+};
+
+/**
+ * A widget's box inside a right-rail dock. The dock's tab strip is the header
+ * and the rail panel owns width and resizing, so this frame carries only the
+ * hotkey and focus-region identity of the instance it shows.
+ */
+export const WidgetDockFrame = ({
+  children,
+  instanceId,
+  region,
+  typeId,
+}: {
+  children: ReactNode;
+  instanceId?: WidgetInstanceId;
+  region: RightRailDock;
+  typeId?: WidgetTypeId;
+}) => {
+  const focusRegionProps = useFocusRegionProps(region);
+
+  return (
+    <Flex
+      bg="bg.subtle"
+      data-hotkey-widget-instance-id={instanceId}
+      data-hotkey-widget-region={region}
+      data-hotkey-widget-type-id={typeId}
+      direction="column"
+      h="full"
+      minH="0"
+      overflow="hidden"
+      w="full"
+      {...focusRegionProps}
+    >
+      {children}
     </Flex>
   );
 };

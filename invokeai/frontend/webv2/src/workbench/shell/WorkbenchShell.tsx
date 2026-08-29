@@ -15,8 +15,9 @@ import { GalleryDragCursor } from '@features/gallery/utility';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { FocusRegionProvider } from '@workbench/focusRegions';
 import { WidgetIcon } from '@workbench/iconResolver';
+import { RIGHT_RAIL_DOCKS, type RightRailDock } from '@workbench/layoutContracts';
 import { PROJECT_CONTENT_PANEL_ID } from '@workbench/projects/projectTabsA11y';
-import { WidgetBar } from '@workbench/widget-frame';
+import { WidgetBar, type WidgetBarGroup } from '@workbench/widget-frame';
 import { FloatingWidgetLayer } from '@workbench/widget-frame/FloatingWidgetLayer';
 import {
   getRegionDropState,
@@ -34,7 +35,11 @@ import {
   revealWidgetPlacement,
 } from '@workbench/widgetPlacementCommands';
 import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from '@workbench/widgetPlacementMeta';
-import { createWidgetRegionViewModelFromState, getWidgetRegionItems } from '@workbench/widgetRegionViewModel';
+import {
+  createWidgetRegionViewModel,
+  createWidgetRegionViewModelFromState,
+  getWidgetRegionItems,
+} from '@workbench/widgetRegionViewModel';
 import { getWidgetById, getWidgetsForRegion, widgetRegistrationFailures } from '@workbench/widgetRegistry';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { useCallback, useMemo, useState } from 'react';
@@ -44,7 +49,8 @@ import { BottomPanel } from './BottomPanel';
 import { CenterArea } from './CenterArea';
 import { DocumentTitleProgress } from './DocumentTitleProgress';
 import { WorkbenchNotificationToaster } from './notifications';
-import { LeftPanel, RightPanel } from './Panels';
+import { LeftPanel } from './Panels';
+import { RightRailPanel, type RightRailDockModel, type RightRailItem } from './RightRail';
 import { StatusBar } from './StatusBar';
 import { TopBar } from './topbar';
 
@@ -68,7 +74,13 @@ export const WorkbenchShell = () => {
   const panels = useActiveProjectSelector((project) => project.layout.panels);
   const projectName = useActiveProjectSelector((project) => project.name);
   const leftRegion = useActiveProjectSelector((project) => project.widgetRegions.left);
+  const rightTopRegion = useActiveProjectSelector((project) => project.widgetRegions.rightTop);
   const rightRegion = useActiveProjectSelector((project) => project.widgetRegions.right);
+  const rightBottomRegion = useActiveProjectSelector((project) => project.widgetRegions.rightBottom);
+  const rightDockRegions = useMemo(
+    () => ({ right: rightRegion, rightBottom: rightBottomRegion, rightTop: rightTopRegion }),
+    [rightBottomRegion, rightRegion, rightTopRegion]
+  );
   const placementProject = useActiveProjectSelector(getWidgetPlacementProject, areWidgetPlacementProjectsEqual);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -90,37 +102,70 @@ export const WorkbenchShell = () => {
       }),
     [getWidgetLabel, leftRegion, placementProject.widgetInstances]
   );
-  const rightRegionViewModel = useMemo(
+  // One view model per dock for the rail groups and the docks themselves, plus
+  // a rail-wide one so the menu counts a widget placed in any dock as placed.
+  const rightDockViewModels = useMemo(
     () =>
-      createWidgetRegionViewModelFromState({
+      RIGHT_RAIL_DOCKS.map((dock) =>
+        createWidgetRegionViewModelFromState({
+          region: dock,
+          regionState: rightDockRegions[dock],
+          widgetInstances: placementProject.widgetInstances,
+          widgets: getWidgetsForRegion('right'),
+          getWidgetLabel,
+        })
+      ),
+    [getWidgetLabel, placementProject.widgetInstances, rightDockRegions]
+  );
+  const rightRailViewModel = useMemo(
+    () =>
+      createWidgetRegionViewModel({
+        activeInstanceId: rightRegion.activeInstanceId,
+        instanceIds: RIGHT_RAIL_DOCKS.flatMap((dock) => rightDockRegions[dock].instanceIds),
         region: 'right',
-        regionState: rightRegion,
         widgetInstances: placementProject.widgetInstances,
         widgets: getWidgetsForRegion('right'),
         getWidgetLabel,
       }),
-    [getWidgetLabel, placementProject.widgetInstances, rightRegion]
+    [getWidgetLabel, placementProject.widgetInstances, rightDockRegions, rightRegion.activeInstanceId]
   );
   const leftMenuItems = useMemo(() => getWidgetRegionItems(leftRegionViewModel), [leftRegionViewModel]);
-  const rightMenuItems = useMemo(() => getWidgetRegionItems(rightRegionViewModel), [rightRegionViewModel]);
+  const rightMenuItems = useMemo(() => getWidgetRegionItems(rightRailViewModel), [rightRailViewModel]);
   const leftRailItems = useMemo(
     () => leftRegionViewModel.placedItems.filter((item) => item.status !== 'disabled'),
     [leftRegionViewModel]
   );
-  const rightRailItems = useMemo(
-    () => rightRegionViewModel.placedItems.filter((item) => item.status !== 'disabled'),
-    [rightRegionViewModel]
-  );
   const canShowLeftPanel = leftRailItems.some((item) => item.id === leftRegion.activeInstanceId);
-  const canShowRightPanel = rightRailItems.some((item) => item.id === rightRegion.activeInstanceId);
   const leftDropState = useMemo(
     () => getRegionDropState(placementProject, activeDrag, 'left', getWidgetById),
     [activeDrag, placementProject]
   );
-  const rightDropState = useMemo(
-    () => getRegionDropState(placementProject, activeDrag, 'right', getWidgetById),
-    [activeDrag, placementProject]
+  const rightDocks = useMemo(
+    () =>
+      RIGHT_RAIL_DOCKS.map((dock, index): RightRailDockModel => {
+        const state = rightDockRegions[dock];
+        const items = rightDockViewModels[index]!.placedItems.filter((item) => item.status !== 'disabled');
+        return {
+          activeId: items.some((item) => item.id === state.activeInstanceId) ? state.activeInstanceId : null,
+          dropState: getRegionDropState(placementProject, activeDrag, dock, getWidgetById),
+          items,
+          region: dock,
+          state,
+        };
+      }),
+    [activeDrag, placementProject, rightDockRegions, rightDockViewModels]
   );
+  const rightRailGroups = useMemo(
+    () =>
+      rightDocks.map((dock) => ({
+        activeId: panels.isRightOpen && !dock.state.isCollapsed ? dock.activeId : null,
+        dropState: dock.dropState,
+        railItems: dock.items,
+        region: dock.region,
+      })),
+    [panels.isRightOpen, rightDocks]
+  );
+  const canShowRightPanel = rightDocks.some((dock) => dock.items.length > 0 && !dock.state.isCollapsed);
   const bottomDropState = useMemo(
     () => getRegionDropState(placementProject, activeDrag, 'bottom', getWidgetById),
     [activeDrag, placementProject]
@@ -180,12 +225,9 @@ export const WorkbenchShell = () => {
     [placementProject, widgets]
   );
   const handleDragCancel = useCallback(() => setActiveDrag(null), []);
-  const handleSelectLeft = useCallback(
-    (instanceId: string) => revealWidgetPlacement({ instanceId, project: placementProject, region: 'left', widgets }),
-    [placementProject, widgets]
-  );
-  const handleSelectRight = useCallback(
-    (instanceId: string) => revealWidgetPlacement({ instanceId, project: placementProject, region: 'right', widgets }),
+  const handleSelect = useCallback(
+    (region: WidgetBarGroup['region'], instanceId: string) =>
+      revealWidgetPlacement({ instanceId, project: placementProject, region, widgets }),
     [placementProject, widgets]
   );
   const handleToggleLeft = useCallback(
@@ -206,23 +248,43 @@ export const WorkbenchShell = () => {
           }),
     [placementProject, widgets]
   );
+  // Closing finds the dock that holds the instance; opening lands in the dock the manifest prefers.
   const handleToggleRight = useCallback(
-    (item: (typeof rightMenuItems)[number]) =>
-      item.isEnabled
-        ? closeWidgetPlacement({
-            widgets,
-            getWidgetById,
-            instanceId: item.id,
-            project: placementProject,
-            region: 'right',
-          })
-        : openWidgetPlacement({
-            widgets,
-            getWidgetsForRegion,
-            options: { createNew: item.allowMultiple, preferredRegions: ['right'] },
-            typeId: item.typeId,
-          }),
+    (item: (typeof rightMenuItems)[number]) => {
+      if (item.isEnabled) {
+        const region = RIGHT_RAIL_DOCKS.find((dock) => rightDockRegions[dock].instanceIds.includes(item.id));
+        return region
+          ? closeWidgetPlacement({ widgets, getWidgetById, instanceId: item.id, project: placementProject, region })
+          : { ok: false as const, reason: 'not-found' as const };
+      }
+      const preferred = item.widget.manifest.rightDock ?? 'right';
+      return openWidgetPlacement({
+        widgets,
+        getWidgetsForRegion,
+        options: {
+          createNew: item.allowMultiple,
+          preferredRegions: [preferred, ...RIGHT_RAIL_DOCKS.filter((dock) => dock !== preferred)],
+        },
+        typeId: item.typeId,
+      });
+    },
+    [placementProject, rightDockRegions, widgets]
+  );
+  const handleRemoveFromDock = useCallback(
+    (region: RightRailDock, item: RightRailItem) =>
+      closeWidgetPlacement({ widgets, getWidgetById, instanceId: item.id, project: placementProject, region }),
     [placementProject, widgets]
+  );
+  const leftRailGroups = useMemo(
+    () => [
+      {
+        activeId: panels.isLeftOpen && !leftRegion.isCollapsed ? leftRegion.activeInstanceId : null,
+        dropState: leftDropState,
+        railItems: leftRailItems,
+        region: 'left' as const,
+      },
+    ],
+    [leftDropState, leftRailItems, leftRegion.activeInstanceId, leftRegion.isCollapsed, panels.isLeftOpen]
   );
 
   return (
@@ -257,30 +319,24 @@ export const WorkbenchShell = () => {
               role="region"
             >
               <WidgetBar
-                activeId={panels.isLeftOpen && !leftRegion.isCollapsed ? leftRegion.activeInstanceId : null}
-                dropState={leftDropState}
+                groups={leftRailGroups}
                 menuItems={leftMenuItems}
-                railItems={leftRailItems}
-                region="left"
                 side="left"
-                onSelect={handleSelectLeft}
+                onSelect={handleSelect}
                 onToggle={handleToggleLeft}
               />
               {panels.isLeftOpen && !leftRegion.isCollapsed && canShowLeftPanel ? (
                 <LeftPanel instanceId={leftRegion.activeInstanceId} />
               ) : null}
               <CenterArea />
-              {panels.isRightOpen && !rightRegion.isCollapsed && canShowRightPanel ? (
-                <RightPanel instanceId={rightRegion.activeInstanceId} />
+              {panels.isRightOpen && canShowRightPanel ? (
+                <RightRailPanel docks={rightDocks} onRemove={handleRemoveFromDock} onSelect={handleSelect} />
               ) : null}
               <WidgetBar
-                activeId={panels.isRightOpen && !rightRegion.isCollapsed ? rightRegion.activeInstanceId : null}
-                dropState={rightDropState}
+                groups={rightRailGroups}
                 menuItems={rightMenuItems}
-                railItems={rightRailItems}
-                region="right"
                 side="right"
-                onSelect={handleSelectRight}
+                onSelect={handleSelect}
                 onToggle={handleToggleRight}
               />
             </Flex>

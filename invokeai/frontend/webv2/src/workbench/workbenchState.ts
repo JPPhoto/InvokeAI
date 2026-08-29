@@ -69,6 +69,8 @@ import {
   type GallerySettings,
   type GeneratedImageContract,
 } from '@features/gallery/contracts';
+import { getWidgetRail, RIGHT_RAIL_DOCKS, WIDGET_REGIONS } from '@workbench/layoutContracts';
+import { EMPTY_DOCK_REGION } from '@workbench/layoutPresetSnapshots';
 
 import type { WorkbenchQueueItem as QueueItem } from './queueHistoryContracts';
 
@@ -425,6 +427,8 @@ const MIN_PANEL_SIZE_PX = 350;
 const MAX_PANEL_SIZE_PX = 720;
 const MIN_STATUS_PANEL_SIZE_PX = 96;
 const MAX_STATUS_PANEL_SIZE_PX = 420;
+const MIN_DOCK_SIZE_PX = 120;
+const MAX_DOCK_SIZE_PX = 720;
 
 /**
  * How far a resize drag must push past a region's floor before releasing means
@@ -434,10 +438,13 @@ const MAX_STATUS_PANEL_SIZE_PX = 420;
  */
 const PANEL_COLLAPSE_OVERSHOOT_PX = 80;
 
-/** The resize bounds for a widget region — shared with the resize handles. */
+/** The resize bounds for a widget region — shared with the resize handles; the outer docks size their height. */
 export const getPanelSizeBounds = (region: WidgetRegion): { max: number; min: number } => {
   if (region === 'bottom') {
     return { max: MAX_STATUS_PANEL_SIZE_PX, min: MIN_STATUS_PANEL_SIZE_PX };
+  }
+  if (region === 'rightTop' || region === 'rightBottom') {
+    return { max: MAX_DOCK_SIZE_PX, min: MIN_DOCK_SIZE_PX };
   }
 
   return { max: MAX_PANEL_SIZE_PX, min: MIN_PANEL_SIZE_PX };
@@ -1106,26 +1113,7 @@ const updateProjectWidgetInstanceValues = (
   };
 };
 
-const cloneWidgetRegions = (
-  widgetRegions: Record<WidgetRegion, WidgetRegionState>
-): Record<WidgetRegion, WidgetRegionState> => ({
-  center: {
-    ...widgetRegions.center,
-    instanceIds: [...widgetRegions.center.instanceIds],
-  },
-  left: {
-    ...widgetRegions.left,
-    instanceIds: [...widgetRegions.left.instanceIds],
-  },
-  right: {
-    ...widgetRegions.right,
-    instanceIds: [...widgetRegions.right.instanceIds],
-  },
-  bottom: {
-    ...widgetRegions.bottom,
-    instanceIds: [...widgetRegions.bottom.instanceIds],
-  },
-});
+const cloneWidgetRegions = cloneLayoutPresetWidgetRegions;
 
 const cloneWidgetGraphs = (widgetGraphs: Project['widgetGraphs']): Project['widgetGraphs'] =>
   Object.fromEntries(Object.entries(widgetGraphs).map(([key, graph]) => [key, graph ? cloneGraph(graph) : graph]));
@@ -1449,6 +1437,67 @@ const ensureRightRegion = (rightRegion: WidgetRegionState | undefined): WidgetRe
   return rightRegion;
 };
 
+/** The Edit rail as it shipped before the right rail had docks; Image Map now lives in the bottom dock. */
+const PRE_DOCK_EDIT_RIGHT_REGION_WIDGET_IDS: readonly WidgetInstanceId[] = [
+  'layers',
+  'preview',
+  'gallery',
+  'image-map',
+  'queue',
+];
+
+/**
+ * Projects persisted before the right rail had docks carry none. An untouched
+ * pre-dock Edit rail adopts the shipped docks (Image Map moves to the bottom
+ * one); anything else gets empty, collapsed docks and keeps its rail as is.
+ */
+const isDockShape = (value: unknown): value is WidgetRegionState =>
+  !!value &&
+  typeof value === 'object' &&
+  Array.isArray((value as WidgetRegionState).instanceIds) &&
+  typeof (value as WidgetRegionState).activeInstanceId === 'string' &&
+  typeof (value as WidgetRegionState).isCollapsed === 'boolean' &&
+  typeof (value as WidgetRegionState).sizePx === 'number';
+
+const ensureRightRailDocks = (
+  regions: Partial<Record<WidgetRegion, WidgetRegionState>> | undefined,
+  right: WidgetRegionState
+): {
+  docks: Pick<Record<WidgetRegion, WidgetRegionState>, 'right' | 'rightTop' | 'rightBottom'>;
+  /** Instances the migration moved from `right` into `rightBottom`. */
+  movedToBottom: readonly WidgetInstanceId[];
+} => {
+  const dock = (name: 'rightTop' | 'rightBottom'): WidgetRegionState =>
+    isDockShape(regions?.[name]) ? regions[name] : { ...EMPTY_DOCK_REGION, sizePx: createWidgetRegions()[name].sizePx };
+  const isPreDock = regions?.rightTop === undefined && regions?.rightBottom === undefined;
+  const isPreDockEditRail =
+    right.instanceIds.length === PRE_DOCK_EDIT_RIGHT_REGION_WIDGET_IDS.length &&
+    right.instanceIds.every((id, index) => id === PRE_DOCK_EDIT_RIGHT_REGION_WIDGET_IDS[index]);
+
+  if (isPreDock && isPreDockEditRail) {
+    const edit = getLayoutPreset('edit').snapshot.widgetRegions;
+    return {
+      docks: {
+        right: {
+          ...right,
+          activeInstanceId: right.activeInstanceId === 'image-map' ? 'layers' : right.activeInstanceId,
+          instanceIds: [...edit.right.instanceIds],
+        },
+        // A rail the user had shut stays shut; the new dock opens with it.
+        rightBottom: {
+          ...edit.rightBottom,
+          instanceIds: [...edit.rightBottom.instanceIds],
+          isCollapsed: right.isCollapsed,
+        },
+        rightTop: dock('rightTop'),
+      },
+      movedToBottom: edit.rightBottom.instanceIds,
+    };
+  }
+
+  return { docks: { right, rightBottom: dock('rightBottom'), rightTop: dock('rightTop') }, movedToBottom: [] };
+};
+
 // The shipped bottom-region default before 'queue-status' was added — a
 // persisted project whose bottom rail matches this exactly is still running
 // the pre-branch defaults, so it should pick up the new widget the same way
@@ -1522,7 +1571,7 @@ const ensureCenterRegion = (
   };
 };
 
-const WIDGET_REGION_IDS: WidgetRegion[] = ['left', 'right', 'bottom', 'center'];
+const WIDGET_REGION_IDS: WidgetRegion[] = [...WIDGET_REGIONS];
 const FLOATING_WIDGET_MODES: FloatingWidgetMode[] = ['windowed', 'maximized', 'shaded'];
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
@@ -1654,7 +1703,7 @@ const reconcileFloatingWidgets = (
       ...region,
       activeInstanceId: instanceIds.includes(region.activeInstanceId)
         ? region.activeInstanceId
-        : (instanceIds[0] ?? region.activeInstanceId),
+        : (instanceIds[0] ?? emptiedActiveInstanceId(regionId, region)),
       instanceIds,
       isCollapsed: instanceIds.length === 0 ? regionId !== 'center' : region.isCollapsed,
     };
@@ -1765,14 +1814,30 @@ const assembleWorkbenchProject = (project: Project, canvas: CanvasStateContractV
     };
   }
 
+  const rail = ensureRightRailDocks(
+    legacyWidgetRegions,
+    ensureRightRegion(legacyWidgetRegions?.right ?? legacyWidgetRegions?.['right-panel'])
+  );
+  const floatingWidgets = normalizeFloatingWidgets((project as Partial<Project>).floatingWidgets, widgetInstances);
+  // A window floated out of the old rail docks back where the migration now keeps its widget.
+  const rehomedFloating = floatingWidgets
+    ? Object.fromEntries(
+        Object.entries(floatingWidgets).map(([instanceId, floating]) => [
+          instanceId,
+          rail.movedToBottom.includes(instanceId) && floating.returnRegion === 'right'
+            ? { ...floating, returnRegion: 'rightBottom' as const }
+            : floating,
+        ])
+      )
+    : floatingWidgets;
   const placement = reconcileFloatingWidgets(
     {
       left: leftRegion,
-      right: ensureRightRegion(legacyWidgetRegions?.right ?? legacyWidgetRegions?.['right-panel']),
+      ...rail.docks,
       bottom: bottomRegion,
       center: ensureCenterRegion(legacyWidgetRegions?.center, project.layout.centerViewId),
     },
-    normalizeFloatingWidgets((project as Partial<Project>).floatingWidgets, widgetInstances)
+    rehomedFloating
   );
 
   return {
@@ -1916,6 +1981,23 @@ const updateActiveProject = (state: WorkbenchState, getProject: (project: Projec
   return didChange ? { ...state, projects } : state;
 };
 
+/**
+ * Which of `regions` a panel toggle should collapse or expand: empty ones are
+ * left alone, so toggling never opens a dock with nothing in it (and never
+ * writes drift into a preset that ships the dock collapsed).
+ */
+export const resolvePanelToggle = (
+  widgetRegions: Record<WidgetRegion, Pick<WidgetRegionState, 'instanceIds' | 'isCollapsed'>>,
+  regions: readonly WidgetRegion[]
+): { regions: WidgetRegion[]; shouldCollapse: boolean } => {
+  const occupied = regions.filter((region) => widgetRegions[region].instanceIds.length > 0);
+  return { regions: occupied, shouldCollapse: occupied.some((region) => !widgetRegions[region].isCollapsed) };
+};
+
+/** A region with nothing left names no active instance; the center keeps its id because it never empties. */
+const emptiedActiveInstanceId = (regionId: WidgetRegion, region: WidgetRegionState): WidgetInstanceId =>
+  regionId === 'center' ? region.activeInstanceId : '';
+
 const getNextInstanceId = (region: WidgetRegionState, instanceId: WidgetInstanceId): WidgetInstanceId | null => {
   if (region.activeInstanceId !== instanceId) {
     return region.activeInstanceId;
@@ -1964,7 +2046,7 @@ const openPanelForRegion = (layout: ProjectLayoutState, region: WidgetRegion): P
     ...layout.panels,
     isBottomOpen: region === 'bottom' ? true : layout.panels.isBottomOpen,
     isLeftOpen: region === 'left' ? true : layout.panels.isLeftOpen,
-    isRightOpen: region === 'right' ? true : layout.panels.isRightOpen,
+    isRightOpen: getWidgetRail(region) === 'right' ? true : layout.panels.isRightOpen,
   },
 });
 
@@ -2008,14 +2090,18 @@ const isWidgetRegionState = (
   const record = value as Partial<WidgetRegionState>;
   const instanceIds = record.instanceIds;
 
+  // An empty region (a dock nothing was placed in) names no active instance.
+  const isEmpty = Array.isArray(instanceIds) && instanceIds.length === 0 && record.activeInstanceId === '';
+
   return (
     typeof record.activeInstanceId === 'string' &&
-    record.activeInstanceId.length > 0 &&
     Array.isArray(instanceIds) &&
     instanceIds.every((instanceId) => typeof instanceId === 'string' && instanceId in widgetInstances) &&
     new Set(instanceIds).size === instanceIds.length &&
-    record.activeInstanceId in widgetInstances &&
-    (instanceIds.length === 0 || instanceIds.includes(record.activeInstanceId)) &&
+    (isEmpty ||
+      (record.activeInstanceId.length > 0 &&
+        record.activeInstanceId in widgetInstances &&
+        (instanceIds.length === 0 || instanceIds.includes(record.activeInstanceId)))) &&
     typeof record.isCollapsed === 'boolean' &&
     typeof record.sizePx === 'number' &&
     Number.isFinite(record.sizePx) &&
@@ -2054,7 +2140,14 @@ const isLayoutPresetSnapshot = (value: unknown): value is LayoutPresetSnapshot =
     isWidgetRegionState(snapshot.widgetRegions.left, widgetInstances) &&
     isWidgetRegionState(snapshot.widgetRegions.right, widgetInstances) &&
     isWidgetRegionState(snapshot.widgetRegions.bottom, widgetInstances) &&
-    isWidgetRegionState(snapshot.widgetRegions.center, widgetInstances)
+    isWidgetRegionState(snapshot.widgetRegions.center, widgetInstances) &&
+    // Docks are absent from snapshots saved before the right rail had them; present ones must be well-formed.
+    RIGHT_RAIL_DOCKS.every(
+      (dock) =>
+        dock === 'right' ||
+        snapshot.widgetRegions?.[dock] === undefined ||
+        isWidgetRegionState(snapshot.widgetRegions[dock], widgetInstances)
+    )
   );
 };
 
@@ -3549,6 +3642,27 @@ export const __workbenchReducerInternal = (
           Object.values(project.widgetInstances).find((instance) => instance.typeId === action.widgetId);
         const instanceId =
           action.createNew || !existingInstance ? createId(`widget-${action.widgetId}`) : existingInstance.id;
+        // An instance already docked elsewhere on the same rail is revealed there, never placed twice.
+        const siblingDock = WIDGET_REGION_IDS.find(
+          (candidate) =>
+            candidate !== action.region &&
+            getWidgetRail(candidate) === getWidgetRail(action.region) &&
+            project.widgetRegions[candidate].instanceIds.includes(instanceId)
+        );
+        if (siblingDock) {
+          return {
+            ...project,
+            layout: openPanelForRegion(project.layout, siblingDock),
+            widgetRegions: {
+              ...project.widgetRegions,
+              [siblingDock]: {
+                ...project.widgetRegions[siblingDock],
+                activeInstanceId: instanceId,
+                isCollapsed: false,
+              },
+            },
+          };
+        }
         const instanceIds = region.instanceIds.includes(instanceId)
           ? region.instanceIds
           : [...region.instanceIds, instanceId];
@@ -3621,7 +3735,9 @@ export const __workbenchReducerInternal = (
 
           return {
             ...region,
-            activeInstanceId: isEnabled && fallbackInstanceId ? fallbackInstanceId : action.widgetId,
+            activeInstanceId: isEnabled
+              ? (fallbackInstanceId ?? emptiedActiveInstanceId(action.region, region))
+              : action.widgetId,
             instanceIds,
             isCollapsed: action.region === 'center' ? false : instanceIds.length === 0 ? true : region.isCollapsed,
           };
@@ -3669,8 +3785,8 @@ export const __workbenchReducerInternal = (
             [hostRegionId]: {
               ...hostRegion,
               activeInstanceId:
-                hostRegion.activeInstanceId === action.instanceId && fallbackInstanceId
-                  ? fallbackInstanceId
+                hostRegion.activeInstanceId === action.instanceId
+                  ? (fallbackInstanceId ?? emptiedActiveInstanceId(hostRegionId, hostRegion))
                   : hostRegion.activeInstanceId,
               instanceIds,
               // Floating the last widget out of a rail leaves nothing to show,
@@ -3802,7 +3918,7 @@ export const __workbenchReducerInternal = (
               ...fromRegion,
               activeInstanceId:
                 fromRegion.activeInstanceId === action.instanceId
-                  ? (nextFromInstanceIds[0] ?? fromRegion.activeInstanceId)
+                  ? (nextFromInstanceIds[0] ?? emptiedActiveInstanceId(action.fromRegion, fromRegion))
                   : fromRegion.activeInstanceId,
               instanceIds: nextFromInstanceIds,
               isCollapsed:

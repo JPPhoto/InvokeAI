@@ -1,5 +1,5 @@
 export { WidgetActionsMenu } from './WidgetActionsMenu';
-export { WidgetBar, type WidgetBarItem } from './WidgetBar';
+export { WidgetBar, type WidgetBarGroup, type WidgetBarItem } from './WidgetBar';
 export { WidgetEnableMenu, type WidgetEnableMenuItem } from './WidgetEnableMenu';
 export { WidgetFailureBoundary } from './WidgetFailureBoundary';
 export { WidgetIdentityIcon } from './WidgetIdentityIcon';

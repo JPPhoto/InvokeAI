@@ -8,6 +8,7 @@ import type {
 } from '@workbench/widgetContracts';
 
 import { getAuthSession } from '@features/identity';
+import { RIGHT_RAIL_DOCKS } from '@workbench/layoutContracts';
 
 import { createDeferredResource } from './deferredResource';
 import { createWidgetImplementationResource } from './widgetImplementationResource';
@@ -56,7 +57,7 @@ const createFailure = (widgetId: WidgetTypeId, error: unknown): WidgetFailure =>
   widgetId,
 });
 
-const renderableRegions = new Set<WidgetRegion>(['bottom', 'center', 'left', 'right']);
+const renderableRegions = new Set<WidgetRegion>(['bottom', 'center', 'left', 'right', 'rightTop', 'rightBottom']);
 
 const isWidgetIconComponent = (value: WidgetManifest['icon']): boolean =>
   typeof value === 'function' || (typeof value === 'object' && value !== null && '$$typeof' in value);
@@ -89,8 +90,15 @@ const validateManifest = (manifest: NormalizedWidgetManifest): void => {
   }
 };
 
+/** `right` in a manifest means the whole rail: every dock of it accepts the widget. */
+const expandRightRail = (allowedRegions: WidgetRegion[]): WidgetRegion[] =>
+  allowedRegions.includes('right')
+    ? [...new Set<WidgetRegion>([...allowedRegions, ...RIGHT_RAIL_DOCKS])]
+    : allowedRegions;
+
 export const normalizeWidgetManifest = (manifest: WidgetManifest): NormalizedWidgetManifest => ({
   ...manifest,
+  allowedRegions: expandRightRail(manifest.allowedRegions),
   apiVersion: manifest.apiVersion ?? 1,
   state: manifest.state ?? { createInitial: () => ({}), persistence: 'project', version: 1 },
 });

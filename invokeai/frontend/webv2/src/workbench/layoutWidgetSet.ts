@@ -14,7 +14,7 @@ export interface LayoutWidgetSource {
  * Regions in the order a boot reveals them, so callers that care about
  * priority get it for free and callers that do not are unaffected.
  */
-const REGION_ORDER = ['center', 'left', 'right', 'bottom'];
+const REGION_ORDER = ['center', 'left', 'right', 'rightTop', 'rightBottom', 'bottom'];
 
 /**
  * Every widget type a layout renders: each region's active instance, plus every

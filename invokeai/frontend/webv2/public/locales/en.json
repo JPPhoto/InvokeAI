@@ -1491,6 +1491,17 @@
       "createWidgets": "Create widgets",
       "inspectWidgets": "Inspect widgets"
     },
+    "dock": {
+      "collapse": "Collapse {{dock}}",
+      "expand": "Expand {{dock}}",
+      "resize": "Resize {{dock}}",
+      "tabs": "{{dock}} widgets",
+      "names": {
+        "rightTop": "top dock",
+        "right": "middle dock",
+        "rightBottom": "bottom dock"
+      }
+    },
     "labels": {
       "autosaveStatus": "Autosave",
       "canvas": "Canvas",

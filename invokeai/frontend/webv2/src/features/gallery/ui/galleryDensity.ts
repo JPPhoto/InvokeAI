@@ -9,6 +9,10 @@ type GalleryRegion = GalleryWidgetProps['region'];
  * components read it: every slot renders one way, so a size-dependent
  * difference must be expressible as "which shell puts this where".
  */
+/** A side rail: the left panel or any dock of the right rail. */
+const isRailRegion = (region: string): boolean =>
+  region === 'left' || region === 'right' || region === 'rightTop' || region === 'rightBottom';
+
 export type GalleryLayoutMode = 'stacked' | 'wide';
 
 /** Below this the board column's ~240px leaves too little grid to scan. */
@@ -27,7 +31,7 @@ export const getGalleryLayout = ({
   region: GalleryRegion;
   widthPx: number;
 }): GalleryLayoutMode => {
-  if (region === 'left' || region === 'right') {
+  if (isRailRegion(region)) {
     return 'stacked';
   }
 
@@ -38,9 +42,7 @@ export const getGalleryLayout = ({
 export const useGalleryLayout = (
   region: GalleryRegion
 ): { layout: GalleryLayoutMode; rootRef: Ref<HTMLDivElement> } => {
-  const [layout, setLayout] = useState<GalleryLayoutMode>(() =>
-    region === 'left' || region === 'right' ? 'stacked' : 'wide'
-  );
+  const [layout, setLayout] = useState<GalleryLayoutMode>(() => (isRailRegion(region) ? 'stacked' : 'wide'));
   const regionRef = useRef(region);
 
   useLayoutEffect(() => {

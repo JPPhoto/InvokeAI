@@ -19,6 +19,7 @@ import {
 } from '@platform/state/accountLifecycle';
 import { useQueryClient } from '@tanstack/react-query';
 import { submitActiveInvocation } from '@workbench/activeInvocationSubmission';
+import { RIGHT_RAIL_DOCKS, WIDGET_REGIONS } from '@workbench/layoutContracts';
 import { builtInLayoutPresetDescriptors } from '@workbench/layoutPresets';
 import { toggleCommandPalette } from '@workbench/palette/paletteStore';
 import { openWorkbenchSettings } from '@workbench/settings/settingsDialogStore';
@@ -28,6 +29,7 @@ import { openWidgetPlacement } from '@workbench/widgetPlacementCommands';
 import { getWidgetsForRegion } from '@workbench/widgetRegistry';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useWorkbenchCommands, useWorkbenchExtensions, useWorkbenchQueries } from '@workbench/WorkbenchContext';
+import { resolvePanelToggle } from '@workbench/workbenchState';
 
 const layoutPresetCommands = builtInLayoutPresetDescriptors.map(({ hotkeyId, preset }) => ({
   id: `app.${hotkeyId}`,
@@ -328,9 +330,11 @@ export const useRegisterFirstPartyCommands = () => {
       }),
       commandApi.register({
         handler: () => {
-          const region = queries.getSnapshot().activeProject.widgetRegions.right;
+          const toggle = resolvePanelToggle(queries.getSnapshot().activeProject.widgetRegions, RIGHT_RAIL_DOCKS);
 
-          layout.setRegionCollapsed('right', !region.isCollapsed);
+          for (const dock of toggle.regions) {
+            layout.setRegionCollapsed(dock, toggle.shouldCollapse);
+          }
         },
         id: 'app.toggleRightPanel',
         title: 'Toggle right panel',
@@ -342,12 +346,14 @@ export const useRegisterFirstPartyCommands = () => {
       }),
       commandApi.register({
         handler: () => {
-          const { bottom, left, right } = queries.getSnapshot().activeProject.widgetRegions;
-          const shouldCollapse = !left.isCollapsed || !right.isCollapsed || !bottom.isCollapsed;
+          const toggle = resolvePanelToggle(
+            queries.getSnapshot().activeProject.widgetRegions,
+            WIDGET_REGIONS.filter((region) => region !== 'center')
+          );
 
-          layout.setRegionCollapsed('left', shouldCollapse);
-          layout.setRegionCollapsed('right', shouldCollapse);
-          layout.setRegionCollapsed('bottom', shouldCollapse);
+          for (const region of toggle.regions) {
+            layout.setRegionCollapsed(region, toggle.shouldCollapse);
+          }
         },
         id: 'app.togglePanels',
         title: 'Toggle panels',

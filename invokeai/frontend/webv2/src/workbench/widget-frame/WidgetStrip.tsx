@@ -1,6 +1,6 @@
 import type { WidgetRegion } from '@workbench/layoutContracts';
 import type { WidgetInstanceId } from '@workbench/widgetContracts';
-import type { WidgetRegionDropState } from '@workbench/widgetDnd';
+import type { WidgetDndSurface, WidgetRegionDropState } from '@workbench/widgetDnd';
 
 import { Flex, type FlexProps } from '@chakra-ui/react';
 import { useDroppable } from '@dnd-kit/core';
@@ -16,6 +16,7 @@ interface WidgetStripProps extends FlexProps {
   region: WidgetRegion;
   sortableInstanceIds: WidgetInstanceId[];
   strategy: SortingStrategy;
+  surface?: WidgetDndSurface;
 }
 
 export const WidgetStrip = ({
@@ -24,16 +25,17 @@ export const WidgetStrip = ({
   region,
   sortableInstanceIds,
   strategy,
+  surface = 'rail',
   ...props
 }: WidgetStripProps) => {
   const { isOver, setNodeRef } = useDroppable({
     data: getWidgetRegionDropData(region),
     disabled: !dropState.isActive || !dropState.isAllowed,
-    id: getWidgetRegionDropId(region),
+    id: getWidgetRegionDropId(region, surface),
   });
   const sortableItems = useMemo(
-    () => sortableInstanceIds.map((id) => getWidgetInstanceDragId(region, id)),
-    [region, sortableInstanceIds]
+    () => sortableInstanceIds.map((id) => getWidgetInstanceDragId(region, id, surface)),
+    [region, sortableInstanceIds, surface]
   );
 
   return (

@@ -4,19 +4,21 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { getWidgetInstanceDragData, getWidgetInstanceDragId } from '@workbench/widgetDnd';
+import { getWidgetInstanceDragData, getWidgetInstanceDragId, type WidgetDndSurface } from '@workbench/widgetDnd';
 import { useCallback } from 'react';
 
 export const useWidgetSortable = ({
   disabled,
   instanceId,
   region,
+  surface = 'rail',
   typeId,
 }: {
   region: WidgetRegion;
   instanceId: WidgetInstanceId;
   typeId: WidgetTypeId;
   disabled?: boolean;
+  surface?: WidgetDndSurface;
 }): {
   setNodeRef: ReturnType<typeof useSortable>['setNodeRef'];
   style: CSSProperties;
@@ -27,7 +29,7 @@ export const useWidgetSortable = ({
   const { attributes, isDragging, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
     data: getWidgetInstanceDragData(region, instanceId, typeId),
     disabled,
-    id: getWidgetInstanceDragId(region, instanceId),
+    id: getWidgetInstanceDragId(region, instanceId, surface),
   });
   const setSortableNodeRef = useCallback(
     (node: HTMLElement | null) => {

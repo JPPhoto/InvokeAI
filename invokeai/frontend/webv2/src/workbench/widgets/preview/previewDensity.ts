@@ -13,6 +13,10 @@ import { useCallback, useLayoutEffect, useRef, useState, type Ref } from 'react'
  *                one-line summaries, no footer message line.
  * - `minimal`  — very narrow: frame + hairline progress + prev/next only.
  */
+/** A side rail: the left panel or any dock of the right rail. */
+const isRailRegion = (region: string): boolean =>
+  region === 'left' || region === 'right' || region === 'rightTop' || region === 'rightBottom';
+
 export type PreviewDensity = 'full' | 'compact' | 'minimal';
 
 export const PREVIEW_MINIMAL_MAX_WIDTH_PX = 280;
@@ -29,7 +33,7 @@ export const getPreviewDensity = ({
     return 'minimal';
   }
 
-  if (region === 'left' || region === 'right') {
+  if (isRailRegion(region)) {
     return 'compact';
   }
 
@@ -44,7 +48,7 @@ export const getPreviewDensity = ({
 export const usePreviewDensity = (
   region: WorkbenchRegion
 ): { density: PreviewDensity; rootRef: Ref<HTMLDivElement> } => {
-  const [density, setDensity] = useState<PreviewDensity>(region === 'left' || region === 'right' ? 'compact' : 'full');
+  const [density, setDensity] = useState<PreviewDensity>(isRailRegion(region) ? 'compact' : 'full');
   const regionRef = useRef(region);
   useLayoutEffect(() => {
     regionRef.current = region;

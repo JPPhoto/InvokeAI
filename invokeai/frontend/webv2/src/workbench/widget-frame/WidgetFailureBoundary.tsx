@@ -13,7 +13,7 @@ import { TriangleAlertIcon } from 'lucide-react';
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { WidgetPanelFrame, WidgetTooltipFrame } from './WidgetFrames';
+import { WidgetDockFrame, WidgetPanelFrame, WidgetTooltipFrame } from './WidgetFrames';
 
 interface WidgetFailureBoundaryProps {
   children: ReactNode;
@@ -161,18 +161,32 @@ const WidgetFailureFallback = ({
     );
   }
 
-  const isPanel = region === 'left' || region === 'right' || region === 'bottom';
+  const isDock = region === 'rightTop' || region === 'right' || region === 'rightBottom';
+  const isPanel = region === 'left' || region === 'bottom';
 
-  if (!isPanel && region !== 'center') {
+  if (!isDock && !isPanel && region !== 'center') {
     return <WidgetFailureCard details={details} label={label} onCopy={onCopy} onRetry={onRetry} />;
+  }
+
+  const card = (
+    <Box flex="1" minH="0" overflow="auto" p="2">
+      <WidgetFailureCard details={details} label={label} onCopy={onCopy} onRetry={onRetry} />
+    </Box>
+  );
+
+  // A dock's tab strip carries the identity, so only the card is framed there.
+  if (isDock) {
+    return (
+      <WidgetDockFrame instanceId={instance?.id} region={region} typeId={instance?.typeId}>
+        {card}
+      </WidgetDockFrame>
+    );
   }
 
   const framed = (
     <>
       {widget?.manifest.chrome?.header === 'hidden' ? null : <WidgetFailureHeader label={label} region={region} />}
-      <Box flex="1" minH="0" overflow="auto" p="2">
-        <WidgetFailureCard details={details} label={label} onCopy={onCopy} onRetry={onRetry} />
-      </Box>
+      {card}
     </>
   );
 
