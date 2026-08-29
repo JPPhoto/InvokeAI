@@ -58,6 +58,12 @@ _MAX_ATTEMPTS = 3
 # so an outage that lasts hours does not retry at 1 Hz while still recovering promptly.
 _MAX_BACKOFF_SECONDS = 60.0
 
+# A memoized vocabulary-build failure is retried at most this often. Transient causes (an OOM
+# while the GPU was busy generating, a text-tower load that lost a race) recover on the next
+# labels request after the window; a permanently broken install still answers from memory for
+# everything in between, at one rebuild attempt per window rather than one per points refresh.
+_VOCAB_FAILURE_RETRY_SECONDS = 600.0
+
 
 def _normalize_query_vector(vector: np.ndarray) -> np.ndarray:
     """L2-normalize one query embedding, refusing anything that would poison a search.
@@ -290,6 +296,13 @@ class ImageIndexService(ImageIndexServiceBase):
         # MODEL_LOAD_LOCK, contending with generation's model loads — once per
         # points refresh, forever.
         self._vocab_failure: Optional[Exception] = None
+        # When _vocab_failure was memoized (time.monotonic). A failure is not
+        # forever: an OOM while the GPU was busy generating, or a text-tower
+        # load that lost a race, recovers — so a request arriving after
+        # _VOCAB_FAILURE_RETRY_SECONDS drops the memo and queues a rebuild.
+        # The window keeps the vision-only case above at one from_pretrained
+        # attempt per window instead of one per points refresh.
+        self._vocab_failed_at: Optional[float] = None
         # Set by a labels request, serviced on the worker: the build is minutes
         # of encoder work and must never run on a request thread.
         self._vocab_build_requested = threading.Event()
@@ -373,14 +386,29 @@ class ImageIndexService(ImageIndexServiceBase):
             if self._vocab_cache is not None:
                 return self._vocab_cache
             if self._vocab_failure is not None:
-                # Cleared again on the way out, not just when it was stored:
-                # re-raising a persistent exception re-attaches a fresh traceback
-                # to it, so without this the frames grow by one propagation per
-                # labels request, forever, each set holding that request's caller
-                # frame — whose `record` is the whole projection, coordinates
-                # included. Clearing here bounds it to the one propagation in
-                # flight instead, which the next request replaces.
-                raise self._vocab_failure.with_traceback(None)
+                # Aged past the retry window: drop the memo and fall through to
+                # queue a rebuild. The failure may have been transient (an OOM
+                # while the GPU was busy generating); answering from memory
+                # forever would pin one bad minute as a permanent outage.
+                # A stopped worker is exempt — it would never consume the
+                # build request, so the request would 409 "still being
+                # prepared" for the rest of the process's life; the memoized
+                # failure (the real cause) is the better answer there.
+                if (
+                    self._vocab_failed_at is None
+                    or self._stop_event.is_set()
+                    or time.monotonic() - self._vocab_failed_at < _VOCAB_FAILURE_RETRY_SECONDS
+                ):
+                    # Cleared again on the way out, not just when it was stored:
+                    # re-raising a persistent exception re-attaches a fresh traceback
+                    # to it, so without this the frames grow by one propagation per
+                    # labels request, forever, each set holding that request's caller
+                    # frame — whose `record` is the whole projection, coordinates
+                    # included. Clearing here bounds it to the one propagation in
+                    # flight instead, which the next request replaces.
+                    raise self._vocab_failure.with_traceback(None)
+                self._vocab_failure = None
+                self._vocab_failed_at = None
             if self._invoker is None or self._model_id is None:
                 raise TextSearchUnavailableError("The image index is not running")
 
@@ -481,6 +509,7 @@ class ImageIndexService(ImageIndexServiceBase):
                 e.__cause__ = None
                 e.__context__ = None
                 self._vocab_failure = e.with_traceback(None)
+                self._vocab_failed_at = time.monotonic()
 
     def _load_or_embed_phrases(self, phrases: list[str], cache_path: Path) -> np.ndarray:
         """One vocabulary tier's embedding matrix, from its disk cache or the encoder.
@@ -982,6 +1011,7 @@ class ImageIndexService(ImageIndexServiceBase):
                         with self._vocab_lock:
                             self._vocab_cache = None
                             self._vocab_failure = None
+                            self._vocab_failed_at = None
                     try:
                         self._build_vocab_embeddings()
                     except Exception:
