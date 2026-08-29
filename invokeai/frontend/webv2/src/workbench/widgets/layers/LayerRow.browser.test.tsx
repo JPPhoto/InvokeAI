@@ -1,21 +1,14 @@
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
-import type { PreparedFlatEdit } from '@workbench/canvas-engine/api';
+import type { CanvasNodeContract, PreparedDocumentEdit } from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
 import { ChakraProvider } from '@chakra-ui/react';
-import {
-  closestCenter,
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from '@dnd-kit/core';
+import { closestCenter, DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { arrayMove, SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { system } from '@theme/system';
-import { createFlatDocumentModel } from '@workbench/canvas-engine/api';
-import { createEmptyCanvasDocumentV2 } from '@workbench/canvasMigration';
+import { createDocumentModel } from '@workbench/canvas-engine/api';
+import { groupContract, stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { createEmptyCanvasDocument } from '@workbench/canvasMigration';
 import { createLayerPanelState, selectLayerInPanel } from '@workbench/layerPanelState';
 import { createInstance } from 'i18next';
 import { act, useCallback, useMemo, useState } from 'react';
@@ -24,9 +17,9 @@ import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 
-import { LAYER_KEYBOARD_SENSOR_OPTIONS } from './layerDndConfig';
-import { LayerListItem, type LayerListItemEngine } from './LayerListItem';
 import { createEmptyPaintLayer } from './layerOps';
+import { LayerRow, type LayerRowEngine } from './LayerRow';
+import { buildLayerStackRows } from './layerTreeRows';
 
 vi.mock('./ControlLayerWarningIcon', () => ({
   ControlLayerWarningIcon: () => null,
@@ -53,6 +46,10 @@ vi.mock('./LayerContextMenu', () => ({
   LayerContextMenu: () => <button aria-label="Layer menu" type="button" />,
 }));
 
+vi.mock('./LayerGroupContextMenu', () => ({
+  LayerGroupContextMenu: () => <button aria-label="Group menu" type="button" />,
+}));
+
 const i18n = createInstance();
 void i18n.use(initReactI18next).init({
   fallbackLng: 'en',
@@ -64,11 +61,16 @@ void i18n.use(initReactI18next).init({
         widgets: {
           layers: {
             actions: {
+              collapseGroup: 'Collapse group',
+              expandGroup: 'Expand group',
+              groupLocked: 'Locked by a group',
               reorder: 'Reorder layer',
               select: 'Select {{name}}',
               toggleLock: 'Toggle lock',
               toggleVisibility: 'Toggle visibility',
             },
+            groupSummary_one: '{{count}} layer',
+            groupSummary_other: '{{count}} layers',
             types: { paint: 'Paint' },
           },
         },
@@ -77,47 +79,60 @@ void i18n.use(initReactI18next).init({
   },
 });
 
-const INITIAL_LAYERS = [createEmptyPaintLayer('First layer', 'first'), createEmptyPaintLayer('Second layer', 'second')];
+const INITIAL_NODES: CanvasNodeContract[] = [
+  createEmptyPaintLayer('First layer', 'first'),
+  createEmptyPaintLayer('Second layer', 'second'),
+];
 const requestLayerThumbnail = vi.fn();
 
-const Harness = () => {
-  const [layers, setLayers] = useState(INITIAL_LAYERS);
+const Harness = ({ initialNodes = INITIAL_NODES }: { initialNodes?: CanvasNodeContract[] }) => {
+  const [nodes, setNodes] = useState(initialNodes);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [selection, setSelection] = useState(() => createLayerPanelState('test-project', null));
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, LAYER_KEYBOARD_SENSOR_OPTIONS)
-  );
-  const layerIds = useMemo(() => layers.map((layer) => layer.id), [layers]);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const selectedLayerId = selection.primaryId;
+  const document = useMemo(
+    () => ({ ...createEmptyCanvasDocument(), stacks: stacksFrom(nodes), selectedLayerId }),
+    [nodes, selectedLayerId]
+  );
+  const rows = useMemo(() => buildLayerStackRows(document, expanded).raster.rows, [document, expanded]);
+  const rowIds = useMemo(() => rows.map((row) => row.id), [rows]);
   const dispatch = useCallback((mutation: CanvasProjectMutation) => {
     if (mutation.type === 'setCanvasSelectedLayer') {
       setSelection(createLayerPanelState('test-project', mutation.id));
     } else if (mutation.type === 'updateCanvasLayer' && mutation.patch.isEnabled !== undefined) {
-      setLayers((current) =>
-        current.map((layer) =>
-          layer.id === mutation.id ? { ...layer, isEnabled: mutation.patch.isEnabled ?? layer.isEnabled } : layer
+      setNodes((current) =>
+        current.map((node) =>
+          node.id === mutation.id ? { ...node, isEnabled: mutation.patch.isEnabled ?? node.isEnabled } : node
         )
       );
     }
   }, []);
   const handleSelect = useCallback(
     (id: string, modifiers: { additive: boolean; range: boolean }) => {
-      setSelection((current) => selectLayerInPanel(current, id, layerIds, modifiers));
+      setSelection((current) => selectLayerInPanel(current, id, rowIds, modifiers));
     },
-    [layerIds]
+    [rowIds]
   );
+  const handleToggleExpanded = useCallback((groupId: string) => {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  }, []);
   const engine = useMemo(
     () =>
       ({
         document: {
-          model: () =>
-            createFlatDocumentModel(
-              { ...createEmptyCanvasDocumentV2(), layers, selectedLayerId: selection.primaryId },
-              { editRevision: 0, projectId: 'test-project' }
-            ),
+          model: () => createDocumentModel(document, { editRevision: 0, projectId: 'test-project' }),
         },
         layers: {
-          commitPrepared: (_label: string, edit: PreparedFlatEdit) => {
+          commitPrepared: (_label: string, edit: PreparedDocumentEdit) => {
             dispatch(edit.forward);
             return { status: 'committed' as const };
           },
@@ -131,40 +146,42 @@ const Harness = () => {
           requestLayerThumbnail,
         },
         projectId: 'test-project',
-      }) as unknown as LayerListItemEngine,
-    [dispatch, layers, selection.primaryId]
+      }) as unknown as LayerRowEngine,
+    [dispatch, document]
   );
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     if (!event.over || event.active.id === event.over.id) {
       return;
     }
-    setLayers((current) => {
-      const from = current.findIndex((layer) => layer.id === event.active.id);
-      const to = current.findIndex((layer) => layer.id === event.over?.id);
+    setNodes((current) => {
+      const from = current.findIndex((node) => node.id === event.active.id);
+      const to = current.findIndex((node) => node.id === event.over?.id);
       return from === -1 || to === -1 ? current : arrayMove(current, from, to);
     });
   }, []);
 
   return (
     <DndContext collisionDetection={closestCenter} sensors={sensors} onDragEnd={handleDragEnd}>
-      <SortableContext items={layerIds} strategy={verticalListSortingStrategy}>
-        {layers.map((layer) => (
-          <LayerListItem
-            key={layer.id}
+      <SortableContext items={rowIds} strategy={verticalListSortingStrategy}>
+        {rows.map((row) => (
+          <LayerRow
+            key={row.id}
             dispatch={dispatch}
+            drag={null}
             editingLocked={false}
             engine={engine}
-            isPrimarySelected={selectedLayerId === layer.id}
-            isSelected={selection.selectedIds.includes(layer.id)}
-            layer={layer}
-            layers={layers}
+            isPrimarySelected={selectedLayerId === row.id}
+            isSelected={selection.selectedIds.includes(row.id)}
+            row={row}
             onSelect={handleSelect}
+            onToggleExpanded={handleToggleExpanded}
           />
         ))}
       </SortableContext>
       <output data-testid="selected-layer">{selectedLayerId ?? 'none'}</output>
       <output data-testid="selected-layers">{selection.selectedIds.join(',') || 'none'}</output>
-      <output data-testid="layer-order">{layers.map((layer) => layer.id).join(',')}</output>
+      <output data-testid="layer-order">{nodes.map((node) => node.id).join(',')}</output>
+      <output data-testid="row-order">{rowIds.join(',')}</output>
     </DndContext>
   );
 };
@@ -173,7 +190,7 @@ let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const renderHarness = async () => {
+const renderHarness = async (initialNodes?: CanvasNodeContract[]) => {
   host = document.createElement('div');
   host.style.width = '480px';
   document.body.append(host);
@@ -183,12 +200,13 @@ const renderHarness = async () => {
     root?.render(
       <I18nextProvider i18n={i18n}>
         <ChakraProvider value={system}>
-          <Harness />
+          <Harness initialNodes={initialNodes} />
         </ChakraProvider>
       </I18nextProvider>
     );
   });
 };
+const rowOrder = (): string => host!.querySelector<HTMLOutputElement>('[data-testid="row-order"]')!.value;
 
 const pointer = (type: string, target: EventTarget, clientX: number, clientY: number): void => {
   target.dispatchEvent(
@@ -211,7 +229,7 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-describe('LayerListItem accessibility', () => {
+describe('LayerRow accessibility', () => {
   it('keeps layer-row background feedback nearly immediate', async () => {
     await renderHarness();
 
@@ -279,7 +297,7 @@ describe('LayerListItem accessibility', () => {
     );
     expect(selectedLayers()).toBe('first,second');
     expect(selectedLayer()).toBe('second');
-    expect(selectionButton('First layer')).toHaveAttribute('aria-pressed', 'true');
+    expect(selectionButton('First layer')).toHaveAttribute('aria-selected', 'true');
     expect(selectionButton('First layer')).not.toHaveAttribute('aria-current');
     expect(selectionButton('Second layer')).toHaveAttribute('aria-current', 'true');
     expect(selectionButton('Second layer')).toHaveAttribute('data-primary', 'true');
@@ -409,18 +427,33 @@ describe('LayerListItem accessibility', () => {
     expect(layerOrder()).toBe('second,first');
   });
 
-  // With no grip there is no keyboard drag gesture to claim Enter, so the
-  // Enter/Arrow/Enter sequence that used to reorder now moves nothing. Enter
-  // still selects (covered above); keyboard reordering is the context menu's
-  // Move actions.
-  it('no longer starts a keyboard drag from a focused row', async () => {
-    await renderHarness();
-    selectionButton('First layer').focus();
+  it('expands and collapses a group from its chevron and arrow keys, indenting its children', async () => {
+    await renderHarness([
+      groupContract('g', [createEmptyPaintLayer('Inner layer', 'inner')], { name: 'Group' }),
+      createEmptyPaintLayer('Outer layer', 'outer'),
+    ]);
+    expect(rowOrder()).toBe('g,outer');
+    expect(selectionButton('Group')).toHaveAttribute('aria-expanded', 'false');
 
-    await act(() => userEvent.keyboard('{Enter}'));
-    await act(() => userEvent.keyboard('{ArrowDown}'));
-    await act(() => userEvent.keyboard('{Enter}'));
+    await act(() => userEvent.click(host!.querySelector<HTMLButtonElement>('button[aria-label="Expand group"]')!));
+    expect(rowOrder()).toBe('g,inner,outer');
+    expect(selectionButton('Group')).toHaveAttribute('aria-expanded', 'true');
+    expect(selectionButton('Inner layer')).toHaveAttribute('aria-level', '2');
+    expect(getComputedStyle(selectionButton('Inner layer').parentElement!).paddingLeft).toBe('16px');
 
-    expect(layerOrder()).toBe('first,second');
+    selectionButton('Group').focus();
+    await act(() => userEvent.keyboard('{ArrowLeft}'));
+    expect(rowOrder()).toBe('g,outer');
+  });
+
+  it('reports a lock inherited from a group on the child row', async () => {
+    await renderHarness([
+      groupContract('g', [createEmptyPaintLayer('Inner layer', 'inner')], { isLocked: true, name: 'Group' }),
+    ]);
+    await act(() => userEvent.click(host!.querySelector<HTMLButtonElement>('button[aria-label="Expand group"]')!));
+
+    const locks = host!.querySelectorAll<HTMLButtonElement>('button[aria-label="Toggle lock"]');
+    expect(locks).toHaveLength(2);
+    expect(locks[1]!.querySelector('svg.lucide-lock')).not.toBeNull();
   });
 });

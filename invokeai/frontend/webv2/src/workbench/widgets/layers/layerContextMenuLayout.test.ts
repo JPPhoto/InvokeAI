@@ -1,9 +1,10 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it } from 'vitest';
 
 import { getLayerContextActions } from './layerContextActions';
@@ -27,13 +28,13 @@ const paintLayer = (id: string, patch: Partial<CanvasRasterLayerContractV2> = {}
   ...patch,
 });
 
-const makeDocument = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
+const makeDocument = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 512, width: 512, x: 0, y: 0 },
   height: 512,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: layers[0]?.id ?? null,
-  version: 2,
+  version: 3,
   width: 512,
 });
 
@@ -45,6 +46,7 @@ const actionsFor = (layer: CanvasLayerContract, layers: readonly CanvasLayerCont
     hasSupportedContent: true,
     hasWorkflowBindings: true,
     interactionLocked: false,
+    selectedIds: [layer.id],
     layer,
   });
 
@@ -71,7 +73,7 @@ describe('getLayerContextMenuLayout', () => {
     expect(summarize(upper, [upper, below])).toEqual([
       {
         id: 'quick',
-        items: ['arrange(move-to-front,move-forward,move-backward,move-to-back)', 'duplicate'],
+        items: ['arrange(move-to-front,move-forward,move-backward,move-to-back)', 'duplicate', 'group'],
         presentation: 'row',
       },
       {

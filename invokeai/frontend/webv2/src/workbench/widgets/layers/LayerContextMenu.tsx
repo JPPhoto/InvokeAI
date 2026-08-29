@@ -1,5 +1,5 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasMaskContract,
   BooleanRasterOperation,
@@ -15,9 +15,9 @@ import { HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { galleryTransfers } from '@features/gallery';
 import { useModelsSelector } from '@features/models';
 import { IconButton, MenuContent, RenameDialog, Tooltip } from '@platform/ui';
-import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/api';
+import { getDocumentLayer, getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/api';
 import { getCanvasOperations } from '@workbench/canvas-operations/api';
-import { publishLayerPanelSelection, readLayerPanelState } from '@workbench/layerPanelState';
+import { publishLayerPanelSelection, readLayerPanelState, useLayerPanelState } from '@workbench/layerPanelState';
 import { useNotify } from '@workbench/useNotify';
 import { isCanvasInteractionLocked } from '@workbench/widgets/canvas/canvasInteractionLock';
 import { useCanvasDocumentEditingLocked, useLayerThumbnailVersion } from '@workbench/widgets/canvas/engineStoreHooks';
@@ -51,6 +51,7 @@ import type { LayerPropertiesSection } from './layerPropertiesRequestStore';
 
 import { resolveDefaultControlModelForBase } from './controlModelOptions';
 import {
+  actionTargets,
   getLayerContextActions,
   type LayerConfigPatchKind,
   type LayerContextAction,
@@ -66,6 +67,7 @@ import {
   getLayerContextMenuRenderEntries,
 } from './layerContextMenuLayout';
 import { copyBlobToClipboard, saveLayerToAssets } from './layerExportActions';
+import { groupLayers } from './layerGroupCommands';
 import { resolveMenuTargetForRender } from './layerMenuState';
 import {
   convertRasterToControl,
@@ -140,7 +142,7 @@ const LAYER_ACTION_ERROR_KEYS: Record<LayerActionErrorStatus, string> = {
   unsupported: 'widgets.layers.actions.unsupported',
 };
 
-const hasPureExportableLayerContent = (layer: CanvasLayerContract, document: CanvasDocumentContractV2): boolean => {
+const hasPureExportableLayerContent = (layer: CanvasLayerContract, document: CanvasDocumentContractV3): boolean => {
   if (!renderableSourceOf(layer)) {
     return false;
   }
@@ -220,6 +222,7 @@ const LayerMenu = ({
     [document.height, document.width]
   );
   const documentEditingLocked = useCanvasDocumentEditingLocked(engine);
+  const { selectedIds } = useLayerPanelState(projectId, document.selectedLayerId);
   const interactionLocked = isCanvasInteractionLocked(canvas, queueItems) || documentEditingLocked;
   // Re-render when live, not-yet-persisted paint/mask pixels change.
   useLayerThumbnailVersion(engine, layer.id);
@@ -268,6 +271,7 @@ const LayerMenu = ({
       hasWorkflowBindings: workflowAvailability.hasWorkflowBindings,
       interactionLocked,
       layer,
+      selectedIds,
     }),
     [
       document,
@@ -275,6 +279,7 @@ const LayerMenu = ({
       hasSupportedContent,
       interactionLocked,
       layer,
+      selectedIds,
       workflowAvailability.canRunWorkflow,
       workflowAvailability.hasWorkflowBindings,
     ]
@@ -326,13 +331,21 @@ const LayerMenu = ({
       return;
     }
     commitPrepared(t('widgets.layers.actions.duplicate'), (model) =>
-      model.prepare({ newId: createLayerId(), sourceId: layer.id, type: 'duplicate' })
+      model.prepare({ createId: createLayerId, ids: [layer.id], type: 'duplicate' })
     );
   }, [commitPrepared, document.selectedLayerId, engine, layer.id, notify, projectId, t]);
 
   const handleDelete = useCallback(() => {
     commitPrepared(t('widgets.layers.actions.delete'), (model) => model.prepare({ ids: [layer.id], type: 'remove' }));
   }, [commitPrepared, layer.id, t]);
+
+  const handleGroup = useCallback(() => {
+    const ids = actionTargets({ layer, selectedIds });
+    const outcome = groupLayers(engine, projectId, ids, t('widgets.layers.actions.group'));
+    if (outcome.status === 'refused') {
+      throw makeStatusError(outcome.refusal.status === 'locked' ? 'locked' : 'unsupported');
+    }
+  }, [engine, layer, makeStatusError, projectId, selectedIds, t]);
 
   const handleMerge = useCallback(() => {
     // Pixel work: engine-only, and not recorded on the undo history.
@@ -630,6 +643,7 @@ const LayerMenu = ({
       delete: handleDelete,
       duplicate: handleDuplicate,
       extractMaskedArea: handleExtractMaskedArea,
+      group: handleGroup,
       fitToBbox: handleFitToBbox,
       mergeDown: handleMerge,
       openProperties: handleOpenProperties,
@@ -656,6 +670,7 @@ const LayerMenu = ({
       handleDuplicate,
       handleExtractMaskedArea,
       handleFitToBbox,
+      handleGroup,
       handleLayerConfigAction,
       handleMerge,
       handleOpenProperties,
@@ -769,7 +784,6 @@ interface LayerRowMenuProps {
   dispatch: Dispatch<CanvasProjectMutation>;
   engine: LayerContextMenuEngine | null;
   layer: CanvasLayerContract;
-  layers: readonly CanvasLayerContract[];
 }
 
 /** The layers-panel per-row context menu: a ⋯ trigger button, opened below it. */
@@ -788,9 +802,9 @@ export interface CanvasLayerContextMenuTarget {
  * The canvas-surface right-click menu: the SAME {@link LayerMenu}, anchored at the
  * cursor via a 1×1 virtual rect (no trigger DOM), controlled by `target`. The
  * canvas widget sets `target` to the hit layer + pointer position after selecting
- * it; `null` closes the menu. The layer is resolved from
- * `target.layerId` against the live layer list, so the shared items get the exact
- * same inputs the panel passes. Keyed by layer id so switching target resets the
+ * it; `null` closes the menu. The layer is resolved from `target.layerId`
+ * against the live document, so the shared items get the exact same inputs the
+ * panel passes. Keyed by layer id so switching target resets the
  * menu's sibling-dialog state.
  *
  * Choosing a sibling-dialog action closes the menu, which nulls `target`. The
@@ -801,7 +815,6 @@ export const CanvasLayerContextMenu = ({
   beforeDangerItems,
   dispatch,
   engine,
-  layers,
   target,
   showGroupLabels,
   onClose,
@@ -809,7 +822,6 @@ export const CanvasLayerContextMenu = ({
   beforeDangerItems?: ReactNode;
   dispatch: Dispatch<CanvasProjectMutation>;
   engine: LayerContextMenuEngine | null;
-  layers: readonly CanvasLayerContract[];
   target: CanvasLayerContextMenuTarget | null;
   showGroupLabels?: boolean;
   onClose: () => void;
@@ -819,7 +831,10 @@ export const CanvasLayerContextMenu = ({
   const [dialogState, setDialogState] = useState<LayerMenuDialogState | null>(null);
   const renderTarget = resolveMenuTargetForRender(target, dialogState);
 
-  const layer = renderTarget ? layers.find((entry) => entry.id === renderTarget.layerId) : undefined;
+  const layerId = renderTarget?.layerId ?? null;
+  const layer = useActiveProjectSelector((project) =>
+    layerId ? (getDocumentLayer(project.canvas.document, layerId) ?? undefined) : undefined
+  );
 
   const anchorX = renderTarget?.x ?? 0;
   const anchorY = renderTarget?.y ?? 0;

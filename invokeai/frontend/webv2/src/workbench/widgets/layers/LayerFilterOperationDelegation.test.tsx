@@ -25,7 +25,7 @@ const { operations, renderSharedLaunch } = vi.hoisted(() => ({
   renderSharedLaunch: vi.fn(),
 }));
 const ENGINE = {
-  document: { getDocument: vi.fn(() => ({ layers: [] })) },
+  document: { getDocument: vi.fn(() => ({ layers: [] })), model: () => null },
   exports: { hasExportableLayerContent: vi.fn(() => false) },
 } as unknown as CanvasEngine;
 

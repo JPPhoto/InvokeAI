@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createControlLayer, createEmptyPaintLayer } from './layerOps';
+import { createControlLayer } from './layerOps';
 import {
   clearLayerPropertiesRequest,
   getLayerPropertiesRequest,
-  isLayerPropertiesGroupRequested,
+  isLayerPropertiesRequestedWithin,
   layerPropertiesRequestStore,
   requestLayerProperties,
 } from './layerPropertiesRequestStore';
@@ -59,7 +59,7 @@ describe('layerPropertiesRequestStore', () => {
     requestLayerProperties(control.id, 'filter');
     const request = getLayerPropertiesRequest();
 
-    expect(isLayerPropertiesGroupRequested(request, [control])).toBe(true);
-    expect(isLayerPropertiesGroupRequested(request, [createEmptyPaintLayer('Raster', 'raster-1')])).toBe(false);
+    expect(isLayerPropertiesRequestedWithin(request, [control.id])).toBe(true);
+    expect(isLayerPropertiesRequestedWithin(request, ['raster-1'])).toBe(false);
   });
 });

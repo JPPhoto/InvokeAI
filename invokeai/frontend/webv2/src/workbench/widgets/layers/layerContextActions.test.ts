@@ -1,9 +1,10 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -54,13 +55,13 @@ const makeLayer = (type: CanvasLayerContract['type']): CanvasLayerContract => {
   }
 };
 
-const makeDocument = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
+const makeDocument = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 512, width: 512, x: 0, y: 0 },
   height: 512,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: layers[0]?.id ?? null,
-  version: 2,
+  version: 3,
   width: 512,
 });
 
@@ -77,6 +78,7 @@ const makeState = (
     hasWorkflowBindings: true,
     interactionLocked: false,
     layer,
+    selectedIds: [layer.id],
     ...overrides,
   };
 };
@@ -90,6 +92,7 @@ const makeEffects = (): LayerContextActionEffects => ({
   duplicate: vi.fn(),
   extractMaskedArea: vi.fn(() => Promise.resolve()),
   fitToBbox: vi.fn(),
+  group: vi.fn(),
   mergeDown: vi.fn(),
   openProperties: vi.fn(),
   openRename: vi.fn(),
@@ -432,6 +435,7 @@ describe('getLayerContextActions', () => {
       'move-backward',
       'move-to-back',
       'duplicate',
+      'group',
       'rename',
       'transform',
       'fit-to-bbox',

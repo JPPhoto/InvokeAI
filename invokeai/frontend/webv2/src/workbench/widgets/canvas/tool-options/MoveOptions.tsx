@@ -1,6 +1,7 @@
 import type { NumberInput as ChakraNumberInput } from '@chakra-ui/react';
 
 import { HStack, NumberInput, Text } from '@chakra-ui/react';
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { useCallback } from 'react';
@@ -26,10 +27,10 @@ export const MoveOptions = ({ engine }: ToolOptionsComponentProps) => {
   const selected = useActiveProjectSelector(
     (project): SelectedTransform | null => {
       const { document } = project.canvas;
-      const layer = document.selectedLayerId
-        ? document.layers.find((entry) => entry.id === document.selectedLayerId)
-        : undefined;
-      return layer ? { id: layer.id, x: layer.transform.x, y: layer.transform.y } : null;
+      const leaf = document.selectedLayerId ? lookupDocumentLeaf(document, document.selectedLayerId) : null;
+      return leaf && !leaf.effectiveLocked
+        ? { id: leaf.id, x: leaf.layer.transform.x, y: leaf.layer.transform.y }
+        : null;
     },
     (a, b) => a?.id === b?.id && a?.x === b?.x && a?.y === b?.y
   );

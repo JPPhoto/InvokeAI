@@ -1,14 +1,26 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasEngine,
   LayerStackMoveKind,
   StructuralCommitResult,
 } from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 
-import { isHideableLayer, isLayerHidden } from '@workbench/canvas-engine/api';
+import {
+  compileDocumentLeaves,
+  getDocumentIndex,
+  isGroupNode,
+  isNodeHidden,
+  isOverlayStack,
+} from '@workbench/canvas-engine/api';
 import { publishLayerPanelSelection } from '@workbench/layerPanelState';
 import { commitPreparedEdit, type PreparedCommitOutcome } from '@workbench/widgets/canvas/useStructuralCommit';
+import {
+  canGroupNodes,
+  canUngroupNodes,
+  groupLayers,
+  ungroupLayers,
+} from '@workbench/widgets/layers/layerGroupCommands';
 import { canMergeLayerDown } from '@workbench/widgets/layers/layerOps';
 
 /** Command id → document-space nudge delta (shift variants are ×10). */
@@ -37,7 +49,7 @@ const REORDER_KINDS: Record<string, LayerStackMoveKind> = {
  * makes the ~35-command dispatch table testable without mounting React.
  */
 export interface CanvasHotkeyContext {
-  readonly document: CanvasDocumentContractV2;
+  readonly document: CanvasDocumentContractV3;
   readonly engine: CanvasEngine | null;
   /** Any staging slot exists, so left/right cycle candidates instead of nudging. */
   readonly hasStagingSlots: boolean;
@@ -64,9 +76,11 @@ export interface CanvasHotkeyContext {
  */
 export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyContext): void => {
   const { dispatch, document, engine, t } = ctx;
-  const { layers, selectedLayerId } = document;
-  const selectedIndex = selectedLayerId ? layers.findIndex((layer) => layer.id === selectedLayerId) : -1;
-  const selectedLayer = selectedIndex >= 0 ? layers[selectedIndex] : undefined;
+  const { selectedLayerId } = document;
+  const index = getDocumentIndex(document);
+  const selected = selectedLayerId ? index.byId.get(selectedLayerId) : undefined;
+  const selectedLayer = selected && !isGroupNode(selected.node) ? selected.node : undefined;
+  const selectedFrozen = !!selected && (selected.ancestorsLocked || selected.node.isLocked);
 
   if ((commandId === 'canvas.prevEntity' || commandId === 'canvas.nudgeLeft') && ctx.hasStagingSlots) {
     dispatch({ direction: -1, type: 'cycleStagedImage' });
@@ -104,7 +118,7 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
   // Layer z-reorder: the same prepared move the layers panel commits.
   const reorderKind = REORDER_KINDS[commandId];
   if (reorderKind) {
-    if (!engine || selectedIndex < 0) {
+    if (!engine || !selected) {
       return;
     }
     ctx.reportPreparedCommit(
@@ -120,7 +134,7 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     // Photoshop meaning. Only with no selection does it delete the layer.
     if (engine?.interaction.get('hasSelection')) {
       engine.selection.eraseSelection();
-    } else if (engine && selectedLayer && selectedIndex >= 0 && !selectedLayer.isLocked) {
+    } else if (engine && selected && !selectedFrozen) {
       ctx.reportPreparedCommit(
         commitPreparedEdit(engine, t('widgets.canvas.commands.deleteLayer'), (model) =>
           model.prepare({ ids: ctx.selectedLayerIds, type: 'remove' })
@@ -132,16 +146,21 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
   } else if (commandId === 'canvas.pasteImage') {
     ctx.pasteFromClipboard();
   } else if (commandId === 'canvas.toggleNonRasterLayers') {
-    // Hide, never disable: this is the "get the overlays out of my way"
-    // shortcut, and it must leave the generated image untouched.
-    const hideable = layers.filter(isHideableLayer);
-    if (engine && hideable.length > 0) {
-      const nextHidden = hideable.every((layer) => !isLayerHidden(layer));
+    // Hide, never disable: this is the "get the overlays out of my way" shortcut, and it must
+    // leave the generated image untouched. Hiding turns off the overlay roots; showing turns on
+    // every node hidden in its own right, so nothing stays gated behind a hidden group.
+    const overlays = index.nodes.filter((entry) => isOverlayStack(entry.stack));
+    const leaves = compileDocumentLeaves(document).filter((leaf) => isOverlayStack(leaf.stack));
+    if (engine && leaves.length > 0) {
+      const nextHidden = leaves.every((leaf) => !leaf.documentHidden);
+      const targets = nextHidden
+        ? overlays.filter((entry) => entry.parentId === null)
+        : overlays.filter((entry) => isNodeHidden(entry.node));
       ctx.reportPreparedCommit(
         commitPreparedEdit(engine, t('widgets.canvas.commands.toggleNonRasterLayers'), (model) =>
           model.prepare({
             type: 'set-hidden',
-            updates: hideable.map((layer) => ({ id: layer.id, isHidden: nextHidden })),
+            updates: targets.map((entry) => ({ id: entry.node.id, isHidden: nextHidden })),
           })
         )
       );
@@ -220,7 +239,7 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     // the selected pixels. With none, it duplicates the whole layer.
     if (engine?.interaction.get('hasSelection')) {
       engine.selection.liftSelectionToLayer();
-    } else if (engine && selectedLayer) {
+    } else if (engine && selected) {
       void engine.layers
         .duplicateLayers(ctx.selectedLayerIds)
         .then((result) => {
@@ -242,6 +261,16 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
           // and preflight refusal through the same user-facing command feedback.
           ctx.notifyLayerDuplicateFailed();
         });
+    }
+  } else if (commandId === 'canvas.groupLayers') {
+    if (engine && selected && canGroupNodes(document, ctx.selectedLayerIds)) {
+      ctx.reportPreparedCommit(
+        groupLayers(engine, engine.projectId, ctx.selectedLayerIds, t('widgets.canvas.commands.groupLayers'))
+      );
+    }
+  } else if (commandId === 'canvas.ungroupLayers') {
+    if (engine && selected && canUngroupNodes(document, ctx.selectedLayerIds)) {
+      ctx.reportPreparedCommit(ungroupLayers(engine, ctx.selectedLayerIds, t('widgets.canvas.commands.ungroupLayers')));
     }
   } else if (commandId === 'canvas.mergeDown') {
     // Gate on the SAME predicate the layers panel's context menu uses to

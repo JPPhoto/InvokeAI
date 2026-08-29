@@ -4,6 +4,7 @@ import { HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { IconButton, MenuContent } from '@platform/ui';
 import {
   BrushIcon,
+  FolderPlusIcon,
   ImagePlusIcon,
   MapPinIcon,
   PlusIcon,
@@ -24,6 +25,7 @@ const MENU_POSITIONING = { placement: 'bottom-end' } as const;
 /** Icon per add-layer item (kept in the view; the menu structure itself is pure data). */
 const ADD_LAYER_ICONS: Record<AddLayerItemId, LucideIcon> = {
   control: SlidersHorizontalIcon,
+  group: FolderPlusIcon,
   inpaint_mask: SquareDashedBottomIcon,
   raster: BrushIcon,
   regional_guidance: MapPinIcon,

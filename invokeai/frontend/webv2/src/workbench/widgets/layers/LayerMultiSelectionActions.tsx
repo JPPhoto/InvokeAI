@@ -1,14 +1,11 @@
+import type { CanvasDocumentContractV3, LayerStackMoveKind } from '@workbench/canvas-engine/api';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 
 import { HStack, Text } from '@chakra-ui/react';
 import { toaster } from '@platform/ui';
 import { IconButton } from '@platform/ui/Button';
 import { Tooltip } from '@platform/ui/Tooltip';
-import {
-  canMergeSelectedRasters,
-  type CanvasLayerContract,
-  type LayerStackMoveKind,
-} from '@workbench/canvas-engine/api';
+import { canMergeSelectedRasters, collectSubtree, getDocumentIndex } from '@workbench/canvas-engine/api';
 import { publishLayerPanelSelection } from '@workbench/layerPanelState';
 import { useCanvasRasterContentEpoch } from '@workbench/widgets/canvas/engineStoreHooks';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
@@ -20,6 +17,8 @@ import {
   CopyIcon,
   EyeIcon,
   EyeOffIcon,
+  FolderMinusIcon,
+  FolderPlusIcon,
   LockIcon,
   LockOpenIcon,
   MergeIcon,
@@ -28,21 +27,23 @@ import {
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { canGroupNodes, canUngroupNodes, groupLayers, ungroupLayers } from './layerGroupCommands';
+
 type MultiSelectionEngine = Pick<CanvasEngineHandle, 'document' | 'exports' | 'interaction' | 'layers'>;
 const BULK_TOOLTIP_POSITIONING = { placement: 'top' } as const;
 
 interface LayerMultiSelectionActionsProps {
+  document: CanvasDocumentContractV3;
   editingLocked: boolean;
   engine: MultiSelectionEngine | null;
-  layers: readonly CanvasLayerContract[];
   projectId: string;
   selectedIds: readonly string[];
 }
 
 export const LayerMultiSelectionActions = ({
+  document,
   editingLocked,
   engine,
-  layers,
   projectId,
   selectedIds,
 }: LayerMultiSelectionActionsProps) => {
@@ -50,15 +51,21 @@ export const LayerMultiSelectionActions = ({
   const { t } = useTranslation();
   useCanvasRasterContentEpoch(engine);
   const selected = useMemo(() => {
-    const ids = new Set(selectedIds);
-    return layers.filter((layer) => ids.has(layer.id));
-  }, [layers, selectedIds]);
-  const allEnabled = selected.every((layer) => layer.isEnabled);
-  const allLocked = selected.every((layer) => layer.isLocked);
-  const hasLocked = selected.some((layer) => layer.isLocked);
+    const index = getDocumentIndex(document);
+    return selectedIds.map((id) => index.byId.get(id)).filter((entry) => entry !== undefined);
+  }, [document, selectedIds]);
+  const allEnabled = selected.every((entry) => entry.node.isEnabled);
+  const allLocked = selected.every((entry) => entry.node.isLocked);
+  const anyFrozen = selected.some(
+    (entry) => entry.ancestorsLocked || collectSubtree(entry.node).some((node) => node.isLocked)
+  );
+  const canGroup = canGroupNodes(document, selectedIds);
+  const canUngroup = canUngroupNodes(document, selectedIds);
+  const model = engine?.document.model() ?? null;
   const canMergeSelected =
     !!engine &&
-    canMergeSelectedRasters(layers, new Set(selectedIds), (layerId) =>
+    !!model &&
+    canMergeSelectedRasters(model.document, model.compileLeaves(), new Set(selectedIds), (layerId) =>
       engine.exports.hasExportableLayerContent(layerId)
     );
 
@@ -77,8 +84,7 @@ export const LayerMultiSelectionActions = ({
         return;
       }
     } catch {
-      // Reducer rejection is failure-atomic; surface the same actionable result
-      // as a preflight refusal instead of leaking an event-handler exception.
+      // Reducer rejection is failure-atomic; surface the same actionable result as a refusal.
     }
     if (engine) {
       toaster.create({ title: t('widgets.layers.actions.copyFailed'), type: 'warning' });
@@ -123,17 +129,26 @@ export const LayerMultiSelectionActions = ({
     const isEnabled = !allEnabled;
     commitPrepared(
       t(isEnabled ? 'widgets.layers.actions.enableSelected' : 'widgets.layers.actions.disableSelected'),
-      (model) => model.prepare({ type: 'set-enabled', updates: selected.map((layer) => ({ id: layer.id, isEnabled })) })
+      (model) => model.prepare({ type: 'set-enabled', updates: selectedIds.map((id) => ({ id, isEnabled })) })
     );
-  }, [allEnabled, commitPrepared, selected, t]);
+  }, [allEnabled, commitPrepared, selectedIds, t]);
 
   const toggleLocked = useCallback(() => {
     const isLocked = !allLocked;
     commitPrepared(
       t(isLocked ? 'widgets.layers.actions.lockSelected' : 'widgets.layers.actions.unlockSelected'),
-      (model) => model.prepare({ type: 'set-locked', updates: selected.map((layer) => ({ id: layer.id, isLocked })) })
+      (model) => model.prepare({ type: 'set-locked', updates: selectedIds.map((id) => ({ id, isLocked })) })
     );
-  }, [allLocked, commitPrepared, selected, t]);
+  }, [allLocked, commitPrepared, selectedIds, t]);
+
+  const groupSelected = useCallback(
+    () => groupLayers(engine, projectId, selectedIds, t('widgets.layers.actions.groupSelected')),
+    [engine, projectId, selectedIds, t]
+  );
+  const ungroupSelected = useCallback(
+    () => ungroupLayers(engine, selectedIds, t('widgets.layers.actions.ungroupSelected')),
+    [engine, selectedIds, t]
+  );
 
   const deleteSelected = useCallback(() => {
     commitPrepared(t('widgets.layers.actions.deleteSelected'), (model) =>
@@ -177,6 +192,18 @@ export const LayerMultiSelectionActions = ({
         onClick={moveToBack}
       />
       <BulkActionButton
+        disabled={editingLocked || !engine || !canGroup}
+        icon={FolderPlusIcon}
+        label={t('widgets.layers.actions.groupSelected')}
+        onClick={groupSelected}
+      />
+      <BulkActionButton
+        disabled={editingLocked || !engine || !canUngroup}
+        icon={FolderMinusIcon}
+        label={t('widgets.layers.actions.ungroupSelected')}
+        onClick={ungroupSelected}
+      />
+      <BulkActionButton
         disabled={editingLocked}
         icon={allEnabled ? EyeOffIcon : EyeIcon}
         label={t(allEnabled ? 'widgets.layers.actions.disableSelected' : 'widgets.layers.actions.enableSelected')}
@@ -202,7 +229,7 @@ export const LayerMultiSelectionActions = ({
       />
       <BulkActionButton
         colorPalette="red"
-        disabled={editingLocked || hasLocked}
+        disabled={editingLocked || anyFrozen}
         icon={Trash2Icon}
         label={t('widgets.layers.actions.deleteSelected')}
         onClick={deleteSelected}

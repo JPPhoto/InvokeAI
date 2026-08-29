@@ -1,9 +1,10 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -143,13 +144,13 @@ describe('isMergeableRasterLayer', () => {
 });
 
 describe('canMergeLayerDown', () => {
-  const documentOf = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
+  const documentOf = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 => ({
     background: 'transparent',
     bbox: { height: 100, width: 100, x: 0, y: 0 },
     height: 100,
-    layers,
+    stacks: stacksFrom(layers),
     selectedLayerId: null,
-    version: 2,
+    version: 3,
     width: 100,
   });
   const document = documentOf([paintLayer('top'), imageLayer('mid'), maskLayer('bottom')]);

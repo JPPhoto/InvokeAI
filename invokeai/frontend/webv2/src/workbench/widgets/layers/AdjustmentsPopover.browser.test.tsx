@@ -1,12 +1,13 @@
-import type { CanvasRasterLayerContractV2, PreparedFlatEdit } from '@workbench/canvas-engine/api';
+import type { CanvasRasterLayerContractV2, PreparedDocumentEdit } from '@workbench/canvas-engine/api';
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { applyThemeToRoot } from '@theme/applyTheme';
 import { system } from '@theme/system';
-import { createFlatDocumentModel } from '@workbench/canvas-engine/api';
-import { createEmptyCanvasDocumentV2 } from '@workbench/canvasMigration';
+import { createDocumentModel } from '@workbench/canvas-engine/api';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { createEmptyCanvasDocument } from '@workbench/canvasMigration';
 import { createInstance } from 'i18next';
 import { act, useMemo, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -42,7 +43,7 @@ const createLayer = (): CanvasRasterLayerContractV2 =>
     type: 'raster',
   }) as unknown as CanvasRasterLayerContractV2;
 
-const commits: PreparedFlatEdit[] = [];
+const commits: PreparedDocumentEdit[] = [];
 let latestAdjustments: unknown = 'untouched';
 
 const Harness = () => {
@@ -63,14 +64,14 @@ const Harness = () => {
     return {
       document: {
         model: () =>
-          createFlatDocumentModel(
-            { ...createEmptyCanvasDocumentV2(), layers: [layer], selectedLayerId: layer.id },
+          createDocumentModel(
+            { ...createEmptyCanvasDocument(), stacks: stacksFrom([layer]), selectedLayerId: layer.id },
             { editRevision: 0, projectId: 'test-project' }
           ),
       },
       layers: {
         applyStructuralPreview: apply,
-        commitPrepared: (_label: string, edit: PreparedFlatEdit) => {
+        commitPrepared: (_label: string, edit: PreparedDocumentEdit) => {
           commits.push(edit);
           return { status: apply(edit.forward) ? ('committed' as const) : ('dispatch-rejected' as const) };
         },

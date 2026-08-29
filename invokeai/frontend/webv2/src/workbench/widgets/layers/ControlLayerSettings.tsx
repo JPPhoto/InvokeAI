@@ -7,6 +7,7 @@ import type {
   CanvasControlAdapterContract,
   CanvasControlLayerContract,
   CanvasDocumentCapability,
+  CanvasLayerContract,
 } from '@workbench/canvas-engine/api';
 import type { LayerFilterOperationEngine } from '@workbench/widgets/layers/LayerFilterOperationButton';
 import type { CanvasStructuralEngine } from '@workbench/widgets/layers/layerOps';
@@ -19,6 +20,7 @@ import {
 } from '@features/generation/graph';
 import { useModelsSelector } from '@features/models';
 import { Field, Select, Slider } from '@platform/ui';
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import { getCanvasOperations, resolveDefaultFilterForModel } from '@workbench/canvas-operations/api';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useCallback, useMemo, useRef } from 'react';
@@ -67,6 +69,21 @@ interface ControlLayerSettingsProps {
  * undo stack (`updateCanvasLayerConfig`); the filter preview runs on the utility
  * queue and never mutates the document until "Apply".
  */
+/** Contributing control leaves of one adapter kind with content, in generation order. */
+const contributingControlLayers = (
+  engine: CanvasStructuralEngine & LayerFilterOperationEngine & { readonly document: CanvasDocumentCapability },
+  kind: CanvasControlAdapterContract['kind']
+): CanvasLayerContract[] =>
+  (engine.document.model()?.compileLeaves() ?? [])
+    .filter(
+      (leaf) =>
+        leaf.contributionEnabled &&
+        leaf.layer.type === 'control' &&
+        leaf.layer.adapter.kind === kind &&
+        engine.exports.hasExportableLayerContent(leaf.id)
+    )
+    .map((leaf) => leaf.layer);
+
 export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: ControlLayerSettingsProps) => {
   const { t } = useTranslation();
   const commitPrepared = usePreparedCommit(engine);
@@ -287,32 +304,17 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
   const hasContent = engine?.exports.hasExportableLayerContent(layer.id) ?? false;
   const controlLoraIndex =
     adapter.kind === 'control_lora' && engine
-      ? (engine.document
-          .getDocument()
-          ?.layers.filter(
-            (candidate) =>
-              candidate.isEnabled &&
-              candidate.type === 'control' &&
-              candidate.adapter.kind === 'control_lora' &&
-              engine.exports.hasExportableLayerContent(candidate.id)
-          )
-          .findIndex((candidate) => candidate.id === layer.id) ?? 0)
+      ? contributingControlLayers(engine, 'control_lora').findIndex((candidate) => candidate.id === layer.id)
       : 0;
   const zImageControlIndex =
     adapter.kind === 'z_image_control' && engine
-      ? (engine.document
-          .getDocument()
-          ?.layers.filter(
-            (candidate) =>
-              candidate.isEnabled &&
-              candidate.type === 'control' &&
-              candidate.adapter.kind === 'z_image_control' &&
-              engine.exports.hasExportableLayerContent(candidate.id)
-          )
-          .findIndex((candidate) => candidate.id === layer.id) ?? 0)
+      ? contributingControlLayers(engine, 'z_image_control').findIndex((candidate) => candidate.id === layer.id)
       : 0;
+  const contributing = engine
+    ? (lookupDocumentLeaf(engine.document.model()?.document, layer.id)?.contributionEnabled ?? false)
+    : layer.isEnabled;
   const validationReason =
-    layer.isEnabled && mainModel
+    contributing && mainModel
       ? getControlValidationReason({
           adapterModel: adapterModel ? { base: adapterModel.base, type: adapterModel.type } : null,
           beginEndStepPct: adapter.beginEndStepPct,

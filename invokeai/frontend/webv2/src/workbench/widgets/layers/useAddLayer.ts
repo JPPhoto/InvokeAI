@@ -1,9 +1,11 @@
-import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
+import type { CanvasNodeContract } from '@workbench/canvas-engine/api';
 
 import { useModelsSelector } from '@features/models';
+import { getDocumentIndex, getDocumentLeaves } from '@workbench/canvas-engine/api';
+import { setLayerGroupExpanded } from '@workbench/layerPanelState';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
-import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
+import { useActiveProjectId, useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { nextLayerName } from '@workbench/workbenchState';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -16,9 +18,11 @@ import {
   createControlLayer,
   createEmptyPaintLayer,
   createInpaintMaskLayer,
+  createLayerId,
   createRegionalGuidanceLayer,
   createRegionalGuidanceLayerWithRefImage,
   nextControlLayerName,
+  nextGroupName,
   nextInpaintMaskName,
   nextRegionalGuidanceName,
 } from './layerOps';
@@ -27,21 +31,23 @@ import { useSelectedModelBase } from './useSelectedModelBase';
 /**
  * Returns a single `addLayer(id)` callback that creates a new layer of the given
  * kind through the guarded structural commit (one undoable history entry per
- * add). Reused by the panel's add-layer menu AND each group header's "New"
- * button so both surfaces stay in lockstep.
+ * add). Reused by the panel's add-layer menu AND each stack header's "New"
+ * button so both surfaces stay in lockstep. A new node lands directly above the
+ * selection, inside its group when the selection is a leaf of one.
  */
 export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
   const { t } = useTranslation();
   const engine = useCanvasEngine();
+  const projectId = useActiveProjectId();
   const commitPrepared = usePreparedCommit(engine);
   const base = useSelectedModelBase();
   const models = useModelsSelector((snapshot) => snapshot.models);
   const layerNames = useActiveProjectSelector(
-    (project) => project.canvas.document.layers.map((layer) => layer.name),
+    (project) => getDocumentIndex(project.canvas.document).nodes.map((entry) => entry.node.name),
     (left, right) => left.length === right.length && left.every((name, index) => name === right[index])
   );
   const regionalGuidanceCount = useActiveProjectSelector(
-    (project) => project.canvas.document.layers.filter((layer) => layer.type === 'regional_guidance').length
+    (project) => getDocumentLeaves(project.canvas.document).filter((layer) => layer.type === 'regional_guidance').length
   );
 
   return useCallback(
@@ -49,12 +55,39 @@ export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
       if (!isAddLayerItemAvailable(id, base)) {
         return;
       }
-      const add = (label: string, layer: CanvasLayerContract): void => {
+      const add = (label: string, node: CanvasNodeContract): void => {
         commitPrepared(label, (model) =>
-          model.prepare({ aboveId: model.document.selectedLayerId, layers: [layer], type: 'insert' })
+          model.prepare({ aboveId: model.document.selectedLayerId, nodes: [node], type: 'insert' })
         );
       };
       switch (id) {
+        case 'group': {
+          // An empty group has no stack of its own: it joins the selected node's stack, else raster.
+          const groupId = createLayerId();
+          const outcome = commitPrepared(t('widgets.layers.actions.newGroup'), (model) => {
+            const selectedId = model.document.selectedLayerId;
+            const selected = selectedId ? getDocumentIndex(model.document).byId.get(selectedId) : undefined;
+            return model.prepare({
+              aboveId: selectedId,
+              nodes: [
+                {
+                  children: [],
+                  id: groupId,
+                  isEnabled: true,
+                  isLocked: false,
+                  name: nextGroupName(layerNames),
+                  type: 'group',
+                },
+              ],
+              stack: selected?.stack ?? 'raster',
+              type: 'insert',
+            });
+          });
+          if (outcome.status === 'committed') {
+            setLayerGroupExpanded(projectId, groupId, [groupId], true);
+          }
+          return;
+        }
         case 'raster': {
           const layer = createEmptyPaintLayer(nextLayerName(layerNames));
           add(t('widgets.layers.actions.addRasterLayer'), layer);
@@ -91,6 +124,6 @@ export const useAddLayer = (): ((id: AddLayerItemId) => void) => {
         }
       }
     },
-    [base, commitPrepared, layerNames, models, regionalGuidanceCount, t]
+    [base, commitPrepared, layerNames, models, projectId, regionalGuidanceCount, t]
   );
 };

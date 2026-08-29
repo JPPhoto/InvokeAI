@@ -1,5 +1,3 @@
-import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
-
 import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
@@ -48,7 +46,8 @@ export const useLayerPropertiesRequest = (layerId: string): LayerPropertiesReque
 export const useCurrentLayerPropertiesRequest = (): LayerPropertiesRequest | null =>
   layerPropertiesRequestStore.useSelector((snapshot) => snapshot.request, Object.is);
 
-export const isLayerPropertiesGroupRequested = (
+/** Whether the pending request targets one of `nodeIds`, so its stack must stay expanded to honour it. */
+export const isLayerPropertiesRequestedWithin = (
   request: LayerPropertiesRequest | null,
-  layers: readonly CanvasLayerContract[]
-): boolean => !!request && layers.some((layer) => layer.id === request.layerId);
+  nodeIds: readonly string[]
+): boolean => !!request && nodeIds.includes(request.layerId);

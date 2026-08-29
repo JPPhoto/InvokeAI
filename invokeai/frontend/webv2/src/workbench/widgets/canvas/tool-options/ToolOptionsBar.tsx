@@ -3,10 +3,14 @@ import type { CanvasOperationState } from '@workbench/canvas-operations/api';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import type { ComponentType } from 'react';
 
-import { HStack, Text } from '@chakra-ui/react';
+import { Button, HStack, Text } from '@chakra-ui/react';
+import { collectSubtreeLeaves, getDocumentNode } from '@workbench/canvas-engine/api';
+import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 import { BboxDetailsBar } from '@workbench/widgets/canvas/BboxDetailsBar';
 import { CanvasFloatingBarDivider } from '@workbench/widgets/canvas/CanvasFloatingBar';
 import { useCanvasActiveTool, useCanvasOperation } from '@workbench/widgets/canvas/engineStoreHooks';
+import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
+import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { BboxOptions } from './BboxOptions';
@@ -31,6 +35,9 @@ export type CanvasToolOptionsEngine = Pick<
 export interface ToolOptionsComponentProps {
   engine: CanvasToolOptionsEngine;
 }
+
+/** Tools that paint into one leaf; a selected group cannot take their strokes. */
+const LEAF_TOOLS: ReadonlySet<ToolId> = new Set(['brush', 'eraser', 'gradient', 'shape', 'text']);
 
 /** Contextual options content per active tool; tools without an entry show their hint instead. */
 export const TOOL_OPTIONS_COMPONENTS: Partial<Record<ToolId, ComponentType<ToolOptionsComponentProps>>> = {
@@ -91,7 +98,9 @@ export const ToolOptionsBar = ({ engine }: { engine: CanvasToolOptionsEngine }) 
         <CanvasFloatingBarDivider />
         {hasBboxDetails ? <BboxDetailsBar engine={engine} /> : null}
         {hasBboxDetails && OptionsComponent ? <CanvasFloatingBarDivider /> : null}
-        {OptionsComponent ? (
+        {OptionsComponent && LEAF_TOOLS.has(activeTool) ? (
+          <LeafToolOptions component={OptionsComponent} engine={engine} />
+        ) : OptionsComponent ? (
           <OptionsComponent engine={engine} />
         ) : (
           <Text color="fg.subtle" fontSize="xs" minW="0" truncate>
@@ -100,5 +109,46 @@ export const ToolOptionsBar = ({ engine }: { engine: CanvasToolOptionsEngine }) 
         )}
       </HStack>
     </CanvasOptionsBar>
+  );
+};
+
+/** A leaf tool's options, or the way out when the selection is a group those tools cannot paint into. */
+const LeafToolOptions = ({
+  component: OptionsComponent,
+  engine,
+}: {
+  component: ComponentType<ToolOptionsComponentProps>;
+  engine: CanvasToolOptionsEngine;
+}) => {
+  const { t } = useTranslation();
+  const dispatch = useCanvasProjectMutationDispatch();
+  const selectedGroup = useActiveProjectSelector(
+    (project) => {
+      const { document } = project.canvas;
+      const node = getDocumentNode(document, document.selectedLayerId);
+      return node?.type === 'group' ? { firstLeafId: collectSubtreeLeaves(node)[0]?.id ?? null, id: node.id } : null;
+    },
+    (a, b) => a?.id === b?.id && a?.firstLeafId === b?.firstLeafId
+  );
+  const selectFirstLeaf = useCallback(() => {
+    if (selectedGroup?.firstLeafId) {
+      dispatch({ id: selectedGroup.firstLeafId, type: 'setCanvasSelectedLayer' });
+    }
+  }, [dispatch, selectedGroup]);
+
+  if (!selectedGroup) {
+    return <OptionsComponent engine={engine} />;
+  }
+  return (
+    <HStack gap="2" minW="0">
+      <Text color="fg.subtle" fontSize="xs" minW="0" truncate>
+        {t('widgets.layers.groupSelectedHint')}
+      </Text>
+      {selectedGroup.firstLeafId ? (
+        <Button size="2xs" variant="subtle" onClick={selectFirstLeaf}>
+          {t('widgets.layers.actions.selectFirstChild')}
+        </Button>
+      ) : null}
+    </HStack>
   );
 };

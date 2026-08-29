@@ -6,7 +6,7 @@
 import type {
   CanvasBlendMode,
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasImageRef,
   CanvasInpaintMaskLayerContract,
   CanvasLayerBaseContract,
@@ -107,6 +107,25 @@ export const nextInpaintMaskName = (existingNames: readonly string[]): string =>
     n += 1;
   }
   return `Inpaint Mask ${n}`;
+};
+
+/** The next free "Group N" name given the existing node names (N ≥ 1, first gap). */
+export const nextGroupName = (existingNames: readonly string[]): string => {
+  const used = new Set<number>();
+  for (const name of existingNames) {
+    const match = /^Group (\d+)$/.exec(name.trim());
+    if (match) {
+      const n = Number(match[1]);
+      if (Number.isInteger(n) && n > 0) {
+        used.add(n);
+      }
+    }
+  }
+  let n = 1;
+  while (used.has(n)) {
+    n += 1;
+  }
+  return `Group ${n}`;
 };
 
 /** Builds an empty inpaint mask layer with the legacy-default fill (no bitmap yet). */
@@ -352,7 +371,7 @@ export const fitLayerTransformToBbox = (
   bbox: Rect,
   documentRect: Rect = bbox
 ): LayerTransform | null => {
-  const doc = { height: documentRect.height, width: documentRect.width } as CanvasDocumentContractV2;
+  const doc = { height: documentRect.height, width: documentRect.width } as CanvasDocumentContractV3;
   const contentRect = getSourceContentRect(layer, doc);
   if (contentRect.width <= 0 || contentRect.height <= 0) {
     return null;
@@ -610,7 +629,7 @@ export const convertRasterControlLayer = (
 };
 
 /** Whether the layers panel may offer merge-down for `layerId`; merging is pixel work, so it needs an engine. */
-export const canMergeLayerDown = (document: CanvasDocumentContractV2, layerId: string, hasEngine: boolean): boolean =>
+export const canMergeLayerDown = (document: CanvasDocumentContractV3, layerId: string, hasEngine: boolean): boolean =>
   hasEngine && mergeDownEligibility(document, layerId).status === 'eligible';
 
 /** Applies a guarded live edit without recording history until the interaction ends. */

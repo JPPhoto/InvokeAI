@@ -2197,7 +2197,9 @@
         "selectTransformTool": "Select transform tool",
         "selectViewTool": "Select view tool",
         "toggleNonRasterLayers": "Hide control, guidance and mask layers",
-        "undo": "Undo canvas edit"
+        "undo": "Undo canvas edit",
+        "groupLayers": "Group selected layers",
+        "ungroupLayers": "Ungroup selected layers"
       },
       "contextMenu": {
         "createError": "Couldn't create from BBox",
@@ -2308,7 +2310,11 @@
         "reverted": "The edit could not be verified and was reverted.",
         "stale": "The canvas changed before this edit landed. Try again.",
         "unmirrored": "The edit was reverted, but the canvas view may be out of date.",
-        "unverified": "The edit could not be verified or reverted. Check the canvas before continuing."
+        "unverified": "The edit could not be verified or reverted. Check the canvas before continuing.",
+        "refusedNotSiblings": "Only items that share the same group can be grouped together.",
+        "refusedDepth": "Groups can nest at most 10 levels deep.",
+        "refusedCycle": "A group can't be moved into itself.",
+        "refusedNodeLimit": "The canvas can't hold more than 10,000 layers and groups."
       },
       "surface": "Canvas surface",
       "toolHints": {
@@ -2537,7 +2543,18 @@
         "transform": "Transform",
         "unsupported": "This action is not supported for this layer.",
         "unlock": "Unlock layer",
-        "unlockSelected": "Unlock selected layers"
+        "unlockSelected": "Unlock selected layers",
+        "group": "Group layers",
+        "groupSelected": "Group selected layers",
+        "ungroup": "Ungroup",
+        "ungroupSelected": "Ungroup selected groups",
+        "newGroup": "New group",
+        "expandGroup": "Expand group",
+        "collapseGroup": "Collapse group",
+        "selectFirstChild": "Select first layer in group",
+        "groupLocked": "Locked by a group",
+        "groupDisabled": "Disabled by a group",
+        "groupHidden": "Hidden by a group"
       },
       "control": {
         "apply": "Apply",
@@ -2893,8 +2910,13 @@
         "image": "Image",
         "inpaint_mask": "Inpaint",
         "paint": "Paint",
-        "regional_guidance": "Region"
-      }
+        "regional_guidance": "Region",
+        "group": "Group"
+      },
+      "groupSummary_one": "{{count}} layer",
+      "groupSummary_other": "{{count}} layers",
+      "groupEmpty": "Empty group",
+      "groupSelectedHint": "Select a layer inside this group to paint."
     },
     "gallery": {
       "alwaysShowDimensions": "Always show dimensions",

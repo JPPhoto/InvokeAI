@@ -1,5 +1,11 @@
 import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
 
+import {
+  groupContract,
+  layerContract,
+  stacksFrom,
+} from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { indexStacks } from '@workbench/canvas-engine/document/documentIndex';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -16,6 +22,7 @@ import {
 } from './layerPanelState';
 
 const ids = ['a', 'b', 'c', 'd'];
+const indexOf = (nodeIds: readonly string[]) => indexStacks(stacksFrom(nodeIds.map((id) => layerContract(id))));
 const plain = { additive: false, range: false };
 const toggle = { additive: true, range: false };
 const range = { additive: false, range: true };
@@ -84,38 +91,38 @@ describe('layer panel selection', () => {
 
   it('drops duplicate ids while reconciling', () => {
     const state = { ...createLayerPanelState('project', 'a'), selectedIds: ['a', 'a', 'b'] };
-    expect(reconcileLayerPanelState(state, 'project', ids, 'a').selectedIds).toEqual(['a', 'b']);
+    expect(reconcileLayerPanelState(state, 'project', indexOf(ids), 'a').selectedIds).toEqual(['a', 'b']);
   });
 
   it('prunes removed secondaries without collapsing an unchanged primary', () => {
     const multi = { ...createLayerPanelState('project', 'a'), anchorId: 'c', selectedIds: ['a', 'b', 'c'] };
-    expect(reconcileLayerPanelState(multi, 'project', ['a', 'b', 'd'], 'a')).toEqual({
+    expect(reconcileLayerPanelState(multi, 'project', indexOf(['a', 'b', 'd']), 'a')).toEqual({
       ...multi,
       anchorId: 'a',
       selectedIds: ['a', 'b'],
     });
-    expect(reconcileLayerPanelState(multi, 'project', ids, 'a')).toBe(multi);
+    expect(reconcileLayerPanelState(multi, 'project', indexOf(ids), 'a')).toBe(multi);
   });
 
   it('carries collapsed stacks through a same-project primary change only', () => {
     const collapsed = { ...createLayerPanelState('project', 'a'), collapsedStacks: ['control' as const] };
-    expect(reconcileLayerPanelState(collapsed, 'project', ids, 'b')).toMatchObject({
+    expect(reconcileLayerPanelState(collapsed, 'project', indexOf(ids), 'b')).toMatchObject({
       collapsedStacks: ['control'],
       primaryId: 'b',
     });
-    expect(reconcileLayerPanelState(collapsed, 'other', ids, 'b').collapsedStacks).toEqual([]);
+    expect(reconcileLayerPanelState(collapsed, 'other', indexOf(ids), 'b').collapsedStacks).toEqual([]);
   });
 
   it('collapses to a new primary selected outside the panel and resets between projects', () => {
     const multi = selectLayerInPanel(createLayerPanelState('project', 'a'), 'c', ids, toggle);
-    expect(reconcileLayerPanelState(multi, 'project', ids, 'd').selectedIds).toEqual(['d']);
-    expect(reconcileLayerPanelState(multi, 'other-project', ids, 'a').selectedIds).toEqual(['a']);
+    expect(reconcileLayerPanelState(multi, 'project', indexOf(ids), 'd').selectedIds).toEqual(['d']);
+    expect(reconcileLayerPanelState(multi, 'other-project', indexOf(ids), 'a').selectedIds).toEqual(['a']);
   });
 
   it('does not resurrect secondaries after an A to B to A project round trip', () => {
     let selection = selectLayerInPanel(createLayerPanelState('project-a', 'a'), 'c', ids, toggle);
-    selection = reconcileLayerPanelState(selection, 'project-b', ids, 'b');
-    selection = reconcileLayerPanelState(selection, 'project-a', ids, 'a');
+    selection = reconcileLayerPanelState(selection, 'project-b', indexOf(ids), 'b');
+    selection = reconcileLayerPanelState(selection, 'project-a', indexOf(ids), 'a');
     expect(selection.selectedIds).toEqual(['a']);
   });
 });
@@ -126,7 +133,7 @@ describe('layer panel state store', () => {
   const project = (id: string, layerIds: readonly string[], selectedLayerId: string | null): LayerPanelProjectView => ({
     canvas: {
       document: {
-        layers: layerIds.map((layerId) => ({ id: layerId }) as CanvasLayerContract),
+        stacks: stacksFrom(layerIds.map((layerId) => ({ id: layerId }) as CanvasLayerContract)),
         selectedLayerId,
       },
     },
@@ -191,5 +198,20 @@ describe('layer panel state store', () => {
     toggleLayerStackCollapsed('p1', 'a', 'control');
     expect(isSameLayerPanelState(readLayerPanelState('p1', 'b'), readLayerPanelState('p1', 'b'))).toBe(true);
     expect(isSameLayerPanelState(readLayerPanelState('p1', 'a'), readLayerPanelState('p1', 'b'))).toBe(false);
+  });
+});
+
+describe('revealing an external primary', () => {
+  it('expands every group above a primary that arrived from outside the panel', () => {
+    const index = indexStacks(
+      stacksFrom([groupContract('g', [groupContract('h', [layerContract('a')])]), layerContract('b')])
+    );
+    expect(reconcileLayerPanelState(createLayerPanelState('project', 'b'), 'project', index, 'a')).toMatchObject({
+      expandedGroupIds: ['g', 'h'],
+      primaryId: 'a',
+      selectedIds: ['a'],
+    });
+    const collapsedByUser = createLayerPanelState('project', 'a');
+    expect(reconcileLayerPanelState(collapsedByUser, 'project', index, 'a')).toBe(collapsedByUser);
   });
 });

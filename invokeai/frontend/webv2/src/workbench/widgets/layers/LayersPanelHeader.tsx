@@ -3,12 +3,18 @@ import type {
   SelectValueChangeDetails,
   SliderValueChangeDetails,
 } from '@chakra-ui/react';
-import type { CanvasBlendMode, CanvasLayerContract, CanvasMaskFillContract } from '@workbench/canvas-engine/api';
+import type {
+  CanvasBlendMode,
+  CanvasDocumentContractV3,
+  CanvasLayerContract,
+  CanvasMaskFillContract,
+} from '@workbench/canvas-engine/api';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 
 import { Box, createListCollection, Flex, HStack, NumberInput, Stack } from '@chakra-ui/react';
 import { useDebouncedDraftValue, useRegisterGenerateDraftFlusher } from '@features/generation/react';
 import { ColorPicker, Field, Select, Slider } from '@platform/ui';
+import { getDocumentLayer } from '@workbench/canvas-engine/api';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
 import {
   CANVAS_DENOISING_STRENGTH_KEY,
@@ -42,11 +48,8 @@ const isMaskLayer = (layer: CanvasLayerContract | null): layer is MaskLayer =>
   layer !== null && (layer.type === 'inpaint_mask' || layer.type === 'regional_guidance');
 
 const selectSelectedLayer = (project: {
-  canvas: { document: { layers: readonly CanvasLayerContract[]; selectedLayerId: string | null } };
-}): CanvasLayerContract | null => {
-  const { layers, selectedLayerId } = project.canvas.document;
-  return layers.find((layer) => layer.id === selectedLayerId) ?? null;
-};
+  canvas: { document: Pick<CanvasDocumentContractV3, 'stacks' | 'selectedLayerId'> };
+}): CanvasLayerContract | null => getDocumentLayer(project.canvas.document, project.canvas.document.selectedLayerId);
 
 export const isSameSelection = (left: CanvasLayerContract | null, right: CanvasLayerContract | null): boolean => {
   if (left?.id !== right?.id || left?.opacity !== right?.opacity || left?.blendMode !== right?.blendMode) {

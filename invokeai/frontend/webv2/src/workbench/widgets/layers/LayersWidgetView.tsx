@@ -1,9 +1,11 @@
 import type { LayerStackKind } from '@workbench/canvas-engine/api';
 
 import { Flex, Icon, Stack, Text } from '@chakra-ui/react';
+import { LAYER_STACKS_TOP_FIRST } from '@workbench/canvas-engine/api';
 import {
   publishLayerPanelSelection,
   selectLayerInPanel,
+  setLayerGroupExpanded,
   toggleLayerStackCollapsed,
   useLayerPanelState,
   type LayerSelectionModifiers,
@@ -16,20 +18,16 @@ import { LayersIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { LayerGroup } from './layerGroups';
-
-import { groupLayers } from './layerGroups';
-import { LayerGroupSection } from './LayerGroupSection';
 import { LayerMultiSelectionActions } from './LayerMultiSelectionActions';
-import { isLayerPropertiesGroupRequested, useCurrentLayerPropertiesRequest } from './layerPropertiesRequestStore';
+import { isLayerPropertiesRequestedWithin, useCurrentLayerPropertiesRequest } from './layerPropertiesRequestStore';
 import { LayersPanelHeader } from './LayersPanelHeader';
+import { LayerStackSection } from './LayerStackSection';
+import { buildLayerStackRows } from './layerTreeRows';
 
 /**
- * The layers panel: a fixed Photoshop-style header region (selected layer's
- * opacity + blend mode, global denoising strength) above the layer list, which
- * is split into type groups (inpaint masks / regional guidance / control /
- * raster — legacy display order). Each group is a within-group drag-to-reorder
- * list mapped onto the single global z-ordered `layers` array.
+ * The layers panel: a fixed Photoshop-style header region (selected layer's opacity + blend mode,
+ * global denoising strength) above the four stacks (inpaint masks / regional guidance / control /
+ * raster), each a tree of groups and layers rendered top first.
  */
 export const LayersWidgetView = () => {
   const { t } = useTranslation();
@@ -38,35 +36,49 @@ export const LayersWidgetView = () => {
   const dispatch = useCanvasProjectMutationDispatch();
   const editingLocked = useCanvasDocumentEditingLocked(engine);
   const propertiesRequest = useCurrentLayerPropertiesRequest();
-  const { layers, selectedLayerId } = useActiveProjectSelector(
-    (project) => ({
-      layers: project.canvas.document.layers,
-      selectedLayerId: project.canvas.document.selectedLayerId,
-    }),
-    (left, right) => left.layers === right.layers && left.selectedLayerId === right.selectedLayerId
+  const document = useActiveProjectSelector((project) => project.canvas.document);
+  const { selectedLayerId } = document;
+
+  const panelState = useLayerPanelState(projectId, selectedLayerId);
+  const expandedGroupIds = useMemo(() => new Set(panelState.expandedGroupIds), [panelState.expandedGroupIds]);
+  const stacks = useMemo(() => buildLayerStackRows(document, expandedGroupIds), [document, expandedGroupIds]);
+  const visibleStacks = useMemo(
+    () => LAYER_STACKS_TOP_FIRST.map((kind) => stacks[kind]).filter((stack) => stack.nodeIds.length > 0),
+    [stacks]
+  );
+  const { collapsedStacks, selectedIds } = panelState;
+  const isCollapsed = useCallback(
+    (stack: LayerStackKind): boolean =>
+      collapsedStacks.includes(stack) && !isLayerPropertiesRequestedWithin(propertiesRequest, stacks[stack].nodeIds),
+    [collapsedStacks, propertiesRequest, stacks]
+  );
+  const allNodeIds = useMemo(() => visibleStacks.flatMap((stack) => stack.nodeIds), [visibleStacks]);
+  const visibleRowIds = useMemo(
+    () => visibleStacks.flatMap((stack) => (isCollapsed(stack.stack) ? [] : stack.rows.map((row) => row.id))),
+    [isCollapsed, visibleStacks]
   );
 
-  const groups = useMemo(() => groupLayers(layers), [layers]);
-  const panelState = useLayerPanelState(projectId, selectedLayerId);
-  const isCollapsed = (group: LayerGroup): boolean =>
-    panelState.collapsedStacks.includes(group.key) && !isLayerPropertiesGroupRequested(propertiesRequest, group.layers);
-  const allLayerIds = useMemo(() => groups.flatMap((group) => group.layers.map((layer) => layer.id)), [groups]);
-  const visibleLayerIds = groups.flatMap((group) => (isCollapsed(group) ? [] : group.layers.map((layer) => layer.id)));
-  const selectedIds = panelState.selectedIds;
-
-  const handleSelectLayer = useCallback(
-    (layerId: string, modifiers: LayerSelectionModifiers) => {
-      const next = selectLayerInPanel(panelState, layerId, modifiers.range ? visibleLayerIds : allLayerIds, modifiers);
+  const handleSelect = useCallback(
+    (id: string, modifiers: LayerSelectionModifiers) => {
+      const next = selectLayerInPanel(panelState, id, modifiers.range ? visibleRowIds : allNodeIds, modifiers);
       publishLayerPanelSelection(next);
       if (next.primaryId !== selectedLayerId) {
         dispatch({ id: next.primaryId, type: 'setCanvasSelectedLayer' });
       }
     },
-    [allLayerIds, dispatch, panelState, selectedLayerId, visibleLayerIds]
+    [allNodeIds, dispatch, panelState, selectedLayerId, visibleRowIds]
   );
 
   const handleToggleCollapse = useCallback(
     (stack: LayerStackKind) => toggleLayerStackCollapsed(projectId, selectedLayerId, stack),
+    [projectId, selectedLayerId]
+  );
+  const handleToggleExpanded = useCallback(
+    (groupId: string) => setLayerGroupExpanded(projectId, selectedLayerId, [groupId]),
+    [projectId, selectedLayerId]
+  );
+  const handleExpandGroup = useCallback(
+    (groupId: string) => setLayerGroupExpanded(projectId, selectedLayerId, [groupId], true),
     [projectId, selectedLayerId]
   );
 
@@ -75,14 +87,14 @@ export const LayersWidgetView = () => {
       <LayersPanelHeader />
       {selectedIds.length > 1 ? (
         <LayerMultiSelectionActions
+          document={document}
           editingLocked={editingLocked}
           engine={engine}
-          layers={layers}
           projectId={projectId}
           selectedIds={selectedIds}
         />
       ) : null}
-      {groups.length === 0 ? (
+      {visibleStacks.length === 0 ? (
         <Flex
           align="center"
           borderColor="border.subtle"
@@ -103,19 +115,20 @@ export const LayersWidgetView = () => {
         </Flex>
       ) : (
         <Stack gap="3">
-          {groups.map((group) => (
-            <LayerGroupSection
-              key={group.key}
+          {visibleStacks.map((stack) => (
+            <LayerStackSection
+              key={stack.stack}
               dispatch={dispatch}
+              document={document}
               engine={engine}
-              groupKey={group.key}
-              groupLayers={group.layers}
-              isCollapsed={isCollapsed(group)}
-              layers={layers}
-              onSelectLayer={handleSelectLayer}
-              onToggleCollapse={handleToggleCollapse}
+              isCollapsed={isCollapsed(stack.stack)}
               selectedIds={selectedIds}
               selectedLayerId={selectedLayerId}
+              stack={stack}
+              onExpandGroup={handleExpandGroup}
+              onSelect={handleSelect}
+              onToggleCollapse={handleToggleCollapse}
+              onToggleExpanded={handleToggleExpanded}
             />
           ))}
         </Stack>

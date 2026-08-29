@@ -1,7 +1,8 @@
-import type { CanvasDocumentContractV2, LayerStackKind } from '@workbench/canvas-engine/api';
+import type { CanvasDocumentContractV3, CanvasDocumentIndex, LayerStackKind } from '@workbench/canvas-engine/api';
 
 import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
+import { getDocumentIndex } from '@workbench/canvas-engine/api';
 
 /**
  * Transient Layers-panel state, kept per project and outside the document, its snapshots and
@@ -14,6 +15,8 @@ export interface LayerPanelState {
   readonly anchorId: string | null;
   readonly selectedIds: readonly string[];
   readonly collapsedStacks: readonly LayerStackKind[];
+  /** Groups whose children the panel shows; every other group is collapsed. */
+  readonly expandedGroupIds: readonly string[];
 }
 
 export interface LayerSelectionModifiers {
@@ -37,10 +40,12 @@ const store = createExternalStore<LayerPanelStore>({ byProject: {} });
 export const createLayerPanelState = (
   projectId: string,
   primaryId: string | null,
-  collapsedStacks: readonly LayerStackKind[] = []
+  collapsedStacks: readonly LayerStackKind[] = [],
+  expandedGroupIds: readonly string[] = []
 ): LayerPanelState => ({
   anchorId: primaryId,
   collapsedStacks,
+  expandedGroupIds,
   primaryId,
   projectId,
   selectedIds: primaryId ? [primaryId] : [],
@@ -54,14 +59,17 @@ export const isSameLayerPanelState = (left: LayerPanelState, right: LayerPanelSt
   left.primaryId === right.primaryId &&
   left.anchorId === right.anchorId &&
   sameIds(left.selectedIds, right.selectedIds) &&
-  sameIds(left.collapsedStacks, right.collapsedStacks);
+  sameIds(left.collapsedStacks, right.collapsedStacks) &&
+  sameIds(left.expandedGroupIds, right.expandedGroupIds);
 
 const stateFor = (snapshot: LayerPanelStore, projectId: string, primaryId: string | null): LayerPanelState => {
   const stored = snapshot.byProject[projectId];
   if (!stored) {
     return createLayerPanelState(projectId, primaryId);
   }
-  return stored.primaryId === primaryId ? stored : createLayerPanelState(projectId, primaryId, stored.collapsedStacks);
+  return stored.primaryId === primaryId
+    ? stored
+    : createLayerPanelState(projectId, primaryId, stored.collapsedStacks, stored.expandedGroupIds);
 };
 
 export const readLayerPanelState = (projectId: string, primaryId: string | null): LayerPanelState =>
@@ -81,9 +89,11 @@ const write = (state: LayerPanelState): void => {
 
 /** Records a panel-originated selection; publish before dispatching a new primary so reconciliation keeps it. */
 export const publishLayerPanelSelection = (selection: LayerPanelSelectionUpdate): void => {
+  const stored = store.getSnapshot().byProject[selection.projectId];
   write({
     anchorId: selection.anchorId ?? selection.primaryId,
-    collapsedStacks: store.getSnapshot().byProject[selection.projectId]?.collapsedStacks ?? [],
+    collapsedStacks: stored?.collapsedStacks ?? [],
+    expandedGroupIds: stored?.expandedGroupIds ?? [],
     primaryId: selection.primaryId,
     projectId: selection.projectId,
     selectedIds: [...selection.selectedIds],
@@ -98,27 +108,59 @@ export const toggleLayerStackCollapsed = (projectId: string, primaryId: string |
   write({ ...current, collapsedStacks });
 };
 
-/** Keeps a state valid after an external primary change, a project switch, or a layer removal. */
+/** Shows or hides a group's children; `expanded` forces a state instead of toggling. */
+export const setLayerGroupExpanded = (
+  projectId: string,
+  primaryId: string | null,
+  groupIds: readonly string[],
+  expanded?: boolean
+): void => {
+  const current = readLayerPanelState(projectId, primaryId);
+  const next = new Set(current.expandedGroupIds);
+  for (const groupId of groupIds) {
+    if (expanded ?? !next.has(groupId)) {
+      next.add(groupId);
+    } else {
+      next.delete(groupId);
+    }
+  }
+  write({ ...current, expandedGroupIds: [...next] });
+};
+
+/**
+ * Keeps a state valid after an external primary change, a project switch, or a node removal. A
+ * primary that arrived from outside the panel (a hotkey, an undo, a new layer) is revealed: every
+ * group above it expands so the row it names is on screen.
+ */
 export const reconcileLayerPanelState = (
   state: LayerPanelState,
   projectId: string,
-  orderedIds: readonly string[],
+  index: CanvasDocumentIndex,
   primaryId: string | null
 ): LayerPanelState => {
-  const existing = new Set(orderedIds);
-  const validPrimaryId = primaryId && existing.has(primaryId) ? primaryId : null;
+  const primary = primaryId ? index.byId.get(primaryId) : undefined;
+  const validPrimaryId = primary ? primary.node.id : null;
+  const expandedGroupIds = state.expandedGroupIds.filter((id) => index.byId.has(id));
   if (state.projectId !== projectId || state.primaryId !== validPrimaryId) {
-    return createLayerPanelState(projectId, validPrimaryId, state.projectId === projectId ? state.collapsedStacks : []);
+    const revealed = primary ? [...new Set([...expandedGroupIds, ...primary.path])] : expandedGroupIds;
+    return state.projectId === projectId
+      ? createLayerPanelState(projectId, validPrimaryId, state.collapsedStacks, revealed)
+      : createLayerPanelState(projectId, validPrimaryId, [], primary ? [...primary.path] : []);
   }
+  const existing = index.byId;
   const selectedIds = [...new Set(state.selectedIds)].filter((id) => existing.has(id));
   if (validPrimaryId && !selectedIds.includes(validPrimaryId)) {
     selectedIds.push(validPrimaryId);
   }
   const anchorId = state.anchorId && existing.has(state.anchorId) ? state.anchorId : validPrimaryId;
-  if (anchorId === state.anchorId && sameIds(selectedIds, state.selectedIds)) {
+  if (
+    anchorId === state.anchorId &&
+    sameIds(selectedIds, state.selectedIds) &&
+    sameIds(expandedGroupIds, state.expandedGroupIds)
+  ) {
     return state;
   }
-  return { ...state, anchorId, selectedIds };
+  return { ...state, anchorId, expandedGroupIds, selectedIds };
 };
 
 /**
@@ -169,7 +211,7 @@ export const selectLayerInPanel = (
 
 export interface LayerPanelProjectView {
   readonly id: string;
-  readonly canvas: { readonly document: Pick<CanvasDocumentContractV2, 'layers' | 'selectedLayerId'> };
+  readonly canvas: { readonly document: Pick<CanvasDocumentContractV3, 'stacks' | 'selectedLayerId'> };
 }
 
 const reconciledDocuments = new Map<string, LayerPanelProjectView['canvas']['document']>();
@@ -180,10 +222,7 @@ export const reconcileLayerPanelStates = (projects: readonly LayerPanelProjectVi
   const next: Record<string, LayerPanelState> = {};
   let changed = false;
   for (const project of projects) {
-    const stored = byProject[project.id];
-    if (!stored) {
-      continue;
-    }
+    const stored = byProject[project.id] ?? createLayerPanelState(project.id, null);
     const { document } = project.canvas;
     if (reconciledDocuments.get(project.id) === document) {
       next[project.id] = stored;
@@ -193,11 +232,11 @@ export const reconcileLayerPanelStates = (projects: readonly LayerPanelProjectVi
     const reconciled = reconcileLayerPanelState(
       stored,
       project.id,
-      document.layers.map((layer) => layer.id),
+      getDocumentIndex(document),
       document.selectedLayerId
     );
     next[project.id] = reconciled;
-    changed ||= reconciled !== stored;
+    changed ||= reconciled !== byProject[project.id];
   }
   for (const id of reconciledDocuments.keys()) {
     if (!(id in next)) {

@@ -1,12 +1,17 @@
 import type {
   BooleanRasterOperation,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   LayerStackMoveKind,
 } from '@workbench/canvas-engine/api';
 import type { LucideIcon } from 'lucide-react';
 
-import { getSourceContentRect, isPixelBackedLayer, lookupLayerBelow } from '@workbench/canvas-engine/api';
+import {
+  getDocumentIndex,
+  getSourceContentRect,
+  isPixelBackedLayer,
+  lookupLayerBelow,
+} from '@workbench/canvas-engine/api';
 import {
   ArrowDownIcon,
   ArrowDownToLineIcon,
@@ -16,6 +21,7 @@ import {
   CropIcon,
   EyeIcon,
   EyeOffIcon,
+  FolderPlusIcon,
   ImageIcon,
   LockIcon,
   LockOpenIcon,
@@ -30,7 +36,7 @@ import {
 
 import type { LayerPropertiesSection } from './layerPropertiesRequestStore';
 
-import { getGroupPosition } from './layerGroups';
+import { canGroupNodes } from './layerGroupCommands';
 import { canConvertRasterControl, canMergeLayerDown } from './layerOps';
 
 export type LayerContextActionId =
@@ -39,6 +45,7 @@ export type LayerContextActionId =
   | 'move-backward'
   | 'move-to-back'
   | 'duplicate'
+  | 'group'
   | 'rename'
   | 'transform'
   | 'fit-to-bbox'
@@ -81,17 +88,20 @@ export type LayerContextSubmenuId = 'arrange' | 'add-modifiers' | 'add-regional'
 
 export interface LayerContextActionState {
   canRunWorkflow: boolean;
-  document: CanvasDocumentContractV2;
+  document: CanvasDocumentContractV3;
   hasEngine: boolean;
   hasSupportedContent: boolean;
   hasWorkflowBindings: boolean;
   interactionLocked: boolean;
   layer: CanvasLayerContract;
+  /** The panel's selection; an action on a selected layer applies to every selected node. */
+  selectedIds: readonly string[];
 }
 
 export interface LayerContextActionEffects {
   reorder(kind: LayerStackMoveKind, actionId: LayerContextActionId): void;
   duplicate(): void;
+  group(): void;
   openRename(): void;
   openRunWorkflow(): void;
   startSelectObject(layerId: string): void;
@@ -167,8 +177,15 @@ const REGIONAL_ONLY = ['regional_guidance'] as const;
 
 const alwaysVisible = (): boolean => true;
 const isInteractionFree = (context: LayerContextActionState): boolean => !context.interactionLocked;
+const layerEntry = (context: LayerContextActionState) => getDocumentIndex(context.document).byId.get(context.layer.id);
+/** The nodes a selection-wide action applies to: the whole selection when the layer is in it. */
+export const actionTargets = (context: Pick<LayerContextActionState, 'layer' | 'selectedIds'>): readonly string[] =>
+  context.selectedIds.includes(context.layer.id) ? context.selectedIds : [context.layer.id];
+/** Locked in its own right or by a group above it: content edits are refused either way. */
+const isLayerFrozen = (context: LayerContextActionState): boolean =>
+  context.layer.isLocked || (layerEntry(context)?.ancestorsLocked ?? false);
 const isLayerMutable = (context: LayerContextActionState): boolean =>
-  isInteractionFree(context) && !context.layer.isLocked;
+  isInteractionFree(context) && !isLayerFrozen(context);
 const hasReadablePixels = (context: LayerContextActionState): boolean =>
   context.hasEngine && context.hasSupportedContent && !context.interactionLocked;
 const hasMutablePixels = (context: LayerContextActionState): boolean =>
@@ -206,15 +223,26 @@ const hasFilterableLayerContent = (context: LayerContextActionState): boolean =>
   );
 };
 
-const groupPosition = (context: LayerContextActionState) => getGroupPosition(context.document.layers, context.layer.id);
+/** Where the layer sits among its siblings (index 0 = top), or null when absent. */
+const siblingPosition = (context: LayerContextActionState): { index: number; count: number } | null => {
+  const index = getDocumentIndex(context.document);
+  const entry = index.byId.get(context.layer.id);
+  if (!entry) {
+    return null;
+  }
+  const parent = entry.parentId === null ? null : index.byId.get(entry.parentId)!.node;
+  const count =
+    parent && parent.type === 'group' ? parent.children.length : context.document.stacks[entry.stack].length;
+  return { count, index: entry.siblingIndex };
+};
 
 const canMoveForward = (context: LayerContextActionState): boolean => {
-  const position = groupPosition(context);
+  const position = siblingPosition(context);
   return isInteractionFree(context) && !!position && position.index > 0;
 };
 
 const canMoveBackward = (context: LayerContextActionState): boolean => {
-  const position = groupPosition(context);
+  const position = siblingPosition(context);
   return isInteractionFree(context) && !!position && position.index < position.count - 1;
 };
 
@@ -289,6 +317,21 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     isVisible: alwaysVisible,
     labelKey: 'widgets.layers.actions.duplicate',
     order: 10,
+    section: 'quick',
+    supportedLayerTypes: ALL_LAYER_TYPES,
+  },
+  {
+    defaultLabel: 'Group layers',
+    handler: ({ effects }) => effects.group(),
+    icon: FolderPlusIcon,
+    id: 'group',
+    isEnabled: (context) =>
+      isInteractionFree(context) &&
+      !(layerEntry(context)?.ancestorsLocked ?? false) &&
+      canGroupNodes(context.document, actionTargets(context)),
+    isVisible: alwaysVisible,
+    labelKey: 'widgets.layers.actions.group',
+    order: 20,
     section: 'quick',
     supportedLayerTypes: ALL_LAYER_TYPES,
   },

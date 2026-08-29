@@ -433,6 +433,8 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
       ['canvas.nudgeDownLarge', t('widgets.canvas.commands.nudgeDownLarge'), ['shift+arrowdown']],
       // Layer management.
       ['canvas.duplicateLayer', t('widgets.canvas.commands.duplicateLayer'), ['mod+j']],
+      ['canvas.groupLayers', t('widgets.canvas.commands.groupLayers'), ['mod+g']],
+      ['canvas.ungroupLayers', t('widgets.canvas.commands.ungroupLayers'), ['mod+shift+g']],
       ['canvas.mergeDown', t('widgets.canvas.commands.mergeDown'), ['mod+e']],
       ['canvas.layerForward', t('widgets.canvas.commands.layerForward'), ['mod+]']],
       ['canvas.layerBackward', t('widgets.canvas.commands.layerBackward'), ['mod+[']],
@@ -500,7 +502,6 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
               beforeDangerItems={compositeSubmenus}
               dispatch={canvasDispatch}
               engine={engine}
-              layers={document.layers}
               showGroupLabels
               target={layerContextMenuTarget}
               onClose={closeContextMenu}
