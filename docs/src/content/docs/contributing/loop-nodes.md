@@ -355,6 +355,19 @@ The loop should require exactly one matching body return node for each loop boun
 reachable returns, but durable identities must select exactly one return for each `For`.
 Default return behavior can be added later, but it would make the boundary harder to validate.
 
+`ForReturn.output` and `For.output_collection` are convenience result plumbing, not required loop primitives. A body
+that only needs a final accumulator can leave `output` disconnected and carry the accumulator through `state` instead.
+For example, a per-iteration collection can be accumulated explicitly with `StateGet` -> `Collect` -> `StateSet`, then
+returned through `ForReturn.state` and read from `For.final_state`. The missing collection key must be initialized with
+an empty typed collection through `StateGet.default`. This keeps multiple evolving values together in `LoopState`, but
+copies the growing collection through state on every iteration; use the built-in output channel when per-iteration
+results only need to be collected as one final collection.
+
+The state-accumulation shape is distinct from the scheduler-special `Iterate` -> body -> `Collect` -> `ForReturn`
+shape. The latter collapses an inner iterator dimension; the former uses `Collect` inside the body to append one value
+to a state-held collection. `Collect` remains scheduler-managed in both shapes, and the state-accumulation wiring is
+currently supported only as a simple `For` body path.
+
 For the target implementation, the recommended body boundary is a boundary pair:
 
 - `For` starts the body through its iteration-scoped outputs.
@@ -447,6 +460,13 @@ These helpers let workflows opt into state without making every loop body handle
 `state_set.value` is an `AnyField` connection input. Connect `For.item` to store the current item, or connect any
 other node output to store a computed value. It does not provide a generic literal editor; to store a constant, add
 the appropriate typed value node (for example, an Integer or String node) and connect its output to `value`.
+
+`state_merge.values` is also an `AnyField` connection input. Connect a node that outputs a dictionary of updates when
+several state keys must be changed together.
+
+`state_get.default` is an optional `AnyField` connection input used when its key is absent. For example, connect an
+Integer node containing `0` to `default` to initialize a running sum on the first iteration. `state_get.value` then
+provides the existing value or that fallback to the rest of the loop body or to a post-loop node.
 
 ## Execution Contract
 

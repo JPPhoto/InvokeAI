@@ -98,4 +98,31 @@ describe('parseSchema', () => {
     });
     expect(valueInput?.default).toBeUndefined();
   });
+  it('should expose state_get.default and value as AnyField connections', () => {
+    const generatedSchema = JSON.parse(generatedSchemaJSON) as OpenAPIV3_1.Document;
+    const parsed = parseSchema(generatedSchema, ['state_get']);
+    const template = parsed.state_get;
+
+    expect(template?.inputs.default).toMatchObject({
+      input: 'connection',
+      ui_type: 'AnyField',
+      type: { name: 'AnyField', cardinality: 'SINGLE', batch: false },
+    });
+    expect(template?.inputs.default?.default).toBeUndefined();
+    expect(template?.outputs.value).toMatchObject({
+      ui_type: 'AnyField',
+      type: { name: 'AnyField', cardinality: 'SINGLE', batch: false },
+    });
+  });
+  it('should expose state_merge.values as an AnyField connection input', () => {
+    const generatedSchema = JSON.parse(generatedSchemaJSON) as OpenAPIV3_1.Document;
+    const parsed = parseSchema(generatedSchema, ['state_merge']);
+    const valuesInput = parsed.state_merge?.inputs.values;
+
+    expect(valuesInput).toMatchObject({
+      input: 'connection',
+      ui_type: 'AnyField',
+      type: { name: 'AnyField', cardinality: 'SINGLE', batch: false },
+    });
+  });
 });

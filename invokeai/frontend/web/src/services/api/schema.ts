@@ -36126,7 +36126,7 @@ export type components = {
             state?: components["schemas"]["LoopState"] | null;
             /**
              * Values
-             * @description The values to merge into the loop state
+             * @description The values to merge into the loop state. Connect an output to this input.
              * @default {}
              */
             values?: {
@@ -36174,7 +36174,7 @@ export type components = {
             key?: string;
             /**
              * Value
-             * @description The value to set
+             * @description The value to set. Connect an output to this input.
              * @default null
              */
             value?: unknown | null;
@@ -38448,7 +38448,7 @@ export type components = {
          *
          *     - Any Field
          *     We cannot infer the usage of `typing.Any` via schema parsing, so you *must* use `ui_type=UIType.Any` to
-         *     indicate that the field accepts any type. Use with caution. This cannot be used on outputs.
+         *     indicate that the field accepts any type. Use with caution. On inputs, this renders as a connection-only field.
          *
          *     - Scheduler Field
          *     Special handling in the UI is needed for this field, which otherwise would be parsed as a plain enum field.

@@ -57412,7 +57412,8 @@
             "description": "The value read from the loop state",
             "field_kind": "output",
             "title": "Value",
-            "ui_hidden": false
+            "ui_hidden": false,
+            "ui_type": "AnyField"
           },
           "type": {
             "const": "loop_state_value_output",
@@ -83608,6 +83609,7 @@
             "field_kind": "input",
             "orig_required": false,
             "orig_default": null,
+            "ui_type": "AnyField",
             "title": "Default"
           },
           "type": {
@@ -83622,7 +83624,7 @@
         "tags": ["loop", "state"],
         "title": "Get Loop State Value",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "output": {
           "$ref": "#/components/schemas/LoopStateValueOutput"
         }
@@ -83677,13 +83679,14 @@
           "values": {
             "additionalProperties": true,
             "default": {},
-            "description": "The values to merge into the loop state",
+            "description": "The values to merge into the loop state. Connect an output to this input.",
             "field_kind": "input",
             "input": "any",
             "orig_default": {},
             "orig_required": false,
             "title": "Values",
-            "type": "object"
+            "type": "object",
+            "ui_type": "AnyField"
           },
           "type": {
             "const": "state_merge",
@@ -83697,7 +83700,7 @@
         "tags": ["loop", "state"],
         "title": "Merge Loop State Values",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "output": {
           "$ref": "#/components/schemas/LoopStateOutput"
         }
@@ -87739,7 +87742,7 @@
         "type": "object"
       },
       "UIType": {
-        "description": "Type hints for the UI for situations in which the field type is not enough to infer the correct UI type.\n\n- Model Fields\nThe most common node-author-facing use will be for model fields. Internally, there is no difference\nbetween SD-1, SD-2 and SDXL model fields - they all use the class `MainModelField`. To ensure the\nbase-model-specific UI is rendered, use e.g. `ui_type=UIType.SDXLMainModelField` to indicate that\nthe field is an SDXL main model field.\n\n- Any Field\nWe cannot infer the usage of `typing.Any` via schema parsing, so you *must* use `ui_type=UIType.Any` to\nindicate that the field accepts any type. Use with caution. This cannot be used on outputs.\n\n- Scheduler Field\nSpecial handling in the UI is needed for this field, which otherwise would be parsed as a plain enum field.\n\n- Internal Fields\nSimilar to the Any Field, the `collect` and `iterate` nodes make use of `typing.Any`. To facilitate\nhandling these types in the client, we use `UIType._Collection` and `UIType._CollectionItem`. These\nshould not be used by node authors.\n\n- DEPRECATED Fields\nThese types are deprecated and should not be used by node authors. A warning will be logged if one is\nused, and the type will be ignored. They are included here for backwards compatibility.",
+        "description": "Type hints for the UI for situations in which the field type is not enough to infer the correct UI type.\n\n- Model Fields\nThe most common node-author-facing use will be for model fields. Internally, there is no difference\nbetween SD-1, SD-2 and SDXL model fields - they all use the class `MainModelField`. To ensure the\nbase-model-specific UI is rendered, use e.g. `ui_type=UIType.SDXLMainModelField` to indicate that\nthe field is an SDXL main model field.\n\n- Any Field\nWe cannot infer the usage of `typing.Any` via schema parsing, so you *must* use `ui_type=UIType.Any` to\nindicate that the field accepts any type. Use with caution. On inputs, this renders as a connection-only field.\n\n- Scheduler Field\nSpecial handling in the UI is needed for this field, which otherwise would be parsed as a plain enum field.\n\n- Internal Fields\nSimilar to the Any Field, the `collect` and `iterate` nodes make use of `typing.Any`. To facilitate\nhandling these types in the client, we use `UIType._Collection` and `UIType._CollectionItem`. These\nshould not be used by node authors.\n\n- DEPRECATED Fields\nThese types are deprecated and should not be used by node authors. A warning will be logged if one is\nused, and the type will be ignored. They are included here for backwards compatibility.",
         "enum": [
           "SchedulerField",
           "AnyField",

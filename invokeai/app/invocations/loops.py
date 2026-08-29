@@ -27,7 +27,7 @@ class LoopStateOutput(BaseInvocationOutput):
 
 @invocation_output("loop_state_value_output")
 class LoopStateValueOutput(BaseInvocationOutput):
-    value: Any = OutputField(description="The value read from the loop state")
+    value: Any = OutputField(description="The value read from the loop state", ui_type=UIType.Any)
 
 
 @invocation("state_empty", title="Empty Loop State", tags=["loop", "state"], category="workflow", version="1.0.0")
@@ -38,13 +38,17 @@ class StateEmptyInvocation(BaseInvocation):
         return LoopStateOutput(state=LoopState())
 
 
-@invocation("state_get", title="Get Loop State Value", tags=["loop", "state"], category="workflow", version="1.0.0")
+@invocation("state_get", title="Get Loop State Value", tags=["loop", "state"], category="workflow", version="1.0.1")
 class StateGetInvocation(BaseInvocation):
     """Reads a value from loop state."""
 
     state: LoopState = InputField(description="The loop state to read")
     key: str = InputField(default="", description="The state key to read")
-    default: Any = InputField(default=None, description="The value to return when the key is missing")
+    default: Any = InputField(
+        default=None,
+        description="The value to return when the key is missing",
+        ui_type=UIType.Any,
+    )
 
     def invoke(self, context: InvocationContext) -> LoopStateValueOutput:
         return LoopStateValueOutput(value=_copy_value(self.state.values.get(self.key, self.default)))
@@ -69,13 +73,17 @@ class StateSetInvocation(BaseInvocation):
 
 
 @invocation(
-    "state_merge", title="Merge Loop State Values", tags=["loop", "state"], category="workflow", version="1.0.0"
+    "state_merge", title="Merge Loop State Values", tags=["loop", "state"], category="workflow", version="1.0.1"
 )
 class StateMergeInvocation(BaseInvocation):
     """Returns loop state with multiple values merged."""
 
     state: Optional[LoopState] = InputField(default=None, description="The loop state to update")
-    values: dict[str, Any] = InputField(default_factory=dict, description="The values to merge into the loop state")
+    values: dict[str, Any] = InputField(
+        default_factory=dict,
+        description="The values to merge into the loop state. Connect an output to this input.",
+        ui_type=UIType.Any,
+    )
 
     def invoke(self, context: InvocationContext) -> LoopStateOutput:
         values = _copy_value((self.state or LoopState()).values)

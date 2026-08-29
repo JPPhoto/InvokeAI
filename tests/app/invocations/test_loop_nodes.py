@@ -5,6 +5,7 @@ from invokeai.app.invocations.loops import (
     ForInvocation,
     ForReturnInvocation,
     LoopState,
+    LoopStateValueOutput,
     StateEmptyInvocation,
     StateGetInvocation,
     StateMergeInvocation,
@@ -40,6 +41,24 @@ def test_state_set_invocation_schema_exposes_any_value_input() -> None:
     schema = StateSetInvocation.model_json_schema()
 
     assert schema["properties"]["value"]["ui_type"] == "AnyField"
+
+
+def test_state_get_invocation_schema_exposes_any_default_input() -> None:
+    schema = StateGetInvocation.model_json_schema()
+
+    assert schema["properties"]["default"]["ui_type"] == "AnyField"
+
+
+def test_state_get_output_schema_exposes_any_value_output() -> None:
+    schema = LoopStateValueOutput.model_json_schema()
+
+    assert schema["properties"]["value"]["ui_type"] == "AnyField"
+
+
+def test_state_merge_invocation_schema_exposes_any_values_input() -> None:
+    schema = StateMergeInvocation.model_json_schema()
+
+    assert schema["properties"]["values"]["ui_type"] == "AnyField"
 
 
 def test_for_return_invocation_returns_body_output_and_state() -> None:

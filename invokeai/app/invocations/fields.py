@@ -31,7 +31,7 @@ class UIType(str, Enum, metaclass=MetaEnum):
 
     - Any Field
     We cannot infer the usage of `typing.Any` via schema parsing, so you *must* use `ui_type=UIType.Any` to
-    indicate that the field accepts any type. Use with caution. This cannot be used on outputs.
+    indicate that the field accepts any type. Use with caution. On inputs, this renders as a connection-only field.
 
     - Scheduler Field
     Special handling in the UI is needed for this field, which otherwise would be parsed as a plain enum field.
