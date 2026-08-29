@@ -30,9 +30,12 @@ import { MouseSensor, type Activator, type SensorOptions, type SensorProps } fro
  *   pen), so a hold gate would hand the armed gesture to the browser's pan
  *   claim unpredictably.
  *
- * Once the drag is active, the sensor holds the browser's pan off with a
- * document-level non-passive `touchmove` listener — pointer events cannot
- * `preventDefault` a pan — so the gesture cannot be stolen mid-drag.
+ * From the moment the hold arms the gate, the sensor holds the browser's pan
+ * off with a document-level non-passive `touchmove` listener — pointer events
+ * cannot `preventDefault` a pan, and the browser's own pan threshold can be
+ * tighter than the move tolerance (Android Chrome starts scrolling around
+ * 8px) — so an armed drag cannot be stolen by the native scroll before it
+ * activates, nor mid-drag afterwards.
  *
  * Every path through the state machine ends the gesture explicitly
  * (`onEnd`/`onCancel`), which is what clears dnd-kit's activation guard; a
@@ -264,9 +267,12 @@ export class HoldToDragSensor {
   };
 
   private readonly handleTouchMove = (event: TouchEvent) => {
-    // While the drag is live, hold the browser's pan off: pointer events cannot
-    // preventDefault a pan, so this is the only thing keeping the gesture.
-    if (this.gate === 'active' && event.cancelable) {
+    // From arming onward, hold the browser's pan off: pointer events cannot
+    // preventDefault a pan, and the browser's own pan threshold can be tighter
+    // than the move tolerance (Android Chrome starts scrolling around 8px), so
+    // an armed drag would otherwise be lost to the native scroll the instant
+    // the finger moves.
+    if ((this.gate === 'armed' || this.gate === 'active') && event.cancelable) {
       event.preventDefault();
     }
   };

@@ -164,6 +164,42 @@ describe('HoldToDragSensor touch gate', () => {
     expect(events.onDragEnd).toHaveBeenCalledTimes(1);
   });
 
+  it('holds the browser pan off from arming onward, but not during the hold', async () => {
+    // The browser's own pan threshold can be tighter than the move tolerance
+    // (Android Chrome starts scrolling around 8px), so from arming onward the
+    // sensor must keep the pan from starting at all; during the hold the pan
+    // must stay available for the native scroll. The handler only reads
+    // `cancelable` and calls `preventDefault()`, so a plain cancelable event
+    // exercises the same path a real TouchEvent takes.
+    const { events, tile } = await renderHarness();
+
+    const touchMove = () => {
+      const event = new Event('touchmove', { bubbles: true, cancelable: true });
+      document.dispatchEvent(event);
+      return event;
+    };
+
+    await interact(() => pointer('pointerdown', tile(), 150, 150));
+
+    // Waiting: the browser must stay free to pan (an early move is a scroll).
+    expect(touchMove().defaultPrevented).toBe(false);
+
+    await wait(HOLD_ELAPSED_MS);
+    expect(tile().getAttribute('data-drag-armed')).toBe('true');
+
+    // Armed: the pan is held off so the scroll-slop cannot steal the drag.
+    expect(touchMove().defaultPrevented).toBe(true);
+
+    await interact(() => pointer('pointermove', document, 170, 150));
+    expect(events.onDragStart).toHaveBeenCalledTimes(1);
+
+    // Active: still held off, as before.
+    expect(touchMove().defaultPrevented).toBe(true);
+
+    // End the gesture so the sensor cannot leak into the next test in this page.
+    await interact(() => pointer('pointerup', document, 170, 150));
+  });
+
   it('treats a motionless armed hold that lifts as an ordinary tap', async () => {
     // The stock TouchSensor delay constraint activates on the timer alone, so a
     // deliberate slow tap selected nothing and the trailing click was swallowed.
