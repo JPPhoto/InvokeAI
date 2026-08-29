@@ -1,11 +1,19 @@
 import type { CanvasBlendMode } from '@workbench/canvas-engine/contracts';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
+import { readPsd, writePsd } from 'ag-psd';
 import { describe, expect, it } from 'vitest';
 
-import type { PsdExportLayerInput } from './psdExport';
+import type {
+  PsdExportGroupInput,
+  PsdExportLayerInput,
+  PsdExportNodeInput,
+  PsdPlanFolder,
+  PsdPlanNode,
+} from './psdExport';
 
-import { blendModeToPsd, planPsdExport, PSD_MAX_DIMENSION } from './psdExport';
+import { blendModeToPsd, executePsdExport, planPsdExport, PSD_MAX_DIMENSION } from './psdExport';
 
 const IDENTITY = { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 };
 
@@ -161,5 +169,96 @@ describe('planPsdExport', () => {
   it('accepts bounds exactly at the cap', () => {
     const plan = planPsdExport([layer({ contentRect: { height: 10, width: PSD_MAX_DIMENSION, x: 0, y: 0 } })]);
     expect(plan.status).toBe('ok');
+  });
+});
+
+describe('planPsdExport — folders', () => {
+  const group = (id: string, children: PsdExportNodeInput[], isEnabled = true): PsdExportGroupInput => ({
+    children,
+    id,
+    isEnabled,
+    name: id,
+    type: 'group',
+  });
+  const names = (nodes: readonly PsdPlanNode[]): unknown[] =>
+    nodes.map((node) => (node.kind === 'folder' ? { [node.name]: names(node.children) } : node.name));
+
+  it('mirrors the tree as folders, reversing every level, and flattens leaves in visual order', () => {
+    const plan = planPsdExport([
+      layer({ id: 'top', name: 'Top' }),
+      group('G', [
+        layer({ id: 'g1', name: 'G1' }),
+        group('H', [layer({ id: 'h1', name: 'H1' })]),
+        layer({ id: 'g2', name: 'G2' }),
+      ]),
+      layer({ id: 'bottom', name: 'Bottom' }),
+    ]);
+    expect(plan.status).toBe('ok');
+    if (plan.status !== 'ok') {
+      return;
+    }
+    expect(names(plan.tree)).toEqual(['Bottom', { G: ['G2', { H: ['H1'] }, 'G1'] }, 'Top']);
+    expect(plan.layers.map((entry) => entry.id)).toEqual(['bottom', 'g2', 'h1', 'g1', 'top']);
+  });
+
+  it('writes own visibility on folders and leaves while the preview flattens only contributing leaves', () => {
+    const plan = planPsdExport([
+      group(
+        'off',
+        [layer({ id: 'inner', name: 'Inner' }), layer({ id: 'dark', isEnabled: false, name: 'Dark' })],
+        false
+      ),
+      layer({ id: 'root', name: 'Root' }),
+    ]);
+    if (plan.status !== 'ok') {
+      throw new Error(plan.status);
+    }
+    const folder = plan.tree[1] as PsdPlanFolder;
+    expect(folder).toMatchObject({ hidden: true, kind: 'folder', name: 'off' });
+    expect(findLayer(plan, 'inner')).toMatchObject({ contributes: false, hidden: false });
+    expect(findLayer(plan, 'dark')).toMatchObject({ contributes: false, hidden: true });
+    expect(findLayer(plan, 'root')).toMatchObject({ contributes: true, hidden: false });
+  });
+
+  it('drops a folder whose subtree exports nothing', () => {
+    const empty = { height: 0, width: 0, x: 0, y: 0 };
+    const plan = planPsdExport([
+      group('hollow', [group('deeper', [layer({ contentRect: empty, id: 'nothing' })])]),
+      layer({ id: 'root', name: 'Root' }),
+    ]);
+    if (plan.status !== 'ok') {
+      throw new Error(plan.status);
+    }
+    expect(names(plan.tree)).toEqual(['Root']);
+  });
+
+  it('round-trips folder hierarchy, order, names and leaf properties through ag-psd', async () => {
+    const plan = planPsdExport([
+      group('Shading', [layer({ blendMode: 'multiply', id: 'shade', name: 'Shade', opacity: 0.5 })], false),
+      layer({ id: 'base', name: 'Base' }),
+    ]);
+    const backend = createTestStubRasterBackend();
+    const imageDataOf = (width: number, height: number): ImageData =>
+      ({ data: new Uint8ClampedArray(width * height * 4), height, width }) as ImageData;
+    let bytes: ArrayBuffer | null = null;
+    await executePsdExport(plan, 'tree.psd', {
+      backend,
+      download: (data) => {
+        bytes = data;
+      },
+      getLayerSurface: () =>
+        Promise.resolve({ rect: { height: 50, width: 100, x: 0, y: 0 }, surface: backend.createSurface(100, 50) }),
+      readImageData: (_surface, rect) => imageDataOf(rect.width, rect.height),
+      writeImageData: () => undefined,
+      writePsd: (psd) => Promise.resolve(writePsd(psd, { generateThumbnail: false })),
+    });
+    const parsed = readPsd(bytes!, { skipCompositeImageData: true, skipLayerImageData: true, skipThumbnail: true });
+    expect(parsed.children?.map((child) => child.name)).toEqual(['Base', 'Shading']);
+    const folder = parsed.children![1]!;
+    expect(folder.hidden).toBe(true);
+    expect(folder.children?.map((child) => child.name)).toEqual(['Shade']);
+    expect(folder.children![0]).toMatchObject({ blendMode: 'multiply', hidden: false });
+    // Opacity rides an 8-bit field in the file.
+    expect(folder.children![0]!.opacity).toBeCloseTo(0.5, 2);
   });
 });

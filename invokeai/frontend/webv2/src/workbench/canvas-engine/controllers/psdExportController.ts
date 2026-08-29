@@ -1,16 +1,18 @@
 import type { CanvasDocumentSnapshot, PsdExportResult } from '@workbench/canvas-engine/capabilities';
+import type { CanvasNodeContract } from '@workbench/canvas-engine/contracts';
 import type {
   CanvasDetachedLayerSurface,
   CaptureRasterSnapshotResult,
 } from '@workbench/canvas-engine/rasterTransactions';
 import type { RasterBackend } from '@workbench/canvas-engine/render/raster';
 
-import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/flatDocumentModel';
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
+import { isGroupNode } from '@workbench/canvas-engine/document/documentTree';
 import {
   executePsdExport,
   planPsdExport,
   type ExecutePsdExportDeps,
-  type PsdExportLayerInput,
+  type PsdExportNodeInput,
   type PsdExportPlan,
 } from '@workbench/canvas-engine/export/psdExport';
 import { isExportableRasterLayer } from '@workbench/canvas-engine/layerExportGuards';
@@ -66,9 +68,8 @@ export class PsdExportController {
         return 'stale';
       }
       const document = documentSnapshot.canvas.document;
-      const layers = compileDocumentLeaves(document)
-        .map((leaf) => leaf.layer)
-        .filter(isExportableRasterLayer);
+      const leaves = compileDocumentLeaves(document).filter((leaf) => isExportableRasterLayer(leaf.layer));
+      const layers = leaves.map((leaf) => leaf.layer);
       if (layers.length === 0) {
         return 'nothing';
       }
@@ -88,25 +89,48 @@ export class PsdExportController {
         if (!this.deps.isDocumentSnapshotCurrent(documentSnapshot)) {
           return 'stale';
         }
-        const inputs: PsdExportLayerInput[] = [];
-        for (const layer of layers) {
-          const detached = rasterSnapshot.layerSurfaces.get(layer.id);
-          if (!detached) {
-            if (rasterSnapshot.emptyLayerIds.has(layer.id)) {
-              continue;
+        // The raster tree as it stands, minus leaves with nothing captured; the planner derives
+        // effective visibility from the own flags, the same way Photoshop will.
+        let missing: string | null = null;
+        const toInputs = (nodes: readonly CanvasNodeContract[]): PsdExportNodeInput[] =>
+          nodes.flatMap((node): PsdExportNodeInput[] => {
+            if (isGroupNode(node)) {
+              return [
+                {
+                  children: toInputs(node.children),
+                  id: node.id,
+                  isEnabled: node.isEnabled,
+                  name: node.name,
+                  type: 'group',
+                },
+              ];
             }
-            return 'not-ready';
-          }
-          inputs.push({
-            adjustments: layer.type === 'raster' ? layer.adjustments : undefined,
-            blendMode: layer.blendMode,
-            contentRect: detached.rect,
-            id: layer.id,
-            isEnabled: layer.isEnabled,
-            name: layer.name,
-            opacity: layer.opacity,
-            transform: layer.transform,
+            if (!isExportableRasterLayer(node)) {
+              return [];
+            }
+            const detached = rasterSnapshot.layerSurfaces.get(node.id);
+            if (!detached) {
+              if (!rasterSnapshot.emptyLayerIds.has(node.id)) {
+                missing ??= node.id;
+              }
+              return [];
+            }
+            return [
+              {
+                adjustments: node.type === 'raster' ? node.adjustments : undefined,
+                blendMode: node.blendMode,
+                contentRect: detached.rect,
+                id: node.id,
+                isEnabled: node.isEnabled,
+                name: node.name,
+                opacity: node.opacity,
+                transform: node.transform,
+              },
+            ];
           });
+        const inputs = toInputs(document.stacks.raster);
+        if (missing !== null) {
+          return 'not-ready';
         }
         const plan = planPsdExport(inputs);
         if (plan.status === 'empty') {

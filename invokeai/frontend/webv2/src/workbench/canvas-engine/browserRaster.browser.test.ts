@@ -1,10 +1,11 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerSourceContract,
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
 import type { Mat2d } from '@workbench/canvas-engine/types';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { executePsdExport, planPsdExport } from '@workbench/canvas-engine/export/psdExport';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { createImagePatchEntry } from '@workbench/canvas-engine/history/imagePatch';
@@ -45,13 +46,13 @@ const rasterLayer = (
   ...overrides,
 });
 
-const documentWith = (layers: CanvasRasterLayerContractV2[]): CanvasDocumentContractV2 => ({
+const documentWith = (layers: CanvasRasterLayerContractV2[]): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 8, width: 8, x: 0, y: 0 },
   height: 8,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: layers[0]?.id ?? null,
-  version: 2,
+  version: 3,
   width: 8,
 });
 
@@ -190,21 +191,28 @@ describe('real browser raster acceptance', () => {
     expectPixel(surface, 0, 0, [0, 0, 255, 255]);
   });
 
-  it('round-trips a small real PSD with layer and composite pixels', async () => {
+  it('round-trips a small real PSD with a folder, layer pixels and a merged preview of the contributing leaves', async () => {
     const backend = createDomRasterBackend();
-    const layerSurface = backend.createSurface(2, 2);
-    layerSurface.ctx.fillStyle = '#ff0000';
-    layerSurface.ctx.fillRect(0, 0, 2, 2);
+    const fill = (color: string) => {
+      const surface = backend.createSurface(2, 2);
+      surface.ctx.fillStyle = color;
+      surface.ctx.fillRect(0, 0, 2, 2);
+      return surface;
+    };
+    const surfaces = { blue: fill('#0000ff'), red: fill('#ff0000') };
+    const leaf = (id: string, name: string) => ({
+      blendMode: 'normal' as const,
+      contentRect: { height: 2, width: 2, x: 0, y: 0 },
+      id,
+      isEnabled: true,
+      name,
+      opacity: 1,
+      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+    });
+    // A disabled folder above the red base: its blue leaf is exported but stays out of the preview.
     const plan = planPsdExport([
-      {
-        blendMode: 'normal',
-        contentRect: { height: 2, width: 2, x: 0, y: 0 },
-        id: 'red',
-        isEnabled: true,
-        name: 'Red',
-        opacity: 1,
-        transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
-      },
+      { children: [leaf('blue', 'Blue')], id: 'g', isEnabled: false, name: 'Group', type: 'group' },
+      leaf('red', 'Red'),
     ]);
     let bytes: ArrayBuffer | null = null;
 
@@ -213,10 +221,10 @@ describe('real browser raster acceptance', () => {
       download: (data) => {
         bytes = data;
       },
-      getLayerSurface: () =>
+      getLayerSurface: (id) =>
         Promise.resolve({
           rect: { height: 2, width: 2, x: 0, y: 0 },
-          surface: layerSurface,
+          surface: surfaces[id as keyof typeof surfaces],
         }),
     });
 
@@ -225,8 +233,11 @@ describe('real browser raster acceptance', () => {
     const parsed = readPsd(bytes!, { useImageData: true });
     expect(parsed.width).toBe(2);
     expect(parsed.height).toBe(2);
-    expect(parsed.children?.map((child) => child.name)).toEqual(['Red']);
+    expect(parsed.children?.map((child) => child.name)).toEqual(['Red', 'Group']);
+    expect(parsed.children![1]).toMatchObject({ hidden: true });
+    expect(parsed.children![1]!.children?.map((child) => child.name)).toEqual(['Blue']);
     expect(Array.from(parsed.imageData!.data.slice(0, 4))).toEqual([255, 0, 0, 255]);
     expect(Array.from(parsed.children![0]!.imageData!.data.slice(0, 4))).toEqual([255, 0, 0, 255]);
+    expect(Array.from(parsed.children![1]!.children![0]!.imageData!.data.slice(0, 4))).toEqual([0, 0, 255, 255]);
   });
 });
