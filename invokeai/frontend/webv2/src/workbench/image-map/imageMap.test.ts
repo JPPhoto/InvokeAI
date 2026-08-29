@@ -283,6 +283,78 @@ describe('image map store', () => {
       await refresh;
     }
   });
+
+  it('collapses mid-flight refresh requests into one rerun', async () => {
+    // The socket runtime can call refresh while the first load is still in
+    // flight (projection-ready is admitted during 'loading'), and several
+    // events may land inside one fetch's window. Every caller must join the
+    // in-flight request, and exactly one rerun may follow — not one per
+    // caller, and never a parallel fetch.
+    const pointsResolvers: Array<(value: typeof BACKEND_RESPONSE) => void> = [];
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/image_map/points')) {
+        return new Promise((resolve) => {
+          pointsResolvers.push(resolve);
+        });
+      }
+
+      return Promise.resolve({
+        labels: { '0': { label: 'cats' } },
+        updated_at: BACKEND_RESPONSE.updated_at,
+        visible_hash: BACKEND_RESPONSE.visible_hash,
+      });
+    });
+
+    const calls = [refreshImageMapPoints(), refreshImageMapPoints(), refreshImageMapPoints()];
+    // All three joined the one in-flight fetch; no parallel point set.
+    expect(pointsResolvers).toHaveLength(1);
+
+    pointsResolvers[0]?.(BACKEND_RESPONSE);
+    await Promise.all(calls);
+
+    // Exactly one rerun follows the settle.
+    await vi.waitFor(() => expect(pointsResolvers).toHaveLength(2));
+    pointsResolvers[1]?.(BACKEND_RESPONSE);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    // No runaway: the rerun found nothing to queue behind it.
+    expect(pointsResolvers).toHaveLength(2);
+    expect(imageMapStore.getSnapshot().loadState).toBe('loaded');
+  });
+
+  it('still runs the queued rerun when the in-flight fetch fails', async () => {
+    // A refresh admitted during 'loading' must not be lost to the first fetch
+    // failing: the rerun runs anyway and can still recover the map.
+    let pointsCall = 0;
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (!url.startsWith('/api/v1/image_map/points')) {
+        return Promise.resolve({
+          labels: { '0': { label: 'cats' } },
+          updated_at: BACKEND_RESPONSE.updated_at,
+          visible_hash: BACKEND_RESPONSE.visible_hash,
+        });
+      }
+
+      pointsCall += 1;
+      return pointsCall === 1 ? Promise.reject(new Error('backend down')) : Promise.resolve(BACKEND_RESPONSE);
+    });
+
+    const first = refreshImageMapPoints();
+    refreshImageMapPoints();
+    await first;
+
+    // The rerun ran (a second points fetch) despite the first one failing,
+    // and it recovered the map. Without the queued rerun, pointsCall would
+    // sit at 1 and loadState at 'error'.
+    await vi.waitFor(() => expect(pointsCall).toBe(2));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(imageMapStore.getSnapshot().loadState).toBe('loaded');
+  });
 });
 
 describe('cluster palette', () => {
