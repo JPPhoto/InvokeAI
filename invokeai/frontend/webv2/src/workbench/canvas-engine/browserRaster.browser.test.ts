@@ -240,4 +240,50 @@ describe('real browser raster acceptance', () => {
     expect(Array.from(parsed.children![0]!.imageData!.data.slice(0, 4))).toEqual([255, 0, 0, 255]);
     expect(Array.from(parsed.children![1]!.children![0]!.imageData!.data.slice(0, 4))).toEqual([0, 0, 255, 255]);
   });
+
+  it('writes a merged preview pixel-equivalent to compositing the contributing leaves with their opacity and blend', async () => {
+    const backend = createDomRasterBackend();
+    const fill = (color: string) => {
+      const surface = backend.createSurface(2, 2);
+      surface.ctx.fillStyle = color;
+      surface.ctx.fillRect(0, 0, 2, 2);
+      return surface;
+    };
+    const surfaces = { base: fill('#ff8040'), tint: fill('#4080ff') };
+    const leaf = (id: string, name: string, opacity: number, blendMode: 'normal' | 'multiply') => ({
+      blendMode,
+      contentRect: { height: 2, width: 2, x: 0, y: 0 },
+      id,
+      isEnabled: true,
+      name,
+      opacity,
+      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+    });
+    // An enabled folder above the base: its tinted leaf contributes at half opacity, multiplied.
+    const plan = planPsdExport([
+      { children: [leaf('tint', 'Tint', 0.5, 'multiply')], id: 'g', isEnabled: true, name: 'Group', type: 'group' },
+      leaf('base', 'Base', 1, 'normal'),
+    ]);
+    let bytes: ArrayBuffer | null = null;
+    await executePsdExport(plan, 'preview.psd', {
+      backend,
+      download: (data) => {
+        bytes = data;
+      },
+      getLayerSurface: (id) =>
+        Promise.resolve({ rect: { height: 2, width: 2, x: 0, y: 0 }, surface: surfaces[id as keyof typeof surfaces] }),
+    });
+
+    const reference = backend.createSurface(2, 2);
+    reference.ctx.drawImage(surfaces.base.canvas, 0, 0);
+    reference.ctx.globalAlpha = 0.5;
+    reference.ctx.globalCompositeOperation = 'multiply';
+    reference.ctx.drawImage(surfaces.tint.canvas, 0, 0);
+    const expected = Array.from(reference.ctx.getImageData(0, 0, 2, 2).data);
+
+    const { readPsd } = await import('ag-psd');
+    const parsed = readPsd(bytes!, { useImageData: true });
+    expect(Array.from(parsed.imageData!.data)).toEqual(expected);
+    expect(parsed.children?.map((child) => child.name)).toEqual(['Base', 'Group']);
+  });
 });
