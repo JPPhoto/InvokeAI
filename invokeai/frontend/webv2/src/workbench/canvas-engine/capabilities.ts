@@ -1,19 +1,19 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasImageRef,
   CanvasLayerContract,
   CanvasStagingCandidateContract,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
 } from '@workbench/canvas-engine/contracts';
 import type { CanvasMutationOrigin } from '@workbench/canvas-engine/mutationContracts';
 import type { StrokeCommittedEvent } from '@workbench/canvas-engine/tools/tool';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 
 import type { NewRasterLayerResult } from './controllers/newRasterLayerController';
-import type { PreparedFlatEdit } from './document-model/flatDocumentCommands';
-import type { FlatCanvasDocumentModel } from './document-model/flatDocumentModel';
+import type { PreparedDocumentEdit } from './document-model/documentCommands';
+import type { CanvasDocumentModel } from './document-model/documentModel';
 import type { CanvasCommandRefusal } from './document/commandRefusal';
-import type { FlatLayerInsertionAnchor } from './document/insertionAnchors';
+import type { CanvasNodeInsertionAnchor } from './document/insertionAnchors';
 import type { LayerStackKind } from './document/layerStacks';
 import type { CanvasTransactionOutcome, SubsetOf } from './editConcurrency';
 import type { CanvasEditGate } from './editGate';
@@ -141,7 +141,7 @@ export interface CanvasSurfaceCapability {
 
 export interface CanvasDocumentCapability {
   captureSnapshot(): CanvasDocumentSnapshot | null;
-  getDocument(): CanvasDocumentContractV2 | null;
+  getDocument(): CanvasDocumentContractV3 | null;
   /**
    * Counts every reducer document identity change, whatever its origin (user edits, previews,
    * selection, system syncs). Unlike `documentGeneration` (raster invalidation) and the persisted
@@ -150,18 +150,18 @@ export interface CanvasDocumentCapability {
    */
   getEditRevision(): number;
   /** Where a new `stack` layer lands: above `aboveId` when it belongs to the stack, else the stack top. */
-  captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): FlatLayerInsertionAnchor;
-  /** The anchor that restores `layerId` between its current same-stack neighbours; null when absent. */
-  captureRestoreAnchor(layerId: string): FlatLayerInsertionAnchor | null;
+  captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): CanvasNodeInsertionAnchor;
+  /** The anchor that restores `nodeId` between its current siblings; null when absent. */
+  captureRestoreAnchor(nodeId: string): CanvasNodeInsertionAnchor | null;
   /** Swaps in a whole new document; the mirror treats it as a document swap and history clears. */
-  replaceDocument(document: CanvasDocumentContractV2): boolean;
+  replaceDocument(document: CanvasDocumentContractV3): boolean;
   /** The pure model over the current document; the same instance until the document changes. */
-  model(): FlatCanvasDocumentModel | null;
+  model(): CanvasDocumentModel | null;
 }
 
 /** Immutable reducer canvas state captured at one engine document generation. */
 export interface CanvasDocumentSnapshot {
-  readonly canvas: CanvasStateContractV2;
+  readonly canvas: CanvasStateContractV3;
   readonly documentGeneration: number;
 }
 
@@ -233,6 +233,7 @@ export type {
   CanvasMutationOrigin,
   CanvasProjectMutation,
 } from './mutationContracts';
+export { GROUP_PATCH_KEYS } from './mutationContracts';
 
 export interface ExportLayerPixelsOptions {
   includeDisabled?: boolean;
@@ -307,7 +308,7 @@ export interface StructuralCommitOptions {
   /** The edit revision the edit was prepared against; a mismatch refuses as `stale`. */
   expectedRevision?: number;
   /** An extra reducer postcondition beyond "the document changed". */
-  verify?: (document: CanvasDocumentContractV2) => boolean;
+  verify?: (document: CanvasDocumentContractV3) => boolean;
 }
 
 /** The narrowest engine surface a structural edit needs. */
@@ -333,7 +334,7 @@ export interface CanvasLayerCapability {
     options?: StructuralCommitOptions
   ): StructuralCommitResult;
   /** Runs a prepared flat edit through the transaction: refusals, dispatch, verification and history. */
-  commitPrepared(label: string, edit: PreparedFlatEdit, options?: PreparedCommitOptions): StructuralCommitResult;
+  commitPrepared(label: string, edit: PreparedDocumentEdit, options?: PreparedCommitOptions): StructuralCommitResult;
   invertMask(layerId: string): boolean;
 }
 
@@ -484,7 +485,7 @@ export interface CanvasEngineLayerCapability extends CanvasLayerCapability {
     label: string,
     sourceLayerId: string,
     layer: CanvasLayerContract,
-    anchor: FlatLayerInsertionAnchor
+    anchor: CanvasNodeInsertionAnchor
   ): boolean;
   commitMaskImageResult(options: CommitMaskImageResultOptions): Promise<CommitMaskImageResult>;
   commitOpenTextSession(): boolean;
@@ -543,6 +544,7 @@ export interface CanvasEngine {
 // Public Canvas-owned value contracts. These remain serializable and contain
 // no engine implementation, mutable store, controller, or construction type.
 export type * from './contracts';
+export { CANVAS_MAX_NODE_COUNT, CANVAS_MAX_NODE_DEPTH } from './contracts';
 export type BooleanRasterOperation = 'intersect' | 'cutout' | 'cutaway' | 'exclude';
 export interface StagedPreviewPlacement extends Rect {
   opacity: number;
@@ -596,17 +598,39 @@ export { documentToExportLocalSamPoint } from './samCoordinates';
 export { bboxEquals, constrainBboxToRatio, roundBbox } from './tools/bboxHitTest';
 export { isEmpty, union } from './math/rect';
 export { ZOOM_PRESETS } from './math/snapping';
-export { isLayerPixelEditEligible } from './editing/controlPixelEdit';
+export { isLeafPixelEditEligible } from './editing/controlPixelEdit';
 export {
-  getStackOrder,
-  haveSameStackOrders,
+  getSiblingOrder,
+  haveSameStructure,
+  isOverlayStack,
   LAYER_STACK_ORDER,
   LAYER_STACKS_TOP_FIRST,
   layerStackOf,
   type LayerStackKind,
   type LayerStackMoveKind,
-  type ReorderFlatStackCommand,
+  type OverlayStackKind,
+  type ReorderSiblingsCommand,
 } from './document/layerStacks';
+export {
+  childrenOf,
+  collectSubtree,
+  collectSubtreeLeaves,
+  createEmptyStacks,
+  isGroupNode,
+  isLeafNode,
+  subtreeDepth,
+} from './document/documentTree';
+export {
+  getDocumentIndex,
+  getDocumentLayer,
+  getDocumentLeaves,
+  getDocumentNode,
+  hasDocumentNode,
+  isSelfOrAncestor,
+  outermostNodes,
+  type CanvasDocumentIndex,
+  type CanvasNodeEntry,
+} from './document/documentIndex';
 export {
   type HideableLayer,
   isHideableLayer,
@@ -616,34 +640,44 @@ export {
   isLayerPaintable,
   isMergeableRasterLayer,
   isLayerTransparencyLocked,
+  isNodeHidden,
   isPixelBackedLayer,
 } from './document/layerEligibility';
 export {
-  type FlatDocumentCommand,
-  type FlatDocumentRefusal,
+  type DocumentCommand,
+  type DocumentRefusal,
+  type InvalidTargetReason,
   type MergeDownEligibility,
-  type PreparedFlatEdit,
-  type PrepareFlatEditResult,
-} from './document-model/flatDocumentCommands';
+  type PreparedDocumentEdit,
+  type PrepareEditResult,
+} from './document-model/documentCommands';
 export {
-  createFlatDocumentModel,
-  type FlatCanvasDocumentModel,
+  compileContributingLayers,
+  compileDocumentLeaves,
+  createDocumentModel,
+  type CanvasDocumentModel,
+  lookupDocumentLayer,
+  lookupDocumentLeaf,
+  lookupDocumentNode,
   lookupLayerBelow,
   mergeDownEligibility,
-} from './document-model/flatDocumentModel';
-export { checkFlatEditPostconditions, type FlatEditPostcondition } from './document-model/postconditions';
+} from './document-model/documentModel';
+export { checkEditPostconditions, type EditPostcondition } from './document-model/postconditions';
 export {
+  isLeafIsolated,
   planScreenComposition,
   type CanvasScreenViewState,
   type ScreenCompositionPlan,
 } from './document-model/screenComposition';
-export { type SemanticLeafV2 } from './document-model/semanticLeaf';
+export { type SemanticLeaf } from './document-model/semanticLeaf';
 export {
   captureInsertionAnchor,
   captureRestoreAnchor,
-  resolveInsertionIndex,
-  type FlatLayerInsertion,
-  type FlatLayerInsertionAnchor,
+  resolveInsertionTarget,
+  type CanvasNodeInsertion,
+  type CanvasNodeInsertionAnchor,
+  type CanvasNodeMove,
+  type InsertionAnchorCapture,
 } from './document/insertionAnchors';
 export { isExportableRasterLayer } from './layerExportGuards';
 export {

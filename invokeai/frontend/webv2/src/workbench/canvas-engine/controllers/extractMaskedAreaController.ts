@@ -1,7 +1,7 @@
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { CanvasDiagnostics } from '@workbench/canvas-engine/diagnostics';
-import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
@@ -15,7 +15,9 @@ import type {
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
-import { isLayerContributing } from '@workbench/canvas-engine/document/layerEligibility';
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLayer, getDocumentLeaves, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
+import { createEmptyStacks } from '@workbench/canvas-engine/document/documentTree';
 import { getSourceContentRect } from '@workbench/canvas-engine/document/sources';
 import { isEmpty } from '@workbench/canvas-engine/math/rect';
 import { compositeDocument } from '@workbench/canvas-engine/render/compositor';
@@ -35,10 +37,10 @@ export interface ExtractMaskedAreaControllerOptions {
   readonly derived: DerivedSurfaceCache;
   readonly diagnostics: CanvasDiagnostics;
   readonly history: History;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
-  readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
+  readonly getReducerDocument: () => CanvasDocumentContractV3 | null;
   readonly endBurst: () => void;
-  readonly isCacheReady: (layer: CanvasLayerContract, document: CanvasDocumentContractV2) => boolean;
+  readonly isCacheReady: (layer: CanvasLayerContract, document: CanvasDocumentContractV3) => boolean;
   readonly hasExportableContent: (layerId: string) => boolean;
   readonly exportBaked: (layerId: string, includeDisabled?: boolean) => Promise<ExportResult>;
   readonly rasterize: (layerId: string) => Promise<ExportResult>;
@@ -46,7 +48,7 @@ export interface ExtractMaskedAreaControllerOptions {
   readonly getAdjustedSurface: (layer: CanvasLayerContract, entry: LayerCacheEntry) => RasterSurface | null;
   readonly getMaskPattern: (style: string, color: string) => RasterSurface | null;
   readonly createLayerId: () => string;
-  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => CanvasNodeInsertionAnchor;
   readonly preparePixels: (layerId: string, rect: Rect, pixels: RasterSurface) => PreparedLayerCacheReplacement;
   readonly installPrepared: (prepared: PreparedLayerCacheReplacement) => void;
   readonly dispatchPrepared: (
@@ -57,6 +59,15 @@ export interface ExtractMaskedAreaControllerOptions {
 }
 
 /** Owns guarded extraction of raster content through an inpaint mask. */
+/** Contributing raster leaves with content, top first, with ancestor state applied. */
+const contributingRasters = (
+  document: CanvasDocumentContractV3,
+  hasContent: (layerId: string) => boolean
+): CanvasLayerContract[] =>
+  compileDocumentLeaves(document)
+    .filter((leaf) => leaf.stack === 'raster' && leaf.contributionEnabled && hasContent(leaf.id))
+    .map((leaf) => leaf.layer);
+
 export class ExtractMaskedAreaController {
   private disposed = false;
   constructor(private readonly deps: ExtractMaskedAreaControllerOptions) {}
@@ -71,8 +82,8 @@ export class ExtractMaskedAreaController {
     if (!document) {
       return { status: 'missing' };
     }
-    const maskIndex = document.layers.findIndex((layer) => layer.id === maskLayerId);
-    const mask = document.layers[maskIndex];
+    const maskIndex = getDocumentLeaves(document).findIndex((layer) => layer.id === maskLayerId);
+    const mask = getDocumentLeaves(document)[maskIndex];
     if (maskIndex < 0 || !mask) {
       return { status: 'missing' };
     }
@@ -83,9 +94,7 @@ export class ExtractMaskedAreaController {
     if (isEmpty(getSourceContentRect(mask, document)) && (!liveMask || isEmpty(liveMask.rect))) {
       return { status: 'empty' };
     }
-    const contributors = document.layers.filter(
-      (layer) => isLayerContributing(layer) && layer.type === 'raster' && this.deps.hasExportableContent(layer.id)
-    );
+    const contributors = contributingRasters(document, this.deps.hasExportableContent);
     if (contributors.length === 0) {
       return { status: 'empty' };
     }
@@ -131,17 +140,16 @@ export class ExtractMaskedAreaController {
         return { status: 'not-ready' };
       }
       const liveDocument = this.deps.getDocument();
-      const liveMaskIndex = liveDocument?.layers.findIndex((layer) => layer.id === maskLayerId) ?? -1;
-      const currentMask = liveDocument?.layers[liveMaskIndex];
+      const liveMaskIndex =
+        getDocumentLeaves(liveDocument ?? null).findIndex((layer) => layer.id === maskLayerId) ?? -1;
+      const currentMask = getDocumentLeaves(liveDocument ?? null)[liveMaskIndex];
       if (!liveDocument || !currentMask) {
         return { status: 'missing' };
       }
       if (currentMask !== mask) {
         return { status: currentMask.type === 'inpaint_mask' && currentMask.isLocked ? 'unsupported' : 'not-ready' };
       }
-      const liveContributors = liveDocument.layers.filter(
-        (layer) => isLayerContributing(layer) && layer.type === 'raster' && this.deps.hasExportableContent(layer.id)
-      );
+      const liveContributors = contributingRasters(liveDocument, this.deps.hasExportableContent);
       if (
         liveMaskIndex !== maskIndex ||
         liveContributors.some((layer, index) => layer !== contributors[index]) ||
@@ -169,7 +177,7 @@ export class ExtractMaskedAreaController {
       const pixels = this.deps.backend.createSurface(rect.width, rect.height);
       compositeDocument(
         pixels,
-        { ...document, layers: contributors },
+        { ...document, stacks: { ...createEmptyStacks(), raster: contributors } },
         this.deps.layers,
         { a: 1, b: 0, c: 0, d: 1, e: -rect.x, f: -rect.y },
         {
@@ -202,17 +210,17 @@ export class ExtractMaskedAreaController {
         const prepared = this.deps.preparePixels(resultId, rect, pixels);
         this.deps.dispatchPrepared(
           {
-            add: [{ anchor, layers: [layer] }],
+            add: [{ anchor, nodes: [layer] }],
             enabledUpdates: [],
             selectedLayerId: resultId,
             type: 'applyCanvasLayerStackMutation',
           },
           () =>
             this.deps.getReducerDocument()?.selectedLayerId === resultId &&
-            this.deps.getReducerDocument()?.layers.some((candidate) => candidate === layer) === true,
+            getDocumentLayer(this.deps.getReducerDocument(), layer.id) === layer,
           () =>
             this.deps.getDocument()?.selectedLayerId === resultId &&
-            this.deps.getDocument()?.layers.some((candidate) => candidate === layer) === true
+            getDocumentLayer(this.deps.getDocument(), layer.id) === layer
         );
         this.deps.installPrepared(prepared);
       };
@@ -230,10 +238,10 @@ export class ExtractMaskedAreaController {
             { enabledUpdates: [], removeIds: [resultId], selectedLayerId, type: 'applyCanvasLayerStackMutation' },
             () =>
               this.deps.getReducerDocument()?.selectedLayerId === selectedLayerId &&
-              this.deps.getReducerDocument()?.layers.some((candidate) => candidate.id === resultId) === false,
+              isNodeAbsent(this.deps.getReducerDocument(), resultId),
             () =>
               this.deps.getDocument()?.selectedLayerId === selectedLayerId &&
-              this.deps.getDocument()?.layers.some((candidate) => candidate.id === resultId) === false
+              isNodeAbsent(this.deps.getDocument(), resultId)
           ),
       });
       return { layerId: resultId, status: 'extracted' };

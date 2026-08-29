@@ -19,6 +19,7 @@ afterAll(closeSourceAnalysis);
 /** Modules that may take part in stack order and selection repair: the reducer and the document seam. */
 const DOCUMENT_SEAM_OWNERS = [
   /^workbench\/canvasProjectMutations\.ts$/,
+  /^workbench\/canvasMigration\.ts$/,
   /^workbench\/canvas-engine\/document\//,
   /^workbench\/canvas-engine\/document-model\//,
 ];
@@ -30,7 +31,7 @@ const SEAM_MODULES = [
 ];
 
 /**
- * Mutations that restructure the layer list. Controllers build some as forward/inverse pairs for
+ * Mutations that restructure the stack forests. Controllers build some as forward/inverse pairs for
  * prepared raster dispatch, while paint creates and rolls back its pointer-down layer by design.
  * Every current owner is enumerated below; the scan matches the formatted literal `type: '…'`.
  */
@@ -38,10 +39,9 @@ const STRUCTURAL_MUTATION_TYPES = [
   'addCanvasLayer',
   'applyCanvasLayerStackMutation',
   'convertCanvasLayer',
-  'duplicateCanvasLayer',
   'mergeCanvasLayersDown',
   'removeCanvasLayers',
-  'reorderCanvasLayerStacks',
+  'reorderCanvasSiblings',
   'replaceCanvasDocument',
   'replaceCanvasLayer',
   'restoreCanvasSnapshot',
@@ -51,8 +51,8 @@ const STRUCTURAL_MUTATION_TYPES = [
   'updateCanvasLayerSource',
 ];
 /**
- * The finite set of modules that still construct the v2 flat mutation vocabulary. Keeping this
- * explicit prevents new bypasses and is the migration checklist for the hierarchy tree reducer.
+ * The finite set of modules that construct structural mutations directly. Keeping this explicit
+ * prevents new bypasses of the prepared-edit seam.
  */
 const STRUCTURAL_MUTATION_OWNER_PATHS = new Set([
   'workbench/canvasProjectMutations.ts',
@@ -70,7 +70,7 @@ const STRUCTURAL_MUTATION_OWNER_PATHS = new Set([
   'workbench/canvas-engine/controllers/stagedResultController.ts',
   'workbench/canvas-engine/controllers/structuralLayerController.ts',
   'workbench/canvas-engine/controllers/textEditingController.ts',
-  'workbench/canvas-engine/document-model/flatDocumentModel.ts',
+  'workbench/canvas-engine/document-model/documentModel.ts',
   'workbench/canvas-engine/document/bitmapStore.ts',
   'workbench/canvas-engine/engine.ts',
   'workbench/canvas-engine/mutationContracts.ts',
@@ -83,7 +83,7 @@ const STRUCTURAL_MUTATION_OWNER_PATHS = new Set([
 ]);
 const structuralLiteral = new RegExp(`type: '(?:${STRUCTURAL_MUTATION_TYPES.join('|')})'`, 'g');
 
-const SEAM_ONLY_SYMBOLS = ['repairSelectedLayerId', 'moveLayersWithinStacks', 'reorderLayerStack'];
+const SEAM_ONLY_SYMBOLS = ['repairSelectedLayerId', 'moveNodesWithinSiblings', 'reorderSiblings'];
 
 /** Production planners that consume the document model; dropping the import would reopen an ad-hoc path. */
 const MODEL_CONSUMERS = [
@@ -101,7 +101,7 @@ const MODEL_CONSUMERS = [
   'workbench/canvas-operations/generationCompositePlan.ts',
 ];
 
-const MODEL_MODULE = 'workbench/canvas-engine/document-model/flatDocumentModel';
+const MODEL_MODULE = 'workbench/canvas-engine/document-model/documentModel';
 
 describe('canvas document seam ownership', () => {
   it('keeps stack mutation and selection repair inside the reducer and the document seam', () => {
@@ -127,7 +127,7 @@ describe('canvas document seam ownership', () => {
     expect(offenders).toEqual([]);
   }, 60_000);
 
-  it('keeps flat structural mutation construction in explicit owners', () => {
+  it('keeps structural mutation construction in explicit owners', () => {
     const offenders: string[] = [];
     for (const [path, source] of productionSources) {
       if (STRUCTURAL_MUTATION_OWNER_PATHS.has(path)) {

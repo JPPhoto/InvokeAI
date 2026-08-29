@@ -1,6 +1,6 @@
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
-import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { CanvasDocumentContractV3, CanvasStackForests } from '@workbench/canvas-engine/contracts';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { CanvasEditConcurrency, DocumentEditPermit } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
@@ -13,6 +13,7 @@ import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/ren
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { EMPTY_STACKS } from '@workbench/canvas-engine/document/documentTree';
 import { captureInsertionAnchor, captureRestoreAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 
 /**
@@ -23,12 +24,12 @@ import { captureInsertionAnchor, captureRestoreAnchor } from '@workbench/canvas-
  */
 export interface CanvasMutationContext extends CanvasEditConcurrency {
   readonly history: History;
-  getDocument(): CanvasDocumentContractV2 | null;
-  getReducerDocument(): CanvasDocumentContractV2 | null;
+  getDocument(): CanvasDocumentContractV3 | null;
+  getReducerDocument(): CanvasDocumentContractV3 | null;
   /** Where a new `stack` layer lands: above `aboveId` when it belongs to the stack, else the stack top. */
-  captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): FlatLayerInsertionAnchor;
+  captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): CanvasNodeInsertionAnchor;
   /** The anchor that restores `layerId` between its current same-stack neighbours; null when absent. */
-  captureRestoreAnchor(layerId: string): FlatLayerInsertionAnchor | null;
+  captureRestoreAnchor(layerId: string): CanvasNodeInsertionAnchor | null;
   isGuardCurrent(guard: LayerExportGuard): boolean;
   dispatch(action: CanvasProjectMutation, origin?: CanvasMutationOrigin): boolean;
   dispatchPrepared(
@@ -47,8 +48,8 @@ export interface CanvasMutationContext extends CanvasEditConcurrency {
 export interface CanvasMutationContextDeps {
   readonly projectId: string;
   readonly history: History;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
-  readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
+  readonly getReducerDocument: () => CanvasDocumentContractV3 | null;
   readonly subscribeReducer: (listener: () => void) => () => void;
   readonly dispatch: (action: CanvasProjectMutation, origin?: CanvasMutationOrigin) => boolean;
   readonly commitEdit: (intent: CanvasEditIntent) => void;
@@ -96,7 +97,7 @@ export const createCanvasMutationContext = (
     syncEditRevision();
     return editRevision;
   };
-  const currentLayers = (): readonly CanvasLayerContract[] => deps.getDocument()?.layers ?? [];
+  const currentStacks = (): CanvasStackForests => deps.getDocument()?.stacks ?? EMPTY_STACKS;
   const canEdit = (owner?: symbol): boolean => owner === deps.editOwner || !deps.editingLocked.get();
   const capturePermit = (owner?: symbol): DocumentEditPermit | null =>
     canEdit(owner) ? { epoch: documentEditEpoch, owner } : null;
@@ -174,7 +175,7 @@ export const createCanvasMutationContext = (
   return {
     canEdit,
     captureInsertionAnchor: (stack, aboveId) =>
-      captureInsertionAnchor(currentLayers(), {
+      captureInsertionAnchor(currentStacks(), {
         aboveId,
         editRevision: getEditRevision(),
         projectId: deps.projectId,
@@ -182,7 +183,7 @@ export const createCanvasMutationContext = (
       }),
     capturePermit,
     captureRestoreAnchor: (layerId) =>
-      captureRestoreAnchor(currentLayers(), layerId, deps.projectId, getEditRevision()),
+      captureRestoreAnchor(currentStacks(), layerId, deps.projectId, getEditRevision()),
     createLayerId: () => deps.createLayerId(),
     dispatch: (action, origin) => deps.dispatch(action, origin),
     dispatchPrepared,

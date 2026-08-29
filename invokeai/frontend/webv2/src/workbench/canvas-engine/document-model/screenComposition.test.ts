@@ -1,21 +1,17 @@
-import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasLayerContract, CanvasNodeContract } from '@workbench/canvas-engine/contracts';
 
 import { describe, expect, it } from 'vitest';
 
 import type { CanvasScreenViewState } from './screenComposition';
 
+import { documentFrom, groupContract, layerContract } from './documentFixtures.testStub';
+import { compileDocumentLeaves } from './documentModel';
 import { planScreenComposition } from './screenComposition';
-import { compileSemanticLeaf } from './semanticLeaf';
 
-const leaf = (id: string, type: CanvasLayerContract['type'], overrides: Partial<CanvasLayerContract> = {}) =>
-  compileSemanticLeaf({
-    id,
-    isEnabled: true,
-    isLocked: false,
-    transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
-    type,
-    ...overrides,
-  } as CanvasLayerContract);
+const layer = (id: string, type: CanvasLayerContract['type'], overrides: Partial<CanvasLayerContract> = {}) =>
+  layerContract(id, type, overrides);
+
+const leaves = (nodes: readonly CanvasNodeContract[]) => compileDocumentLeaves(documentFrom(nodes));
 
 const view = (overrides: Partial<CanvasScreenViewState> = {}): CanvasScreenViewState => ({
   isolationLayerId: null,
@@ -23,45 +19,71 @@ const view = (overrides: Partial<CanvasScreenViewState> = {}): CanvasScreenViewS
   ...overrides,
 });
 
-const leaves = [
-  leaf('i1', 'inpaint_mask'),
-  leaf('r1', 'raster'),
-  leaf('c1', 'control', { isHidden: true } as Partial<CanvasLayerContract>),
-  leaf('r2', 'raster', { isEnabled: false }),
-  leaf('g1', 'regional_guidance'),
-  leaf('r3', 'raster'),
-];
-
 const drawn = (plan: ReturnType<typeof planScreenComposition>): string[] => plan.leaves.map((leaf) => leaf.id);
 
 describe('planScreenComposition', () => {
-  it('draws contributing, unhidden leaves stack by stack, bottom first', () => {
-    expect(drawn(planScreenComposition(leaves, view()))).toEqual(['r3', 'r1', 'g1', 'i1']);
-  });
-
-  it('applies overlay stack switches without touching raster leaves', () => {
+  it('draws stacks bottom first and each stack bottom-most leaf first', () => {
     const plan = planScreenComposition(
-      leaves,
-      view({ showOverlayStacks: { control: true, inpaint_mask: false, regional_guidance: false } })
+      leaves([layer('m1', 'inpaint_mask'), layer('c1', 'control'), layer('r1', 'raster'), layer('r2', 'raster')]),
+      view()
     );
-    expect(drawn(plan)).toEqual(['r3', 'r1']);
+    expect(drawn(plan)).toEqual(['r2', 'r1', 'c1', 'm1']);
   });
 
-  it('isolates one drawable leaf regardless of the stack switches', () => {
+  it('skips disabled and document-hidden leaves and leaves an ancestor gates its descendants', () => {
     const plan = planScreenComposition(
-      leaves,
+      leaves([
+        layer('r1', 'raster', { isEnabled: false }),
+        groupContract('off', [layer('r2', 'raster')], { isEnabled: false }),
+        groupContract('hidden', [layer('c2', 'control')], { isHidden: true }),
+        layer('c1', 'control', { isHidden: true } as Partial<CanvasLayerContract>),
+        layer('r3', 'raster'),
+      ]),
+      view()
+    );
+    expect(drawn(plan)).toEqual(['r3']);
+  });
+
+  it('switches whole overlay stacks off without touching raster', () => {
+    const plan = planScreenComposition(
+      leaves([layer('m1', 'inpaint_mask'), layer('c1', 'control'), layer('r1', 'raster')]),
+      view({ showOverlayStacks: { control: false, inpaint_mask: true, regional_guidance: true } })
+    );
+    expect(drawn(plan)).toEqual(['r1', 'm1']);
+  });
+
+  it('isolates one leaf, overriding its own and its ancestors visibility and every stack switch', () => {
+    const plan = planScreenComposition(
+      leaves([
+        groupContract(
+          'g',
+          [layer('c1', 'control', { isEnabled: false, isHidden: true } as Partial<CanvasLayerContract>)],
+          {
+            isEnabled: false,
+          }
+        ),
+        layer('r1', 'raster'),
+      ]),
       view({
-        isolationLayerId: 'g1',
+        isolationLayerId: 'c1',
         showOverlayStacks: { control: false, inpaint_mask: false, regional_guidance: false },
       })
     );
-    expect(plan).toEqual({ isolationLayerId: 'g1', leaves: [leaves[4]] });
-    expect(drawn(planScreenComposition(leaves, view({ isolationLayerId: 'r1' })))).toEqual(['r1']);
+    expect(drawn(plan)).toEqual(['c1']);
+    expect(plan.isolationLayerId).toBe('c1');
   });
 
-  it('lets isolation override document visibility while an absent target draws nothing', () => {
-    expect(drawn(planScreenComposition(leaves, view({ isolationLayerId: 'c1' })))).toEqual(['c1']);
-    expect(drawn(planScreenComposition(leaves, view({ isolationLayerId: 'r2' })))).toEqual(['r2']);
-    expect(planScreenComposition(leaves, view({ isolationLayerId: 'ghost' })).leaves).toEqual([]);
+  it('isolates a group as every leaf beneath it', () => {
+    const plan = planScreenComposition(
+      leaves([
+        groupContract('g', [
+          layer('r1', 'raster'),
+          groupContract('inner', [layer('r2', 'raster', { isEnabled: false })]),
+        ]),
+        layer('r3', 'raster'),
+      ]),
+      view({ isolationLayerId: 'g' })
+    );
+    expect(drawn(plan)).toEqual(['r2', 'r1']);
   });
 });

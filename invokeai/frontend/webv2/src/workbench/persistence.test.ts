@@ -93,7 +93,7 @@ describe('workbench persistence migration', () => {
   it('gates every cached project before stripping transient state', () => {
     const state = createInitialWorkbenchState();
     const supported = state.projects[0]!;
-    const future = { ...supported, id: 'future', name: 'Future', canvas: { ...supported.canvas, version: 3 } };
+    const future = { ...supported, id: 'future', name: 'Future', canvas: { ...supported.canvas, version: 4 } };
     const hydrated = hydratePersistedWorkbenchSnapshot({
       savedAt: '2026-06-09T00:00:00.000Z',
       state: { ...state, projects: [supported, future] },
@@ -102,7 +102,7 @@ describe('workbench persistence migration', () => {
 
     expect(hydrated?.state.projects.map((project) => project.id)).toEqual([supported.id]);
     expect(hydrated?.refusedProjects).toMatchObject([
-      { projectId: 'future', raw: future, refusal: { status: 'unsupported-version', version: 3 }, source: 'canvas' },
+      { projectId: 'future', raw: future, refusal: { status: 'unsupported-version', version: 4 }, source: 'canvas' },
     ]);
   });
 
@@ -118,7 +118,7 @@ describe('workbench persistence migration', () => {
             snapshot: {
               canvas: {
                 ...project.canvas,
-                document: { ...project.canvas.document, layers: [{ id: 'unknown', type: 'future-layer' }] },
+                document: { ...project.canvas.document, stacks: { raster: [{ id: 'unknown', type: 'future-layer' }] } },
               },
             },
           },
@@ -149,7 +149,7 @@ describe('workbench persistence migration', () => {
   it('repoints a refused active project at the first loadable one', () => {
     const state = createInitialWorkbenchState();
     const supported = state.projects[0]!;
-    const future = { ...supported, id: 'future', name: 'Future', canvas: { ...supported.canvas, version: 3 } };
+    const future = { ...supported, id: 'future', name: 'Future', canvas: { ...supported.canvas, version: 4 } };
     const hydrated = hydratePersistedWorkbenchSnapshot({
       savedAt: '2026-06-09T00:00:00.000Z',
       state: { ...state, activeProjectId: 'future', projects: [supported, future] },
@@ -162,7 +162,7 @@ describe('workbench persistence migration', () => {
   it('moves refused projects into a sibling bucket verbatim and forgets them on request', async () => {
     const state = createInitialWorkbenchState();
     const supported = state.projects[0]!;
-    const future = { ...supported, id: 'future', name: 'Future', canvas: { ...supported.canvas, version: 3 } };
+    const future = { ...supported, id: 'future', name: 'Future', canvas: { ...supported.canvas, version: 4 } };
 
     storage.set(
       'invokeai:v7:webv2:workbench',
@@ -191,7 +191,7 @@ describe('workbench persistence migration', () => {
   it('does not remove an unsupported project from the primary cache if recovery retention fails', async () => {
     const state = createInitialWorkbenchState();
     const supported = state.projects[0]!;
-    const future = { ...supported, id: 'future', name: 'Future', canvas: { ...supported.canvas, version: 3 } };
+    const future = { ...supported, id: 'future', name: 'Future', canvas: { ...supported.canvas, version: 4 } };
     const storageKey = 'invokeai:v7:webv2:workbench';
 
     storage.set(
@@ -224,7 +224,7 @@ describe('workbench persistence migration', () => {
   it('does not classify a failed primary-cache compaction as corrupt input', async () => {
     const state = createInitialWorkbenchState();
     const supported = state.projects[0]!;
-    const future = { ...supported, id: 'future', name: 'Future', canvas: { ...supported.canvas, version: 3 } };
+    const future = { ...supported, id: 'future', name: 'Future', canvas: { ...supported.canvas, version: 4 } };
     const storageKey = 'invokeai:v7:webv2:workbench';
 
     storage.set(
@@ -265,7 +265,7 @@ describe('workbench persistence migration', () => {
         projectId: 'future',
         projectName: 'Future',
         raw: null,
-        refusal: { raw: null, scope: 'document', status: 'unsupported-version', version: 3 },
+        refusal: { raw: null, scope: 'document', status: 'unsupported-version', version: 4 },
         source: 'canvas',
       },
     ]);

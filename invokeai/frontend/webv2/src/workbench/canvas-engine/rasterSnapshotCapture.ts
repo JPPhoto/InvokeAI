@@ -1,8 +1,8 @@
 import type { CanvasDocumentSnapshot, LayerExportGuard } from '@workbench/canvas-engine/capabilities';
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
 } from '@workbench/canvas-engine/contracts';
 import type { ExportLayerPixelsResult } from '@workbench/canvas-engine/controllers/rasterExportController';
 import type { RasterMemoryBudgetController } from '@workbench/canvas-engine/controllers/rasterMemoryBudgetController';
@@ -10,7 +10,7 @@ import type { CanvasRasterSnapshot, CaptureRasterSnapshotResult } from '@workben
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
-import { lookupDocumentLayer } from '@workbench/canvas-engine/document-model/flatDocumentModel';
+import { lookupDocumentLayer } from '@workbench/canvas-engine/document-model/documentModel';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { isSupportedExportSource } from '@workbench/canvas-engine/layerExportGuards';
 
@@ -21,7 +21,7 @@ const BYTES_PER_PIXEL = 4;
  * from a raster pass. Reserved up front so a capture that cannot fit is refused
  * before any work is done; the real cost is topped up per layer afterwards.
  */
-const estimatedLayerBytes = (layer: CanvasLayerContract, document: CanvasDocumentContractV2): number => {
+const estimatedLayerBytes = (layer: CanvasLayerContract, document: CanvasDocumentContractV3): number => {
   const source = renderableSourceOf(layer);
   if (source?.type === 'image') {
     return source.image.width * source.image.height * BYTES_PER_PIXEL;
@@ -38,7 +38,7 @@ export interface CreateRasterSnapshotCaptureDeps {
   /** Re-reads the live cache sizes into the budget before a reservation decision. */
   readonly syncMemoryBaselines: () => void;
   readonly createSurface: (width: number, height: number) => RasterSurface;
-  readonly getCanvasState: () => CanvasStateContractV2 | null;
+  readonly getCanvasState: () => CanvasStateContractV3 | null;
   readonly getDocumentGeneration: () => number;
   readonly getContentEpoch: () => number;
   readonly getLifecycleGeneration: () => number;
@@ -94,7 +94,7 @@ export const createRasterSnapshotCapture = (deps: CreateRasterSnapshotCaptureDep
   const activeSnapshots = new Set<CanvasRasterSnapshot>();
   const snapshotSources = new WeakMap<
     CanvasDocumentSnapshot,
-    { canvas: CanvasStateContractV2; contentEpoch: number; lifecycleGeneration: number }
+    { canvas: CanvasStateContractV3; contentEpoch: number; lifecycleGeneration: number }
   >();
 
   const isDocumentSnapshotCurrent = (snapshot: CanvasDocumentSnapshot): boolean => {

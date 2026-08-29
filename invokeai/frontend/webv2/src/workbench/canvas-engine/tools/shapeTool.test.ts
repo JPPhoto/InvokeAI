@@ -1,22 +1,23 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { PointerInput, Vec2 } from '@workbench/canvas-engine/types';
 import type { Viewport } from '@workbench/canvas-engine/viewport';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createShapeTool, rectFromDrag } from './shapeTool';
 
-const makeDoc = (): CanvasDocumentContractV2 => ({
+const makeDoc = (): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 96, width: 96, x: 0, y: 0 },
   height: 512,
-  layers: [],
+  stacks: stacksFrom([]),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 512,
 });
 
@@ -40,7 +41,7 @@ interface StructuralCommit {
   inverse: CanvasProjectMutation;
 }
 
-const createHarness = (doc: CanvasDocumentContractV2) => {
+const createHarness = (doc: CanvasDocumentContractV3) => {
   const dispatched: CanvasProjectMutation[] = [];
   const commits: StructuralCommit[] = [];
   const stores = createEngineStores();

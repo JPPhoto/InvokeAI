@@ -1,9 +1,10 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { PointerInput, Vec2 } from '@workbench/canvas-engine/types';
 import type { Viewport } from '@workbench/canvas-engine/viewport';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { describe, expect, it, vi } from 'vitest';
@@ -32,13 +33,13 @@ const gradientLayer = (over: Partial<CanvasLayerContract> = {}): CanvasLayerCont
     ...over,
   }) as CanvasLayerContract;
 
-const makeDoc = (over: Partial<CanvasDocumentContractV2> = {}): CanvasDocumentContractV2 => ({
+const makeDoc = (over: Partial<CanvasDocumentContractV3> = {}): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 96, width: 96, x: 0, y: 0 },
   height: 512,
-  layers: [],
+  stacks: stacksFrom([]),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 512,
   ...over,
 });
@@ -63,7 +64,7 @@ interface StructuralCommit {
   inverse: CanvasProjectMutation;
 }
 
-const createHarness = (doc: CanvasDocumentContractV2) => {
+const createHarness = (doc: CanvasDocumentContractV3) => {
   const dispatched: CanvasProjectMutation[] = [];
   const commits: StructuralCommit[] = [];
   const stores = createEngineStores();
@@ -137,7 +138,7 @@ describe('gradient tool: create when no gradient selected', () => {
 describe('gradient tool: edit selected gradient layer', () => {
   it('commits ONE updateCanvasLayerSource with the new angle (kind/stops preserved)', () => {
     const layer = gradientLayer();
-    const doc = makeDoc({ layers: [layer], selectedLayerId: 'grad-existing' });
+    const doc = makeDoc({ stacks: stacksFrom([layer]), selectedLayerId: 'grad-existing' });
     const h = createHarness(doc);
     const tool = createGradientTool();
 
@@ -167,7 +168,7 @@ describe('gradient tool: edit selected gradient layer', () => {
 
   it('is a no-op when the selected gradient layer is locked', () => {
     const layer = gradientLayer({ isLocked: true });
-    const doc = makeDoc({ layers: [layer], selectedLayerId: 'grad-existing' });
+    const doc = makeDoc({ stacks: stacksFrom([layer]), selectedLayerId: 'grad-existing' });
     const h = createHarness(doc);
     const tool = createGradientTool();
 
@@ -192,7 +193,7 @@ describe('gradient tool: edit selected gradient layer', () => {
         type: 'gradient',
       },
     } as Partial<CanvasLayerContract>);
-    const doc = makeDoc({ layers: [layer], selectedLayerId: 'grad-existing' });
+    const doc = makeDoc({ stacks: stacksFrom([layer]), selectedLayerId: 'grad-existing' });
     const h = createHarness(doc);
     const tool = createGradientTool();
 
@@ -213,7 +214,7 @@ describe('gradient tool: edit selected gradient layer', () => {
       id: 'paint-1',
       source: { bitmap: null, type: 'paint' },
     } as Partial<CanvasLayerContract>);
-    const doc = makeDoc({ layers: [paint], selectedLayerId: 'paint-1' });
+    const doc = makeDoc({ stacks: stacksFrom([paint]), selectedLayerId: 'paint-1' });
     const h = createHarness(doc);
     const tool = createGradientTool();
 

@@ -6,12 +6,13 @@ import type {
 } from '@workbench/canvas-engine/contracts';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 
+import { getDocumentLeaves } from '@workbench/canvas-engine/api';
 import { createBitmapStore } from '@workbench/canvas-engine/document/bitmapStore';
 import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createEmptyCanvasDocumentV2 } from './canvasMigration';
+import { createEmptyCanvasDocument } from './canvasMigration';
 import { createCanvasProjectMutationPort } from './canvasProjectMutationPort';
 import { createWorkbenchStore } from './workbenchStore';
 
@@ -56,10 +57,9 @@ const getLayer = (
   projectId: string,
   layerId: string
 ): CanvasLayerContract | undefined =>
-  store
-    .getState()
-    .projects.find((project) => project.id === projectId)
-    ?.canvas.document.layers.find((layer) => layer.id === layerId);
+  getDocumentLeaves(store.getState().projects.find((project) => project.id === projectId)?.canvas.document).find(
+    (layer) => layer.id === layerId
+  );
 
 const getPaintSource = (
   layer: CanvasLayerContract | undefined
@@ -77,7 +77,7 @@ const setupProjects = (originLayer: CanvasLayerContract, otherLayer: CanvasLayer
   const store = createWorkbenchStore();
   const originProjectId = store.getState().activeProjectId;
   store.commands.canvas.apply(originProjectId, {
-    document: createEmptyCanvasDocumentV2(),
+    document: createEmptyCanvasDocument(),
     type: 'replaceCanvasDocument',
   });
   store.commands.canvas.apply(originProjectId, {
@@ -88,7 +88,7 @@ const setupProjects = (originLayer: CanvasLayerContract, otherLayer: CanvasLayer
   store.commands.projects.create();
   const otherProjectId = store.getState().activeProjectId;
   store.commands.canvas.apply(otherProjectId, {
-    document: createEmptyCanvasDocumentV2(),
+    document: createEmptyCanvasDocument(),
     type: 'replaceCanvasDocument',
   });
   store.commands.canvas.apply(otherProjectId, {

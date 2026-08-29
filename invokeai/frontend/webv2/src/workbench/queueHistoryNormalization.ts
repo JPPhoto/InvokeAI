@@ -5,7 +5,7 @@ import type {
   QueueSourceId,
   QueueSubmissionPresentation,
 } from '@features/queue/contracts';
-import type { CanvasStateContractV2 } from '@workbench/canvas-engine/api';
+import type { CanvasStateContractV3 } from '@workbench/canvas-engine/api';
 import type { GraphContract } from '@workbench/graphContracts';
 import type { WidgetInstanceContract, WidgetInstanceId, WidgetStateMap } from '@workbench/widgetContracts';
 
@@ -21,7 +21,7 @@ type UnknownRecord = Record<string, unknown>;
 type PresentationSource = { batchCount: number; height?: number; positivePrompt?: string; width?: number } | null;
 
 export interface QueueHistoryNormalizationContext {
-  canvas: CanvasStateContractV2;
+  canvas: CanvasStateContractV3;
   widgetInstances: Record<WidgetInstanceId, WidgetInstanceContract>;
 }
 
@@ -252,7 +252,7 @@ const getBackendSubmission = (
 const normalizeLegacyQueueItem = (
   value: unknown,
   index: number,
-  canvas: CanvasStateContractV2,
+  canvas: CanvasStateContractV3,
   context: QueueHistoryNormalizationContext
 ): WorkbenchQueueItem => {
   const item = isRecord(value) ? value : {};
@@ -331,7 +331,7 @@ const normalizeLegacyQueueItem = (
  * Stands in for a queue canvas that could not be read. Its revision matches no document, so the
  * item's results can never be placed onto, or lock, a canvas they were not generated against.
  */
-const unplaceableCanvas = (canvas: CanvasStateContractV2): CanvasStateContractV2 => ({
+const unplaceableCanvas = (canvas: CanvasStateContractV3): CanvasStateContractV3 => ({
   ...canvas,
   documentRevision: -1,
 });

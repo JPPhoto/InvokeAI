@@ -1,6 +1,6 @@
 import type {
   CanvasBlendMode,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasImageRef,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
@@ -9,6 +9,7 @@ import type {
 import type { Mat2d } from '@workbench/canvas-engine/types';
 
 import { createCanvasDiagnostics } from '@workbench/canvas-engine/diagnostics';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { identity } from '@workbench/canvas-engine/math/mat2d';
 import { describe, expect, it } from 'vitest';
 
@@ -80,14 +81,14 @@ const inpaintMaskLayer = (id: string): CanvasLayerContract => ({
 
 const makeDoc = (
   layers: CanvasLayerContract[],
-  overrides: Partial<CanvasDocumentContractV2> = {}
-): CanvasDocumentContractV2 => ({
+  overrides: Partial<CanvasDocumentContractV3> = {}
+): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 100,
   ...overrides,
 });
@@ -488,8 +489,7 @@ describe('compositeDocument', () => {
     const widthToId: Record<number, string> = { 10: 'raster', 11: 'control', 12: 'regional', 13: 'inpaint' };
     const target = backend.createSurface(200, 200) as StubRasterSurface;
 
-    // Deliberately SCRAMBLED array order (index 0 = top-most): a raster created
-    // above a control layer, masks interleaved below. Group order must win.
+    // Each stack draws in LAYER_STACK_ORDER whatever order the fixture lists them in.
     const doc = makeDoc([
       rasterLayer('raster'),
       inpaintMaskLayer('inpaint'),
@@ -503,7 +503,7 @@ describe('compositeDocument', () => {
       .map((e) => widthToId[(e.args[0] as { width: number }).width])
       .filter((id): id is string => id !== undefined);
 
-    // Raster (bottom) first, then control, then the masks — regardless of array index.
+    // Raster (bottom) first, then control, then the masks.
     expect(order.indexOf('raster')).toBeLessThan(order.indexOf('control'));
     expect(order.indexOf('control')).toBeLessThan(order.indexOf('regional'));
     expect(order.indexOf('regional')).toBeLessThan(order.indexOf('inpaint'));

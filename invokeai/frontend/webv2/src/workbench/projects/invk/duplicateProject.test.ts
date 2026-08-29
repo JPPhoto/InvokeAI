@@ -2,6 +2,7 @@ import type { AccountScope } from '@platform/state/accountLifecycle';
 import type { ProjectBoardItemDTO, ProjectRecordDTO } from '@workbench/projects/api';
 import type * as apiModule from '@workbench/projects/api';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { ProjectCreateAbsentError } from '@workbench/projects/api';
 import { createDraftProject } from '@workbench/workbenchState';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -79,7 +80,7 @@ const sourceRecord = (document: Record<string, unknown> = {}): ProjectRecordDTO 
       ...project,
       canvas: {
         ...project.canvas,
-        document: { ...project.canvas.document, layers: [rasterImageLayer('l1', 'shared.png')] },
+        document: { ...project.canvas.document, stacks: stacksFrom([rasterImageLayer('l1', 'shared.png')]) },
       },
       id: 'source',
       name: 'Source',
@@ -112,9 +113,9 @@ const createdData = (): Record<string, unknown> =>
 const restoredLayerName = (): string =>
   (
     createdData().canvas as {
-      document: { layers: { source: { image: { imageName: string } } }[] };
+      document: { stacks: { raster: { source: { image: { imageName: string } } }[] } };
     }
-  ).document.layers[0]!.source.image.imageName;
+  ).document.stacks.raster[0]!.source.image.imageName;
 
 beforeEach(async () => {
   vi.resetModules();

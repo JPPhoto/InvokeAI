@@ -1,5 +1,5 @@
 import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
-import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { History, HistoryEntry } from '@workbench/canvas-engine/history/history';
 import type { ImagePatchApply } from '@workbench/canvas-engine/history/imagePatch';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
@@ -38,7 +38,7 @@ export const createStrokeCommit = (deps: CreateStrokeCommitDeps): StrokeCommit =
   const { applyImagePatch, dispatchCanvasMutation, history, layerCache } = deps;
 
   const createComposedPaintEntry = (
-    created: { layer: CanvasLayerContract; anchor: FlatLayerInsertionAnchor },
+    created: { layer: CanvasLayerContract; anchor: CanvasNodeInsertionAnchor },
     event: StrokeCommittedEvent,
     label: string
   ): HistoryEntry => {

@@ -3,12 +3,12 @@ import type {
   StructuralCommitOptions,
   StructuralCommitResult,
 } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
-import type { PreparedFlatEdit } from '@workbench/canvas-engine/document-model/flatDocumentCommands';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
+import type { PreparedDocumentEdit } from '@workbench/canvas-engine/document-model/documentCommands';
 import type { CanvasMutationOrigin, CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 
-import { checkFlatEditPostconditions } from '@workbench/canvas-engine/document-model/postconditions';
-import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
+import { createDocumentModel } from '@workbench/canvas-engine/document-model/documentModel';
+import { checkEditPostconditions } from '@workbench/canvas-engine/document-model/postconditions';
 import { createDocumentPatchEntry } from '@workbench/canvas-engine/history/documentPatch';
 
 import type { CanvasMutationContext } from './mutationContext';
@@ -47,7 +47,7 @@ export type StructuralFailureReport =
 
 export interface StructuralLayerControllerOptions {
   readonly ctx: StructuralMutationContext;
-  readonly getSelectedLayerIds?: (document: CanvasDocumentContractV2) => readonly string[];
+  readonly getSelectedLayerIds?: (document: CanvasDocumentContractV3) => readonly string[];
   readonly report?: (message: StructuralFailureReport, label: string, error: unknown) => void;
   readonly now?: () => number;
 }
@@ -60,14 +60,12 @@ interface NudgeBurst {
 
 const NUDGE_COALESCE_MS = 500;
 
-const positionMutation = (positions: readonly { id: string; x: number; y: number }[]): CanvasProjectMutation =>
-  positions.length === 1
-    ? {
-        id: positions[0]!.id,
-        patch: { transform: { x: positions[0]!.x, y: positions[0]!.y } },
-        type: 'updateCanvasLayer',
-      }
-    : { type: 'setCanvasLayerPositions', updates: [...positions] };
+const positionMutation = (positions: readonly { id: string; x: number; y: number }[]): CanvasProjectMutation => ({
+  type: 'setCanvasLayerPositions',
+  updates: [...positions],
+});
+
+const unique = (ids: readonly string[]): string[] => [...new Set(ids)];
 
 /** Owns guarded, failure-atomic structural document edits and nudge coalescing. */
 export class StructuralLayerController {
@@ -110,7 +108,11 @@ export class StructuralLayerController {
   }
 
   /** A prepared flat edit: refused as `stale` unless its revision and project still match, verified by its postconditions. */
-  commitPrepared(label: string, edit: PreparedFlatEdit, options: PreparedCommitOptions = {}): StructuralCommitResult {
+  commitPrepared(
+    label: string,
+    edit: PreparedDocumentEdit,
+    options: PreparedCommitOptions = {}
+  ): StructuralCommitResult {
     const refusal = this.refuse({ expectedRevision: edit.expectedRevision });
     if (refusal) {
       return refusal;
@@ -123,7 +125,7 @@ export class StructuralLayerController {
       label,
       edit.forward,
       edit.inverse,
-      (document) => checkFlatEditPostconditions(document, edit.postconditions),
+      (document) => checkEditPostconditions(document, edit.postconditions),
       options.origin
     );
     if (applied.status === 'committed' && edit.history === 'record') {
@@ -150,28 +152,29 @@ export class StructuralLayerController {
     if (!document?.selectedLayerId) {
       return { status: 'dispatch-rejected' };
     }
-    const requested = new Set(this.deps.getSelectedLayerIds?.(document) ?? [document.selectedLayerId]);
-    const layers = document.layers.filter((layer) => requested.has(layer.id));
-    if (
-      layers.length === 0 ||
-      layers.length !== requested.size ||
-      !requested.has(document.selectedLayerId) ||
-      layers.some((layer) => !isLayerEditable(layer))
-    ) {
+    const ids = unique([document.selectedLayerId, ...(this.deps.getSelectedLayerIds?.(document) ?? [])]);
+    const model = createDocumentModel(document, { editRevision: ctx.getEditRevision(), projectId: ctx.projectId });
+    const prepared = model.prepare({ dx, dy, ids, type: 'translate' });
+    if (prepared.status !== 'prepared' || prepared.edit.forward.type !== 'setCanvasLayerPositions') {
       return { status: 'dispatch-rejected' };
     }
-    const selectionKey = layers.map((layer) => layer.id).join('\0');
+    const leaves = model.compileLeaves();
+    if (prepared.edit.touchedIds.some((id) => !leaves.find((leaf) => leaf.id === id)?.contributionEnabled)) {
+      return { status: 'dispatch-rejected' };
+    }
+    const selectionKey = prepared.edit.touchedIds.join('\0');
     const now = this.now();
     const coalesce = !!this.burst && this.burst.selectionKey === selectionKey && now < this.burst.expiresAt;
     const origins =
       coalesce && this.burst
         ? this.burst.origins
-        : layers.map((layer) => ({ id: layer.id, x: layer.transform.x, y: layer.transform.y }));
-    const next = layers.map((layer) => ({ id: layer.id, x: layer.transform.x + dx, y: layer.transform.y + dy }));
+        : (prepared.edit.inverse as Extract<CanvasProjectMutation, { type: 'setCanvasLayerPositions' }>).updates;
     const label = 'Nudge layer';
-    const forward = positionMutation(next);
+    const forward = prepared.edit.forward;
     const inverse = positionMutation(origins);
-    const applied = this.apply(label, forward, inverse);
+    const applied = this.apply(label, forward, inverse, (next) =>
+      checkEditPostconditions(next, prepared.edit.postconditions)
+    );
     if (applied.status !== 'committed') {
       this.burst = null;
       return applied;
@@ -217,7 +220,7 @@ export class StructuralLayerController {
     label: string,
     forward: CanvasProjectMutation,
     inverse: CanvasProjectMutation,
-    verify: (document: CanvasDocumentContractV2) => boolean = () => true,
+    verify: (document: CanvasDocumentContractV3) => boolean = () => true,
     origin?: CanvasMutationOrigin
   ): StructuralCommitResult {
     const { ctx } = this.deps;

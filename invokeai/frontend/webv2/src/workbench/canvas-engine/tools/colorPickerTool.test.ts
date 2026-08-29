@@ -1,9 +1,10 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { PointerInput } from '@workbench/canvas-engine/types';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { createLayerCacheStore, type LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
@@ -54,13 +55,13 @@ const paintLayer = (id: string, x = 0): CanvasLayerContract => ({
   type: 'raster',
 });
 
-const makeDoc = (layerX = 0): CanvasDocumentContractV2 => ({
+const makeDoc = (layerX = 0): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers: [paintLayer('paint1', layerX)],
+  stacks: stacksFrom([paintLayer('paint1', layerX)]),
   selectedLayerId: 'paint1',
-  version: 2,
+  version: 3,
   width: 100,
 });
 
@@ -83,7 +84,7 @@ interface Harness {
   overlayCursors: unknown[];
 }
 
-const createHarness = (doc: CanvasDocumentContractV2 | null): Harness => {
+const createHarness = (doc: CanvasDocumentContractV3 | null): Harness => {
   const pixel: MutablePixel = { current: [10, 20, 30, 255] };
   const backend = createFixedPixelBackend(pixel);
   const layers = createLayerCacheStore(backend);

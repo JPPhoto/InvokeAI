@@ -138,7 +138,7 @@ describe('dependency policy rules', () => {
     '@workbench/canvas-engine/document/sources',
     '@workbench/canvas-engine/document/bitmapStore',
   ])('keeps the pure document model free of engine, screen and framework imports: %s', (specifier) => {
-    expect(checkDependency('workbench/canvas-engine/document-model/flatDocumentModel.ts', specifier)).toContainEqual(
+    expect(checkDependency('workbench/canvas-engine/document-model/documentModel.ts', specifier)).toContainEqual(
       expect.objectContaining({ rule: 'document-model-purity' })
     );
   });
@@ -157,13 +157,13 @@ describe('dependency policy rules', () => {
   });
 
   it('permits the pure document model to read document facts, math and contracts', () => {
-    const source = 'workbench/canvas-engine/document-model/flatDocumentModel.ts';
+    const source = 'workbench/canvas-engine/document-model/documentModel.ts';
     expect(checkDependency(source, './semanticLeaf')).toEqual([]);
     expect(checkDependency(source, '@workbench/canvas-engine/document/layerStacks')).toEqual([]);
     expect(checkDependency(source, '@workbench/canvas-engine/math/mat2d')).toEqual([]);
     expect(checkDependency(source, '@workbench/canvas-engine/contracts')).toEqual([]);
     expect(checkDependency(source, '@workbench/canvas-engine/mutationContracts')).toEqual([]);
-    expect(checkDependency('workbench/canvas-engine/document-model/flatDocumentModel.test.ts', 'vitest')).toEqual([]);
+    expect(checkDependency('workbench/canvas-engine/document-model/documentModel.test.ts', 'vitest')).toEqual([]);
   });
 
   it('permits feature Core to depend on other pure Core and Platform State modules', () => {

@@ -3,9 +3,9 @@ import type { ModelConfig } from '@features/models';
 import type { QueueCompiledSubmission, QueueHistoryItemStatus } from '@features/queue/contracts';
 import type { ProjectGraphState } from '@features/workflow/contracts';
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasPlacementContract,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
   CanvasStagingCandidateContract,
 } from '@workbench/canvas-engine/api';
 import type { DeveloperLogNamespace } from '@workbench/diagnostics/contracts';
@@ -84,7 +84,7 @@ import {
   type CanvasEditIntent,
   type WorkbenchActionOrigin,
 } from './autoRoutePolicy';
-import { createNewCanvasStateV2, loadCanvasState } from './canvasMigration';
+import { createNewCanvasState, loadCanvasState } from './canvasMigration';
 import { applyCanvasProjectMutation, type CanvasProjectMutation } from './canvasProjectMutations';
 import { gateProjectCanvases } from './projectCanvasGate';
 import { getProjectWidgetValues } from './widgetState';
@@ -363,7 +363,7 @@ type WorkbenchReducerAction =
   | {
       type: 'submitCanvasInvocationSnapshot';
       backendSupportsCancellation: boolean;
-      canvas: CanvasStateContractV2;
+      canvas: CanvasStateContractV3;
       destination: ResultDestination;
       generate: QueueGenerateSnapshot;
       graph: GraphContract;
@@ -633,7 +633,7 @@ const clonePlacement = (placement: CanvasPlacementContract): CanvasPlacementCont
 
 const createCenteredPlacement = (
   image: Pick<GeneratedImageContract, 'height' | 'width'>,
-  document: Pick<CanvasDocumentContractV2, 'height' | 'width'>
+  document: Pick<CanvasDocumentContractV3, 'height' | 'width'>
 ): CanvasPlacementContract => {
   const imageWidth = image.width > 0 ? image.width : document.width;
   const imageHeight = image.height > 0 ? image.height : document.height;
@@ -652,7 +652,7 @@ const createCenteredPlacement = (
 
 const normalizeStagingCandidate = (
   image: CanvasStagingCandidateContract | GeneratedImageContract,
-  document: Pick<CanvasDocumentContractV2, 'height' | 'width'>,
+  document: Pick<CanvasDocumentContractV3, 'height' | 'width'>,
   sourceBackendItemId?: number
 ): CanvasStagingCandidateContract => ({
   ...image,
@@ -689,9 +689,9 @@ const getCanvasStagingSlotCountWithPendingImages = (
   );
 
 const getCanvasWithPendingImages = (
-  canvas: CanvasStateContractV2,
+  canvas: CanvasStateContractV3,
   pendingImages: CanvasStagingCandidateContract[]
-): CanvasStateContractV2 => ({
+): CanvasStateContractV3 => ({
   ...canvas,
   stagingArea: {
     ...canvas.stagingArea,
@@ -952,11 +952,11 @@ const getGalleryItemFromPersistedValue = (values: Record<string, unknown>, value
  * migration boundary: callers with genuinely unknown/legacy input must run
  * `loadCanvasState` first (see `normalizeWorkbenchProject`).
  */
-const cloneCanvas = (canvas: CanvasStateContractV2): CanvasStateContractV2 => {
+const cloneCanvas = (canvas: CanvasStateContractV3): CanvasStateContractV3 => {
   const document = structuredClone(canvas.document);
 
   return {
-    version: 2,
+    version: 3,
     document,
     documentRevision: canvas.documentRevision,
     snapshots: canvas.snapshots.map((snapshot) => ({ ...snapshot, document: structuredClone(snapshot.document) })),
@@ -1703,7 +1703,7 @@ export const normalizeWorkbenchProject = (project: Project): Project => {
   return assembleWorkbenchProject(project, cloneCanvas(canvas.status === 'loaded' ? canvas.value : project.canvas));
 };
 
-const assembleWorkbenchProject = (project: Project, canvas: CanvasStateContractV2): Project => {
+const assembleWorkbenchProject = (project: Project, canvas: CanvasStateContractV3): Project => {
   const legacyWidgetRegions = project.widgetRegions as
     | Partial<Record<WidgetRegion | 'left-panel' | 'right-panel' | 'status-bar', WidgetRegionState>>
     | undefined;
@@ -1848,7 +1848,7 @@ export const clampPanelSize = (region: WidgetRegion, sizePx: number): number => 
   return Math.min(max, Math.max(min, sizePx));
 };
 
-const createCanvasState = (): CanvasStateContractV2 => createNewCanvasStateV2();
+const createCanvasState = (): CanvasStateContractV3 => createNewCanvasState();
 
 const createProject = (index: number, id: string, preset: LayoutPreset): Project =>
   applyLayoutPresetToProject(
@@ -2992,7 +2992,7 @@ const enqueueCompiledSnapshot = (
     widgetStates: WidgetStateMap;
   },
   backendSupportsCancellation: boolean,
-  canvasSnapshot?: CanvasStateContractV2
+  canvasSnapshot?: CanvasStateContractV3
 ): Project => {
   const submittedAt = now();
   const queueItemId = createId('queue-item');

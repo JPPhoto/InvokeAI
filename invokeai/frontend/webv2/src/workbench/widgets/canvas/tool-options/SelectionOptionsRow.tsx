@@ -2,7 +2,7 @@ import type { SelectionOp } from '@workbench/canvas-engine/api';
 
 import { HStack, Text } from '@chakra-ui/react';
 import { Button } from '@platform/ui';
-import { isLayerPixelEditEligible } from '@workbench/canvas-engine/api';
+import { isLeafPixelEditEligible, lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import { useCanvasHasSelection } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { useCallback } from 'react';
@@ -65,10 +65,7 @@ export const SelectionOptionsRow = ({ engine, hintKey, mode, onModeChange }: Sel
   // visible). Same eligibility the engine enforces; used to disable the buttons.
   const canPaintTarget = useActiveProjectSelector((project) => {
     const { document } = project.canvas;
-    const layer = document.selectedLayerId
-      ? document.layers.find((entry) => entry.id === document.selectedLayerId)
-      : undefined;
-    return isLayerPixelEditEligible(layer);
+    return isLeafPixelEditEligible(lookupDocumentLeaf(document, document.selectedLayerId ?? ''));
   });
 
   const onFill = useCallback(() => engine.selection.fillSelection(), [engine]);

@@ -1,13 +1,15 @@
 import type { LayerExportGuard, ReplaceSelectionFromImageResult } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2, CanvasImageRef } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasImageRef } from '@workbench/canvas-engine/contracts';
 import type { DecodeImageResult } from '@workbench/canvas-engine/controllers/rasterController';
 import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { SelectionState } from '@workbench/canvas-engine/selection/selectionState';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
+
 export interface SelectionImageControllerOptions {
   readonly concurrency: CanvasEditConcurrency;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly decodeImage: (
     image: CanvasImageRef,
     options: {
@@ -52,7 +54,7 @@ export class SelectionImageController {
       if (!document) {
         return { status: 'missing' };
       }
-      const layer = document.layers.find((candidate) => candidate.id === guard.layerId);
+      const layer = getDocumentLayer(document, guard.layerId);
       if (!layer) {
         return { status: 'missing' };
       }

@@ -2,14 +2,14 @@ import type {
   CanvasEditIntent,
   CanvasMutationOrigin,
   CanvasProjectMutation,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
 } from '@workbench/canvas-engine/api';
 import type { WorkbenchState } from '@workbench/projectContracts';
 
 import type { WorkbenchCanvasCommands } from './workbenchStore';
 
 export interface CanvasProjectMutationPort {
-  getCanvasState(): CanvasStateContractV2 | null;
+  getCanvasState(): CanvasStateContractV3 | null;
   subscribe(listener: () => void): () => void;
   dispatch(mutation: CanvasProjectMutation, origin?: CanvasMutationOrigin): boolean;
   commitEdit(intent: CanvasEditIntent): void;
@@ -23,7 +23,7 @@ export const createCanvasProjectMutationPort = (
   },
   projectId: string
 ): CanvasProjectMutationPort => {
-  const getCanvasState = (): CanvasStateContractV2 | null =>
+  const getCanvasState = (): CanvasStateContractV3 | null =>
     store.getState().projects.find((project) => project.id === projectId)?.canvas ?? null;
 
   return {

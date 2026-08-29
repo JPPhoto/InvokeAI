@@ -5,7 +5,7 @@ import type {
   LayerExportGuard,
 } from '@workbench/canvas-engine/capabilities';
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasLayerSourceContract,
 } from '@workbench/canvas-engine/contracts';
@@ -13,8 +13,7 @@ import type { LayerCacheEntry, LayerCacheStore } from '@workbench/canvas-engine/
 import type { RasterBackend } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
-import { lookupDocumentLayer } from '@workbench/canvas-engine/document-model/flatDocumentModel';
-import { isLayerContributing } from '@workbench/canvas-engine/document/layerEligibility';
+import { lookupDocumentLayer, lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { fromTRS } from '@workbench/canvas-engine/math/mat2d';
 import { isEmpty, roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
@@ -33,10 +32,10 @@ export type ExportLayerPixelsResult =
 export interface RasterExportControllerOptions {
   readonly backend: RasterBackend;
   readonly captureGuard: (layer: CanvasLayerContract, entry: LayerCacheEntry) => LayerExportGuard;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly getOrStartRasterization: (
     layer: CanvasLayerContract,
-    document: CanvasDocumentContractV2,
+    document: CanvasDocumentContractV3,
     signal?: AbortSignal
   ) => Promise<'published' | 'stale' | 'error' | 'aborted'>;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
@@ -117,7 +116,7 @@ export class RasterExportController {
     if (!layer || !source) {
       return { status: 'missing' };
     }
-    if (!options.includeDisabled && !isLayerContributing(layer)) {
+    if (!options.includeDisabled && !lookupDocumentLeaf(document, layerId)?.contributionEnabled) {
       return { status: 'disabled' };
     }
     if (!this.options.isSupportedSource(source)) {
@@ -166,7 +165,7 @@ export class RasterExportController {
     if (!currentSource) {
       return { status: 'missing' };
     }
-    if (!options.includeDisabled && !isLayerContributing(currentLayer)) {
+    if (!options.includeDisabled && !lookupDocumentLeaf(currentDocument!, layerId)?.contributionEnabled) {
       return { status: 'disabled' };
     }
     if (!this.options.isSupportedSource(currentSource)) {

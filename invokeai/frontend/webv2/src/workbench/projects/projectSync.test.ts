@@ -63,7 +63,7 @@ describe('project document serialization', () => {
   it('refuses a document whose canvas was written by a newer client, keeping the raw document', () => {
     const project = getProject();
     const document = serializeProjectDocument(project);
-    const future = { ...document, canvas: { ...(document.canvas as object), version: 3 } };
+    const future = { ...document, canvas: { ...(document.canvas as object), version: 4 } };
 
     const result = deserializeProjectDocument(future);
 
@@ -71,7 +71,7 @@ describe('project document serialization', () => {
       refused: {
         projectId: project.id,
         raw: future,
-        refusal: { scope: 'state', status: 'unsupported-version', version: 3 },
+        refusal: { scope: 'state', status: 'unsupported-version', version: 4 },
         source: 'canvas',
       },
       status: 'refused',

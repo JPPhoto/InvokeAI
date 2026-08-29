@@ -1,5 +1,7 @@
-import type { CanvasDocumentContractV2, Rect } from '@workbench/canvas-engine/api';
+import type { CanvasDocumentContractV3, Rect } from '@workbench/canvas-engine/api';
 
+import { getDocumentLeaves } from '@workbench/canvas-engine/api';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it, vi, type Mock } from 'vitest';
 
 import {
@@ -14,16 +16,16 @@ const BBOX: Rect = { height: 64, width: 64, x: 0, y: 0 };
 const FIT_LAYERS: Rect = { height: 128, width: 256, x: 8, y: 16 };
 const FIT_MASKS: Rect = { height: 32, width: 32, x: 4, y: 4 };
 
-const documentOf = (): CanvasDocumentContractV2 =>
+const documentOf = (): CanvasDocumentContractV3 =>
   ({
     background: { color: '#000000', type: 'transparent' },
     bbox: BBOX,
     height: 512,
-    layers: [],
+    stacks: stacksFrom([]),
     selectedLayerId: null,
-    version: 2,
+    version: 3,
     width: 768,
-  }) as unknown as CanvasDocumentContractV2;
+  }) as unknown as CanvasDocumentContractV3;
 
 const createEngine = (viewportSize = { height: 600, width: 800 }) => {
   const zoomAtPoint = vi.fn();
@@ -102,7 +104,7 @@ describe('applyFitBbox', () => {
 
 describe('confirmNewCanvas', () => {
   const replaced = (engine: ReturnType<typeof createEngine>['engine']) =>
-    (engine.document.replaceDocument as Mock).mock.calls[0]?.[0] as CanvasDocumentContractV2;
+    (engine.document.replaceDocument as Mock).mock.calls[0]?.[0] as CanvasDocumentContractV3;
 
   it('replaces the document at the current dimensions through the engine', () => {
     const { engine } = createEngine();
@@ -115,8 +117,8 @@ describe('confirmNewCanvas', () => {
   it('seeds exactly one empty inpaint mask', () => {
     const { engine } = createEngine();
     confirmNewCanvas({ document: { height: 64, width: 64 }, editingLocked: false, engine });
-    expect(replaced(engine).layers).toHaveLength(1);
-    expect(replaced(engine).layers[0]?.type).toBe('inpaint_mask');
+    expect(getDocumentLeaves(replaced(engine))).toHaveLength(1);
+    expect(getDocumentLeaves(replaced(engine))[0]?.type).toBe('inpaint_mask');
   });
 
   it('refuses while editing is locked — the second gate behind the confirm dialog', () => {

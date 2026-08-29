@@ -1,5 +1,5 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasLayerSourceContract,
 } from '@workbench/canvas-engine/contracts';
@@ -17,7 +17,7 @@ import {
   renderableSourceOf,
 } from './sources';
 
-const doc = { height: 200, width: 300 } as CanvasDocumentContractV2;
+const doc = { height: 200, width: 300 } as CanvasDocumentContractV3;
 
 const inpaintMask = (
   bitmap: { imageName: string; width: number; height: number } | null,

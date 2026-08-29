@@ -1,9 +1,9 @@
 import type {
   CanvasDocumentCapability,
   CanvasLayerCapability,
-  FlatCanvasDocumentModel,
-  FlatDocumentRefusal,
-  PrepareFlatEditResult,
+  CanvasDocumentModel,
+  DocumentRefusal,
+  PrepareEditResult,
   StructuralCommitResult,
 } from '@workbench/canvas-engine/api';
 import type { TFunction } from 'i18next';
@@ -61,14 +61,14 @@ export interface CanvasPreparedEngine {
 
 export type PreparedCommitOutcome =
   | StructuralCommitResult
-  | { status: 'refused'; refusal: FlatDocumentRefusal }
+  | { status: 'refused'; refusal: DocumentRefusal }
   | { status: 'unchanged' };
 
 /** Prepares an edit against the engine's current model and commits it; refusals and no-ops never dispatch. */
 export const commitPreparedEdit = (
   engine: CanvasPreparedEngine | null,
   label: string,
-  prepare: (model: FlatCanvasDocumentModel) => PrepareFlatEditResult
+  prepare: (model: CanvasDocumentModel) => PrepareEditResult
 ): PreparedCommitOutcome => {
   const model = engine?.document.model() ?? null;
   if (!engine || !model) {
@@ -85,13 +85,24 @@ export const commitPreparedEdit = (
   }
 };
 
-const REFUSAL_KEYS: Record<FlatDocumentRefusal['status'], string> = {
+const REFUSAL_KEYS: Record<DocumentRefusal['status'], string> = {
   'invalid-target': 'widgets.canvas.structural.refusedInvalidTarget',
   locked: 'widgets.canvas.structural.refusedLocked',
   missing: 'widgets.canvas.structural.refusedMissing',
   unsupported: 'widgets.canvas.structural.refusedUnsupported',
   'wrong-type': 'widgets.canvas.structural.refusedWrongType',
 };
+
+const INVALID_TARGET_KEYS: Partial<Record<Extract<DocumentRefusal, { status: 'invalid-target' }>['reason'], string>> = {
+  cycle: 'widgets.canvas.structural.refusedCycle',
+  'depth-exceeded': 'widgets.canvas.structural.refusedDepth',
+  'node-limit': 'widgets.canvas.structural.refusedNodeLimit',
+  'not-siblings': 'widgets.canvas.structural.refusedNotSiblings',
+};
+
+const refusalKey = (refusal: DocumentRefusal): string =>
+  (refusal.status === 'invalid-target' ? INVALID_TARGET_KEYS[refusal.reason] : undefined) ??
+  REFUSAL_KEYS[refusal.status];
 
 export const reportPreparedCommit = (
   outcome: PreparedCommitOutcome,
@@ -102,7 +113,7 @@ export const reportPreparedCommit = (
     return;
   }
   if (outcome.status === 'refused') {
-    reportError(t('widgets.canvas.structural.failed'), t(REFUSAL_KEYS[outcome.refusal.status]));
+    reportError(t('widgets.canvas.structural.failed'), t(refusalKey(outcome.refusal)));
     return;
   }
   reportStructuralCommit(outcome, reportError, t);
@@ -110,7 +121,7 @@ export const reportPreparedCommit = (
 
 export type PreparedCommit = (
   label: string,
-  prepare: (model: FlatCanvasDocumentModel) => PrepareFlatEditResult
+  prepare: (model: CanvasDocumentModel) => PrepareEditResult
 ) => PreparedCommitOutcome;
 
 /** A widget-side prepared commit that reports every refusal the user needs to hear about. */

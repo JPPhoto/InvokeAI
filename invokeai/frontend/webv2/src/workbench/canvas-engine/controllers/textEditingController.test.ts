@@ -1,14 +1,16 @@
 import type { StructuralCommitResult } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { TextEditSession } from '@workbench/canvas-engine/engineStores';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { EMPTY_STACKS } from '@workbench/canvas-engine/document/documentTree';
 import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { DEFAULT_TEXT_OPTIONS } from '@workbench/canvas-engine/engineStores';
 import { describe, expect, it, vi } from 'vitest';
 
 import { TextEditingController } from './textEditingController';
 
-const createHarness = (document: CanvasDocumentContractV2) => {
+const createHarness = (document: CanvasDocumentContractV3) => {
   let session: TextEditSession | null = null;
   const commitStructural = vi.fn<(label: string, forward: unknown, inverse: unknown) => StructuralCommitResult>(() => ({
     status: 'committed',
@@ -16,7 +18,7 @@ const createHarness = (document: CanvasDocumentContractV2) => {
   const invalidate = vi.fn();
   const controller = new TextEditingController({
     canEdit: () => true,
-    captureInsertionAnchor: createTestInsertionAnchorCapture('p', () => document?.layers ?? []),
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p', () => document?.stacks ?? EMPTY_STACKS),
     commitStructural,
     createLayerId: () => 'text-new',
     getDocument: () => document,
@@ -33,7 +35,12 @@ const createHarness = (document: CanvasDocumentContractV2) => {
 
 describe('TextEditingController', () => {
   it('owns create session state and commits one structural layer addition', () => {
-    const h = createHarness({ bbox: { height: 1, width: 1, x: 0, y: 0 }, height: 1, layers: [], width: 1 } as never);
+    const h = createHarness({
+      bbox: { height: 1, width: 1, x: 0, y: 0 },
+      height: 1,
+      stacks: stacksFrom([]),
+      width: 1,
+    } as never);
     h.controller.openCreate({ x: 10.4, y: 20.6 });
     expect(h.getSession()?.transform).toMatchObject({ x: 10, y: 21 });
 
@@ -44,7 +51,12 @@ describe('TextEditingController', () => {
   });
 
   it('uses the registered content reader and cancels empty creates', () => {
-    const h = createHarness({ bbox: { height: 1, width: 1, x: 0, y: 0 }, height: 1, layers: [], width: 1 } as never);
+    const h = createHarness({
+      bbox: { height: 1, width: 1, x: 0, y: 0 },
+      height: 1,
+      stacks: stacksFrom([]),
+      width: 1,
+    } as never);
     h.controller.openCreate({ x: 0, y: 0 });
     h.controller.setContentReader(() => '   ');
 
@@ -57,7 +69,12 @@ describe('TextEditingController', () => {
 
 describe('TextEditingController refusals', () => {
   it('keeps the session for a transient refusal and drops it when the target is gone', () => {
-    const h = createHarness({ bbox: { height: 1, width: 1, x: 0, y: 0 }, height: 1, layers: [], width: 1 } as never);
+    const h = createHarness({
+      bbox: { height: 1, width: 1, x: 0, y: 0 },
+      height: 1,
+      stacks: stacksFrom([]),
+      width: 1,
+    } as never);
     h.commitStructural.mockReturnValueOnce({ status: 'busy' as const });
     h.controller.openCreate({ x: 0, y: 0 });
 
@@ -70,7 +87,12 @@ describe('TextEditingController refusals', () => {
   });
 
   it('reports nothing to commit for an empty creation', () => {
-    const h = createHarness({ bbox: { height: 1, width: 1, x: 0, y: 0 }, height: 1, layers: [], width: 1 } as never);
+    const h = createHarness({
+      bbox: { height: 1, width: 1, x: 0, y: 0 },
+      height: 1,
+      stacks: stacksFrom([]),
+      width: 1,
+    } as never);
     h.controller.openCreate({ x: 0, y: 0 });
 
     expect(h.controller.commit('   ')).toBeNull();

@@ -24,6 +24,8 @@ import type { CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contr
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { Rect, Vec2 } from '@workbench/canvas-engine/types';
 
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
+
 import type { Tool, ToolContext } from './tool';
 
 /** Bit for the primary (usually left) mouse button in `PointerEvent.buttons`. */
@@ -135,7 +137,7 @@ export const createShapeTool = (): Tool => {
         id: layerId,
         isEnabled: true,
         isLocked: false,
-        name: `Shape ${doc.layers.length + 1}`,
+        name: `Shape ${getDocumentLeaves(doc).length + 1}`,
         opacity: 1,
         source: {
           fill: options.fill,

@@ -1,13 +1,13 @@
 import type { LayerThumbnailRequestResult } from '@workbench/canvas-engine/capabilities';
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasLayerSourceContract,
 } from '@workbench/canvas-engine/contracts';
 import type { LayerCacheEntry } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 
-import { lookupDocumentLayer } from '@workbench/canvas-engine/document-model/flatDocumentModel';
+import { lookupDocumentLayer } from '@workbench/canvas-engine/document-model/documentModel';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
 import { renderControlTransparency } from '@workbench/canvas-engine/render/controlTransparency';
@@ -17,7 +17,7 @@ import { fitThumbnailSize } from '@workbench/canvas-engine/render/thumbnail';
 export interface ThumbnailControllerOptions {
   readonly backend: RasterBackend;
   readonly projectId: string;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly getActiveProjectId: () => string | null;
   readonly getEntry: (layerId: string) => LayerCacheEntry | undefined;
   readonly getCheckerboard: () => RasterSurface;
@@ -26,7 +26,7 @@ export interface ThumbnailControllerOptions {
   readonly isSupportedSource: (source: CanvasLayerSourceContract) => boolean;
   readonly rasterize: (
     layer: CanvasLayerContract,
-    document: CanvasDocumentContractV2
+    document: CanvasDocumentContractV3
   ) => Promise<'published' | 'stale' | 'error'>;
   readonly setStatus: (layerId: string, status: 'loading' | 'ready' | 'error' | null) => void;
   readonly reportError: (layerId: string, error: unknown) => void;

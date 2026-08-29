@@ -1,6 +1,6 @@
 import type {
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasImageRef,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
@@ -10,6 +10,7 @@ import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { StubRasterSurface } from '@workbench/canvas-engine/render/raster.testStub';
 import type { Rect } from '@workbench/canvas-operations/generationContracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { planComposites, planControlComposites } from '@workbench/canvas-operations/generationCompositePlan';
 import { describe, expect, it, vi } from 'vitest';
@@ -57,13 +58,13 @@ const controlLayer = (id: string, overrides: Partial<CanvasControlLayerContract>
   ...overrides,
 });
 
-const makeDoc = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
+const makeDoc = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 100,
 });
 
@@ -321,7 +322,7 @@ const inpaintMask = (
   type: 'inpaint_mask',
 });
 
-const maskEntryOf = (doc: CanvasDocumentContractV2) =>
+const maskEntryOf = (doc: CanvasDocumentContractV3) =>
   planComposites(doc, BBOX).entries.find((e) => e.kind === 'inpaint-mask')!;
 
 /** A grayscale ImageData that is uniformly white or has a single dark pixel. */

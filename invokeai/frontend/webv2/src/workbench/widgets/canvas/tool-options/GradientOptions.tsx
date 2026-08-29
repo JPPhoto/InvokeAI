@@ -3,6 +3,7 @@ import type { CanvasLayerSourceContract, GradientStop, GradientToolOptions } fro
 
 import { createListCollection, HStack, NumberInput, Text } from '@chakra-ui/react';
 import { ColorPicker, Select } from '@platform/ui';
+import { getDocumentLayer } from '@workbench/canvas-engine/api';
 import { useGradientOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
@@ -39,9 +40,7 @@ export const GradientOptions = ({ engine }: ToolOptionsComponentProps) => {
   const selected = useActiveProjectSelector(
     (project): SelectedGradient | null => {
       const { document } = project.canvas;
-      const layer = document.selectedLayerId
-        ? document.layers.find((entry) => entry.id === document.selectedLayerId)
-        : undefined;
+      const layer = document.selectedLayerId ? getDocumentLayer(document, document.selectedLayerId) : undefined;
       if (layer && layer.type === 'raster' && layer.source.type === 'gradient') {
         return { id: layer.id, source: layer.source };
       }

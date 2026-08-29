@@ -1,10 +1,11 @@
 import type {
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
 
+import { groupContract, stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it } from 'vitest';
 
 import { calculateActiveFrameLayerIds } from './frameDemand';
@@ -36,13 +37,13 @@ const hiddenControl = (id: string): CanvasControlLayerContract => ({
   withTransparencyEffect: false,
 });
 
-const document = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
+const document = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 1_000,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 1_000,
 });
 
@@ -123,5 +124,21 @@ describe('calculateActiveFrameLayerIds', () => {
         viewport: { height: 120, width: 120, x: 140, y: 0 },
       })
     ).toEqual(new Set(['rotated']));
+  });
+});
+
+describe('calculateActiveFrameLayerIds — group gating', () => {
+  it('does not demand a layer hidden or disabled by a group above it', () => {
+    const doc = {
+      ...document([layer('base', 0, 0)]),
+      stacks: stacksFrom([
+        { ...groupContract('hidden', [{ ...hiddenControl('c'), isHidden: false }]), isHidden: true },
+        groupContract('off', [layer('r', 0, 0)], { isEnabled: false }),
+        layer('base', 0, 0),
+      ]),
+    };
+    expect(calculateActiveFrameLayerIds({ document: doc, viewport: { height: 200, width: 200, x: 0, y: 0 } })).toEqual(
+      new Set(['base'])
+    );
   });
 });

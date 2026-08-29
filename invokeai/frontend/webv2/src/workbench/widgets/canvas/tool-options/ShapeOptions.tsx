@@ -3,7 +3,7 @@ import type { CanvasLayerSourceContract, ShapeToolOptions } from '@workbench/can
 
 import { createListCollection, HStack, NumberInput, Text } from '@chakra-ui/react';
 import { ColorPicker, Select, ToggleIconButton } from '@platform/ui';
-import { MAX_SHAPE_STROKE_WIDTH } from '@workbench/canvas-engine/api';
+import { MAX_SHAPE_STROKE_WIDTH, getDocumentLayer } from '@workbench/canvas-engine/api';
 import { useShapeOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
@@ -44,9 +44,7 @@ export const ShapeOptions = ({ engine }: ToolOptionsComponentProps) => {
   const selected = useActiveProjectSelector(
     (project): SelectedShape | null => {
       const { document } = project.canvas;
-      const layer = document.selectedLayerId
-        ? document.layers.find((entry) => entry.id === document.selectedLayerId)
-        : undefined;
+      const layer = document.selectedLayerId ? getDocumentLayer(document, document.selectedLayerId) : undefined;
       if (layer && layer.type === 'raster' && layer.source.type === 'shape') {
         return { id: layer.id, source: layer.source };
       }

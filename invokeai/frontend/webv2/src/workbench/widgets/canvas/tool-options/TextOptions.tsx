@@ -8,6 +8,7 @@ import {
   MIN_TEXT_FONT_SIZE,
   TEXT_FONT_FAMILIES,
   TEXT_FONT_WEIGHTS,
+  getDocumentLayer,
 } from '@workbench/canvas-engine/api';
 import { useTextEditSession, useTextOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
@@ -96,9 +97,7 @@ export const TextOptions = ({ engine }: ToolOptionsComponentProps) => {
   const selected = useActiveProjectSelector(
     (project): SelectedText | null => {
       const { document } = project.canvas;
-      const layer = document.selectedLayerId
-        ? document.layers.find((entry) => entry.id === document.selectedLayerId)
-        : undefined;
+      const layer = document.selectedLayerId ? getDocumentLayer(document, document.selectedLayerId) : undefined;
       if (layer && layer.type === 'raster' && layer.source.type === 'text') {
         return { id: layer.id, source: layer.source };
       }

@@ -1,19 +1,28 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasLayerSourceContract,
+  CanvasNodeContract,
 } from '@workbench/canvas-engine/contracts';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { CanvasLayerBasePatch, CanvasLayerConfigPatch } from '@workbench/canvas-engine/mutationContracts';
 
-import { isLayerHidden } from '@workbench/canvas-engine/document/layerEligibility';
-import { getStackOrder } from '@workbench/canvas-engine/document/layerStacks';
+import { getDocumentIndex, getDocumentNode } from '@workbench/canvas-engine/document/documentIndex';
+import { isGroupNode } from '@workbench/canvas-engine/document/documentTree';
+import { isNodeHidden } from '@workbench/canvas-engine/document/layerEligibility';
+import { getSiblingOrder } from '@workbench/canvas-engine/document/layerStacks';
+import { GROUP_PATCH_KEYS } from '@workbench/canvas-engine/mutationContracts';
 
 /** What a document must show after a prepared edit landed; evaluated against the reducer document. */
-export type FlatEditPostcondition =
+export type EditPostcondition =
   | { readonly kind: 'present'; readonly ids: readonly string[] }
   | { readonly kind: 'absent'; readonly ids: readonly string[] }
-  | { readonly kind: 'stack-order'; readonly stack: LayerStackKind; readonly orderedIds: readonly string[] }
+  | {
+      readonly kind: 'sibling-order';
+      readonly stack: LayerStackKind;
+      readonly parentId: string | null;
+      readonly orderedIds: readonly string[];
+    }
   | { readonly kind: 'selection'; readonly id: string | null }
   | { readonly kind: 'patched'; readonly id: string; readonly patch: CanvasLayerBasePatch }
   | { readonly kind: 'config'; readonly id: string; readonly config: CanvasLayerConfigPatch }
@@ -42,22 +51,25 @@ export const sameValue = (left: unknown, right: unknown): boolean => {
   return keys.length === Object.keys(right).length && keys.every((key) => sameValue(left[key], right[key]));
 };
 
-/** Whether every field named by `patch` already holds its value on `layer`. */
-export const isPatchApplied = (layer: CanvasLayerContract, patch: CanvasLayerBasePatch): boolean =>
-  (Object.keys(patch) as (keyof CanvasLayerBasePatch)[]).every((key) =>
-    key === 'transform'
+/** Whether every field named by `patch` already holds its value on `node`. */
+export const isPatchApplied = (node: CanvasNodeContract, patch: CanvasLayerBasePatch): boolean =>
+  (Object.keys(patch) as (keyof CanvasLayerBasePatch)[]).every((key) => {
+    if (isGroupNode(node)) {
+      return GROUP_PATCH_KEYS.includes(key) && node[key as 'name' | 'isEnabled' | 'isLocked'] === patch[key];
+    }
+    return key === 'transform'
       ? (Object.keys(patch.transform ?? {}) as (keyof CanvasLayerContract['transform'])[]).every(
-          (axis) => layer.transform[axis] === patch.transform?.[axis]
+          (axis) => node.transform[axis] === patch.transform?.[axis]
         )
-      : layer[key] === patch[key]
-  );
+      : node[key] === patch[key];
+  });
 
 /** Whether every field named by `config` already holds its value; nested partials compare field by field. */
-export const isConfigApplied = (layer: CanvasLayerContract, config: CanvasLayerConfigPatch): boolean => {
-  if (layer.type !== config.layerType) {
+export const isConfigApplied = (node: CanvasNodeContract, config: CanvasLayerConfigPatch): boolean => {
+  if (node.type !== config.layerType) {
     return false;
   }
-  const target = layer as unknown as Record<string, unknown>;
+  const target = node as unknown as Record<string, unknown>;
   return Object.entries(config).every(([key, value]) => {
     if (key === 'layerType') {
       return true;
@@ -69,40 +81,43 @@ export const isConfigApplied = (layer: CanvasLayerContract, config: CanvasLayerC
   });
 };
 
-export const checkFlatEditPostconditions = (
-  document: CanvasDocumentContractV2,
-  postconditions: readonly FlatEditPostcondition[]
-): boolean =>
-  postconditions.every((postcondition) => {
+const sameOrder = (left: readonly string[], right: readonly string[]): boolean =>
+  left.length === right.length && left.every((id, index) => id === right[index]);
+
+export const checkEditPostconditions = (
+  document: CanvasDocumentContractV3,
+  postconditions: readonly EditPostcondition[]
+): boolean => {
+  const index = getDocumentIndex(document);
+  return postconditions.every((postcondition) => {
     switch (postcondition.kind) {
       case 'present':
-        return postcondition.ids.every((id) => document.layers.some((layer) => layer.id === id));
+        return postcondition.ids.every((id) => index.byId.has(id));
       case 'absent':
-        return postcondition.ids.every((id) => !document.layers.some((layer) => layer.id === id));
-      case 'stack-order': {
-        const { orderedIds } = getStackOrder(document.layers, postcondition.stack);
-        return (
-          orderedIds.length === postcondition.orderedIds.length &&
-          orderedIds.every((id, index) => id === postcondition.orderedIds[index])
+        return postcondition.ids.every((id) => !index.byId.has(id));
+      case 'sibling-order':
+        return sameOrder(
+          getSiblingOrder(document.stacks, postcondition.stack, postcondition.parentId).orderedIds,
+          postcondition.orderedIds
         );
-      }
       case 'selection':
         return document.selectedLayerId === postcondition.id;
       case 'patched': {
-        const layer = document.layers.find((candidate) => candidate.id === postcondition.id);
-        return layer !== undefined && isPatchApplied(layer, postcondition.patch);
+        const node = getDocumentNode(document, postcondition.id);
+        return node !== null && isPatchApplied(node, postcondition.patch);
       }
       case 'config': {
-        const layer = document.layers.find((candidate) => candidate.id === postcondition.id);
-        return layer !== undefined && isConfigApplied(layer, postcondition.config);
+        const node = getDocumentNode(document, postcondition.id);
+        return node !== null && isConfigApplied(node, postcondition.config);
       }
       case 'source': {
-        const layer = document.layers.find((candidate) => candidate.id === postcondition.id);
-        return layer !== undefined && 'source' in layer && layer.source === postcondition.source;
+        const node = getDocumentNode(document, postcondition.id);
+        return node !== null && 'source' in node && node.source === postcondition.source;
       }
       case 'hidden': {
-        const layer = document.layers.find((candidate) => candidate.id === postcondition.id);
-        return layer !== undefined && isLayerHidden(layer) === postcondition.isHidden;
+        const node = getDocumentNode(document, postcondition.id);
+        return node !== null && isNodeHidden(node) === postcondition.isHidden;
       }
     }
   });
+};

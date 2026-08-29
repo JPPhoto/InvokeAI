@@ -5,6 +5,7 @@ import { assertAccountScopeCurrent, captureAccountScope, type AccountScope } fro
 import {
   DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
   getProjectCanvasSchemaRequirement,
+  isCanvasSchemaVersionSupported,
   MAX_SUPPORTED_CANVAS_SCHEMA_VERSION,
 } from '@workbench/canvasSchemaVersion';
 import { timeWorkbenchPerf } from '@workbench/performanceMarks';
@@ -1646,7 +1647,7 @@ const loadFromBackend = async (
     openIds.map(async (id) => {
       const summary = summaryById.get(id);
 
-      if (summary && summary.minimum_canvas_schema_version > MAX_SUPPORTED_CANVAS_SCHEMA_VERSION) {
+      if (summary && !isCanvasSchemaVersionSupported(summary.minimum_canvas_schema_version)) {
         return {
           refused: toDeclaredSchemaRefusal(id, summary.name, summary.minimum_canvas_schema_version),
           status: 'refused' as const,

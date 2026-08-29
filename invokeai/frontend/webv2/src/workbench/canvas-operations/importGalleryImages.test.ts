@@ -7,6 +7,7 @@ import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
 import { accountLifecycle } from '@platform/state/accountLifecycle';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import {
   createControlLayer,
@@ -47,7 +48,7 @@ const withProject = (mutate?: (project: Project) => Project): { project: Project
   const document = {
     ...current.canvas.document,
     bbox: { height: 512, width: 768, x: 31, y: 47 },
-    layers: [createEmptyPaintLayer('Existing', 'previous')],
+    stacks: stacksFrom([createEmptyPaintLayer('Existing', 'previous')]),
     selectedLayerId: 'previous',
   };
   const base = { ...current, canvas: { ...current.canvas, document } };
@@ -158,7 +159,7 @@ const getForwardLayers = (action: WorkbenchAction | CanvasProjectMutation): read
   if (mutation.type !== 'applyCanvasLayerStackMutation' || !mutation.add) {
     throw new Error('Expected add stack mutation');
   }
-  return mutation.add.flatMap((insertion) => insertion.layers);
+  return mutation.add.flatMap((insertion) => insertion.nodes as CanvasLayerContract[]);
 };
 
 const expectedLayer = (

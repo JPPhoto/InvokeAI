@@ -15,14 +15,14 @@
 
 import type {
   CanvasBlendMode,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
 } from '@workbench/canvas-engine/contracts';
 import type { CanvasDiagnostics } from '@workbench/canvas-engine/diagnostics';
-import type { SemanticLeafV2 } from '@workbench/canvas-engine/document-model/semanticLeaf';
+import type { SemanticLeaf } from '@workbench/canvas-engine/document-model/semanticLeaf';
 import type { LayerDamage, Mat2d, Rect, Vec2 } from '@workbench/canvas-engine/types';
 
-import { compileDocumentLeaves, lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/flatDocumentModel';
+import { compileDocumentLeaves, lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
 import {
   ALL_OVERLAY_STACKS_SHOWN,
   planScreenComposition,
@@ -208,7 +208,7 @@ const identityTransform = (ctx: Ctx): void => {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 };
 
-const getEffectiveLayerMatrix = (leaf: SemanticLeafV2, opts: CompositeOptions): Mat2d => {
+const getEffectiveLayerMatrix = (leaf: SemanticLeaf, opts: CompositeOptions): Mat2d => {
   const override = opts.transformOverrides?.get(leaf.id);
   if (!override) {
     return leaf.worldTransform;
@@ -223,7 +223,7 @@ const getEffectiveLayerMatrix = (leaf: SemanticLeafV2, opts: CompositeOptions): 
 };
 
 const isDefinitelyOffscreen = (
-  leaf: SemanticLeafV2,
+  leaf: SemanticLeaf,
   entry: LayerCacheEntry,
   view: Mat2d,
   target: RasterSurface,
@@ -301,7 +301,7 @@ const drawBackground = (ctx: Ctx, tile: RasterSurface | null, bounds: Rect): voi
  * of the previous frame behind.
  */
 const resolveDamage = (
-  doc: CanvasDocumentContractV2,
+  doc: CanvasDocumentContractV3,
   view: Mat2d,
   target: RasterSurface,
   opts: CompositeOptions
@@ -396,7 +396,7 @@ const drawMaskLayer = (
  */
 const drawCachedLayer = (
   ctx: Ctx,
-  leaf: SemanticLeafV2,
+  leaf: SemanticLeaf,
   entry: LayerCacheEntry,
   view: Mat2d,
   opts: CompositeOptions
@@ -476,7 +476,7 @@ const drawCachedLayer = (
  */
 const drawFloatingSelection = (
   ctx: Ctx,
-  leaf: SemanticLeafV2,
+  leaf: SemanticLeaf,
   view: Mat2d,
   opts: CompositeOptions,
   float: NonNullable<CompositeOptions['floatingSelection']>
@@ -496,7 +496,7 @@ const drawFloatingSelection = (
  */
 export const compositeDocument = (
   target: RasterSurface,
-  doc: CanvasDocumentContractV2,
+  doc: CanvasDocumentContractV3,
   caches: LayerCacheStore,
   view: Mat2d,
   opts: CompositeOptions = {}

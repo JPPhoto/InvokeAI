@@ -1,8 +1,9 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { SamPreviewState } from '@workbench/canvas-engine/controllers/previewStateController';
 import type { FloatingSelection } from '@workbench/canvas-engine/selection/floatingSelection';
 import type { Mat2d, ToolId } from '@workbench/canvas-engine/types';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -26,11 +27,11 @@ const documentOf = (layerIds: readonly string[] = ['a'], overrides: Record<strin
   ({
     bbox: { height: 32, width: 32, x: 0, y: 0 },
     height: 64,
-    layers: layerIds.map((id) => layer(id)),
+    stacks: stacksFrom(layerIds.map((id) => layer(id) as unknown as CanvasLayerContract)),
     selectedLayerId: layerIds[0] ?? null,
     width: 64,
     ...overrides,
-  }) as unknown as CanvasDocumentContractV2;
+  }) as unknown as CanvasDocumentContractV3;
 
 interface Harness {
   deps: CreateOverlayFrameDeps;

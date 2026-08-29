@@ -123,7 +123,10 @@ describe('normalizeWorkbenchQueueHistory', () => {
             ...item,
             snapshot: {
               ...item.snapshot,
-              canvas: { ...canvas, document: { ...canvas.document, layers: [{ id: 'broken', type: 'mystery' }] } },
+              canvas: {
+                ...canvas,
+                document: { ...canvas.document, stacks: { raster: [{ id: 'broken', type: 'mystery' }] } },
+              },
             },
           },
         ],

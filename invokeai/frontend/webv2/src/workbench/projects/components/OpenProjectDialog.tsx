@@ -1,6 +1,6 @@
 import type { ProjectRecordDTO } from '@workbench/projects/api';
 
-import { Badge, Dialog, Icon, Portal, Spinner, Stack, Text } from '@chakra-ui/react';
+import { Dialog, Icon, Portal, Spinner, Stack, Text } from '@chakra-ui/react';
 import { flushGenerateDrafts } from '@features/generation/react';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import {
@@ -12,7 +12,9 @@ import { areArraysEqual } from '@platform/state/selectors';
 import { getApiErrorMessage } from '@platform/transport/http';
 import { Button, CloseButton, Row, Scrollable } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
+import { MIN_SUPPORTED_CANVAS_SCHEMA_VERSION } from '@workbench/canvasSchemaVersion';
 import { formatRelativeTime } from '@workbench/launchpad/formatRelativeTime';
+import { ProjectCompatibilityBadge } from '@workbench/launchpad/projects/ProjectCompatibilityBadge';
 import {
   isProjectSummaryCompatible,
   refreshProjectLibrary,
@@ -66,7 +68,14 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
       const owner = captureAccountScope();
 
       if (!isProjectSummaryCompatible(summary)) {
-        notify.error(t('projects.couldNotOpen'), t('projects.file.updateClient'));
+        notify.error(
+          t('projects.couldNotOpen'),
+          t(
+            summary.minimumCanvasSchemaVersion < MIN_SUPPORTED_CANVAS_SCHEMA_VERSION
+              ? 'projects.file.legacyCanvasProject'
+              : 'projects.file.updateClient'
+          )
+        );
 
         return;
       }
@@ -203,7 +212,6 @@ const OpenProjectRow = ({
 }) => {
   const open = useCallback(() => void onOpen(summary), [onOpen, summary]);
   const { t } = useTranslation();
-  const isCompatible = isProjectSummaryCompatible(summary);
 
   return (
     <Row asChild gap="2.5" px="2.5" py="2" rounded="md" _disabled={disabledRowStyles}>
@@ -213,11 +221,7 @@ const OpenProjectRow = ({
           <Text color="fg.muted" fontSize="2xs">
             {t('projects.editedRelative', { time: formatRelativeTime(summary.updatedAt) })}
           </Text>
-          {!isCompatible ? (
-            <Badge alignSelf="flex-start" colorPalette="orange" size="xs" variant="surface">
-              {t('projects.requiresNewerInvoke')}
-            </Badge>
-          ) : null}
+          <ProjectCompatibilityBadge summary={summary} />
         </Stack>
         {isBusy ? <Spinner color="fg.muted" size="xs" /> : <Icon as={ArrowRightIcon} boxSize="3.5" color="fg.muted" />}
       </button>

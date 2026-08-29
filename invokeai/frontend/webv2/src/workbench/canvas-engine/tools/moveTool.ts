@@ -39,7 +39,9 @@ import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { PointerInput, Vec2 } from '@workbench/canvas-engine/types';
 
-import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentIndex } from '@workbench/canvas-engine/document/documentIndex';
+import { isLeafEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { snapMovedPoint } from '@workbench/canvas-engine/math/snapping';
 
 import type { Tool, ToolContext } from './tool';
@@ -96,17 +98,29 @@ export const createMoveTool = (): Tool => {
    * The drag target is the document's selected layer, and nothing else — the
    * press point plays no part in choosing it.
    */
-  const selectedDraggableLayers = (ctx: ToolContext): readonly CanvasLayerContract[] => {
+  const selectedDraggableLayers = (
+    ctx: ToolContext
+  ): { layers: readonly CanvasLayerContract[]; primaryId: string | null } => {
     const doc = ctx.getDocument();
     const selectedId = doc?.selectedLayerId;
     if (!doc || !selectedId) {
-      return [];
+      return { layers: [], primaryId: null };
     }
     const requested = new Set(ctx.getSelectedLayerIds?.() ?? [selectedId]);
-    const selected = doc.layers.filter((layer) => requested.has(layer.id));
-    return requested.has(selectedId) && selected.length === requested.size && selected.every(isLayerEditable)
-      ? selected
-      : [];
+    requested.add(selectedId);
+    const index = getDocumentIndex(doc);
+    if ([...requested].some((id) => !index.byId.has(id))) {
+      return { layers: [], primaryId: null };
+    }
+    // A selected group drags every leaf beneath it; a locked node anywhere in the set refuses the drag.
+    const leaves = compileDocumentLeaves(doc).filter(
+      (leaf) => requested.has(leaf.id) || leaf.parentIds.some((ancestor) => requested.has(ancestor))
+    );
+    if (leaves.length === 0 || !leaves.every(isLeafEditable)) {
+      return { layers: [], primaryId: null };
+    }
+    const primary = leaves.find((leaf) => leaf.id === selectedId || leaf.parentIds.includes(selectedId));
+    return { layers: leaves.map((leaf) => leaf.layer), primaryId: primary?.id ?? null };
   };
 
   /**
@@ -118,8 +132,8 @@ export const createMoveTool = (): Tool => {
     if (existing) {
       return { kind: 'float', layerId: existing.layerId, origin: { ...existing.transform } };
     }
-    const layers = selectedDraggableLayers(ctx);
-    const primary = layers.find((layer) => layer.id === ctx.getDocument()?.selectedLayerId);
+    const { layers, primaryId } = selectedDraggableLayers(ctx);
+    const primary = layers.find((layer) => layer.id === primaryId);
     if (!primary) {
       return { kind: 'none' };
     }

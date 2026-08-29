@@ -52,21 +52,7 @@ export interface CanvasStagingCandidateContract extends GeneratedImageContract {
   sourceBackendItemId?: number;
 }
 
-export interface CanvasRasterLayerContract extends GeneratedImageContract {
-  id: string;
-  acceptedAt: string;
-  label: string;
-  placement: CanvasPlacementContract;
-}
-
-export interface CanvasDocumentContract {
-  version: 1;
-  width: number;
-  height: number;
-  layers: CanvasRasterLayerContract[];
-}
-
-/** @deprecated legacy v1 shape, superseded by {@link CanvasStagingAreaContractV2}. Extracted so v1 and v2 canvas state can share its structure. */
+/** The legacy-shaped staging area; v3 state extends it with `autoSwitchMode`. */
 export interface CanvasStagingAreaContract {
   sourceQueueItemId?: string;
   selectedLayerId?: string;
@@ -77,25 +63,15 @@ export interface CanvasStagingAreaContract {
   areThumbnailsVisible: boolean;
 }
 
-/** @deprecated legacy v1 shape, superseded by {@link CanvasStateContractV2}. Kept for migration input typing and the still-v1-shaped staging area. */
-export interface CanvasStateContract {
-  version: 1;
-  document: CanvasDocumentContract;
-  stagingArea: CanvasStagingAreaContract;
-}
-
 // ---------------------------------------------------------------------------
-// Canvas v2 document contracts
+// Canvas v3 document contracts
 //
-// The canvas document is being rebuilt as a full photo editor: a layer stack
-// supporting raster, control, regional-guidance, and inpaint-mask layers, each
-// with its own transform/opacity/blend-mode. `CanvasStateContract` (v1) only
-// ever produced single-image raster layers positioned by `placement`; v2
-// layers are positioned by `transform` and reference bitmaps by `imageName`
-// (via `CanvasImageRef`) rather than by resolved URLs, since URLs are
-// ephemeral/backend-derived while the document is persisted. The staging
-// area (pending queue results awaiting placement onto the canvas) keeps its
-// v1 shape unchanged — only the accepted document evolves.
+// A document holds four stack forests (raster, control, regional guidance and
+// inpaint mask). Each forest is a top-first tree of leaves and pass-through
+// groups. Leaves are positioned by `transform` and reference bitmaps by
+// `imageName` (via `CanvasImageRef`) rather than by resolved URLs, since URLs
+// are ephemeral. Groups organise leaves and gate their effective enabled,
+// locked and hidden state; they carry no opacity, blend mode or transform.
 // ---------------------------------------------------------------------------
 
 export type CanvasBlendMode =
@@ -293,14 +269,40 @@ export type CanvasLayerContract =
   | CanvasRegionalGuidanceLayerContract
   | CanvasInpaintMaskLayerContract;
 
-export interface CanvasDocumentContractV2 {
-  version: 2;
+export type CanvasLayerStackKind = CanvasLayerContract['type'];
+
+/**
+ * A pass-through group. It belongs to exactly one stack forest and may contain only that
+ * stack's leaves and groups. `isHidden` is display-only and valid only in overlay stacks, with the
+ * meaning the overlay leaves already give it; a raster group has no display-only hidden state.
+ */
+export interface CanvasGroupContract {
+  id: string;
+  type: 'group';
+  name: string;
+  isEnabled: boolean;
+  isLocked: boolean;
+  isHidden?: boolean;
+  /** Index 0 is the top-most child. */
+  children: CanvasNodeContract[];
+}
+
+export type CanvasNodeContract = CanvasLayerContract | CanvasGroupContract;
+
+/** One top-first forest per stack; a node's stack is the forest it lives in. */
+export type CanvasStackForests = Record<CanvasLayerStackKind, CanvasNodeContract[]>;
+
+export const CANVAS_MAX_NODE_DEPTH = 10;
+export const CANVAS_MAX_NODE_COUNT = 10_000;
+
+export interface CanvasDocumentContractV3 {
+  version: 3;
   width: number;
   height: number;
   background: 'transparent' | { color: string };
-  /** Index 0 is the top-most layer. */
-  layers: CanvasLayerContract[];
+  stacks: CanvasStackForests;
   bbox: { x: number; y: number; width: number; height: number };
+  /** A leaf or a group; leaf-only tools refuse a group rather than guessing a descendant. */
   selectedLayerId: string | null;
 }
 
@@ -308,16 +310,16 @@ export interface CanvasSnapshotContract {
   id: string;
   name: string;
   createdAt: string;
-  document: CanvasDocumentContractV2;
+  document: CanvasDocumentContractV3;
 }
 
 export interface CanvasStagingAreaContractV2 extends CanvasStagingAreaContract {
   autoSwitchMode: 'off' | 'latest' | 'progress';
 }
 
-export interface CanvasStateContractV2 {
-  version: 2;
-  document: CanvasDocumentContractV2;
+export interface CanvasStateContractV3 {
+  version: 3;
+  document: CanvasDocumentContractV3;
   /**
    * Monotonic counter bumped whenever the document is swapped wholesale
    * (snapshot restore, `replaceCanvasDocument`) rather than incrementally

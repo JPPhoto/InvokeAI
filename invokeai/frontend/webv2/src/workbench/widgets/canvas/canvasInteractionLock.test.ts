@@ -2,7 +2,7 @@ import type { QueueHistoryItemStatus } from '@features/queue/contracts';
 import type { CanvasStagingCandidateContract } from '@workbench/canvas-engine/contracts';
 import type { WorkbenchQueueItem as QueueItem } from '@workbench/queueHistoryContracts';
 
-import { createEmptyCanvasStateV2 } from '@workbench/canvasMigration';
+import { createEmptyCanvasState } from '@workbench/canvasMigration';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -24,7 +24,7 @@ const createStagedCandidate = (): CanvasStagingCandidateContract => ({
 });
 
 const createCanvas = ({ revision = 1, staged = false }: { revision?: number; staged?: boolean } = {}) => {
-  const canvas = createEmptyCanvasStateV2(512, 512);
+  const canvas = createEmptyCanvasState(512, 512);
   const pendingImages = staged ? [createStagedCandidate()] : [];
 
   return {

@@ -13,7 +13,7 @@
  * Zero React, zero import-time side effects.
  */
 
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { Mat2d, Vec2 } from '@workbench/canvas-engine/types';
 
 import type { LayerCacheStore } from './layerCache';
@@ -37,7 +37,7 @@ export interface RgbaSample {
  * with non-zero alpha.
  */
 export const sampleDocumentColor = (
-  doc: CanvasDocumentContractV2,
+  doc: CanvasDocumentContractV3,
   layers: LayerCacheStore,
   backend: RasterBackend,
   docPoint: Vec2

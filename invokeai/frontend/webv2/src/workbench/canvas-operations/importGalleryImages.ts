@@ -17,7 +17,7 @@ import {
   captureAccountScope,
   registerAccountOwnedResource,
 } from '@platform/state/accountLifecycle';
-import { captureInsertionAnchor } from '@workbench/canvas-engine/api';
+import { captureInsertionAnchor, getDocumentLeaves } from '@workbench/canvas-engine/api';
 import { resolveDefaultControlModelForBase } from '@workbench/widgets/layers/controlModelOptions';
 import {
   createControlLayer,
@@ -160,7 +160,7 @@ const buildLayers = (
       buildLayer(image, destination, {
         bbox: project.canvas.document.bbox,
         defaultControlModel,
-        existingLayers: [...project.canvas.document.layers, ...layers],
+        existingLayers: [...getDocumentLeaves(project.canvas.document), ...layers],
         modelBase,
       })
     );
@@ -289,7 +289,7 @@ export const importGalleryImagesToCanvas = async (options: {
     const anchorFor = (stack: LayerStackKind) =>
       matchingProjectEngine
         ? matchingProjectEngine.document.captureInsertionAnchor(stack, null)
-        : captureInsertionAnchor(capturedDocument.layers, {
+        : captureInsertionAnchor(capturedDocument.stacks, {
             aboveId: null,
             editRevision: project.canvas.documentRevision,
             projectId: project.id,
@@ -298,7 +298,7 @@ export const importGalleryImagesToCanvas = async (options: {
     const forward: CanvasProjectMutation = {
       add: [...new Set(layers.map((layer) => layer.type))].map((stack) => ({
         anchor: anchorFor(stack),
-        layers: layers.filter((layer) => layer.type === stack),
+        nodes: layers.filter((layer) => layer.type === stack),
       })),
       enabledUpdates: [],
       selectedLayerId: layers.at(-1)?.id ?? previousSelectedLayerId,

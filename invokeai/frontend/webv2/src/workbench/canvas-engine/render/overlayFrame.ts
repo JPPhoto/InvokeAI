@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { SamPreviewState } from '@workbench/canvas-engine/controllers/previewStateController';
 import type { EngineStores } from '@workbench/canvas-engine/engineStores';
 import type {
@@ -14,7 +14,7 @@ import {
   compileDocumentLeaves,
   lookupDocumentLayer,
   lookupDocumentLeaf,
-} from '@workbench/canvas-engine/document-model/flatDocumentModel';
+} from '@workbench/canvas-engine/document-model/documentModel';
 import { applyToPoint } from '@workbench/canvas-engine/math/mat2d';
 import { hittableLayerRect, layerOutlineCorners } from '@workbench/canvas-engine/tools/moveHitTest';
 import { transformOverlayGeometry } from '@workbench/canvas-engine/transform/transformMath';
@@ -42,7 +42,7 @@ export interface CreateOverlayFrameDeps {
 export interface OverlayFrame {
   /** Everything the overlay renderer draws this frame, gathered from live state. */
   describe(
-    doc: CanvasDocumentContractV2,
+    doc: CanvasDocumentContractV3,
     view: Mat2d,
     floatFrame: FloatingSelectionFrame | null,
     samPreview: SamPreviewState | null
@@ -67,7 +67,7 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
    * (carrying a live override) wins over the committed selection so the marquee
    * tracks the preview rather than lagging a frame behind it.
    */
-  const moveOutlineCorners = (doc: CanvasDocumentContractV2): readonly Vec2[] | null => {
+  const moveOutlineCorners = (doc: CanvasDocumentContractV3): readonly Vec2[] | null => {
     if (getActiveToolId() !== 'move') {
       return null;
     }
@@ -80,7 +80,7 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
   };
 
   /** The transform-tool frame (rotated bounds + handles + rotation nub), or `null`. */
-  const transformFrame = (doc: CanvasDocumentContractV2): TransformFrameOverlay | null => {
+  const transformFrame = (doc: CanvasDocumentContractV3): TransformFrameOverlay | null => {
     if (getActiveToolId() !== 'transform') {
       return null;
     }

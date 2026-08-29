@@ -1,7 +1,7 @@
 import type { CommitRasterFilterOptions, CommitRasterFilterResult } from '@workbench/canvas-engine/capabilities';
 import type {
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasImageRef,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
@@ -12,6 +12,7 @@ import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/ren
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { getDocumentLayer, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
 import { createControlLayer } from '@workbench/canvas-engine/document/layerFactories';
 import { LayerFilterOutputDimensionError } from '@workbench/canvas-engine/filterError';
 
@@ -25,7 +26,7 @@ export type {
 } from '@workbench/canvas-engine/capabilities';
 
 export interface FilterResultControllerOptions {
-  readonly captureCache: (layer: CanvasLayerContract, document: CanvasDocumentContractV2) => CapturedLayerCache;
+  readonly captureCache: (layer: CanvasLayerContract, document: CanvasDocumentContractV3) => CapturedLayerCache;
   readonly ctx: CanvasMutationContext;
   readonly decodeImage: (
     image: CanvasImageRef,
@@ -78,7 +79,7 @@ export class FilterResultController {
       }
       const pixels = decoded.surface;
       const document = o.ctx.getDocument();
-      const liveLayer = document?.layers.find((candidate) => candidate.id === options.guard.layerId);
+      const liveLayer = getDocumentLayer(document, options.guard.layerId);
       if (!document || !liveLayer) {
         return { status: 'missing' };
       }
@@ -122,8 +123,8 @@ export class FilterResultController {
         ): void => {
           o.ctx.dispatchPrepared(
             { layer: contract, layerId: liveLayer.id, type: 'replaceCanvasLayer' },
-            () => o.ctx.getReducerDocument()?.layers.find((candidate) => candidate.id === liveLayer.id) === contract,
-            () => o.ctx.getDocument()?.layers.find((candidate) => candidate.id === liveLayer.id) === contract
+            () => getDocumentLayer(o.ctx.getReducerDocument(), liveLayer.id) === contract,
+            () => getDocumentLayer(o.ctx.getDocument(), liveLayer.id) === contract
           );
           if (publishOptions.discardPersistence) {
             try {
@@ -201,8 +202,8 @@ export class FilterResultController {
         const prepared = o.ctx.preparePixels(layerId, rect, pixels);
         o.ctx.dispatchPrepared(
           { anchor, layer: copy, type: 'addCanvasLayer' },
-          () => o.ctx.getReducerDocument()?.layers.some((candidate) => candidate === copy) === true,
-          () => o.ctx.getDocument()?.layers.some((candidate) => candidate === copy) === true
+          () => getDocumentLayer(o.ctx.getReducerDocument(), copy.id) === copy,
+          () => getDocumentLayer(o.ctx.getDocument(), copy.id) === copy
         );
         o.ctx.installPrepared(prepared, false);
       };
@@ -220,8 +221,8 @@ export class FilterResultController {
           );
           o.ctx.dispatchPrepared(
             { ids: [layerId], type: 'removeCanvasLayers' },
-            () => o.ctx.getReducerDocument()?.layers.some((candidate) => candidate.id === layerId) === false,
-            () => o.ctx.getDocument()?.layers.some((candidate) => candidate.id === layerId) === false
+            () => isNodeAbsent(o.ctx.getReducerDocument(), layerId),
+            () => isNodeAbsent(o.ctx.getDocument(), layerId)
           );
         },
       });

@@ -1,15 +1,15 @@
 import type {
   CanvasAdjustmentsContract,
   CanvasBlendMode,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerSourceContract,
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
-import type { SemanticLeafV2 } from '@workbench/canvas-engine/document-model/semanticLeaf';
+import type { SemanticLeaf } from '@workbench/canvas-engine/document-model/semanticLeaf';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Mat2d, Rect } from '@workbench/canvas-engine/types';
 
-import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/flatDocumentModel';
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
 import { fromTRS, multiply } from '@workbench/canvas-engine/math/mat2d';
 import { roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 import { adjustmentsKey, applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
@@ -57,7 +57,7 @@ const defaultWriteImageData = (surface: RasterSurface, imageData: ImageData, x: 
   surface.ctx.putImageData(imageData, x, y);
 
 /** True when a leaf is a contributing raster layer with rasterizable, non-empty pixels. */
-const isBaseRasterLeaf = (leaf: SemanticLeafV2): leaf is SemanticLeafV2 & { layer: CanvasRasterLayerContractV2 } => {
+const isBaseRasterLeaf = (leaf: SemanticLeaf): leaf is SemanticLeaf & { layer: CanvasRasterLayerContractV2 } => {
   const { layer } = leaf;
   if (!leaf.contributionEnabled || layer.type !== 'raster') {
     return false;
@@ -81,7 +81,7 @@ const sourceRefOf = (source: CanvasLayerSourceContract): string => {
 };
 
 /** The native (unscaled) content rect of a base-raster layer's source (layer-local). */
-const contentRectOf = (layer: CanvasRasterLayerContractV2, doc: CanvasDocumentContractV2): Rect => {
+const contentRectOf = (layer: CanvasRasterLayerContractV2, doc: CanvasDocumentContractV3): Rect => {
   const { source } = layer;
   if (source.type === 'image') {
     return { height: source.image.height, width: source.image.width, x: 0, y: 0 };
@@ -94,7 +94,7 @@ const contentRectOf = (layer: CanvasRasterLayerContractV2, doc: CanvasDocumentCo
 };
 
 /** Projects a document layer into its frozen composite contribution. */
-const toLayerRef = (layer: CanvasRasterLayerContractV2, doc: CanvasDocumentContractV2): CompositeLayerRef => {
+const toLayerRef = (layer: CanvasRasterLayerContractV2, doc: CanvasDocumentContractV3): CompositeLayerRef => {
   const rect = contentRectOf(layer, doc);
   const hasAdjustments = !isIdentityAdjustments(layer.adjustments);
   return {
@@ -153,7 +153,7 @@ export const getCompositeLayerBounds = (layers: readonly CompositeLayerRef[]): R
 };
 
 /** Plans the enabled base-raster layers over an exact document-space rectangle. */
-export const planBaseRasterComposite = (document: CanvasDocumentContractV2, rect: Rect): BaseRasterCompositeEntry => {
+export const planBaseRasterComposite = (document: CanvasDocumentContractV3, rect: Rect): BaseRasterCompositeEntry => {
   const layers = compileDocumentLeaves(document)
     .filter(isBaseRasterLeaf)
     .map((leaf) => toLayerRef(leaf.layer, document));
@@ -166,7 +166,7 @@ export const planBaseRasterComposite = (document: CanvasDocumentContractV2, rect
 };
 
 /** Tight outward-rounded bounds of all enabled raster content in the document. */
-export const getBaseRasterContentBounds = (document: CanvasDocumentContractV2): Rect | null => {
+export const getBaseRasterContentBounds = (document: CanvasDocumentContractV3): Rect | null => {
   const bounds = getCompositeLayerBounds(planBaseRasterComposite(document, document.bbox).layers);
   return bounds === null ? null : roundOut(bounds);
 };

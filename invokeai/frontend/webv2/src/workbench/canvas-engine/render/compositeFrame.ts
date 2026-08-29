@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type {
   PreviewStateController,
   SamPreviewState,
@@ -12,6 +12,7 @@ import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/rend
 import type { LayerDamage, Mat2d, Rect } from '@workbench/canvas-engine/types';
 import type { Viewport } from '@workbench/canvas-engine/viewport';
 
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
 import { isLayerContributing } from '@workbench/canvas-engine/document/layerEligibility';
 import { getSourceContentRect, isRenderableLayer, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { compositeDocument, shouldSmoothAtZoom } from '@workbench/canvas-engine/render/compositor';
@@ -35,7 +36,7 @@ export interface CreateCompositeFrameDeps {
   readonly getMaskPatternTile: (style: string, color: string) => RasterSurface | null;
   readonly getCheckerboardTile: () => RasterSurface;
   /** Starts (or joins) the rasterization of a layer whose cache is stale. */
-  readonly rasterizeLayer: (layer: CanvasLayerContract, doc: CanvasDocumentContractV2) => void;
+  readonly rasterizeLayer: (layer: CanvasLayerContract, doc: CanvasDocumentContractV3) => void;
   readonly syncMemoryBaselines: () => void;
   readonly deleteDerivedSurfaces: (layerId: string) => void;
 }
@@ -44,7 +45,7 @@ export interface CompositeFrame {
   /** Composites the document onto the screen surface and enforces the surface budget. */
   draw(
     screen: RasterSurface,
-    doc: CanvasDocumentContractV2,
+    doc: CanvasDocumentContractV3,
     view: Mat2d,
     floatFrame: FloatingSelectionFrame | null,
     samPreview: SamPreviewState | null,
@@ -87,8 +88,8 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
    * shrinking it back to the contract size here would destroy those pixels. The
    * rasterizer owns sizing the surface and placing its content rect.
    */
-  const ensureLayerCaches = (doc: CanvasDocumentContractV2, activeFrameLayerIds: ReadonlySet<string>): void => {
-    for (const layer of doc.layers) {
+  const ensureLayerCaches = (doc: CanvasDocumentContractV3, activeFrameLayerIds: ReadonlySet<string>): void => {
+    for (const layer of getDocumentLeaves(doc)) {
       // The layer's rasterizable source: a raster/control `source`, or a mask
       // layer's alpha bitmap viewed as a paint source (colorized at composite).
       if (!isLayerContributing(layer) || !renderableSourceOf(layer) || !activeFrameLayerIds.has(layer.id)) {
@@ -159,7 +160,7 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
       const isolatedIds = isolatedGuard ? new Set([isolatedGuard.layerId]) : null;
 
       const liveCacheRects = new Map<string, Rect>();
-      for (const layer of doc.layers) {
+      for (const layer of getDocumentLeaves(doc)) {
         const rect = layerCache.peek(layer.id)?.rect;
         if (rect) {
           liveCacheRects.set(layer.id, rect);

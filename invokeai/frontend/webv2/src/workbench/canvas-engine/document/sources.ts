@@ -13,7 +13,7 @@
  */
 
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasLayerSourceContract,
 } from '@workbench/canvas-engine/contracts';
@@ -110,7 +110,7 @@ export const isRenderableLayer = (layer: CanvasLayerContract): boolean => {
  *
  * Throws for layers without a rasterizable source, so callers fail loudly.
  */
-export const getSourceContentRect = (layer: CanvasLayerContract, doc: CanvasDocumentContractV2): Rect => {
+export const getSourceContentRect = (layer: CanvasLayerContract, doc: CanvasDocumentContractV3): Rect => {
   const source = renderableSourceOf(layer);
   if (!source) {
     throw new Error(`getSourceContentRect: layer type '${layer.type}' has no rasterizable source`);
@@ -152,7 +152,7 @@ export const getSourceContentRect = (layer: CanvasLayerContract, doc: CanvasDocu
  * projected through the layer transform (rotation-aware). Used for culling and
  * fit-to-content. Throws for layers without a rasterizable source.
  */
-export const getSourceBounds = (layer: CanvasLayerContract, doc: CanvasDocumentContractV2): Rect => {
+export const getSourceBounds = (layer: CanvasLayerContract, doc: CanvasDocumentContractV3): Rect => {
   const contentRect = getSourceContentRect(layer, doc);
   const { transform } = layer;
   const matrix = fromTRS({ x: transform.x, y: transform.y }, transform.rotation, transform.scaleX, transform.scaleY);
@@ -162,7 +162,7 @@ export const getSourceBounds = (layer: CanvasLayerContract, doc: CanvasDocumentC
 /** The native (unscaled) pixel size of a layer's raster cache surface. */
 export const getSourcePixelSize = (
   layer: CanvasLayerContract,
-  doc: CanvasDocumentContractV2
+  doc: CanvasDocumentContractV3
 ): { width: number; height: number } => {
   const rect = getSourceContentRect(layer, doc);
   return { height: rect.height, width: rect.width };

@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
@@ -18,7 +18,7 @@ export type RasterCompositeExportResult =
 
 export interface RasterCompositeExportSnapshot {
   contentEpoch: number;
-  document: CanvasDocumentContractV2 | null;
+  document: CanvasDocumentContractV3 | null;
   documentGeneration: number;
   lifecycleGeneration: number;
 }

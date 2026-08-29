@@ -15,10 +15,12 @@
  */
 
 import type { CanvasLayerContract, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
-import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { PointerInput } from '@workbench/canvas-engine/types';
 
-import { isLayerPaintable, isLayerTransparencyLocked } from '@workbench/canvas-engine/document/layerEligibility';
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
+import { isLeafPaintable, isLayerTransparencyLocked } from '@workbench/canvas-engine/document/layerEligibility';
 import { isMaskLayer } from '@workbench/canvas-engine/document/sources';
 
 import type { StrokeCommittedEvent, Tool, ToolContext } from './tool';
@@ -53,7 +55,7 @@ interface PaintTarget {
   commit(event: StrokeCommittedEvent): void;
   cancel(): void;
   /** When the gesture auto-created its layer, the created contract + its anchor (for history). */
-  createdLayer?: { layer: CanvasLayerContract; anchor: FlatLayerInsertionAnchor };
+  createdLayer?: { layer: CanvasLayerContract; anchor: CanvasNodeInsertionAnchor };
   /**
    * Overrides the brush colour for this gesture (mask targets paint an opaque
    * stencil — the stored RGB is irrelevant, the compositor colorizes by alpha).
@@ -81,12 +83,13 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
   if (!doc) {
     return null;
   }
-  const selected = doc.selectedLayerId ? doc.layers.find((layer) => layer.id === doc.selectedLayerId) : undefined;
+  const leaf = doc.selectedLayerId ? lookupDocumentLeaf(doc, doc.selectedLayerId) : null;
+  const selected = leaf?.layer;
 
-  if (selected && selected.type === 'raster' && selected.source.type === 'paint') {
+  if (leaf && selected && selected.type === 'raster' && selected.source.type === 'paint') {
     // The selection is a paint layer: paint into it, unless it's locked/disabled
     // (a no-op — don't silently spawn a new layer over the user's locked target).
-    if (!isLayerPaintable(selected)) {
+    if (!isLeafPaintable(leaf)) {
       return null;
     }
     if (selected.source.bitmap) {
@@ -109,11 +112,11 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
     };
   }
 
-  if (selected?.type === 'raster' && selected.source.type === 'image' && tool === 'eraser') {
+  if (leaf && selected?.type === 'raster' && selected.source.type === 'image' && tool === 'eraser') {
     // Erasing is a destructive pixel edit, so materialize the image into an
     // undoable paint layer in place. A locked/disabled/unready image refuses the
     // transaction; never spawn a new layer over the selected image.
-    if (!isLayerPaintable(selected) || isLayerTransparencyLocked(selected)) {
+    if (!isLeafPaintable(leaf) || isLayerTransparencyLocked(selected)) {
       return null;
     }
     const transaction = ctx.beginPixelEdit?.(selected.id) ?? null;
@@ -127,12 +130,12 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
     };
   }
 
-  if (selected && isMaskLayer(selected)) {
+  if (leaf && selected && isMaskLayer(selected)) {
     // The selection is a mask: paint the stroke into its alpha stencil cache
     // (brush adds coverage, eraser removes — the shared stroke session handles
     // both via its composite op). Never auto-create a paint layer here. A
     // locked/disabled mask refuses the stroke (a no-op, not a spawn).
-    if (!isLayerPaintable(selected)) {
+    if (!isLeafPaintable(leaf)) {
       return null;
     }
     if (selected.mask.bitmap) {
@@ -173,7 +176,7 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
     id: layerId,
     isEnabled: true,
     isLocked: false,
-    name: `Layer ${doc.layers.length + 1}`,
+    name: `Layer ${getDocumentLeaves(doc).length + 1}`,
     opacity: 1,
     source: { bitmap: null, type: 'paint' },
     transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },

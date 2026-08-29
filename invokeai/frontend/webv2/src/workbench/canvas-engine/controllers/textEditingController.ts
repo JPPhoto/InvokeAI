@@ -1,12 +1,14 @@
 import type { StructuralCommitResult } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
-import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { TextEditSession, TextSource, TextToolOptions } from '@workbench/canvas-engine/engineStores';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { Vec2 } from '@workbench/canvas-engine/types';
 
-import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
+import { isLeafEditable } from '@workbench/canvas-engine/document/layerEligibility';
 
 export interface TextEditingControllerOptions {
   readonly session: {
@@ -14,11 +16,11 @@ export interface TextEditingControllerOptions {
     set(value: TextEditSession | null): void;
   };
   readonly options: { get(): TextToolOptions };
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly canEdit: () => boolean;
   readonly isGestureActive: () => boolean;
   readonly createLayerId: () => string;
-  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => CanvasNodeInsertionAnchor;
   readonly commitStructural: (
     label: string,
     forward: CanvasProjectMutation,
@@ -82,8 +84,9 @@ export class TextEditingController {
       return;
     }
     const document = this.deps.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === layerId);
-    if (!document || !layer || layer.type !== 'raster' || layer.source.type !== 'text' || !isLayerEditable(layer)) {
+    const leaf = lookupDocumentLeaf(document, layerId);
+    const layer = leaf?.layer;
+    if (!document || !layer || layer.type !== 'raster' || layer.source.type !== 'text' || !isLeafEditable(leaf)) {
       return;
     }
     this.deps.session.set({
@@ -140,7 +143,7 @@ export class TextEditingController {
         id: layerId,
         isEnabled: true,
         isLocked: false,
-        name: `Text ${(this.deps.getDocument()?.layers.length ?? 0) + 1}`,
+        name: `Text ${(getDocumentLeaves(this.deps.getDocument() ?? null).length ?? 0) + 1}`,
         opacity: 1,
         source: finalSource,
         transform: session.transform,

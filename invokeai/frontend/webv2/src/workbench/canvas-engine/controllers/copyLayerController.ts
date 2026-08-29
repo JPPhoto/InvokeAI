@@ -1,6 +1,6 @@
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
-import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
@@ -9,6 +9,8 @@ import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/ren
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { getDocumentLayer, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
+
 type ExportResult =
   | { status: 'ok'; surface: RasterSurface; rect: Rect; guard: LayerExportGuard; release(): void }
   | { status: 'missing' | 'disabled' | 'unsupported' | 'empty' | 'not-ready' | 'over-budget' };
@@ -16,13 +18,13 @@ type ExportResult =
 export interface CopyLayerControllerOptions {
   readonly concurrency: CanvasEditConcurrency;
   readonly history: History;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
-  readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
+  readonly getReducerDocument: () => CanvasDocumentContractV3 | null;
   readonly endBurst: () => void;
   readonly exportBaked: (layerId: string) => Promise<ExportResult>;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
   readonly createLayerId: () => string;
-  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => CanvasNodeInsertionAnchor;
   readonly preparePixels: (layerId: string, rect: Rect, pixels: RasterSurface) => PreparedLayerCacheReplacement;
   readonly installPrepared: (prepared: PreparedLayerCacheReplacement) => void;
   readonly dispatchPrepared: (
@@ -44,7 +46,7 @@ export class CopyLayerController {
     }
     this.deps.endBurst();
     const document = this.deps.getDocument();
-    const sourceLayer = document?.layers.find((candidate) => candidate.id === layerId);
+    const sourceLayer = getDocumentLayer(document, layerId);
     if (!document || !sourceLayer) {
       return null;
     }
@@ -64,7 +66,7 @@ export class CopyLayerController {
         return null;
       }
       const liveDocument = this.deps.getDocument();
-      if (!liveDocument || !liveDocument.layers.includes(sourceLayer)) {
+      if (!liveDocument || getDocumentLayer(liveDocument, sourceLayer.id) !== sourceLayer) {
         return null;
       }
       const newId = this.deps.createLayerId();
@@ -85,17 +87,17 @@ export class CopyLayerController {
         const prepared = this.deps.preparePixels(newId, baked.rect, baked.surface);
         this.deps.dispatchPrepared(
           {
-            add: [{ anchor, layers: [layer] }],
+            add: [{ anchor, nodes: [layer] }],
             enabledUpdates: [],
             selectedLayerId: newId,
             type: 'applyCanvasLayerStackMutation',
           },
           () =>
             this.deps.getReducerDocument()?.selectedLayerId === newId &&
-            this.deps.getReducerDocument()?.layers.some((candidate) => candidate === layer) === true,
+            getDocumentLayer(this.deps.getReducerDocument(), layer.id) === layer,
           () =>
             this.deps.getDocument()?.selectedLayerId === newId &&
-            this.deps.getDocument()?.layers.some((candidate) => candidate === layer) === true
+            getDocumentLayer(this.deps.getDocument(), layer.id) === layer
         );
         this.deps.installPrepared(prepared);
       };
@@ -113,10 +115,10 @@ export class CopyLayerController {
             { enabledUpdates: [], removeIds: [newId], selectedLayerId, type: 'applyCanvasLayerStackMutation' },
             () =>
               this.deps.getReducerDocument()?.selectedLayerId === selectedLayerId &&
-              this.deps.getReducerDocument()?.layers.some((candidate) => candidate.id === newId) === false,
+              isNodeAbsent(this.deps.getReducerDocument(), newId),
             () =>
               this.deps.getDocument()?.selectedLayerId === selectedLayerId &&
-              this.deps.getDocument()?.layers.some((candidate) => candidate.id === newId) === false
+              isNodeAbsent(this.deps.getDocument(), newId)
           ),
       });
       return newId;

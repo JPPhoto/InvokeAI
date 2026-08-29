@@ -14,8 +14,8 @@
  */
 
 import type { StructuralCommitResult } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
-import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { EngineStores } from '@workbench/canvas-engine/engineStores';
 import type { CreatePath2D } from '@workbench/canvas-engine/freehand';
@@ -55,7 +55,7 @@ export interface StrokeCommittedEvent {
    * now-empty auto-created layer (and a redo re-adds the layer + stroke).
    * Absent for strokes painted into a pre-existing layer.
    */
-  createdLayer?: { layer: CanvasLayerContract; anchor: FlatLayerInsertionAnchor };
+  createdLayer?: { layer: CanvasLayerContract; anchor: CanvasNodeInsertionAnchor };
 }
 
 export interface PixelEditPatch {
@@ -90,7 +90,7 @@ export interface ToolContext {
   /** The pan/zoom viewport. */
   viewport: Viewport;
   /** The current mirrored document, or `null` when none is available. */
-  getDocument(): CanvasDocumentContractV2 | null;
+  getDocument(): CanvasDocumentContractV3 | null;
   /** Selected layer ids from the Layers panel, including the document's primary layer. */
   getSelectedLayerIds?(): readonly string[];
   /** Requests a re-render for the given flags. */
@@ -98,7 +98,7 @@ export interface ToolContext {
   /** Reducer bridge. Painting tools use it for the single gesture-start `addCanvasLayer`. */
   dispatch(action: CanvasProjectMutation): void;
   /** Where a layer the tool creates lands: above `aboveId` when it belongs to `stack`, else the stack top. */
-  captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): FlatLayerInsertionAnchor;
+  captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): CanvasNodeInsertionAnchor;
   /**
    * Records a structural document edit on the engine-owned canvas history:
    * dispatches `forward` now, and an undo dispatches `inverse` / a redo

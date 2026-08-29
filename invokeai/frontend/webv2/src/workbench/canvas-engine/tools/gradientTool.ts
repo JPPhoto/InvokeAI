@@ -27,7 +27,9 @@ import type { CanvasLayerSourceContract, CanvasRasterLayerContractV2 } from '@wo
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { Vec2 } from '@workbench/canvas-engine/types';
 
-import { isLayerEditable } from '@workbench/canvas-engine/document/layerEligibility';
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
+import { isLeafEditable } from '@workbench/canvas-engine/document/layerEligibility';
 
 import type { Tool, ToolContext } from './tool';
 
@@ -115,11 +117,12 @@ export const createGradientTool = (): Tool => {
         return;
       }
       const angle = angleFromDrag(current.startDoc, input.documentPoint);
-      const selected = doc.selectedLayerId ? doc.layers.find((layer) => layer.id === doc.selectedLayerId) : undefined;
+      const leaf = doc.selectedLayerId ? lookupDocumentLeaf(doc, doc.selectedLayerId) : null;
+      const selected = leaf?.layer;
 
-      if (selected && selected.type === 'raster' && selected.source.type === 'gradient') {
+      if (leaf && selected && selected.type === 'raster' && selected.source.type === 'gradient') {
         // Edit the selected gradient layer — unless it's locked/disabled (no-op).
-        if (!isLayerEditable(selected)) {
+        if (!isLeafEditable(leaf)) {
           clearPreview(ctx);
           return;
         }
@@ -161,7 +164,7 @@ export const createGradientTool = (): Tool => {
         id: layerId,
         isEnabled: true,
         isLocked: false,
-        name: `Gradient ${doc.layers.length + 1}`,
+        name: `Gradient ${getDocumentLeaves(doc).length + 1}`,
         opacity: 1,
         source,
         transform: { rotation: 0, scaleX: 1, scaleY: 1, x: doc.bbox.x, y: doc.bbox.y },

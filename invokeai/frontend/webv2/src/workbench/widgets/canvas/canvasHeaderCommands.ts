@@ -1,11 +1,11 @@
 import type {
   CanvasDocumentCapability,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   Rect,
   StructuralCommitResult,
 } from '@workbench/canvas-engine/api';
 
-import { createNewCanvasStateV2 } from '@workbench/canvasMigration';
+import { createNewCanvasState } from '@workbench/canvasMigration';
 
 /**
  * The slice of the engine the header's actions drive. Structural rather than the
@@ -27,7 +27,7 @@ export interface CanvasHeaderCommandEngine {
 
 /** The minimum the destructive replace needs — kept narrow so its memo deps stay tight. */
 export interface NewCanvasContext {
-  readonly document: Pick<CanvasDocumentContractV2, 'width' | 'height'>;
+  readonly document: Pick<CanvasDocumentContractV3, 'width' | 'height'>;
   /** An in-flight operation owns the document; every mutating header action is inert. */
   readonly editingLocked: boolean;
   readonly engine: Pick<CanvasHeaderCommandEngine, 'document'>;
@@ -35,7 +35,7 @@ export interface NewCanvasContext {
 
 export interface CanvasHeaderCommandContext extends NewCanvasContext {
   readonly engine: CanvasHeaderCommandEngine;
-  readonly document: CanvasDocumentContractV2;
+  readonly document: CanvasDocumentContractV3;
   readonly fitLayersRect: Rect | null;
   readonly fitMasksRect: Rect | null;
   /** Opens the confirm dialog. The destructive replace only runs from its confirm. */
@@ -82,7 +82,7 @@ export const confirmNewCanvas = (ctx: NewCanvasContext): void => {
   if (ctx.editingLocked) {
     return;
   }
-  ctx.engine.document.replaceDocument(createNewCanvasStateV2(ctx.document.width, ctx.document.height).document);
+  ctx.engine.document.replaceDocument(createNewCanvasState(ctx.document.width, ctx.document.height).document);
 };
 
 /**

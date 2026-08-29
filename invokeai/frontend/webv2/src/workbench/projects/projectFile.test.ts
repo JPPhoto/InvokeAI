@@ -1,3 +1,4 @@
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createDraftProject } from '@workbench/workbenchState';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -124,7 +125,7 @@ const projectWithRestorableAssets = (includeVideo = true) => {
       ...project.canvas,
       document: {
         ...project.canvas.document,
-        layers: [rasterImageLayer('restored-image', 'archive-image.png')],
+        stacks: stacksFrom([rasterImageLayer('restored-image', 'archive-image.png')]),
       },
     },
     ...(includeVideo ? { futureVideoInput: { video_name: 'archive-video.mp4' } } : {}),
@@ -187,7 +188,11 @@ describe('exportOpenProject', () => {
   it('reaches the server through the mocked transport', async () => {
     api.getProject.mockResolvedValue({
       data: {
-        canvas: { document: { layers: [{ id: 'l', source: { image: { imageName: 'pinned.png' }, type: 'image' } }] } },
+        canvas: {
+          document: {
+            stacks: { raster: [{ id: 'l', source: { image: { imageName: 'pinned.png' }, type: 'image' } }] },
+          },
+        },
         id: 'p1',
         layout: {},
         name: 'Pinned',
@@ -220,7 +225,7 @@ describe('exportLibraryProject', () => {
 
     api.getProject.mockResolvedValue({
       data: document,
-      minimum_canvas_schema_version: 3,
+      minimum_canvas_schema_version: 4,
       name: 'Future history',
       project_id: 'p1',
       revision: 3,
@@ -233,7 +238,7 @@ describe('exportLibraryProject', () => {
     const entries = await readArchive(new Uint8Array(await blob.arrayBuffer()));
     const manifest = JSON.parse(readEntryText(entries.get('manifest.json')!)) as Record<string, unknown>;
 
-    expect(manifest.minimumCanvasSchemaVersion).toBe(3);
+    expect(manifest.minimumCanvasSchemaVersion).toBe(4);
   });
 
   /**
@@ -337,7 +342,7 @@ describe('what a transfer reports', () => {
         ...project.canvas,
         document: {
           ...project.canvas.document,
-          layers: [rasterImageLayer('l1', 'a.png'), rasterImageLayer('l2', 'b.png')],
+          stacks: stacksFrom([rasterImageLayer('l1', 'a.png'), rasterImageLayer('l2', 'b.png')]),
         },
       },
       name: 'Two layers',
@@ -421,7 +426,7 @@ describe('importing a project board', () => {
       ...project,
       canvas: {
         ...project.canvas,
-        document: { ...project.canvas.document, layers: [rasterImageLayer('l1', 'shared.png')] },
+        document: { ...project.canvas.document, stacks: stacksFrom([rasterImageLayer('l1', 'shared.png')]) },
       },
       name: 'Board project',
     };
@@ -477,10 +482,10 @@ describe('importing a project board', () => {
     await projectFile.importProjectFile(await exportedBoardArchive());
 
     const { data } = api.createProjectSettled.mock.calls[0]![0] as {
-      data: { canvas: { document: { layers: Array<{ source: { image: { imageName: string } } }> } } };
+      data: { canvas: { document: { stacks: { raster: Array<{ source: { image: { imageName: string } } }> } } } };
     };
 
-    expect(data.canvas.document.layers[0]?.source.image.imageName).toBe('board-shared.png');
+    expect(data.canvas.document.stacks.raster[0]?.source.image.imageName).toBe('board-shared.png');
   });
 
   /** The dedup that document references get is deliberately not applied to board membership. */
@@ -510,9 +515,9 @@ describe('importing a project board', () => {
 
     const outcome = await projectFile.importProjectFile(await exportedBoardArchive());
     const { data } = api.createProjectSettled.mock.calls[0]![0] as {
-      data: { canvas: { document: { layers: Array<{ source: { image: { imageName: string } } }> } } };
+      data: { canvas: { document: { stacks: { raster: Array<{ source: { image: { imageName: string } } }> } } } };
     };
-    const restoredName = data.canvas.document.layers[0]!.source.image.imageName;
+    const restoredName = data.canvas.document.stacks.raster[0]!.source.image.imageName;
 
     expect(restoredName).not.toBe('shared.png');
     expect(restoredName).toContain('-missing-image-');
@@ -538,7 +543,7 @@ describe('importing a project board', () => {
     await projectFile.importProjectFile(capturedArchive());
 
     expect(transport.createStagingBoard).not.toHaveBeenCalled();
-    expect(api.createProjectSettled.mock.calls[0]![0]).toMatchObject({ minimum_canvas_schema_version: 2 });
+    expect(api.createProjectSettled.mock.calls[0]![0]).toMatchObject({ minimum_canvas_schema_version: 3 });
     expect(api.createProjectSettled.mock.calls[0]![0]).not.toHaveProperty('board_id');
   });
 
@@ -553,7 +558,7 @@ describe('importing a project board', () => {
 
     const rewrittenEntries = new Map([...entries].map(([path, bytes]) => [path, binaryEntry(bytes)]));
 
-    rewrittenEntries.set('manifest.json', textEntry(JSON.stringify({ ...manifest, minimumCanvasSchemaVersion: 3 })));
+    rewrittenEntries.set('manifest.json', textEntry(JSON.stringify({ ...manifest, minimumCanvasSchemaVersion: 4 })));
     const archive = new File([await writeArchive(rewrittenEntries)], original.name);
 
     await expect(projectFile.importProjectFile(archive)).rejects.toMatchObject({ reason: 'unsupported-version' });
@@ -726,7 +731,7 @@ describe('importProjectFile', () => {
         ...project.canvas,
         document: {
           ...project.canvas.document,
-          layers: [rasterImageLayer('image-layer', 'legacy.png')],
+          stacks: stacksFrom([rasterImageLayer('image-layer', 'legacy.png')]),
         },
       },
       futureDocumentKey: { survives: true },
@@ -759,12 +764,12 @@ describe('importProjectFile', () => {
     const createRequest = api.createProjectSettled.mock.calls[0]![0] as { data: Record<string, unknown> };
     const invocation = createRequest.data.invocation as { sourceId: string };
     const canvas = createRequest.data.canvas as {
-      document: { layers: Array<{ source: { image: { imageName: string } } }> };
+      document: { stacks: { raster: Array<{ source: { image: { imageName: string } } }> } };
     };
 
     expect(invocation.sourceId).toBe('workflow');
     expect(createRequest.data.futureDocumentKey).toEqual({ survives: true });
-    expect(canvas.document.layers[0]?.source.image.imageName).toBe('server-legacy.png');
+    expect(canvas.document.stacks.raster[0]?.source.image.imageName).toBe('server-legacy.png');
   });
 
   it('imports the shipped legacy JSON envelope under a fresh canonical identity without restoring assets', async () => {
@@ -816,7 +821,7 @@ describe('importProjectFile', () => {
       JSON.stringify({
         document: {},
         kind: 'invokeai-project',
-        version: 2,
+        version: 4,
       }),
     ],
     ['a missing document', JSON.stringify({ kind: 'invokeai-project', version: 1 })],

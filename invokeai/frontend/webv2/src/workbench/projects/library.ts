@@ -8,10 +8,7 @@ import {
 import { createExternalStore } from '@platform/state/externalStore';
 import { createSingleFlight } from '@platform/state/singleFlight';
 import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
-import {
-  DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
-  MAX_SUPPORTED_CANVAS_SCHEMA_VERSION,
-} from '@workbench/canvasSchemaVersion';
+import { DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION, isCanvasSchemaVersionSupported } from '@workbench/canvasSchemaVersion';
 import { createLocalStorageWorkbenchPersistence } from '@workbench/persistence';
 
 import type { ProjectTransferIssues } from './invk/transfer';
@@ -205,7 +202,7 @@ export const upsertProjectSummary = (
 };
 
 export const isProjectSummaryCompatible = (summary: ProjectSummary): boolean =>
-  summary.minimumCanvasSchemaVersion <= MAX_SUPPORTED_CANVAS_SCHEMA_VERSION;
+  isCanvasSchemaVersionSupported(summary.minimumCanvasSchemaVersion);
 
 /**
  * Every mutation below branches on one question: does the workbench hold this project? If so it

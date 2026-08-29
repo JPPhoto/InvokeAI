@@ -1,12 +1,13 @@
 import type {
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasImageRef,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
   CanvasRegionalGuidanceLayerContract,
 } from '@workbench/canvas-engine/contracts';
 
+import { groupContract, stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it } from 'vitest';
 
 import type { Rect } from './generationContracts';
@@ -56,19 +57,19 @@ const BBOX: Rect = { height: 200, width: 200, x: 0, y: 0 };
 
 const makeDoc = (
   layers: CanvasLayerContract[],
-  overrides: Partial<CanvasDocumentContractV2> = {}
-): CanvasDocumentContractV2 => ({
+  overrides: Partial<CanvasDocumentContractV3> = {}
+): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 200, width: 200, x: 0, y: 0 },
   height: 300,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 400,
   ...overrides,
 });
 
-const keyOf = (doc: CanvasDocumentContractV2, bbox: Rect = BBOX): string => planComposites(doc, bbox).entries[0]!.key;
+const keyOf = (doc: CanvasDocumentContractV3, bbox: Rect = BBOX): string => planComposites(doc, bbox).entries[0]!.key;
 
 describe('planComposites — plan shape', () => {
   it('emits a single base-raster entry scoped to the bbox', () => {
@@ -243,7 +244,7 @@ const inpaintMask = (
   type: 'inpaint_mask',
 });
 
-const entryOfKind = (doc: CanvasDocumentContractV2, kind: string) =>
+const entryOfKind = (doc: CanvasDocumentContractV3, kind: string) =>
   planComposites(doc, BBOX).entries.find((e) => e.kind === kind);
 
 describe('planComposites — inpaint-mask entries', () => {
@@ -315,7 +316,7 @@ describe('planComposites — noise-mask entries', () => {
 });
 
 describe('planComposites — mask entry keys', () => {
-  const maskKeyOf = (doc: CanvasDocumentContractV2, kind: string): string | undefined => entryOfKind(doc, kind)?.key;
+  const maskKeyOf = (doc: CanvasDocumentContractV3, kind: string): string | undefined => entryOfKind(doc, kind)?.key;
 
   it('is stable for identical documents', () => {
     const a = makeDoc([inpaintMask('m1', { denoiseLimit: 0.5 })]);
@@ -529,3 +530,14 @@ describe('planComposites — raster adjustments in the base key', () => {
 });
 
 const plan0 = (layer: CanvasLayerContract): string => planComposites(makeDoc([layer]), BBOX).entries[0]!.key;
+
+describe('planComposites — group gating', () => {
+  it('excludes a raster leaf whose group is disabled', () => {
+    const doc = {
+      ...makeDoc([]),
+      stacks: stacksFrom([groupContract('g', [rasterLayer('inner')], { isEnabled: false }), rasterLayer('root')]),
+    };
+    expect(planComposites(doc, BBOX).entries[0]!.layers.map((layer) => layer.id)).toEqual(['root']);
+    expect(getBaseRasterContentBounds(doc)).toEqual({ height: 48, width: 64, x: 0, y: 0 });
+  });
+});

@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
@@ -341,7 +341,7 @@ describe('createCanvasMutationContext', () => {
 
 describe('edit revision', () => {
   it('advances once per reducer document identity and never on notification alone', () => {
-    let document = { layers: [] } as unknown as CanvasDocumentContractV2;
+    let document = { layers: [] } as unknown as CanvasDocumentContractV3;
     const listeners: (() => void)[] = [];
     const { context } = createHarness({
       getReducerDocument: () => document,

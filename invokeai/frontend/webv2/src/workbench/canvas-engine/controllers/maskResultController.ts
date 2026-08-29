@@ -3,13 +3,14 @@ import type {
   CommitMaskImageResultOptions,
   LayerExportGuard,
 } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
-import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 
+import { getDocumentLayer, getDocumentLeaves, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
 import {
   createInpaintMaskFromImage,
   createRegionalGuidanceFromImage,
@@ -26,7 +27,7 @@ export type {
 } from '@workbench/canvas-engine/capabilities';
 
 export interface MaskResultControllerOptions {
-  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => CanvasNodeInsertionAnchor;
   readonly concurrency: CanvasEditConcurrency;
   readonly createLayerId: () => string;
   readonly dispatchPrepared: (
@@ -35,8 +36,8 @@ export interface MaskResultControllerOptions {
     mirrorAccepted: () => boolean
   ) => void;
   readonly endBurst: () => void;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
-  readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
+  readonly getReducerDocument: () => CanvasDocumentContractV3 | null;
   readonly history: History;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
 }
@@ -57,7 +58,7 @@ export class MaskResultController {
     if (!document) {
       return Promise.resolve({ status: 'missing' });
     }
-    const liveLayer = document.layers.find((candidate) => candidate.id === options.guard.layerId);
+    const liveLayer = getDocumentLayer(document, options.guard.layerId);
     if (!liveLayer) {
       return Promise.resolve({ status: 'missing' });
     }
@@ -76,7 +77,7 @@ export class MaskResultController {
     if (options.signal?.aborted) {
       return Promise.resolve({ status: 'aborted' });
     }
-    const names = document.layers.map((layer) => layer.name);
+    const names = getDocumentLeaves(document).map((layer) => layer.name);
     const layerId = o.createLayerId();
     const layer =
       options.target === 'inpaint_mask'
@@ -90,7 +91,7 @@ export class MaskResultController {
         : createRegionalGuidanceFromImage({
             fill: {
               color: nextRegionalGuidanceFillColor(
-                document.layers.filter((candidate) => candidate.type === 'regional_guidance').length
+                getDocumentLeaves(document).filter((candidate) => candidate.type === 'regional_guidance').length
               ),
               style: 'solid',
             },
@@ -104,8 +105,8 @@ export class MaskResultController {
     const apply = (): void =>
       o.dispatchPrepared(
         { anchor, layer, type: 'addCanvasLayer' },
-        () => o.getReducerDocument()?.layers.some((candidate) => candidate === layer) === true,
-        () => o.getDocument()?.layers.some((candidate) => candidate === layer) === true
+        () => getDocumentLayer(o.getReducerDocument(), layer.id) === layer,
+        () => getDocumentLayer(o.getDocument(), layer.id) === layer
       );
     o.endBurst();
     apply();
@@ -122,8 +123,8 @@ export class MaskResultController {
         );
         o.dispatchPrepared(
           { ids: [layerId], type: 'removeCanvasLayers' },
-          () => o.getReducerDocument()?.layers.some((candidate) => candidate.id === layerId) === false,
-          () => o.getDocument()?.layers.some((candidate) => candidate.id === layerId) === false
+          () => isNodeAbsent(o.getReducerDocument(), layerId),
+          () => isNodeAbsent(o.getDocument(), layerId)
         );
       },
     });

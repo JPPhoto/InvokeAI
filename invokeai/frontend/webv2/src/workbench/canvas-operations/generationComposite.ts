@@ -33,7 +33,7 @@ import type {
   CanvasControlLayerContract,
   CanvasDocumentSnapshot,
   CanvasRegionalGuidanceLayerContract,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
 } from '@workbench/canvas-engine/api';
 import type { CaptureRasterSnapshotResult } from '@workbench/canvas-engine/rasterTransactions';
 import type { Rect } from '@workbench/canvas-engine/types';
@@ -42,7 +42,7 @@ import type {
   ExecuteCompositePlanDeps,
 } from '@workbench/canvas-operations/compositeForGeneration';
 
-import { lookupDocumentLayer } from '@workbench/canvas-engine/document-model/flatDocumentModel';
+import { lookupDocumentLayer } from '@workbench/canvas-engine/document-model/documentModel';
 import { intersect } from '@workbench/canvas-engine/math/rect';
 import {
   computeCompositeContentBounds,
@@ -133,7 +133,7 @@ export interface GenerationCompositeDedupeCommit {
 /** Everything a canvas invoke needs from the composite pipeline. */
 export interface GenerationComposites {
   /** The frozen canvas state the composites were built from (for the enqueue snapshot). */
-  canvas: CanvasStateContractV2;
+  canvas: CanvasStateContractV3;
   /** The generation bounding box of the frozen document. */
   bbox: Rect;
   /** The resolved generation mode. */

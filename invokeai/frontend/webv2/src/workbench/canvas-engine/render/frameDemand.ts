@@ -1,14 +1,14 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { Rect } from '@workbench/canvas-engine/types';
 
-import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/flatDocumentModel';
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
 import { isLeafDrawableForScreen } from '@workbench/canvas-engine/document-model/screenComposition';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { fromTRS } from '@workbench/canvas-engine/math/mat2d';
 import { intersect, isEmpty, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 
 export interface FrameDemandInput {
-  readonly document: CanvasDocumentContractV2;
+  readonly document: CanvasDocumentContractV3;
   readonly isolationLayerIds?: ReadonlySet<string>;
   readonly liveCacheRects?: ReadonlyMap<string, Rect>;
   readonly transformOverrides?: ReadonlyMap<

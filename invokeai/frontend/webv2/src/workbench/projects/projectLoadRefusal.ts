@@ -1,6 +1,8 @@
 import type { RefusedWorkbenchProject } from '@workbench/projectContracts';
 import type { TFunction } from 'i18next';
 
+import { MIN_SUPPORTED_CANVAS_SCHEMA_VERSION } from '@workbench/canvasSchemaVersion';
+
 export interface RefusedProjectNotice {
   title: string;
   message: string;
@@ -13,7 +15,12 @@ export const describeRefusedProject = (refused: RefusedWorkbenchProject, t: TFun
   return {
     message:
       refused.refusal.status === 'unsupported-version'
-        ? t('projects.load.unsupportedVersion', { name })
+        ? t(
+            refused.refusal.version < MIN_SUPPORTED_CANVAS_SCHEMA_VERSION
+              ? 'projects.load.legacyVersion'
+              : 'projects.load.unsupportedVersion',
+            { name }
+          )
         : t('projects.load.invalid', { name }),
     title: t('projects.couldNotOpen'),
   };

@@ -1,6 +1,6 @@
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasLayerSourceContract,
 } from '@workbench/canvas-engine/contracts';
@@ -11,6 +11,7 @@ import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/ren
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
 import { renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { intersect, isEmpty, roundOut } from '@workbench/canvas-engine/math/rect';
 
@@ -32,15 +33,15 @@ export interface CropLayerControllerOptions {
   readonly concurrency: CanvasEditConcurrency;
   readonly backend: RasterBackend;
   readonly history: History;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
-  readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
+  readonly getReducerDocument: () => CanvasDocumentContractV3 | null;
   readonly endBurst: () => void;
   readonly isSupportedSource: (source: CanvasLayerSourceContract) => boolean;
   readonly exportBaked: (layerId: string) => Promise<ExportResult>;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
   readonly captureCache: (
     layer: CanvasLayerContract,
-    document: CanvasDocumentContractV2
+    document: CanvasDocumentContractV3
   ) => PixelSnapshot | null | 'not-ready';
   readonly preparePixels: (layerId: string, rect: Rect, pixels: RasterSurface) => PreparedLayerCacheReplacement;
   readonly installPrepared: (prepared: PreparedLayerCacheReplacement) => void;
@@ -64,7 +65,7 @@ export class CropLayerController {
     }
     this.deps.endBurst();
     const document = this.deps.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === layerId);
+    const layer = getDocumentLayer(document, layerId);
     if (!document || !layer) {
       return { status: 'missing' };
     }
@@ -85,7 +86,7 @@ export class CropLayerController {
           return { status: 'busy' };
         }
         const liveDocument = this.deps.getDocument();
-        const liveLayer = liveDocument?.layers.find((candidate) => candidate.id === layerId);
+        const liveLayer = getDocumentLayer(liveDocument, layerId);
         if (!liveDocument || !liveLayer) {
           return { status: 'missing' };
         }
@@ -131,8 +132,8 @@ export class CropLayerController {
         const publish = (contract: CanvasLayerContract, prepared: PreparedLayerCacheReplacement): void => {
           this.deps.dispatchPrepared(
             { layer: contract, layerId, type: 'replaceCanvasLayer' },
-            () => this.deps.getReducerDocument()?.layers.find((candidate) => candidate.id === layerId) === contract,
-            () => this.deps.getDocument()?.layers.find((candidate) => candidate.id === layerId) === contract
+            () => getDocumentLayer(this.deps.getReducerDocument(), layerId) === contract,
+            () => getDocumentLayer(this.deps.getDocument(), layerId) === contract
           );
           try {
             this.deps.discardPersisted(layerId);

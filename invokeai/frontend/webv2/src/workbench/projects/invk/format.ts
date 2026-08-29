@@ -1,5 +1,7 @@
 import type { RefusedWorkbenchProject } from '@workbench/projectContracts';
 
+import { MIN_SUPPORTED_CANVAS_SCHEMA_VERSION } from '@workbench/canvasSchemaVersion';
+
 /**
  * What an `.invk` is called and how reading one can fail.
  *
@@ -61,5 +63,11 @@ export class InvkFormatError extends Error {
 }
 
 /** The archive-format reason that matches a project the canvas version gate refused. */
-export const toInvkFormatReason = (refused: RefusedWorkbenchProject): InvkFormatReason =>
-  refused.refusal.status === 'unsupported-version' ? 'unsupported-version' : 'damaged';
+export const toInvkFormatReason = (refused: RefusedWorkbenchProject): InvkFormatReason => {
+  if (refused.refusal.status !== 'unsupported-version') {
+    return 'damaged';
+  }
+  return refused.refusal.version < MIN_SUPPORTED_CANVAS_SCHEMA_VERSION
+    ? 'legacy-canvas-project'
+    : 'unsupported-version';
+};

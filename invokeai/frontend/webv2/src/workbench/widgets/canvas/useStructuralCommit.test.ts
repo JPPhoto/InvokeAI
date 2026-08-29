@@ -1,8 +1,9 @@
 import type { StructuralCommitResult } from '@workbench/canvas-engine/api';
 import type { TFunction } from 'i18next';
 
-import { createFlatDocumentModel } from '@workbench/canvas-engine/api';
-import { createEmptyCanvasDocumentV2 } from '@workbench/canvasMigration';
+import { createDocumentModel } from '@workbench/canvas-engine/api';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { createEmptyCanvasDocument } from '@workbench/canvasMigration';
 import { createEmptyPaintLayer } from '@workbench/widgets/layers/layerOps';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -38,8 +39,8 @@ describe('reportStructuralCommit', () => {
 
 describe('commitPreparedEdit', () => {
   const layer = createEmptyPaintLayer('Layer', 'a');
-  const document = { ...createEmptyCanvasDocumentV2(), layers: [layer], selectedLayerId: 'a' };
-  const model = createFlatDocumentModel(document, { editRevision: 3, projectId: 'p' });
+  const document = { ...createEmptyCanvasDocument(), stacks: stacksFrom([layer]), selectedLayerId: 'a' };
+  const model = createDocumentModel(document, { editRevision: 3, projectId: 'p' });
 
   it('commits a prepared edit through the engine transaction', () => {
     const commitPrepared = vi.fn(() => ({ status: 'committed' as const }));

@@ -1,5 +1,6 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { describe, expect, it, vi } from 'vitest';
@@ -24,13 +25,13 @@ describe('RasterExportController budget', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster' as const,
     };
-    const document: CanvasDocumentContractV2 = {
+    const document: CanvasDocumentContractV3 = {
       background: 'transparent',
       bbox: { height: 100, width: 100, x: 0, y: 0 },
       height: 100,
-      layers: [layer],
+      stacks: stacksFrom([layer]),
       selectedLayerId: null,
-      version: 2,
+      version: 3,
       width: 100,
     };
     const reserve = vi.fn(() => ({ availableBytes: 0, requestedBytes: 40_000, status: 'over-budget' as const }));
@@ -76,13 +77,13 @@ describe('RasterExportController budget', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster' as const,
     };
-    const document: CanvasDocumentContractV2 = {
+    const document: CanvasDocumentContractV3 = {
       background: 'transparent',
       bbox: { height: 100, width: 100, x: 0, y: 0 },
       height: 100,
-      layers: [layer],
+      stacks: stacksFrom([layer]),
       selectedLayerId: null,
-      version: 2,
+      version: 3,
       width: 100,
     };
     const release = vi.fn();
@@ -126,13 +127,13 @@ describe('RasterExportController budget', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster' as const,
     };
-    const document: CanvasDocumentContractV2 = {
+    const document: CanvasDocumentContractV3 = {
       background: 'transparent',
       bbox: { height: 100, width: 100, x: 0, y: 0 },
       height: 100,
-      layers: [layer],
+      stacks: stacksFrom([layer]),
       selectedLayerId: null,
-      version: 2,
+      version: 3,
       width: 100,
     };
     const release = vi.fn();

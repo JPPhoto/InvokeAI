@@ -1,5 +1,6 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasStackForests,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
@@ -8,7 +9,10 @@ import type { SelectionState } from '@workbench/canvas-engine/selection/selectio
 import type { PlacedSurface, Rect } from '@workbench/canvas-engine/types';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
-import { insertLayersAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
+import { EMPTY_STACKS, removeNodes } from '@workbench/canvas-engine/document/documentTree';
+import { insertNodesAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createTestEditConcurrency } from '@workbench/canvas-engine/editConcurrency.testStub';
 import { createHistory } from '@workbench/canvas-engine/history/history';
@@ -30,19 +34,19 @@ const paintLayer = (id: string, transform: Partial<CanvasLayerContract['transfor
   type: 'raster',
 });
 
-const makeDoc = (layers: CanvasLayerContract[], selectedLayerId: string | null): CanvasDocumentContractV2 => ({
+const makeDoc = (stacks: CanvasStackForests, selectedLayerId: string | null): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers,
+  stacks,
   selectedLayerId,
-  version: 2,
+  version: 3,
   width: 100,
 });
 
 /** The created layer, narrowed to the raster variant the controller always makes. */
-const createdRaster = (document: CanvasDocumentContractV2 | null, id: string): CanvasRasterLayerContractV2 => {
-  const layer = document?.layers.find((candidate) => candidate.id === id);
+const createdRaster = (document: CanvasDocumentContractV3 | null, id: string): CanvasRasterLayerContractV2 => {
+  const layer = getDocumentLeaves(document).find((candidate) => candidate.id === id);
   if (!layer || layer.type !== 'raster') {
     throw new Error(`expected a raster layer ${id}`);
   }
@@ -53,7 +57,7 @@ const imageData = (width: number, height: number): ImageData =>
   ({ colorSpace: 'srgb', data: new Uint8ClampedArray(width * height * 4), height, width }) as ImageData;
 
 interface HarnessOptions {
-  layers?: CanvasLayerContract[];
+  stacks?: CanvasStackForests;
   selectedLayerId?: string | null;
   maskRect?: Rect | null;
   cacheRect?: Rect;
@@ -65,9 +69,10 @@ const createHarness = (options: HarnessOptions = {}) => {
   const backend = createTestStubRasterBackend();
   const layerCache = createLayerCacheStore(backend);
   const history = createHistory();
-  const layers = options.layers ?? [paintLayer('a')];
-  const selectedLayerId = options.selectedLayerId === undefined ? (layers[0]?.id ?? null) : options.selectedLayerId;
-  let document: CanvasDocumentContractV2 | null = makeDoc(layers, selectedLayerId);
+  const stacks = options.stacks ?? stacksFrom([paintLayer('a')]);
+  const selectedLayerId =
+    options.selectedLayerId === undefined ? (stacks.raster[0]?.id ?? null) : options.selectedLayerId;
+  let document: CanvasDocumentContractV3 | null = makeDoc(stacks, selectedLayerId);
 
   const maskRect = options.maskRect === undefined ? { height: 30, width: 30, x: 20, y: 20 } : options.maskRect;
   const mask: PlacedSurface | null = maskRect
@@ -85,7 +90,7 @@ const createHarness = (options: HarnessOptions = {}) => {
 
   const controller = new NewRasterLayerController({
     backend,
-    captureInsertionAnchor: createTestInsertionAnchorCapture('p', () => document?.layers ?? []),
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p', () => document?.stacks ?? EMPTY_STACKS),
     concurrency: createTestEditConcurrency({
       capturePermit: () => (options.permit === undefined ? { epoch: 0 } : options.permit),
       isGestureActive: () => options.gestureActive === true,
@@ -96,14 +101,14 @@ const createHarness = (options: HarnessOptions = {}) => {
       // Mirror the reducer: apply the stack mutation to the local document so
       // the controller's postconditions and later reads see the new layer.
       if (action.type === 'applyCanvasLayerStackMutation' && document) {
-        let next = document.layers;
-        if (action.removeIds) {
-          next = next.filter((layer) => !action.removeIds!.includes(layer.id));
-        }
+        let next = document.stacks;
         for (const insertion of action.add ?? []) {
-          next = insertLayersAtAnchor(next, insertion.anchor, insertion.layers);
+          next = insertNodesAtAnchor(next, insertion.anchor, insertion.nodes);
         }
-        document = { ...document, layers: next, selectedLayerId: action.selectedLayerId ?? null };
+        if (action.removeIds) {
+          next = removeNodes(next, new Set(action.removeIds));
+        }
+        document = { ...document, selectedLayerId: action.selectedLayerId ?? null, stacks: next };
       }
     },
     endBurst: vi.fn(),
@@ -129,14 +134,17 @@ const createHarness = (options: HarnessOptions = {}) => {
 
 describe('NewRasterLayerController: insert', () => {
   it('inserts a paint layer above the active one and selects it', () => {
-    const h = createHarness({ layers: [paintLayer('top'), paintLayer('bottom')], selectedLayerId: 'bottom' });
+    const h = createHarness({
+      stacks: stacksFrom([paintLayer('top'), paintLayer('bottom')]),
+      selectedLayerId: 'bottom',
+    });
     const surface = h.backend.createSurface(10, 10);
 
     const result = h.controller.insert({ height: 10, width: 10, x: 5, y: 5 }, surface, 'New', 'Insert');
 
     expect(result).toEqual({ layerId: 'new-1', status: 'created' });
     // Index 0 is top-most, so "above bottom" is bottom's own index.
-    expect(h.document()!.layers.map((layer) => layer.id)).toEqual(['top', 'new-1', 'bottom']);
+    expect(getDocumentLeaves(h.document()!).map((layer) => layer.id)).toEqual(['top', 'new-1', 'bottom']);
     expect(h.document()!.selectedLayerId).toBe('new-1');
     expect(h.installed).toHaveBeenCalledTimes(1);
   });
@@ -153,14 +161,14 @@ describe('NewRasterLayerController: insert', () => {
   });
 
   it('undo removes the layer and restores the previous selection', () => {
-    const h = createHarness({ layers: [paintLayer('a')], selectedLayerId: 'a' });
+    const h = createHarness({ stacks: stacksFrom([paintLayer('a')]), selectedLayerId: 'a' });
     const surface = h.backend.createSurface(10, 10);
 
     h.controller.insert({ height: 10, width: 10, x: 0, y: 0 }, surface, 'New', 'Insert');
     expect(h.history.canUndo()).toBe(true);
 
     h.history.undo();
-    expect(h.document()!.layers.map((layer) => layer.id)).toEqual(['a']);
+    expect(getDocumentLeaves(h.document()!).map((layer) => layer.id)).toEqual(['a']);
     expect(h.document()!.selectedLayerId).toBe('a');
   });
 
@@ -172,7 +180,7 @@ describe('NewRasterLayerController: insert', () => {
     h.history.undo();
     h.history.redo();
 
-    expect(h.document()!.layers.some((layer) => layer.id === 'new-1')).toBe(true);
+    expect(getDocumentLeaves(h.document()!).some((layer) => layer.id === 'new-1')).toBe(true);
     expect(h.document()!.selectedLayerId).toBe('new-1');
   });
 
@@ -258,7 +266,7 @@ describe('NewRasterLayerController: liftSelectionToLayer', () => {
   it('bakes the source layer transform into the new layer placement', () => {
     // The copy comes out layer-local; a new layer lives in document space, so a
     // translated source must shift where the pixels land.
-    const h = createHarness({ layers: [paintLayer('a', { x: 10, y: 5 })] });
+    const h = createHarness({ stacks: stacksFrom([paintLayer('a', { x: 10, y: 5 })]) });
 
     h.controller.liftSelectionToLayer('Selection', 'Layer via copy');
 

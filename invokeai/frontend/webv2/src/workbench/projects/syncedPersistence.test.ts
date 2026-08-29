@@ -63,7 +63,7 @@ const api = vi.hoisted(() => {
         created_at: '2026-06-10 08:00:00.000',
         data: structuredClone(data),
         name: data.name as string,
-        minimum_canvas_schema_version: 2,
+        minimum_canvas_schema_version: 3,
         project_id: id,
         revision: 1,
         updated_at: '2026-06-10 08:00:00.000',
@@ -340,18 +340,18 @@ describe('loadWorkbench session hydration', () => {
     );
     api.createProject.mockImplementationOnce(() => {
       api.__seed(persistence.serializeProjectDocument({ ...local, name: 'Newer server project' }));
-      api.__records.get(local.id)!.minimum_canvas_schema_version = 3;
+      api.__records.get(local.id)!.minimum_canvas_schema_version = 4;
 
       return Promise.reject(Object.assign(new Error('conflict'), { __status: 409 }));
     });
-    api.getProject.mockRejectedValueOnce(api.__schemaError(3, 2));
+    api.getProject.mockRejectedValueOnce(api.__schemaError(4, 3));
 
     const snapshot = await service.loadWorkbench();
     const recoveredRecord = [...api.__records.values()].find((record) => record.project_id !== local.id);
 
     expect(api.updateProject).not.toHaveBeenCalled();
     expect(api.__records.get(local.id)).toMatchObject({
-      minimum_canvas_schema_version: 3,
+      minimum_canvas_schema_version: 4,
       name: 'Newer server project',
     });
     expect(recoveredRecord?.data).toMatchObject({
@@ -740,7 +740,7 @@ describe('saveWorkbench', () => {
 
     api.updateProject.mockRejectedValueOnce(new Error('offline'));
     await service.saveWorkbench(stateWithProjects([edited]));
-    setPersistedCanvasSchemaFloor(project.id, 3);
+    setPersistedCanvasSchemaFloor(project.id, 4);
 
     const server = api.__records.get(project.id)!;
 
@@ -765,7 +765,7 @@ describe('saveWorkbench', () => {
     await reconnected.saveWorkbench(replay!.state);
 
     expect(api.createProject).toHaveBeenLastCalledWith(
-      expect.objectContaining({ minimum_canvas_schema_version: 3 }),
+      expect.objectContaining({ minimum_canvas_schema_version: 4 }),
       expect.any(AbortSignal)
     );
     expect([...api.__records.values()]).toEqual(
@@ -802,7 +802,7 @@ describe('saveWorkbench', () => {
     api.listProjects.mockImplementationOnce(async () => {
       const summaries = await listProjects();
 
-      api.__records.get(project.id)!.minimum_canvas_schema_version = 3;
+      api.__records.get(project.id)!.minimum_canvas_schema_version = 4;
 
       return summaries;
     });
@@ -813,7 +813,7 @@ describe('saveWorkbench', () => {
     await reconnected.saveWorkbench(replay!.state);
 
     expect(api.createProject).toHaveBeenLastCalledWith(
-      expect.objectContaining({ minimum_canvas_schema_version: 3 }),
+      expect.objectContaining({ minimum_canvas_schema_version: 4 }),
       expect.any(AbortSignal)
     );
   });
@@ -879,7 +879,7 @@ describe('saveWorkbench', () => {
 
     api.updateProject.mockRejectedValueOnce(new Error('offline'));
     await service.saveWorkbench(stateWithProjects([edited]));
-    setPersistedCanvasSchemaFloor(project.id, 3);
+    setPersistedCanvasSchemaFloor(project.id, 4);
     api.__records.delete(project.id);
 
     const reconnected = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
@@ -916,7 +916,7 @@ describe('saveWorkbench', () => {
     await restartedAgain.saveWorkbench(replayAgain!.state);
 
     expect(api.createProject).toHaveBeenLastCalledWith(
-      expect.objectContaining({ minimum_canvas_schema_version: 3 }),
+      expect.objectContaining({ minimum_canvas_schema_version: 4 }),
       expect.any(AbortSignal)
     );
     expect(api.__records.has(project.id)).toBe(false);
@@ -937,7 +937,7 @@ describe('saveWorkbench', () => {
     api.updateProject.mockRejectedValueOnce(new Error('offline'));
     await service.saveWorkbench(stateWithProjects([edited]));
 
-    api.__records.get(project.id)!.minimum_canvas_schema_version = 3;
+    api.__records.get(project.id)!.minimum_canvas_schema_version = 4;
 
     const reconnected = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
     const replay = await reconnected.loadWorkbench();
@@ -1553,14 +1553,14 @@ describe('hydrateProjectFromServer', () => {
   });
 
   it('reports a server schema precondition as an unsupported project instead of as missing', async () => {
-    api.getProject.mockRejectedValueOnce(api.__schemaError(3, 2));
+    api.getProject.mockRejectedValueOnce(api.__schemaError(4, 3));
 
     expect(await service.hydrateProjectFromServer('future', 'Future project')).toEqual({
       refused: {
         projectId: 'future',
         projectName: 'Future project',
         raw: null,
-        refusal: { raw: null, scope: 'document', status: 'unsupported-version', version: 3 },
+        refusal: { raw: null, scope: 'document', status: 'unsupported-version', version: 4 },
         source: 'canvas',
       },
       status: 'refused',
@@ -1839,13 +1839,13 @@ describe('authoritative project boards', () => {
       await service.saveWorkbench(stateWithProjects([staleLocal]));
       const lowerFloorRecoveryId = [...api.__records.keys()].find((id) => id !== project.id)!;
 
-      api.__records.get(project.id)!.minimum_canvas_schema_version = 3;
+      api.__records.get(project.id)!.minimum_canvas_schema_version = 4;
       const retried = await service.saveWorkbench(stateWithProjects([staleLocal]));
       const raisedFloorRecoveryId = retried.conflicts[0]!.recoveredIdentity.id;
 
       expect(raisedFloorRecoveryId).not.toBe(lowerFloorRecoveryId);
-      expect(api.__records.get(lowerFloorRecoveryId)?.minimum_canvas_schema_version).toBe(2);
-      expect(api.__records.get(raisedFloorRecoveryId)?.minimum_canvas_schema_version).toBe(3);
+      expect(api.__records.get(lowerFloorRecoveryId)?.minimum_canvas_schema_version).toBe(3);
+      expect(api.__records.get(raisedFloorRecoveryId)?.minimum_canvas_schema_version).toBe(4);
     });
 
     it('uses a distinct recovery identity for a later conflict after reconciliation is durable', async () => {
@@ -1987,12 +1987,12 @@ describe('authoritative project boards', () => {
       const opened = await openServerProject(project.id);
       const edited = { ...opened, name: 'Local work' };
 
-      api.updateProject.mockRejectedValueOnce(api.__schemaError(3, 2));
+      api.updateProject.mockRejectedValueOnce(api.__schemaError(4, 3));
 
       await expect(service.flushProjectToServer(edited)).resolves.toEqual({
         documentJson: JSON.stringify(persistence.serializeProjectDocument(edited)),
         kind: 'schema-refused',
-        refusal: { maxCanvasSchemaVersion: 2, minimumCanvasSchemaVersion: 3 },
+        refusal: { maxCanvasSchemaVersion: 3, minimumCanvasSchemaVersion: 4 },
       });
 
       const callsAfterRefusal = api.updateProject.mock.calls.length;
@@ -2021,7 +2021,7 @@ describe('authoritative project boards', () => {
       });
 
       try {
-        api.updateProject.mockRejectedValueOnce(api.__schemaError(3, 2));
+        api.updateProject.mockRejectedValueOnce(api.__schemaError(4, 3));
         await service.saveWorkbench(stateWithProjects([edited]));
         const cachedBeforeOmission = storage.get('invokeai:v7:webv2:workbench');
 
@@ -2043,7 +2043,7 @@ describe('authoritative project boards', () => {
       const opened = await openServerProject(project.id);
       const edited = { ...opened, name: 'Local work that must survive' };
 
-      api.updateProject.mockRejectedValueOnce(api.__schemaError(3, 2));
+      api.updateProject.mockRejectedValueOnce(api.__schemaError(4, 3));
       await service.saveWorkbench(stateWithProjects([edited]));
       storage.set(
         'invokeai:v7:webv2:workbench:refused-projects',
@@ -2051,7 +2051,7 @@ describe('authoritative project boards', () => {
           [project.id]: persistence.serializeProjectDocument({ ...edited, name: 'Older retained edit' }),
         })
       );
-      api.__records.get(project.id)!.minimum_canvas_schema_version = 3;
+      api.__records.get(project.id)!.minimum_canvas_schema_version = 4;
 
       const reloaded = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
 
@@ -2077,7 +2077,7 @@ describe('authoritative project boards', () => {
       const opened = await openServerProject(project.id);
       const edited = { ...opened, name: 'Divergent local work' };
 
-      api.updateProject.mockRejectedValueOnce(api.__schemaError(3, 2));
+      api.updateProject.mockRejectedValueOnce(api.__schemaError(4, 3));
       await service.saveWorkbench(stateWithProjects([edited]));
 
       const reloaded = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
@@ -2099,11 +2099,11 @@ describe('authoritative project boards', () => {
       const opened = await openServerProject(project.id);
 
       api.updateProject.mockRejectedValueOnce(Object.assign(new Error('conflict'), { __status: 409 }));
-      api.getProject.mockRejectedValueOnce(api.__schemaError(3, 2));
+      api.getProject.mockRejectedValueOnce(api.__schemaError(4, 3));
 
       await expect(service.flushProjectToServer({ ...opened, name: 'Local work' })).resolves.toMatchObject({
         kind: 'schema-refused',
-        refusal: { maxCanvasSchemaVersion: 2, minimumCanvasSchemaVersion: 3 },
+        refusal: { maxCanvasSchemaVersion: 3, minimumCanvasSchemaVersion: 4 },
       });
     });
 
@@ -2114,7 +2114,7 @@ describe('authoritative project boards', () => {
 
       api.__records.set(project.id, {
         ...server,
-        minimum_canvas_schema_version: 3,
+        minimum_canvas_schema_version: 4,
         revision: server.revision + 1,
       });
 
@@ -2128,7 +2128,7 @@ describe('authoritative project boards', () => {
       expect(updateRequests[0]).not.toHaveProperty('minimum_canvas_schema_version');
       expect(updateRequests[1]).not.toHaveProperty('minimum_canvas_schema_version');
       expect(api.__records.get(project.id)).toMatchObject({
-        minimum_canvas_schema_version: 3,
+        minimum_canvas_schema_version: 4,
         name: 'Local edit',
         revision: 3,
       });
@@ -2376,7 +2376,7 @@ describe('canvas version gate', () => {
   const futureProject = (name: string): Project => {
     const draft = { ...createDraftProject([]), name };
 
-    return { ...draft, canvas: { ...draft.canvas, version: 3 } as unknown as Project['canvas'] };
+    return { ...draft, canvas: { ...draft.canvas, version: 4 } as unknown as Project['canvas'] };
   };
 
   const cacheKey = 'invokeai:v7:webv2:workbench';
@@ -2395,21 +2395,21 @@ describe('canvas version gate', () => {
     await service.flushProjectToServer(future);
 
     expect(api.createProject).toHaveBeenCalledWith(
-      expect.objectContaining({ minimum_canvas_schema_version: 3, project_id: future.id }),
+      expect.objectContaining({ minimum_canvas_schema_version: 4, project_id: future.id }),
       expect.any(AbortSignal)
     );
   });
 
   it('retains a server floor when deletion recovery forks a document with a lower live version', async () => {
     const project = seedServerProject('Future floor');
-    api.__records.get(project.id)!.minimum_canvas_schema_version = 3;
+    api.__records.get(project.id)!.minimum_canvas_schema_version = 4;
     const opened = await openServerProject(project.id);
 
     api.__records.delete(project.id);
     await service.flushProjectToServer({ ...opened, name: 'Recovered locally' });
 
     expect(api.createProject).toHaveBeenLastCalledWith(
-      expect.objectContaining({ minimum_canvas_schema_version: 3 }),
+      expect.objectContaining({ minimum_canvas_schema_version: 4 }),
       expect.any(AbortSignal)
     );
   });
@@ -2423,7 +2423,7 @@ describe('canvas version gate', () => {
     api.__records.set(project.id, {
       ...serverRecord,
       data: persistence.serializeProjectDocument(winningServer),
-      minimum_canvas_schema_version: 3,
+      minimum_canvas_schema_version: 4,
       name: winningServer.name,
       revision: serverRecord.revision + 1,
     });
@@ -2431,14 +2431,14 @@ describe('canvas version gate', () => {
     await service.flushProjectToServer({ ...opened, name: 'Divergent local edit' });
 
     expect(api.createProject).toHaveBeenLastCalledWith(
-      expect.objectContaining({ minimum_canvas_schema_version: 3 }),
+      expect.objectContaining({ minimum_canvas_schema_version: 4 }),
       expect.any(AbortSignal)
     );
   });
 
   it('retains a server schema refusal during boot instead of treating the project as missing', async () => {
     const future = seedServerProject('Future server project');
-    api.__records.get(future.id)!.minimum_canvas_schema_version = 3;
+    api.__records.get(future.id)!.minimum_canvas_schema_version = 4;
     seedSessionBlob({
       account: createInitialWorkbenchState().account,
       activeProjectId: future.id,
@@ -2451,7 +2451,7 @@ describe('canvas version gate', () => {
         projectId: future.id,
         projectName: 'Future server project',
         raw: null,
-        refusal: { raw: null, scope: 'document', status: 'unsupported-version', version: 3 },
+        refusal: { raw: null, scope: 'document', status: 'unsupported-version', version: 4 },
         source: 'canvas',
       },
     ]);
@@ -2463,7 +2463,7 @@ describe('canvas version gate', () => {
     const future = seedServerProject('Future server project');
     const cached = { ...future, name: 'Local work that must remain cached' };
 
-    api.__records.get(future.id)!.minimum_canvas_schema_version = 3;
+    api.__records.get(future.id)!.minimum_canvas_schema_version = 4;
     seedCache([cached]);
     seedSessionBlob({
       account: createInitialWorkbenchState().account,
@@ -2534,7 +2534,7 @@ describe('canvas version gate', () => {
       {
         projectId: future.id,
         projectName: 'From the future',
-        refusal: { scope: 'state', status: 'unsupported-version', version: 3 },
+        refusal: { scope: 'state', status: 'unsupported-version', version: 4 },
         source: 'canvas',
       },
     ]);
@@ -2605,7 +2605,7 @@ describe('canvas version gate', () => {
       projects: [{ ...snapshot!.state.projects[0]!, name: 'Edited' }],
     });
 
-    expect(api.__records.get(future.id)?.data.canvas).toMatchObject({ version: 3 });
+    expect(api.__records.get(future.id)?.data.canvas).toMatchObject({ version: 4 });
     expect(api.__records.get(future.id)?.revision).toBe(1);
   });
 
@@ -2617,7 +2617,7 @@ describe('canvas version gate', () => {
     const result = await service.hydrateProjectFromServer(future.id);
 
     expect(result).toMatchObject({
-      refused: { projectId: future.id, refusal: { status: 'unsupported-version', version: 3 }, source: 'canvas' },
+      refused: { projectId: future.id, refusal: { status: 'unsupported-version', version: 4 }, source: 'canvas' },
       status: 'refused',
     });
   });

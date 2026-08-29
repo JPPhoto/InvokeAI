@@ -1,24 +1,25 @@
 import type { CommitStagedImageOptions, CommitStagedImageResult } from '@workbench/canvas-engine/capabilities';
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasRasterLayerContractV2,
   CanvasStagingCandidateContract,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
 } from '@workbench/canvas-engine/contracts';
-import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { ProjectEvent } from '@workbench/projectContracts';
 
-import { insertLayersAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
-import { haveSameStackOrders } from '@workbench/canvas-engine/document/layerStacks';
+import { getDocumentLayer, getDocumentLeaves, hasDocumentNode } from '@workbench/canvas-engine/document/documentIndex';
+import { insertNodesAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import { haveSameStructure } from '@workbench/canvas-engine/document/layerStacks';
 import { getCanvasStagingCandidateFingerprint } from '@workbench/canvasStagingView';
 
 export interface StagedResultControllerOptions {
   readonly concurrency: CanvasEditConcurrency;
-  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => CanvasNodeInsertionAnchor;
   readonly createEventId: () => string;
   readonly createLayerId: () => string;
   readonly dispatchPrepared: (
@@ -28,8 +29,8 @@ export interface StagedResultControllerOptions {
     origin?: 'system' | 'user'
   ) => void;
   readonly endBurst: () => void;
-  readonly getCanvasState: () => CanvasStateContractV2 | null;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getCanvasState: () => CanvasStateContractV3 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly history: History;
   readonly now: () => string;
 }
@@ -95,7 +96,7 @@ export class StagedResultController {
 
     const continueStaging = options.continueStaging === true;
     const layer = {
-      ...createLayer(o.createLayerId(), `Layer ${canvas.document.layers.length + 1}`, options.candidate),
+      ...createLayer(o.createLayerId(), `Layer ${getDocumentLeaves(canvas.document).length + 1}`, options.candidate),
       isEnabled: !continueStaging,
     };
     const event: ProjectEvent = {
@@ -107,22 +108,22 @@ export class StagedResultController {
       type: 'canvas-layer-accepted',
     };
     const previousSelectedLayerId = canvas.document.selectedLayerId;
-    const previousLayers = canvas.document.layers;
+    const previousStacks = canvas.document.stacks;
     const anchor = o.captureInsertionAnchor('raster', null);
-    const acceptedLayers = insertLayersAtAnchor(previousLayers, anchor, [layer]);
+    const acceptedStacks = insertNodesAtAnchor(previousStacks, anchor, [layer]);
     const previousStagingArea = canvas.stagingArea;
     const acceptedSelectedLayerId = continueStaging ? previousSelectedLayerId : layer.id;
-    const hasPreviousLayerStack = (document: CanvasDocumentContractV2 | null): boolean =>
+    const hasPreviousLayerStack = (document: CanvasDocumentContractV3 | null): boolean =>
       document?.selectedLayerId === previousSelectedLayerId &&
-      !document.layers.some((current) => current.id === layer.id) &&
-      haveSameStackOrders(document.layers, previousLayers);
-    const hasAcceptedLayerStack = (document: CanvasDocumentContractV2 | null): boolean =>
+      !hasDocumentNode(document, layer.id) &&
+      haveSameStructure(document.stacks, previousStacks);
+    const hasAcceptedLayerStack = (document: CanvasDocumentContractV3 | null): boolean =>
       document?.selectedLayerId === acceptedSelectedLayerId &&
-      document.layers.includes(layer) &&
-      haveSameStackOrders(document.layers, acceptedLayers);
-    const isCommitted = (next: CanvasStateContractV2 | null): boolean =>
+      getDocumentLayer(document, layer.id) === layer &&
+      haveSameStructure(document.stacks, acceptedStacks);
+    const isCommitted = (next: CanvasStateContractV3 | null): boolean =>
       next?.document.selectedLayerId === acceptedSelectedLayerId &&
-      next.document.layers.some((current) => current === layer) &&
+      getDocumentLayer(next.document, layer.id) === layer &&
       (continueStaging
         ? next.stagingArea === previousStagingArea
         : next.stagingArea.pendingImages.length === 0 &&
@@ -131,7 +132,7 @@ export class StagedResultController {
           !next.stagingArea.isVisible);
     const isMirrored = (): boolean =>
       o.getDocument()?.selectedLayerId === acceptedSelectedLayerId &&
-      o.getDocument()?.layers.some((current) => current === layer) === true;
+      getDocumentLayer(o.getDocument(), layer.id) === layer;
 
     try {
       o.endBurst();
@@ -187,7 +188,7 @@ export class StagedResultController {
       }
     };
     const addAcceptedLayer: Extract<CanvasProjectMutation, { type: 'applyCanvasLayerStackMutation' }> = {
-      add: [{ anchor, layers: [layer] }],
+      add: [{ anchor, nodes: [layer] }],
       enabledUpdates: [],
       selectedLayerId: acceptedSelectedLayerId,
       type: 'applyCanvasLayerStackMutation',

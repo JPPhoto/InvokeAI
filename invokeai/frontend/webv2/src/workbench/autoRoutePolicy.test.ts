@@ -95,7 +95,7 @@ describe('Canvas edit classification', () => {
     expect(
       isHighConfidenceCanvasEdit(
         mutation({
-          add: [{ anchor: {}, layers: [{}] }],
+          add: [{ anchor: {}, nodes: [{}] }],
           enabledUpdates: [],
           selectedLayerId: 'new-layer',
           type: 'applyCanvasLayerStackMutation',

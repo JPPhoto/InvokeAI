@@ -1,7 +1,7 @@
 import type {
   CanvasBlendMode,
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasInpaintMaskLayerContract,
   CanvasLayerContract,
   CanvasMaskFillContract,
@@ -9,6 +9,7 @@ import type {
 } from '@workbench/canvas-engine/contracts';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { identity } from '@workbench/canvas-engine/math/mat2d';
 import {
   compositeDocument,
@@ -77,13 +78,13 @@ const inpaintMask = (id: string, fill: CanvasMaskFillContract): CanvasInpaintMas
   type: 'inpaint_mask',
 });
 
-const doc = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
+const doc = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: BBOX,
   height: HEIGHT,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: WIDTH,
 });
 

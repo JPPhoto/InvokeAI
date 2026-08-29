@@ -23,6 +23,16 @@ The port's `dispatch()` returns whether the named project's canvas identity chan
 
 Paint persistence clears a dirty result only after the intended layer accepts the bitmap reference. A rejected update retains dirty pixels for retry; deletion of the layer or project is terminal and discards obsolete persistence work. This applies equally to raster/control paint sources and paint-backed masks.
 
+## Document contract and hierarchy
+
+`CanvasDocumentContractV3` holds four stack forests, `document.stacks.{raster, control, regional_guidance, inpaint_mask}`. Each forest is a top-first tree of leaves (the unchanged v2 leaf contracts) and pass-through groups (`type: 'group'` with `id`, `name`, `isEnabled`, `isLocked`, optional overlay-only `isHidden`, and `children`). A node belongs to exactly one stack, ids are unique across the document, groups nest at most ten levels deep, and a document holds at most 10,000 nodes. `selectedLayerId` may name a leaf or a group; leaf-only tools refuse a group rather than guessing a descendant. Groups carry no opacity, blend mode, transform, or raster surface: they only organise leaves and gate their effective state. Older document versions are refused by the loader; nothing migrates them.
+
+`document/documentIndex.ts` builds one index per `stacks` identity (parent, path, sibling index, document order, and ancestor-effective enabled/locked/hidden per node). The reducer preserves `stacks` identity across selection, bbox and geometry-only edits, so those changes cost no index. `document-model/documentModel.ts` compiles `SemanticLeaf`s from that index: a leaf's `contributionEnabled`, `effectiveLocked`, and `documentHidden` fold in every ancestor, and a leaf keeps its identity while its layer object, ancestor path, and ancestor-effective state are unchanged. Every consumer that decides visibility, contribution, editability, or export reads leaves (or `isLeaf*` predicates) rather than a layer's own flags.
+
+Structural edits are prepared by the model (`insert`, `remove`, `duplicate`, `move`, `reorder`, `reparent`, `group`, `ungroup`, `patch*`, `set-*`, `translate`, `select`) and committed through `commitPrepared`. Restructuring lands as one `applyCanvasLayerStackMutation` that the reducer applies as `add`, then `move`, then `removeIds`, then flag and selection updates, refusing the whole mutation when any step is invalid or the result exceeds the limits. Insertion anchors are exact: before a surviving sibling under its current parent, after a surviving sibling, the top of the captured parent, the nearest surviving group on the captured path, then the stack top. Inverses restore removed or moved nodes as maximal sibling runs anchored to their unmoved neighbours, so undo reproduces the previous structure exactly.
+
+The document mirror diffs forests by leaf identity and ancestor-effective state: a group flag flip reports every descendant leaf as changed (never source-changed), a group rename reports nothing, and a reparent that changes no leaf's effective state reports an order change only.
+
 ## Package and capability boundaries
 
 `canvas-engine/` is the rendering and editing core. It may import engine-internal modules and shared canvas contracts, mutations, and the project mutation port. It must not import React, widgets, application canvas operations, generation graphs, socket infrastructure, or backend networking. `importBoundaries.test.ts` enforces that rule.
@@ -59,7 +69,7 @@ Controller-local tests instantiate these boundaries with fakes. Integration test
 
 ## Immutable document and raster snapshots
 
-`CanvasDocumentCapability.captureSnapshot()` returns a `CanvasDocumentSnapshot` or `null`. A snapshot contains a structured clone of the exact `CanvasStateContractV2` and the engine's `documentGeneration`. The engine privately associates it with the reducer canvas identity from which it was captured, so a caller cannot manufacture a current snapshot by copying fields.
+`CanvasDocumentCapability.captureSnapshot()` returns a `CanvasDocumentSnapshot` or `null`. A snapshot contains a structured clone of the exact `CanvasStateContractV3` and the engine's `documentGeneration`. The engine privately associates it with the reducer canvas identity from which it was captured, so a caller cannot manufacture a current snapshot by copying fields.
 
 `CanvasExportCapability.captureRasterSnapshot(snapshot, layerIds, options)` requests exactly the required layer caches, temporarily pins them, reserves detached-surface capacity, and copies their pixels into independent surfaces. It returns a typed `ok`, `stale`, `aborted`, `not-ready`, or `over-budget` result. Freshness is checked before and after every asynchronous rasterization boundary and once after all copies are detached.
 

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { createEmptyCanvasStateV2 } from './canvasMigration';
+import { createEmptyCanvasState } from './canvasMigration';
 import { gateProjectCanvases } from './projectCanvasGate';
 
-const canvas = createEmptyCanvasStateV2();
+const canvas = createEmptyCanvasState();
 const queueItem = (id: string, itemCanvas: unknown) => ({ id, snapshot: { canvas: itemCanvas } });
 
 describe('gateProjectCanvases', () => {
@@ -14,14 +14,14 @@ describe('gateProjectCanvases', () => {
   });
 
   it('refuses a project whose live canvas is unsupported or invalid, keeping the raw document', () => {
-    const future = { canvas: { ...canvas, version: 3 }, id: 'p', name: 'P' };
+    const future = { canvas: { ...canvas, version: 4 }, id: 'p', name: 'P' };
     const broken = { canvas: { ...canvas, version: '2' }, id: 'p', name: 'P' };
 
     expect(gateProjectCanvases(future)).toMatchObject({
       projectId: 'p',
       projectName: 'P',
       raw: future,
-      refusal: { scope: 'state', status: 'unsupported-version', version: 3 },
+      refusal: { scope: 'state', status: 'unsupported-version', version: 4 },
       source: 'canvas',
     });
     expect(gateProjectCanvases(broken)).toMatchObject({
@@ -33,7 +33,7 @@ describe('gateProjectCanvases', () => {
 
   it('refuses a project for any invalid queue canvas before normalization, naming the item', () => {
     const invalidItem = queueItem('invalid', { ...canvas, version: '2' });
-    const futureItem = queueItem('future', { ...canvas, version: 3 });
+    const futureItem = queueItem('future', { ...canvas, version: 4 });
     const invalidProject = { canvas, id: 'p', name: 'P', queue: { items: [invalidItem] } };
 
     expect(gateProjectCanvases(invalidProject)).toMatchObject({
@@ -44,7 +44,7 @@ describe('gateProjectCanvases', () => {
     });
     expect(gateProjectCanvases({ canvas, id: 'p', name: 'P', queue: { items: [futureItem] } })).toMatchObject({
       queueItem: { index: 0, itemId: 'future' },
-      refusal: { status: 'unsupported-version', version: 3 },
+      refusal: { status: 'unsupported-version', version: 4 },
       source: 'queue-item',
     });
 

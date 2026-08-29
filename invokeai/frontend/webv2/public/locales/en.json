@@ -430,6 +430,7 @@
     "exporting": "Exporting \"{{name}}\"…",
     "failedToLoad": "Failed to load your projects.",
     "requiresNewerInvoke": "Requires a newer Invoke",
+    "legacyFormat": "Older project format",
     "file": {
       "bundlingProgress": "Bundling {{completed}} of {{total}} assets…",
       "damaged": "This project file is damaged and cannot be opened.",
@@ -470,6 +471,7 @@
     "load": {
       "invalid": "\"{{name}}\" contains canvas data this version of Invoke cannot read, and it was not opened.",
       "multiple": "{{count}} saved projects were not opened because this version of Invoke cannot read them: {{names}}.",
+      "legacyVersion": "\"{{name}}\" was saved by an older version of Invoke and cannot be opened here.",
       "unsupportedVersion": "\"{{name}}\" was saved by a newer version of Invoke and cannot be opened here."
     },
     "newProject": "New project",

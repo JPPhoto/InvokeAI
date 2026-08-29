@@ -1,51 +1,63 @@
-import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasStackForests } from '@workbench/canvas-engine/contracts';
 
-const nearestSurviving = (
-  previousLayers: readonly CanvasLayerContract[],
-  previousIndex: number,
-  accept: (layer: CanvasLayerContract) => boolean
+import { indexStacks, type CanvasDocumentIndex, type CanvasNodeEntry } from './documentIndex';
+
+const nearestInOrder = (
+  entries: readonly CanvasNodeEntry[],
+  from: number,
+  accept: (entry: CanvasNodeEntry) => boolean
 ): string | null => {
-  for (let index = previousIndex + 1; index < previousLayers.length; index += 1) {
-    const layer = previousLayers[index]!;
-    if (accept(layer)) {
-      return layer.id;
+  for (let position = from + 1; position < entries.length; position += 1) {
+    if (accept(entries[position]!)) {
+      return entries[position]!.node.id;
     }
   }
-  for (let index = previousIndex - 1; index >= 0; index -= 1) {
-    const layer = previousLayers[index]!;
-    if (accept(layer)) {
-      return layer.id;
+  for (let position = from - 1; position >= 0; position -= 1) {
+    if (accept(entries[position]!)) {
+      return entries[position]!.node.id;
     }
   }
   return null;
 };
 
+const siblingsOf = (index: CanvasDocumentIndex, entry: CanvasNodeEntry): readonly CanvasNodeEntry[] =>
+  index.nodes.filter((candidate) => candidate.stack === entry.stack && candidate.parentId === entry.parentId);
+
 /**
- * The primary selection after `layers` replaced `previousLayers`. A surviving selection is kept.
- * A removed one moves to its nearest surviving neighbour in the previous order, preferring its own
- * stack, below first, then above; without a previous order the top layer is selected.
+ * The primary selection after `stacks` replaced `previous`. A surviving selection is kept. A removed
+ * one moves to its nearest surviving sibling in the previous order (below first, then above), then
+ * to its previous parent, then to the nearest surviving node of its stack, then to the nearest
+ * surviving node of any stack; without a previous order the top node is selected.
  */
 export const repairSelectedLayerId = (
-  layers: readonly CanvasLayerContract[],
+  stacks: CanvasStackForests,
   selectedLayerId: string | null,
-  previousLayers?: readonly CanvasLayerContract[]
+  previous?: CanvasStackForests
 ): string | null => {
   if (selectedLayerId === null) {
     return null;
   }
-  const surviving = new Set(layers.map((layer) => layer.id));
-  if (surviving.has(selectedLayerId)) {
+  const next = indexStacks(stacks);
+  if (next.byId.has(selectedLayerId)) {
     return selectedLayerId;
   }
-  const previousIndex = previousLayers?.findIndex((layer) => layer.id === selectedLayerId) ?? -1;
-  if (previousLayers && previousIndex >= 0) {
-    const stack = previousLayers[previousIndex]!.type;
+  const survives = (entry: CanvasNodeEntry): boolean => next.byId.has(entry.node.id);
+  const before = previous ? indexStacks(previous) : null;
+  const entry = before?.byId.get(selectedLayerId);
+  if (before && entry) {
+    const siblings = siblingsOf(before, entry);
     return (
-      nearestSurviving(previousLayers, previousIndex, (layer) => surviving.has(layer.id) && layer.type === stack) ??
-      nearestSurviving(previousLayers, previousIndex, (layer) => surviving.has(layer.id)) ??
-      layers[0]?.id ??
+      nearestInOrder(siblings, siblings.indexOf(entry), survives) ??
+      (entry.parentId !== null && next.byId.has(entry.parentId) ? entry.parentId : null) ??
+      nearestInOrder(
+        before.nodes,
+        entry.order,
+        (candidate) => candidate.stack === entry.stack && survives(candidate)
+      ) ??
+      nearestInOrder(before.nodes, entry.order, survives) ??
+      next.nodes[0]?.node.id ??
       null
     );
   }
-  return layers[0]?.id ?? null;
+  return next.nodes[0]?.node.id ?? null;
 };

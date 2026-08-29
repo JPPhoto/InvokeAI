@@ -1,8 +1,8 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { FloatingSelection } from '@workbench/canvas-engine/selection/floatingSelection';
 import type { Mat2d } from '@workbench/canvas-engine/types';
 
-import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/flatDocumentModel';
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
 import { floatDocumentMatrix } from '@workbench/canvas-engine/selection/floatingSelection';
 import { bakeMatrix } from '@workbench/canvas-engine/transform/transformMath';
 
@@ -27,7 +27,7 @@ export interface FloatingSelectionFrame {
  */
 export const floatingSelectionFrame = (
   float: FloatingSelection | null,
-  doc: CanvasDocumentContractV2 | null
+  doc: CanvasDocumentContractV3 | null
 ): FloatingSelectionFrame | null => {
   const leaf = float && doc ? lookupDocumentLeaf(doc, float.layerId) : null;
   if (!float || !leaf) {

@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createControlLayer, createEmptyPaintLayer } from '@workbench/widgets/layers/layerOps';
 import { createDraftProject } from '@workbench/workbenchState';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -54,9 +55,9 @@ const renderRow = (layer: CanvasLayerContract): Map<string, CapturedButton> => {
     background: 'transparent',
     bbox: { height: 100, width: 100, x: 0, y: 0 },
     height: 100,
-    layers: [layer],
+    stacks: stacksFrom([layer]),
     selectedLayerId: layer.id,
-    version: 2,
+    version: 3,
     width: 100,
   };
   activeProject.current = project;

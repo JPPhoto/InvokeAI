@@ -1,9 +1,9 @@
-import type { CanvasStateContractV2, ToolId } from '@workbench/canvas-engine/api';
+import type { CanvasStateContractV3, ToolId } from '@workbench/canvas-engine/api';
 import type { WorkbenchQueueItem as QueueItem } from '@workbench/queueHistoryContracts';
 
 import { getCanvasStagingSlots } from '@workbench/canvasStagingView';
 
-export const isCanvasInteractionLocked = (canvas: CanvasStateContractV2, queueItems: readonly QueueItem[]): boolean =>
+export const isCanvasInteractionLocked = (canvas: CanvasStateContractV3, queueItems: readonly QueueItem[]): boolean =>
   getCanvasStagingSlots(canvas, queueItems).length > 0 ||
   queueItems.some(
     (item) =>

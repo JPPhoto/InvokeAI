@@ -32,7 +32,7 @@
  */
 
 import type { AspectRatioId } from '@features/generation/contracts';
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/api';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/api';
 import type { WorkbenchState } from '@workbench/projectContracts';
 
 import { clampDimension, deriveAspectRatioId } from '@features/generation/settings';
@@ -42,7 +42,7 @@ import type { WorkbenchCommands } from './workbenchStore';
 import { gridSizeForModelBase } from './widgets/canvas/bboxGrid';
 import { getProjectWidgetValues } from './widgetState';
 
-type Bbox = CanvasDocumentContractV2['bbox'];
+type Bbox = CanvasDocumentContractV3['bbox'];
 
 /** The last-synced width/height on both sides, used to detect which side changed. */
 export interface CanvasDimsSnapshot {

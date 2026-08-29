@@ -67,7 +67,7 @@ export type {
 import type { CanvasApplicationHost } from '@workbench/canvas-engine/applicationHost';
 import type {
   CanvasImageRef,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasLayerSourceContract,
 } from '@workbench/canvas-engine/contracts';
@@ -110,9 +110,11 @@ import { StagedResultController } from '@workbench/canvas-engine/controllers/sta
 import { StructuralLayerController } from '@workbench/canvas-engine/controllers/structuralLayerController';
 import { createCanvasDiagnostics } from '@workbench/canvas-engine/diagnostics';
 import {
-  createFlatDocumentModel,
-  type FlatCanvasDocumentModel,
-} from '@workbench/canvas-engine/document-model/flatDocumentModel';
+  compileDocumentLeaves,
+  createDocumentModel,
+  type CanvasDocumentModel,
+} from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLayer, getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
 import {
   createEngineStores,
   type EngineStores,
@@ -549,7 +551,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
    */
   const getLayerSourceById = (layerId: string): CanvasLayerSourceContract | null => {
     const doc = mirror.getDocument();
-    const layer = doc?.layers.find((candidate) => candidate.id === layerId);
+    const layer = getDocumentLayer(doc, layerId);
     // Masks expose their alpha bitmap as a synthetic `paint` source so the bitmap
     // store's source-type/redundant-dispatch guards and the mirror's self-echo
     // check work uniformly across paint layers and masks.
@@ -557,7 +559,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   };
 
   const getAuthoritativeLayerSourceById = (layerId: string): CanvasLayerSourceContract | null => {
-    const layer = mutationPort.getCanvasState()?.document.layers.find((candidate) => candidate.id === layerId);
+    const layer = getDocumentLayer(mutationPort.getCanvasState()?.document, layerId);
     return layer ? renderableSourceOf(layer) : null;
   };
 
@@ -571,7 +573,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
    */
   const dispatchLayerBitmap = (layerId: string, bitmap: CanvasImageRef, offset: { x: number; y: number }): boolean => {
     const doc = mirror.getDocument();
-    const layer = doc?.layers.find((candidate) => candidate.id === layerId);
+    const layer = getDocumentLayer(doc, layerId);
     if (!layer) {
       return false;
     }
@@ -605,7 +607,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
    */
   const clearLayerBitmap = (layerId: string): boolean => {
     const doc = mirror.getDocument();
-    const layer = doc?.layers.find((candidate) => candidate.id === layerId);
+    const layer = getDocumentLayer(doc, layerId);
     if (!layer) {
       return false;
     }
@@ -650,7 +652,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     if (pixelEditController?.isOpenFor([layerId])) {
       return true;
     }
-    const layer = mirror.getDocument()?.layers.find((candidate) => candidate.id === layerId);
+    const layer = getDocumentLayer(mirror.getDocument(), layerId);
     return !!layer && isCurrentRasterizationJob(layer);
   };
 
@@ -717,13 +719,15 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   // Direct pixel writes do not replace the reducer canvas object. Snapshot
   // freshness therefore also binds to this engine-local content epoch.
   let rasterContentEpoch = 0;
-  const resolveSelectedLayerIds = (document: CanvasDocumentContractV2): readonly string[] => {
+  const resolveSelectedLayerIds = (document: CanvasDocumentContractV3): readonly string[] => {
     const primaryId = document.selectedLayerId;
     if (!primaryId) {
       return [];
     }
     const requested = new Set(opts.getSelectedLayerIds?.() ?? [primaryId]);
-    const reconciled = document.layers.filter((layer) => requested.has(layer.id)).map((layer) => layer.id);
+    const reconciled = getDocumentLeaves(document)
+      .filter((layer) => requested.has(layer.id))
+      .map((layer) => layer.id);
     return requested.has(primaryId) && reconciled.length === requested.size ? reconciled : [primaryId];
   };
   const cancelOpenPixelEdit = (): void => {
@@ -1028,7 +1032,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     },
     commitStructural: (label, forward, inverse) => commitStructural(label, forward, inverse),
     documentDeltaToLayerLocal: (layerId, delta) => {
-      const layer = mirror.getDocument()?.layers.find((candidate) => candidate.id === layerId);
+      const layer = getDocumentLayer(mirror.getDocument(), layerId);
       return layer ? documentDeltaToLocal(layerMatrix(layer.transform), delta) : delta;
     },
     getFloatingSelection: () => floatingSelection.get(),
@@ -1126,7 +1130,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
 
   // ---- Rasterization orchestration ---------------------------------------
 
-  const rasterizeDeps = (doc: CanvasDocumentContractV2, signal?: AbortSignal): RasterizeDeps => ({
+  const rasterizeDeps = (doc: CanvasDocumentContractV3, signal?: AbortSignal): RasterizeDeps => ({
     backend,
     bitmapPool: rasterController.bitmaps,
     documentSize: { height: doc.height, width: doc.width },
@@ -1264,7 +1268,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   ): Promise<StructuralExportLayerPixelsResult> => normalizeStructuralExport(rasterizeLayerPixels(layerId, options));
   const rasterizeLayerForThumbnail = async (
     layer: CanvasLayerContract,
-    document: CanvasDocumentContractV2
+    document: CanvasDocumentContractV3
   ): Promise<'published' | 'stale' | 'error'> => {
     const result = await getOrStartLayerRasterization(layer, document);
     return result === 'aborted' ? 'stale' : result;
@@ -1490,10 +1494,10 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       cleanup.run(() => stores.lassoPreview.set(null));
       cleanup.run(() => stores.marqueePreview.set(null));
       const doc = mirror.getDocument();
-      const present = new Set(doc ? doc.layers.map((layer) => layer.id) : []);
+      const present = new Set(doc ? getDocumentLeaves(doc).map((layer) => layer.id) : []);
       rasterController.clearMirroredImages();
       rasterController.clearThumbnailKeys();
-      for (const layer of doc?.layers ?? []) {
+      for (const layer of getDocumentLeaves(doc)) {
         rasterController.setThumbnailKey(layer.id, getLayerThumbnailDisplayKey(layer));
         const imageName = layerImageName(layer);
         if (imageName) {
@@ -1553,7 +1557,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       const sourceChanged = new Set(sourceChangedIds);
       const previousImageNames = new Map(ids.map((id) => [id, rasterController.getMirroredImage(id)]));
       for (const id of ids) {
-        const layer = doc?.layers.find((candidate) => candidate.id === id);
+        const layer = getDocumentLayer(doc, id);
         const imageName = layer ? layerImageName(layer) : null;
         if (imageName) {
           rasterController.setMirroredImage(id, imageName);
@@ -1577,7 +1581,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
           hasTextEditSession: textSession?.layerId === id,
           hasTransformSession: session?.layerId === id,
           isSelfEcho: () => bitmapStore.isSelfEcho(id, getLayerSourceById(id)),
-          layer: doc?.layers.find((candidate) => candidate.id === id),
+          layer: getDocumentLayer(doc, id) ?? undefined,
           previousImageName: previousImageNames.get(id),
           sourceChanged: sourceChanged.has(id),
         });
@@ -1657,7 +1661,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     onStagingChanged: () => scheduler.invalidate({ overlay: true }),
   });
 
-  for (const layer of mirror.getDocument()?.layers ?? []) {
+  for (const layer of getDocumentLeaves(mirror.getDocument())) {
     rasterController.setThumbnailKey(layer.id, getLayerThumbnailDisplayKey(layer));
     const imageName = layerImageName(layer);
     if (imageName) {
@@ -2029,9 +2033,9 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     // bbox (generation frame) is the primary anchor, so an empty canvas fits it;
     // any renderable layer beyond the bbox is unioned in so it lands in view.
     let bounds: Rect = { ...doc.bbox };
-    for (const layer of doc.layers) {
-      if (isRenderableLayer(layer)) {
-        bounds = union(bounds, getSourceBounds(layer, doc));
+    for (const leaf of compileDocumentLeaves(doc)) {
+      if (leaf.contributionEnabled && isRenderableLayer(leaf.layer)) {
+        bounds = union(bounds, getSourceBounds(leaf.layer, doc));
       }
     }
     viewport.fitToView(bounds, viewport.getViewportSize());
@@ -2057,7 +2061,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     fitToView();
   };
 
-  const isLayerCacheReadyForOp = (layer: CanvasLayerContract, doc: CanvasDocumentContractV2): boolean => {
+  const isLayerCacheReadyForOp = (layer: CanvasLayerContract, doc: CanvasDocumentContractV3): boolean => {
     if (isEmpty(getSourceContentRect(layer, doc))) {
       return true;
     }
@@ -2100,7 +2104,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     }
   };
 
-  const getReducerDocument = (): CanvasDocumentContractV2 | null => mutationPort.getCanvasState()?.document ?? null;
+  const getReducerDocument = (): CanvasDocumentContractV3 | null => mutationPort.getCanvasState()?.document ?? null;
   const getMainModelBase = (): string | null => {
     return opts.getMainModelBase?.() ?? null;
   };
@@ -2112,10 +2116,10 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
 
   /** Conversion reducers clone contracts, so their publication postcondition compares by value. */
   const documentHasLayerContract = (
-    document: CanvasDocumentContractV2 | null,
+    document: CanvasDocumentContractV3 | null,
     expected: CanvasLayerContract
   ): boolean => {
-    const current = document?.layers.find((candidate) => candidate.id === expected.id);
+    const current = getDocumentLayer(document, expected.id);
     return current !== undefined && areJsonValuesStructurallyEqual(current, expected);
   };
 
@@ -2162,7 +2166,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
 
   const captureLayerCache = (
     layer: CanvasLayerContract,
-    doc: CanvasDocumentContractV2
+    doc: CanvasDocumentContractV3
   ): { pixels: RasterSurface; rect: Rect } | null | 'not-ready' => {
     const entry = layerCache.get(layer.id);
     if (!entry || isEmpty(entry.rect)) {
@@ -2178,7 +2182,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
 
   const getDuplicateRasterPlan = (
     layer: CanvasLayerContract,
-    doc: CanvasDocumentContractV2
+    doc: CanvasDocumentContractV3
   ): DuplicateLayerRasterPlan => {
     const source = renderableSourceOf(layer);
     if (!source) {
@@ -2244,6 +2248,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
 
   const layerMutationController = new LayerMutationController({
     captureInsertionAnchor,
+    captureRestoreAnchor: (nodeId) => mutationContext.captureRestoreAnchor(nodeId),
     captureCache: captureLayerCache,
     createLayerId,
     concurrency: mutationContext,
@@ -2468,7 +2473,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   const exportSelectionBlob = (): Promise<Blob | null> => {
     floatingSelection.commit();
     const doc = mirror.getDocument();
-    const layer = doc?.layers.find((candidate) => candidate.id === doc.selectedLayerId);
+    const layer = getDocumentLayer(doc, doc?.selectedLayerId);
     const mask = selection.mask();
     const entry = layer ? layerCache.get(layer.id) : undefined;
     if (!doc || !layer || !mask || !entry || isEmpty(entry.rect)) {
@@ -2577,7 +2582,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     const doc = mirror.getDocument();
     // Invalidate (mark stale → re-rasterize) every live layer cache and drop its
     // memoized adjusted surface; the next composite rebuilds them from source.
-    for (const layer of doc?.layers ?? []) {
+    for (const layer of getDocumentLeaves(doc)) {
       invalidateLayerCache(layer.id);
       deleteDerivedSurfaces(layer.id);
     }
@@ -2597,7 +2602,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       bbox: doc?.bbox ?? null,
       canRedo: history.canRedo(),
       canUndo: history.canUndo(),
-      document: doc ? { height: doc.height, layers: doc.layers.length, width: doc.width } : null,
+      document: doc ? { height: doc.height, layers: getDocumentLeaves(doc).length, width: doc.width } : null,
       hasSelection: selection.hasSelection(),
       projectId,
       selectedLayerId: doc?.selectedLayerId ?? null,
@@ -2869,14 +2874,14 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     hasExportableLayerContent,
     isLayerExportGuardCurrent,
   };
-  let documentModel: FlatCanvasDocumentModel | null = null;
-  const currentDocumentModel = (): FlatCanvasDocumentModel | null => {
+  let documentModel: CanvasDocumentModel | null = null;
+  const currentDocumentModel = (): CanvasDocumentModel | null => {
     const document = mutationPort.getCanvasState()?.document ?? null;
     if (!document) {
       return null;
     }
     if (documentModel?.document !== document) {
-      documentModel = createFlatDocumentModel(document, {
+      documentModel = createDocumentModel(document, {
         editRevision: mutationContext.getEditRevision(),
         projectId,
       });

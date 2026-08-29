@@ -1,11 +1,9 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { Project } from '@workbench/projectContracts';
 
-import {
-  createFlatDocumentModel,
-  type FlatCanvasDocumentModel,
-} from '@workbench/canvas-engine/document-model/flatDocumentModel';
+import { createDocumentModel, type CanvasDocumentModel } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLayer, getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
 import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { applyCanvasProjectMutation } from '@workbench/canvasProjectMutations';
@@ -94,8 +92,8 @@ const rename = (id: string, name: string): CanvasProjectMutation => ({
   patch: { name },
   type: 'updateCanvasLayer',
 });
-const layerName = (document: CanvasDocumentContractV2, id = 'layer'): string | undefined =>
-  document.layers.find((layer) => layer.id === id)?.name;
+const layerName = (document: CanvasDocumentContractV3, id = 'layer'): string | undefined =>
+  getDocumentLeaves(document).find((layer) => layer.id === id)?.name;
 
 describe('StructuralLayerController', () => {
   it('commits through the guarded dispatch and records one failure-atomic history entry', () => {
@@ -213,7 +211,7 @@ describe('StructuralLayerController', () => {
   });
 
   describe('commitPrepared', () => {
-    const prepareRename = (model: FlatCanvasDocumentModel, name: string) => {
+    const prepareRename = (model: CanvasDocumentModel, name: string) => {
       const result = model.prepare({ id: 'layer', patch: { name }, type: 'patch' });
       if (result.status !== 'prepared') {
         throw new Error(`expected a prepared edit, got ${result.status}`);
@@ -223,7 +221,7 @@ describe('StructuralLayerController', () => {
 
     it('applies a prepared edit, verifies its postconditions and records one entry', () => {
       const { controller, ctx, document, history, projectId } = createHarness();
-      const model = createFlatDocumentModel(document(), { editRevision: ctx.getEditRevision(), projectId });
+      const model = createDocumentModel(document(), { editRevision: ctx.getEditRevision(), projectId });
 
       expect(controller.commitPrepared('Rename', prepareRename(model, 'Renamed'))).toEqual({ status: 'committed' });
       expect(layerName(document())).toBe('Renamed');
@@ -235,14 +233,14 @@ describe('StructuralLayerController', () => {
     it('refuses an edit prepared against an older revision or another project', () => {
       const { controller, ctx, document, history, projectId } = createHarness();
       const stale = prepareRename(
-        createFlatDocumentModel(document(), { editRevision: ctx.getEditRevision(), projectId }),
+        createDocumentModel(document(), { editRevision: ctx.getEditRevision(), projectId }),
         'A'
       );
       ctx.dispatch(rename('layer', 'Elsewhere'), 'system');
 
       expect(controller.commitPrepared('Rename', stale)).toMatchObject({ status: 'stale' });
       const foreign = prepareRename(
-        createFlatDocumentModel(document(), { editRevision: ctx.getEditRevision(), projectId: 'other' }),
+        createDocumentModel(document(), { editRevision: ctx.getEditRevision(), projectId: 'other' }),
         'B'
       );
       expect(controller.commitPrepared('Rename', foreign)).toEqual({ status: 'dispatch-rejected' });
@@ -252,7 +250,7 @@ describe('StructuralLayerController', () => {
 
     it('skips history for an edit whose policy is none', () => {
       const { controller, ctx, document, history, projectId } = createHarness();
-      const model = createFlatDocumentModel(document(), { editRevision: ctx.getEditRevision(), projectId });
+      const model = createDocumentModel(document(), { editRevision: ctx.getEditRevision(), projectId });
       const result = model.prepare({ id: null, type: 'select' });
       if (result.status !== 'prepared') {
         throw new Error('expected a prepared selection change');
@@ -281,7 +279,7 @@ describe('StructuralLayerController', () => {
       expectedRevision: anchor.capturedEditRevision,
       status: 'stale',
     });
-    expect(document().layers.some((layer) => layer.id === 'added')).toBe(false);
+    expect(getDocumentLeaves(document()).some((layer) => layer.id === 'added')).toBe(false);
     expect(anchor.projectId).toBe(projectId);
   });
 
@@ -310,10 +308,10 @@ describe('StructuralLayerController', () => {
     expect(controller.nudge(1, 0)).toEqual({ status: 'committed' });
     now = 100;
     expect(controller.nudge(1, 0)).toEqual({ status: 'committed' });
-    expect(document().layers[0]?.transform.x).toBe(2);
+    expect(getDocumentLayer(document(), 'layer')?.transform.x).toBe(2);
 
     history.undo();
-    expect(document().layers[0]?.transform.x).toBe(0);
+    expect(getDocumentLayer(document(), 'layer')?.transform.x).toBe(0);
     expect(history.canUndo()).toBe(false);
 
     controller.commit(

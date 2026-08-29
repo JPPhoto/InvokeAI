@@ -1,16 +1,7 @@
 /**
- * The canvas document mutation vocabulary.
- *
- * These types live inside `canvas-engine` because the engine and its controllers
- * are their heaviest consumers — 21 engine files import `CanvasProjectMutation`,
- * and every one of them wants only the type, never the reducer. Keeping the
- * declaration in `workbench/canvasProjectMutations.ts` made the engine's own
- * public surface (`capabilities.ts`) import upward from the workbench root,
- * which is the edge that closed the 16-module import cycle.
- *
- * The reducer that interprets these mutations stays in
- * `workbench/canvasProjectMutations.ts` and re-exports these types, so callers
- * outside canvas are unaffected.
+ * The canvas document mutation vocabulary. Declared inside `canvas-engine` because the engine and
+ * its controllers are its heaviest consumers; the reducer that interprets it lives in
+ * `workbench/canvasProjectMutations.ts` and re-exports these types.
  */
 
 import type { ProjectEvent } from '@workbench/projectEventContracts';
@@ -19,7 +10,7 @@ import type {
   CanvasAdjustmentsContract,
   CanvasControlAdapterContract,
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerBaseContract,
   CanvasLayerContract,
   CanvasLayerSourceContract,
@@ -28,12 +19,16 @@ import type {
   CanvasRegionalGuidanceLayerContract,
   CanvasStagingAreaContractV2,
 } from './contracts';
-import type { FlatLayerInsertion, FlatLayerInsertionAnchor } from './document/insertionAnchors';
-import type { ReorderFlatStackCommand } from './document/layerStacks';
+import type { CanvasNodeInsertion, CanvasNodeInsertionAnchor, CanvasNodeMove } from './document/insertionAnchors';
+import type { ReorderSiblingsCommand } from './document/layerStacks';
 
+/** Base fields a node accepts; a group takes only `name`, `isEnabled` and `isLocked`. */
 export type CanvasLayerBasePatch = Partial<
   Pick<CanvasLayerBaseContract, 'name' | 'isEnabled' | 'isLocked' | 'opacity' | 'blendMode'>
 > & { transform?: Partial<CanvasLayerBaseContract['transform']> };
+
+/** The base fields a group carries; anything else in a patch does not apply to it. */
+export const GROUP_PATCH_KEYS: readonly (keyof CanvasLayerBasePatch)[] = ['name', 'isEnabled', 'isLocked'];
 
 export type CanvasLayerConfigPatch =
   | {
@@ -61,7 +56,7 @@ export type CanvasLayerConfigPatch =
 export type CanvasProjectMutation =
   | {
       type: 'commitStagedImage';
-      anchor: FlatLayerInsertionAnchor;
+      anchor: CanvasNodeInsertionAnchor;
       candidateFingerprint: string;
       continueStaging: boolean;
       event: ProjectEvent;
@@ -83,20 +78,25 @@ export type CanvasProjectMutation =
   | { type: 'toggleCanvasStagingVisibility' }
   | { type: 'toggleCanvasStagingThumbnailsVisibility' }
   | { type: 'clearCanvasStaging' }
-  | { type: 'addCanvasLayer'; layer: CanvasLayerContract; anchor: FlatLayerInsertionAnchor }
+  | { type: 'addCanvasLayer'; layer: CanvasLayerContract; anchor: CanvasNodeInsertionAnchor }
   | {
+      /**
+       * One atomic restructuring, applied as `add`, then `move`, then `removeIds`, then the flag
+       * and selection updates, so an anchor may name a node a later step moves or removes. The
+       * whole mutation is refused when any step is invalid or the result exceeds the depth or
+       * node limits.
+       */
       type: 'applyCanvasLayerStackMutation';
-      /** Applied in order against the document before `removeIds`, so an anchor may name a removed layer. */
-      add?: readonly FlatLayerInsertion[];
+      add?: readonly CanvasNodeInsertion[];
+      move?: readonly CanvasNodeMove[];
       removeIds?: readonly string[];
       enabledUpdates: readonly { id: string; isEnabled: boolean }[];
       lockedUpdates?: readonly { id: string; isLocked: boolean }[];
-      /** Omit to preserve the current selection, repairing it if that layer is removed. */
+      /** Omit to preserve the current selection, repairing it if that node is removed. */
       selectedLayerId?: string | null;
     }
   | { type: 'removeCanvasLayers'; ids: string[] }
-  | { type: 'duplicateCanvasLayer'; sourceId: string; newId: string }
-  | { type: 'reorderCanvasLayerStacks'; stacks: readonly ReorderFlatStackCommand[] }
+  | { type: 'reorderCanvasSiblings'; orders: readonly ReorderSiblingsCommand[] }
   | { type: 'updateCanvasLayer'; id: string; patch: CanvasLayerBasePatch }
   | { type: 'replaceCanvasLayer'; layerId: string; layer: CanvasLayerContract }
   | { type: 'setCanvasLayersEnabled'; updates: readonly { id: string; isEnabled: boolean }[] }
@@ -104,16 +104,23 @@ export type CanvasProjectMutation =
   | { type: 'setCanvasLayersHidden'; updates: readonly { id: string; isHidden: boolean }[] }
   | { type: 'updateCanvasLayerSource'; id: string; source: CanvasLayerSourceContract }
   | { type: 'updateCanvasLayerConfig'; id: string; config: CanvasLayerConfigPatch }
-  | { type: 'convertCanvasLayer'; id: string; targetType: CanvasLayerContract['type']; layer: CanvasLayerContract }
+  | {
+      type: 'convertCanvasLayer';
+      id: string;
+      targetType: CanvasLayerContract['type'];
+      layer: CanvasLayerContract;
+      /** Where a leaf changing stacks lands; the top of its new stack when absent. */
+      anchor?: CanvasNodeInsertionAnchor;
+    }
   | {
       type: 'mergeCanvasLayersDown';
       upperLayerId: string;
       source: Extract<CanvasLayerSourceContract, { type: 'paint' }>;
     }
-  | { type: 'setCanvasBbox'; bbox: CanvasDocumentContractV2['bbox'] }
+  | { type: 'setCanvasBbox'; bbox: CanvasDocumentContractV3['bbox'] }
   | { type: 'setCanvasSelectedLayer'; id: string | null }
   | { type: 'resizeCanvasDocument'; width: number; height: number; offsetX?: number; offsetY?: number }
-  | { type: 'replaceCanvasDocument'; document: CanvasDocumentContractV2 }
+  | { type: 'replaceCanvasDocument'; document: CanvasDocumentContractV3 }
   | { type: 'saveCanvasSnapshot'; id: string; name: string; createdAt: string }
   | { type: 'restoreCanvasSnapshot'; snapshotId: string }
   | { type: 'deleteCanvasSnapshot'; snapshotId: string }

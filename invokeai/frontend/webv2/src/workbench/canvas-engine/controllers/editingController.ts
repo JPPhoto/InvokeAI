@@ -1,8 +1,9 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { CanvasEditGate, CanvasEditGateController } from '@workbench/canvas-engine/editGate';
 import type { SelectionState, SelectionStateDeps } from '@workbench/canvas-engine/selection/selectionState';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
 import { getSourceBounds, isRenderableLayer } from '@workbench/canvas-engine/document/sources';
 import { createCanvasEditGate } from '@workbench/canvas-engine/editGate';
 import { roundOut, union } from '@workbench/canvas-engine/math/rect';
@@ -16,7 +17,7 @@ import { TransformEditingController, type TransformEditingControllerOptions } fr
 
 export interface EditingControllerOptions {
   readonly selection: SelectionStateDeps;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly createSelectionState?: (deps: SelectionStateDeps) => SelectionState;
   readonly createEditGate?: () => CanvasEditGateController;
   readonly text: TextEditingControllerOptions;
@@ -36,7 +37,7 @@ export class EditingController {
   readonly selectionImage: SelectionImageController;
   readonly floatingSelection: FloatingSelectionController;
   private readonly editGate: CanvasEditGateController;
-  private readonly getDocument: () => CanvasDocumentContractV2 | null;
+  private readonly getDocument: () => CanvasDocumentContractV3 | null;
   private disposed = false;
 
   constructor(options: EditingControllerOptions) {
@@ -69,9 +70,9 @@ export class EditingController {
       return null;
     }
     let bounds: Rect = { ...document.bbox };
-    for (const layer of document.layers) {
-      if (isRenderableLayer(layer)) {
-        bounds = union(bounds, getSourceBounds(layer, document));
+    for (const leaf of compileDocumentLeaves(document)) {
+      if (leaf.contributionEnabled && isRenderableLayer(leaf.layer)) {
+        bounds = union(bounds, getSourceBounds(leaf.layer, document));
       }
     }
     return roundOut(bounds);

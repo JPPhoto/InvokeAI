@@ -1,6 +1,6 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { CanvasCommandRefusal } from '@workbench/canvas-engine/document/commandRefusal';
-import type { FlatLayerInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type {
   CanvasEditConcurrency,
@@ -14,6 +14,7 @@ import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/rend
 import type { SelectionState } from '@workbench/canvas-engine/selection/selectionState';
 import type { Rect, Vec2 } from '@workbench/canvas-engine/types';
 
+import { getDocumentLayer, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
 import { isEmpty, roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
 import { liftSelectedPixels } from '@workbench/canvas-engine/selection/floatingSelection';
 import { layerMatrix } from '@workbench/canvas-engine/tools/moveHitTest';
@@ -28,11 +29,11 @@ export interface NewRasterLayerControllerOptions {
   readonly layers: LayerCacheStore;
   readonly selection: SelectionState;
   readonly history: History;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
-  readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
+  readonly getReducerDocument: () => CanvasDocumentContractV3 | null;
   readonly endBurst: () => void;
   readonly createLayerId: () => string;
-  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => FlatLayerInsertionAnchor;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => CanvasNodeInsertionAnchor;
   readonly preparePixels: (layerId: string, rect: Rect, pixels: RasterSurface) => PreparedLayerCacheReplacement;
   readonly installPrepared: (prepared: PreparedLayerCacheReplacement) => void;
   readonly dispatchPrepared: (
@@ -103,17 +104,17 @@ export class NewRasterLayerController {
       const prepared = this.deps.preparePixels(layerId, rect, pixels);
       this.deps.dispatchPrepared(
         {
-          add: [{ anchor, layers: [layer] }],
+          add: [{ anchor, nodes: [layer] }],
           enabledUpdates: [],
           selectedLayerId: layerId,
           type: 'applyCanvasLayerStackMutation',
         },
         () =>
           this.deps.getReducerDocument()?.selectedLayerId === layerId &&
-          this.deps.getReducerDocument()?.layers.some((candidate) => candidate === layer) === true,
+          getDocumentLayer(this.deps.getReducerDocument(), layer.id) === layer,
         () =>
           this.deps.getDocument()?.selectedLayerId === layerId &&
-          this.deps.getDocument()?.layers.some((candidate) => candidate === layer) === true
+          getDocumentLayer(this.deps.getDocument(), layer.id) === layer
       );
       this.deps.installPrepared(prepared);
     };
@@ -137,10 +138,10 @@ export class NewRasterLayerController {
           },
           () =>
             this.deps.getReducerDocument()?.selectedLayerId === previousSelectedLayerId &&
-            this.deps.getReducerDocument()?.layers.some((candidate) => candidate.id === layerId) === false,
+            isNodeAbsent(this.deps.getReducerDocument(), layerId),
           () =>
             this.deps.getDocument()?.selectedLayerId === previousSelectedLayerId &&
-            this.deps.getDocument()?.layers.some((candidate) => candidate.id === layerId) === false
+            isNodeAbsent(this.deps.getDocument(), layerId)
         ),
     });
     return { layerId, status: 'created' };
@@ -152,7 +153,7 @@ export class NewRasterLayerController {
    */
   liftSelectionToLayer(name: string, label: string): NewRasterLayerResult {
     const document = this.deps.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === document.selectedLayerId);
+    const layer = getDocumentLayer(document, document?.selectedLayerId);
     const mask = this.deps.selection.mask();
     const entry = layer ? this.deps.layers.get(layer.id) : undefined;
     if (!document || !layer || !mask || !entry || isEmpty(entry.rect)) {

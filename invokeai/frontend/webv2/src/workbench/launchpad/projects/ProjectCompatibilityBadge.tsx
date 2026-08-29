@@ -1,6 +1,7 @@
 import type { ProjectSummary } from '@workbench/projects/library';
 
 import { Badge } from '@chakra-ui/react';
+import { MIN_SUPPORTED_CANVAS_SCHEMA_VERSION } from '@workbench/canvasSchemaVersion';
 import { isProjectSummaryCompatible } from '@workbench/projects/library';
 import { useTranslation } from 'react-i18next';
 
@@ -14,7 +15,11 @@ export const ProjectCompatibilityBadge = ({ summary }: { summary: ProjectSummary
 
   return (
     <Badge alignSelf="flex-start" colorPalette="orange" size="xs" variant="surface">
-      {t('projects.requiresNewerInvoke')}
+      {t(
+        summary.minimumCanvasSchemaVersion < MIN_SUPPORTED_CANVAS_SCHEMA_VERSION
+          ? 'projects.legacyFormat'
+          : 'projects.requiresNewerInvoke'
+      )}
     </Badge>
   );
 };

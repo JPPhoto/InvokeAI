@@ -1,7 +1,7 @@
 import type { ProjectGraphState } from '@features/workflow/contracts';
 import type { BackendConnectionStatus } from '@platform/transport/types';
 
-import type { CanvasStateContractV2 } from './canvas-engine/api';
+import type { CanvasStateContractV3 } from './canvas-engine/api';
 import type { CanvasLoadRefusal } from './canvasLoadContracts';
 import type { GraphContract } from './graphContracts';
 import type { InvocationControllerState } from './invocationContracts';
@@ -48,7 +48,7 @@ export interface Project {
    */
   floatingWidgets?: Record<WidgetInstanceId, FloatingWidgetState>;
   widgetGraphs: Partial<Record<WidgetTypeId, GraphContract>>;
-  canvas: CanvasStateContractV2;
+  canvas: CanvasStateContractV3;
   graphHistory: GraphHistorySnapshot[];
   promptHistory: PromptHistoryItem[];
   undoRedo: UndoRedoHistory;

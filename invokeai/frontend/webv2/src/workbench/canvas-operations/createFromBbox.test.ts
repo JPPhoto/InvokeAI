@@ -1,11 +1,12 @@
 import type { GalleryImage } from '@features/gallery';
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { CanvasEngine } from '@workbench/canvas-engine/engine';
 import type { RasterCompositeExportResult } from '@workbench/canvas-engine/exportRasterComposite';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
 import { accountLifecycle } from '@platform/state/accountLifecycle';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEmptyPaintLayer } from '@workbench/widgets/layers/layerOps';
 import { createInitialWorkbenchState } from '@workbench/workbenchState';
@@ -47,7 +48,7 @@ const withProject = (): { project: Project; state: WorkbenchState } => {
   const document = {
     ...current.canvas.document,
     bbox,
-    layers: [createEmptyPaintLayer('Existing', 'previous')],
+    stacks: stacksFrom([createEmptyPaintLayer('Existing', 'previous')]),
     selectedLayerId: 'previous',
   };
   const project = { ...current, canvas: { ...current.canvas, document } };
@@ -84,7 +85,7 @@ const createHarness = (
   });
   const getDocument = vi.fn(() => {
     order.push('document');
-    return project.canvas.document as unknown as CanvasDocumentContractV2;
+    return project.canvas.document as unknown as CanvasDocumentContractV3;
   });
   const exportRasterComposite = vi.fn<CanvasEngine['exports']['exportRasterComposite']>(() => {
     order.push('export');
@@ -146,7 +147,7 @@ const getCommittedLayers = (harness: ReturnType<typeof createHarness>): readonly
   if (forward?.type !== 'applyCanvasLayerStackMutation' || !forward.add) {
     throw new Error('Expected add stack mutation');
   }
-  return forward.add.flatMap((insertion) => insertion.layers);
+  return forward.add.flatMap((insertion) => insertion.nodes as CanvasLayerContract[]);
 };
 
 describe('createFromBbox', () => {

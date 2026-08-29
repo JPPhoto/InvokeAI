@@ -118,10 +118,9 @@ const CANVAS_EDIT_CONFIDENCE = {
   deleteCanvasSnapshot: 'none',
   discardAllStagedImages: 'none',
   discardSelectedStagedImage: 'none',
-  duplicateCanvasLayer: 'high',
   mergeCanvasLayersDown: 'high',
   removeCanvasLayers: 'high',
-  reorderCanvasLayerStacks: 'high',
+  reorderCanvasSiblings: 'high',
   replaceCanvasDocument: 'none',
   replaceCanvasLayer: 'high',
   resizeCanvasDocument: 'high',
@@ -158,7 +157,8 @@ export const isHighConfidenceCanvasEdit = (mutation: CanvasProjectMutation): boo
 
   if (mutation.type === 'applyCanvasLayerStackMutation') {
     return (
-      (mutation.add?.some((insertion) => insertion.layers.length > 0) ?? false) ||
+      (mutation.add?.some((insertion) => insertion.nodes.length > 0) ?? false) ||
+      (mutation.move?.length ?? 0) > 0 ||
       (mutation.removeIds?.length ?? 0) > 0 ||
       mutation.enabledUpdates.length > 0
     );

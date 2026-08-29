@@ -1,102 +1,157 @@
-import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasNodeContract, CanvasStackForests } from '@workbench/canvas-engine/contracts';
 
+import {
+  groupContract,
+  layerContract,
+  stacksFrom,
+} from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it } from 'vitest';
 
+import { getDocumentIndex } from './documentIndex';
+import { removeNodes } from './documentTree';
 import {
   captureInsertionAnchor,
   captureRestoreAnchor,
-  insertLayersAtAnchor,
-  resolveInsertionIndex,
+  insertNodesAtAnchor,
+  resolveInsertionTarget,
 } from './insertionAnchors';
 
-const layer = (id: string, type: CanvasLayerContract['type'] = 'raster'): CanvasLayerContract =>
-  ({ id, type }) as CanvasLayerContract;
+const layer = layerContract;
+const group = groupContract;
 
-const layers = [layer('i1', 'inpaint_mask'), layer('r1'), layer('c1', 'control'), layer('r2'), layer('r3')];
-const ids = (entries: readonly CanvasLayerContract[]): string[] => entries.map((entry) => entry.id);
+/**
+ * raster: r1, g1[r2, g2[r3], r4], r5  ·  control: c1
+ */
+const stacks = (): CanvasStackForests =>
+  stacksFrom([
+    layer('r1'),
+    group('g1', [layer('r2'), group('g2', [layer('r3')]), layer('r4')]),
+    layer('r5'),
+    layer('c1', 'control'),
+  ]);
+
 const capture = { editRevision: 7, projectId: 'p' };
+const preorder = (forest: CanvasStackForests, stack: 'raster' | 'control' = 'raster'): string[] =>
+  getDocumentIndex({ stacks: forest })
+    .nodes.filter((entry) => entry.stack === stack)
+    .map((entry) => `${'  '.repeat(entry.path.length)}${entry.node.id}`);
 
 describe('captureInsertionAnchor', () => {
-  it('anchors above a compatible leaf and remembers the same-stack member above it', () => {
-    expect(captureInsertionAnchor(layers, { ...capture, aboveId: 'r2', stack: 'raster' })).toEqual({
-      afterId: 'r1',
-      beforeId: 'r2',
+  it('anchors above a node under its own parent and remembers the sibling above it', () => {
+    expect(captureInsertionAnchor(stacks(), { ...capture, aboveId: 'r4', stack: 'raster' })).toEqual({
+      afterId: 'g2',
+      beforeId: 'r4',
       capturedEditRevision: 7,
+      parentPath: ['g1'],
       projectId: 'p',
       stack: 'raster',
     });
-    expect(captureInsertionAnchor(layers, { ...capture, aboveId: 'r1', stack: 'raster' })).toMatchObject({
+    expect(captureInsertionAnchor(stacks(), { ...capture, aboveId: 'r3', stack: 'raster' })).toMatchObject({
       afterId: null,
-      beforeId: 'r1',
+      beforeId: 'r3',
+      parentPath: ['g1', 'g2'],
     });
   });
 
-  it('falls back to the stack top for an incompatible, absent, or omitted leaf', () => {
-    const top = { afterId: null, beforeId: 'r1', capturedEditRevision: 7, projectId: 'p', stack: 'raster' };
+  it('anchors inside a group at its top when asked to', () => {
+    expect(captureInsertionAnchor(stacks(), { ...capture, insideId: 'g1', stack: 'raster' })).toMatchObject({
+      afterId: null,
+      beforeId: 'r2',
+      parentPath: ['g1'],
+    });
+    expect(
+      captureInsertionAnchor(stacks(), { ...capture, aboveId: 'r5', insideId: 'r1', stack: 'raster' })
+    ).toMatchObject({ beforeId: 'r5', parentPath: [] });
+  });
 
-    expect(captureInsertionAnchor(layers, { ...capture, aboveId: 'c1', stack: 'raster' })).toEqual(top);
-    expect(captureInsertionAnchor(layers, { ...capture, aboveId: 'ghost', stack: 'raster' })).toEqual(top);
-    expect(captureInsertionAnchor(layers, { ...capture, stack: 'raster' })).toEqual(top);
-    expect(captureInsertionAnchor(layers, { ...capture, stack: 'regional_guidance' })).toMatchObject({
+  it('falls back to the stack top for an incompatible, absent, or omitted node', () => {
+    const top = {
+      afterId: null,
+      beforeId: 'r1',
+      capturedEditRevision: 7,
+      parentPath: [],
+      projectId: 'p',
+      stack: 'raster',
+    };
+
+    expect(captureInsertionAnchor(stacks(), { ...capture, aboveId: 'c1', stack: 'raster' })).toEqual(top);
+    expect(captureInsertionAnchor(stacks(), { ...capture, aboveId: 'ghost', stack: 'raster' })).toEqual(top);
+    expect(captureInsertionAnchor(stacks(), { ...capture, stack: 'raster' })).toEqual(top);
+    expect(captureInsertionAnchor(stacks(), { ...capture, stack: 'regional_guidance' })).toMatchObject({
       afterId: null,
       beforeId: null,
+      parentPath: [],
     });
   });
 });
 
 describe('captureRestoreAnchor', () => {
-  it('captures the same-stack neighbours on both sides', () => {
-    expect(captureRestoreAnchor(layers, 'r2', 'p', 3)).toEqual({
-      afterId: 'r1',
-      beforeId: 'r3',
+  it('captures the siblings on both sides and the parent path', () => {
+    expect(captureRestoreAnchor(stacks(), 'g2', 'p', 3)).toEqual({
+      afterId: 'r2',
+      beforeId: 'r4',
       capturedEditRevision: 3,
+      parentPath: ['g1'],
       projectId: 'p',
       stack: 'raster',
     });
-    expect(captureRestoreAnchor(layers, 'c1', 'p', 3)).toMatchObject({
+    expect(captureRestoreAnchor(stacks(), 'c1', 'p', 3)).toMatchObject({
       afterId: null,
       beforeId: null,
       stack: 'control',
     });
-    expect(captureRestoreAnchor(layers, 'ghost', 'p', 3)).toBeNull();
+    expect(captureRestoreAnchor(stacks(), 'ghost', 'p', 3)).toBeNull();
   });
 });
 
-describe('resolveInsertionIndex', () => {
-  const anchor = captureInsertionAnchor(layers, { ...capture, aboveId: 'r2', stack: 'raster' });
+describe('resolveInsertionTarget', () => {
+  const anchor = captureInsertionAnchor(stacks(), { ...capture, aboveId: 'r4', stack: 'raster' });
 
-  it('lands before a surviving beforeId', () => {
-    expect(resolveInsertionIndex(layers, anchor)).toBe(3);
+  it('lands before a surviving beforeId under its current parent', () => {
+    expect(resolveInsertionTarget(stacks(), anchor)).toEqual({ index: 2, parentId: 'g1' });
+  });
+
+  it('follows a moved beforeId to its new parent', () => {
+    const moved = stacksFrom([
+      layer('r4'),
+      layer('r1'),
+      group('g1', [layer('r2'), group('g2', [layer('r3')])]),
+      layer('r5'),
+    ]);
+    expect(resolveInsertionTarget(moved, anchor)).toEqual({ index: 0, parentId: null });
   });
 
   it('lands after a surviving afterId once beforeId is gone', () => {
-    const withoutR2 = layers.filter((entry) => entry.id !== 'r2');
-    expect(resolveInsertionIndex(withoutR2, anchor)).toBe(2);
+    expect(resolveInsertionTarget(removeNodes(stacks(), new Set(['r4'])), anchor)).toEqual({
+      index: 2,
+      parentId: 'g1',
+    });
   });
 
-  it('lands at the stack top when neither survives, or at 0 for an empty stack', () => {
-    const onlyR3 = [layer('i1', 'inpaint_mask'), layer('c1', 'control'), layer('r3')];
-    expect(resolveInsertionIndex(onlyR3, anchor)).toBe(2);
-    expect(resolveInsertionIndex([layer('i1', 'inpaint_mask')], anchor)).toBe(0);
+  it('lands at the top of the captured parent, then the nearest surviving ancestor, then the stack top', () => {
+    const inner = captureInsertionAnchor(stacks(), { ...capture, aboveId: 'r3', stack: 'raster' });
+    expect(resolveInsertionTarget(removeNodes(stacks(), new Set(['r3'])), inner)).toEqual({ index: 0, parentId: 'g2' });
+    expect(resolveInsertionTarget(removeNodes(stacks(), new Set(['g2'])), inner)).toEqual({ index: 0, parentId: 'g1' });
+    expect(resolveInsertionTarget(removeNodes(stacks(), new Set(['g1'])), inner)).toEqual({ index: 0, parentId: null });
   });
 
   it('ignores ids that moved to another stack', () => {
-    const retyped = layers.map((entry) => (entry.id === 'r2' ? layer('r2', 'control') : entry));
-    expect(resolveInsertionIndex(retyped, anchor)).toBe(2);
+    const retyped = stacksFrom([layer('r1'), group('g1', [layer('r2')]), layer('r4', 'control')]);
+    expect(resolveInsertionTarget(retyped, anchor)).toEqual({ index: 0, parentId: 'g1' });
   });
 });
 
-describe('insertLayersAtAnchor', () => {
-  it('splices the inserted layers at the resolved index', () => {
-    const anchor = captureInsertionAnchor(layers, { ...capture, aboveId: 'r2', stack: 'raster' });
-    expect(ids(insertLayersAtAnchor(layers, anchor, [layer('n1'), layer('n2')]))).toEqual([
-      'i1',
-      'r1',
-      'c1',
-      'n1',
-      'n2',
-      'r2',
-      'r3',
-    ]);
+describe('insertNodesAtAnchor', () => {
+  it('splices the nodes at the resolved target and shares every untouched node', () => {
+    const before = stacks();
+    const anchor = captureInsertionAnchor(before, { ...capture, aboveId: 'r4', stack: 'raster' });
+    const after = insertNodesAtAnchor(before, anchor, [layer('n1'), layer('n2')]);
+
+    expect(preorder(after)).toEqual(['r1', 'g1', '  r2', '  g2', '    r3', '  n1', '  n2', '  r4', 'r5']);
+    expect(after.control).toBe(before.control);
+    expect(after.raster[0]).toBe(before.raster[0]);
+    expect((after.raster[1] as { children: CanvasNodeContract[] }).children[1]).toBe(
+      (before.raster[1] as { children: CanvasNodeContract[] }).children[1]
+    );
   });
 });

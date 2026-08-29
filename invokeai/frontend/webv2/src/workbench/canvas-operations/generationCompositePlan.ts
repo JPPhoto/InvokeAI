@@ -1,6 +1,6 @@
 import type {
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasInpaintMaskLayerContract,
   CanvasLayerContract,
   CanvasLayerSourceContract,
@@ -13,7 +13,7 @@ import {
   getCompositeLayerBounds,
   planBaseRasterComposite,
 } from '@workbench/canvas-engine/api';
-import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/flatDocumentModel';
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
 import { hasControlLayerContent, hasRegionalGuidanceMaskContent } from '@workbench/canvasLayerContent';
 
 import type {
@@ -65,7 +65,7 @@ export { getBaseRasterContentBounds, getCompositeLayerBounds, planBaseRasterComp
 
 /** The contributing layers, in flat order, narrowed to the ones that satisfy `hasContent`. */
 const contributingLayers = <T extends CanvasLayerContract>(
-  document: CanvasDocumentContractV2,
+  document: CanvasDocumentContractV3,
   hasContent: (layer: CanvasLayerContract) => layer is T
 ): T[] =>
   compileDocumentLeaves(document)
@@ -134,7 +134,7 @@ const deriveMaskKey = (kind: string, bbox: Rect, layers: CompositeMaskLayerRef[]
  *   (masks with an undefined `noiseLevel` are excluded, mirroring legacy — they
  *   must NOT be treated as noise 0).
  */
-export const planComposites = (document: CanvasDocumentContractV2, bbox: Rect): CompositePlan => {
+export const planComposites = (document: CanvasDocumentContractV3, bbox: Rect): CompositePlan => {
   const entries: CompositeEntry[] = [planBaseRasterComposite(document, bbox)];
 
   const maskLayers = contributingLayers(document, isInpaintMaskWithContent);
@@ -172,7 +172,7 @@ export const planComposites = (document: CanvasDocumentContractV2, bbox: Rect): 
 /** The native (unscaled) content rect of a control layer's source (layer-local). */
 const controlContentRect = (
   layer: CanvasControlLayerContract,
-  doc: CanvasDocumentContractV2
+  doc: CanvasDocumentContractV3
 ): { width: number; height: number; x: number; y: number } => {
   const { source } = layer;
   if (source.type === 'image') {
@@ -192,7 +192,7 @@ const controlContentRect = (
  * rasterizes control at opacity 1, no filters), so display tweaks don't churn the
  * entry key.
  */
-const toControlLayerRef = (layer: CanvasControlLayerContract, doc: CanvasDocumentContractV2): CompositeLayerRef => {
+const toControlLayerRef = (layer: CanvasControlLayerContract, doc: CanvasDocumentContractV3): CompositeLayerRef => {
   const rect = controlContentRect(layer, doc);
   return {
     blendMode: 'normal',
@@ -225,7 +225,7 @@ export interface ControlCompositeEntry {
  * Control layers never contribute to the `base-raster` composite, so they never
  * paint into the img2img/inpaint source.
  */
-export const planControlComposites = (document: CanvasDocumentContractV2, bbox: Rect): ControlCompositeEntry[] =>
+export const planControlComposites = (document: CanvasDocumentContractV3, bbox: Rect): ControlCompositeEntry[] =>
   contributingLayers(document, isControlLayerWithContent).map((layer) => {
     const ref = toControlLayerRef(layer, document);
     return {
@@ -292,7 +292,7 @@ export interface RegionalMaskCompositeEntry {
  * "no region" reason). Regional layers never contribute to `base-raster`.
  */
 export const planRegionalMaskComposites = (
-  document: CanvasDocumentContractV2,
+  document: CanvasDocumentContractV3,
   bbox: Rect
 ): RegionalMaskCompositeEntry[] =>
   contributingLayers(document, isRegionalGuidanceWithMask).map((layer) => {

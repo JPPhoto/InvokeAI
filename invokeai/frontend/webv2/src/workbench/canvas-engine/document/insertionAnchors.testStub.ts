@@ -1,20 +1,22 @@
-import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasStackForests } from '@workbench/canvas-engine/contracts';
 
-import type { FlatLayerInsertionAnchor } from './insertionAnchors';
+import type { CanvasNodeInsertionAnchor } from './insertionAnchors';
 import type { LayerStackKind } from './layerStacks';
 
+import { EMPTY_STACKS } from './documentTree';
 import { captureInsertionAnchor } from './insertionAnchors';
 
-export const stackTopAnchor = (projectId: string, stack: LayerStackKind = 'raster'): FlatLayerInsertionAnchor => ({
+export const stackTopAnchor = (projectId: string, stack: LayerStackKind = 'raster'): CanvasNodeInsertionAnchor => ({
   afterId: null,
   beforeId: null,
   capturedEditRevision: 0,
+  parentPath: [],
   projectId,
   stack,
 });
 
-/** Captures the way the engine does, against whatever `getLayers` returns at call time. */
+/** Captures the way the engine does, against whatever `getStacks` returns at call time. */
 export const createTestInsertionAnchorCapture =
-  (projectId: string, getLayers: () => readonly CanvasLayerContract[] = () => []) =>
-  (stack: LayerStackKind, aboveId: string | null): FlatLayerInsertionAnchor =>
-    captureInsertionAnchor(getLayers(), { aboveId, editRevision: 0, projectId, stack });
+  (projectId: string, getStacks: () => CanvasStackForests = () => EMPTY_STACKS) =>
+  (stack: LayerStackKind, aboveId: string | null): CanvasNodeInsertionAnchor =>
+    captureInsertionAnchor(getStacks(), { aboveId, editRevision: 0, projectId, stack });

@@ -1,13 +1,19 @@
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { RasterMemoryReservationResult } from '@workbench/canvas-engine/controllers/rasterMemoryBudgetController';
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
-import { lookupDocumentLayer, mergeDownEligibility } from '@workbench/canvas-engine/document-model/flatDocumentModel';
-import { insertLayersAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
-import { haveSameStackOrders } from '@workbench/canvas-engine/document/layerStacks';
+import {
+  lookupDocumentLayer,
+  mergeDownEligibility,
+  compileDocumentLeaves,
+} from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLayer, getDocumentLeaves, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
+import { removeNodes } from '@workbench/canvas-engine/document/documentTree';
+import { insertNodesAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import { haveSameStructure } from '@workbench/canvas-engine/document/layerStacks';
 import { mergeDownMatrix } from '@workbench/canvas-engine/document/mergeDown';
 import { canMergeSelectedRasters, getMergeVisibleRasterLayers } from '@workbench/canvas-engine/document/mergeVisible';
 import { isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
@@ -26,7 +32,7 @@ export interface MergeLayerControllerOptions {
   readonly ctx: CanvasMutationContext;
   readonly layers: LayerCacheStore;
   readonly canEdit: () => boolean;
-  readonly isCacheReady: (layer: CanvasLayerContract, document: CanvasDocumentContractV2) => boolean;
+  readonly isCacheReady: (layer: CanvasLayerContract, document: CanvasDocumentContractV3) => boolean;
   readonly hasExportableContent: (layerId: string) => boolean;
   readonly exportBaked: (layerId: string) => Promise<ExportResult>;
   readonly notifyPainted: (layerId: string) => void;
@@ -135,7 +141,7 @@ export class MergeLayerController {
     if (!document) {
       return 'nothing';
     }
-    const contributors = getMergeVisibleRasterLayers(document.layers, this.deps.hasExportableContent);
+    const contributors = getMergeVisibleRasterLayers(compileDocumentLeaves(document), this.deps.hasExportableContent);
     if (contributors.length < 2) {
       return 'nothing';
     }
@@ -182,7 +188,7 @@ export class MergeLayerController {
 
       const liveDocument = this.deps.ctx.getDocument();
       const liveContributors = liveDocument
-        ? getMergeVisibleRasterLayers(liveDocument.layers, this.deps.hasExportableContent)
+        ? getMergeVisibleRasterLayers(compileDocumentLeaves(liveDocument), this.deps.hasExportableContent)
         : [];
       if (
         !liveDocument ||
@@ -229,13 +235,13 @@ export class MergeLayerController {
       };
       const selectedLayerId = liveDocument.selectedLayerId;
       const anchor = this.deps.ctx.captureInsertionAnchor('raster', null);
-      const hasResult = (doc: CanvasDocumentContractV2 | null): boolean =>
-        doc?.selectedLayerId === resultId && doc.layers.includes(resultLayer);
+      const hasResult = (doc: CanvasDocumentContractV3 | null): boolean =>
+        doc?.selectedLayerId === resultId && getDocumentLayer(doc, resultLayer.id) === resultLayer;
       const apply = (): void => {
         const prepared = this.deps.ctx.preparePixels(resultId, rect, pixels);
         this.deps.ctx.dispatchPrepared(
           {
-            add: [{ anchor, layers: [resultLayer] }],
+            add: [{ anchor, nodes: [resultLayer] }],
             enabledUpdates: [],
             selectedLayerId: resultId,
             type: 'applyCanvasLayerStackMutation',
@@ -259,10 +265,10 @@ export class MergeLayerController {
             { enabledUpdates: [], removeIds: [resultId], selectedLayerId, type: 'applyCanvasLayerStackMutation' },
             () =>
               this.deps.ctx.getReducerDocument()?.selectedLayerId === selectedLayerId &&
-              this.deps.ctx.getReducerDocument()?.layers.some((layer) => layer.id === resultId) === false,
+              isNodeAbsent(this.deps.ctx.getReducerDocument(), resultId),
             () =>
               this.deps.ctx.getDocument()?.selectedLayerId === selectedLayerId &&
-              this.deps.ctx.getDocument()?.layers.some((layer) => layer.id === resultId) === false
+              isNodeAbsent(this.deps.ctx.getDocument(), resultId)
           ),
       });
       return 'merged';
@@ -284,8 +290,10 @@ export class MergeLayerController {
       return 'nothing';
     }
     const selectedIds = new Set(layerIds);
-    const contributors = document.layers.filter((layer) => selectedIds.has(layer.id));
-    if (!canMergeSelectedRasters(document.layers, selectedIds, this.deps.hasExportableContent)) {
+    const contributors = getDocumentLeaves(document).filter((layer) => selectedIds.has(layer.id));
+    if (
+      !canMergeSelectedRasters(document, compileDocumentLeaves(document), selectedIds, this.deps.hasExportableContent)
+    ) {
       return 'nothing';
     }
     const owned: Extract<ExportResult, { status: 'ok' }>[] = [];
@@ -392,21 +400,19 @@ export class MergeLayerController {
         const anchor = this.deps.ctx.captureInsertionAnchor('raster', contributors[0]!.id);
         const restoreInsertions = contributors.map((layer) => ({
           anchor: this.deps.ctx.captureRestoreAnchor(layer.id)!,
-          layers: [layer],
+          nodes: [layer],
         }));
-        const mergedLayers = insertLayersAtAnchor(document.layers, anchor, [resultLayer]).filter(
-          (layer) => !selectedIds.has(layer.id)
-        );
+        const mergedStacks = removeNodes(insertNodesAtAnchor(document.stacks, anchor, [resultLayer]), selectedIds);
         const selectedLayerId = document.selectedLayerId;
-        const hasMerged = (candidate: CanvasDocumentContractV2 | null): boolean =>
-          candidate?.selectedLayerId === resultId && haveSameStackOrders(candidate.layers, mergedLayers);
-        const hasOriginals = (candidate: CanvasDocumentContractV2 | null): boolean =>
-          candidate?.selectedLayerId === selectedLayerId && haveSameStackOrders(candidate.layers, document.layers);
+        const hasMerged = (candidate: CanvasDocumentContractV3 | null): boolean =>
+          candidate?.selectedLayerId === resultId && haveSameStructure(candidate.stacks, mergedStacks);
+        const hasOriginals = (candidate: CanvasDocumentContractV3 | null): boolean =>
+          candidate?.selectedLayerId === selectedLayerId && haveSameStructure(candidate.stacks, document.stacks);
         const applyPrepared = (): void => {
           const prepared = this.deps.ctx.preparePixels(resultId, rect, pixels);
           this.deps.ctx.dispatchPrepared(
             {
-              add: [{ anchor, layers: [resultLayer] }],
+              add: [{ anchor, nodes: [resultLayer] }],
               enabledUpdates: [],
               removeIds: contributorIds,
               selectedLayerId: resultId,
