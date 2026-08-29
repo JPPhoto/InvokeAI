@@ -1,10 +1,9 @@
 import type {
   ToolbarRegionProps,
   ToolPresentationAdapter,
-} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { useEraserOptions } from '@workbench/widgets/canvas/engineStoreHooks';
-import { EraserIcon } from 'lucide-react';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -30,10 +29,9 @@ const EraserOpacity = ({ engine }: ToolbarRegionProps) => {
 };
 
 export const eraserAdapter: ToolPresentationAdapter = {
+  rowLabels: { geometry: 'widgets.canvas.toolOptions.size', intensity: 'widgets.canvas.toolOptions.opacity' },
   geometry: EraserSize,
-  icon: EraserIcon,
   id: 'eraser',
   intensity: EraserOpacity,
   paintsLeaf: true,
-  primary: 'geometry',
 };

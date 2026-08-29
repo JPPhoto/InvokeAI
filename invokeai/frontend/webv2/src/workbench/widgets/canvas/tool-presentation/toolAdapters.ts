@@ -12,31 +12,26 @@ import { selectObjectOperationAdapter } from '@workbench/widgets/canvas/tool-opt
 import { shapeAdapter } from '@workbench/widgets/canvas/tool-options/ShapeOptions';
 import { textAdapter } from '@workbench/widgets/canvas/tool-options/TextOptions';
 import { transformAdapter } from '@workbench/widgets/canvas/tool-options/TransformOptions';
-import { HandIcon, PipetteIcon, ScanSearchIcon } from 'lucide-react';
 
 import type { CanvasOperationKind, OperationPresentationAdapter, ToolPresentationAdapter } from './toolbarContracts';
 
 /** Tools with no primary settings show their name and hint; the shell never unmounts for them. */
-const hintOnly = (id: ToolId, icon: ToolPresentationAdapter['icon']): ToolPresentationAdapter => ({
-  icon,
-  id,
-  primary: null,
-});
+const hintOnly = (id: ToolId): ToolPresentationAdapter => ({ id });
 
 export const TOOL_PRESENTATION_ADAPTERS: Readonly<Record<ToolId, ToolPresentationAdapter>> = {
   bbox: bboxAdapter,
   brush: brushAdapter,
-  colorPicker: hintOnly('colorPicker', PipetteIcon),
+  colorPicker: hintOnly('colorPicker'),
   eraser: eraserAdapter,
   gradient: gradientAdapter,
   lasso: lassoAdapter,
   marquee: marqueeAdapter,
   move: moveAdapter,
-  sam: hintOnly('sam', ScanSearchIcon),
+  sam: hintOnly('sam'),
   shape: shapeAdapter,
   text: textAdapter,
   transform: transformAdapter,
-  view: hintOnly('view', HandIcon),
+  view: hintOnly('view'),
 };
 
 export const OPERATION_PRESENTATION_ADAPTERS: Readonly<Record<CanvasOperationKind, OperationPresentationAdapter>> = {

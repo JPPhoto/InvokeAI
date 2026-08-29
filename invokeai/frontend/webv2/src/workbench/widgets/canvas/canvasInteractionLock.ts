@@ -24,8 +24,6 @@ export interface CanvasInteractionCapabilities {
   areOperationActionsEnabled: boolean;
   canAcceptStagedImage: boolean;
   isDocumentEditingLocked: boolean;
-  isOperationChromeVisible: boolean;
-  isRegularToolOptionsVisible: boolean;
   isSurfaceInteractionLocked: boolean;
 }
 
@@ -51,8 +49,6 @@ export const getCanvasInteractionCapabilities = ({
     areOperationActionsEnabled: isDocumentEditingLocked && !isSurfaceInteractionLocked,
     canAcceptStagedImage: hasCanvasEngine && hasSelectedCandidate && !isDocumentEditingLocked,
     isDocumentEditingLocked,
-    isOperationChromeVisible: isDocumentEditingLocked,
-    isRegularToolOptionsVisible: !isDocumentEditingLocked && !isSurfaceInteractionLocked,
     isSurfaceInteractionLocked,
   };
 };

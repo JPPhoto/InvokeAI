@@ -43,8 +43,15 @@ const ToolStripButton = ({ engine, icon, isInteractionLocked, label, toolId }: T
 };
 
 /**
- * The canvas's left-docked, vertical tool strip, floating over the surface
- * beneath the context toolbar. Color-picker is intentionally absent —
+ * Clears the center region's floating chrome, whose inset already includes the
+ * gap below the islands. Outside the center the variable is undefined and the
+ * strip falls back to its own top margin.
+ */
+const TOOL_STRIP_TOP = 'var(--wb-center-chrome-inset, var(--chakra-spacing-2))';
+
+/**
+ * The canvas's left-docked, vertical tool strip, topped out directly beneath
+ * the region's floating chrome islands. Color-picker is intentionally absent —
  * it's alt-hold-only for now (see `canvas-engine/input/pointerPipeline.ts`),
  * not a sticky tool a user selects directly.
  */
@@ -58,7 +65,7 @@ const ToolStripRoot = ({
   const { t } = useTranslation();
 
   return (
-    <Box left="2" position="absolute" top="2" zIndex="2">
+    <Box left="2" position="absolute" top={TOOL_STRIP_TOP} zIndex="2">
       <Toolbar aria-label={t('widgets.canvas.tools.label')}>
         <ToolStripButton
           engine={engine}

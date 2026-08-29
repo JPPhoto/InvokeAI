@@ -4,12 +4,10 @@ import type {
   ToolbarRegionProps,
   ToolbarStatusProps,
   ToolPresentationAdapter,
-} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
-import { TOOLBAR_GAP_PX, TOOLBAR_NUMBER_FIELD_WIDTH_PX } from '@workbench/widgets/canvas/context-toolbar/toolbarLayout';
-import { ToolbarNumberField, ToolbarStatus } from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
 import { useCanvasHasFloatingSelection, useTransformSession } from '@workbench/widgets/canvas/engineStoreHooks';
-import { Rotate3dIcon } from 'lucide-react';
+import { ToolbarNumberField, ToolbarStatus } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -121,28 +119,19 @@ const TransformScale = ({ engine }: ToolbarRegionProps) => {
  * pixels instead of opening a layer session; the numerics stay disabled
  * because the float's transform is layer-local, not document space.
  */
-const TransformStatus = ({ compact, engine }: ToolbarStatusProps) => {
+const TransformStatus = ({ engine }: ToolbarStatusProps) => {
   const session = useTransformSession(engine);
   const hasFloat = useCanvasHasFloatingSelection(engine);
   const disabled = !session && !hasFloat;
   const onApply = useCallback(() => engine.layers.applyTransform(), [engine]);
   const onCancel = useCallback(() => engine.layers.cancelTransform(), [engine]);
-  return (
-    <ToolbarStatus
-      applyDisabled={disabled}
-      cancelDisabled={disabled}
-      compact={compact}
-      onApply={onApply}
-      onCancel={onCancel}
-    />
-  );
+  return <ToolbarStatus applyDisabled={disabled} cancelDisabled={disabled} onApply={onApply} onCancel={onCancel} />;
 };
 
 export const transformAdapter: ToolPresentationAdapter = {
+  rowLabels: { geometry: 'widgets.transform.position', modes: 'widgets.transform.scale' },
   geometry: TransformPosition,
-  icon: Rotate3dIcon,
   id: 'transform',
-  modes: { component: TransformScale, width: 3 * TOOLBAR_NUMBER_FIELD_WIDTH_PX + 2 * TOOLBAR_GAP_PX },
-  primary: 'geometry',
+  modes: TransformScale,
   status: TransformStatus,
 };

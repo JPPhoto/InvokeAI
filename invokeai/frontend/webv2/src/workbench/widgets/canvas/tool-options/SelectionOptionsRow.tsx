@@ -1,11 +1,11 @@
 import type { SelectionOp } from '@workbench/canvas-engine/api';
-import type { ToolbarRegionProps } from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
+import type { ToolbarRegionProps } from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { HStack } from '@chakra-ui/react';
 import { Button, IconButton, Tooltip } from '@platform/ui';
 import { isLeafPixelEditEligible, lookupDocumentLeaf } from '@workbench/canvas-engine/api';
-import { ToolbarHint } from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
 import { useCanvasHasSelection } from '@workbench/widgets/canvas/engineStoreHooks';
+import { ToolbarHint } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { SquareIcon, SquareMinusIcon, SquarePlusIcon, SquaresIntersectIcon } from 'lucide-react';
 import { useCallback } from 'react';
@@ -26,9 +26,6 @@ const OP_MODE_ICONS: Record<SelectionOp, typeof SquareIcon> = {
   replace: SquareIcon,
   subtract: SquareMinusIcon,
 };
-
-/** Bar width of the four op-mode icon buttons; the hint after them truncates. */
-export const SELECTION_MODES_WIDTH_PX = 4 * 32 + 3 * 4;
 
 const OpModeButton = ({
   active,

@@ -179,6 +179,9 @@ const surfaces = [
     ready: async (page) => {
       await waitForWorkbench(page);
       await selectLayoutPreset(page, 'Edit', 'Canvas');
+      // The bottom dock's Properties tab is the canvas's settings surface; the journey must scan it, not a fallback.
+      await page.getByRole('tab', { exact: true, name: 'Properties', selected: true }).waitFor();
+      await page.getByRole('tabpanel').getByText('Tool', { exact: true }).waitFor();
     },
   },
   {

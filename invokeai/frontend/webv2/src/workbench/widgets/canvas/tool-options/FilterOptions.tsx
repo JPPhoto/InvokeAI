@@ -2,7 +2,7 @@ import type {
   OperationPresentationAdapter,
   ToolbarRegionProps,
   ToolbarStatusProps,
-} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
 import { HStack, Stack } from '@chakra-ui/react';
@@ -15,8 +15,8 @@ import {
   isFilterConfigValid,
   type FilterOperationSessionState,
 } from '@workbench/canvas-operations/api';
-import { ToolbarStatus } from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
 import { useFilterSession } from '@workbench/widgets/canvas/engineStoreHooks';
+import { ToolbarStatus } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { LayerFilterControls } from '@workbench/widgets/layers/LayerFilterControls';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -185,7 +185,7 @@ export const FilterMore = ({ engine, isSurfaceInteractionLocked }: ToolbarRegion
   );
 };
 
-export const FilterStatus = ({ compact, engine, isExternalInteractionLocked }: ToolbarStatusProps) => {
+export const FilterStatus = ({ engine, isExternalInteractionLocked }: ToolbarStatusProps) => {
   const { t } = useTranslation();
   const session = useFilterSession(engine);
   const operations = getCanvasOperations(engine);
@@ -195,7 +195,7 @@ export const FilterStatus = ({ compact, engine, isExternalInteractionLocked }: T
   );
   const onCancel = useCallback(() => operations.cancelFilterOperation(), [operations]);
   if (!session) {
-    return <ToolbarStatus compact={compact} />;
+    return <ToolbarStatus />;
   }
   const eligibility = getFilterActionEligibility(session, isExternalInteractionLocked);
   const sourceLabel = `${session.layerName} · ${t(`widgets.layers.selectObject.saveAs_${session.layerType}`)}`;
@@ -205,12 +205,10 @@ export const FilterStatus = ({ compact, engine, isExternalInteractionLocked }: T
       applyDisabled={!eligibility.canApply}
       applyLoading={session.status === 'committing'}
       cancelDisabled={!eligibility.canCancel}
-      compact={compact}
       onApply={onApply}
       onCancel={onCancel}
     >
       <OperationStatusChip
-        compact={compact}
         errorDetail={null}
         errorText={session.error}
         isBusy={isBusy}
@@ -225,7 +223,7 @@ export const FilterStatus = ({ compact, engine, isExternalInteractionLocked }: T
 
 export const filterOperationAdapter: OperationPresentationAdapter = {
   kind: 'filter',
-  modes: { component: FilterModes, width: 232 },
+  modes: FilterModes,
   more: FilterMore,
   status: FilterStatus,
 };

@@ -155,15 +155,19 @@ describe('right rail docks', () => {
       { label: 'layers', selected: true },
       { label: 'preview', selected: false },
       { label: 'gallery', selected: false },
+      { label: 'image-map', selected: false },
       { label: 'queue', selected: false },
     ]);
-    expect(tabsOf('rightBottom')).toEqual([{ label: 'image-map', selected: true }]);
+    expect(tabsOf('rightBottom')).toEqual([
+      { label: 'properties', selected: true },
+      { label: 'transform', selected: false },
+    ]);
     const tab = page.getByRole('tab', { exact: true, name: 'layers' }).element();
     expect(tab.getAttribute('aria-controls')).toBe('rail-dock-right-panel');
     expect(host!.querySelector('#rail-dock-right-panel')?.getAttribute('role')).toBe('tabpanel');
     expect(tab.getAttribute('aria-roledescription')).toBeNull();
     expect(bodyOf('right')).toBe('layers');
-    expect(bodyOf('rightBottom')).toBe('image-map');
+    expect(bodyOf('rightBottom')).toBe('properties');
     expect(Math.round(dockElement('rightBottom')!.getBoundingClientRect().height)).toBe(region('rightBottom').sizePx);
     expect(dockElement('right')!.getBoundingClientRect().height).toBeGreaterThan(400);
     expect(host!.querySelector('[data-chrome-actions="layers"]')).not.toBeNull();
@@ -206,7 +210,7 @@ describe('right rail docks', () => {
     expect(region('rightBottom').isCollapsed).toBe(true);
     expect(bodyOf('rightBottom')).toBeUndefined();
     expect(dockElement('rightBottom')!.getBoundingClientRect().height).toBeLessThan(48);
-    expect(tabsOf('rightBottom')).toEqual([{ label: 'image-map', selected: true }]);
+    expect(tabsOf('rightBottom').map((tab) => tab.label)).toEqual(['properties', 'transform']);
 
     await interact(() =>
       page
@@ -215,7 +219,7 @@ describe('right rail docks', () => {
         .dispatchEvent(new MouseEvent('click', { bubbles: true }))
     );
     expect(region('rightBottom').isCollapsed).toBe(false);
-    expect(bodyOf('rightBottom')).toBe('image-map');
+    expect(bodyOf('rightBottom')).toBe('properties');
   });
 
   it('resizes the bottom dock from its handle by keyboard and collapses it below the floor', async () => {
@@ -250,16 +254,13 @@ describe('right rail docks', () => {
 
   it('follows a widget between docks: the top dock appears when it gains a widget and a dock with nothing left disappears', async () => {
     const store = storeRef.current!;
-    await interact(() =>
-      store.commands.widgets.move({
-        fromRegion: 'rightBottom',
-        instanceId: 'image-map',
-        toIndex: 0,
-        toRegion: 'rightTop',
-      })
-    );
+    for (const instanceId of ['properties', 'transform']) {
+      await interact(() =>
+        store.commands.widgets.move({ fromRegion: 'rightBottom', instanceId, toIndex: 9, toRegion: 'rightTop' })
+      );
+    }
     expect(dockElement('rightBottom')).toBeNull();
-    expect(tabsOf('rightTop')).toEqual([{ label: 'image-map', selected: true }]);
+    expect(tabsOf('rightTop').map((tab) => tab.label)).toEqual(['properties', 'transform']);
     expect([...host!.querySelectorAll<HTMLElement>('[data-rail-dock]')].map((el) => el.dataset.railDock)).toEqual([
       'rightTop',
       'right',

@@ -22,10 +22,14 @@ const preDockEditSnapshot = (): LayoutPresetSnapshot => {
     instanceIds: ['layers', 'preview', 'gallery', 'image-map', 'queue'],
   };
   const snapshot = getLayoutPreset('edit').snapshot;
+  const widgetRegions = { ...regions, right } as LayoutPresetSnapshot['widgetRegions'];
+  const referenced = new Set(Object.values(widgetRegions).flatMap((region) => region.instanceIds));
   return {
     layout: { ...snapshot.layout, panels: { ...snapshot.layout.panels } },
-    widgetInstances: snapshot.widgetInstances,
-    widgetRegions: { ...regions, right } as LayoutPresetSnapshot['widgetRegions'],
+    widgetInstances: Object.fromEntries(
+      Object.entries(snapshot.widgetInstances).filter(([instanceId]) => referenced.has(instanceId))
+    ),
+    widgetRegions,
   };
 };
 
@@ -69,61 +73,49 @@ describe('right rail docks', () => {
     expect(normalizeWorkbenchAccount({ customLayoutPresets: [preset] }).customLayoutPresets?.length).toBe(1);
   });
 
-  it('leaves an emptied dock naming no instance, so moving a widget out and back matches the preset again', () => {
+  it('leaves an emptied dock naming no instance, so moving widgets out and back matches the preset again', () => {
     let state = editState();
-    state = workbenchReducer(state, {
-      fromRegion: 'rightBottom',
-      instanceId: 'image-map',
-      toIndex: 0,
-      toRegion: 'rightTop',
-      type: 'moveWidgetInstance',
-    });
+    const move = (instanceId: string, fromRegion: 'rightTop' | 'rightBottom', toRegion: 'rightTop' | 'rightBottom') =>
+      workbenchReducer(state, { fromRegion, instanceId, toIndex: 99, toRegion, type: 'moveWidgetInstance' });
+    state = move('properties', 'rightBottom', 'rightTop');
+    state = move('transform', 'rightBottom', 'rightTop');
     expect(activeProject(state).widgetRegions.rightBottom).toMatchObject({
       activeInstanceId: '',
       instanceIds: [],
       isCollapsed: true,
     });
     expect(activeProject(state).widgetRegions.rightTop).toMatchObject({
-      activeInstanceId: 'image-map',
-      instanceIds: ['image-map'],
+      activeInstanceId: 'transform',
+      instanceIds: ['properties', 'transform'],
       isCollapsed: false,
     });
 
-    state = workbenchReducer(state, {
-      fromRegion: 'rightTop',
-      instanceId: 'image-map',
-      toIndex: 0,
-      toRegion: 'rightBottom',
-      type: 'moveWidgetInstance',
-    });
+    state = move('properties', 'rightTop', 'rightBottom');
+    state = move('transform', 'rightTop', 'rightBottom');
+    state = workbenchReducer(state, { region: 'rightBottom', type: 'selectRegionWidget', widgetId: 'properties' });
     expect(doesProjectMatchLayoutPreset(activeProject(state), getLayoutPreset('edit'))).toBe(true);
 
-    const closed = workbenchReducer(state, {
-      region: 'rightBottom',
-      type: 'toggleRegionWidget',
-      widgetId: 'image-map',
-    });
+    const closed = workbenchReducer(
+      workbenchReducer(state, { region: 'rightBottom', type: 'toggleRegionWidget', widgetId: 'transform' }),
+      { region: 'rightBottom', type: 'toggleRegionWidget', widgetId: 'properties' }
+    );
     expect(activeProject(closed).widgetRegions.rightBottom.activeInstanceId).toBe('');
 
-    const floated = workbenchReducer(state, { instanceId: 'image-map', type: 'floatWidget' });
-    expect(activeProject(floated).widgetRegions.rightBottom).toMatchObject({ activeInstanceId: '', isCollapsed: true });
-    expect(activeProject(floated).floatingWidgets?.['image-map']?.returnRegion).toBe('rightBottom');
+    const floated = workbenchReducer(state, { instanceId: 'properties', type: 'floatWidget' });
+    expect(activeProject(floated).widgetRegions.rightBottom).toMatchObject({ activeInstanceId: 'transform' });
+    expect(activeProject(floated).floatingWidgets?.properties?.returnRegion).toBe('rightBottom');
   });
 
   it('reveals an instance already docked elsewhere on the rail instead of placing it twice', () => {
     let state = editState();
     state = workbenchReducer(state, { region: 'rightBottom', type: 'setRegionWidgetCollapsed', isCollapsed: true });
-    state = workbenchReducer(state, { region: 'right', type: 'openRegionWidget', widgetId: 'image-map' });
+    state = workbenchReducer(state, { region: 'right', type: 'openRegionWidget', widgetId: 'transform' });
     const { right, rightBottom } = activeProject(state).widgetRegions;
-    expect(right.instanceIds).not.toContain('image-map');
-    expect(rightBottom).toMatchObject({
-      activeInstanceId: 'image-map',
-      instanceIds: ['image-map'],
-      isCollapsed: false,
-    });
+    expect(right.instanceIds).not.toContain('transform');
+    expect(rightBottom).toMatchObject({ activeInstanceId: 'transform', isCollapsed: false });
   });
 
-  it('migrates a pre-dock Edit rail keeping the rail shut if it was, and re-homes a floated Image Map to the new dock', () => {
+  it('migrates a pre-dock Edit rail keeping the rail shut if it was, and leaves a floated Image Map in the middle', () => {
     const initial = createInitialWorkbenchState();
     const preDock = (mutate: (project: Project) => Project): WorkbenchState => ({
       ...initial,
@@ -144,7 +136,10 @@ describe('right rail docks', () => {
     });
 
     const shut = activeProject(workbenchReducer(initial, { state: preDock((p) => p), type: 'hydrateWorkbench' }));
-    expect(shut.widgetRegions.rightBottom).toMatchObject({ instanceIds: ['image-map'], isCollapsed: true });
+    expect(shut.widgetRegions.rightBottom).toMatchObject({
+      instanceIds: ['properties', 'transform'],
+      isCollapsed: true,
+    });
 
     const floated = activeProject(
       workbenchReducer(initial, {
@@ -169,13 +164,30 @@ describe('right rail docks', () => {
         type: 'hydrateWorkbench',
       })
     );
-    expect(floated.floatingWidgets?.['image-map']?.returnRegion).toBe('rightBottom');
-    expect(floated.widgetRegions.rightBottom).toMatchObject({
-      activeInstanceId: '',
-      instanceIds: [],
-      isCollapsed: true,
-    });
+    expect(floated.floatingWidgets?.['image-map']?.returnRegion).toBe('right');
+    expect(floated.widgetRegions.rightBottom).toMatchObject({ instanceIds: ['properties', 'transform'] });
     expect(floated.widgetRegions.right.instanceIds).toEqual(['layers', 'preview', 'gallery', 'queue']);
+  });
+
+  it('upgrades the interim rail that docked Image Map alone at the bottom to the shipped docks', () => {
+    const initial = createInitialWorkbenchState();
+    const interim: WorkbenchState = {
+      ...initial,
+      projects: initial.projects.map((project) => ({
+        ...project,
+        widgetRegions: {
+          ...project.widgetRegions,
+          right: { ...project.widgetRegions.right, instanceIds: ['layers', 'preview', 'gallery', 'queue'] },
+          rightBottom: { activeInstanceId: 'image-map', instanceIds: ['image-map'], isCollapsed: false, sizePx: 280 },
+          rightTop: { activeInstanceId: '', instanceIds: [], isCollapsed: true, sizePx: 280 },
+        },
+      })),
+    };
+    const project = activeProject(workbenchReducer(initial, { state: interim, type: 'hydrateWorkbench' }));
+    expect(project.widgetRegions.right.instanceIds).toEqual(['layers', 'preview', 'gallery', 'image-map', 'queue']);
+    expect(project.widgetRegions.rightBottom.instanceIds).toEqual(['properties', 'transform']);
+    expect(project.widgetInstances.transform?.typeId).toBe('transform');
+    expect(project.widgetRegions.rightBottom).toMatchObject({ activeInstanceId: 'properties', isCollapsed: false });
   });
 
   it('toggles only the docks that hold something', () => {

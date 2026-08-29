@@ -3,21 +3,21 @@ import type { CanvasLayerSourceContract, ShapeToolOptions } from '@workbench/can
 import type {
   ToolbarRegionProps,
   ToolPresentationAdapter,
-} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { createListCollection } from '@chakra-ui/react';
 import { ColorPicker, Select, ToggleIconButton } from '@platform/ui';
 import { MAX_SHAPE_STROKE_WIDTH, getDocumentLayer } from '@workbench/canvas-engine/api';
+import { useShapeOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import {
   ToolbarHint,
   ToolbarNumberField,
   useNumberCommit,
-} from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
-import { useShapeOptions } from '@workbench/widgets/canvas/engineStoreHooks';
+} from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
-import { PaintBucketIcon, ShapesIcon, SquareIcon } from 'lucide-react';
+import { PaintBucketIcon, SquareIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -188,11 +188,14 @@ const ShapeColors = ({ engine }: ToolbarRegionProps) => {
 };
 
 export const shapeAdapter: ToolPresentationAdapter = {
+  rowLabels: {
+    color: 'widgets.canvas.toolOptions.shapeColors',
+    geometry: 'widgets.canvas.toolOptions.shapeStrokeWidth',
+    modes: 'widgets.canvas.toolOptions.shapeKind',
+  },
   color: ShapeColors,
   geometry: ShapeStrokeWidth,
-  icon: ShapesIcon,
   id: 'shape',
-  modes: { component: ShapeModes, width: 176 },
+  modes: ShapeModes,
   paintsLeaf: true,
-  primary: 'modes',
 };

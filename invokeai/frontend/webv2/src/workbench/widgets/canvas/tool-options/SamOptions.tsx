@@ -2,7 +2,7 @@ import type {
   OperationPresentationAdapter,
   ToolbarRegionProps,
   ToolbarStatusProps,
-} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 /* oxlint-disable react-perf/jsx-no-jsx-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop */
 import type { ChangeEvent } from 'react';
 
@@ -19,8 +19,8 @@ import {
   type SamModel,
   type SelectObjectSaveTarget,
 } from '@workbench/canvas-operations/api';
-import { ToolbarStatus } from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
 import { useSamSession } from '@workbench/widgets/canvas/engineStoreHooks';
+import { ToolbarStatus } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { SquareMinusIcon, SquarePlusIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -394,9 +394,6 @@ export const SamSettings = ({
   );
 };
 
-/** Bar width of the mode toggle plus the point buttons or the prompt input; invert lives in More. */
-export const SAM_MODES_WIDTH_PX = 244;
-
 /** Input mode, the visual point labels or the prompt, and invert: what changes between previews. */
 export const SamModes = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
   const { t } = useTranslation();
@@ -515,14 +512,14 @@ export const SamMore = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionPro
   );
 };
 
-export const SamStatus = ({ compact, engine, isExternalInteractionLocked }: ToolbarStatusProps) => {
+export const SamStatus = ({ engine, isExternalInteractionLocked }: ToolbarStatusProps) => {
   const { t } = useTranslation();
   const session = useSamSession(engine);
   const actions = useMemo(() => getSamActionHandlers(getCanvasOperations(engine)), [engine]);
   const onApply = useCallback(() => actions.apply(), [actions]);
   const onCancel = useCallback(() => actions.cancel(), [actions]);
   if (!session) {
-    return <ToolbarStatus compact={compact} />;
+    return <ToolbarStatus />;
   }
   const eligibility = getSamActionEligibility(session, isExternalInteractionLocked);
   const isProcessing = isSamProcessingStatus(session.status);
@@ -538,12 +535,10 @@ export const SamStatus = ({ compact, engine, isExternalInteractionLocked }: Tool
       applyDisabled={!eligibility.canApply}
       applyLoading={session.status === 'committing'}
       cancelDisabled={!eligibility.canCancel}
-      compact={compact}
       onApply={onApply}
       onCancel={onCancel}
     >
       <OperationStatusChip
-        compact={compact}
         errorDetail={session.error?.detail ?? null}
         errorText={session.error ? t(getSamErrorTranslationKey(session.error.code)) : null}
         isBusy={isBusy}
@@ -558,7 +553,7 @@ export const SamStatus = ({ compact, engine, isExternalInteractionLocked }: Tool
 
 export const selectObjectOperationAdapter: OperationPresentationAdapter = {
   kind: 'select-object',
-  modes: { component: SamModes, width: SAM_MODES_WIDTH_PX },
+  modes: SamModes,
   more: SamMore,
   status: SamStatus,
 };

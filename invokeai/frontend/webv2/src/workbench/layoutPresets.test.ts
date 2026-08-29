@@ -3,6 +3,16 @@ import { describe, expect, it } from 'vitest';
 import { builtInLayoutPresetDescriptors, layoutPresets } from './layoutPresets';
 
 describe('built-in layout preset descriptors', () => {
+  it('has a widget instance for every instance id a preset places', () => {
+    for (const preset of layoutPresets) {
+      for (const region of Object.values(preset.snapshot.widgetRegions)) {
+        for (const instanceId of region.instanceIds) {
+          expect(preset.snapshot.widgetInstances[instanceId], `${preset.id} ${instanceId}`).toBeDefined();
+        }
+      }
+    }
+  });
+
   it('owns the preset, presentation, and command metadata in strip order', () => {
     expect(
       builtInLayoutPresetDescriptors.map(({ defaultKeys, hotkeyId, preset }) => ({
@@ -111,16 +121,16 @@ describe('built-in layout preset descriptors', () => {
           center: 'canvas',
           left: 'generate',
           right: 'layers',
-          rightBottom: 'image-map',
+          rightBottom: 'properties',
           rightTop: '',
         },
         bottom: ['server-status', 'queue-status', 'gallery:bottom', 'notifications', 'autosave-status'],
         center: ['canvas', 'preview'],
         left: ['generate', 'upscale', 'video'],
         panels: { isBottomOpen: false, isLeftOpen: true, isRightOpen: true },
-        right: ['layers', 'preview', 'gallery', 'queue'],
-        // Overview sits in the bottom dock: the rail is three tab groups, Layers in the middle.
-        rightBottom: ['image-map'],
+        right: ['layers', 'preview', 'gallery', 'image-map', 'queue'],
+        // The rail is three tab groups: Layers in the middle, the editors below it.
+        rightBottom: ['properties', 'transform'],
         rightTop: [],
       },
     });

@@ -3,7 +3,7 @@ import type { CanvasLayerSourceContract, TextToolOptions } from '@workbench/canv
 import type {
   ToolbarRegionProps,
   ToolPresentationAdapter,
-} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { createListCollection, HStack } from '@chakra-ui/react';
 import { ColorPicker, IconButton, Select } from '@platform/ui';
@@ -14,12 +14,12 @@ import {
   TEXT_FONT_WEIGHTS,
   getDocumentLayer,
 } from '@workbench/canvas-engine/api';
-import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
 import { useTextEditSession, useTextOptions } from '@workbench/widgets/canvas/engineStoreHooks';
+import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
-import { AlignCenterIcon, AlignLeftIcon, AlignRightIcon, TypeIcon } from 'lucide-react';
+import { AlignCenterIcon, AlignLeftIcon, AlignRightIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -244,11 +244,14 @@ const TextColor = ({ engine }: ToolbarRegionProps) => {
 };
 
 export const textAdapter: ToolPresentationAdapter = {
+  rowLabels: {
+    color: 'widgets.canvas.toolOptions.textColor',
+    geometry: 'widgets.canvas.toolOptions.textFont',
+    modes: 'widgets.canvas.toolOptions.textStyle',
+  },
   color: TextColor,
   geometry: TextFamily,
-  icon: TypeIcon,
   id: 'text',
-  modes: { component: TextStyle, width: 320 },
+  modes: TextStyle,
   paintsLeaf: true,
-  primary: 'geometry',
 };

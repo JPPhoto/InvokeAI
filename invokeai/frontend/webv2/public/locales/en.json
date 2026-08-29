@@ -1491,6 +1491,31 @@
       "createWidgets": "Create widgets",
       "inspectWidgets": "Inspect widgets"
     },
+    "properties": {
+      "noCanvas": "Open a canvas to edit its properties.",
+      "rows": {
+        "color": "Color",
+        "geometry": "Geometry",
+        "intensity": "Intensity",
+        "modes": "Modes",
+        "more": "More"
+      },
+      "sections": {
+        "operation": "Operation",
+        "tool": "Tool"
+      }
+    },
+    "transform": {
+      "edit": "Transform layer",
+      "groupSelected": "Select a layer inside this group to transform.",
+      "hint": "Each field commits one undoable change to the selected layer.",
+      "noSelection": "No layer selected",
+      "position": "Position",
+      "rotation": "Rotation",
+      "scale": "Scale",
+      "session": "Transform in progress",
+      "title": "Transform"
+    },
     "dock": {
       "collapse": "Collapse {{dock}}",
       "expand": "Expand {{dock}}",
@@ -1510,6 +1535,8 @@
       "generate": "Generate",
       "imageMap": "Image Map",
       "layers": "Layers",
+      "properties": "Properties",
+      "transform": "Transform",
       "notifications": "Notifications",
       "preview": "Preview",
       "project": "Project",
@@ -2334,16 +2361,14 @@
         "view": "Drag to pan and scroll to zoom."
       },
       "toolOptions": {
-        "applyTransform": "Apply",
-        "aspectRatio": "Aspect ratio",
         "brushColor": "Brush color",
         "brushSize": "Brush size",
-        "cancelTransform": "Cancel",
         "deselect": "Deselect",
         "eraseSelection": "Erase",
         "eraserSize": "Eraser size",
         "fillSelection": "Fill",
         "frameHeight": "H",
+        "frameSize": "Frame",
         "frameWidth": "W",
         "gradientAngle": "Angle",
         "gradientEdit": "Edit gradient",
@@ -2352,6 +2377,7 @@
         "gradientLinear": "Linear",
         "gradientRadial": "Radial",
         "gradientStart": "Start",
+        "gradientStops": "Stops",
         "invertSelection": "Invert",
         "lassoFreehand": "Freehand",
         "lassoHint": "Draw a shape to select. Shift adds, Alt subtracts.",
@@ -2359,7 +2385,6 @@
         "lassoPolygonHint": "Click to place points. Double-click, Enter, or click the first point to close.",
         "lassoShape": "Lasso mode",
         "liftSelectionToLayer": "New layer",
-        "lockAspect": "Lock aspect ratio",
         "marqueeHint": "Drag to select a region. Shift constrains, Alt draws from centre.",
         "marqueeKind": "Marquee shape",
         "movePosition": "Move layer",
@@ -2368,15 +2393,18 @@
         "positionY": "Y",
         "pressureAffectsOpacity": "Pen pressure affects opacity",
         "pressureAffectsWidth": "Pen pressure affects width",
+        "pressure": "Pressure",
         "rotation": "Rotation",
         "scaleHeight": "H %",
         "scaleWidth": "W %",
+        "selectionActions": "Actions",
         "selectionAdd": "Add",
         "selectionIntersect": "Intersect",
         "selectionMode": "Selection mode",
         "selectionReplace": "Replace",
         "selectionSubtract": "Subtract",
         "setFrame": "Set generation frame",
+        "shapeColors": "Colors",
         "shapeEdit": "Edit shape",
         "shapeEllipse": "Ellipse",
         "shapeFill": "Fill",
@@ -2394,6 +2422,7 @@
         "textFont": "Font",
         "textLineHeight": "Line height",
         "textSize": "Font size",
+        "textStyle": "Style",
         "textWeight": "Weight"
       },
       "tools": {
@@ -2411,18 +2440,6 @@
         "text": "Text",
         "transform": "Transform",
         "view": "View"
-      },
-      "toolbar": {
-        "label": "Tool options",
-        "more": "More options",
-        "regions": {
-          "color": "Color",
-          "geometry": "Geometry",
-          "intensity": "Intensity",
-          "modes": "Modes",
-          "more": "More",
-          "status": "Status"
-        }
       }
     },
     "workflow": {

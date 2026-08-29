@@ -1437,7 +1437,7 @@ const ensureRightRegion = (rightRegion: WidgetRegionState | undefined): WidgetRe
   return rightRegion;
 };
 
-/** The Edit rail as it shipped before the right rail had docks; Image Map now lives in the bottom dock. */
+/** The Edit rail as it shipped before the right rail had docks; the bottom dock (Properties, Transform) joins it. */
 const PRE_DOCK_EDIT_RIGHT_REGION_WIDGET_IDS: readonly WidgetInstanceId[] = [
   'layers',
   'preview',
@@ -1446,11 +1446,12 @@ const PRE_DOCK_EDIT_RIGHT_REGION_WIDGET_IDS: readonly WidgetInstanceId[] = [
   'queue',
 ];
 
-/**
- * Projects persisted before the right rail had docks carry none. An untouched
- * pre-dock Edit rail adopts the shipped docks (Image Map moves to the bottom
- * one); anything else gets empty, collapsed docks and keeps its rail as is.
- */
+/** One unreleased build docked Image Map alone at the bottom; that rail becomes the shipped one too. */
+const INTERIM_EDIT_RIGHT_REGION_WIDGET_IDS: readonly WidgetInstanceId[] = ['layers', 'preview', 'gallery', 'queue'];
+
+const sameInstanceIds = (region: WidgetRegionState, ids: readonly WidgetInstanceId[]): boolean =>
+  region.instanceIds.length === ids.length && region.instanceIds.every((id, index) => id === ids[index]);
+
 const isDockShape = (value: unknown): value is WidgetRegionState =>
   !!value &&
   typeof value === 'object' &&
@@ -1459,43 +1460,41 @@ const isDockShape = (value: unknown): value is WidgetRegionState =>
   typeof (value as WidgetRegionState).isCollapsed === 'boolean' &&
   typeof (value as WidgetRegionState).sizePx === 'number';
 
+/**
+ * Projects persisted before the right rail had docks carry none, and one
+ * unreleased build docked Image Map alone. An untouched rail of either shape
+ * adopts the shipped Edit docks; anything else gets empty, collapsed docks for
+ * the ones it lacks and keeps its rail as is.
+ */
 const ensureRightRailDocks = (
   regions: Partial<Record<WidgetRegion, WidgetRegionState>> | undefined,
   right: WidgetRegionState
-): {
-  docks: Pick<Record<WidgetRegion, WidgetRegionState>, 'right' | 'rightTop' | 'rightBottom'>;
-  /** Instances the migration moved from `right` into `rightBottom`. */
-  movedToBottom: readonly WidgetInstanceId[];
-} => {
+): Pick<Record<WidgetRegion, WidgetRegionState>, 'right' | 'rightTop' | 'rightBottom'> => {
   const dock = (name: 'rightTop' | 'rightBottom'): WidgetRegionState =>
     isDockShape(regions?.[name]) ? regions[name] : { ...EMPTY_DOCK_REGION, sizePx: createWidgetRegions()[name].sizePx };
+  const top = dock('rightTop');
+  const bottom = dock('rightBottom');
   const isPreDock = regions?.rightTop === undefined && regions?.rightBottom === undefined;
-  const isPreDockEditRail =
-    right.instanceIds.length === PRE_DOCK_EDIT_RIGHT_REGION_WIDGET_IDS.length &&
-    right.instanceIds.every((id, index) => id === PRE_DOCK_EDIT_RIGHT_REGION_WIDGET_IDS[index]);
+  const isInterim =
+    top.instanceIds.length === 0 &&
+    sameInstanceIds(bottom, ['image-map']) &&
+    sameInstanceIds(right, INTERIM_EDIT_RIGHT_REGION_WIDGET_IDS);
 
-  if (isPreDock && isPreDockEditRail) {
+  if ((isPreDock && sameInstanceIds(right, PRE_DOCK_EDIT_RIGHT_REGION_WIDGET_IDS)) || isInterim) {
     const edit = getLayoutPreset('edit').snapshot.widgetRegions;
     return {
-      docks: {
-        right: {
-          ...right,
-          activeInstanceId: right.activeInstanceId === 'image-map' ? 'layers' : right.activeInstanceId,
-          instanceIds: [...edit.right.instanceIds],
-        },
-        // A rail the user had shut stays shut; the new dock opens with it.
-        rightBottom: {
-          ...edit.rightBottom,
-          instanceIds: [...edit.rightBottom.instanceIds],
-          isCollapsed: right.isCollapsed,
-        },
-        rightTop: dock('rightTop'),
+      right: { ...right, instanceIds: [...edit.right.instanceIds] },
+      // A rail the user had shut stays shut; the new dock opens with it.
+      rightBottom: {
+        ...edit.rightBottom,
+        instanceIds: [...edit.rightBottom.instanceIds],
+        isCollapsed: right.isCollapsed,
       },
-      movedToBottom: edit.rightBottom.instanceIds,
+      rightTop: top,
     };
   }
 
-  return { docks: { right, rightBottom: dock('rightBottom'), rightTop: dock('rightTop') }, movedToBottom: [] };
+  return { right, rightBottom: bottom, rightTop: top };
 };
 
 // The shipped bottom-region default before 'queue-status' was added — a
@@ -1818,26 +1817,23 @@ const assembleWorkbenchProject = (project: Project, canvas: CanvasStateContractV
     legacyWidgetRegions,
     ensureRightRegion(legacyWidgetRegions?.right ?? legacyWidgetRegions?.['right-panel'])
   );
-  const floatingWidgets = normalizeFloatingWidgets((project as Partial<Project>).floatingWidgets, widgetInstances);
-  // A window floated out of the old rail docks back where the migration now keeps its widget.
-  const rehomedFloating = floatingWidgets
-    ? Object.fromEntries(
-        Object.entries(floatingWidgets).map(([instanceId, floating]) => [
-          instanceId,
-          rail.movedToBottom.includes(instanceId) && floating.returnRegion === 'right'
-            ? { ...floating, returnRegion: 'rightBottom' as const }
-            : floating,
-        ])
-      )
-    : floatingWidgets;
+  // The bottom dock's widgets are new to a migrated project; every dock member needs an instance to render.
+  const editInstances = getLayoutPreset('edit').snapshot.widgetInstances;
+  for (const instanceId of rail.rightBottom.instanceIds) {
+    const typeId = editInstances[instanceId]?.typeId;
+    if (!widgetInstances[instanceId] && typeId) {
+      widgetInstances[instanceId] = createWidgetInstance(typeId, instanceId);
+    }
+  }
+
   const placement = reconcileFloatingWidgets(
     {
       left: leftRegion,
-      ...rail.docks,
+      ...rail,
       bottom: bottomRegion,
       center: ensureCenterRegion(legacyWidgetRegions?.center, project.layout.centerViewId),
     },
-    rehomedFloating
+    normalizeFloatingWidgets((project as Partial<Project>).floatingWidgets, widgetInstances)
   );
 
   return {

@@ -166,16 +166,10 @@ const renderRegions = (session: FilterOperationSessionState) => {
       )
     );
   return {
-    modes: render(
-      createElement(FilterModes, { engine: engine as never, isSurfaceInteractionLocked: false, placement: 'bar' })
-    ),
-    more: render(
-      createElement(FilterMore, { engine: engine as never, isSurfaceInteractionLocked: false, placement: 'menu' })
-    ),
+    modes: render(createElement(FilterModes, { engine: engine as never, isSurfaceInteractionLocked: false })),
+    more: render(createElement(FilterMore, { engine: engine as never, isSurfaceInteractionLocked: false })),
     operations,
-    status: render(
-      createElement(FilterStatus, { compact: false, engine: engine as never, isExternalInteractionLocked: false })
-    ),
+    status: render(createElement(FilterStatus, { engine: engine as never, isExternalInteractionLocked: false })),
   };
 };
 

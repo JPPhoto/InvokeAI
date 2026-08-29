@@ -3,16 +3,15 @@ import type { MarqueeToolOptions, SelectionOp } from '@workbench/canvas-engine/a
 import type {
   ToolbarRegionProps,
   ToolPresentationAdapter,
-} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { createListCollection } from '@chakra-ui/react';
 import { Select } from '@platform/ui';
 import { useMarqueeOptions } from '@workbench/widgets/canvas/engineStoreHooks';
-import { SquareDashedIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { SELECTION_MODES_WIDTH_PX, SelectionActions, SelectionModes } from './SelectionOptionsRow';
+import { SelectionActions, SelectionModes } from './SelectionOptionsRow';
 
 type MarqueeKind = MarqueeToolOptions['kind'];
 
@@ -20,7 +19,7 @@ const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: false } as co
 const SELECT_TRIGGER_PROPS = { minW: '6rem', w: '6rem' } as const;
 
 /** The shape the next drag traces (rectangle / ellipse), then the shared selection op mode. */
-const MarqueeModes = ({ engine, isSurfaceInteractionLocked, placement }: ToolbarRegionProps) => {
+const MarqueeModes = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
   const { t } = useTranslation();
   const options = useMarqueeOptions(engine);
   const kindCollection = useMemo(
@@ -65,7 +64,6 @@ const MarqueeModes = ({ engine, isSurfaceInteractionLocked, placement }: Toolbar
         hintKey="widgets.canvas.toolOptions.marqueeHint"
         isSurfaceInteractionLocked={isSurfaceInteractionLocked}
         mode={options.mode}
-        placement={placement}
         onModeChange={onModeChange}
       />
     </>
@@ -73,9 +71,8 @@ const MarqueeModes = ({ engine, isSurfaceInteractionLocked, placement }: Toolbar
 };
 
 export const marqueeAdapter: ToolPresentationAdapter = {
-  icon: SquareDashedIcon,
+  rowLabels: { modes: 'widgets.canvas.toolOptions.selectionMode', more: 'widgets.canvas.toolOptions.selectionActions' },
   id: 'marquee',
-  modes: { component: MarqueeModes, width: 96 + 8 + SELECTION_MODES_WIDTH_PX },
+  modes: MarqueeModes,
   more: SelectionActions,
-  primary: 'modes',
 };

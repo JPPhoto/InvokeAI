@@ -64,7 +64,7 @@ const renderRow = (layer: CanvasLayerContract): Map<string, CapturedButton> => {
   activeProject.current = project;
   renderToStaticMarkup(
     <ChakraProvider value={system}>
-      <SelectionActions engine={engine} isSurfaceInteractionLocked={false} placement="bar" />
+      <SelectionActions engine={engine} isSurfaceInteractionLocked={false} />
     </ChakraProvider>
   );
   return new Map(buttons);

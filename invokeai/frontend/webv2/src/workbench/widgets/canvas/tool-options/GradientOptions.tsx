@@ -3,17 +3,16 @@ import type { CanvasLayerSourceContract, GradientStop, GradientToolOptions } fro
 import type {
   ToolbarRegionProps,
   ToolPresentationAdapter,
-} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { createListCollection } from '@chakra-ui/react';
 import { ColorPicker, Select } from '@platform/ui';
 import { getDocumentLayer } from '@workbench/canvas-engine/api';
-import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
 import { useGradientOptions } from '@workbench/widgets/canvas/engineStoreHooks';
+import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
-import { PaintBucketIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -168,11 +167,14 @@ const GradientStops = ({ engine }: ToolbarRegionProps) => {
 };
 
 export const gradientAdapter: ToolPresentationAdapter = {
+  rowLabels: {
+    color: 'widgets.canvas.toolOptions.gradientStops',
+    geometry: 'widgets.canvas.toolOptions.gradientAngle',
+    modes: 'widgets.canvas.toolOptions.gradientKind',
+  },
   color: GradientStops,
   geometry: GradientAngle,
-  icon: PaintBucketIcon,
   id: 'gradient',
-  modes: { component: GradientKindSelect, width: 96 },
+  modes: GradientKindSelect,
   paintsLeaf: true,
-  primary: 'modes',
 };

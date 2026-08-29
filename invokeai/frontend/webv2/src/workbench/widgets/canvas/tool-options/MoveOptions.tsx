@@ -1,13 +1,12 @@
 import type {
   ToolbarRegionProps,
   ToolPresentationAdapter,
-} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { lookupDocumentLeaf } from '@workbench/canvas-engine/api';
-import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
+import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
-import { MoveIcon } from 'lucide-react';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -80,8 +79,7 @@ const MovePosition = ({ engine }: ToolbarRegionProps) => {
 };
 
 export const moveAdapter: ToolPresentationAdapter = {
+  rowLabels: { geometry: 'widgets.transform.position' },
   geometry: MovePosition,
-  icon: MoveIcon,
   id: 'move',
-  primary: 'geometry',
 };

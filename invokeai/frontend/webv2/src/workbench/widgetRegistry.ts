@@ -22,9 +22,11 @@ import { layersWidgetManifest } from './widgets/layers/manifest';
 import { notificationsWidgetManifest } from './widgets/notifications/manifest';
 import { previewWidgetManifest } from './widgets/preview/manifest';
 import { projectWidgetManifest } from './widgets/project/manifest';
+import { propertiesWidgetManifest } from './widgets/properties/manifest';
 import { queueStatusWidgetManifest } from './widgets/queue-status/manifest';
 import { queueWidgetManifest } from './widgets/queue/manifest';
 import { serverStatusWidgetManifest } from './widgets/server-status/manifest';
+import { transformWidgetManifest } from './widgets/transform/manifest';
 import { upscaleWidgetManifest } from './widgets/upscale/manifest';
 import { versionStatusWidgetManifest } from './widgets/version-status/manifest';
 import { videoWidgetManifest } from './widgets/video/manifest';
@@ -42,6 +44,8 @@ export const firstPartyWidgetManifests: WidgetManifest[] = [
   previewWidgetManifest,
   projectWidgetManifest,
   layersWidgetManifest,
+  propertiesWidgetManifest,
+  transformWidgetManifest,
   queueWidgetManifest,
   notificationsWidgetManifest,
   serverStatusWidgetManifest,

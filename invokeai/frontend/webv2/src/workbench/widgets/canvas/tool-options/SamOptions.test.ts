@@ -485,15 +485,9 @@ describe('select object regions', () => {
           createElement(I18nextProvider, { i18n: testI18n }, element)
         )
       );
-    const modes = render(
-      createElement(SamModes, { engine: engine as never, isSurfaceInteractionLocked: false, placement: 'bar' })
-    );
-    const more = render(
-      createElement(SamMore, { engine: engine as never, isSurfaceInteractionLocked: false, placement: 'menu' })
-    );
-    const status = render(
-      createElement(SamStatus, { compact: false, engine: engine as never, isExternalInteractionLocked: false })
-    );
+    const modes = render(createElement(SamModes, { engine: engine as never, isSurfaceInteractionLocked: false }));
+    const more = render(createElement(SamMore, { engine: engine as never, isSurfaceInteractionLocked: false }));
+    const status = render(createElement(SamStatus, { engine: engine as never, isExternalInteractionLocked: false }));
 
     expect(modes.indexOf('>Visual<')).toBeLessThan(modes.indexOf('aria-label="Include 1"'));
     expect(modes).not.toContain('>Invert<');

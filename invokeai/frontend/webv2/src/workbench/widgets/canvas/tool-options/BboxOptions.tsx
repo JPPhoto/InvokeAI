@@ -2,14 +2,12 @@ import type { AspectRatioId } from '@features/generation/contracts';
 import type {
   ToolbarRegionProps,
   ToolPresentationAdapter,
-} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { AspectRatioLockButton, AspectRatioSelect } from '@features/generation/components';
 import { ASPECT_RATIO_MAP, deriveAspectRatioId } from '@features/generation/settings';
 import { constrainBboxToRatio } from '@workbench/canvas-engine/api';
-import { TOOLBAR_GAP_PX, TOOLBAR_NUMBER_FIELD_WIDTH_PX } from '@workbench/widgets/canvas/context-toolbar/toolbarLayout';
-import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
-import { FrameIcon } from 'lucide-react';
+import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -109,9 +107,8 @@ const FrameSize = ({ engine }: ToolbarRegionProps) => {
 };
 
 export const bboxAdapter: ToolPresentationAdapter = {
+  rowLabels: { geometry: 'widgets.transform.position', modes: 'widgets.canvas.toolOptions.frameSize' },
   geometry: FramePosition,
-  icon: FrameIcon,
   id: 'bbox',
-  modes: { component: FrameSize, width: 2 * TOOLBAR_NUMBER_FIELD_WIDTH_PX + 120 + 32 + 3 * TOOLBAR_GAP_PX },
-  primary: 'geometry',
+  modes: FrameSize,
 };

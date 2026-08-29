@@ -146,7 +146,8 @@ const RailGroup = ({
       data-rail-group={group.region}
       direction="column"
       dropState={group.dropState}
-      minH={group.railItems.length === 0 ? (group.dropState.isActive ? '10' : '4') : undefined}
+      display={group.railItems.length === 0 && !group.dropState.isActive ? 'none' : undefined}
+      minH={group.railItems.length === 0 ? '10' : undefined}
       pt={separated ? '1' : undefined}
       region={group.region}
       sortableInstanceIds={sortableInstanceIds}

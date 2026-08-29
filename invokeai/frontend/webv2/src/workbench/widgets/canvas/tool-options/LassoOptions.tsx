@@ -3,16 +3,15 @@ import type { LassoToolOptions, SelectionOp } from '@workbench/canvas-engine/api
 import type {
   ToolbarRegionProps,
   ToolPresentationAdapter,
-} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { createListCollection } from '@chakra-ui/react';
 import { Select } from '@platform/ui';
 import { useLassoOptions } from '@workbench/widgets/canvas/engineStoreHooks';
-import { LassoIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { SELECTION_MODES_WIDTH_PX, SelectionActions, SelectionModes } from './SelectionOptionsRow';
+import { SelectionActions, SelectionModes } from './SelectionOptionsRow';
 
 type LassoShape = LassoToolOptions['shape'];
 
@@ -20,7 +19,7 @@ const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: false } as co
 const SELECT_TRIGGER_PROPS = { minW: '6rem', w: '6rem' } as const;
 
 /** How the path is drawn (freehand drag / polygon clicks), then the shared selection op mode. */
-const LassoModes = ({ engine, isSurfaceInteractionLocked, placement }: ToolbarRegionProps) => {
+const LassoModes = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
   const { t } = useTranslation();
   const options = useLassoOptions(engine);
   const shapeCollection = useMemo(
@@ -69,7 +68,6 @@ const LassoModes = ({ engine, isSurfaceInteractionLocked, placement }: ToolbarRe
         }
         isSurfaceInteractionLocked={isSurfaceInteractionLocked}
         mode={options.mode}
-        placement={placement}
         onModeChange={onModeChange}
       />
     </>
@@ -77,9 +75,8 @@ const LassoModes = ({ engine, isSurfaceInteractionLocked, placement }: ToolbarRe
 };
 
 export const lassoAdapter: ToolPresentationAdapter = {
-  icon: LassoIcon,
+  rowLabels: { modes: 'widgets.canvas.toolOptions.selectionMode', more: 'widgets.canvas.toolOptions.selectionActions' },
   id: 'lasso',
-  modes: { component: LassoModes, width: 96 + 8 + SELECTION_MODES_WIDTH_PX },
+  modes: LassoModes,
   more: SelectionActions,
-  primary: 'modes',
 };

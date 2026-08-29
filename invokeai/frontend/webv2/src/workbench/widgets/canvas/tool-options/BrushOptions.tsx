@@ -3,20 +3,20 @@ import type { BrushOptions as BrushOptionsState } from '@workbench/canvas-engine
 import type {
   ToolbarRegionProps,
   ToolPresentationAdapter,
-} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 import type { KeyboardEvent } from 'react';
 
 import { HStack } from '@chakra-ui/react';
 import { ColorPicker, ToggleIconButton } from '@platform/ui';
 import { MAX_BRUSH_SIZE, MIN_BRUSH_SIZE } from '@workbench/canvas-engine/api';
+import { useBrushOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import {
   ToolbarNumberField,
   ToolbarSlider,
   useNumberCommit,
-} from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
-import { useBrushOptions } from '@workbench/widgets/canvas/engineStoreHooks';
+} from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
-import { BrushIcon, DropletIcon, PenLineIcon } from 'lucide-react';
+import { DropletIcon, PenLineIcon } from 'lucide-react';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -238,12 +238,15 @@ const BrushPressure = ({ engine }: ToolbarRegionProps) => {
 };
 
 export const brushAdapter: ToolPresentationAdapter = {
+  rowLabels: {
+    geometry: 'widgets.canvas.toolOptions.size',
+    intensity: 'widgets.canvas.toolOptions.opacity',
+    more: 'widgets.canvas.toolOptions.pressure',
+  },
   color: BrushColor,
   geometry: BrushSize,
-  icon: BrushIcon,
   id: 'brush',
   intensity: BrushOpacity,
   more: BrushPressure,
   paintsLeaf: true,
-  primary: 'geometry',
 };

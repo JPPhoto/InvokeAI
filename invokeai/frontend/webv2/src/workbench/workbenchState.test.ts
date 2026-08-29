@@ -555,7 +555,7 @@ describe('workbench widget region defaults', () => {
     }
   });
 
-  it('moves Image Map into the bottom dock for an untouched pre-dock Edit rail and leaves other rails alone', () => {
+  it('adds the bottom dock to an untouched pre-dock Edit rail and leaves other rails alone', () => {
     const initial = createInitialWorkbenchState();
     const preDock = (instanceIds: Project['widgetRegions']['right']['instanceIds']): WorkbenchState => ({
       ...initial,
@@ -574,12 +574,20 @@ describe('workbench widget region defaults', () => {
     const custom = preDock(['image-map', 'layers']);
 
     const hydratedEdit = getActiveProject(workbenchReducer(initial, { state: editRail, type: 'hydrateWorkbench' }));
-    expect(hydratedEdit.widgetRegions.right.instanceIds).toEqual(['layers', 'preview', 'gallery', 'queue']);
+    expect(hydratedEdit.widgetRegions.right.instanceIds).toEqual([
+      'layers',
+      'preview',
+      'gallery',
+      'image-map',
+      'queue',
+    ]);
     expect(hydratedEdit.widgetRegions.rightBottom).toMatchObject({
-      activeInstanceId: 'image-map',
-      instanceIds: ['image-map'],
+      activeInstanceId: 'properties',
+      instanceIds: ['properties', 'transform'],
       isCollapsed: false,
     });
+    expect(hydratedEdit.widgetInstances.properties?.typeId).toBe('properties');
+    expect(hydratedEdit.widgetInstances.transform?.typeId).toBe('transform');
     expect(hydratedEdit.widgetRegions.rightTop).toMatchObject({ instanceIds: [], isCollapsed: true });
 
     const hydratedCustom = getActiveProject(workbenchReducer(initial, { state: custom, type: 'hydrateWorkbench' }));
