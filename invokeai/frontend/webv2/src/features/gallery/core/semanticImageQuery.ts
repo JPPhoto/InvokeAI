@@ -234,6 +234,23 @@ const stripGallerySearchPositions = (
 };
 
 /**
+ * The same values with an infinite window's mid-board anchor dropped, or null
+ * when there is none.
+ *
+ * In infinite mode `galleryPage` is not a page number but the anchor of a
+ * mid-board window, set by a reveal from the image map. That is a "you are
+ * here" for the session that made it: restored anywhere else it opens the
+ * gallery stranded in the middle of a board, with no page control (the
+ * footer's is paginated-only) and no way back to the top short of switching
+ * boards. Paginated pages stay — there the value really is the page the user
+ * was reading.
+ */
+export const stripInfiniteWindowAnchor = (values: Record<string, unknown>): Record<string, unknown> | null =>
+  values.paginationMode !== 'paginated' && typeof values.galleryPage === 'number' && values.galleryPage > 0
+    ? { ...values, galleryPage: 0 }
+    : null;
+
+/**
  * For the SAVE path: drop what the realm reading this back will not have.
  *
  * A dropped file or an image-map cluster names an entry in an in-memory

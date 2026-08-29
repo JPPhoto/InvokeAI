@@ -54,6 +54,7 @@ import {
   getBoundedRecentImages,
   getGalleryPage,
   getPersistedSelectedGalleryItemKeys,
+  stripInfiniteWindowAnchor,
   stripUnresolvableGallerySearch,
   getGallerySettings,
   getSelectedGalleryItemFromValues,
@@ -1747,7 +1748,15 @@ export const normalizeWorkbenchProject = (project: Project): Project => {
     // rescues the LIVE copy. So the test is whether the reference resolves
     // here, not what kind it is; the latter would delete the ranking the user
     // is looking at.
-    const strippedValues = stripUnresolvableGallerySearch(instance.state.values);
+    // An infinite window's mid-board anchor goes the same way, for the same
+    // reason the save path drops it: it is a "you are here" for the session
+    // that revealed it. Adoption and the boot snapshot have to agree on this,
+    // because the sync baseline is taken from the adopted document while the
+    // store is hydrated from the snapshot — a project that has only been
+    // opened must serialize to its baseline, or the next autosave pushes it.
+    const strippedSearchValues = stripUnresolvableGallerySearch(instance.state.values);
+    const strippedValues =
+      stripInfiniteWindowAnchor(strippedSearchValues ?? instance.state.values) ?? strippedSearchValues;
     const hasRecentImages = 'recentImages' in instance.state.values;
 
     if (strippedValues === null && !hasRecentImages) {

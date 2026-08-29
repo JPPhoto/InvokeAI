@@ -858,6 +858,7 @@ describe('adopting a project from another realm', () => {
     const values = galleryValuesOf(
       galleryProject({
         galleryPage: 3,
+        paginationMode: 'paginated',
         semanticImageQuery: { clusterId, kind: 'cluster', label: 'beaches' },
       })
     );
@@ -866,9 +867,21 @@ describe('adopting a project from another realm', () => {
     expect(values.galleryPage).toBe(3);
   });
 
+  it('drops an infinite window anchor on adoption, and keeps a paginated page', () => {
+    // A reveal anchors the infinite window mid-board for the session that
+    // made it; adopted anywhere else it strands the gallery there. A
+    // paginated page is the page the user was reading and survives.
+    expect(galleryValuesOf(galleryProject({ galleryPage: 5, paginationMode: 'infinite' })).galleryPage).toBe(0);
+    expect(galleryValuesOf(galleryProject({ galleryPage: 5, paginationMode: 'paginated' })).galleryPage).toBe(5);
+  });
+
   it('keeps a search the new realm can rebuild, and the page it was read on', () => {
     const values = galleryValuesOf(
-      galleryProject({ galleryPage: 3, semanticImageQuery: { kind: 'text', query: 'sunset' } })
+      galleryProject({
+        galleryPage: 3,
+        paginationMode: 'paginated',
+        semanticImageQuery: { kind: 'text', query: 'sunset' },
+      })
     );
 
     expect(values.semanticImageQuery).toEqual({ kind: 'text', query: 'sunset' });

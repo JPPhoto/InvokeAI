@@ -1,7 +1,7 @@
 import type { HydratedWorkbenchSnapshot, PersistedWorkbenchSnapshotV1 } from '@workbench/persistenceContracts';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
-import { getGalleryPage, getGallerySettings, stripSessionScopedGallerySearch } from '@features/gallery/contracts';
+import { stripInfiniteWindowAnchor, stripSessionScopedGallerySearch } from '@features/gallery/contracts';
 
 import { timeWorkbenchPerf } from './performanceMarks';
 
@@ -53,25 +53,16 @@ const stripSessionScopedGalleryState = (project: Project): Project => {
       }
 
       const strippedValues = stripSessionScopedGallerySearch(values);
-      const hasWindowAnchor = getGallerySettings(values).paginationMode === 'infinite' && getGalleryPage(values) > 0;
+      const strippedAnchorValues = stripInfiniteWindowAnchor(strippedValues ?? values);
 
-      if (strippedValues === null && !hasWindowAnchor) {
+      if (strippedValues === null && strippedAnchorValues === null) {
         return [instanceId, instance];
       }
 
       didChange = true;
       return [
         instanceId,
-        {
-          ...instance,
-          state: {
-            ...instance.state,
-            values: {
-              ...(strippedValues ?? values),
-              ...(hasWindowAnchor ? { galleryPage: 0 } : {}),
-            },
-          },
-        },
+        { ...instance, state: { ...instance.state, values: strippedAnchorValues ?? strippedValues ?? values } },
       ];
     })
   );

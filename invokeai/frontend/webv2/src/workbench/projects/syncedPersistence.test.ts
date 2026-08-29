@@ -834,6 +834,35 @@ describe('authoritative project boards', () => {
     expect(api.__records.get(draft.id)?.revision).toBe(1);
   });
 
+  it('does not push a project it only opened when the other session left a window anchor', async () => {
+    // The sync baseline is taken from the adopted document; the store is
+    // hydrated from the boot snapshot. Both drop an infinite window's
+    // mid-board anchor, so a project that has only been opened serializes to
+    // its baseline — dropped by one and not the other, the first autosave
+    // would push it unprompted and fork the tab that set it.
+    const draft = { ...createDraftProject([]), name: 'Revealed elsewhere' };
+    const document = persistence.serializeProjectDocument(draft);
+    const widgetInstances = document.widgetInstances as Record<string, { state: { values: Record<string, unknown> } }>;
+
+    widgetInstances.gallery!.state.values = {
+      ...widgetInstances.gallery!.state.values,
+      galleryPage: 5,
+      paginationMode: 'infinite',
+    };
+    api.__seed(document);
+    seedSessionBlob({ openProjectIds: [draft.id] });
+
+    const loaded = await service.loadWorkbench();
+    const opened = loaded!.state.projects.find((project) => project.id === draft.id)!;
+
+    expect(opened.widgetInstances.gallery!.state.values.galleryPage).toBe(0);
+
+    await service.saveWorkbench(stateWithProjects([opened]));
+
+    expect(api.updateProject).not.toHaveBeenCalled();
+    expect(api.__records.get(draft.id)?.revision).toBe(1);
+  });
+
   it("retries rather than forks when only the other session's ranking moved", async () => {
     // The other tab paged its ranking: the revision moved and the data changed
     // only in the positions set against a search this realm cannot resolve.
