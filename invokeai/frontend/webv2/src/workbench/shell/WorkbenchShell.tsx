@@ -3,7 +3,6 @@ import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
-  PointerSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -43,6 +42,12 @@ import { useTranslation } from 'react-i18next';
 import { BottomPanel } from './BottomPanel';
 import { CenterArea } from './CenterArea';
 import { DocumentTitleProgress } from './DocumentTitleProgress';
+import {
+  HoldToDragSensor,
+  PrimaryMouseSensor,
+  TOUCH_DRAG_HOLD_DELAY_MS,
+  TOUCH_DRAG_MOVE_TOLERANCE_PX,
+} from './holdToDragSensor';
 import { WorkbenchNotificationToaster } from './notifications';
 import { LeftPanel, RightPanel } from './Panels';
 import { StatusBar } from './StatusBar';
@@ -71,7 +76,12 @@ export const WorkbenchShell = () => {
   const rightRegion = useActiveProjectSelector((project) => project.widgetRegions.right);
   const placementProject = useActiveProjectSelector(getWidgetPlacementProject, areWidgetPlacementProjectsEqual);
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    // `PrimaryMouseSensor`/`HoldToDragSensor` replace the stock `PointerSensor`:
+    // see holdToDragSensor.ts for why touch gestures need the hold gate.
+    useSensor(PrimaryMouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(HoldToDragSensor, {
+      activationConstraint: { delay: TOUCH_DRAG_HOLD_DELAY_MS, tolerance: TOUCH_DRAG_MOVE_TOLERANCE_PX },
+    }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
   const [activeDrag, setActiveDrag] = useState<ActiveWidgetDrag | null>(null);
