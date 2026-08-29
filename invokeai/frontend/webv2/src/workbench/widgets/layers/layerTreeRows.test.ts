@@ -20,8 +20,8 @@ const document = () =>
     layer('r5'),
   ]);
 
-const outline = (rows: readonly { id: string; depth: number }[]) =>
-  rows.map((row) => `${'  '.repeat(row.depth)}${row.id}`);
+const outline = (rows: readonly { id: string; vm: { depth: number } }[]) =>
+  rows.map((row) => `${'  '.repeat(row.vm.depth)}${row.id}`);
 
 describe('buildLayerStackRows', () => {
   it('lists rendered rows per stack, hiding the children of collapsed groups', () => {
@@ -41,23 +41,25 @@ describe('buildLayerStackRows', () => {
     const rows = buildLayerStackRows(document(), new Set(['G', 'H'])).raster.rows;
     const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
     expect(byId.G).toMatchObject({
-      childCount: 3,
-      contributionEnabled: false,
       expanded: true,
-      gatedByAncestor: false,
-      kind: 'group',
-      leafCount: 3,
+      posInSet: 2,
+      setSize: 3,
+      vm: { childCount: 3, contributionEnabled: false, kind: 'group', leafCount: 3 },
     });
     expect(byId.r3).toMatchObject({
-      contributionEnabled: false,
-      depth: 2,
-      effectiveLocked: true,
-      gatedByAncestor: true,
-      kind: 'leaf',
-      parentId: 'H',
+      posInSet: 1,
+      setSize: 1,
+      vm: {
+        ancestorsEnabled: false,
+        contributionEnabled: false,
+        depth: 2,
+        effectiveLocked: true,
+        kind: 'leaf',
+        parentId: 'H',
+      },
     });
-    expect(byId.H).toMatchObject({ contributionEnabled: false, effectiveLocked: true, gatedByAncestor: true });
-    expect(byId.r5).toMatchObject({ contributionEnabled: true, effectiveLocked: false, gatedByAncestor: false });
+    expect(byId.H).toMatchObject({ vm: { ancestorsLocked: false, contributionEnabled: false, effectiveLocked: true } });
+    expect(byId.r5).toMatchObject({ posInSet: 3, vm: { contributionEnabled: true, effectiveLocked: false } });
   });
 
   it('keeps row identity for untouched nodes across an unrelated edit and a toggle elsewhere', () => {
@@ -65,7 +67,7 @@ describe('buildLayerStackRows', () => {
     const renamed = documentFrom([
       layer('c1', 'control'),
       layer('r1', 'raster', { name: 'renamed' }),
-      before[1]!.node,
+      before[1]!.vm.node,
       layer('r5'),
     ]);
     const after = buildLayerStackRows(renamed, new Set(['G'])).raster.rows;
@@ -82,14 +84,18 @@ describe('projectLayerDrop', () => {
   const rows = () => buildLayerStackRows(document(), new Set(['G', 'H'])).raster.rows;
 
   it('drops between siblings at the same depth', () => {
-    expect(projectLayerDrop({ activeIds: ['r5'], depthOffset: 0, edge: 'above', overId: 'r1', rows: rows() })).toEqual({
+    expect(
+      projectLayerDrop({ activeIds: ['r5'], depthOffset: 0, edge: 'above', overId: 'r1', rows: rows() })
+    ).toMatchObject({
       beforeId: 'r1',
       depth: 0,
       ids: ['r5'],
       parentId: null,
       stack: 'raster',
     });
-    expect(projectLayerDrop({ activeIds: ['r1'], depthOffset: 0, edge: 'below', overId: 'r5', rows: rows() })).toEqual({
+    expect(
+      projectLayerDrop({ activeIds: ['r1'], depthOffset: 0, edge: 'below', overId: 'r5', rows: rows() })
+    ).toMatchObject({
       beforeId: null,
       depth: 0,
       ids: ['r1'],
@@ -99,28 +105,36 @@ describe('projectLayerDrop', () => {
   });
 
   it('indents into the group above when dragged right, and outdents at a subtree end when dragged left', () => {
-    expect(projectLayerDrop({ activeIds: ['r5'], depthOffset: 1, edge: 'below', overId: 'G', rows: rows() })).toEqual({
+    expect(
+      projectLayerDrop({ activeIds: ['r5'], depthOffset: 1, edge: 'below', overId: 'G', rows: rows() })
+    ).toMatchObject({
       beforeId: 'r2',
       depth: 1,
       ids: ['r5'],
       parentId: 'G',
       stack: 'raster',
     });
-    expect(projectLayerDrop({ activeIds: ['r5'], depthOffset: 2, edge: 'below', overId: 'H', rows: rows() })).toEqual({
+    expect(
+      projectLayerDrop({ activeIds: ['r5'], depthOffset: 2, edge: 'below', overId: 'H', rows: rows() })
+    ).toMatchObject({
       beforeId: 'r3',
       depth: 2,
       ids: ['r5'],
       parentId: 'H',
       stack: 'raster',
     });
-    expect(projectLayerDrop({ activeIds: ['r1'], depthOffset: 0, edge: 'below', overId: 'r4', rows: rows() })).toEqual({
+    expect(
+      projectLayerDrop({ activeIds: ['r1'], depthOffset: 0, edge: 'below', overId: 'r4', rows: rows() })
+    ).toMatchObject({
       beforeId: 'r5',
       depth: 0,
       ids: ['r1'],
       parentId: null,
       stack: 'raster',
     });
-    expect(projectLayerDrop({ activeIds: ['r1'], depthOffset: 1, edge: 'below', overId: 'r4', rows: rows() })).toEqual({
+    expect(
+      projectLayerDrop({ activeIds: ['r1'], depthOffset: 1, edge: 'below', overId: 'r4', rows: rows() })
+    ).toMatchObject({
       beforeId: null,
       depth: 1,
       ids: ['r1'],
@@ -142,7 +156,7 @@ describe('projectLayerDrop', () => {
   it('moves a group with its descendants and refuses to drop into itself', () => {
     expect(
       projectLayerDrop({ activeIds: ['G', 'r3'], depthOffset: 0, edge: 'below', overId: 'r5', rows: rows() })
-    ).toEqual({
+    ).toMatchObject({
       beforeId: null,
       depth: 0,
       ids: ['G'],
@@ -157,7 +171,7 @@ describe('projectLayerDrop', () => {
   it('keeps a multi-selection in document order', () => {
     expect(
       projectLayerDrop({ activeIds: ['r5', 'r1'], depthOffset: 0, edge: 'above', overId: 'r4', rows: rows() })
-    ).toEqual({
+    ).toMatchObject({
       beforeId: 'r4',
       depth: 1,
       ids: ['r1', 'r5'],
@@ -185,5 +199,17 @@ describe('projectLayerDrop', () => {
     expect(
       projectLayerDrop({ activeIds: ['S'], depthOffset: 10, edge: 'below', overId: 'n1', rows: deepRows })
     ).toBeNull();
+  });
+});
+
+describe('buildLayerStackRows filter', () => {
+  it('keeps matches and their ancestors, opens only groups with a match beneath, and leaves a matching group closed', () => {
+    const filtered = buildLayerStackRows(document(), new Set(), 'r3');
+    expect(outline(filtered.raster.rows)).toEqual(['G', '  H', '    r3']);
+    expect(filtered.raster.rows.map((row) => row.expanded)).toEqual([true, true, false]);
+    expect(filtered.control.rows).toEqual([]);
+    const groupMatch = buildLayerStackRows(document(), new Set(['G']), 'g');
+    expect(outline(groupMatch.raster.rows)).toEqual(['G']);
+    expect(groupMatch.raster.rows[0]!.expanded).toBe(false);
   });
 });

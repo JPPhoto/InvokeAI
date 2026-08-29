@@ -1,55 +1,38 @@
-import type { CanvasGroupContract, CanvasLayerContract } from '@workbench/canvas-engine/api';
-import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
-import type { LayerSelectionModifiers } from '@workbench/layerPanelState';
-import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
-import type { Dispatch, KeyboardEvent, MouseEvent } from 'react';
+import type { CanvasLayerContract, SemanticNode } from '@workbench/canvas-engine/api';
+import type { LayerPanelDensity } from '@workbench/layerPanelState';
+import type { KeyboardEvent, MouseEvent } from 'react';
 
 import { Badge, Box, chakra, HStack, Icon, Input, Stack, Text } from '@chakra-ui/react';
-import { useSortable } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { IconButton, Row, ToggleDot, Tooltip } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { isHideableLayer, isNodeHidden, isOverlayStack } from '@workbench/canvas-engine/api';
-import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import {
   ChevronRightIcon,
   EyeIcon,
   EyeOffIcon,
   FolderIcon,
   FolderOpenIcon,
+  ImageIcon,
   LockIcon,
   LockOpenIcon,
+  MoreVerticalIcon,
+  SlidersHorizontalIcon,
 } from 'lucide-react';
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import type { LayerRowCommands } from './layerRowCommands';
 import type { LayerTreeRow } from './layerTreeRows';
 
 import { ControlLayerWarningIcon } from './ControlLayerWarningIcon';
-import {
-  CanvasLayerContextMenu,
-  type CanvasLayerContextMenuTarget,
-  LayerContextMenu,
-  type LayerContextMenuEngine,
-} from './LayerContextMenu';
-import { LayerGroupContextMenu, type LayerGroupContextMenuEngine } from './LayerGroupContextMenu';
-import { createLayerMenuTargetFromContextEvent } from './layerMenuState';
-import { LayerPropertiesPopover, type LayerPropertiesEngine } from './LayerPropertiesPopover';
-import { LayerThumbnail } from './LayerThumbnail';
+import { LAYER_TREE_INDENT_PX } from './layerPanelRows';
+import { anchorFromPoint, anchorFromRect } from './layerRowCommands';
+import { layerRowSummary } from './layerRowSummary';
+import { LayerThumbnail, type LayerThumbnailEngine } from './LayerThumbnail';
 
-/** Horizontal offset per nesting level, in CSS pixels; the drag projection uses the same step. */
-export const LAYER_TREE_INDENT_PX = 16;
-
-const ROW_INTERACTIVE_DESCENDANTS = {
-  '& button, & input': {
-    pointerEvents: 'auto',
-  },
-};
-const ROW_SELECTION_FOCUS = {
-  outline: '2px solid',
-  outlineColor: 'accent.solid',
-  outlineOffset: '-2px',
-};
+const ROW_INTERACTIVE_DESCENDANTS = { '& button, & input': { pointerEvents: 'auto' } };
+const ROW_SELECTION_FOCUS = { outline: '2px solid', outlineColor: 'accent.solid', outlineOffset: '-2px' };
 const LAYER_ROW_BACKGROUND_TRANSITION = 'background min(40ms, var(--wb-motion-duration-fast)) ease-out';
 const VISIBILITY_DOT_BASE = {
   borderRadius: 'full',
@@ -68,380 +51,308 @@ const VISIBILITY_DOT_GATED = { ...VISIBILITY_DOT_BASE, bg: 'transparent', border
 const VISIBILITY_DOT_UNCHECKED = { ...VISIBILITY_DOT_BASE, bg: 'transparent', borderColor: 'border.emphasized' };
 const VISIBILITY_DOT_CHECKED_HOVER = { _before: { bg: 'accent.emphasized', borderColor: 'accent.emphasized' } };
 const VISIBILITY_DOT_UNCHECKED_HOVER = { _before: { borderColor: 'fg.muted' } };
-const INDICATOR_STYLE = { bg: 'accent.solid', borderRadius: 'full', h: '2px', my: '1px' };
 
-export type LayerRowEngine = LayerContextMenuEngine &
-  LayerGroupContextMenuEngine &
-  LayerPropertiesEngine &
-  Pick<CanvasEngineHandle, 'previews'>;
+const THUMBNAIL_SIZE: Record<LayerPanelDensity, string> = { comfortable: '8', compact: '5', large: '11' };
+const NAME_SIZE: Record<LayerPanelDensity, string> = { comfortable: '2xs', compact: '2xs', large: 'xs' };
 
-const layerBadgeKey = (layer: CanvasLayerContract): string => {
-  if (layer.type === 'raster') {
-    return layer.source.type === 'image' ? 'widgets.layers.types.image' : 'widgets.layers.types.paint';
-  }
-  return `widgets.layers.types.${layer.type}`;
-};
-
-export interface LayerRowDragState {
-  /** The row travels with the current drag. */
-  readonly isDragSource: boolean;
-  /** The row stands in for the dragged block: draw the insertion line at this depth instead. */
-  readonly indicatorDepth: number | null;
-}
+/** How a row takes part in the current drag. */
+export type LayerRowDragState = 'source' | 'travelling' | null;
 
 interface LayerRowProps {
-  dispatch: Dispatch<CanvasProjectMutation>;
-  drag: LayerRowDragState | null;
+  commands: LayerRowCommands;
+  density: LayerPanelDensity;
+  drag: LayerRowDragState;
+  /** Drag reordering is off: the editing lock or degraded mode. */
+  dragDisabled: boolean;
   editingLocked: boolean;
-  engine: LayerRowEngine | null;
-  isPrimarySelected: boolean;
-  isSelected: boolean;
+  engine: LayerThumbnailEngine | null;
+  focused: boolean;
+  primary: boolean;
+  renaming: boolean;
   row: LayerTreeRow;
-  onSelect: (id: string, modifiers: LayerSelectionModifiers) => void;
-  onToggleExpanded: (groupId: string) => void;
+  selected: boolean;
+  /** Thumbnails are drawn; off in degraded mode. */
+  thumbnails: boolean;
 }
-
-export const getLayerRowInteractionState = (editingLocked: boolean) => ({
-  canRename: !editingLocked,
-  canSelect: true,
-  canToggleLock: !editingLocked,
-  canToggleVisibility: !editingLocked,
-  sortableDisabled: editingLocked,
-});
 
 const stopPropagation = (event: { stopPropagation: () => void }): void => event.stopPropagation();
 
 const LayerRowComponent = ({
-  dispatch,
+  commands,
+  density,
   drag,
+  dragDisabled,
   editingLocked,
   engine,
-  isPrimarySelected,
-  isSelected,
+  focused,
+  primary,
+  renaming,
   row,
-  onSelect,
-  onToggleExpanded,
+  selected,
+  thumbnails,
 }: LayerRowProps) => {
-  const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
-  const interaction = getLayerRowInteractionState(editingLocked);
-  const { node } = row;
-  const group = node.type === 'group' ? (node as CanvasGroupContract) : null;
-  const layer = node.type === 'group' ? null : (node as CanvasLayerContract);
-  const { attributes, isDragging, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
-    disabled: interaction.sortableDisabled,
+  const { vm } = row;
+  const { node } = vm;
+  const group = vm.kind === 'group';
+  const layer = group ? null : (node as CanvasLayerContract);
+  const { listeners, setNodeRef: setDragRef } = useDraggable({
+    data: { stack: vm.stack },
+    disabled: dragDisabled,
     id: row.id,
   });
-  const [isEditing, setIsEditing] = useState(false);
-  const [draftName, setDraftName] = useState(node.name);
-  const [contextMenuTarget, setContextMenuTarget] = useState<CanvasLayerContextMenuTarget | null>(null);
-  const [groupMenuAnchor, setGroupMenuAnchor] = useState<{ x: number; y: number } | null>(null);
-  const selectRef = useRef<HTMLButtonElement | null>(null);
+  const { setNodeRef: setDropRef } = useDroppable({ data: { stack: vm.stack }, disabled: dragDisabled, id: row.id });
+  const setRowRef = useCallback(
+    (element: HTMLElement | null) => {
+      setDragRef(element);
+      setDropRef(element);
+    },
+    [setDragRef, setDropRef]
+  );
+  const nameInput = useRef<HTMLInputElement | null>(null);
+  // Escape abandons the draft; the blur that follows refocusing the row must not commit it.
+  const renameCancelled = useRef(false);
+  const treeItem = useRef<HTMLButtonElement | null>(null);
 
-  const dndStyle = useMemo(
-    () => ({
-      opacity: isDragging || drag?.isDragSource ? 0.4 : undefined,
-      position: 'relative' as const,
-      transform: CSS.Translate.toString(transform),
-      transition,
-      zIndex: isDragging ? 1 : undefined,
-    }),
-    [drag?.isDragSource, isDragging, transform, transition]
-  );
-  const indentStyle = useMemo(() => ({ paddingLeft: `${row.depth * LAYER_TREE_INDENT_PX}px` }), [row.depth]);
-  // The insertion line stands in for the block at full strength; only the block itself fades.
-  const indicatorHostStyle = useMemo(() => ({ ...dndStyle, opacity: undefined }), [dndStyle]);
-  const indicatorStyle = useMemo(
-    () => ({ marginLeft: `${(drag?.indicatorDepth ?? 0) * LAYER_TREE_INDENT_PX}px` }),
-    [drag?.indicatorDepth]
-  );
+  const indentStyle = useMemo(() => ({ paddingLeft: `${vm.depth * LAYER_TREE_INDENT_PX}px` }), [vm.depth]);
 
   const handleSelect = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => {
-      if (interaction.canSelect) {
-        onSelect(row.id, { additive: event.metaKey || event.ctrlKey, range: event.shiftKey });
-      }
-    },
-    [interaction.canSelect, row.id, onSelect]
+    (event: MouseEvent<HTMLButtonElement>) =>
+      commands.select(row.id, { additive: event.metaKey || event.ctrlKey, range: event.shiftKey }),
+    [commands, row.id]
   );
-
+  const handleFocus = useCallback(() => commands.focus(row.id), [commands, row.id]);
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>) => commands.keyDown(row.id, event),
+    [commands, row.id]
+  );
   const handleToggleExpanded = useCallback(
     (event: { stopPropagation: () => void }) => {
       event.stopPropagation();
-      onToggleExpanded(row.id);
+      commands.toggleExpanded(row.id);
     },
-    [onToggleExpanded, row.id]
+    [commands, row.id]
   );
-
-  const handleSelectKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLButtonElement>) => {
-      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-        const tree = event.currentTarget.closest('[role="tree"]');
-        const items = tree ? Array.from(tree.querySelectorAll<HTMLElement>('[role="treeitem"]')) : [];
-        const next = items[items.indexOf(event.currentTarget) + (event.key === 'ArrowDown' ? 1 : -1)];
-        if (next) {
-          event.preventDefault();
-          next.focus();
-        }
-        return;
-      }
-      if (!group) {
-        return;
-      }
-      if ((event.key === 'ArrowRight' && !row.expanded) || (event.key === 'ArrowLeft' && row.expanded)) {
-        event.preventDefault();
-        onToggleExpanded(row.id);
-      }
-    },
-    [group, onToggleExpanded, row.expanded, row.id]
-  );
-
-  const patchBase = useCallback(
-    (label: string, forward: Partial<Pick<CanvasLayerContract, 'name' | 'isEnabled' | 'isLocked'>>) => {
-      commitPrepared(label, (model) => model.prepare({ id: row.id, patch: forward, type: 'patch' }));
-    },
-    [commitPrepared, row.id]
-  );
-
   const handleToggleVisible = useCallback(
-    (checked: boolean) => patchBase(t('widgets.layers.actions.toggleVisibility'), { isEnabled: checked }),
-    [patchBase, t]
+    (checked: boolean) => commands.setEnabled(row.id, checked),
+    [commands, row.id]
   );
-
   const handleToggleHidden = useCallback(
     (event: { stopPropagation: () => void }) => {
       event.stopPropagation();
-      const isHidden = !isNodeHidden(node);
-      commitPrepared(t('widgets.layers.actions.toggleHidden'), (model) =>
-        model.prepare({ type: 'set-hidden', updates: [{ id: row.id, isHidden }] })
-      );
+      commands.setHidden(row.id, !isNodeHidden(node));
     },
-    [commitPrepared, node, row.id, t]
+    [commands, node, row.id]
   );
-
   const handleToggleLock = useCallback(
     (event: { stopPropagation: () => void }) => {
       event.stopPropagation();
-      patchBase(t('widgets.layers.actions.toggleLock'), { isLocked: !node.isLocked });
+      commands.setLocked(row.id, !node.isLocked);
     },
-    [node.isLocked, patchBase, t]
+    [commands, node.isLocked, row.id]
   );
-
-  const startEditing = useCallback(() => {
-    setDraftName(node.name);
-    setIsEditing(true);
-  }, [node.name]);
-
-  const finishEditing = useCallback(() => {
-    setIsEditing(false);
-    selectRef.current?.focus();
-  }, []);
-
-  const commitName = useCallback(() => {
-    finishEditing();
-    const name = draftName.trim();
-    if (name && name !== node.name) {
-      patchBase(t('widgets.layers.actions.rename'), { name });
+  const handleOpenMenu = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      commands.openMenu(row.id, anchorFromRect(event.currentTarget.getBoundingClientRect()));
+    },
+    [commands, row.id]
+  );
+  const handleOpenProperties = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      commands.openProperties(row.id, anchorFromRect(event.currentTarget.getBoundingClientRect()));
+    },
+    [commands, row.id]
+  );
+  const handleContextMenu = useCallback(
+    (event: MouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      if (!selected) {
+        commands.select(row.id, { additive: false, range: false });
+      }
+      commands.openMenu(row.id, anchorFromPoint(event.clientX, event.clientY));
+    },
+    [commands, row.id, selected]
+  );
+  const startRename = useCallback(() => {
+    if (!editingLocked) {
+      commands.startRename(row.id);
     }
-  }, [draftName, finishEditing, node.name, patchBase, t]);
-
+  }, [commands, editingLocked, row.id]);
+  const finishRename = useCallback(() => {
+    commands.endRename();
+    treeItem.current?.focus();
+  }, [commands]);
+  const commitName = useCallback(() => {
+    const name = nameInput.current?.value.trim() ?? '';
+    const cancelled = renameCancelled.current;
+    finishRename();
+    if (!cancelled && name && name !== node.name) {
+      commands.rename(row.id, name);
+    }
+  }, [commands, finishRename, node.name, row.id]);
   const handleNameKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
-      // Stop only the two keys the rename owns; the hotkey runtime already refuses non-editable
-      // bindings for a focused input, and Escape would otherwise reach the engine as a deselect.
       if (event.key === 'Enter') {
         event.stopPropagation();
         commitName();
       } else if (event.key === 'Escape') {
         event.stopPropagation();
-        finishEditing();
+        renameCancelled.current = true;
+        finishRename();
       }
     },
-    [commitName, finishEditing]
+    [commitName, finishRename]
   );
-
-  const handleNameChange = useCallback((event: { target: { value: string } }) => setDraftName(event.target.value), []);
   const focusOnMount = useCallback((input: HTMLInputElement | null) => {
+    nameInput.current = input;
+    renameCancelled.current = false;
     input?.focus();
     input?.select();
   }, []);
 
-  const handleContextMenu = useCallback(
-    (event: MouseEvent<HTMLElement>) => {
-      if (!isSelected) {
-        onSelect(row.id, { additive: false, range: false });
-      }
-      if (layer) {
-        setContextMenuTarget(createLayerMenuTargetFromContextEvent(row.id, event));
-      } else {
-        event.preventDefault();
-        setGroupMenuAnchor({ x: event.clientX, y: event.clientY });
-      }
-    },
-    [isSelected, layer, onSelect, row.id]
-  );
-
-  const closeContextMenu = useCallback(() => setContextMenuTarget(null), []);
-  const closeGroupMenu = useCallback(() => setGroupMenuAnchor(null), []);
-  const setSelectRef = useCallback(
-    (element: HTMLButtonElement | null) => {
-      setActivatorNodeRef(element);
-      selectRef.current = element;
-    },
-    [setActivatorNodeRef]
-  );
-
-  // Pointer listeners only: Enter on a row belongs to selection, and keyboard reordering is the
-  // menu's Move actions, so dnd-kit's keyboard activator stays unattached.
-  const sortableRowListeners = useMemo(() => {
-    if (interaction.sortableDisabled || !listeners) {
+  // Pointer listeners only: the tree item owns its role, focus and keyboard model, and dnd-kit's
+  // keyboard activator, roledescription and instructions stay out of the accessibility tree.
+  const dragListeners = useMemo(() => {
+    if (dragDisabled || !listeners) {
       return {};
     }
     const { onKeyDown: _onKeyDown, ...rest } = listeners;
     return rest;
-  }, [interaction.sortableDisabled, listeners]);
+  }, [dragDisabled, listeners]);
 
-  // The selection button owns its role, focus, and pressed state.
-  const sortableAttributes = useMemo(() => {
-    if (interaction.sortableDisabled) {
-      return {};
-    }
-    const { role: _role, tabIndex: _tabIndex, 'aria-pressed': _ariaPressed, ...rest } = attributes;
-    return rest;
-  }, [attributes, interaction.sortableDisabled]);
-
-  const hideable = group ? isOverlayStack(row.stack) : isHideableLayer(layer!);
+  const hideable = group ? isOverlayStack(vm.stack) : isHideableLayer(layer!);
   const ownHidden = isNodeHidden(node);
-  const hiddenByAncestor = row.documentHidden && !ownHidden;
-  const lockedByAncestor = row.effectiveLocked && !node.isLocked;
-  const disabledByAncestor = !row.contributionEnabled && node.isEnabled;
-
-  if (drag?.indicatorDepth !== null && drag?.indicatorDepth !== undefined) {
-    return (
-      <Box ref={setNodeRef} aria-hidden style={indicatorHostStyle}>
-        <Box style={indicatorStyle} {...INDICATOR_STYLE} />
-      </Box>
-    );
-  }
+  const hiddenByAncestor = vm.documentHidden && !ownHidden;
+  const lockedByAncestor = vm.effectiveLocked && !node.isLocked;
+  const disabledByAncestor = !vm.contributionEnabled && node.isEnabled;
 
   return (
-    <Box ref={setNodeRef} style={dndStyle}>
+    <Box
+      ref={setRowRef}
+      {...dragListeners}
+      data-layer-row-id={row.id}
+      h="full"
+      opacity={drag ? 0.4 : undefined}
+      onContextMenu={handleContextMenu}
+    >
       <Row
-        {...sortableRowListeners}
-        active={isSelected ? 'muted' : undefined}
-        borderStartColor={isPrimarySelected ? 'accent.solid' : 'transparent'}
+        active={selected ? 'muted' : undefined}
+        borderStartColor={primary ? 'accent.solid' : 'transparent'}
         borderStartWidth="2px"
-        cursor={isDragging ? 'grabbing' : 'default'}
+        cursor={drag === 'source' ? 'grabbing' : 'default'}
         display="flex"
         gap="1.5"
-        p="1.5"
+        h="full"
+        px="1.5"
         position="relative"
         style={indentStyle}
         transition={LAYER_ROW_BACKGROUND_TRANSITION}
-        onContextMenu={handleContextMenu}
       >
-        {/* No grip: the row is the pointer drag target; the row-covering selection button carries
-            the sortable description and keeps Enter as selection. */}
+        {/* No grip: the whole row is the pointer drag target; this row-covering button is the tree item. */}
         <chakra.button
-          ref={setSelectRef}
-          {...sortableAttributes}
-          aria-current={isPrimarySelected ? 'true' : undefined}
+          ref={treeItem}
+          aria-current={primary ? 'true' : undefined}
           aria-expanded={group ? row.expanded : undefined}
           aria-label={t('widgets.layers.actions.select', { name: node.name })}
-          aria-level={row.depth + 1}
-          aria-selected={isSelected}
-          role="treeitem"
-          data-primary={isPrimarySelected || undefined}
-          cursor={isDragging ? 'grabbing' : undefined}
+          aria-level={vm.depth + 1}
+          aria-posinset={row.posInSet}
+          aria-selected={selected}
+          aria-setsize={row.setSize}
+          data-primary={primary || undefined}
           inset="0"
           position="absolute"
+          role="treeitem"
           rounded="sm"
+          tabIndex={focused ? 0 : -1}
           type="button"
           _focusVisible={ROW_SELECTION_FOCUS}
           onClick={handleSelect}
-          onDoubleClick={interaction.canRename ? startEditing : undefined}
-          onKeyDown={handleSelectKeyDown}
+          onDoubleClick={startRename}
+          onFocus={handleFocus}
+          onKeyDown={handleKeyDown}
         />
-        <HStack css={ROW_INTERACTIVE_DESCENDANTS} gap="1.5" pointerEvents="none" position="relative" w="full">
+        <HStack css={ROW_INTERACTIVE_DESCENDANTS} gap="1.5" h="full" pointerEvents="none" position="relative" w="full">
           {group ? (
-            <>
-              <IconButton
-                aria-label={t(
-                  row.expanded ? 'widgets.layers.actions.collapseGroup' : 'widgets.layers.actions.expandGroup'
-                )}
-                color="fg.subtle"
-                size="2xs"
-                variant="ghost"
-                onClick={handleToggleExpanded}
-                onPointerDown={stopPropagation}
-              >
-                <Icon
-                  as={ChevronRightIcon}
-                  boxSize="3.5"
-                  transform={row.expanded ? 'rotate(90deg)' : undefined}
-                  transitionDuration="fast"
-                  transitionProperty="transform"
-                />
-              </IconButton>
-              <Box
-                alignItems="center"
-                bg="bg.muted"
-                borderColor="border.subtle"
-                borderWidth="1px"
-                boxSize="8"
-                color="fg.muted"
-                display="flex"
-                flexShrink={0}
-                justifyContent="center"
-                rounded="sm"
-              >
-                <Icon as={row.expanded ? FolderOpenIcon : FolderIcon} boxSize="4" />
-              </Box>
-            </>
+            <IconButton
+              aria-label={t(
+                row.expanded ? 'widgets.layers.actions.collapseGroup' : 'widgets.layers.actions.expandGroup'
+              )}
+              color="fg.subtle"
+              size="2xs"
+              variant="ghost"
+              onClick={handleToggleExpanded}
+              onPointerDown={stopPropagation}
+            >
+              <Icon
+                as={ChevronRightIcon}
+                boxSize="3.5"
+                transform={row.expanded ? 'rotate(90deg)' : undefined}
+                transitionDuration="fast"
+                transitionProperty="transform"
+              />
+            </IconButton>
+          ) : null}
+          {group || !thumbnails ? (
+            <Box
+              alignItems="center"
+              bg="bg.muted"
+              borderColor="border.subtle"
+              borderWidth="1px"
+              boxSize={THUMBNAIL_SIZE[density]}
+              color="fg.muted"
+              display="flex"
+              flexShrink={0}
+              justifyContent="center"
+              rounded="sm"
+            >
+              <Icon as={group ? (row.expanded ? FolderOpenIcon : FolderIcon) : ImageIcon} boxSize="4" />
+            </Box>
           ) : (
-            <LayerThumbnail engine={engine} layer={layer!} />
+            <Box boxSize={THUMBNAIL_SIZE[density]} flexShrink={0}>
+              <LayerThumbnail engine={engine} layer={layer!} />
+            </Box>
           )}
-          <Stack flex="1" gap="0.5" minW="0">
-            {isEditing ? (
+          <Stack flex="1" gap="0" justify="center" minW="0">
+            {renaming ? (
               <Input
                 ref={focusOnMount}
                 aria-label={t('widgets.layers.actions.rename')}
-                disabled={!interaction.canRename}
+                defaultValue={node.name}
                 size="2xs"
-                value={draftName}
                 onBlur={commitName}
-                onChange={handleNameChange}
                 onKeyDown={handleNameKeyDown}
                 onPointerDown={stopPropagation}
               />
             ) : (
               <MiddleTruncate
-                aria-disabled={!interaction.canRename}
-                color={row.contributionEnabled ? undefined : 'fg.muted'}
-                fontSize="2xs"
+                color={vm.contributionEnabled ? undefined : 'fg.muted'}
+                fontSize={NAME_SIZE[density]}
                 fontWeight="700"
                 text={node.name}
               />
             )}
-            <HStack alignSelf="flex-start" gap="1">
-              {group ? (
-                <Text color="fg.subtle" fontSize="2xs">
-                  {row.leafCount === 0
-                    ? t('widgets.layers.groupEmpty')
-                    : t('widgets.layers.groupSummary', { count: row.leafCount })}
-                </Text>
-              ) : (
-                <>
-                  <Badge colorPalette="gray" size="xs" variant="subtle">
-                    {t(layerBadgeKey(layer!))}
-                  </Badge>
-                  <ControlLayerWarningIcon contributing={row.contributionEnabled} layer={layer!} />
-                </>
-              )}
-            </HStack>
+            {density !== 'compact' ? (
+              <HStack gap="1" minW="0">
+                {group ? (
+                  <Text color="fg.subtle" fontSize="2xs">
+                    {vm.leafCount === 0
+                      ? t('widgets.layers.groupEmpty')
+                      : t('widgets.layers.groupSummary', { count: vm.leafCount })}
+                  </Text>
+                ) : (
+                  <>
+                    <Text color="fg.subtle" fontSize="2xs" minW="0" truncate>
+                      {layerRowSummary(layer!, t)}
+                    </Text>
+                    <ControlLayerWarningIcon contributing={vm.contributionEnabled} layer={layer!} />
+                  </>
+                )}
+              </HStack>
+            ) : null}
           </Stack>
-          {/* One control cluster on the same rhythm as the stack header so every row's trailing
-              icons share columns; slots a row cannot use are held open. */}
+          {/* One control cluster on the same rhythm as the stack header; slots a row cannot use are held open. */}
           <HStack flexShrink="0" gap="0.5">
             {hideable ? (
               <Tooltip
@@ -452,14 +363,14 @@ const LayerRowComponent = ({
                 <IconButton
                   aria-label={t('widgets.layers.actions.toggleHidden')}
                   aria-pressed={!ownHidden}
-                  color={row.documentHidden ? 'fg.subtle' : 'fg'}
-                  disabled={!interaction.canToggleVisibility || hiddenByAncestor}
+                  color={vm.documentHidden ? 'fg.subtle' : 'fg'}
+                  disabled={editingLocked || hiddenByAncestor}
                   size="2xs"
                   variant="ghost"
                   onClick={handleToggleHidden}
                   onPointerDown={stopPropagation}
                 >
-                  {row.documentHidden ? <EyeOffIcon /> : <EyeIcon />}
+                  {vm.documentHidden ? <EyeOffIcon /> : <EyeIcon />}
                 </IconButton>
               </Tooltip>
             ) : (
@@ -479,14 +390,14 @@ const LayerRowComponent = ({
                 bg="transparent"
                 borderWidth="0"
                 checked={node.isEnabled}
-                cursor={interaction.canToggleVisibility ? 'pointer' : 'not-allowed'}
-                disabled={!interaction.canToggleVisibility}
+                cursor={editingLocked ? 'not-allowed' : 'pointer'}
+                disabled={editingLocked}
                 h="6"
                 label={t('widgets.layers.actions.toggleVisibility')}
                 position="relative"
+                tooltip={disabledByAncestor ? t('widgets.layers.actions.groupDisabled') : undefined}
                 transition="none"
                 w="6"
-                tooltip={disabledByAncestor ? t('widgets.layers.actions.groupDisabled') : undefined}
                 onCheckedChange={handleToggleVisible}
               />
             </Box>
@@ -497,56 +408,72 @@ const LayerRowComponent = ({
             >
               <IconButton
                 aria-label={t('widgets.layers.actions.toggleLock')}
-                color={node.isLocked ? 'fg' : row.effectiveLocked ? 'fg.muted' : 'fg.subtle'}
-                disabled={!interaction.canToggleLock || lockedByAncestor}
+                color={node.isLocked ? 'fg' : vm.effectiveLocked ? 'fg.muted' : 'fg.subtle'}
+                disabled={editingLocked || lockedByAncestor}
                 size="2xs"
                 variant="ghost"
                 onClick={handleToggleLock}
                 onPointerDown={stopPropagation}
               >
-                {row.effectiveLocked ? <LockIcon /> : <LockOpenIcon />}
+                {vm.effectiveLocked ? <LockIcon /> : <LockOpenIcon />}
               </IconButton>
             </Tooltip>
             {layer ? (
-              <Box
-                display="flex"
-                flexShrink="0"
-                onClick={stopPropagation}
-                onContextMenu={stopPropagation}
+              <IconButton
+                aria-label={t('widgets.layers.properties')}
+                color="fg.subtle"
+                disabled={editingLocked}
+                size="2xs"
+                variant="ghost"
+                onClick={handleOpenProperties}
                 onPointerDown={stopPropagation}
               >
-                <LayerPropertiesPopover engine={engine} layer={layer} />
-              </Box>
+                <SlidersHorizontalIcon />
+              </IconButton>
             ) : (
               <Box boxSize="6" />
             )}
-            <Box display="flex" flexShrink="0" onPointerDown={stopPropagation}>
-              {group ? (
-                <LayerGroupContextMenu
-                  anchor={groupMenuAnchor}
-                  editingLocked={editingLocked}
-                  engine={engine}
-                  group={group}
-                  stack={row.stack}
-                  onAnchorClose={closeGroupMenu}
-                />
-              ) : (
-                <LayerContextMenu dispatch={dispatch} engine={engine} layer={layer!} />
-              )}
-            </Box>
+            <IconButton
+              aria-label={t('widgets.layers.options')}
+              color="fg.muted"
+              size="2xs"
+              variant="ghost"
+              onClick={handleOpenMenu}
+              onPointerDown={stopPropagation}
+            >
+              <MoreVerticalIcon />
+            </IconButton>
           </HStack>
         </HStack>
       </Row>
-      {layer ? (
-        <CanvasLayerContextMenu
-          dispatch={dispatch}
-          engine={engine}
-          target={contextMenuTarget}
-          onClose={closeContextMenu}
-        />
-      ) : null}
     </Box>
   );
 };
 
 export const LayerRow = memo(LayerRowComponent);
+
+/** The compact card that follows the pointer: the grabbed row's name plus how many rows travel. */
+export const LayerDragGhost = ({ count, vm }: { count: number; vm: SemanticNode }) => (
+  <HStack
+    bg="bg.panel"
+    borderColor="accent.solid"
+    borderWidth="1px"
+    boxShadow="lg"
+    cursor="grabbing"
+    gap="2"
+    maxW="16rem"
+    px="2"
+    py="1.5"
+    rounded="sm"
+  >
+    {vm.kind === 'group' ? <Icon as={FolderIcon} boxSize="3.5" color="fg.muted" flexShrink={0} /> : null}
+    <Text flex="1" fontSize="2xs" fontWeight="700" truncate>
+      {vm.node.name}
+    </Text>
+    {count > 1 ? (
+      <Badge colorPalette="accent" size="xs" variant="solid">
+        {count}
+      </Badge>
+    ) : null}
+  </HStack>
+);

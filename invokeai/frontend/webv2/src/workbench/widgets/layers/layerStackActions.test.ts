@@ -1,6 +1,6 @@
 import type { CanvasLayerContract, CanvasLayerSourceContract, CanvasNodeContract } from '@workbench/canvas-engine/api';
 
-import { getDocumentIndex } from '@workbench/canvas-engine/api';
+import { compileDocumentNodes } from '@workbench/canvas-engine/api';
 import {
   groupContract,
   layerContract,
@@ -13,7 +13,7 @@ import { canExportRasterPsd, getStackActions, isStackAllVisible, planStackVisibi
 const raster = (source: CanvasLayerSourceContract, id = 'r'): CanvasLayerContract =>
   layerContract(id, 'raster', { source });
 const imageRef = { height: 10, imageName: 'img', width: 10 };
-const entriesOf = (nodes: CanvasNodeContract[]) => getDocumentIndex({ stacks: stacksFrom(nodes) }).nodes;
+const entriesOf = (nodes: CanvasNodeContract[]) => compileDocumentNodes({ stacks: stacksFrom(nodes) });
 
 describe('getStackActions', () => {
   it('offers merge-visible + export-psd only for the raster stack, with new rightmost everywhere', () => {

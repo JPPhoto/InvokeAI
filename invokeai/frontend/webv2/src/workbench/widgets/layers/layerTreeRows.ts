@@ -1,128 +1,117 @@
-import type {
-  CanvasDocumentContractV3,
-  CanvasNodeContract,
-  CanvasNodeEntry,
-  LayerStackKind,
-} from '@workbench/canvas-engine/api';
+import type { CanvasDocumentContractV3, LayerStackKind, SemanticNode } from '@workbench/canvas-engine/api';
 
-import {
-  collectSubtreeLeaves,
-  getDocumentIndex,
-  isGroupNode,
-  isNodeHidden,
-  subtreeDepth,
-} from '@workbench/canvas-engine/api';
+import { compileDocumentNodes, LAYER_STACKS_TOP_FIRST } from '@workbench/canvas-engine/api';
 
-/** One Layers-panel row: a node plus the tree and effective facts the row renders. */
+/** One Layers-panel row: the seam's node view model plus what the panel adds to it. */
 export interface LayerTreeRow {
   readonly id: string;
-  readonly kind: 'group' | 'leaf';
-  readonly stack: LayerStackKind;
-  readonly node: CanvasNodeContract;
-  readonly parentId: string | null;
-  readonly depth: number;
+  readonly vm: SemanticNode;
   /** Groups only: whether the row shows its children. */
   readonly expanded: boolean;
-  readonly childCount: number;
-  readonly leafCount: number;
-  /** Levels below this node, rendered or not; 0 for a leaf or an empty group. */
-  readonly subtreeDepth: number;
-  /** The node and every ancestor are enabled. */
-  readonly contributionEnabled: boolean;
-  /** The node or an ancestor is locked. */
-  readonly effectiveLocked: boolean;
-  /** The node or an ancestor is display-hidden. */
-  readonly documentHidden: boolean;
-  /** An ancestor alone disables, locks, or hides this node. */
-  readonly gatedByAncestor: boolean;
+  /** 1-based position among the node's siblings, and how many siblings there are. */
+  readonly posInSet: number;
+  readonly setSize: number;
 }
 
 export interface LayerStackRows {
   readonly stack: LayerStackKind;
-  /** Rows the panel renders, top first; children of collapsed groups are absent. */
+  /** Rows the panel renders, top first; children of collapsed groups and filtered-out nodes are absent. */
   readonly rows: readonly LayerTreeRow[];
   /** Every node id in the stack, top first, whether rendered or not. */
   readonly nodeIds: readonly string[];
   readonly leafCount: number;
+  readonly groupCount: number;
 }
 
-const rowsByNode = new WeakMap<CanvasNodeContract, LayerTreeRow>();
+export type LayerStackRowsByKind = Record<LayerStackKind, LayerStackRows>;
 
-const isRowCurrent = (row: LayerTreeRow, entry: CanvasNodeEntry, expanded: boolean): boolean =>
-  row.node === entry.node &&
-  row.parentId === entry.parentId &&
-  row.depth === entry.path.length &&
-  row.expanded === expanded &&
-  row.contributionEnabled === (entry.ancestorsEnabled && row.node.isEnabled) &&
-  row.effectiveLocked === (entry.ancestorsLocked || entry.node.isLocked) &&
-  row.documentHidden === (entry.ancestorsHidden || isNodeHidden(entry.node));
+const rowsByNode = new WeakMap<SemanticNode, LayerTreeRow>();
 
-const rowFor = (entry: CanvasNodeEntry, expanded: boolean): LayerTreeRow => {
-  const cached = rowsByNode.get(entry.node);
-  if (cached && isRowCurrent(cached, entry, expanded)) {
+const rowFor = (vm: SemanticNode, expanded: boolean, posInSet: number, setSize: number): LayerTreeRow => {
+  const cached = rowsByNode.get(vm);
+  if (cached && cached.expanded === expanded && cached.posInSet === posInSet && cached.setSize === setSize) {
     return cached;
   }
-  const { node } = entry;
-  const group = isGroupNode(node);
-  const row: LayerTreeRow = {
-    childCount: group ? node.children.length : 0,
-    contributionEnabled: entry.ancestorsEnabled && node.isEnabled,
-    depth: entry.path.length,
-    documentHidden: entry.ancestorsHidden || isNodeHidden(node),
-    effectiveLocked: entry.ancestorsLocked || node.isLocked,
-    expanded: group && expanded,
-    gatedByAncestor: !entry.ancestorsEnabled || entry.ancestorsLocked || entry.ancestorsHidden,
-    id: node.id,
-    kind: group ? 'group' : 'leaf',
-    leafCount: group ? collectSubtreeLeaves(node).length : 1,
-    node,
-    parentId: entry.parentId,
-    stack: entry.stack,
-    subtreeDepth: group ? Math.max(1, subtreeDepth(node)) : 0,
-  };
-  rowsByNode.set(node, row);
+  const row: LayerTreeRow = { expanded, id: vm.id, posInSet, setSize, vm };
+  rowsByNode.set(vm, row);
   return row;
 };
 
+const normalizeFilter = (filter: string | undefined): string => (filter ?? '').trim().toLocaleLowerCase();
+
 /**
- * The rows of every stack for a document and the set of expanded groups. Row objects keep their
- * identity while their node, place, effective state, and expansion are unchanged, so memoized row
- * components skip unaffected rows.
+ * The nodes a filter keeps: every node whose name matches, plus the groups above a match so the
+ * match stays reachable. A kept group shows expanded when something kept sits beneath it; a
+ * matching group with no kept descendant shows collapsed, since its children are not matches.
+ */
+const filteredIds = (
+  nodes: readonly SemanticNode[],
+  filter: string
+): { kept: ReadonlySet<string>; open: ReadonlySet<string> } => {
+  const kept = new Set<string>();
+  const open = new Set<string>();
+  for (const node of nodes) {
+    if (node.node.name.toLocaleLowerCase().includes(filter)) {
+      kept.add(node.id);
+      for (const ancestor of node.parentIds) {
+        kept.add(ancestor);
+        open.add(ancestor);
+      }
+    }
+  }
+  return { kept, open };
+};
+
+/**
+ * The rows of every stack for a document, the set of expanded groups, and an optional name filter.
+ * Rows come from the seam's semantic nodes, so a row keeps its identity while its node, its place,
+ * its effective state, its sibling position and its expansion are unchanged; memoized row
+ * components skip unaffected rows. Every node is visited once.
  */
 export const buildLayerStackRows = (
   document: CanvasDocumentContractV3,
-  expandedGroupIds: ReadonlySet<string>
-): Record<LayerStackKind, LayerStackRows> => {
-  const index = getDocumentIndex(document);
-  const result: Record<LayerStackKind, { rows: LayerTreeRow[]; nodeIds: string[]; leafCount: number }> = {
-    control: { leafCount: 0, nodeIds: [], rows: [] },
-    inpaint_mask: { leafCount: 0, nodeIds: [], rows: [] },
-    raster: { leafCount: 0, nodeIds: [], rows: [] },
-    regional_guidance: { leafCount: 0, nodeIds: [], rows: [] },
-  };
+  expandedGroupIds: ReadonlySet<string>,
+  filter?: string
+): LayerStackRowsByKind => {
+  const nodes = compileDocumentNodes(document);
+  const query = normalizeFilter(filter);
+  const filtered = query ? filteredIds(nodes, query) : null;
+  const kept = filtered?.kept ?? null;
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const setSizeOf = (node: SemanticNode): number =>
+    node.parentId === null ? document.stacks[node.stack].length : (byId.get(node.parentId)?.childCount ?? 0);
+  const result = Object.fromEntries(
+    LAYER_STACKS_TOP_FIRST.map((stack) => [
+      stack,
+      { groupCount: 0, leafCount: 0, nodeIds: [] as string[], rows: [] as LayerTreeRow[], stack },
+    ])
+  ) as Record<
+    LayerStackKind,
+    { groupCount: number; leafCount: number; nodeIds: string[]; rows: LayerTreeRow[]; stack: LayerStackKind }
+  >;
   const collapsed = new Set<string>();
-  for (const entry of index.nodes) {
-    const target = result[entry.stack];
-    target.nodeIds.push(entry.node.id);
-    if (!isGroupNode(entry.node)) {
+  for (const node of nodes) {
+    const target = result[node.stack];
+    target.nodeIds.push(node.id);
+    if (node.kind === 'group') {
+      target.groupCount += 1;
+    } else {
       target.leafCount += 1;
     }
-    if (entry.path.some((ancestor) => collapsed.has(ancestor))) {
-      if (isGroupNode(entry.node) && !expandedGroupIds.has(entry.node.id)) {
-        collapsed.add(entry.node.id);
+    if (kept && !kept.has(node.id)) {
+      continue;
+    }
+    if (node.parentIds.some((ancestor) => collapsed.has(ancestor))) {
+      if (node.kind === 'group' && !expandedGroupIds.has(node.id)) {
+        collapsed.add(node.id);
       }
       continue;
     }
-    const expanded = isGroupNode(entry.node) && expandedGroupIds.has(entry.node.id);
-    if (isGroupNode(entry.node) && !expanded) {
-      collapsed.add(entry.node.id);
+    const expanded = node.kind === 'group' && (filtered ? filtered.open.has(node.id) : expandedGroupIds.has(node.id));
+    if (node.kind === 'group' && !expanded) {
+      collapsed.add(node.id);
     }
-    target.rows.push(rowFor(entry, expanded));
+    target.rows.push(rowFor(node, expanded, node.siblingIndex + 1, setSizeOf(node)));
   }
-  return {
-    control: { stack: 'control', ...result.control },
-    inpaint_mask: { stack: 'inpaint_mask', ...result.inpaint_mask },
-    raster: { stack: 'raster', ...result.raster },
-    regional_guidance: { stack: 'regional_guidance', ...result.regional_guidance },
-  };
+  return result;
 };

@@ -1,6 +1,6 @@
-import type { CanvasLayerContract, CanvasNodeEntry, LayerStackKind } from '@workbench/canvas-engine/api';
+import type { CanvasLayerContract, LayerStackKind, SemanticNode } from '@workbench/canvas-engine/api';
 
-import { isExportableRasterLayer, isGroupNode, isNodeHidden } from '@workbench/canvas-engine/api';
+import { isExportableRasterLayer, isNodeHidden } from '@workbench/canvas-engine/api';
 
 /** A stack-header action id. Extend this + `getStackActions` to add a new action. */
 export type StackActionId = 'mergeVisible' | 'exportPsd' | 'toggleVisibility' | 'new';
@@ -33,17 +33,15 @@ export type StackVisibilityAxis = 'enabled' | 'hidden';
 export const stackVisibilityAxis = (stack: LayerStackKind): StackVisibilityAxis =>
   stack === 'raster' ? 'enabled' : 'hidden';
 
-const isEntryVisible = (entry: CanvasNodeEntry, axis: StackVisibilityAxis): boolean =>
-  axis === 'hidden'
-    ? !entry.ancestorsHidden && !isNodeHidden(entry.node)
-    : entry.ancestorsEnabled && entry.node.isEnabled;
+const isVisible = (node: SemanticNode, axis: StackVisibilityAxis): boolean =>
+  axis === 'hidden' ? !node.documentHidden : node.contributionEnabled;
 
-const isOwnVisible = (entry: CanvasNodeEntry, axis: StackVisibilityAxis): boolean =>
-  axis === 'hidden' ? !isNodeHidden(entry.node) : entry.node.isEnabled;
+const isOwnVisible = (node: SemanticNode, axis: StackVisibilityAxis): boolean =>
+  axis === 'hidden' ? !isNodeHidden(node.node) : node.node.isEnabled;
 
 /** True when every leaf of the stack is effectively visible on `axis`. Empty ⇒ true. */
-export const isStackAllVisible = (entries: readonly CanvasNodeEntry[], axis: StackVisibilityAxis): boolean =>
-  entries.every((entry) => isGroupNode(entry.node) || isEntryVisible(entry, axis));
+export const isStackAllVisible = (nodes: readonly SemanticNode[], axis: StackVisibilityAxis): boolean =>
+  nodes.every((node) => node.kind === 'group' || isVisible(node, axis));
 
 /**
  * Plans a stack show/hide-all toggle as ONE reversible bulk edit. When every leaf is visible the
@@ -51,12 +49,12 @@ export const isStackAllVisible = (entries: readonly CanvasNodeEntry[], axis: Sta
  * off in its own right is turned on, so nothing stays gated behind an ancestor.
  */
 export const planStackVisibilityToggle = (
-  entries: readonly CanvasNodeEntry[],
+  nodes: readonly SemanticNode[],
   axis: StackVisibilityAxis
 ): { ids: string[]; nextVisible: boolean } => {
-  const nextVisible = !isStackAllVisible(entries, axis);
+  const nextVisible = !isStackAllVisible(nodes, axis);
   const targets = nextVisible
-    ? entries.filter((entry) => !isOwnVisible(entry, axis))
-    : entries.filter((entry) => entry.parentId === null);
-  return { ids: targets.map((entry) => entry.node.id), nextVisible };
+    ? nodes.filter((node) => !isOwnVisible(node, axis))
+    : nodes.filter((node) => node.parentId === null);
+  return { ids: targets.map((node) => node.id), nextVisible };
 };

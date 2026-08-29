@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/api';
+import type { CanvasDocumentModel } from '@workbench/canvas-engine/api';
 import type { CanvasPreparedEngine, PreparedCommitOutcome } from '@workbench/widgets/canvas/useStructuralCommit';
 
 import { getDocumentIndex, isGroupNode } from '@workbench/canvas-engine/api';
@@ -7,25 +7,23 @@ import { commitPreparedEdit } from '@workbench/widgets/canvas/useStructuralCommi
 
 import { createLayerId, nextGroupName } from './layerOps';
 
-/** Whether `ids` name siblings the model can wrap in one group. */
-export const canGroupNodes = (document: CanvasDocumentContractV3, ids: readonly string[]): boolean => {
-  const index = getDocumentIndex(document);
-  const entries = ids.map((id) => index.byId.get(id)).filter((entry) => entry !== undefined);
-  if (entries.length === 0 || entries.length !== ids.length) {
-    return false;
-  }
-  const selected = new Set(ids);
-  const outer = entries.filter((entry) => !entry.path.some((ancestor) => selected.has(ancestor)));
-  const first = outer[0]!;
-  return outer.every((entry) => entry.stack === first.stack && entry.parentId === first.parentId);
-};
+/** A group id no document holds, for asking the model whether a grouping would be accepted. */
+const ELIGIBILITY_GROUP_ID = '\0group';
 
-/** Whether any of `ids` is a group the model can dissolve. */
-export const canUngroupNodes = (document: CanvasDocumentContractV3, ids: readonly string[]): boolean =>
-  ids.some((id) => {
-    const node = getDocumentIndex(document).byId.get(id)?.node;
+/** Whether the model would accept wrapping `ids` in one group; the same check the command runs. */
+export const canGroupSelection = (model: CanvasDocumentModel | null, ids: readonly string[]): boolean =>
+  ids.length > 0 &&
+  !!model &&
+  model.refusalFor({ groupId: ELIGIBILITY_GROUP_ID, ids, name: '', type: 'group' }) === null;
+
+/** Whether the model would dissolve at least one group among `ids`. */
+export const canUngroupSelection = (model: CanvasDocumentModel | null, ids: readonly string[]): boolean => {
+  const groupIds = ids.filter((id) => {
+    const node = model?.getNode(id);
     return !!node && isGroupNode(node);
   });
+  return groupIds.length > 0 && !!model && model.refusalFor({ ids: groupIds, type: 'ungroup' }) === null;
+};
 
 /**
  * Wraps `ids` in a new group, selects it, and shows its children. The selection is published only

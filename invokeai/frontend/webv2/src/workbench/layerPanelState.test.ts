@@ -17,6 +17,9 @@ import {
   isSameLayerPanelState,
   reconcileLayerPanelStates,
   selectLayerInPanel,
+  setLayerPanelDensity,
+  setLayerPanelFilter,
+  setLayerPanelFocus,
   toggleLayerStackCollapsed,
   type LayerPanelProjectView,
 } from './layerPanelState';
@@ -213,5 +216,36 @@ describe('revealing an external primary', () => {
     });
     const collapsedByUser = createLayerPanelState('project', 'a');
     expect(reconcileLayerPanelState(collapsedByUser, 'project', index, 'a')).toBe(collapsedByUser);
+  });
+});
+
+describe('focus, density and filter', () => {
+  beforeEach(() => clearLayerPanelStates());
+
+  it('keeps a roving focus that follows the primary until a row is focused explicitly', () => {
+    const index = indexStacks(stacksFrom([layerContract('a'), layerContract('b')]));
+    publishLayerPanelSelection({ primaryId: 'a', projectId: 'p1', selectedIds: ['a'] });
+    expect(readLayerPanelState('p1', 'a').focusId).toBe('a');
+    setLayerPanelFocus('p1', 'a', 'b');
+    expect(readLayerPanelState('p1', 'a').focusId).toBe('b');
+    const gone = reconcileLayerPanelState(
+      readLayerPanelState('p1', 'a'),
+      'p1',
+      indexStacks(stacksFrom([layerContract('a')])),
+      'a'
+    );
+    expect(gone.focusId).toBe('a');
+    expect(reconcileLayerPanelState(readLayerPanelState('p1', 'a'), 'p1', index, 'a').focusId).toBe('b');
+  });
+
+  it('carries density and filter across primary changes and clears them on a project switch', () => {
+    setLayerPanelDensity('p1', 'a', 'compact');
+    setLayerPanelFilter('p1', 'a', 'sky');
+    expect(readLayerPanelState('p1', 'b')).toMatchObject({ density: 'compact', filter: 'sky', primaryId: 'b' });
+    const index = indexStacks(stacksFrom([layerContract('x')]));
+    expect(reconcileLayerPanelState(readLayerPanelState('p1', 'b'), 'p2', index, 'x')).toMatchObject({
+      density: 'comfortable',
+      filter: '',
+    });
   });
 });

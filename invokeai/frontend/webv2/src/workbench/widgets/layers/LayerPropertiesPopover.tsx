@@ -1,26 +1,16 @@
 import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 
-import { Box, Popover, Portal, Stack, Switch, Text } from '@chakra-ui/react';
-import { IconButton } from '@platform/ui';
+import { Popover, Portal, Stack, Switch, Text } from '@chakra-ui/react';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
-import { SlidersHorizontalIcon } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-
-import type { LayerPropertiesRequest } from './layerPropertiesRequestStore';
 
 import { AdjustmentsPopover } from './AdjustmentsPopover';
 import { ControlLayerSettings } from './ControlLayerSettings';
 import { InpaintMaskSettings } from './InpaintMaskSettings';
-import {
-  closeLayerPropertiesForOperation,
-  getLayerPropertiesOwnershipKey,
-  isLayerPropertiesOpen,
-} from './layerPropertiesOperation';
-import { clearLayerPropertiesRequest, useLayerPropertiesRequest } from './layerPropertiesRequestStore';
 import { RasterLayerFilterSection } from './RasterLayerFilterSection';
 import { RegionalGuidanceSettings } from './RegionalGuidanceSettings';
 
@@ -29,118 +19,65 @@ export type LayerPropertiesEngine = Pick<
   'document' | 'exports' | 'interaction' | 'layers' | 'projectId'
 >;
 
-const POPOVER_POSITIONING = { placement: 'left-start' } as const;
-
-const stopPropagation = (event: { stopPropagation: () => void }): void => event.stopPropagation();
+/** A viewport box the popover anchors to: the row's properties button, or the row itself. */
+export interface LayerPropertiesAnchor {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
 
 interface LayerPropertiesPopoverProps {
+  anchor: LayerPropertiesAnchor;
   engine: LayerPropertiesEngine | null;
   layer: CanvasLayerContract;
+  onClose: () => void;
 }
 
 /**
- * The per-layer "properties/configure" affordance (round-3 restructure): a sliders
- * IconButton on each row that opens a popover holding that layer's type-specific
- * settings — control adapter/filter, regional prompts/ref-images, inpaint mask
- * fill/noise, or raster adjustments. Previously these were
- * stacked in the panel header for the *selected* layer; moving them into a per-row
- * popover keeps the header slim and each layer's config next to the layer.
- *
- * Content is mounted only while open (`lazyMount` + `unmountOnExit`). Starting a
- * canvas operation explicitly clears both trigger and request ownership before
- * the operation panel takes over. Type-specific settings are keyed by layer so
+ * The one per-panel "properties/configure" surface: a popover holding the addressed layer's
+ * type-specific settings, anchored to the row that asked for it. Rows hold no popover of their
+ * own, so a large document mounts one settings instance at most. Starting a canvas operation
+ * closes it before the operation panel takes over; type-specific settings are keyed by layer so
  * switching targets always mounts a fresh settings instance.
  */
-export const LayerPropertiesPopover = (props: LayerPropertiesPopoverProps) => {
-  const editingLocked = useCanvasDocumentEditingLocked(props.engine);
-  const request = useLayerPropertiesRequest(props.layer.id);
-  return (
-    <LayerPropertiesPopoverOwnership
-      key={`${props.layer.id}:${getLayerPropertiesOwnershipKey(editingLocked)}`}
-      {...props}
-      editingLocked={editingLocked}
-      request={request}
-    />
-  );
-};
-
-const LayerPropertiesPopoverOwnership = ({
-  editingLocked,
-  engine,
-  layer,
-  request,
-}: LayerPropertiesPopoverProps & { editingLocked: boolean; request: LayerPropertiesRequest | null }) => {
-  const { t } = useTranslation();
-  const [triggerOpen, setTriggerOpen] = useState(false);
+export const LayerPropertiesPopover = ({ anchor, engine, layer, onClose }: LayerPropertiesPopoverProps) => {
+  const editingLocked = useCanvasDocumentEditingLocked(engine);
   const documentRevision = useActiveProjectSelector((project) => project.canvas.documentRevision);
-  const isOpen = !editingLocked && isLayerPropertiesOpen({ requestToken: request?.token ?? null, triggerOpen });
-  const consumeLockedRequestRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      if (node && editingLocked && request) {
-        clearLayerPropertiesRequest(request.token);
-      }
-    },
-    [editingLocked, request]
-  );
-
+  const positioning = useMemo(() => ({ getAnchorRect: () => anchor, placement: 'left-start' as const }), [anchor]);
   const handleOpenChange = useCallback(
     (details: { open: boolean }) => {
-      setTriggerOpen(details.open);
-      if (!details.open && request) {
-        clearLayerPropertiesRequest(request.token);
+      if (!details.open) {
+        onClose();
       }
     },
-    [request]
+    [onClose]
   );
-  const handleOperationStarted = useCallback(() => {
-    const closed = closeLayerPropertiesForOperation({ requestToken: request?.token ?? null, triggerOpen });
-    setTriggerOpen(closed.triggerOpen);
-    if (closed.requestTokenToClear !== null) {
-      clearLayerPropertiesRequest(closed.requestTokenToClear);
-    }
-  }, [request?.token, triggerOpen]);
-
   return (
-    <>
-      {editingLocked && request ? <Box ref={consumeLockedRequestRef} display="none" /> : null}
-      <Popover.Root
-        lazyMount
-        open={isOpen}
-        positioning={POPOVER_POSITIONING}
-        unmountOnExit
-        onOpenChange={handleOpenChange}
-      >
-        <Popover.Trigger asChild>
-          <IconButton
-            aria-label={t('widgets.layers.properties')}
-            color="fg.subtle"
-            disabled={editingLocked}
-            size="2xs"
-            variant="ghost"
-            onClick={stopPropagation}
-            onPointerDown={stopPropagation}
-          >
-            <SlidersHorizontalIcon />
-          </IconButton>
-        </Popover.Trigger>
-        <Portal>
-          <Popover.Positioner>
-            <Popover.Content bg="bg.muted" borderColor="border.emphasized" borderWidth="1px" w="20rem">
-              <Popover.Body p="2.5">
-                <Stack gap="2" inert={editingLocked}>
-                  <LayerTypeSettings
-                    documentRevision={documentRevision}
-                    engine={engine}
-                    layer={layer}
-                    onOperationStarted={handleOperationStarted}
-                  />
-                </Stack>
-              </Popover.Body>
-            </Popover.Content>
-          </Popover.Positioner>
-        </Portal>
-      </Popover.Root>
-    </>
+    <Popover.Root
+      lazyMount
+      open={!editingLocked}
+      positioning={positioning}
+      unmountOnExit
+      onOpenChange={handleOpenChange}
+    >
+      <Portal>
+        <Popover.Positioner>
+          <Popover.Content bg="bg.muted" borderColor="border.emphasized" borderWidth="1px" w="20rem">
+            <Popover.Body p="2.5">
+              <Stack gap="2">
+                <LayerTypeSettings
+                  documentRevision={documentRevision}
+                  engine={engine}
+                  layer={layer}
+                  onOperationStarted={onClose}
+                />
+              </Stack>
+            </Popover.Body>
+          </Popover.Content>
+        </Popover.Positioner>
+      </Portal>
+    </Popover.Root>
   );
 };
 

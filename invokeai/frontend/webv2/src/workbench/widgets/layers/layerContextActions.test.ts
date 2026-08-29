@@ -77,6 +77,7 @@ const makeState = (
     hasSupportedContent: true,
     hasWorkflowBindings: true,
     interactionLocked: false,
+    canGroupSelection: true,
     layer,
     selectedIds: [layer.id],
     ...overrides,

@@ -2552,6 +2552,8 @@
         "expandGroup": "Expand group",
         "collapseGroup": "Collapse group",
         "selectFirstChild": "Select first layer in group",
+        "indent": "Move into the group above",
+        "outdent": "Move out of the group",
         "groupLocked": "Locked by a group",
         "groupDisabled": "Disabled by a group",
         "groupHidden": "Hidden by a group"
@@ -2910,13 +2912,40 @@
         "image": "Image",
         "inpaint_mask": "Inpaint",
         "paint": "Paint",
+        "gradient": "Gradient",
+        "shape": "Shape",
+        "text": "Text",
         "regional_guidance": "Region",
         "group": "Group"
       },
       "groupSummary_one": "{{count}} layer",
       "groupSummary_other": "{{count}} layers",
       "groupEmpty": "Empty group",
-      "groupSelectedHint": "Select a layer inside this group to paint."
+      "groupSelectedHint": "Select a layer inside this group to paint.",
+      "tree": "Layer tree",
+      "summary": {
+        "referenceImages_one": "{{count}} reference image",
+        "referenceImages_other": "{{count}} reference images",
+        "denoiseLimit": "Denoise ≤ {{value}}%",
+        "noise": "Noise {{value}}%"
+      },
+      "footer": {
+        "filter": "Filter layers",
+        "layers_one": "{{count}} layer",
+        "layers_other": "{{count}} layers",
+        "groups_one": "{{count}} group",
+        "groups_other": "{{count}} groups",
+        "selected_one": "{{count}} selected",
+        "selected_other": "{{count}} selected",
+        "degraded": "Large document: thumbnails and drag reordering are off.",
+        "density": {
+          "label": "Row density",
+          "compact": "Compact",
+          "comfortable": "Comfortable",
+          "large": "Large"
+        }
+      },
+      "dropRefused": "Can't drop here: {{reason}}"
     },
     "gallery": {
       "alwaysShowDimensions": "Always show dimensions",

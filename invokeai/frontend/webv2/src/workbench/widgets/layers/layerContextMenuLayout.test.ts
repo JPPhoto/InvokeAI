@@ -47,6 +47,7 @@ const actionsFor = (layer: CanvasLayerContract, layers: readonly CanvasLayerCont
     hasWorkflowBindings: true,
     interactionLocked: false,
     selectedIds: [layer.id],
+    canGroupSelection: true,
     layer,
   });
 

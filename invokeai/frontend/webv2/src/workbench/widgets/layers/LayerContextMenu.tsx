@@ -67,7 +67,7 @@ import {
   getLayerContextMenuRenderEntries,
 } from './layerContextMenuLayout';
 import { copyBlobToClipboard, saveLayerToAssets } from './layerExportActions';
-import { groupLayers } from './layerGroupCommands';
+import { canGroupSelection, groupLayers } from './layerGroupCommands';
 import { resolveMenuTargetForRender } from './layerMenuState';
 import {
   convertRasterToControl,
@@ -262,8 +262,10 @@ const LayerMenu = ({
     [commitPrepared, layer.id]
   );
 
+  const canGroup = canGroupSelection(engine?.document.model() ?? null, actionTargets({ layer, selectedIds }));
   const actionState = useMemo<LayerContextActionState>(
     () => ({
+      canGroupSelection: canGroup,
       canRunWorkflow: workflowAvailability.canRunWorkflow,
       document,
       hasEngine: engine !== null,
@@ -274,6 +276,7 @@ const LayerMenu = ({
       selectedIds,
     }),
     [
+      canGroup,
       document,
       engine,
       hasSupportedContent,

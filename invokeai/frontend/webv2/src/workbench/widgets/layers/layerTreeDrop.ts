@@ -14,10 +14,12 @@ export interface LayerDropTarget {
   readonly depth: number;
   /** Ids that move, outermost only, in document order. */
   readonly ids: readonly string[];
+  /** The rendered row the block lands above, or `null` for the end of the list. */
+  readonly beforeRowId: string | null;
 }
 
 export interface LayerDropInput {
-  /** The stack's rendered rows, top first. */
+  /** One stack's rendered rows, top first. */
   readonly rows: readonly LayerTreeRow[];
   /** Every selected id that drags along; descendants of another dragged id are folded in. */
   readonly activeIds: readonly string[];
@@ -28,14 +30,19 @@ export interface LayerDropInput {
   readonly depthOffset: number;
 }
 
-/** The descendants of a rendered row are the following rows with a greater depth. */
-const subtreeEnd = (rows: readonly LayerTreeRow[], start: number): number => {
-  const depth = rows[start]!.depth;
-  let end = start + 1;
-  while (end < rows.length && rows[end]!.depth > depth) {
-    end += 1;
+/** For each rendered row, the index just past its rendered descendants. One backward pass. */
+const subtreeEnds = (rows: readonly LayerTreeRow[]): Int32Array => {
+  const ends = new Int32Array(rows.length);
+  const open: number[] = [];
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const depth = rows[index]!.vm.depth;
+    while (open.length > 0 && rows[open[open.length - 1]!]!.vm.depth > depth) {
+      open.pop();
+    }
+    ends[index] = open.length > 0 ? open[open.length - 1]! : rows.length;
+    open.push(index);
   }
-  return end;
+  return ends;
 };
 
 /**
@@ -43,34 +50,47 @@ const subtreeEnd = (rows: readonly LayerTreeRow[], start: number): number => {
  * the pointer's vertical position picks the gap, and its horizontal offset picks the depth
  * between the shallowest and deepest parent that gap allows. Returns `null` when nothing valid
  * is under the pointer, when the pointer is over the block itself, or when the move would exceed
- * the depth limit. Locks, cycles across stacks, and other document refusals stay with the model.
+ * the depth limit. Locks and other document refusals stay with the model. Linear in the rows.
  */
 export const projectLayerDrop = (input: LayerDropInput): LayerDropTarget | null => {
   const { rows } = input;
+  if (rows.length === 0) {
+    return null;
+  }
   const selected = new Set(input.activeIds);
-  const outer = rows.filter(
-    (row, index) =>
-      selected.has(row.id) &&
-      !rows.slice(0, index).some((candidate) => selected.has(candidate.id) && isAncestorRow(rows, candidate, row))
-  );
+  const ends = subtreeEnds(rows);
+  const moving = new Uint8Array(rows.length);
+  const outer: LayerTreeRow[] = [];
+  let deepestSubtree = 0;
+  let coveredUntil = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index]!;
+    if (index < coveredUntil) {
+      moving[index] = 1;
+      continue;
+    }
+    if (!selected.has(row.id)) {
+      continue;
+    }
+    outer.push(row);
+    moving[index] = 1;
+    coveredUntil = ends[index]!;
+    deepestSubtree = Math.max(deepestSubtree, row.vm.subtreeDepth);
+  }
   if (outer.length === 0) {
     return null;
   }
-  const moving = new Set<string>();
-  let deepestSubtree = 0;
-  for (const row of outer) {
-    const start = rows.indexOf(row);
-    const end = subtreeEnd(rows, start);
-    for (let index = start; index < end; index += 1) {
-      moving.add(rows[index]!.id);
+  let overIndex = -1;
+  const remaining: LayerTreeRow[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    if (moving[index]) {
+      continue;
     }
-    deepestSubtree = Math.max(deepestSubtree, row.subtreeDepth);
+    if (rows[index]!.id === input.overId) {
+      overIndex = remaining.length;
+    }
+    remaining.push(rows[index]!);
   }
-  if (moving.has(input.overId)) {
-    return null;
-  }
-  const remaining = rows.filter((row) => !moving.has(row.id));
-  const overIndex = remaining.findIndex((row) => row.id === input.overId);
   if (overIndex < 0) {
     return null;
   }
@@ -78,34 +98,50 @@ export const projectLayerDrop = (input: LayerDropInput): LayerDropTarget | null 
   const previous = remaining[insertAt - 1];
   const next = remaining[insertAt];
   const maxDepth = Math.min(
-    previous ? previous.depth + (previous.kind === 'group' && previous.expanded ? 1 : 0) : 0,
+    previous ? previous.vm.depth + (previous.vm.kind === 'group' && previous.expanded ? 1 : 0) : 0,
     CANVAS_MAX_NODE_DEPTH - deepestSubtree
   );
-  const minDepth = next ? next.depth : 0;
+  const minDepth = next ? next.vm.depth : 0;
   if (maxDepth < minDepth) {
     return null;
   }
-  const depth = Math.max(minDepth, Math.min(maxDepth, outer[0]!.depth + input.depthOffset));
+  const depth = Math.max(minDepth, Math.min(maxDepth, outer[0]!.vm.depth + input.depthOffset));
   let parentId: string | null = null;
   if (depth > 0 && previous) {
-    if (previous.depth < depth) {
+    if (previous.vm.depth < depth) {
       parentId = previous.id;
     } else {
       for (let index = insertAt - 1; index >= 0; index -= 1) {
         const candidate = remaining[index]!;
-        if (candidate.depth === depth - 1) {
+        if (candidate.vm.depth === depth - 1) {
           parentId = candidate.id;
           break;
         }
       }
     }
   }
-  const beforeId = next && next.parentId === parentId && next.depth === depth ? next.id : null;
-  return { beforeId, depth, ids: outer.map((row) => row.id), parentId, stack: rows[0]!.stack };
+  const beforeId = next && next.vm.parentId === parentId && next.vm.depth === depth ? next.id : null;
+  return {
+    beforeId,
+    beforeRowId: next?.id ?? null,
+    depth,
+    ids: outer.map((row) => row.id),
+    parentId,
+    stack: rows[0]!.vm.stack,
+  };
 };
 
-const isAncestorRow = (rows: readonly LayerTreeRow[], ancestor: LayerTreeRow, row: LayerTreeRow): boolean => {
-  const start = rows.indexOf(ancestor);
-  const index = rows.indexOf(row);
-  return ancestor.kind === 'group' && index > start && index < subtreeEnd(rows, start);
+/** The selected rendered rows with no selected rendered ancestor: the blocks a drag carries. */
+export const outermostRowIds = (rows: readonly LayerTreeRow[], ids: ReadonlySet<string>): string[] => {
+  const ends = subtreeEnds(rows);
+  const outer: string[] = [];
+  let coveredUntil = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    if (index < coveredUntil || !ids.has(rows[index]!.id)) {
+      continue;
+    }
+    outer.push(rows[index]!.id);
+    coveredUntil = ends[index]!;
+  }
+  return outer;
 };

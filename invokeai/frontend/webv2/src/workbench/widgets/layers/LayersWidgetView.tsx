@@ -1,15 +1,8 @@
-import type { LayerStackKind } from '@workbench/canvas-engine/api';
+import type { LayerPanelDensity } from '@workbench/layerPanelState';
 
 import { Flex, Icon, Stack, Text } from '@chakra-ui/react';
-import { LAYER_STACKS_TOP_FIRST } from '@workbench/canvas-engine/api';
-import {
-  publishLayerPanelSelection,
-  selectLayerInPanel,
-  setLayerGroupExpanded,
-  toggleLayerStackCollapsed,
-  useLayerPanelState,
-  type LayerSelectionModifiers,
-} from '@workbench/layerPanelState';
+import { getDocumentIndex } from '@workbench/canvas-engine/api';
+import { setLayerPanelDensity, setLayerPanelFilter, useLayerPanelState } from '@workbench/layerPanelState';
 import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
@@ -19,15 +12,17 @@ import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { LayerMultiSelectionActions } from './LayerMultiSelectionActions';
-import { isLayerPropertiesRequestedWithin, useCurrentLayerPropertiesRequest } from './layerPropertiesRequestStore';
+import { LAYER_PANEL_DEGRADE_THRESHOLD } from './layerPanelRows';
+import { LayersPanelFooter } from './LayersPanelFooter';
 import { LayersPanelHeader } from './LayersPanelHeader';
-import { LayerStackSection } from './LayerStackSection';
+import { LayersTree } from './LayersTree';
 import { buildLayerStackRows } from './layerTreeRows';
 
 /**
- * The layers panel: a fixed Photoshop-style header region (selected layer's opacity + blend mode,
- * global denoising strength) above the four stacks (inpaint masks / regional guidance / control /
- * raster), each a tree of groups and layers rendered top first.
+ * The layers panel: a fixed header (selected layer's opacity + blend mode, global denoising
+ * strength), a fixed selection toolbar, the virtualized tree of the four stacks, and a fixed
+ * footer (summary, filter, density). Regions keep their geometry; their controls disable instead
+ * of appearing and disappearing.
  */
 export const LayersWidgetView = () => {
   const { t } = useTranslation();
@@ -35,66 +30,46 @@ export const LayersWidgetView = () => {
   const projectId = useActiveProjectId();
   const dispatch = useCanvasProjectMutationDispatch();
   const editingLocked = useCanvasDocumentEditingLocked(engine);
-  const propertiesRequest = useCurrentLayerPropertiesRequest();
   const document = useActiveProjectSelector((project) => project.canvas.document);
   const { selectedLayerId } = document;
 
-  const panelState = useLayerPanelState(projectId, selectedLayerId);
-  const expandedGroupIds = useMemo(() => new Set(panelState.expandedGroupIds), [panelState.expandedGroupIds]);
-  const stacks = useMemo(() => buildLayerStackRows(document, expandedGroupIds), [document, expandedGroupIds]);
-  const visibleStacks = useMemo(
-    () => LAYER_STACKS_TOP_FIRST.map((kind) => stacks[kind]).filter((stack) => stack.nodeIds.length > 0),
+  const panel = useLayerPanelState(projectId, selectedLayerId);
+  const expandedGroupIds = useMemo(() => new Set(panel.expandedGroupIds), [panel.expandedGroupIds]);
+  const stacks = useMemo(
+    () => buildLayerStackRows(document, expandedGroupIds, panel.filter),
+    [document, expandedGroupIds, panel.filter]
+  );
+  const nodeCount = getDocumentIndex(document).nodes.length;
+  const degraded = nodeCount > LAYER_PANEL_DEGRADE_THRESHOLD;
+  const counts = useMemo(
+    () =>
+      Object.values(stacks).reduce(
+        (total, stack) => ({ groups: total.groups + stack.groupCount, leaves: total.leaves + stack.leafCount }),
+        { groups: 0, leaves: 0 }
+      ),
     [stacks]
   );
-  const { collapsedStacks, selectedIds } = panelState;
-  const isCollapsed = useCallback(
-    (stack: LayerStackKind): boolean =>
-      collapsedStacks.includes(stack) && !isLayerPropertiesRequestedWithin(propertiesRequest, stacks[stack].nodeIds),
-    [collapsedStacks, propertiesRequest, stacks]
-  );
-  const allNodeIds = useMemo(() => visibleStacks.flatMap((stack) => stack.nodeIds), [visibleStacks]);
-  const visibleRowIds = useMemo(
-    () => visibleStacks.flatMap((stack) => (isCollapsed(stack.stack) ? [] : stack.rows.map((row) => row.id))),
-    [isCollapsed, visibleStacks]
-  );
 
-  const handleSelect = useCallback(
-    (id: string, modifiers: LayerSelectionModifiers) => {
-      const next = selectLayerInPanel(panelState, id, modifiers.range ? visibleRowIds : allNodeIds, modifiers);
-      publishLayerPanelSelection(next);
-      if (next.primaryId !== selectedLayerId) {
-        dispatch({ id: next.primaryId, type: 'setCanvasSelectedLayer' });
-      }
-    },
-    [allNodeIds, dispatch, panelState, selectedLayerId, visibleRowIds]
-  );
-
-  const handleToggleCollapse = useCallback(
-    (stack: LayerStackKind) => toggleLayerStackCollapsed(projectId, selectedLayerId, stack),
+  const handleDensity = useCallback(
+    (density: LayerPanelDensity) => setLayerPanelDensity(projectId, selectedLayerId, density),
     [projectId, selectedLayerId]
   );
-  const handleToggleExpanded = useCallback(
-    (groupId: string) => setLayerGroupExpanded(projectId, selectedLayerId, [groupId]),
-    [projectId, selectedLayerId]
-  );
-  const handleExpandGroup = useCallback(
-    (groupId: string) => setLayerGroupExpanded(projectId, selectedLayerId, [groupId], true),
+  const handleFilter = useCallback(
+    (filter: string) => setLayerPanelFilter(projectId, selectedLayerId, filter),
     [projectId, selectedLayerId]
   );
 
   return (
-    <Stack h="full">
+    <Stack gap="1" h="full" minH="0">
       <LayersPanelHeader />
-      {selectedIds.length > 1 ? (
-        <LayerMultiSelectionActions
-          document={document}
-          editingLocked={editingLocked}
-          engine={engine}
-          projectId={projectId}
-          selectedIds={selectedIds}
-        />
-      ) : null}
-      {visibleStacks.length === 0 ? (
+      <LayerMultiSelectionActions
+        document={document}
+        editingLocked={editingLocked}
+        engine={engine}
+        projectId={projectId}
+        selectedIds={panel.selectedIds}
+      />
+      {nodeCount === 0 ? (
         <Flex
           align="center"
           borderColor="border.subtle"
@@ -102,9 +77,11 @@ export const LayersWidgetView = () => {
           borderWidth="1px"
           color="fg.subtle"
           direction="column"
+          flex="1"
           gap="2"
           justify="center"
           minH="8rem"
+          mx="2"
           p="4"
           rounded="md"
         >
@@ -114,25 +91,27 @@ export const LayersWidgetView = () => {
           </Text>
         </Flex>
       ) : (
-        <Stack gap="3">
-          {visibleStacks.map((stack) => (
-            <LayerStackSection
-              key={stack.stack}
-              dispatch={dispatch}
-              document={document}
-              engine={engine}
-              isCollapsed={isCollapsed(stack.stack)}
-              selectedIds={selectedIds}
-              selectedLayerId={selectedLayerId}
-              stack={stack}
-              onExpandGroup={handleExpandGroup}
-              onSelect={handleSelect}
-              onToggleCollapse={handleToggleCollapse}
-              onToggleExpanded={handleToggleExpanded}
-            />
-          ))}
-        </Stack>
+        <LayersTree
+          degraded={degraded}
+          dispatch={dispatch}
+          document={document}
+          editingLocked={editingLocked}
+          engine={engine}
+          panel={panel}
+          projectId={projectId}
+          stacks={stacks}
+        />
       )}
+      <LayersPanelFooter
+        degraded={degraded}
+        density={panel.density}
+        filter={panel.filter}
+        groupCount={counts.groups}
+        leafCount={counts.leaves}
+        selectedCount={panel.selectedIds.length}
+        onDensityChange={handleDensity}
+        onFilterChange={handleFilter}
+      />
     </Stack>
   );
 };

@@ -24,7 +24,7 @@ const THUMBNAIL_MAX_PX = 96;
 const CANVAS_STYLE: CSSProperties = { height: '100%', objectFit: 'contain', width: '100%' };
 const IMG_STYLE: CSSProperties = { height: '100%', objectFit: 'cover', width: '100%' };
 
-type LayerThumbnailEngine = CanvasCoreStoreCapability & {
+export type LayerThumbnailEngine = CanvasCoreStoreCapability & {
   readonly previews: CanvasPreviewCapability;
   readonly projectId: string;
 };

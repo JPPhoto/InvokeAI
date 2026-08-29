@@ -36,7 +36,6 @@ import {
 
 import type { LayerPropertiesSection } from './layerPropertiesRequestStore';
 
-import { canGroupNodes } from './layerGroupCommands';
 import { canConvertRasterControl, canMergeLayerDown } from './layerOps';
 
 export type LayerContextActionId =
@@ -96,6 +95,8 @@ export interface LayerContextActionState {
   layer: CanvasLayerContract;
   /** The panel's selection; an action on a selected layer applies to every selected node. */
   selectedIds: readonly string[];
+  /** The model's answer for grouping `actionTargets`, asked by the menu that owns the engine. */
+  canGroupSelection: boolean;
 }
 
 export interface LayerContextActionEffects {
@@ -325,10 +326,7 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     handler: ({ effects }) => effects.group(),
     icon: FolderPlusIcon,
     id: 'group',
-    isEnabled: (context) =>
-      isInteractionFree(context) &&
-      !(layerEntry(context)?.ancestorsLocked ?? false) &&
-      canGroupNodes(context.document, actionTargets(context)),
+    isEnabled: (context) => isInteractionFree(context) && context.canGroupSelection,
     isVisible: alwaysVisible,
     labelKey: 'widgets.layers.actions.group',
     order: 20,

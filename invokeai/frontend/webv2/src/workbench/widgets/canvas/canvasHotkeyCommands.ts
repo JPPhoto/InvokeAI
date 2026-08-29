@@ -16,8 +16,8 @@ import {
 import { publishLayerPanelSelection } from '@workbench/layerPanelState';
 import { commitPreparedEdit, type PreparedCommitOutcome } from '@workbench/widgets/canvas/useStructuralCommit';
 import {
-  canGroupNodes,
-  canUngroupNodes,
+  canGroupSelection,
+  canUngroupSelection,
   groupLayers,
   ungroupLayers,
 } from '@workbench/widgets/layers/layerGroupCommands';
@@ -263,13 +263,13 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
         });
     }
   } else if (commandId === 'canvas.groupLayers') {
-    if (engine && selected && canGroupNodes(document, ctx.selectedLayerIds)) {
+    if (engine && selected && canGroupSelection(engine.document.model(), ctx.selectedLayerIds)) {
       ctx.reportPreparedCommit(
         groupLayers(engine, engine.projectId, ctx.selectedLayerIds, t('widgets.canvas.commands.groupLayers'))
       );
     }
   } else if (commandId === 'canvas.ungroupLayers') {
-    if (engine && selected && canUngroupNodes(document, ctx.selectedLayerIds)) {
+    if (engine && selected && canUngroupSelection(engine.document.model(), ctx.selectedLayerIds)) {
       ctx.reportPreparedCommit(ungroupLayers(engine, ctx.selectedLayerIds, t('widgets.canvas.commands.ungroupLayers')));
     }
   } else if (commandId === 'canvas.mergeDown') {

@@ -5,7 +5,7 @@ import { HStack, Text } from '@chakra-ui/react';
 import { toaster } from '@platform/ui';
 import { IconButton } from '@platform/ui/Button';
 import { Tooltip } from '@platform/ui/Tooltip';
-import { canMergeSelectedRasters, collectSubtree, getDocumentIndex } from '@workbench/canvas-engine/api';
+import { canMergeSelectedRasters, getDocumentIndex } from '@workbench/canvas-engine/api';
 import { publishLayerPanelSelection } from '@workbench/layerPanelState';
 import { useCanvasRasterContentEpoch } from '@workbench/widgets/canvas/engineStoreHooks';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
@@ -27,7 +27,7 @@ import {
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { canGroupNodes, canUngroupNodes, groupLayers, ungroupLayers } from './layerGroupCommands';
+import { groupLayers, ungroupLayers } from './layerGroupCommands';
 
 type MultiSelectionEngine = Pick<CanvasEngineHandle, 'document' | 'exports' | 'interaction' | 'layers'>;
 const BULK_TOOLTIP_POSITIONING = { placement: 'top' } as const;
@@ -56,12 +56,13 @@ export const LayerMultiSelectionActions = ({
   }, [document, selectedIds]);
   const allEnabled = selected.every((entry) => entry.node.isEnabled);
   const allLocked = selected.every((entry) => entry.node.isLocked);
-  const anyFrozen = selected.some(
-    (entry) => entry.ancestorsLocked || collectSubtree(entry.node).some((node) => node.isLocked)
-  );
-  const canGroup = canGroupNodes(document, selectedIds);
-  const canUngroup = canUngroupNodes(document, selectedIds);
   const model = engine?.document.model() ?? null;
+  const none = selected.length === 0;
+  // Enablement comes from the same authority that will run the command, so nothing here can refuse later.
+  const canGroup =
+    !none && !!model && model.refusalFor({ groupId: '\0probe', ids: selectedIds, name: '', type: 'group' }) === null;
+  const canUngroup = !none && !!model && model.refusalFor({ ids: selectedIds, type: 'ungroup' }) === null;
+  const canDelete = !none && !!model && model.refusalFor({ ids: selectedIds, type: 'remove' }) === null;
   const canMergeSelected =
     !!engine &&
     !!model &&
@@ -168,25 +169,25 @@ export const LayerMultiSelectionActions = ({
         {t('widgets.layers.actions.selectedCount', { count: selected.length })}
       </Text>
       <BulkActionButton
-        disabled={editingLocked}
+        disabled={editingLocked || none}
         icon={ChevronsUpIcon}
         label={t('widgets.layers.actions.moveSelectedToFront')}
         onClick={moveToFront}
       />
       <BulkActionButton
-        disabled={editingLocked}
+        disabled={editingLocked || none}
         icon={ArrowUpIcon}
         label={t('widgets.layers.actions.moveSelectedForward')}
         onClick={moveForward}
       />
       <BulkActionButton
-        disabled={editingLocked}
+        disabled={editingLocked || none}
         icon={ArrowDownIcon}
         label={t('widgets.layers.actions.moveSelectedBackward')}
         onClick={moveBackward}
       />
       <BulkActionButton
-        disabled={editingLocked}
+        disabled={editingLocked || none}
         icon={ChevronsDownIcon}
         label={t('widgets.layers.actions.moveSelectedToBack')}
         onClick={moveToBack}
@@ -204,19 +205,19 @@ export const LayerMultiSelectionActions = ({
         onClick={ungroupSelected}
       />
       <BulkActionButton
-        disabled={editingLocked}
+        disabled={editingLocked || none}
         icon={allEnabled ? EyeOffIcon : EyeIcon}
         label={t(allEnabled ? 'widgets.layers.actions.disableSelected' : 'widgets.layers.actions.enableSelected')}
         onClick={toggleEnabled}
       />
       <BulkActionButton
-        disabled={editingLocked}
+        disabled={editingLocked || none}
         icon={allLocked ? LockOpenIcon : LockIcon}
         label={t(allLocked ? 'widgets.layers.actions.unlockSelected' : 'widgets.layers.actions.lockSelected')}
         onClick={toggleLocked}
       />
       <BulkActionButton
-        disabled={editingLocked || !engine}
+        disabled={editingLocked || !engine || none}
         icon={CopyIcon}
         label={t('widgets.layers.actions.duplicateSelected')}
         onClick={duplicateSelected}
@@ -229,7 +230,7 @@ export const LayerMultiSelectionActions = ({
       />
       <BulkActionButton
         colorPalette="red"
-        disabled={editingLocked || anyFrozen}
+        disabled={editingLocked || !canDelete}
         icon={Trash2Icon}
         label={t('widgets.layers.actions.deleteSelected')}
         onClick={deleteSelected}

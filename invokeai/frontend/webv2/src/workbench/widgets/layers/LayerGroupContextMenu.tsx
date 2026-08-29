@@ -4,7 +4,7 @@ import type { LucideIcon } from 'lucide-react';
 import type { ComponentProps } from 'react';
 
 import { HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
-import { IconButton, MenuContent, RenameDialog } from '@platform/ui';
+import { MenuContent, RenameDialog } from '@platform/ui';
 import { collectSubtree, getDocumentIndex, isOverlayStack } from '@workbench/canvas-engine/api';
 import { publishLayerPanelSelection, useLayerPanelState } from '@workbench/layerPanelState';
 import { useNotify } from '@workbench/useNotify';
@@ -21,7 +21,6 @@ import {
   FolderPlusIcon,
   LockIcon,
   LockOpenIcon,
-  MoreVerticalIcon,
   PencilIcon,
   Trash2Icon,
   UngroupIcon,
@@ -29,13 +28,11 @@ import {
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { canGroupNodes, groupLayers, ungroupLayers } from './layerGroupCommands';
+import { canGroupSelection, groupLayers, ungroupLayers } from './layerGroupCommands';
 
 export type LayerGroupContextMenuEngine = Pick<CanvasEngineHandle, 'document' | 'layers' | 'projectId'>;
 
 type MenuPositioning = ComponentProps<typeof Menu.Root>['positioning'];
-
-const MENU_POSITIONING: MenuPositioning = { placement: 'bottom-end' };
 
 const ARRANGE: readonly { icon: LucideIcon; key: string; kind: LayerStackMoveKind }[] = [
   { icon: ArrowUpToLineIcon, key: 'moveToFront', kind: 'front' },
@@ -44,16 +41,14 @@ const ARRANGE: readonly { icon: LucideIcon; key: string; kind: LayerStackMoveKin
   { icon: ArrowDownToLineIcon, key: 'moveToBack', kind: 'back' },
 ];
 
-const stopPropagation = (event: { stopPropagation: () => void }): void => event.stopPropagation();
-
 interface LayerGroupContextMenuProps {
+  /** The viewport box the menu opens at: a row's menu button or a right-click point. */
+  anchor: { x: number; y: number; width: number; height: number };
   editingLocked: boolean;
   engine: LayerGroupContextMenuEngine | null;
   group: CanvasGroupContract;
   stack: LayerStackKind;
-  /** A right-click point that opens the same menu there; `null` shows only the trigger. */
-  anchor?: { x: number; y: number } | null;
-  onAnchorClose?: () => void;
+  onClose: () => void;
 }
 
 const MenuRow = ({ icon, label }: { icon: LucideIcon; label: string }) => (
@@ -65,13 +60,13 @@ const MenuRow = ({ icon, label }: { icon: LucideIcon; label: string }) => (
   </HStack>
 );
 
-/** The per-group menu: naming, grouping, arrangement, and state edits, all through prepared edits. */
+/** The group menu the panel host opens for one group at a time: naming, grouping, arrangement, and state edits. */
 export const LayerGroupContextMenu = ({
-  anchor = null,
+  anchor,
   editingLocked,
   engine,
   group,
-  onAnchorClose,
+  onClose,
   stack,
 }: LayerGroupContextMenuProps) => {
   const { t } = useTranslation();
@@ -91,20 +86,18 @@ export const LayerGroupContextMenu = ({
   const frozen = entry?.ancestorsLocked ?? false;
   const holdsLocked =
     frozen || group.isLocked || (entry ? collectSubtree(entry.node).some((node) => node.isLocked) : false);
-  const groupable = !frozen && canGroupNodes(document, selection());
-  const anchorX = anchor?.x ?? 0;
-  const anchorY = anchor?.y ?? 0;
-  const anchoredPositioning = useMemo<MenuPositioning>(
-    () => ({ getAnchorRect: () => ({ height: 1, width: 1, x: anchorX, y: anchorY }), placement: 'bottom-start' }),
-    [anchorX, anchorY]
+  const groupable = canGroupSelection(engine?.document.model() ?? null, selection());
+  const positioning = useMemo<MenuPositioning>(
+    () => ({ getAnchorRect: () => anchor, placement: 'bottom-start' }),
+    [anchor]
   );
-  const handleAnchoredOpenChange = useCallback(
+  const handleOpenChange = useCallback(
     (details: { open: boolean }) => {
       if (!details.open) {
-        onAnchorClose?.();
+        onClose();
       }
     },
-    [onAnchorClose]
+    [onClose]
   );
 
   const patch = useCallback(
@@ -230,35 +223,11 @@ export const LayerGroupContextMenu = ({
 
   return (
     <>
-      <Menu.Root lazyMount positioning={MENU_POSITIONING} unmountOnExit>
-        <Menu.Trigger asChild>
-          <IconButton
-            aria-label={t('widgets.layers.options')}
-            color="fg.muted"
-            size="2xs"
-            variant="ghost"
-            onClick={stopPropagation}
-          >
-            <MoreVerticalIcon />
-          </IconButton>
-        </Menu.Trigger>
+      <Menu.Root lazyMount open positioning={positioning} unmountOnExit onOpenChange={handleOpenChange}>
         <Portal>
           <Menu.Positioner>{items}</Menu.Positioner>
         </Portal>
       </Menu.Root>
-      {anchor ? (
-        <Menu.Root
-          lazyMount
-          open
-          positioning={anchoredPositioning}
-          unmountOnExit
-          onOpenChange={handleAnchoredOpenChange}
-        >
-          <Portal>
-            <Menu.Positioner>{items}</Menu.Positioner>
-          </Portal>
-        </Menu.Root>
-      ) : null}
       <RenameDialog
         initialName={group.name}
         isOpen={renaming}

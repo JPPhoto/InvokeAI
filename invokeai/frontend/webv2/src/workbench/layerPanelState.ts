@@ -9,6 +9,8 @@ import { getDocumentIndex } from '@workbench/canvas-engine/api';
  * history. The primary selection stays `document.selectedLayerId`; `primaryId` mirrors the value
  * this state was built against so an external primary change collapses stale secondaries.
  */
+export type LayerPanelDensity = 'compact' | 'comfortable' | 'large';
+
 export interface LayerPanelState {
   readonly projectId: string;
   readonly primaryId: string | null;
@@ -17,7 +19,22 @@ export interface LayerPanelState {
   readonly collapsedStacks: readonly LayerStackKind[];
   /** Groups whose children the panel shows; every other group is collapsed. */
   readonly expandedGroupIds: readonly string[];
+  /** The row that holds keyboard focus (roving tabindex); falls back to the primary. */
+  readonly focusId: string | null;
+  readonly density: LayerPanelDensity;
+  /** A name filter; empty shows everything. */
+  readonly filter: string;
 }
+
+/** Panel preferences that survive a primary change and a project switch. */
+type LayerPanelCarry = Pick<LayerPanelState, 'collapsedStacks' | 'expandedGroupIds' | 'density' | 'filter'>;
+
+const DEFAULT_CARRY: LayerPanelCarry = {
+  collapsedStacks: [],
+  density: 'comfortable',
+  expandedGroupIds: [],
+  filter: '',
+};
 
 export interface LayerSelectionModifiers {
   additive: boolean;
@@ -40,15 +57,22 @@ const store = createExternalStore<LayerPanelStore>({ byProject: {} });
 export const createLayerPanelState = (
   projectId: string,
   primaryId: string | null,
-  collapsedStacks: readonly LayerStackKind[] = [],
-  expandedGroupIds: readonly string[] = []
+  carry: Partial<LayerPanelCarry> = {}
 ): LayerPanelState => ({
+  ...DEFAULT_CARRY,
+  ...carry,
   anchorId: primaryId,
-  collapsedStacks,
-  expandedGroupIds,
+  focusId: primaryId,
   primaryId,
   projectId,
   selectedIds: primaryId ? [primaryId] : [],
+});
+
+const carryOf = (state: LayerPanelState): LayerPanelCarry => ({
+  collapsedStacks: state.collapsedStacks,
+  density: state.density,
+  expandedGroupIds: state.expandedGroupIds,
+  filter: state.filter,
 });
 
 const sameIds = (left: readonly string[], right: readonly string[]): boolean =>
@@ -58,6 +82,9 @@ export const isSameLayerPanelState = (left: LayerPanelState, right: LayerPanelSt
   left.projectId === right.projectId &&
   left.primaryId === right.primaryId &&
   left.anchorId === right.anchorId &&
+  left.focusId === right.focusId &&
+  left.density === right.density &&
+  left.filter === right.filter &&
   sameIds(left.selectedIds, right.selectedIds) &&
   sameIds(left.collapsedStacks, right.collapsedStacks) &&
   sameIds(left.expandedGroupIds, right.expandedGroupIds);
@@ -67,9 +94,7 @@ const stateFor = (snapshot: LayerPanelStore, projectId: string, primaryId: strin
   if (!stored) {
     return createLayerPanelState(projectId, primaryId);
   }
-  return stored.primaryId === primaryId
-    ? stored
-    : createLayerPanelState(projectId, primaryId, stored.collapsedStacks, stored.expandedGroupIds);
+  return stored.primaryId === primaryId ? stored : createLayerPanelState(projectId, primaryId, carryOf(stored));
 };
 
 export const readLayerPanelState = (projectId: string, primaryId: string | null): LayerPanelState =>
@@ -91,9 +116,9 @@ const write = (state: LayerPanelState): void => {
 export const publishLayerPanelSelection = (selection: LayerPanelSelectionUpdate): void => {
   const stored = store.getSnapshot().byProject[selection.projectId];
   write({
+    ...(stored ? carryOf(stored) : DEFAULT_CARRY),
     anchorId: selection.anchorId ?? selection.primaryId,
-    collapsedStacks: stored?.collapsedStacks ?? [],
-    expandedGroupIds: stored?.expandedGroupIds ?? [],
+    focusId: selection.primaryId,
     primaryId: selection.primaryId,
     projectId: selection.projectId,
     selectedIds: [...selection.selectedIds],
@@ -127,6 +152,27 @@ export const setLayerGroupExpanded = (
   write({ ...current, expandedGroupIds: [...next] });
 };
 
+export const setLayerPanelFocus = (projectId: string, primaryId: string | null, focusId: string | null): void => {
+  const current = readLayerPanelState(projectId, primaryId);
+  if (current.focusId !== focusId) {
+    write({ ...current, focusId });
+  }
+};
+
+export const setLayerPanelDensity = (projectId: string, primaryId: string | null, density: LayerPanelDensity): void => {
+  const current = readLayerPanelState(projectId, primaryId);
+  if (current.density !== density) {
+    write({ ...current, density });
+  }
+};
+
+export const setLayerPanelFilter = (projectId: string, primaryId: string | null, filter: string): void => {
+  const current = readLayerPanelState(projectId, primaryId);
+  if (current.filter !== filter) {
+    write({ ...current, filter });
+  }
+};
+
 /**
  * Keeps a state valid after an external primary change, a project switch, or a node removal. A
  * primary that arrived from outside the panel (a hotkey, an undo, a new layer) is revealed: every
@@ -144,8 +190,8 @@ export const reconcileLayerPanelState = (
   if (state.projectId !== projectId || state.primaryId !== validPrimaryId) {
     const revealed = primary ? [...new Set([...expandedGroupIds, ...primary.path])] : expandedGroupIds;
     return state.projectId === projectId
-      ? createLayerPanelState(projectId, validPrimaryId, state.collapsedStacks, revealed)
-      : createLayerPanelState(projectId, validPrimaryId, [], primary ? [...primary.path] : []);
+      ? createLayerPanelState(projectId, validPrimaryId, { ...carryOf(state), expandedGroupIds: revealed })
+      : createLayerPanelState(projectId, validPrimaryId, { expandedGroupIds: primary ? [...primary.path] : [] });
   }
   const existing = index.byId;
   const selectedIds = [...new Set(state.selectedIds)].filter((id) => existing.has(id));
@@ -153,14 +199,16 @@ export const reconcileLayerPanelState = (
     selectedIds.push(validPrimaryId);
   }
   const anchorId = state.anchorId && existing.has(state.anchorId) ? state.anchorId : validPrimaryId;
+  const focusId = state.focusId && existing.has(state.focusId) ? state.focusId : validPrimaryId;
   if (
     anchorId === state.anchorId &&
+    focusId === state.focusId &&
     sameIds(selectedIds, state.selectedIds) &&
     sameIds(expandedGroupIds, state.expandedGroupIds)
   ) {
     return state;
   }
-  return { ...state, anchorId, expandedGroupIds, selectedIds };
+  return { ...state, anchorId, expandedGroupIds, focusId, selectedIds };
 };
 
 /**
