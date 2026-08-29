@@ -335,14 +335,18 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   // they were before the first swap. A page names a window of ONE query,
   // though: restored into a different board, view, order, mode or search it
   // would anchor that listing 1800 rows down around an image from another,
-  // so the memo is only honoured in the query it was recorded in.
-  const swappedOutRef = useRef<{ key: GalleryItemKey; page: number; queryKey: string } | null>(null);
+  // so the memo is only honoured in the query it was recorded in — and only
+  // while the item is still in that query's board. Moving the compare image
+  // to another board re-boards it in place without touching the selection's
+  // query, so the key alone would still match.
+  const swappedOutRef = useRef<{ boardId: string; key: GalleryItemKey; page: number; queryKey: string } | null>(null);
   const swapCompareImages = useCallback(() => {
     if (selectedItem?.kind === 'image' && compareImage) {
       const compareItem = legacyGeneratedImageToGalleryItem(compareImage);
       const swappedOut = swappedOutRef.current;
 
       swappedOutRef.current = {
+        boardId: selectedItem.boardId,
         key: toGalleryItemKey(selectedItem),
         page: selectedImageQuery.page,
         queryKey: navigationQueryKey,
@@ -350,7 +354,8 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
       if (
         swappedOut &&
         swappedOut.key === toGalleryItemKey(compareItem) &&
-        swappedOut.queryKey === navigationQueryKey
+        swappedOut.queryKey === navigationQueryKey &&
+        swappedOut.boardId === compareItem.boardId
       ) {
         selectGalleryItemAtPage(compareItem, swappedOut.page);
       } else {

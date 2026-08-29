@@ -928,6 +928,46 @@ describe('preview keyboard navigation boundary', () => {
     expect(context?.getItemSelectionPage?.(deepC)).toBe(30);
   });
 
+  it('does not restore a remembered page for an item since moved to another board', async () => {
+    // Moving the compare image re-boards it in place and leaves the selection's
+    // query alone, so the memo's key still matches. The page it remembers is a
+    // window of the OLD board's listing, which the item is no longer in.
+    setGalleryValues({
+      compareImage: legacyImage('compare-top', '2026-07-24T00:00:00.000Z'),
+      galleryPage: 0,
+      recentImages: [],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([createImageItem('deep-newer', '2026-07-20T00:00:02.000Z')]);
+    mocks.galleryItemPages[0] = { items: [createImageItem('compare-top', '2026-07-24T00:00:00.000Z')], total: 2 };
+
+    await render();
+
+    const swap = () =>
+      act(async () => {
+        registeredCommands.get('viewer.swapImages')?.();
+        await Promise.resolve();
+      });
+
+    await swap();
+    await commitLastSelection();
+    // The deep image, now in the compare slot, is moved to another board.
+    setGalleryValues({
+      compareImage: { ...legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'), boardId: 'board-b' },
+    });
+    await rerender();
+    await swap();
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'deep-newer', boardId: 'board-b' }),
+      undefined,
+      0,
+      true
+    );
+  });
+
   it('fetches the next infinite page before stepping past the loaded backend boundary', async () => {
     const newest: GalleryImage = {
       ...mocks.recentImages[0],
