@@ -67,6 +67,16 @@ def _nested_for_graph() -> Graph:
     return graph
 
 
+def _empty_for_graph() -> Graph:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+    return graph
+
+
 def _insert_session(queue: SqliteSessionQueue, state: GraphExecutionState) -> int:
     session_id = str(uuid.uuid4())
     batch_id = str(uuid.uuid4())
@@ -144,6 +154,26 @@ def test_sqlite_queue_resumes_partial_stateful_for_loop(session_queue: SqliteSes
     assert final_item.session.is_complete()
     assert final_item.session.results[after_collection_id].value == ["alpha", "beta", "charlie"]
     assert final_item.session.results[after_state_id].value == "charlie"
+
+
+def test_sqlite_queue_round_trips_empty_for_final_output(session_queue: SqliteSessionQueue) -> None:
+    item_id = _insert_session(session_queue, GraphExecutionState(graph=_empty_for_graph()))
+
+    queue_item = session_queue.dequeue()
+    assert queue_item is not None
+    state = queue_item.session
+    after_node = state.next()
+    assert isinstance(after_node, AnyTypeTestInvocation)
+
+    session_queue.save_queue_item_session(queue_item.item_id, state)
+    resumed = session_queue.get_queue_item(item_id).session
+
+    for_exec_id = next(exec_id for exec_id, source_id in resumed.prepared_source_mapping.items() if source_id == "for")
+    for_output = resumed.results[for_exec_id]
+    assert for_output.type == "for_output"
+    assert for_output.item is None
+    assert for_output.index == -1
+    assert for_output.total == 0
 
 
 def test_sqlite_queue_resumes_nested_for_after_first_outer_iteration(

@@ -634,7 +634,7 @@ const iterate: InvocationTemplate = {
 export const for_loop: InvocationTemplate = {
   title: 'For',
   type: 'for',
-  version: '1.1.0',
+  version: '1.2.0',
   tags: [],
   description: '',
   outputType: 'for_output',
@@ -691,7 +691,7 @@ export const for_loop: InvocationTemplate = {
       fieldKind: 'output',
       name: 'item',
       title: 'Collection Item',
-      description: 'The item for the current loop iteration',
+      description: 'The item for the current loop iteration, or None when the collection is empty',
       type: {
         name: 'CollectionItemField',
         cardinality: 'SINGLE',

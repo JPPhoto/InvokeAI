@@ -93,8 +93,9 @@ class StateMergeInvocation(BaseInvocation):
 
 @invocation_output("for_output")
 class ForInvocationOutput(BaseInvocationOutput):
-    item: Any = OutputField(
-        description="The item for the current loop iteration",
+    item: Optional[Any] = OutputField(
+        default=None,
+        description="The item for the current loop iteration, or None when the collection is empty",
         title="Collection Item",
         ui_type=UIType._CollectionItem,
         output_scope=OutputScope.Iteration,
@@ -127,7 +128,7 @@ class ForInvocationOutput(BaseInvocationOutput):
     )
 
 
-@invocation("for", version="1.1.0")
+@invocation("for", version="1.2.0")
 class ForInvocation(BaseInvocation):
     collection: list[Any] = InputField(
         description="The list of items to iterate over",

@@ -294,7 +294,7 @@ the scheduler copies it for each materialized iteration.
 
 Per-iteration outputs:
 
-- `item: Any`
+- `item: Any | None` (null on the synthetic result for an empty collection)
 - `index: int`
 - `total: int`
 - `state: LoopState`
@@ -310,7 +310,7 @@ flat invocation where every output has the same execution scope.
 Potential output metadata:
 
 ```py
-item: Any = OutputField(..., loop_scope="iteration")
+item: Optional[Any] = OutputField(default=None, ..., loop_scope="iteration")
 output_collection: list[Any] = OutputField(..., loop_scope="final")
 ```
 
@@ -481,6 +481,7 @@ If the collection is empty:
 - no body iterations run
 - final `output_collection` is empty
 - final `state` is the provided initial state or an empty `LoopState`
+- the synthetic `For` result has `item=None`, `index=-1`, and `total=0`; no iteration item is emitted
 
 ### 2. Initial State
 
@@ -922,6 +923,7 @@ Frontend tests should cover:
 - type compatibility for `LoopState`
 - visual grouping of iteration outputs and final outputs
 - editor handling for body return nodes
+- mounted `happy-dom` coverage for the visible loop-body boundary label/status and `ForReturn` picker wiring
 
 ### Current Coverage
 
@@ -958,8 +960,10 @@ Backend and frontend validation tests accept deeper nested `For` loops, explicit
 `For`/`Iterate` bodies, nested early-break predicate scope, sibling children without complete fan-in, and a `ForReturn`
 shared by multiple loops. Schema/template tests cover the versioned `continue_condition` input and its default-continue
 editor behavior.
-Browser-level picker and ReactFlow interaction coverage is deferred; the temporary browser-test dependencies and
-configuration are removed from this branch. Unit tests cover contextual `ForReturn` discovery and connection wiring.
+Mounted `happy-dom` tests cover the visible loop-body boundary label/status and selecting `ForReturn` from a pending
+`For.item` connection, including shared durable body identity and automatic edge creation. These tests reuse the
+existing `happy-dom` dependency; this branch adds no browser-test dependencies or configuration. Unit tests cover
+contextual `ForReturn` discovery and connection wiring.
 Collection operation tests cover sequential concatenation, strict positional zipping, Cartesian products, empty inputs,
 input immutability, and zip length mismatches.
 
@@ -1018,8 +1022,8 @@ Answered branch-local decisions:
     nested-context cleanup.
 
 Steps 1 through 18 are complete for the current recursive body-path contract. Step 11 now includes output grouping,
-contextual `ForReturn` discovery/wiring, and a structured visual body boundary, covered by frontend unit tests. Browser-
-level interaction coverage remains deferred until the temporary browser-test dependencies are removed as final cleanup.
+contextual `ForReturn` discovery/wiring, a structured visual body boundary, and mounted `happy-dom` interaction
+coverage. Full browser geometry, drag, and zoom behavior remains outside this test environment.
 
 The durable endpoint identity slice, bounded internal `Iterate` slice, recursive identity-bearing nested `For` slice,
 deterministic nested final-output continuation slice, explicit sibling fan-in slice, positional `CollectionZip` slice,
@@ -1032,6 +1036,7 @@ stateless loops and richer collection producers remain later work.
 
 ## Next Development Slice
 
-After the final adversarial review and full PR validation, the next development slice is browser-level interaction
-coverage for the structured visual loop-body boundary/editor, followed by removal of the temporary browser-test
-dependencies as final cleanup. Parallel stateless loops and richer collection producers remain later architecture work.
+After the final adversarial review and full PR validation, the next development slice is final cleanup: confirm that no
+branch-specific temporary browser-test dependencies or configuration remain, then complete PR validation. The current
+mounted tests use the existing `happy-dom` dependency and require no package changes. Parallel stateless loops and
+richer collection producers remain later architecture work.

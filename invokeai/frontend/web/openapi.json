@@ -34213,7 +34213,7 @@
         "required": ["type", "id"],
         "title": "ForInvocation",
         "type": "object",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "output": {
           "$ref": "#/components/schemas/ForInvocationOutput"
         }
@@ -34222,7 +34222,14 @@
         "class": "output",
         "properties": {
           "item": {
-            "description": "The item for the current loop iteration",
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The item for the current loop iteration, or None when the collection is empty",
             "field_kind": "output",
             "output_scope": "iteration",
             "title": "Collection Item",

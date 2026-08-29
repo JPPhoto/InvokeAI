@@ -14164,9 +14164,10 @@ export type components = {
         ForInvocationOutput: {
             /**
              * Collection Item
-             * @description The item for the current loop iteration
+             * @description The item for the current loop iteration, or None when the collection is empty
+             * @default null
              */
-            item: unknown;
+            item: unknown | null;
             /**
              * Index
              * @description The index for the current loop iteration
