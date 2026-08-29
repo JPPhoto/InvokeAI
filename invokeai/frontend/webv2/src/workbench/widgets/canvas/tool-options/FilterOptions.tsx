@@ -1,9 +1,13 @@
-/* oxlint-disable react-perf/jsx-no-new-function-as-prop */
+import type {
+  OperationPresentationAdapter,
+  ToolbarRegionProps,
+  ToolbarStatusProps,
+} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
 
-import { Flex, HStack, IconButton, Menu, Portal, Text, VisuallyHidden } from '@chakra-ui/react';
+/* oxlint-disable react-perf/jsx-no-new-function-as-prop */
+import { HStack, Stack } from '@chakra-ui/react';
 import { galleryDurability } from '@features/gallery';
-import { Button, MenuContent, Tooltip } from '@platform/ui';
-import { Group } from '@platform/ui/Group';
+import { Button, Tooltip } from '@platform/ui';
 import {
   buildFilterDefaults,
   getCanvasOperations,
@@ -11,17 +15,13 @@ import {
   isFilterConfigValid,
   type FilterOperationSessionState,
 } from '@workbench/canvas-operations/api';
-import { CanvasFloatingBar, CanvasFloatingBarDivider } from '@workbench/widgets/canvas/CanvasFloatingBar';
+import { ToolbarStatus } from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
 import { useFilterSession } from '@workbench/widgets/canvas/engineStoreHooks';
 import { LayerFilterControls } from '@workbench/widgets/layers/LayerFilterControls';
-import { ChevronDownIcon } from 'lucide-react';
+import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { CanvasOperationUIEngine } from './operationUIEngine';
-
-import { OperationStatusSlot } from './OperationStatusSlot';
-
-const FILTER_UPWARD_POSITIONING = { placement: 'top-end' } as const;
+import { OperationStatusChip } from './OperationStatusSlot';
 
 export interface FilterActionEligibility {
   canApply: boolean;
@@ -66,188 +66,166 @@ export const getFilterStatusTranslationKey = (status: FilterOperationSessionStat
         ? 'widgets.layers.rasterFilter.statusError'
         : 'widgets.layers.selectObject.statusReady';
 
-export const FilterOptionsBar = ({
-  engine,
-  session,
-  isExternalInteractionLocked = false,
-}: { engine: CanvasOperationUIEngine } & {
-  isExternalInteractionLocked?: boolean;
-  session: FilterOperationSessionState;
-}) => {
-  const { t } = useTranslation();
-  const eligibility = getFilterActionEligibility(session, isExternalInteractionLocked);
-  const saveTargetEligibility = getFilterSaveTargetEligibility(eligibility);
-  const sourceLabel = `${session.layerName} · ${t(`widgets.layers.selectObject.saveAs_${session.layerType}`)}`;
-  const isBusy = !session.error && (session.status === 'processing' || session.status === 'committing');
-  const setType = (type: string) => {
-    const definition = getFilterDefinition(type);
-    getCanvasOperations(engine).updateFilterOperation({
-      settings: definition ? buildFilterDefaults(definition) : {},
-      type,
-    });
-  };
-  const setSettings = (settings: Record<string, unknown>) => {
-    const current = getCanvasOperations(engine).getFilterSessionState();
-    if (current) {
-      getCanvasOperations(engine).updateFilterOperation({ settings, type: current.draft.type });
-    }
-  };
-  const reset = () => {
-    const current = getCanvasOperations(engine).getFilterSessionState();
-    if (!current) {
-      return;
-    }
-    const definition = getFilterDefinition(current.draft.type);
-    getCanvasOperations(engine).resetFilterOperation(definition ? buildFilterDefaults(definition) : {});
-  };
-
-  return (
-    <CanvasFloatingBar maxW="full">
-      <Flex
-        align="center"
-        aria-label={t('widgets.layers.rasterFilter.title')}
-        flexWrap="wrap"
-        gap="1"
-        minW="0"
-        role="group"
-      >
-        <Tooltip content={sourceLabel}>
-          <Text flexShrink="0" fontSize="xs" fontWeight="semibold" px="1" whiteSpace="nowrap">
-            {t('widgets.layers.rasterFilter.title')}
-            <VisuallyHidden>{sourceLabel}</VisuallyHidden>
-          </Text>
-        </Tooltip>
-        <CanvasFloatingBarDivider />
-        <Flex align="center" flexWrap="wrap" gap="2" minW="0">
-          <LayerFilterControls
-            disabled={!eligibility.canEdit}
-            filterType={session.draft.type}
-            focusFilter={false}
-            settings={session.draft.settings}
-            variant="operation"
-            onFilterTypeChange={setType}
-            onSettingsChange={setSettings}
-          />
-        </Flex>
-        <CanvasFloatingBarDivider />
-        <Tooltip content={t('widgets.layers.rasterFilter.autoProcessDescription')}>
-          <Button
-            aria-pressed={session.autoProcess}
-            disabled={!eligibility.canEdit}
-            size="xs"
-            variant={session.autoProcess ? 'solid' : 'ghost'}
-            onClick={() => getCanvasOperations(engine).setFilterOperationAutoProcess(!session.autoProcess)}
-          >
-            {t('widgets.layers.rasterFilter.autoProcess')}
-          </Button>
-        </Tooltip>
-        <CanvasFloatingBarDivider />
-        <OperationStatusSlot
-          errorDetail={null}
-          errorText={session.error}
-          isBusy={isBusy}
-          minW="0"
-          statusText={t(getFilterStatusTranslationKey(session.status))}
-          technicalDetailsLabel={t('widgets.layers.selectObject.technicalDetails')}
-        />
-        <CanvasFloatingBarDivider />
-        <HStack flexShrink="0" gap="1">
-          <Button
-            disabled={!eligibility.canProcess}
-            loading={session.status === 'processing'}
-            size="xs"
-            onClick={() => void getCanvasOperations(engine).processFilterOperation()}
-          >
-            {t('widgets.layers.selectObject.process')}
-          </Button>
-          <Button disabled={!eligibility.canReset} size="xs" variant="ghost" onClick={reset}>
-            {t('widgets.layers.selectObject.reset')}
-          </Button>
-          <Menu.Root positioning={FILTER_UPWARD_POSITIONING}>
-            <Group attached>
-              <Button
-                colorPalette="accent"
-                disabled={!eligibility.canApply}
-                loading={session.status === 'committing'}
-                roundedEnd="none"
-                size="xs"
-                onClick={() =>
-                  void getCanvasOperations(engine).commitFilterOperation('apply', galleryDurability.makeCanvasAsset)
-                }
-              >
-                {t('common.apply')}
-              </Button>
-              <Menu.Trigger asChild>
-                <IconButton
-                  aria-label={t('widgets.layers.selectObject.saveAs')}
-                  colorPalette="accent"
-                  disabled={!eligibility.canSave}
-                  minW="0"
-                  roundedStart="none"
-                  size="xs"
-                  w="6"
-                >
-                  <ChevronDownIcon />
-                </IconButton>
-              </Menu.Trigger>
-            </Group>
-            <Portal>
-              <Menu.Positioner>
-                <MenuContent minW="11rem" py="1">
-                  <Menu.Item
-                    disabled={!saveTargetEligibility.raster}
-                    value="raster"
-                    onClick={() =>
-                      void getCanvasOperations(engine).commitFilterOperation(
-                        'raster',
-                        galleryDurability.makeCanvasAsset
-                      )
-                    }
-                  >
-                    <Menu.ItemText>{t('widgets.layers.selectObject.saveAs_raster')}</Menu.ItemText>
-                  </Menu.Item>
-                  <Menu.Item
-                    disabled={!saveTargetEligibility.control}
-                    value="control"
-                    onClick={() =>
-                      void getCanvasOperations(engine).commitFilterOperation(
-                        'control',
-                        galleryDurability.makeCanvasAsset
-                      )
-                    }
-                  >
-                    <Menu.ItemText>{t('widgets.layers.selectObject.saveAs_control')}</Menu.ItemText>
-                  </Menu.Item>
-                </MenuContent>
-              </Menu.Positioner>
-            </Portal>
-          </Menu.Root>
-          <Button
-            disabled={!eligibility.canCancel}
-            size="xs"
-            variant="ghost"
-            onClick={() => getCanvasOperations(engine).cancelFilterOperation()}
-          >
-            {t('common.cancel')}
-          </Button>
-        </HStack>
-      </Flex>
-    </CanvasFloatingBar>
+const useFilterDraft = (engine: ToolbarRegionProps['engine']) => {
+  const operations = getCanvasOperations(engine);
+  const setType = useCallback(
+    (type: string) => {
+      const definition = getFilterDefinition(type);
+      operations.updateFilterOperation({ settings: definition ? buildFilterDefaults(definition) : {}, type });
+    },
+    [operations]
   );
+  const setSettings = useCallback(
+    (settings: Record<string, unknown>) => {
+      const current = operations.getFilterSessionState();
+      if (current) {
+        operations.updateFilterOperation({ settings, type: current.draft.type });
+      }
+    },
+    [operations]
+  );
+  const reset = useCallback(() => {
+    const current = operations.getFilterSessionState();
+    if (current) {
+      const definition = getFilterDefinition(current.draft.type);
+      operations.resetFilterOperation(definition ? buildFilterDefaults(definition) : {});
+    }
+  }, [operations]);
+  return { operations, reset, setSettings, setType };
 };
 
-export const FilterOptions = ({
-  engine,
-  isExternalInteractionLocked = false,
-}: {
-  engine: CanvasOperationUIEngine;
-  isExternalInteractionLocked?: boolean;
-}) => {
+/** Filter type and auto-process: the choices made while iterating on a preview. */
+export const FilterModes = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
+  const { t } = useTranslation();
   const session = useFilterSession(engine);
+  const { operations, setSettings, setType } = useFilterDraft(engine);
   if (!session) {
     return null;
   }
+  const eligibility = getFilterActionEligibility(session, isSurfaceInteractionLocked);
   return (
-    <FilterOptionsBar engine={engine} isExternalInteractionLocked={isExternalInteractionLocked} session={session} />
+    <>
+      <LayerFilterControls
+        disabled={!eligibility.canEdit}
+        filterType={session.draft.type}
+        focusFilter={false}
+        parts="type"
+        settings={session.draft.settings}
+        variant="operation"
+        onFilterTypeChange={setType}
+        onSettingsChange={setSettings}
+      />
+      <Tooltip content={t('widgets.layers.rasterFilter.autoProcessDescription')}>
+        <Button
+          aria-pressed={session.autoProcess}
+          disabled={!eligibility.canEdit}
+          flexShrink={0}
+          size="xs"
+          variant={session.autoProcess ? 'solid' : 'ghost'}
+          onClick={() => operations.setFilterOperationAutoProcess(!session.autoProcess)}
+        >
+          {t('widgets.layers.rasterFilter.autoProcess')}
+        </Button>
+      </Tooltip>
+    </>
   );
+};
+
+/** The filter's parameters and its secondary commands; C2 moves these into Properties → Operation. */
+export const FilterMore = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
+  const { t } = useTranslation();
+  const session = useFilterSession(engine);
+  const { operations, reset, setSettings, setType } = useFilterDraft(engine);
+  if (!session) {
+    return null;
+  }
+  const eligibility = getFilterActionEligibility(session, isSurfaceInteractionLocked);
+  const saveTargets = getFilterSaveTargetEligibility(eligibility);
+  return (
+    <Stack gap="2" w="full">
+      <LayerFilterControls
+        disabled={!eligibility.canEdit}
+        filterType={session.draft.type}
+        focusFilter={false}
+        parts="params"
+        settings={session.draft.settings}
+        onFilterTypeChange={setType}
+        onSettingsChange={setSettings}
+      />
+      <HStack flexWrap="wrap" gap="1">
+        <Button
+          disabled={!eligibility.canProcess}
+          loading={session.status === 'processing'}
+          size="xs"
+          onClick={() => void operations.processFilterOperation()}
+        >
+          {t('widgets.layers.selectObject.process')}
+        </Button>
+        <Button disabled={!eligibility.canReset} size="xs" variant="ghost" onClick={reset}>
+          {t('widgets.layers.selectObject.reset')}
+        </Button>
+        <Button
+          disabled={!saveTargets.raster}
+          size="xs"
+          variant="ghost"
+          onClick={() => void operations.commitFilterOperation('raster', galleryDurability.makeCanvasAsset)}
+        >
+          {t('widgets.layers.selectObject.saveAs_raster')}
+        </Button>
+        <Button
+          disabled={!saveTargets.control}
+          size="xs"
+          variant="ghost"
+          onClick={() => void operations.commitFilterOperation('control', galleryDurability.makeCanvasAsset)}
+        >
+          {t('widgets.layers.selectObject.saveAs_control')}
+        </Button>
+      </HStack>
+    </Stack>
+  );
+};
+
+export const FilterStatus = ({ compact, engine, isExternalInteractionLocked }: ToolbarStatusProps) => {
+  const { t } = useTranslation();
+  const session = useFilterSession(engine);
+  const operations = getCanvasOperations(engine);
+  const onApply = useCallback(
+    () => void operations.commitFilterOperation('apply', galleryDurability.makeCanvasAsset),
+    [operations]
+  );
+  const onCancel = useCallback(() => operations.cancelFilterOperation(), [operations]);
+  if (!session) {
+    return <ToolbarStatus compact={compact} />;
+  }
+  const eligibility = getFilterActionEligibility(session, isExternalInteractionLocked);
+  const sourceLabel = `${session.layerName} · ${t(`widgets.layers.selectObject.saveAs_${session.layerType}`)}`;
+  const isBusy = !session.error && (session.status === 'processing' || session.status === 'committing');
+  return (
+    <ToolbarStatus
+      applyDisabled={!eligibility.canApply}
+      applyLoading={session.status === 'committing'}
+      cancelDisabled={!eligibility.canCancel}
+      compact={compact}
+      onApply={onApply}
+      onCancel={onCancel}
+    >
+      <OperationStatusChip
+        compact={compact}
+        errorDetail={null}
+        errorText={session.error}
+        isBusy={isBusy}
+        sourceLabel={sourceLabel}
+        statusText={t(getFilterStatusTranslationKey(session.status))}
+        technicalDetailsLabel={t('widgets.layers.selectObject.technicalDetails')}
+        title={t('widgets.layers.rasterFilter.title')}
+      />
+    </ToolbarStatus>
+  );
+};
+
+export const filterOperationAdapter: OperationPresentationAdapter = {
+  kind: 'filter',
+  modes: { component: FilterModes, width: 232 },
+  more: FilterMore,
+  status: FilterStatus,
 };

@@ -1,18 +1,25 @@
-import type { NumberInput as ChakraNumberInput, SelectValueChangeDetails } from '@chakra-ui/react';
+import type { SelectValueChangeDetails } from '@chakra-ui/react';
 import type { CanvasLayerSourceContract, ShapeToolOptions } from '@workbench/canvas-engine/api';
+import type {
+  ToolbarRegionProps,
+  ToolPresentationAdapter,
+} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
 
-import { createListCollection, HStack, NumberInput, Text } from '@chakra-ui/react';
+import { createListCollection } from '@chakra-ui/react';
 import { ColorPicker, Select, ToggleIconButton } from '@platform/ui';
 import { MAX_SHAPE_STROKE_WIDTH, getDocumentLayer } from '@workbench/canvas-engine/api';
+import {
+  ToolbarHint,
+  ToolbarNumberField,
+  useNumberCommit,
+} from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
 import { useShapeOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
-import { PaintBucketIcon, SquareIcon } from 'lucide-react';
+import { PaintBucketIcon, ShapesIcon, SquareIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-
-import type { ToolOptionsComponentProps } from './ToolOptionsBar';
 
 type ShapeSource = Extract<CanvasLayerSourceContract, { type: 'shape' }>;
 type ShapeKind = ShapeToolOptions['kind'];
@@ -22,45 +29,72 @@ interface SelectedShape {
   source: ShapeSource;
 }
 
-/** Fallback color used when re-enabling a `none` fill/stroke. */
 const FALLBACK_COLOR = '#000000';
-
-const SELECT_POSITIONING = { placement: 'top-start', sameWidth: false } as const;
-const SELECT_TRIGGER_PROPS = { minW: '6rem' } as const;
+const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: false } as const;
+const SELECT_TRIGGER_PROPS = { minW: '6rem', w: '6rem' } as const;
 
 /**
- * Shape tool options: kind (rect/ellipse), fill color (+ none), stroke color
- * (+ none) and stroke width. Edits set the defaults for the next created shape
- * AND, when a shape layer is selected, apply to it — colors commit ONE history
- * entry on interaction end (the ColorPicker popover shows the live color while
- * dragging; the canvas updates on release), discrete edits commit immediately.
+ * Displayed values follow the selected shape layer, else the tool defaults.
+ * Edits set the defaults for the next shape AND, when a shape layer is
+ * selected, commit to it: colors record one history entry on release, discrete
+ * edits commit at once. C2 splits these two owners into Properties sections.
  */
-export const ShapeOptions = ({ engine }: ToolOptionsComponentProps) => {
+const useShapeEditor = (engine: ToolbarRegionProps['engine']) => {
   const { t } = useTranslation();
   const commitPrepared = usePreparedCommit(engine);
   const options = useShapeOptions(engine);
-  const sampleColor = useColorSampler(engine);
-
   const selected = useActiveProjectSelector(
     (project): SelectedShape | null => {
       const { document } = project.canvas;
       const layer = document.selectedLayerId ? getDocumentLayer(document, document.selectedLayerId) : undefined;
-      if (layer && layer.type === 'raster' && layer.source.type === 'shape') {
-        return { id: layer.id, source: layer.source };
-      }
-      return null;
+      return layer && layer.type === 'raster' && layer.source.type === 'shape'
+        ? { id: layer.id, source: layer.source }
+        : null;
     },
-    // Re-render on a selection change or a source-reference change (the reducer
-    // replaces the source object on every edit).
     (a, b) => a?.id === b?.id && a?.source === b?.source
   );
-
-  // Displayed values track the selected shape layer, or the tool defaults.
   const kind: ShapeKind = selected ? (selected.source.kind === 'ellipse' ? 'ellipse' : 'rect') : options.kind;
   const fill = selected ? selected.source.fill : options.fill;
   const stroke = selected ? selected.source.stroke : options.stroke;
   const strokeWidth = selected ? selected.source.strokeWidth : options.strokeWidth;
 
+  const applyEdit = useCallback(
+    (patch: Partial<ShapeToolOptions>, commit: boolean) => {
+      engine.interaction.set('shapeOptions', { fill, kind, stroke, strokeWidth, ...patch });
+      if (selected && commit) {
+        const after: ShapeSource = { ...selected.source, ...patch };
+        commitPrepared(t('widgets.canvas.toolOptions.shapeEdit'), (model) =>
+          model.prepare({ id: selected.id, source: after, type: 'patch-source' })
+        );
+      }
+    },
+    [commitPrepared, engine, fill, kind, selected, stroke, strokeWidth, t]
+  );
+  return { applyEdit, fill, kind, stroke, strokeWidth };
+};
+
+const ShapeStrokeWidth = ({ engine }: ToolbarRegionProps) => {
+  const { t } = useTranslation();
+  const { applyEdit, stroke, strokeWidth } = useShapeEditor(engine);
+  const onCommit = useNumberCommit(
+    useCallback((value: number) => applyEdit({ strokeWidth: Math.max(0, Math.round(value)) }, true), [applyEdit])
+  );
+  return (
+    <ToolbarNumberField
+      aria-label={t('widgets.canvas.toolOptions.shapeStrokeWidth')}
+      disabled={stroke === null}
+      max={MAX_SHAPE_STROKE_WIDTH}
+      min={0}
+      suffix="px"
+      value={String(Math.round(strokeWidth))}
+      onValueCommit={onCommit}
+    />
+  );
+};
+
+const ShapeModes = ({ engine }: ToolbarRegionProps) => {
+  const { t } = useTranslation();
+  const { applyEdit, fill, kind, stroke } = useShapeEditor(engine);
   const kindCollection = useMemo(
     () =>
       createListCollection<{ label: string; value: ShapeKind }>({
@@ -72,25 +106,6 @@ export const ShapeOptions = ({ engine }: ToolOptionsComponentProps) => {
     [t]
   );
   const kindValue = useMemo(() => [kind], [kind]);
-
-  /**
-   * Applies an options patch: always updates the defaults store; when a shape
-   * layer is selected and `commit` is set, records one history entry on it.
-   */
-  const applyEdit = useCallback(
-    (patch: Partial<ShapeToolOptions>, commit: boolean) => {
-      engine.interaction.set('shapeOptions', { fill, kind, stroke, strokeWidth, ...patch });
-      if (selected && commit) {
-        const before = selected.source;
-        const after: ShapeSource = { ...before, ...patch };
-        commitPrepared(t('widgets.canvas.toolOptions.shapeEdit'), (model) =>
-          model.prepare({ id: selected.id, source: after, type: 'patch-source' })
-        );
-      }
-    },
-    [commitPrepared, engine, fill, kind, selected, stroke, strokeWidth, t]
-  );
-
   const onKindChange = useCallback(
     ({ value }: SelectValueChangeDetails<{ label: string; value: ShapeKind }>) => {
       const next = value[0] as ShapeKind | undefined;
@@ -100,98 +115,84 @@ export const ShapeOptions = ({ engine }: ToolOptionsComponentProps) => {
     },
     [applyEdit, kind]
   );
-
-  // Fill: a toggle for none, plus a color picker (live store on drag, one commit on end).
   const onFillToggle = useCallback(
     (checked: boolean) => applyEdit({ fill: checked ? (fill ?? FALLBACK_COLOR) : null }, true),
     [applyEdit, fill]
   );
-  const onFillChange = useCallback((hex: string) => applyEdit({ fill: hex }, false), [applyEdit]);
-  const onFillChangeEnd = useCallback((hex: string) => applyEdit({ fill: hex }, true), [applyEdit]);
-
   const onStrokeToggle = useCallback(
     (checked: boolean) => applyEdit({ stroke: checked ? (stroke ?? FALLBACK_COLOR) : null }, true),
     [applyEdit, stroke]
   );
-  const onStrokeChange = useCallback((hex: string) => applyEdit({ stroke: hex }, false), [applyEdit]);
-  const onStrokeChangeEnd = useCallback((hex: string) => applyEdit({ stroke: hex }, true), [applyEdit]);
-
-  const onStrokeWidthChange = useCallback(
-    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
-      if (Number.isFinite(valueAsNumber)) {
-        applyEdit({ strokeWidth: Math.max(0, Math.round(valueAsNumber)) }, true);
-      }
-    },
-    [applyEdit]
-  );
-
   return (
-    <HStack align="center" gap="3">
+    <>
       <Select
         aria-label={t('widgets.canvas.toolOptions.shapeKind')}
         collection={kindCollection}
         positioning={SELECT_POSITIONING}
         size="xs"
+        flexShrink={0}
         triggerProps={SELECT_TRIGGER_PROPS}
+        w="6rem"
         value={kindValue}
         valueText={t(
           kind === 'ellipse' ? 'widgets.canvas.toolOptions.shapeEllipse' : 'widgets.canvas.toolOptions.shapeRect'
         )}
         onValueChange={onKindChange}
       />
-
-      <HStack align="center" gap="1.5">
-        <ToggleIconButton
-          checked={fill !== null}
-          icon={PaintBucketIcon}
-          label={t('widgets.canvas.toolOptions.shapeFill')}
-          onCheckedChange={onFillToggle}
-        />
-        {fill !== null ? (
-          <ColorPicker
-            aria-label={t('widgets.canvas.toolOptions.shapeFill')}
-            value={fill}
-            onSampleColor={sampleColor}
-            onValueChange={onFillChange}
-            onValueChangeEnd={onFillChangeEnd}
-          />
-        ) : null}
-      </HStack>
-
-      <HStack align="center" gap="1.5">
-        <ToggleIconButton
-          checked={stroke !== null}
-          icon={SquareIcon}
-          label={t('widgets.canvas.toolOptions.shapeStroke')}
-          onCheckedChange={onStrokeToggle}
-        />
-        {stroke !== null ? (
-          <>
-            <ColorPicker
-              aria-label={t('widgets.canvas.toolOptions.shapeStroke')}
-              value={stroke}
-              onSampleColor={sampleColor}
-              onValueChange={onStrokeChange}
-              onValueChangeEnd={onStrokeChangeEnd}
-            />
-            <NumberInput.Root
-              max={MAX_SHAPE_STROKE_WIDTH}
-              min={0}
-              size="xs"
-              value={String(Math.round(strokeWidth))}
-              w="4.5rem"
-              onValueChange={onStrokeWidthChange}
-            >
-              <NumberInput.Control />
-              <NumberInput.Input aria-label={t('widgets.canvas.toolOptions.shapeStrokeWidth')} fontSize="xs" />
-            </NumberInput.Root>
-          </>
-        ) : null}
-      </HStack>
-
-      <Text color="fg.muted" flexShrink="0" fontSize="2xs">
-        {t('widgets.canvas.toolOptions.shapeHint')}
-      </Text>
-    </HStack>
+      <ToggleIconButton
+        checked={fill !== null}
+        icon={PaintBucketIcon}
+        label={t('widgets.canvas.toolOptions.shapeFill')}
+        onCheckedChange={onFillToggle}
+      />
+      <ToggleIconButton
+        checked={stroke !== null}
+        icon={SquareIcon}
+        label={t('widgets.canvas.toolOptions.shapeStroke')}
+        onCheckedChange={onStrokeToggle}
+      />
+      <ToolbarHint>{t('widgets.canvas.toolOptions.shapeHint')}</ToolbarHint>
+    </>
   );
+};
+
+/** Fill and stroke chips; a `none` fill or stroke shows a disabled chip so the slots keep their place. */
+const ShapeColors = ({ engine }: ToolbarRegionProps) => {
+  const { t } = useTranslation();
+  const { applyEdit, fill, stroke } = useShapeEditor(engine);
+  const sampleColor = useColorSampler(engine);
+  const onFillChange = useCallback((hex: string) => applyEdit({ fill: hex }, false), [applyEdit]);
+  const onFillChangeEnd = useCallback((hex: string) => applyEdit({ fill: hex }, true), [applyEdit]);
+  const onStrokeChange = useCallback((hex: string) => applyEdit({ stroke: hex }, false), [applyEdit]);
+  const onStrokeChangeEnd = useCallback((hex: string) => applyEdit({ stroke: hex }, true), [applyEdit]);
+  return (
+    <>
+      <ColorPicker
+        aria-label={t('widgets.canvas.toolOptions.shapeFill')}
+        disabled={fill === null}
+        value={fill ?? FALLBACK_COLOR}
+        onSampleColor={sampleColor}
+        onValueChange={onFillChange}
+        onValueChangeEnd={onFillChangeEnd}
+      />
+      <ColorPicker
+        aria-label={t('widgets.canvas.toolOptions.shapeStroke')}
+        disabled={stroke === null}
+        value={stroke ?? FALLBACK_COLOR}
+        onSampleColor={sampleColor}
+        onValueChange={onStrokeChange}
+        onValueChangeEnd={onStrokeChangeEnd}
+      />
+    </>
+  );
+};
+
+export const shapeAdapter: ToolPresentationAdapter = {
+  color: ShapeColors,
+  geometry: ShapeStrokeWidth,
+  icon: ShapesIcon,
+  id: 'shape',
+  modes: { component: ShapeModes, width: 176 },
+  paintsLeaf: true,
+  primary: 'modes',
 };

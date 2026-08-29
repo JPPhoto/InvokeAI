@@ -3,6 +3,7 @@ import type { ComponentProps } from 'react';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
+import { attachCanvasOperations } from '@workbench/canvas-operations/operationAccess';
 import { createInstance } from 'i18next';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -16,9 +17,11 @@ import {
   getSamErrorTranslationKey,
   getSamStatusTranslationKey,
   keepSamImageIntermediate,
+  SamModes,
+  SamMore,
   SamPromptBody,
   SamModeToggle,
-  SamOptionsBar,
+  SamStatus,
   SamStatusSlot,
   SamVisualInput,
 } from './SamOptions';
@@ -405,9 +408,8 @@ describe('single-row SAM inputs', () => {
     expect(markup).not.toContain('title=');
     expect(markup).toContain('aria-describedby="sam-visual-guidance"');
     expect(markup).toContain('id="sam-visual-guidance"');
-    expect(markup).toContain('Include 1');
-    expect(markup).toContain('Exclude 1');
-    expect(markup).toContain('Bounding box active');
+    expect(markup).toContain('aria-label="Include 1"');
+    expect(markup).toContain('aria-label="Exclude 1"');
     expect(markup).not.toContain('>widgets.layers.selectObject.pointType<');
   });
 });
@@ -456,52 +458,58 @@ describe('getSamActionHandlers', () => {
   });
 });
 
-describe('SamOptionsBar', () => {
-  it('server-renders one row of controls in stable order without panel slots', () => {
-    const engine = {
-      operations: {
-        applySelectObjectSession: vi.fn(),
-        cancelSelectObjectSession: vi.fn(),
-        processSelectObjectSession: vi.fn(),
-        resetSelectObjectSession: vi.fn(),
-        saveSelectObjectSession: vi.fn(),
-        updateSelectObjectSession: vi.fn(),
-      },
+describe('select object regions', () => {
+  it('splits mode, points and invert into the bar, settings and secondary commands into More, and keeps Apply / Cancel in status', () => {
+    const session = snapshot({
+      hasPreview: true,
+      input: { bbox: null, excludePoints: [], includePoints: [{ x: 4, y: 5 }], type: 'visual' },
+      sourceRect: { height: 768, width: 1024, x: 0, y: 0 },
+    });
+    const operations = {
+      applySelectObjectSession: vi.fn(),
+      cancelSelectObjectSession: vi.fn(),
+      getSamSessionState: () => session,
+      processSelectObjectSession: vi.fn(),
+      resetSelectObjectSession: vi.fn(),
+      saveSelectObjectSession: vi.fn(),
+      subscribeSamSession: () => () => undefined,
+      updateSelectObjectSession: vi.fn(),
     };
-    const markup = renderToStaticMarkup(
-      createElement(
-        ChakraProvider,
-        { value: system } as ComponentProps<typeof ChakraProvider>,
+    const engine = {};
+    attachCanvasOperations(engine, operations as never);
+    const render = (element: React.ReactElement) =>
+      renderToStaticMarkup(
         createElement(
-          I18nextProvider,
-          { i18n: testI18n },
-          createElement(SamOptionsBar, {
-            engine: engine as never,
-            operations: engine.operations as never,
-            session: snapshot({
-              hasPreview: true,
-              input: { bbox: null, excludePoints: [], includePoints: [{ x: 4, y: 5 }], type: 'visual' },
-              sourceRect: { height: 768, width: 1024, x: 0, y: 0 },
-            }),
-          })
+          ChakraProvider,
+          { value: system } as ComponentProps<typeof ChakraProvider>,
+          createElement(I18nextProvider, { i18n: testI18n }, element)
         )
-      )
+      );
+    const modes = render(
+      createElement(SamModes, { engine: engine as never, isSurfaceInteractionLocked: false, placement: 'bar' })
+    );
+    const more = render(
+      createElement(SamMore, { engine: engine as never, isSurfaceInteractionLocked: false, placement: 'menu' })
+    );
+    const status = render(
+      createElement(SamStatus, { compact: false, engine: engine as never, isExternalInteractionLocked: false })
     );
 
-    expect(markup).not.toContain('data-slot="header"');
-    expect(markup).not.toContain('data-slot="body"');
-    expect(markup).not.toContain('data-slot="footer"');
-    expect(markup).not.toContain('data-operation=');
-    expect(markup).toContain('Layer 1 · Raster layer · 1024 × 768');
-    expect(markup).toContain('aria-label="Select Object settings"');
-    expect(markup).toContain('aria-label="Save As"');
-    expect(markup.indexOf('>Visual<')).toBeLessThan(markup.indexOf('Include 1'));
-    expect(markup.indexOf('Include 1')).toBeLessThan(markup.indexOf('>Invert<'));
-    expect(markup.indexOf('>Invert<')).toBeLessThan(markup.indexOf('aria-label="Select Object settings"'));
-    expect(markup.indexOf('aria-label="Select Object settings"')).toBeLessThan(markup.indexOf('>Process<'));
-    expect(markup.indexOf('>Process<')).toBeLessThan(markup.indexOf('>Reset<'));
-    expect(markup.indexOf('>Reset<')).toBeLessThan(markup.indexOf('>Apply<'));
-    expect(markup.indexOf('>Apply<')).toBeLessThan(markup.indexOf('aria-label="Save As"'));
-    expect(markup.indexOf('aria-label="Save As"')).toBeLessThan(markup.indexOf('>Cancel<'));
+    expect(modes.indexOf('>Visual<')).toBeLessThan(modes.indexOf('aria-label="Include 1"'));
+    expect(modes).not.toContain('>Invert<');
+    expect(modes).not.toContain('>Process<');
+
+    expect(more.indexOf('>Invert<')).toBeLessThan(more.indexOf('No bounding box'));
+    expect(more).toContain('aria-label="Select Object settings"');
+    expect(more.indexOf('aria-label="Select Object settings"')).toBeLessThan(more.indexOf('>Process<'));
+    expect(more.indexOf('>Process<')).toBeLessThan(more.indexOf('>Reset<'));
+    expect(more.indexOf('>Reset<')).toBeLessThan(more.indexOf('aria-label="Save As"'));
+    for (const target of ['Selection', 'Raster layer', 'Control layer']) {
+      expect(more).toContain(`>${target}<`);
+    }
+
+    expect(status).toContain('Layer 1 · Raster layer · 1024 × 768');
+    expect(status.indexOf('>Select Object<')).toBeLessThan(status.indexOf('>Apply<'));
+    expect(status.indexOf('>Apply<')).toBeLessThan(status.indexOf('>Cancel<'));
   });
 });

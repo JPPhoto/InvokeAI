@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { getLayerFilterControlPolicy } from './LayerFilterControls';
 
 describe('getLayerFilterControlPolicy', () => {
-  it('keeps layer properties compact and gives the operation bar fixed-width upward-opening fields', () => {
+  it('keeps layer properties compact and gives the context toolbar fixed-width downward-opening fields', () => {
     expect(getLayerFilterControlPolicy('property')).toEqual({
       controlMinH: undefined,
       controlSize: 'xs',
@@ -20,7 +20,7 @@ describe('getLayerFilterControlPolicy', () => {
       fieldOrientation: 'horizontal',
       fieldW: { enum: '13rem', filter: '11rem', model: '16rem', number: '17rem', string: '13rem' },
       modelSize: 'xs',
-      positioning: { placement: 'top-end', sameWidth: false },
+      positioning: { placement: 'bottom-end', sameWidth: false },
       showFilterLabel: false,
       showNumberStepper: false,
     });

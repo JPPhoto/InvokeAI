@@ -1,7 +1,7 @@
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 
-import { Box } from '@chakra-ui/react';
+import { Box, Flex } from '@chakra-ui/react';
 import { useDndMonitor, type DragEndEvent } from '@dnd-kit/core';
 import { useQueueItemProgressImage } from '@features/queue/react';
 import { useMountEffect } from '@platform/react/useMountEffect';
@@ -25,7 +25,6 @@ import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useSt
 import { useTranslation } from 'react-i18next';
 
 import { gridSizeForModelBase } from './bboxGrid';
-import { CanvasBottomControls } from './CanvasBottomControls';
 import { CanvasBottomOverlay } from './CanvasBottomOverlay';
 import { copyBlobToClipboard, decodeImageBlob, readClipboardImage } from './canvasClipboard';
 import {
@@ -49,6 +48,7 @@ import {
 import { CanvasSurface } from './CanvasSurface';
 import { CanvasSurfaceContextLayout } from './CanvasSurfaceContextLayout';
 import { resolveCheckerColors } from './checkerColors';
+import { CanvasContextToolbar } from './context-toolbar/CanvasContextToolbar';
 import { useCanvasOperation } from './engineStoreHooks';
 import { executeCanvasImageDropImport } from './executeCanvasImageDropImport';
 import { StagingBar } from './StagingBar';
@@ -60,12 +60,16 @@ import { useCanvasGallerySave } from './useCanvasGallerySave';
 import { useCreateFromBbox } from './useCreateFromBbox';
 import { reportPreparedCommit, reportStructuralCommit } from './useStructuralCommit';
 
+/** The center region's floating chrome islands overlay this much of the widget; the toolbar starts beneath them. */
+const CENTER_CHROME_INSET = 'var(--wb-center-chrome-inset, 0px)';
+
 /**
  * The canvas widget shell. The engine owns pixels and interaction and renders
  * into {@link CanvasSurface}; this component only wires the reducer-backed
- * chrome around it — command/hotkey registration, the settings-store feed, and
- * the floating bottom chrome (tool options + staging). Zoom / fit / settings
- * live in the widget header ({@link CanvasHeaderActions}).
+ * chrome around it — command/hotkey registration, the settings-store feed, the
+ * in-layout context toolbar above the surface and the floating staging bar
+ * over it. Zoom / fit / settings live in the widget header
+ * ({@link CanvasHeaderActions}).
  */
 export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   const { t } = useTranslation();
@@ -481,83 +485,75 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   const canvasSurface = useMemo(() => (engine ? <CanvasSurface engine={engine} /> : null), [engine]);
 
   return (
-    <Box
+    <Flex
       aria-label={t('widgets.canvas.surface')}
       bg="bg.inset"
+      direction="column"
       h="full"
       overflow="hidden"
-      position="relative"
+      pt={CENTER_CHROME_INSET}
       role="region"
       w="full"
     >
-      <CanvasSurfaceContextLayout surface={canvasSurface} onContextMenu={handleSurfaceContextMenu}>
-        <CanvasImageDropOverlay
-          isDocumentEditingLocked={interactionCapabilities.isDocumentEditingLocked}
-          isInteractionLocked={isInteractionLocked}
-        />
-        {engine ? (
-          <>
-            <ToolStrip engine={engine} isInteractionLocked={isInteractionLocked} />
-            <CanvasLayerContextMenu
-              beforeDangerItems={compositeSubmenus}
-              dispatch={canvasDispatch}
-              engine={engine}
-              showGroupLabels
-              target={layerContextMenuTarget}
-              onClose={closeContextMenu}
-            />
-          </>
-        ) : null}
-        {contextMenuBranch === 'global' && contextMenuTarget ? (
-          <CanvasGlobalContextMenu target={contextMenuTarget} onClose={closeContextMenu}>
-            {compositeSubmenus}
-          </CanvasGlobalContextMenu>
-        ) : null}
-
-        {/*
-         * Floating bottom-center chrome: the staging bar (when active) stacks
-         * directly above the always-present tool options bar — "just like the
-         * staging UI". The wrapper is click-through so the canvas stays
-         * interactive around the bars; each bar re-enables pointer events.
-         */}
-        <CanvasBottomOverlay.Root>
-          {hasStagingSlots || isCanvasGenerationInFlight ? (
-            <CanvasBottomOverlay.Staging>
-              <StagingBar
-                antialiasProgressImages={antialiasProgressImages}
-                areThumbnailsVisible={stagingArea.areThumbnailsVisible}
-                autoSwitchMode={stagingArea.autoSwitchMode}
-                canAccept={interactionCapabilities.canAcceptStagedImage}
-                hasMultipleSlots={hasMultipleStagingSlots}
-                isGenerating={isCanvasGenerationInFlight}
-                isVisible={stagingArea.isVisible}
-                selectedCandidate={selectedCandidate}
-                selectedImageIndex={stagingArea.selectedImageIndex}
-                selectedSlot={selectedSlot}
-                slots={stagingSlots}
-                onAccept={acceptStagedImage}
-                onCancelQueueItem={cancelQueueItem}
-                onCycle={cycleStagedImage}
-                onDiscardAll={discardAllStagedImages}
-                onDiscardSelected={discardSelectedStagedImage}
-                onPreloadCandidate={preloadStagedCandidate}
-                onSelectImage={selectStagedImage}
-                onSaveToLayerAndContinue={saveStagedImageAndContinue}
-                onSetAutoSwitch={setStagingAutoSwitch}
-                onToggleThumbnails={toggleStagingThumbnails}
-                onToggleVisibility={toggleStagingVisibility}
+      <CanvasContextToolbar engine={engine} isSurfaceInteractionLocked={isInteractionLocked} />
+      <Box flex="1" minH="0" overflow="hidden" position="relative">
+        <CanvasSurfaceContextLayout surface={canvasSurface} onContextMenu={handleSurfaceContextMenu}>
+          <CanvasImageDropOverlay
+            isDocumentEditingLocked={interactionCapabilities.isDocumentEditingLocked}
+            isInteractionLocked={isInteractionLocked}
+          />
+          {engine ? (
+            <>
+              <ToolStrip engine={engine} isInteractionLocked={isInteractionLocked} />
+              <CanvasLayerContextMenu
+                beforeDangerItems={compositeSubmenus}
+                dispatch={canvasDispatch}
+                engine={engine}
+                showGroupLabels
+                target={layerContextMenuTarget}
+                onClose={closeContextMenu}
               />
-            </CanvasBottomOverlay.Staging>
+            </>
           ) : null}
-          <CanvasBottomOverlay.Controls>
-            <CanvasBottomControls
-              engine={engine}
-              isExternalInteractionLocked={isInteractionLocked}
-              operation={operation}
-            />
-          </CanvasBottomOverlay.Controls>
-        </CanvasBottomOverlay.Root>
-      </CanvasSurfaceContextLayout>
-    </Box>
+          {contextMenuBranch === 'global' && contextMenuTarget ? (
+            <CanvasGlobalContextMenu target={contextMenuTarget} onClose={closeContextMenu}>
+              {compositeSubmenus}
+            </CanvasGlobalContextMenu>
+          ) : null}
+
+          {/* Staging keeps its bottom-center slot; the wrapper is click-through and the bar re-enables pointer events. */}
+          <CanvasBottomOverlay.Root>
+            {hasStagingSlots || isCanvasGenerationInFlight ? (
+              <CanvasBottomOverlay.Staging>
+                <StagingBar
+                  antialiasProgressImages={antialiasProgressImages}
+                  areThumbnailsVisible={stagingArea.areThumbnailsVisible}
+                  autoSwitchMode={stagingArea.autoSwitchMode}
+                  canAccept={interactionCapabilities.canAcceptStagedImage}
+                  hasMultipleSlots={hasMultipleStagingSlots}
+                  isGenerating={isCanvasGenerationInFlight}
+                  isVisible={stagingArea.isVisible}
+                  selectedCandidate={selectedCandidate}
+                  selectedImageIndex={stagingArea.selectedImageIndex}
+                  selectedSlot={selectedSlot}
+                  slots={stagingSlots}
+                  onAccept={acceptStagedImage}
+                  onCancelQueueItem={cancelQueueItem}
+                  onCycle={cycleStagedImage}
+                  onDiscardAll={discardAllStagedImages}
+                  onDiscardSelected={discardSelectedStagedImage}
+                  onPreloadCandidate={preloadStagedCandidate}
+                  onSelectImage={selectStagedImage}
+                  onSaveToLayerAndContinue={saveStagedImageAndContinue}
+                  onSetAutoSwitch={setStagingAutoSwitch}
+                  onToggleThumbnails={toggleStagingThumbnails}
+                  onToggleVisibility={toggleStagingVisibility}
+                />
+              </CanvasBottomOverlay.Staging>
+            ) : null}
+          </CanvasBottomOverlay.Root>
+        </CanvasSurfaceContextLayout>
+      </Box>
+    </Flex>
   );
 };

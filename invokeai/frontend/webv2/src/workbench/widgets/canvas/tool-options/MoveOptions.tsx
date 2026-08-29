@@ -1,13 +1,15 @@
-import type { NumberInput as ChakraNumberInput } from '@chakra-ui/react';
+import type {
+  ToolbarRegionProps,
+  ToolPresentationAdapter,
+} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
 
-import { HStack, NumberInput, Text } from '@chakra-ui/react';
 import { lookupDocumentLeaf } from '@workbench/canvas-engine/api';
+import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
+import { MoveIcon } from 'lucide-react';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-
-import type { ToolOptionsComponentProps } from './ToolOptionsBar';
 
 interface SelectedTransform {
   id: string;
@@ -16,12 +18,12 @@ interface SelectedTransform {
 }
 
 /**
- * Move tool options: numeric X / Y position of the selected layer (document
- * pixels). Reads the committed transform from the reducer and writes each edit
- * back through the engine's structural history (so it shares the canvas undo
- * stack with drags and nudges). Disabled with no selection.
+ * Numeric X / Y of the selected layer in document pixels. Reads the committed
+ * transform and writes each edit through the engine's structural history, so
+ * it shares the undo stack with drags and nudges. Disabled with no editable
+ * selection.
  */
-export const MoveOptions = ({ engine }: ToolOptionsComponentProps) => {
+const MovePosition = ({ engine }: ToolbarRegionProps) => {
   const { t } = useTranslation();
   const commitPrepared = usePreparedCommit(engine);
   const selected = useActiveProjectSelector(
@@ -36,8 +38,12 @@ export const MoveOptions = ({ engine }: ToolOptionsComponentProps) => {
   );
 
   const commitAxis = useCallback(
-    (axis: 'x' | 'y', next: number) => {
-      if (!selected || next === selected[axis]) {
+    (axis: 'x' | 'y', value: number) => {
+      if (!selected) {
+        return;
+      }
+      const next = Math.round(value);
+      if (next === selected[axis]) {
         return;
       }
       commitPrepared(t('widgets.canvas.toolOptions.movePosition'), (model) =>
@@ -50,59 +56,32 @@ export const MoveOptions = ({ engine }: ToolOptionsComponentProps) => {
     },
     [commitPrepared, selected, t]
   );
-
-  const onXChange = useCallback(
-    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
-      if (Number.isFinite(valueAsNumber)) {
-        commitAxis('x', Math.round(valueAsNumber));
-      }
-    },
-    [commitAxis]
-  );
-
-  const onYChange = useCallback(
-    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
-      if (Number.isFinite(valueAsNumber)) {
-        commitAxis('y', Math.round(valueAsNumber));
-      }
-    },
-    [commitAxis]
-  );
-
-  const disabled = !selected;
+  const onX = useNumberCommit(useCallback((value: number) => commitAxis('x', value), [commitAxis]));
+  const onY = useNumberCommit(useCallback((value: number) => commitAxis('y', value), [commitAxis]));
 
   return (
-    <HStack align="center" gap="3">
-      <HStack align="center" gap="1.5">
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.canvas.toolOptions.positionX')}
-        </Text>
-        <NumberInput.Root
-          disabled={disabled}
-          size="xs"
-          value={selected ? String(Math.round(selected.x)) : ''}
-          w="5rem"
-          onValueChange={onXChange}
-        >
-          <NumberInput.Control />
-          <NumberInput.Input aria-label={t('widgets.canvas.toolOptions.positionX')} fontSize="xs" />
-        </NumberInput.Root>
-      </HStack>
-      <HStack align="center" gap="1.5">
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.canvas.toolOptions.positionY')}
-        </Text>
-        <NumberInput.Root
-          disabled={disabled}
-          size="xs"
-          value={selected ? String(Math.round(selected.y)) : ''}
-          w="5rem"
-          onValueChange={onYChange}
-        >
-          <NumberInput.Control />
-          <NumberInput.Input aria-label={t('widgets.canvas.toolOptions.positionY')} fontSize="xs" />
-        </NumberInput.Root>
-      </HStack>
-    </HStack>
+    <>
+      <ToolbarNumberField
+        aria-label={t('widgets.canvas.toolOptions.positionX')}
+        disabled={!selected}
+        label={t('widgets.canvas.toolOptions.positionX')}
+        value={selected ? String(Math.round(selected.x)) : ''}
+        onValueCommit={onX}
+      />
+      <ToolbarNumberField
+        aria-label={t('widgets.canvas.toolOptions.positionY')}
+        disabled={!selected}
+        label={t('widgets.canvas.toolOptions.positionY')}
+        value={selected ? String(Math.round(selected.y)) : ''}
+        onValueCommit={onY}
+      />
+    </>
   );
+};
+
+export const moveAdapter: ToolPresentationAdapter = {
+  geometry: MovePosition,
+  icon: MoveIcon,
+  id: 'move',
+  primary: 'geometry',
 };

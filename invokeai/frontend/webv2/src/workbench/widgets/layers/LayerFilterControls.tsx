@@ -20,7 +20,6 @@ import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const SELECT_POSITIONING_DOWN = { placement: 'bottom-end', sameWidth: false } as const;
-const SELECT_POSITIONING_UP = { placement: 'top-end', sameWidth: false } as const;
 const SPANDREL_MODEL_TYPES: ModelTaxonomyType[] = ['spandrel_image_to_image'];
 
 interface LayerFilterControlsProps {
@@ -28,6 +27,8 @@ interface LayerFilterControlsProps {
   settings: Record<string, unknown>;
   disabled: boolean;
   focusFilter: boolean;
+  /** Which controls to render; the context toolbar shows the type in its bar and the parameters in its More menu. */
+  parts?: 'all' | 'params' | 'type';
   variant?: LayerFilterControlsVariant;
   onFilterTypeChange(value: string): void;
   onSettingsChange(value: Record<string, unknown>): void;
@@ -43,7 +44,7 @@ export const getLayerFilterControlPolicy = (variant: LayerFilterControlsVariant)
         fieldOrientation: 'horizontal',
         fieldW: { enum: '13rem', filter: '11rem', model: '16rem', number: '17rem', string: '13rem' },
         modelSize: 'xs',
-        positioning: SELECT_POSITIONING_UP,
+        positioning: SELECT_POSITIONING_DOWN,
         showFilterLabel: false,
         showNumberStepper: false,
       } as const)
@@ -64,6 +65,7 @@ export const LayerFilterControls = ({
   focusFilter,
   onFilterTypeChange,
   onSettingsChange,
+  parts = 'all',
   settings,
   variant = 'property',
 }: LayerFilterControlsProps) => {
@@ -117,7 +119,7 @@ export const LayerFilterControls = ({
 
   return (
     <>
-      {policy.showFilterLabel ? (
+      {parts === 'params' ? null : policy.showFilterLabel ? (
         <Field label={t('widgets.layers.control.filter')} w={filterFieldW}>
           {filterSelect}
         </Field>
@@ -126,17 +128,19 @@ export const LayerFilterControls = ({
           {filterSelect}
         </Box>
       )}
-      {definition?.params.map((param) => (
-        <FilterParamField
-          key={param.key}
-          disabled={disabled}
-          param={param}
-          policy={policy}
-          settings={settings}
-          value={settings[param.key]}
-          onChange={handleSettingChange}
-        />
-      ))}
+      {parts === 'type'
+        ? null
+        : definition?.params.map((param) => (
+            <FilterParamField
+              key={param.key}
+              disabled={disabled}
+              param={param}
+              policy={policy}
+              settings={settings}
+              value={settings[param.key]}
+              onChange={handleSettingChange}
+            />
+          ))}
     </>
   );
 };

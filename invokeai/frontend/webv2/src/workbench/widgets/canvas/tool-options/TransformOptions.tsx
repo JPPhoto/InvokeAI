@@ -1,182 +1,148 @@
 import type { NumberInput as ChakraNumberInput } from '@chakra-ui/react';
 import type { LayerTransform } from '@workbench/canvas-engine/api';
+import type {
+  ToolbarRegionProps,
+  ToolbarStatusProps,
+  ToolPresentationAdapter,
+} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
 
-import { HStack, NumberInput, Text } from '@chakra-ui/react';
-import { Button } from '@platform/ui';
+import { TOOLBAR_GAP_PX, TOOLBAR_NUMBER_FIELD_WIDTH_PX } from '@workbench/widgets/canvas/context-toolbar/toolbarLayout';
+import { ToolbarNumberField, ToolbarStatus } from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
 import { useCanvasHasFloatingSelection, useTransformSession } from '@workbench/widgets/canvas/engineStoreHooks';
+import { Rotate3dIcon } from 'lucide-react';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-
-import type { ToolOptionsComponentProps } from './ToolOptionsBar';
 
 const RAD_TO_DEG = 180 / Math.PI;
 const DEG_TO_RAD = Math.PI / 180;
 
-/** Rounds to 2 decimals for display without trailing float noise. */
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 /**
- * Transform tool options: numeric X / Y (document px), width/height scale
- * (percent), and rotation (degrees) of the active session, plus Apply / Cancel.
- *
- * Scale is shown as a PERCENT of the layer's native size rather than absolute
- * W/H pixels: the session carries only the transform (not the source pixel
- * dimensions), so a percent is the resolution-independent, self-contained
- * representation. Edits update the session preview through the engine (no
- * dispatch until Apply); the whole session is one undo entry. Disabled with no
- * session — except Apply / Cancel, which stay live for a floating selection.
+ * Edits go to the session preview through the engine; nothing reaches the
+ * document until Apply, and the whole session is one undo entry. Scale is a
+ * percent of the layer's native size because the session carries only the
+ * transform, not the source pixel dimensions.
  */
-export const TransformOptions = ({ engine }: ToolOptionsComponentProps) => {
-  const { t } = useTranslation();
+const useTransformPatch = (engine: ToolbarRegionProps['engine']) => {
   const session = useTransformSession(engine);
   const transform = session?.transform ?? null;
-  // A floating selection frames its own pixels instead of opening a layer
-  // session, so Apply / Cancel must still act — they bank or abandon the float.
-  // The numerics stay disabled: the float's transform is LAYER-LOCAL, and
-  // showing those numbers in a bar that otherwise reads document space would
-  // misreport where the pixels are.
-  const hasFloat = useCanvasHasFloatingSelection(engine);
-
   const patch = useCallback(
     (next: Partial<LayerTransform>) => {
-      if (!transform) {
-        return;
+      if (transform) {
+        engine.layers.updateTransformSession({ ...transform, ...next });
       }
-      engine.layers.updateTransformSession({ ...transform, ...next });
     },
     [engine, transform]
   );
+  return { patch, transform };
+};
 
+type NumberChange = ChakraNumberInput.ValueChangeDetails;
+
+const TransformPosition = ({ engine }: ToolbarRegionProps) => {
+  const { t } = useTranslation();
+  const { patch, transform } = useTransformPatch(engine);
   const onX = useCallback(
-    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
-      if (Number.isFinite(valueAsNumber)) {
-        patch({ x: Math.round(valueAsNumber) });
-      }
-    },
+    ({ valueAsNumber }: NumberChange) => Number.isFinite(valueAsNumber) && patch({ x: Math.round(valueAsNumber) }),
     [patch]
   );
   const onY = useCallback(
-    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
-      if (Number.isFinite(valueAsNumber)) {
-        patch({ y: Math.round(valueAsNumber) });
-      }
-    },
+    ({ valueAsNumber }: NumberChange) => Number.isFinite(valueAsNumber) && patch({ y: Math.round(valueAsNumber) }),
     [patch]
   );
+  return (
+    <>
+      <ToolbarNumberField
+        aria-label={t('widgets.canvas.toolOptions.positionX')}
+        disabled={!transform}
+        label={t('widgets.canvas.toolOptions.positionX')}
+        value={transform ? String(Math.round(transform.x)) : ''}
+        onValueChange={onX}
+      />
+      <ToolbarNumberField
+        aria-label={t('widgets.canvas.toolOptions.positionY')}
+        disabled={!transform}
+        label={t('widgets.canvas.toolOptions.positionY')}
+        value={transform ? String(Math.round(transform.y)) : ''}
+        onValueChange={onY}
+      />
+    </>
+  );
+};
+
+const TransformScale = ({ engine }: ToolbarRegionProps) => {
+  const { t } = useTranslation();
+  const { patch, transform } = useTransformPatch(engine);
   const onScaleX = useCallback(
-    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
-      if (Number.isFinite(valueAsNumber) && valueAsNumber !== 0) {
-        patch({ scaleX: valueAsNumber / 100 });
-      }
-    },
+    ({ valueAsNumber }: NumberChange) =>
+      Number.isFinite(valueAsNumber) && valueAsNumber !== 0 && patch({ scaleX: valueAsNumber / 100 }),
     [patch]
   );
   const onScaleY = useCallback(
-    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
-      if (Number.isFinite(valueAsNumber) && valueAsNumber !== 0) {
-        patch({ scaleY: valueAsNumber / 100 });
-      }
-    },
+    ({ valueAsNumber }: NumberChange) =>
+      Number.isFinite(valueAsNumber) && valueAsNumber !== 0 && patch({ scaleY: valueAsNumber / 100 }),
     [patch]
   );
   const onRotation = useCallback(
-    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
-      if (Number.isFinite(valueAsNumber)) {
-        patch({ rotation: valueAsNumber * DEG_TO_RAD });
-      }
-    },
+    ({ valueAsNumber }: NumberChange) =>
+      Number.isFinite(valueAsNumber) && patch({ rotation: valueAsNumber * DEG_TO_RAD }),
     [patch]
   );
+  return (
+    <>
+      <ToolbarNumberField
+        aria-label={t('widgets.canvas.toolOptions.scaleWidth')}
+        disabled={!transform}
+        label={t('widgets.canvas.toolOptions.frameWidth')}
+        value={transform ? String(round2(transform.scaleX * 100)) : ''}
+        onValueChange={onScaleX}
+      />
+      <ToolbarNumberField
+        aria-label={t('widgets.canvas.toolOptions.scaleHeight')}
+        disabled={!transform}
+        label={t('widgets.canvas.toolOptions.frameHeight')}
+        value={transform ? String(round2(transform.scaleY * 100)) : ''}
+        onValueChange={onScaleY}
+      />
+      <ToolbarNumberField
+        aria-label={t('widgets.canvas.toolOptions.rotation')}
+        disabled={!transform}
+        suffix="°"
+        value={transform ? String(round2(transform.rotation * RAD_TO_DEG)) : ''}
+        onValueChange={onRotation}
+      />
+    </>
+  );
+};
 
+/**
+ * Apply / Cancel stay live for a floating selection, which frames its own
+ * pixels instead of opening a layer session; the numerics stay disabled
+ * because the float's transform is layer-local, not document space.
+ */
+const TransformStatus = ({ compact, engine }: ToolbarStatusProps) => {
+  const session = useTransformSession(engine);
+  const hasFloat = useCanvasHasFloatingSelection(engine);
+  const disabled = !session && !hasFloat;
   const onApply = useCallback(() => engine.layers.applyTransform(), [engine]);
   const onCancel = useCallback(() => engine.layers.cancelTransform(), [engine]);
-
-  const disabled = !transform;
-  const commitDisabled = disabled && !hasFloat;
-
   return (
-    <HStack align="center" gap="3">
-      <HStack align="center" gap="1.5">
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.canvas.toolOptions.positionX')}
-        </Text>
-        <NumberInput.Root
-          disabled={disabled}
-          size="xs"
-          value={transform ? String(Math.round(transform.x)) : ''}
-          w="4.5rem"
-          onValueChange={onX}
-        >
-          <NumberInput.Control />
-          <NumberInput.Input aria-label={t('widgets.canvas.toolOptions.positionX')} fontSize="xs" />
-        </NumberInput.Root>
-      </HStack>
-      <HStack align="center" gap="1.5">
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.canvas.toolOptions.positionY')}
-        </Text>
-        <NumberInput.Root
-          disabled={disabled}
-          size="xs"
-          value={transform ? String(Math.round(transform.y)) : ''}
-          w="4.5rem"
-          onValueChange={onY}
-        >
-          <NumberInput.Control />
-          <NumberInput.Input aria-label={t('widgets.canvas.toolOptions.positionY')} fontSize="xs" />
-        </NumberInput.Root>
-      </HStack>
-      <HStack align="center" gap="1.5">
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.canvas.toolOptions.scaleWidth')}
-        </Text>
-        <NumberInput.Root
-          disabled={disabled}
-          size="xs"
-          value={transform ? String(round2(transform.scaleX * 100)) : ''}
-          w="4.5rem"
-          onValueChange={onScaleX}
-        >
-          <NumberInput.Control />
-          <NumberInput.Input aria-label={t('widgets.canvas.toolOptions.scaleWidth')} fontSize="xs" />
-        </NumberInput.Root>
-      </HStack>
-      <HStack align="center" gap="1.5">
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.canvas.toolOptions.scaleHeight')}
-        </Text>
-        <NumberInput.Root
-          disabled={disabled}
-          size="xs"
-          value={transform ? String(round2(transform.scaleY * 100)) : ''}
-          w="4.5rem"
-          onValueChange={onScaleY}
-        >
-          <NumberInput.Control />
-          <NumberInput.Input aria-label={t('widgets.canvas.toolOptions.scaleHeight')} fontSize="xs" />
-        </NumberInput.Root>
-      </HStack>
-      <HStack align="center" gap="1.5">
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.canvas.toolOptions.rotation')}
-        </Text>
-        <NumberInput.Root
-          disabled={disabled}
-          size="xs"
-          value={transform ? String(round2(transform.rotation * RAD_TO_DEG)) : ''}
-          w="4.5rem"
-          onValueChange={onRotation}
-        >
-          <NumberInput.Control />
-          <NumberInput.Input aria-label={t('widgets.canvas.toolOptions.rotation')} fontSize="xs" />
-        </NumberInput.Root>
-      </HStack>
-      <Button disabled={commitDisabled} size="xs" variant="solid" onClick={onApply}>
-        {t('widgets.canvas.toolOptions.applyTransform')}
-      </Button>
-      <Button disabled={commitDisabled} size="xs" variant="ghost" onClick={onCancel}>
-        {t('widgets.canvas.toolOptions.cancelTransform')}
-      </Button>
-    </HStack>
+    <ToolbarStatus
+      applyDisabled={disabled}
+      cancelDisabled={disabled}
+      compact={compact}
+      onApply={onApply}
+      onCancel={onCancel}
+    />
   );
+};
+
+export const transformAdapter: ToolPresentationAdapter = {
+  geometry: TransformPosition,
+  icon: Rotate3dIcon,
+  id: 'transform',
+  modes: { component: TransformScale, width: 3 * TOOLBAR_NUMBER_FIELD_WIDTH_PX + 2 * TOOLBAR_GAP_PX },
+  primary: 'geometry',
+  status: TransformStatus,
 };

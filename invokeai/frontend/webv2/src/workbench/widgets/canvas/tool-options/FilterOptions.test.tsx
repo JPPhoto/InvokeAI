@@ -4,6 +4,7 @@ import type { ComponentProps } from 'react';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
+import { attachCanvasOperations } from '@workbench/canvas-operations/operationAccess';
 import { createInstance } from 'i18next';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -11,7 +12,9 @@ import { I18nextProvider } from 'react-i18next';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  FilterOptionsBar,
+  FilterModes,
+  FilterMore,
+  FilterStatus,
   getFilterActionEligibility,
   getFilterSaveTargetEligibility,
   getFilterStatusTranslationKey,
@@ -141,97 +144,79 @@ describe('getFilterStatusTranslationKey', () => {
   });
 });
 
-describe('FilterOptionsBar', () => {
-  it('server-renders one row of controls in stable order without panel slots', () => {
-    const engine = {
-      cancelFilterOperation: vi.fn(),
-      commitFilterOperation: vi.fn(),
-      processFilterOperation: vi.fn(),
-      resetFilterOperation: vi.fn(),
-      setFilterOperationAutoProcess: vi.fn(),
-      updateFilterOperation: vi.fn(),
-    };
-    const markup = renderToStaticMarkup(
+const renderRegions = (session: FilterOperationSessionState) => {
+  const operations = {
+    cancelFilterOperation: vi.fn(),
+    commitFilterOperation: vi.fn(),
+    getFilterSessionState: () => session,
+    processFilterOperation: vi.fn(),
+    resetFilterOperation: vi.fn(),
+    setFilterOperationAutoProcess: vi.fn(),
+    subscribeFilterSession: () => () => undefined,
+    updateFilterOperation: vi.fn(),
+  };
+  const engine = {};
+  attachCanvasOperations(engine, operations as never);
+  const render = (element: React.ReactElement) =>
+    renderToStaticMarkup(
       createElement(
         ChakraProvider,
         { value: system } as ComponentProps<typeof ChakraProvider>,
-        createElement(
-          I18nextProvider,
-          { i18n: testI18n },
-          createElement(FilterOptionsBar, {
-            engine: engine as never,
-            session: state({
-              draft: { settings: { high_threshold: 200, low_threshold: 100 }, type: 'canny_edge_detection' },
-            }),
-          })
-        )
+        createElement(I18nextProvider, { i18n: testI18n }, element)
       )
     );
+  return {
+    modes: render(
+      createElement(FilterModes, { engine: engine as never, isSurfaceInteractionLocked: false, placement: 'bar' })
+    ),
+    more: render(
+      createElement(FilterMore, { engine: engine as never, isSurfaceInteractionLocked: false, placement: 'menu' })
+    ),
+    operations,
+    status: render(
+      createElement(FilterStatus, { compact: false, engine: engine as never, isExternalInteractionLocked: false })
+    ),
+  };
+};
 
-    expect(markup).not.toContain('data-slot="header"');
-    expect(markup).not.toContain('data-slot="body"');
-    expect(markup).not.toContain('data-slot="feedback"');
-    expect(markup).not.toContain('data-slot="footer"');
-    expect(markup).not.toContain('data-operation=');
-    expect(markup).toContain('Portrait · Raster layer');
-    expect(markup).toContain('role="status"');
-    expect(markup).toContain('aria-label="Save As"');
-    expect(markup.indexOf('>Filter<')).toBeLessThan(markup.indexOf('>Auto<'));
-    expect(markup.indexOf('>Auto<')).toBeLessThan(markup.indexOf('>Process<'));
-    expect(markup.indexOf('>Process<')).toBeLessThan(markup.indexOf('>Reset<'));
-    expect(markup.indexOf('>Reset<')).toBeLessThan(markup.indexOf('>Apply<'));
-    expect(markup.indexOf('>Apply<')).toBeLessThan(markup.indexOf('aria-label="Save As"'));
-    expect(markup.indexOf('aria-label="Save As"')).toBeLessThan(markup.indexOf('>Cancel<'));
+describe('filter operation regions', () => {
+  it('splits type and auto-process into the bar, parameters and secondary commands into More, and keeps Apply / Cancel in status', () => {
+    const { modes, more, status } = renderRegions(
+      state({ draft: { settings: { high_threshold: 200, low_threshold: 100 }, type: 'canny_edge_detection' } })
+    );
+
+    expect(modes).toContain('aria-label="Filter"');
+    expect(modes).toContain('>Auto<');
+    expect(modes).not.toContain('>Process<');
+
+    expect(more).not.toContain('aria-label="Filter"');
+    expect(more.indexOf('>Process<')).toBeLessThan(more.indexOf('>Reset<'));
+    expect(more.indexOf('>Reset<')).toBeLessThan(more.indexOf('>Raster layer<'));
+    expect(more.indexOf('>Raster layer<')).toBeLessThan(more.indexOf('>Control layer<'));
+
+    expect(status).toContain('Portrait · Raster layer');
+    expect(status).toContain('role="status"');
+    expect(status.indexOf('>Filter<')).toBeLessThan(status.indexOf('>Apply<'));
+    expect(status.indexOf('>Apply<')).toBeLessThan(status.indexOf('>Cancel<'));
   });
 
-  it('server-renders disabled action buttons while processing', () => {
-    const engine = {
-      cancelFilterOperation: vi.fn(),
-      commitFilterOperation: vi.fn(),
-      processFilterOperation: vi.fn(),
-      resetFilterOperation: vi.fn(),
-      setFilterOperationAutoProcess: vi.fn(),
-      updateFilterOperation: vi.fn(),
-    };
-    const markup = renderToStaticMarkup(
-      createElement(
-        ChakraProvider,
-        { value: system } as ComponentProps<typeof ChakraProvider>,
-        createElement(
-          I18nextProvider,
-          { i18n: testI18n },
-          createElement(FilterOptionsBar, {
-            engine: engine as never,
-            session: state({ status: 'processing' }),
-          })
-        )
-      )
-    );
+  it('disables Process and Auto while processing and keeps Cancel live', () => {
+    const { modes, more, status } = renderRegions(state({ status: 'processing' }));
 
-    const processIdx = markup.indexOf('>Process<');
-    const processButtonTag = markup.slice(markup.lastIndexOf('<button', processIdx), processIdx);
+    const processIdx = more.indexOf('>Process<');
+    const processButtonTag = more.slice(more.lastIndexOf('<button', processIdx), processIdx);
     expect(processButtonTag).toContain('disabled=""');
     expect(processButtonTag).toContain('data-loading=""');
 
-    const autoIdx = markup.indexOf('>Auto<');
-    const autoButtonTag = markup.slice(markup.lastIndexOf('<button', autoIdx), autoIdx);
-    expect(autoButtonTag).toContain('disabled=""');
+    const autoIdx = modes.indexOf('>Auto<');
+    expect(modes.slice(modes.lastIndexOf('<button', autoIdx), autoIdx)).toContain('disabled=""');
+
+    const cancelIdx = status.indexOf('>Cancel<');
+    expect(status.slice(status.lastIndexOf('<button', cancelIdx), cancelIdx)).not.toContain('disabled=""');
   });
 
   it('marks the Auto chip pressed state from the session', () => {
-    const render = (autoProcess: boolean) =>
-      renderToStaticMarkup(
-        createElement(
-          ChakraProvider,
-          { value: system } as ComponentProps<typeof ChakraProvider>,
-          createElement(
-            I18nextProvider,
-            { i18n: testI18n },
-            createElement(FilterOptionsBar, { engine: {} as never, session: state({ autoProcess }) })
-          )
-        )
-      );
-    expect(render(true)).toContain('aria-pressed="true"');
-    expect(render(false)).toContain('aria-pressed="false"');
+    expect(renderRegions(state({ autoProcess: true })).modes).toContain('aria-pressed="true"');
+    expect(renderRegions(state({ autoProcess: false })).modes).toContain('aria-pressed="false"');
   });
 });

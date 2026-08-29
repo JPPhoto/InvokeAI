@@ -11,7 +11,7 @@ import { createDraftProject } from '@workbench/workbenchState';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { SelectionOptionsRow } from './SelectionOptionsRow';
+import { SelectionActions } from './SelectionOptionsRow';
 
 interface CapturedButton {
   children?: ReactNode;
@@ -46,6 +46,7 @@ const engine = {
     eraseSelection: vi.fn(),
     fillSelection: vi.fn(),
     invertSelection: vi.fn(),
+    liftSelectionToLayer: vi.fn(),
   },
 } as unknown as CanvasEngine;
 
@@ -63,12 +64,7 @@ const renderRow = (layer: CanvasLayerContract): Map<string, CapturedButton> => {
   activeProject.current = project;
   renderToStaticMarkup(
     <ChakraProvider value={system}>
-      <SelectionOptionsRow
-        engine={engine}
-        hintKey="widgets.canvas.toolOptions.lassoHint"
-        mode="replace"
-        onModeChange={vi.fn()}
-      />
+      <SelectionActions engine={engine} isSurfaceInteractionLocked={false} placement="bar" />
     </ChakraProvider>
   );
   return new Map(buttons);
@@ -79,7 +75,7 @@ beforeEach(() => {
   hasSelection.current = true;
 });
 
-describe('SelectionOptionsRow pixel target eligibility', () => {
+describe('SelectionActions pixel target eligibility', () => {
   const rasterPaint = createEmptyPaintLayer('Raster', 'raster');
   const controlPaint = createControlLayer('Control', 'control');
   const rasterImage: CanvasLayerContract = {

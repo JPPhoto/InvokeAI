@@ -1,16 +1,24 @@
-import type { NumberInput as ChakraNumberInput, SliderValueChangeDetails } from '@chakra-ui/react';
+import type { NumberInput as ChakraNumberInput } from '@chakra-ui/react';
+import type { BrushOptions as BrushOptionsState } from '@workbench/canvas-engine/api';
+import type {
+  ToolbarRegionProps,
+  ToolPresentationAdapter,
+} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
 import type { KeyboardEvent } from 'react';
 
-import { HStack, NumberInput, Text } from '@chakra-ui/react';
-import { ColorPicker, Slider, ToggleIconButton } from '@platform/ui';
+import { HStack } from '@chakra-ui/react';
+import { ColorPicker, ToggleIconButton } from '@platform/ui';
 import { MAX_BRUSH_SIZE, MIN_BRUSH_SIZE } from '@workbench/canvas-engine/api';
+import {
+  ToolbarNumberField,
+  ToolbarSlider,
+  useNumberCommit,
+} from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
 import { useBrushOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
-import { DropletIcon, PenLineIcon } from 'lucide-react';
-import { useCallback, useMemo, useReducer } from 'react';
+import { BrushIcon, DropletIcon, PenLineIcon } from 'lucide-react';
+import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-
-import type { ToolOptionsComponentProps } from './ToolOptionsBar';
 
 export const BRUSH_SIZE_SLIDER_MAX_SIZE = 600;
 export const BRUSH_SIZE_SLIDER_MIN = 0;
@@ -38,8 +46,6 @@ export const formatBrushSize = (size: number): string =>
     .toFixed(2)
     .replace(/\.?0+$/, '');
 
-const formatOpacityPercent = (value: number): string => `${Math.round(value)}%`;
-
 export const getBrushSizeKeyboardStep = (size: number, direction: -1 | 1): number => {
   if (size < 1 || (direction < 0 && size === 1)) {
     return 0.01;
@@ -53,56 +59,22 @@ export const getBrushSizeKeyboardStep = (size: number, direction: -1 | 1): numbe
   return 10;
 };
 
-interface PaintSizeOpacityControlsProps {
-  opacity: number;
-  setOpacity: (opacity: number) => void;
-  setSize: (size: number) => void;
-  size: number;
-  sizeLabel: string;
-}
-
-/** Shared size + opacity controls for the brush and eraser. */
-export const PaintSizeOpacityControls = ({
-  opacity,
-  setOpacity,
+/** Logarithmic size slider plus an exact numeric field, shared by the brush and eraser. */
+export const PaintSizeControl = ({
+  label,
   setSize,
   size,
-  sizeLabel,
-}: PaintSizeOpacityControlsProps) => {
-  const { t } = useTranslation();
-  const sizeAriaLabel = useMemo(() => [sizeLabel], [sizeLabel]);
-  const opacityAriaLabel = useMemo(() => [t('widgets.canvas.toolOptions.opacity')], [t]);
-  const sliderValue = useMemo(() => [brushSizeToSliderPosition(size)], [size]);
-  const opacityValue = useMemo(() => [Math.round(opacity * 100)], [opacity]);
-  const numberInputValue = useMemo(() => formatBrushSize(size), [size]);
-  const [numberInputResetVersion, resetNumberInput] = useReducer((version: number) => version + 1, 0);
-  const formatCurrentSizePx = useCallback(() => `${numberInputValue}px`, [numberInputValue]);
-
-  const onSliderSizeChange = useCallback(
-    ({ value }: SliderValueChangeDetails) => {
-      const next = value[0];
-      if (next !== undefined && Number.isFinite(next)) {
-        setSize(sliderPositionToBrushSize(next));
-      }
-    },
-    [setSize]
-  );
-  const onNumberSizeCommit = useCallback(
-    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
-      if (Number.isFinite(valueAsNumber)) {
-        setSize(clampBrushSize(valueAsNumber));
-      }
-      // NumberInput retains the literal draft it was given. Always remount it
-      // after commit so rounding/clamping (including a no-op engine update)
-      // cannot leave the field disagreeing with the accepted size.
-      resetNumberInput();
-    },
-    [setSize]
-  );
+}: {
+  label: string;
+  setSize: (size: number) => void;
+  size: number;
+}) => {
+  const numberValue = formatBrushSize(size);
+  const formatPx = useCallback(() => `${numberValue}px`, [numberValue]);
+  const onSlider = useCallback((position: number) => setSize(sliderPositionToBrushSize(position)), [setSize]);
+  const onCommit = useNumberCommit((value) => setSize(clampBrushSize(value)));
   const onSliderKeyDownCapture = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
-      // Preserve the slider primitive's native modifier-key semantics. This
-      // override is only for unmodified logical brush-size navigation.
       if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
         return;
       }
@@ -133,132 +105,145 @@ export const PaintSizeOpacityControls = ({
     },
     [setSize, size]
   );
-  const onOpacityChange = useCallback(
-    ({ value }: SliderValueChangeDetails) => {
-      const next = value[0];
-      if (next !== undefined && Number.isFinite(next)) {
-        setOpacity(next / 100);
-      }
-    },
-    [setOpacity]
-  );
 
   return (
     <>
-      <HStack align="center" gap="1.5">
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.canvas.toolOptions.size')}
-        </Text>
-        <Slider
-          aria-label={sizeAriaLabel}
-          formatValue={formatCurrentSizePx}
-          getAriaValueText={formatCurrentSizePx}
-          max={BRUSH_SIZE_SLIDER_MAX}
-          min={BRUSH_SIZE_SLIDER_MIN}
-          size="sm"
-          step={BRUSH_SIZE_SLIDER_STEP}
-          value={sliderValue}
-          w="7rem"
-          onKeyDownCapture={onSliderKeyDownCapture}
-          onValueChange={onSliderSizeChange}
-        />
-        <NumberInput.Root
-          max={MAX_BRUSH_SIZE}
-          min={MIN_BRUSH_SIZE}
-          size="xs"
-          step={0.1}
-          defaultValue={numberInputValue}
-          key={`${numberInputValue}:${numberInputResetVersion}`}
-          w="4.5rem"
-          onValueCommit={onNumberSizeCommit}
-        >
-          <NumberInput.Control />
-          <NumberInput.Input aria-label={sizeLabel} fontSize="xs" />
-        </NumberInput.Root>
-      </HStack>
-      <HStack align="center" gap="1.5">
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.canvas.toolOptions.opacity')}
-        </Text>
-        <Slider
-          aria-label={opacityAriaLabel}
-          formatValue={formatOpacityPercent}
-          max={100}
-          min={0}
-          size="sm"
-          value={opacityValue}
-          w="6rem"
-          onValueChange={onOpacityChange}
-        />
-      </HStack>
+      <ToolbarSlider
+        aria-label={label}
+        formatValue={formatPx}
+        getAriaValueText={formatPx}
+        max={BRUSH_SIZE_SLIDER_MAX}
+        min={BRUSH_SIZE_SLIDER_MIN}
+        step={BRUSH_SIZE_SLIDER_STEP}
+        value={brushSizeToSliderPosition(size)}
+        onKeyDownCapture={onSliderKeyDownCapture}
+        onValueChange={onSlider}
+      />
+      <ToolbarNumberField
+        aria-label={label}
+        max={MAX_BRUSH_SIZE}
+        min={MIN_BRUSH_SIZE}
+        step={0.1}
+        suffix="px"
+        value={numberValue}
+        onValueCommit={onCommit}
+      />
     </>
   );
 };
 
-/** Brush tool options: color swatch, size (slider + numeric), opacity, and pressure sensitivity. */
-export const BrushOptions = ({ engine }: ToolOptionsComponentProps) => {
+const formatPercent = (value: number): string => `${Math.round(value)}%`;
+
+/** Opacity slider plus a percent field, shared by the brush and eraser. */
+export const PaintOpacityControl = ({
+  opacity,
+  setOpacity,
+}: {
+  opacity: number;
+  setOpacity: (opacity: number) => void;
+}) => {
   const { t } = useTranslation();
-  const options = useBrushOptions(engine);
-
-  const setSize = useCallback(
-    (size: number) => engine.interaction.set('brushOptions', { ...options, size: clampBrushSize(size) }),
-    [engine, options]
+  const label = t('widgets.canvas.toolOptions.opacity');
+  const percent = Math.round(opacity * 100);
+  const onSlider = useCallback((value: number) => setOpacity(value / 100), [setOpacity]);
+  const onNumber = useCallback(
+    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
+      if (Number.isFinite(valueAsNumber)) {
+        setOpacity(Math.max(0, Math.min(100, valueAsNumber)) / 100);
+      }
+    },
+    [setOpacity]
   );
-
-  const setOpacity = useCallback(
-    (opacity: number) => engine.interaction.set('brushOptions', { ...options, opacity }),
-    [engine, options]
-  );
-
-  const onColorChange = useCallback(
-    (hex: string) => engine.interaction.set('brushOptions', { ...options, color: hex }),
-    [engine, options]
-  );
-  const sampleColor = useColorSampler(engine);
-
-  const onPressureWidthToggle = useCallback(
-    (checked: boolean) => engine.interaction.set('brushOptions', { ...options, pressureAffectsWidth: checked }),
-    [engine, options]
-  );
-
-  const onPressureOpacityToggle = useCallback(
-    (checked: boolean) => engine.interaction.set('brushOptions', { ...options, pressureAffectsOpacity: checked }),
-    [engine, options]
-  );
-
   return (
-    <HStack align="center" gap="3">
-      <ColorPicker
-        aria-label={t('widgets.canvas.toolOptions.brushColor')}
-        value={options.color}
-        onSampleColor={sampleColor}
-        onValueChange={onColorChange}
+    <>
+      <ToolbarSlider
+        aria-label={label}
+        formatValue={formatPercent}
+        max={100}
+        min={0}
+        value={percent}
+        onValueChange={onSlider}
       />
-      <PaintSizeOpacityControls
-        opacity={options.opacity}
-        setOpacity={setOpacity}
-        setSize={setSize}
-        size={options.size}
-        sizeLabel={t('widgets.canvas.toolOptions.brushSize')}
+      <ToolbarNumberField
+        aria-label={label}
+        max={100}
+        min={0}
+        suffix="%"
+        value={String(percent)}
+        onValueChange={onNumber}
       />
-      {/*
-        Two independent toggles rather than one pressure switch: width and opacity are separate
-        pressure responses, and opacity additionally costs a full scratch refill per frame.
-        Each is an aria-labelled button, so unlike sibling switches sharing a
-        Field.Root they cannot collide on a hidden-input id.
-      */}
+    </>
+  );
+};
+
+const useBrushPatch = (engine: ToolbarRegionProps['engine']) => {
+  const options = useBrushOptions(engine);
+  const patch = useCallback(
+    (changes: Partial<BrushOptionsState>) => engine.interaction.set('brushOptions', { ...options, ...changes }),
+    [engine, options]
+  );
+  return [options, patch] as const;
+};
+
+const BrushSize = ({ engine }: ToolbarRegionProps) => {
+  const { t } = useTranslation();
+  const [options, set] = useBrushPatch(engine);
+  const setSize = useCallback((size: number) => set({ size: clampBrushSize(size) }), [set]);
+  return <PaintSizeControl label={t('widgets.canvas.toolOptions.brushSize')} setSize={setSize} size={options.size} />;
+};
+
+const BrushOpacity = ({ engine }: ToolbarRegionProps) => {
+  const [options, set] = useBrushPatch(engine);
+  const setOpacity = useCallback((opacity: number) => set({ opacity }), [set]);
+  return <PaintOpacityControl opacity={options.opacity} setOpacity={setOpacity} />;
+};
+
+const BrushColor = ({ engine }: ToolbarRegionProps) => {
+  const { t } = useTranslation();
+  const [options, set] = useBrushPatch(engine);
+  const onColorChange = useCallback((color: string) => set({ color }), [set]);
+  const sampleColor = useColorSampler(engine);
+  return (
+    <ColorPicker
+      aria-label={t('widgets.canvas.toolOptions.brushColor')}
+      value={options.color}
+      onSampleColor={sampleColor}
+      onValueChange={onColorChange}
+    />
+  );
+};
+
+/** Width and opacity are separate pressure responses (opacity also costs a scratch refill per frame). */
+const BrushPressure = ({ engine }: ToolbarRegionProps) => {
+  const { t } = useTranslation();
+  const [options, set] = useBrushPatch(engine);
+  const onWidth = useCallback((pressureAffectsWidth: boolean) => set({ pressureAffectsWidth }), [set]);
+  const onOpacity = useCallback((pressureAffectsOpacity: boolean) => set({ pressureAffectsOpacity }), [set]);
+  return (
+    <HStack gap="1">
       <ToggleIconButton
         checked={options.pressureAffectsWidth}
         icon={PenLineIcon}
         label={t('widgets.canvas.toolOptions.pressureAffectsWidth')}
-        onCheckedChange={onPressureWidthToggle}
+        onCheckedChange={onWidth}
       />
       <ToggleIconButton
         checked={options.pressureAffectsOpacity}
         icon={DropletIcon}
         label={t('widgets.canvas.toolOptions.pressureAffectsOpacity')}
-        onCheckedChange={onPressureOpacityToggle}
+        onCheckedChange={onOpacity}
       />
     </HStack>
   );
+};
+
+export const brushAdapter: ToolPresentationAdapter = {
+  color: BrushColor,
+  geometry: BrushSize,
+  icon: BrushIcon,
+  id: 'brush',
+  intensity: BrushOpacity,
+  more: BrushPressure,
+  paintsLeaf: true,
+  primary: 'geometry',
 };

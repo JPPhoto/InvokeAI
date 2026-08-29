@@ -1,8 +1,8 @@
 import type { CSSProperties } from 'react';
 
-import { Flex, IconButton, Spinner } from '@chakra-ui/react';
+import { Flex, HStack, IconButton, Spinner, Text, VisuallyHidden } from '@chakra-ui/react';
 import { Tooltip } from '@platform/ui';
-import { InfoIcon } from 'lucide-react';
+import { CircleAlertIcon, InfoIcon } from 'lucide-react';
 
 const ERROR_CLAMP_STYLE: CSSProperties = {
   display: '-webkit-box',
@@ -67,5 +67,68 @@ export const OperationStatusSlot = ({
         </Flex>
       )}
     </Flex>
+  );
+};
+
+interface OperationStatusChipProps {
+  compact: boolean;
+  errorDetail: string | null;
+  errorText: string | null;
+  isBusy: boolean;
+  /** The source layer, named for assistive tech and the tooltip. */
+  sourceLabel: string;
+  statusText: string;
+  technicalDetailsLabel: string;
+  title: string;
+}
+
+/**
+ * The toolbar's status chip for a running operation: title plus the live
+ * status slot, or at compact widths a single icon (spinner, error, info) whose
+ * tooltip carries the text while the live region stays mounted for announcements.
+ */
+export const OperationStatusChip = ({
+  compact,
+  errorDetail,
+  errorText,
+  isBusy,
+  sourceLabel,
+  statusText,
+  technicalDetailsLabel,
+  title,
+}: OperationStatusChipProps) => {
+  const slot = (
+    <OperationStatusSlot
+      errorDetail={errorDetail}
+      errorText={errorText}
+      isBusy={isBusy}
+      minW="0"
+      statusText={statusText}
+      technicalDetailsLabel={technicalDetailsLabel}
+    />
+  );
+  if (compact) {
+    return (
+      <Tooltip content={`${title} · ${errorText ?? (isBusy ? statusText : sourceLabel)}`}>
+        <Flex align="center" boxSize="8" color={errorText ? 'fg.error' : 'fg.muted'} justify="center">
+          {errorText ? <CircleAlertIcon size={16} /> : isBusy ? <Spinner size="xs" /> : <InfoIcon size={16} />}
+          <VisuallyHidden>
+            {title}
+            {slot}
+          </VisuallyHidden>
+        </Flex>
+      </Tooltip>
+    );
+  }
+  return (
+    <HStack gap="1" minW="0">
+      <Tooltip content={sourceLabel}>
+        <Text flexShrink={0} fontSize="xs" fontWeight="semibold" minW="0" truncate>
+          {title}
+          <VisuallyHidden>{sourceLabel}</VisuallyHidden>
+        </Text>
+      </Tooltip>
+      {slot}
+    </HStack>
   );
 };

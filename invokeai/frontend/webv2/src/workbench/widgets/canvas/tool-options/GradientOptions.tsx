@@ -1,17 +1,21 @@
-import type { NumberInput as ChakraNumberInput, SelectValueChangeDetails } from '@chakra-ui/react';
+import type { SelectValueChangeDetails } from '@chakra-ui/react';
 import type { CanvasLayerSourceContract, GradientStop, GradientToolOptions } from '@workbench/canvas-engine/api';
+import type {
+  ToolbarRegionProps,
+  ToolPresentationAdapter,
+} from '@workbench/widgets/canvas/context-toolbar/toolbarContracts';
 
-import { createListCollection, HStack, NumberInput, Text } from '@chakra-ui/react';
+import { createListCollection } from '@chakra-ui/react';
 import { ColorPicker, Select } from '@platform/ui';
 import { getDocumentLayer } from '@workbench/canvas-engine/api';
+import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/context-toolbar/ToolbarPrimitives';
 import { useGradientOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
+import { PaintBucketIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-
-import type { ToolOptionsComponentProps } from './ToolOptionsBar';
 
 type GradientSource = Extract<CanvasLayerSourceContract, { type: 'gradient' }>;
 type GradientKind = GradientToolOptions['kind'];
@@ -21,41 +25,73 @@ interface SelectedGradient {
   source: GradientSource;
 }
 
-const SELECT_POSITIONING = { placement: 'top-start', sameWidth: false } as const;
-const SELECT_TRIGGER_PROPS = { minW: '6rem' } as const;
+const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: false } as const;
+const SELECT_TRIGGER_PROPS = { minW: '6rem', w: '6rem' } as const;
 
 /**
- * Gradient tool options: kind (linear/radial), angle (degrees), and a MINIMAL
- * two-stop editor — start/end color, each carrying its own alpha. Edits set
- * defaults for the next created gradient AND apply to a selected gradient layer
- * (colors commit one history entry on interaction end; discrete edits commit at
- * once). A full multi-stop editor is a follow-up.
+ * Kind, angle and a minimal two-stop editor. Displayed values follow the
+ * selected gradient layer, else the tool defaults; edits set the defaults AND
+ * commit to a selected gradient layer (colors once on release).
  */
-export const GradientOptions = ({ engine }: ToolOptionsComponentProps) => {
+const useGradientEditor = (engine: ToolbarRegionProps['engine']) => {
   const { t } = useTranslation();
   const commitPrepared = usePreparedCommit(engine);
   const options = useGradientOptions(engine);
-  const sampleColor = useColorSampler(engine);
-
   const selected = useActiveProjectSelector(
     (project): SelectedGradient | null => {
       const { document } = project.canvas;
       const layer = document.selectedLayerId ? getDocumentLayer(document, document.selectedLayerId) : undefined;
-      if (layer && layer.type === 'raster' && layer.source.type === 'gradient') {
-        return { id: layer.id, source: layer.source };
-      }
-      return null;
+      return layer && layer.type === 'raster' && layer.source.type === 'gradient'
+        ? { id: layer.id, source: layer.source }
+        : null;
     },
     (a, b) => a?.id === b?.id && a?.source === b?.source
   );
-
   const kind: GradientKind = selected ? selected.source.kind : options.kind;
   const angle = selected ? selected.source.angle : options.angle;
   const stops = selected ? selected.source.stops : options.stops;
-  const start = stops[0] ?? { color: '#000000ff', offset: 0 };
-  const end = stops[stops.length - 1] ?? { color: '#ffffffff', offset: 1 };
 
-  const kindCollection = useMemo(
+  const apply = useCallback(
+    (next: { angle: number; kind: GradientKind; stops: GradientStop[] }, commit: boolean) => {
+      engine.interaction.set('gradientOptions', next);
+      if (selected && commit) {
+        const after: GradientSource = { ...selected.source, ...next };
+        commitPrepared(t('widgets.canvas.toolOptions.gradientEdit'), (model) =>
+          model.prepare({ id: selected.id, source: after, type: 'patch-source' })
+        );
+      }
+    },
+    [commitPrepared, engine, selected, t]
+  );
+  return { angle, apply, kind, stops };
+};
+
+const GradientAngle = ({ engine }: ToolbarRegionProps) => {
+  const { t } = useTranslation();
+  const { angle, apply, kind, stops } = useGradientEditor(engine);
+  const onCommit = useNumberCommit(
+    useCallback(
+      (value: number) => apply({ angle: Math.round(value), kind, stops: [...stops] }, true),
+      [apply, kind, stops]
+    )
+  );
+  return (
+    <ToolbarNumberField
+      aria-label={t('widgets.canvas.toolOptions.gradientAngle')}
+      disabled={kind === 'radial'}
+      max={360}
+      min={-360}
+      suffix="°"
+      value={String(Math.round(angle))}
+      onValueCommit={onCommit}
+    />
+  );
+};
+
+const GradientKindSelect = ({ engine }: ToolbarRegionProps) => {
+  const { t } = useTranslation();
+  const { angle, apply, kind, stops } = useGradientEditor(engine);
+  const collection = useMemo(
     () =>
       createListCollection<{ label: string; value: GradientKind }>({
         items: [
@@ -65,120 +101,78 @@ export const GradientOptions = ({ engine }: ToolOptionsComponentProps) => {
       }),
     [t]
   );
-  const kindValue = useMemo(() => [kind], [kind]);
-
-  const applyGradient = useCallback(
-    (next: { kind: GradientKind; angle: number; stops: GradientStop[] }, commit: boolean) => {
-      engine.interaction.set('gradientOptions', { angle: next.angle, kind: next.kind, stops: next.stops });
-      if (selected && commit) {
-        const before = selected.source;
-        const after: GradientSource = { ...before, angle: next.angle, kind: next.kind, stops: next.stops };
-        commitPrepared(t('widgets.canvas.toolOptions.gradientEdit'), (model) =>
-          model.prepare({ id: selected.id, source: after, type: 'patch-source' })
-        );
+  const value = useMemo(() => [kind], [kind]);
+  const onChange = useCallback(
+    ({ value: next }: SelectValueChangeDetails<{ label: string; value: GradientKind }>) => {
+      const kindNext = next[0] as GradientKind | undefined;
+      if (kindNext && kindNext !== kind) {
+        apply({ angle, kind: kindNext, stops: [...stops] }, true);
       }
     },
-    [commitPrepared, engine, selected, t]
+    [angle, apply, kind, stops]
   );
-
-  const setStopColor = useCallback(
-    (index: number, color: string, commit: boolean) => {
-      const nextStops = stops.map((stop, i) => (i === index ? { ...stop, color } : stop));
-      applyGradient({ angle, kind, stops: nextStops }, commit);
-    },
-    [angle, applyGradient, kind, stops]
-  );
-
-  const lastIndex = stops.length - 1;
-
-  const onKindChange = useCallback(
-    ({ value }: SelectValueChangeDetails<{ label: string; value: GradientKind }>) => {
-      const next = value[0] as GradientKind | undefined;
-      if (next && next !== kind) {
-        applyGradient({ angle, kind: next, stops: [...stops] }, true);
-      }
-    },
-    [angle, applyGradient, kind, stops]
-  );
-
-  const onAngleChange = useCallback(
-    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
-      if (Number.isFinite(valueAsNumber)) {
-        applyGradient({ angle: Math.round(valueAsNumber), kind, stops: [...stops] }, true);
-      }
-    },
-    [applyGradient, kind, stops]
-  );
-
-  const onStartColorChange = useCallback((color: string) => setStopColor(0, color, false), [setStopColor]);
-  const onStartColorEnd = useCallback((color: string) => setStopColor(0, color, true), [setStopColor]);
-
-  const onEndColorChange = useCallback(
-    (color: string) => setStopColor(lastIndex, color, false),
-    [lastIndex, setStopColor]
-  );
-  const onEndColorEnd = useCallback((color: string) => setStopColor(lastIndex, color, true), [lastIndex, setStopColor]);
-
   return (
-    <HStack align="center" gap="3">
-      <Select
-        aria-label={t('widgets.canvas.toolOptions.gradientKind')}
-        collection={kindCollection}
-        positioning={SELECT_POSITIONING}
-        size="xs"
-        triggerProps={SELECT_TRIGGER_PROPS}
-        value={kindValue}
-        valueText={t(
-          kind === 'radial' ? 'widgets.canvas.toolOptions.gradientRadial' : 'widgets.canvas.toolOptions.gradientLinear'
-        )}
-        onValueChange={onKindChange}
-      />
-
-      <HStack align="center" gap="1.5">
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.canvas.toolOptions.gradientAngle')}
-        </Text>
-        <NumberInput.Root
-          disabled={kind === 'radial'}
-          max={360}
-          min={-360}
-          size="xs"
-          value={String(Math.round(angle))}
-          w="4.5rem"
-          onValueChange={onAngleChange}
-        >
-          <NumberInput.Control />
-          <NumberInput.Input aria-label={t('widgets.canvas.toolOptions.gradientAngle')} fontSize="xs" />
-        </NumberInput.Root>
-      </HStack>
-
-      <HStack align="center" gap="1.5">
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.canvas.toolOptions.gradientStart')}
-        </Text>
-        <ColorPicker
-          aria-label={t('widgets.canvas.toolOptions.gradientStart')}
-          value={start.color}
-          withAlpha
-          onSampleColor={sampleColor}
-          onValueChange={onStartColorChange}
-          onValueChangeEnd={onStartColorEnd}
-        />
-      </HStack>
-
-      <HStack align="center" gap="1.5">
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.canvas.toolOptions.gradientEnd')}
-        </Text>
-        <ColorPicker
-          aria-label={t('widgets.canvas.toolOptions.gradientEnd')}
-          value={end.color}
-          withAlpha
-          onSampleColor={sampleColor}
-          onValueChange={onEndColorChange}
-          onValueChangeEnd={onEndColorEnd}
-        />
-      </HStack>
-    </HStack>
+    <Select
+      aria-label={t('widgets.canvas.toolOptions.gradientKind')}
+      collection={collection}
+      positioning={SELECT_POSITIONING}
+      size="xs"
+      flexShrink={0}
+      triggerProps={SELECT_TRIGGER_PROPS}
+      w="6rem"
+      value={value}
+      valueText={t(
+        kind === 'radial' ? 'widgets.canvas.toolOptions.gradientRadial' : 'widgets.canvas.toolOptions.gradientLinear'
+      )}
+      onValueChange={onChange}
+    />
   );
+};
+
+const GradientStops = ({ engine }: ToolbarRegionProps) => {
+  const { t } = useTranslation();
+  const { angle, apply, kind, stops } = useGradientEditor(engine);
+  const sampleColor = useColorSampler(engine);
+  const start = stops[0] ?? { color: '#000000ff', offset: 0 };
+  const end = stops[stops.length - 1] ?? { color: '#ffffffff', offset: 1 };
+  const setStop = useCallback(
+    (index: number, color: string, commit: boolean) =>
+      apply({ angle, kind, stops: stops.map((stop, i) => (i === index ? { ...stop, color } : stop)) }, commit),
+    [angle, apply, kind, stops]
+  );
+  const last = stops.length - 1;
+  const onStart = useCallback((color: string) => setStop(0, color, false), [setStop]);
+  const onStartEnd = useCallback((color: string) => setStop(0, color, true), [setStop]);
+  const onEnd = useCallback((color: string) => setStop(last, color, false), [last, setStop]);
+  const onEndEnd = useCallback((color: string) => setStop(last, color, true), [last, setStop]);
+  return (
+    <>
+      <ColorPicker
+        aria-label={t('widgets.canvas.toolOptions.gradientStart')}
+        value={start.color}
+        withAlpha
+        onSampleColor={sampleColor}
+        onValueChange={onStart}
+        onValueChangeEnd={onStartEnd}
+      />
+      <ColorPicker
+        aria-label={t('widgets.canvas.toolOptions.gradientEnd')}
+        value={end.color}
+        withAlpha
+        onSampleColor={sampleColor}
+        onValueChange={onEnd}
+        onValueChangeEnd={onEndEnd}
+      />
+    </>
+  );
+};
+
+export const gradientAdapter: ToolPresentationAdapter = {
+  color: GradientStops,
+  geometry: GradientAngle,
+  icon: PaintBucketIcon,
+  id: 'gradient',
+  modes: { component: GradientKindSelect, width: 96 },
+  paintsLeaf: true,
+  primary: 'modes',
 };

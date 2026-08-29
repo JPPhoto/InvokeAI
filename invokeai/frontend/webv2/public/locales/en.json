@@ -2400,6 +2400,18 @@
         "text": "Text",
         "transform": "Transform",
         "view": "View"
+      },
+      "toolbar": {
+        "label": "Tool options",
+        "more": "More options",
+        "regions": {
+          "color": "Color",
+          "geometry": "Geometry",
+          "intensity": "Intensity",
+          "modes": "Modes",
+          "more": "More",
+          "status": "Status"
+        }
       }
     },
     "workflow": {
