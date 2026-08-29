@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV3, LayerStackKind, SemanticNode } from '@workbench/canvas-engine/api';
+import type { CanvasStackForests, LayerStackKind, SemanticNode } from '@workbench/canvas-engine/api';
 
 import { compileDocumentNodes, LAYER_STACKS_TOP_FIRST } from '@workbench/canvas-engine/api';
 
@@ -69,17 +69,17 @@ const filteredIds = (
  * components skip unaffected rows. Every node is visited once.
  */
 export const buildLayerStackRows = (
-  document: CanvasDocumentContractV3,
+  stacks: CanvasStackForests,
   expandedGroupIds: ReadonlySet<string>,
   filter?: string
 ): LayerStackRowsByKind => {
-  const nodes = compileDocumentNodes(document);
+  const nodes = compileDocumentNodes({ stacks });
   const query = normalizeFilter(filter);
   const filtered = query ? filteredIds(nodes, query) : null;
   const kept = filtered?.kept ?? null;
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const setSizeOf = (node: SemanticNode): number =>
-    node.parentId === null ? document.stacks[node.stack].length : (byId.get(node.parentId)?.childCount ?? 0);
+    node.parentId === null ? stacks[node.stack].length : (byId.get(node.parentId)?.childCount ?? 0);
   const result = Object.fromEntries(
     LAYER_STACKS_TOP_FIRST.map((stack) => [
       stack,

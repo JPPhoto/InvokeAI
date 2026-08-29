@@ -52,7 +52,7 @@ const LayersPanelFooterComponent = ({
         value={filter}
         onChange={handleFilter}
       />
-      <Text color="fg.subtle" flexShrink={0} fontSize="2xs" whiteSpace="nowrap">
+      <Text color="fg.muted" flexShrink={0} fontSize="2xs" whiteSpace="nowrap">
         {degraded
           ? t('widgets.layers.footer.degraded')
           : `${t('widgets.layers.footer.layers', { count: leafCount })} · ${t('widgets.layers.footer.groups', { count: groupCount })} · ${t('widgets.layers.footer.selected', { count: selectedCount })}`}

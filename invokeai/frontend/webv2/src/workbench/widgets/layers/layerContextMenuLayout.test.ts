@@ -42,6 +42,7 @@ const actionsFor = (layer: CanvasLayerContract, layers: readonly CanvasLayerCont
   getLayerContextActions({
     canRunWorkflow: true,
     document: makeDocument([...layers]),
+    hiddenByAncestor: false,
     hasEngine: true,
     hasSupportedContent: true,
     hasWorkflowBindings: true,

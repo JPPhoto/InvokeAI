@@ -1,5 +1,6 @@
 import type { CanvasDocumentContractV3, LayerStackMoveKind } from '@workbench/canvas-engine/api';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
+import type { KeyboardEvent } from 'react';
 
 import { HStack, Text } from '@chakra-ui/react';
 import { toaster } from '@platform/ui';
@@ -24,7 +25,7 @@ import {
   MergeIcon,
   Trash2Icon,
 } from 'lucide-react';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { groupLayers, ungroupLayers } from './layerGroupCommands';
@@ -157,113 +158,197 @@ export const LayerMultiSelectionActions = ({
     );
   }, [commitPrepared, selectedIds, t]);
 
+  const actions = useMemo<readonly BulkAction[]>(
+    () => [
+      {
+        disabled: editingLocked || none,
+        icon: ChevronsUpIcon,
+        id: 'front',
+        label: t('widgets.layers.actions.moveSelectedToFront'),
+        run: moveToFront,
+      },
+      {
+        disabled: editingLocked || none,
+        icon: ArrowUpIcon,
+        id: 'forward',
+        label: t('widgets.layers.actions.moveSelectedForward'),
+        run: moveForward,
+      },
+      {
+        disabled: editingLocked || none,
+        icon: ArrowDownIcon,
+        id: 'backward',
+        label: t('widgets.layers.actions.moveSelectedBackward'),
+        run: moveBackward,
+      },
+      {
+        disabled: editingLocked || none,
+        icon: ChevronsDownIcon,
+        id: 'back',
+        label: t('widgets.layers.actions.moveSelectedToBack'),
+        run: moveToBack,
+      },
+      {
+        disabled: editingLocked || !engine || !canGroup,
+        icon: FolderPlusIcon,
+        id: 'group',
+        label: t('widgets.layers.actions.groupSelected'),
+        run: groupSelected,
+      },
+      {
+        disabled: editingLocked || !engine || !canUngroup,
+        icon: FolderMinusIcon,
+        id: 'ungroup',
+        label: t('widgets.layers.actions.ungroupSelected'),
+        run: ungroupSelected,
+      },
+      {
+        disabled: editingLocked || none,
+        icon: allEnabled ? EyeOffIcon : EyeIcon,
+        id: 'enable',
+        label: t(allEnabled ? 'widgets.layers.actions.disableSelected' : 'widgets.layers.actions.enableSelected'),
+        run: toggleEnabled,
+      },
+      {
+        disabled: editingLocked || none,
+        icon: allLocked ? LockOpenIcon : LockIcon,
+        id: 'lock',
+        label: t(allLocked ? 'widgets.layers.actions.unlockSelected' : 'widgets.layers.actions.lockSelected'),
+        run: toggleLocked,
+      },
+      {
+        disabled: editingLocked || !engine || none,
+        icon: CopyIcon,
+        id: 'duplicate',
+        label: t('widgets.layers.actions.duplicateSelected'),
+        run: duplicateSelected,
+      },
+      {
+        disabled: editingLocked || !engine || !canMergeSelected,
+        icon: MergeIcon,
+        id: 'merge',
+        label: t('widgets.layers.actions.mergeSelected'),
+        run: mergeSelected,
+      },
+      {
+        colorPalette: 'red',
+        disabled: editingLocked || !canDelete,
+        icon: Trash2Icon,
+        id: 'delete',
+        label: t('widgets.layers.actions.deleteSelected'),
+        run: deleteSelected,
+      },
+    ],
+    [
+      allEnabled,
+      allLocked,
+      canDelete,
+      canGroup,
+      canMergeSelected,
+      canUngroup,
+      deleteSelected,
+      duplicateSelected,
+      editingLocked,
+      engine,
+      groupSelected,
+      mergeSelected,
+      moveBackward,
+      moveForward,
+      moveToBack,
+      moveToFront,
+      none,
+      t,
+      toggleEnabled,
+      toggleLocked,
+      ungroupSelected,
+    ]
+  );
   return (
-    <HStack
-      aria-label={t('widgets.layers.actions.selectedCount', { count: selected.length })}
-      gap="0.5"
-      minH="10"
-      px="2"
-      role="toolbar"
-    >
-      <Text color="fg.muted" flex="1" fontSize="2xs" fontWeight="700">
-        {t('widgets.layers.actions.selectedCount', { count: selected.length })}
-      </Text>
-      <BulkActionButton
-        disabled={editingLocked || none}
-        icon={ChevronsUpIcon}
-        label={t('widgets.layers.actions.moveSelectedToFront')}
-        onClick={moveToFront}
-      />
-      <BulkActionButton
-        disabled={editingLocked || none}
-        icon={ArrowUpIcon}
-        label={t('widgets.layers.actions.moveSelectedForward')}
-        onClick={moveForward}
-      />
-      <BulkActionButton
-        disabled={editingLocked || none}
-        icon={ArrowDownIcon}
-        label={t('widgets.layers.actions.moveSelectedBackward')}
-        onClick={moveBackward}
-      />
-      <BulkActionButton
-        disabled={editingLocked || none}
-        icon={ChevronsDownIcon}
-        label={t('widgets.layers.actions.moveSelectedToBack')}
-        onClick={moveToBack}
-      />
-      <BulkActionButton
-        disabled={editingLocked || !engine || !canGroup}
-        icon={FolderPlusIcon}
-        label={t('widgets.layers.actions.groupSelected')}
-        onClick={groupSelected}
-      />
-      <BulkActionButton
-        disabled={editingLocked || !engine || !canUngroup}
-        icon={FolderMinusIcon}
-        label={t('widgets.layers.actions.ungroupSelected')}
-        onClick={ungroupSelected}
-      />
-      <BulkActionButton
-        disabled={editingLocked || none}
-        icon={allEnabled ? EyeOffIcon : EyeIcon}
-        label={t(allEnabled ? 'widgets.layers.actions.disableSelected' : 'widgets.layers.actions.enableSelected')}
-        onClick={toggleEnabled}
-      />
-      <BulkActionButton
-        disabled={editingLocked || none}
-        icon={allLocked ? LockOpenIcon : LockIcon}
-        label={t(allLocked ? 'widgets.layers.actions.unlockSelected' : 'widgets.layers.actions.lockSelected')}
-        onClick={toggleLocked}
-      />
-      <BulkActionButton
-        disabled={editingLocked || !engine || none}
-        icon={CopyIcon}
-        label={t('widgets.layers.actions.duplicateSelected')}
-        onClick={duplicateSelected}
-      />
-      <BulkActionButton
-        disabled={editingLocked || !engine || !canMergeSelected}
-        icon={MergeIcon}
-        label={t('widgets.layers.actions.mergeSelected')}
-        onClick={mergeSelected}
-      />
-      <BulkActionButton
-        colorPalette="red"
-        disabled={editingLocked || !canDelete}
-        icon={Trash2Icon}
-        label={t('widgets.layers.actions.deleteSelected')}
-        onClick={deleteSelected}
-      />
-    </HStack>
+    <BulkActionToolbar
+      actions={actions}
+      label={t('widgets.layers.actions.selectedCount', { count: selected.length })}
+    />
   );
 };
 
 export default LayerMultiSelectionActions;
 
-const BulkActionButton = ({
-  colorPalette,
-  disabled,
-  icon: Icon,
-  label,
-  onClick,
-}: {
+interface BulkAction {
   colorPalette?: string;
   disabled: boolean;
   icon: typeof ArrowUpIcon;
+  id: string;
   label: string;
-  onClick: () => void;
-}) => (
-  <Tooltip content={label} positioning={BULK_TOOLTIP_POSITIONING}>
-    <IconButton
-      aria-label={label}
-      colorPalette={colorPalette}
-      disabled={disabled}
-      size="xs"
-      variant="ghost"
-      onClick={onClick}
-    >
-      <Icon />
-    </IconButton>
-  </Tooltip>
-);
+  run: () => void;
+}
+
+/**
+ * One tab stop for the whole toolbar; arrows, Home and End move between the enabled buttons. The focus
+ * bookkeeping lives here so tracking it never re-runs the eligibility above.
+ */
+const BulkActionToolbar = ({ actions, label }: { actions: readonly BulkAction[]; label: string }) => {
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const enabled = actions.filter((action) => !action.disabled);
+  const tabStopId = enabled.some((action) => action.id === activeId) ? activeId : (enabled[0]?.id ?? null);
+  const onKeyDown = useCallback((event: KeyboardEvent<HTMLElement>) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+      return;
+    }
+    const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+    const current = buttons.indexOf(event.target as HTMLButtonElement);
+    if (buttons.length === 0 || current === -1) {
+      return;
+    }
+    event.preventDefault();
+    const next =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? buttons.length - 1
+          : (current + (event.key === 'ArrowRight' ? 1 : buttons.length - 1)) % buttons.length;
+    buttons[next]!.focus();
+  }, []);
+  return (
+    <HStack aria-label={label} gap="0.5" minH="10" px="2" role="toolbar" onKeyDown={onKeyDown}>
+      <Text color="fg.muted" flex="1" fontSize="2xs" fontWeight="700">
+        {label}
+      </Text>
+      {actions.map((action) => (
+        <BulkActionButton
+          key={action.id}
+          action={action}
+          tabIndex={action.id === tabStopId ? 0 : -1}
+          onFocus={setActiveId}
+        />
+      ))}
+    </HStack>
+  );
+};
+
+const BulkActionButton = ({
+  action: { colorPalette, disabled, icon: Icon, id, label, run },
+  onFocus,
+  tabIndex,
+}: {
+  action: BulkAction;
+  onFocus: (id: string) => void;
+  tabIndex: number;
+}) => {
+  const handleFocus = useCallback(() => onFocus(id), [id, onFocus]);
+  return (
+    <Tooltip content={label} positioning={BULK_TOOLTIP_POSITIONING}>
+      <IconButton
+        aria-label={label}
+        colorPalette={colorPalette}
+        disabled={disabled}
+        size="xs"
+        tabIndex={tabIndex}
+        variant="ghost"
+        onClick={run}
+        onFocus={handleFocus}
+      >
+        <Icon />
+      </IconButton>
+    </Tooltip>
+  );
+};

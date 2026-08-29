@@ -14,8 +14,22 @@ export const LAYER_TREE_INDENT_PX = 16;
 export const LAYER_PANEL_DEGRADE_THRESHOLD = 2_000;
 
 export type PanelRow =
-  | { readonly kind: 'header'; readonly key: string; readonly stack: LayerStackRows; readonly collapsed: boolean }
+  | {
+      readonly kind: 'header';
+      readonly key: string;
+      readonly stack: LayerStackRows;
+      readonly collapsed: boolean;
+      /** The header's place among the non-empty stacks, for `aria-posinset` / `aria-setsize`. */
+      readonly posInSet: number;
+      readonly setSize: number;
+    }
   | { readonly kind: 'node'; readonly key: string; readonly stack: LayerStackKind; readonly row: LayerTreeRow };
+
+export const headerKey = (stack: LayerStackKind): string => `header:${stack}`;
+
+export const isHeaderKey = (key: string): boolean => key.startsWith('header:');
+
+export const stackOfHeaderKey = (key: string): LayerStackKind => key.slice('header:'.length) as LayerStackKind;
 
 /**
  * The one flat list the panel virtualizes: a header per non-empty stack followed by its rendered
@@ -28,13 +42,18 @@ export const flattenPanelRows = (
   forceOpen: (stack: LayerStackKind) => boolean
 ): PanelRow[] => {
   const rows: PanelRow[] = [];
-  for (const kind of LAYER_STACKS_TOP_FIRST) {
+  const present = LAYER_STACKS_TOP_FIRST.filter((kind) => stacks[kind].nodeIds.length > 0);
+  for (const kind of present) {
     const stack = stacks[kind];
-    if (stack.nodeIds.length === 0) {
-      continue;
-    }
     const collapsed = collapsedStacks.includes(kind) && !forceOpen(kind);
-    rows.push({ collapsed, key: `header:${kind}`, kind: 'header', stack });
+    rows.push({
+      collapsed,
+      key: headerKey(kind),
+      kind: 'header',
+      posInSet: present.indexOf(kind) + 1,
+      setSize: present.length,
+      stack,
+    });
     if (!collapsed) {
       for (const row of stack.rows) {
         rows.push({ key: row.id, kind: 'node', row, stack: kind });
@@ -49,62 +68,74 @@ export const panelRowHeight = (row: PanelRow, density: LayerPanelDensity): numbe
 
 export type TreeNavigationKey = 'ArrowDown' | 'ArrowUp' | 'Home' | 'End' | 'ArrowLeft' | 'ArrowRight';
 
-export type TreeNavigation = { readonly focus: string } | { readonly expand: string; readonly expanded: boolean };
+export type TreeNavigation =
+  | { readonly focus: string }
+  | { readonly expand: string; readonly expanded: boolean }
+  | { readonly collapseStack: LayerStackKind; readonly collapsed: boolean };
 
-/**
- * The WAI-ARIA tree keyboard model over the flat list: vertical keys walk rendered node rows,
- * Home/End jump, Right opens a group or enters it, Left closes a group or climbs to the parent.
- */
-type NodePanelRow = Extract<PanelRow, { kind: 'node' }>;
+const positionsCache = new WeakMap<readonly PanelRow[], Map<string, number>>();
 
-const nodeRowsCache = new WeakMap<readonly PanelRow[], { rows: NodePanelRow[]; positions: Map<string, number> }>();
-
-/** The node rows of a list and their positions, computed once per list identity. */
-const nodeRowsOf = (rows: readonly PanelRow[]) => {
-  let cached = nodeRowsCache.get(rows);
+const positionsOf = (rows: readonly PanelRow[]): Map<string, number> => {
+  let cached = positionsCache.get(rows);
   if (!cached) {
-    const nodeRows = rows.filter((row): row is NodePanelRow => row.kind === 'node');
-    cached = { positions: new Map(nodeRows.map((row, index) => [row.row.id, index])), rows: nodeRows };
-    nodeRowsCache.set(rows, cached);
+    cached = new Map(rows.map((row, index) => [row.key, index]));
+    positionsCache.set(rows, cached);
   }
   return cached;
 };
 
+/**
+ * The WAI-ARIA tree keyboard model over the flat list, headers included: vertical keys walk every
+ * rendered item, Home/End jump, Right opens a stack or group or enters it, Left closes one or
+ * climbs to the parent (a root node's parent is its stack header).
+ */
 export const navigateTree = (
   rows: readonly PanelRow[],
-  currentId: string,
+  currentKey: string,
   key: TreeNavigationKey
 ): TreeNavigation | null => {
-  const { positions, rows: nodeRows } = nodeRowsOf(rows);
-  const position = positions.get(currentId) ?? -1;
+  const position = positionsOf(rows).get(currentKey) ?? -1;
   if (position < 0) {
-    return nodeRows[0] ? { focus: nodeRows[0].row.id } : null;
+    return rows[0] ? { focus: rows[0].key } : null;
   }
-  const current = nodeRows[position]!.row;
+  const current = rows[position]!;
   switch (key) {
     case 'ArrowDown':
-      return nodeRows[position + 1] ? { focus: nodeRows[position + 1]!.row.id } : null;
+      return rows[position + 1] ? { focus: rows[position + 1]!.key } : null;
     case 'ArrowUp':
-      return nodeRows[position - 1] ? { focus: nodeRows[position - 1]!.row.id } : null;
+      return rows[position - 1] ? { focus: rows[position - 1]!.key } : null;
     case 'Home':
-      return { focus: nodeRows[0]!.row.id };
+      return { focus: rows[0]!.key };
     case 'End':
-      return { focus: nodeRows[nodeRows.length - 1]!.row.id };
+      return { focus: rows[rows.length - 1]!.key };
     case 'ArrowRight': {
-      if (current.vm.kind !== 'group' || current.vm.childCount === 0) {
+      if (current.kind === 'header') {
+        if (current.collapsed) {
+          return { collapsed: false, collapseStack: current.stack.stack };
+        }
+        const first = rows[position + 1];
+        return first && first.kind === 'node' ? { focus: first.key } : null;
+      }
+      const { row } = current;
+      if (row.vm.kind !== 'group' || row.vm.childCount === 0) {
         return null;
       }
-      if (!current.expanded) {
-        return { expand: current.id, expanded: true };
+      if (!row.expanded) {
+        return { expand: row.id, expanded: true };
       }
-      const child = nodeRows[position + 1];
-      return child && child.row.vm.parentId === current.id ? { focus: child.row.id } : null;
+      const child = rows[position + 1];
+      return child && child.kind === 'node' && child.row.vm.parentId === row.id ? { focus: child.key } : null;
     }
-    case 'ArrowLeft':
-      if (current.vm.kind === 'group' && current.expanded) {
-        return { expand: current.id, expanded: false };
+    case 'ArrowLeft': {
+      if (current.kind === 'header') {
+        return current.collapsed ? null : { collapsed: true, collapseStack: current.stack.stack };
       }
-      return current.vm.parentId ? { focus: current.vm.parentId } : null;
+      const { row } = current;
+      if (row.vm.kind === 'group' && row.expanded) {
+        return { expand: row.id, expanded: false };
+      }
+      return { focus: row.vm.parentId ?? headerKey(row.vm.stack) };
+    }
   }
 };
 

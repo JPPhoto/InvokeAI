@@ -15,7 +15,13 @@ import { HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { galleryTransfers } from '@features/gallery';
 import { useModelsSelector } from '@features/models';
 import { IconButton, MenuContent, RenameDialog, Tooltip } from '@platform/ui';
-import { getDocumentLayer, getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/api';
+import {
+  getDocumentLayer,
+  getSourceContentRect,
+  isNodeHidden,
+  lookupDocumentNodeState,
+  renderableSourceOf,
+} from '@workbench/canvas-engine/api';
 import { getCanvasOperations } from '@workbench/canvas-operations/api';
 import { publishLayerPanelSelection, readLayerPanelState, useLayerPanelState } from '@workbench/layerPanelState';
 import { useNotify } from '@workbench/useNotify';
@@ -263,9 +269,12 @@ const LayerMenu = ({
   );
 
   const canGroup = canGroupSelection(engine?.document.model() ?? null, actionTargets({ layer, selectedIds }));
+  const hiddenByAncestor =
+    (lookupDocumentNodeState(document, layer.id)?.documentHidden ?? false) && !isNodeHidden(layer);
   const actionState = useMemo<LayerContextActionState>(
     () => ({
       canGroupSelection: canGroup,
+      hiddenByAncestor,
       canRunWorkflow: workflowAvailability.canRunWorkflow,
       document,
       hasEngine: engine !== null,
@@ -276,6 +285,7 @@ const LayerMenu = ({
       selectedIds,
     }),
     [
+      hiddenByAncestor,
       canGroup,
       document,
       engine,
@@ -407,6 +417,12 @@ const LayerMenu = ({
   const handleToggleVisibility = useCallback(() => {
     patchBase(t('widgets.layers.actions.toggleVisibility'), { isEnabled: !layer.isEnabled });
   }, [layer.isEnabled, patchBase, t]);
+
+  const handleToggleHidden = useCallback(() => {
+    commitPrepared(t('widgets.layers.actions.toggleHidden'), (model) =>
+      model.prepare({ type: 'set-hidden', updates: [{ id: layer.id, isHidden: !isNodeHidden(layer) }] })
+    );
+  }, [commitPrepared, layer, t]);
 
   const handleToggleLock = useCallback(() => {
     patchBase(t('widgets.layers.actions.toggleLock'), { isLocked: !layer.isLocked });
@@ -659,6 +675,7 @@ const LayerMenu = ({
       reorder: (kind, actionId) => reorder(kind, getActionLabel(actionId)),
       saveToAssets: handleSaveToAssets,
       toggleLock: handleToggleLock,
+      toggleHidden: handleToggleHidden,
       toggleVisibility: handleToggleVisibility,
       transform: handleTransform,
     }),
@@ -680,6 +697,7 @@ const LayerMenu = ({
       handleRasterize,
       handleSaveToAssets,
       handleToggleLock,
+      handleToggleHidden,
       handleToggleVisibility,
       handleTransform,
       openRename,

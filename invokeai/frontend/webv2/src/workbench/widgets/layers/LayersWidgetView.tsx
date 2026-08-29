@@ -35,9 +35,10 @@ export const LayersWidgetView = () => {
 
   const panel = useLayerPanelState(projectId, selectedLayerId);
   const expandedGroupIds = useMemo(() => new Set(panel.expandedGroupIds), [panel.expandedGroupIds]);
+  // Keyed on the forests, so a selection or bbox change never rebuilds a row.
   const stacks = useMemo(
-    () => buildLayerStackRows(document, expandedGroupIds, panel.filter),
-    [document, expandedGroupIds, panel.filter]
+    () => buildLayerStackRows(document.stacks, expandedGroupIds, panel.filter),
+    [document.stacks, expandedGroupIds, panel.filter]
   );
   const nodeCount = getDocumentIndex(document).nodes.length;
   const degraded = nodeCount > LAYER_PANEL_DEGRADE_THRESHOLD;

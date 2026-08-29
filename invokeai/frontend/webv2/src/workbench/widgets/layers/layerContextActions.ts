@@ -9,6 +9,8 @@ import type { LucideIcon } from 'lucide-react';
 import {
   getDocumentIndex,
   getSourceContentRect,
+  isHideableLayer,
+  isNodeHidden,
   isPixelBackedLayer,
   lookupLayerBelow,
 } from '@workbench/canvas-engine/api';
@@ -78,6 +80,7 @@ export type LayerContextActionId =
   | 'inpaint-denoise-limit'
   | 'merge-down'
   | 'toggle-visibility'
+  | 'toggle-hidden'
   | 'toggle-lock'
   | 'delete';
 
@@ -97,6 +100,8 @@ export interface LayerContextActionState {
   selectedIds: readonly string[];
   /** The model's answer for grouping `actionTargets`, asked by the menu that owns the engine. */
   canGroupSelection: boolean;
+  /** A group above the layer hides it on the canvas; the layer's own flag cannot override that. */
+  hiddenByAncestor: boolean;
 }
 
 export interface LayerContextActionEffects {
@@ -121,6 +126,7 @@ export interface LayerContextActionEffects {
   patchConfig(kind: LayerConfigPatchKind): void;
   mergeDown(): void;
   toggleVisibility(): void;
+  toggleHidden(): void;
   toggleLock(): void;
   delete(): void;
 }
@@ -764,6 +770,22 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     isVisible: alwaysVisible,
     labelKey: 'widgets.layers.actions.toggleVisibility',
     order: 0,
+    section: 'state',
+    supportedLayerTypes: ALL_LAYER_TYPES,
+  },
+  {
+    defaultLabel: 'Toggle canvas visibility',
+    getDefaultLabel: (context) => (isNodeHidden(context.layer) ? 'Show on canvas' : 'Hide on canvas'),
+    getIcon: (context) => (isNodeHidden(context.layer) ? EyeIcon : EyeOffIcon),
+    getLabelKey: (context) =>
+      isNodeHidden(context.layer) ? 'widgets.layers.actions.showOnCanvas' : 'widgets.layers.actions.hideOnCanvas',
+    handler: ({ effects }) => effects.toggleHidden(),
+    icon: EyeOffIcon,
+    id: 'toggle-hidden',
+    isEnabled: (context) => isInteractionFree(context) && !context.hiddenByAncestor,
+    isVisible: (context) => isHideableLayer(context.layer),
+    labelKey: 'widgets.layers.actions.toggleHidden',
+    order: 5,
     section: 'state',
     supportedLayerTypes: ALL_LAYER_TYPES,
   },

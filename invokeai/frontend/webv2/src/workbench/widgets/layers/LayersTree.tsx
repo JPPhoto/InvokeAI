@@ -25,24 +25,28 @@ import { useTranslation } from 'react-i18next';
 
 import type { LayerRowCommands, LayerSurfaceAnchor } from './layerRowCommands';
 import type { LayerStackRowsByKind } from './layerTreeRows';
+import type { LayerStackActionsEngine } from './useLayerStackActions';
 
 import {
   flattenPanelRows,
+  isHeaderKey,
   isTreeNavigationKey,
   LAYER_HEADER_HEIGHT_PX,
   LAYER_TREE_INDENT_PX,
   navigateTree,
   panelRowHeight,
+  stackOfHeaderKey,
   type PanelRow,
 } from './layerPanelRows';
 import { clearLayerPropertiesRequest, useCurrentLayerPropertiesRequest } from './layerPropertiesRequestStore';
 import { LayerDragGhost, LayerRow, type LayerRowDragState } from './LayerRow';
 import { anchorFromRect } from './layerRowCommands';
-import { LayerStackHeader, type LayerStackHeaderEngine } from './LayerStackHeader';
+import { LayerStackHeader } from './LayerStackHeader';
 import { LayerSurfaceHost, type LayerSurfaceEngine, type LayerSurfaceRequest } from './LayerSurfaceHost';
+import { createLayerTreeAutoScroller, type LayerTreeAutoScroller } from './layerTreeAutoScroll';
 import { outermostRowIds, projectLayerDrop, type LayerDropTarget } from './layerTreeDrop';
 
-export type LayersTreeEngine = LayerStackHeaderEngine & LayerSurfaceEngine & Pick<CanvasEngineHandle, 'previews'>;
+export type LayersTreeEngine = LayerStackActionsEngine & LayerSurfaceEngine & Pick<CanvasEngineHandle, 'previews'>;
 
 const POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: 6 } } as const;
 const OVERLAY_MODIFIERS = [restrictToVerticalAxis];
@@ -78,23 +82,20 @@ interface LayersTreeProps {
 const edgeOf = (rect: { top: number; height: number } | undefined, y: number): 'above' | 'below' =>
   rect && y >= rect.top + rect.height / 2 ? 'below' : 'above';
 
-const isNodeRow = (row: PanelRow | undefined): row is Extract<PanelRow, { kind: 'node' }> => row?.kind === 'node';
+const isMenuKey = (event: KeyboardEvent<HTMLElement>): boolean =>
+  event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey);
+
+/** The viewport box of a rendered item, the anchor a keyboard-opened menu uses. */
+const anchorOfItem = (host: HTMLElement | null, key: string): LayerSurfaceAnchor | null => {
+  const element = host?.querySelector<HTMLElement>(`[data-layer-row-id="${CSS.escape(key)}"]`);
+  return element ? anchorFromRect(element.getBoundingClientRect()) : null;
+};
 
 /** One absolutely positioned slot of the virtual list; the style object is built once per offset. */
-const VirtualSlot = ({
-  children,
-  header,
-  size,
-  start,
-}: {
-  children: ReactNode;
-  header: boolean;
-  size: number;
-  start: number;
-}) => {
+const VirtualSlot = ({ children, size, start }: { children: ReactNode; size: number; start: number }) => {
   const style = useMemo(() => ({ height: size, top: start }), [size, start]);
   return (
-    <Box left="0" position="absolute" right="0" role={header ? 'presentation' : undefined} style={style}>
+    <Box left="0" position="absolute" right="0" role="presentation" style={style}>
       {children}
     </Box>
   );
@@ -102,8 +103,8 @@ const VirtualSlot = ({
 
 /**
  * The virtualized, keyboard-first layer tree: one scroll container, one drag context, one menu
- * host, fixed row heights per density, and a roving tab stop. Rows receive a view model and a
- * command handle; every subscription and commit lives here.
+ * host, fixed row heights per density, and a single roving tab stop over stack headers and rows.
+ * Rows receive a view model and a command handle; every subscription and commit lives here.
  */
 export const LayersTree = ({
   degraded,
@@ -135,6 +136,9 @@ export const LayersTree = ({
   const pendingProperties = useRef<{ id: string; token: number; scrolled: boolean; opened: boolean } | null>(null);
   // Whether keyboard focus lives in the tree; read by the repair effect after the focused row is gone.
   const treeOwnsFocus = useRef(false);
+  // The primary the panel itself selected last; any other primary change came from outside and is revealed.
+  const panelSelectedPrimary = useRef<string | null>(null);
+  const revealedPrimary = useRef<string | null>(null);
   const { density, selectedIds, primaryId } = panel;
 
   const requestedId = propertiesRequest?.layerId ?? null;
@@ -147,15 +151,8 @@ export const LayersTree = ({
     () => flattenPanelRows(stacks, panel.collapsedStacks, forceOpen),
     [forceOpen, panel.collapsedStacks, stacks]
   );
-  const rowIndexById = useMemo(() => {
-    const map = new Map<string, number>();
-    panelRows.forEach((row, index) => {
-      if (row.kind === 'node') {
-        map.set(row.row.id, index);
-      }
-    });
-    return map;
-  }, [panelRows]);
+  // Every item, header or node, by its tree key.
+  const rowIndexByKey = useMemo(() => new Map(panelRows.map((row, index) => [row.key, index])), [panelRows]);
   const offsets = useMemo(() => {
     const starts = new Float64Array(panelRows.length + 1);
     panelRows.forEach((row, index) => {
@@ -163,24 +160,25 @@ export const LayersTree = ({
     });
     return starts;
   }, [density, panelRows]);
-  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
-  const allNodeIds = useMemo(
-    () => Object.values(stacks).flatMap((stack) => (stack.nodeIds.length > 0 ? stack.nodeIds : [])),
-    [stacks]
+  const headerIndexes = useMemo(
+    () => panelRows.flatMap((row, index) => (row.kind === 'header' ? [index] : [])),
+    [panelRows]
   );
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const allNodeIds = useMemo(() => Object.values(stacks).flatMap((stack) => stack.nodeIds), [stacks]);
   const visibleRowIds = useMemo(
     () => panelRows.flatMap((row) => (row.kind === 'node' ? [row.row.id] : [])),
     [panelRows]
   );
-  const focusId =
-    panel.focusId && rowIndexById.has(panel.focusId)
+  const focusKey =
+    panel.focusId && rowIndexByKey.has(panel.focusId)
       ? panel.focusId
-      : primaryId && rowIndexById.has(primaryId)
+      : primaryId && rowIndexByKey.has(primaryId)
         ? primaryId
-        : (visibleRowIds[0] ?? null);
-  const focusIndex = focusId ? (rowIndexById.get(focusId) ?? -1) : -1;
+        : (panelRows[0]?.key ?? null);
+  const focusIndex = focusKey ? (rowIndexByKey.get(focusKey) ?? -1) : -1;
 
-  // The focused row stays mounted whatever the scroll position: focus must never fall off the tree.
+  // The focused item stays mounted whatever the scroll position: focus must never fall off the tree.
   const rangeExtractor = useCallback(
     (range: Range) => {
       const indexes = defaultRangeExtractor(range);
@@ -193,6 +191,8 @@ export const LayersTree = ({
     [focusIndex]
   );
   const getScrollElement = useCallback(() => scrollRef.current, []);
+  // Created once the scroll element exists; handlers reach it through the ref.
+  const autoScroller = useRef<LayerTreeAutoScroller | null>(null);
   const estimateSize = useCallback((index: number) => panelRowHeight(panelRows[index]!, density), [density, panelRows]);
   const getItemKey = useCallback((index: number) => panelRows[index]?.key ?? index, [panelRows]);
   const virtualizer = useVirtualizer({
@@ -202,6 +202,8 @@ export const LayersTree = ({
     getScrollElement,
     overscan: OVERSCAN_ROWS,
     rangeExtractor,
+    // A revealed row lands below the pinned header, never under it.
+    scrollPaddingStart: LAYER_HEADER_HEIGHT_PX,
   });
   const virtualItems = virtualizer.virtualItems;
   // Fixed sizes change only with the row list or the density; re-measure then, never per snapshot.
@@ -211,16 +213,12 @@ export const LayersTree = ({
   useLayoutEffect(() => {
     measureVirtualizer();
   }, [density, panelRows]);
-
-  const handleScroll = useCallback(() => setScrollTop(scrollRef.current?.scrollTop ?? 0), []);
   const virtualizerRef = useRef(virtualizer);
   useLayoutEffect(() => {
     virtualizerRef.current = virtualizer;
   });
-  const headerIndexes = useMemo(
-    () => panelRows.flatMap((row, index) => (row.kind === 'header' ? [index] : [])),
-    [panelRows]
-  );
+
+  const handleScroll = useCallback(() => setScrollTop(scrollRef.current?.scrollTop ?? 0), []);
 
   // Event handlers read the latest render through this ref, so the command handle never changes identity.
   const latest = useRef({
@@ -232,7 +230,8 @@ export const LayersTree = ({
     panel,
     panelRows,
     projectId,
-    rowIndexById,
+    rowIndexByKey,
+    stacks,
     visibleRowIds,
   });
   useLayoutEffect(() => {
@@ -245,51 +244,87 @@ export const LayersTree = ({
       panel,
       panelRows,
       projectId,
-      rowIndexById,
+      rowIndexByKey,
+      stacks,
       visibleRowIds,
     };
   });
+  // A keyboard move on a selected row carries the selection, exactly as a drag of it would.
+  const movingIds = useCallback((key: string, stack: LayerStackKind): readonly string[] => {
+    const { panel: current, stacks: forests } = latest.current;
+    return current.selectedIds.includes(key)
+      ? outermostRowIds(forests[stack].rows, new Set(current.selectedIds))
+      : [key];
+  }, []);
 
-  const focusRow = useCallback((id: string) => {
-    const { panel: current, projectId: project, rowIndexById: rows } = latest.current;
-    setLayerPanelFocus(project, current.primaryId, id);
-    const index = rows.get(id);
+  const focusItem = useCallback((key: string) => {
+    const { panel: current, projectId: project, rowIndexByKey: keys } = latest.current;
+    setLayerPanelFocus(project, current.primaryId, key);
+    const index = keys.get(key);
     if (index !== undefined) {
       virtualizerRef.current.scrollToIndex(index);
     }
-    pendingFocus.current = id;
+    pendingFocus.current = key;
   }, []);
 
   const runStructural = useCallback((label: string, command: DocumentCommand) => {
     const { commitPrepared: commit } = latest.current;
-    commit(label, (model) => model.prepare(command));
+    return commit(label, (model) => model.prepare(command));
   }, []);
 
-  // One handle for every row; it reads the latest render through a ref so rows never re-render for it.
+  // One handle for every row and header; it reads the latest render through a ref so items never re-render for it.
   const commands = useMemo<LayerRowCommands>(
     () => ({
       endRename: () => setRenamingId(null),
-      focus: (id) => {
+      focus: (key) => {
         const { panel: current, projectId: project } = latest.current;
-        if (current.focusId !== id) {
-          setLayerPanelFocus(project, current.primaryId, id);
+        if (current.focusId !== key) {
+          setLayerPanelFocus(project, current.primaryId, key);
         }
       },
-      keyDown: (id, event: KeyboardEvent<HTMLElement>) => {
+      keyDown: (key, event: KeyboardEvent<HTMLElement>) => {
         const { document: currentDocument, panel: current, panelRows: rows, projectId: project } = latest.current;
-        if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        if (isMenuKey(event)) {
           event.preventDefault();
+          const anchor = anchorOfItem(scrollRef.current, key);
+          if (anchor) {
+            setSurface(
+              isHeaderKey(key)
+                ? { anchor, kind: 'stack-menu', stack: stackOfHeaderKey(key) }
+                : { anchor, id: key, kind: 'menu' }
+            );
+          }
+          return;
+        }
+        if (isHeaderKey(key)) {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            toggleLayerStackCollapsed(project, current.primaryId, stackOfHeaderKey(key));
+            return;
+          }
+        } else if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+          event.preventDefault();
+          const vm = lookupDocumentNodeState(currentDocument, key);
+          if (!vm) {
+            return;
+          }
           runStructural(t('widgets.layers.actions.reorder'), {
-            ids: [id],
+            ids: movingIds(key, vm.stack),
             kind: event.key === 'ArrowUp' ? 'forward' : 'backward',
             type: 'move',
           });
           return;
-        }
-        if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        } else if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
           event.preventDefault();
-          const vm = lookupDocumentNodeState(currentDocument, id);
+          const vm = lookupDocumentNodeState(currentDocument, key);
           if (!vm) {
+            return;
+          }
+          // Only siblings of the focused row can follow it into or out of a group.
+          const ids = movingIds(key, vm.stack).filter(
+            (id) => lookupDocumentNodeState(currentDocument, id)?.parentId === vm.parentId
+          );
+          if (ids.length === 0) {
             return;
           }
           if (event.key === 'ArrowLeft') {
@@ -305,7 +340,7 @@ export const LayersTree = ({
             const beforeId = grandSiblings[parent.siblingIndex + 1]?.id ?? null;
             runStructural(t('widgets.layers.actions.outdent'), {
               beforeId,
-              ids: [id],
+              ids,
               parentId: parent.parentId,
               type: 'reparent',
             });
@@ -320,26 +355,27 @@ export const LayersTree = ({
           if (!above || above.type !== 'group') {
             return;
           }
-          setLayerGroupExpanded(project, current.primaryId, [above.id], true);
-          runStructural(t('widgets.layers.actions.indent'), {
+          const outcome = runStructural(t('widgets.layers.actions.indent'), {
             beforeId: null,
-            ids: [id],
+            ids,
             parentId: above.id,
             type: 'reparent',
           });
+          if (outcome.status === 'committed') {
+            setLayerGroupExpanded(project, current.primaryId, [above.id], true);
+          }
           return;
-        }
-        if (event.key === 'F2') {
+        } else if (event.key === 'F2') {
           event.preventDefault();
           if (!latest.current.editingLocked) {
-            setRenamingId(id);
+            setRenamingId(key);
           }
           return;
         }
         if (!isTreeNavigationKey(event.key)) {
           return;
         }
-        const navigation = navigateTree(rows, id, event.key);
+        const navigation = navigateTree(rows, key, event.key);
         if (!navigation) {
           return;
         }
@@ -348,10 +384,17 @@ export const LayersTree = ({
           setLayerGroupExpanded(project, current.primaryId, [navigation.expand], navigation.expanded);
           return;
         }
-        focusRow(navigation.focus);
+        if ('collapseStack' in navigation) {
+          if (current.collapsedStacks.includes(navigation.collapseStack) !== navigation.collapsed) {
+            toggleLayerStackCollapsed(project, current.primaryId, navigation.collapseStack);
+          }
+          return;
+        }
+        focusItem(navigation.focus);
       },
       openMenu: (id, anchor: LayerSurfaceAnchor) => setSurface({ anchor, id, kind: 'menu' }),
       openProperties: (id, anchor: LayerSurfaceAnchor) => setSurface({ anchor, id, kind: 'properties' }),
+      openStackMenu: (stack, anchor: LayerSurfaceAnchor) => setSurface({ anchor, kind: 'stack-menu', stack }),
       rename: (id, name) => runStructural(t('widgets.layers.actions.rename'), { id, patch: { name }, type: 'patch' }),
       select: (id, modifiers: LayerSelectionModifiers) => {
         const {
@@ -364,6 +407,7 @@ export const LayersTree = ({
         const next = selectLayerInPanel(current, id, modifiers.range ? visible : all, modifiers);
         publishLayerPanelSelection(next);
         setLayerPanelFocus(project, next.primaryId, id);
+        panelSelectedPrimary.current = next.primaryId;
         if (next.primaryId !== current.primaryId) {
           send({ id: next.primaryId, type: 'setCanvasSelectedLayer' });
         }
@@ -378,6 +422,10 @@ export const LayersTree = ({
       setLocked: (id, isLocked) =>
         runStructural(t('widgets.layers.actions.toggleLock'), { type: 'set-locked', updates: [{ id, isLocked }] }),
       startRename: (id) => setRenamingId(id),
+      toggleCollapse: (stack) => {
+        const { panel: current, projectId: project } = latest.current;
+        toggleLayerStackCollapsed(project, current.primaryId, stack);
+      },
       toggleExpanded: (id) => {
         const { panel: current, projectId: project } = latest.current;
         // A filter decides expansion itself; the chevron is inert until it is cleared.
@@ -386,13 +434,9 @@ export const LayersTree = ({
         }
       },
     }),
-    [focusRow, runStructural, t]
+    [focusItem, movingIds, runStructural, t]
   );
 
-  const handleToggleCollapse = useCallback(
-    (stack: LayerStackKind) => toggleLayerStackCollapsed(projectId, primaryId, stack),
-    [primaryId, projectId]
-  );
   const closeSurface = useCallback(() => {
     setSurface(null);
     if (pendingProperties.current) {
@@ -400,6 +444,24 @@ export const LayersTree = ({
       pendingProperties.current = null;
     }
   }, []);
+
+  // A primary that changed outside the panel (canvas, undo, a new layer) is scrolled into view once,
+  // as soon as it has a row; later list changes leave the scroll position alone.
+  useLayoutEffect(() => {
+    if (!primaryId || revealedPrimary.current === primaryId) {
+      return;
+    }
+    if (panelSelectedPrimary.current === primaryId) {
+      panelSelectedPrimary.current = null;
+      revealedPrimary.current = primaryId;
+      return;
+    }
+    const index = rowIndexByKey.get(primaryId);
+    if (index !== undefined) {
+      revealedPrimary.current = primaryId;
+      virtualizerRef.current.scrollToIndex(index);
+    }
+  }, [primaryId, rowIndexByKey]);
 
   // A properties request from elsewhere (a menu, a hotkey) reveals its row, scrolls to it once it is
   // rendered, and then opens the surface on it exactly once; a request for a node that is gone is dropped.
@@ -422,12 +484,12 @@ export const LayersTree = ({
         setLayerGroupExpanded(projectId, primaryId, [...vm.parentIds], true);
       }
     }
-    const index = rowIndexById.get(pending.id);
+    const index = rowIndexByKey.get(pending.id);
     if (!pending.scrolled && index !== undefined) {
       pendingProperties.current = { ...pending, scrolled: true };
       virtualizerRef.current.scrollToIndex(index);
     }
-  }, [document, primaryId, projectId, propertiesRequest, rowIndexById]);
+  }, [document, primaryId, projectId, propertiesRequest, rowIndexByKey]);
 
   // After paint: land a pending focus, and open a pending properties surface on its now-rendered row.
   useLayoutEffect(() => {
@@ -436,9 +498,7 @@ export const LayersTree = ({
       return;
     }
     if (pendingFocus.current) {
-      const target = host.querySelector<HTMLElement>(
-        `[data-layer-row-id="${CSS.escape(pendingFocus.current)}"] [role="treeitem"]`
-      );
+      const target = host.querySelector<HTMLElement>(`[data-layer-row-id="${CSS.escape(pendingFocus.current)}"]`);
       if (target) {
         target.focus();
         pendingFocus.current = null;
@@ -455,7 +515,7 @@ export const LayersTree = ({
   }, [panelRows, virtualItems]);
 
   // Focus repair: the browser drops focus to the body when a focused row unmounts, so the tree
-  // remembers whether it owned focus and puts it back on the row that now holds the tab stop.
+  // remembers whether it owned focus and puts it back on the item that now holds the tab stop.
   const handleFocusCapture = useCallback(() => {
     treeOwnsFocus.current = true;
   }, []);
@@ -466,14 +526,14 @@ export const LayersTree = ({
   }, []);
   useLayoutEffect(() => {
     const host = scrollRef.current;
-    if (!host || !focusId || !treeOwnsFocus.current || renamingId !== null) {
+    if (!host || !focusKey || !treeOwnsFocus.current || renamingId !== null) {
       return;
     }
     if (host.contains(window.document.activeElement) && window.document.activeElement !== window.document.body) {
       return;
     }
-    host.querySelector<HTMLElement>(`[data-layer-row-id="${CSS.escape(focusId)}"] [role="treeitem"]`)?.focus();
-  }, [focusId, panelRows, renamingId, virtualItems]);
+    host.querySelector<HTMLElement>(`[data-layer-row-id="${CSS.escape(focusKey)}"]`)?.focus();
+  }, [focusKey, panelRows, renamingId, virtualItems]);
 
   const clearHoverTimer = useCallback(() => {
     if (hoverTimer.current !== null) {
@@ -481,7 +541,13 @@ export const LayersTree = ({
       hoverTimer.current = null;
     }
   }, []);
-  useMountEffect(() => clearHoverTimer);
+  useMountEffect(() => {
+    autoScroller.current = createLayerTreeAutoScroller(scrollRef);
+    return () => {
+      clearHoverTimer();
+      autoScroller.current?.stop();
+    };
+  });
 
   const sensors = useSensors(useSensor(PointerSensor, POINTER_SENSOR_OPTIONS));
   const dragDisabled = editingLocked || degraded || panel.filter.trim() !== '';
@@ -538,6 +604,7 @@ export const LayersTree = ({
   const handleDragMove = useCallback((event: DragMoveEvent) => {
     const depthOffset = Math.round(event.delta.x / LAYER_TREE_INDENT_PX);
     pointerY.current = pointerStart.current.y + event.delta.y;
+    autoScroller.current?.update(pointerY.current);
     const edge = edgeOf(event.over?.rect, pointerY.current);
     setDrag((current) =>
       current && (current.depthOffset !== depthOffset || current.edge !== edge)
@@ -595,6 +662,7 @@ export const LayersTree = ({
 
   const finishDrag = useCallback(() => {
     clearHoverTimer();
+    autoScroller.current?.stop();
     setDrag(null);
   }, [clearHoverTimer]);
   const handleDragEnd = useCallback(
@@ -619,13 +687,13 @@ export const LayersTree = ({
     const stackRows = stacks[drag.stack].rows;
     let top: number;
     if (target.beforeRowId) {
-      top = offsets[rowIndexById.get(target.beforeRowId)!]!;
+      top = offsets[rowIndexByKey.get(target.beforeRowId)!]!;
     } else {
       const last = stackRows[stackRows.length - 1]!;
-      top = offsets[rowIndexById.get(last.id)! + 1]!;
+      top = offsets[rowIndexByKey.get(last.id)! + 1]!;
     }
     return { left: target.depth * LAYER_TREE_INDENT_PX + 8, top };
-  }, [drag, offsets, rowIndexById, stacks, target]);
+  }, [drag, offsets, rowIndexByKey, stacks, target]);
 
   const refusalReason = refusal
     ? t(
@@ -639,7 +707,6 @@ export const LayersTree = ({
       )
     : null;
 
-  // The stack whose header has scrolled out of view keeps a pinned copy at the top of the viewport.
   // The stack whose header scrolled out keeps a pinned copy; the next header pushes it up as it arrives.
   const pinnedHeader = useMemo(() => {
     let low = 0;
@@ -673,8 +740,26 @@ export const LayersTree = ({
   const dragStateOf = (id: string): LayerRowDragState =>
     drag ? (id === drag.activeId ? 'source' : drag.travelling.has(id) ? 'travelling' : null) : null;
 
+  const renderHeader = (row: Extract<PanelRow, { kind: 'header' }>, pinned: boolean) => (
+    <LayerStackHeader
+      collapsed={row.collapsed}
+      commands={commands}
+      document={document}
+      editingLocked={editingLocked}
+      engine={engine}
+      focused={row.key === focusKey}
+      leafCount={row.stack.leafCount}
+      pinned={pinned}
+      posInSet={row.posInSet}
+      rowKey={row.key}
+      setSize={row.setSize}
+      stack={row.stack.stack}
+    />
+  );
+
   return (
     <DndContext
+      autoScroll={false}
       collisionDetection={collisionDetection}
       sensors={sensors}
       onDragCancel={finishDrag}
@@ -703,14 +788,16 @@ export const LayersTree = ({
             w="full"
           >
             {virtualItems.map((item) => {
-              // The window can lag a shrinking list by one render; a stale index draws nothing.
-              const panelRow = panelRows[item.index];
+              // The window applies a changed key set one commit late; a slot draws the row its key
+              // names, never the row at its index, so no node is relabelled in between.
+              const rowIndex = rowIndexByKey.get(String(item.key));
+              const panelRow = rowIndex === undefined ? undefined : panelRows[rowIndex];
               if (!panelRow) {
                 return null;
               }
               return (
-                <VirtualSlot key={item.key} header={panelRow.kind === 'header'} size={item.size} start={item.start}>
-                  {isNodeRow(panelRow) ? (
+                <VirtualSlot key={item.key} size={item.size} start={item.start}>
+                  {panelRow.kind === 'node' ? (
                     <LayerRow
                       commands={commands}
                       density={density}
@@ -718,7 +805,7 @@ export const LayersTree = ({
                       dragDisabled={dragDisabled}
                       editingLocked={editingLocked}
                       engine={engine}
-                      focused={panelRow.row.id === focusId}
+                      focused={panelRow.row.id === focusKey}
                       primary={panelRow.row.id === primaryId}
                       renaming={panelRow.row.id === renamingId}
                       row={panelRow.row}
@@ -726,15 +813,7 @@ export const LayersTree = ({
                       thumbnails={!degraded}
                     />
                   ) : (
-                    <LayerStackHeader
-                      collapsed={panelRow.collapsed}
-                      document={document}
-                      editingLocked={editingLocked}
-                      engine={engine}
-                      leafCount={panelRow.stack.leafCount}
-                      stack={panelRow.stack.stack}
-                      onToggleCollapse={handleToggleCollapse}
-                    />
+                    renderHeader(panelRow, false)
                   )}
                 </VirtualSlot>
               );
@@ -782,15 +861,7 @@ export const LayersTree = ({
             top="0"
             zIndex="1"
           >
-            <LayerStackHeader
-              collapsed={pinnedHeader.row.collapsed}
-              document={document}
-              editingLocked={editingLocked}
-              engine={engine}
-              leafCount={pinnedHeader.row.stack.leafCount}
-              stack={pinnedHeader.row.stack.stack}
-              onToggleCollapse={handleToggleCollapse}
-            />
+            {renderHeader(pinnedHeader.row, true)}
           </Box>
         ) : null}
         <DragOverlay dropAnimation={null} modifiers={OVERLAY_MODIFIERS}>

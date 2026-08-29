@@ -1,3 +1,4 @@
+import type { LayerStackKind } from '@workbench/canvas-engine/api';
 import type { LayerSelectionModifiers } from '@workbench/layerPanelState';
 import type { KeyboardEvent } from 'react';
 
@@ -25,6 +26,9 @@ export interface LayerRowCommands {
   endRename(): void;
   openMenu(id: string, anchor: LayerSurfaceAnchor): void;
   openProperties(id: string, anchor: LayerSurfaceAnchor): void;
+  openStackMenu(stack: LayerStackKind, anchor: LayerSurfaceAnchor): void;
+  toggleCollapse(stack: LayerStackKind): void;
+  /** `id` is a node id or a stack header key; the tree tells them apart. */
   keyDown(id: string, event: KeyboardEvent<HTMLElement>): void;
 }
 

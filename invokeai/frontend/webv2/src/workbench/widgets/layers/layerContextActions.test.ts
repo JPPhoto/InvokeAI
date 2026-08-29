@@ -74,6 +74,7 @@ const makeState = (
     canRunWorkflow: true,
     document,
     hasEngine: true,
+    hiddenByAncestor: false,
     hasSupportedContent: true,
     hasWorkflowBindings: true,
     interactionLocked: false,
@@ -86,6 +87,7 @@ const makeState = (
 
 const makeEffects = (): LayerContextActionEffects => ({
   booleanMerge: vi.fn(() => Promise.resolve()),
+  toggleHidden: vi.fn(),
   copyTo: vi.fn(),
   copyToClipboard: vi.fn(() => Promise.resolve()),
   cropToBbox: vi.fn(() => Promise.resolve()),
@@ -470,6 +472,7 @@ describe('getLayerContextActions', () => {
       'inpaint-denoise-limit',
       'merge-down',
       'toggle-visibility',
+      'toggle-hidden',
       'toggle-lock',
       'delete',
     ];
@@ -768,5 +771,22 @@ describe('getLayerContextActions', () => {
     expect(idsFor(upper, [upper, createInpaintMaskLayer('Mask', 'mask-below')])).toEqual(
       expect.not.arrayContaining(operations)
     );
+  });
+});
+
+describe('toggle-hidden', () => {
+  it('offers hide-on-canvas to overlay layers only and yields to a hiding ancestor', () => {
+    expect(idsFor(rasterLayer)).not.toContain('toggle-hidden');
+    const control = getLayerContextActions(makeState(nonEmptyControlLayer));
+    expect(byId(control, 'toggle-hidden').isDisabled).toBe(false);
+    expect(byId(control, 'toggle-hidden').labelKey).toBe('widgets.layers.actions.hideOnCanvas');
+    expect(getEnglishTranslation('widgets.layers.actions.hideOnCanvas')).toBe('Hide on canvas');
+    const hidden = getLayerContextActions(makeState({ ...nonEmptyControlLayer, isHidden: true }));
+    expect(byId(hidden, 'toggle-hidden').labelKey).toBe('widgets.layers.actions.showOnCanvas');
+    const gated = getLayerContextActions(makeState(nonEmptyControlLayer, { hiddenByAncestor: true }));
+    expect(byId(gated, 'toggle-hidden').isDisabled).toBe(true);
+    const runtime = makeRuntimeContext(nonEmptyControlLayer);
+    void LAYER_CONTEXT_ACTION_DEFINITIONS.find((definition) => definition.id === 'toggle-hidden')!.handler(runtime);
+    expect(runtime.effects.toggleHidden).toHaveBeenCalledTimes(1);
   });
 });

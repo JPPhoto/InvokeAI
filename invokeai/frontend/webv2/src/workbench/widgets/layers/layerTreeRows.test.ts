@@ -25,20 +25,20 @@ const outline = (rows: readonly { id: string; vm: { depth: number } }[]) =>
 
 describe('buildLayerStackRows', () => {
   it('lists rendered rows per stack, hiding the children of collapsed groups', () => {
-    const collapsed = buildLayerStackRows(document(), new Set());
+    const collapsed = buildLayerStackRows(document().stacks, new Set());
     expect(outline(collapsed.raster.rows)).toEqual(['r1', 'G', 'r5']);
     expect(collapsed.raster.nodeIds).toEqual(['r1', 'G', 'r2', 'H', 'r3', 'r4', 'r5']);
     expect(collapsed.raster.leafCount).toBe(5);
     expect(outline(collapsed.control.rows)).toEqual(['c1']);
     expect(collapsed.inpaint_mask.rows).toEqual([]);
 
-    const expanded = buildLayerStackRows(document(), new Set(['G', 'H']));
+    const expanded = buildLayerStackRows(document().stacks, new Set(['G', 'H']));
     expect(outline(expanded.raster.rows)).toEqual(['r1', 'G', '  r2', '  H', '    r3', '  r4', 'r5']);
-    expect(outline(buildLayerStackRows(document(), new Set(['H'])).raster.rows)).toEqual(['r1', 'G', 'r5']);
+    expect(outline(buildLayerStackRows(document().stacks, new Set(['H'])).raster.rows)).toEqual(['r1', 'G', 'r5']);
   });
 
   it('carries effective state and counts on each row', () => {
-    const rows = buildLayerStackRows(document(), new Set(['G', 'H'])).raster.rows;
+    const rows = buildLayerStackRows(document().stacks, new Set(['G', 'H'])).raster.rows;
     const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
     expect(byId.G).toMatchObject({
       expanded: true,
@@ -63,25 +63,25 @@ describe('buildLayerStackRows', () => {
   });
 
   it('keeps row identity for untouched nodes across an unrelated edit and a toggle elsewhere', () => {
-    const before = buildLayerStackRows(document(), new Set(['G'])).raster.rows;
+    const before = buildLayerStackRows(document().stacks, new Set(['G'])).raster.rows;
     const renamed = documentFrom([
       layer('c1', 'control'),
       layer('r1', 'raster', { name: 'renamed' }),
       before[1]!.vm.node,
       layer('r5'),
     ]);
-    const after = buildLayerStackRows(renamed, new Set(['G'])).raster.rows;
+    const after = buildLayerStackRows(renamed.stacks, new Set(['G'])).raster.rows;
     expect(after[1]).toBe(before[1]);
     expect(after[2]).toBe(before[2]);
     expect(after[0]).not.toBe(before[0]);
-    const toggled = buildLayerStackRows(renamed, new Set(['G', 'H'])).raster.rows;
+    const toggled = buildLayerStackRows(renamed.stacks, new Set(['G', 'H'])).raster.rows;
     expect(toggled.find((row) => row.id === 'G')).toBe(after[1]);
     expect(toggled.find((row) => row.id === 'H')).not.toBe(after.find((row) => row.id === 'H'));
   });
 });
 
 describe('projectLayerDrop', () => {
-  const rows = () => buildLayerStackRows(document(), new Set(['G', 'H'])).raster.rows;
+  const rows = () => buildLayerStackRows(document().stacks, new Set(['G', 'H'])).raster.rows;
 
   it('drops between siblings at the same depth', () => {
     expect(
@@ -181,7 +181,7 @@ describe('projectLayerDrop', () => {
   });
 
   it('treats a collapsed group as a leaf for indentation and refuses past the depth limit', () => {
-    const collapsed = buildLayerStackRows(document(), new Set()).raster.rows;
+    const collapsed = buildLayerStackRows(document().stacks, new Set()).raster.rows;
     expect(
       projectLayerDrop({ activeIds: ['r5'], depthOffset: 1, edge: 'below', overId: 'G', rows: collapsed })
     ).toMatchObject({ depth: 0, parentId: null });
@@ -189,7 +189,7 @@ describe('projectLayerDrop', () => {
       depth === 0 ? layer('leaf') : group(`n${depth}`, [nest(depth - 1)]);
     const deep = documentFrom([nest(10), group('S', [layer('s')])]);
     const ids = new Set(Array.from({ length: 10 }, (_, index) => `n${index + 1}`).concat(['S']));
-    const deepRows = buildLayerStackRows(deep, ids).raster.rows;
+    const deepRows = buildLayerStackRows(deep.stacks, ids).raster.rows;
     expect(
       projectLayerDrop({ activeIds: ['S'], depthOffset: 10, edge: 'below', overId: 'leaf', rows: deepRows })
     ).toMatchObject({ depth: 9, parentId: 'n2' });
@@ -204,11 +204,11 @@ describe('projectLayerDrop', () => {
 
 describe('buildLayerStackRows filter', () => {
   it('keeps matches and their ancestors, opens only groups with a match beneath, and leaves a matching group closed', () => {
-    const filtered = buildLayerStackRows(document(), new Set(), 'r3');
+    const filtered = buildLayerStackRows(document().stacks, new Set(), 'r3');
     expect(outline(filtered.raster.rows)).toEqual(['G', '  H', '    r3']);
     expect(filtered.raster.rows.map((row) => row.expanded)).toEqual([true, true, false]);
     expect(filtered.control.rows).toEqual([]);
-    const groupMatch = buildLayerStackRows(document(), new Set(['G']), 'g');
+    const groupMatch = buildLayerStackRows(document().stacks, new Set(['G']), 'g');
     expect(outline(groupMatch.raster.rows)).toEqual(['G']);
     expect(groupMatch.raster.rows[0]!.expanded).toBe(false);
   });

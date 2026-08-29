@@ -103,7 +103,7 @@ export const ToolOptionsBar = ({ engine }: { engine: CanvasToolOptionsEngine }) 
         ) : OptionsComponent ? (
           <OptionsComponent engine={engine} />
         ) : (
-          <Text color="fg.subtle" fontSize="xs" minW="0" truncate>
+          <Text color="fg.muted" fontSize="xs" minW="0" truncate>
             {t(`widgets.canvas.toolHints.${activeTool}`)}
           </Text>
         )}
@@ -141,7 +141,7 @@ const LeafToolOptions = ({
   }
   return (
     <HStack gap="2" minW="0">
-      <Text color="fg.subtle" fontSize="xs" minW="0" truncate>
+      <Text color="fg.muted" fontSize="xs" minW="0" truncate>
         {t('widgets.layers.groupSelectedHint')}
       </Text>
       {selectedGroup.firstLeafId ? (

@@ -116,6 +116,18 @@ describe('layer panel selection', () => {
     expect(reconcileLayerPanelState(collapsed, 'other', indexOf(ids), 'b').collapsedStacks).toEqual([]);
   });
 
+  it('opens the collapsed stack of a primary selected outside the panel', () => {
+    const index = indexStacks(stacksFrom([layerContract('c', 'control'), layerContract('a')]));
+    const collapsed = {
+      ...createLayerPanelState('p', 'a'),
+      collapsedStacks: ['control' as const, 'inpaint_mask' as const],
+    };
+    expect(reconcileLayerPanelState(collapsed, 'p', index, 'c').collapsedStacks).toEqual(['inpaint_mask']);
+    const stale = { ...collapsed, expandedGroupIds: ['gone'] };
+    expect(reconcileLayerPanelState(stale, 'p', index, 'c').expandedGroupIds).toEqual([]);
+    expect(reconcileLayerPanelState(collapsed, 'p', index, 'a')).toBe(collapsed);
+  });
+
   it('collapses to a new primary selected outside the panel and resets between projects', () => {
     const multi = selectLayerInPanel(createLayerPanelState('project', 'a'), 'c', ids, toggle);
     expect(reconcileLayerPanelState(multi, 'project', indexOf(ids), 'd').selectedIds).toEqual(['d']);

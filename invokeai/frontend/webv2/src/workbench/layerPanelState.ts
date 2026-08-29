@@ -186,14 +186,24 @@ export const reconcileLayerPanelState = (
 ): LayerPanelState => {
   const primary = primaryId ? index.byId.get(primaryId) : undefined;
   const validPrimaryId = primary ? primary.node.id : null;
-  const expandedGroupIds = state.expandedGroupIds.filter((id) => index.byId.has(id));
   if (state.projectId !== projectId || state.primaryId !== validPrimaryId) {
-    const revealed = primary ? [...new Set([...expandedGroupIds, ...primary.path])] : expandedGroupIds;
-    return state.projectId === projectId
-      ? createLayerPanelState(projectId, validPrimaryId, { ...carryOf(state), expandedGroupIds: revealed })
-      : createLayerPanelState(projectId, validPrimaryId, { expandedGroupIds: primary ? [...primary.path] : [] });
+    if (state.projectId !== projectId) {
+      return createLayerPanelState(projectId, validPrimaryId, { expandedGroupIds: primary ? [...primary.path] : [] });
+    }
+    // The new primary is revealed: its stack opens and every group on its path expands.
+    const carry = carryOf(state);
+    return createLayerPanelState(projectId, validPrimaryId, {
+      ...carry,
+      collapsedStacks: primary
+        ? carry.collapsedStacks.filter((stack) => stack !== primary.stack)
+        : carry.collapsedStacks,
+      expandedGroupIds: [
+        ...new Set([...carry.expandedGroupIds.filter((id) => index.byId.has(id)), ...(primary?.path ?? [])]),
+      ],
+    });
   }
   const existing = index.byId;
+  const expandedGroupIds = state.expandedGroupIds.filter((id) => existing.has(id));
   const selectedIds = [...new Set(state.selectedIds)].filter((id) => existing.has(id));
   if (validPrimaryId && !selectedIds.includes(validPrimaryId)) {
     selectedIds.push(validPrimaryId);

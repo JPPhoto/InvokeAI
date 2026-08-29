@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/api';
+import type { CanvasDocumentContractV3, LayerStackKind } from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import type { Dispatch } from 'react';
@@ -11,18 +11,17 @@ import type { LayerSurfaceAnchor } from './layerRowCommands';
 import { CanvasLayerContextMenu, type LayerContextMenuEngine } from './LayerContextMenu';
 import { LayerGroupContextMenu, type LayerGroupContextMenuEngine } from './LayerGroupContextMenu';
 import { LayerPropertiesPopover, type LayerPropertiesEngine } from './LayerPropertiesPopover';
+import { LayerStackMenu } from './LayerStackMenu';
 
 export type LayerSurfaceEngine = LayerContextMenuEngine &
   LayerGroupContextMenuEngine &
   LayerPropertiesEngine &
-  Pick<CanvasEngineHandle, 'projectId'>;
+  Pick<CanvasEngineHandle, 'exports' | 'projectId'>;
 
 /** What the panel currently shows beside a row, addressed by node id rather than owned by the row. */
-export interface LayerSurfaceRequest {
-  readonly kind: 'menu' | 'properties';
-  readonly id: string;
-  readonly anchor: LayerSurfaceAnchor;
-}
+export type LayerSurfaceRequest =
+  | { readonly kind: 'menu' | 'properties'; readonly id: string; readonly anchor: LayerSurfaceAnchor }
+  | { readonly kind: 'stack-menu'; readonly stack: LayerStackKind; readonly anchor: LayerSurfaceAnchor };
 
 interface LayerSurfaceHostProps {
   dispatch: Dispatch<CanvasProjectMutation>;
@@ -46,7 +45,7 @@ export const LayerSurfaceHost = ({
   surface,
   onClose,
 }: LayerSurfaceHostProps) => {
-  const node = surface ? getDocumentNode(document, surface.id) : null;
+  const node = surface && surface.kind !== 'stack-menu' ? getDocumentNode(document, surface.id) : null;
   const menuTarget = useMemo(
     () =>
       surface?.kind === 'menu' && node && node.type !== 'group'
@@ -55,6 +54,18 @@ export const LayerSurfaceHost = ({
     [node, surface]
   );
   const handleMenuClose = useCallback(() => onClose(), [onClose]);
+  if (surface?.kind === 'stack-menu') {
+    return (
+      <LayerStackMenu
+        anchor={surface.anchor}
+        document={document}
+        editingLocked={editingLocked}
+        engine={engine}
+        stack={surface.stack}
+        onClose={onClose}
+      />
+    );
+  }
   if (surface && !node) {
     return null;
   }

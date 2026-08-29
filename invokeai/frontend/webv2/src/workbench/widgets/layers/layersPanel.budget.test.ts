@@ -37,11 +37,13 @@ describe(`layers panel budgets over ${NODE_COUNT} nodes`, () => {
     const index = getDocumentIndex(document);
     const roots = index.nodes.filter((entry) => entry.parentId === null).length;
     resetDocumentModelDiagnostics();
-    const collapsed = timed(annotate, 'collapsed rows', () => buildLayerStackRows(document, new Set()));
+    const collapsed = timed(annotate, 'collapsed rows', () => buildLayerStackRows(document.stacks, new Set()));
     expect(Object.values(collapsed).reduce((total, stack) => total + stack.rows.length, 0)).toBe(roots);
     expect(getDocumentModelDiagnostics().nodesCompiled).toBe(NODE_COUNT);
 
-    const expanded = timed(annotate, 'expanded rows', () => buildLayerStackRows(document, new Set(groupIds(document))));
+    const expanded = timed(annotate, 'expanded rows', () =>
+      buildLayerStackRows(document.stacks, new Set(groupIds(document)))
+    );
     expect(Object.values(expanded).reduce((total, stack) => total + stack.rows.length, 0)).toBe(NODE_COUNT);
     expect(getDocumentModelDiagnostics().nodesCompiled).toBe(NODE_COUNT);
     const flat = flattenPanelRows(expanded, [], () => false);
@@ -53,16 +55,16 @@ describe(`layers panel budgets over ${NODE_COUNT} nodes`, () => {
     const document = createLargeTreeDocument(NODE_COUNT);
     const groups = groupIds(document);
     const expanded = new Set(groups);
-    const before = buildLayerStackRows(document, expanded);
+    const before = buildLayerStackRows(document.stacks, expanded);
     // Selection lives beside the document, so nothing here can change.
-    const again = buildLayerStackRows(document, expanded);
+    const again = buildLayerStackRows(document.stacks, expanded);
     for (const stack of Object.keys(before) as (keyof typeof before)[]) {
       before[stack].rows.forEach((row, position) => expect(again[stack].rows[position]).toBe(row));
     }
     const target = groups.find((id) => getDocumentIndex(document).byId.get(id)!.path.length === 1)!;
     const collapsedOne = new Set(groups);
     collapsedOne.delete(target);
-    const after = buildLayerStackRows(document, collapsedOne);
+    const after = buildLayerStackRows(document.stacks, collapsedOne);
     const descendants = new Set(
       getDocumentIndex(document)
         .nodes.filter((entry) => entry.path.includes(target))
@@ -86,7 +88,7 @@ describe(`layers panel budgets over ${NODE_COUNT} nodes`, () => {
 
   it('projects a large multi-selection drag in linear time and keeps semantic order', ({ annotate }) => {
     const document = createLargeFlatDocument(NODE_COUNT * 2, null);
-    const rows = buildLayerStackRows(document, new Set()).raster.rows;
+    const rows = buildLayerStackRows(document.stacks, new Set()).raster.rows;
     const selected = new Set(rows.filter((_, position) => position % 2 === 0).map((row) => row.id));
     const activeIds = timed(annotate, 'outermost rows', () => outermostRowIds(rows, selected));
     expect(activeIds).toHaveLength(selected.size);
@@ -99,10 +101,11 @@ describe(`layers panel budgets over ${NODE_COUNT} nodes`, () => {
 
   it('navigates the flat list in bounded steps', () => {
     const document = createLargeTreeDocument(NODE_COUNT);
-    const rows = flattenPanelRows(buildLayerStackRows(document, new Set(groupIds(document))), [], () => false);
+    const rows = flattenPanelRows(buildLayerStackRows(document.stacks, new Set(groupIds(document))), [], () => false);
     const first = rows.find((row) => row.kind === 'node')!;
     expect(navigateTree(rows, first.key, 'End')).toEqual({ focus: rows[rows.length - 1]!.key });
-    expect(navigateTree(rows, rows[rows.length - 1]!.key, 'Home')).toEqual({ focus: first.key });
+    expect(navigateTree(rows, rows[rows.length - 1]!.key, 'Home')).toEqual({ focus: rows[0]!.key });
+    expect(navigateTree(rows, rows[0]!.key, 'ArrowRight')).toEqual({ focus: first.key });
     const nodes = compileDocumentNodes(document);
     const nested = nodes.find((node) => node.depth >= 2 && node.kind === 'leaf')!;
     expect(navigateTree(rows, nested.id, 'ArrowLeft')).toEqual({ focus: nested.parentId });
