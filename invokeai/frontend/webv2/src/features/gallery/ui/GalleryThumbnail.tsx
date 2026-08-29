@@ -26,7 +26,7 @@ const THUMBNAIL_HOVER_CSS = {
  */
 const THUMBNAIL_DRAG_CSS = {
   ...THUMBNAIL_HOVER_CSS,
-  filter: 'saturate(0.4)',
+  filter: 'saturate(0)',
 } as const;
 
 /**
@@ -37,13 +37,13 @@ const THUMBNAIL_DRAG_CSS = {
  */
 const THUMBNAIL_ARMED_CSS = {
   ...THUMBNAIL_HOVER_CSS,
-  '&[data-drag-armed=true]': { filter: 'saturate(0.4)' },
+  '&[data-drag-armed=true]': { filter: 'saturate(0)' },
 } as const;
 
 const PREVIEW_IMAGE_STYLE = {
   borderRadius: '0.375rem',
   boxShadow: '0 8px 24px rgb(0 0 0 / 45%)',
-  filter: 'saturate(0.4)',
+  filter: 'saturate(0)',
   height: '100%',
   objectFit: 'cover',
   width: '100%',

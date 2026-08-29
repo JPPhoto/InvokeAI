@@ -144,14 +144,14 @@ const FilmstripThumb = ({
 const FILMSTRIP_CONTAIN_CSS = { contain: 'inline-size' } as const;
 
 /** Same touch drag cue as the gallery grid: the source thumb desaturates while dragged. */
-const FILMSTRIP_THUMB_DRAG_CSS = { filter: 'saturate(0.4)' } as const;
+const FILMSTRIP_THUMB_DRAG_CSS = { filter: 'saturate(0)' } as const;
 
 /**
  * Same armed cue as the gallery grid: desaturation while a sustained touch
  * hold has armed the drag gate (before movement starts the drag). Set as
  * `data-drag-armed` by the hold-to-drag sensor.
  */
-const FILMSTRIP_THUMB_ARMED_CSS = { '&[data-drag-armed=true]': { filter: 'saturate(0.4)' } } as const;
+const FILMSTRIP_THUMB_ARMED_CSS = { '&[data-drag-armed=true]': { filter: 'saturate(0)' } } as const;
 
 // The thumb row centers itself with `h="full"`, which needs the content
 // wrapper to actually span the viewport height rather than shrink to it.
