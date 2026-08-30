@@ -186,7 +186,7 @@ class ForReturnInvocationOutput(BaseInvocationOutput):
     )
 
 
-@invocation("for_return", version="1.3.0")
+@invocation("for_return", version="1.3.1")
 class ForReturnInvocation(BaseInvocation):
     loop_linkage: Optional[Any] = InputField(
         default=None,

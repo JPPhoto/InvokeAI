@@ -784,7 +784,7 @@ export const for_loop: InvocationTemplate = {
 export const for_return: InvocationTemplate = {
   title: 'ForReturn',
   type: 'for_return',
-  version: '1.3.0',
+  version: '1.3.1',
   tags: [],
   description: '',
   outputType: 'for_return_output',
