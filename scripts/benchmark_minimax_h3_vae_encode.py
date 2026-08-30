@@ -72,22 +72,25 @@ def _conv_path_description() -> str:
     return f"HIP {torch.version.hip}: {'conv2d decomposition (HIP < 7.2)' if decomposed else 'native MIOpen conv3d'}"
 
 
-def _run(vae: AutoencoderKLMiniMaxH3, frames: np.ndarray, device: torch.device, repeats: int) -> dict:
-    def once() -> torch.Tensor:
-        return encode_reference_video(vae, frames, device)[0]
+def _run(vae: AutoencoderKLMiniMaxH3, frames: np.ndarray, device: torch.device, repeats: int, mode: str) -> dict:
+    def once() -> tuple[torch.Tensor, float]:
+        start = time.perf_counter()
+        rows = encode_reference_video(vae, frames, device)[0]
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        return rows, time.perf_counter() - start
 
-    once()  # warm-up: kernel selection / MIOpen find, allocator growth
+    # Warm-up: kernel selection (MIOpen find can take minutes per new shape set), allocator growth.
+    _, warm = once()
+    print(f"{mode:>8}: warm-up encode {warm:.1f} s", flush=True)
     if device.type == "cuda":
-        torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
     times = []
     rows = None
-    for _ in range(repeats):
-        start = time.perf_counter()
-        rows = once()
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-        times.append(time.perf_counter() - start)
+    for index in range(repeats):
+        rows, elapsed = once()
+        times.append(elapsed)
+        print(f"{mode:>8}: repeat {index + 1}/{repeats} {elapsed:.1f} s", flush=True)
     assert rows is not None
     result = {"rows": rows, "min_s": min(times), "max_s": max(times)}
     if device.type == "cuda":
@@ -113,7 +116,7 @@ def main() -> None:
         nargs="+",
         choices=["fp32", "autocast"],
         default=["fp32", "autocast"],
-        help="Which encodes to time (default: both; drift is reported only when both run).",
+        help="Which encodes to time, in this order (default: fp32 then autocast; drift needs both).",
     )
     parser.add_argument(
         "--no-tf32", action="store_true", help="Disable TF32 convolutions (NVIDIA only; ROCm has no TF32 path)."
@@ -146,7 +149,8 @@ def main() -> None:
         print(f"cudnn.allow_tf32={torch.backends.cudnn.allow_tf32}")
     print(
         f"clip: {num_frames} frames at {args.width}x{args.height} -> {num_chunks} chunks of {clip_length}, "
-        f"{tiles_y}x{tiles_x} tiles per chunk; {args.repeats} timed repeats per mode after one warm-up"
+        f"{tiles_y}x{tiles_x} tiles per chunk; {args.repeats} timed repeats per mode after one warm-up",
+        flush=True,
     )
 
     real_autocast = keyframe_conditioning.vae_encode_autocast
@@ -159,7 +163,7 @@ def main() -> None:
             keyframe_conditioning.vae_encode_autocast = real_autocast
             reference_conditioning.vae_encode_autocast = real_autocast
         with torch.inference_mode():
-            results[mode] = _run(vae, frames, device, args.repeats)
+            results[mode] = _run(vae, frames, device, args.repeats, mode)
         r = results[mode]
         line = (
             f"{mode:>8}: {r['min_s']:.2f} s (max {r['max_s']:.2f} s) for {num_chunks} chunks = "
