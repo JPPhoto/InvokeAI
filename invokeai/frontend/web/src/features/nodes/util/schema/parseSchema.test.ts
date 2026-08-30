@@ -78,6 +78,7 @@ describe('parseSchema', () => {
       })
     );
 
+    // Keep this explicit check so the generated schema and hand-maintained loop fixture cannot drift together.
     expect(parsed.for_return?.version).toBe('1.3.2');
     expect(parsed.for_return?.inputs.continue_condition).toMatchObject({
       input: 'any',
