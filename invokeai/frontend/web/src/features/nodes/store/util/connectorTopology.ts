@@ -116,8 +116,7 @@ const getConnectorDeletionInputEdgeIds = (
     inputEdgeIds.add(inputEdge.id);
 
     const sourceNode = nodes.find((node) => node.id === inputEdge.source);
-    currentConnectorId =
-      isConnectorNode(sourceNode) && removedConnectorIds.has(sourceNode.id) ? sourceNode.id : null;
+    currentConnectorId = isConnectorNode(sourceNode) && removedConnectorIds.has(sourceNode.id) ? sourceNode.id : null;
   }
 
   return inputEdgeIds;
@@ -378,9 +377,7 @@ export const getEdgesWithLoopLinkageAliases = (nodes: AnyNode[], edges: AnyEdge[
     path?.edgeIds.forEach((edgeId) => loopLinkageEdgeIds.add(edgeId));
   }
 
-  return edges.map((edge) =>
-    loopLinkageEdgeIds.has(edge.id) ? ({ ...edge, type: 'loop_linkage' } as AnyEdge) : edge
-  );
+  return edges.map((edge) => (loopLinkageEdgeIds.has(edge.id) ? ({ ...edge, type: 'loop_linkage' } as AnyEdge) : edge));
 };
 
 /**
@@ -491,12 +488,7 @@ export const getConnectorDeletionSpliceConnections = (
   validateConnection?: SpliceConnectionValidator,
   removedConnectorIds: ReadonlySet<string> = new Set()
 ): SpliceConnection[] | null => {
-  const resolvedSource = resolveSurvivingConnectorDeletionSource(
-    connectorId,
-    nodes,
-    edges,
-    removedConnectorIds
-  );
+  const resolvedSource = resolveSurvivingConnectorDeletionSource(connectorId, nodes, edges, removedConnectorIds);
   if (!resolvedSource) {
     return null;
   }
@@ -588,10 +580,7 @@ export const getConnectorDeletionSpliceConnections = (
     return spliceConnections;
   }
 
-  const ignoredEdgeIds = new Set([
-    ...inputEdgeIds,
-    ...traversedEdgeIds,
-  ]);
+  const ignoredEdgeIds = new Set([...inputEdgeIds, ...traversedEdgeIds]);
   const existingEdges = edges.filter((edge) => !ignoredEdgeIds.has(edge.id));
   const stagedConnections: SpliceConnection[] = [];
 

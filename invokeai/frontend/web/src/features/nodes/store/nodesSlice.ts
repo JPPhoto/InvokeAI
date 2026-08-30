@@ -301,14 +301,11 @@ const slice = createSlice({
       }
 
       const replacementNodeIds = new Set(
-        action.payload.flatMap((change) =>
-          change.type === 'add' || change.type === 'replace' ? [change.item.id] : []
-        )
+        action.payload.flatMap((change) => (change.type === 'add' || change.type === 'replace' ? [change.item.id] : []))
       );
       const removedConnectorIds = new Set(
-        action.payload.flatMap((change) =>
-          change.type === 'remove' && !replacementNodeIds.has(change.id) ? [change.id] : []
-        )
+        action.payload
+          .flatMap((change) => (change.type === 'remove' && !replacementNodeIds.has(change.id) ? [change.id] : []))
           .filter((nodeId) => isConnectorNode(state.nodes.find((node) => node.id === nodeId)))
       );
       const removedNodeIds = new Set(
@@ -327,16 +324,17 @@ const slice = createSlice({
           continue;
         }
 
-        const spliceEdges = getConnectorDeletionSpliceConnections(
-          node.id,
-          state.nodes,
-          state.edges,
-          undefined,
-          undefined,
-          removedConnectorIds
-        )
-          ?.filter((connection) => !removedNodeIds.has(connection.source) && !removedNodeIds.has(connection.target))
-          .map((connection) => connectionToEdge(connection)) ?? [];
+        const spliceEdges =
+          getConnectorDeletionSpliceConnections(
+            node.id,
+            state.nodes,
+            state.edges,
+            undefined,
+            undefined,
+            removedConnectorIds
+          )
+            ?.filter((connection) => !removedNodeIds.has(connection.source) && !removedNodeIds.has(connection.target))
+            .map((connection) => connectionToEdge(connection)) ?? [];
         spliceEdges.forEach((edge) => removedConnectorSpliceEdgesById.set(edge.id, edge));
       }
       const removedConnectorSpliceEdges = [...removedConnectorSpliceEdgesById.values()];
