@@ -82,10 +82,10 @@ Implemented on this branch:
 - Completed prepared `For` iterations release their copied collection after the successor or final output is prepared,
   avoiding quadratic collection retention while preserving serialization and resume behavior.
 - Frontend enqueue-time whole-graph validation matching the backend's currently supported loop body shapes.
-- Optional durable `body_id` metadata on `For` and `ForReturn`, with matching frontend/backend validation for missing,
-  stale, duplicate, and mismatched identities. Legacy loops with no identity metadata remain valid.
-- Runtime body-boundary resolution consumes `body_id` when selecting a matching reachable `ForReturn`; structural
-  validation remains identity-independent so malformed endpoint metadata is still reported precisely.
+- A durable `loop_linkage` association edge between each `For` and its matching `ForReturn`, with matching
+  frontend/backend validation for missing, stale, duplicate, and mismatched associations.
+- Runtime body-boundary resolution consumes `loop_linkage` when selecting a matching reachable `ForReturn`; the
+  association edge is not executable data flow and is excluded from scheduling, cycle detection, and input propagation.
 - Contextual `ForReturn` discovery in the add-node picker: iteration-output connections prioritize and auto-expand
   `ForReturn`, then reuse ordinary connection validation to select its compatible input.
 - Threaded `DefaultSessionProcessor` integration coverage for successful execution, queue-status-event cancellation,
@@ -93,7 +93,7 @@ Implemented on this branch:
 - Production-style `DefaultSessionProcessor` coverage with the actual SQLite session queue and registered event bus,
   including bounded nested `Iterate` success, cancellation, and body-failure cleanup.
 - SQLite session-queue coverage for persisting, reloading, and completing a partially executed stateful loop.
-- Runtime support for recursively identity-bearing nested `For` boundaries whose final collections feed their parent
+- Runtime support for recursively linked nested `For` boundaries whose final collections feed their parent
   `ForReturn`, including multiple outer contexts, empty inner or leaf collections, and explicit sibling fan-in.
 - Optional `ForReturn.continue_condition` early-break behavior. `None` preserves legacy continuation, `True` schedules
   the next iteration, and `False` finalizes the current loop context after collecting the current return.
@@ -181,57 +181,46 @@ Iterator-derived values must be collapsed as needed and then carried explicitly 
 outputs. Direct iterator-derived external body inputs are rejected until the runtime has a durable contract for mapping
 multiple iteration dimensions.
 
-### Durable Body Identity
+### Durable Loop Linkage
 
-`For` and `ForReturn` each carry an optional hidden `body_id` input. When present, the same opaque value identifies one
-loop body boundary on both endpoints:
+`For` and `ForReturn` are associated by a required serialized `loop_linkage` edge. The edge is a control-flow
+association, not a value connection:
 
 ```text
-For(body_id="body-a") -> body path -> ForReturn(body_id="body-a")
+For.loop_linkage - - - - - - - - - - - - - - - - - > ForReturn.loop_linkage
+For.item -> body path -> ForReturn.output
 ```
 
-The value is part of the invocation data, so graph JSON and workflow JSON preserve it through save/load and execution
-resume. It is not inferred from a process-local transient store or from a runtime-generated execution-node ID. A body
-identity is valid only once on `For` nodes and once on `ForReturn` nodes, and the reachable structural boundary must
-agree with the value.
+The edge is part of graph JSON and workflow JSON, so it survives save/load and execution resume. It is not inferred from
+reachability, a process-local transient store, or a runtime-generated execution-node ID. The `For` output carries a
+constant linkage marker so the prepared execution result remains schema-valid, but the marker is not consumed as an
+ordinary data input by `ForReturn`.
+
+There is deliberately no compatibility migration for the former hidden endpoint metadata: these loop nodes are not
+released, so a saved `For` workflow must contain the explicit linkage edge to be valid.
 
 Validation rules are shared by the backend and frontend:
 
-- both endpoints may omit `body_id` for compatibility with existing simple loops;
-- when present, `body_id` must be a non-empty string;
-- the editor's blank hidden `body_id` value means unset and is omitted from graph JSON; an explicitly serialized empty
-  identity remains invalid;
-- when the editor adds `ForReturn` from a `For` iteration output, it copies the existing `body_id` or creates one and
-  applies it to both boundary nodes; manual or imported boundary identities remain subject to the same validation;
-- copying a complete `For` and matching `ForReturn` pair creates a fresh shared `body_id`; copying only one boundary, or
-  a mismatched boundary selection, clears its identity so the pasted fragment does not retain a stale or duplicate ID;
-- deleting one boundary clears its identity on the surviving counterpart, so removing a `For` and adding a replacement
-  leaves a valid legacy-compatible pair; reconnecting the replacement to an unambiguous body automatically assigns a
-  fresh shared identity; same-ID updates that preserve the identity keep it intact;
-- after an edge or node change completes an unambiguous body boundary, the editor assigns a fresh shared identity when
-  both endpoints are legacy, or propagates the `For` identity to a newly linked `ForReturn`; this also rebinds a
-  replacement `For` after its stale predecessor is removed or replaced; it does not adopt an identity found only on a
-  return because that identity may be stale;
-- `body_id` is direct serialized metadata and must not have an incoming graph edge;
-- if either endpoint has an identity, the matching endpoint must also have one;
-- an identity on a return with no corresponding `For` is stale;
-- duplicate identities on `For` nodes or on `ForReturn` nodes are rejected;
-- the two endpoints must carry the same identity;
+- every `For` has exactly one outgoing `loop_linkage` edge;
+- every `ForReturn` has exactly one incoming `loop_linkage` edge;
+- the edge must connect `For.loop_linkage` directly to `ForReturn.loop_linkage`;
+- a `For` or `ForReturn` cannot participate in a second linkage edge;
+- removing either boundary removes the serialized edge, and replacing a boundary requires a new edge to the replacement;
 - `For.collection`, `For.state`, `ForReturn.output`, and `ForReturn.state` each accept at most one incoming edge;
   malformed saved graphs with duplicate boundary inputs are rejected.
 
-This slice establishes the serialized contract. Identity-bearing nested `For` boundaries are supported recursively when
+This slice establishes the serialized contract. Linked nested `For` boundaries are supported recursively when
 each boundary has one direct child `For` or independent direct children joined by an explicit fan-in continuation. A child
 final collection may feed the parent's matching `ForReturn` directly or through an ordinary outer continuation subgraph.
 Sequential composition, mixed nested loop shapes, and implicit product or zip semantics remain rejected. A bounded internal `Iterate` is supported only when one matching `Collect`
 collapses its item dimension before `ForReturn`; other internal iterator shapes remain rejected.
 
-The first runtime consumer of the identity is the body-path resolver used by materialization and empty-loop cleanup. An
-identity-bearing `For` selects the reachable `ForReturn` with the same `body_id`; an identity-free `For` retains the
-legacy exactly-one-reachable-return rule. This separates runtime ownership lookup from author-time validation. It
-permits the recursive nested shape described below. Multiple nested levels use composite execution contexts and
-independent output ownership. A supported continuation subgraph runs once per parent iteration after one child finalizes,
-or after all independent sibling children finalize at the fan-in barrier; mixed nested loop types remain rejected.
+The first runtime consumer of the linkage is the body-path resolver used by materialization and empty-loop cleanup. A
+`For` selects the reachable `ForReturn` named by its linkage edge. This separates runtime ownership lookup from
+author-time validation and permits the recursive nested shape described below. Multiple nested levels use composite
+execution contexts and independent output ownership. A supported continuation subgraph runs once per parent iteration
+after one child finalizes, or after all independent sibling children finalize at the fan-in barrier; mixed nested loop
+types remain rejected.
 
 The supported nested `For` shape is:
 
@@ -242,7 +231,7 @@ For.inner.output_collection -> optional outer continuation -> ForReturn.outer.ou
 For.outer.state -> ForReturn.outer.state (optional)
 ```
 
-The inner and outer boundaries must carry distinct matching `body_id` values. The scheduler keeps both iteration
+The inner and outer boundaries must have distinct `loop_linkage` edges. The scheduler keeps both iteration
 dimensions in execution paths, defers the outer continuation and `ForReturn` until the inner loop finalizes, and creates
 one outer return per outer iteration. Continuation nodes may consume the inner final collection and values from the outer
 iteration or its preparation path. Empty inner collections still produce one empty outer result. Nested `For` failure
@@ -294,10 +283,13 @@ Inputs:
 
 - `collection: list[Any]`
 - `state: LoopState | None = None`
-- `body_id: str | None = None` (hidden durable boundary identity)
 
 Prepared execution nodes also carry a hidden scheduler-owned `index`. It is direct metadata, not a connectable input;
 the scheduler copies it for each materialized iteration.
+
+Association output:
+
+- `loop_linkage: Any` (required association marker used only by the serialized linkage edge)
 
 Per-iteration outputs:
 
@@ -343,7 +335,8 @@ Inputs:
 - `output: Any | None = None`
 - `state: LoopState | None = None`
 - `continue_condition: bool | None = True`
-- `body_id: str | None = None` (hidden durable boundary identity matching `For.body_id`)
+- `loop_linkage: Any | None = None` (optional on the node schema so an editor node can be created before pairing;
+  required as a graph connection to the matching `For`)
 
 Outputs:
 
@@ -382,15 +375,15 @@ For the target implementation, the recommended body boundary is a boundary pair:
 - The loop body is the reachable subgraph from `For` iteration-scoped outputs to the matching `ForReturn`.
 
 The `ForReturn` must be associated with a specific source `For`. Reachability alone is not sufficient once nested loops
-or shared body paths are allowed, because the backend must know which return node closes which loop. The optional
-`body_id` contract now records that association in serialized invocation data. The runtime consumes it for recursive
-identity-bearing nesting and continues to reject mixed loop bodies and sibling shapes without an explicit fan-in.
+or shared body paths are allowed, because the backend must know which return node closes which loop. The serialized
+`loop_linkage` edge records that association directly. The runtime consumes it for recursive nested execution and
+continues to reject mixed loop bodies and sibling shapes without an explicit fan-in.
 
 This is simpler than a full visual subgraph while still giving the backend an explicit return boundary. Validation must
 also reject loop-body paths that escape to after-loop nodes without passing through the matching `ForReturn`.
 
-The current branch implements this reachable body-path subset plus endpoint identity validation. The runtime supports
-recursive identity-bearing inner `For` boundaries whose final collections feed their parent `ForReturn` directly or
+The current branch implements this reachable body-path subset plus linkage validation. The runtime supports recursively
+linked inner `For` boundaries whose final collections feed their parent `ForReturn` directly or
 through an ordinary continuation subgraph. Sibling loop branches may use explicit `CollectionConcat` or
 `CollectionZip` or `CollectionCartesian` continuations; mixed loop types and implicit pairing remain future work.
 
@@ -658,7 +651,7 @@ Potential validation rules:
 - A body return's `state` input must be compatible with `LoopState`.
 - The author-time graph must remain acyclic.
 - Nodes inside the loop body must not feed after-loop nodes directly.
-- Identity-bearing nested `For` boundaries are valid recursively only in the inner-final-collection shape described above.
+- Linked nested `For` boundaries are valid recursively only in the inner-final-collection shape described above.
   The continuation subgraph must be reachable from every direct child `output_collection`, must terminate at the parent
   `ForReturn`, and must not contain another `For`, `Iterate`, or `ForReturn`. Sibling children do not imply zip or
   Cartesian semantics; an ordinary fan-in node must define how their final collections are combined.
@@ -678,9 +671,9 @@ First implementation recommendation:
 
 Resolved design question:
 
-- The durable endpoint association is the optional shared `body_id` field on `For` and `ForReturn`. Missing values
-  preserve legacy simple loops; once used, the value must be present exactly once on each endpoint and match the
-  structurally reachable body boundary. Visual body membership and runtime nested-loop ownership remain separate work.
+- The durable endpoint association is a required serialized `loop_linkage` edge from `For` to `ForReturn`. It is a
+  direct relationship between boundary nodes, not a data-flow edge. Missing, stale, duplicate, or mismatched linkage
+  is invalid; deleting either endpoint removes the edge, and a replacement boundary must be linked explicitly.
 
 ## Editor Contract
 
@@ -708,13 +701,10 @@ The ordinary invocation renderer now groups scoped fields under localized `Itera
 headings. Nodes without scoped outputs keep the existing flat output rendering.
 
 The editor now also draws a non-interactive dashed boundary around the reachable path from each `For` iteration output
-to its selected `ForReturn`. The boundary resolver uses the same durable `body_id` values as graph validation, chooses
-the matching return on nested paths, and labels incomplete, ambiguous, stale, mismatched, empty, duplicate, or orphaned
-identity states. Legacy simple loops without `body_id` remain visible and are labeled as legacy boundaries. The overlay
-is a rendering affordance only: it does not add serialized nodes or edges and does not change scheduler behavior.
-When a visible edge completes an unambiguous `For` to `ForReturn` body, the editor also maintains the hidden shared
-`body_id`; this includes direct state-carrying paths. Ambiguous paths remain legacy or invalid until their ownership is
-clear.
+to the `ForReturn` named by its linkage edge. The overlay labels incomplete, invalid, duplicate, ambiguous, empty, and
+orphaned boundary states. The linkage edge is rendered as a dashed green association and is not included in executable
+graph paths. The overlay is a rendering affordance only: it does not add nodes or infer associations. Replacing either
+boundary removes the old edge; connecting the replacement creates a new association.
 
 When an iteration-scoped output connection is dropped on empty canvas, the add-node picker prioritizes `ForReturn`,
 expands its category, and preserves that priority while searching. Selecting it uses the existing valid-connection
@@ -797,7 +787,7 @@ no explicit rule for product, zip, or state-lane semantics and should remain rej
 
 ### Recursive Nested For Body
 
-The nested `For` extension supports complete identity-bearing inner `For` boundaries recursively inside an outer `For`
+The nested `For` extension supports complete linked inner `For` boundaries recursively inside an outer `For`
 body. Each boundary has one direct child loop or independent direct children joined by an ordinary continuation subgraph.
 A child final output may close the parent directly or pass through that continuation:
 
@@ -852,7 +842,7 @@ outer context and prevents later outer iterations.
 
 Supporting this shape requires:
 
-- durable body identity that associates each `ForReturn` with exactly one `For`, without relying on ambiguous
+- a durable `loop_linkage` edge that associates each `ForReturn` with exactly one `For`, without relying on ambiguous
   reachability
 - a composite execution context that distinguishes the outer iteration, inner loop instance, and inner iteration
 - independent output aggregation for every inner loop instance
@@ -910,11 +900,11 @@ Backend tests should cover:
 - cancellation or failure does not expose partial final outputs to after-loop nodes
 - serialized `GraphExecutionState` can resume a partially completed loop
 - cache does not collapse distinct stateful iterations
-- the supported identity-bearing nested `For` shape completes nested contexts independently, including empty inner and
+- the supported linked nested `For` shape completes nested contexts independently, including empty inner and
   leaf collections
 - recursive nested `For` boundaries are accepted when each boundary has one direct child or explicit sibling fan-in and
   any post-child continuation is ordinary parent-scoped work; mixed nested loop shapes remain rejected
-- runtime body-path resolution selects the matching `ForReturn` by durable `body_id` when identity metadata is present
+- runtime body-path resolution selects the matching `ForReturn` through its durable `loop_linkage` edge
 - body paths that feed after-loop nodes directly are rejected
 - nested `ForReturn.continue_condition` inputs are accepted only from the current nested body or parent-scoped
   continuation and reject external scopes that cannot be rematerialized
@@ -938,7 +928,7 @@ Frontend tests should cover:
 
 ### Current Coverage
 
-Backend unit tests currently cover the invocation contracts, durable body-identity validation, identity-aware runtime
+Backend unit tests currently cover the invocation contracts, durable loop-linkage validation, linkage-aware runtime
 body-path resolution, and graph round-trip,
 state helper copy semantics, graph-boundary validation,
 sequential materialization, state carry, final output release, empty collections, failure handling, serialization and
@@ -959,7 +949,7 @@ cleanup for both shapes.
 Nested `For` runner tests cover independent outer contexts, empty inner collections, explicit outer state wiring, inner
 cancellation, and inner-body failure without releasing final outputs.
 
-Frontend unit tests cover `For` and `ForReturn` graph/workflow round trips, durable body-identity validation, resolution of their output scopes from the
+Frontend unit tests cover `For` and `ForReturn` graph/workflow round trips, durable loop-linkage validation, resolution of their output scopes from the
 current templates, and `LoopState` connection-type compatibility. Frontend connection tests cover iteration/final scope
 overlap across incremental connection orders, through ordinary body extensions, body descendants, and connector nodes.
 Output row-model and renderer tests cover flat rendering for ordinary nodes and distinct localized iteration/final
@@ -972,7 +962,7 @@ Backend and frontend validation tests accept deeper nested `For` loops, explicit
 shared by multiple loops. Schema/template tests cover the versioned `continue_condition` input and its default-continue
 editor behavior.
 Mounted `happy-dom` tests cover the visible loop-body boundary label/status and selecting `ForReturn` from a pending
-`For.item` connection, including shared durable body identity and automatic edge creation. These tests reuse the
+`For.item` connection, including the dashed linkage edge and automatic edge creation. These tests reuse the
 existing `happy-dom` dependency; this branch adds no browser-test dependencies or configuration. Unit tests cover
 contextual `ForReturn` discovery and connection wiring.
 Collection operation tests cover sequential concatenation, strict positional zipping, Cartesian products, empty inputs,
@@ -987,8 +977,8 @@ Answered branch-local decisions:
 - Loop output scope is invocation output field metadata and is preserved through backend schema and frontend type
   generation. Saved workflows preserve node types and field handles, then resolve scope from the current templates when
   loaded.
-- Durable body identity is the optional shared `body_id` field on `For` and `ForReturn`. It is persisted as ordinary
-  invocation data; legacy workflows omit it and continue using the bounded reachability contract.
+- Durable loop linkage is the required serialized `loop_linkage` edge from `For` to `ForReturn`. It is persisted with
+  the workflow graph and is required for every loop boundary; it is not an ordinary executable data-flow edge.
 - A nested child's final `output_collection` may feed an ordinary parent-scoped continuation subgraph before the matching
   parent `ForReturn`. The continuation is materialized once at the parent iteration path after child finalization; it may
   consume child final output plus parent iteration/preparation inputs. Independent sibling loops are supported only when
@@ -1013,15 +1003,15 @@ Answered branch-local decisions:
    validation/schema.
 3. Preserve output-scope metadata through saved workflows, backend schemas, frontend types, and graph preparation.
 4. Add graph validation for the bounded collection-based loop shape and matching `ForReturn` body boundary.
-5. Reject unsupported nested loops and body paths that escape directly to after-loop nodes; add durable endpoint identity
-   metadata for nested/shared runtime paths.
+5. Reject unsupported nested loops and body paths that escape directly to after-loop nodes; add durable endpoint linkage
+   edges for nested/shared runtime paths.
 6. Extend `GraphExecutionState` materialization to create one iteration context at a time.
 7. Route iteration-scoped outputs into body execution nodes and final-scoped outputs into after-loop nodes.
 8. Carry explicit returned state into the next iteration.
 9. Aggregate final output collection and final state.
 10. Add serialization/resume tests.
 11. Add editor affordances after the backend contract is stable.
-12. Support recursively identity-bearing nested `For` boundaries with independent inner aggregation and deferred outer
+12. Support recursively linked nested `For` boundaries with independent inner aggregation and deferred outer
     return materialization.
 13. Define and implement a deterministic nested final-output continuation contract.
 14. Define and implement sibling nested-body contracts with an explicit fan-in barrier; leave sequential, zip, and
@@ -1038,7 +1028,7 @@ coverage. Full browser geometry, drag, and zoom behavior remains outside this te
 complete: no branch-specific temporary browser-test dependencies or configuration remain, and the mounted tests use
 the existing `happy-dom` dependency.
 
-The durable endpoint identity slice, bounded internal `Iterate` slice, recursive identity-bearing nested `For` slice,
+The durable endpoint linkage slice, bounded internal `Iterate` slice, recursive linked nested `For` slice,
 deterministic nested final-output continuation slice, explicit sibling fan-in slice, positional `CollectionZip` slice,
 and `CollectionCartesian` slice are implemented. Nested execution
 uses explicit composite paths, independent inner aggregation, deferred outer returns, parent-scoped continuation

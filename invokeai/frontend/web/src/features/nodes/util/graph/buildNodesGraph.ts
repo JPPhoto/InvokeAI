@@ -91,10 +91,6 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
           return inputsAccumulator;
         }
 
-        if ((type === 'for' || type === 'for_return') && name === 'body_id' && input.value === undefined) {
-          return inputsAccumulator;
-        }
-
         if (isBoardFieldInputTemplate(fieldTemplate) && isBoardFieldInputInstance(input)) {
           inputsAccumulator[name] = getBoardField(input, state);
         } else {
@@ -181,6 +177,23 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
       );
     });
 
+  const loopLinkageEdges = edges
+    .filter((edge) => edge.type === 'loop_linkage')
+    .filter((edge) => {
+      const sourceNode = nodes.find((node) => node.id === edge.source);
+      const targetNode = nodes.find((node) => node.id === edge.target);
+      return Boolean(
+        sourceNode &&
+        targetNode &&
+        isInvocationNode(sourceNode) &&
+        isInvocationNode(targetNode) &&
+        isExecutableNode(sourceNode) &&
+        isExecutableNode(targetNode) &&
+        filteredNodeIds.includes(sourceNode.id) &&
+        filteredNodeIds.includes(targetNode.id)
+      );
+    });
+
   // Reduce the node editor edges into invocation graph edges
   const parsedEdges = flattenedEdges.reduce<NonNullable<Graph['edges']>>((edgesAccumulator, edge) => {
     const { source, target, sourceHandle, targetHandle } = edge;
@@ -192,6 +205,7 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
 
     // Format the edges and add to the edges array
     edgesAccumulator.push({
+      type: 'default',
       source: {
         node_id: source,
         field: sourceHandle,
@@ -205,6 +219,33 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
     return edgesAccumulator;
   }, []);
 
+  loopLinkageEdges.forEach((edge) => {
+    if (!edge.sourceHandle || !edge.targetHandle) {
+      log.warn(
+        {
+          edgeId: edge.id,
+          source: edge.source,
+          sourceHandle: edge.sourceHandle,
+          target: edge.target,
+          targetHandle: edge.targetHandle,
+        },
+        'Missing source or target handle for loop linkage edge'
+      );
+      return;
+    }
+    parsedEdges.push({
+      type: 'loop_linkage',
+      source: {
+        node_id: edge.source,
+        field: edge.sourceHandle,
+      },
+      destination: {
+        node_id: edge.target,
+        field: edge.targetHandle,
+      },
+    });
+  });
+
   /**
    * Omit all inputs that have edges connected.
    *
@@ -215,6 +256,9 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
    * even though the actual value that will be used comes from the connection.
    */
   parsedEdges.forEach((edge) => {
+    if (edge.type !== 'default') {
+      return;
+    }
     const destination_node = parsedNodes[edge.destination.node_id];
     if (!destination_node) {
       return;

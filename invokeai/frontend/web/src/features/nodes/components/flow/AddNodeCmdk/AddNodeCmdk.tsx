@@ -35,10 +35,10 @@ import type { PendingConnection, Templates } from 'features/nodes/store/types';
 import { resolvePendingConnectionSource } from 'features/nodes/store/util/connectorTopology';
 import { findUnoccupiedPosition } from 'features/nodes/store/util/findUnoccupiedPosition';
 import { getFirstValidConnection } from 'features/nodes/store/util/getFirstValidConnection';
-import { createLoopBodyIdentity, getLoopBodyIdentity } from 'features/nodes/store/util/loopIdentity';
 import { connectionToEdge } from 'features/nodes/store/util/reactFlowUtil';
 import { validateConnectionTypes } from 'features/nodes/store/util/validateConnectionTypes';
 import { selectShouldGroupNodesByCategory } from 'features/nodes/store/workflowSettingsSlice';
+import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 import type { AnyEdge, AnyNode, InvocationTemplate } from 'features/nodes/types/invocation';
 import { isInvocationNode } from 'features/nodes/types/invocation';
 import { useRegisteredHotkeys } from 'features/system/components/HotkeysModal/useHotkeyData';
@@ -86,36 +86,8 @@ const useAddNode = () => {
       node.position = findUnoccupiedPosition(nodes, cursorPos?.x ?? node.position.x, cursorPos?.y ?? node.position.y);
       node.selected = true;
 
-      const forReturnBodyIdentity =
-        isInvocationNode(node) && node.data.type === 'for_return'
-          ? getForReturnBodyIdentity(pendingConnection, nodes, edges, templates)
-          : null;
-
       // Deselect all other nodes and edges
       const nodeChanges: NodeChange<AnyNode>[] = [{ type: 'add', item: node }];
-      if (forReturnBodyIdentity) {
-        const sourceNode = nodes.find((candidate) => candidate.id === forReturnBodyIdentity.sourceNodeId);
-        const sourceBodyIdInput =
-          sourceNode && isInvocationNode(sourceNode) ? sourceNode.data.inputs.body_id : undefined;
-        const returnBodyIdInput = isInvocationNode(node) ? node.data.inputs.body_id : undefined;
-        if (sourceNode && isInvocationNode(sourceNode) && sourceBodyIdInput && returnBodyIdInput) {
-          returnBodyIdInput.value = forReturnBodyIdentity.bodyId;
-          nodeChanges.unshift({
-            type: 'replace',
-            id: sourceNode.id,
-            item: {
-              ...sourceNode,
-              data: {
-                ...sourceNode.data,
-                inputs: {
-                  ...sourceNode.data.inputs,
-                  body_id: { ...sourceBodyIdInput, value: forReturnBodyIdentity.bodyId },
-                },
-              },
-            },
-          });
-        }
-      }
       const edgeChanges: EdgeChange<AnyEdge>[] = [];
       nodes.forEach(({ id, selected }) => {
         if (selected) {
@@ -160,6 +132,34 @@ const useAddNode = () => {
         if (connection) {
           const newEdge = connectionToEdge(connection);
           store.dispatch(edgesChanged([{ type: 'add', item: newEdge }]));
+
+          const resolvedSource = resolvePendingConnectionSource(pendingConnection, nodes, edges, templates);
+          const sourceNode = resolvedSource
+            ? nodes.find((candidate) => candidate.id === resolvedSource.nodeId)
+            : nodes.find((candidate) => candidate.id === source);
+          if (
+            newEdge.type === 'default' &&
+            node.data.type === 'for_return' &&
+            sourceNode &&
+            isInvocationNode(sourceNode) &&
+            sourceNode.data.type === 'for' &&
+            resolvedSource?.outputScope === 'iteration' &&
+            !edges.some((edge) => edge.type === 'loop_linkage' && edge.source === sourceNode.id)
+          ) {
+            store.dispatch(
+              edgesChanged([
+                {
+                  type: 'add',
+                  item: connectionToEdge({
+                    source: sourceNode.id,
+                    sourceHandle: LOOP_LINKAGE_FIELD,
+                    target: node.id,
+                    targetHandle: LOOP_LINKAGE_FIELD,
+                  }),
+                },
+              ])
+            );
+          }
         }
       }
     },
@@ -408,38 +408,6 @@ const isForIterationOutputConnection = (
   );
 };
 
-export const getForReturnBodyIdentity = (
-  pendingConnection: PendingConnection | null,
-  nodes: AnyNode[],
-  edges: AnyEdge[] = [],
-  templates?: Templates
-): { sourceNodeId: string; bodyId: string } | null => {
-  if (!pendingConnection || pendingConnection.handleType !== 'source') {
-    return null;
-  }
-
-  const pendingSource = nodes.find((node) => node.id === pendingConnection.nodeId);
-  const resolvedSource = resolvePendingConnectionSource(pendingConnection, nodes, edges, templates);
-  const sourceNode = resolvedSource ? nodes.find((node) => node.id === resolvedSource.nodeId) : pendingSource;
-  if (!isInvocationNode(sourceNode) || sourceNode.data.type !== 'for') {
-    return null;
-  }
-
-  const isIterationOutput = resolvedSource
-    ? resolvedSource.outputScope === 'iteration' ||
-      (resolvedSource.nodeId === pendingConnection.nodeId && isForIterationOutputConnection(pendingConnection))
-    : isForIterationOutputConnection(pendingConnection);
-  if (!isIterationOutput) {
-    return null;
-  }
-
-  const bodyId = getLoopBodyIdentity(sourceNode);
-  return {
-    sourceNodeId: sourceNode.id,
-    bodyId: bodyId ?? createLoopBodyIdentity(),
-  };
-};
-
 export const getPendingConnectionNodeItems = (
   templatesArray: InvocationTemplate[],
   pendingConnection: PendingConnection,
@@ -450,6 +418,13 @@ export const getPendingConnectionNodeItems = (
 
   for (const template of templatesArray) {
     if (!filter(template, searchTerm)) {
+      continue;
+    }
+
+    if (
+      pendingConnection.handleId === LOOP_LINKAGE_FIELD &&
+      template.type !== (pendingConnection.handleType === 'source' ? 'for_return' : 'for')
+    ) {
       continue;
     }
 

@@ -28,7 +28,7 @@ import {
   resolveConnectorSource,
 } from 'features/nodes/store/util/connectorTopology';
 import { connectionToEdge } from 'features/nodes/store/util/reactFlowUtil';
-import { SHARED_NODE_PROPERTIES } from 'features/nodes/types/constants';
+import { LOOP_LINKAGE_FIELD, SHARED_NODE_PROPERTIES } from 'features/nodes/types/constants';
 import type {
   BoardFieldValue,
   BooleanFieldValue,
@@ -99,7 +99,6 @@ import {
   isNodeFieldElement,
   isTextElement,
 } from 'features/nodes/types/workflow';
-import { reconcileForLoopBodyIdentities } from 'features/nodes/util/graph/loopBodyBoundary';
 import { buildFieldInputInstance } from 'features/nodes/util/schema/buildFieldInputInstance';
 import { atom, computed } from 'nanostores';
 import type { MouseEvent } from 'react';
@@ -108,7 +107,6 @@ import { assert } from 'tsafe';
 import type { z } from 'zod';
 
 import type { PendingConnection, Templates } from './types';
-import { getLoopBodyIdentity } from './util/loopIdentity';
 
 const CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX = 'saved_workflow_input::';
 
@@ -250,62 +248,23 @@ const removeCallSavedWorkflowDynamicFieldsFromForm = (
   }
 };
 
-const clearIdentitiesForRemovedLoopBoundaries = (state: NodesState, changes: NodeChange<AnyNode>[]) => {
-  const forBodyIdsToClear = new Set<string>();
-  const forReturnBodyIdsToClear = new Set<string>();
-  const replacementsById = new Map<string, AnyNode>();
-
-  for (const change of changes) {
-    if (change.type === 'add' || change.type === 'replace') {
-      replacementsById.set(change.item.id, change.item);
-    }
+const isValidLoopLinkageEdge = (edge: AnyEdge, nodes: AnyNode[]): boolean => {
+  if (edge.type !== 'loop_linkage') {
+    return true;
   }
 
-  for (const change of changes) {
-    if (change.type !== 'remove' && change.type !== 'replace') {
-      continue;
-    }
-
-    const node = state.nodes.find((candidate) => candidate.id === change.id);
-    if (!isInvocationNode(node)) {
-      continue;
-    }
-
-    const bodyId = getLoopBodyIdentity(node as AnyNode);
-    if (bodyId === undefined) {
-      continue;
-    }
-
-    const replacement = change.type === 'replace' ? change.item : replacementsById.get(change.id);
-    if (
-      replacement &&
-      isInvocationNode(replacement) &&
-      replacement.data.type === node.data.type &&
-      getLoopBodyIdentity(replacement) === bodyId
-    ) {
-      continue;
-    }
-
-    if (node.data.type === 'for') {
-      forReturnBodyIdsToClear.add(bodyId);
-    } else if (node.data.type === 'for_return') {
-      forBodyIdsToClear.add(bodyId);
-    }
-  }
-
-  for (const node of state.nodes) {
-    if (!isInvocationNode(node) || !node.data.inputs.body_id) {
-      continue;
-    }
-
-    const bodyId = getLoopBodyIdentity(node as AnyNode);
-    if (
-      (node.data.type === 'for' && forBodyIdsToClear.has(bodyId ?? '')) ||
-      (node.data.type === 'for_return' && forReturnBodyIdsToClear.has(bodyId ?? ''))
-    ) {
-      node.data.inputs.body_id.value = undefined;
-    }
-  }
+  const sourceNode = nodes.find((node) => node.id === edge.source);
+  const targetNode = nodes.find((node) => node.id === edge.target);
+  return Boolean(
+    sourceNode &&
+    targetNode &&
+    isInvocationNode(sourceNode) &&
+    sourceNode.data.type === 'for' &&
+    isInvocationNode(targetNode) &&
+    targetNode.data.type === 'for_return' &&
+    edge.sourceHandle === LOOP_LINKAGE_FIELD &&
+    edge.targetHandle === LOOP_LINKAGE_FIELD
+  );
 };
 
 const slice = createSlice({
@@ -340,8 +299,6 @@ const slice = createSlice({
           );
       });
 
-      clearIdentitiesForRemovedLoopBoundaries(state, action.payload);
-
       // TODO(psyche): The below TS issue was recently fixed upstream. Need to upgrade @xyflow/react and then we
       // should be able to remove this cast.
       //
@@ -366,7 +323,7 @@ const slice = createSlice({
         for (const e of state.edges) {
           const sourceExists = state.nodes.some((n) => n.id === e.source);
           const targetExists = state.nodes.some((n) => n.id === e.target);
-          if (!(sourceExists && targetExists)) {
+          if (!(sourceExists && targetExists) || !isValidLoopLinkageEdge(e, state.nodes)) {
             edgeChanges.push({ type: 'remove', id: e.id });
           }
         }
@@ -380,8 +337,6 @@ const slice = createSlice({
           );
         }
       }
-
-      reconcileForLoopBodyIdentities(state.nodes as AnyNode[], state.edges);
 
       const wereNodesRemoved = action.payload.some((change) => change.type === 'remove' || change.type === 'replace');
 
@@ -414,7 +369,9 @@ const slice = createSlice({
           const edge = state.edges.find((e) => e.id === change.id);
           // If we deleted or selected a collapsed edge, we need to find its "hidden" edges and do the same to them
           if (edge && edge.type === 'collapsed') {
-            const hiddenEdges = state.edges.filter((e) => e.source === edge.source && e.target === edge.target);
+            const hiddenEdges = state.edges.filter(
+              (e) => e.type === 'default' && e.source === edge.source && e.target === edge.target
+            );
             for (const { id } of hiddenEdges) {
               if (change.type === 'remove') {
                 changes.push({ type: 'remove', id });
@@ -433,7 +390,6 @@ const slice = createSlice({
         changes.push(change);
       }
       state.edges = applyEdgeChanges(changes, state.edges);
-      reconcileForLoopBodyIdentities(state.nodes as AnyNode[], state.edges);
     },
     fieldLabelChanged: (
       state,
@@ -496,6 +452,7 @@ const slice = createSlice({
       // - if the edge was just closed, we need to check all its edges and hide them if both nodes are closed
 
       const connectedEdges = getConnectedEdges([node], state.edges);
+      const executableConnectedEdges = connectedEdges.filter((edge) => edge.type !== 'loop_linkage');
 
       if (isOpen) {
         // reset hidden status of all edges
@@ -509,18 +466,19 @@ const slice = createSlice({
           }
         });
       } else {
-        const closedIncomers = getIncomers(node, state.nodes, state.edges).filter(
+        const executableEdges = state.edges.filter((edge) => edge.type !== 'loop_linkage');
+        const closedIncomers = getIncomers(node, state.nodes, executableEdges).filter(
           (node) => isInvocationNode(node) && node.data.isOpen === false
         );
 
-        const closedOutgoers = getOutgoers(node, state.nodes, state.edges).filter(
+        const closedOutgoers = getOutgoers(node, state.nodes, executableEdges).filter(
           (node) => isInvocationNode(node) && node.data.isOpen === false
         );
 
         const collapsedEdgesToCreate: AnyEdge[] = [];
 
         // hide all edges
-        connectedEdges.forEach((edge) => {
+        executableConnectedEdges.forEach((edge) => {
           if (edge.target === nodeId && closedIncomers.find((node) => node.id === edge.source)) {
             edge.hidden = true;
             const collapsedEdge = collapsedEdgesToCreate.find(

@@ -18,7 +18,7 @@ from tests.app.services.workflow_call_test_utils import (
     _DummySessionQueue,
     _DummyStats,
 )
-from tests.test_nodes import create_edge
+from tests.test_nodes import create_edge, create_loop_linkage
 
 
 @invocation_output("test_for_runner_value_output")
@@ -81,6 +81,7 @@ def _build_graph(*, fail_on: int | None = None) -> Graph:
     graph.add_edge(create_edge("for", "item", "body", "value"))
     graph.add_edge(create_edge("body", "value", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "collection"))
+    graph.add_edge(create_loop_linkage("for", "return"))
     return graph
 
 
@@ -99,6 +100,7 @@ def _build_nested_graph(*, fail_on: int | None = None) -> Graph:
     graph.add_edge(create_edge("body", "value", "collect", "item"))
     graph.add_edge(create_edge("collect", "collection", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "collection"))
+    graph.add_edge(create_loop_linkage("for", "return"))
     return graph
 
 
@@ -115,22 +117,20 @@ def _build_nested_for_graph(
             id="outer_for",
             collection=[[1, 2], [3, 4]] if collection is None else collection,
             state=LoopState(values={"outer": True}),
-            body_id="outer-body",
         )
     )
     graph.add_node(ForRunnerCollectionAdapterInvocation(id="inner_collection"))
-    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(ForInvocation(id="inner_for"))
     graph.add_node(ForRunnerBodyInvocation(id="inner_body", fail_on=fail_on))
     graph.add_node(
         ForReturnInvocation(
             id="inner_return",
-            body_id="inner-body",
             continue_condition=False if break_inner_after_first else None,
         )
     )
     graph.add_node(ForRunnerConditionInvocation(id="outer_condition", continue_condition=not break_outer_after_first))
     graph.add_node(ForRunnerCollectionInvocation(id="outer_output"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
     graph.add_node(ForRunnerCollectionInvocation(id="after"))
     graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
     graph.add_edge(create_edge("inner_collection", "collection", "inner_for", "collection"))
@@ -142,6 +142,8 @@ def _build_nested_for_graph(
     graph.add_edge(create_edge("outer_condition", "value", "outer_return", "continue_condition"))
     graph.add_edge(create_edge("outer_for", "state", "outer_return", "state"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "collection"))
+    graph.add_edge(create_loop_linkage("outer_for", "outer_return"))
+    graph.add_edge(create_loop_linkage("inner_for", "inner_return"))
     return graph
 
 

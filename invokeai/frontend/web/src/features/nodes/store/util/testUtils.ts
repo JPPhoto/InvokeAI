@@ -12,6 +12,15 @@ export const buildEdge = (source: string, sourceHandle: string, target: string, 
   id: `reactflow__edge-${source}${sourceHandle}-${target}${targetHandle}`,
 });
 
+export const buildLoopLinkageEdge = (source: string, target: string): AnyEdge => ({
+  source,
+  sourceHandle: 'loop_linkage',
+  target,
+  targetHandle: 'loop_linkage',
+  type: 'loop_linkage',
+  id: `reactflow__edge-${source}-loop_linkage-${target}-loop_linkage`,
+});
+
 export const buildNode = (template: InvocationTemplate) => buildInvocationNode({ x: 0, y: 0 }, template);
 
 export const add: InvocationTemplate = {
@@ -634,7 +643,7 @@ const iterate: InvocationTemplate = {
 export const for_loop: InvocationTemplate = {
   title: 'For',
   type: 'for',
-  version: '1.2.0',
+  version: '1.3.0',
   tags: [],
   description: '',
   outputType: 'for_output',
@@ -670,23 +679,21 @@ export const for_loop: InvocationTemplate = {
         batch: false,
       },
     },
-    body_id: {
-      name: 'body_id',
-      title: 'Body Id',
-      required: false,
-      default: '',
-      description: 'Stable identity shared by this For and its matching ForReturn',
-      fieldKind: 'input',
-      input: 'direct',
-      ui_hidden: true,
+  },
+  outputs: {
+    loop_linkage: {
+      fieldKind: 'output',
+      name: 'loop_linkage',
+      title: 'Loop Linkage',
+      description: 'The loop linkage to the matching ForReturn',
       type: {
-        name: 'StringField',
+        name: 'AnyField',
         cardinality: 'SINGLE',
         batch: false,
       },
+      ui_hidden: false,
+      ui_type: 'AnyField',
     },
-  },
-  outputs: {
     item: {
       fieldKind: 'output',
       name: 'item',
@@ -777,7 +784,7 @@ export const for_loop: InvocationTemplate = {
 export const for_return: InvocationTemplate = {
   title: 'ForReturn',
   type: 'for_return',
-  version: '1.2.0',
+  version: '1.3.0',
   tags: [],
   description: '',
   outputType: 'for_return_output',
@@ -828,17 +835,18 @@ export const for_return: InvocationTemplate = {
         batch: false,
       },
     },
-    body_id: {
-      name: 'body_id',
-      title: 'Body Id',
+    loop_linkage: {
+      name: 'loop_linkage',
+      title: 'Loop Linkage',
       required: false,
-      default: '',
-      description: 'Stable identity shared by this ForReturn and its matching For',
+      default: undefined,
+      description: 'The loop linkage from the matching For',
       fieldKind: 'input',
-      input: 'direct',
-      ui_hidden: true,
+      input: 'connection',
+      ui_hidden: false,
+      ui_type: 'AnyField',
       type: {
-        name: 'StringField',
+        name: 'AnyField',
         cardinality: 'SINGLE',
         batch: false,
       },

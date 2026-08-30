@@ -88,6 +88,7 @@ NoneType = type(None)
 # Port name constants
 ITEM_FIELD = "item"
 COLLECTION_FIELD = "collection"
+LOOP_LINKAGE_FIELD = "loop_linkage"
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,10 @@ class EdgeConnection(BaseModel):
 class Edge(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    type: Literal["default", "loop_linkage"] = Field(
+        default="default",
+        description="The kind of relationship represented by this edge",
+    )
     source: EdgeConnection = Field(description="The connection for the edge's from node and field")
     destination: EdgeConnection = Field(description="The connection for the edge's to node and field")
 
@@ -571,6 +576,7 @@ class _ExecutionMaterializer:
         new_node.state = initial_state
 
         self._state.results[new_node.id] = ForInvocationOutput(
+            loop_linkage="loop_linkage",
             item=None,
             index=-1,
             total=0,
@@ -2713,8 +2719,8 @@ class Graph(BaseModel):
 
         try:
             # Delete edges for this node
-            input_edges = self._get_input_edges(node_id)
-            output_edges = self._get_output_edges(node_id)
+            input_edges = self._get_input_edges(node_id, include_loop_linkage=True)
+            output_edges = self._get_output_edges(node_id, include_loop_linkage=True)
 
             for edge in input_edges:
                 self.delete_edge(edge)
@@ -2781,6 +2787,7 @@ class Graph(BaseModel):
 
     def _validate_edge_nodes_and_fields(self) -> None:
         for edge in self.edges:
+            self._validate_reserved_edge_fields(edge)
             source_node = self.nodes.get(edge.source.node_id, None)
             if source_node is None:
                 raise NodeNotFoundError(f"Edge source node {edge.source.node_id} does not exist in the graph")
@@ -2826,7 +2833,7 @@ class Graph(BaseModel):
 
     def _validate_special_nodes(self) -> None:
         # TODO: may need to validate all iterators & collectors in subgraphs so edge connections in parent graphs will be available
-        self._validate_for_body_identities()
+        self._validate_for_loop_linkages()
         for node in self.nodes.values():
             if isinstance(node, IterateInvocation):
                 err = self._is_iterator_connection_valid(node.id)
@@ -2845,110 +2852,31 @@ class Graph(BaseModel):
                 if err is not None:
                     raise InvalidEdgeError(f"Invalid ForReturn node ({node.id}): {err}")
 
-    def _validate_for_body_identities(self) -> None:
-        """Validates optional durable identities shared by For and ForReturn endpoints.
-
-        Workflows written before body identities existed leave both endpoints unset and continue to use the
-        reachability-based boundary rules below. Once either endpoint carries an identity, both endpoints of the
-        structurally matching boundary must carry the same unique value.
-        """
+    def _validate_for_loop_linkages(self) -> None:
+        """Validates the required non-data association between each For and its ForReturn."""
         for_nodes = [node for node in self.nodes.values() if isinstance(node, ForInvocation)]
         return_nodes = [node for node in self.nodes.values() if isinstance(node, ForReturnInvocation)]
-        for_identity_nodes: dict[str, list[str]] = {}
-        return_identity_nodes: dict[str, list[str]] = {}
+        linkage_edges = self._get_loop_linkage_edges()
+
+        for edge in linkage_edges:
+            source_node = self.nodes.get(edge.source.node_id)
+            destination_node = self.nodes.get(edge.destination.node_id)
+            if (
+                not isinstance(source_node, ForInvocation)
+                or not isinstance(destination_node, ForReturnInvocation)
+                or edge.source.field != LOOP_LINKAGE_FIELD
+                or edge.destination.field != LOOP_LINKAGE_FIELD
+            ):
+                raise InvalidEdgeError(f"Invalid loop linkage ({edge})")
 
         for node in for_nodes:
-            if node.body_id == "":
-                raise InvalidEdgeError(f"For body identity on For '{node.id}' must be non-empty")
-            if node.body_id:
-                for_identity_nodes.setdefault(node.body_id, []).append(node.id)
+            matching_edges = [edge for edge in linkage_edges if edge.source.node_id == node.id]
+            if len(matching_edges) != 1:
+                raise InvalidEdgeError(f"For '{node.id}' must have exactly one loop linkage")
         for node in return_nodes:
-            if node.body_id == "":
-                raise InvalidEdgeError(f"For body identity on ForReturn '{node.id}' must be non-empty")
-            if node.body_id:
-                return_identity_nodes.setdefault(node.body_id, []).append(node.id)
-
-        for body_id, node_ids in for_identity_nodes.items():
-            if len(node_ids) > 1:
-                raise InvalidEdgeError(f"Duplicate For body identity '{body_id}' is used by multiple For nodes")
-        for body_id, node_ids in return_identity_nodes.items():
-            if len(node_ids) > 1:
-                raise InvalidEdgeError(f"Duplicate For body identity '{body_id}' is used by multiple ForReturn nodes")
-
-        graph = self.nx_graph_flat()
-        matching_return_by_for_id: dict[str, str] = {}
-        matching_for_ids_by_return_id: dict[str, list[str]] = {}
-        for node in for_nodes:
-            iteration_edges = self._get_for_iteration_output_edges(node.id)
-            reachable_return_ids = [
-                body_node_id
-                for body_node_id in self._get_for_reachable_body_nodes(iteration_edges, graph)
-                if isinstance(self.get_node(body_node_id), ForReturnInvocation)
-            ]
-            if node.body_id:
-                matching_return_ids = [
-                    return_id for return_id in reachable_return_ids if self.get_node(return_id).body_id == node.body_id
-                ]
-                if len(matching_return_ids) == 1:
-                    return_node_id = matching_return_ids[0]
-                elif len(reachable_return_ids) == 1:
-                    return_node_id = reachable_return_ids[0]
-                else:
-                    return_node_id = None
-            else:
-                return_node_id = reachable_return_ids[0] if len(reachable_return_ids) == 1 else None
-
-            if return_node_id is not None:
-                matching_return_by_for_id[node.id] = return_node_id
-                matching_for_ids_by_return_id.setdefault(return_node_id, []).append(node.id)
-
-        for node in return_nodes:
-            if not node.body_id:
-                continue
-            matching_for_ids = matching_for_ids_by_return_id.get(node.id, [])
-            if len(matching_for_ids) == 1:
-                matching_for = self.get_node(matching_for_ids[0])
-                assert isinstance(matching_for, ForInvocation)
-                if not matching_for.body_id:
-                    raise InvalidEdgeError("For body identity is missing on the matching For")
-                if matching_for.body_id != node.body_id:
-                    raise InvalidEdgeError(
-                        f"For body identity mismatch between For '{matching_for.id}' and ForReturn '{node.id}'"
-                    )
-            elif node.body_id not in for_identity_nodes:
-                raise InvalidEdgeError(
-                    f"Stale For body identity '{node.body_id}' on ForReturn '{node.id}' has no matching For"
-                )
-            else:
-                raise InvalidEdgeError(
-                    f"For body identity mismatch: ForReturn '{node.id}' is not the structural return for body "
-                    f"identity '{node.body_id}'"
-                )
-
-        for node in for_nodes:
-            if not node.body_id:
-                continue
-            return_node_id = matching_return_by_for_id.get(node.id)
-            if return_node_id is None:
-                iteration_edges = self._get_for_iteration_output_edges(node.id)
-                reachable_return_ids = [
-                    body_node_id
-                    for body_node_id in self._get_for_reachable_body_nodes(iteration_edges, graph)
-                    if isinstance(self.get_node(body_node_id), ForReturnInvocation)
-                ]
-                if node.body_id and len(reachable_return_ids) > 1:
-                    raise InvalidEdgeError(
-                        f"For body identity mismatch: For '{node.id}' has no matching reachable ForReturn"
-                    )
-                continue
-            matching_return = self.get_node(return_node_id)
-            assert isinstance(matching_return, ForReturnInvocation)
-            if not matching_return.body_id:
-                raise InvalidEdgeError("For body identity is missing on the matching ForReturn")
-            if matching_return.body_id != node.body_id:
-                raise InvalidEdgeError(
-                    f"For body identity mismatch between For '{node.id}' and ForReturn '{matching_return.id}'"
-                )
+            matching_edges = [edge for edge in linkage_edges if edge.destination.node_id == node.id]
+            if len(matching_edges) != 1:
+                raise InvalidEdgeError(f"ForReturn '{node.id}' must have exactly one loop linkage")
 
     def validate_self(self) -> None:
         """
@@ -3038,6 +2966,34 @@ class Graph(BaseModel):
             if isinstance(json_schema_extra, dict) and json_schema_extra.get("input") == Input.Direct:
                 raise InvalidEdgeError(f"Cannot connect to direct input ({edge})")
 
+    def _validate_reserved_edge_fields(self, edge: Edge) -> None:
+        if edge.type == "default" and (
+            edge.source.field == LOOP_LINKAGE_FIELD or edge.destination.field == LOOP_LINKAGE_FIELD
+        ):
+            raise InvalidEdgeError(f"The loop_linkage field must use a loop_linkage edge ({edge})")
+
+    def _validate_loop_linkage_edge(
+        self, edge: Edge, source_node: BaseInvocation, destination_node: BaseInvocation
+    ) -> None:
+        if (
+            not isinstance(source_node, ForInvocation)
+            or not isinstance(destination_node, ForReturnInvocation)
+            or edge.source.field != LOOP_LINKAGE_FIELD
+            or edge.destination.field != LOOP_LINKAGE_FIELD
+        ):
+            raise InvalidEdgeError(f"Invalid loop linkage ({edge})")
+
+        if any(
+            existing_edge.source.node_id == source_node.id
+            for existing_edge in self._get_loop_linkage_edges()
+        ):
+            raise InvalidEdgeError(f"For node already has a loop linkage ({edge})")
+        if any(
+            existing_edge.destination.node_id == destination_node.id
+            for existing_edge in self._get_loop_linkage_edges()
+        ):
+            raise InvalidEdgeError(f"ForReturn node already has a loop linkage ({edge})")
+
     def _validate_iterator_edge_rules(
         self, edge: Edge, source_node: BaseInvocation, destination_node: BaseInvocation
     ) -> None:
@@ -3081,7 +3037,11 @@ class Graph(BaseModel):
 
     def _validate_edge(self, edge: Edge, allow_inputless_source_collector: bool = False):
         """Validates that a new edge doesn't create a cycle in the graph"""
+        self._validate_reserved_edge_fields(edge)
         source_node, destination_node = self._get_edge_nodes(edge)
+        if edge.type == "loop_linkage":
+            self._validate_loop_linkage_edge(edge, source_node, destination_node)
+            return
         self._validate_edge_destination_uniqueness(edge, destination_node)
         self._validate_edge_would_not_create_cycle(edge)
         self._validate_edge_field_compatibility(edge, source_node, destination_node)
@@ -3118,8 +3078,8 @@ class Graph(BaseModel):
         # Set the new node in the graph
         self.nodes[new_node.id] = new_node
         if new_node.id != node.id:
-            input_edges = self._get_input_edges(node_id)
-            output_edges = self._get_output_edges(node_id)
+            input_edges = self._get_input_edges(node_id, include_loop_linkage=True)
+            output_edges = self._get_output_edges(node_id, include_loop_linkage=True)
 
             # Delete node and all edges
             self.delete_node(node_id)
@@ -3128,6 +3088,7 @@ class Graph(BaseModel):
             for edge in input_edges:
                 self.add_edge(
                     Edge(
+                        type=edge.type,
                         source=edge.source,
                         destination=EdgeConnection(node_id=new_node.id, field=edge.destination.field),
                     )
@@ -3136,17 +3097,22 @@ class Graph(BaseModel):
             for edge in output_edges:
                 self.add_edge(
                     Edge(
+                        type=edge.type,
                         source=EdgeConnection(node_id=new_node.id, field=edge.source.field),
                         destination=edge.destination,
                     )
                 )
 
-    def _get_input_edges(self, node_id: str, field: Optional[str] = None) -> list[Edge]:
+    def _get_input_edges(
+        self, node_id: str, field: Optional[str] = None, *, include_loop_linkage: bool = False
+    ) -> list[Edge]:
         """Gets all input edges for a node. If field is provided, only edges to that field are returned."""
 
         self._ensure_edge_indexes()
         assert self._input_edges_by_node is not None
         edges = self._input_edges_by_node.get(node_id, [])
+        if not include_loop_linkage:
+            edges = [edge for edge in edges if edge.type == "default"]
 
         if field is None:
             return list(edges)
@@ -3155,11 +3121,15 @@ class Graph(BaseModel):
 
         return filtered_edges
 
-    def _get_output_edges(self, node_id: str, field: Optional[str] = None) -> list[Edge]:
+    def _get_output_edges(
+        self, node_id: str, field: Optional[str] = None, *, include_loop_linkage: bool = False
+    ) -> list[Edge]:
         """Gets all output edges for a node. If field is provided, only edges from that field are returned."""
         self._ensure_edge_indexes()
         assert self._output_edges_by_node is not None
         edges = self._output_edges_by_node.get(node_id, [])
+        if not include_loop_linkage:
+            edges = [edge for edge in edges if edge.type == "default"]
 
         if field is None:
             return list(edges)
@@ -3167,6 +3137,30 @@ class Graph(BaseModel):
         filtered_edges = [e for e in edges if e.source.field == field]
 
         return filtered_edges
+
+    def _get_loop_linkage_edges(self, node_id: str | None = None) -> list[Edge]:
+        edges = [edge for edge in self.edges if edge.type == "loop_linkage"]
+        if node_id is None:
+            return edges
+        return [
+            edge
+            for edge in edges
+            if edge.source.node_id == node_id or edge.destination.node_id == node_id
+        ]
+
+    def _get_linked_for_return_id(self, for_node_id: str) -> str | None:
+        linkage_edges = [edge for edge in self._get_loop_linkage_edges(for_node_id) if edge.source.node_id == for_node_id]
+        if len(linkage_edges) != 1:
+            return None
+        return linkage_edges[0].destination.node_id
+
+    def _get_linked_for_id(self, return_node_id: str) -> str | None:
+        linkage_edges = [
+            edge for edge in self._get_loop_linkage_edges(return_node_id) if edge.destination.node_id == return_node_id
+        ]
+        if len(linkage_edges) != 1:
+            return None
+        return linkage_edges[0].source.node_id
 
     def _get_for_iteration_output_edges(self, node_id: str) -> list[Edge]:
         node = self.get_node(node_id)
@@ -3197,43 +3191,29 @@ class Graph(BaseModel):
         return (reachable_body_nodes & nx.ancestors(graph, return_node_id)) | {return_node_id}
 
     def _get_for_body_path_to_return(
-        self, node_id: str, graph: nx.DiGraph, *, use_body_identity: bool = True
+        self, node_id: str, graph: nx.DiGraph
     ) -> tuple[set[str], str] | None:
         """Resolve the runtime body path to its owning ForReturn.
 
-        Identity-free loops retain the legacy rule that exactly one reachable ForReturn must exist. When a For has a
-        durable body identity, runtime resolution selects the one reachable ForReturn with the same identity. Validation
-        passes ``use_body_identity=False`` so it can independently verify endpoint metadata and report missing or stale
-        identities instead of hiding them during structural ownership checks.
+        The loop linkage identifies the return endpoint. The ordinary body graph still determines whether that return
+        is reachable from an iteration output and which nodes belong to the body.
         """
         iteration_edges = self._get_for_iteration_output_edges(node_id)
         if len(iteration_edges) == 0:
             return None
 
         reachable_body_nodes = self._get_for_reachable_body_nodes(iteration_edges, graph)
-        reachable_return_node_ids = [
-            reachable_node_id
-            for reachable_node_id in reachable_body_nodes
-            if isinstance(self.get_node(reachable_node_id), ForReturnInvocation)
-        ]
-        loop_node = self.get_node(node_id)
-        if use_body_identity and isinstance(loop_node, ForInvocation) and loop_node.body_id:
-            reachable_return_node_ids = [
-                return_node_id
-                for return_node_id in reachable_return_node_ids
-                if self.get_node(return_node_id).body_id == loop_node.body_id
-            ]
-        if len(reachable_return_node_ids) != 1:
+        return_node_id = self._get_linked_for_return_id(node_id)
+        if return_node_id is None or return_node_id not in reachable_body_nodes:
             return None
 
-        return_node_id = reachable_return_node_ids[0]
         return self._get_for_body_path_nodes(reachable_body_nodes, return_node_id, graph), return_node_id
 
     def _get_supported_for_nested_iterate_body(
         self, node_id: str, graph: nx.DiGraph
     ) -> tuple[set[str], str, str, str] | None:
         """Returns the bounded internal Iterate body contract, if this For uses it."""
-        body_path_to_return = self._get_for_body_path_to_return(node_id, graph, use_body_identity=False)
+        body_path_to_return = self._get_for_body_path_to_return(node_id, graph)
         if body_path_to_return is None:
             return None
 
@@ -3305,7 +3285,7 @@ class Graph(BaseModel):
         as an explicit fan-in barrier after every child has finalized for the current parent iteration.
         """
         outer_node = self.get_node(node_id)
-        if not isinstance(outer_node, ForInvocation) or not outer_node.body_id:
+        if not isinstance(outer_node, ForInvocation):
             return None
 
         iteration_edges = self._get_for_iteration_output_edges(node_id)
@@ -3317,12 +3297,9 @@ class Graph(BaseModel):
             for body_node_id in reachable_body_nodes
             if isinstance(self.get_node(body_node_id), ForReturnInvocation)
         ]
-        outer_return_ids = [
-            return_id for return_id in reachable_return_ids if self.get_node(return_id).body_id == outer_node.body_id
-        ]
-        if len(outer_return_ids) != 1:
+        outer_return_id = self._get_linked_for_return_id(node_id)
+        if outer_return_id is None or outer_return_id not in reachable_return_ids:
             return None
-        outer_return_id = outer_return_ids[0]
 
         nested_for_ids = [
             body_node_id
@@ -3347,13 +3324,16 @@ class Graph(BaseModel):
         for inner_for_id in direct_nested_for_ids:
             inner_for = self.get_node(inner_for_id)
             assert isinstance(inner_for, ForInvocation)
-            if not inner_for.body_id:
+            inner_return_id = self._get_linked_for_return_id(inner_for_id)
+            if inner_return_id is None:
                 return None
 
             inner_body_path_to_return = self._get_for_body_path_to_return(inner_for_id, graph)
             if inner_body_path_to_return is None:
                 return None
-            child_body_path_nodes, inner_return_id = inner_body_path_to_return
+            child_body_path_nodes, resolved_inner_return_id = inner_body_path_to_return
+            if resolved_inner_return_id != inner_return_id:
+                return None
             if inner_return_id not in reachable_return_ids:
                 return None
 
@@ -3500,11 +3480,6 @@ class Graph(BaseModel):
 
         graph = self.nx_graph_flat()
         reachable_body_nodes = self._get_for_reachable_body_nodes(iteration_edges, graph)
-        reachable_return_node_ids = [
-            reachable_node_id
-            for reachable_node_id in reachable_body_nodes
-            if isinstance(self.get_node(reachable_node_id), ForReturnInvocation)
-        ]
 
         nested_for_node_ids = [
             body_node_id
@@ -3520,24 +3495,15 @@ class Graph(BaseModel):
         ]
         nested_body = self._get_supported_for_nested_for_body(node_id, graph) if nested_for_node_ids else None
         if nested_for_node_ids and nested_body is None:
-            return "Nested For loops require one identity-bearing inner For with a matching ForReturn"
+            return "Nested For loops require one linked inner For with a matching ForReturn"
 
         if nested_body is not None:
             body_path_nodes = nested_body.body_path_nodes
             return_node_id = nested_body.outer_return_id
         else:
-            if len(reachable_return_node_ids) != 1:
+            return_node_id = self._get_linked_for_return_id(node_id)
+            if return_node_id is None or return_node_id not in reachable_body_nodes:
                 return "For loop body must expose exactly one matching ForReturn"
-            return_node_id = reachable_return_node_ids[0]
-            if isinstance(loop_node := self.get_node(node_id), ForInvocation) and loop_node.body_id:
-                matching_return_node_ids = [
-                    return_id
-                    for return_id in reachable_return_node_ids
-                    if self.get_node(return_id).body_id == loop_node.body_id
-                ]
-                if len(matching_return_node_ids) != 1:
-                    return "For loop body must expose exactly one matching ForReturn"
-                return_node_id = matching_return_node_ids[0]
             body_path_nodes = self._get_for_body_path_nodes(reachable_body_nodes, return_node_id, graph)
 
         unterminated_body_nodes = reachable_body_nodes - body_path_nodes
@@ -3863,7 +3829,7 @@ class Graph(BaseModel):
         # TODO: Cache this?
         g = nx.DiGraph()
         g.add_nodes_from(list(self.nodes.keys()))
-        g.add_edges_from({(e.source.node_id, e.destination.node_id) for e in self.edges})
+        g.add_edges_from({(e.source.node_id, e.destination.node_id) for e in self.edges if e.type == "default"})
         return g
 
     def nx_graph_flat(self, nx_graph: Optional["nx.DiGraph"] = None) -> "nx.DiGraph":
@@ -3873,7 +3839,11 @@ class Graph(BaseModel):
         # Add all nodes from this graph except graph/iteration nodes
         g.add_nodes_from([n.id for n in self.nodes.values()])
 
-        unique_edges = {(e.source.node_id, e.destination.node_id) for e in self.edges}
+        unique_edges = {
+            (e.source.node_id, e.destination.node_id)
+            for e in self.edges
+            if e.type == "default"
+        }
         g.add_edges_from(unique_edges)
         return g
 

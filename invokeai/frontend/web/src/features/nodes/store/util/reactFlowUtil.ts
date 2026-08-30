@@ -1,5 +1,6 @@
 import type { Connection } from '@xyflow/react';
 import type { AnyEdge } from 'features/nodes/types/invocation';
+import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 import { assert } from 'tsafe';
 
 /**
@@ -24,7 +25,7 @@ export const connectionToEdge = (connection: Connection): AnyEdge => {
   const { source, sourceHandle, target, targetHandle } = connection;
   assert(source && sourceHandle && target && targetHandle, 'Invalid connection');
   return {
-    type: 'default',
+    type: sourceHandle === LOOP_LINKAGE_FIELD && targetHandle === LOOP_LINKAGE_FIELD ? 'loop_linkage' : 'default',
     source,
     sourceHandle,
     target,

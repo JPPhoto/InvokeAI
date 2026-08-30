@@ -4,6 +4,7 @@ import { addElement, getIsFormEmpty } from 'features/nodes/components/sidePanel/
 import { CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX } from 'features/nodes/store/nodesSlice';
 import type { Templates } from 'features/nodes/store/types';
 import { validateConnection } from 'features/nodes/store/util/validateConnection';
+import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 import { nodeAcceptsExtraInputs } from 'features/nodes/types/extraInputs';
 import {
   isBoardFieldInputInstance,
@@ -207,6 +208,19 @@ export const validateWorkflow = async (args: ValidateWorkflowArgs): Promise<Vali
     }
 
     if (
+      !issues.length &&
+      edge.type === 'loop_linkage' &&
+      (edge.sourceHandle !== LOOP_LINKAGE_FIELD ||
+        edge.targetHandle !== LOOP_LINKAGE_FIELD ||
+        sourceNode?.type !== 'invocation' ||
+        sourceNode.data.type !== 'for' ||
+        targetNode?.type !== 'invocation' ||
+        targetNode.data.type !== 'for_return')
+    ) {
+      issues.push(t('nodes.forLoopLinkageInvalid'));
+    }
+
+    if (
       targetNode &&
       isWorkflowInvocationNode(targetNode) &&
       targetTemplate &&
@@ -222,7 +236,7 @@ export const validateWorkflow = async (args: ValidateWorkflowArgs): Promise<Vali
       );
     }
 
-    if (!issues.length && edge.type === 'default') {
+    if (!issues.length && (edge.type === 'default' || edge.type === 'loop_linkage')) {
       const connectionError = validateConnection(edge, nodes, validEdges, templates, null, true);
       if (connectionError) {
         issues.push(connectionError);

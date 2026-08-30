@@ -13,6 +13,7 @@ import {
 import {
   add,
   buildEdge,
+  buildLoopLinkageEdge,
   buildNode,
   call_saved_workflow,
   collect,
@@ -485,6 +486,107 @@ describe(validateConnection.name, () => {
     const c = { source: n1.id, sourceHandle: 'value', target: n2.id, targetHandle: 'image' };
     const r = validateConnection(c, nodes, [], templates, null);
     expect(r).toEqual('nodes.fieldTypesMustMatch');
+  });
+
+  describe('loop linkage', () => {
+    it('accepts a For to ForReturn linkage connection', () => {
+      const forNode = buildNode(for_loop);
+      const returnNode = buildNode(for_return);
+
+      expect(
+        validateConnection(
+          {
+            source: forNode.id,
+            sourceHandle: 'loop_linkage',
+            target: returnNode.id,
+            targetHandle: 'loop_linkage',
+          },
+          [forNode, returnNode],
+          [],
+          templates,
+          null
+        )
+      ).toBeNull();
+    });
+
+    it('rejects a linkage connection with a non-linkage handle', () => {
+      const forNode = buildNode(for_loop);
+      const returnNode = buildNode(for_return);
+
+      expect(
+        validateConnection(
+          {
+            source: forNode.id,
+            sourceHandle: 'item',
+            target: returnNode.id,
+            targetHandle: 'loop_linkage',
+          },
+          [forNode, returnNode],
+          [],
+          templates,
+          null
+        )
+      ).toBe('nodes.forLoopLinkageInvalid');
+    });
+
+    it('rejects linkage connections that do not join For and ForReturn', () => {
+      const sourceNode = buildNode(add);
+      const returnNode = buildNode(for_return);
+
+      expect(
+        validateConnection(
+          {
+            source: sourceNode.id,
+            sourceHandle: 'loop_linkage',
+            target: returnNode.id,
+            targetHandle: 'loop_linkage',
+          },
+          [sourceNode, returnNode],
+          [],
+          templates,
+          null
+        )
+      ).toBe('nodes.forLoopLinkageInvalid');
+    });
+
+    it('rejects linkage connections that duplicate either endpoint', () => {
+      const firstForNode = buildNode(for_loop);
+      const secondForNode = buildNode(for_loop);
+      const firstReturnNode = buildNode(for_return);
+      const secondReturnNode = buildNode(for_return);
+      const existingEdge = buildLoopLinkageEdge(firstForNode.id, firstReturnNode.id);
+      const nodes = [firstForNode, secondForNode, firstReturnNode, secondReturnNode];
+
+      expect(
+        validateConnection(
+          {
+            source: firstForNode.id,
+            sourceHandle: 'loop_linkage',
+            target: secondReturnNode.id,
+            targetHandle: 'loop_linkage',
+          },
+          nodes,
+          [existingEdge],
+          templates,
+          null
+        )
+      ).toBe('nodes.forLoopLinkageDuplicate');
+
+      expect(
+        validateConnection(
+          {
+            source: secondForNode.id,
+            sourceHandle: 'loop_linkage',
+            target: firstReturnNode.id,
+            targetHandle: 'loop_linkage',
+          },
+          nodes,
+          [existingEdge],
+          templates,
+          null
+        )
+      ).toBe('nodes.forLoopLinkageDuplicate');
+    });
   });
 
   describe('loop output scopes', () => {

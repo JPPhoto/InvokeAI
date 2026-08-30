@@ -57,7 +57,19 @@ from tests.test_nodes import (
     TestEventService,
     TextToImageTestInvocation,
     create_edge,
+    create_loop_linkage,
 )
+
+
+def add_test_loop_linkages(graph: Graph) -> Graph:
+    """Add the explicit boundary edges shared by the runtime fixture graphs."""
+    for_node_ids = [node.id for node in graph.nodes.values() if isinstance(node, ForInvocation)]
+    return_node_ids = {node.id for node in graph.nodes.values() if isinstance(node, ForReturnInvocation)}
+    for for_node_id in for_node_ids:
+        return_node_id = "return" if for_node_id == "for" else for_node_id.removesuffix("_for") + "_return"
+        if return_node_id in return_node_ids:
+            graph.add_edge(create_loop_linkage(for_node_id, return_node_id))
+    return graph
 
 
 @invocation_output("test_two_any_output")
@@ -236,7 +248,7 @@ def test_graph_for_materializes_first_iteration():
     graph.add_node(ForReturnInvocation(id="return"))
     graph.add_edge(create_edge("for", "item", "return", "output"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
 
     next_node = state.next()
 
@@ -257,7 +269,7 @@ def test_graph_for_return_receives_first_iteration_item():
     graph.add_node(ForReturnInvocation(id="return"))
     graph.add_edge(create_edge("for", "item", "return", "output"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     for_node, for_output = invoke_next(state)
     return_node, return_output = invoke_next(state)
 
@@ -276,7 +288,7 @@ def test_graph_for_final_outputs_do_not_materialize_from_iteration_output():
     graph.add_edge(create_edge("for", "item", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     for_node, _for_output = invoke_next(state)
     next_node = state.next()
 
@@ -291,7 +303,7 @@ def test_graph_for_return_schedules_next_iteration():
     graph.add_node(ForReturnInvocation(id="return"))
     graph.add_edge(create_edge("for", "item", "return", "output"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     _for_node, _for_output = invoke_next(state)
     _return_node, _return_output = invoke_next(state)
 
@@ -341,7 +353,7 @@ def test_graph_sequential_for_uses_previous_final_collection_as_next_input():
     graph.add_edge(create_edge("second_for", "item", "second_return", "output"))
     graph.add_edge(create_edge("second_for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     after_exec_id = next(
@@ -369,7 +381,7 @@ def test_graph_sequential_for_preserves_outer_iteration_scope():
     graph.add_edge(create_edge("second_for", "item", "second_return", "output"))
     graph.add_edge(create_edge("second_for", "output_collection", "collect", "item"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     collect_exec_ids = sorted(state.source_prepared_mapping["collect"], key=state._get_iteration_path)
@@ -387,7 +399,7 @@ def test_graph_for_dynamic_non_collection_input_fails_with_a_clear_error(value: 
     graph.add_edge(create_edge("source", "value", "for", "collection"))
     graph.add_edge(create_edge("for", "item", "return", "output"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     source_node = state.next()
     assert isinstance(source_node, AnyTypeTestInvocation)
     state.complete(source_node.id, source_node.invoke(Mock(InvocationContext)))
@@ -410,7 +422,7 @@ def test_graph_combines_independent_for_final_outputs_with_different_lengths():
     graph.add_edge(create_edge("second_for", "output_collection", "concat", "second"))
     graph.add_edge(create_edge("concat", "collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     after_exec_id = next(
@@ -432,7 +444,7 @@ def test_graph_for_retention_survives_partial_json_round_trip():
     graph.add_edge(create_edge("body", "value", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     first_for_node, _first_for_output = invoke_next(state)
     _body_node, _body_output = invoke_next(state)
     first_return_node, _first_return_output = invoke_next(state)
@@ -465,7 +477,7 @@ def test_graph_for_return_passes_state_to_next_iteration():
     graph.add_node(ForReturnInvocation(id="return"))
     graph.add_edge(create_edge("for", "item", "return", "output"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     for_node = state.next()
     assert isinstance(for_node, ForInvocation)
     state.complete(for_node.id, for_node.invoke(Mock(InvocationContext)))
@@ -492,7 +504,7 @@ def test_graph_for_rematerializes_indirect_body_for_each_iteration():
     graph.add_edge(create_edge("body", "value", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     executed_source_ids = execute_all_nodes(state)
 
     assert executed_source_ids == ["for", "body", "return", "for", "body", "return", "after"]
@@ -522,7 +534,7 @@ def test_graph_for_rematerializes_nested_iterate_body_through_collect():
     graph.add_edge(create_edge("for", "state", "return", "state"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     after_exec_id = next(
@@ -557,7 +569,7 @@ def test_graph_for_rematerializes_nested_iterate_body_chain_through_collect():
     graph.add_edge(create_edge("collect", "collection", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     after_exec_id = next(
@@ -586,7 +598,7 @@ def test_graph_for_nested_iterate_empty_inner_collection_still_returns_one_empty
     graph.add_edge(create_edge("for", "state", "return", "state"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     after_exec_id = next(
@@ -614,7 +626,7 @@ def test_graph_for_nested_iterate_resumes_after_json_round_trip():
     graph.add_edge(create_edge("collect", "collection", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     for _ in range(4):
         invoke_next(state)
 
@@ -634,13 +646,13 @@ def test_graph_for_nested_iterate_resumes_after_json_round_trip():
 
 def test_graph_nested_for_resumes_after_json_round_trip_without_replaying_inner_output():
     graph = Graph()
-    graph.add_node(ForInvocation(id="outer_for", collection=[["a", "b"], ["c", "d"]], body_id="outer-body"))
+    graph.add_node(ForInvocation(id="outer_for", collection=[["a", "b"], ["c", "d"]]))
     graph.add_node(AnyCollectionFromValueTestInvocation(id="inner_collection"))
-    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(ForInvocation(id="inner_for"))
     graph.add_node(AnyTypeTestInvocation(id="inner_body"))
     graph.add_node(StateSetInvocation(id="inner_state", key="last_item"))
-    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="inner_return"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
     graph.add_node(AnyTypeTestInvocation(id="after"))
     graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
     graph.add_edge(create_edge("inner_collection", "collection", "inner_for", "collection"))
@@ -652,7 +664,7 @@ def test_graph_nested_for_resumes_after_json_round_trip_without_replaying_inner_
     graph.add_edge(create_edge("inner_for", "output_collection", "outer_return", "output"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     executed_source_ids: list[str] = []
     for _ in range(6):
         invocation, _output = invoke_next(state)
@@ -679,8 +691,7 @@ def test_graph_nested_for_resumes_after_json_round_trip_without_replaying_inner_
     resumed = TypeAdapter(GraphExecutionState).validate_json(
         state.model_dump_json(warnings=False, exclude_none=True), strict=False
     )
-    assert resumed.graph.nodes["inner_for"].body_id == "inner-body"
-    assert resumed.graph.nodes["outer_return"].body_id == "outer-body"
+    assert {edge.type for edge in resumed.graph.edges} == {"default", "loop_linkage"}
     assert resumed.prepared_source_mapping == prepared_mapping
     assert {
         exec_node_id: resumed._get_iteration_path(exec_node_id) for exec_node_id in prepared_mapping
@@ -723,17 +734,16 @@ def test_graph_executes_deeper_nested_for_boundaries():
         ForInvocation(
             id="outer_for",
             collection=[[["a", "b"], [], ["c"]], [], [[], ["d"]]],
-            body_id="outer-body",
         )
     )
     graph.add_node(AnyCollectionFromValueTestInvocation(id="inner_collection"))
-    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(ForInvocation(id="inner_for"))
     graph.add_node(AnyCollectionFromValueTestInvocation(id="leaf_collection"))
-    graph.add_node(ForInvocation(id="leaf_for", body_id="leaf-body"))
+    graph.add_node(ForInvocation(id="leaf_for"))
     graph.add_node(AnyTypeTestInvocation(id="leaf_body"))
-    graph.add_node(ForReturnInvocation(id="leaf_return", body_id="leaf-body"))
-    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="leaf_return"))
+    graph.add_node(ForReturnInvocation(id="inner_return"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
     graph.add_node(AnyTypeTestInvocation(id="after"))
 
     graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
@@ -746,7 +756,7 @@ def test_graph_executes_deeper_nested_for_boundaries():
     graph.add_edge(create_edge("inner_for", "output_collection", "outer_return", "output"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     after_exec_id = next(
@@ -760,14 +770,14 @@ def test_graph_executes_deeper_nested_for_boundaries():
 
 def test_graph_executes_nested_for_with_outer_continuation_using_inner_final_output():
     graph = Graph()
-    graph.add_node(ForInvocation(id="outer_for", collection=[[], ["a"]], body_id="outer-body"))
+    graph.add_node(ForInvocation(id="outer_for", collection=[[], ["a"]]))
     graph.add_node(AnyCollectionFromValueTestInvocation(id="inner_collection"))
-    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(ForInvocation(id="inner_for"))
     graph.add_node(AnyTypeTestInvocation(id="inner_body"))
-    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    graph.add_node(ForReturnInvocation(id="inner_return"))
     graph.add_node(TwoAnyTestInvocation(id="continuation"))
     graph.add_node(AnyTypeTestInvocation(id="continuation_tail"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
     graph.add_node(AnyTypeTestInvocation(id="after"))
 
     graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
@@ -780,7 +790,7 @@ def test_graph_executes_nested_for_with_outer_continuation_using_inner_final_out
     graph.add_edge(create_edge("continuation_tail", "value", "outer_return", "output"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     after_exec_id = next(
@@ -794,12 +804,12 @@ def test_graph_executes_nested_for_with_outer_continuation_using_inner_final_out
 
 def test_graph_nested_for_inner_early_break_resumes_outer_loop():
     graph = Graph()
-    graph.add_node(ForInvocation(id="outer_for", collection=[["a", "stop"], ["later"]], body_id="outer-body"))
+    graph.add_node(ForInvocation(id="outer_for", collection=[["a", "stop"], ["later"]]))
     graph.add_node(AnyCollectionFromValueTestInvocation(id="inner_collection"))
-    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(ForInvocation(id="inner_for"))
     graph.add_node(ContinueOnValueTestInvocation(id="inner_condition"))
-    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="inner_return"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
     graph.add_node(AnyTypeTestInvocation(id="after"))
 
     graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
@@ -810,7 +820,7 @@ def test_graph_nested_for_inner_early_break_resumes_outer_loop():
     graph.add_edge(create_edge("inner_for", "output_collection", "outer_return", "output"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     after_exec_id = next(
@@ -824,15 +834,15 @@ def test_graph_nested_for_inner_early_break_resumes_outer_loop():
 
 def test_graph_executes_independent_nested_for_children_through_explicit_fan_in():
     graph = Graph()
-    graph.add_node(ForInvocation(id="outer_for", collection=[[], ["a", "b"], ["c"]], body_id="outer-body"))
-    graph.add_node(ForInvocation(id="first_for", body_id="first-body"))
-    graph.add_node(ForInvocation(id="second_for", body_id="second-body"))
+    graph.add_node(ForInvocation(id="outer_for", collection=[[], ["a", "b"], ["c"]]))
+    graph.add_node(ForInvocation(id="first_for"))
+    graph.add_node(ForInvocation(id="second_for"))
     graph.add_node(AnyTypeTestInvocation(id="first_body"))
     graph.add_node(AnyTypeTestInvocation(id="second_body"))
-    graph.add_node(ForReturnInvocation(id="first_return", body_id="first-body"))
-    graph.add_node(ForReturnInvocation(id="second_return", body_id="second-body"))
+    graph.add_node(ForReturnInvocation(id="first_return"))
+    graph.add_node(ForReturnInvocation(id="second_return"))
     graph.add_node(TwoAnyTestInvocation(id="fan_in"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
     graph.add_node(AnyTypeTestInvocation(id="after"))
 
     graph.add_edge(create_edge("outer_for", "item", "first_for", "collection"))
@@ -846,7 +856,7 @@ def test_graph_executes_independent_nested_for_children_through_explicit_fan_in(
     graph.add_edge(create_edge("fan_in", "value", "outer_return", "output"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     after_exec_id = next(
@@ -860,15 +870,15 @@ def test_graph_executes_independent_nested_for_children_through_explicit_fan_in(
 
 def test_graph_executes_sibling_for_through_collection_concat():
     graph = Graph()
-    graph.add_node(ForInvocation(id="outer_for", collection=[["a", "b"]], body_id="outer-body"))
-    graph.add_node(ForInvocation(id="first_for", body_id="first-body"))
-    graph.add_node(ForInvocation(id="second_for", body_id="second-body"))
+    graph.add_node(ForInvocation(id="outer_for", collection=[["a", "b"]]))
+    graph.add_node(ForInvocation(id="first_for"))
+    graph.add_node(ForInvocation(id="second_for"))
     graph.add_node(AnyTypeTestInvocation(id="first_body"))
     graph.add_node(AnyTypeTestInvocation(id="second_body"))
-    graph.add_node(ForReturnInvocation(id="first_return", body_id="first-body"))
-    graph.add_node(ForReturnInvocation(id="second_return", body_id="second-body"))
+    graph.add_node(ForReturnInvocation(id="first_return"))
+    graph.add_node(ForReturnInvocation(id="second_return"))
     graph.add_node(CollectionConcatInvocation(id="concat"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
     graph.add_node(AnyTypeTestInvocation(id="after"))
 
     graph.add_edge(create_edge("outer_for", "item", "first_for", "collection"))
@@ -882,7 +892,7 @@ def test_graph_executes_sibling_for_through_collection_concat():
     graph.add_edge(create_edge("concat", "collection", "outer_return", "output"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     after_exec_id = next(
@@ -896,15 +906,15 @@ def test_graph_executes_sibling_for_through_collection_concat():
 
 def test_graph_executes_sibling_for_through_collection_zip():
     graph = Graph()
-    graph.add_node(ForInvocation(id="outer_for", collection=[[1, 2]], body_id="outer-body"))
-    graph.add_node(ForInvocation(id="first_for", body_id="first-body"))
-    graph.add_node(ForInvocation(id="second_for", body_id="second-body"))
+    graph.add_node(ForInvocation(id="outer_for", collection=[[1, 2]]))
+    graph.add_node(ForInvocation(id="first_for"))
+    graph.add_node(ForInvocation(id="second_for"))
     graph.add_node(AnyTypeTestInvocation(id="first_body"))
     graph.add_node(AddInvocation(id="second_body", b=10))
-    graph.add_node(ForReturnInvocation(id="first_return", body_id="first-body"))
-    graph.add_node(ForReturnInvocation(id="second_return", body_id="second-body"))
+    graph.add_node(ForReturnInvocation(id="first_return"))
+    graph.add_node(ForReturnInvocation(id="second_return"))
     graph.add_node(CollectionZipInvocation(id="zip"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
 
     graph.add_edge(create_edge("outer_for", "item", "first_for", "collection"))
     graph.add_edge(create_edge("outer_for", "item", "second_for", "collection"))
@@ -916,7 +926,7 @@ def test_graph_executes_sibling_for_through_collection_zip():
     graph.add_edge(create_edge("second_for", "output_collection", "zip", "second"))
     graph.add_edge(create_edge("zip", "collection", "outer_return", "output"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     outer_return_id = next(
@@ -930,15 +940,15 @@ def test_graph_executes_sibling_for_through_collection_zip():
 
 def test_graph_executes_sibling_for_through_collection_cartesian():
     graph = Graph()
-    graph.add_node(ForInvocation(id="outer_for", collection=[[1, 2]], body_id="outer-body"))
-    graph.add_node(ForInvocation(id="first_for", body_id="first-body"))
-    graph.add_node(ForInvocation(id="second_for", body_id="second-body"))
+    graph.add_node(ForInvocation(id="outer_for", collection=[[1, 2]]))
+    graph.add_node(ForInvocation(id="first_for"))
+    graph.add_node(ForInvocation(id="second_for"))
     graph.add_node(AnyTypeTestInvocation(id="first_body"))
     graph.add_node(AddInvocation(id="second_body", b=10))
-    graph.add_node(ForReturnInvocation(id="first_return", body_id="first-body"))
-    graph.add_node(ForReturnInvocation(id="second_return", body_id="second-body"))
+    graph.add_node(ForReturnInvocation(id="first_return"))
+    graph.add_node(ForReturnInvocation(id="second_return"))
     graph.add_node(CollectionCartesianInvocation(id="cartesian"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
 
     graph.add_edge(create_edge("outer_for", "item", "first_for", "collection"))
     graph.add_edge(create_edge("outer_for", "item", "second_for", "collection"))
@@ -950,7 +960,7 @@ def test_graph_executes_sibling_for_through_collection_cartesian():
     graph.add_edge(create_edge("second_for", "output_collection", "cartesian", "second"))
     graph.add_edge(create_edge("cartesian", "collection", "outer_return", "output"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     outer_return_id = next(
@@ -964,15 +974,15 @@ def test_graph_executes_sibling_for_through_collection_cartesian():
 
 def test_graph_nested_sibling_failure_does_not_release_outer_final_outputs():
     graph = Graph()
-    graph.add_node(ForInvocation(id="outer_for", collection=[["a"]], body_id="outer-body"))
-    graph.add_node(ForInvocation(id="first_for", body_id="first-body"))
-    graph.add_node(ForInvocation(id="second_for", body_id="second-body"))
+    graph.add_node(ForInvocation(id="outer_for", collection=[["a"]]))
+    graph.add_node(ForInvocation(id="first_for"))
+    graph.add_node(ForInvocation(id="second_for"))
     graph.add_node(AnyTypeTestInvocation(id="first_body"))
     graph.add_node(AnyTypeTestInvocation(id="second_body"))
-    graph.add_node(ForReturnInvocation(id="first_return", body_id="first-body"))
-    graph.add_node(ForReturnInvocation(id="second_return", body_id="second-body"))
+    graph.add_node(ForReturnInvocation(id="first_return"))
+    graph.add_node(ForReturnInvocation(id="second_return"))
     graph.add_node(TwoAnyTestInvocation(id="fan_in"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
     graph.add_node(AnyTypeTestInvocation(id="after"))
 
     graph.add_edge(create_edge("outer_for", "item", "first_for", "collection"))
@@ -986,7 +996,7 @@ def test_graph_nested_sibling_failure_does_not_release_outer_final_outputs():
     graph.add_edge(create_edge("fan_in", "value", "outer_return", "output"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     while True:
         node = state.next()
         assert node is not None
@@ -1005,16 +1015,16 @@ def test_graph_nested_sibling_failure_does_not_release_outer_final_outputs():
 
 def test_graph_executes_sibling_for_with_one_empty_child_context():
     graph = Graph()
-    graph.add_node(ForInvocation(id="outer_for", collection=[["a", "b"], ["c"]], body_id="outer-body"))
-    graph.add_node(ForInvocation(id="first_for", body_id="first-body"))
+    graph.add_node(ForInvocation(id="outer_for", collection=[["a", "b"], ["c"]]))
+    graph.add_node(ForInvocation(id="first_for"))
     graph.add_node(EmptyCollectionTestInvocation(id="second_collection"))
-    graph.add_node(ForInvocation(id="second_for", body_id="second-body"))
+    graph.add_node(ForInvocation(id="second_for"))
     graph.add_node(AnyTypeTestInvocation(id="first_body"))
     graph.add_node(AnyTypeTestInvocation(id="second_body"))
-    graph.add_node(ForReturnInvocation(id="first_return", body_id="first-body"))
-    graph.add_node(ForReturnInvocation(id="second_return", body_id="second-body"))
+    graph.add_node(ForReturnInvocation(id="first_return"))
+    graph.add_node(ForReturnInvocation(id="second_return"))
     graph.add_node(TwoAnyTestInvocation(id="fan_in"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
     graph.add_node(AnyTypeTestInvocation(id="after"))
 
     graph.add_edge(create_edge("outer_for", "item", "first_for", "collection"))
@@ -1029,7 +1039,7 @@ def test_graph_executes_sibling_for_with_one_empty_child_context():
     graph.add_edge(create_edge("fan_in", "value", "outer_return", "output"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     after_exec_id = next(
@@ -1044,13 +1054,13 @@ def test_graph_executes_sibling_for_with_one_empty_child_context():
 
 def test_graph_nested_for_continuation_failure_does_not_release_outer_final_outputs():
     graph = Graph()
-    graph.add_node(ForInvocation(id="outer_for", collection=[["a"]], body_id="outer-body"))
+    graph.add_node(ForInvocation(id="outer_for", collection=[["a"]]))
     graph.add_node(AnyCollectionFromValueTestInvocation(id="inner_collection"))
-    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(ForInvocation(id="inner_for"))
     graph.add_node(AnyTypeTestInvocation(id="inner_body"))
-    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    graph.add_node(ForReturnInvocation(id="inner_return"))
     graph.add_node(TwoAnyTestInvocation(id="continuation"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
     graph.add_node(AnyTypeTestInvocation(id="after"))
 
     graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
@@ -1062,7 +1072,7 @@ def test_graph_nested_for_continuation_failure_does_not_release_outer_final_outp
     graph.add_edge(create_edge("continuation", "value", "outer_return", "output"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     while True:
         node = state.next()
         assert node is not None
@@ -1081,13 +1091,13 @@ def test_graph_nested_for_continuation_failure_does_not_release_outer_final_outp
 
 def test_graph_nested_for_continuation_resumes_after_json_round_trip():
     graph = Graph()
-    graph.add_node(ForInvocation(id="outer_for", collection=[["a"], ["b"]], body_id="outer-body"))
+    graph.add_node(ForInvocation(id="outer_for", collection=[["a"], ["b"]]))
     graph.add_node(AnyCollectionFromValueTestInvocation(id="inner_collection"))
-    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(ForInvocation(id="inner_for"))
     graph.add_node(AnyTypeTestInvocation(id="inner_body"))
-    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
+    graph.add_node(ForReturnInvocation(id="inner_return"))
     graph.add_node(TwoAnyTestInvocation(id="continuation"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
     graph.add_node(AnyTypeTestInvocation(id="after"))
 
     graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
@@ -1099,7 +1109,7 @@ def test_graph_nested_for_continuation_resumes_after_json_round_trip():
     graph.add_edge(create_edge("continuation", "value", "outer_return", "output"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     for _ in range(5):
         invoke_next(state)
 
@@ -1123,15 +1133,15 @@ def test_graph_nested_for_continuation_resumes_after_json_round_trip():
 
 def test_graph_deeper_nested_for_failure_does_not_release_final_outputs():
     graph = Graph()
-    graph.add_node(ForInvocation(id="outer_for", collection=[[["a"]]], body_id="outer-body"))
+    graph.add_node(ForInvocation(id="outer_for", collection=[[["a"]]]))
     graph.add_node(AnyCollectionFromValueTestInvocation(id="inner_collection"))
-    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(ForInvocation(id="inner_for"))
     graph.add_node(AnyCollectionFromValueTestInvocation(id="leaf_collection"))
-    graph.add_node(ForInvocation(id="leaf_for", body_id="leaf-body"))
+    graph.add_node(ForInvocation(id="leaf_for"))
     graph.add_node(AnyTypeTestInvocation(id="leaf_body"))
-    graph.add_node(ForReturnInvocation(id="leaf_return", body_id="leaf-body"))
-    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="leaf_return"))
+    graph.add_node(ForReturnInvocation(id="inner_return"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
     graph.add_node(AnyTypeTestInvocation(id="after"))
 
     graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
@@ -1144,7 +1154,7 @@ def test_graph_deeper_nested_for_failure_does_not_release_final_outputs():
     graph.add_edge(create_edge("inner_for", "output_collection", "outer_return", "output"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     while True:
         node = state.next()
         assert node is not None
@@ -1181,7 +1191,7 @@ def test_graph_for_nested_iterate_scopes_under_parent_iterator():
     graph.add_edge(create_edge("collect", "collection", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "item"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     after_exec_ids = sorted(state.source_prepared_mapping["after"], key=state._get_iteration_path)
@@ -1213,7 +1223,7 @@ def test_graph_for_nested_iterate_mixed_empty_groups_under_parent_iterator():
     graph.add_edge(create_edge("collect", "collection", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "item"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
 
     after_exec_ids = sorted(state.source_prepared_mapping["after"], key=state._get_iteration_path)
@@ -1241,7 +1251,7 @@ def test_graph_for_nested_iterate_failure_does_not_release_final_outputs():
     graph.add_edge(create_edge("collect", "collection", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     _for_node, _for_output = invoke_next(state)
     _adapter_node, _adapter_output = invoke_next(state)
     _inner_node, _inner_output = invoke_next(state)
@@ -1265,7 +1275,7 @@ def test_graph_for_rematerialized_body_carries_returned_state():
     graph.add_edge(create_edge("for", "item", "body", "value"))
     graph.add_edge(create_edge("body", "value", "return", "output"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     for_0 = state.next()
     assert isinstance(for_0, ForInvocation)
     state.complete(for_0.id, for_0.invoke(Mock(InvocationContext)))
@@ -1296,7 +1306,7 @@ def test_graph_for_iteration_does_not_deep_copy_collection_twice():
     graph.add_node(ForReturnInvocation(id="return"))
     graph.add_edge(create_edge("for", "item", "return", "output"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     for_0 = state.next()
     assert isinstance(for_0, ForInvocation)
     DeepCopyCounter.copies = 0
@@ -1322,7 +1332,7 @@ def test_graph_for_body_state_helper_updates_state_for_next_iteration_and_final_
     graph.add_edge(create_edge("state_set", "state", "return", "state"))
     graph.add_edge(create_edge("for", "final_state", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     executed_source_ids = execute_all_nodes(state)
 
     assert executed_source_ids == [
@@ -1358,7 +1368,7 @@ def test_graph_for_body_state_helper_return_state_is_visible_to_next_iteration()
     graph.add_edge(create_edge("state_set", "state", "return", "state"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
     after_exec_id = next(
         exec_node_id
@@ -1394,7 +1404,7 @@ def test_graph_for_partially_completed_stateful_loop_resumes_after_serialization
     graph.add_edge(create_edge("state_set", "state", "return", "state"))
     graph.add_edge(create_edge("for", "final_state", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     for _ in range(completed_count):
         invoke_next(state)
 
@@ -1425,7 +1435,7 @@ def test_graph_for_rematerialized_body_cache_keys_overlap_for_matching_item_inpu
         graph.add_edge(create_edge("for", "item", "state_set", "value"))
         graph.add_edge(create_edge("state_set", "state", "return", "state"))
 
-        state = GraphExecutionState(graph=graph)
+        state = GraphExecutionState(graph=add_test_loop_linkages(graph))
         execute_all_nodes(state)
 
         return {
@@ -1455,7 +1465,7 @@ def test_graph_for_rematerialized_body_cache_keys_include_loop_state_inputs():
         graph.add_edge(create_edge("for", "item", "state_set", "value"))
         graph.add_edge(create_edge("state_set", "state", "return", "state"))
 
-        state = GraphExecutionState(graph=graph)
+        state = GraphExecutionState(graph=add_test_loop_linkages(graph))
         execute_all_nodes(state)
 
         return {
@@ -1483,7 +1493,7 @@ def test_graph_for_body_failure_stops_loop_without_releasing_final_outputs():
     graph.add_edge(create_edge("for", "output_collection", "after", "first"))
     graph.add_edge(create_edge("for", "final_state", "after", "second"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     _for_node, _for_output = invoke_next(state)
     body_node = state.next()
     assert isinstance(body_node, AnyTypeTestInvocation)
@@ -1508,7 +1518,7 @@ def test_graph_for_return_failure_stops_loop_without_releasing_final_outputs():
     graph.add_edge(create_edge("for", "output_collection", "after", "first"))
     graph.add_edge(create_edge("for", "final_state", "after", "second"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     _for_node, _for_output = invoke_next(state)
     _body_node, _body_output = invoke_next(state)
     return_node = state.next()
@@ -1534,7 +1544,7 @@ def test_graph_for_failure_after_successful_iteration_does_not_release_partial_o
     graph.add_edge(create_edge("for", "output_collection", "after", "first"))
     graph.add_edge(create_edge("for", "final_state", "after", "second"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     _for_0, _for_output_0 = invoke_next(state)
     _body_0, _body_output_0 = invoke_next(state)
     return_0 = state.next()
@@ -1563,7 +1573,7 @@ def test_graph_for_failure_state_round_trip_does_not_resume_loop_or_release_fina
     graph.add_edge(create_edge("for", "output_collection", "after", "first"))
     graph.add_edge(create_edge("for", "final_state", "after", "second"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     _for_node, _for_output = invoke_next(state)
     body_node = state.next()
     assert isinstance(body_node, AnyTypeTestInvocation)
@@ -1592,7 +1602,7 @@ def test_graph_for_rematerialized_body_reuses_external_input_each_iteration():
     graph.add_edge(create_edge("body", "value", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     executed_source_ids = execute_all_nodes(state)
 
     assert executed_source_ids.count("external") == 1
@@ -1621,7 +1631,7 @@ def test_graph_for_output_collection_is_scoped_to_parent_iterator_context():
     graph.add_edge(create_edge("for", "item", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "collect", "item"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
     collect_exec_ids = sorted(
         (
@@ -1650,7 +1660,7 @@ def test_graph_for_output_collection_preserves_multiple_items_per_parent_iterato
     graph.add_edge(create_edge("for", "item", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "collect", "item"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
     collect_exec_ids = sorted(
         (
@@ -1680,7 +1690,7 @@ def test_graph_for_does_not_release_final_outputs_until_each_parent_context_fini
     graph.add_edge(create_edge("for", "item", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "collect", "item"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     while len(state.finalized_loop_contexts) < 1:
         invocation, output = invoke_next(state)
         assert invocation is not None
@@ -1723,7 +1733,7 @@ def test_graph_for_final_state_is_scoped_to_parent_iterator_context():
     graph.add_edge(create_edge("state_set", "state", "return", "state"))
     graph.add_edge(create_edge("for", "final_state", "collect", "item"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
     collect_exec_ids = sorted(
         (
@@ -1748,7 +1758,7 @@ def test_graph_for_final_output_collection_materializes_after_last_direct_return
     graph.add_edge(create_edge("for", "item", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     _for_0, _for_output_0 = invoke_next(state)
     _return_0, _return_output_0 = invoke_next(state)
     _for_1, _for_output_1 = invoke_next(state)
@@ -1768,7 +1778,7 @@ def test_graph_for_final_state_materializes_after_last_direct_return():
     graph.add_edge(create_edge("for", "item", "return", "output"))
     graph.add_edge(create_edge("for", "final_state", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     for_0 = state.next()
     assert isinstance(for_0, ForInvocation)
     state.complete(for_0.id, for_0.invoke(Mock(InvocationContext)))
@@ -1796,7 +1806,7 @@ def test_graph_for_return_can_break_early_and_release_final_outputs():
     graph.add_edge(create_edge("for", "item", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     for_node, _for_output = invoke_next(state)
     assert isinstance(for_node, ForInvocation)
     return_node, return_output = invoke_next(state)
@@ -1829,7 +1839,7 @@ def test_graph_for_return_evaluates_connected_break_condition_for_each_iteration
     graph.add_edge(create_edge("for", "item", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     executed_source_ids: list[str] = []
     while True:
         node = state.next()
@@ -1860,7 +1870,7 @@ def test_graph_for_return_early_break_survives_resume_with_returned_state():
     graph.add_edge(create_edge("for", "output_collection", "after", "first"))
     graph.add_edge(create_edge("for", "final_state", "after", "second"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     _for_node, _for_output = invoke_next(state)
     _state_set_node, _state_set_output = invoke_next(state)
     _return_node, _return_output = invoke_next(state)
@@ -1884,7 +1894,7 @@ def test_graph_for_empty_collection_materializes_final_outputs():
     graph.add_edge(create_edge("for", "output_collection", "after", "first"))
     graph.add_edge(create_edge("for", "final_state", "after", "second"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     after_node = state.next()
 
     assert isinstance(after_node, TwoAnyTestInvocation)
@@ -1904,7 +1914,7 @@ def test_graph_for_empty_collection_round_trips_without_optional_item():
     graph.add_edge(create_edge("for", "item", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     after_node = state.next()
     assert isinstance(after_node, AnyTypeTestInvocation)
 
@@ -1925,7 +1935,7 @@ def test_graph_for_empty_collection_round_trips_missing_loop_state_value():
     graph.add_edge(create_edge("for", "item", "return", "output"))
     graph.add_edge(create_edge("for", "final_state", "get", "state"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     get_node = state.next()
     assert isinstance(get_node, StateGetInvocation)
     state.complete(get_node.id, get_node.invoke(Mock(InvocationContext)))
@@ -1950,7 +1960,7 @@ def test_graph_for_empty_collection_preserves_connected_initial_state():
     graph.add_edge(create_edge("for", "output_collection", "after", "first"))
     graph.add_edge(create_edge("for", "final_state", "after", "second"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
     after_exec_id = next(
         exec_node_id
@@ -1974,7 +1984,7 @@ def test_graph_for_independent_empty_and_nonempty_final_outputs_join_correctly()
     graph.add_edge(create_edge("empty_for", "output_collection", "after", "first"))
     graph.add_edge(create_edge("nonempty_for", "output_collection", "after", "second"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
     after_exec_id = next(
         exec_node_id
@@ -1998,7 +2008,7 @@ def test_graph_for_nested_parent_context_survives_state_round_trip():
     graph.add_edge(create_edge("for", "item", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "collect", "item"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     for _ in range(5):
         invocation, output = invoke_next(state)
         assert invocation is not None
@@ -2034,7 +2044,7 @@ def test_graph_for_empty_and_nonempty_parent_iterator_contexts_both_finalize():
     graph.add_edge(create_edge("for", "item", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "collect", "item"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
     collect_exec_ids = sorted(
         (
@@ -2064,7 +2074,7 @@ def test_graph_for_under_empty_parent_iterator_collects_and_completes():
     graph.add_edge(create_edge("for", "item", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "collect", "item"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
     collect_exec_ids = [
         exec_node_id
@@ -2086,7 +2096,7 @@ def test_graph_for_empty_collection_with_indirect_body_completes_without_body_ex
     graph.add_edge(create_edge("body", "value", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     after_node = state.next()
 
     assert isinstance(after_node, AnyTypeTestInvocation)
@@ -2106,7 +2116,7 @@ def test_graph_for_return_omitted_output_is_not_collected():
     graph.add_edge(create_edge("for", "state", "return", "state"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     execute_all_nodes(state)
     after_exec_id = next(
         exec_node_id
@@ -2126,7 +2136,7 @@ def test_graph_for_multiple_final_edges_to_same_node_do_not_crash():
     graph.add_edge(create_edge("for", "output_collection", "after", "first"))
     graph.add_edge(create_edge("for", "final_state", "after", "second"))
 
-    state = GraphExecutionState(graph=graph)
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
     _for_node, _for_output = invoke_next(state)
     _return_node, _return_output = invoke_next(state)
     after_node = state.next()

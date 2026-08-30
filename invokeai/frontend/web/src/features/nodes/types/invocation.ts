@@ -161,6 +161,14 @@ const zDefaultInvocationNodeEdge = z.custom<Edge<Record<string, never>, 'default
 );
 export type DefaultInvocationNodeEdge = z.infer<typeof zDefaultInvocationNodeEdge>;
 
+const zLoopLinkageInvocationNodeEdgeValidationSchema = z.looseObject({
+  type: z.literal('loop_linkage'),
+});
+const zLoopLinkageInvocationNodeEdge = z.custom<Edge<Record<string, never>, 'loop_linkage'>>(
+  (val) => zLoopLinkageInvocationNodeEdgeValidationSchema.safeParse(val).success
+);
+export type LoopLinkageInvocationNodeEdge = z.infer<typeof zLoopLinkageInvocationNodeEdge>;
+
 const zInvocationNodeEdgeCollapsedData = z.object({
   count: z.number().int().min(1),
 });
@@ -174,7 +182,11 @@ const zCollapsedInvocationNodeEdge = z.custom<Edge<InvocationNodeEdgeCollapsedDa
   (val) => zInvocationNodeEdgeCollapsedValidationSchema.safeParse(val).success
 );
 export type CollapsedInvocationNodeEdge = z.infer<typeof zCollapsedInvocationNodeEdge>;
-export const zAnyEdge = z.union([zDefaultInvocationNodeEdge, zCollapsedInvocationNodeEdge]);
+export const zAnyEdge = z.union([
+  zDefaultInvocationNodeEdge,
+  zLoopLinkageInvocationNodeEdge,
+  zCollapsedInvocationNodeEdge,
+]);
 export type AnyEdge = z.infer<typeof zAnyEdge>;
 // #endregion
 

@@ -4,6 +4,7 @@ import { CONNECTOR_INPUT_HANDLE, CONNECTOR_OUTPUT_HANDLE } from 'features/nodes/
 import {
   add,
   buildEdge,
+  buildLoopLinkageEdge,
   buildNode,
   for_loop,
   for_return,
@@ -87,53 +88,31 @@ describe('buildNodesGraph', () => {
     const bodyNode = buildNode(add);
     const state = buildState([forNode, bodyNode], [buildEdge(forNode.id, 'item', bodyNode.id, 'a')]);
 
-    expect(() => buildNodesGraph(state, { ...templates, for: for_loop })).toThrow('nodes.forLoopReturnCount');
+    expect(() => buildNodesGraph(state, { ...templates, for: for_loop })).toThrow('nodes.forLoopLinkageMissing');
   });
 
-  it('omits a blank optional body identity from a simple For graph', () => {
+  it('preserves the explicit loop linkage in a simple For graph', () => {
     const forNode = buildNode(for_loop);
     const returnNode = buildNode(for_return);
-    const state = buildState([forNode, returnNode], [buildEdge(forNode.id, 'item', returnNode.id, 'output')]);
-
-    const graph = buildNodesGraph(state, { ...templates, for: for_loop, for_return });
-
-    expect(graph.nodes[forNode.id]).not.toHaveProperty('body_id');
-    expect(graph.nodes[returnNode.id]).not.toHaveProperty('body_id');
-  });
-
-  it('rejects an explicitly serialized empty body identity', () => {
-    const forNode = buildNode(for_loop);
-    const returnNode = buildNode(for_return);
-    const forBodyIdInput = forNode.data.inputs.body_id;
-    const returnBodyIdInput = returnNode.data.inputs.body_id;
-    if (!forBodyIdInput || !returnBodyIdInput) {
-      throw new Error('Expected For body identity inputs');
-    }
-    forBodyIdInput.value = '';
-    returnBodyIdInput.value = '';
-    const state = buildState([forNode, returnNode], [buildEdge(forNode.id, 'item', returnNode.id, 'output')]);
-
-    expect(() => buildNodesGraph(state, { ...templates, for: for_loop, for_return })).toThrow(
-      'nodes.forLoopBodyIdentityEmpty'
+    const state = buildState(
+      [forNode, returnNode],
+      [buildEdge(forNode.id, 'item', returnNode.id, 'output'), buildLoopLinkageEdge(forNode.id, returnNode.id)]
     );
-  });
-
-  it('preserves a populated body identity in a simple For graph', () => {
-    const forNode = buildNode(for_loop);
-    const returnNode = buildNode(for_return);
-    const forBodyIdInput = forNode.data.inputs.body_id;
-    const returnBodyIdInput = returnNode.data.inputs.body_id;
-    if (!forBodyIdInput || !returnBodyIdInput) {
-      throw new Error('Expected For body identity inputs');
-    }
-    forBodyIdInput.value = 'body-1';
-    returnBodyIdInput.value = 'body-1';
-    const state = buildState([forNode, returnNode], [buildEdge(forNode.id, 'item', returnNode.id, 'output')]);
 
     const graph = buildNodesGraph(state, { ...templates, for: for_loop, for_return });
 
-    expect(graph.nodes[forNode.id]).toHaveProperty('body_id', 'body-1');
-    expect(graph.nodes[returnNode.id]).toHaveProperty('body_id', 'body-1');
+    expect(graph.edges).toEqual([
+      expect.objectContaining({
+        type: 'default',
+        source: { node_id: forNode.id, field: 'item' },
+        destination: { node_id: returnNode.id, field: 'output' },
+      }),
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: { node_id: forNode.id, field: 'loop_linkage' },
+        destination: { node_id: returnNode.id, field: 'loop_linkage' },
+      }),
+    ]);
   });
 
   it('serializes dynamic saved workflow inputs into workflow_inputs', () => {
@@ -224,6 +203,7 @@ describe('buildNodesGraph', () => {
       workflow_inputs: {},
     });
     expect(graph.edges).toContainEqual({
+      type: 'default',
       source: { node_id: sourceNode.id, field: 'value' },
       destination: { node_id: callNode.id, field: 'saved_workflow_input::node-1::a' },
     });
@@ -286,6 +266,7 @@ describe('buildNodesGraph', () => {
     expect(graph.nodes).not.toHaveProperty(connector.id);
     expect(graph.edges).toEqual([
       {
+        type: 'default',
         source: { node_id: source.id, field: 'value' },
         destination: { node_id: target.id, field: 'a' },
       },
@@ -310,6 +291,7 @@ describe('buildNodesGraph', () => {
 
     expect(graph.edges).toEqual([
       {
+        type: 'default',
         source: { node_id: source.id, field: 'value' },
         destination: { node_id: target.id, field: 'a' },
       },
@@ -334,10 +316,12 @@ describe('buildNodesGraph', () => {
 
     expect(graph.edges).toEqual([
       {
+        type: 'default',
         source: { node_id: source.id, field: 'value' },
         destination: { node_id: targetA.id, field: 'a' },
       },
       {
+        type: 'default',
         source: { node_id: source.id, field: 'value' },
         destination: { node_id: targetB.id, field: 'width' },
       },
@@ -372,6 +356,7 @@ describe('buildNodesGraph', () => {
 
     expect(graph.edges).toEqual([
       {
+        type: 'default',
         source: { node_id: source.id, field: 'value' },
         destination: { node_id: target.id, field: 'a' },
       },
@@ -400,6 +385,7 @@ describe('buildNodesGraph', () => {
 
     expect(graph.edges).toEqual([
       {
+        type: 'default',
         source: { node_id: source.id, field: 'value' },
         destination: { node_id: target.id, field: 'a' },
       },

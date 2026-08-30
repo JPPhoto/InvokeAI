@@ -14,7 +14,7 @@ from invokeai.app.invocations.loops import (
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.session_queue.session_queue_sqlite import SqliteSessionQueue
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState
-from tests.test_nodes import AnyTypeTestInvocation, create_edge
+from tests.test_nodes import AnyTypeTestInvocation, create_edge, create_loop_linkage
 
 
 @pytest.fixture
@@ -46,17 +46,18 @@ def _stateful_for_graph() -> Graph:
     graph.add_edge(create_edge("for", "output_collection", "after_collection", "value"))
     graph.add_edge(create_edge("for", "final_state", "after_state", "state"))
     graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_loop_linkage("for", "return"))
     return graph
 
 
 def _nested_for_graph() -> Graph:
     graph = Graph()
-    graph.add_node(ForInvocation(id="outer_for", collection=[["a", "b"], ["c", "d"]], body_id="outer-body"))
+    graph.add_node(ForInvocation(id="outer_for", collection=[["a", "b"], ["c", "d"]]))
     graph.add_node(AnyTypeTestInvocation(id="inner_collection"))
-    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(ForInvocation(id="inner_for"))
     graph.add_node(AnyTypeTestInvocation(id="inner_body"))
-    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="inner_return"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
     graph.add_node(AnyTypeTestInvocation(id="after"))
     graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
     graph.add_edge(create_edge("inner_collection", "value", "inner_for", "collection"))
@@ -64,6 +65,8 @@ def _nested_for_graph() -> Graph:
     graph.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
     graph.add_edge(create_edge("inner_for", "output_collection", "outer_return", "output"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "value"))
+    graph.add_edge(create_loop_linkage("outer_for", "outer_return"))
+    graph.add_edge(create_loop_linkage("inner_for", "inner_return"))
     return graph
 
 
@@ -74,6 +77,7 @@ def _empty_for_graph() -> Graph:
     graph.add_node(AnyTypeTestInvocation(id="after"))
     graph.add_edge(create_edge("for", "item", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+    graph.add_edge(create_loop_linkage("for", "return"))
     return graph
 
 
@@ -192,6 +196,10 @@ def test_sqlite_queue_round_trips_missing_loop_state_value_after_empty_for(
     assert queue_item is not None
     state = queue_item.session
     after_state = state.next()
+    while not isinstance(after_state, StateGetInvocation):
+        assert isinstance(after_state, AnyTypeTestInvocation)
+        state.complete(after_state.id, after_state.invoke(Mock(InvocationContext)))
+        after_state = state.next()
     assert isinstance(after_state, StateGetInvocation)
     state.complete(after_state.id, after_state.invoke(Mock(InvocationContext)))
 

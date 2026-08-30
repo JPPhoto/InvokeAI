@@ -26246,6 +26246,13 @@
       },
       "Edge": {
         "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["default", "loop_linkage"],
+            "title": "Type",
+            "description": "The kind of relationship represented by this edge",
+            "default": "default"
+          },
           "source": {
             "$ref": "#/components/schemas/EdgeConnection",
             "description": "The connection for the edge's from node and field"
@@ -34173,24 +34180,6 @@
             "orig_default": null,
             "orig_required": false
           },
-          "body_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "Stable identity shared by this For and its matching ForReturn",
-            "field_kind": "input",
-            "input": "direct",
-            "orig_default": null,
-            "orig_required": false,
-            "title": "Body Id",
-            "ui_hidden": true
-          },
           "index": {
             "default": -1,
             "description": "The internal iteration index for a prepared For execution node",
@@ -34213,7 +34202,7 @@
         "required": ["type", "id"],
         "title": "ForInvocation",
         "type": "object",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "output": {
           "$ref": "#/components/schemas/ForInvocationOutput"
         }
@@ -34221,6 +34210,13 @@
       "ForInvocationOutput": {
         "class": "output",
         "properties": {
+          "loop_linkage": {
+            "description": "The loop linkage to the matching ForReturn",
+            "field_kind": "output",
+            "title": "Loop Linkage",
+            "ui_hidden": false,
+            "ui_type": "AnyField"
+          },
           "item": {
             "anyOf": [
               {},
@@ -34288,6 +34284,7 @@
         },
         "required": [
           "output_meta",
+          "loop_linkage",
           "item",
           "index",
           "total",
@@ -34378,23 +34375,21 @@
             "orig_required": false,
             "title": "Continue Condition"
           },
-          "body_id": {
+          "loop_linkage": {
             "anyOf": [
-              {
-                "type": "string"
-              },
+              {},
               {
                 "type": "null"
               }
             ],
             "default": null,
-            "description": "Stable identity shared by this ForReturn and its matching For",
+            "description": "The loop linkage from the matching For",
             "field_kind": "input",
-            "input": "direct",
+            "input": "connection",
             "orig_default": null,
             "orig_required": false,
-            "title": "Body Id",
-            "ui_hidden": true
+            "title": "Loop Linkage",
+            "ui_type": "AnyField"
           },
           "type": {
             "const": "for_return",
@@ -34407,7 +34402,7 @@
         "required": ["type", "id"],
         "title": "ForReturnInvocation",
         "type": "object",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "output": {
           "$ref": "#/components/schemas/ForReturnInvocationOutput"
         }

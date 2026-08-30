@@ -122,6 +122,40 @@ def test_build_graph_from_workflow_converts_invocation_nodes():
     assert graph.nodes["return-1"].get_type() == "workflow_return"
 
 
+def test_build_graph_from_workflow_preserves_loop_linkage_edges():
+    workflow = _build_workflow(
+        nodes=[
+            _build_workflow_node("for-1", "for", {"collection": ["a"]}),
+            _build_workflow_node("for-return-1", "for_return", {}),
+            _build_workflow_node("workflow-return-1", "workflow_return", {"values": []}),
+        ],
+        edges=[
+            {
+                "id": "edge-for-body",
+                "type": "default",
+                "source": "for-1",
+                "sourceHandle": "item",
+                "target": "for-return-1",
+                "targetHandle": "output",
+            },
+            {
+                "id": "edge-for-linkage",
+                "type": "loop_linkage",
+                "source": "for-1",
+                "sourceHandle": "loop_linkage",
+                "target": "for-return-1",
+                "targetHandle": "loop_linkage",
+            },
+        ],
+    )
+
+    graph = build_graph_from_workflow(workflow)
+
+    assert [edge.type for edge in graph.edges] == ["default", "loop_linkage"]
+    assert graph.edges[1].source.node_id == "for-1"
+    assert graph.edges[1].destination.node_id == "for-return-1"
+
+
 def test_build_graph_from_workflow_flattens_connector_edges():
     workflow = _build_workflow(
         nodes=[

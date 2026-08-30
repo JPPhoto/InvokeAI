@@ -57,10 +57,15 @@ const zWorkflowEdgeDefault = zWorkflowEdgeBase.extend({
   targetHandle: z.string().trim().min(1),
   hidden: z.boolean().optional(),
 });
+const zWorkflowEdgeLoopLinkage = zWorkflowEdgeBase.extend({
+  type: z.literal('loop_linkage'),
+  sourceHandle: z.string().trim().min(1),
+  targetHandle: z.string().trim().min(1),
+});
 const zWorkflowEdgeCollapsed = zWorkflowEdgeBase.extend({
   type: z.literal('collapsed'),
 });
-const zWorkflowEdge = z.union([zWorkflowEdgeDefault, zWorkflowEdgeCollapsed]);
+const zWorkflowEdge = z.union([zWorkflowEdgeDefault, zWorkflowEdgeLoopLinkage, zWorkflowEdgeCollapsed]);
 // #endregion
 
 // #region Workflow Builder

@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { applyEdgeChanges, applyNodeChanges } from '@xyflow/react';
+import { CONNECTOR_INPUT_HANDLE, CONNECTOR_OUTPUT_HANDLE } from 'features/nodes/store/util/connectorTopology';
 import {
   $addNodeCmdk,
   $cursorPos,
@@ -10,7 +11,7 @@ import {
   nodesChanged,
 } from 'features/nodes/store/nodesSlice';
 import type { PendingConnection } from 'features/nodes/store/types';
-import { buildNode, for_loop, for_return } from 'features/nodes/store/util/testUtils';
+import { buildEdge, buildLoopLinkageEdge, buildNode, for_loop, for_return } from 'features/nodes/store/util/testUtils';
 import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
 import type { ChangeEvent, ReactNode } from 'react';
 import * as React from 'react';
@@ -165,6 +166,18 @@ const setNodeId = (node: AnyNode, id: string): AnyNode => {
   return node;
 };
 
+const buildConnector = (id: string): AnyNode => ({
+  id,
+  type: 'connector',
+  position: { x: 0, y: 0 },
+  data: {
+    id,
+    type: 'connector',
+    label: 'Connector',
+    isOpen: true,
+  },
+});
+
 describe('AddNodeCmdk (mounted)', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -214,7 +227,7 @@ describe('AddNodeCmdk (mounted)', () => {
     $templates.set({});
   });
 
-  it('adds ForReturn with the source For identity and auto-connects its output', () => {
+  it('adds ForReturn with loop linkage and auto-connects its output', () => {
     act(() => {
       root.render(<AddNodeCmdk />);
     });
@@ -228,14 +241,6 @@ describe('AddNodeCmdk (mounted)', () => {
       returnItem?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    const forNode = mocks.nodes.find((node) => node.id === 'for-node');
-    const returnNode = mocks.nodes.find((node) => node.id === 'return-node');
-    const bodyId = forNode?.type === 'invocation' ? forNode.data.inputs.body_id?.value : undefined;
-    const returnBodyId = returnNode?.type === 'invocation' ? returnNode.data.inputs.body_id?.value : undefined;
-
-    expect(bodyId).toEqual(expect.any(String));
-    expect(bodyId).not.toBe('');
-    expect(returnBodyId).toBe(bodyId);
     expect(mocks.edges).toEqual([
       expect.objectContaining({
         source: 'for-node',
@@ -243,8 +248,72 @@ describe('AddNodeCmdk (mounted)', () => {
         target: 'return-node',
         targetHandle: 'output',
       }),
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: 'for-node',
+        sourceHandle: 'loop_linkage',
+        target: 'return-node',
+        targetHandle: 'loop_linkage',
+      }),
     ]);
     expect($addNodeCmdk.get()).toBe(false);
     expect($pendingConnection.get()).toBeNull();
+  });
+
+  it('adds loop linkage when an iteration output is routed through a connector', () => {
+    const connector = buildConnector('connector');
+    mocks.nodes = [mocks.nodes[0]!, connector];
+    mocks.edges = [buildEdge('for-node', 'item', connector.id, CONNECTOR_INPUT_HANDLE)];
+    $pendingConnection.set({
+      nodeId: connector.id,
+      handleId: CONNECTOR_OUTPUT_HANDLE,
+      handleType: 'source',
+      fieldTemplate: {
+        ...for_loop.outputs.item,
+        name: CONNECTOR_OUTPUT_HANDLE,
+      } as PendingConnection['fieldTemplate'],
+    });
+
+    act(() => {
+      root.render(<AddNodeCmdk />);
+    });
+
+    const returnItem = Array.from(container.querySelectorAll('[role="button"]')).find((element) =>
+      element.textContent?.trim().startsWith('ForReturn')
+    );
+    act(() => {
+      returnItem?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(mocks.edges).toContainEqual(
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: 'for-node',
+        sourceHandle: 'loop_linkage',
+        target: 'return-node',
+        targetHandle: 'loop_linkage',
+      })
+    );
+  });
+
+  it('does not add a duplicate linkage when the For is already paired', () => {
+    const existingReturn = setNodeId(buildNode(for_return), 'existing-return');
+    mocks.nodes = [mocks.nodes[0]!, existingReturn];
+    mocks.edges = [buildLoopLinkageEdge('for-node', existingReturn.id)];
+
+    act(() => {
+      root.render(<AddNodeCmdk />);
+    });
+
+    const returnItem = Array.from(container.querySelectorAll('[role="button"]')).find((element) =>
+      element.textContent?.trim().startsWith('ForReturn')
+    );
+    act(() => {
+      returnItem?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(mocks.edges.filter((edge) => edge.type === 'loop_linkage')).toEqual([
+      buildLoopLinkageEdge('for-node', existingReturn.id),
+    ]);
   });
 });

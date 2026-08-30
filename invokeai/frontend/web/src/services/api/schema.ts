@@ -10185,6 +10185,13 @@ export type components = {
         };
         /** Edge */
         Edge: {
+            /**
+             * Type
+             * @description The kind of relationship represented by this edge
+             * @default default
+             * @enum {string}
+             */
+            type?: "default" | "loop_linkage";
             /** @description The connection for the edge's from node and field */
             source: components["schemas"]["EdgeConnection"];
             /** @description The connection for the edge's to node and field */
@@ -14142,12 +14149,6 @@ export type components = {
              */
             state?: components["schemas"]["LoopState"] | null;
             /**
-             * Body Id
-             * @description Stable identity shared by this For and its matching ForReturn
-             * @default null
-             */
-            body_id?: string | null;
-            /**
              * Index
              * @description The internal iteration index for a prepared For execution node
              * @default -1
@@ -14162,6 +14163,11 @@ export type components = {
         };
         /** ForInvocationOutput */
         ForInvocationOutput: {
+            /**
+             * Loop Linkage
+             * @description The loop linkage to the matching ForReturn
+             */
+            loop_linkage: unknown;
             /**
              * Collection Item
              * @description The item for the current loop iteration, or None when the collection is empty
@@ -14237,11 +14243,11 @@ export type components = {
              */
             continue_condition?: boolean | null;
             /**
-             * Body Id
-             * @description Stable identity shared by this ForReturn and its matching For
+             * Loop Linkage
+             * @description The loop linkage from the matching For
              * @default null
              */
-            body_id?: string | null;
+            loop_linkage?: unknown | null;
             /**
              * type
              * @default for_return

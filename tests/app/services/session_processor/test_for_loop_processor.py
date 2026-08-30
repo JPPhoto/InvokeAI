@@ -22,7 +22,7 @@ from invokeai.app.services.session_queue.session_queue_common import (
 )
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from tests.test_nodes import create_edge
+from tests.test_nodes import create_edge, create_loop_linkage
 
 
 @invocation_output("test_for_processor_body_output")
@@ -208,6 +208,7 @@ def _build_graph(*, fail_on: int | None = None) -> Graph:
     graph.add_edge(create_edge("for", "item", "body", "value"))
     graph.add_edge(create_edge("body", "value", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "values"))
+    graph.add_edge(create_loop_linkage("for", "return"))
     return graph
 
 

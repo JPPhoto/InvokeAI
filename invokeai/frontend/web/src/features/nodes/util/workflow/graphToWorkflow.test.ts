@@ -310,7 +310,6 @@ describe('graphToWorkflow', () => {
         for: {
           id: 'for',
           type: 'for',
-          body_id: 'body-1',
           collection: ['alpha', 'beta'],
           state: null,
           index: -1,
@@ -318,7 +317,6 @@ describe('graphToWorkflow', () => {
         return: {
           id: 'return',
           type: 'for_return',
-          body_id: 'body-1',
           output: null,
           state: null,
           continue_condition: null,
@@ -326,8 +324,14 @@ describe('graphToWorkflow', () => {
       },
       edges: [
         {
+          type: 'default',
           source: { node_id: 'for', field: 'item' },
           destination: { node_id: 'return', field: 'output' },
+        },
+        {
+          type: 'loop_linkage',
+          source: { node_id: 'for', field: 'loop_linkage' },
+          destination: { node_id: 'return', field: 'loop_linkage' },
         },
       ],
     } satisfies NonNullableGraph;
@@ -342,24 +346,30 @@ describe('graphToWorkflow', () => {
     expect(forNode.data.inputs.collection?.value).toEqual(['alpha', 'beta']);
     expect(forNode.data.inputs.state?.value).toBeNull();
     expect(forNode.data.inputs.index).toBeUndefined();
-    expect(forNode.data.inputs.body_id?.value).toBe('body-1');
-    expect(returnNode.data.inputs.body_id?.value).toBe('body-1');
     expect(returnNode.data.inputs.continue_condition?.value).toBeNull();
     expect(returnNode.data.inputs.state?.value).toBeNull();
-    expect(workflow.edges).toHaveLength(1);
+    expect(workflow.edges).toHaveLength(2);
     expect(workflow.edges[0]).toMatchObject({
+      type: 'default',
       source: 'for',
       sourceHandle: 'item',
       target: 'return',
       targetHandle: 'output',
+    });
+    expect(workflow.edges[1]).toMatchObject({
+      type: 'loop_linkage',
+      source: 'for',
+      sourceHandle: 'loop_linkage',
+      target: 'return',
+      targetHandle: 'loop_linkage',
     });
     const resolvedForTemplate = loopTemplates[forNode.data.type];
     if (!resolvedForTemplate) {
       throw new Error('Expected the round-tripped For node type to resolve its template');
     }
     expect(getOutputFieldNamesByScope(Object.values(resolvedForTemplate.outputs))).toEqual({
-      all: ['item', 'index', 'total', 'state', 'output_collection', 'final_state'],
-      unscoped: [],
+      all: ['loop_linkage', 'item', 'index', 'total', 'state', 'output_collection', 'final_state'],
+      unscoped: ['loop_linkage'],
       iteration: ['item', 'index', 'total', 'state'],
       final: ['output_collection', 'final_state'],
     });
@@ -384,13 +394,11 @@ describe('graphToWorkflow', () => {
       type: 'for',
       collection: ['alpha', 'beta'],
       state: null,
-      body_id: 'body-1',
     });
     expect(rebuiltGraph.nodes.return).toMatchObject({
       type: 'for_return',
       state: null,
       continue_condition: null,
-      body_id: 'body-1',
     });
     expect(rebuiltGraph.edges).toEqual(graph.edges);
   });

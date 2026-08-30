@@ -1,7 +1,7 @@
 import copy
 from typing import Any, Optional, TypeVar
 
-from pydantic import BaseModel, Field, StrictStr
+from pydantic import BaseModel, Field
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput, invocation, invocation_output
 from invokeai.app.invocations.fields import Input, InputField, OutputField, OutputScope, UIType
@@ -97,6 +97,11 @@ class StateMergeInvocation(BaseInvocation):
 
 @invocation_output("for_output")
 class ForInvocationOutput(BaseInvocationOutput):
+    loop_linkage: Any = OutputField(
+        description="The loop linkage to the matching ForReturn",
+        title="Loop Linkage",
+        ui_type=UIType.Any,
+    )
     item: Optional[Any] = OutputField(
         default=None,
         description="The item for the current loop iteration, or None when the collection is empty",
@@ -132,7 +137,7 @@ class ForInvocationOutput(BaseInvocationOutput):
     )
 
 
-@invocation("for", version="1.2.0")
+@invocation("for", version="1.3.0")
 class ForInvocation(BaseInvocation):
     collection: list[Any] = InputField(
         description="The list of items to iterate over",
@@ -142,12 +147,6 @@ class ForInvocation(BaseInvocation):
     state: Optional[LoopState] = InputField(
         default=None,
         description="Optional initial loop state",
-    )
-    body_id: Optional[StrictStr] = InputField(
-        default=None,
-        description="Stable identity shared by this For and its matching ForReturn",
-        input=Input.Direct,
-        ui_hidden=True,
     )
     index: int = InputField(
         description="The internal iteration index for a prepared For execution node",
@@ -162,6 +161,7 @@ class ForInvocation(BaseInvocation):
 
         state = self.state or LoopState()
         return ForInvocationOutput(
+            loop_linkage="loop_linkage",
             item=self.collection[self.index],
             index=self.index,
             total=len(self.collection),
@@ -186,7 +186,7 @@ class ForReturnInvocationOutput(BaseInvocationOutput):
     )
 
 
-@invocation("for_return", version="1.2.0")
+@invocation("for_return", version="1.3.0")
 class ForReturnInvocation(BaseInvocation):
     output: Optional[Any] = InputField(
         default=None,
@@ -201,11 +201,11 @@ class ForReturnInvocation(BaseInvocation):
         default=True,
         description="Whether to schedule the next loop iteration; false finalizes the loop",
     )
-    body_id: Optional[StrictStr] = InputField(
+    loop_linkage: Optional[Any] = InputField(
         default=None,
-        description="Stable identity shared by this ForReturn and its matching For",
-        input=Input.Direct,
-        ui_hidden=True,
+        description="The loop linkage from the matching For",
+        input=Input.Connection,
+        ui_type=UIType.Any,
     )
 
     def invoke(self, context: InvocationContext) -> ForReturnInvocationOutput:

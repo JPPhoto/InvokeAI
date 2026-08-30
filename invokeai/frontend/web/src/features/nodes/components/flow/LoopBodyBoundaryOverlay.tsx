@@ -20,8 +20,6 @@ const getStatusColor = (status: LoopBodyBoundaryStatus) => {
   };
 };
 
-const getShortBodyId = (bodyId: string): string => (bodyId.length > 12 ? `${bodyId.slice(0, 8)}...` : bodyId);
-
 type Props = {
   edges: AnyEdge[];
 };
@@ -42,16 +40,14 @@ const LoopBodyBoundaryOverlay = ({ edges }: Props) => {
         }
 
         const colors = getStatusColor(boundary.status);
-        const bodyLabel = boundary.bodyId
-          ? t('nodes.forLoopBodyBoundaryWithIdentity', { bodyId: getShortBodyId(boundary.bodyId) })
-          : t('nodes.forLoopBodyBoundaryLegacy');
+        const bodyLabel = t('nodes.forLoopBodyBoundary');
         const statusLabel =
           boundary.status === 'complete' ? '' : t(`nodes.forLoopBodyBoundaryStatus.${boundary.status}`);
         const label = statusLabel ? `${bodyLabel} - ${statusLabel}` : bodyLabel;
 
         return (
           <Box
-            key={`${boundary.forNodeId ?? 'orphan'}-${boundary.returnNodeId ?? 'return'}`}
+            key={`${boundary.forNodeId ?? 'orphan'}-${boundary.returnNodeId ?? 'return'}-${boundary.status}`}
             position="absolute"
             pointerEvents="none"
             transform={`translate(${bounds.x - BOUNDARY_PADDING}px, ${bounds.y - BOUNDARY_PADDING}px)`}
@@ -62,9 +58,7 @@ const LoopBodyBoundaryOverlay = ({ edges }: Props) => {
             borderRadius="base"
             data-loop-body-boundary={boundary.forNodeId ?? boundary.returnNodeId}
             data-loop-body-status={boundary.status}
-            data-loop-body-id={boundary.bodyId}
             aria-label={label}
-            title={boundary.bodyId ?? undefined}
             zIndex={0}
           >
             <Text

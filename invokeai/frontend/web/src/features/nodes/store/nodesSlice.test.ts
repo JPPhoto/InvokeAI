@@ -11,11 +11,21 @@ import {
   fieldIntegerValueChanged,
   fieldStringValueChanged,
   fieldValueReset,
+  nodeIsOpenChanged,
   nodesChanged,
   nodesSliceConfig,
 } from './nodesSlice';
 import { CONNECTOR_INPUT_HANDLE, CONNECTOR_OUTPUT_HANDLE } from './util/connectorTopology';
-import { add, buildEdge, buildNode, for_loop, for_return, sub, templates } from './util/testUtils';
+import {
+  add,
+  buildEdge,
+  buildLoopLinkageEdge,
+  buildNode,
+  for_loop,
+  for_return,
+  sub,
+  templates,
+} from './util/testUtils';
 
 const callSavedWorkflowTemplate = templates.call_saved_workflow;
 const addTemplate = templates.add;
@@ -615,7 +625,7 @@ describe('nodesSlice connector actions', () => {
 });
 
 describe('nodesSlice loop boundary actions', () => {
-  it('assigns a shared identity when ForReturn is connected through state', () => {
+  it('stores loop linkage as an explicit edge', () => {
     const forNode = buildNode(for_loop);
     const returnNode = buildNode(for_return);
     const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
@@ -623,90 +633,36 @@ describe('nodesSlice loop boundary actions', () => {
 
     const nextState = nodesSliceConfig.slice.reducer(
       initialState,
-      edgesChanged([{ type: 'add', item: buildEdge(forNode.id, 'state', returnNode.id, 'state') }])
+      edgesChanged([{ type: 'add', item: buildLoopLinkageEdge(forNode.id, returnNode.id) }])
     );
-    const updatedFor = nextState.nodes.find((node) => node.id === forNode.id);
-    const updatedReturn = nextState.nodes.find((node) => node.id === returnNode.id);
-
-    if (!updatedFor || updatedFor.type !== 'invocation' || !updatedReturn || updatedReturn.type !== 'invocation') {
-      throw new Error('Expected For and ForReturn invocations');
-    }
-    expect(updatedFor.data.inputs.body_id?.value).toEqual(expect.any(String));
-    expect(updatedReturn.data.inputs.body_id?.value).toBe(updatedFor.data.inputs.body_id?.value);
+    expect(nextState.edges).toEqual([buildLoopLinkageEdge(forNode.id, returnNode.id)]);
   });
 
-  it('rebinds a replacement For after its stale predecessor is removed', () => {
+  it('removes loop linkage when either boundary node is removed', () => {
     const oldForNode = buildNode(for_loop);
-    const replacementForNode = buildNode(for_loop);
     const returnNode = buildNode(for_return);
-    oldForNode.data.inputs.body_id!.value = 'body-1';
-    returnNode.data.inputs.body_id!.value = 'body-1';
 
     const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
-    initialState.nodes = [oldForNode, replacementForNode, returnNode];
-
-    const connectedState = nodesSliceConfig.slice.reducer(
-      initialState,
-      edgesChanged([{ type: 'add', item: buildEdge(replacementForNode.id, 'item', returnNode.id, 'output') }])
-    );
-    const connectedFor = connectedState.nodes.find((node) => node.id === replacementForNode.id);
-    const connectedReturn = connectedState.nodes.find((node) => node.id === returnNode.id);
-    if (
-      !connectedFor ||
-      connectedFor.type !== 'invocation' ||
-      !connectedReturn ||
-      connectedReturn.type !== 'invocation'
-    ) {
-      throw new Error('Expected connected replacement For and ForReturn invocations');
-    }
-    expect(connectedFor.data.inputs.body_id?.value).toBeUndefined();
-    expect(connectedReturn.data.inputs.body_id?.value).toBe('body-1');
+    initialState.nodes = [oldForNode, returnNode];
+    initialState.edges = [buildLoopLinkageEdge(oldForNode.id, returnNode.id)];
 
     const nextState = nodesSliceConfig.slice.reducer(
-      connectedState,
+      initialState,
       nodesChanged([{ type: 'remove', id: oldForNode.id }])
     );
-    const updatedFor = nextState.nodes.find((node) => node.id === replacementForNode.id);
-    const updatedReturn = nextState.nodes.find((node) => node.id === returnNode.id);
-
-    if (!updatedFor || updatedFor.type !== 'invocation' || !updatedReturn || updatedReturn.type !== 'invocation') {
-      throw new Error('Expected replacement For and ForReturn invocations');
-    }
-    expect(updatedFor.data.inputs.body_id?.value).toEqual(expect.any(String));
-    expect(updatedReturn.data.inputs.body_id?.value).toBe(updatedFor.data.inputs.body_id?.value);
+    expect(nextState.edges).toEqual([]);
   });
 
-  it('clears the surviving ForReturn identity when its For is removed', () => {
-    const forNode = buildNode(for_loop);
-    const returnNode = buildNode(for_return);
-    forNode.data.inputs.body_id!.value = 'body-1';
-    returnNode.data.inputs.body_id!.value = 'body-1';
-
-    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
-    initialState.nodes = [forNode, returnNode];
-    initialState.edges = [buildEdge(forNode.id, 'item', returnNode.id, 'output')];
-
-    const nextState = nodesSliceConfig.slice.reducer(initialState, nodesChanged([{ type: 'remove', id: forNode.id }]));
-    const survivingReturn = nextState.nodes.find((node) => node.id === returnNode.id);
-
-    if (!survivingReturn || survivingReturn.type !== 'invocation') {
-      throw new Error('Expected surviving ForReturn invocation');
-    }
-    expect(survivingReturn.data.inputs.body_id?.value).toBeUndefined();
-  });
-
-  it('preserves loop identity when a boundary is replaced with the same identity', () => {
+  it('preserves linkage when a boundary is replaced with the same node id', () => {
     const forNode = buildNode(for_loop);
     const replacement = buildNode(for_loop);
     const returnNode = buildNode(for_return);
-    forNode.data.inputs.body_id!.value = 'body-1';
     replacement.id = forNode.id;
     replacement.data.id = forNode.id;
-    replacement.data.inputs.body_id!.value = 'body-1';
-    returnNode.data.inputs.body_id!.value = 'body-1';
 
     const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
     initialState.nodes = [forNode, returnNode];
+    initialState.edges = [buildLoopLinkageEdge(forNode.id, returnNode.id)];
 
     const nextState = nodesSliceConfig.slice.reducer(
       initialState,
@@ -715,32 +671,88 @@ describe('nodesSlice loop boundary actions', () => {
         { type: 'add', item: replacement },
       ])
     );
-    const survivingReturn = nextState.nodes.find((node) => node.id === returnNode.id);
-
-    if (!survivingReturn || survivingReturn.type !== 'invocation') {
-      throw new Error('Expected surviving ForReturn invocation');
-    }
-    expect(survivingReturn.data.inputs.body_id?.value).toBe('body-1');
+    expect(nextState.edges).toEqual([buildLoopLinkageEdge(forNode.id, returnNode.id)]);
   });
 
-  it('clears the surviving For identity when its ForReturn is removed', () => {
+  it('removes linkage when a boundary is replaced by a different node type', () => {
     const forNode = buildNode(for_loop);
+    const replacement = buildNode(add);
     const returnNode = buildNode(for_return);
-    forNode.data.inputs.body_id!.value = 'body-1';
-    returnNode.data.inputs.body_id!.value = 'body-1';
+    replacement.id = forNode.id;
+    replacement.data.id = forNode.id;
 
     const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
     initialState.nodes = [forNode, returnNode];
+    initialState.edges = [buildLoopLinkageEdge(forNode.id, returnNode.id)];
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      initialState,
+      nodesChanged([
+        { type: 'remove', id: forNode.id },
+        { type: 'add', item: replacement },
+      ])
+    );
+
+    expect(nextState.edges).toEqual([]);
+  });
+
+  it('removes linkage when its ForReturn is removed', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, returnNode];
+    initialState.edges = [buildLoopLinkageEdge(forNode.id, returnNode.id)];
 
     const nextState = nodesSliceConfig.slice.reducer(
       initialState,
       nodesChanged([{ type: 'remove', id: returnNode.id }])
     );
-    const survivingFor = nextState.nodes.find((node) => node.id === forNode.id);
+    expect(nextState.edges).toEqual([]);
+  });
 
-    if (!survivingFor || survivingFor.type !== 'invocation') {
-      throw new Error('Expected surviving For invocation');
+  it('does not collapse loop linkage when both boundary nodes are closed', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    returnNode.data.isOpen = false;
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, returnNode];
+    initialState.edges = [buildLoopLinkageEdge(forNode.id, returnNode.id)];
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      initialState,
+      nodeIsOpenChanged({ nodeId: forNode.id, isOpen: false })
+    );
+
+    expect(nextState.edges).toEqual([buildLoopLinkageEdge(forNode.id, returnNode.id)]);
+  });
+
+  it('does not treat loop linkage as a hidden edge of a collapsed data-flow edge', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    returnNode.data.isOpen = false;
+    const loopLinkageEdge = buildLoopLinkageEdge(forNode.id, returnNode.id);
+    const dataFlowEdge = buildEdge(forNode.id, 'item', returnNode.id, 'output');
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, returnNode];
+    initialState.edges = [dataFlowEdge, loopLinkageEdge];
+
+    const closedState = nodesSliceConfig.slice.reducer(
+      initialState,
+      nodeIsOpenChanged({ nodeId: forNode.id, isOpen: false })
+    );
+    const collapsedEdge = closedState.edges.find((edge) => edge.type === 'collapsed');
+    if (!collapsedEdge) {
+      throw new Error('Expected collapsed edge');
     }
-    expect(survivingFor.data.inputs.body_id?.value).toBeUndefined();
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      closedState,
+      edgesChanged([{ type: 'remove', id: collapsedEdge.id }])
+    );
+
+    expect(nextState.edges).toEqual([loopLinkageEdge]);
   });
 });

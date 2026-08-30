@@ -1,4 +1,5 @@
 import type { Graph } from 'services/api/types';
+import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 
 type ForLoopGraphError =
   | 'nodes.forLoopMissingIterationOutput'
@@ -11,13 +12,9 @@ type ForLoopGraphError =
   | 'nodes.forLoopBodyEscape'
   | 'nodes.forLoopInputCount'
   | 'nodes.forReturnInputCount'
-  | 'nodes.forLoopBodyIdentityMissing'
-  | 'nodes.forLoopBodyIdentityType'
-  | 'nodes.forLoopBodyIdentityEmpty'
-  | 'nodes.forLoopBodyIdentityEdge'
-  | 'nodes.forLoopBodyIdentityStale'
-  | 'nodes.forLoopBodyIdentityDuplicate'
-  | 'nodes.forLoopBodyIdentityMismatch'
+  | 'nodes.forLoopLinkageMissing'
+  | 'nodes.forLoopLinkageInvalid'
+  | 'nodes.forLoopLinkageDuplicate'
   | 'nodes.forReturnOwnership';
 
 const ITERATION_OUTPUT_FIELDS = new Set(['item', 'index', 'total', 'state']);
@@ -25,7 +22,9 @@ const FINAL_OUTPUT_FIELDS = new Set(['output_collection', 'final_state']);
 
 export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => {
   const nodes = graph.nodes ?? {};
-  const edges = graph.edges ?? [];
+  const allEdges = graph.edges ?? [];
+  const edges = allEdges.filter((edge) => edge.type !== 'loop_linkage');
+  const linkageEdges = allEdges.filter((edge) => edge.type === 'loop_linkage');
   const outgoing = new Map<string, string[]>();
   const incoming = new Map<string, string[]>();
 
@@ -53,45 +52,38 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
   const hasPath = (startId: string, targetId: string): boolean =>
     startId === targetId || walk([startId], outgoing).has(targetId);
 
-  const getBodyId = (node: unknown): string | undefined => {
-    if (!node || typeof node !== 'object') {
-      return undefined;
+  const linkedReturnByForId = new Map<string, string>();
+  const linkedForByReturnId = new Map<string, string>();
+  for (const edge of linkageEdges) {
+    const sourceNode = nodes[edge.source.node_id];
+    const destinationNode = nodes[edge.destination.node_id];
+    if (
+      edge.source.field !== LOOP_LINKAGE_FIELD ||
+      edge.destination.field !== LOOP_LINKAGE_FIELD ||
+      sourceNode?.type !== 'for' ||
+      destinationNode?.type !== 'for_return'
+    ) {
+      return 'nodes.forLoopLinkageInvalid';
     }
-    const bodyId = (node as { body_id?: unknown }).body_id;
-    return typeof bodyId === 'string' && bodyId.length > 0 ? bodyId : undefined;
-  };
-
-  if (
-    Object.values(nodes).some((node) => {
-      if (node.type !== 'for' && node.type !== 'for_return') {
-        return false;
-      }
-      const bodyId = (node as { body_id?: unknown }).body_id;
-      return bodyId !== undefined && bodyId !== null && typeof bodyId !== 'string';
-    })
-  ) {
-    return 'nodes.forLoopBodyIdentityType';
+    if (linkedReturnByForId.has(edge.source.node_id) || linkedForByReturnId.has(edge.destination.node_id)) {
+      return 'nodes.forLoopLinkageDuplicate';
+    }
+    linkedReturnByForId.set(edge.source.node_id, edge.destination.node_id);
+    linkedForByReturnId.set(edge.destination.node_id, edge.source.node_id);
   }
 
   if (
     Object.values(nodes).some((node) => {
-      if (node.type !== 'for' && node.type !== 'for_return') {
-        return false;
+      if (node.type === 'for') {
+        return !linkedReturnByForId.has(node.id);
       }
-      return (node as { body_id?: unknown }).body_id === '';
+      if (node.type === 'for_return') {
+        return !linkedForByReturnId.has(node.id);
+      }
+      return false;
     })
   ) {
-    return 'nodes.forLoopBodyIdentityEmpty';
-  }
-
-  if (
-    edges.some(
-      (edge) =>
-        edge.destination.field === 'body_id' &&
-        (nodes[edge.destination.node_id]?.type === 'for' || nodes[edge.destination.node_id]?.type === 'for_return')
-    )
-  ) {
-    return 'nodes.forLoopBodyIdentityEdge';
+    return 'nodes.forLoopLinkageMissing';
   }
 
   const supportsNestedIterateBody = (
@@ -179,16 +171,8 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     reachableBodyNodeIds: Set<string>,
     reachableReturnIds: string[]
   ): { bodyPathNodeIds: Set<string>; returnId: string } | null => {
-    const outerBodyId = getBodyId(nodes[forId]);
-    if (outerBodyId === undefined) {
-      return null;
-    }
-    const outerReturnIds = reachableReturnIds.filter((returnId) => getBodyId(nodes[returnId]) === outerBodyId);
-    if (outerReturnIds.length !== 1) {
-      return null;
-    }
-    const outerReturnId = outerReturnIds[0];
-    if (outerReturnId === undefined) {
+    const outerReturnId = linkedReturnByForId.get(forId);
+    if (outerReturnId === undefined || !reachableReturnIds.includes(outerReturnId)) {
       return null;
     }
 
@@ -203,7 +187,7 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     const innerBodyPathNodeIds = new Set<string>();
 
     for (const innerForId of directInnerForIds) {
-      if (innerForId === undefined || getBodyId(nodes[innerForId]) === undefined) {
+      if (innerForId === undefined) {
         return null;
       }
 
@@ -220,15 +204,8 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
       const innerReachableReturnIds = [...innerReachableBodyNodeIds].filter(
         (nodeId) => nodes[nodeId]?.type === 'for_return'
       );
-      const innerBodyId = getBodyId(nodes[innerForId]);
-      const innerReturnIdsForBody = innerReachableReturnIds.filter(
-        (returnId) => getBodyId(nodes[returnId]) === innerBodyId
-      );
-      if (innerReturnIdsForBody.length !== 1) {
-        return null;
-      }
-      const innerReturnId = innerReturnIdsForBody[0];
-      if (innerReturnId === undefined || !reachableReturnIds.includes(innerReturnId)) {
+      const innerReturnId = linkedReturnByForId.get(innerForId);
+      if (innerReturnId === undefined || !innerReachableReturnIds.includes(innerReturnId)) {
         return null;
       }
 
@@ -423,97 +400,6 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     return { bodyPathNodeIds, returnId: outerReturnId };
   };
 
-  const forIdentityNodes = new Map<string, string[]>();
-  const returnIdentityNodes = new Map<string, string[]>();
-  const matchingReturnByForId = new Map<string, string>();
-  const identityMatchingForIdsByReturnId = new Map<string, string[]>();
-  for (const node of Object.values(nodes)) {
-    if (node.type === 'for') {
-      const bodyId = getBodyId(node);
-      if (bodyId !== undefined) {
-        forIdentityNodes.set(bodyId, [...(forIdentityNodes.get(bodyId) ?? []), node.id]);
-      }
-
-      const iterationEdges = edges.filter(
-        (edge) => edge.source.node_id === node.id && ITERATION_OUTPUT_FIELDS.has(edge.source.field)
-      );
-      if (iterationEdges.length === 0) {
-        continue;
-      }
-      const reachableBodyNodeIds = walk(
-        iterationEdges.map((edge) => edge.destination.node_id),
-        outgoing
-      );
-      const reachableReturnIds = [...reachableBodyNodeIds].filter((nodeId) => nodes[nodeId]?.type === 'for_return');
-      const identityMatchingReturnIds =
-        bodyId === undefined ? [] : reachableReturnIds.filter((returnId) => getBodyId(nodes[returnId]) === bodyId);
-      const returnId = identityMatchingReturnIds.length === 1 ? identityMatchingReturnIds[0] : reachableReturnIds[0];
-      if (returnId !== undefined && (reachableReturnIds.length === 1 || identityMatchingReturnIds.length === 1)) {
-        if (returnId !== undefined) {
-          matchingReturnByForId.set(node.id, returnId);
-          identityMatchingForIdsByReturnId.set(returnId, [
-            ...(identityMatchingForIdsByReturnId.get(returnId) ?? []),
-            node.id,
-          ]);
-        }
-      }
-    }
-    if (node.type === 'for_return') {
-      const bodyId = getBodyId(node);
-      if (bodyId !== undefined) {
-        returnIdentityNodes.set(bodyId, [...(returnIdentityNodes.get(bodyId) ?? []), node.id]);
-      }
-    }
-  }
-
-  if ([...forIdentityNodes.values()].some((nodeIds) => nodeIds.length > 1)) {
-    return 'nodes.forLoopBodyIdentityDuplicate';
-  }
-  if ([...returnIdentityNodes.values()].some((nodeIds) => nodeIds.length > 1)) {
-    return 'nodes.forLoopBodyIdentityDuplicate';
-  }
-
-  for (const node of Object.values(nodes)) {
-    if (node.type !== 'for_return') {
-      continue;
-    }
-    const bodyId = getBodyId(node);
-    if (bodyId === undefined) {
-      continue;
-    }
-    const matchingForIds = identityMatchingForIdsByReturnId.get(node.id) ?? [];
-    if (matchingForIds.length === 1) {
-      const matchingFor = nodes[matchingForIds[0] ?? ''];
-      if (getBodyId(matchingFor) === undefined) {
-        return 'nodes.forLoopBodyIdentityMissing';
-      }
-      if (getBodyId(matchingFor) !== bodyId) {
-        return 'nodes.forLoopBodyIdentityMismatch';
-      }
-    } else if (!forIdentityNodes.has(bodyId)) {
-      return 'nodes.forLoopBodyIdentityStale';
-    }
-  }
-
-  for (const node of Object.values(nodes)) {
-    if (node.type !== 'for') {
-      continue;
-    }
-    const bodyId = getBodyId(node);
-    const returnId = matchingReturnByForId.get(node.id);
-    if (bodyId === undefined || returnId === undefined) {
-      continue;
-    }
-    const matchingReturn = nodes[returnId];
-    const returnBodyId = getBodyId(matchingReturn);
-    if (returnBodyId === undefined) {
-      return 'nodes.forLoopBodyIdentityMissing';
-    }
-    if (returnBodyId !== bodyId) {
-      return 'nodes.forLoopBodyIdentityMismatch';
-    }
-  }
-
   const matchingForIdsByReturnId = new Map<string, string[]>();
 
   for (const node of Object.values(nodes)) {
@@ -554,11 +440,12 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
       return 'nodes.forLoopNestedUnsupported';
     }
 
-    if (nestedBody === null && reachableReturnIds.length !== 1) {
+    const linkedReturnId = linkedReturnByForId.get(node.id);
+    if (nestedBody === null && (linkedReturnId === undefined || !reachableReturnIds.includes(linkedReturnId))) {
       return 'nodes.forLoopReturnCount';
     }
 
-    const returnId = nestedBody?.returnId ?? reachableReturnIds[0];
+    const returnId = nestedBody?.returnId ?? linkedReturnId;
     if (returnId === undefined) {
       return 'nodes.forLoopReturnCount';
     }

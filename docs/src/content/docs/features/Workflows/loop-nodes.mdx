@@ -3,7 +3,7 @@ title: Loop Nodes
 description: Repeat workflow steps over a collection and optionally carry values from one iteration to the next.
 sidebar:
   order: 4
-lastUpdated: 2026-08-29
+lastUpdated: 2026-08-30
 ---
 
 Loop nodes let a workflow repeat the same group of steps for every item in a collection. For example, a workflow can
@@ -20,6 +20,7 @@ Connect the nodes in this order:
 
 ```text
 Collection producer -> For.collection
+For.loop_linkage - - - - - - - - - - - - - - - - - > ForReturn.loop_linkage
 For.item -> work nodes -> ForReturn.output
 For.output_collection -> nodes after the loop
 ```
@@ -31,7 +32,12 @@ The `For` node does not send its per-item `item` output directly to nodes after 
 iterations finish, connect that node to `For.output_collection` or `For.final_state`.
 
 The editor draws a dashed green boundary around the loop body. This is a visual guide showing which nodes repeat; the
-boundary does not carry data. The data still moves through the ports and edges you connect.
+boundary does not carry data. The dashed green line between `For.loop_linkage` and `ForReturn.loop_linkage` is a required
+association, not a data value. The remaining values move through the ports and edges you connect.
+
+The loop is not executable until its two boundary nodes are paired. Connect `For.loop_linkage` directly to the matching
+`ForReturn.loop_linkage`. When you add `ForReturn` from an iteration-output connection in the node picker, the editor can
+create this association for you. Replacing either boundary node requires pairing the replacement again.
 
 ### A Simple Example
 
@@ -47,13 +53,15 @@ For.output_collection -> Save or display node
 The processor runs once per image. The final `output_collection` contains the processed images in the same order as the
 input collection.
 
-`ForReturn.output` is optional. Leave it disconnected when the loop is being used only for its effects or when the
-result is carried through loop state instead.
+`ForReturn.output` may be disconnected when the result is carried through loop state instead. A body still needs a
+dependency into `ForReturn`, such as a state update or a scalar `continue_condition`; there is no separate completion
+port for effects-only bodies.
 
 ## What The For Outputs Mean
 
 | Output | Meaning | Use it for |
 | --- | --- | --- |
+| `loop_linkage` | The association port for the matching `ForReturn` | Pairing the loop boundaries; it is not data |
 | `item` | The current collection item | The work done during this iteration |
 | `index` | The zero-based position of the current item | Labels, counters, or position-based logic |
 | `total` | The collection length | Progress or position-based logic |
@@ -61,19 +69,22 @@ result is carried through loop state instead.
 | `output_collection` | All values returned through `ForReturn.output` | Work that should happen after the loop |
 | `final_state` | The state from the last completed iteration | Reading accumulated values after the loop |
 
-The first four outputs belong inside the loop body. The last two become available after the loop finishes.
+The `item`, `index`, `total`, and `state` outputs belong inside the loop body. The `output_collection` and `final_state`
+outputs become available after the loop finishes. `loop_linkage` is only for pairing the two boundary nodes.
 
 ## Returning Results
 
-`ForReturn` closes the loop body. It has three useful inputs:
+`ForReturn` closes the loop body. It has four useful inputs:
 
 - **Output** adds one value to `For.output_collection` for the current iteration.
 - **State** supplies the state for the next iteration.
 - **Continue Condition** controls whether another item should be processed. It continues by default; connecting `False`
   stops after the current iteration.
+- **Loop Linkage** pairs this node with its owning `For`. It must be connected directly to `For.loop_linkage`; it does
+  not provide a value to the loop body.
 
-There is no need to connect `ForReturn` back to `For` manually. The loop connection is represented by the matching
-`For` and `ForReturn` nodes and their body boundary in the editor.
+The `Loop Linkage` connection is separate from the body data connections. It tells the engine which `ForReturn` closes
+which `For`, which matters when loops are nested or several loop boundaries are present in one workflow.
 
 ## Carrying Values With State
 
@@ -202,6 +213,7 @@ from completed iterations remain available through the normal final outputs.
 ## Common Wiring Mistakes
 
 - Connect the collection to `For.collection`, not to `For.item`.
+- Connect `For.loop_linkage` directly to the matching `ForReturn.loop_linkage`.
 - Connect body work to `ForReturn.output` when its results should be collected.
 - Connect after-loop work to `For.output_collection` or `For.final_state`, not to `For.item` or `For.state`.
 - Give each nested `For` its own `ForReturn`.

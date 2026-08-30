@@ -5,6 +5,7 @@ import {
   add,
   call_saved_workflow,
   for_loop,
+  for_return,
   img_resize,
   main_model_loader,
   workflow_return,
@@ -739,5 +740,45 @@ describe('validateWorkflow', () => {
       throw new Error('expected an invocation node');
     }
     expect(validationResult.workflow.nodes[0].data.inputs.index).toBeUndefined();
+  });
+
+  it('should remove malformed loop linkage edges instead of treating them as data edges', async () => {
+    const forNode = buildInvocationNode({ x: 0, y: 0 }, for_loop);
+    const returnNode = buildInvocationNode({ x: 0, y: 0 }, for_return);
+    const workflow: WorkflowV3 = {
+      name: '',
+      author: '',
+      description: '',
+      version: '',
+      contact: '',
+      tags: '',
+      notes: '',
+      exposedFields: [],
+      form: getDefaultForm(),
+      meta: { version: '4.0.0', category: 'user' },
+      nodes: [forNode, returnNode],
+      edges: [
+        {
+          id: 'malformed-loop-linkage',
+          type: 'loop_linkage',
+          source: forNode.id,
+          sourceHandle: 'item',
+          target: returnNode.id,
+          targetHandle: 'output',
+        },
+      ],
+    };
+
+    const validationResult = await validateWorkflow({
+      workflow,
+      templates: { for: for_loop, for_return },
+      checkImageAccess: resolveTrue,
+      checkVideoAccess: resolveTrue,
+      checkBoardAccess: resolveTrue,
+      checkModelAccess: resolveTrue,
+    });
+
+    expect(validationResult.workflow.edges).toEqual([]);
+    expect(validationResult.warnings).toHaveLength(1);
   });
 });

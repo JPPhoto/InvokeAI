@@ -12,6 +12,7 @@ import { validateConnectionTypes } from 'features/nodes/store/util/validateConne
 import type { FieldType } from 'features/nodes/types/field';
 import type { AnyEdge, AnyNode, InvocationNode } from 'features/nodes/types/invocation';
 import { getInvocationNodeInputTemplate, isConnectorNode, isInvocationNode } from 'features/nodes/types/invocation';
+import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 import type { SetNonNullable } from 'type-fest';
 
 type Connection = SetNonNullable<NullableConnection>;
@@ -370,6 +371,37 @@ export const validateConnection: ValidateConnectionFunc = (
   ignoreEdge,
   strict = true
 ): string | null => {
+  const hasLoopLinkageHandle = c.sourceHandle === LOOP_LINKAGE_FIELD || c.targetHandle === LOOP_LINKAGE_FIELD;
+  if (hasLoopLinkageHandle) {
+    if (c.sourceHandle !== LOOP_LINKAGE_FIELD || c.targetHandle !== LOOP_LINKAGE_FIELD) {
+      return 'nodes.forLoopLinkageInvalid';
+    }
+
+    const sourceNode = nodes.find((node) => node.id === c.source);
+    const targetNode = nodes.find((node) => node.id === c.target);
+    if (!sourceNode || !targetNode) {
+      return 'nodes.missingNode';
+    }
+    if (
+      !isInvocationNode(sourceNode) ||
+      !isInvocationNode(targetNode) ||
+      sourceNode.data.type !== 'for' ||
+      targetNode.data.type !== 'for_return'
+    ) {
+      return 'nodes.forLoopLinkageInvalid';
+    }
+
+    const filteredEdges = edges.filter((edge) => edge.id !== ignoreEdge?.id);
+    if (
+      filteredEdges.some(
+        (edge) => edge.type === 'loop_linkage' && (edge.source === c.source || edge.target === c.target)
+      )
+    ) {
+      return 'nodes.forLoopLinkageDuplicate';
+    }
+    return null;
+  }
+
   if (c.source === c.target) {
     return 'nodes.cannotConnectToSelf';
   }

@@ -20,7 +20,7 @@ from invokeai.app.services.session_processor.session_processor_default import (
 from invokeai.app.services.session_queue.session_queue_sqlite import SqliteSessionQueue
 from invokeai.app.services.shared.graph import CollectInvocation, Graph, GraphExecutionState, IterateInvocation
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from tests.test_nodes import create_edge
+from tests.test_nodes import create_edge, create_loop_linkage
 
 
 @invocation_output("test_for_sqlite_body_output")
@@ -80,17 +80,18 @@ def _build_nested_graph(*, fail_on: int | None = None) -> Graph:
     graph.add_edge(create_edge("body", "value", "collect", "item"))
     graph.add_edge(create_edge("collect", "collection", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "collection"))
+    graph.add_edge(create_loop_linkage("for", "return"))
     return graph
 
 
 def _build_nested_for_graph(*, fail_on: int | None = None) -> Graph:
     graph = Graph()
-    graph.add_node(ForInvocation(id="outer_for", collection=[[1, 2], [3, 4]], body_id="outer-body"))
+    graph.add_node(ForInvocation(id="outer_for", collection=[[1, 2], [3, 4]]))
     graph.add_node(ForSqliteCollectionAdapterInvocation(id="inner_collection"))
-    graph.add_node(ForInvocation(id="inner_for", body_id="inner-body"))
+    graph.add_node(ForInvocation(id="inner_for"))
     graph.add_node(ForSqliteBodyInvocation(id="inner_body", fail_on=fail_on))
-    graph.add_node(ForReturnInvocation(id="inner_return", body_id="inner-body"))
-    graph.add_node(ForReturnInvocation(id="outer_return", body_id="outer-body"))
+    graph.add_node(ForReturnInvocation(id="inner_return"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
     graph.add_node(ForSqliteAfterInvocation(id="after"))
     graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
     graph.add_edge(create_edge("inner_collection", "collection", "inner_for", "collection"))
@@ -98,6 +99,8 @@ def _build_nested_for_graph(*, fail_on: int | None = None) -> Graph:
     graph.add_edge(create_edge("inner_body", "value", "inner_return", "output"))
     graph.add_edge(create_edge("inner_for", "output_collection", "outer_return", "output"))
     graph.add_edge(create_edge("outer_for", "output_collection", "after", "collection"))
+    graph.add_edge(create_loop_linkage("outer_for", "outer_return"))
+    graph.add_edge(create_loop_linkage("inner_for", "inner_return"))
     return graph
 
 

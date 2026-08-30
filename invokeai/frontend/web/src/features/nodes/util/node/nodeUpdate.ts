@@ -17,7 +17,7 @@ type UpdateNodeOptions = {
 export const getConnectedInputNames = (nodeId: string, edges: ConnectedInputEdge[]): Set<string> =>
   new Set(
     edges.flatMap((edge) =>
-      edge.type === 'default' && edge.target === nodeId && edge.targetHandle ? [edge.targetHandle] : []
+      edge.type !== 'loop_linkage' && edge.target === nodeId && edge.targetHandle ? [edge.targetHandle] : []
     )
   );
 

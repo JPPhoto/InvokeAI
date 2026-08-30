@@ -221,6 +221,10 @@ def _get_default_edges(workflow_edges: Sequence[Any]) -> list[Mapping[str, Any]]
     return [edge for edge in workflow_edges if _is_mapping(edge) and edge.get("type") == "default"]
 
 
+def _get_loop_linkage_edges(workflow_edges: Sequence[Any]) -> list[Mapping[str, Any]]:
+    return [edge for edge in workflow_edges if _is_mapping(edge) and edge.get("type") == "loop_linkage"]
+
+
 def _get_connector_input_edge(
     connector_id: str, workflow_edges: Sequence[Mapping[str, Any]]
 ) -> Mapping[str, Any] | None:
@@ -276,7 +280,9 @@ def build_graph_from_workflow(workflow: Mapping[str, Any]) -> Graph:
     workflow_nodes = {
         node["id"]: node for node in workflow_nodes_raw if _is_mapping(node) and isinstance(node.get("id"), str)
     }
-    default_edges = _get_default_edges(workflow_edges_raw if isinstance(workflow_edges_raw, Sequence) else [])
+    workflow_edges = workflow_edges_raw if isinstance(workflow_edges_raw, Sequence) else []
+    default_edges = _get_default_edges(workflow_edges)
+    loop_linkage_edges = _get_loop_linkage_edges(workflow_edges)
 
     parsed_nodes: dict[str, dict[str, Any]] = {}
     for node in workflow_nodes.values():
@@ -312,7 +318,7 @@ def build_graph_from_workflow(workflow: Mapping[str, Any]) -> Graph:
 
         parsed_nodes[node_id] = graph_node
 
-    parsed_edges: list[dict[str, dict[str, str]]] = []
+    parsed_edges: list[dict[str, Any]] = []
     seen_edges: set[tuple[str, str, str, str]] = set()
 
     for edge in default_edges:
@@ -345,6 +351,7 @@ def build_graph_from_workflow(workflow: Mapping[str, Any]) -> Graph:
 
         parsed_edges.append(
             {
+                "type": "default",
                 "source": {
                     "node_id": resolved_source_id,
                     "field": resolved_source_handle,
@@ -356,16 +363,37 @@ def build_graph_from_workflow(workflow: Mapping[str, Any]) -> Graph:
             }
         )
 
+    for edge in loop_linkage_edges:
+        source_id = edge.get("source")
+        target_id = edge.get("target")
+        source_handle = edge.get("sourceHandle")
+        target_handle = edge.get("targetHandle")
+        if not all(isinstance(v, str) for v in (source_id, target_id, source_handle, target_handle)):
+            continue
+        if not _is_invocation_node(workflow_nodes.get(source_id)) or not _is_invocation_node(
+            workflow_nodes.get(target_id)
+        ):
+            continue
+        parsed_edges.append(
+            {
+                "type": "loop_linkage",
+                "source": {"node_id": source_id, "field": source_handle},
+                "destination": {"node_id": target_id, "field": target_handle},
+            }
+        )
+
     for edge in parsed_edges:
-        destination_node_id = edge["destination"]["node_id"]
-        destination_field = edge["destination"]["field"]
-        parsed_nodes[destination_node_id].pop(destination_field, None)
+        if edge["type"] == "default":
+            destination_node_id = edge["destination"]["node_id"]
+            destination_field = edge["destination"]["field"]
+            parsed_nodes[destination_node_id].pop(destination_field, None)
 
     return Graph.model_validate(
         {
             "nodes": parsed_nodes,
             "edges": [
                 Edge(
+                    type=edge["type"],
                     source=EdgeConnection(**edge["source"]),
                     destination=EdgeConnection(**edge["destination"]),
                 )

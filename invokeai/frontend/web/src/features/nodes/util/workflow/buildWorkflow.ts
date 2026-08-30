@@ -55,6 +55,9 @@ export const buildWorkflowFast = (nodesState: NodesState): WorkflowV3 => {
     if (edge.type === 'default' && edge.sourceHandle && edge.targetHandle) {
       const { id, type, source, target, sourceHandle, targetHandle, hidden } = edge;
       newWorkflow.edges.push({ id, type, source, target, sourceHandle, targetHandle, hidden });
+    } else if (edge.type === 'loop_linkage' && edge.sourceHandle && edge.targetHandle) {
+      const { id, type, source, target, sourceHandle, targetHandle } = edge;
+      newWorkflow.edges.push({ id, type, source, target, sourceHandle, targetHandle });
     } else if (edge.type === 'collapsed') {
       const { id, type, source, target } = edge;
       newWorkflow.edges.push({ id, type, source, target });
