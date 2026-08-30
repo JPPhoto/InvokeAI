@@ -1556,6 +1556,7 @@
         "forLoopFinalOutputInBody": "Final For loop outputs cannot feed its body",
         "forLoopBodyEscape": "For loop body outputs cannot escape before its return",
         "forLoopBodyIdentityMissing": "For loop body identity is missing on one boundary endpoint",
+        "forLoopBodyIdentityType": "For loop body identity must be a string",
         "forLoopBodyIdentityEmpty": "For loop body identity must be non-empty",
         "forLoopBodyIdentityEdge": "For loop body identity cannot have an incoming connection",
         "forLoopInputCount": "For loop may have only one collection and state input each",

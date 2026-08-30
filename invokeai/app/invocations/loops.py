@@ -1,7 +1,7 @@
 import copy
 from typing import Any, Optional, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictStr
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput, invocation, invocation_output
 from invokeai.app.invocations.fields import Input, InputField, OutputField, OutputScope, UIType
@@ -139,7 +139,7 @@ class ForInvocation(BaseInvocation):
         default=None,
         description="Optional initial loop state",
     )
-    body_id: Optional[str] = InputField(
+    body_id: Optional[StrictStr] = InputField(
         default=None,
         description="Stable identity shared by this For and its matching ForReturn",
         input=Input.Direct,
@@ -197,7 +197,7 @@ class ForReturnInvocation(BaseInvocation):
         default=True,
         description="Whether to schedule the next loop iteration; false finalizes the loop",
     )
-    body_id: Optional[str] = InputField(
+    body_id: Optional[StrictStr] = InputField(
         default=None,
         description="Stable identity shared by this ForReturn and its matching For",
         input=Input.Direct,

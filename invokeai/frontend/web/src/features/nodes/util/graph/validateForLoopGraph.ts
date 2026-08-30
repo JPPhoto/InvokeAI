@@ -12,6 +12,7 @@ type ForLoopGraphError =
   | 'nodes.forLoopInputCount'
   | 'nodes.forReturnInputCount'
   | 'nodes.forLoopBodyIdentityMissing'
+  | 'nodes.forLoopBodyIdentityType'
   | 'nodes.forLoopBodyIdentityEmpty'
   | 'nodes.forLoopBodyIdentityEdge'
   | 'nodes.forLoopBodyIdentityStale'
@@ -59,6 +60,18 @@ export const validateForLoopGraph = (graph: Graph): ForLoopGraphError | null => 
     const bodyId = (node as { body_id?: unknown }).body_id;
     return typeof bodyId === 'string' && bodyId.length > 0 ? bodyId : undefined;
   };
+
+  if (
+    Object.values(nodes).some((node) => {
+      if (node.type !== 'for' && node.type !== 'for_return') {
+        return false;
+      }
+      const bodyId = (node as { body_id?: unknown }).body_id;
+      return bodyId !== undefined && bodyId !== null && typeof bodyId !== 'string';
+    })
+  ) {
+    return 'nodes.forLoopBodyIdentityType';
+  }
 
   if (
     Object.values(nodes).some((node) => {

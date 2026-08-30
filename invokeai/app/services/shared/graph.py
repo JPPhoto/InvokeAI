@@ -483,6 +483,8 @@ class _ExecutionMaterializer:
         )
         input_collection_output = self._state.results[input_collection_prepared_node_id]
         input_collection = getattr(input_collection_output, input_collection_edge.source.field)
+        if not isinstance(input_collection, list):
+            raise ValueError("For collection input must be a list")
         return len(input_collection)
 
     def _get_new_node_iterations(

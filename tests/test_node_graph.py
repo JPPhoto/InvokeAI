@@ -313,6 +313,15 @@ def test_graph_rejects_stale_for_return_body_identity():
         g.validate_self()
 
 
+@pytest.mark.parametrize("body_id", [123, True, ["body-1"]])
+def test_for_body_identity_requires_a_string(body_id: Any):
+    with pytest.raises(ValidationError):
+        ForInvocation(id="for", body_id=body_id)
+
+    with pytest.raises(ValidationError):
+        ForReturnInvocation(id="return", body_id=body_id)
+
+
 def test_graph_rejects_duplicate_for_body_identities():
     g = Graph()
     g.add_node(ForInvocation(id="first", body_id="body-1"))

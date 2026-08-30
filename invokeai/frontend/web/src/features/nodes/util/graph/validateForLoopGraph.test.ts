@@ -332,6 +332,12 @@ describe(validateForLoopGraph.name, () => {
       expected: 'nodes.forLoopBodyIdentityMismatch',
     },
     {
+      name: 'non-string For identity',
+      nodes: [{ id: 'for', type: 'for', body_id: 123 } as unknown as TestNode],
+      edges: [],
+      expected: 'nodes.forLoopBodyIdentityType',
+    },
+    {
       name: 'empty For identity',
       nodes: [{ id: 'for', type: 'for', body_id: '' }],
       edges: [],
