@@ -72,10 +72,23 @@ def _find_vae_in_root(root: Path) -> Path:
     return candidates[0]
 
 
+_STOCK_FORWARD = MiniMaxH3VideoCausalConv3d.forward  # captured before any patch
+
+
+def _set_conv_path(path: str) -> None:
+    """Force the encoder's conv3d implementation: 'native' (stock forward) or 'decomposed'."""
+    if path == "decomposed":
+        _patch_minimax_h3_causal_conv3d()
+        return
+    MiniMaxH3VideoCausalConv3d.forward = _STOCK_FORWARD
+    if hasattr(MiniMaxH3VideoCausalConv3d, ROCM_DECOMPOSITION_SENTINEL):
+        delattr(MiniMaxH3VideoCausalConv3d, ROCM_DECOMPOSITION_SENTINEL)
+
+
 def _conv_path_description() -> str:
-    if torch.version.hip is None:
-        return "cuDNN conv3d (CUDA build)"
     decomposed = getattr(MiniMaxH3VideoCausalConv3d, ROCM_DECOMPOSITION_SENTINEL, False)
+    if torch.version.hip is None:
+        return "conv2d decomposition (forced)" if decomposed else "cuDNN conv3d (CUDA build)"
     return f"HIP {torch.version.hip}: {'conv2d decomposition' if decomposed else 'native MIOpen conv3d'}"
 
 
@@ -114,7 +127,10 @@ def main() -> None:
     parser.add_argument("--width", type=int, default=768, help="Reference canvas width (default 768).")
     parser.add_argument("--height", type=int, default=448, help="Reference canvas height (default 448).")
     parser.add_argument(
-        "--frames", type=int, default=39, help="Frames in the synthetic clip; snapped down to 17n+5 (default 39)."
+        "--frames",
+        type=int,
+        default=39,
+        help="Frames in the synthetic clip; snapped down to 17n+5, minimum 22 (default 39).",
     )
     parser.add_argument("--repeats", type=int, default=3, help="Timed repetitions per mode (default 3).")
     parser.add_argument("--device", default="cuda", help="Torch device (default cuda).")
@@ -130,12 +146,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--conv3d",
-        choices=["auto", "native", "decomposed"],
+        choices=["auto", "native", "decomposed", "both"],
         default="auto",
         help=(
-            "ROCm conv3d path: 'auto' does what the model loader does (conv2d decomposition on HIP < 7.2, native "
-            "MIOpen conv3d otherwise); 'decomposed' forces the decomposition on any HIP version; 'native' forces "
-            "stock conv3d. Only meaningful on ROCm; run the script twice to A/B the two."
+            "conv3d path: 'auto' does what the model loader does (the conv2d decomposition on ROCm, stock conv3d "
+            "elsewhere); 'decomposed' / 'native' force one path on any build; 'both' runs every mode on native "
+            "first, then decomposed, and reports the numeric drift between the two paths (a slow native path "
+            "makes this long - shrink the clip, e.g. --width 256 --height 256 --frames 22, the minimum)."
         ),
     )
     args = parser.parse_args()
@@ -148,7 +165,7 @@ def main() -> None:
     if args.conv3d == "auto":
         patch_minimax_h3_causal_conv3d_for_rocm()
     elif args.conv3d == "decomposed":
-        _patch_minimax_h3_causal_conv3d()
+        _set_conv_path("decomposed")
     vae = AutoencoderKLMiniMaxH3.from_pretrained(vae_path, local_files_only=True).eval()
     vae.decoder = torch.nn.Identity()  # the ViT decoder is never used by an encode
     vae = vae.to(device)
@@ -174,36 +191,58 @@ def main() -> None:
     )
 
     real_autocast = keyframe_conditioning.vae_encode_autocast
-    results: dict[str, dict] = {}
-    for mode in args.modes:
-        if mode == "fp32":
-            keyframe_conditioning.vae_encode_autocast = lambda device: contextlib.nullcontext()
-            reference_conditioning.vae_encode_autocast = keyframe_conditioning.vae_encode_autocast
-        else:
-            keyframe_conditioning.vae_encode_autocast = real_autocast
-            reference_conditioning.vae_encode_autocast = real_autocast
-        with torch.inference_mode():
-            results[mode] = _run(vae, frames, device, args.repeats, mode)
-        r = results[mode]
-        line = (
-            f"{mode:>8}: {r['min_s']:.2f} s (max {r['max_s']:.2f} s) for {num_chunks} chunks = "
-            f"{r['min_s'] / num_chunks:.2f} s/chunk"
-        )
-        if "peak_allocated_gib" in r:
-            line += f"; peak allocated {r['peak_allocated_gib']:.2f} GiB, reserved {r['peak_reserved_gib']:.2f} GiB"
-        print(line)
 
-    if "fp32" in results and "autocast" in results:
-        rows32, rows16 = results["fp32"]["rows"], results["autocast"]["rows"]
-        diff = (rows32 - rows16).abs()
+    def run_modes(label: str) -> dict[str, dict]:
+        results: dict[str, dict] = {}
+        for mode in args.modes:
+            if mode == "fp32":
+                keyframe_conditioning.vae_encode_autocast = lambda device: contextlib.nullcontext()
+                reference_conditioning.vae_encode_autocast = keyframe_conditioning.vae_encode_autocast
+            else:
+                keyframe_conditioning.vae_encode_autocast = real_autocast
+                reference_conditioning.vae_encode_autocast = real_autocast
+            with torch.inference_mode():
+                results[mode] = _run(vae, frames, device, args.repeats, f"{label}{mode}")
+            r = results[mode]
+            line = (
+                f"{label}{mode:>8}: {r['min_s']:.2f} s (max {r['max_s']:.2f} s) for {num_chunks} chunks = "
+                f"{r['min_s'] / num_chunks:.2f} s/chunk"
+            )
+            if "peak_allocated_gib" in r:
+                line += f"; peak allocated {r['peak_allocated_gib']:.2f} GiB, reserved {r['peak_reserved_gib']:.2f} GiB"
+            print(line, flush=True)
+
+        if "fp32" in results and "autocast" in results:
+            rows32, rows16 = results["fp32"]["rows"], results["autocast"]["rows"]
+            diff = (rows32 - rows16).abs()
+            print(
+                f"{label}speedup {results['fp32']['min_s'] / results['autocast']['min_s']:.2f}x; drift autocast vs "
+                f"fp32: rel-norm {(diff.norm() / rows32.norm()).item():.2e}, max {diff.max().item():.3f} "
+                f"(row std {rows32.std().item():.3f}); finite: {bool(torch.isfinite(rows16).all())}"
+            )
+        # A 10 s reference at 24 fps snaps to 226 frames = 14 chunks.
+        for mode, r in results.items():
+            print(f"{label}projected 10 s reference ({mode}): {14 * r['min_s'] / num_chunks:.0f} s", flush=True)
+        return results
+
+    if args.conv3d != "both":
+        run_modes("")
+        return
+
+    by_path: dict[str, dict[str, dict]] = {}
+    for path in ("native", "decomposed"):
+        _set_conv_path(path)
+        print(f"--- conv path: {_conv_path_description()}", flush=True)
+        by_path[path] = run_modes(f"[{path}] ")
+    for mode in args.modes:
+        native, decomposed = by_path["native"][mode]["rows"], by_path["decomposed"][mode]["rows"]
+        diff = (native - decomposed).abs()
         print(
-            f"speedup {results['fp32']['min_s'] / results['autocast']['min_s']:.2f}x; drift autocast vs fp32: "
-            f"rel-norm {(diff.norm() / rows32.norm()).item():.2e}, max {diff.max().item():.3f} "
-            f"(row std {rows32.std().item():.3f}); finite: {bool(torch.isfinite(rows16).all())}"
+            f"{mode}: decomposed vs native drift rel-norm {(diff.norm() / native.norm()).item():.2e}, "
+            f"max {diff.max().item():.3f} (row std {native.std().item():.3f}); "
+            f"finite: {bool(torch.isfinite(decomposed).all())}; "
+            f"decomposed speedup {by_path['native'][mode]['min_s'] / by_path['decomposed'][mode]['min_s']:.2f}x"
         )
-    # A 10 s reference at 24 fps snaps to 226 frames = 14 chunks.
-    for mode, r in results.items():
-        print(f"projected 10 s reference ({mode}): {14 * r['min_s'] / num_chunks:.0f} s")
 
 
 if __name__ == "__main__":
