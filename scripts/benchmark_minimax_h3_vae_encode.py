@@ -1,0 +1,186 @@
+"""Benchmark the MiniMax H3 video VAE *encode* path: float32 vs the float16-autocast recipe.
+
+Reference videos (Ref2VA) and keyframes (FL2VA) are encoded through the VAE's convolutional
+encoder one 17-frame chunk at a time, spatially tiled. ``vae_encode_autocast`` runs those
+convolutions under float16 autocast on CUDA-type devices (NVIDIA and ROCm). This script times
+the real ``encode_reference_video`` path both ways on a synthetic clip, reports peak memory and
+the numeric drift between the two encodes, and projects the cost of a full-length reference.
+
+    python scripts/benchmark_minimax_h3_vae_encode.py --vae /path/to/MiniMax-H3-components/vae
+    python scripts/benchmark_minimax_h3_vae_encode.py --root ~/invokeai   # finds the VAE in the models dir
+
+The same ROCm conv3d handling the model loader applies (the conv2d decomposition on HIP < 7.2,
+native conv3d otherwise) is applied here, and the active path is printed. The decoder is not
+loaded onto the device — it is a ~4.5 GiB ViT that the encode never touches.
+
+Measured on an RTX 5060 Ti (torch 2.13, cuDNN, TF32 convs on) at the default 768x448 x 39
+frames: 4.6 s/chunk float32 -> 3.2 s/chunk autocast; with TF32 off, 9.2 -> 3.2 s/chunk.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import json
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+
+# Direct script execution puts ``scripts/`` on sys.path, not the repository root.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from invokeai.backend.minimax_h3 import keyframe_conditioning, reference_conditioning  # noqa: E402
+from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import (  # noqa: E402
+    AutoencoderKLMiniMaxH3,
+    MiniMaxH3VideoCausalConv3d,
+)
+from invokeai.backend.minimax_h3.reference_conditioning import (  # noqa: E402
+    encode_reference_video,
+    snap_reference_num_frames,
+)
+from invokeai.backend.minimax_h3.rocm_causal_conv3d import (  # noqa: E402
+    _SENTINEL as ROCM_DECOMPOSITION_SENTINEL,
+)
+from invokeai.backend.minimax_h3.rocm_causal_conv3d import (  # noqa: E402
+    patch_minimax_h3_causal_conv3d_for_rocm,
+)
+
+
+def _find_vae_in_root(root: Path) -> Path:
+    """Locate the H3 components install's ``vae/`` folder under an InvokeAI root's models dir."""
+    candidates = []
+    for config in (root / "models").glob("*/vae/config.json"):
+        try:
+            if json.loads(config.read_text()).get("_class_name") == "AutoencoderKLMiniMaxH3":
+                candidates.append(config.parent)
+        except (OSError, ValueError):
+            continue
+    if not candidates:
+        raise SystemExit(f"No AutoencoderKLMiniMaxH3 folder found under {root / 'models'}; pass --vae explicitly.")
+    if len(candidates) > 1:
+        print(f"Several H3 VAE folders found, using the first: {[str(c) for c in candidates]}")
+    return candidates[0]
+
+
+def _conv_path_description() -> str:
+    if torch.version.hip is None:
+        return "cuDNN conv3d (CUDA build)"
+    decomposed = getattr(MiniMaxH3VideoCausalConv3d, ROCM_DECOMPOSITION_SENTINEL, False)
+    return f"HIP {torch.version.hip}: {'conv2d decomposition (HIP < 7.2)' if decomposed else 'native MIOpen conv3d'}"
+
+
+def _run(vae: AutoencoderKLMiniMaxH3, frames: np.ndarray, device: torch.device, repeats: int) -> dict:
+    def once() -> torch.Tensor:
+        return encode_reference_video(vae, frames, device)[0]
+
+    once()  # warm-up: kernel selection / MIOpen find, allocator growth
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+    times = []
+    rows = None
+    for _ in range(repeats):
+        start = time.perf_counter()
+        rows = once()
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        times.append(time.perf_counter() - start)
+    assert rows is not None
+    result = {"rows": rows, "min_s": min(times), "max_s": max(times)}
+    if device.type == "cuda":
+        result["peak_allocated_gib"] = torch.cuda.max_memory_allocated() / 2**30
+        result["peak_reserved_gib"] = torch.cuda.max_memory_reserved() / 2**30
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--vae", type=Path, help="The H3 components install's vae/ folder (diffusers layout).")
+    source.add_argument("--root", type=Path, help="An InvokeAI root; the VAE is located under its models dir.")
+    parser.add_argument("--width", type=int, default=768, help="Reference canvas width (default 768).")
+    parser.add_argument("--height", type=int, default=448, help="Reference canvas height (default 448).")
+    parser.add_argument(
+        "--frames", type=int, default=39, help="Frames in the synthetic clip; snapped down to 17n+5 (default 39)."
+    )
+    parser.add_argument("--repeats", type=int, default=3, help="Timed repetitions per mode (default 3).")
+    parser.add_argument("--device", default="cuda", help="Torch device (default cuda).")
+    parser.add_argument(
+        "--modes",
+        nargs="+",
+        choices=["fp32", "autocast"],
+        default=["fp32", "autocast"],
+        help="Which encodes to time (default: both; drift is reported only when both run).",
+    )
+    parser.add_argument(
+        "--no-tf32", action="store_true", help="Disable TF32 convolutions (NVIDIA only; ROCm has no TF32 path)."
+    )
+    args = parser.parse_args()
+
+    device = torch.device(args.device)
+    if args.no_tf32:
+        torch.backends.cudnn.allow_tf32 = False
+
+    vae_path = args.vae if args.vae is not None else _find_vae_in_root(args.root.expanduser())
+    patch_minimax_h3_causal_conv3d_for_rocm()
+    vae = AutoencoderKLMiniMaxH3.from_pretrained(vae_path, local_files_only=True).eval()
+    vae.decoder = torch.nn.Identity()  # the ViT decoder is never used by an encode
+    vae = vae.to(device)
+
+    num_frames = snap_reference_num_frames(args.frames)
+    clip_length = int(vae.config.clip_length)
+    num_chunks = -(-num_frames // clip_length)
+    rng = np.random.default_rng(0)
+    frames = rng.integers(0, 256, size=(num_frames, args.height, args.width, 3), dtype=np.uint8)
+    tiles_y = len(vae._split_tiles(args.height, vae.tile_sample_min_height, vae.tile_sample_min_overlap_height)[0])
+    tiles_x = len(vae._split_tiles(args.width, vae.tile_sample_min_width, vae.tile_sample_min_overlap_width)[0])
+
+    print(f"torch {torch.__version__}, device {device}", end="")
+    if device.type == "cuda":
+        print(f" ({torch.cuda.get_device_name(device)})", end="")
+    print(f", conv path: {_conv_path_description()}")
+    if torch.version.hip is None and device.type == "cuda":
+        print(f"cudnn.allow_tf32={torch.backends.cudnn.allow_tf32}")
+    print(
+        f"clip: {num_frames} frames at {args.width}x{args.height} -> {num_chunks} chunks of {clip_length}, "
+        f"{tiles_y}x{tiles_x} tiles per chunk; {args.repeats} timed repeats per mode after one warm-up"
+    )
+
+    real_autocast = keyframe_conditioning.vae_encode_autocast
+    results: dict[str, dict] = {}
+    for mode in args.modes:
+        if mode == "fp32":
+            keyframe_conditioning.vae_encode_autocast = lambda device: contextlib.nullcontext()
+            reference_conditioning.vae_encode_autocast = keyframe_conditioning.vae_encode_autocast
+        else:
+            keyframe_conditioning.vae_encode_autocast = real_autocast
+            reference_conditioning.vae_encode_autocast = real_autocast
+        with torch.inference_mode():
+            results[mode] = _run(vae, frames, device, args.repeats)
+        r = results[mode]
+        line = (
+            f"{mode:>8}: {r['min_s']:.2f} s (max {r['max_s']:.2f} s) for {num_chunks} chunks = "
+            f"{r['min_s'] / num_chunks:.2f} s/chunk"
+        )
+        if "peak_allocated_gib" in r:
+            line += f"; peak allocated {r['peak_allocated_gib']:.2f} GiB, reserved {r['peak_reserved_gib']:.2f} GiB"
+        print(line)
+
+    if "fp32" in results and "autocast" in results:
+        rows32, rows16 = results["fp32"]["rows"], results["autocast"]["rows"]
+        diff = (rows32 - rows16).abs()
+        print(
+            f"speedup {results['fp32']['min_s'] / results['autocast']['min_s']:.2f}x; drift autocast vs fp32: "
+            f"rel-norm {(diff.norm() / rows32.norm()).item():.2e}, max {diff.max().item():.3f} "
+            f"(row std {rows32.std().item():.3f}); finite: {bool(torch.isfinite(rows16).all())}"
+        )
+    # A 10 s reference at 24 fps snaps to 226 frames = 14 chunks.
+    for mode, r in results.items():
+        print(f"projected 10 s reference ({mode}): {14 * r['min_s'] / num_chunks:.0f} s")
+
+
+if __name__ == "__main__":
+    main()
