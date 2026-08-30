@@ -32,6 +32,7 @@ from PIL import Image, ImageOps
 from invokeai.backend.minimax_h3.audio_resample import resample_sinc
 from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import AutoencoderKLMiniMaxH3
 from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3_audio import AutoencoderKLMiniMaxH3Audio
+from invokeai.backend.minimax_h3.keyframe_conditioning import vae_encode_autocast
 from invokeai.backend.minimax_h3.packing import (
     MINIMAX_H3_CANVAS_MULTIPLE,
     MINIMAX_H3_FPS,
@@ -260,8 +261,9 @@ def encode_reference_image(
     like a keyframe.
     """
     pixels = torch.from_numpy(np.array(image)).to(device).permute(2, 0, 1)[None, :, None]
-    moments = vae._encode_clip(_normalize_pixels(pixels, device))
-    return _encode_condition_moments(vae, moments)
+    with vae_encode_autocast(device):
+        moments = vae._encode_clip(_normalize_pixels(pixels, device))
+    return _encode_condition_moments(vae, moments.float())
 
 
 @torch.no_grad()
@@ -273,8 +275,9 @@ def encode_reference_video(
     Returns ``(rows, (num_latent_frames, latent_height, latent_width))``. The frame count is
     snapped DOWN to ``17 * n + 5`` first, then the stack goes through the VAE's temporal
     chunking. The pixels move to the device one 17-frame chunk at a time — each chunk encodes
-    independently, so the result is bit-identical to ``vae._encode`` over the whole stack
-    while never materializing the full float32 pixel tensor on the device.
+    independently, so the result is bit-identical to ``vae._encode`` over the whole stack under
+    the same :func:`vae_encode_autocast` precision, while never materializing the full float32
+    pixel tensor on the device.
     """
     frames = frames[: snap_reference_num_frames(frames.shape[0])]
 
@@ -291,7 +294,9 @@ def encode_reference_video(
             # the whole stack to a multiple of `clip_length`.
             pad = pixels[:, :, -1:].repeat(1, 1, clip_length - pixels.shape[2], 1, 1)
             pixels = torch.cat([pixels, pad], dim=2)
-        chunk_moments.append(vae._encode_clip(_normalize_pixels(pixels, device)).cpu())
+        with vae_encode_autocast(device):
+            moments = vae._encode_clip(_normalize_pixels(pixels, device))
+        chunk_moments.append(moments.float().cpu())
 
     moments = torch.cat(chunk_moments, dim=2)
     if vae.config.token_drop > 0:
