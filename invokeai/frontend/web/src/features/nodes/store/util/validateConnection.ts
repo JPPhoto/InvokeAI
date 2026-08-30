@@ -9,10 +9,10 @@ import {
 import { getCollectItemType } from 'features/nodes/store/util/getCollectItemType';
 import { getHasCycles } from 'features/nodes/store/util/getHasCycles';
 import { validateConnectionTypes } from 'features/nodes/store/util/validateConnectionTypes';
+import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 import type { FieldType } from 'features/nodes/types/field';
 import type { AnyEdge, AnyNode, InvocationNode } from 'features/nodes/types/invocation';
 import { getInvocationNodeInputTemplate, isConnectorNode, isInvocationNode } from 'features/nodes/types/invocation';
-import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 import type { SetNonNullable } from 'type-fest';
 
 type Connection = SetNonNullable<NullableConnection>;

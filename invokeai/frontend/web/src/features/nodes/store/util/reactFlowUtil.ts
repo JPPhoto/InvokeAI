@@ -1,6 +1,6 @@
 import type { Connection } from '@xyflow/react';
-import type { AnyEdge } from 'features/nodes/types/invocation';
 import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
+import type { AnyEdge } from 'features/nodes/types/invocation';
 import { assert } from 'tsafe';
 
 /**

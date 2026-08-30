@@ -1,5 +1,5 @@
-import type { Graph } from 'services/api/types';
 import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
+import type { Graph } from 'services/api/types';
 
 type ForLoopGraphError =
   | 'nodes.forLoopMissingIterationOutput'

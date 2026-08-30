@@ -1,6 +1,5 @@
 // @vitest-environment happy-dom
 import { applyEdgeChanges, applyNodeChanges } from '@xyflow/react';
-import { CONNECTOR_INPUT_HANDLE, CONNECTOR_OUTPUT_HANDLE } from 'features/nodes/store/util/connectorTopology';
 import {
   $addNodeCmdk,
   $cursorPos,
@@ -11,6 +10,7 @@ import {
   nodesChanged,
 } from 'features/nodes/store/nodesSlice';
 import type { PendingConnection } from 'features/nodes/store/types';
+import { CONNECTOR_INPUT_HANDLE, CONNECTOR_OUTPUT_HANDLE } from 'features/nodes/store/util/connectorTopology';
 import { buildEdge, buildLoopLinkageEdge, buildNode, for_loop, for_return } from 'features/nodes/store/util/testUtils';
 import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
 import type { ChangeEvent, ReactNode } from 'react';

@@ -1,6 +1,6 @@
+import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
 import { isInvocationNode } from 'features/nodes/types/invocation';
-import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 
 const ITERATION_OUTPUT_FIELDS = new Set(['item', 'index', 'total', 'state']);
 
