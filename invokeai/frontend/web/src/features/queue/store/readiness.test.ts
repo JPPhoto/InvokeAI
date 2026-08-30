@@ -301,7 +301,7 @@ describe('workflow readiness checks', () => {
       store,
     });
 
-    expect(reasons).toContainEqual({ content: 'nodes.forLoopReturnCount' });
+    expect(reasons).toContainEqual({ content: 'nodes.forLoopLinkageMissing' });
   });
 });
 

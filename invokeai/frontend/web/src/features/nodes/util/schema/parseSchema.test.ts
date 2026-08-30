@@ -78,7 +78,7 @@ describe('parseSchema', () => {
       })
     );
 
-    expect(parsed.for_return?.version).toBe('1.2.0');
+    expect(parsed.for_return?.version).toBe('1.3.0');
     expect(parsed.for_return?.inputs.continue_condition).toMatchObject({
       input: 'any',
       required: false,

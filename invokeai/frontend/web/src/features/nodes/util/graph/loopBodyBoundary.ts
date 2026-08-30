@@ -1,3 +1,4 @@
+import { isLoopLinkageEdge } from 'features/nodes/store/util/reactFlowUtil';
 import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
 import { isInvocationNode } from 'features/nodes/types/invocation';
@@ -51,8 +52,8 @@ const getBoundaryNodeIds = (
 
 export const getForLoopBodyBoundaries = (nodes: AnyNode[], edges: AnyEdge[]): LoopBodyBoundary[] => {
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
-  const executableEdges = edges.filter((edge) => edge.type === 'default');
-  const linkageEdges = edges.filter((edge) => edge.type === 'loop_linkage');
+  const executableEdges = edges.filter((edge) => !isLoopLinkageEdge(edge));
+  const linkageEdges = edges.filter(isLoopLinkageEdge);
   const outgoing = new Map<string, string[]>();
   const incoming = new Map<string, string[]>();
 

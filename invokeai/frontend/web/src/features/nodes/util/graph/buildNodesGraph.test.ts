@@ -115,6 +115,46 @@ describe('buildNodesGraph', () => {
     ]);
   });
 
+  it('normalizes loop linkage handles when an edge is missing its linkage type', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    const state = buildState(
+      [forNode, returnNode],
+      [
+        buildEdge(forNode.id, 'item', returnNode.id, 'output'),
+        buildEdge(forNode.id, 'loop_linkage', returnNode.id, 'loop_linkage'),
+      ]
+    );
+
+    const graph = buildNodesGraph(state, { ...templates, for: for_loop, for_return });
+
+    expect(graph.edges).toEqual([
+      expect.objectContaining({
+        type: 'default',
+        source: { node_id: forNode.id, field: 'item' },
+        destination: { node_id: returnNode.id, field: 'output' },
+      }),
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: { node_id: forNode.id, field: 'loop_linkage' },
+        destination: { node_id: returnNode.id, field: 'loop_linkage' },
+      }),
+    ]);
+  });
+
+  it('continues to omit collapsed edges while normalizing linkage edges', () => {
+    const sourceNode = buildNode(add);
+    const targetNode = buildNode(add);
+    const state = buildState(
+      [sourceNode, targetNode],
+      [{ ...buildEdge(sourceNode.id, 'value', targetNode.id, 'a'), type: 'collapsed', data: { count: 1 } }]
+    );
+
+    const graph = buildNodesGraph(state, templates);
+
+    expect(graph.edges).toEqual([]);
+  });
+
   it('serializes dynamic saved workflow inputs into workflow_inputs', () => {
     const state = nodesSliceConfig.getInitialState();
     const node = buildNode(callSavedWorkflowTemplate);

@@ -789,6 +789,22 @@ export const for_return: InvocationTemplate = {
   description: '',
   outputType: 'for_return_output',
   inputs: {
+    loop_linkage: {
+      name: 'loop_linkage',
+      title: 'Loop Linkage',
+      required: false,
+      default: undefined,
+      description: 'The loop linkage from the matching For',
+      fieldKind: 'input',
+      input: 'connection',
+      ui_hidden: false,
+      ui_type: 'AnyField',
+      type: {
+        name: 'AnyField',
+        cardinality: 'SINGLE',
+        batch: false,
+      },
+    },
     output: {
       name: 'output',
       title: 'Output',
@@ -831,22 +847,6 @@ export const for_return: InvocationTemplate = {
       ui_hidden: false,
       type: {
         name: 'BooleanField',
-        cardinality: 'SINGLE',
-        batch: false,
-      },
-    },
-    loop_linkage: {
-      name: 'loop_linkage',
-      title: 'Loop Linkage',
-      required: false,
-      default: undefined,
-      description: 'The loop linkage from the matching For',
-      fieldKind: 'input',
-      input: 'connection',
-      ui_hidden: false,
-      ui_type: 'AnyField',
-      type: {
-        name: 'AnyField',
         cardinality: 'SINGLE',
         batch: false,
       },

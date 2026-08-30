@@ -3,6 +3,7 @@ import { getSavedWorkflowDynamicFields } from 'features/nodes/components/flow/no
 import { addElement, getIsFormEmpty } from 'features/nodes/components/sidePanel/builder/form-manipulation';
 import { CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX } from 'features/nodes/store/nodesSlice';
 import type { Templates } from 'features/nodes/store/types';
+import { getEdgeTypeFromHandles } from 'features/nodes/store/util/reactFlowUtil';
 import { validateConnection } from 'features/nodes/store/util/validateConnection';
 import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 import { nodeAcceptsExtraInputs } from 'features/nodes/types/extraInputs';
@@ -151,7 +152,12 @@ export const validateWorkflow = async (args: ValidateWorkflowArgs): Promise<Vali
 
   await refreshCallSavedWorkflowDynamicInputs({ workflow: _workflow, templates, getWorkflow, warnings });
 
-  for (const edge of edges) {
+  for (const rawEdge of edges) {
+    const edge =
+      rawEdge.type === 'default' &&
+      getEdgeTypeFromHandles(rawEdge.sourceHandle, rawEdge.targetHandle) === 'loop_linkage'
+        ? { ...rawEdge, type: 'loop_linkage' as const }
+        : rawEdge;
     // Validate each edge. If the edge is invalid, we must remove it to prevent runtime errors with reactflow.
     const sourceNode = nodes.find(({ id }) => id === edge.source);
     const targetNode = nodes.find(({ id }) => id === edge.target);

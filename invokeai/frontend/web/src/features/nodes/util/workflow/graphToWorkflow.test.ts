@@ -402,4 +402,34 @@ describe('graphToWorkflow', () => {
     });
     expect(rebuiltGraph.edges).toEqual(graph.edges);
   });
+
+  it('normalizes a default graph edge between loop linkage fields', () => {
+    const workflow = graphToWorkflow(
+      {
+        id: 'graph',
+        nodes: {
+          for: { id: 'for', type: 'for', collection: [], state: null },
+          return: { id: 'return', type: 'for_return', output: null, state: null, continue_condition: true },
+        },
+        edges: [
+          {
+            type: 'default',
+            source: { node_id: 'for', field: 'loop_linkage' },
+            destination: { node_id: 'return', field: 'loop_linkage' },
+          },
+        ],
+      } satisfies NonNullableGraph,
+      false
+    );
+
+    expect(workflow.edges).toEqual([
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: 'for',
+        sourceHandle: 'loop_linkage',
+        target: 'return',
+        targetHandle: 'loop_linkage',
+      }),
+    ]);
+  });
 });

@@ -37,6 +37,15 @@ def test_for_invocation_is_not_directly_executable() -> None:
         node.invoke(None)  # type: ignore[arg-type]
 
 
+def test_for_return_loop_linkage_is_the_first_input() -> None:
+    input_names = [
+        name
+        for name in ForReturnInvocation.model_fields
+        if name not in {"id", "is_intermediate", "use_cache", "type"}
+    ]
+    assert input_names == ["loop_linkage", "output", "state", "continue_condition"]
+
+
 def test_state_set_invocation_schema_exposes_any_value_input() -> None:
     schema = StateSetInvocation.model_json_schema()
 

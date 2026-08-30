@@ -27,7 +27,7 @@ import {
   getConnectorOutputEdges,
   resolveConnectorSource,
 } from 'features/nodes/store/util/connectorTopology';
-import { connectionToEdge } from 'features/nodes/store/util/reactFlowUtil';
+import { connectionToEdge, isLoopLinkageEdge } from 'features/nodes/store/util/reactFlowUtil';
 import { LOOP_LINKAGE_FIELD, SHARED_NODE_PROPERTIES } from 'features/nodes/types/constants';
 import type {
   BoardFieldValue,
@@ -249,7 +249,7 @@ const removeCallSavedWorkflowDynamicFieldsFromForm = (
 };
 
 const isValidLoopLinkageEdge = (edge: AnyEdge, nodes: AnyNode[]): boolean => {
-  if (edge.type !== 'loop_linkage') {
+  if (!isLoopLinkageEdge(edge)) {
     return true;
   }
 

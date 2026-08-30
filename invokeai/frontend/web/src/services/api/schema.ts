@@ -14226,6 +14226,12 @@ export type components = {
              */
             use_cache?: boolean;
             /**
+             * Loop Linkage
+             * @description The loop linkage from the matching For
+             * @default null
+             */
+            loop_linkage?: unknown | null;
+            /**
              * Output
              * @description The output item to append to the loop output collection
              * @default null
@@ -14242,12 +14248,6 @@ export type components = {
              * @default true
              */
             continue_condition?: boolean | null;
-            /**
-             * Loop Linkage
-             * @description The loop linkage from the matching For
-             * @default null
-             */
-            loop_linkage?: unknown | null;
             /**
              * type
              * @default for_return

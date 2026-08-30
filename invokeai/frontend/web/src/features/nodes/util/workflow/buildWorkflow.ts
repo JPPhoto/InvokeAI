@@ -5,6 +5,7 @@ import { parseify } from 'common/util/serialize';
 import { pick } from 'es-toolkit/compat';
 import { selectNodesSlice } from 'features/nodes/store/selectors';
 import type { NodesState } from 'features/nodes/store/types';
+import { getEdgeTypeFromHandles } from 'features/nodes/store/util/reactFlowUtil';
 import { isConnectorNode, isInvocationNode, isNotesNode } from 'features/nodes/types/invocation';
 import type { WorkflowV3 } from 'features/nodes/types/workflow';
 import { zWorkflowV3 } from 'features/nodes/types/workflow';
@@ -52,12 +53,14 @@ export const buildWorkflowFast = (nodesState: NodesState): WorkflowV3 => {
   }
 
   for (const edge of edges) {
-    if (edge.type === 'default' && edge.sourceHandle && edge.targetHandle) {
-      const { id, type, source, target, sourceHandle, targetHandle, hidden } = edge;
-      newWorkflow.edges.push({ id, type, source, target, sourceHandle, targetHandle, hidden });
-    } else if (edge.type === 'loop_linkage' && edge.sourceHandle && edge.targetHandle) {
-      const { id, type, source, target, sourceHandle, targetHandle } = edge;
-      newWorkflow.edges.push({ id, type, source, target, sourceHandle, targetHandle });
+    if ((edge.type === 'default' || edge.type === 'loop_linkage') && edge.sourceHandle && edge.targetHandle) {
+      const { id, source, target, sourceHandle, targetHandle, hidden } = edge;
+      const type = edge.type === 'loop_linkage' ? 'loop_linkage' : getEdgeTypeFromHandles(sourceHandle, targetHandle);
+      if (type === 'loop_linkage') {
+        newWorkflow.edges.push({ id, type, source, target, sourceHandle, targetHandle });
+      } else {
+        newWorkflow.edges.push({ id, type, source, target, sourceHandle, targetHandle, hidden });
+      }
     } else if (edge.type === 'collapsed') {
       const { id, type, source, target } = edge;
       newWorkflow.edges.push({ id, type, source, target });

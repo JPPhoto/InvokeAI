@@ -5,6 +5,7 @@ import { selectAutoAddBoardId } from 'features/gallery/store/gallerySelectors';
 import { selectNodesSlice } from 'features/nodes/store/selectors';
 import type { Templates } from 'features/nodes/store/types';
 import { resolveConnectorSource } from 'features/nodes/store/util/connectorTopology';
+import { isLoopLinkageEdge } from 'features/nodes/store/util/reactFlowUtil';
 import type { BoardField } from 'features/nodes/types/common';
 import { nodeAcceptsExtraInputs } from 'features/nodes/types/extraInputs';
 import type { BoardFieldInputInstance } from 'features/nodes/types/field';
@@ -129,7 +130,7 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
 
   // skip out the "dummy" edges between collapsed nodes
   const flattenedEdges = edges
-    .filter((edge) => edge.type === 'default')
+    .filter((edge) => edge.type !== 'collapsed' && !isLoopLinkageEdge(edge))
     .flatMap((edge) => {
       const targetNode = nodes.find((node) => node.id === edge.target);
       if (!targetNode || !isInvocationNode(targetNode) || !isExecutableNode(targetNode)) {
@@ -177,22 +178,20 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
       );
     });
 
-  const loopLinkageEdges = edges
-    .filter((edge) => edge.type === 'loop_linkage')
-    .filter((edge) => {
-      const sourceNode = nodes.find((node) => node.id === edge.source);
-      const targetNode = nodes.find((node) => node.id === edge.target);
-      return Boolean(
-        sourceNode &&
-        targetNode &&
-        isInvocationNode(sourceNode) &&
-        isInvocationNode(targetNode) &&
-        isExecutableNode(sourceNode) &&
-        isExecutableNode(targetNode) &&
-        filteredNodeIds.includes(sourceNode.id) &&
-        filteredNodeIds.includes(targetNode.id)
-      );
-    });
+  const loopLinkageEdges = edges.filter(isLoopLinkageEdge).filter((edge) => {
+    const sourceNode = nodes.find((node) => node.id === edge.source);
+    const targetNode = nodes.find((node) => node.id === edge.target);
+    return Boolean(
+      sourceNode &&
+      targetNode &&
+      isInvocationNode(sourceNode) &&
+      isInvocationNode(targetNode) &&
+      isExecutableNode(sourceNode) &&
+      isExecutableNode(targetNode) &&
+      filteredNodeIds.includes(sourceNode.id) &&
+      filteredNodeIds.includes(targetNode.id)
+    );
+  });
 
   // Reduce the node editor edges into invocation graph edges
   const parsedEdges = flattenedEdges.reduce<NonNullable<Graph['edges']>>((edgesAccumulator, edge) => {

@@ -205,6 +205,8 @@ Validation rules are shared by the backend and frontend:
 - every `For` has exactly one outgoing `loop_linkage` edge;
 - every `ForReturn` has exactly one incoming `loop_linkage` edge;
 - the edge must connect `For.loop_linkage` directly to `ForReturn.loop_linkage`;
+- connector nodes cannot be used for `loop_linkage`; connectors are re-pointable data-flow aliases, while loop
+  ownership must remain a stable, unambiguous association between the two boundary nodes;
 - a `For` or `ForReturn` cannot participate in a second linkage edge;
 - removing either boundary removes the serialized edge, and replacing a boundary requires a new edge to the replacement;
 - `For.collection`, `For.state`, `ForReturn.output`, and `ForReturn.state` each accept at most one incoming edge;

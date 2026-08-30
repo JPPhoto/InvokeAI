@@ -781,4 +781,50 @@ describe('validateWorkflow', () => {
     expect(validationResult.workflow.edges).toEqual([]);
     expect(validationResult.warnings).toHaveLength(1);
   });
+
+  it('should normalize a stale default edge between loop linkage handles', async () => {
+    const forNode = buildInvocationNode({ x: 0, y: 0 }, for_loop);
+    const returnNode = buildInvocationNode({ x: 0, y: 0 }, for_return);
+    const workflow: WorkflowV3 = {
+      name: '',
+      author: '',
+      description: '',
+      version: '',
+      contact: '',
+      tags: '',
+      notes: '',
+      exposedFields: [],
+      form: getDefaultForm(),
+      meta: { version: '4.0.0', category: 'user' },
+      nodes: [forNode, returnNode],
+      edges: [
+        {
+          id: 'stale-loop-linkage',
+          type: 'default',
+          source: forNode.id,
+          sourceHandle: 'loop_linkage',
+          target: returnNode.id,
+          targetHandle: 'loop_linkage',
+        },
+      ],
+    };
+
+    const validationResult = await validateWorkflow({
+      workflow,
+      templates: { for: for_loop, for_return },
+      checkImageAccess: resolveTrue,
+      checkVideoAccess: resolveTrue,
+      checkBoardAccess: resolveTrue,
+      checkModelAccess: resolveTrue,
+    });
+
+    expect(validationResult.warnings).toEqual([]);
+    expect(validationResult.workflow.edges).toEqual([
+      expect.objectContaining({
+        type: 'loop_linkage',
+        sourceHandle: 'loop_linkage',
+        targetHandle: 'loop_linkage',
+      }),
+    ]);
+  });
 });

@@ -188,6 +188,12 @@ class ForReturnInvocationOutput(BaseInvocationOutput):
 
 @invocation("for_return", version="1.3.0")
 class ForReturnInvocation(BaseInvocation):
+    loop_linkage: Optional[Any] = InputField(
+        default=None,
+        description="The loop linkage from the matching For",
+        input=Input.Connection,
+        ui_type=UIType.Any,
+    )
     output: Optional[Any] = InputField(
         default=None,
         description="The output item to append to the loop output collection",
@@ -200,12 +206,6 @@ class ForReturnInvocation(BaseInvocation):
     continue_condition: Optional[bool] = InputField(
         default=True,
         description="Whether to schedule the next loop iteration; false finalizes the loop",
-    )
-    loop_linkage: Optional[Any] = InputField(
-        default=None,
-        description="The loop linkage from the matching For",
-        input=Input.Connection,
-        ui_type=UIType.Any,
     )
 
     def invoke(self, context: InvocationContext) -> ForReturnInvocationOutput:
