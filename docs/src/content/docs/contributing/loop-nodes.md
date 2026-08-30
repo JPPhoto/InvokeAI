@@ -4,12 +4,12 @@ title: Loop Nodes Architecture
 
 ## Goal
 
-InvokeAI should support a bounded `For` loop node as an engine-native iteration boundary for workflows.
+InvokeAI supports a bounded `For` loop node as an engine-native iteration boundary for workflows.
 
-The first target is a collection-based `For` node, not a fully general `While` node and not arbitrary cyclic graph
-execution.
+The implemented `For` node is collection-based and bounded. It is not a fully general `While` node and does not
+permit arbitrary cyclic graph execution.
 
-The long-term feature goal is:
+The `For` contract is:
 
 - A workflow can iterate over an input collection.
 - Each iteration emits the current `item`, `index`, `total`, and optional loop `state`.
@@ -19,21 +19,21 @@ The long-term feature goal is:
 - The architecture must work for Invoke frontend graphs and for externally submitted graphs that use the same node
   types.
 
-This document records the target architecture and execution contract needed to continue development later.
+This document records the completed `For` contract and the architecture available for future loop-node extensions.
 
-## Implementation Priority
+## Design Principles
 
 Favor explicit graph semantics over hidden mutable runtime state.
 
-The work may still proceed incrementally, but each increment should satisfy all of the following:
+The implementation satisfies the following requirements:
 
 - testable in isolation
 - compatible with the long-term architecture described here
 - non-breaking to existing graph execution behavior
 - compatible with persisted and resumed graph execution state
 
-The first implementation should keep the loop source narrow. Rich iteration sources should be ordinary collection
-producer nodes rather than extra modes on `For`.
+The loop source remains narrow. Rich iteration sources are ordinary collection producer nodes rather than extra modes
+on `For`.
 
 ## Current State
 
@@ -59,9 +59,10 @@ Lessons from those branches:
   state.
 - Loop-carried state should be explicit graph data so it is visible, serialized, resumable, and testable.
 
-What is still not implemented:
+Explicitly outside the current `For` contract:
 
-- Runtime support for implicit zip or Cartesian loop semantics, or mixed nested loop shapes.
+- Implicit zip or Cartesian loop semantics, or mixed nested loop shapes. Workflows must use explicit collection
+  operations when they need those semantics.
 
 Implemented on this branch:
 
@@ -100,7 +101,7 @@ Implemented on this branch:
 
 ## Architectural Direction
 
-Use a bounded collection-based loop as the first durable primitive.
+The bounded collection-based `For` is the durable loop primitive.
 
 The `For` node should have one loop source:
 
@@ -137,9 +138,9 @@ This state model is preferred because it:
 - can survive retry or resume
 - does not rely on mutable context side effects
 
-## Non-Goals For The First Phase
+## Boundaries Of The Current `For` Contract
 
-These should not be the first implementation target:
+The current `For` contract intentionally excludes:
 
 - a general `While` node
 - unknown or unbounded loop counts
@@ -150,13 +151,13 @@ These should not be the first implementation target:
 - parallel loop-body execution
 - automatic inference of arbitrary loop body outputs
 
-The first early-break contract is deliberately attached to `ForReturn`, where the current iteration already completes.
+The early-break contract is deliberately attached to `ForReturn`, where the current iteration already completes.
 A separate `ForContinue` node remains a possible future extension if independent control-flow branches need to skip a
 return or continue without producing an output item.
 
 ## Current Implementation Boundary
 
-The current incremental implementation supports a bounded body path from iteration-scoped `For` outputs to one matching
+The current implementation supports a bounded body path from iteration-scoped `For` outputs to one matching
 `ForReturn`:
 
 ```text
@@ -176,7 +177,7 @@ ExternalNode.output -> BodyNode.input
 ```
 
 The external node must not be derived from an `Iterate`. An independent iterator feeding the body would create multiple
-body returns for one `For` iteration, while the first implementation requires exactly one matching `ForReturn`.
+body returns for one `For` iteration, while the current contract requires exactly one matching `ForReturn`.
 Iterator-derived values must be collapsed as needed and then carried explicitly through the `For` inputs and iteration
 outputs. Direct iterator-derived external body inputs are rejected until the runtime has a durable contract for mapping
 multiple iteration dimensions.
@@ -224,13 +225,14 @@ The loop-body enclosure includes resolved loop-linkage connectors in its visual 
 used by the body data path. This keeps the visible wiring inside the enclosure without making those connectors executable
 body nodes.
 
-This slice establishes the serialized contract. Linked nested `For` boundaries are supported recursively when
+This contract establishes the serialized contract. Linked nested `For` boundaries are supported recursively when
 each boundary has one direct child `For` or independent direct children joined by an explicit fan-in continuation. A child
 final collection may feed the parent's matching `ForReturn` directly or through an ordinary outer continuation subgraph.
-Sequential composition, mixed nested loop shapes, and implicit product or zip semantics remain rejected. A bounded internal `Iterate` is supported only when one matching `Collect`
-collapses its item dimension before `ForReturn`; other internal iterator shapes remain rejected.
+Implicit sequential composition, mixed nested loop shapes, and implicit product or zip semantics remain rejected. A
+bounded internal `Iterate` is supported only when one matching `Collect` collapses its item dimension before
+`ForReturn`; other internal iterator shapes remain rejected.
 
-The first runtime consumer of the linkage is the body-path resolver used by materialization and empty-loop cleanup. A
+The runtime consumer of the linkage is the body-path resolver used by materialization and empty-loop cleanup. A
 `For` selects the reachable `ForReturn` named by its linkage edge. This separates runtime ownership lookup from
 author-time validation and permits the recursive nested shape described below. Multiple nested levels use composite
 execution contexts and independent output ownership. A supported continuation subgraph runs once per parent iteration
@@ -371,9 +373,8 @@ Semantics:
 - `continue_condition` defaults to `True`; `None` also continues, while `False` finalizes the
   current loop context after recording the current return.
 
-The loop should require exactly one matching body return node for each loop boundary. A nested shape may have multiple
-reachable returns, but each `For`'s linkage must select exactly one return.
-Default return behavior can be added later, but it would make the boundary harder to validate.
+The loop requires exactly one matching body return node for each loop boundary. A nested shape may have multiple
+reachable returns, but each `For`'s linkage must select exactly one return. No implicit default return is defined.
 
 `ForReturn.output` and `For.output_collection` are convenience result plumbing, not required loop primitives. A body
 that only needs a final accumulator can leave `output` disconnected and carry the accumulator through `state` instead.
@@ -389,7 +390,7 @@ body to append one value
 to a state-held collection. `Collect` remains scheduler-managed in both shapes, and the state-accumulation wiring is
 currently supported only as a simple `For` body path.
 
-For the target implementation, the recommended body boundary is a boundary pair:
+The `For` body boundary is a boundary pair:
 
 - `For` starts the body through its iteration-scoped outputs.
 - `ForReturn` ends the body for one iteration.
@@ -403,10 +404,11 @@ continues to reject mixed loop bodies and sibling shapes without an explicit fan
 This is simpler than a full visual subgraph while still giving the backend an explicit return boundary. Validation must
 also reject loop-body paths that escape to after-loop nodes without passing through the matching `ForReturn`.
 
-The current branch implements this reachable body-path subset plus linkage validation. The runtime supports recursively
+The current implementation supports this reachable body-path subset plus linkage validation. The runtime supports recursively
 linked inner `For` boundaries whose final collections feed their parent `ForReturn` directly or
 through an ordinary continuation subgraph. Sibling loop branches may use explicit `CollectionConcat` or
-`CollectionZip` or `CollectionCartesian` continuations; mixed loop types and implicit pairing remain future work.
+`CollectionZip` or `CollectionCartesian` continuations; mixed loop types and implicit pairing are outside the current
+contract.
 
 ### 4. Runtime Shape
 
@@ -573,10 +575,8 @@ complete. The scheduler records completion independently for each parent context
 for those contexts together. They should not depend on or see per-iteration prepared outputs directly unless they are
 part of the loop body.
 
-During incremental implementation, final-scoped `For` outputs may exist in the schema before the runtime final prepared
-node exists. In that state, edges from `For.output_collection` and `For.final_state` must not be materialized from
-per-iteration `For` execution nodes. They should remain blocked until the scheduler can create a final loop execution
-surface after all iterations complete.
+Final-scoped `For` outputs are materialized only after the scheduler creates the final loop execution surface. Edges from
+`For.output_collection` and `For.final_state` are never materialized from per-iteration `For` execution nodes.
 
 ### 6. Cancellation And Partial Results
 
@@ -591,11 +591,10 @@ state. When `For` is under an outer iterator, each existing parent context final
 wait until all active parent contexts have final outputs. If the outer iterator has no contexts, the inner `For` produces
 no per-context final output and downstream collection behavior remains empty.
 
-### 7. Ordering
+### 7. Ordering And Parallelism
 
-Loop iterations are currently scheduled sequentially, including stateless loops.
-
-Parallel loop execution is not implemented.
+`For` iterations are scheduled sequentially, including stateless loops. Parallel loop-body execution is a future shared
+execution capability, not part of the current `For` contract.
 
 ### 8. Persistence And Resume
 
@@ -682,7 +681,7 @@ Potential validation rules:
 - Iterator-derived external body inputs must be rejected until multiple iteration dimensions have an explicit body
   mapping contract.
 
-First implementation recommendation:
+Current body-boundary design:
 
 - Use a boundary pair rather than a full visual subgraph.
 - The simple body is reachable from iteration-scoped `For` outputs and terminates at one `ForReturn`. The recursive
@@ -741,7 +740,7 @@ This local guard intentionally does not require a complete body while the user i
 ownership, unterminated body paths, nested loops, internal `Iterate` nodes, and iterator-derived external inputs remain
 whole-graph validation concerns enforced by the backend.
 
-Suggested first visual shape:
+Current visual shape:
 
 ```text
 +-----------------------------------+
@@ -762,14 +761,12 @@ Suggested first visual shape:
 +-----------------------------------+
 ```
 
-The first version does not need a visual subgraph editor, but the graph representation must not block one later. A later
-interactive UI may turn the current read-only boundary into a richer loop region around the reachable body nodes between
-`For` and `ForReturn`.
+The current UI uses a read-only boundary around the reachable body nodes between `For` and `ForReturn`.
 
-## Future Loop Architecture Extensions
+## Implemented Loop Architecture Extensions
 
-The first implementation is intentionally scoped to a bounded collection-based `For`, but several parts of the
-architecture are meant to be reusable by later loop-like nodes:
+The completed bounded collection-based `For` establishes several reusable architectural pieces for later loop-like
+nodes:
 
 - output scopes that distinguish body edges from after-loop edges
 - explicit body boundaries between a loop entry node and a matching return or continuation node
@@ -777,12 +774,12 @@ architecture are meant to be reusable by later loop-like nodes:
 - scheduler materialization that maps one visible author-time node to multiple prepared execution surfaces
 - validation rules that prevent body edges from leaking into after-loop execution
 
-Potential extensions should build on those pieces instead of introducing hidden graph cycles or process-local mutable
+Future loop-like nodes should build on those pieces instead of introducing hidden graph cycles or process-local mutable
 state.
 
 ### Bounded Nested Iterate Body
 
-The first nested-loop extension supports a bounded inner `Iterate` whose results are collapsed before the outer body
+The supported nested-loop shape includes a bounded inner `Iterate` whose results are collapsed before the outer body
 returns:
 
 ```text
@@ -811,9 +808,9 @@ iteration; a future extension must define an explicit scalar aggregation boundar
 This extension must remain distinct from an independent external `Iterate` feeding a body node. The external shape has
 no explicit rule for product, zip, or state-lane semantics and should remain rejected until such a contract is designed.
 
-### Recursive Nested For Body
+### Recursive Nested `For` Body
 
-The nested `For` extension supports complete linked inner `For` boundaries recursively inside an outer `For`
+The current nested `For` contract supports complete linked inner `For` boundaries recursively inside an outer `For`
 body. Each boundary has one direct child loop or independent direct children joined by an ordinary continuation subgraph.
 A child final output may close the parent directly or pass through that continuation:
 
@@ -884,7 +881,9 @@ Sibling children finalize independently under the same parent iteration; the fan
 them finalize. Implicit sequential, zip, or Cartesian composition and mixed nested `Iterate`/`For` shapes remain
 rejected. They must not be approximated by allowing reachability-inferred loop boundaries to share body or return nodes.
 
-Possible future loop-like nodes:
+## Future Loop-Node Extensions
+
+Possible future loop-like nodes and shared execution capabilities:
 
 - `While`: repeats while a condition remains true. This requires a condition value that is evaluated after each body
   return and a hard stop policy to avoid unbounded execution.
@@ -897,9 +896,9 @@ Possible future loop-like nodes:
 - `Repeat`: runs a body a fixed number of times. This can be modeled as `Range -> For.collection`, so it should only
   become a separate node if the UX benefit justifies the extra primitive.
 
-The collection-based `For` should remain the proving ground for the shared architecture. Later nodes should be added
-only when their behavior cannot be expressed clearly by collection producer nodes plus `For`, or when a narrower node
-can provide stronger validation, simpler UI, or safer execution semantics.
+Future nodes should reuse the shared architecture. They should be added only when their behavior cannot be expressed
+clearly by collection producer nodes plus `For`, or when a narrower node can provide stronger validation, simpler UI, or
+safer execution semantics.
 
 ## Testing Plan
 
@@ -998,7 +997,7 @@ input immutability, and zip length mismatches.
 
 Answered branch-local decisions:
 
-- The first implementation uses explicit `for_return`.
+- The current `For` contract uses explicit `for_return`.
 - `ForReturn.output=None` is omitted from `For.output_collection`.
 - Loop output scope is invocation output field metadata and is preserved through backend schema and frontend type
   generation. Saved workflows preserve node types and field handles, then resolve scope from the current templates when
@@ -1023,49 +1022,10 @@ Answered branch-local decisions:
 - `LoopState`, `For`, `ForReturn`, and the state helper nodes are defined in the dedicated `invocations.loops` module.
   Scheduler, materialization, and graph-boundary validation remain in the graph execution service.
 
-## Incremental Implementation Plan
+## Implementation Status
 
-1. Add `LoopState` schema and state helper nodes.
-2. Add `For` and `ForReturn` invocation definitions with scoped output metadata but without runtime behavior beyond
-   validation/schema.
-3. Preserve output-scope metadata through saved workflows, backend schemas, frontend types, and graph preparation.
-4. Add graph validation for the bounded collection-based loop shape and matching `ForReturn` body boundary.
-5. Reject unsupported nested loops and body paths that escape directly to after-loop nodes; add durable endpoint linkage
-   edges for nested/shared runtime paths.
-6. Extend `GraphExecutionState` materialization to create one iteration context at a time.
-7. Route iteration-scoped outputs into body execution nodes and final-scoped outputs into after-loop nodes.
-8. Carry explicit returned state into the next iteration.
-9. Aggregate final output collection and final state.
-10. Add serialization/resume tests.
-11. Add editor affordances after the backend contract is stable.
-12. Support recursively linked nested `For` boundaries with independent inner aggregation and deferred outer
-    return materialization.
-13. Define and implement a deterministic nested final-output continuation contract.
-14. Define and implement sibling nested-body contracts with an explicit fan-in barrier; leave sequential, zip, and
-    Cartesian composition to ordinary collection operations.
-15. Add the first explicit sibling collection operation, `CollectionConcat`, with deterministic left-to-right semantics.
-16. Add explicit positional sibling pairing with `CollectionZip`, including a strict equal-length contract.
-17. Add explicit all-combinations sibling pairing with `CollectionCartesian`.
-18. Add an explicit `ForReturn.continue_condition` early-break contract and verify finalization, state, resume, and
-    nested-context cleanup.
-
-Steps 1 through 18 are complete for the current recursive body-path contract. Step 11 now includes output grouping,
-contextual `ForReturn` discovery/wiring, a structured visual body boundary, and mounted `happy-dom` interaction
-coverage. Full browser geometry, drag, and zoom behavior remains outside this test environment. Final cleanup is
-complete: no branch-specific temporary browser-test dependencies or configuration remain, and the mounted tests use
-the existing `happy-dom` dependency.
-
-The durable endpoint linkage slice, bounded internal `Iterate` slice, recursive linked nested `For` slice,
-deterministic nested final-output continuation slice, explicit sibling fan-in slice, positional `CollectionZip` slice,
-and `CollectionCartesian` slice are implemented. Nested execution
-uses explicit composite paths, independent inner aggregation, deferred outer returns, parent-scoped continuation
-materialization, empty-group handling, failure cleanup, and durable source/execution mappings. Sequential sibling
-composition is available through `CollectionConcat`, positional pairing through `CollectionZip`, and all-combinations
-pairing through `CollectionCartesian`. Early break is available through `ForReturn.continue_condition`; parallel
-stateless loops and richer collection producers remain later work.
-
-## Next Development Slice
-
-The final cleanup slice is complete. No additional `For` implementation slice is required before PR validation. The
-next code work after this branch is parallel stateless loops and richer collection producers; those remain separate
-architecture work and are not started here.
+The bounded collection-based `For` implementation is complete, including runtime execution, persistence and resume,
+frontend and backend validation, nested supported paths, explicit collection operations, early break, and mounted
+`happy-dom` UI coverage. The temporary browser-test setup and its package dependencies have been removed. Future work
+is limited to the separate loop-node extensions and shared execution capabilities listed in [Future Loop-Node
+Extensions](#future-loop-node-extensions).
