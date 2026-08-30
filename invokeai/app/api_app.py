@@ -49,6 +49,7 @@ from invokeai.app.api.sockets import SocketIO
 from invokeai.app.services.config.config_default import get_config
 from invokeai.app.util.custom_openapi import get_openapi_func
 from invokeai.backend.util.logging import InvokeAILogger
+from invokeai.frontend.cli.arg_parser import InvokeAIArgs
 
 app_config = get_config()
 logger = InvokeAILogger.get_logger(config=app_config)
@@ -588,6 +589,9 @@ def overridden_redoc(request: Request) -> HTMLResponse:
 
 
 web_root_path = Path(list(web_dir.__path__)[0])
+ui_root_path = web_root_path
+if InvokeAIArgs.did_parse and getattr(InvokeAIArgs.args, "webv2", False):
+    ui_root_path = web_root_path.parent / "webv2"
 
 if app_config.unsafe_disable_picklescan:
     logger.warning(
@@ -596,9 +600,9 @@ if app_config.unsafe_disable_picklescan:
     )
 
 try:
-    app.mount("/", NoCacheStaticFiles(directory=Path(web_root_path, "dist"), html=True), name="ui")
+    app.mount("/", NoCacheStaticFiles(directory=Path(ui_root_path, "dist"), html=True), name="ui")
 except RuntimeError:
-    logger.warning(f"No UI found at {web_root_path}/dist, skipping UI mount")
+    logger.warning(f"No UI found at {ui_root_path}/dist, skipping UI mount")
 app.mount(
     "/static", NoCacheStaticFiles(directory=Path(web_root_path, "static/")), name="static"
 )  # docs favicon is in here
