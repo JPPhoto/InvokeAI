@@ -10,7 +10,8 @@ the numeric drift between the two encodes, and projects the cost of a full-lengt
     python scripts/benchmark_minimax_h3_vae_encode.py --root ~/invokeai   # finds the VAE in the models dir
 
 The same ROCm conv3d handling the model loader applies (the conv2d decomposition on HIP < 7.2,
-native conv3d otherwise) is applied here, and the active path is printed. The decoder is not
+native conv3d otherwise) is applied here, and the active path is printed; ``--conv3d decomposed``
+or ``--conv3d native`` forces one path so the two can be A/B'd on the same HIP version. The decoder is not
 loaded onto the device — it is a ~4.5 GiB ViT that the encode never touches.
 
 Measured on an RTX 5060 Ti (torch 2.13, cuDNN, TF32 convs on) at the default 768x448 x 39
@@ -50,6 +51,7 @@ from invokeai.backend.minimax_h3.rocm_causal_conv3d import (  # noqa: E402
     _SENTINEL as ROCM_DECOMPOSITION_SENTINEL,
 )
 from invokeai.backend.minimax_h3.rocm_causal_conv3d import (  # noqa: E402
+    _patch_minimax_h3_causal_conv3d,
     patch_minimax_h3_causal_conv3d_for_rocm,
 )
 
@@ -74,7 +76,7 @@ def _conv_path_description() -> str:
     if torch.version.hip is None:
         return "cuDNN conv3d (CUDA build)"
     decomposed = getattr(MiniMaxH3VideoCausalConv3d, ROCM_DECOMPOSITION_SENTINEL, False)
-    return f"HIP {torch.version.hip}: {'conv2d decomposition (HIP < 7.2)' if decomposed else 'native MIOpen conv3d'}"
+    return f"HIP {torch.version.hip}: {'conv2d decomposition' if decomposed else 'native MIOpen conv3d'}"
 
 
 def _run(vae: AutoencoderKLMiniMaxH3, frames: np.ndarray, device: torch.device, repeats: int, mode: str) -> dict:
@@ -126,6 +128,16 @@ def main() -> None:
     parser.add_argument(
         "--no-tf32", action="store_true", help="Disable TF32 convolutions (NVIDIA only; ROCm has no TF32 path)."
     )
+    parser.add_argument(
+        "--conv3d",
+        choices=["auto", "native", "decomposed"],
+        default="auto",
+        help=(
+            "ROCm conv3d path: 'auto' does what the model loader does (conv2d decomposition on HIP < 7.2, native "
+            "MIOpen conv3d otherwise); 'decomposed' forces the decomposition on any HIP version; 'native' forces "
+            "stock conv3d. Only meaningful on ROCm; run the script twice to A/B the two."
+        ),
+    )
     args = parser.parse_args()
 
     device = torch.device(args.device)
@@ -133,7 +145,10 @@ def main() -> None:
         torch.backends.cudnn.allow_tf32 = False
 
     vae_path = args.vae if args.vae is not None else _find_vae_in_root(args.root.expanduser())
-    patch_minimax_h3_causal_conv3d_for_rocm()
+    if args.conv3d == "auto":
+        patch_minimax_h3_causal_conv3d_for_rocm()
+    elif args.conv3d == "decomposed":
+        _patch_minimax_h3_causal_conv3d()
     vae = AutoencoderKLMiniMaxH3.from_pretrained(vae_path, local_files_only=True).eval()
     vae.decoder = torch.nn.Identity()  # the ViT decoder is never used by an encode
     vae = vae.to(device)
