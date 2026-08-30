@@ -2057,12 +2057,96 @@ def test_a_failed_vocabulary_build_is_not_retried_on_every_request(service: Imag
     from invokeai.app.services.image_index.image_index_base import TextSearchUnavailableError
 
     service._vocab_failure = TextSearchUnavailableError("no text encoder")  # type: ignore[assignment]
+    # As the worker's except branch always does — a fresh failure, inside the
+    # retry window.
+    service._vocab_failed_at = time.monotonic()
 
     with pytest.raises(TextSearchUnavailableError, match="no text encoder"):
         service.get_vocab_embeddings()
 
     # Not even queued: there is nothing for the worker to retry.
     assert not service._vocab_build_requested.is_set()
+
+
+def test_an_aged_vocabulary_failure_requeues_the_build(service: ImageIndexService) -> None:
+    # The memo protects a vision-only install from per-refresh text-tower
+    # retries, but the failure itself can be transient — an OOM while the GPU
+    # was busy generating, a load that lost a race. Answering from memory
+    # forever pins one bad minute as a permanent labels outage; after the
+    # retry window, the next request must drop the memo and ask the worker
+    # to build again.
+    from invokeai.app.services.image_index.image_index_base import TextSearchUnavailableError
+
+    service._invoker = SimpleNamespace()  # type: ignore[assignment]
+    service._model_id = MODEL_ID
+    service._vocab_failure = TextSearchUnavailableError("encoder OOM")  # type: ignore[assignment]
+    service._vocab_failed_at = time.monotonic() - image_index_default._VOCAB_FAILURE_RETRY_SECONDS - 1
+
+    with pytest.raises(TextSearchUnavailableError, match="still being prepared"):
+        service.get_vocab_embeddings()
+
+    assert service._vocab_build_requested.is_set()
+    assert service._vocab_failure is None
+    assert service._vocab_failed_at is None
+
+
+def test_a_failed_build_records_when_it_failed(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The retry window is measured from the build's failure, so the stamp must
+    # land with the memo.
+    from invokeai.app.services.image_index import cluster_labels
+
+    def _oom(embed_fn, vocabulary):
+        raise RuntimeError("encoder OOM")
+
+    matrix = np.arange(3 * DIM, dtype=EMBEDDING_DTYPE).reshape(3, DIM)
+    service = _vocab_build_service(tmp_path, monkeypatch, matrix)
+    monkeypatch.setattr(cluster_labels, "ensemble_phrase_embeddings", _oom)
+
+    service._build_vocab_embeddings()
+
+    assert service._vocab_failure is not None
+    assert service._vocab_failed_at is not None
+    # Two-sided: a stamp written with the wrong clock (time.time against a
+    # monotonic read) is a huge negative difference that a one-sided bound
+    # passes vacuously — and the memo would then never age out.
+    assert abs(time.monotonic() - service._vocab_failed_at) < 5
+
+
+def test_an_aged_vocabulary_failure_does_not_requeue_against_a_stopped_worker(
+    service: ImageIndexService,
+) -> None:
+    # The decay assumes the index worker will consume the build request. After
+    # stop() nothing will, so a request arriving in the shutdown window must
+    # answer with the memoized failure — the real cause — rather than queue a
+    # rebuild that 409s "still being prepared" for the rest of the process's
+    # life.
+    from invokeai.app.services.image_index.image_index_base import TextSearchUnavailableError
+
+    service._vocab_failure = TextSearchUnavailableError("encoder OOM")  # type: ignore[assignment]
+    service._vocab_failed_at = time.monotonic() - image_index_default._VOCAB_FAILURE_RETRY_SECONDS - 1
+    service._stop_event.set()
+
+    with pytest.raises(TextSearchUnavailableError, match="encoder OOM"):
+        service.get_vocab_embeddings()
+
+    assert not service._vocab_build_requested.is_set()
+    assert service._vocab_failure is not None
+
+
+def test_the_worker_clears_the_failure_stamp_with_the_memo(service: ImageIndexService) -> None:
+    """Pin the CALL SITE, not just the fields.
+
+    The worker's invalidation block drops the memo and its stamp together; the
+    stamp is only ever read under `if self._vocab_failure is not None`, so
+    leaving it behind is invisible today — but any future read outside that
+    guard turns the stale value live. Like the backoff call-site test above,
+    this is the plausible hand-resolved-rebase loss the suite must see.
+    """
+    source = inspect.getsource(ImageIndexService._worker_loop)
+    invalidate_block = source.split("_vocab_invalidate_requested.clear()")[1].split("try:")[0]
+
+    assert "self._vocab_failure = None" in invalidate_block
+    assert "self._vocab_failed_at = None" in invalidate_block
 
 
 def _vocab_build_service(tmp_path, monkeypatch: pytest.MonkeyPatch, matrix: np.ndarray) -> ImageIndexService:
