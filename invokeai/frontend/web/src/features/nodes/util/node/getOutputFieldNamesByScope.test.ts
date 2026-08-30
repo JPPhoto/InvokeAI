@@ -43,7 +43,7 @@ describe(getOutputFieldNamesByScope.name, () => {
       iteration: [],
       final: [],
     });
-    expect(for_return.inputs.output.ui_hidden).toBe(false);
-    expect(for_return.inputs.state.ui_hidden).toBe(false);
+    expect(for_return.inputs.output?.ui_hidden).toBe(false);
+    expect(for_return.inputs.state?.ui_hidden).toBe(false);
   });
 });
