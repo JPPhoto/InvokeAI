@@ -95,7 +95,7 @@ Implemented on this branch:
 - SQLite session-queue coverage for persisting, reloading, and completing a partially executed stateful loop.
 - Runtime support for recursively linked nested `For` boundaries whose final collections feed their parent
   `ForReturn`, including multiple outer contexts, empty inner or leaf collections, and explicit sibling fan-in.
-- Optional `ForReturn.continue_condition` early-break behavior. `None` preserves legacy continuation, `True` schedules
+- Optional `ForReturn.continue_condition` early-break behavior. `None` and `True` schedule
   the next iteration, and `False` finalizes the current loop context after collecting the current return.
 
 ## Architectural Direction
@@ -196,8 +196,9 @@ reachability, a process-local transient store, or a runtime-generated execution-
 constant linkage marker so the prepared execution result remains schema-valid, but the marker is not consumed as an
 ordinary data input by `ForReturn`.
 
-There is deliberately no compatibility migration for the former hidden endpoint metadata: these loop nodes are not
-released, so a saved `For` workflow must contain the explicit linkage edge to be valid.
+Design note: `loop_linkage` is an explicit association edge rather than metadata on either invocation. This makes loop
+ownership a first-class part of the serialized graph, lets the editor and backend validate the same relationship, and
+keeps the association out of executable data flow while preserving it through save/load and execution resume.
 
 Validation rules are shared by the backend and frontend:
 
@@ -273,7 +274,7 @@ class LoopState(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
 ```
 
-The wrapper gives schema-facing code a stable type and leaves room for future metadata, validation, and migrations.
+The wrapper gives schema-facing code a stable type and leaves room for future metadata and validation.
 
 ### 2. For Node
 
@@ -348,11 +349,11 @@ Semantics:
 - `output` is appended to the final `For.output_collection` when present.
 - `state` becomes the next iteration's state when present.
 - If `state` is omitted, the previous state carries forward unchanged.
-- `continue_condition` defaults to `True`; `None` also continues for compatibility, while `False` finalizes the
+- `continue_condition` defaults to `True`; `None` also continues, while `False` finalizes the
   current loop context after recording the current return.
 
 The loop should require exactly one matching body return node for each loop boundary. A nested shape may have multiple
-reachable returns, but durable identities must select exactly one return for each `For`.
+reachable returns, but each `For`'s linkage must select exactly one return.
 Default return behavior can be added later, but it would make the boundary harder to validate.
 
 `ForReturn.output` and `For.output_collection` are convenience result plumbing, not required loop primitives. A body
@@ -364,7 +365,8 @@ copies the growing collection through state on every iteration; use the built-in
 results only need to be collected as one final collection.
 
 The state-accumulation shape is distinct from the scheduler-special `Iterate` -> body -> `Collect` -> `ForReturn`
-shape. The latter collapses an inner iterator dimension; the former uses `Collect` inside the body to append one value
+shape. The iterator shape collapses an inner iterator dimension; the state-accumulation shape uses `Collect` inside the
+body to append one value
 to a state-held collection. `Collect` remains scheduler-managed in both shapes, and the state-accumulation wiring is
 currently supported only as a simple `For` body path.
 
@@ -704,7 +706,7 @@ The editor now also draws a non-interactive dashed boundary around the reachable
 to the `ForReturn` named by its linkage edge. The overlay labels incomplete, invalid, duplicate, ambiguous, empty, and
 orphaned boundary states. The linkage edge is rendered as a dashed green association and is not included in executable
 graph paths. The overlay is a rendering affordance only: it does not add nodes or infer associations. Replacing either
-boundary removes the old edge; connecting the replacement creates a new association.
+boundary removes the existing edge; connecting the replacement creates a new association.
 
 When an iteration-scoped output connection is dropped on empty canvas, the add-node picker prioritizes `ForReturn`,
 expands its category, and preserves that priority while searching. Selecting it uses the existing valid-connection
