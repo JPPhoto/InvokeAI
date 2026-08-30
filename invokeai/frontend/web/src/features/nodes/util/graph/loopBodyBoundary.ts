@@ -211,7 +211,7 @@ const setBodyIdentity = (node: AnyNode, bodyId: string): void => {
   }
 };
 
-/** Assigns durable identities after an unambiguous loop boundary is completed in the editor. */
+/** Assigns durable identities after an unambiguous loop boundary is completed in the editor state. */
 export const reconcileForLoopBodyIdentities = (
   nodes: AnyNode[],
   edges: AnyEdge[],

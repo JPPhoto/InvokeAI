@@ -208,9 +208,10 @@ Validation rules are shared by the backend and frontend:
 - deleting one boundary clears its identity on the surviving counterpart, so removing a `For` and adding a replacement
   leaves a valid legacy-compatible pair; reconnecting the replacement to an unambiguous body automatically assigns a
   fresh shared identity; same-ID updates that preserve the identity keep it intact;
-- after an edge change completes an unambiguous body boundary, the editor assigns a fresh shared identity when both
-  endpoints are legacy, or propagates the `For` identity to a newly linked `ForReturn`; it does not adopt an identity
-  found only on a return because that identity may be stale;
+- after an edge or node change completes an unambiguous body boundary, the editor assigns a fresh shared identity when
+  both endpoints are legacy, or propagates the `For` identity to a newly linked `ForReturn`; this also rebinds a
+  replacement `For` after its stale predecessor is removed or replaced; it does not adopt an identity found only on a
+  return because that identity may be stale;
 - `body_id` is direct serialized metadata and must not have an incoming graph edge;
 - if either endpoint has an identity, the matching endpoint must also have one;
 - an identity on a return with no corresponding `For` is stale;

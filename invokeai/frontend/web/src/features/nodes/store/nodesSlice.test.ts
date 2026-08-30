@@ -635,6 +635,47 @@ describe('nodesSlice loop boundary actions', () => {
     expect(updatedReturn.data.inputs.body_id?.value).toBe(updatedFor.data.inputs.body_id?.value);
   });
 
+  it('rebinds a replacement For after its stale predecessor is removed', () => {
+    const oldForNode = buildNode(for_loop);
+    const replacementForNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    oldForNode.data.inputs.body_id!.value = 'body-1';
+    returnNode.data.inputs.body_id!.value = 'body-1';
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [oldForNode, replacementForNode, returnNode];
+
+    const connectedState = nodesSliceConfig.slice.reducer(
+      initialState,
+      edgesChanged([{ type: 'add', item: buildEdge(replacementForNode.id, 'item', returnNode.id, 'output') }])
+    );
+    const connectedFor = connectedState.nodes.find((node) => node.id === replacementForNode.id);
+    const connectedReturn = connectedState.nodes.find((node) => node.id === returnNode.id);
+    if (
+      !connectedFor ||
+      connectedFor.type !== 'invocation' ||
+      !connectedReturn ||
+      connectedReturn.type !== 'invocation'
+    ) {
+      throw new Error('Expected connected replacement For and ForReturn invocations');
+    }
+    expect(connectedFor.data.inputs.body_id?.value).toBeUndefined();
+    expect(connectedReturn.data.inputs.body_id?.value).toBe('body-1');
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      connectedState,
+      nodesChanged([{ type: 'remove', id: oldForNode.id }])
+    );
+    const updatedFor = nextState.nodes.find((node) => node.id === replacementForNode.id);
+    const updatedReturn = nextState.nodes.find((node) => node.id === returnNode.id);
+
+    if (!updatedFor || updatedFor.type !== 'invocation' || !updatedReturn || updatedReturn.type !== 'invocation') {
+      throw new Error('Expected replacement For and ForReturn invocations');
+    }
+    expect(updatedFor.data.inputs.body_id?.value).toEqual(expect.any(String));
+    expect(updatedReturn.data.inputs.body_id?.value).toBe(updatedFor.data.inputs.body_id?.value);
+  });
+
   it('clears the surviving ForReturn identity when its For is removed', () => {
     const forNode = buildNode(for_loop);
     const returnNode = buildNode(for_return);

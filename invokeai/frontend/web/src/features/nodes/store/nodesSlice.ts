@@ -381,6 +381,8 @@ const slice = createSlice({
         }
       }
 
+      reconcileForLoopBodyIdentities(state.nodes as AnyNode[], state.edges);
+
       const wereNodesRemoved = action.payload.some((change) => change.type === 'remove' || change.type === 'replace');
 
       if (wereNodesRemoved) {
