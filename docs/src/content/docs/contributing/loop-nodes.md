@@ -183,16 +183,16 @@ multiple iteration dimensions.
 
 ### Durable Loop Linkage
 
-`For` and `ForReturn` are associated by a required serialized `loop_linkage` edge. The edge is a control-flow
-association, not a value connection:
+`For` and `ForReturn` are associated by a required serialized `loop_linkage` association. The association is a
+control-flow relationship, not a value connection:
 
 ```text
 For.loop_linkage - - - - - - - - - - - - - - - - - > ForReturn.loop_linkage
 For.item -> body path -> ForReturn.output
 ```
 
-The edge is part of graph JSON and workflow JSON, so it survives save/load and execution resume. It is not inferred from
-reachability, a process-local transient store, or a runtime-generated execution-node ID. The `For` output carries a
+The association is part of graph JSON and workflow JSON, so it survives save/load and execution resume. It is not inferred
+from reachability, a process-local transient store, or a runtime-generated execution-node ID. The `For` output carries a
 constant linkage marker so the prepared execution result remains schema-valid, but the marker is not consumed as an
 ordinary data input by `ForReturn`.
 
@@ -202,15 +202,27 @@ keeps the association out of executable data flow while preserving it through sa
 
 Validation rules are shared by the backend and frontend:
 
-- every `For` has exactly one outgoing `loop_linkage` edge;
-- every `ForReturn` has exactly one incoming `loop_linkage` edge;
-- the edge must connect `For.loop_linkage` directly to `ForReturn.loop_linkage`;
-- connector nodes cannot be used for `loop_linkage`; connectors are re-pointable data-flow aliases, while loop
-  ownership must remain a stable, unambiguous association between the two boundary nodes;
+- every `For` has exactly one outgoing `loop_linkage` association;
+- every `ForReturn` has exactly one incoming `loop_linkage` association;
+- the runtime graph edge connects `For.loop_linkage` directly to `ForReturn.loop_linkage`;
+- the editor may retain a connector path as a visual alias for that association. Every connector on the path must have
+  exactly one `in` edge and one `out` edge, the path must resolve to one `For` and one `ForReturn`, and the connector
+  output cannot branch to another boundary or ordinary data target;
 - a `For` or `ForReturn` cannot participate in a second linkage edge;
-- removing either boundary removes the serialized edge, and replacing a boundary requires a new edge to the replacement;
+- removing either boundary removes the serialized association. Replacing a boundary with a different node type or ID
+  requires a new association; replacing the same boundary role at the same ID preserves the association;
 - `For.collection`, `For.state`, `ForReturn.output`, and `ForReturn.state` each accept at most one incoming edge;
   malformed saved graphs with duplicate boundary inputs are rejected.
+
+Connector aliases are serialized as ordinary-looking `For.loop_linkage -> connector.in -> connector.out ->
+ForReturn.loop_linkage` edges so the user can move or replace the connector path. Workflow validation accepts a path while
+it is being assembled, but graph construction resolves a complete path to the canonical runtime association and rejects
+missing, branched, reused, cyclic, or mismatched paths before execution. A connector carrying loop linkage cannot also be
+used as a normal data-flow fan-out.
+
+The loop-body enclosure includes resolved loop-linkage connectors in its visual bounds, just as it includes connectors
+used by the body data path. This keeps the visible wiring inside the enclosure without making those connectors executable
+body nodes.
 
 This slice establishes the serialized contract. Linked nested `For` boundaries are supported recursively when
 each boundary has one direct child `For` or independent direct children joined by an explicit fan-in continuation. A child
@@ -675,9 +687,11 @@ First implementation recommendation:
 
 Resolved design question:
 
-- The durable endpoint association is a required serialized `loop_linkage` edge from `For` to `ForReturn`. It is a
-  direct relationship between boundary nodes, not a data-flow edge. Missing, stale, duplicate, or mismatched linkage
-  is invalid; deleting either endpoint removes the edge, and a replacement boundary must be linked explicitly.
+- The durable endpoint association is a required serialized `loop_linkage` association from `For` to `ForReturn`. It is
+  a direct relationship between boundary nodes, not a data-flow edge. A connector path may serialize the association as
+  an editor alias, but graph construction resolves it to the direct runtime edge. Missing, stale, duplicate, or
+  mismatched linkage is invalid; deleting either endpoint removes the association, while a same-role replacement at the
+  same ID preserves it.
 
 ## Editor Contract
 
@@ -706,9 +720,11 @@ headings. Nodes without scoped outputs keep the existing flat output rendering.
 
 The editor now also draws a non-interactive dashed boundary around the reachable path from each `For` iteration output
 to the `ForReturn` named by its linkage edge. The overlay labels incomplete, invalid, duplicate, ambiguous, empty, and
-orphaned boundary states. The linkage edge is rendered as a dashed green association and is not included in executable
-graph paths. The overlay is a rendering affordance only: it does not add nodes or infer associations. Replacing either
-boundary removes the existing edge; connecting the replacement creates a new association.
+orphaned boundary states. A direct linkage edge is rendered as a dashed green association; a complete connector alias is
+resolved to the same visual association and its connector edges are excluded from executable paths. The overlay is a
+rendering affordance only: it does not add nodes or infer associations. Replacing either boundary removes the existing
+edge; connecting a replacement with a different role or ID creates a new association, while a same-role replacement at
+the same ID retains the existing one.
 
 When an iteration-scoped output connection is dropped on empty canvas, the add-node picker prioritizes `ForReturn`,
 expands its category, and preserves that priority while searching. Selecting it uses the existing valid-connection
@@ -981,8 +997,9 @@ Answered branch-local decisions:
 - Loop output scope is invocation output field metadata and is preserved through backend schema and frontend type
   generation. Saved workflows preserve node types and field handles, then resolve scope from the current templates when
   loaded.
-- Durable loop linkage is the required serialized `loop_linkage` edge from `For` to `ForReturn`. It is persisted with
-  the workflow graph and is required for every loop boundary; it is not an ordinary executable data-flow edge.
+- Durable loop linkage is the required serialized `loop_linkage` association from `For` to `ForReturn`. A connector path
+  may act as its one-to-one editor alias, but graph construction produces the direct canonical association in the runtime
+  graph and never treats the alias as executable data flow.
 - A nested child's final `output_collection` may feed an ordinary parent-scoped continuation subgraph before the matching
   parent `ForReturn`. The continuation is materialized once at the parent iteration path after child finalization; it may
   consume child final output plus parent iteration/preparation inputs. Independent sibling loops are supported only when

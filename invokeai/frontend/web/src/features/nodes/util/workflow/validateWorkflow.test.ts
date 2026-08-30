@@ -827,4 +827,110 @@ describe('validateWorkflow', () => {
       }),
     ]);
   });
+
+  it('should preserve a connector loop linkage alias regardless of edge order', async () => {
+    const forNode = buildInvocationNode({ x: 0, y: 0 }, for_loop);
+    const connectorNode = buildConnectorNode('connector-1');
+    const returnNode = buildInvocationNode({ x: 0, y: 0 }, for_return);
+    const workflow: WorkflowV3 = {
+      name: '',
+      author: '',
+      description: '',
+      version: '',
+      contact: '',
+      tags: '',
+      notes: '',
+      exposedFields: [],
+      form: getDefaultForm(),
+      meta: { version: '4.0.0', category: 'user' },
+      nodes: [forNode, connectorNode, returnNode],
+      edges: [
+        {
+          id: 'linkage-output',
+          type: 'default',
+          source: connectorNode.id,
+          sourceHandle: CONNECTOR_OUTPUT_HANDLE,
+          target: returnNode.id,
+          targetHandle: 'loop_linkage',
+        },
+        {
+          id: 'linkage-input',
+          type: 'default',
+          source: forNode.id,
+          sourceHandle: 'loop_linkage',
+          target: connectorNode.id,
+          targetHandle: CONNECTOR_INPUT_HANDLE,
+        },
+      ],
+    };
+
+    const validationResult = await validateWorkflow({
+      workflow,
+      templates: { for: for_loop, for_return },
+      checkImageAccess: resolveTrue,
+      checkVideoAccess: resolveTrue,
+      checkBoardAccess: resolveTrue,
+      checkModelAccess: resolveTrue,
+    });
+
+    expect(validationResult.warnings).toEqual([]);
+    expect(validationResult.workflow.edges).toEqual(workflow.edges);
+  });
+
+  it('should remove a connector alias that duplicates a direct linkage regardless of edge order', async () => {
+    const forNode = buildInvocationNode({ x: 0, y: 0 }, for_loop);
+    const connectorNode = buildConnectorNode('connector-1');
+    const returnNode = buildInvocationNode({ x: 0, y: 0 }, for_return);
+    const directLinkage = {
+      id: 'direct-linkage',
+      type: 'loop_linkage' as const,
+      source: forNode.id,
+      sourceHandle: 'loop_linkage',
+      target: returnNode.id,
+      targetHandle: 'loop_linkage',
+    };
+    const workflow: WorkflowV3 = {
+      name: '',
+      author: '',
+      description: '',
+      version: '',
+      contact: '',
+      tags: '',
+      notes: '',
+      exposedFields: [],
+      form: getDefaultForm(),
+      meta: { version: '4.0.0', category: 'user' },
+      nodes: [forNode, connectorNode, returnNode],
+      edges: [
+        {
+          id: 'linkage-output',
+          type: 'default',
+          source: connectorNode.id,
+          sourceHandle: CONNECTOR_OUTPUT_HANDLE,
+          target: returnNode.id,
+          targetHandle: 'loop_linkage',
+        },
+        directLinkage,
+        {
+          id: 'linkage-input',
+          type: 'default',
+          source: forNode.id,
+          sourceHandle: 'loop_linkage',
+          target: connectorNode.id,
+          targetHandle: CONNECTOR_INPUT_HANDLE,
+        },
+      ],
+    };
+
+    const validationResult = await validateWorkflow({
+      workflow,
+      templates: { for: for_loop, for_return },
+      checkImageAccess: resolveTrue,
+      checkVideoAccess: resolveTrue,
+      checkBoardAccess: resolveTrue,
+      checkModelAccess: resolveTrue,
+    });
+
+    expect(validationResult.workflow.edges).toEqual([directLinkage]);
+  });
 });

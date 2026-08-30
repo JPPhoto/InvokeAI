@@ -104,6 +104,18 @@ const ifTemplate: InvocationTemplate = {
   classification: 'stable',
 };
 
+const buildConnectorNode = (id: string) => ({
+  id,
+  type: 'connector' as const,
+  position: { x: 0, y: 0 },
+  data: {
+    id,
+    type: 'connector' as const,
+    label: 'Connector',
+    isOpen: true,
+  },
+});
+
 const floatOutputTemplate: InvocationTemplate = {
   title: 'Float Output',
   type: 'float_output',
@@ -221,18 +233,6 @@ const workflowReturnTemplate: InvocationTemplate = {
   nodePack: 'invokeai',
   classification: 'beta',
 };
-
-const buildConnectorNode = (id: string) => ({
-  id,
-  type: 'connector' as const,
-  position: { x: 0, y: 0 },
-  data: {
-    id,
-    type: 'connector' as const,
-    label: 'Connector',
-    isOpen: true,
-  },
-});
 
 describe(validateConnection.name, () => {
   it('should reject invalid connection to self', () => {
@@ -524,6 +524,276 @@ describe(validateConnection.name, () => {
           [forNode, returnNode],
           [],
           templates,
+          null
+        )
+      ).toBe('nodes.forLoopLinkageInvalid');
+    });
+
+    it('accepts the For side of a connector linkage alias', () => {
+      const forNode = buildNode(for_loop);
+      const connector = buildConnectorNode('connector-1');
+
+      expect(
+        validateConnection(
+          {
+            source: forNode.id,
+            sourceHandle: 'loop_linkage',
+            target: connector.id,
+            targetHandle: CONNECTOR_INPUT_HANDLE,
+          },
+          [forNode, connector],
+          [],
+          templates,
+          null
+        )
+      ).toBeNull();
+    });
+
+    it('rejects the For side of an alias that would reuse an already-linked ForReturn', () => {
+      const forNode = buildNode(for_loop);
+      const existingForNode = buildNode(for_loop);
+      const connector = buildConnectorNode('connector-1');
+      const returnNode = buildNode(for_return);
+      const edges = [
+        buildLoopLinkageEdge(existingForNode.id, returnNode.id),
+        buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+      ];
+
+      expect(
+        validateConnection(
+          {
+            source: forNode.id,
+            sourceHandle: 'loop_linkage',
+            target: connector.id,
+            targetHandle: CONNECTOR_INPUT_HANDLE,
+          },
+          [forNode, existingForNode, connector, returnNode],
+          edges,
+          { ...templates, for: for_loop, for_return },
+          null
+        )
+      ).toBe('nodes.forLoopLinkageDuplicate');
+    });
+
+    it('rejects the For side of a connector linkage alias with an occupied connector input', () => {
+      const forNode = buildNode(for_loop);
+      const sourceNode = buildNode(sub);
+      const connector = buildConnectorNode('connector-1');
+      const edges = [buildEdge(sourceNode.id, 'value', connector.id, CONNECTOR_INPUT_HANDLE)];
+
+      expect(
+        validateConnection(
+          {
+            source: forNode.id,
+            sourceHandle: 'loop_linkage',
+            target: connector.id,
+            targetHandle: CONNECTOR_INPUT_HANDLE,
+          },
+          [forNode, sourceNode, connector],
+          edges,
+          { ...templates, for: for_loop },
+          null
+        )
+      ).toBe('nodes.inputMayOnlyHaveOneConnection');
+    });
+
+    it('accepts the ForReturn side of a complete connector linkage alias', () => {
+      const forNode = buildNode(for_loop);
+      const connector = buildConnectorNode('connector-1');
+      const returnNode = buildNode(for_return);
+      const edges = [buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE)];
+
+      expect(
+        validateConnection(
+          {
+            source: connector.id,
+            sourceHandle: CONNECTOR_OUTPUT_HANDLE,
+            target: returnNode.id,
+            targetHandle: 'loop_linkage',
+          },
+          [forNode, connector, returnNode],
+          edges,
+          templates,
+          null
+        )
+      ).toBeNull();
+    });
+
+    it('accepts a connector chain edge between an attached For and ForReturn', () => {
+      const forNode = buildNode(for_loop);
+      const firstConnector = buildConnectorNode('connector-1');
+      const secondConnector = buildConnectorNode('connector-2');
+      const returnNode = buildNode(for_return);
+      const edges = [
+        buildEdge(forNode.id, 'loop_linkage', firstConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(secondConnector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+      ];
+
+      expect(
+        validateConnection(
+          {
+            source: firstConnector.id,
+            sourceHandle: CONNECTOR_OUTPUT_HANDLE,
+            target: secondConnector.id,
+            targetHandle: CONNECTOR_INPUT_HANDLE,
+          },
+          [forNode, firstConnector, secondConnector, returnNode],
+          edges,
+          templates,
+          null
+        )
+      ).toBeNull();
+    });
+
+    it('accepts a connector deletion splice that preserves a loop linkage chain', () => {
+      const forNode = buildNode(for_loop);
+      const firstConnector = buildConnectorNode('connector-1');
+      const terminalConnector = buildConnectorNode('connector-2');
+      const returnNode = buildNode(for_return);
+      const edges = [
+        buildEdge(forNode.id, 'loop_linkage', firstConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(firstConnector.id, CONNECTOR_OUTPUT_HANDLE, terminalConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(terminalConnector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+      ];
+
+      expect(
+        getConnectorDeletionSpliceConnections(
+          terminalConnector.id,
+          [forNode, firstConnector, terminalConnector, returnNode],
+          edges,
+          templates,
+          validateConnection
+        )
+      ).toEqual([
+        {
+          source: firstConnector.id,
+          sourceHandle: CONNECTOR_OUTPUT_HANDLE,
+          target: returnNode.id,
+          targetHandle: 'loop_linkage',
+        },
+      ]);
+    });
+
+    it('rejects a connector loop linkage chain that creates a cycle', () => {
+      const forNode = buildNode(for_loop);
+      const firstConnector = buildConnectorNode('connector-1');
+      const secondConnector = buildConnectorNode('connector-2');
+      const edges = [
+        buildEdge(forNode.id, 'loop_linkage', firstConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(secondConnector.id, CONNECTOR_OUTPUT_HANDLE, firstConnector.id, CONNECTOR_INPUT_HANDLE),
+      ];
+
+      expect(
+        validateConnection(
+          {
+            source: firstConnector.id,
+            sourceHandle: CONNECTOR_OUTPUT_HANDLE,
+            target: secondConnector.id,
+            targetHandle: CONNECTOR_INPUT_HANDLE,
+          },
+          [forNode, firstConnector, secondConnector],
+          edges,
+          { ...templates, for: for_loop },
+          null
+        )
+      ).toBe('nodes.connectionWouldCreateCycle');
+    });
+
+    it('rejects an unresolved connector linkage alias for an already-owned ForReturn', () => {
+      const connector = buildConnectorNode('connector-1');
+      const forNode = buildNode(for_loop);
+      const returnNode = buildNode(for_return);
+      const existingForNode = buildNode(for_loop);
+      const existingReturnNode = buildNode(for_return);
+      const edges = [buildLoopLinkageEdge(existingForNode.id, returnNode.id)];
+
+      expect(
+        validateConnection(
+          {
+            source: connector.id,
+            sourceHandle: CONNECTOR_OUTPUT_HANDLE,
+            target: returnNode.id,
+            targetHandle: 'loop_linkage',
+          },
+          [connector, forNode, returnNode, existingForNode, existingReturnNode],
+          edges,
+          templates,
+          null
+        )
+      ).toBe('nodes.forLoopLinkageDuplicate');
+    });
+
+    it('rejects a connector linkage alias reused by a second ForReturn', () => {
+      const forNode = buildNode(for_loop);
+      const connector = buildConnectorNode('connector-1');
+      const firstReturnNode = buildNode(for_return);
+      const secondReturnNode = buildNode(for_return);
+      const edges = [
+        buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, firstReturnNode.id, 'loop_linkage'),
+      ];
+
+      expect(
+        validateConnection(
+          {
+            source: connector.id,
+            sourceHandle: CONNECTOR_OUTPUT_HANDLE,
+            target: secondReturnNode.id,
+            targetHandle: 'loop_linkage',
+          },
+          [forNode, connector, firstReturnNode, secondReturnNode],
+          edges,
+          templates,
+          null
+        )
+      ).toBe('nodes.forLoopLinkageInvalid');
+    });
+
+    it('rejects a connector linkage alias that shares a ForReturn with another alias', () => {
+      const firstForNode = buildNode(for_loop);
+      const secondForNode = buildNode(for_loop);
+      const firstConnector = buildConnectorNode('connector-1');
+      const secondConnector = buildConnectorNode('connector-2');
+      const returnNode = buildNode(for_return);
+      const edges = [
+        buildEdge(firstForNode.id, 'loop_linkage', firstConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(firstConnector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+        buildEdge(secondConnector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+      ];
+
+      expect(
+        validateConnection(
+          {
+            source: secondForNode.id,
+            sourceHandle: 'loop_linkage',
+            target: secondConnector.id,
+            targetHandle: CONNECTOR_INPUT_HANDLE,
+          },
+          [firstForNode, secondForNode, firstConnector, secondConnector, returnNode],
+          edges,
+          templates,
+          null
+        )
+      ).toBe('nodes.forLoopLinkageDuplicate');
+    });
+
+    it('rejects a loop linkage connector reused for ordinary data', () => {
+      const forNode = buildNode(for_loop);
+      const connector = buildConnectorNode('connector-1');
+      const targetNode = buildNode(sub);
+      const edges = [buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE)];
+
+      expect(
+        validateConnection(
+          {
+            source: connector.id,
+            sourceHandle: CONNECTOR_OUTPUT_HANDLE,
+            target: targetNode.id,
+            targetHandle: 'a',
+          },
+          [forNode, connector, targetNode],
+          edges,
+          { ...templates, for: for_loop },
           null
         )
       ).toBe('nodes.forLoopLinkageInvalid');

@@ -115,6 +115,116 @@ describe('buildNodesGraph', () => {
     ]);
   });
 
+  it('canonicalizes connector loop linkage into one direct execution edge', () => {
+    const forNode = buildNode(for_loop);
+    const connector = buildConnectorNode('connector-1');
+    const returnNode = buildNode(for_return);
+    const state = buildState(
+      [forNode, connector, returnNode],
+      [
+        buildEdge(forNode.id, 'item', returnNode.id, 'output'),
+        buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+      ]
+    );
+
+    const graph = buildNodesGraph(state, { ...templates, for: for_loop, for_return });
+
+    expect(graph.edges).toEqual([
+      expect.objectContaining({
+        type: 'default',
+        source: { node_id: forNode.id, field: 'item' },
+        destination: { node_id: returnNode.id, field: 'output' },
+      }),
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: { node_id: forNode.id, field: 'loop_linkage' },
+        destination: { node_id: returnNode.id, field: 'loop_linkage' },
+      }),
+    ]);
+  });
+
+  it('canonicalizes a chained connector loop linkage into one direct execution edge', () => {
+    const forNode = buildNode(for_loop);
+    const firstConnector = buildConnectorNode('connector-1');
+    const secondConnector = buildConnectorNode('connector-2');
+    const returnNode = buildNode(for_return);
+    const state = buildState(
+      [forNode, firstConnector, secondConnector, returnNode],
+      [
+        buildEdge(forNode.id, 'item', returnNode.id, 'output'),
+        buildEdge(forNode.id, 'loop_linkage', firstConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(firstConnector.id, CONNECTOR_OUTPUT_HANDLE, secondConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(secondConnector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+      ]
+    );
+
+    const graph = buildNodesGraph(state, { ...templates, for: for_loop, for_return });
+
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: { node_id: forNode.id, field: 'loop_linkage' },
+        destination: { node_id: returnNode.id, field: 'loop_linkage' },
+      })
+    );
+    expect(graph.edges).toHaveLength(2);
+  });
+
+  it('rejects a connector loop linkage that branches to multiple ForReturns', () => {
+    const forNode = buildNode(for_loop);
+    const connector = buildConnectorNode('connector-1');
+    const firstReturnNode = buildNode(for_return);
+    const secondReturnNode = buildNode(for_return);
+    const state = buildState(
+      [forNode, connector, firstReturnNode, secondReturnNode],
+      [
+        buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, firstReturnNode.id, 'loop_linkage'),
+        buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, secondReturnNode.id, 'loop_linkage'),
+      ]
+    );
+
+    expect(() => buildNodesGraph(state, { ...templates, for: for_loop, for_return })).toThrow(
+      'nodes.forLoopLinkageInvalid'
+    );
+  });
+
+  it('rejects a loop linkage connector reused for ordinary data before a ForReturn is attached', () => {
+    const forNode = buildNode(for_loop);
+    const connector = buildConnectorNode('connector-1');
+    const targetNode = buildNode(sub);
+    const state = buildState(
+      [forNode, connector, targetNode],
+      [
+        buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, targetNode.id, 'a'),
+      ]
+    );
+
+    expect(() => buildNodesGraph(state, { ...templates, for: for_loop })).toThrow('nodes.forLoopLinkageInvalid');
+  });
+
+  it('rejects connector loop linkages that share a ForReturn', () => {
+    const forNode = buildNode(for_loop);
+    const firstConnector = buildConnectorNode('connector-1');
+    const secondConnector = buildConnectorNode('connector-2');
+    const returnNode = buildNode(for_return);
+    const state = buildState(
+      [forNode, firstConnector, secondConnector, returnNode],
+      [
+        buildEdge(forNode.id, 'loop_linkage', firstConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(firstConnector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+        buildEdge(forNode.id, 'loop_linkage', secondConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(secondConnector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+      ]
+    );
+
+    expect(() => buildNodesGraph(state, { ...templates, for: for_loop, for_return })).toThrow(
+      'nodes.forLoopLinkageDuplicate'
+    );
+  });
+
   it('normalizes loop linkage handles when an edge is missing its linkage type', () => {
     const forNode = buildNode(for_loop);
     const returnNode = buildNode(for_return);

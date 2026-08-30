@@ -5,6 +5,7 @@ import {
   CONNECTOR_INPUT_HANDLE,
   CONNECTOR_OUTPUT_HANDLE,
   resolveConnectorSource,
+  resolveLoopLinkagePath,
 } from 'features/nodes/store/util/connectorTopology';
 import { getCollectItemType } from 'features/nodes/store/util/getCollectItemType';
 import { getHasCycles } from 'features/nodes/store/util/getHasCycles';
@@ -14,6 +15,8 @@ import type { FieldType } from 'features/nodes/types/field';
 import type { AnyEdge, AnyNode, InvocationNode } from 'features/nodes/types/invocation';
 import { getInvocationNodeInputTemplate, isConnectorNode, isInvocationNode } from 'features/nodes/types/invocation';
 import type { SetNonNullable } from 'type-fest';
+
+import { isLoopLinkageEdge } from './reactFlowUtil';
 
 type Connection = SetNonNullable<NullableConnection>;
 
@@ -359,6 +362,19 @@ const hasOutputScopeConflict = (connection: Connection, nodes: AnyNode[], edges:
   return [...stagedConflicts].some((conflict) => !existingConflicts.has(conflict));
 };
 
+const getResolvedLoopLinkages = (nodes: AnyNode[], edges: AnyEdge[]) =>
+  edges.flatMap((edge) => {
+    if (
+      edge.type !== 'default' ||
+      edge.targetHandle !== LOOP_LINKAGE_FIELD ||
+      !isConnectorNode(nodes.find((node) => node.id === edge.source))
+    ) {
+      return [];
+    }
+    const path = resolveLoopLinkagePath(edge, nodes, edges);
+    return path ? [path] : [];
+  });
+
 /**
  * Validates a connection between two fields
  * @returns A translation key for an error if the connection is invalid, otherwise null
@@ -371,35 +387,202 @@ export const validateConnection: ValidateConnectionFunc = (
   ignoreEdge,
   strict = true
 ): string | null => {
-  const hasLoopLinkageHandle = c.sourceHandle === LOOP_LINKAGE_FIELD || c.targetHandle === LOOP_LINKAGE_FIELD;
+  const sourceNode = nodes.find((node) => node.id === c.source);
+  const targetNode = nodes.find((node) => node.id === c.target);
+  const filteredEdges = edges.filter((edge) => edge.id !== ignoreEdge?.id);
+  const resolvedConnectorSource =
+    sourceNode && isConnectorNode(sourceNode) && c.sourceHandle === CONNECTOR_OUTPUT_HANDLE
+      ? resolveConnectorSource(sourceNode.id, nodes, filteredEdges)
+      : null;
+  const hasConnectorLoopLinkage =
+    c.sourceHandle === CONNECTOR_OUTPUT_HANDLE &&
+    c.targetHandle === CONNECTOR_INPUT_HANDLE &&
+    isConnectorNode(sourceNode) &&
+    isConnectorNode(targetNode) &&
+    resolvedConnectorSource?.fieldName === LOOP_LINKAGE_FIELD;
+  const hasLoopLinkageHandle =
+    c.sourceHandle === LOOP_LINKAGE_FIELD || c.targetHandle === LOOP_LINKAGE_FIELD || hasConnectorLoopLinkage;
   if (hasLoopLinkageHandle) {
-    if (c.sourceHandle !== LOOP_LINKAGE_FIELD || c.targetHandle !== LOOP_LINKAGE_FIELD) {
-      return 'nodes.forLoopLinkageInvalid';
-    }
-
-    const sourceNode = nodes.find((node) => node.id === c.source);
-    const targetNode = nodes.find((node) => node.id === c.target);
     if (!sourceNode || !targetNode) {
       return 'nodes.missingNode';
     }
+
     if (
-      !isInvocationNode(sourceNode) ||
-      !isInvocationNode(targetNode) ||
-      sourceNode.data.type !== 'for' ||
-      targetNode.data.type !== 'for_return'
+      c.sourceHandle === LOOP_LINKAGE_FIELD &&
+      isInvocationNode(sourceNode) &&
+      sourceNode.data.type === 'for' &&
+      isConnectorNode(targetNode) &&
+      c.targetHandle === CONNECTOR_INPUT_HANDLE
     ) {
-      return 'nodes.forLoopLinkageInvalid';
+      if (
+        filteredEdges.some(
+          (edge) =>
+            edge.type === 'default' && edge.target === targetNode.id && edge.targetHandle === CONNECTOR_INPUT_HANDLE
+        )
+      ) {
+        return 'nodes.inputMayOnlyHaveOneConnection';
+      }
+      if (
+        filteredEdges.some(
+          (edge) =>
+            edge.source === c.source &&
+            ((edge.type === 'loop_linkage' && edge.sourceHandle === LOOP_LINKAGE_FIELD) ||
+              (edge.type === 'default' && edge.sourceHandle === LOOP_LINKAGE_FIELD))
+        )
+      ) {
+        return 'nodes.forLoopLinkageDuplicate';
+      }
+
+      const candidateEdge = { ...c, id: '__candidate_loop_linkage__', type: 'default' } satisfies AnyEdge;
+      const stagedEdges = [...filteredEdges, candidateEdge];
+      if (getHasCycles(c.source, c.target, nodes, stagedEdges)) {
+        return 'nodes.connectionWouldCreateCycle';
+      }
+      const terminalTargetEdges = getConnectorTerminalTargetEdges(targetNode.id, nodes, stagedEdges);
+      for (const terminalTargetEdge of terminalTargetEdges) {
+        const terminalNode = nodes.find((node) => node.id === terminalTargetEdge.target);
+        if (
+          !terminalNode ||
+          !isInvocationNode(terminalNode) ||
+          terminalNode.data.type !== 'for_return' ||
+          terminalTargetEdge.targetHandle !== LOOP_LINKAGE_FIELD ||
+          !resolveLoopLinkagePath(terminalTargetEdge, nodes, stagedEdges)
+        ) {
+          return 'nodes.forLoopLinkageInvalid';
+        }
+      }
+
+      const candidatePaths = getResolvedLoopLinkages(nodes, stagedEdges).filter((path) =>
+        path.edgeIds.includes(candidateEdge.id)
+      );
+      if (candidatePaths.length > 1) {
+        return 'nodes.forLoopLinkageInvalid';
+      }
+      const candidatePath = candidatePaths[0];
+      if (
+        candidatePath &&
+        (filteredEdges.some(
+          (edge) =>
+            isLoopLinkageEdge(edge) &&
+            (edge.source === candidatePath.forNodeId || edge.target === candidatePath.returnNodeId)
+        ) ||
+          getResolvedLoopLinkages(nodes, filteredEdges).some(
+            (existingPath) =>
+              existingPath.forNodeId === candidatePath.forNodeId ||
+              existingPath.returnNodeId === candidatePath.returnNodeId
+          ))
+      ) {
+        return 'nodes.forLoopLinkageDuplicate';
+      }
+      return null;
     }
 
-    const filteredEdges = edges.filter((edge) => edge.id !== ignoreEdge?.id);
-    if (
-      filteredEdges.some(
-        (edge) => edge.type === 'loop_linkage' && (edge.source === c.source || edge.target === c.target)
-      )
-    ) {
-      return 'nodes.forLoopLinkageDuplicate';
+    if (hasConnectorLoopLinkage) {
+      if (filteredEdges.some(getTargetEqualityPredicate(c))) {
+        return 'nodes.inputMayOnlyHaveOneConnection';
+      }
+
+      const candidateEdge = { ...c, id: '__candidate_loop_linkage__', type: 'default' } satisfies AnyEdge;
+      const stagedEdges = [...filteredEdges, candidateEdge];
+      if (getHasCycles(c.source, c.target, nodes, stagedEdges)) {
+        return 'nodes.connectionWouldCreateCycle';
+      }
+      const terminalTargetEdges = getConnectorTerminalTargetEdges(targetNode.id, nodes, stagedEdges);
+      for (const terminalTargetEdge of terminalTargetEdges) {
+        const terminalNode = nodes.find((node) => node.id === terminalTargetEdge.target);
+        if (
+          !terminalNode ||
+          !isInvocationNode(terminalNode) ||
+          terminalNode.data.type !== 'for_return' ||
+          terminalTargetEdge.targetHandle !== LOOP_LINKAGE_FIELD ||
+          !resolveLoopLinkagePath(terminalTargetEdge, nodes, stagedEdges)
+        ) {
+          return 'nodes.forLoopLinkageInvalid';
+        }
+      }
+
+      const candidatePaths = getResolvedLoopLinkages(nodes, stagedEdges).filter((path) =>
+        path.edgeIds.includes(candidateEdge.id)
+      );
+      if (candidatePaths.length > 1) {
+        return 'nodes.forLoopLinkageInvalid';
+      }
+
+      const candidatePath = candidatePaths[0];
+      if (
+        candidatePath &&
+        (filteredEdges.some(
+          (edge) =>
+            isLoopLinkageEdge(edge) &&
+            (edge.source === candidatePath.forNodeId || edge.target === candidatePath.returnNodeId)
+        ) ||
+          getResolvedLoopLinkages(nodes, filteredEdges).some(
+            (existingPath) =>
+              existingPath.forNodeId === candidatePath.forNodeId ||
+              existingPath.returnNodeId === candidatePath.returnNodeId
+          ))
+      ) {
+        return 'nodes.forLoopLinkageDuplicate';
+      }
+      return null;
     }
-    return null;
+
+    if (
+      isConnectorNode(sourceNode) &&
+      sourceNode &&
+      c.sourceHandle === CONNECTOR_OUTPUT_HANDLE &&
+      isInvocationNode(targetNode) &&
+      targetNode.data.type === 'for_return' &&
+      c.targetHandle === LOOP_LINKAGE_FIELD
+    ) {
+      if (
+        filteredEdges.some((edge) => isLoopLinkageEdge(edge) && edge.target === targetNode.id) ||
+        getResolvedLoopLinkages(nodes, filteredEdges).some((path) => path.returnNodeId === targetNode.id)
+      ) {
+        return 'nodes.forLoopLinkageDuplicate';
+      }
+      const resolvedSource = resolveConnectorSource(sourceNode.id, nodes, filteredEdges);
+      if (resolvedSource && resolvedSource.fieldName !== LOOP_LINKAGE_FIELD) {
+        return 'nodes.forLoopLinkageInvalid';
+      }
+
+      const candidateEdge = { ...c, id: '__candidate_loop_linkage__', type: 'default' } satisfies AnyEdge;
+      const stagedEdges = [...filteredEdges, candidateEdge];
+      const path = resolveLoopLinkagePath(candidateEdge, nodes, stagedEdges);
+      if (!path) {
+        // A connector can be wired to ForReturn before its upstream source is attached.
+        return resolvedSource ? 'nodes.forLoopLinkageInvalid' : null;
+      }
+
+      const hasDuplicateLinkage = filteredEdges.some(
+        (edge) => isLoopLinkageEdge(edge) && (edge.source === path.forNodeId || edge.target === path.returnNodeId)
+      );
+      const hasDuplicateConnectorPath = getResolvedLoopLinkages(nodes, filteredEdges).some(
+        (existingPath) => existingPath.forNodeId === path.forNodeId || existingPath.returnNodeId === path.returnNodeId
+      );
+      if (hasDuplicateLinkage || hasDuplicateConnectorPath) {
+        return 'nodes.forLoopLinkageDuplicate';
+      }
+      return null;
+    }
+
+    if (
+      c.sourceHandle === LOOP_LINKAGE_FIELD &&
+      c.targetHandle === LOOP_LINKAGE_FIELD &&
+      isInvocationNode(sourceNode) &&
+      sourceNode.data.type === 'for' &&
+      isInvocationNode(targetNode) &&
+      targetNode.data.type === 'for_return'
+    ) {
+      if (
+        filteredEdges.some((edge) => isLoopLinkageEdge(edge) && (edge.source === c.source || edge.target === c.target))
+      ) {
+        return 'nodes.forLoopLinkageDuplicate';
+      }
+      return null;
+    }
+
+    return 'nodes.forLoopLinkageInvalid';
   }
 
   if (c.source === c.target) {
@@ -529,6 +712,10 @@ export const validateConnection: ValidateConnectionFunc = (
     }
 
     const { node: resolvedSourceNode, handle: sourceHandle, fieldTemplate: sourceFieldTemplate } = effectiveSource;
+
+    if (sourceHandle === LOOP_LINKAGE_FIELD) {
+      return 'nodes.forLoopLinkageInvalid';
+    }
 
     if (hasOutputScopeConflict(c, nodes, filteredEdges, templates)) {
       return 'nodes.loopOutputScopeConflict';

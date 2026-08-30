@@ -1,3 +1,4 @@
+import { CONNECTOR_INPUT_HANDLE, CONNECTOR_OUTPUT_HANDLE } from 'features/nodes/store/util/connectorTopology';
 import {
   add,
   buildEdge,
@@ -19,6 +20,13 @@ const setNodeId = (node: AnyNode, id: string): AnyNode => {
 
 const edge = (source: string, sourceHandle: string, target: string, targetHandle: string): AnyEdge =>
   buildEdge(source, sourceHandle, target, targetHandle);
+
+const connector = (id: string): AnyNode => ({
+  id,
+  type: 'connector',
+  position: { x: 0, y: 0 },
+  data: { id, type: 'connector', label: 'Connector', isOpen: true },
+});
 
 describe(getForLoopBodyBoundaries.name, () => {
   it('resolves a body using its explicit loop linkage', () => {
@@ -43,6 +51,50 @@ describe(getForLoopBodyBoundaries.name, () => {
         status: 'complete',
       }),
     ]);
+  });
+
+  it('resolves a body using a connector loop linkage alias', () => {
+    const forNode = setNodeId(buildNode(for_loop), 'for');
+    const bodyNode = setNodeId(buildNode(add), 'body');
+    const connectorNode = connector('connector');
+    const returnNode = setNodeId(buildNode(for_return), 'return');
+
+    const boundaries = getForLoopBodyBoundaries(
+      [forNode, bodyNode, connectorNode, returnNode],
+      [
+        edge('for', 'item', 'body', 'a'),
+        edge('body', 'value', 'return', 'output'),
+        edge('for', 'loop_linkage', 'connector', CONNECTOR_INPUT_HANDLE),
+        edge('connector', CONNECTOR_OUTPUT_HANDLE, 'return', 'loop_linkage'),
+      ]
+    );
+
+    expect(boundaries).toEqual([
+      expect.objectContaining({
+        forNodeId: 'for',
+        returnNodeId: 'return',
+        bodyNodeIds: ['for', 'body', 'connector', 'return'],
+        status: 'complete',
+      }),
+    ]);
+  });
+
+  it('includes every connector in a loop linkage alias chain', () => {
+    const forNode = setNodeId(buildNode(for_loop), 'for');
+    const firstConnector = connector('connector-a');
+    const secondConnector = connector('connector-b');
+    const returnNode = setNodeId(buildNode(for_return), 'return');
+
+    const boundaries = getForLoopBodyBoundaries(
+      [forNode, firstConnector, secondConnector, returnNode],
+      [
+        edge('for', 'loop_linkage', 'connector-a', CONNECTOR_INPUT_HANDLE),
+        edge('connector-a', CONNECTOR_OUTPUT_HANDLE, 'connector-b', CONNECTOR_INPUT_HANDLE),
+        edge('connector-b', CONNECTOR_OUTPUT_HANDLE, 'return', 'loop_linkage'),
+      ]
+    );
+
+    expect(boundaries[0]?.bodyNodeIds).toEqual(['for', 'connector-a', 'connector-b', 'return']);
   });
 
   it('reports missing loop linkage even when the data path is complete', () => {

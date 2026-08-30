@@ -4,9 +4,15 @@ import { omit, reduce } from 'es-toolkit/compat';
 import { selectAutoAddBoardId } from 'features/gallery/store/gallerySelectors';
 import { selectNodesSlice } from 'features/nodes/store/selectors';
 import type { Templates } from 'features/nodes/store/types';
-import { resolveConnectorSource } from 'features/nodes/store/util/connectorTopology';
+import {
+  CONNECTOR_INPUT_HANDLE,
+  CONNECTOR_OUTPUT_HANDLE,
+  resolveConnectorSource,
+  resolveLoopLinkagePath,
+} from 'features/nodes/store/util/connectorTopology';
 import { isLoopLinkageEdge } from 'features/nodes/store/util/reactFlowUtil';
 import type { BoardField } from 'features/nodes/types/common';
+import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 import { nodeAcceptsExtraInputs } from 'features/nodes/types/extraInputs';
 import type { BoardFieldInputInstance } from 'features/nodes/types/field';
 import { isBoardFieldInputInstance, isBoardFieldInputTemplate } from 'features/nodes/types/field';
@@ -128,9 +134,57 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
 
   const filteredNodeIds = filteredNodes.map(({ id }) => id);
 
+  for (const edge of edges) {
+    if (
+      edge.type !== 'default' ||
+      edge.sourceHandle !== CONNECTOR_OUTPUT_HANDLE ||
+      !isConnectorNode(nodes.find((node) => node.id === edge.source))
+    ) {
+      continue;
+    }
+
+    const resolvedSource = resolveConnectorSource(edge.source, nodes, edges);
+    if (!resolvedSource || resolvedSource.fieldName !== LOOP_LINKAGE_FIELD) {
+      continue;
+    }
+
+    const targetNode = nodes.find((node) => node.id === edge.target);
+    if (isConnectorNode(targetNode) && edge.targetHandle === CONNECTOR_INPUT_HANDLE) {
+      continue;
+    }
+    if (
+      isInvocationNode(targetNode) &&
+      targetNode.data.type === 'for_return' &&
+      edge.targetHandle === LOOP_LINKAGE_FIELD
+    ) {
+      continue;
+    }
+    throw new Error(t('nodes.forLoopLinkageInvalid') || 'nodes.forLoopLinkageInvalid');
+  }
+
+  const connectorLoopLinkagePaths = edges.flatMap((edge) => {
+    if (
+      edge.type !== 'default' ||
+      edge.sourceHandle !== CONNECTOR_OUTPUT_HANDLE ||
+      edge.targetHandle !== LOOP_LINKAGE_FIELD ||
+      !isConnectorNode(nodes.find((node) => node.id === edge.source))
+    ) {
+      return [];
+    }
+
+    const path = resolveLoopLinkagePath(edge, nodes, edges);
+    if (!path) {
+      throw new Error(t('nodes.forLoopLinkageInvalid') || 'nodes.forLoopLinkageInvalid');
+    }
+    return [path];
+  });
+  const connectorLoopLinkageEdgeIds = new Set(connectorLoopLinkagePaths.flatMap((path) => path.edgeIds));
+
   // skip out the "dummy" edges between collapsed nodes
   const flattenedEdges = edges
-    .filter((edge) => edge.type !== 'collapsed' && !isLoopLinkageEdge(edge))
+    .filter(
+      (edge) => edge.type !== 'collapsed' && !isLoopLinkageEdge(edge) && !connectorLoopLinkageEdgeIds.has(edge.id)
+    )
     .flatMap((edge) => {
       const targetNode = nodes.find((node) => node.id === edge.target);
       if (!targetNode || !isInvocationNode(targetNode) || !isExecutableNode(targetNode)) {
@@ -241,6 +295,20 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
       destination: {
         node_id: edge.target,
         field: edge.targetHandle,
+      },
+    });
+  });
+
+  connectorLoopLinkagePaths.forEach(({ forNodeId, returnNodeId }) => {
+    parsedEdges.push({
+      type: 'loop_linkage',
+      source: {
+        node_id: forNodeId,
+        field: LOOP_LINKAGE_FIELD,
+      },
+      destination: {
+        node_id: returnNodeId,
+        field: LOOP_LINKAGE_FIELD,
       },
     });
   });

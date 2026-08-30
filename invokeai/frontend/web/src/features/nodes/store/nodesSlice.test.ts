@@ -509,6 +509,30 @@ describe('nodesSlice connector actions', () => {
     ]);
   });
 
+  it('splits a direct loop linkage into a connector alias when inserting a connector', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    const connector = buildFixedConnectorNode('connector-1');
+    const directEdge = buildLoopLinkageEdge(forNode.id, returnNode.id);
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, returnNode];
+    initialState.edges = [directEdge];
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      initialState,
+      connectorInserted({
+        edgeId: directEdge.id,
+        connector,
+      })
+    );
+
+    expect(nextState.edges).toEqual([
+      buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE),
+      buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+    ]);
+  });
+
   it('splices connector outputs back to the resolved upstream source when removed', () => {
     const source = buildNode(add);
     const target = buildNode(sub);
@@ -635,7 +659,15 @@ describe('nodesSlice loop boundary actions', () => {
       initialState,
       edgesChanged([{ type: 'add', item: buildLoopLinkageEdge(forNode.id, returnNode.id) }])
     );
-    expect(nextState.edges).toEqual([buildLoopLinkageEdge(forNode.id, returnNode.id)]);
+    expect(nextState.edges).toEqual([
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: forNode.id,
+        sourceHandle: 'loop_linkage',
+        target: returnNode.id,
+        targetHandle: 'loop_linkage',
+      }),
+    ]);
   });
 
   it('removes loop linkage when either boundary node is removed', () => {
@@ -650,6 +682,224 @@ describe('nodesSlice loop boundary actions', () => {
       initialState,
       nodesChanged([{ type: 'remove', id: oldForNode.id }])
     );
+    expect(nextState.edges).toEqual([]);
+  });
+
+  it('removes all connector alias edges when a For boundary is removed', () => {
+    const forNode = buildNode(for_loop);
+    const connector = buildFixedConnectorNode('connector-1');
+    const returnNode = buildNode(for_return);
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, connector, returnNode];
+    initialState.edges = [
+      buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE),
+      buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+    ];
+
+    const nextState = nodesSliceConfig.slice.reducer(initialState, nodesChanged([{ type: 'remove', id: forNode.id }]));
+
+    expect(nextState.edges).toEqual([]);
+  });
+
+  it('removes all connector alias edges when a For boundary is replaced by another node type', () => {
+    const forNode = buildNode(for_loop);
+    const replacement = buildNode(add);
+    const connector = buildFixedConnectorNode('connector-1');
+    const returnNode = buildNode(for_return);
+    replacement.id = forNode.id;
+    replacement.data.id = forNode.id;
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, connector, returnNode];
+    initialState.edges = [
+      buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE),
+      buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+    ];
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      initialState,
+      nodesChanged([
+        { type: 'remove', id: forNode.id },
+        { type: 'add', item: replacement },
+      ])
+    );
+
+    expect(nextState.edges).toEqual([]);
+  });
+
+  it('removes an incomplete connector alias when a For boundary is replaced by another node type', () => {
+    const forNode = buildNode(for_loop);
+    const replacement = buildNode(add);
+    const connector = buildFixedConnectorNode('connector-1');
+    replacement.id = forNode.id;
+    replacement.data.id = forNode.id;
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, connector];
+    initialState.edges = [buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE)];
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      initialState,
+      nodesChanged([
+        { type: 'remove', id: forNode.id },
+        { type: 'add', item: replacement },
+      ])
+    );
+
+    expect(nextState.edges).toEqual([]);
+  });
+
+  it('splices a connector loop linkage alias into a direct edge when removed', () => {
+    const forNode = buildNode(for_loop);
+    const connector = buildFixedConnectorNode('connector-1');
+    const returnNode = buildNode(for_return);
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, connector, returnNode];
+    initialState.edges = [
+      buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE),
+      buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+    ];
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      initialState,
+      nodesChanged([{ type: 'remove', id: connector.id }])
+    );
+
+    expect(nextState.edges).toEqual([
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: forNode.id,
+        sourceHandle: 'loop_linkage',
+        target: returnNode.id,
+        targetHandle: 'loop_linkage',
+      }),
+    ]);
+  });
+
+  it('splices a removed terminal loop linkage connector to the preceding connector', () => {
+    const forNode = buildNode(for_loop);
+    const firstConnector = buildFixedConnectorNode('connector-a');
+    const terminalConnector = buildFixedConnectorNode('connector-b');
+    const returnNode = buildNode(for_return);
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, firstConnector, terminalConnector, returnNode];
+    initialState.edges = [
+      buildEdge(forNode.id, 'loop_linkage', firstConnector.id, CONNECTOR_INPUT_HANDLE),
+      buildEdge(firstConnector.id, CONNECTOR_OUTPUT_HANDLE, terminalConnector.id, CONNECTOR_INPUT_HANDLE),
+      buildEdge(terminalConnector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+    ];
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      initialState,
+      nodesChanged([{ type: 'remove', id: terminalConnector.id }])
+    );
+
+    expect(nextState.nodes.map((node) => node.id)).toEqual([forNode.id, firstConnector.id, returnNode.id]);
+    expect(nextState.edges).toEqual([
+      buildEdge(forNode.id, 'loop_linkage', firstConnector.id, CONNECTOR_INPUT_HANDLE),
+      expect.objectContaining({
+        type: 'default',
+        source: firstConnector.id,
+        sourceHandle: CONNECTOR_OUTPUT_HANDLE,
+        target: returnNode.id,
+        targetHandle: 'loop_linkage',
+      }),
+    ]);
+  });
+
+  it('splices a removed interior loop linkage connector to the preceding connector', () => {
+    const forNode = buildNode(for_loop);
+    const firstConnector = buildFixedConnectorNode('connector-a');
+    const removedConnector = buildFixedConnectorNode('connector-b');
+    const terminalConnector = buildFixedConnectorNode('connector-c');
+    const returnNode = buildNode(for_return);
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, firstConnector, removedConnector, terminalConnector, returnNode];
+    initialState.edges = [
+      buildEdge(forNode.id, 'loop_linkage', firstConnector.id, CONNECTOR_INPUT_HANDLE),
+      buildEdge(firstConnector.id, CONNECTOR_OUTPUT_HANDLE, removedConnector.id, CONNECTOR_INPUT_HANDLE),
+      buildEdge(removedConnector.id, CONNECTOR_OUTPUT_HANDLE, terminalConnector.id, CONNECTOR_INPUT_HANDLE),
+      buildEdge(terminalConnector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+    ];
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      initialState,
+      nodesChanged([{ type: 'remove', id: removedConnector.id }])
+    );
+
+    expect(nextState.nodes.map((node) => node.id)).toEqual([
+      forNode.id,
+      firstConnector.id,
+      terminalConnector.id,
+      returnNode.id,
+    ]);
+    expect(nextState.edges).toEqual(
+      expect.arrayContaining([
+        buildEdge(forNode.id, 'loop_linkage', firstConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(firstConnector.id, CONNECTOR_OUTPUT_HANDLE, terminalConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(terminalConnector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+      ])
+    );
+  });
+
+  it('splices a chain when multiple loop linkage connectors are removed together', () => {
+    const forNode = buildNode(for_loop);
+    const firstConnector = buildFixedConnectorNode('connector-a');
+    const secondConnector = buildFixedConnectorNode('connector-b');
+    const returnNode = buildNode(for_return);
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, firstConnector, secondConnector, returnNode];
+    initialState.edges = [
+      buildEdge(forNode.id, 'loop_linkage', firstConnector.id, CONNECTOR_INPUT_HANDLE),
+      buildEdge(firstConnector.id, CONNECTOR_OUTPUT_HANDLE, secondConnector.id, CONNECTOR_INPUT_HANDLE),
+      buildEdge(secondConnector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+    ];
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      initialState,
+      nodesChanged([
+        { type: 'remove', id: firstConnector.id },
+        { type: 'remove', id: secondConnector.id },
+      ])
+    );
+
+    expect(nextState.nodes.map((node) => node.id)).toEqual([forNode.id, returnNode.id]);
+    expect(nextState.edges).toEqual([
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: forNode.id,
+        sourceHandle: 'loop_linkage',
+        target: returnNode.id,
+        targetHandle: 'loop_linkage',
+      }),
+    ]);
+  });
+
+  it('does not create invalid edges when removing a loop linkage connector with an ordinary fanout', () => {
+    const forNode = buildNode(for_loop);
+    const connector = buildFixedConnectorNode('connector');
+    const returnNode = buildNode(for_return);
+    const ordinaryTarget = buildNode(sub);
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, connector, returnNode, ordinaryTarget];
+    initialState.edges = [
+      buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE),
+      buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+      buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, ordinaryTarget.id, 'a'),
+    ];
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      initialState,
+      nodesChanged([{ type: 'remove', id: connector.id }])
+    );
+
+    expect(nextState.nodes.map((node) => node.id)).toEqual([forNode.id, returnNode.id, ordinaryTarget.id]);
     expect(nextState.edges).toEqual([]);
   });
 

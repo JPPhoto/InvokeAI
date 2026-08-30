@@ -1,7 +1,8 @@
+import { CONNECTOR_OUTPUT_HANDLE, resolveLoopLinkagePath } from 'features/nodes/store/util/connectorTopology';
 import { isLoopLinkageEdge } from 'features/nodes/store/util/reactFlowUtil';
 import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
-import { isInvocationNode } from 'features/nodes/types/invocation';
+import { isConnectorNode, isInvocationNode } from 'features/nodes/types/invocation';
 
 const ITERATION_OUTPUT_FIELDS = new Set(['item', 'index', 'total', 'state']);
 
@@ -39,7 +40,8 @@ const getBoundaryNodeIds = (
   nodes: AnyNode[],
   reachableNodeIds: Set<string>,
   returnNodeId: string | undefined,
-  incoming: Map<string, string[]>
+  incoming: Map<string, string[]>,
+  additionalNodeIds: Set<string> = new Set()
 ): string[] => {
   const bodyNodeIds = returnNodeId
     ? new Set([...getReachableNodeIds([returnNodeId], incoming)].filter((nodeId) => reachableNodeIds.has(nodeId)))
@@ -47,13 +49,49 @@ const getBoundaryNodeIds = (
   if (returnNodeId) {
     bodyNodeIds.add(returnNodeId);
   }
+  additionalNodeIds.forEach((nodeId) => bodyNodeIds.add(nodeId));
   return nodes.filter((node) => bodyNodeIds.has(node.id)).map((node) => node.id);
 };
 
 export const getForLoopBodyBoundaries = (nodes: AnyNode[], edges: AnyEdge[]): LoopBodyBoundary[] => {
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
-  const executableEdges = edges.filter((edge) => !isLoopLinkageEdge(edge));
-  const linkageEdges = edges.filter(isLoopLinkageEdge);
+  const resolvedConnectorLinkages = edges.flatMap((edge) => {
+    if (
+      edge.type !== 'default' ||
+      edge.sourceHandle !== CONNECTOR_OUTPUT_HANDLE ||
+      edge.targetHandle !== LOOP_LINKAGE_FIELD ||
+      !isConnectorNode(nodes.find((node) => node.id === edge.source))
+    ) {
+      return [];
+    }
+    const path = resolveLoopLinkagePath(edge, nodes, edges);
+    return path ? [path] : [];
+  });
+  const resolvedConnectorLinkageEdgeIds = new Set(resolvedConnectorLinkages.flatMap((path) => path.edgeIds));
+  const resolvedConnectorNodeIdsByForId = new Map<string, string[]>();
+  for (const path of resolvedConnectorLinkages) {
+    resolvedConnectorNodeIdsByForId.set(path.forNodeId, [
+      ...(resolvedConnectorNodeIdsByForId.get(path.forNodeId) ?? []),
+      ...path.connectorNodeIds,
+    ]);
+  }
+  const executableEdges = edges.filter(
+    (edge) => !isLoopLinkageEdge(edge) && !resolvedConnectorLinkageEdgeIds.has(edge.id)
+  );
+  const linkageEdges = [
+    ...edges.filter(isLoopLinkageEdge),
+    ...resolvedConnectorLinkages.map(
+      ({ forNodeId, returnNodeId }) =>
+        ({
+          id: `resolved-loop-linkage-${forNodeId}-${returnNodeId}`,
+          type: 'loop_linkage' as const,
+          source: forNodeId,
+          sourceHandle: LOOP_LINKAGE_FIELD,
+          target: returnNodeId,
+          targetHandle: LOOP_LINKAGE_FIELD,
+        }) satisfies AnyEdge
+    ),
+  ];
   const outgoing = new Map<string, string[]>();
   const incoming = new Map<string, string[]>();
 
@@ -146,7 +184,13 @@ export const getForLoopBodyBoundaries = (nodes: AnyNode[], edges: AnyEdge[]): Lo
         ...(returnNodeId ? { returnNodeId } : {}),
         bodyNodeIds: [
           forNode.id,
-          ...getBoundaryNodeIds(nodes, reachableNodeIds, returnNodeId, incoming).filter((id) => id !== forNode.id),
+          ...getBoundaryNodeIds(
+            nodes,
+            reachableNodeIds,
+            returnNodeId,
+            incoming,
+            new Set(resolvedConnectorNodeIdsByForId.get(forNode.id))
+          ).filter((id) => id !== forNode.id),
         ],
         status,
       };

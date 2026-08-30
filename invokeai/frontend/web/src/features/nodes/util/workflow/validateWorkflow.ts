@@ -3,7 +3,12 @@ import { getSavedWorkflowDynamicFields } from 'features/nodes/components/flow/no
 import { addElement, getIsFormEmpty } from 'features/nodes/components/sidePanel/builder/form-manipulation';
 import { CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX } from 'features/nodes/store/nodesSlice';
 import type { Templates } from 'features/nodes/store/types';
-import { getEdgeTypeFromHandles } from 'features/nodes/store/util/reactFlowUtil';
+import {
+  CONNECTOR_OUTPUT_HANDLE,
+  resolveConnectorSource,
+  resolveLoopLinkagePath,
+} from 'features/nodes/store/util/connectorTopology';
+import { getEdgeTypeFromHandles, isLoopLinkageEdge } from 'features/nodes/store/util/reactFlowUtil';
 import { validateConnection } from 'features/nodes/store/util/validateConnection';
 import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 import { nodeAcceptsExtraInputs } from 'features/nodes/types/extraInputs';
@@ -15,7 +20,7 @@ import {
   isModelIdentifierFieldInputInstance,
   isVideoFieldInputInstance,
 } from 'features/nodes/types/field';
-import { getInvocationNodeInputTemplate } from 'features/nodes/types/invocation';
+import { getInvocationNodeInputTemplate, isConnectorNode } from 'features/nodes/types/invocation';
 import type { WorkflowV3 } from 'features/nodes/types/workflow';
 import {
   buildNodeFieldElement,
@@ -263,7 +268,54 @@ export const validateWorkflow = async (args: ValidateWorkflowArgs): Promise<Vali
   }
 
   // Remove invalid edges before node updates so migrations only trust surviving connections.
-  _workflow.edges = validEdges;
+  const invalidConnectorLinkageEdgeIds = new Set<string>();
+  const linkedForIds = new Set(validEdges.filter(isLoopLinkageEdge).map((edge) => edge.source));
+  const linkedReturnIds = new Set(validEdges.filter(isLoopLinkageEdge).map((edge) => edge.target));
+  for (const edge of edges) {
+    if (
+      edge.type !== 'default' ||
+      edge.sourceHandle !== CONNECTOR_OUTPUT_HANDLE ||
+      edge.targetHandle !== LOOP_LINKAGE_FIELD ||
+      !isConnectorNode(nodes.find((node) => node.id === edge.source))
+    ) {
+      continue;
+    }
+
+    const resolvedSource = resolveConnectorSource(edge.source, nodes, edges);
+    if (!resolvedSource) {
+      continue;
+    }
+
+    const path = resolveLoopLinkagePath(edge, nodes, edges);
+    if (!path) {
+      invalidConnectorLinkageEdgeIds.add(edge.id);
+      warnings.push({
+        message: t('nodes.deletedInvalidEdge', {
+          source: `${edge.source}.${edge.sourceHandle}`,
+          target: `${edge.target}.${edge.targetHandle}`,
+        }),
+        issues: [t('nodes.forLoopLinkageInvalid')],
+        data: edge,
+      });
+      continue;
+    }
+    if (linkedForIds.has(path.forNodeId) || linkedReturnIds.has(path.returnNodeId)) {
+      path.edgeIds.forEach((edgeId) => invalidConnectorLinkageEdgeIds.add(edgeId));
+      warnings.push({
+        message: t('nodes.deletedInvalidEdge', {
+          source: `${edge.source}.${edge.sourceHandle}`,
+          target: `${edge.target}.${edge.targetHandle}`,
+        }),
+        issues: [t('nodes.forLoopLinkageDuplicate')],
+        data: edge,
+      });
+      continue;
+    }
+    linkedForIds.add(path.forNodeId);
+    linkedReturnIds.add(path.returnNodeId);
+  }
+
+  _workflow.edges = validEdges.filter((edge) => !invalidConnectorLinkageEdgeIds.has(edge.id));
 
   for (const node of nodes) {
     if (!isWorkflowInvocationNode(node)) {
