@@ -22,12 +22,17 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
-import numpy as np
-import torch
+# The server sets this at startup (see run_app.py); a standalone script has to do it itself or the
+# warm-up encode spends minutes in MIOpen's exhaustive kernel search on ROCm. Inert elsewhere.
+os.environ.setdefault("MIOPEN_FIND_MODE", "FAST")
+
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
 
 # Direct script execution puts ``scripts/`` on sys.path, not the repository root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
