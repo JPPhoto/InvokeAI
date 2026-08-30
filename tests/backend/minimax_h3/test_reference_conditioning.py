@@ -7,12 +7,15 @@ order, torchaudio-parity resampling (against baked torchaudio 2.11 vectors), the
 conditioner sampling, and the per-modality label presentation. No models are loaded.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 import torch
 from PIL import Image
 
 from invokeai.backend.minimax_h3.audio_resample import resample_sinc
+from invokeai.backend.minimax_h3.keyframe_conditioning import vae_encode_autocast
 from invokeai.backend.minimax_h3.reference_conditioning import (
     normalize_reference_audio,
     normalize_reference_image,
@@ -320,3 +323,19 @@ class TestPresentation:
             video_block_timestamps=[[0.25]],
         )
         assert tokenizer.texts == ["<Video 1>: ", "<0.2 seconds>", "P"]
+
+
+def test_vae_encode_autocast_is_fp16_on_cuda_devices_and_a_no_op_elsewhere() -> None:
+    with warnings.catch_warnings():
+        # CPU-only torch builds warn "CUDA is not available. Disabling" on construction (and set
+        # enabled=False) - the recipe's attributes are still recorded, which is what is under test.
+        warnings.simplefilter("ignore")
+        cuda = vae_encode_autocast(torch.device("cuda"))
+    assert isinstance(cuda, torch.autocast)
+    assert cuda.fast_dtype == torch.float16
+    assert cuda.device == "cuda"
+    # The weight-cast cache would pin float16 copies of the whole encoder for a long encode.
+    assert cuda._cache_enabled is False
+    for device in (torch.device("cpu"), torch.device("mps"), torch.device("meta")):
+        with vae_encode_autocast(device):
+            assert not torch.is_autocast_enabled("cpu")
