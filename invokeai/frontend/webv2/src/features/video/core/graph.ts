@@ -450,7 +450,11 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
     id: 'denoise_latents',
     // The node's frame counts are a string Literal choice list.
     num_frames: String(settings.numFrames),
-    steps: settings.steps,
+    // The H3 node counts sigma grid points (terminal zero included), so node
+    // steps = model evaluations + 1. The panel's steps setting means model
+    // evaluations — the count a distilled turbo LoRA is trained for — so add
+    // the terminal point here. Metadata records the panel value.
+    steps: settings.steps + 1,
     type: 'minimax_h3_denoise',
     width: dimensions.width,
   });

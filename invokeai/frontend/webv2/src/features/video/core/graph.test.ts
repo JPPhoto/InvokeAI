@@ -363,7 +363,9 @@ describe('compileVideoGraph — MiniMax H3', () => {
     const denoise = nodeOfType(backendGraph, 'minimax_h3_denoise');
 
     // The H3 canvas policy: 16:9 caps at 1344×768; frame counts are string literals.
-    expect(denoise).toMatchObject({ height: 768, num_frames: '124', steps: settings.steps, width: 1344 });
+    // The H3 denoise node counts sigma grid points, so the graph passes
+    // panel steps (model evaluations) + 1.
+    expect(denoise).toMatchObject({ height: 768, num_frames: '124', steps: settings.steps + 1, width: 1344 });
 
     const output = nodeOfType(backendGraph, 'minimax_h3_latents_to_video');
 
