@@ -40,6 +40,7 @@ import { getInvocationNodeErrors } from 'features/nodes/store/util/fieldValidato
 import type { WorkflowSettingsState } from 'features/nodes/store/workflowSettingsSlice';
 import { selectWorkflowSettingsSlice } from 'features/nodes/store/workflowSettingsSlice';
 import { isBatchNode, isExecutableNode, isInvocationNode } from 'features/nodes/types/invocation';
+import { buildNodesGraph } from 'features/nodes/util/graph/buildNodesGraph';
 import { resolveBatchValue } from 'features/nodes/util/node/resolveBatchValue';
 import type { UpscaleState } from 'features/parameters/store/upscaleSlice';
 import { selectUpscaleSlice } from 'features/parameters/store/upscaleSlice';
@@ -197,6 +198,7 @@ const debouncedUpdateReasons = debounce(async (arg: UpdateReasonsArg) => {
       workflowSettingsState: workflowSettings,
       isConnected,
       templates,
+      store,
     });
     $reasonsWhyCannotEnqueue.set(reasons);
   } else if (tab === 'upscaling') {
@@ -614,18 +616,28 @@ export const getReasonsWhyCannotEnqueueGenerateTab = (arg: {
 
   return reasons;
 };
-const getReasonsWhyCannotEnqueueWorkflowsTab = async (arg: {
+export const getReasonsWhyCannotEnqueueWorkflowsTab = async (arg: {
   dispatch: AppDispatch;
   nodesState: NodesState;
   workflowSettingsState: WorkflowSettingsState;
   isConnected: boolean;
   templates: Templates;
+  store: AppStore;
 }): Promise<Reason[]> => {
-  const { dispatch, nodesState, workflowSettingsState, isConnected, templates } = arg;
+  const { dispatch, nodesState, workflowSettingsState, isConnected, templates, store } = arg;
   const reasons: Reason[] = [];
 
   if (!isConnected) {
     reasons.push(disconnectedReason(i18n.t));
+  }
+
+  // Queue submission always builds and validates this graph, regardless of the optional field
+  // validation setting. Run the same validation here so an invalid loop cannot leave Invoke
+  // enabled only to fail inside the click handler.
+  try {
+    buildNodesGraph(store.getState(), templates);
+  } catch (error) {
+    reasons.push({ content: error instanceof Error ? error.message : String(error) });
   }
 
   if (workflowSettingsState.shouldValidateGraph) {

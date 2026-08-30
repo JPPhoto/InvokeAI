@@ -24,11 +24,11 @@ import { type NodesState, zNodesState } from 'features/nodes/store/types';
 import {
   CONNECTOR_INPUT_HANDLE,
   CONNECTOR_OUTPUT_HANDLE,
-  getConnectorOutputEdges,
-  resolveConnectorSource,
+  getConnectorDeletionSpliceConnections,
+  getLoopLinkageAliasEdgeIdsForBoundary,
 } from 'features/nodes/store/util/connectorTopology';
-import { connectionToEdge } from 'features/nodes/store/util/reactFlowUtil';
-import { SHARED_NODE_PROPERTIES } from 'features/nodes/types/constants';
+import { connectionToEdge, isLoopLinkageEdge } from 'features/nodes/store/util/reactFlowUtil';
+import { LOOP_LINKAGE_FIELD, SHARED_NODE_PROPERTIES } from 'features/nodes/types/constants';
 import type {
   BoardFieldValue,
   BooleanFieldValue,
@@ -248,37 +248,96 @@ const removeCallSavedWorkflowDynamicFieldsFromForm = (
   }
 };
 
+const isValidLoopLinkageEdge = (edge: AnyEdge, nodes: AnyNode[]): boolean => {
+  if (!isLoopLinkageEdge(edge)) {
+    return true;
+  }
+
+  const sourceNode = nodes.find((node) => node.id === edge.source);
+  const targetNode = nodes.find((node) => node.id === edge.target);
+  return Boolean(
+    sourceNode &&
+    targetNode &&
+    isInvocationNode(sourceNode) &&
+    sourceNode.data.type === 'for' &&
+    isInvocationNode(targetNode) &&
+    targetNode.data.type === 'for_return' &&
+    edge.sourceHandle === LOOP_LINKAGE_FIELD &&
+    edge.targetHandle === LOOP_LINKAGE_FIELD
+  );
+};
+
 const slice = createSlice({
   name: 'nodes',
   initialState: getInitialState(),
   reducers: {
     nodesChanged: (state, action: PayloadAction<NodeChange<AnyNode>[]>) => {
-      const removedConnectorSpliceEdges: AnyEdge[] = action.payload.flatMap((change) => {
+      const replacementNodesById = new Map<string, AnyNode>();
+      for (const change of action.payload) {
+        if (change.type === 'add' || change.type === 'replace') {
+          replacementNodesById.set(change.item.id, change.item);
+        }
+      }
+
+      const removedBoundaryAliasEdgeIds = new Set<string>();
+      for (const change of action.payload) {
+        if (change.type !== 'remove' && change.type !== 'replace') {
+          continue;
+        }
+
+        const oldNode = state.nodes.find((candidate) => candidate.id === change.id);
+        if (!isInvocationNode(oldNode) || !['for', 'for_return'].includes(oldNode.data.type)) {
+          continue;
+        }
+
+        const replacementNode = replacementNodesById.get(change.id);
+        if (isInvocationNode(replacementNode) && replacementNode.data.type === oldNode.data.type) {
+          continue;
+        }
+
+        getLoopLinkageAliasEdgeIdsForBoundary(oldNode.id, state.nodes, state.edges).forEach((edgeId) =>
+          removedBoundaryAliasEdgeIds.add(edgeId)
+        );
+      }
+
+      const replacementNodeIds = new Set(
+        action.payload.flatMap((change) => (change.type === 'add' || change.type === 'replace' ? [change.item.id] : []))
+      );
+      const removedConnectorIds = new Set(
+        action.payload
+          .flatMap((change) => (change.type === 'remove' && !replacementNodeIds.has(change.id) ? [change.id] : []))
+          .filter((nodeId) => isConnectorNode(state.nodes.find((node) => node.id === nodeId)))
+      );
+      const removedNodeIds = new Set(
+        action.payload.flatMap((change) =>
+          change.type === 'remove' && !replacementNodeIds.has(change.id) ? [change.id] : []
+        )
+      );
+      const removedConnectorSpliceEdgesById = new Map<string, AnyEdge>();
+      for (const change of action.payload) {
         if (change.type !== 'remove') {
-          return [];
+          continue;
         }
 
         const node = state.nodes.find((candidate) => candidate.id === change.id);
-        if (!isConnectorNode(node)) {
-          return [];
+        if (!isConnectorNode(node) || !removedConnectorIds.has(node.id)) {
+          continue;
         }
 
-        const resolvedSource = resolveConnectorSource(node.id, state.nodes, state.edges);
-        if (!resolvedSource) {
-          return [];
-        }
-
-        return getConnectorOutputEdges(node.id, state.edges)
-          .filter((edge): edge is AnyEdge & { type: 'default'; targetHandle: string } => edge.type === 'default')
-          .map((edge) =>
-            connectionToEdge({
-              source: resolvedSource.nodeId,
-              sourceHandle: resolvedSource.fieldName,
-              target: edge.target,
-              targetHandle: edge.targetHandle,
-            })
-          );
-      });
+        const spliceEdges =
+          getConnectorDeletionSpliceConnections(
+            node.id,
+            state.nodes,
+            state.edges,
+            undefined,
+            undefined,
+            removedConnectorIds
+          )
+            ?.filter((connection) => !removedNodeIds.has(connection.source) && !removedNodeIds.has(connection.target))
+            .map((connection) => connectionToEdge(connection)) ?? [];
+        spliceEdges.forEach((edge) => removedConnectorSpliceEdgesById.set(edge.id, edge));
+      }
+      const removedConnectorSpliceEdges = [...removedConnectorSpliceEdgesById.values()];
 
       // TODO(psyche): The below TS issue was recently fixed upstream. Need to upgrade @xyflow/react and then we
       // should be able to remove this cast.
@@ -304,7 +363,11 @@ const slice = createSlice({
         for (const e of state.edges) {
           const sourceExists = state.nodes.some((n) => n.id === e.source);
           const targetExists = state.nodes.some((n) => n.id === e.target);
-          if (!(sourceExists && targetExists)) {
+          if (
+            !(sourceExists && targetExists) ||
+            !isValidLoopLinkageEdge(e, state.nodes) ||
+            removedBoundaryAliasEdgeIds.has(e.id)
+          ) {
             edgeChanges.push({ type: 'remove', id: e.id });
           }
         }
@@ -350,7 +413,9 @@ const slice = createSlice({
           const edge = state.edges.find((e) => e.id === change.id);
           // If we deleted or selected a collapsed edge, we need to find its "hidden" edges and do the same to them
           if (edge && edge.type === 'collapsed') {
-            const hiddenEdges = state.edges.filter((e) => e.source === edge.source && e.target === edge.target);
+            const hiddenEdges = state.edges.filter(
+              (e) => e.type === 'default' && e.source === edge.source && e.target === edge.target
+            );
             for (const { id } of hiddenEdges) {
               if (change.type === 'remove') {
                 changes.push({ type: 'remove', id });
@@ -431,6 +496,7 @@ const slice = createSlice({
       // - if the edge was just closed, we need to check all its edges and hide them if both nodes are closed
 
       const connectedEdges = getConnectedEdges([node], state.edges);
+      const executableConnectedEdges = connectedEdges.filter((edge) => edge.type !== 'loop_linkage');
 
       if (isOpen) {
         // reset hidden status of all edges
@@ -444,18 +510,19 @@ const slice = createSlice({
           }
         });
       } else {
-        const closedIncomers = getIncomers(node, state.nodes, state.edges).filter(
+        const executableEdges = state.edges.filter((edge) => edge.type !== 'loop_linkage');
+        const closedIncomers = getIncomers(node, state.nodes, executableEdges).filter(
           (node) => isInvocationNode(node) && node.data.isOpen === false
         );
 
-        const closedOutgoers = getOutgoers(node, state.nodes, state.edges).filter(
+        const closedOutgoers = getOutgoers(node, state.nodes, executableEdges).filter(
           (node) => isInvocationNode(node) && node.data.isOpen === false
         );
 
         const collapsedEdgesToCreate: AnyEdge[] = [];
 
         // hide all edges
-        connectedEdges.forEach((edge) => {
+        executableConnectedEdges.forEach((edge) => {
           if (edge.target === nodeId && closedIncomers.find((node) => node.id === edge.source)) {
             edge.hidden = true;
             const collapsedEdge = collapsedEdgesToCreate.find(
@@ -516,7 +583,7 @@ const slice = createSlice({
     ) => {
       const { edgeId, connector } = action.payload;
       const edge = state.edges.find((candidate) => candidate.id === edgeId);
-      if (!edge || edge.type !== 'default') {
+      if (!edge || (edge.type !== 'default' && edge.type !== 'loop_linkage')) {
         return;
       }
       state.nodes.push({ ...SHARED_NODE_PROPERTIES, ...connector } as (typeof state.nodes)[number]);

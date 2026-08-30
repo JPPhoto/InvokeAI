@@ -1,11 +1,14 @@
 import { $templates } from 'features/nodes/store/nodesSlice';
 import type { Templates } from 'features/nodes/store/types';
+import { for_loop, for_return } from 'features/nodes/store/util/testUtils';
 import type { InvocationTemplate } from 'features/nodes/types/invocation';
 import { isWorkflowInvocationNode } from 'features/nodes/types/workflow';
+import { buildNodesGraph } from 'features/nodes/util/graph/buildNodesGraph';
+import { getOutputFieldNamesByScope } from 'features/nodes/util/node/getOutputFieldNamesByScope';
+import { graphToWorkflow } from 'features/nodes/util/workflow/graphToWorkflow';
 import type { NonNullableGraph } from 'services/api/types';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { graphToWorkflow } from './graphToWorkflow';
 import { parseAndMigrateWorkflow } from './migrations';
 
 // Minimal templates needed to render the user's graph. We use the same shape
@@ -233,9 +236,10 @@ const imageCollectionTemplate = {
 
 describe('graphToWorkflow', () => {
   const originalTemplates = $templates.get();
+  const loopTemplates: Templates = { for: for_loop, for_return };
 
   beforeEach(() => {
-    $templates.set({ image_collection: imageCollectionTemplate });
+    $templates.set({ image_collection: imageCollectionTemplate, ...loopTemplates });
   });
 
   afterEach(() => {
@@ -297,5 +301,135 @@ describe('graphToWorkflow', () => {
     }
     expect(node.data.inputs.images?.value).toBeUndefined();
     expect(node.data.inputs.collection?.value).toEqual(images);
+  });
+
+  it('round-trips For and ForReturn nodes and resolves scoped outputs from their templates', () => {
+    const graph = {
+      id: 'graph',
+      nodes: {
+        for: {
+          id: 'for',
+          type: 'for',
+          collection: ['alpha', 'beta'],
+          state: null,
+          index: -1,
+        },
+        return: {
+          id: 'return',
+          type: 'for_return',
+          output: null,
+          state: null,
+          continue_condition: null,
+        },
+      },
+      edges: [
+        {
+          type: 'default',
+          source: { node_id: 'for', field: 'item' },
+          destination: { node_id: 'return', field: 'output' },
+        },
+        {
+          type: 'loop_linkage',
+          source: { node_id: 'for', field: 'loop_linkage' },
+          destination: { node_id: 'return', field: 'loop_linkage' },
+        },
+      ],
+    } satisfies NonNullableGraph;
+
+    const workflow = graphToWorkflow(graph, false);
+    const forNode = workflow.nodes.find((node) => node.id === 'for');
+    const returnNode = workflow.nodes.find((node) => node.id === 'return');
+    if (!isWorkflowInvocationNode(forNode) || !isWorkflowInvocationNode(returnNode)) {
+      throw new Error('Expected For and ForReturn invocation nodes');
+    }
+
+    expect(forNode.data.inputs.collection?.value).toEqual(['alpha', 'beta']);
+    expect(forNode.data.inputs.state?.value).toBeNull();
+    expect(forNode.data.inputs.index).toBeUndefined();
+    expect(returnNode.data.inputs.continue_condition?.value).toBeNull();
+    expect(returnNode.data.inputs.state?.value).toBeNull();
+    expect(workflow.edges).toHaveLength(2);
+    expect(workflow.edges[0]).toMatchObject({
+      type: 'default',
+      source: 'for',
+      sourceHandle: 'item',
+      target: 'return',
+      targetHandle: 'output',
+    });
+    expect(workflow.edges[1]).toMatchObject({
+      type: 'loop_linkage',
+      source: 'for',
+      sourceHandle: 'loop_linkage',
+      target: 'return',
+      targetHandle: 'loop_linkage',
+    });
+    const resolvedForTemplate = loopTemplates[forNode.data.type];
+    if (!resolvedForTemplate) {
+      throw new Error('Expected the round-tripped For node type to resolve its template');
+    }
+    expect(getOutputFieldNamesByScope(Object.values(resolvedForTemplate.outputs))).toEqual({
+      all: ['loop_linkage', 'item', 'index', 'total', 'state', 'output_collection', 'final_state'],
+      unscoped: ['loop_linkage'],
+      iteration: ['item', 'index', 'total', 'state'],
+      final: ['output_collection', 'final_state'],
+    });
+
+    const rootState = {
+      nodes: {
+        past: [],
+        future: [],
+        present: {
+          _version: 1,
+          formFieldInitialValues: {},
+          ...workflow,
+        },
+      },
+      gallery: {
+        autoAddBoardId: 'none',
+      },
+    } as never;
+    const rebuiltGraph = buildNodesGraph(rootState, loopTemplates);
+
+    expect(rebuiltGraph.nodes.for).toMatchObject({
+      type: 'for',
+      collection: ['alpha', 'beta'],
+      state: null,
+    });
+    expect(rebuiltGraph.nodes.return).toMatchObject({
+      type: 'for_return',
+      state: null,
+      continue_condition: null,
+    });
+    expect(rebuiltGraph.edges).toEqual(graph.edges);
+  });
+
+  it('normalizes a default graph edge between loop linkage fields', () => {
+    const workflow = graphToWorkflow(
+      {
+        id: 'graph',
+        nodes: {
+          for: { id: 'for', type: 'for', collection: [], state: null },
+          return: { id: 'return', type: 'for_return', output: null, state: null, continue_condition: true },
+        },
+        edges: [
+          {
+            type: 'default',
+            source: { node_id: 'for', field: 'loop_linkage' },
+            destination: { node_id: 'return', field: 'loop_linkage' },
+          },
+        ],
+      } satisfies NonNullableGraph,
+      false
+    );
+
+    expect(workflow.edges).toEqual([
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: 'for',
+        sourceHandle: 'loop_linkage',
+        target: 'return',
+        targetHandle: 'loop_linkage',
+      }),
+    ]);
   });
 });

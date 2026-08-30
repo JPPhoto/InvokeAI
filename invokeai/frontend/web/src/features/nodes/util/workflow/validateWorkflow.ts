@@ -3,7 +3,14 @@ import { getSavedWorkflowDynamicFields } from 'features/nodes/components/flow/no
 import { addElement, getIsFormEmpty } from 'features/nodes/components/sidePanel/builder/form-manipulation';
 import { CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX } from 'features/nodes/store/nodesSlice';
 import type { Templates } from 'features/nodes/store/types';
+import {
+  CONNECTOR_OUTPUT_HANDLE,
+  resolveConnectorSource,
+  resolveLoopLinkagePath,
+} from 'features/nodes/store/util/connectorTopology';
+import { getEdgeTypeFromHandles, isLoopLinkageEdge } from 'features/nodes/store/util/reactFlowUtil';
 import { validateConnection } from 'features/nodes/store/util/validateConnection';
+import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 import { nodeAcceptsExtraInputs } from 'features/nodes/types/extraInputs';
 import {
   isBoardFieldInputInstance,
@@ -13,7 +20,7 @@ import {
   isModelIdentifierFieldInputInstance,
   isVideoFieldInputInstance,
 } from 'features/nodes/types/field';
-import { getInvocationNodeInputTemplate } from 'features/nodes/types/invocation';
+import { getInvocationNodeInputTemplate, isConnectorNode } from 'features/nodes/types/invocation';
 import type { WorkflowV3 } from 'features/nodes/types/workflow';
 import {
   buildNodeFieldElement,
@@ -150,7 +157,12 @@ export const validateWorkflow = async (args: ValidateWorkflowArgs): Promise<Vali
 
   await refreshCallSavedWorkflowDynamicInputs({ workflow: _workflow, templates, getWorkflow, warnings });
 
-  for (const edge of edges) {
+  for (const rawEdge of edges) {
+    const edge =
+      rawEdge.type === 'default' &&
+      getEdgeTypeFromHandles(rawEdge.sourceHandle, rawEdge.targetHandle) === 'loop_linkage'
+        ? { ...rawEdge, type: 'loop_linkage' as const }
+        : rawEdge;
     // Validate each edge. If the edge is invalid, we must remove it to prevent runtime errors with reactflow.
     const sourceNode = nodes.find(({ id }) => id === edge.source);
     const targetNode = nodes.find(({ id }) => id === edge.target);
@@ -207,6 +219,19 @@ export const validateWorkflow = async (args: ValidateWorkflowArgs): Promise<Vali
     }
 
     if (
+      !issues.length &&
+      edge.type === 'loop_linkage' &&
+      (edge.sourceHandle !== LOOP_LINKAGE_FIELD ||
+        edge.targetHandle !== LOOP_LINKAGE_FIELD ||
+        sourceNode?.type !== 'invocation' ||
+        sourceNode.data.type !== 'for' ||
+        targetNode?.type !== 'invocation' ||
+        targetNode.data.type !== 'for_return')
+    ) {
+      issues.push(t('nodes.forLoopLinkageInvalid'));
+    }
+
+    if (
       targetNode &&
       isWorkflowInvocationNode(targetNode) &&
       targetTemplate &&
@@ -222,7 +247,7 @@ export const validateWorkflow = async (args: ValidateWorkflowArgs): Promise<Vali
       );
     }
 
-    if (!issues.length && edge.type === 'default') {
+    if (!issues.length && (edge.type === 'default' || edge.type === 'loop_linkage')) {
       const connectionError = validateConnection(edge, nodes, validEdges, templates, null, true);
       if (connectionError) {
         issues.push(connectionError);
@@ -243,7 +268,54 @@ export const validateWorkflow = async (args: ValidateWorkflowArgs): Promise<Vali
   }
 
   // Remove invalid edges before node updates so migrations only trust surviving connections.
-  _workflow.edges = validEdges;
+  const invalidConnectorLinkageEdgeIds = new Set<string>();
+  const linkedForIds = new Set(validEdges.filter(isLoopLinkageEdge).map((edge) => edge.source));
+  const linkedReturnIds = new Set(validEdges.filter(isLoopLinkageEdge).map((edge) => edge.target));
+  for (const edge of edges) {
+    if (
+      edge.type !== 'default' ||
+      edge.sourceHandle !== CONNECTOR_OUTPUT_HANDLE ||
+      edge.targetHandle !== LOOP_LINKAGE_FIELD ||
+      !isConnectorNode(nodes.find((node) => node.id === edge.source))
+    ) {
+      continue;
+    }
+
+    const resolvedSource = resolveConnectorSource(edge.source, nodes, edges);
+    if (!resolvedSource) {
+      continue;
+    }
+
+    const path = resolveLoopLinkagePath(edge, nodes, edges);
+    if (!path) {
+      invalidConnectorLinkageEdgeIds.add(edge.id);
+      warnings.push({
+        message: t('nodes.deletedInvalidEdge', {
+          source: `${edge.source}.${edge.sourceHandle}`,
+          target: `${edge.target}.${edge.targetHandle}`,
+        }),
+        issues: [t('nodes.forLoopLinkageInvalid')],
+        data: edge,
+      });
+      continue;
+    }
+    if (linkedForIds.has(path.forNodeId) || linkedReturnIds.has(path.returnNodeId)) {
+      path.edgeIds.forEach((edgeId) => invalidConnectorLinkageEdgeIds.add(edgeId));
+      warnings.push({
+        message: t('nodes.deletedInvalidEdge', {
+          source: `${edge.source}.${edge.sourceHandle}`,
+          target: `${edge.target}.${edge.targetHandle}`,
+        }),
+        issues: [t('nodes.forLoopLinkageDuplicate')],
+        data: edge,
+      });
+      continue;
+    }
+    linkedForIds.add(path.forNodeId);
+    linkedReturnIds.add(path.returnNodeId);
+  }
+
+  _workflow.edges = validEdges.filter((edge) => !invalidConnectorLinkageEdgeIds.has(edge.id));
 
   for (const node of nodes) {
     if (!isWorkflowInvocationNode(node)) {
@@ -281,6 +353,12 @@ export const validateWorkflow = async (args: ValidateWorkflowArgs): Promise<Vali
         });
         continue;
       }
+    }
+
+    // Prepared For executions carry an internal index input that is not part of the editable workflow template.
+    // Strip it when loading so an execution artifact cannot become an "unexpected field" in the editor.
+    if (node.data.type === 'for') {
+      delete node.data.inputs.index;
     }
 
     for (const input of Object.values(node.data.inputs)) {

@@ -48,7 +48,10 @@ import {
   selectNodes,
   selectNodesSlice,
 } from 'features/nodes/store/selectors';
-import { getConnectorDeletionSpliceConnections } from 'features/nodes/store/util/connectorTopology';
+import {
+  getConnectorDeletionSpliceConnections,
+  getEdgesWithLoopLinkageAliases,
+} from 'features/nodes/store/util/connectorTopology';
 import { connectionToEdge } from 'features/nodes/store/util/reactFlowUtil';
 import { validateConnection } from 'features/nodes/store/util/validateConnection';
 import { selectSelectionMode, selectShouldSnapToGrid } from 'features/nodes/store/workflowSettingsSlice';
@@ -65,6 +68,8 @@ import { PiPlugsConnectedBold, PiTrashBold } from 'react-icons/pi';
 import CustomConnectionLine from './connectionLines/CustomConnectionLine';
 import InvocationCollapsedEdge from './edges/InvocationCollapsedEdge';
 import InvocationDefaultEdge from './edges/InvocationDefaultEdge';
+import InvocationLoopLinkageEdge from './edges/InvocationLoopLinkageEdge';
+import LoopBodyBoundaryOverlay from './LoopBodyBoundaryOverlay';
 import ConnectorNode from './nodes/Connector/ConnectorNode';
 import CurrentImageNode from './nodes/CurrentImage/CurrentImageNode';
 import InvocationNodeWrapper from './nodes/Invocation/InvocationNodeWrapper';
@@ -76,6 +81,7 @@ import { isWorkflowHotkeyEnabled, shouldIgnoreWorkflowCopyHotkey } from './workf
 const edgeTypes = {
   collapsed: InvocationCollapsedEdge,
   default: InvocationDefaultEdge,
+  loop_linkage: InvocationLoopLinkageEdge,
 } as const;
 
 const nodeTypes = {
@@ -288,7 +294,7 @@ export const Flow = memo(() => {
 
   const onEdgeDoubleClick = useCallback<NonNullable<ReactFlowProps['onEdgeDoubleClick']>>(
     (event, edge) => {
-      if (edge.type !== 'default' || edge.hidden) {
+      if (edge.hidden || (edge.type !== 'default' && edge.type !== 'loop_linkage')) {
         return;
       }
       const flow = $flow.get();
@@ -371,7 +377,7 @@ export const Flow = memo(() => {
 
   const renderedNodes = useMemo(() => nodes, [nodes]);
 
-  const renderedEdges = useMemo(() => edges, [edges]);
+  const renderedEdges = useMemo(() => getEdgesWithLoopLinkageAliases(nodes, edges), [edges, nodes]);
   const contextMenuPosition = contextMenuState ? { x: contextMenuState.pageX, y: contextMenuState.pageY } : null;
   const contextMenuKey = contextMenuPosition ? `${contextMenuPosition.x}-${contextMenuPosition.y}` : 'closed';
 
@@ -382,6 +388,7 @@ export const Flow = memo(() => {
         viewport={viewport}
         renderedNodes={renderedNodes}
         renderedEdges={renderedEdges}
+        boundaryEdges={edges}
         onInit={onInit}
         onMouseMove={onMouseMove}
         onNodesChange={onNodesChange}
@@ -433,6 +440,7 @@ type FlowSurfaceProps = {
   viewport: ReactFlowProps<AnyNode, AnyEdge>['defaultViewport'];
   renderedNodes: AnyNode[];
   renderedEdges: AnyEdge[];
+  boundaryEdges: AnyEdge[];
   onInit: OnInit<AnyNode, AnyEdge>;
   onMouseMove: (event: MouseEvent<HTMLDivElement>) => void;
   onNodesChange: OnNodesChange<AnyNode>;
@@ -458,6 +466,7 @@ const FlowSurface = memo((props: FlowSurfaceProps) => {
     viewport,
     renderedNodes,
     renderedEdges,
+    boundaryEdges,
     onInit,
     onMouseMove,
     onNodesChange,
@@ -523,6 +532,7 @@ const FlowSurface = memo((props: FlowSurfaceProps) => {
         noPanClassName={NO_PAN_CLASS}
       >
         <Background gap={snapGrid} offset={snapGrid} />
+        <LoopBodyBoundaryOverlay edges={boundaryEdges} />
       </ReactFlow>
     </div>
   );

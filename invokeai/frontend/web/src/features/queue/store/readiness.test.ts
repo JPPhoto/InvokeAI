@@ -8,13 +8,22 @@ vi.mock('i18next', () => ({
   default: {
     t: (key: string) => key,
   },
+  t: (key: string) => key,
 }));
 
+import type { AppStore } from 'app/store/store';
 import type { ParamsState, RefImagesState } from 'features/controlLayers/store/types';
 import type { DynamicPromptsState } from 'features/dynamicPrompts/store/dynamicPromptsSlice';
+import type { NodesState } from 'features/nodes/store/types';
+import { add, buildEdge, buildNode, for_loop, templates } from 'features/nodes/store/util/testUtils';
+import type { WorkflowSettingsState } from 'features/nodes/store/workflowSettingsSlice';
 import type { AnyModelConfig, MainModelConfig } from 'services/api/types';
 
-import { getReasonsWhyCannotEnqueueCanvasTab, getReasonsWhyCannotEnqueueGenerateTab } from './readiness';
+import {
+  getReasonsWhyCannotEnqueueCanvasTab,
+  getReasonsWhyCannotEnqueueGenerateTab,
+  getReasonsWhyCannotEnqueueWorkflowsTab,
+} from './readiness';
 
 // --- Fixtures ---
 
@@ -241,6 +250,58 @@ describe('FLUX.2 Klein readiness checks – generate tab', () => {
     );
     expect(hasFlux2VaeReason(reasons)).toBe(false);
     expect(hasFlux2Qwen3Reason(reasons)).toBe(false);
+  });
+});
+
+describe('workflow readiness checks', () => {
+  it('blocks Invoke when the workflow graph has an invalid For topology', async () => {
+    const forNode = buildNode(for_loop);
+    const bodyNode = buildNode(add);
+    const nodesState = {
+      _version: 1,
+      nodes: [forNode, bodyNode],
+      edges: [buildEdge(forNode.id, 'item', bodyNode.id, 'a')],
+      formFieldInitialValues: {},
+      id: undefined,
+      name: '',
+      author: '',
+      description: '',
+      version: '',
+      contact: '',
+      tags: '',
+      notes: '',
+      exposedFields: [],
+      meta: { version: '4.0.0', category: 'user' },
+      form: {
+        rootElementId: 'root',
+        elements: {
+          root: {
+            id: 'root',
+            type: 'container',
+            data: { layout: 'column', children: [] },
+          },
+        },
+      },
+    } as unknown as NodesState;
+    const rootState = {
+      nodes: { present: nodesState },
+      gallery: { autoAddBoardId: 'none', selection: [] },
+    };
+    const store = {
+      dispatch: vi.fn(),
+      getState: () => rootState,
+    } as unknown as AppStore;
+
+    const reasons = await getReasonsWhyCannotEnqueueWorkflowsTab({
+      dispatch: store.dispatch,
+      nodesState,
+      workflowSettingsState: { shouldValidateGraph: true } as WorkflowSettingsState,
+      isConnected: true,
+      templates: { ...templates, for: for_loop },
+      store,
+    });
+
+    expect(reasons).toContainEqual({ content: 'nodes.forLoopLinkageMissing' });
   });
 });
 

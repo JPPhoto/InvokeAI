@@ -2,6 +2,7 @@ import * as dagre from '@dagrejs/dagre';
 import { logger } from 'app/logging/logger';
 import { forEach } from 'es-toolkit/compat';
 import { $templates } from 'features/nodes/store/nodesSlice';
+import { getEdgeTypeFromHandles } from 'features/nodes/store/util/reactFlowUtil';
 import { NODE_WIDTH } from 'features/nodes/types/constants';
 import { nodeAcceptsExtraInputs } from 'features/nodes/types/extraInputs';
 import type { FieldInputInstance, FieldInputTemplate } from 'features/nodes/types/field';
@@ -122,7 +123,10 @@ export const graphToWorkflow = (graph: NonNullableGraph, autoLayout = true): Wor
   forEach(graph.edges, (edge) => {
     workflow.edges.push({
       id: uuidv4(), // we don't have edge IDs in the graph
-      type: 'default',
+      type:
+        edge.type === 'loop_linkage'
+          ? 'loop_linkage'
+          : getEdgeTypeFromHandles(edge.source.field, edge.destination.field),
       source: edge.source.node_id,
       sourceHandle: edge.source.field,
       target: edge.destination.node_id,
@@ -167,9 +171,11 @@ export const graphToWorkflow = (graph: NonNullableGraph, autoLayout = true): Wor
       dagreGraph.setNode(node.id, { width, height });
     });
 
-    graph.edges.forEach((edge) => {
-      dagreGraph.setEdge(edge.source.node_id, edge.destination.node_id);
-    });
+    graph.edges
+      .filter((edge) => edge.type !== 'loop_linkage')
+      .forEach((edge) => {
+        dagreGraph.setEdge(edge.source.node_id, edge.destination.node_id);
+      });
 
     // This does the magic
     dagre.layout(dagreGraph);

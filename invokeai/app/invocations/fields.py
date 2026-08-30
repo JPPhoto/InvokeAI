@@ -31,7 +31,7 @@ class UIType(str, Enum, metaclass=MetaEnum):
 
     - Any Field
     We cannot infer the usage of `typing.Any` via schema parsing, so you *must* use `ui_type=UIType.Any` to
-    indicate that the field accepts any type. Use with caution. This cannot be used on outputs.
+    indicate that the field accepts any type. Use with caution. On inputs, this renders as a connection-only field.
 
     - Scheduler Field
     Special handling in the UI is needed for this field, which otherwise would be parsed as a plain enum field.
@@ -549,6 +549,17 @@ class FieldKind(str, Enum, metaclass=MetaEnum):
     NodeAttribute = "node_attribute"
 
 
+class OutputScope(str, Enum, metaclass=MetaEnum):
+    """
+    The execution scope for an output field.
+    - `Iteration`: The field emits values for a loop body's current iteration.
+    - `Final`: The field emits values after a loop boundary completes.
+    """
+
+    Iteration = "iteration"
+    Final = "final"
+
+
 class InputFieldJSONSchemaExtra(BaseModel):
     """
     Extra attributes to be added to input fields and their OpenAPI schema. Used during graph execution,
@@ -630,6 +641,7 @@ class OutputFieldJSONSchemaExtra(BaseModel):
     ui_hidden: bool = False
     ui_order: Optional[int] = None
     ui_type: Optional[UIType] = None
+    output_scope: Optional[OutputScope] = None
 
     model_config = ConfigDict(
         validate_assignment=True,
@@ -949,6 +961,7 @@ def OutputField(
     ui_type: Optional[UIType] = None,
     ui_hidden: bool = False,
     ui_order: Optional[int] = None,
+    output_scope: Optional[OutputScope] = None,
 ) -> Any:
     """
     Creates an output field for an invocation output.
@@ -965,6 +978,9 @@ def OutputField(
 
         ui_order: Specifies the order in which this field should be rendered in the UI. If omitted, the field will be
         rendered after all fields with an explicit order, in the order they are defined in the Invocation class.
+
+        output_scope: Optionally specifies whether this output is scoped to a loop iteration or to the final loop
+        result. Unscoped outputs have the normal invocation output behavior.
     """
 
     return Field(
@@ -987,6 +1003,7 @@ def OutputField(
             ui_hidden=ui_hidden,
             ui_order=ui_order,
             ui_type=ui_type,
+            output_scope=output_scope,
             field_kind=FieldKind.Output,
         ).model_dump(exclude_none=True),
     )

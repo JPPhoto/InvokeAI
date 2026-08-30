@@ -19,7 +19,9 @@ export const getHasCycles = (source: string, target: string, nodes: Node[], edge
   });
 
   edges.forEach((e) => {
-    g.setEdge(e.source, e.target);
+    if (e.type === 'default') {
+      g.setEdge(e.source, e.target);
+    }
   });
 
   // add the candidate edge

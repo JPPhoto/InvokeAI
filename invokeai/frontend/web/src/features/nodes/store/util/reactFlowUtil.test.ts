@@ -20,4 +20,22 @@ describe('connectionToEdge', () => {
       id: 'reactflow__edge-source-nodevalue-target-nodea',
     });
   });
+
+  it('creates a loop linkage edge when both handles are loop linkage handles', () => {
+    expect(
+      connectionToEdge({
+        source: 'for-node',
+        sourceHandle: 'loop_linkage',
+        target: 'return-node',
+        targetHandle: 'loop_linkage',
+      })
+    ).toEqual({
+      type: 'loop_linkage',
+      source: 'for-node',
+      sourceHandle: 'loop_linkage',
+      target: 'return-node',
+      targetHandle: 'loop_linkage',
+      id: 'reactflow__edge-for-nodeloop_linkage-return-nodeloop_linkage',
+    });
+  });
 });

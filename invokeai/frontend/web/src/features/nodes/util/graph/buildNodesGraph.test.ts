@@ -1,7 +1,17 @@
 import { deepClone } from 'common/util/deepClone';
 import { callSavedWorkflowDynamicFieldsChanged, nodesSliceConfig } from 'features/nodes/store/nodesSlice';
 import { CONNECTOR_INPUT_HANDLE, CONNECTOR_OUTPUT_HANDLE } from 'features/nodes/store/util/connectorTopology';
-import { add, buildEdge, buildNode, img_resize, sub, templates } from 'features/nodes/store/util/testUtils';
+import {
+  add,
+  buildEdge,
+  buildLoopLinkageEdge,
+  buildNode,
+  for_loop,
+  for_return,
+  img_resize,
+  sub,
+  templates,
+} from 'features/nodes/store/util/testUtils';
 import type { IntegerFieldInputTemplate } from 'features/nodes/types/field';
 import { zInvocationNodeData } from 'features/nodes/types/invocation';
 import { describe, expect, it } from 'vitest';
@@ -73,6 +83,188 @@ const buildState = (nodes: unknown[], edges: unknown[]) =>
   }) as unknown as Parameters<typeof buildNodesGraph>[0];
 
 describe('buildNodesGraph', () => {
+  it('rejects an invalid For loop before queue submission', () => {
+    const forNode = buildNode(for_loop);
+    const bodyNode = buildNode(add);
+    const state = buildState([forNode, bodyNode], [buildEdge(forNode.id, 'item', bodyNode.id, 'a')]);
+
+    expect(() => buildNodesGraph(state, { ...templates, for: for_loop })).toThrow('nodes.forLoopLinkageMissing');
+  });
+
+  it('preserves the explicit loop linkage in a simple For graph', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    const state = buildState(
+      [forNode, returnNode],
+      [buildEdge(forNode.id, 'item', returnNode.id, 'output'), buildLoopLinkageEdge(forNode.id, returnNode.id)]
+    );
+
+    const graph = buildNodesGraph(state, { ...templates, for: for_loop, for_return });
+
+    expect(graph.edges).toEqual([
+      expect.objectContaining({
+        type: 'default',
+        source: { node_id: forNode.id, field: 'item' },
+        destination: { node_id: returnNode.id, field: 'output' },
+      }),
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: { node_id: forNode.id, field: 'loop_linkage' },
+        destination: { node_id: returnNode.id, field: 'loop_linkage' },
+      }),
+    ]);
+  });
+
+  it('canonicalizes connector loop linkage into one direct execution edge', () => {
+    const forNode = buildNode(for_loop);
+    const connector = buildConnectorNode('connector-1');
+    const returnNode = buildNode(for_return);
+    const state = buildState(
+      [forNode, connector, returnNode],
+      [
+        buildEdge(forNode.id, 'item', returnNode.id, 'output'),
+        buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+      ]
+    );
+
+    const graph = buildNodesGraph(state, { ...templates, for: for_loop, for_return });
+
+    expect(graph.edges).toEqual([
+      expect.objectContaining({
+        type: 'default',
+        source: { node_id: forNode.id, field: 'item' },
+        destination: { node_id: returnNode.id, field: 'output' },
+      }),
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: { node_id: forNode.id, field: 'loop_linkage' },
+        destination: { node_id: returnNode.id, field: 'loop_linkage' },
+      }),
+    ]);
+  });
+
+  it('canonicalizes a chained connector loop linkage into one direct execution edge', () => {
+    const forNode = buildNode(for_loop);
+    const firstConnector = buildConnectorNode('connector-1');
+    const secondConnector = buildConnectorNode('connector-2');
+    const returnNode = buildNode(for_return);
+    const state = buildState(
+      [forNode, firstConnector, secondConnector, returnNode],
+      [
+        buildEdge(forNode.id, 'item', returnNode.id, 'output'),
+        buildEdge(forNode.id, 'loop_linkage', firstConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(firstConnector.id, CONNECTOR_OUTPUT_HANDLE, secondConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(secondConnector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+      ]
+    );
+
+    const graph = buildNodesGraph(state, { ...templates, for: for_loop, for_return });
+
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: { node_id: forNode.id, field: 'loop_linkage' },
+        destination: { node_id: returnNode.id, field: 'loop_linkage' },
+      })
+    );
+    expect(graph.edges).toHaveLength(2);
+  });
+
+  it('rejects a connector loop linkage that branches to multiple ForReturns', () => {
+    const forNode = buildNode(for_loop);
+    const connector = buildConnectorNode('connector-1');
+    const firstReturnNode = buildNode(for_return);
+    const secondReturnNode = buildNode(for_return);
+    const state = buildState(
+      [forNode, connector, firstReturnNode, secondReturnNode],
+      [
+        buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, firstReturnNode.id, 'loop_linkage'),
+        buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, secondReturnNode.id, 'loop_linkage'),
+      ]
+    );
+
+    expect(() => buildNodesGraph(state, { ...templates, for: for_loop, for_return })).toThrow(
+      'nodes.forLoopLinkageInvalid'
+    );
+  });
+
+  it('rejects a loop linkage connector reused for ordinary data before a ForReturn is attached', () => {
+    const forNode = buildNode(for_loop);
+    const connector = buildConnectorNode('connector-1');
+    const targetNode = buildNode(sub);
+    const state = buildState(
+      [forNode, connector, targetNode],
+      [
+        buildEdge(forNode.id, 'loop_linkage', connector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(connector.id, CONNECTOR_OUTPUT_HANDLE, targetNode.id, 'a'),
+      ]
+    );
+
+    expect(() => buildNodesGraph(state, { ...templates, for: for_loop })).toThrow('nodes.forLoopLinkageInvalid');
+  });
+
+  it('rejects connector loop linkages that share a ForReturn', () => {
+    const forNode = buildNode(for_loop);
+    const firstConnector = buildConnectorNode('connector-1');
+    const secondConnector = buildConnectorNode('connector-2');
+    const returnNode = buildNode(for_return);
+    const state = buildState(
+      [forNode, firstConnector, secondConnector, returnNode],
+      [
+        buildEdge(forNode.id, 'loop_linkage', firstConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(firstConnector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+        buildEdge(forNode.id, 'loop_linkage', secondConnector.id, CONNECTOR_INPUT_HANDLE),
+        buildEdge(secondConnector.id, CONNECTOR_OUTPUT_HANDLE, returnNode.id, 'loop_linkage'),
+      ]
+    );
+
+    expect(() => buildNodesGraph(state, { ...templates, for: for_loop, for_return })).toThrow(
+      'nodes.forLoopLinkageDuplicate'
+    );
+  });
+
+  it('normalizes loop linkage handles when an edge is missing its linkage type', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    const state = buildState(
+      [forNode, returnNode],
+      [
+        buildEdge(forNode.id, 'item', returnNode.id, 'output'),
+        buildEdge(forNode.id, 'loop_linkage', returnNode.id, 'loop_linkage'),
+      ]
+    );
+
+    const graph = buildNodesGraph(state, { ...templates, for: for_loop, for_return });
+
+    expect(graph.edges).toEqual([
+      expect.objectContaining({
+        type: 'default',
+        source: { node_id: forNode.id, field: 'item' },
+        destination: { node_id: returnNode.id, field: 'output' },
+      }),
+      expect.objectContaining({
+        type: 'loop_linkage',
+        source: { node_id: forNode.id, field: 'loop_linkage' },
+        destination: { node_id: returnNode.id, field: 'loop_linkage' },
+      }),
+    ]);
+  });
+
+  it('continues to omit collapsed edges while normalizing linkage edges', () => {
+    const sourceNode = buildNode(add);
+    const targetNode = buildNode(add);
+    const state = buildState(
+      [sourceNode, targetNode],
+      [{ ...buildEdge(sourceNode.id, 'value', targetNode.id, 'a'), type: 'collapsed', data: { count: 1 } }]
+    );
+
+    const graph = buildNodesGraph(state, templates);
+
+    expect(graph.edges).toEqual([]);
+  });
+
   it('serializes dynamic saved workflow inputs into workflow_inputs', () => {
     const state = nodesSliceConfig.getInitialState();
     const node = buildNode(callSavedWorkflowTemplate);
@@ -161,6 +353,7 @@ describe('buildNodesGraph', () => {
       workflow_inputs: {},
     });
     expect(graph.edges).toContainEqual({
+      type: 'default',
       source: { node_id: sourceNode.id, field: 'value' },
       destination: { node_id: callNode.id, field: 'saved_workflow_input::node-1::a' },
     });
@@ -223,6 +416,7 @@ describe('buildNodesGraph', () => {
     expect(graph.nodes).not.toHaveProperty(connector.id);
     expect(graph.edges).toEqual([
       {
+        type: 'default',
         source: { node_id: source.id, field: 'value' },
         destination: { node_id: target.id, field: 'a' },
       },
@@ -247,6 +441,7 @@ describe('buildNodesGraph', () => {
 
     expect(graph.edges).toEqual([
       {
+        type: 'default',
         source: { node_id: source.id, field: 'value' },
         destination: { node_id: target.id, field: 'a' },
       },
@@ -271,10 +466,12 @@ describe('buildNodesGraph', () => {
 
     expect(graph.edges).toEqual([
       {
+        type: 'default',
         source: { node_id: source.id, field: 'value' },
         destination: { node_id: targetA.id, field: 'a' },
       },
       {
+        type: 'default',
         source: { node_id: source.id, field: 'value' },
         destination: { node_id: targetB.id, field: 'width' },
       },
@@ -309,6 +506,7 @@ describe('buildNodesGraph', () => {
 
     expect(graph.edges).toEqual([
       {
+        type: 'default',
         source: { node_id: source.id, field: 'value' },
         destination: { node_id: target.id, field: 'a' },
       },
@@ -337,6 +535,7 @@ describe('buildNodesGraph', () => {
 
     expect(graph.edges).toEqual([
       {
+        type: 'default',
         source: { node_id: source.id, field: 'value' },
         destination: { node_id: target.id, field: 'a' },
       },

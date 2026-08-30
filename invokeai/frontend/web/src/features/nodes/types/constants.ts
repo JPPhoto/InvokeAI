@@ -5,6 +5,9 @@ import type { AnyNode } from 'features/nodes/types/invocation';
  */
 export const HANDLE_TOOLTIP_OPEN_DELAY = 500;
 
+/** The non-executable association between a For and its matching ForReturn. */
+export const LOOP_LINKAGE_FIELD = 'loop_linkage';
+
 /**
  * The width of a node in the UI in pixels.
  */
