@@ -99,6 +99,7 @@ import {
   isNodeFieldElement,
   isTextElement,
 } from 'features/nodes/types/workflow';
+import { reconcileForLoopBodyIdentities } from 'features/nodes/util/graph/loopBodyBoundary';
 import { buildFieldInputInstance } from 'features/nodes/util/schema/buildFieldInputInstance';
 import { atom, computed } from 'nanostores';
 import type { MouseEvent } from 'react';
@@ -430,6 +431,7 @@ const slice = createSlice({
         changes.push(change);
       }
       state.edges = applyEdgeChanges(changes, state.edges);
+      reconcileForLoopBodyIdentities(state.nodes as AnyNode[], state.edges);
     },
     fieldLabelChanged: (
       state,

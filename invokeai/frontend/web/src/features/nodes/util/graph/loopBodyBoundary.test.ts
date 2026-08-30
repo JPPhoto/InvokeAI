@@ -1,8 +1,9 @@
+import { getLoopBodyIdentity } from 'features/nodes/store/util/loopIdentity';
 import { add, buildEdge, buildNode, for_loop, for_return } from 'features/nodes/store/util/testUtils';
 import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
 import { describe, expect, it } from 'vitest';
 
-import { getForLoopBodyBoundaries } from './loopBodyBoundary';
+import { getForLoopBodyBoundaries, reconcileForLoopBodyIdentities } from './loopBodyBoundary';
 
 const setBodyId = (node: AnyNode, bodyId: string | undefined) => {
   if (node.type !== 'invocation' || !node.data.inputs.body_id) {
@@ -21,6 +22,70 @@ const edge = (source: string, sourceHandle: string, target: string, targetHandle
   buildEdge(source, sourceHandle, target, targetHandle);
 
 describe(getForLoopBodyBoundaries.name, () => {
+  it('assigns a shared identity for a body connected through state', () => {
+    const forNode = setNodeId(buildNode(for_loop), 'for');
+    const returnNode = setNodeId(buildNode(for_return), 'return');
+
+    reconcileForLoopBodyIdentities([forNode, returnNode], [edge('for', 'state', 'return', 'state')], () => 'body-1');
+
+    expect(getLoopBodyIdentity(forNode)).toBe('body-1');
+    expect(getLoopBodyIdentity(returnNode)).toBe('body-1');
+  });
+
+  it('propagates an existing For identity to a newly linked ForReturn', () => {
+    const forNode = setNodeId(buildNode(for_loop), 'for');
+    const returnNode = setNodeId(buildNode(for_return), 'return');
+    setBodyId(forNode, 'body-1');
+
+    reconcileForLoopBodyIdentities([forNode, returnNode], [edge('for', 'state', 'return', 'state')]);
+
+    expect(getLoopBodyIdentity(returnNode)).toBe('body-1');
+  });
+
+  it('does not reuse a For identity claimed by a detached ForReturn', () => {
+    const forNode = setNodeId(buildNode(for_loop), 'for');
+    const returnNode = setNodeId(buildNode(for_return), 'return');
+    const detachedReturnNode = setNodeId(buildNode(for_return), 'detached-return');
+    setBodyId(forNode, 'body-1');
+    setBodyId(detachedReturnNode, 'body-1');
+
+    reconcileForLoopBodyIdentities(
+      [forNode, returnNode, detachedReturnNode],
+      [edge('for', 'state', 'return', 'state')]
+    );
+
+    expect(getLoopBodyIdentity(forNode)).toBe('body-1');
+    expect(getLoopBodyIdentity(returnNode)).toBeUndefined();
+    expect(getLoopBodyIdentity(detachedReturnNode)).toBe('body-1');
+  });
+
+  it('does not adopt an identity that exists only on ForReturn', () => {
+    const forNode = setNodeId(buildNode(for_loop), 'for');
+    const returnNode = setNodeId(buildNode(for_return), 'return');
+    setBodyId(returnNode, 'body-1');
+
+    reconcileForLoopBodyIdentities([forNode, returnNode], [edge('for', 'state', 'return', 'state')]);
+
+    expect(getLoopBodyIdentity(forNode)).toBeUndefined();
+    expect(getLoopBodyIdentity(returnNode)).toBe('body-1');
+  });
+
+  it('does not assign an identity when multiple For nodes share one return', () => {
+    const firstForNode = setNodeId(buildNode(for_loop), 'first-for');
+    const secondForNode = setNodeId(buildNode(for_loop), 'second-for');
+    const returnNode = setNodeId(buildNode(for_return), 'return');
+
+    reconcileForLoopBodyIdentities(
+      [firstForNode, secondForNode, returnNode],
+      [edge('first-for', 'state', 'return', 'state'), edge('second-for', 'state', 'return', 'state')],
+      () => 'body-1'
+    );
+
+    expect(getLoopBodyIdentity(firstForNode)).toBeUndefined();
+    expect(getLoopBodyIdentity(secondForNode)).toBeUndefined();
+    expect(getLoopBodyIdentity(returnNode)).toBeUndefined();
+  });
+
   it('resolves a legacy body from For iteration outputs to one ForReturn', () => {
     const forNode = setNodeId(buildNode(for_loop), 'for');
     const bodyNode = setNodeId(buildNode(add), 'body');

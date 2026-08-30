@@ -1,4 +1,4 @@
-import { getLoopBodyIdentity } from 'features/nodes/store/util/loopIdentity';
+import { createLoopBodyIdentity, getLoopBodyIdentity } from 'features/nodes/store/util/loopIdentity';
 import type { AnyEdge, AnyNode, InvocationNode } from 'features/nodes/types/invocation';
 import { isInvocationNode } from 'features/nodes/types/invocation';
 
@@ -195,4 +195,74 @@ export const getForLoopBodyBoundaries = (nodes: AnyNode[], edges: AnyEdge[]): Lo
     });
 
   return [...forBoundaries, ...orphanReturnBoundaries];
+};
+
+const hasInvalidBodyIdentity = (node: AnyNode): boolean => {
+  if (!isLoopBoundary(node)) {
+    return false;
+  }
+  const bodyId = node.data.inputs.body_id?.value;
+  return bodyId !== undefined && bodyId !== null && typeof bodyId !== 'string';
+};
+
+const setBodyIdentity = (node: AnyNode, bodyId: string): void => {
+  if (isLoopBoundary(node) && node.data.inputs.body_id) {
+    node.data.inputs.body_id.value = bodyId;
+  }
+};
+
+/** Assigns durable identities after an unambiguous loop boundary is completed in the editor. */
+export const reconcileForLoopBodyIdentities = (
+  nodes: AnyNode[],
+  edges: AnyEdge[],
+  createBodyId: () => string = createLoopBodyIdentity
+): void => {
+  const boundaries = getForLoopBodyBoundaries(nodes, edges).filter(
+    (boundary) =>
+      (boundary.status === 'complete' || boundary.status === 'identity_missing') &&
+      boundary.forNodeId !== undefined &&
+      boundary.returnNodeId !== undefined
+  );
+  const bodyIdCounts = getBodyIds(nodes);
+  const returnBoundaryCounts = new Map<string, number>();
+  for (const boundary of boundaries) {
+    if (boundary.returnNodeId !== undefined) {
+      returnBoundaryCounts.set(boundary.returnNodeId, (returnBoundaryCounts.get(boundary.returnNodeId) ?? 0) + 1);
+    }
+  }
+
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  for (const boundary of boundaries) {
+    if (
+      boundary.forNodeId === undefined ||
+      boundary.returnNodeId === undefined ||
+      returnBoundaryCounts.get(boundary.returnNodeId) !== 1
+    ) {
+      continue;
+    }
+
+    const forNode = nodesById.get(boundary.forNodeId);
+    const returnNode = nodesById.get(boundary.returnNodeId);
+    if (!forNode || !returnNode || hasInvalidBodyIdentity(forNode) || hasInvalidBodyIdentity(returnNode)) {
+      continue;
+    }
+
+    const forBodyId = getLoopBodyIdentity(forNode);
+    const returnBodyId = getLoopBodyIdentity(returnNode);
+    if (forBodyId === undefined && returnBodyId !== undefined) {
+      // A return-only identity may be stale. Do not silently adopt it.
+      continue;
+    }
+    if (forBodyId !== undefined && returnBodyId === undefined && (bodyIdCounts.get(forBodyId)?.returnCount ?? 0) > 0) {
+      // A detached return may still claim this identity. Do not create duplicate ownership.
+      continue;
+    }
+    if (forBodyId !== undefined && returnBodyId !== undefined) {
+      continue;
+    }
+
+    const bodyId = forBodyId ?? createBodyId();
+    setBodyIdentity(forNode, bodyId);
+    setBodyIdentity(returnNode, bodyId);
+  }
 };

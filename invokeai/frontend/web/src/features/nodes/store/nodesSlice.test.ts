@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   callSavedWorkflowDynamicFieldsChanged,
   connectorInserted,
+  edgesChanged,
   fieldIntegerValueChanged,
   fieldStringValueChanged,
   fieldValueReset,
@@ -614,6 +615,26 @@ describe('nodesSlice connector actions', () => {
 });
 
 describe('nodesSlice loop boundary actions', () => {
+  it('assigns a shared identity when ForReturn is connected through state', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, returnNode];
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      initialState,
+      edgesChanged([{ type: 'add', item: buildEdge(forNode.id, 'state', returnNode.id, 'state') }])
+    );
+    const updatedFor = nextState.nodes.find((node) => node.id === forNode.id);
+    const updatedReturn = nextState.nodes.find((node) => node.id === returnNode.id);
+
+    if (!updatedFor || updatedFor.type !== 'invocation' || !updatedReturn || updatedReturn.type !== 'invocation') {
+      throw new Error('Expected For and ForReturn invocations');
+    }
+    expect(updatedFor.data.inputs.body_id?.value).toEqual(expect.any(String));
+    expect(updatedReturn.data.inputs.body_id?.value).toBe(updatedFor.data.inputs.body_id?.value);
+  });
+
   it('clears the surviving ForReturn identity when its For is removed', () => {
     const forNode = buildNode(for_loop);
     const returnNode = buildNode(for_return);

@@ -206,8 +206,11 @@ Validation rules are shared by the backend and frontend:
 - copying a complete `For` and matching `ForReturn` pair creates a fresh shared `body_id`; copying only one boundary, or
   a mismatched boundary selection, clears its identity so the pasted fragment does not retain a stale or duplicate ID;
 - deleting one boundary clears its identity on the surviving counterpart, so removing a `For` and adding a replacement
-  leaves a valid legacy-compatible pair until the replacement is explicitly paired; same-ID updates that preserve the
-  identity keep it intact;
+  leaves a valid legacy-compatible pair; reconnecting the replacement to an unambiguous body automatically assigns a
+  fresh shared identity; same-ID updates that preserve the identity keep it intact;
+- after an edge change completes an unambiguous body boundary, the editor assigns a fresh shared identity when both
+  endpoints are legacy, or propagates the `For` identity to a newly linked `ForReturn`; it does not adopt an identity
+  found only on a return because that identity may be stale;
 - `body_id` is direct serialized metadata and must not have an incoming graph edge;
 - if either endpoint has an identity, the matching endpoint must also have one;
 - an identity on a return with no corresponding `For` is stale;
@@ -708,6 +711,9 @@ to its selected `ForReturn`. The boundary resolver uses the same durable `body_i
 the matching return on nested paths, and labels incomplete, ambiguous, stale, mismatched, empty, duplicate, or orphaned
 identity states. Legacy simple loops without `body_id` remain visible and are labeled as legacy boundaries. The overlay
 is a rendering affordance only: it does not add serialized nodes or edges and does not change scheduler behavior.
+When a visible edge completes an unambiguous `For` to `ForReturn` body, the editor also maintains the hidden shared
+`body_id`; this includes direct state-carrying paths. Ambiguous paths remain legacy or invalid until their ownership is
+clear.
 
 When an iteration-scoped output connection is dropped on empty canvas, the add-node picker prioritizes `ForReturn`,
 expands its category, and preserves that priority while searching. Selecting it uses the existing valid-connection
