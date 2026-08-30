@@ -784,7 +784,7 @@ export const for_loop: InvocationTemplate = {
 export const for_return: InvocationTemplate = {
   title: 'ForReturn',
   type: 'for_return',
-  version: '1.3.1',
+  version: '1.3.2',
   tags: [],
   description: '',
   outputType: 'for_return_output',
@@ -863,7 +863,7 @@ export const for_return: InvocationTemplate = {
         cardinality: 'SINGLE',
         batch: false,
       },
-      ui_hidden: false,
+      ui_hidden: true,
       ui_type: 'CollectionItemField',
     },
     state: {
@@ -876,7 +876,7 @@ export const for_return: InvocationTemplate = {
         cardinality: 'SINGLE',
         batch: false,
       },
-      ui_hidden: false,
+      ui_hidden: true,
     },
   },
   useCache: true,

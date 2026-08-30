@@ -358,6 +358,11 @@ Outputs:
 - `output: Any | None`
 - `state: LoopState | None`
 
+These output fields remain in the execution result for the scheduler, serialization, and resume behavior, but the node
+editor hides their output ports. They are not ordinary downstream data-flow outputs. To use the returned values outside
+the loop, connect downstream nodes to `For.output_collection` or `For.final_state` instead. The `ForReturn.output` and
+`ForReturn.state` inputs remain visible because they are the user-facing body-return controls.
+
 Semantics:
 
 - `output` is appended to the final `For.output_collection` when present.
@@ -702,6 +707,7 @@ Minimum editor behavior:
 - show `collection` and optional `state` inputs
 - show per-iteration outputs in a distinct "Iteration Outputs" section: `item`, `index`, `total`, `state`
 - show final outputs in a distinct "Final Outputs" section: `output_collection`, `final_state`
+- show `ForReturn` inputs while hiding its scheduler-facing `output` and `state` output ports
 - make the body return node discoverable and understandable
 - prevent invalid body return wiring where possible
 

@@ -4,6 +4,7 @@ from invokeai.app.invocations.fields import OutputScope
 from invokeai.app.invocations.loops import (
     ForInvocation,
     ForReturnInvocation,
+    ForReturnInvocationOutput,
     LoopState,
     LoopStateValueOutput,
     StateEmptyInvocation,
@@ -39,11 +40,19 @@ def test_for_invocation_is_not_directly_executable() -> None:
 
 def test_for_return_loop_linkage_is_the_first_input() -> None:
     input_names = [
-        name
-        for name in ForReturnInvocation.model_fields
-        if name not in {"id", "is_intermediate", "use_cache", "type"}
+        name for name in ForReturnInvocation.model_fields if name not in {"id", "is_intermediate", "use_cache", "type"}
     ]
     assert input_names == ["loop_linkage", "output", "state", "continue_condition"]
+
+
+def test_for_return_scheduler_outputs_are_hidden_from_ui_schema() -> None:
+    schema = ForReturnInvocationOutput.model_json_schema()
+    invocation_schema = ForReturnInvocation.model_json_schema()
+
+    assert schema["properties"]["output"]["ui_hidden"] is True
+    assert schema["properties"]["state"]["ui_hidden"] is True
+    assert invocation_schema["properties"]["output"].get("ui_hidden", False) is False
+    assert invocation_schema["properties"]["state"].get("ui_hidden", False) is False
 
 
 def test_state_set_invocation_schema_exposes_any_value_input() -> None:

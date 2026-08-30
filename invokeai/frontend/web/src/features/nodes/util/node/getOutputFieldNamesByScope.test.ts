@@ -1,3 +1,4 @@
+import { for_return } from 'features/nodes/store/util/testUtils';
 import type { FieldOutputTemplate } from 'features/nodes/types/field';
 import { getOutputFieldNamesByScope } from 'features/nodes/util/node/getOutputFieldNamesByScope';
 import { describe, expect, it } from 'vitest';
@@ -33,5 +34,16 @@ describe(getOutputFieldNamesByScope.name, () => {
       iteration: ['item'],
       final: ['output_collection'],
     });
+  });
+
+  it('hides ForReturn scheduler outputs from the node UI', () => {
+    expect(getOutputFieldNamesByScope(Object.values(for_return.outputs))).toEqual({
+      all: [],
+      unscoped: [],
+      iteration: [],
+      final: [],
+    });
+    expect(for_return.inputs.output.ui_hidden).toBe(false);
+    expect(for_return.inputs.state.ui_hidden).toBe(false);
   });
 });

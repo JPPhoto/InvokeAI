@@ -178,15 +178,17 @@ class ForReturnInvocationOutput(BaseInvocationOutput):
         description="The output item to append to the loop output collection",
         title="Output",
         ui_type=UIType._CollectionItem,
+        ui_hidden=True,
     )
     state: Optional[LoopState] = OutputField(
         default=None,
         description="The state to pass to the next loop iteration",
         title="State",
+        ui_hidden=True,
     )
 
 
-@invocation("for_return", version="1.3.1")
+@invocation("for_return", version="1.3.2")
 class ForReturnInvocation(BaseInvocation):
     loop_linkage: Optional[Any] = InputField(
         default=None,
