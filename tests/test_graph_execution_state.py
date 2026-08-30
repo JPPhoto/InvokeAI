@@ -27,6 +27,7 @@ from invokeai.app.invocations.loops import (
     ForReturnInvocation,
     ForReturnInvocationOutput,
     LoopState,
+    StateGetInvocation,
     StateSetInvocation,
 )
 from invokeai.app.invocations.math import AddInvocation, MultiplyInvocation
@@ -1914,6 +1915,26 @@ def test_graph_for_empty_collection_round_trips_without_optional_item():
 
     assert isinstance(resumed_after_node, AnyTypeTestInvocation)
     assert resumed_after_node.value == []
+
+
+def test_graph_for_empty_collection_round_trips_missing_loop_state_value():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(StateGetInvocation(id="get", key="missing"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_edge("for", "final_state", "get", "state"))
+
+    state = GraphExecutionState(graph=graph)
+    get_node = state.next()
+    assert isinstance(get_node, StateGetInvocation)
+    state.complete(get_node.id, get_node.invoke(Mock(InvocationContext)))
+
+    resumed = TypeAdapter(GraphExecutionState).validate_json(
+        state.model_dump_json(warnings=False, exclude_none=True), strict=False
+    )
+
+    assert resumed.results[get_node.id].value is None
 
 
 def test_graph_for_empty_collection_preserves_connected_initial_state():

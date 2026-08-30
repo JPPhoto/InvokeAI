@@ -77,6 +77,13 @@ def _empty_for_graph() -> Graph:
     return graph
 
 
+def _empty_for_missing_state_graph() -> Graph:
+    graph = _empty_for_graph()
+    graph.add_node(StateGetInvocation(id="after_state", key="missing"))
+    graph.add_edge(create_edge("for", "final_state", "after_state", "state"))
+    return graph
+
+
 def _insert_session(queue: SqliteSessionQueue, state: GraphExecutionState) -> int:
     session_id = str(uuid.uuid4())
     batch_id = str(uuid.uuid4())
@@ -174,6 +181,24 @@ def test_sqlite_queue_round_trips_empty_for_final_output(session_queue: SqliteSe
     assert for_output.item is None
     assert for_output.index == -1
     assert for_output.total == 0
+
+
+def test_sqlite_queue_round_trips_missing_loop_state_value_after_empty_for(
+    session_queue: SqliteSessionQueue,
+) -> None:
+    item_id = _insert_session(session_queue, GraphExecutionState(graph=_empty_for_missing_state_graph()))
+
+    queue_item = session_queue.dequeue()
+    assert queue_item is not None
+    state = queue_item.session
+    after_state = state.next()
+    assert isinstance(after_state, StateGetInvocation)
+    state.complete(after_state.id, after_state.invoke(Mock(InvocationContext)))
+
+    session_queue.save_queue_item_session(queue_item.item_id, state)
+    resumed = session_queue.get_queue_item(item_id).session
+
+    assert resumed.results[after_state.id].value is None
 
 
 def test_sqlite_queue_resumes_nested_for_after_first_outer_iteration(

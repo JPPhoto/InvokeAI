@@ -205,6 +205,9 @@ Validation rules are shared by the backend and frontend:
   applies it to both boundary nodes; manual or imported boundary identities remain subject to the same validation;
 - copying a complete `For` and matching `ForReturn` pair creates a fresh shared `body_id`; copying only one boundary, or
   a mismatched boundary selection, clears its identity so the pasted fragment does not retain a stale or duplicate ID;
+- deleting one boundary clears its identity on the surviving counterpart, so removing a `For` and adding a replacement
+  leaves a valid legacy-compatible pair until the replacement is explicitly paired; same-ID updates that preserve the
+  identity keep it intact;
 - `body_id` is direct serialized metadata and must not have an incoming graph edge;
 - if either endpoint has an identity, the matching endpoint must also have one;
 - an identity on a return with no corresponding `For` is stale;
@@ -452,6 +455,7 @@ Useful helpers:
 
 - `state_empty` creates an empty `LoopState`.
 - `state_get` reads a value from `LoopState.values` by key.
+- `state_get` returns its configured `default`, or `None` when the key is absent and no default is supplied.
 - `state_set` returns a new `LoopState` with one key updated.
 - `state_merge` returns a new `LoopState` with multiple updates applied.
 

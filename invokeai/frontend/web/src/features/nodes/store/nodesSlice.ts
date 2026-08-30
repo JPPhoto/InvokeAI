@@ -107,6 +107,7 @@ import { assert } from 'tsafe';
 import type { z } from 'zod';
 
 import type { PendingConnection, Templates } from './types';
+import { getLoopBodyIdentity } from './util/loopIdentity';
 
 const CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX = 'saved_workflow_input::';
 
@@ -248,6 +249,64 @@ const removeCallSavedWorkflowDynamicFieldsFromForm = (
   }
 };
 
+const clearIdentitiesForRemovedLoopBoundaries = (state: NodesState, changes: NodeChange<AnyNode>[]) => {
+  const forBodyIdsToClear = new Set<string>();
+  const forReturnBodyIdsToClear = new Set<string>();
+  const replacementsById = new Map<string, AnyNode>();
+
+  for (const change of changes) {
+    if (change.type === 'add' || change.type === 'replace') {
+      replacementsById.set(change.item.id, change.item);
+    }
+  }
+
+  for (const change of changes) {
+    if (change.type !== 'remove' && change.type !== 'replace') {
+      continue;
+    }
+
+    const node = state.nodes.find((candidate) => candidate.id === change.id);
+    if (!isInvocationNode(node)) {
+      continue;
+    }
+
+    const bodyId = getLoopBodyIdentity(node as AnyNode);
+    if (bodyId === undefined) {
+      continue;
+    }
+
+    const replacement = change.type === 'replace' ? change.item : replacementsById.get(change.id);
+    if (
+      replacement &&
+      isInvocationNode(replacement) &&
+      replacement.data.type === node.data.type &&
+      getLoopBodyIdentity(replacement) === bodyId
+    ) {
+      continue;
+    }
+
+    if (node.data.type === 'for') {
+      forReturnBodyIdsToClear.add(bodyId);
+    } else if (node.data.type === 'for_return') {
+      forBodyIdsToClear.add(bodyId);
+    }
+  }
+
+  for (const node of state.nodes) {
+    if (!isInvocationNode(node) || !node.data.inputs.body_id) {
+      continue;
+    }
+
+    const bodyId = getLoopBodyIdentity(node as AnyNode);
+    if (
+      (node.data.type === 'for' && forBodyIdsToClear.has(bodyId ?? '')) ||
+      (node.data.type === 'for_return' && forReturnBodyIdsToClear.has(bodyId ?? ''))
+    ) {
+      node.data.inputs.body_id.value = undefined;
+    }
+  }
+};
+
 const slice = createSlice({
   name: 'nodes',
   initialState: getInitialState(),
@@ -279,6 +338,8 @@ const slice = createSlice({
             })
           );
       });
+
+      clearIdentitiesForRemovedLoopBoundaries(state, action.payload);
 
       // TODO(psyche): The below TS issue was recently fixed upstream. Need to upgrade @xyflow/react and then we
       // should be able to remove this cast.

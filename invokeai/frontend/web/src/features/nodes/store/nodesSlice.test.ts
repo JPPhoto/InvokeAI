@@ -14,7 +14,7 @@ import {
   nodesSliceConfig,
 } from './nodesSlice';
 import { CONNECTOR_INPUT_HANDLE, CONNECTOR_OUTPUT_HANDLE } from './util/connectorTopology';
-import { add, buildEdge, buildNode, sub, templates } from './util/testUtils';
+import { add, buildEdge, buildNode, for_loop, for_return, sub, templates } from './util/testUtils';
 
 const callSavedWorkflowTemplate = templates.call_saved_workflow;
 const addTemplate = templates.add;
@@ -610,5 +610,75 @@ describe('nodesSlice connector actions', () => {
 
     expect(nextState.nodes.map((node) => node.id)).toEqual([source.id, target.id]);
     expect(nextState.edges).toEqual([buildEdge(source.id, 'value', target.id, 'a')]);
+  });
+});
+
+describe('nodesSlice loop boundary actions', () => {
+  it('clears the surviving ForReturn identity when its For is removed', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    forNode.data.inputs.body_id!.value = 'body-1';
+    returnNode.data.inputs.body_id!.value = 'body-1';
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, returnNode];
+    initialState.edges = [buildEdge(forNode.id, 'item', returnNode.id, 'output')];
+
+    const nextState = nodesSliceConfig.slice.reducer(initialState, nodesChanged([{ type: 'remove', id: forNode.id }]));
+    const survivingReturn = nextState.nodes.find((node) => node.id === returnNode.id);
+
+    if (!survivingReturn || survivingReturn.type !== 'invocation') {
+      throw new Error('Expected surviving ForReturn invocation');
+    }
+    expect(survivingReturn.data.inputs.body_id?.value).toBeUndefined();
+  });
+
+  it('preserves loop identity when a boundary is replaced with the same identity', () => {
+    const forNode = buildNode(for_loop);
+    const replacement = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    forNode.data.inputs.body_id!.value = 'body-1';
+    replacement.id = forNode.id;
+    replacement.data.id = forNode.id;
+    replacement.data.inputs.body_id!.value = 'body-1';
+    returnNode.data.inputs.body_id!.value = 'body-1';
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, returnNode];
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      initialState,
+      nodesChanged([
+        { type: 'remove', id: forNode.id },
+        { type: 'add', item: replacement },
+      ])
+    );
+    const survivingReturn = nextState.nodes.find((node) => node.id === returnNode.id);
+
+    if (!survivingReturn || survivingReturn.type !== 'invocation') {
+      throw new Error('Expected surviving ForReturn invocation');
+    }
+    expect(survivingReturn.data.inputs.body_id?.value).toBe('body-1');
+  });
+
+  it('clears the surviving For identity when its ForReturn is removed', () => {
+    const forNode = buildNode(for_loop);
+    const returnNode = buildNode(for_return);
+    forNode.data.inputs.body_id!.value = 'body-1';
+    returnNode.data.inputs.body_id!.value = 'body-1';
+
+    const initialState = deepClone(nodesSliceConfig.slice.reducer(undefined, { type: 'test/init' }));
+    initialState.nodes = [forNode, returnNode];
+
+    const nextState = nodesSliceConfig.slice.reducer(
+      initialState,
+      nodesChanged([{ type: 'remove', id: returnNode.id }])
+    );
+    const survivingFor = nextState.nodes.find((node) => node.id === forNode.id);
+
+    if (!survivingFor || survivingFor.type !== 'invocation') {
+      throw new Error('Expected surviving For invocation');
+    }
+    expect(survivingFor.data.inputs.body_id?.value).toBeUndefined();
   });
 });
