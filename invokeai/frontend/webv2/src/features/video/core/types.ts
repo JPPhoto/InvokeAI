@@ -47,10 +47,11 @@ export type VideoReferenceItem =
       /**
        * True on the reference the panel derives from the Initial Video in
        * Ref2VA extend mode: it tracks that clip's identity, and its trim
-       * defaults re-derive from the cutpoint (`[end - 140, end]`, ~5s of
-       * lead-in at 24 fps) whenever the Initial Video trim changes. It is an
-       * ordinary reference otherwise — reorderable, trimmable, removable —
-       * and the flag is panel state only, never recorded in metadata.
+       * defaults re-derive from the cutpoint (up to ~5s of lead-in at 24 fps,
+       * capped at the generated frame count so the backend keeps the whole
+       * window) whenever the Initial Video trim or the frame count changes.
+       * It is an ordinary reference otherwise — reorderable, trimmable,
+       * removable — and the flag is panel state only, never in metadata.
        */
       fromSourceVideo?: boolean;
     }

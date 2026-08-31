@@ -3165,7 +3165,7 @@
       "referenceDetailMax": "Max detail (2048px, slower)",
       "referenceExtendCapFull": "No continuity reference added",
       "referenceExtendCapFullDescription": "All 3 video reference slots are in use, so the extension has no reference sampling the initial video. Remove a video reference to add one.",
-      "referenceExtendHelp": "The generated video is appended to this clip at its End Frame. A linked video reference samples the last ~5 seconds of the clip (141 frames at 24 fps, scaled to its frame rate) before that cutpoint for continuity — its trim re-derives whenever the cutpoints change.",
+      "referenceExtendHelp": "The generated video is appended to this clip at its End Frame. A linked video reference samples up to the last ~5 seconds before that cutpoint for continuity — never more than the generated clip's own length, since the model discards the overrun at the seam. Its trim re-derives whenever the cutpoints or the frame count change.",
       "referenceFromInitialVideo": "Initial video",
       "references": "References",
       "referencesHelp": "Up to 3 videos and 9 images condition the generation, in order — reordering references changes the result. A video reference can contribute its image track, its soundtrack, or both.",

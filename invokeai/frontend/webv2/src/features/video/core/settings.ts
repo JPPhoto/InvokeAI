@@ -26,6 +26,8 @@ import type {
   WanTargetResolution,
 } from './types';
 
+import { MINIMAX_H3_FPS } from './dimensions';
+
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object';
 
 const hasFiniteNumber = (record: Record<string, unknown>, key: string): boolean =>
@@ -387,34 +389,99 @@ export const createVideoSourceClip = (item: {
 export const MIN_VIDEO_TRIM_FRAMES = 2;
 
 /**
- * Frames the reference-extend tail reference samples ahead of the cutpoint,
- * expressed at 24 fps: ~5s of lead-in, and exactly on the 17n+5 frame grid
- * (17*8+5) so the backend's 24 fps resample + snap-down keeps all of it. The
- * window is a DURATION — `deriveReferenceExtendClip` scales it to the source
- * clip's own frame rate, so a 16 fps source samples 94 frames of the same
- * ~5.9 s rather than 141 frames of ~8.8 s.
+ * The MAXIMUM lead-in the reference-extend tail reference samples ahead of the
+ * cutpoint, expressed at 24 fps: ~5s, and exactly on the 17n+5 frame grid
+ * (17*8+5) so the backend's 24 fps resample + snap-down keeps all of it.
+ *
+ * The window is a DURATION — `deriveReferenceExtendClip` scales it to the
+ * source clip's own frame rate, so a 16 fps source samples 94 frames of the
+ * same ~5.9 s rather than 141 frames of ~8.8 s. It is also a CEILING, not a
+ * fixed size: the generated frame count is the other bound, and the smaller of
+ * the two wins.
  */
 export const VIDEO_REFERENCE_EXTEND_TAIL_FRAMES = 141;
 
-const VIDEO_REFERENCE_EXTEND_TAIL_FPS = 24;
+/**
+ * The tail reference's default trim: the frames right before the cutpoint,
+ * sized so the backend keeps ALL of them.
+ *
+ * Three backend rules bound the window, and every one of them discards from
+ * the END — the frames adjacent to the cutpoint, the only ones continuity
+ * depends on. `normalize_reference_video_frames` resamples onto H3's fixed
+ * 24 fps and truncates to the GENERATED frame count keeping the FRONT
+ * (`frames[:num_frames]`); `encode_reference_video` then snaps what survives
+ * DOWN to the `17n + 5` grid the video VAE encodes without padding.
+ *
+ * The budget is therefore `min(TAIL, numFrames)` frames of 24 fps material,
+ * and both of those sit ON that grid already (141 = 17*8+5; every frame choice
+ * is 90 + 17i). The conversion into the source clip's own frame space rounds
+ * UP: overshooting is free, because the truncation cuts the window back to
+ * exactly `numFrames` and the snap then keeps it whole, while undershooting
+ * lands OFF the grid and the snap eats up to 16 frames at the seam. Rounding
+ * down looks safer and is not — it cost 17 frames at 23.976 fps (NTSC film) at
+ * every frame count on offer, and 17 at 16 fps at the 124-frame default.
+ */
+export const deriveReferenceExtendClip = (sourceVideo: VideoSourceClip, numFrames: number): VideoSourceClip => ({
+  ...sourceVideo,
+  endFrame: sourceVideo.endFrame,
+  // Deliberately unclamped by the Initial Video's START cutpoint: the
+  // reference samples the original clip for continuity, independent of which
+  // portion the extension keeps.
+  startFrame: referenceExtendStartFrame(sourceVideo, numFrames),
+});
 
-/** The tail reference's default trim: the `VIDEO_REFERENCE_EXTEND_TAIL_FRAMES`-at-24fps window before the cutpoint, in source frames. */
-export const deriveReferenceExtendClip = (sourceVideo: VideoSourceClip): VideoSourceClip => {
-  const fps =
-    Number.isFinite(sourceVideo.fps) && sourceVideo.fps > 0 ? sourceVideo.fps : VIDEO_REFERENCE_EXTEND_TAIL_FPS;
-  const tailFrames = Math.max(
-    1,
-    Math.round((VIDEO_REFERENCE_EXTEND_TAIL_FRAMES / VIDEO_REFERENCE_EXTEND_TAIL_FPS) * fps)
-  );
+/** The tail window's start index — see `deriveReferenceExtendClip`. */
+const referenceExtendStartFrame = (clip: VideoSourceClip, numFrames: number): number => {
+  const budget = Number.isFinite(numFrames)
+    ? Math.min(VIDEO_REFERENCE_EXTEND_TAIL_FRAMES, Math.trunc(numFrames))
+    : VIDEO_REFERENCE_EXTEND_TAIL_FRAMES;
+  // A clip whose probe recorded no usable rate: the backend resamples at the
+  // rate it probes, so 24 — a no-op conversion — is the only safe assumption.
+  // A zero or negative rate would otherwise collapse the window to the 2-frame
+  // floor, which is below the 13 frames text conditioning needs.
+  const fps = Number.isFinite(clip.fps) && clip.fps > 0 ? clip.fps : MINIMAX_H3_FPS;
+  const tail = Math.max(MIN_VIDEO_TRIM_FRAMES, Math.ceil((budget * fps) / MINIMAX_H3_FPS));
 
-  return {
-    ...sourceVideo,
-    endFrame: sourceVideo.endFrame,
-    // Deliberately unclamped by the Initial Video's START cutpoint: the
-    // reference samples the original clip for continuity, independent of
-    // which portion the extension keeps.
-    startFrame: Math.max(0, sourceVideo.endFrame - (tailFrames - 1)),
-  };
+  return Math.max(0, clip.endFrame - (tail - 1));
+};
+
+/**
+ * Re-derives the linked tail reference's window for a generated frame count.
+ *
+ * The window is a function of that count, so a frame-count change has to move
+ * it. This RE-DERIVES rather than shrinks-to-fit: a shrink-only rule ratchets.
+ * The Frames number input emits a value per keystroke, unclamped, so typing
+ * "345" passes through 3 — and a shrink-only window would collapse to 3 frames
+ * and never come back, silently, for the rest of the session. Dragging the
+ * slider down and back up does the same. Re-deriving is idempotent in
+ * `numFrames`, so the values a keystroke or a drag passes through leave no
+ * trace.
+ *
+ * The cost is that a hand-tuned linked trim resets on a frame-count change as
+ * well as on a cutpoint change — the same bargain the section's help text
+ * already describes, and the backend leaves no alternative: a window that does
+ * not fit the budget loses its seam end.
+ */
+export const applyReferenceExtendNumFrames = (
+  references: VideoReferenceItem[],
+  numFrames: number
+): VideoReferenceItem[] => {
+  let changed = false;
+  const next = references.map((entry) => {
+    if (entry.kind !== 'video' || entry.fromSourceVideo !== true) {
+      return entry;
+    }
+    const startFrame = referenceExtendStartFrame(entry.clip, numFrames);
+
+    if (startFrame === entry.clip.startFrame) {
+      return entry;
+    }
+    changed = true;
+
+    return { ...entry, clip: { ...entry.clip, startFrame } };
+  });
+
+  return changed ? next : references;
 };
 
 /**
@@ -423,19 +490,28 @@ export const deriveReferenceExtendClip = (sourceVideo: VideoSourceClip): VideoSo
  *
  * - clearing the Initial Video removes its linked reference;
  * - setting or re-trimming it re-derives the linked reference's default trim
- *   (`[end - 140, end]`) — a manually tuned trim therefore holds only until
- *   the next cutpoint change, which the section's help text says;
+ *   (the tail window ending on the cutpoint) — a manually tuned trim
+ *   therefore holds only until the next cutpoint change, which the section's
+ *   help text says;
  * - with no linked entry yet, an existing video reference for the same clip
  *   is adopted (recall restores the pair without the linkage flag; adopting
- *   avoids a duplicate), else a new one is PREPENDED — the continuity anchor
- *   leads the request order — unless the video cap is already full, in which
- *   case the list is returned unchanged and the extension simply runs without
- *   a tail reference.
+ *   avoids a duplicate), else a new one is APPENDED — unless the video cap is
+ *   already full, in which case the list is returned unchanged and the
+ *   extension simply runs without a tail reference.
+ *
+ * Appended, not prepended, because request order IS rotary order:
+ * `build_ref2va_packed_sequence` lays the reference blocks out in order, each
+ * advancing a shared clock, and the generated rows then start at the position
+ * the LAST block left behind. The reference the model continues from is
+ * therefore the final one, so the continuity anchor belongs at the end. (The
+ * entry stays reorderable and keeps its place on a re-derive; only the
+ * default position is fixed here.)
  */
 export const applyReferenceExtendSourceVideo = (
   references: VideoReferenceItem[],
   sourceVideo: VideoSourceClip | null,
-  maxVideos: number
+  maxVideos: number,
+  numFrames: number
 ): VideoReferenceItem[] => {
   if (!sourceVideo) {
     const kept = references.filter((entry) => !(entry.kind === 'video' && entry.fromSourceVideo === true));
@@ -444,7 +520,7 @@ export const applyReferenceExtendSourceVideo = (
   }
 
   const linked: VideoReferenceItem = {
-    clip: deriveReferenceExtendClip(sourceVideo),
+    clip: deriveReferenceExtendClip(sourceVideo, numFrames),
     conditioning: 'video_audio',
     fromSourceVideo: true,
     kind: 'video',
@@ -467,7 +543,7 @@ export const applyReferenceExtendSourceVideo = (
 
   const videoCount = references.filter((entry) => entry.kind === 'video').length;
 
-  return videoCount >= maxVideos ? references : [linked, ...references];
+  return videoCount >= maxVideos ? references : [...references, linked];
 };
 
 /**

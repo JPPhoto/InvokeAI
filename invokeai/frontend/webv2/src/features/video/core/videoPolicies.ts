@@ -40,6 +40,7 @@ import {
 } from './dimensions';
 import {
   applyReferenceExtendSourceVideo,
+  applyReferenceExtendNumFrames,
   MIN_VIDEO_TRIM_FRAMES,
   resolveVideoMode,
   VIDEO_ASPECT_RATIO_IDS,
@@ -1413,6 +1414,18 @@ export const getVideoModelSelectionResult = ({
     addClearedLabel(clearedLabels, 'Initial video');
   }
 
+  // The frame count is snapped BEFORE the tail reference is derived: the window
+  // is budgeted against it, and deriving first left a Wan panel's count (as low
+  // as 5) sizing a window for a 90-frame H3 generation — under the 13 frames
+  // text conditioning needs, so Generate failed outright.
+  const snappedFrames = snapVideoNumFrames(model, next.numFrames);
+  const framesChanged = snappedFrames !== next.numFrames;
+
+  if (framesChanged) {
+    next.numFrames = snappedFrames;
+    addClearedLabel(clearedLabels, 'Frames');
+  }
+
   // Reference-extend: a surviving Initial Video (e.g. carried over from an
   // FL2VA extend setup) gets its linked tail reference derived, so the switch
   // lands on a generatable panel. Only when none exists yet: the transition
@@ -1424,7 +1437,19 @@ export const getVideoModelSelectionResult = ({
     next.sourceVideo &&
     !next.references.some((entry) => entry.kind === 'video' && entry.fromSourceVideo === true)
   ) {
-    next.references = applyReferenceExtendSourceVideo(next.references, next.sourceVideo, config.references.maxVideos);
+    next.references = applyReferenceExtendSourceVideo(
+      next.references,
+      next.sourceVideo,
+      config.references.maxVideos,
+      next.numFrames
+    );
+  }
+
+  // A tail reference carried in from another model keeps a window budgeted for
+  // that model's frame count. Only when the count actually moved: otherwise a
+  // task-neutral re-selection would reset a hand-tuned trim.
+  if (config.references?.extend && framesChanged) {
+    next.references = applyReferenceExtendNumFrames(next.references, next.numFrames);
   }
 
   if (next.firstFrameImage && !modes.includes('first-frame') && !modes.includes('first-last')) {
@@ -1447,13 +1472,6 @@ export const getVideoModelSelectionResult = ({
   if (!config.targetResolutions.some((option) => option.id === next.targetResolution)) {
     next.targetResolution = config.defaults.targetResolution;
     addClearedLabel(clearedLabels, 'Target resolution');
-  }
-
-  const snappedFrames = snapVideoNumFrames(model, next.numFrames);
-
-  if (snappedFrames !== next.numFrames) {
-    next.numFrames = snappedFrames;
-    addClearedLabel(clearedLabels, 'Frames');
   }
 
   const clampedFps =

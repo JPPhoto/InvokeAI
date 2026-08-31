@@ -10,6 +10,7 @@ import { ModelSelect } from '@features/models/react';
 import { getVideoDurationSeconds, invertVideoAspectRatioId } from '@features/video/core/dimensions';
 import {
   applyReferenceExtendSourceVideo,
+  applyReferenceExtendNumFrames,
   normalizeVideoWidgetValues,
   resolveVideoMode,
   VIDEO_ASPECT_RATIO_IDS,
@@ -214,7 +215,6 @@ export const VideoWidgetView = () => {
       cfgScale: (cfgScale: number) => patch({ cfgScale }),
       cfgScaleLowNoise: (cfgScaleLowNoise: number) => patch({ cfgScaleLowNoise }),
       fps: (fps: number) => patch({ fps }),
-      numFrames: (numFrames: number) => patch({ numFrames }),
       randomizeSeed: (details: { checked: boolean }) => patch({ shouldRandomizeSeed: details.checked }),
       seed: ({ valueAsNumber }: NumberInput.ValueChangeDetails) =>
         Number.isFinite(valueAsNumber) && patch({ seed: valueAsNumber }),
@@ -251,10 +251,31 @@ export const VideoWidgetView = () => {
     [patch]
   );
   const setLastFrame = useCallback((lastFrameImage: ImageWithDims | null) => patch({ lastFrameImage }), [patch]);
+  // Not part of `set`: that object is memoized on `patch` alone so the field
+  // setters keep the children's `memo` intact, and this one has to track the
+  // reference list. The linked tail reference's window is budgeted against the
+  // generated frame count — the backend discards an ill-fitting window at its
+  // SEAM end — so the count and the window move together. The re-derive is
+  // idempotent: this fires once per keystroke of the Frames input, unclamped,
+  // so typing "345" arrives as 3, then 34, then 345.
+  const setNumFrames = useCallback(
+    (numFrames: number) =>
+      patch(
+        referenceExtend
+          ? { numFrames, references: applyReferenceExtendNumFrames(values.references, numFrames) }
+          : { numFrames }
+      ),
+    [patch, referenceExtend, values.references]
+  );
   const setSourceVideo = useCallback(
     (sourceVideo: VideoSourceClip | null) => {
       if (referenceExtend) {
-        const references = applyReferenceExtendSourceVideo(values.references, sourceVideo, maxVideoReferences);
+        const references = applyReferenceExtendSourceVideo(
+          values.references,
+          sourceVideo,
+          maxVideoReferences,
+          values.numFrames
+        );
 
         // Unchanged identity with a clip set means the video cap is full and
         // no same-clip entry could be adopted: the extension would run with
@@ -271,7 +292,7 @@ export const VideoWidgetView = () => {
       }
       patch({ sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) });
     },
-    [maxVideoReferences, patch, referenceExtend, t, values.references]
+    [maxVideoReferences, patch, referenceExtend, t, values.numFrames, values.references]
   );
   const setReferences = useCallback(
     (references: VideoReferenceItem[]) =>
@@ -530,7 +551,7 @@ export const VideoWidgetView = () => {
               min={framesSlider.min}
               step={framesSlider.step}
               value={values.numFrames}
-              onChange={set.numFrames}
+              onChange={setNumFrames}
             />
           </Field>
           {policy.ui.fpsVisible ? (

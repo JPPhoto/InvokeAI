@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { VideoSettings } from './types';
 
+import { MINIMAX_H3_NUM_FRAMES_CHOICES } from './dimensions';
 import {
   applyReferenceExtendSourceVideo,
+  applyReferenceExtendNumFrames,
   clearDeletedVideoMedia,
   cloneVideoWidgetValues,
   createVideoSourceClip,
@@ -384,28 +386,71 @@ describe('references', () => {
 });
 
 describe('reference-extend linkage', () => {
-  const longSource = { ...SOURCE_VIDEO, endFrame: 400, fps: 24, numFrames: 402, video_name: 'long.mp4' };
+  // H3 generates at a fixed 24 fps; SOURCE_VIDEO runs at 16, so the two rates
+  // are exercised separately.
+  const longSource = { ...SOURCE_VIDEO, endFrame: 400, numFrames: 402, video_name: 'long.mp4' };
+  const source24 = { ...longSource, fps: 24 };
+  // The panel's default; every choice is on the 17n+5 grid.
+  const FRAMES = 141;
 
-  it('derives the tail trim: 141 frames at 24 fps ending at the cutpoint, clamped at 0', () => {
-    expect(deriveReferenceExtendClip(longSource)).toMatchObject({ endFrame: 400, startFrame: 260 });
+  it('derives the tail trim: the window ending at the cutpoint, clamped at 0', () => {
+    expect(deriveReferenceExtendClip(source24, FRAMES)).toMatchObject({ endFrame: 400, startFrame: 260 });
     // Shorter than the tail window: sample from the clip's own start.
-    expect(deriveReferenceExtendClip(SOURCE_VIDEO)).toMatchObject({ endFrame: 79, startFrame: 0 });
+    expect(deriveReferenceExtendClip({ ...SOURCE_VIDEO, fps: 24 }, FRAMES)).toMatchObject({
+      endFrame: 79,
+      startFrame: 0,
+    });
   });
 
-  it('scales the tail window to the source frame rate — a constant duration, not a constant frame count', () => {
-    // 16 fps: round(141/24 * 16) = 94 frames of the same ~5.9 s.
-    expect(deriveReferenceExtendClip({ ...longSource, fps: 16 })).toMatchObject({ endFrame: 400, startFrame: 307 });
-    // 30 fps: round(141/24 * 30) = 176 frames.
-    expect(deriveReferenceExtendClip({ ...longSource, fps: 30 })).toMatchObject({ endFrame: 400, startFrame: 225 });
-    // A degenerate recorded rate falls back to the 24 fps window.
-    expect(deriveReferenceExtendClip({ ...longSource, fps: 0 })).toMatchObject({ endFrame: 400, startFrame: 260 });
+  it('budgets the window against the generated frame count', () => {
+    // `normalize_reference_video_frames` truncates a reference to the generated
+    // frame count keeping the FRONT, so a window longer than the generation
+    // loses its tail — the frames at the seam. It must never outrun the count.
+    expect(deriveReferenceExtendClip(source24, 124)).toMatchObject({ endFrame: 400, startFrame: 277 });
+    expect(deriveReferenceExtendClip(source24, 90)).toMatchObject({ endFrame: 400, startFrame: 311 });
+    // Above the tail window the budget stops binding: ~5s of lead-in is the cap.
+    expect(deriveReferenceExtendClip(source24, 345)).toMatchObject({ endFrame: 400, startFrame: 260 });
   });
 
-  it('prepends a linked video+audio reference and re-derives it on cutpoint changes', () => {
-    const added = applyReferenceExtendSourceVideo([IMAGE_REFERENCE], longSource, 3);
+  it('lands the window ON the 17n+5 grid the backend keeps, at every source rate', () => {
+    // The real test of the window: run it through ALL THREE backend rules.
+    // `resample_video_frame_repeats` onto 24 fps, `frames[:num_frames]`, then
+    // `snap_reference_num_frames` DOWN to 17n+5 — every one of which cuts the
+    // seam end. Rounding the fps conversion DOWN satisfied the first two and
+    // failed the third, losing 17 frames at 23.976 fps at every frame count.
+    const resample = (n: number, fps: number) => Math.floor((n * 24) / fps + 0.5);
+    const snapDown = (n: number) => Math.max(1, Math.floor((n - 5) / 17)) * 17 + 5;
+
+    for (const fps of [10, 12, 15, 16, 18, 20, 23.976, 24, 25, 29.97, 30, 60]) {
+      for (const numFrames of MINIMAX_H3_NUM_FRAMES_CHOICES) {
+        const clip = deriveReferenceExtendClip({ ...longSource, fps }, numFrames);
+        const budget = Math.min(141, numFrames);
+        const kept = snapDown(Math.min(resample(clip.endFrame - clip.startFrame + 1, fps), numFrames));
+
+        expect({ fps, kept, numFrames }).toEqual({ fps, kept: budget, numFrames });
+      }
+    }
+  });
+
+  it('converts the window into the source clip fps', () => {
+    // 141 frames of 24 fps material is 94 frames of a 16 fps clip — the same
+    // 5.875s of wall time, which is what the tail window actually means.
+    expect(deriveReferenceExtendClip(longSource, FRAMES)).toMatchObject({ endFrame: 400, startFrame: 307 });
+    // A clip whose probe recorded no usable rate falls back to a no-op
+    // conversion rather than collapsing to the 2-frame floor.
+    expect(deriveReferenceExtendClip({ ...longSource, fps: 0 }, FRAMES)).toMatchObject({ startFrame: 260 });
+    expect(deriveReferenceExtendClip({ ...longSource, fps: -30 }, FRAMES)).toMatchObject({ startFrame: 260 });
+  });
+
+  it('appends a linked video+audio reference and re-derives it on cutpoint changes', () => {
+    // Appended, not prepended: request order is rotary order and the generated
+    // rows continue from the LAST reference block, so the continuity anchor
+    // has to be the final entry.
+    const added = applyReferenceExtendSourceVideo([IMAGE_REFERENCE], source24, 3, FRAMES);
 
     expect(added).toHaveLength(2);
-    expect(added[0]).toMatchObject({
+    expect(added[0]).toBe(IMAGE_REFERENCE);
+    expect(added[1]).toMatchObject({
       clip: { endFrame: 400, startFrame: 260, video_name: 'long.mp4' },
       conditioning: 'video_audio',
       fromSourceVideo: true,
@@ -415,31 +460,31 @@ describe('reference-extend linkage', () => {
     // The user tunes the conditioning, then moves the cutpoint: the trim
     // re-derives, the position and conditioning survive.
     const tuned = added.map((entry, index) =>
-      index === 0 && entry.kind === 'video' ? { ...entry, conditioning: 'video' as const } : entry
+      index === 1 && entry.kind === 'video' ? { ...entry, conditioning: 'video' as const } : entry
     );
-    const retrimmed = applyReferenceExtendSourceVideo(tuned, { ...longSource, endFrame: 300 }, 3);
+    const retrimmed = applyReferenceExtendSourceVideo(tuned, { ...source24, endFrame: 300 }, 3, FRAMES);
 
-    expect(retrimmed[0]).toMatchObject({
+    expect(retrimmed[1]).toMatchObject({
       clip: { endFrame: 300, startFrame: 160 },
       conditioning: 'video',
       fromSourceVideo: true,
     });
-    expect(retrimmed[1]).toBe(added[1]);
+    expect(retrimmed[0]).toBe(added[0]);
   });
 
   it('clearing the initial video removes only the linked reference (identity-preserving when none)', () => {
-    const list = applyReferenceExtendSourceVideo([VIDEO_REFERENCE, IMAGE_REFERENCE], longSource, 3);
+    const list = applyReferenceExtendSourceVideo([VIDEO_REFERENCE, IMAGE_REFERENCE], source24, 3, FRAMES);
 
-    expect(applyReferenceExtendSourceVideo(list, null, 3)).toEqual([VIDEO_REFERENCE, IMAGE_REFERENCE]);
+    expect(applyReferenceExtendSourceVideo(list, null, 3, FRAMES)).toEqual([VIDEO_REFERENCE, IMAGE_REFERENCE]);
 
     const unlinked = [VIDEO_REFERENCE, IMAGE_REFERENCE];
 
-    expect(applyReferenceExtendSourceVideo(unlinked, null, 3)).toBe(unlinked);
+    expect(applyReferenceExtendSourceVideo(unlinked, null, 3, FRAMES)).toBe(unlinked);
   });
 
   it('adopts an unflagged reference for the same clip instead of duplicating it (recall shape)', () => {
     const recalled = { ...VIDEO_REFERENCE, clip: { ...VIDEO_REFERENCE.clip, video_name: 'long.mp4' } };
-    const result = applyReferenceExtendSourceVideo([IMAGE_REFERENCE, recalled], longSource, 3);
+    const result = applyReferenceExtendSourceVideo([IMAGE_REFERENCE, recalled], source24, 3, FRAMES);
 
     expect(result).toHaveLength(2);
     expect(result[1]).toMatchObject({
@@ -452,13 +497,13 @@ describe('reference-extend linkage', () => {
     // User: linked ref for clip A, plus their OWN hand-trimmed reference for
     // clip B sitting above it. Swapping the Initial Video to clip B must
     // update the FLAGGED entry — not rewrite the user's B reference.
-    const linkedA = applyReferenceExtendSourceVideo([], longSource, 3)[0];
+    const linkedA = applyReferenceExtendSourceVideo([], source24, 3, FRAMES)[0];
     const handTrimmedB = {
       ...VIDEO_REFERENCE,
       clip: { ...VIDEO_REFERENCE.clip, endFrame: 200, numFrames: 300, startFrame: 100, video_name: 'b.mp4' },
     };
-    const sourceB = { ...longSource, endFrame: 290, numFrames: 300, video_name: 'b.mp4' };
-    const result = applyReferenceExtendSourceVideo([handTrimmedB, linkedA!], sourceB, 3);
+    const sourceB = { ...source24, endFrame: 290, numFrames: 300, video_name: 'b.mp4' };
+    const result = applyReferenceExtendSourceVideo([handTrimmedB, linkedA!], sourceB, 3, FRAMES);
 
     expect(result[0]).toBe(handTrimmedB);
     expect(result[1]).toMatchObject({
@@ -475,6 +520,40 @@ describe('reference-extend linkage', () => {
       { ...VIDEO_REFERENCE, clip: { ...VIDEO_REFERENCE.clip, video_name: 'c.mp4' } },
     ];
 
-    expect(applyReferenceExtendSourceVideo(full, longSource, 3)).toBe(full);
+    expect(applyReferenceExtendSourceVideo(full, source24, 3, FRAMES)).toBe(full);
+  });
+
+  it('applyReferenceExtendNumFrames re-derives the window and is idempotent', () => {
+    const linked = applyReferenceExtendSourceVideo([IMAGE_REFERENCE], source24, 3, FRAMES);
+
+    expect(linked[1]).toMatchObject({ clip: { startFrame: 260 } });
+
+    const at124 = applyReferenceExtendNumFrames(linked, 124);
+
+    expect(at124[1]).toMatchObject({ clip: { endFrame: 400, startFrame: 277 }, fromSourceVideo: true });
+    expect(at124[0]).toBe(linked[0]);
+    // Idempotent, and identity-preserving when nothing moves.
+    expect(applyReferenceExtendNumFrames(at124, 124)).toBe(at124);
+    expect(applyReferenceExtendNumFrames(linked, FRAMES)).toBe(linked);
+  });
+
+  it('applyReferenceExtendNumFrames does not ratchet: the window re-widens', () => {
+    // The Frames number input emits a value per keystroke, unclamped, so typing
+    // "345" arrives as 3, then 34, then 345. A shrink-only rule would pin the
+    // window at the 3-frame budget for the rest of the session.
+    const linked = applyReferenceExtendSourceVideo([], source24, 3, 345);
+    const typed = [3, 34, 345].reduce(applyReferenceExtendNumFrames, linked);
+
+    expect(typed[0]).toMatchObject({ clip: { endFrame: 400, startFrame: 260 } });
+    // And a slider dragged down and back up ends where it started.
+    expect([90, 124, 345].reduce(applyReferenceExtendNumFrames, linked)[0]).toMatchObject({
+      clip: { startFrame: 260 },
+    });
+  });
+
+  it('applyReferenceExtendNumFrames leaves unlinked references alone', () => {
+    const unlinked = [VIDEO_REFERENCE, IMAGE_REFERENCE];
+
+    expect(applyReferenceExtendNumFrames(unlinked, 90)).toBe(unlinked);
   });
 });

@@ -1279,6 +1279,28 @@ describe('reference-extend policy', () => {
     expect(reasons).toContainEqual(expect.stringContaining('cannot be combined with an initial video on this model'));
   });
 
+  it('a Wan -> Ref2VA switch snaps the frame count BEFORE sizing the tail window', () => {
+    // Wan's grid starts at 5 frames. Deriving the window before the snap sized
+    // it for that count, and the repair only ever shrank — so the panel landed
+    // on a 90-frame H3 generation with a 5-frame anchor, below the 13 frames
+    // `sample_text_conditioning_frames` needs. Generate failed outright.
+    for (const wanFrames of [5, 9, 21, 81]) {
+      const wan = wanModel('i2v-14b');
+      const toRef = getVideoModelSelectionResult({
+        currentSettings: settingsFor(wan, { modelKey: wan.key, numFrames: wanFrames, sourceVideo: initialVideo }),
+        model: ref2vaTransformer(),
+        models: [wan],
+      });
+      const linked = toRef.settings.references.find(
+        (entry) => entry.kind === 'video' && entry.fromSourceVideo === true
+      );
+
+      expect(toRef.settings.numFrames).toBe(90);
+      // 90 frames of 24 fps material off a 24 fps clip, whatever Wan was on.
+      expect(linked).toMatchObject({ clip: { endFrame: 400, startFrame: 311 } });
+    }
+  });
+
   it('an FL2VA -> Ref2VA switch keeps the initial video and derives its linked tail reference', () => {
     const fl2va = h3Model();
     const toRef = getVideoModelSelectionResult({
@@ -1289,8 +1311,12 @@ describe('reference-extend policy', () => {
 
     expect(toRef.settings.sourceVideo).toEqual(initialVideo);
     expect(toRef.clearedLabels).not.toContain('Initial video');
+    // The window is budgeted against the frame count the switch lands on
+    // (H3's 124-frame default, snapped AFTER the derivation): a reference
+    // longer than the generation is truncated at its seam end.
+    expect(toRef.settings.numFrames).toBe(124);
     expect(toRef.settings.references[0]).toMatchObject({
-      clip: { endFrame: 400, startFrame: 260, video_name: 'long.mp4' },
+      clip: { endFrame: 400, startFrame: 277, video_name: 'long.mp4' },
       conditioning: 'video_audio',
       fromSourceVideo: true,
       kind: 'video',
