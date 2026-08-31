@@ -150,6 +150,11 @@ const ReferenceCard = memo(function ReferenceCard({
           <HStack gap="1">
             {reference.kind === 'video' ? <FilmIcon size={12} /> : <ImagePlusIcon size={12} />}
             <MiddleTruncate flex="1" fontSize="xs" text={name} />
+            {reference.kind === 'video' && reference.fromSourceVideo === true ? (
+              <Badge flexShrink={0} size="xs" variant="outline">
+                {t('widgets.video.referenceFromInitialVideo')}
+              </Badge>
+            ) : null}
           </HStack>
           <Select
             collection={reference.kind === 'video' ? collections.conditioning : collections.detail}

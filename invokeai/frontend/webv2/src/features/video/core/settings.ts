@@ -145,7 +145,9 @@ const areAcceleratorLorasPresent = (keys: readonly string[], loras: readonly Gen
  * frame and a source video never coexist (normalization and the setters both
  * enforce it), and a last frame refines whichever mode its partner implies:
  * with a first frame it becomes FLF2V interpolation, with a source video it is
- * the destination the extension should land on.
+ * the destination the extension should land on. References always win: with a
+ * source video alongside them (Ref2VA reference-extend) the mode stays
+ * `reference` and the graph appends the new clip to the source.
  */
 export const resolveVideoMode = (
   settings: Pick<VideoSettings, 'firstFrameImage' | 'lastFrameImage' | 'sourceVideo' | 'references'>
@@ -199,16 +201,16 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
     return null;
   }
 
-  // References are mutually exclusive with every frame/source-video slot; when a stale
-  // record somehow holds both, the references win deterministically (mirroring the
-  // first-frame-beats-source rule below).
+  // References are mutually exclusive with the frame slots; when a stale
+  // record somehow holds both, the references win deterministically. A source
+  // video COEXISTS with references (Ref2VA reference-extend) — validation
+  // rejects the pair on models that cannot consume it.
   const references = sanitizeVideoReferences(values.references);
   const hasReferences = references.length > 0;
   const firstFrameImage = !hasReferences && isImageWithDims(values.firstFrameImage) ? values.firstFrameImage : null;
   // A first frame and a source video are mutually exclusive; if a stale
   // project somehow holds both, the first frame wins deterministically.
-  const sourceVideo =
-    !firstFrameImage && !hasReferences && isVideoSourceClip(values.sourceVideo) ? values.sourceVideo : null;
+  const sourceVideo = !firstFrameImage && isVideoSourceClip(values.sourceVideo) ? values.sourceVideo : null;
   const loras = Array.isArray(values.loras) ? values.loras.filter(isVideoLora) : [];
   const acceleratorLoraKeys = getStringArray(values.acceleratorLoraKeys);
   // The flag means "the accelerator LoRAs the toggle added are active": if any
@@ -294,7 +296,7 @@ export const isVideoSettings = (values: unknown): values is VideoSettings => {
     values.references.every(isVideoReferenceItem) &&
     !(
       (values.references as unknown[]).length > 0 &&
-      (values.firstFrameImage !== null || values.lastFrameImage !== null || values.sourceVideo !== null)
+      (values.firstFrameImage !== null || values.lastFrameImage !== null)
     ) &&
     Array.isArray(values.loras) &&
     values.loras.every(isVideoLora) &&
@@ -383,6 +385,71 @@ export const createVideoSourceClip = (item: {
 
 /** The minimum frames a trim must keep — video_concat's crossfade consumes a 2-frame tail. */
 export const MIN_VIDEO_TRIM_FRAMES = 2;
+
+/**
+ * Frames the reference-extend tail reference samples ahead of the cutpoint:
+ * ~5s of lead-in at H3's fixed 24 fps, and exactly on the 17n+5 frame grid
+ * (17*8+5) so the backend's snap-down keeps all of it.
+ */
+export const VIDEO_REFERENCE_EXTEND_TAIL_FRAMES = 141;
+
+/** The tail reference's default trim: the last `VIDEO_REFERENCE_EXTEND_TAIL_FRAMES` frames before the cutpoint. */
+export const deriveReferenceExtendClip = (sourceVideo: VideoSourceClip): VideoSourceClip => ({
+  ...sourceVideo,
+  endFrame: sourceVideo.endFrame,
+  // Deliberately unclamped by the Initial Video's START cutpoint: the
+  // reference samples the original clip for continuity, independent of which
+  // portion the extension keeps.
+  startFrame: Math.max(0, sourceVideo.endFrame - (VIDEO_REFERENCE_EXTEND_TAIL_FRAMES - 1)),
+});
+
+/**
+ * Keeps the reference list in step with the Initial Video on a reference-extend
+ * panel (pure; the setter and the model-selection transition both use it):
+ *
+ * - clearing the Initial Video removes its linked reference;
+ * - setting or re-trimming it re-derives the linked reference's default trim
+ *   (`[end - 140, end]`) — a manually tuned trim therefore holds only until
+ *   the next cutpoint change, which the section's help text says;
+ * - with no linked entry yet, an existing video reference for the same clip
+ *   is adopted (recall restores the pair without the linkage flag; adopting
+ *   avoids a duplicate), else a new one is PREPENDED — the continuity anchor
+ *   leads the request order — unless the video cap is already full, in which
+ *   case the list is returned unchanged and the extension simply runs without
+ *   a tail reference.
+ */
+export const applyReferenceExtendSourceVideo = (
+  references: VideoReferenceItem[],
+  sourceVideo: VideoSourceClip | null,
+  maxVideos: number
+): VideoReferenceItem[] => {
+  if (!sourceVideo) {
+    const kept = references.filter((entry) => !(entry.kind === 'video' && entry.fromSourceVideo === true));
+
+    return kept.length === references.length ? references : kept;
+  }
+
+  const linked: VideoReferenceItem = {
+    clip: deriveReferenceExtendClip(sourceVideo),
+    conditioning: 'video_audio',
+    fromSourceVideo: true,
+    kind: 'video',
+  };
+  const linkedIndex = references.findIndex(
+    (entry) =>
+      entry.kind === 'video' && (entry.fromSourceVideo === true || entry.clip.video_name === sourceVideo.video_name)
+  );
+
+  if (linkedIndex >= 0) {
+    return references.map((entry, index) =>
+      index === linkedIndex && entry.kind === 'video' ? { ...linked, conditioning: entry.conditioning } : entry
+    );
+  }
+
+  const videoCount = references.filter((entry) => entry.kind === 'video').length;
+
+  return videoCount >= maxVideos ? references : [linked, ...references];
+};
 
 /**
  * Clears conditioning media that no longer exists in the gallery. Returns the

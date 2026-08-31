@@ -131,7 +131,12 @@ const toTailAwareIndex = (frame: number, estimatedNumFrames: number): number => 
   return tailOffset <= 3 ? -(tailOffset + 1) : frame;
 };
 
-const addExtendScaffolding = (
+/**
+ * Trimmed source extraction + [source, new clip] crossfade join — the shared
+ * core of FL2VA/Wan extend and Ref2VA reference-extend. video_concat rebuilds
+ * the soundtrack from every input, so both clips' audio survives the join.
+ */
+const addSourceJoin = (
   graph: BackendGraphContract,
   sourceVideo: NonNullable<VideoSettings['sourceVideo']>,
   newClip: BackendInvocationContract,
@@ -147,13 +152,6 @@ const addExtendScaffolding = (
     video: { video_name: sourceVideo.video_name },
     ...(options.extractFps === undefined ? {} : { fps: options.extractFps }),
   });
-  const lastFrame = addNode(graph, {
-    frame_index: -1,
-    id: 'source_last_frame',
-    is_intermediate: true,
-    type: 'video_frame_extract',
-    use_cache: false,
-  });
   const sourceCollect = addNode(graph, { id: 'source_clip_collect', type: 'collect' });
   const clipsCollect = addNode(graph, { id: 'clips_to_join', type: 'collect' });
   const concat = addNode(graph, {
@@ -166,12 +164,31 @@ const addExtendScaffolding = (
     use_cache: false,
   });
 
-  addEdge(graph, extract, 'video', lastFrame, 'video');
   // Chained collectors keep the join order deterministic: [trimmed source, new clip].
   addEdge(graph, extract, 'video', sourceCollect, 'item');
   addEdge(graph, sourceCollect, 'collection', clipsCollect, 'collection');
   addEdge(graph, newClip, 'video', clipsCollect, 'item');
   addEdge(graph, clipsCollect, 'collection', concat, 'videos');
+
+  return { concat, extract };
+};
+
+const addExtendScaffolding = (
+  graph: BackendGraphContract,
+  sourceVideo: NonNullable<VideoSettings['sourceVideo']>,
+  newClip: BackendInvocationContract,
+  options: { extractFps?: number } = {}
+) => {
+  const { concat, extract } = addSourceJoin(graph, sourceVideo, newClip, options);
+  const lastFrame = addNode(graph, {
+    frame_index: -1,
+    id: 'source_last_frame',
+    is_intermediate: true,
+    type: 'video_frame_extract',
+    use_cache: false,
+  });
+
+  addEdge(graph, extract, 'video', lastFrame, 'video');
 
   return { concat, extract, lastFrame };
 };
@@ -527,6 +544,7 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
 
   let output: BackendInvocationContract;
   let extendParts: { lastFrame: BackendInvocationContract; newClip: BackendInvocationContract } | null = null;
+  let referenceExtendClip: BackendInvocationContract | null = null;
 
   if (mode === 'extend' && settings.sourceVideo && frameConditioning) {
     const newClip = addLatentsToVideo('extension_clip', true);
@@ -538,6 +556,15 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
     addEdge(graph, lastFrame, 'image', frameConditioning, 'first_image');
     output = concat;
     extendParts = { lastFrame, newClip };
+  } else if (mode === 'reference' && settings.sourceVideo) {
+    // Reference-extend: the new clip is appended to the trimmed Initial
+    // Video. Continuity comes from the references (typically the linked tail
+    // reference), not from frame conditioning, so no last frame is extracted.
+    const newClip = addLatentsToVideo('extension_clip', true);
+    const { concat } = addSourceJoin(graph, settings.sourceVideo, newClip, { extractFps: 24 });
+
+    output = concat;
+    referenceExtendClip = newClip;
   } else {
     output = addLatentsToVideo('video_output', false);
   }
@@ -567,7 +594,11 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
     height: dimensions.height,
     model,
     negativeWired: false,
-    outputs: extendParts ? [output, extendParts.newClip] : [output],
+    outputs: extendParts
+      ? [output, extendParts.newClip]
+      : referenceExtendClip
+        ? [output, referenceExtendClip]
+        : [output],
     settings,
     width: dimensions.width,
   });

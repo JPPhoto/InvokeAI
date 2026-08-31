@@ -3163,6 +3163,8 @@
       "referenceConditioningVideoAudio": "Video + audio",
       "referenceDetailMatch": "Match generation size",
       "referenceDetailMax": "Max detail (2048px, slower)",
+      "referenceExtendHelp": "The generated video is appended to this clip at its End Frame. A linked video reference samples the last ~5 seconds (141 frames) before that cutpoint for continuity — its trim re-derives whenever the cutpoints change.",
+      "referenceFromInitialVideo": "Initial video",
       "references": "References",
       "referencesHelp": "Up to 3 videos and 9 images condition the generation, in order — reordering references changes the result. A video reference can contribute its image track, its soundtrack, or both.",
       "removeReference": "Remove reference",

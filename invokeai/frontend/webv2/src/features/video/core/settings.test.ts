@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import type { VideoSettings } from './types';
 
 import {
+  applyReferenceExtendSourceVideo,
   clearDeletedVideoMedia,
   cloneVideoWidgetValues,
   createVideoSourceClip,
+  deriveReferenceExtendClip,
   isVideoSettings,
   isVideoSourceClip,
   normalizeVideoSettings,
@@ -319,14 +321,16 @@ describe('references', () => {
     );
   });
 
-  it('normalization drops frame/source media when references are present', () => {
+  it('normalization drops frame media when references are present, keeping the source video', () => {
     const normalized = normalizeVideoSettings(
       createSettings({ firstFrameImage: FIRST_FRAME, references: [IMAGE_REFERENCE], sourceVideo: SOURCE_VIDEO })
     );
 
     expect(normalized?.references).toEqual([IMAGE_REFERENCE]);
     expect(normalized?.firstFrameImage).toBeNull();
-    expect(normalized?.sourceVideo).toBeNull();
+    // References + source video is the Ref2VA reference-extend shape;
+    // validation rejects the pair on models that cannot consume it.
+    expect(normalized?.sourceVideo).toEqual(SOURCE_VIDEO);
   });
 
   it('normalization drops malformed entries and enforces the caps, preserving order', () => {
@@ -376,5 +380,72 @@ describe('references', () => {
     const sweptVideo = clearDeletedVideoMedia(values, new Set(), new Set(['ref.mp4']));
 
     expect(sweptVideo.references).toEqual([IMAGE_REFERENCE]);
+  });
+});
+
+describe('reference-extend linkage', () => {
+  const longSource = { ...SOURCE_VIDEO, endFrame: 400, numFrames: 402, video_name: 'long.mp4' };
+
+  it('derives the tail trim: 141 frames inclusive ending at the cutpoint, clamped at 0', () => {
+    expect(deriveReferenceExtendClip(longSource)).toMatchObject({ endFrame: 400, startFrame: 260 });
+    // Shorter than the tail window: sample from the clip's own start.
+    expect(deriveReferenceExtendClip(SOURCE_VIDEO)).toMatchObject({ endFrame: 79, startFrame: 0 });
+  });
+
+  it('prepends a linked video+audio reference and re-derives it on cutpoint changes', () => {
+    const added = applyReferenceExtendSourceVideo([IMAGE_REFERENCE], longSource, 3);
+
+    expect(added).toHaveLength(2);
+    expect(added[0]).toMatchObject({
+      clip: { endFrame: 400, startFrame: 260, video_name: 'long.mp4' },
+      conditioning: 'video_audio',
+      fromSourceVideo: true,
+      kind: 'video',
+    });
+
+    // The user tunes the conditioning, then moves the cutpoint: the trim
+    // re-derives, the position and conditioning survive.
+    const tuned = added.map((entry, index) =>
+      index === 0 && entry.kind === 'video' ? { ...entry, conditioning: 'video' as const } : entry
+    );
+    const retrimmed = applyReferenceExtendSourceVideo(tuned, { ...longSource, endFrame: 300 }, 3);
+
+    expect(retrimmed[0]).toMatchObject({
+      clip: { endFrame: 300, startFrame: 160 },
+      conditioning: 'video',
+      fromSourceVideo: true,
+    });
+    expect(retrimmed[1]).toBe(added[1]);
+  });
+
+  it('clearing the initial video removes only the linked reference (identity-preserving when none)', () => {
+    const list = applyReferenceExtendSourceVideo([VIDEO_REFERENCE, IMAGE_REFERENCE], longSource, 3);
+
+    expect(applyReferenceExtendSourceVideo(list, null, 3)).toEqual([VIDEO_REFERENCE, IMAGE_REFERENCE]);
+
+    const unlinked = [VIDEO_REFERENCE, IMAGE_REFERENCE];
+
+    expect(applyReferenceExtendSourceVideo(unlinked, null, 3)).toBe(unlinked);
+  });
+
+  it('adopts an unflagged reference for the same clip instead of duplicating it (recall shape)', () => {
+    const recalled = { ...VIDEO_REFERENCE, clip: { ...VIDEO_REFERENCE.clip, video_name: 'long.mp4' } };
+    const result = applyReferenceExtendSourceVideo([IMAGE_REFERENCE, recalled], longSource, 3);
+
+    expect(result).toHaveLength(2);
+    expect(result[1]).toMatchObject({
+      clip: { endFrame: 400, startFrame: 260, video_name: 'long.mp4' },
+      fromSourceVideo: true,
+    });
+  });
+
+  it('leaves a full video-reference list unchanged instead of overflowing the cap', () => {
+    const full = [
+      VIDEO_REFERENCE,
+      { ...VIDEO_REFERENCE, clip: { ...VIDEO_REFERENCE.clip, video_name: 'b.mp4' } },
+      { ...VIDEO_REFERENCE, clip: { ...VIDEO_REFERENCE.clip, video_name: 'c.mp4' } },
+    ];
+
+    expect(applyReferenceExtendSourceVideo(full, longSource, 3)).toBe(full);
   });
 });

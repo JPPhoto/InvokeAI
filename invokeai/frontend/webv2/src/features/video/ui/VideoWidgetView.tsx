@@ -8,7 +8,12 @@ import { isMainModelConfig, sanitizeBatchCount, SEED_MAX } from '@features/gener
 import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { ModelSelect } from '@features/models/react';
 import { getVideoDurationSeconds, invertVideoAspectRatioId } from '@features/video/core/dimensions';
-import { normalizeVideoWidgetValues, resolveVideoMode, VIDEO_ASPECT_RATIO_IDS } from '@features/video/core/settings';
+import {
+  applyReferenceExtendSourceVideo,
+  normalizeVideoWidgetValues,
+  resolveVideoMode,
+  VIDEO_ASPECT_RATIO_IDS,
+} from '@features/video/core/settings';
 import {
   getAcceleratorLoraChangeResult,
   getAcceleratorToggleResult,
@@ -235,7 +240,11 @@ export const VideoWidgetView = () => {
   // video are different ways to claim the same conditioning slot, so setting
   // one clears the other. A last frame combines with either — with a first
   // frame it interpolates (FLF2V); with a source video it is the destination
-  // the extension should land on.
+  // the extension should land on. On a reference-extend panel the initial
+  // video and the references coexist — the setter keeps the linked tail
+  // reference in step with the clip and its cutpoints.
+  const referenceExtend = Boolean(policy.references?.extend);
+  const maxVideoReferences = policy.references?.maxVideos ?? 3;
   const setFirstFrame = useCallback(
     (firstFrameImage: ImageWithDims | null) =>
       patch({ firstFrameImage, ...(firstFrameImage ? { sourceVideo: null } : {}) }),
@@ -243,16 +252,28 @@ export const VideoWidgetView = () => {
   );
   const setLastFrame = useCallback((lastFrameImage: ImageWithDims | null) => patch({ lastFrameImage }), [patch]);
   const setSourceVideo = useCallback(
-    (sourceVideo: VideoSourceClip | null) => patch({ sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) }),
-    [patch]
+    (sourceVideo: VideoSourceClip | null) => {
+      if (referenceExtend) {
+        patch({
+          references: applyReferenceExtendSourceVideo(values.references, sourceVideo, maxVideoReferences),
+          sourceVideo,
+          ...(sourceVideo ? { firstFrameImage: null } : {}),
+        });
+        return;
+      }
+      patch({ sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) });
+    },
+    [maxVideoReferences, patch, referenceExtend, values.references]
   );
   const setReferences = useCallback(
     (references: VideoReferenceItem[]) =>
       patch({
         references,
-        ...(references.length > 0 ? { firstFrameImage: null, lastFrameImage: null, sourceVideo: null } : {}),
+        ...(references.length > 0
+          ? { firstFrameImage: null, lastFrameImage: null, ...(referenceExtend ? {} : { sourceVideo: null }) }
+          : {}),
       }),
-    [patch]
+    [patch, referenceExtend]
   );
   const clearReferences = useCallback(() => patch({ references: [] }), [patch]);
   const setLoras = useCallback(
@@ -321,6 +342,7 @@ export const VideoWidgetView = () => {
   const supportsLastFrame = policy.modes.includes('first-last') || policy.modes.includes('last-frame');
   const supportsExtend = policy.modes.includes('extend');
   const supportsReferences = policy.modes.includes('reference');
+  const supportsInitialVideo = supportsExtend || referenceExtend;
   const hasConditioningMedia = Boolean(values.firstFrameImage || values.lastFrameImage || values.sourceVideo);
   const derivedSourceText = dimensions ? t(`widgets.video.dimensionSource.${dimensions.source}`) : undefined;
   const derivedSizeText = dimensions
@@ -424,7 +446,7 @@ export const VideoWidgetView = () => {
       {!supportsLastFrame && values.lastFrameImage ? (
         <StaleMediaStub label={t('widgets.video.staleLastFrame')} onClear={clearLastFrame} />
       ) : null}
-      {!supportsExtend && values.sourceVideo ? (
+      {!supportsInitialVideo && values.sourceVideo ? (
         <StaleMediaStub label={t('widgets.video.staleSourceVideo')} onClear={clearSourceVideo} />
       ) : null}
       {!supportsReferences && values.references.length > 0 ? (
@@ -444,9 +466,14 @@ export const VideoWidgetView = () => {
         </GenerationSettingsSection>
       ) : null}
 
-      {supportsExtend ? (
+      {supportsInitialVideo ? (
         <GenerationSettingsSection label={t('widgets.video.initialVideo')} sectionId="video-source" defaultOpen>
           <Stack gap="3" p="2">
+            {referenceExtend ? (
+              <Text color="fg.muted" fontSize="2xs" textWrap="pretty">
+                {t('widgets.video.referenceExtendHelp')}
+              </Text>
+            ) : null}
             <VideoSourceClipField
               disabled={Boolean(values.firstFrameImage)}
               disabledReason={values.firstFrameImage ? t('widgets.video.initialVideoBlocked') : undefined}

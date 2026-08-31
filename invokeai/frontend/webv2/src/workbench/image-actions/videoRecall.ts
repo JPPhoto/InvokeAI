@@ -626,8 +626,16 @@ export const buildVideoRecallSettings = ({
   }
 
   if (references.length > 0) {
-    // References replace every frame/source slot — the modes are mutually exclusive.
+    // References replace the frame slots, but a recorded source video rides
+    // ALONGSIDE them: Ref2VA reference-extend appends the new clip to it.
     mediaNames.references = references;
+    if (media.sourceVideoName) {
+      const startFrame = getInteger(metadata, 'source_video_start_frame');
+      const endFrame = getInteger(metadata, 'source_video_end_frame');
+
+      mediaNames.sourceVideoName = media.sourceVideoName;
+      mediaNames.sourceVideoTrim = startFrame !== null && endFrame !== null ? { endFrame, startFrame } : null;
+    }
     fields.push('media');
   } else if (media.firstFrameName || media.lastFrameName || media.sourceVideoName) {
     mediaNames.firstFrameName = media.firstFrameName;

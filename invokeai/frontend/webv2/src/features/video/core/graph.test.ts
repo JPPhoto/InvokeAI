@@ -563,4 +563,66 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     expect(nodesOfType(backendGraph, 'minimax_h3_reference_conditioning')).toHaveLength(0);
     expect(nodesOfType(backendGraph, 'collect')).toHaveLength(0);
   });
+
+  it('reference-extend: appends the new clip to the initial video without frame conditioning', () => {
+    const initialVideo = {
+      endFrame: 400,
+      fps: 24,
+      height: 480,
+      numFrames: 402,
+      startFrame: 10,
+      video_name: 'long.mp4',
+      width: 832,
+    };
+    const settings = {
+      ...referenceSettings,
+      references: [
+        // The linked tail reference (as the setter derives it) plus a user reference.
+        {
+          clip: { ...initialVideo, endFrame: 400, startFrame: 260 },
+          conditioning: 'video_audio' as const,
+          fromSourceVideo: true,
+          kind: 'video' as const,
+        },
+        ...referenceSettings.references,
+      ],
+      sourceVideo: initialVideo,
+    };
+    const { backendGraph } = compileVideoGraph(settings, model);
+
+    // The new clip is intermediate; the crossfade concat is the output, fed
+    // [trimmed source, new clip]; the source is retimed to H3's fixed 24 fps.
+    expect(nodeOfType(backendGraph, 'minimax_h3_latents_to_video')).toMatchObject({
+      id: 'extension_clip',
+      is_intermediate: true,
+    });
+    expect(nodeOfType(backendGraph, 'video_concat')).toMatchObject({ id: 'video_output', transition: 'crossfade' });
+    expect(nodeOfType(backendGraph, 'extract_video_range')).toMatchObject({ end_frame: -2, fps: 24, start_frame: 10 });
+    expect(hasEdge(backendGraph, 'source_video', 'video', 'source_clip_collect', 'item')).toBe(true);
+    expect(hasEdge(backendGraph, 'extension_clip', 'video', 'clips_to_join', 'item')).toBe(true);
+
+    // Continuity comes from the references — no frame conditioning, no last-frame extraction.
+    expect(nodesOfType(backendGraph, 'minimax_h3_frame_conditioning')).toHaveLength(0);
+    expect(nodesOfType(backendGraph, 'video_frame_extract')).toHaveLength(0);
+
+    // The linked reference is an ordinary first reference; the flag never reaches metadata.
+    const videoReferences = nodesOfType(backendGraph, 'minimax_h3_video_reference');
+
+    expect(videoReferences[0]).toMatchObject({ id: 'reference_1', start_frame: 260 });
+    const metadata = nodeOfType(backendGraph, 'core_metadata');
+
+    expect(metadata.generation_mode).toBe('minimax_h3_ref2v');
+    expect(metadata).toMatchObject({
+      source_video: { video_name: 'long.mp4' },
+      source_video_end_frame: 400,
+      source_video_start_frame: 10,
+    });
+    expect((metadata.minimax_h3_references as Record<string, unknown>[])[0]).toEqual({
+      conditioning: 'video_audio',
+      end_frame: 260 + 140,
+      kind: 'video',
+      start_frame: 260,
+      video_name: 'long.mp4',
+    });
+  });
 });
