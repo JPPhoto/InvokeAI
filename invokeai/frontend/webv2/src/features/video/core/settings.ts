@@ -387,21 +387,35 @@ export const createVideoSourceClip = (item: {
 export const MIN_VIDEO_TRIM_FRAMES = 2;
 
 /**
- * Frames the reference-extend tail reference samples ahead of the cutpoint:
- * ~5s of lead-in at H3's fixed 24 fps, and exactly on the 17n+5 frame grid
- * (17*8+5) so the backend's snap-down keeps all of it.
+ * Frames the reference-extend tail reference samples ahead of the cutpoint,
+ * expressed at 24 fps: ~5s of lead-in, and exactly on the 17n+5 frame grid
+ * (17*8+5) so the backend's 24 fps resample + snap-down keeps all of it. The
+ * window is a DURATION — `deriveReferenceExtendClip` scales it to the source
+ * clip's own frame rate, so a 16 fps source samples 94 frames of the same
+ * ~5.9 s rather than 141 frames of ~8.8 s.
  */
 export const VIDEO_REFERENCE_EXTEND_TAIL_FRAMES = 141;
 
-/** The tail reference's default trim: the last `VIDEO_REFERENCE_EXTEND_TAIL_FRAMES` frames before the cutpoint. */
-export const deriveReferenceExtendClip = (sourceVideo: VideoSourceClip): VideoSourceClip => ({
-  ...sourceVideo,
-  endFrame: sourceVideo.endFrame,
-  // Deliberately unclamped by the Initial Video's START cutpoint: the
-  // reference samples the original clip for continuity, independent of which
-  // portion the extension keeps.
-  startFrame: Math.max(0, sourceVideo.endFrame - (VIDEO_REFERENCE_EXTEND_TAIL_FRAMES - 1)),
-});
+const VIDEO_REFERENCE_EXTEND_TAIL_FPS = 24;
+
+/** The tail reference's default trim: the `VIDEO_REFERENCE_EXTEND_TAIL_FRAMES`-at-24fps window before the cutpoint, in source frames. */
+export const deriveReferenceExtendClip = (sourceVideo: VideoSourceClip): VideoSourceClip => {
+  const fps =
+    Number.isFinite(sourceVideo.fps) && sourceVideo.fps > 0 ? sourceVideo.fps : VIDEO_REFERENCE_EXTEND_TAIL_FPS;
+  const tailFrames = Math.max(
+    1,
+    Math.round((VIDEO_REFERENCE_EXTEND_TAIL_FRAMES / VIDEO_REFERENCE_EXTEND_TAIL_FPS) * fps)
+  );
+
+  return {
+    ...sourceVideo,
+    endFrame: sourceVideo.endFrame,
+    // Deliberately unclamped by the Initial Video's START cutpoint: the
+    // reference samples the original clip for continuity, independent of
+    // which portion the extension keeps.
+    startFrame: Math.max(0, sourceVideo.endFrame - (tailFrames - 1)),
+  };
+};
 
 /**
  * Keeps the reference list in step with the Initial Video on a reference-extend

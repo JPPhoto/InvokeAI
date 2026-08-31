@@ -384,12 +384,21 @@ describe('references', () => {
 });
 
 describe('reference-extend linkage', () => {
-  const longSource = { ...SOURCE_VIDEO, endFrame: 400, numFrames: 402, video_name: 'long.mp4' };
+  const longSource = { ...SOURCE_VIDEO, endFrame: 400, fps: 24, numFrames: 402, video_name: 'long.mp4' };
 
-  it('derives the tail trim: 141 frames inclusive ending at the cutpoint, clamped at 0', () => {
+  it('derives the tail trim: 141 frames at 24 fps ending at the cutpoint, clamped at 0', () => {
     expect(deriveReferenceExtendClip(longSource)).toMatchObject({ endFrame: 400, startFrame: 260 });
     // Shorter than the tail window: sample from the clip's own start.
     expect(deriveReferenceExtendClip(SOURCE_VIDEO)).toMatchObject({ endFrame: 79, startFrame: 0 });
+  });
+
+  it('scales the tail window to the source frame rate — a constant duration, not a constant frame count', () => {
+    // 16 fps: round(141/24 * 16) = 94 frames of the same ~5.9 s.
+    expect(deriveReferenceExtendClip({ ...longSource, fps: 16 })).toMatchObject({ endFrame: 400, startFrame: 307 });
+    // 30 fps: round(141/24 * 30) = 176 frames.
+    expect(deriveReferenceExtendClip({ ...longSource, fps: 30 })).toMatchObject({ endFrame: 400, startFrame: 225 });
+    // A degenerate recorded rate falls back to the 24 fps window.
+    expect(deriveReferenceExtendClip({ ...longSource, fps: 0 })).toMatchObject({ endFrame: 400, startFrame: 260 });
   });
 
   it('prepends a linked video+audio reference and re-derives it on cutpoint changes', () => {
