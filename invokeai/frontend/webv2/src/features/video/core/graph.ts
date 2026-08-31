@@ -414,13 +414,25 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
     throw new Error('Video dimensions could not be derived from the current settings.');
   }
 
+  // A single-file H3 checkpoint carries only the transformer: the loader's
+  // main model is the Diffusers install from the Model Components slot, with
+  // the checkpoint riding the transformer-override input. A Diffusers main at
+  // top is the loader's main directly. Validation requires the slot for
+  // checkpoint mains, so the throw is a backstop for direct callers.
+  const isSingleFileMain = model.format !== 'diffusers';
+  const componentSource = isSingleFileMain ? settings.componentSourceModel : null;
+
+  if (isSingleFileMain && !componentSource) {
+    throw new Error('A single-file MiniMax H3 transformer needs a Diffusers install selected under Model Components.');
+  }
+
   const graph: BackendGraphContract = { edges: [], id: createId('minimax_h3_video_graph'), nodes: {} };
   const { positivePrompt, seed } = addPromptAndSeedNodes(graph);
   const modelLoader = addNode(graph, {
     id: 'model_loader',
-    model,
+    model: componentSource ?? model,
     text_encoder_model: settings.h3TextEncoderModel ?? undefined,
-    transformer_model: settings.h3TransformerModel ?? undefined,
+    transformer_model: isSingleFileMain ? model : undefined,
     type: 'minimax_h3_model_loader',
   });
   const activeLoras = getActiveCompatibleLoras(settings, model);
@@ -532,7 +544,7 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
 
   const metadata = addVideoMetadata({
     extras: {
-      ...(settings.h3TransformerModel ? { minimax_h3_transformer_model: settings.h3TransformerModel } : {}),
+      ...(componentSource ? { minimax_h3_component_source: componentSource } : {}),
       ...(settings.h3TextEncoderModel ? { minimax_h3_text_encoder_model: settings.h3TextEncoderModel } : {}),
       ...(mode === 'reference'
         ? {

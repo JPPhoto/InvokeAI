@@ -248,16 +248,34 @@ export const VIDEO_GENERATION: Record<
 export const SUPPORTED_VIDEO_BASES = Object.keys(VIDEO_GENERATION) as SupportedVideoBase[];
 
 /**
- * MiniMax H3 mains must be the Diffusers folder install — the loader sources
- * five of its six submodels from it; single-file H3 checkpoints are only usable
- * as the transformer override slot.
+ * A model the video panel can reason about at all: any Wan main, and MiniMax
+ * H3 mains in both shapes — the Diffusers folder install and the single-file
+ * transformer checkpoint. For H3 the checkpoint IS the model identity (its
+ * task variant decides the panel's mode); the Diffusers install supplies the
+ * five other submodels, either as the model itself (full install) or through
+ * the component-source slot (checkpoint main).
  */
 export const isSupportedVideoModel = <T extends { base: string; type: string; format?: string }>(
   model: T
 ): model is T & MainModelConfig =>
-  model.type === 'main' && (model.base === 'wan' || (model.base === 'minimax-h3' && model.format === 'diffusers'));
+  model.type === 'main' &&
+  (model.base === 'wan' ||
+    (model.base === 'minimax-h3' && (model.format === 'diffusers' || model.format === 'checkpoint')));
 
-export const isVideoModelSelectable = <T extends ModelConfig>(model: T): boolean => isSupportedVideoModel(model);
+/**
+ * What the top model selector offers — like the image Generate panel, the top
+ * pick is what decides the panel's UI, so it lists the identity-bearing models:
+ * H3 single-file transformers (either task variant) and full Diffusers
+ * installs. Excluded, though still "supported" for stored/recalled state:
+ * a components-only folder (no transformer weights — it belongs in the Model
+ * Components slot) and a Ref2VA Diffusers folder (its `transformer_ref`
+ * weights are not folder-loadable; the single-file checkpoint is the runnable
+ * form, with the folder serving as the component source).
+ */
+export const isVideoModelSelectable = <T extends ModelConfig>(model: T): boolean =>
+  isSupportedVideoModel(model) &&
+  !isComponentsOnlyH3Main(model) &&
+  !(model.base === 'minimax-h3' && model.format === 'diffusers' && model.variant === 'ref2va');
 
 /**
  * A slim MiniMax H3 folder install: tokenizer/processor/VAEs only, no
@@ -270,26 +288,6 @@ export const isComponentsOnlyH3Main = (model: MainModelConfig): boolean =>
   // here but silently read `components_only` as absent — a false negative
   // that re-opens the fail-mid-generation hole this helper exists to close.
   model.base === 'minimax-h3' && model.format === 'diffusers' && model.components_only === true;
-
-/**
- * The model whose variant decides the panel's policy. For MiniMax H3 the TASK lives on the
- * transformer: selecting a single-file Ref2VA transformer switches the whole panel to the
- * reference mode, whatever the (components) main model's variant says. Everything that maps a
- * model to a VideoVariantConfig and has the settings at hand must resolve through this first.
- */
-export const resolveEffectiveVideoModel = <T extends MainModelConfig | undefined>(
-  model: T,
-  settings: Pick<VideoSettings, 'h3TransformerModel'> | null | undefined
-): T => {
-  if (!model || model.base !== 'minimax-h3') {
-    return model;
-  }
-  const variant = settings?.h3TransformerModel?.variant;
-  if (typeof variant === 'string' && variant.length > 0 && variant !== model.variant) {
-    return { ...model, variant };
-  }
-  return model;
-};
 
 const getVideoVariantConfig = (
   model: Pick<MainModelConfig, 'base' | 'type' | 'variant' | 'format'> | undefined
@@ -471,13 +469,12 @@ export interface VideoModelPolicy {
 }
 
 export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings: VideoSettings): VideoModelPolicy => {
-  // The transformer override can redefine the task (fl2va vs ref2va): the panel policy
-  // always comes from the effective model.
-  const effectiveModel = resolveEffectiveVideoModel(model, settings);
-  const config = getVideoConfig(effectiveModel);
+  // The H3 task (fl2va vs ref2va) lives on the selected model itself: a
+  // single-file transformer checkpoint carries its own variant.
+  const config = getVideoConfig(model);
 
   return {
-    aspectRatioOptions: getVideoAspectRatioOptions(effectiveModel),
+    aspectRatioOptions: getVideoAspectRatioOptions(model),
     defaults: config.defaults,
     fps: config.fps,
     frames: config.frames,
@@ -485,7 +482,7 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
     minSteps: config.minSteps,
     modes: config.modes,
     pixelMultiple: config.pixelMultiple,
-    prompt: getVideoPromptPolicy(effectiveModel, settings),
+    prompt: getVideoPromptPolicy(model, settings),
     references: config.references ?? null,
     targetResolutions: config.targetResolutions,
     ui: {
@@ -776,8 +773,7 @@ export const getAcceleratorToggleResult = (
   models: readonly ModelConfig[],
   enabled: boolean
 ): AcceleratorToggleResult => {
-  const effectiveModel = resolveEffectiveVideoModel(model, settings);
-  const config = getVideoConfig(effectiveModel);
+  const config = getVideoConfig(model);
   // Remove exactly the entries a previous toggle added — never a user's own
   // LoRA that happens to share a Lightning/Turbo-style name.
   const previousKeys = new Set(settings.acceleratorLoraKeys);
@@ -798,7 +794,7 @@ export const getAcceleratorToggleResult = (
     };
   }
 
-  const entries = findAcceleratorLoraEntries(effectiveModel, models);
+  const entries = findAcceleratorLoraEntries(model, models);
 
   if (!entries) {
     // Never leave the flag claiming a fast path that has no LoRAs behind it.
@@ -860,10 +856,9 @@ export const getAcceleratorLoraChangeResult = (
   models: readonly ModelConfig[],
   loras: GenerateLora[]
 ): AcceleratorLoraChangeResult => {
-  // The transformer override can redefine the task (fl2va vs ref2va), and the two tasks
-  // have different accelerators: judge the list against the EFFECTIVE model.
-  const effectiveModel = resolveEffectiveVideoModel(model, settings);
-  const config = getVideoConfig(effectiveModel);
+  // The two H3 tasks (fl2va vs ref2va) have different accelerators; the task
+  // lives on the selected model's own variant.
+  const config = getVideoConfig(model);
   const next: VideoSettings = { ...settings, loras };
 
   // Nothing to repair, and nothing this function is allowed to start.
@@ -872,13 +867,11 @@ export const getAcceleratorLoraChangeResult = (
   }
 
   // The recorded set is still running: leave everything the user tuned alone.
-  if (isRecordedAcceleratorIntact(next, effectiveModel, models, config)) {
+  if (isRecordedAcceleratorIntact(next, model, models, config)) {
     return { acceleratorLoras: null, outcome: 'unchanged', settings: next };
   }
 
-  const replacement = config.accelerator
-    ? findAcceleratorAmong(effectiveModel, getEnabledLoraModels(next), models)
-    : null;
+  const replacement = config.accelerator ? findAcceleratorAmong(model, getEnabledLoraModels(next), models) : null;
 
   if (replacement && config.accelerator) {
     return {
@@ -1094,44 +1087,79 @@ export const getVideoComponentSectionPolicy = (
     return createComponentPolicy(model.format !== 'diffusers', slots);
   }
 
-  // MiniMax H3: a full Diffusers install bundles everything, so both slots
-  // are optional single-file overrides (e.g. the int8 repacks). A slim
-  // "components-only" install (tokenizer/processor/VAEs without transformer
-  // or text-encoder weights — the backend probe records `components_only`)
-  // REQUIRES both overrides: without this gate Invoke enables and the loader
-  // fails minutes into the run.
-  const componentsOnly = isComponentsOnlyH3Main(model);
+  // MiniMax H3. The top model selection carries the task identity (its variant
+  // decides the panel's generation mode); this section supplies what that
+  // selection does not bundle:
+  // - a single-file transformer checkpoint at top REQUIRES a Diffusers H3
+  //   install in the Model Components slot (tokenizer/processor/VAEs come from
+  //   it — full and components-only installs both qualify), plus the
+  //   single-file Qwen3-VL encoder when that install is components-only;
+  // - a full Diffusers install at top bundles everything, so only the optional
+  //   text-encoder override is offered.
+  if (model.format === 'diffusers') {
+    // A components-only install can still sit at top as legacy stored state
+    // (it is no longer selectable); validation steers the user to pick a
+    // single-file transformer as the model, and the encoder slot stays
+    // required so the panel keeps showing what the install cannot provide.
+    const componentsOnly = isComponentsOnlyH3Main(model);
 
-  return createComponentPolicy(componentsOnly, [
+    return createComponentPolicy(componentsOnly, [
+      {
+        filter: (candidate) => candidate.type === 'qwen3_vl_encoder' && candidate.base === 'minimax-h3',
+        helpText: componentsOnly
+          ? 'Required: this install has no text-encoder weights, so the text encoder must come from a single-file Qwen3-VL checkpoint.'
+          : 'Optional single-file Qwen3-VL encoder used in place of the main model’s text encoder.',
+        key: 'h3TextEncoderModel',
+        label: 'Text encoder (single file)',
+        missingMessage: `${model.name} is a components-only install — select a single-file Text encoder.`,
+        modelTypes: ['qwen3_vl_encoder'],
+        required: componentsOnly ? () => true : undefined,
+        valueKind: 'component',
+      },
+    ]);
+  }
+
+  return createComponentPolicy(true, [
     {
-      // Both task variants stay pickable: selecting a Ref2VA transformer is HOW the panel
-      // switches to reference-conditioned generation (the variant drives the effective
-      // policy — see resolveEffectiveVideoModel).
       filter: (candidate) =>
-        candidate.type === 'main' && candidate.base === 'minimax-h3' && candidate.format === 'checkpoint',
-      helpText: componentsOnly
-        ? 'Required: this main model is a components-only install, so the transformer must come from a single-file checkpoint (e.g. pruned int8). Its task variant (FL2VA vs Ref2VA) decides the panel’s generation mode.'
-        : 'Optional single-file transformer (e.g. pruned int8) used in place of the main model’s transformer. Its task variant (FL2VA vs Ref2VA) decides the panel’s generation mode.',
-      key: 'h3TransformerModel',
-      label: 'Transformer (single file)',
-      missingMessage: `${model.name} is a components-only install — select a single-file Transformer.`,
+        candidate.type === 'main' && candidate.base === 'minimax-h3' && candidate.format === 'diffusers',
+      helpText:
+        'Required: a Diffusers MiniMax H3 install (full or components-only) provides the tokenizer, processor, and VAEs the single-file transformer does not carry.',
+      key: 'componentSourceModel',
+      label: 'Model components',
+      missingMessage: `${model.name} is a single-file transformer — select a Diffusers MiniMax H3 install under Model Components.`,
       modelTypes: ['main'],
-      required: componentsOnly ? () => true : undefined,
+      required: () => true,
       valueKind: 'main',
     },
     {
       filter: (candidate) => candidate.type === 'qwen3_vl_encoder' && candidate.base === 'minimax-h3',
-      helpText: componentsOnly
-        ? 'Required: this main model is a components-only install, so the text encoder must come from a single-file Qwen3-VL checkpoint.'
-        : 'Optional single-file Qwen3-VL encoder used in place of the main model’s text encoder.',
+      helpText:
+        'Required when the Model Components install is components-only (no text-encoder weights); a full install provides its own.',
       key: 'h3TextEncoderModel',
       label: 'Text encoder (single file)',
-      missingMessage: `${model.name} is a components-only install — select a single-file Text encoder.`,
+      missingMessage:
+        'The selected Model Components install has no text-encoder weights — select a single-file Text encoder.',
       modelTypes: ['qwen3_vl_encoder'],
-      required: componentsOnly ? () => true : undefined,
+      required: (ctx) => !isH3TextEncoderSatisfied(ctx),
       valueKind: 'component',
     },
   ]);
+};
+
+/** The H3 Diffusers install a checkpoint main draws its components from, if a valid one is selected. */
+const getH3ComponentSource = (ctx: VideoComponentPolicyContext): MainModelConfig | null => {
+  const source = ctx.settings.componentSourceModel;
+
+  return source && source.base === 'minimax-h3' && source.format === 'diffusers' ? source : null;
+};
+
+// A full Diffusers source carries text-encoder weights; a components-only one
+// does not, so the single-file Qwen3-VL override becomes required.
+const isH3TextEncoderSatisfied = (ctx: VideoComponentPolicyContext): boolean => {
+  const source = getH3ComponentSource(ctx);
+
+  return source !== null && !isComponentsOnlyH3Main(source);
 };
 
 const getVideoComponentPolicyContext = (
@@ -1294,11 +1322,10 @@ export const getVideoSettingsWithModelDefaults = (
     ].map((lora) => (isLoraCompatibleWithModel(lora.model, model) ? lora : { ...lora, isEnabled: false })),
     modelKey: model.key,
     numFrames: modelDefaults.numFrames,
-    // Resetting nulls the transformer override, and the override is what makes Ref2VA
-    // references consumable - keeping them would leave an orphaned list for the widget
-    // sync to sweep away silently. Clearing here keeps the reset's effects in one place.
-    // (Frame/source conditioning media stay untouched: they remain valid under the
-    // default FL2VA policy.)
+    // A reset clears the references list along with the components: on an
+    // FL2VA model the orphaned list would otherwise linger for the widget
+    // sync to sweep away silently. (Frame/source conditioning media stay
+    // untouched: they remain valid under the FL2VA policy.)
     references: modelDefaults.references,
     steps: modelDefaults.steps,
     targetResolution: modelDefaults.targetResolution,
@@ -1334,12 +1361,7 @@ export const getVideoModelSelectionResult = ({
   model: MainModelConfig;
   models: readonly ModelConfig[];
 }): VideoModelSelectionResult => {
-  // The transformer override can redefine the task (fl2va vs ref2va), so the policy comes
-  // from the EFFECTIVE model. The override itself is reconciled at the end of this
-  // transition; if it is dropped there, the caller re-runs selection through
-  // getVideoTransformerSelectionResult on the next change anyway.
-  const effectiveModel = resolveEffectiveVideoModel(model, currentSettings);
-  const config = getVideoConfig(effectiveModel);
+  const config = getVideoConfig(model);
   // A record without a modelKey was healed from a store the panel never
   // seeded (a fresh project, or a pre-open "Send to Video" payload): its
   // sampling values are the model-agnostic healing fallbacks, not user
@@ -1385,7 +1407,7 @@ export const getVideoModelSelectionResult = ({
     addClearedLabel(clearedLabels, 'Target resolution');
   }
 
-  const snappedFrames = snapVideoNumFrames(effectiveModel, next.numFrames);
+  const snappedFrames = snapVideoNumFrames(model, next.numFrames);
 
   if (snappedFrames !== next.numFrames) {
     next.numFrames = snappedFrames;
@@ -1410,8 +1432,8 @@ export const getVideoModelSelectionResult = ({
     // aimed at the other expert family) is the toggle re-applied — and when the
     // new model has no accelerator, or its LoRAs are not installed, the fast
     // path turns off, restoring the model's own steps/CFG.
-    if (!isRecordedAcceleratorIntact(next, effectiveModel, models, config)) {
-      const targetEntries = config.accelerator ? findAcceleratorLoraEntries(effectiveModel, models) : null;
+    if (!isRecordedAcceleratorIntact(next, model, models, config)) {
+      const targetEntries = config.accelerator ? findAcceleratorLoraEntries(model, models) : null;
       const result = getAcceleratorToggleResult(next, model, models, targetEntries !== null);
 
       Object.assign(next, result.settings);
@@ -1454,29 +1476,6 @@ export const getVideoModelSelectionResult = ({
 
   return { clearedLabels, settings: next };
 };
-
-/**
- * Canonical transition for the H3 transformer slot. The transformer decides the TASK
- * (fl2va's five modes vs ref2va's reference mode), so changing it must run the same
- * media/accelerator/frames reconciliation a model selection runs — with the new override
- * already in place so the effective policy is the new task's.
- */
-export const getVideoTransformerSelectionResult = ({
-  currentSettings,
-  model,
-  models,
-  transformer,
-}: {
-  currentSettings: VideoSettings;
-  model: MainModelConfig;
-  models: readonly ModelConfig[];
-  transformer: MainModelConfig | null;
-}): VideoModelSelectionResult =>
-  getVideoModelSelectionResult({
-    currentSettings: { ...currentSettings, h3TransformerModel: transformer },
-    model,
-    models,
-  });
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -1526,8 +1525,20 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
     return ['Video needs a supported video model before it can be invoked.'];
   }
 
-  const effectiveModel = resolveEffectiveVideoModel(model, settings);
-  const config = getVideoConfig(effectiveModel);
+  // Supported-but-not-selectable H3 shapes can reach the model slot as stored
+  // or recalled state; name the actual fix instead of failing downstream.
+  if (isComponentsOnlyH3Main(model)) {
+    return [
+      `${model.name} is a components-only install. Select a single-file MiniMax H3 transformer as the model; this install then provides its components.`,
+    ];
+  }
+  if (model.base === 'minimax-h3' && model.format === 'diffusers' && model.variant === 'ref2va') {
+    return [
+      `${model.name} is a Ref2VA folder install, whose transformer weights cannot be folder-loaded. Select a single-file Ref2VA transformer as the model; this install can serve as its Model Components.`,
+    ];
+  }
+
+  const config = getVideoConfig(model);
   const reasons: string[] = [];
   const mode = resolveVideoMode(settings);
   const referenceOnly = config.modes.length === 1 && config.modes[0] === 'reference';
@@ -1590,7 +1601,7 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
     }
   }
 
-  if (!isValidVideoNumFrames(effectiveModel, settings.numFrames)) {
+  if (!isValidVideoNumFrames(model, settings.numFrames)) {
     reasons.push(
       config.frames.kind === 'grid'
         ? `Frame count must be between ${config.frames.min} and ${config.frames.max} in steps of ${config.frames.step} (4·n + 1).`
@@ -1659,7 +1670,7 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
     }
   }
 
-  if (!getVideoDimensions(effectiveModel, settings)) {
+  if (!getVideoDimensions(model, settings)) {
     reasons.push(
       model.base === 'minimax-h3'
         ? 'MiniMax H3 supports aspect ratios from 1:4 to 4:1. The conditioning media is outside that range.'

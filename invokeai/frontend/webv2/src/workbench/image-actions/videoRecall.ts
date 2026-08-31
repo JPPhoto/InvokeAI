@@ -13,7 +13,6 @@ import {
   getVideoAspectRatioOptions,
   getVideoDimensions,
   getVideoModelPolicy,
-  resolveEffectiveVideoModel,
   getVideoModelSelectionResult,
   getVideoTargetResolutionOptions,
   isSupportedVideoModel,
@@ -229,6 +228,7 @@ const VIDEO_COMPONENT_METADATA_KEYS = [
   ['wan_component_source', 'componentSourceModel'],
   ['transformer_low_noise', 'wanLowNoiseModel'],
   ['minimax_h3_transformer_model', 'h3TransformerModel'],
+  ['minimax_h3_component_source', 'componentSourceModel'],
   ['minimax_h3_text_encoder_model', 'h3TextEncoderModel'],
 ] as const;
 
@@ -280,15 +280,14 @@ export const deriveAcceleratorRecallState = (
   steps: number,
   settings: VideoWidgetValues
 ): Pick<VideoWidgetValues, 'acceleratorEnabled' | 'acceleratorLoraKeys'> => {
-  // The H3 task variant lives on the recalled transformer override, and the two tasks have
-  // DIFFERENT accelerators (fl2va Turbo at 6 steps, ref2v Turbo at 4) - so both the policy
-  // and the expected-LoRA lookup must go through the effective model. Callers must recall
-  // the component overrides into `settings` before deriving this.
-  const effectiveModel = resolveEffectiveVideoModel(model, settings);
+  // The H3 task variant lives on the model itself (a single-file transformer
+  // checkpoint carries its own variant), and the two tasks have DIFFERENT
+  // accelerators (fl2va Turbo at 6 steps, ref2v Turbo at 4). Callers must
+  // promote a legacy transformer override onto `model` before deriving this.
   const accelerator = getVideoModelPolicy(model, settings).ui.accelerator;
   const recalled = accelerator
     ? findAcceleratorLorasIn(
-        effectiveModel,
+        model,
         loras.map((lora) => lora.model),
         { requireFamilyName: true }
       )
@@ -455,7 +454,7 @@ export const buildVideoRecallSettings = ({
 
   // all / remix from here on.
   const recalledModel = getSupportedVideoMetadataModel(metadata, models);
-  const model = recalledModel ?? values.model;
+  let model = recalledModel ?? values.model;
 
   if (recalledModel && recalledModel.key !== values.model?.key) {
     // The canonical family transition first, so frames/fps/resolution snap to
@@ -550,6 +549,24 @@ export const buildVideoRecallSettings = ({
 
   if (componentsRecalled) {
     fields.push('components');
+  }
+
+  // Legacy metadata shape (pre model-positions): `model` recorded as the H3
+  // Diffusers install with the single-file transformer as an override extra.
+  // The transformer is the model identity now — promote it, so the
+  // accelerator derivation below judges the right task, and keep the install
+  // as the component source.
+  if (model?.base === 'minimax-h3' && model.format === 'diffusers' && values.h3TransformerModel) {
+    const componentSource = model;
+
+    model = values.h3TransformerModel;
+    values = {
+      ...values,
+      componentSourceModel: componentSource,
+      h3TransformerModel: null,
+      model,
+      modelKey: model.key,
+    };
   }
 
   const recordedLoras = getMetadataLoras(metadata);

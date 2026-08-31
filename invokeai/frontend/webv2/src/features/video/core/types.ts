@@ -111,9 +111,19 @@ export interface VideoSettings {
   wanT5EncoderModel: ModelIdentifierConfig | null;
   /** The low-noise expert of a Wan 2.2 A14B mixture-of-experts pair. */
   wanLowNoiseModel: MainModelConfig | null;
-  /** Optional Diffusers main model used as a component source for split/quantized Wan models. */
+  /**
+   * Diffusers main model used as a component source for single-file mains:
+   * split/quantized Wan models, and single-file MiniMax H3 transformers
+   * (which take tokenizer/processor/VAEs from it).
+   */
   componentSourceModel: MainModelConfig | null;
-  /** Optional single-file MiniMax H3 transformer override (e.g. the pruned int8 repack). */
+  /**
+   * LEGACY — pre model-positions persisted shape only. The single-file H3
+   * transformer used to be an override slot; it is the top model selection
+   * now. `syncVideoWidgetValuesWithModels` promotes a stored value onto
+   * `model` (keeping the old main as `componentSourceModel`); nothing writes
+   * this field any more.
+   */
   h3TransformerModel: MainModelConfig | null;
   /** Optional single-file MiniMax H3 Qwen3-VL text-encoder override. */
   h3TextEncoderModel: ModelIdentifierConfig | null;

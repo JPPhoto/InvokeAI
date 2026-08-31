@@ -17,7 +17,7 @@ import {
   getVideoModes,
   getVideoValidationReasons,
   isSupportedVideoModel,
-  resolveEffectiveVideoModel,
+  isVideoModelSelectable,
   type VideoComponentPolicyContext,
   type VideoComponentValueKey,
 } from './videoPolicies';
@@ -33,7 +33,7 @@ import {
 const EMPTY_ACCELERATOR_LORA_KEYS: string[] = [];
 
 export const createDefaultVideoWidgetValues = (models: readonly ModelConfig[] = []): VideoWidgetValues => {
-  const model = (models.find((candidate) => isSupportedVideoModel(candidate)) as MainModelConfig | undefined) ?? null;
+  const model = (models.find((candidate) => isVideoModelSelectable(candidate)) as MainModelConfig | undefined) ?? null;
 
   return { ...getDefaultVideoSettings(model ?? undefined, models), model };
 };
@@ -47,12 +47,32 @@ export const syncVideoWidgetValuesWithModels = (
   values: VideoWidgetValues,
   models: readonly ModelConfig[]
 ): VideoWidgetValues => {
+  // Legacy stored shape (pre model-positions): an H3 Diffusers install at top
+  // with the single-file transformer in the override slot. The transformer is
+  // the model identity now — promote it to the top slot and keep the install
+  // as its component source. Runs before anything reads `values.model`, so
+  // the whole sync (and its write-back) sees the new shape.
+  if (values.model?.base === 'minimax-h3' && values.model.format === 'diffusers' && values.h3TransformerModel) {
+    values = {
+      ...values,
+      componentSourceModel: values.model,
+      h3TransformerModel: null,
+      model: values.h3TransformerModel,
+      modelKey: values.h3TransformerModel.key,
+    };
+  }
+
   const modelsByKey = new Map(models.map((model) => [model.key, model]));
   const storedMain = values.model ? modelsByKey.get(values.model.key) : undefined;
+  // The stored main survives on the looser `isSupportedVideoModel` check: a
+  // legacy non-selectable shape (components-only install at top with no
+  // transformer to promote) keeps its slot and shows validation guidance
+  // instead of being silently swapped for another model. Auto-picks use the
+  // stricter selectable filter.
   const model: MainModelConfig | null =
     storedMain && isSupportedVideoModel(storedMain)
       ? storedMain
-      : ((models.find((candidate) => isSupportedVideoModel(candidate)) as MainModelConfig | undefined) ?? null);
+      : ((models.find((candidate) => isVideoModelSelectable(candidate)) as MainModelConfig | undefined) ?? null);
 
   // The main changed identity under us (nothing stored, or the stored model was
   // uninstalled and another family got auto-picked): run the canonical
@@ -154,15 +174,11 @@ export const syncVideoWidgetValuesWithModels = (
     wanT5EncoderModel: syncComponent('wanT5EncoderModel', base.wanT5EncoderModel),
   };
 
-  // The transformer decides the task: if the Ref2VA transformer was uninstalled (and the
-  // slot re-resolved to null or an FL2VA file), the stored references are orphaned - the
-  // effective policy no longer has a reference mode - so drop them, identity-preserving.
-  if (next.references.length > 0 && model) {
-    const effectiveModel = resolveEffectiveVideoModel(model, next);
-
-    if (!getVideoModes(effectiveModel).includes('reference')) {
-      next.references = [];
-    }
+  // The model decides the task: if the Ref2VA transformer was uninstalled and
+  // another model got auto-picked, the stored references are orphaned — the
+  // policy no longer has a reference mode — so drop them, identity-preserving.
+  if (next.references.length > 0 && model && !getVideoModes(model).includes('reference')) {
+    next.references = [];
   }
 
   const isUnchanged =
