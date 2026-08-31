@@ -4,6 +4,7 @@ Base class for model loading in InvokeAI.
 """
 
 import time
+import weakref
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from logging import Logger
@@ -69,6 +70,9 @@ class LoadedModelWithoutConfig:
         )
         if self._first_use_finalizer is not None:
             self._first_use_finalizer.atexit = False
+            # This handle owns the grace: put()'s sweep keeps a grace whose holder is alive
+            # (an in-flight multi-model load) and clears one whose holder is gone.
+            cache_record.grace_holder = weakref.ref(self)
 
     def _lock_paced(self, working_mem_bytes: Optional[int]) -> None:
         """Move the model into VRAM in bounded passes, yielding the global load lock between them.

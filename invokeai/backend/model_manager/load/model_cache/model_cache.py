@@ -637,16 +637,23 @@ class ModelCache:
         # unused cache.
         self._ensure_deferred_worker()
 
-        # Any entry still carrying the post-admission grace belongs to an earlier load: cold loads
-        # are serialized under MODEL_LOAD_LOCK's write lock and each load's only graced put() is
-        # its final one, so a flag that survives to the next admission is stale — its loader
-        # either errored out before retrieving the model or dropped the LoadedModel without ever
-        # locking it. Clear such flags so an orphaned record cannot dodge budget reconciles
-        # indefinitely. (An entry retrieved but not yet locked loses its shield here; if a
-        # reconcile then evicts it, lock() falls back to the tolerated issue-7513 path and
-        # proceeds on the detached record.)
+        # A grace that survives to the next admission is NOT necessarily stale: multi-model
+        # invocations load their whole set (text encoder, then tokenizer, then processor) before
+        # locking any of it, so earlier siblings' graces legitimately outlive later puts — and
+        # sweeping them let a sibling's make_room evict a just-admitted multi-GB model to fit a
+        # tiny one, freeing nothing (the loader's handle keeps it alive) while detaching the
+        # record from all accounting. The grace's owner is the LoadedModel handle: clear only
+        # provably orphaned graces — no handle was ever registered (the load raised between
+        # put() and LoadedModel construction), or the handle died without its finalizer running
+        # (deferred worker lost). A live holder means lock() or the finalizer will release the
+        # grace. (Residual race, tolerated via the issue-7513 path: a sibling's put() landing in
+        # the instructions between a load's MODEL_LOAD_LOCK release and its LoadedModel
+        # construction sees a grace with no holder yet and sweeps it.)
         for stale_entry in self._cached_models.values():
-            stale_entry.awaiting_first_use = False
+            if not stale_entry.awaiting_first_use:
+                continue
+            if stale_entry.grace_holder is None or stale_entry.grace_holder() is None:
+                stale_entry.awaiting_first_use = False
 
         size = calc_model_size_by_data(self._logger, model)
         self._make_room_internal(size)
@@ -1656,14 +1663,18 @@ class ModelCache:
         self._logger.debug(log)
 
     @synchronized
-    def make_room(self, bytes_needed: int) -> CacheClearResult:
+    def make_room(self, bytes_needed: int, spare_awaiting_first_use: bool = True) -> CacheClearResult:
         """Make enough room in the cache to accommodate a new model of indicated size.
 
         Note: This function deletes all of the cache's internal references to a model in order to free it. If there are
         external references to the model, there's nothing that the cache can do about it, and those models will not be
         garbage-collected.
+
+        `spare_awaiting_first_use=False` (the explicit clear-cache paths) also evicts entries
+        still inside their admission grace — a user asking for a full clear outranks the grace,
+        and the tolerated issue-7513 path covers an in-flight loader.
         """
-        return self._make_room_internal(bytes_needed)
+        return self._make_room_internal(bytes_needed, spare_awaiting_first_use=spare_awaiting_first_use)
 
     def _make_room_internal(self, bytes_needed: int, spare_awaiting_first_use: bool = True) -> CacheClearResult:
         """Internal implementation of make_room(). Assumes the lock is already held.

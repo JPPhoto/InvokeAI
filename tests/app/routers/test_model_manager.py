@@ -284,7 +284,7 @@ def test_empty_model_cache_aggregates_per_device_results(monkeypatch: Any, clien
             self._result = CacheClearResult(models_cleared=models_cleared, bytes_freed=bytes_freed)
             self.requested: list[int] = []
 
-        def make_room(self, bytes_needed: int) -> CacheClearResult:
+        def make_room(self, bytes_needed: int, spare_awaiting_first_use: bool = True) -> CacheClearResult:
             self.requested.append(bytes_needed)
             return self._result
 
@@ -313,7 +313,7 @@ def test_empty_model_cache_clears_duplicate_cache_objects_once(monkeypatch: Any,
         def __init__(self) -> None:
             self.calls = 0
 
-        def make_room(self, bytes_needed: int) -> CacheClearResult:
+        def make_room(self, bytes_needed: int, spare_awaiting_first_use: bool = True) -> CacheClearResult:
             self.calls += 1
             return CacheClearResult(models_cleared=2, bytes_freed=100)
 
