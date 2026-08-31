@@ -72,6 +72,7 @@ def _run_deferred_work(cache_ref: "weakref.ReferenceType[ModelCache]", work_queu
     while True:
         work = work_queue.get()
         cache = None
+        record = None
         try:
             if work is _DEFERRED_STOP:
                 return
@@ -83,6 +84,11 @@ def _run_deferred_work(cache_ref: "weakref.ReferenceType[ModelCache]", work_queu
                 continue
             if work is _DEFERRED_RECONCILE:
                 cache._reconcile_budget_if_pending()
+            elif isinstance(work, tuple):
+                record, holder_ref = work
+                assert isinstance(record, CacheRecord)
+                cache._release_first_use_grace(record, holder_ref)
+                holder_ref = None
             else:
                 assert isinstance(work, CacheRecord)
                 cache._release_first_use_grace(work)
@@ -91,13 +97,14 @@ def _run_deferred_work(cache_ref: "weakref.ReferenceType[ModelCache]", work_queu
                 cache._logger.exception("Error processing deferred model-cache work")
         finally:
             # Drop both references before blocking on the next get(): locals stay bound for as long
-            # as this frame lives. `work` may be a CacheRecord, which transitively holds its model's
+            # as this frame lives. `work` may be (or hold) a CacheRecord, which transitively holds its model's
             # CPU weights — and _release_first_use_grace's release hook can evict that very record,
             # removing it from the cache AND subtracting its bytes from the RamBudget, so holding it
             # would leave the budget under-reporting a model that is still resident. `cache` must go
             # for the same reason this function takes a weakref at all.
             work = None
             cache = None
+            record = None
 
 
 class _ModelLoadReadWriteLock:
@@ -813,7 +820,9 @@ class ModelCache:
             if self._ram_budget is not None and self._budget_reconcile_pending.is_set() and not self._lock._is_owned():
                 self._dispatch_deferred(_DEFERRED_RECONCILE)
 
-    def release_first_use_grace(self, cache_entry: CacheRecord) -> None:
+    def release_first_use_grace(
+        self, cache_entry: CacheRecord, holder_ref: "weakref.ref[object] | None" = None
+    ) -> None:
         """Make an abandoned, never-locked record available for budget eviction.
 
         Called from a `weakref.finalize` callback (see LoadedModelWithoutConfig), which runs at an
@@ -839,7 +848,7 @@ class ModelCache:
         # release. Losing a race here at worst queues work that no-ops under the lock.
         if not cache_entry.awaiting_first_use:
             return
-        self._dispatch_deferred(cache_entry)
+        self._dispatch_deferred((cache_entry, holder_ref))
 
     def _ensure_deferred_worker(self) -> None:
         """Start the background worker if it is not currently running. Caller must hold the lock.
@@ -914,10 +923,25 @@ class ModelCache:
         self._deferred_work_queue.put(work)
 
     @synchronized
-    def _release_first_use_grace(self, cache_entry: CacheRecord) -> None:
-        """Clear an abandoned record's grace, then let the release hook reconcile the budget."""
-        if self._cached_models.get(cache_entry.key) is cache_entry and not cache_entry.is_locked:
-            cache_entry.awaiting_first_use = False
+    def _release_first_use_grace(
+        self, cache_entry: CacheRecord, holder_ref: "weakref.ref[object] | None" = None
+    ) -> None:
+        """Clear an abandoned record's grace, then let the release hook reconcile the budget.
+
+        `holder_ref` identifies the handle whose death triggered this release. When the record's
+        current `grace_holder` is a DIFFERENT, still-live handle (a newer handle was constructed
+        for the same graced record and re-registered itself), the grace belongs to that handle
+        now — leave it. (Single-slot limitation, documented: if the NEWER handle dies first while
+        an older one lives, the slot points at the dead ref and the grace clears anyway. No
+        current code path constructs two pre-lock handles for one record — one session worker per
+        device cache — so this stays a contract note, not a reachable bug.)
+        """
+        if self._cached_models.get(cache_entry.key) is not cache_entry or cache_entry.is_locked:
+            return
+        current = cache_entry.grace_holder
+        if holder_ref is not None and current is not None and current is not holder_ref and current() is not None:
+            return
+        cache_entry.awaiting_first_use = False
 
     @synchronized
     def _get_cache_snapshot(self) -> dict[str, CacheEntrySnapshot]:
