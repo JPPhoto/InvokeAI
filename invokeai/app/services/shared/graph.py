@@ -686,7 +686,7 @@ class _ExecutionMaterializer:
 
         return prepared_return_id
 
-    def _is_deferred_nested_for_return(self, node_id: str, graph: nx.DiGraph) -> bool:
+    def _is_deferred_nested_for_return(self, node_id: str, graph: "nx.DiGraph") -> bool:
         return any(
             (nested_body := self._state.graph._get_supported_for_nested_for_body(source_for_id, graph)) is not None
             and nested_body.outer_return_id == node_id
@@ -836,8 +836,8 @@ class _ExecutionMaterializer:
         self,
         source_for_id: str,
         prepared_for_id: str,
-        graph: nx.DiGraph,
-        execution_graph: nx.DiGraph,
+        graph: "nx.DiGraph",
+        execution_graph: "nx.DiGraph",
         nested_body: _SupportedNestedForBody,
     ) -> Optional[str]:
         body_path_nodes = nested_body.body_path_nodes
@@ -953,8 +953,8 @@ class _ExecutionMaterializer:
         self,
         source_for_id: str,
         prepared_for_id: str,
-        graph: nx.DiGraph,
-        execution_graph: nx.DiGraph,
+        graph: "nx.DiGraph",
+        execution_graph: "nx.DiGraph",
         nested_body: tuple[set[str], str, str, str],
     ) -> Optional[str]:
         body_path_nodes, source_return_id, source_iterate_id, source_collect_id = nested_body
@@ -3172,7 +3172,7 @@ class Graph(BaseModel):
             if get_output_field_scope(node, edge.source.field) == OutputScope.Final
         ]
 
-    def _get_for_reachable_body_nodes(self, iteration_edges: list[Edge], graph: nx.DiGraph) -> set[str]:
+    def _get_for_reachable_body_nodes(self, iteration_edges: list[Edge], graph: "nx.DiGraph") -> set[str]:
         body_nodes: set[str] = set()
         for edge in iteration_edges:
             body_nodes.add(edge.destination.node_id)
@@ -3180,11 +3180,11 @@ class Graph(BaseModel):
         return body_nodes
 
     def _get_for_body_path_nodes(
-        self, reachable_body_nodes: set[str], return_node_id: str, graph: nx.DiGraph
+        self, reachable_body_nodes: set[str], return_node_id: str, graph: "nx.DiGraph"
     ) -> set[str]:
         return (reachable_body_nodes & nx.ancestors(graph, return_node_id)) | {return_node_id}
 
-    def _get_for_body_path_to_return(self, node_id: str, graph: nx.DiGraph) -> tuple[set[str], str] | None:
+    def _get_for_body_path_to_return(self, node_id: str, graph: "nx.DiGraph") -> tuple[set[str], str] | None:
         """Resolve the runtime body path to its owning ForReturn.
 
         The loop linkage identifies the return endpoint. The ordinary body graph still determines whether that return
@@ -3202,7 +3202,7 @@ class Graph(BaseModel):
         return self._get_for_body_path_nodes(reachable_body_nodes, return_node_id, graph), return_node_id
 
     def _get_supported_for_nested_iterate_body(
-        self, node_id: str, graph: nx.DiGraph
+        self, node_id: str, graph: "nx.DiGraph"
     ) -> tuple[set[str], str, str, str] | None:
         """Returns the bounded internal Iterate body contract, if this For uses it."""
         body_path_to_return = self._get_for_body_path_to_return(node_id, graph)
@@ -3269,7 +3269,7 @@ class Graph(BaseModel):
 
         return body_path_nodes, return_node_id, iterate_node_id, collect_node_id
 
-    def _get_supported_for_nested_for_body(self, node_id: str, graph: nx.DiGraph) -> _SupportedNestedForBody | None:
+    def _get_supported_for_nested_for_body(self, node_id: str, graph: "nx.DiGraph") -> _SupportedNestedForBody | None:
         """Returns the supported recursive nested For contract, if this For uses it.
 
         Each direct child loop has its own ForReturn. A single child may close the parent directly or through a
