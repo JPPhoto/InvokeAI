@@ -31,7 +31,7 @@ import { Button } from '@platform/ui/Button';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
 import { toaster } from '@platform/ui/toaster';
 import { ArrowLeftRightIcon, DicesIcon } from 'lucide-react';
-import { useCallback, useId, useMemo } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { areVideoValuesEqual } from './videoComparators';
@@ -302,13 +302,29 @@ export const VideoWidgetView = () => {
     },
     [maxVideoReferences, patch, referenceExtend, t, values.numFrames, values.references]
   );
+  // Always the newest normalized list. The reference field's add handlers
+  // `await` a gallery resolve before writing, and the Initial Video field and
+  // the Frames slider write references too — so an updater that resolved
+  // against a captured array would clobber whichever of those landed during
+  // the await, silently deleting the anchor or restoring a window the frame
+  // count had already re-derived.
+  // Synced in an effect rather than during render: this file's react-compiler
+  // rule forbids touching a ref while rendering, and a gallery resolve lands
+  // whole frames later, long after the commit.
+  const referencesRef = useRef(values.references);
+
+  useEffect(() => {
+    referencesRef.current = values.references;
+  }, [values.references]);
+
   // The single choke point for every list edit the reference field makes — add,
   // remove, retrim, reorder — so pinning the continuity anchor here covers all
   // of them. Request order is rotary order and the generation continues from
   // the LAST reference, so the anchor's position is derived, not user-set.
   const setReferences = useCallback(
-    (references: VideoReferenceItem[]) => {
-      const next = referenceExtend ? pinReferenceExtendAnchor(references) : references;
+    (update: (current: VideoReferenceItem[]) => VideoReferenceItem[]) => {
+      const updated = update(referencesRef.current);
+      const next = referenceExtend ? pinReferenceExtendAnchor(updated) : updated;
 
       patch({
         references: next,

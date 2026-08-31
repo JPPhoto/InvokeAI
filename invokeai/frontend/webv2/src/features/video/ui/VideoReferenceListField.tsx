@@ -230,7 +230,13 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   disabled?: boolean;
   maxImages: number;
   maxVideos: number;
-  onChange: (references: VideoReferenceItem[]) => void;
+  /**
+   * Accepts an UPDATER, not a snapshot. The add handlers `await` a gallery
+   * resolve before writing, and the Initial Video field and Frames slider both
+   * write references too -- a captured array would clobber whichever of those
+   * landed during the await.
+   */
+  onChange: (update: (current: VideoReferenceItem[]) => VideoReferenceItem[]) => void;
   references: VideoReferenceItem[];
 }) {
   const { t } = useTranslation();
@@ -289,8 +295,8 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         const [resolved] = await galleryImages.resolveMany([imageName]);
 
         if (resolved) {
-          onChange([
-            ...references,
+          onChange((current) => [
+            ...current,
             {
               detail: 'max',
               image: { height: resolved.height, image_name: resolved.imageName, width: resolved.width },
@@ -306,7 +312,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         setIsLoading(false);
       }
     },
-    [onChange, references, reportError]
+    [onChange, reportError]
   );
 
   const addVideoReference = useCallback(
@@ -326,8 +332,8 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
             width: item.width,
           });
 
-          onChange([
-            ...references,
+          onChange((current) => [
+            ...current,
             {
               // References are truncated to the generated duration, not joined: default to
               // the whole clip rather than the extend-mode 2-frame-tail trim.
@@ -345,7 +351,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         setIsLoading(false);
       }
     },
-    [onChange, references, reportError]
+    [onChange, reportError]
   );
 
   const handleDragEnd = useCallback(
@@ -425,32 +431,36 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
 
   const updateReference = useCallback(
     (index: number, reference: VideoReferenceItem) => {
-      onChange(references.map((entry, entryIndex) => (entryIndex === index ? reference : entry)));
+      onChange((current) => current.map((entry, entryIndex) => (entryIndex === index ? reference : entry)));
     },
-    [onChange, references]
+    [onChange]
   );
   const removeReference = useCallback(
     (index: number) => {
-      onChange(references.filter((_, entryIndex) => entryIndex !== index));
+      onChange((current) => current.filter((_, entryIndex) => entryIndex !== index));
     },
-    [onChange, references]
+    [onChange]
   );
   const moveReference = useCallback(
     (index: number, direction: -1 | 1) => {
-      const target = index + direction;
+      onChange((current) => {
+        const target = index + direction;
 
-      if (target < 0 || target >= references.length) {
-        return;
-      }
-      const next = [...references];
-      const [entry] = next.splice(index, 1);
+        if (target < 0 || target >= current.length) {
+          return current;
+        }
+        const next = [...current];
+        const [entry] = next.splice(index, 1);
 
-      if (entry) {
+        if (!entry) {
+          return current;
+        }
         next.splice(target, 0, entry);
-        onChange(next);
-      }
+
+        return next;
+      });
     },
-    [onChange, references]
+    [onChange]
   );
 
   return (

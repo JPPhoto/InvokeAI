@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { VideoSettings } from './types';
+import type { VideoReferenceItem, VideoSettings } from './types';
 
 import { MINIMAX_H3_NUM_FRAMES_CHOICES } from './dimensions';
 import {
@@ -602,6 +602,31 @@ describe('reference-extend linkage', () => {
     expect([90, 124, 345].reduce(applyReferenceExtendNumFrames, linked)[0]).toMatchObject({
       clip: { startFrame: 260 },
     });
+  });
+
+  it('an updater applied after a concurrent write keeps both changes', () => {
+    // The reference field hands `setReferences` an UPDATER because its add
+    // handlers await a gallery resolve before writing. Modelled here: the
+    // handler captures the list, the Initial Video field places the anchor
+    // during the await, then the resolve lands. A captured-array write would
+    // drop the anchor entirely; an updater over live state keeps both.
+    const captured: VideoReferenceItem[] = [];
+    const add = (current: VideoReferenceItem[]): VideoReferenceItem[] => [...current, IMAGE_REFERENCE];
+
+    // ...the Initial Video lands mid-flight.
+    const live = applyReferenceExtendSourceVideo(captured, source24, 3, FRAMES);
+
+    expect(live.some((entry) => entry.kind === 'video' && entry.fromSourceVideo === true)).toBe(true);
+
+    // ...then the resolve writes, against LIVE state rather than `captured`.
+    const merged = pinReferenceExtendAnchor(add(live));
+
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toBe(IMAGE_REFERENCE);
+    expect(merged[1]).toMatchObject({ fromSourceVideo: true, kind: 'video' });
+
+    // The snapshot write this replaced would have produced just the image.
+    expect(add(captured)).toEqual([IMAGE_REFERENCE]);
   });
 
   it('pins the continuity anchor last, whatever the add or drag order', () => {
