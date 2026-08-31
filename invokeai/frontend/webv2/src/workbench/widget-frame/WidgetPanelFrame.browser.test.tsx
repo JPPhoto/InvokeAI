@@ -237,12 +237,7 @@ describe('WidgetPanelFrame resize', () => {
     await interact(() => window.dispatchEvent(new PointerEvent('pointermove', { clientX: 190 })));
     await interact(() => window.dispatchEvent(new PointerEvent('pointerup', { clientX: 190 })));
 
-    // The right panel frames the whole rail, so shutting it shuts every dock.
-    expect(frameMocks.setRegionCollapsed.mock.calls).toEqual([
-      ['rightTop', true],
-      ['right', true],
-      ['rightBottom', true],
-    ]);
+    expect(frameMocks.setRegionCollapsed).toHaveBeenCalledExactlyOnceWith('right', true);
   });
 
   it('measures the bottom strip vertically against its own floor', async () => {

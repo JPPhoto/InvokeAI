@@ -13,9 +13,7 @@ import { useCallback, useLayoutEffect, useRef, useState, type Ref } from 'react'
  *                one-line summaries, no footer message line.
  * - `minimal`  — very narrow: frame + hairline progress + prev/next only.
  */
-/** A side rail: the left panel or any dock of the right rail. */
-const isRailRegion = (region: string): boolean =>
-  region === 'left' || region === 'right' || region === 'rightTop' || region === 'rightBottom';
+const isRailRegion = (region: string): boolean => region === 'left' || region === 'right';
 
 export type PreviewDensity = 'full' | 'compact' | 'minimal';
 

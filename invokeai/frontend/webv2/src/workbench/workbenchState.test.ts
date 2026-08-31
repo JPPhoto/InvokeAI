@@ -550,49 +550,38 @@ describe('workbench widget region defaults', () => {
       'queue',
     ]);
     for (const preset of layoutPresets) {
-      const { right, rightBottom } = preset.snapshot.widgetRegions;
-      expect([...right.instanceIds, ...rightBottom.instanceIds]).toContain('image-map');
+      if (preset.id !== 'edit') {
+        expect(preset.snapshot.widgetRegions.right.instanceIds).toContain('image-map');
+      }
     }
   });
 
-  it('adds the bottom dock to an untouched pre-dock Edit rail and leaves other rails alone', () => {
+  it('adopts the Layers-only Edit rail for untouched legacy rails and leaves customized rails alone', () => {
     const initial = createInitialWorkbenchState();
-    const preDock = (instanceIds: Project['widgetRegions']['right']['instanceIds']): WorkbenchState => ({
+    const withRight = (instanceIds: Project['widgetRegions']['right']['instanceIds']): WorkbenchState => ({
       ...initial,
-      projects: initial.projects.map((project) => {
-        const { rightBottom: _b, rightTop: _t, ...regions } = project.widgetRegions;
-        return {
-          ...project,
-          widgetRegions: {
-            ...regions,
-            right: { ...project.widgetRegions.right, instanceIds },
-          } as Project['widgetRegions'],
-        };
-      }),
+      projects: initial.projects.map((project) => ({
+        ...project,
+        widgetRegions: {
+          ...project.widgetRegions,
+          right: { ...project.widgetRegions.right, activeInstanceId: 'gallery', instanceIds },
+        },
+      })),
     });
-    const editRail = preDock(['layers', 'preview', 'gallery', 'image-map', 'queue']);
-    const custom = preDock(['image-map', 'layers']);
+    const legacyEditRail = withRight(['layers', 'preview', 'gallery', 'image-map', 'queue']);
+    const custom = withRight(['image-map', 'layers']);
 
-    const hydratedEdit = getActiveProject(workbenchReducer(initial, { state: editRail, type: 'hydrateWorkbench' }));
-    expect(hydratedEdit.widgetRegions.right.instanceIds).toEqual([
-      'layers',
-      'preview',
-      'gallery',
-      'image-map',
-      'queue',
-    ]);
-    expect(hydratedEdit.widgetRegions.rightBottom).toMatchObject({
-      activeInstanceId: 'properties',
-      instanceIds: ['properties', 'transform'],
-      isCollapsed: false,
+    const hydratedLegacy = getActiveProject(
+      workbenchReducer(initial, { state: legacyEditRail, type: 'hydrateWorkbench' })
+    );
+    expect(hydratedLegacy.widgetRegions.right).toMatchObject({
+      activeInstanceId: 'layers',
+      instanceIds: ['layers'],
     });
-    expect(hydratedEdit.widgetInstances.properties?.typeId).toBe('properties');
-    expect(hydratedEdit.widgetInstances.transform?.typeId).toBe('transform');
-    expect(hydratedEdit.widgetRegions.rightTop).toMatchObject({ instanceIds: [], isCollapsed: true });
 
     const hydratedCustom = getActiveProject(workbenchReducer(initial, { state: custom, type: 'hydrateWorkbench' }));
     expect(hydratedCustom.widgetRegions.right.instanceIds).toEqual(['image-map', 'layers']);
-    expect(hydratedCustom.widgetRegions.rightBottom).toMatchObject({ instanceIds: [], isCollapsed: true });
+    expect(hydratedCustom.widgetRegions.right.activeInstanceId).toBe('gallery');
   });
 
   it('adds Upscale to untouched legacy left rails while preserving customized rails', () => {

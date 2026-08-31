@@ -4,7 +4,6 @@ import type { CanvasEngine } from '@workbench/canvas-operations/createCanvasEngi
 import type { FilterOperationSessionState } from '@workbench/canvas-operations/filterOperationSession';
 import type { CanvasProjectMutationPort } from '@workbench/canvasProjectMutationPort';
 import type { Project } from '@workbench/projectContracts';
-import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
@@ -23,7 +22,7 @@ import { createEmptyCanvasDocument, createEmptyCanvasState } from '@workbench/ca
 import { applyCanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import { createInitialWorkbenchState } from '@workbench/workbenchState';
 import { createInstance } from 'i18next';
-import { act } from 'react';
+import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider } from 'react-i18next';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -40,9 +39,12 @@ vi.mock('@workbench/useCanvasProjectMutationDispatch', () => ({
 }));
 vi.mock('@workbench/widgets/canvas/useCanvasEngine', () => ({ useCanvasEngine: () => harness.engine }));
 
-import { TransformWidgetView } from '@workbench/widgets/transform/TransformWidgetView';
+import type { LayerEditorPaneLayout } from './editorPaneLayout';
 
-import { PropertiesWidgetView } from './PropertiesWidgetView';
+import { LAYER_EDITOR_PANE_DEFAULTS } from './editorPaneLayout';
+import { LayerEditorPanes } from './LayerEditorPanes';
+import { PropertiesPane } from './PropertiesPane';
+import { TransformPane } from './TransformPane';
 
 const i18n = createInstance();
 beforeAll(async () => {
@@ -130,12 +132,11 @@ const settle = () =>
       })
   );
 
-const viewProps = {} as WidgetViewProps;
 const IDENTITY = { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 };
 
 type Selection = 'none' | 'layer' | 'group';
 
-const mount = async (View: typeof PropertiesWidgetView, selection: Selection = 'none') => {
+const mount = async (View: typeof PropertiesPane, selection: Selection = 'none') => {
   const base = { ...createInitialWorkbenchState().projects[0]!, id: 'p' };
   const nodes =
     selection === 'none'
@@ -164,7 +165,7 @@ const mount = async (View: typeof PropertiesWidgetView, selection: Selection = '
     root?.render(
       <I18nextProvider i18n={i18n}>
         <ChakraProvider value={system}>
-          <View {...viewProps} />
+          <View />
         </ChakraProvider>
       </I18nextProvider>
     );
@@ -183,9 +184,15 @@ afterEach(async () => {
   harness.engine = null;
 });
 
-describe('Properties widget', () => {
+let paneHarnessLayout: LayerEditorPaneLayout = { ...LAYER_EDITOR_PANE_DEFAULTS };
+const LayerEditorPanesHarness = () => {
+  const [layout, setLayout] = useState(paneHarnessLayout);
+  return <LayerEditorPanes layout={layout} onLayoutChange={setLayout} />;
+};
+
+describe('Properties pane', () => {
   it('shows the active tool as labelled rows and swaps them with the tool', async () => {
-    await mount(PropertiesWidgetView);
+    await mount(PropertiesPane);
     await act(() => engine!.tools.setTool('brush'));
     await settle();
     expect(host!.textContent).toContain('Brush');
@@ -201,7 +208,7 @@ describe('Properties widget', () => {
   });
 
   it('puts a running operation first with Cancel, locks the tool rows in place and hands them focus over', async () => {
-    await mount(PropertiesWidgetView);
+    await mount(PropertiesPane);
     await act(() => engine!.tools.setTool('brush'));
     await settle();
     await act(() => page.getByRole('slider', { exact: true, name: 'Brush size' }).element().focus());
@@ -219,16 +226,16 @@ describe('Properties widget', () => {
   });
 });
 
-describe('Transform widget', () => {
+describe('Transform pane', () => {
   it('disables its fields with nothing selected and commits one patch per field for a selected layer', async () => {
-    await mount(TransformWidgetView);
+    await mount(TransformPane);
     expect(host!.textContent).toContain('No layer selected');
     await expect.element(page.getByRole('spinbutton', { exact: true, name: 'X' })).toBeDisabled();
 
     await act(() => root?.unmount());
     host?.remove();
     registry?.releaseEngine('p');
-    await mount(TransformWidgetView, 'layer');
+    await mount(TransformPane, 'layer');
     const commit = vi.spyOn(engine!.layers, 'commitPrepared');
     const x = page.getByRole('spinbutton', { exact: true, name: 'X' });
     await expect.element(x).toBeEnabled();
@@ -250,7 +257,7 @@ describe('Transform widget', () => {
   });
 
   it('wraps rotation into a half turn and names a selected group instead of editing it', async () => {
-    await mount(TransformWidgetView, 'layer');
+    await mount(TransformPane, 'layer');
     const commit = vi.spyOn(engine!.layers, 'commitPrepared');
     const rotation = page.getByRole('spinbutton', { exact: true, name: 'Rotation' });
     await expect.element(rotation).toHaveValue('28.65');
@@ -264,14 +271,14 @@ describe('Transform widget', () => {
     await act(() => root?.unmount());
     host?.remove();
     registry?.releaseEngine('p');
-    await mount(TransformWidgetView, 'group');
+    await mount(TransformPane, 'group');
     expect(host!.textContent).toContain('Folder');
     expect(host!.textContent).toContain('Select a layer inside this group to transform.');
     await expect.element(page.getByRole('spinbutton', { exact: true, name: 'X' })).toBeDisabled();
   });
 
   it('scrubs a field from its label and commits the result once when the mouse button lifts', async () => {
-    await mount(TransformWidgetView, 'layer');
+    await mount(TransformPane, 'layer');
     // The scrubber locks the pointer once a real click has activated the page; the harness lock steals focus.
     vi.spyOn(Element.prototype, 'requestPointerLock').mockImplementation(() => Promise.resolve());
     const commit = vi.spyOn(engine!.layers, 'commitPrepared');
@@ -293,5 +300,37 @@ describe('Transform widget', () => {
       document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, clientX: 120, clientY: 100 }))
     );
     expect(commit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Layer editor panes host', () => {
+  it('keeps the collapsed strip reachable and expands from tab selection', async () => {
+    paneHarnessLayout = { ...LAYER_EDITOR_PANE_DEFAULTS };
+    await mount(LayerEditorPanesHarness);
+    await act(async () => {
+      await userEvent.click(page.getByRole('button', { exact: true, name: 'Collapse editor panes' }));
+    });
+    await settle();
+    const propertiesTab = page.getByRole('tab', { exact: true, name: 'Properties' });
+    await expect.element(propertiesTab).toHaveAttribute('aria-selected', 'true');
+    expect((propertiesTab.element() as HTMLElement).tabIndex).toBe(0);
+    expect(host!.querySelector('[role="tabpanel"]')).toBeNull();
+    await act(async () => {
+      await userEvent.click(propertiesTab);
+    });
+    await settle();
+    expect(host!.querySelector('[role="tabpanel"]')).not.toBeNull();
+  });
+
+  it('collapses from the separator keyboard floor and hands focus to the expand button', async () => {
+    paneHarnessLayout = { ...LAYER_EDITOR_PANE_DEFAULTS, sizePx: 140 };
+    await mount(LayerEditorPanesHarness);
+    const separator = host!.querySelector<HTMLElement>('[role="separator"]')!;
+    await act(() => separator.focus());
+    await act(() => separator.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown' })));
+    await settle();
+    const expand = page.getByRole('button', { exact: true, name: 'Expand editor panes' });
+    await expect.element(expand).toBeVisible();
+    expect(document.activeElement).toBe(expand.element());
   });
 });

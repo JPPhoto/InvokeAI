@@ -25,7 +25,7 @@ export const QueueWidgetView = ({
   region,
 }: {
   presentation?: 'compact' | 'expanded' | 'tooltip';
-  region: 'bottom' | 'center' | 'dialog' | 'floating' | 'left' | 'popover' | 'right' | 'rightTop' | 'rightBottom';
+  region: 'bottom' | 'center' | 'dialog' | 'floating' | 'left' | 'popover' | 'right';
 }) => {
   const { t } = useTranslation();
   const counts = useQueueCounts();

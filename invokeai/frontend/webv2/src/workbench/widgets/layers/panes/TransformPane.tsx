@@ -1,18 +1,19 @@
 import type { LayerTransform } from '@workbench/canvas-engine/api';
-import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { Flex, Stack, Text } from '@chakra-ui/react';
 import { Button } from '@platform/ui/Button';
+import { Scrollable } from '@platform/ui/Scrollable';
 import { getDocumentNode, lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import { useCanvasHasFloatingSelection, useTransformSession } from '@workbench/widgets/canvas/engineStoreHooks';
 import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useCanvasEngine, type CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
-import { GroupSelectedNotice } from '@workbench/widgets/properties/GroupSelectedNotice';
-import { PropertiesRow, PropertiesSection } from '@workbench/widgets/properties/PropertiesSection';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+
+import { GroupSelectedNotice } from './GroupSelectedNotice';
+import { PropertiesRow, PropertiesSection } from './PropertiesSection';
 
 const RAD_TO_DEG = 180 / Math.PI;
 const DEG_TO_RAD = Math.PI / 180;
@@ -42,7 +43,7 @@ interface SelectedNode {
  * it; a floating selection offers Apply / Cancel alone, since its transform is
  * layer-local rather than document space.
  */
-export const TransformWidgetView = (_props: WidgetViewProps) => {
+export const TransformPane = () => {
   const { t } = useTranslation();
   const engine = useCanvasEngine();
 
@@ -53,7 +54,11 @@ export const TransformWidgetView = (_props: WidgetViewProps) => {
       </Flex>
     );
   }
-  return <ConnectedTransform engine={engine} />;
+  return (
+    <Scrollable h="full">
+      <ConnectedTransform engine={engine} />
+    </Scrollable>
+  );
 };
 
 const ConnectedTransform = ({ engine }: { engine: CanvasEngineHandle }) => {

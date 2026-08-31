@@ -23,6 +23,11 @@ export const LeftPanel = ({ instanceId }: { instanceId: WidgetInstanceId }) => (
   <WidgetPanelSlot instanceId={instanceId} region="left" />
 );
 
+/** Right panel — hosts the active registered widget panel view. */
+export const RightPanel = ({ instanceId }: { instanceId: WidgetInstanceId }) => (
+  <WidgetPanelSlot instanceId={instanceId} region="right" />
+);
+
 /**
  * Keeps the panel widgets this session has already shown mounted behind the
  * active one, so switching a layout preset hides them rather than destroying

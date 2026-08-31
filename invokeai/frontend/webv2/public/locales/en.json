@@ -1516,17 +1516,6 @@
       "session": "Transform in progress",
       "title": "Transform"
     },
-    "dock": {
-      "collapse": "Collapse {{dock}}",
-      "expand": "Expand {{dock}}",
-      "resize": "Resize {{dock}}",
-      "tabs": "{{dock}} widgets",
-      "names": {
-        "rightTop": "top dock",
-        "right": "middle dock",
-        "rightBottom": "bottom dock"
-      }
-    },
     "labels": {
       "autosaveStatus": "Autosave",
       "canvas": "Canvas",
@@ -2987,7 +2976,13 @@
           "large": "Large"
         }
       },
-      "dropRefused": "Can't drop here: {{reason}}"
+      "dropRefused": "Can't drop here: {{reason}}",
+      "panes": {
+        "collapse": "Collapse editor panes",
+        "expand": "Expand editor panes",
+        "resize": "Resize editor panes",
+        "tabs": "Layer editor panes"
+      }
     },
     "gallery": {
       "alwaysShowDimensions": "Always show dimensions",

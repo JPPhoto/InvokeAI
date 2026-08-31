@@ -9,9 +9,7 @@ type GalleryRegion = GalleryWidgetProps['region'];
  * components read it: every slot renders one way, so a size-dependent
  * difference must be expressible as "which shell puts this where".
  */
-/** A side rail: the left panel or any dock of the right rail. */
-const isRailRegion = (region: string): boolean =>
-  region === 'left' || region === 'right' || region === 'rightTop' || region === 'rightBottom';
+const isRailRegion = (region: string): boolean => region === 'left' || region === 'right';
 
 export type GalleryLayoutMode = 'stacked' | 'wide';
 

@@ -5,7 +5,7 @@ import { chipRecipe } from '@theme/recipes';
 import { resolveWidgetInstanceLabel } from '@workbench/widgetLabels';
 import { useTranslation } from 'react-i18next';
 
-import { WidgetDockFrame, WidgetPanelFrame, WidgetTooltipFrame } from './WidgetFrames';
+import { WidgetPanelFrame, WidgetTooltipFrame } from './WidgetFrames';
 import { WidgetIdentityIcon } from './WidgetIdentityIcon';
 
 interface WidgetLoadingFallbackProps {
@@ -133,16 +133,7 @@ export const WidgetLoadingFallback = ({ instance, presentation, region, widget }
     return <TooltipWidgetLoadingFallback label={label} loadingLabel={loadingLabel} widget={widget} />;
   }
 
-  // A dock's tab strip already names the widget; the loading body is all a dock paints.
-  if (region === 'rightTop' || region === 'right' || region === 'rightBottom') {
-    return (
-      <WidgetDockFrame instanceId={instance.id} region={region} typeId={instance.typeId}>
-        <WidgetLoadingSurface bg="bg.subtle" label={loadingLabel} />
-      </WidgetDockFrame>
-    );
-  }
-
-  if (region === 'left' || region === 'bottom') {
+  if (region === 'left' || region === 'right' || region === 'bottom') {
     return (
       <WidgetPanelFrame instanceId={instance.id} region={region} typeId={instance.typeId}>
         {widget.manifest.chrome?.header === 'hidden' ? null : <WidgetLoadingHeader label={label} widget={widget} />}

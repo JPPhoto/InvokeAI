@@ -1,16 +1,7 @@
 import type { ProjectGraphAction } from '@features/workflow/core/document';
 import type { ProjectGraphState, XYPosition } from '@features/workflow/core/types';
 
-export type WorkflowRegion =
-  | 'left'
-  | 'right'
-  | 'rightTop'
-  | 'rightBottom'
-  | 'bottom'
-  | 'center'
-  | 'dialog'
-  | 'popover'
-  | 'floating';
+export type WorkflowRegion = 'left' | 'right' | 'bottom' | 'center' | 'dialog' | 'popover' | 'floating';
 
 /**
  * Panel regions workflow surfaces may open/select widgets in. Structural
@@ -18,7 +9,7 @@ export type WorkflowRegion =
  * the feature may not import workbench, so drift is caught as a tsc error at
  * the check site: the `widgets` wiring in `app/WorkflowUiAdapter.tsx`.
  */
-export type WorkflowWidgetPanelRegion = 'left' | 'right' | 'rightTop' | 'rightBottom' | 'bottom' | 'center';
+export type WorkflowWidgetPanelRegion = 'left' | 'right' | 'bottom' | 'center';
 
 /**
  * Invocation sources the graph preview can route. Structural mirror of

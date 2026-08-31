@@ -10,7 +10,6 @@ import type {
 import type { AccountState, Project } from '@workbench/projectContracts';
 import type { WidgetInstanceId } from '@workbench/widgetContracts';
 
-import { isRightRailDock, WIDGET_REGIONS } from '@workbench/layoutContracts';
 import {
   builtInLayoutPresetDescriptors,
   getLayoutPreset,
@@ -31,22 +30,7 @@ export const getLayoutPresetCommandTitleOverrides = (
     })
   );
 
-const widgetRegions: readonly WidgetRegion[] = WIDGET_REGIONS;
-
-/** What a dock holds until a widget lands in it; also what a snapshot saved before docks existed meant. */
-export const EMPTY_DOCK_REGION: WidgetRegionState = {
-  activeInstanceId: '',
-  instanceIds: [],
-  isCollapsed: true,
-  sizePx: 280,
-};
-
-/** Reads a region from a snapshot that may predate the right-rail docks. */
-export const getSnapshotRegion = (
-  widgetRegionState: Partial<Record<WidgetRegion, WidgetRegionState>>,
-  region: WidgetRegion
-): WidgetRegionState =>
-  widgetRegionState[region] ?? (isRightRailDock(region) ? EMPTY_DOCK_REGION : widgetRegionState[region]!);
+const widgetRegions: WidgetRegion[] = ['left', 'right', 'bottom', 'center'];
 
 /**
  * The preset as saved *for this account*: a custom preset, or a built-in with
@@ -81,14 +65,13 @@ export const cloneFloatingWidgets = (
   Object.fromEntries(Object.entries(floatingWidgets).map(([instanceId, state]) => [instanceId, { ...state }]));
 
 export const cloneLayoutPresetWidgetRegions = (
-  widgetRegionState: Partial<Record<WidgetRegion, WidgetRegionState>>
-): Record<WidgetRegion, WidgetRegionState> =>
-  Object.fromEntries(
-    WIDGET_REGIONS.map((region) => {
-      const state = getSnapshotRegion(widgetRegionState, region);
-      return [region, { ...state, instanceIds: [...state.instanceIds] }];
-    })
-  ) as Record<WidgetRegion, WidgetRegionState>;
+  widgetRegionState: Record<WidgetRegion, WidgetRegionState>
+): Record<WidgetRegion, WidgetRegionState> => ({
+  bottom: { ...widgetRegionState.bottom, instanceIds: [...widgetRegionState.bottom.instanceIds] },
+  center: { ...widgetRegionState.center, instanceIds: [...widgetRegionState.center.instanceIds] },
+  left: { ...widgetRegionState.left, instanceIds: [...widgetRegionState.left.instanceIds] },
+  right: { ...widgetRegionState.right, instanceIds: [...widgetRegionState.right.instanceIds] },
+});
 
 export const createLayoutPresetSnapshot = (project: Project): LayoutPresetSnapshot => {
   const referencedInstanceIds = new Set<WidgetInstanceId>();
@@ -184,9 +167,7 @@ export const areLayoutPresetSnapshotsEqual = (left: LayoutPresetSnapshot, right:
   left.layout.panels.isBottomOpen === right.layout.panels.isBottomOpen &&
   left.layout.panels.isLeftOpen === right.layout.panels.isLeftOpen &&
   left.layout.panels.isRightOpen === right.layout.panels.isRightOpen &&
-  widgetRegions.every((region) =>
-    areWidgetRegionsEqual(getSnapshotRegion(left.widgetRegions, region), getSnapshotRegion(right.widgetRegions, region))
-  ) &&
+  widgetRegions.every((region) => areWidgetRegionsEqual(left.widgetRegions[region], right.widgetRegions[region])) &&
   areFloatingWidgetsEqual(left.floatingWidgets, right.floatingWidgets) &&
   areWidgetInstanceSnapshotsEqual(left.widgetInstances, right.widgetInstances);
 

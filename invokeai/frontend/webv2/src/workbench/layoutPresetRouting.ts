@@ -3,9 +3,8 @@ import type { LayoutPreset, LayoutPresetRoute, WidgetRegion } from './layoutCont
 
 import { getNaturalDestination, getSourceIdForWidgetTypeId, graphWidgetSources } from './graphWidgets';
 import { isInvocationSourceAvailable } from './invocation';
-import { getSnapshotRegion } from './layoutPresetSnapshots';
 
-const activeSourceRegionPriority: WidgetRegion[] = ['center', 'left', 'right', 'rightTop', 'rightBottom', 'bottom'];
+const activeSourceRegionPriority: WidgetRegion[] = ['center', 'left', 'right', 'bottom'];
 
 const getPresetSourceIds = (preset: LayoutPreset): Set<InvocationSourceId> => {
   const sourceIds = new Set<InvocationSourceId>();
@@ -33,7 +32,7 @@ export const getLayoutPresetSourceOptions = (preset: LayoutPreset) => {
 
 const getActivePresetSource = (preset: LayoutPreset): InvocationSourceId | null => {
   for (const regionId of activeSourceRegionPriority) {
-    const region = getSnapshotRegion(preset.snapshot.widgetRegions, regionId);
+    const region = preset.snapshot.widgetRegions[regionId];
     const typeId = preset.snapshot.widgetInstances[region.activeInstanceId]?.typeId;
     const sourceId = typeId ? getSourceIdForWidgetTypeId(typeId) : null;
 

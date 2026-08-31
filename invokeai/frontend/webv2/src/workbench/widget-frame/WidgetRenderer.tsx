@@ -20,13 +20,7 @@ import { memo, Suspense, use, useMemo } from 'react';
 
 import { useWidgetRuntime } from './createWidgetRuntime';
 import { WidgetFailureBoundary } from './WidgetFailureBoundary';
-import {
-  WidgetDockFrame,
-  WidgetHeader,
-  WidgetHeaderActionsGroup,
-  WidgetPanelFrame,
-  WidgetTooltipFrame,
-} from './WidgetFrames';
+import { WidgetHeader, WidgetHeaderActionsGroup, WidgetPanelFrame, WidgetTooltipFrame } from './WidgetFrames';
 import { WidgetLoadingFallback } from './WidgetLoadingFallback';
 import { areProjectWidgetRenderInstancesEqual } from './widgetRenderInstance';
 
@@ -268,25 +262,7 @@ const WidgetShellFrame = ({
     return safeContent;
   }
 
-  // A right-rail dock hoists the header into its tab strip (`RightRail`), the
-  // way the center region floats its chrome; the body and footer run here.
-  if (region === 'rightTop' || region === 'right' || region === 'rightBottom') {
-    return (
-      <WidgetDockFrame instanceId={instance.id} region={region} typeId={instance.typeId}>
-        <PanelBodySlot>{safeContent}</PanelBodySlot>
-        <FooterSlot
-          implementation={implementation}
-          instance={instance}
-          presentation={presentation}
-          region={region}
-          runtime={runtime}
-          widget={widget}
-        />
-      </WidgetDockFrame>
-    );
-  }
-
-  if (region === 'left' || region === 'bottom') {
+  if (region === 'left' || region === 'right' || region === 'bottom') {
     return (
       <WidgetPanelFrame instanceId={instance.id} region={region} typeId={instance.typeId}>
         <HeaderSlot
@@ -470,24 +446,15 @@ const FooterSlot = memo(function FooterSlot({
   );
 }, areSlotPropsEqual);
 
-const MissingWidgetNotice = ({ label }: { label: string }) => (
-  <Box p="3">
-    <Text fontSize="xs" fontWeight="700">
-      {label}
-    </Text>
-    <Text color="fg.subtle" fontSize="2xs">
-      Widget view unavailable.
-    </Text>
-  </Box>
+export const MissingWidgetFrame = ({ label, region }: { label: string; region: Exclude<WidgetRegion, 'center'> }) => (
+  <WidgetPanelFrame region={region}>
+    <Box p="3">
+      <Text fontSize="xs" fontWeight="700">
+        {label}
+      </Text>
+      <Text color="fg.subtle" fontSize="2xs">
+        Widget view unavailable.
+      </Text>
+    </Box>
+  </WidgetPanelFrame>
 );
-
-export const MissingWidgetFrame = ({ label, region }: { label: string; region: Exclude<WidgetRegion, 'center'> }) =>
-  region === 'rightTop' || region === 'right' || region === 'rightBottom' ? (
-    <WidgetDockFrame region={region}>
-      <MissingWidgetNotice label={label} />
-    </WidgetDockFrame>
-  ) : (
-    <WidgetPanelFrame region={region}>
-      <MissingWidgetNotice label={label} />
-    </WidgetPanelFrame>
-  );

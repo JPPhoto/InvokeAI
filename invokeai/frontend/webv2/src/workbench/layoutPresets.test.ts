@@ -62,16 +62,12 @@ describe('built-in layout preset descriptors', () => {
             center: snapshot.widgetRegions.center.activeInstanceId,
             left: snapshot.widgetRegions.left.activeInstanceId,
             right: snapshot.widgetRegions.right.activeInstanceId,
-            rightBottom: snapshot.widgetRegions.rightBottom.activeInstanceId,
-            rightTop: snapshot.widgetRegions.rightTop.activeInstanceId,
           },
           bottom: snapshot.widgetRegions.bottom.instanceIds,
           center: snapshot.widgetRegions.center.instanceIds,
           left: snapshot.widgetRegions.left.instanceIds,
           panels: snapshot.layout.panels,
           right: snapshot.widgetRegions.right.instanceIds,
-          rightBottom: snapshot.widgetRegions.rightBottom.instanceIds,
-          rightTop: snapshot.widgetRegions.rightTop.instanceIds,
         },
       ])
     );
@@ -83,16 +79,12 @@ describe('built-in layout preset descriptors', () => {
           center: 'workflow:center',
           left: 'workflow',
           right: 'queue',
-          rightBottom: '',
-          rightTop: '',
         },
         bottom: ['server-status', 'queue-status', 'gallery:bottom', 'notifications', 'autosave-status'],
         center: ['workflow:center', 'preview'],
         left: ['workflow'],
         panels: { isBottomOpen: false, isLeftOpen: true, isRightOpen: true },
         right: ['queue', 'preview', 'gallery', 'image-map'],
-        rightBottom: [],
-        rightTop: [],
       },
       compose: {
         active: {
@@ -100,8 +92,6 @@ describe('built-in layout preset descriptors', () => {
           center: 'preview',
           left: 'generate',
           right: 'gallery',
-          rightBottom: '',
-          rightTop: '',
         },
         bottom: ['server-status', 'queue-status', 'gallery:bottom', 'notifications', 'autosave-status'],
         // Compose keeps Gallery as a center view: the retired `gallery` preset
@@ -112,8 +102,6 @@ describe('built-in layout preset descriptors', () => {
         left: ['generate', 'upscale', 'video'],
         panels: { isBottomOpen: false, isLeftOpen: true, isRightOpen: true },
         right: ['gallery', 'image-map', 'queue'],
-        rightBottom: [],
-        rightTop: [],
       },
       edit: {
         active: {
@@ -121,17 +109,13 @@ describe('built-in layout preset descriptors', () => {
           center: 'canvas',
           left: 'generate',
           right: 'layers',
-          rightBottom: 'properties',
-          rightTop: '',
         },
         bottom: ['server-status', 'queue-status', 'gallery:bottom', 'notifications', 'autosave-status'],
         center: ['canvas', 'preview'],
         left: ['generate', 'upscale', 'video'],
         panels: { isBottomOpen: false, isLeftOpen: true, isRightOpen: true },
-        right: ['layers', 'preview', 'gallery', 'image-map', 'queue'],
-        // The rail is three tab groups: Layers in the middle, the editors below it.
-        rightBottom: ['properties', 'transform'],
-        rightTop: [],
+        // The Edit rail is the Layers panel alone; its editors are panes inside it.
+        right: ['layers'],
       },
     });
   });

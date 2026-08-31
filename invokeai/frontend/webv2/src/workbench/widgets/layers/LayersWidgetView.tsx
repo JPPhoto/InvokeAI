@@ -1,4 +1,5 @@
 import type { LayerPanelDensity } from '@workbench/layerPanelState';
+import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { Flex, Icon, Stack, Text } from '@chakra-ui/react';
 import { getDocumentIndex } from '@workbench/canvas-engine/api';
@@ -11,20 +12,25 @@ import { LayersIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import type { LayerEditorPaneLayout } from './panes/editorPaneLayout';
+
 import { LayerMultiSelectionActions } from './LayerMultiSelectionActions';
 import { LAYER_PANEL_DEGRADE_THRESHOLD } from './layerPanelRows';
 import { LayersPanelFooter } from './LayersPanelFooter';
 import { LayersPanelHeader } from './LayersPanelHeader';
 import { LayersTree } from './LayersTree';
 import { buildLayerStackRows } from './layerTreeRows';
+import { areLayerEditorPaneLayoutsEqual, readLayerEditorPaneLayout } from './panes/editorPaneLayout';
+import { LayerEditorPanes } from './panes/LayerEditorPanes';
 
 /**
  * The layers panel: a fixed header (selected layer's opacity + blend mode, global denoising
  * strength), a fixed selection toolbar, the virtualized tree of the four stacks, and a fixed
- * footer (summary, filter, density). Regions keep their geometry; their controls disable instead
- * of appearing and disappearing.
+ * footer (summary, filter, density), and the editor panes (Properties, Transform) docked at the
+ * bottom. Regions keep their geometry; their controls disable instead of appearing and
+ * disappearing.
  */
-export const LayersWidgetView = () => {
+export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
   const { t } = useTranslation();
   const engine = useCanvasEngine();
   const projectId = useActiveProjectId();
@@ -59,6 +65,14 @@ export const LayersWidgetView = () => {
     (filter: string) => setLayerPanelFilter(projectId, selectedLayerId, filter),
     [projectId, selectedLayerId]
   );
+  const paneLayout = useActiveProjectSelector(
+    (project) => readLayerEditorPaneLayout(project.widgetInstances[runtime.instanceId]?.state.values ?? {}),
+    areLayerEditorPaneLayoutsEqual
+  );
+  const handlePaneLayout = useCallback(
+    (next: LayerEditorPaneLayout) => runtime.state.patch({ editorPanes: next }),
+    [runtime.state]
+  );
 
   return (
     <Stack gap="1" h="full" minH="0">
@@ -92,16 +106,18 @@ export const LayersWidgetView = () => {
           </Text>
         </Flex>
       ) : (
-        <LayersTree
-          degraded={degraded}
-          dispatch={dispatch}
-          document={document}
-          editingLocked={editingLocked}
-          engine={engine}
-          panel={panel}
-          projectId={projectId}
-          stacks={stacks}
-        />
+        <Flex direction="column" flex="1" minH="8rem">
+          <LayersTree
+            degraded={degraded}
+            dispatch={dispatch}
+            document={document}
+            editingLocked={editingLocked}
+            engine={engine}
+            panel={panel}
+            projectId={projectId}
+            stacks={stacks}
+          />
+        </Flex>
       )}
       <LayersPanelFooter
         degraded={degraded}
@@ -113,6 +129,7 @@ export const LayersWidgetView = () => {
         onDensityChange={handleDensity}
         onFilterChange={handleFilter}
       />
+      <LayerEditorPanes layout={paneLayout} onLayoutChange={handlePaneLayout} />
     </Stack>
   );
 };

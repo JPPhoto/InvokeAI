@@ -1,5 +1,3 @@
-import type { WidgetViewProps } from '@workbench/widgetContracts';
-
 import { Flex, Stack, Text } from '@chakra-ui/react';
 import { Scrollable } from '@platform/ui/Scrollable';
 import { isCanvasInteractionLocked } from '@workbench/widgets/canvas/canvasInteractionLock';
@@ -31,7 +29,7 @@ const REGION_LABEL_KEYS = {
  * document transactions through the same adapters the canvas registers; it
  * mirrors no state of its own.
  */
-export const PropertiesWidgetView = (_props: WidgetViewProps) => {
+export const PropertiesPane = () => {
   const { t } = useTranslation();
   const engine = useCanvasEngine();
   const isSurfaceInteractionLocked = useActiveProjectSelector((project) =>

@@ -19,14 +19,7 @@ export interface WidgetPlacementProject {
   widgetRegions: Record<WidgetRegion, Pick<WidgetRegionState, 'activeInstanceId' | 'instanceIds'>>;
 }
 
-const DEFAULT_OPEN_REGIONS: ReadonlyArray<WidgetRegion> = [
-  'center',
-  'right',
-  'rightTop',
-  'rightBottom',
-  'left',
-  'bottom',
-];
+const DEFAULT_OPEN_REGIONS: ReadonlyArray<WidgetRegion> = ['center', 'right', 'left', 'bottom'];
 
 export type WidgetPlacementCommandResult = WidgetWorkbenchApiResult;
 

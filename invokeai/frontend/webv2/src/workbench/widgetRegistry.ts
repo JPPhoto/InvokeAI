@@ -8,7 +8,6 @@ import type {
 } from '@workbench/widgetContracts';
 
 import { getAuthSession } from '@features/identity';
-import { RIGHT_RAIL_DOCKS } from '@workbench/layoutContracts';
 
 import { createDeferredResource } from './deferredResource';
 import { createWidgetImplementationResource } from './widgetImplementationResource';
@@ -22,11 +21,9 @@ import { layersWidgetManifest } from './widgets/layers/manifest';
 import { notificationsWidgetManifest } from './widgets/notifications/manifest';
 import { previewWidgetManifest } from './widgets/preview/manifest';
 import { projectWidgetManifest } from './widgets/project/manifest';
-import { propertiesWidgetManifest } from './widgets/properties/manifest';
 import { queueStatusWidgetManifest } from './widgets/queue-status/manifest';
 import { queueWidgetManifest } from './widgets/queue/manifest';
 import { serverStatusWidgetManifest } from './widgets/server-status/manifest';
-import { transformWidgetManifest } from './widgets/transform/manifest';
 import { upscaleWidgetManifest } from './widgets/upscale/manifest';
 import { versionStatusWidgetManifest } from './widgets/version-status/manifest';
 import { videoWidgetManifest } from './widgets/video/manifest';
@@ -44,8 +41,6 @@ export const firstPartyWidgetManifests: WidgetManifest[] = [
   previewWidgetManifest,
   projectWidgetManifest,
   layersWidgetManifest,
-  propertiesWidgetManifest,
-  transformWidgetManifest,
   queueWidgetManifest,
   notificationsWidgetManifest,
   serverStatusWidgetManifest,
@@ -61,7 +56,7 @@ const createFailure = (widgetId: WidgetTypeId, error: unknown): WidgetFailure =>
   widgetId,
 });
 
-const renderableRegions = new Set<WidgetRegion>(['bottom', 'center', 'left', 'right', 'rightTop', 'rightBottom']);
+const renderableRegions = new Set<WidgetRegion>(['bottom', 'center', 'left', 'right']);
 
 const isWidgetIconComponent = (value: WidgetManifest['icon']): boolean =>
   typeof value === 'function' || (typeof value === 'object' && value !== null && '$$typeof' in value);
@@ -94,15 +89,8 @@ const validateManifest = (manifest: NormalizedWidgetManifest): void => {
   }
 };
 
-/** `right` in a manifest means the whole rail: every dock of it accepts the widget. */
-const expandRightRail = (allowedRegions: WidgetRegion[]): WidgetRegion[] =>
-  allowedRegions.includes('right')
-    ? [...new Set<WidgetRegion>([...allowedRegions, ...RIGHT_RAIL_DOCKS])]
-    : allowedRegions;
-
 export const normalizeWidgetManifest = (manifest: WidgetManifest): NormalizedWidgetManifest => ({
   ...manifest,
-  allowedRegions: expandRightRail(manifest.allowedRegions),
   apiVersion: manifest.apiVersion ?? 1,
   state: manifest.state ?? { createInitial: () => ({}), persistence: 'project', version: 1 },
 });

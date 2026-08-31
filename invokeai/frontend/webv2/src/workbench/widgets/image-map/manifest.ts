@@ -9,7 +9,6 @@ export const imageMapWidgetManifest: WidgetManifest = {
   failurePolicy: { isolateRenderFailure: true, onRegistrationFailure: 'disable' },
   icon: MapIcon,
   id: 'image-map',
-  rightDock: 'rightBottom',
   label: (t) => t('widgets.labels.imageMap'),
   load: () => import('./implementation').then((module) => module.widgetImplementation),
   loadHost: () => import('./ImageMapDataRuntime').then((module) => module.ImageMapDataRuntime),

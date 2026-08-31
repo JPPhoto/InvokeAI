@@ -3,7 +3,7 @@ import type { ReactNode, Ref } from 'react';
 import { Flex, Stack, Text } from '@chakra-ui/react';
 import { FieldLabel } from '@platform/ui/Field';
 
-/** A headed group of rows in the Properties widget: Operation, Tool, Layer. */
+/** A headed group of rows in an editor pane: Operation, Tool, Layer. */
 export const PropertiesSection = ({
   children,
   disabled = false,
@@ -44,7 +44,7 @@ export const PropertiesSection = ({
   );
 };
 
-/** One labelled row: a fixed label column and the controls packed after it, wrapping when the dock is narrow. */
+/** One labelled row: a fixed label column and the controls packed after it, wrapping when the pane is narrow. */
 export const PropertiesRow = ({ children, label }: { children: ReactNode; label: string }) => (
   <Flex align="flex-start" gap="2" minW="0">
     <Flex align="center" flexShrink={0} minH="8" w="20">

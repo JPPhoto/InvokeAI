@@ -2,10 +2,10 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 839840,
+        "brotliBytes": 839827,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 838513,
+        "gzipBytes": 838510,
         "imageRawBytes": 156376,
         "initialRawBytes": 1954215,
         "largestAssetRawBytes": 746355,
@@ -290,10 +290,10 @@
         ]
       },
       "limits": {
-        "brotliBytes": 848239,
+        "brotliBytes": 848226,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 846899,
+        "gzipBytes": 846896,
         "imageRawBytes": 157940,
         "initialRawBytes": 1973758,
         "largestAssetRawBytes": 753819,
@@ -308,15 +308,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1102507,
+        "brotliBytes": 1098011,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1098109,
+        "gzipBytes": 1093193,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2752961,
+        "initialRawBytes": 2738573,
         "largestAssetRawBytes": 746355,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 124705,
+        "ownedRawBytes": 114600,
         "requestCount": 97,
         "scriptRequestCount": 81,
         "sourceOwners": [
@@ -843,7 +843,6 @@
           "source:src/workbench/shell/CenterArea.tsx",
           "source:src/workbench/shell/DocumentTitleProgress.tsx",
           "source:src/workbench/shell/Panels.tsx",
-          "source:src/workbench/shell/RightRail.tsx",
           "source:src/workbench/shell/StatusBar.tsx",
           "source:src/workbench/shell/WorkbenchShell.tsx",
           "source:src/workbench/shell/documentTitle.ts",
@@ -916,14 +915,13 @@
           "source:src/workbench/widgets/generate/manifest.ts",
           "source:src/workbench/widgets/image-map/manifest.ts",
           "source:src/workbench/widgets/layers/manifest.ts",
+          "source:src/workbench/widgets/layers/panes/editorPaneLayout.ts",
           "source:src/workbench/widgets/notifications/manifest.ts",
           "source:src/workbench/widgets/preview/manifest.ts",
           "source:src/workbench/widgets/project/manifest.ts",
-          "source:src/workbench/widgets/properties/manifest.ts",
           "source:src/workbench/widgets/queue-status/manifest.ts",
           "source:src/workbench/widgets/queue/manifest.ts",
           "source:src/workbench/widgets/server-status/manifest.ts",
-          "source:src/workbench/widgets/transform/manifest.ts",
           "source:src/workbench/widgets/upscale/manifest.ts",
           "source:src/workbench/widgets/version-status/manifest.ts",
           "source:src/workbench/widgets/video/manifest.ts",
@@ -933,15 +931,15 @@
         ]
       },
       "limits": {
-        "brotliBytes": 1113533,
+        "brotliBytes": 1108992,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 1109091,
+        "gzipBytes": 1104125,
         "imageRawBytes": 157940,
-        "initialRawBytes": 2780491,
+        "initialRawBytes": 2765959,
         "largestAssetRawBytes": 753819,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 124705,
+        "ownedRawBytes": 114600,
         "requestCount": 97,
         "scriptRequestCount": 81
       },
@@ -950,7 +948,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-08-29",
+  "capturedAt": "2026-08-31",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",

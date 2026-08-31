@@ -37,11 +37,9 @@ const defaultInstanceTypes: Record<WidgetInstanceId, WidgetTypeId> = {
   notifications: 'notifications',
   preview: 'preview',
   project: 'project',
-  properties: 'properties',
   queue: 'queue',
   'queue-status': 'queue-status',
   'server-status': 'server-status',
-  transform: 'transform',
   'version-status': 'version-status',
   workflow: 'workflow',
   'workflow:bottom': 'workflow',
@@ -59,10 +57,6 @@ const createRegion = ({
   isCollapsed?: boolean;
   sizePx: number;
 }): WidgetRegionState => ({ activeInstanceId, instanceIds, isCollapsed, sizePx });
-
-/** A right-rail dock with nothing in it stays collapsed to nothing until a widget lands there. */
-const createEmptyDock = (): WidgetRegionState =>
-  createRegion({ activeInstanceId: '', instanceIds: [], isCollapsed: true, sizePx: 280 });
 
 const createWidgetInstances = (
   widgetRegions: Record<WidgetRegion, WidgetRegionState>
@@ -188,8 +182,6 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
         instanceIds: ['gallery', 'image-map', 'queue'],
         sizePx: 450,
       }),
-      rightBottom: createEmptyDock(),
-      rightTop: createEmptyDock(),
     },
   }),
   createPresetDescriptor({
@@ -220,15 +212,9 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
       }),
       right: createRegion({
         activeInstanceId: 'layers',
-        instanceIds: ['layers', 'preview', 'gallery', 'image-map', 'queue'],
+        instanceIds: ['layers'],
         sizePx: 450,
       }),
-      rightBottom: createRegion({
-        activeInstanceId: 'properties',
-        instanceIds: ['properties', 'transform'],
-        sizePx: 300,
-      }),
-      rightTop: createEmptyDock(),
     },
   }),
   createPresetDescriptor({
@@ -262,8 +248,6 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
         instanceIds: ['queue', 'preview', 'gallery', 'image-map'],
         sizePx: 450,
       }),
-      rightBottom: createEmptyDock(),
-      rightTop: createEmptyDock(),
     },
   }),
 ];

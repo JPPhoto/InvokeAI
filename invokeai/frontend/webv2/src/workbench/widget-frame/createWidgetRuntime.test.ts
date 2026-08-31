@@ -100,8 +100,6 @@ const createPlacementProject = (
     center: { activeInstanceId: 'alpha', instanceIds: [], isCollapsed: false, sizePx: 240 },
     left: { activeInstanceId: 'alpha', instanceIds: [], isCollapsed: false, sizePx: 240 },
     right: { activeInstanceId: 'alpha', instanceIds: ['alpha'], isCollapsed: false, sizePx: 240 },
-    rightBottom: { activeInstanceId: '', instanceIds: [], isCollapsed: true, sizePx: 240 },
-    rightTop: { activeInstanceId: '', instanceIds: [], isCollapsed: true, sizePx: 240 },
     ...overrides.widgetRegions,
   },
 });
@@ -253,8 +251,6 @@ describe('createWidgetRuntime', () => {
           center: { activeInstanceId: 'alpha', instanceIds: [], isCollapsed: false, sizePx: 240 },
           left: { activeInstanceId: 'alpha', instanceIds: [], isCollapsed: false, sizePx: 240 },
           right: { activeInstanceId: 'alpha', instanceIds: [], isCollapsed: false, sizePx: 240 },
-          rightBottom: { activeInstanceId: '', instanceIds: [], isCollapsed: true, sizePx: 240 },
-          rightTop: { activeInstanceId: '', instanceIds: [], isCollapsed: true, sizePx: 240 },
         },
       }),
       region: 'bottom',
