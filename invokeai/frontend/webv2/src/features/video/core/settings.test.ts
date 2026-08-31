@@ -6,6 +6,7 @@ import { MINIMAX_H3_NUM_FRAMES_CHOICES } from './dimensions';
 import {
   applyReferenceExtendSourceVideo,
   applyReferenceExtendNumFrames,
+  pinReferenceExtendAnchor,
   clearDeletedVideoMedia,
   cloneVideoWidgetValues,
   createVideoSourceClip,
@@ -336,6 +337,7 @@ describe('references', () => {
   });
 
   it('normalization drops malformed entries and enforces the caps, preserving order', () => {
+    // Videos over the cap overflow from the FRONT — see the over-cap test below.
     const tooMany = [
       ...Array.from({ length: 4 }, (_, index) => ({
         ...VIDEO_REFERENCE,
@@ -347,10 +349,30 @@ describe('references', () => {
     const normalized = normalizeVideoSettings(createSettings({ references: tooMany as never }));
 
     expect(normalized?.references.map((entry) => (entry.kind === 'video' ? entry.clip.video_name : 'img'))).toEqual([
-      'v0.mp4',
       'v1.mp4',
       'v2.mp4',
+      'v3.mp4',
       'img',
+    ]);
+  });
+
+  it('an over-cap video list overflows from the front, keeping the continuity anchor', () => {
+    // The anchor is last, so dropping from the tail would discard exactly the
+    // entry the extension depends on. Reachable only from a stale record.
+    const tooMany = [
+      IMAGE_REFERENCE,
+      ...Array.from({ length: 5 }, (_unused, index) => ({
+        ...VIDEO_REFERENCE,
+        clip: { ...VIDEO_REFERENCE.clip, video_name: `v${index}.mp4` },
+      })),
+    ];
+    const normalized = normalizeVideoSettings(createSettings({ references: tooMany as never }));
+
+    expect(normalized?.references.map((entry) => (entry.kind === 'video' ? entry.clip.video_name : 'img'))).toEqual([
+      'img',
+      'v2.mp4',
+      'v3.mp4',
+      'v4.mp4',
     ]);
   });
 
@@ -549,6 +571,35 @@ describe('reference-extend linkage', () => {
     expect([90, 124, 345].reduce(applyReferenceExtendNumFrames, linked)[0]).toMatchObject({
       clip: { startFrame: 260 },
     });
+  });
+
+  it('pins the continuity anchor last, whatever the add or drag order', () => {
+    // Request order is rotary order: the generated frames continue from the
+    // LAST reference block. An image added after the Initial Video would
+    // otherwise take a rotary slot between the initial video's tail and the
+    // first generated frame.
+    const linked = applyReferenceExtendSourceVideo([], source24, 3, FRAMES);
+    const anchor = linked[0]!;
+
+    expect(pinReferenceExtendAnchor([anchor, IMAGE_REFERENCE])).toEqual([IMAGE_REFERENCE, anchor]);
+    expect(pinReferenceExtendAnchor([IMAGE_REFERENCE, VIDEO_REFERENCE, anchor])).toEqual([
+      IMAGE_REFERENCE,
+      VIDEO_REFERENCE,
+      anchor,
+    ]);
+    // Identity-preserving when already last, and when there is no anchor.
+    const settled = [IMAGE_REFERENCE, anchor];
+
+    expect(pinReferenceExtendAnchor(settled)).toBe(settled);
+    const none = [IMAGE_REFERENCE, VIDEO_REFERENCE];
+
+    expect(pinReferenceExtendAnchor(none)).toBe(none);
+
+    // Adopting a recalled entry re-pins it rather than leaving it in place.
+    const recalled = { ...VIDEO_REFERENCE, clip: { ...VIDEO_REFERENCE.clip, video_name: 'long.mp4' } };
+    const adopted = applyReferenceExtendSourceVideo([recalled, IMAGE_REFERENCE], source24, 3, FRAMES);
+
+    expect(adopted[1]).toMatchObject({ fromSourceVideo: true, kind: 'video' });
   });
 
   it('applyReferenceExtendNumFrames leaves unlinked references alone', () => {

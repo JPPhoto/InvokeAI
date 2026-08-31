@@ -3110,6 +3110,7 @@
       "initialFrames": "Start & End Images",
       "initialVideo": "Initial Video",
       "initialVideoBlocked": "Clear the first frame to extend a video instead.",
+      "initialVideoCapBlocked": "All 3 video reference slots are in use, so there is no room for the continuity reference this clip needs. Remove a video reference first.",
       "lastFrame": "Last Frame",
       "lastFrameExtendHelp": "Optional destination: the extension ends on this image.",
       "lastFrameHelp": "Optional: the video ends on this image (interpolates from the first frame).",

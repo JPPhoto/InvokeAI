@@ -101,28 +101,36 @@ export const isVideoReferenceItem = (value: unknown): value is VideoReferenceIte
   return false;
 };
 
-/** Drops invalid entries and enforces the per-kind caps, preserving order. */
+/**
+ * Drops invalid entries and enforces the per-kind caps, preserving order.
+ *
+ * An over-cap list should never reach here — both add paths are gated on the
+ * cap and the Initial Video field disables itself when the video slots are
+ * full — so this is the guard for a stale or hand-edited project record.
+ *
+ * Videos overflow from the FRONT. Request order is rotary order and the
+ * generated frames continue from the LAST reference block, so on a
+ * reference-extend panel the final video is the continuity anchor: dropping
+ * from the tail would discard exactly the entry the extension depends on.
+ * Images carry no ordering role and keep the front.
+ */
 const sanitizeVideoReferences = (value: unknown): VideoReferenceItem[] => {
   if (!Array.isArray(value)) {
     return [];
   }
+  const valid = value.filter((entry) => isVideoReferenceItem(entry));
+  let videosToDrop = Math.max(0, valid.filter((entry) => entry.kind === 'video').length - VIDEO_REFERENCE_MAX_VIDEOS);
   const result: VideoReferenceItem[] = [];
-  let videos = 0;
   let images = 0;
-  for (const entry of value) {
-    if (!isVideoReferenceItem(entry)) {
-      continue;
-    }
+  for (const entry of valid) {
     if (entry.kind === 'image') {
       if (images >= VIDEO_REFERENCE_MAX_IMAGES) {
         continue;
       }
       images += 1;
-    } else {
-      if (videos >= VIDEO_REFERENCE_MAX_VIDEOS) {
-        continue;
-      }
-      videos += 1;
+    } else if (videosToDrop > 0) {
+      videosToDrop -= 1;
+      continue;
     }
     result.push(entry);
   }
@@ -485,6 +493,32 @@ export const applyReferenceExtendNumFrames = (
 };
 
 /**
+ * Moves the linked tail reference to the end of the list.
+ *
+ * Request order is rotary order: `build_ref2va_packed_sequence` lays the
+ * reference blocks out in order, each advancing a shared clock, and the
+ * generated rows start at the position the LAST block left behind. The
+ * continuity anchor only anchors anything if it IS that block — an image
+ * dropped afterwards wedges itself (a whole rotary slot) between the initial
+ * video's tail and the first generated frame, and the model continues from the
+ * image instead.
+ *
+ * Add order and drag order must not decide that, so the anchor's position is
+ * derived like its trim: last, always. Identity-preserving when it is already
+ * last, or when there is no anchor.
+ */
+export const pinReferenceExtendAnchor = (references: VideoReferenceItem[]): VideoReferenceItem[] => {
+  const index = references.findIndex((entry) => entry.kind === 'video' && entry.fromSourceVideo === true);
+
+  if (index < 0 || index === references.length - 1) {
+    return references;
+  }
+  const pinned = references[index]!;
+
+  return [...references.slice(0, index), ...references.slice(index + 1), pinned];
+};
+
+/**
  * Keeps the reference list in step with the Initial Video on a reference-extend
  * panel (pure; the setter and the model-selection transition both use it):
  *
@@ -536,8 +570,10 @@ export const applyReferenceExtendSourceVideo = (
       : references.findIndex((entry) => entry.kind === 'video' && entry.clip.video_name === sourceVideo.video_name);
 
   if (linkedIndex >= 0) {
-    return references.map((entry, index) =>
-      index === linkedIndex && entry.kind === 'video' ? { ...linked, conditioning: entry.conditioning } : entry
+    return pinReferenceExtendAnchor(
+      references.map((entry, index) =>
+        index === linkedIndex && entry.kind === 'video' ? { ...linked, conditioning: entry.conditioning } : entry
+      )
     );
   }
 

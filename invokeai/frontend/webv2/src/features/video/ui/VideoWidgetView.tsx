@@ -11,6 +11,7 @@ import { getVideoDurationSeconds, invertVideoAspectRatioId } from '@features/vid
 import {
   applyReferenceExtendSourceVideo,
   applyReferenceExtendNumFrames,
+  pinReferenceExtendAnchor,
   normalizeVideoWidgetValues,
   resolveVideoMode,
   VIDEO_ASPECT_RATIO_IDS,
@@ -294,14 +295,21 @@ export const VideoWidgetView = () => {
     },
     [maxVideoReferences, patch, referenceExtend, t, values.numFrames, values.references]
   );
+  // The single choke point for every list edit the reference field makes — add,
+  // remove, retrim, reorder — so pinning the continuity anchor here covers all
+  // of them. Request order is rotary order and the generation continues from
+  // the LAST reference, so the anchor's position is derived, not user-set.
   const setReferences = useCallback(
-    (references: VideoReferenceItem[]) =>
+    (references: VideoReferenceItem[]) => {
+      const next = referenceExtend ? pinReferenceExtendAnchor(references) : references;
+
       patch({
-        references,
-        ...(references.length > 0
+        references: next,
+        ...(next.length > 0
           ? { firstFrameImage: null, lastFrameImage: null, ...(referenceExtend ? {} : { sourceVideo: null }) }
           : {}),
-      }),
+      });
+    },
     [patch, referenceExtend]
   );
   const clearReferences = useCallback(() => patch({ references: [] }), [patch]);
@@ -372,6 +380,13 @@ export const VideoWidgetView = () => {
   const supportsExtend = policy.modes.includes('extend');
   const supportsReferences = policy.modes.includes('reference');
   const supportsInitialVideo = supportsExtend || referenceExtend;
+  // Setting an Initial Video on a reference-extend panel has to place a linked
+  // tail reference, which needs a free video slot. With an anchor already
+  // present the drop only re-derives it in place, so it stays available.
+  const initialVideoCapBlocked =
+    referenceExtend &&
+    !values.references.some((entry) => entry.kind === 'video' && entry.fromSourceVideo === true) &&
+    values.references.filter((entry) => entry.kind === 'video').length >= maxVideoReferences;
   const hasConditioningMedia = Boolean(values.firstFrameImage || values.lastFrameImage || values.sourceVideo);
   const derivedSourceText = dimensions ? t(`widgets.video.dimensionSource.${dimensions.source}`) : undefined;
   const derivedSizeText = dimensions
@@ -504,8 +519,14 @@ export const VideoWidgetView = () => {
               </Text>
             ) : null}
             <VideoSourceClipField
-              disabled={Boolean(values.firstFrameImage)}
-              disabledReason={values.firstFrameImage ? t('widgets.video.initialVideoBlocked') : undefined}
+              disabled={Boolean(values.firstFrameImage) || initialVideoCapBlocked}
+              disabledReason={
+                values.firstFrameImage
+                  ? t('widgets.video.initialVideoBlocked')
+                  : initialVideoCapBlocked
+                    ? t('widgets.video.initialVideoCapBlocked')
+                    : undefined
+              }
               sourceVideo={values.sourceVideo}
               onChange={setSourceVideo}
             />
