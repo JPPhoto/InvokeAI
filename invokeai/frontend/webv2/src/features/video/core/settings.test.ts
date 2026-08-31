@@ -638,6 +638,70 @@ describe('reference-extend linkage', () => {
     expect(unlinked?.references[0]).not.toHaveProperty('fromSourceVideo');
   });
 
+  it('adopts the LAST same-name entry: the pin invariant records the anchor last', () => {
+    // Recorded metadata can hold a user's OWN reference to the source clip
+    // ahead of the anchor -- the pin forces the anchor last, so it is always
+    // the later same-name entry. A first-match flagged the user's reference:
+    // their trim got re-budgeted, the list reordered against the recording,
+    // and the true tail window sat unprotected at the seam.
+    const userRef = {
+      ...VIDEO_REFERENCE,
+      clip: { ...VIDEO_REFERENCE.clip, endFrame: 20, startFrame: 0, video_name: 'long.mp4' },
+    };
+    const tailRef = { ...VIDEO_REFERENCE, clip: { ...VIDEO_REFERENCE.clip, video_name: 'long.mp4' } };
+    const normalized = normalizeVideoSettings(
+      createSettings({ references: [userRef, tailRef], sourceVideo: source24 })
+    );
+
+    expect(normalized?.references[0]).toBe(userRef);
+    expect(normalized?.references[1]).toMatchObject({ clip: { endFrame: 47 }, fromSourceVideo: true });
+  });
+
+  it('canonicalizes the flag to at most one entry and keeps normalization stable', () => {
+    // Two flagged entries (a corrupt or hand-merged record) used to oscillate:
+    // the pin moves the FIRST flagged entry last, swapping the pair on every
+    // pass -- and the overflow trim exempts every flagged entry, so an
+    // over-cap list of them could never come back under the cap.
+    const flaggedNamed = (video_name: string) => ({
+      ...VIDEO_REFERENCE,
+      clip: { ...VIDEO_REFERENCE.clip, video_name },
+      fromSourceVideo: true,
+    });
+    const once = normalizeVideoSettings(createSettings({ references: [flaggedNamed('a.mp4'), flaggedNamed('b.mp4')] }));
+    const twice = normalizeVideoSettings(createSettings({ references: once!.references }));
+
+    expect(once?.references.filter((entry) => entry.kind === 'video' && entry.fromSourceVideo === true)).toHaveLength(
+      1
+    );
+    expect(once?.references.at(-1)).toMatchObject({ clip: { video_name: 'b.mp4' }, fromSourceVideo: true });
+    expect(twice?.references).toEqual(once?.references);
+
+    // All-flagged over the cap: the exemption can no longer make the surplus
+    // immortal -- the cap holds, and the surviving flag is the last one.
+    const overCap = normalizeVideoSettings(
+      createSettings({ references: ['a', 'b', 'c', 'd'].map((name) => flaggedNamed(`${name}.mp4`)) })
+    );
+
+    expect(overCap?.references).toHaveLength(3);
+    expect(
+      overCap?.references.filter((entry) => entry.kind === 'video' && entry.fromSourceVideo === true)
+    ).toHaveLength(1);
+    expect(overCap?.references.at(-1)).toMatchObject({ clip: { video_name: 'd.mp4' }, fromSourceVideo: true });
+  });
+
+  it('an absurd probed frame rate falls back to 24 instead of hanging', () => {
+    // Past ~2^53 source frames, tailSourceFrames' adjustment loops cannot even
+    // step (tail + 1 === tail in floats) -- fps 1e17 froze the tab. Any rate
+    // no real container produces now takes the same fallback as a broken one.
+    expect(deriveReferenceExtendClip({ ...source24, fps: 1e17 }, 141)).toMatchObject({
+      endFrame: 400,
+      startFrame: 260,
+    });
+    expect(deriveReferenceExtendClip({ ...source24, fps: 1001 }, 141)).toMatchObject({ startFrame: 260 });
+    // The boundary itself is still a real rate.
+    expect(deriveReferenceExtendClip({ ...source24, fps: 1000 }, 141)).not.toMatchObject({ startFrame: 260 });
+  });
+
   it('adopts an unflagged reference for the same clip instead of duplicating it (recall shape)', () => {
     const recalled = { ...VIDEO_REFERENCE, clip: { ...VIDEO_REFERENCE.clip, video_name: 'long.mp4' } };
     const result = applyReferenceExtendSourceVideo([IMAGE_REFERENCE, recalled], source24, 3, FRAMES);

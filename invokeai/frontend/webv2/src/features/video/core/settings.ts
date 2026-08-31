@@ -122,6 +122,28 @@ const sanitizeVideoReferences = (value: unknown, sourceVideoName?: string): Vide
   }
   let valid = value.filter((entry) => isVideoReferenceItem(entry));
 
+  // Canonicalize the flag to AT MOST ONE entry, keeping the LAST. Only a
+  // corrupt or hand-merged record carries two, but two is a poisoned state:
+  // the pin moves the FIRST flagged entry last, so normalization oscillates
+  // between the pair on alternate passes, and the overflow trim below exempts
+  // every flagged entry, so an over-cap list of them could never be brought
+  // under the cap again. The last one matches the pin invariant every healthy
+  // record was written under.
+  let flagged = -1;
+  for (let index = valid.length - 1; index >= 0; index -= 1) {
+    const entry = valid[index]!;
+
+    if (entry.kind === 'video' && entry.fromSourceVideo === true) {
+      flagged = index;
+      break;
+    }
+  }
+  valid = valid.map((entry, index) =>
+    index !== flagged && entry.kind === 'video' && entry.fromSourceVideo === true
+      ? { ...entry, fromSourceVideo: false }
+      : entry
+  );
+
   // Re-establish the linkage recall drops. `fromSourceVideo` is panel state
   // and never reaches metadata, so a recalled panel arrives with its anchor
   // UNFLAGGED beside the source video -- and every invariant keyed on the flag
@@ -129,18 +151,24 @@ const sanitizeVideoReferences = (value: unknown, sourceVideoName?: string): Vide
   // silently lapses: a Frames change left the recalled window unbudgeted and
   // the backend cut 2s off the seam. The flag is derivable, not just
   // storable: the video reference naming the Initial Video's clip IS the
-  // anchor, the same identity `applyReferenceExtendSourceVideo` adopts by.
-  // An already-flagged entry stays authoritative.
-  if (
-    sourceVideoName !== undefined &&
-    !valid.some((entry) => entry.kind === 'video' && entry.fromSourceVideo === true)
-  ) {
-    const adopt = valid.findIndex((entry) => entry.kind === 'video' && entry.clip.video_name === sourceVideoName);
+  // anchor. An already-flagged entry stays authoritative.
+  //
+  // Adopt the LAST same-name entry, not the first. The pin invariant means
+  // the anchor is always recorded last, and recorded metadata can hold a
+  // user's OWN reference to the same clip ahead of it -- a first-match
+  // flagged that one instead: the user's trim got re-budgeted, the list
+  // reordered against the recording, and the true tail window was left
+  // unprotected at the seam.
+  if (flagged === -1 && sourceVideoName !== undefined) {
+    for (let index = valid.length - 1; index >= 0; index -= 1) {
+      const entry = valid[index]!;
 
-    if (adopt >= 0) {
-      valid = valid.map((entry, index) =>
-        index === adopt && entry.kind === 'video' ? { ...entry, fromSourceVideo: true } : entry
-      );
+      if (entry.kind === 'video' && entry.clip.video_name === sourceVideoName) {
+        valid = valid.map((candidate, candidateIndex) =>
+          candidateIndex === index && candidate.kind === 'video' ? { ...candidate, fromSourceVideo: true } : candidate
+        );
+        break;
+      }
     }
   }
 
@@ -152,26 +180,30 @@ const sanitizeVideoReferences = (value: unknown, sourceVideoName?: string): Vide
   // touches the reference list.
   valid = pinReferenceExtendAnchor(valid);
 
+  // Keyed by INDEX, not object identity: a hand-edited record can alias the
+  // same entry object twice, and an identity Set would drop both copies.
+  // With the flag canonicalized to at most one entry above, the flag
+  // exemption can never leave the surplus undroppable.
   let videosToDrop = Math.max(0, valid.filter((entry) => entry.kind === 'video').length - VIDEO_REFERENCE_MAX_VIDEOS);
-  const dropped = new Set<VideoReferenceItem>();
+  const dropped = new Set<number>();
   for (let index = valid.length - 1; index >= 0 && videosToDrop > 0; index -= 1) {
     const entry = valid[index]!;
 
     if (entry.kind === 'video' && entry.fromSourceVideo !== true) {
-      dropped.add(entry);
+      dropped.add(index);
       videosToDrop -= 1;
     }
   }
 
   const result: VideoReferenceItem[] = [];
   let images = 0;
-  for (const entry of valid) {
+  for (const [index, entry] of valid.entries()) {
     if (entry.kind === 'image') {
       if (images >= VIDEO_REFERENCE_MAX_IMAGES) {
         continue;
       }
       images += 1;
-    } else if (dropped.has(entry)) {
+    } else if (dropped.has(index)) {
       continue;
     }
     result.push(entry);
@@ -483,6 +515,9 @@ export const deriveReferenceExtendClip = (sourceVideo: VideoSourceClip, numFrame
   startFrame: referenceExtendStartFrame(sourceVideo, numFrames),
 });
 
+/** The highest source frame rate the tail-window math accepts as real; see the fps guard below. */
+const MAX_REFERENCE_SOURCE_FPS = 1000;
+
 /** `snap_reference_num_frames`: down to the `17n + 5` grid the video VAE encodes whole. */
 const snapReferenceFrames = (frames: number): number => Math.max(1, Math.floor((frames - 5) / 17)) * 17 + 5;
 
@@ -495,8 +530,13 @@ const referenceExtendStartFrame = (clip: VideoSourceClip, numFrames: number): nu
   // A clip whose probe recorded no usable rate: the backend resamples at the
   // rate it probes, so 24 — a no-op conversion — is the only safe assumption.
   // A zero or negative rate would otherwise collapse the window to the 2-frame
-  // floor, which is below the 13 frames text conditioning needs.
-  const fps = Number.isFinite(clip.fps) && clip.fps > 0 ? clip.fps : MINIMAX_H3_FPS;
+  // floor, which is below the 13 frames text conditioning needs. The upper
+  // bound is a hang guard: past ~2^53 source frames, `tailSourceFrames`'
+  // adjustment loops cannot even step (`tail + 1 === tail` in floats) and spin
+  // forever on the main thread — a hand-edited record with fps 1e17 froze the
+  // tab on the first Frames keystroke. No real container exceeds 1000 fps.
+  const fps =
+    Number.isFinite(clip.fps) && clip.fps > 0 && clip.fps <= MAX_REFERENCE_SOURCE_FPS ? clip.fps : MINIMAX_H3_FPS;
   const requested = Number.isFinite(numFrames)
     ? Math.min(VIDEO_REFERENCE_EXTEND_TAIL_FRAMES, Math.trunc(numFrames))
     : VIDEO_REFERENCE_EXTEND_TAIL_FRAMES;

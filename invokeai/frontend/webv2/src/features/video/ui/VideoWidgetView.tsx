@@ -161,16 +161,30 @@ export const VideoWidgetView = () => {
   // Synced in an effect rather than during render: this file's react-compiler
   // rule forbids touching a ref while rendering, and a gallery resolve lands
   // whole frames later, long after the commit.
-  // Keyed by PROJECT, not just latest: the widget is reconciled, never
-  // remounted, across a project switch (the <Activity> key is the panel
+  // Keyed by PROJECT, and carrying a LIVENESS bit. The widget is reconciled,
+  // never remounted, across a project switch (the <Activity> key is the panel
   // instance), while `patch` stays bound to the project its render belonged
-  // to. A bare latest-list ref therefore tracks whichever project is ACTIVE —
-  // and a gallery resolve landing after a switch would write the new project's
-  // reference list into the old project, wholesale.
-  const referencesRef = useRef({ projectId, references: values.references });
+  // to — so a bare latest-list ref tracks whichever project is ACTIVE, and a
+  // gallery resolve landing after a switch would write the new project's
+  // reference list into the old project, wholesale. And a hidden <Activity>
+  // destroys effects while promise continuations keep running: the ref then
+  // freezes with the projectId still matching, so a same-project guard would
+  // happily replay a list the store has since rewritten (a gallery deletion
+  // sweep, say) — resurrecting swept references. `live` is true exactly while
+  // the sync effect is mounted, which is the only time the ref's contents can
+  // be trusted; a write finding it false or mismatched is dropped.
+  //
+  // "Fresh" here means effect-fresh, not instantaneous: two resolves landing
+  // in the same microtask drain still read the same pre-commit list. That
+  // window is inherent to reading through React state at all.
+  const referencesRef = useRef({ live: true, projectId, references: values.references });
 
   useEffect(() => {
-    referencesRef.current = { projectId, references: values.references };
+    referencesRef.current = { live: true, projectId, references: values.references };
+
+    return () => {
+      referencesRef.current = { ...referencesRef.current, live: false };
+    };
   }, [projectId, values.references]);
 
   // Chakra's `Field.Root` hands its single `ids.control` to EVERY control
@@ -292,7 +306,7 @@ export const VideoWidgetView = () => {
   const setNumFrames = useCallback(
     (numFrames: number) =>
       patch(
-        referenceExtend && referencesRef.current.projectId === projectId
+        referenceExtend && referencesRef.current.live && referencesRef.current.projectId === projectId
           ? { numFrames, references: applyReferenceExtendNumFrames(referencesRef.current.references, numFrames) }
           : { numFrames }
       ),
@@ -307,11 +321,12 @@ export const VideoWidgetView = () => {
   const setSourceVideo = useCallback(
     (sourceVideo: VideoSourceClip | null) => {
       if (referenceExtend) {
-        // Same project-scoped live read as `setReferences`: the clip field's
-        // adopt and upload paths call this after an await, and a captured
-        // list would clobber a reference added meanwhile. A write whose
-        // project has moved on is dropped.
-        if (referencesRef.current.projectId !== projectId) {
+        // Same guard as `setReferences`: the clip field's adopt and upload
+        // paths call this after an await, and a captured list would clobber a
+        // reference added meanwhile. Dropped when the project moved on or the
+        // sync effect is unmounted — the ref is effect-fresh, not live, and
+        // only vouches for its contents while mounted.
+        if (!referencesRef.current.live || referencesRef.current.projectId !== projectId) {
           return;
         }
         const current = referencesRef.current.references;
@@ -347,14 +362,23 @@ export const VideoWidgetView = () => {
   // the LAST reference, so the anchor's position is derived, not user-set.
   const setReferences = useCallback(
     (update: (current: VideoReferenceItem[]) => VideoReferenceItem[]) => {
-      // A pending edit whose project has moved on is DROPPED: this callback's
-      // `patch` still targets the project it rendered for, but that project's
-      // current list is gone from the ref. Losing one add because the user
-      // switched projects mid-resolve beats overwriting a list they can see.
-      if (referencesRef.current.projectId !== projectId) {
+      // A pending edit is DROPPED when the ref cannot vouch for the list:
+      // the project moved on (this callback's `patch` still targets the one
+      // it rendered for), or the sync effect is unmounted (a hidden panel's
+      // continuations would replay a frozen list over whatever the store has
+      // done since). Losing one add beats overwriting a list the user can see.
+      if (!referencesRef.current.live || referencesRef.current.projectId !== projectId) {
         return;
       }
       const updated = update(referencesRef.current.references);
+
+      // Identity return means the updater declined (an apply-time cap check)
+      // or had nothing to do: patching anyway would still fire this spread's
+      // firstFrameImage/lastFrameImage clearing — a refused add erasing frame
+      // slots it never touched — and dirty the project with a no-op write.
+      if (updated === referencesRef.current.references) {
+        return;
+      }
       const next = referenceExtend ? pinReferenceExtendAnchor(updated) : updated;
 
       patch({
