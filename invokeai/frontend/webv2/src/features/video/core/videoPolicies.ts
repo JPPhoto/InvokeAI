@@ -1414,9 +1414,16 @@ export const getVideoModelSelectionResult = ({
   }
 
   // Reference-extend: a surviving Initial Video (e.g. carried over from an
-  // FL2VA extend setup) gets its linked tail reference derived/re-derived, so
-  // the switch lands on a generatable panel.
-  if (config.references?.extend && next.sourceVideo) {
+  // FL2VA extend setup) gets its linked tail reference derived, so the switch
+  // lands on a generatable panel. Only when none exists yet: the transition
+  // also runs on task-neutral edits (a same-model re-selection, a component
+  // change), and re-deriving there would reset a hand-tuned trim the help
+  // text only promises to reset on cutpoint changes.
+  if (
+    config.references?.extend &&
+    next.sourceVideo &&
+    !next.references.some((entry) => entry.kind === 'video' && entry.fromSourceVideo === true)
+  ) {
     next.references = applyReferenceExtendSourceVideo(next.references, next.sourceVideo, config.references.maxVideos);
   }
 

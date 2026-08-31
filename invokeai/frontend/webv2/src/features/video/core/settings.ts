@@ -435,10 +435,15 @@ export const applyReferenceExtendSourceVideo = (
     fromSourceVideo: true,
     kind: 'video',
   };
-  const linkedIndex = references.findIndex(
-    (entry) =>
-      entry.kind === 'video' && (entry.fromSourceVideo === true || entry.clip.video_name === sourceVideo.video_name)
-  );
+  // The flagged entry is THE linked reference; adopt-by-name only when none
+  // exists (a recall-restored pair carries no flag). A flag-or-name findIndex
+  // would rewrite a user's own same-clip reference — hand trim and all —
+  // whenever it sat above the flagged one.
+  const flaggedIndex = references.findIndex((entry) => entry.kind === 'video' && entry.fromSourceVideo === true);
+  const linkedIndex =
+    flaggedIndex >= 0
+      ? flaggedIndex
+      : references.findIndex((entry) => entry.kind === 'video' && entry.clip.video_name === sourceVideo.video_name);
 
   if (linkedIndex >= 0) {
     return references.map((entry, index) =>

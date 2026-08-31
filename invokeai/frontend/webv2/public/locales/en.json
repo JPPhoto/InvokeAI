@@ -3163,6 +3163,8 @@
       "referenceConditioningVideoAudio": "Video + audio",
       "referenceDetailMatch": "Match generation size",
       "referenceDetailMax": "Max detail (2048px, slower)",
+      "referenceExtendCapFull": "No continuity reference added",
+      "referenceExtendCapFullDescription": "All 3 video reference slots are in use, so the extension has no reference sampling the initial video. Remove a video reference to add one.",
       "referenceExtendHelp": "The generated video is appended to this clip at its End Frame. A linked video reference samples the last ~5 seconds (141 frames) before that cutpoint for continuity — its trim re-derives whenever the cutpoints change.",
       "referenceFromInitialVideo": "Initial video",
       "references": "References",

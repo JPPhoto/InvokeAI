@@ -1296,6 +1296,22 @@ describe('reference-extend policy', () => {
       kind: 'video',
     });
 
+    // A task-neutral re-selection of the same model must NOT re-derive a
+    // hand-tuned linked trim (only cutpoint changes do, via the setter).
+    const tuned = {
+      ...toRef.settings,
+      references: toRef.settings.references.map((entry, index) =>
+        index === 0 && entry.kind === 'video' ? { ...entry, clip: { ...entry.clip, startFrame: 300 } } : entry
+      ),
+    };
+    const reselected = getVideoModelSelectionResult({
+      currentSettings: tuned,
+      model: ref2vaTransformer(),
+      models: [fl2va],
+    });
+
+    expect(reselected.settings.references[0]).toMatchObject({ clip: { startFrame: 300 } });
+
     // And back: the references (linked one included) clear; the clip stays
     // for FL2VA's own extend mode.
     const backToFl = getVideoModelSelectionResult({

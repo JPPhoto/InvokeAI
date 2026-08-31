@@ -439,6 +439,26 @@ describe('reference-extend linkage', () => {
     });
   });
 
+  it('prefers the flagged entry over an earlier same-name reference on a source swap', () => {
+    // User: linked ref for clip A, plus their OWN hand-trimmed reference for
+    // clip B sitting above it. Swapping the Initial Video to clip B must
+    // update the FLAGGED entry — not rewrite the user's B reference.
+    const linkedA = applyReferenceExtendSourceVideo([], longSource, 3)[0];
+    const handTrimmedB = {
+      ...VIDEO_REFERENCE,
+      clip: { ...VIDEO_REFERENCE.clip, endFrame: 200, numFrames: 300, startFrame: 100, video_name: 'b.mp4' },
+    };
+    const sourceB = { ...longSource, endFrame: 290, numFrames: 300, video_name: 'b.mp4' };
+    const result = applyReferenceExtendSourceVideo([handTrimmedB, linkedA!], sourceB, 3);
+
+    expect(result[0]).toBe(handTrimmedB);
+    expect(result[1]).toMatchObject({
+      clip: { endFrame: 290, startFrame: 150, video_name: 'b.mp4' },
+      fromSourceVideo: true,
+    });
+    expect(result.filter((entry) => entry.kind === 'video' && entry.fromSourceVideo === true)).toHaveLength(1);
+  });
+
   it('leaves a full video-reference list unchanged instead of overflowing the cap', () => {
     const full = [
       VIDEO_REFERENCE,

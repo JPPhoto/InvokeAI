@@ -254,16 +254,24 @@ export const VideoWidgetView = () => {
   const setSourceVideo = useCallback(
     (sourceVideo: VideoSourceClip | null) => {
       if (referenceExtend) {
-        patch({
-          references: applyReferenceExtendSourceVideo(values.references, sourceVideo, maxVideoReferences),
-          sourceVideo,
-          ...(sourceVideo ? { firstFrameImage: null } : {}),
-        });
+        const references = applyReferenceExtendSourceVideo(values.references, sourceVideo, maxVideoReferences);
+
+        // Unchanged identity with a clip set means the video cap is full and
+        // no same-clip entry could be adopted: the extension would run with
+        // no continuity anchor at all, which deserves more than silence.
+        if (sourceVideo && references === values.references) {
+          toaster.create({
+            description: t('widgets.video.referenceExtendCapFullDescription'),
+            title: t('widgets.video.referenceExtendCapFull'),
+            type: 'warning',
+          });
+        }
+        patch({ references, sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) });
         return;
       }
       patch({ sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) });
     },
-    [maxVideoReferences, patch, referenceExtend, values.references]
+    [maxVideoReferences, patch, referenceExtend, t, values.references]
   );
   const setReferences = useCallback(
     (references: VideoReferenceItem[]) =>
