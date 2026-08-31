@@ -67,8 +67,8 @@ const ReferenceCard = memo(function ReferenceCard({
   collections,
   disabled,
   index,
-  isFirst,
-  isLast,
+  canMoveDown,
+  canMoveUp,
   onMove,
   onRemove,
   onUpdate,
@@ -77,8 +77,8 @@ const ReferenceCard = memo(function ReferenceCard({
   collections: ReferenceCollections;
   disabled: boolean;
   index: number;
-  isFirst: boolean;
-  isLast: boolean;
+  canMoveDown: boolean;
+  canMoveUp: boolean;
   onMove: (index: number, direction: -1 | 1) => void;
   onRemove: (index: number) => void;
   onUpdate: (index: number, reference: VideoReferenceItem) => void;
@@ -189,7 +189,7 @@ const ReferenceCard = memo(function ReferenceCard({
         <Stack gap="0">
           <IconButton
             aria-label={t('widgets.video.moveReferenceUp')}
-            disabled={disabled || isFirst}
+            disabled={disabled || !canMoveUp}
             size="2xs"
             variant="ghost"
             onClick={handleMoveUp}
@@ -198,7 +198,7 @@ const ReferenceCard = memo(function ReferenceCard({
           </IconButton>
           <IconButton
             aria-label={t('widgets.video.moveReferenceDown')}
-            disabled={disabled || isLast}
+            disabled={disabled || !canMoveDown}
             size="2xs"
             variant="ghost"
             onClick={handleMoveDown}
@@ -246,6 +246,12 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // The continuity anchor is pinned last, so any move that would displace it is
+  // reverted the moment it is written -- the button fired a patch and the list
+  // came back unchanged. Present those as disabled rather than inert.
+  const anchorIndex = references.findIndex(
+    (reference) => reference.kind === 'video' && reference.fromSourceVideo === true
+  );
   const videoCount = references.filter((reference) => reference.kind === 'video').length;
   const imageCount = references.length - videoCount;
   const canAddVideo = videoCount < maxVideos;
@@ -471,8 +477,8 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
           collections={collections}
           disabled={isInert}
           index={index}
-          isFirst={index === 0}
-          isLast={index === references.length - 1}
+          canMoveDown={index < references.length - 1 && index + 1 !== anchorIndex}
+          canMoveUp={index > 0 && index !== anchorIndex}
           reference={reference}
           onMove={moveReference}
           onRemove={removeReference}

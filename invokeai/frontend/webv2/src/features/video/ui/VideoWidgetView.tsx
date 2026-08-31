@@ -151,6 +151,22 @@ export const VideoWidgetView = () => {
   );
 
   const patch = useCallback((next: Partial<VideoWidgetValues>) => patchValues(next), [patchValues]);
+
+  // Always the newest normalized list. The reference field's add handlers
+  // `await` a gallery resolve before writing, and the Initial Video field and
+  // the Frames slider write references too — so an updater that resolved
+  // against a captured array would clobber whichever of those landed during
+  // the await, silently deleting the anchor or restoring a window the frame
+  // count had already re-derived.
+  // Synced in an effect rather than during render: this file's react-compiler
+  // rule forbids touching a ref while rendering, and a gallery resolve lands
+  // whole frames later, long after the commit.
+  const referencesRef = useRef(values.references);
+
+  useEffect(() => {
+    referencesRef.current = values.references;
+  }, [values.references]);
+
   // Chakra's `Field.Root` hands its single `ids.control` to EVERY control
   // inside it, and this Field holds three. Without an id of its own the
   // switch's hidden input collides with the seed NumberInput, so the
@@ -271,10 +287,14 @@ export const VideoWidgetView = () => {
     (numFrames: number) =>
       patch(
         referenceExtend
-          ? { numFrames, references: applyReferenceExtendNumFrames(values.references, numFrames) }
+          ? { numFrames, references: applyReferenceExtendNumFrames(referencesRef.current, numFrames) }
           : { numFrames }
       ),
-    [patch, referenceExtend, values.references]
+    // Reads the list through the ref so the Frames control keeps a stable
+    // prop identity: depending on `values.references` re-created this on every
+    // panel patch, re-rendering the slider against the file's stable-identity
+    // contract. Safe because the re-derive is idempotent in `numFrames`.
+    [patch, referenceExtend]
   );
   const setSourceVideo = useCallback(
     (sourceVideo: VideoSourceClip | null) => {
@@ -303,21 +323,6 @@ export const VideoWidgetView = () => {
     },
     [maxVideoReferences, patch, referenceExtend, t, values.numFrames, values.references]
   );
-  // Always the newest normalized list. The reference field's add handlers
-  // `await` a gallery resolve before writing, and the Initial Video field and
-  // the Frames slider write references too — so an updater that resolved
-  // against a captured array would clobber whichever of those landed during
-  // the await, silently deleting the anchor or restoring a window the frame
-  // count had already re-derived.
-  // Synced in an effect rather than during render: this file's react-compiler
-  // rule forbids touching a ref while rendering, and a gallery resolve lands
-  // whole frames later, long after the commit.
-  const referencesRef = useRef(values.references);
-
-  useEffect(() => {
-    referencesRef.current = values.references;
-  }, [values.references]);
-
   // The single choke point for every list edit the reference field makes — add,
   // remove, retrim, reorder — so pinning the continuity anchor here covers all
   // of them. Request order is rotary order and the generation continues from
