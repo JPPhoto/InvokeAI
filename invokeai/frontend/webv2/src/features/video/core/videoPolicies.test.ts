@@ -1212,3 +1212,38 @@ describe('ref2va accelerator auto-pick', () => {
     expect(result.settings.steps).toBe(4);
   });
 });
+
+describe('H3 component-source seeding', () => {
+  it('defaults seed a component source for a checkpoint main, preferring a full install', () => {
+    const checkpoint = h3Model('checkpoint');
+    const componentsOnly = { ...h3Model('diffusers', 'h3-components'), components_only: true };
+    const full = h3Model();
+
+    expect(getDefaultVideoSettings(checkpoint, [componentsOnly, full]).componentSourceModel?.key).toBe(full.key);
+    expect(getDefaultVideoSettings(checkpoint, [componentsOnly]).componentSourceModel?.key).toBe(componentsOnly.key);
+    expect(getDefaultVideoSettings(checkpoint, []).componentSourceModel).toBeNull();
+    // Diffusers mains never get one seeded.
+    expect(getDefaultVideoSettings(full, [full]).componentSourceModel).toBeNull();
+  });
+
+  it('model selection fills an empty component-source slot but keeps an explicit pick', () => {
+    const checkpoint = h3Model('checkpoint');
+    const componentsOnly = { ...h3Model('diffusers', 'h3-components'), components_only: true };
+    const full = h3Model();
+    const fromEmpty = getVideoModelSelectionResult({
+      currentSettings: settingsFor(h3Model(), { modelKey: h3Model().key }),
+      model: checkpoint,
+      models: [full, componentsOnly],
+    });
+
+    expect(fromEmpty.settings.componentSourceModel?.key).toBe(full.key);
+
+    const explicit = getVideoModelSelectionResult({
+      currentSettings: settingsFor(checkpoint, { componentSourceModel: componentsOnly, modelKey: checkpoint.key }),
+      model: checkpoint,
+      models: [full, componentsOnly],
+    });
+
+    expect(explicit.settings.componentSourceModel?.key).toBe(componentsOnly.key);
+  });
+});

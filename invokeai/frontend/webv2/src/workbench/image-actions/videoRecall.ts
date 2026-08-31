@@ -551,22 +551,38 @@ export const buildVideoRecallSettings = ({
     fields.push('components');
   }
 
-  // Legacy metadata shape (pre model-positions): `model` recorded as the H3
-  // Diffusers install with the single-file transformer as an override extra.
-  // The transformer is the model identity now — promote it, so the
-  // accelerator derivation below judges the right task, and keep the install
-  // as the component source.
-  if (model?.base === 'minimax-h3' && model.format === 'diffusers' && values.h3TransformerModel) {
-    const componentSource = model;
+  // Legacy metadata shape (pre model-positions): the run recorded the H3
+  // Diffusers install as `model` with the single-file transformer as an
+  // override extra. The transformer is the model identity now — promote it,
+  // so the accelerator derivation below judges the right task. It promotes
+  // whenever the components loop resolved an installed H3 checkpoint into the
+  // override slot, even when the recorded install itself is gone (the panel's
+  // current model then stands in for `model`): the transformer is what
+  // defines the run. Anything else that landed in the slot (corrupt metadata
+  // naming a non-main) is dropped rather than left as dangling state.
+  if (values.h3TransformerModel) {
+    const transformer = values.h3TransformerModel;
 
-    model = values.h3TransformerModel;
-    values = {
-      ...values,
-      componentSourceModel: componentSource,
-      h3TransformerModel: null,
-      model,
-      modelKey: model.key,
-    };
+    if (transformer.type === 'main' && transformer.base === 'minimax-h3' && transformer.format === 'checkpoint') {
+      // The recorded install (when still around) becomes the component
+      // source; otherwise whatever the slot already holds is kept.
+      const componentSource =
+        model?.base === 'minimax-h3' && model.format === 'diffusers' ? model : values.componentSourceModel;
+
+      model = transformer;
+      values = {
+        ...values,
+        componentSourceModel: componentSource,
+        h3TransformerModel: null,
+        model,
+        modelKey: model.key,
+      };
+      if (!fields.includes('model')) {
+        fields.push('model');
+      }
+    } else {
+      values = { ...values, h3TransformerModel: null };
+    }
   }
 
   const recordedLoras = getMetadataLoras(metadata);

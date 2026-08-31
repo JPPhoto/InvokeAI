@@ -52,14 +52,29 @@ export const syncVideoWidgetValuesWithModels = (
   // the model identity now — promote it to the top slot and keep the install
   // as its component source. Runs before anything reads `values.model`, so
   // the whole sync (and its write-back) sees the new shape.
+  //
+  // Only a transformer that resolves in the live catalog as an H3 checkpoint
+  // main is promoted: an uninstalled (or corrupt) override must not evict the
+  // still-installed Diffusers main from the top slot — leaving it in place
+  // keeps a runnable H3 panel, and the component pass below drops the dead
+  // override (no slot offers it any more).
   if (values.model?.base === 'minimax-h3' && values.model.format === 'diffusers' && values.h3TransformerModel) {
-    values = {
-      ...values,
-      componentSourceModel: values.model,
-      h3TransformerModel: null,
-      model: values.h3TransformerModel,
-      modelKey: values.h3TransformerModel.key,
-    };
+    const installedTransformer = models.find((candidate) => candidate.key === values.h3TransformerModel?.key);
+
+    if (
+      installedTransformer &&
+      installedTransformer.type === 'main' &&
+      installedTransformer.base === 'minimax-h3' &&
+      installedTransformer.format === 'checkpoint'
+    ) {
+      values = {
+        ...values,
+        componentSourceModel: values.model,
+        h3TransformerModel: null,
+        model: installedTransformer as MainModelConfig,
+        modelKey: installedTransformer.key,
+      };
+    }
   }
 
   const modelsByKey = new Map(models.map((model) => [model.key, model]));

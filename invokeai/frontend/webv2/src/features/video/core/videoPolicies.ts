@@ -1240,6 +1240,22 @@ export const getWanExpertWiringWarning = (
 // ---------------------------------------------------------------------------
 // Defaults & model-selection transitions
 
+/**
+ * The H3 Diffusers install a single-file transformer main should draw its
+ * components from. A full install is preferred (it also covers the text
+ * encoder); a components-only folder qualifies otherwise. Used to seed
+ * defaults/reset and to fill an empty slot on model selection — a checkpoint
+ * main is un-invokable without one.
+ */
+const findH3ComponentSource = (models: readonly ModelConfig[]): MainModelConfig | null => {
+  const candidates = models.filter(
+    (candidate): candidate is ModelConfig & MainModelConfig =>
+      candidate.type === 'main' && candidate.base === 'minimax-h3' && candidate.format === 'diffusers'
+  );
+
+  return candidates.find((candidate) => !isComponentsOnlyH3Main(candidate)) ?? candidates[0] ?? null;
+};
+
 export const getDefaultVideoSettings = (
   model?: MainModelConfig,
   models: readonly ModelConfig[] = []
@@ -1253,7 +1269,11 @@ export const getDefaultVideoSettings = (
     batchCount: 1,
     cfgScale: config.defaults.cfgScale,
     cfgScaleLowNoise: config.defaults.cfgScaleLowNoise,
-    componentSourceModel: null,
+    // A single-file H3 main cannot run without a Diffusers install in the
+    // Model Components slot, so defaults (and reset, which reuses them) seed
+    // one from the catalog instead of starting un-invokable.
+    componentSourceModel:
+      model && model.base === 'minimax-h3' && model.format === 'checkpoint' ? findH3ComponentSource(models) : null,
     firstFrameImage: null,
     fps: config.fps.defaultValue,
     h3TextEncoderModel: null,
@@ -1472,6 +1492,14 @@ export const getVideoModelSelectionResult = ({
       next[key] = null;
       addClearedLabel(clearedLabels, VIDEO_COMPONENT_SETTING_LABELS[key]);
     }
+  }
+
+  // A single-file H3 main is un-invokable without a component source; fill an
+  // empty slot from the catalog — including one the loop above just cleared
+  // (and reported) as incompatible. An explicit compatible pick is never
+  // overwritten.
+  if (model.base === 'minimax-h3' && model.format === 'checkpoint' && !next.componentSourceModel) {
+    next.componentSourceModel = findH3ComponentSource(models);
   }
 
   return { clearedLabels, settings: next };

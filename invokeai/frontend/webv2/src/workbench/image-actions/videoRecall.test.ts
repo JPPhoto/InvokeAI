@@ -527,4 +527,52 @@ describe('model-position recall shapes', () => {
     expect(result?.values.model?.key).toBe(checkpoint.key);
     expect(result?.values.componentSourceModel?.key).toBe(install.key);
   });
+  it('promotes the recorded transformer even when the recorded install itself is gone', () => {
+    // The transformer defines the run; the panel's current model (a
+    // checkpoint) stands in for the missing install and must not suppress the
+    // promote — pre-fix the references were dropped as unsupported.
+    const panelCheckpoint: MainModelConfig = {
+      base: 'minimax-h3',
+      format: 'checkpoint',
+      key: 'h3-fl2va-ckpt',
+      name: 'MiniMax H3 FL2VA Transformer (int8)',
+      type: 'main',
+      variant: 'fl2va',
+    };
+    const result = buildVideoRecallSettings({
+      currentValues: { ...currentValues, model: panelCheckpoint, modelKey: panelCheckpoint.key },
+      kind: 'all',
+      metadata: {
+        generation_mode: 'minimax_h3_ref2v',
+        minimax_h3_references: [{ detail: 'max', image_name: 'ref.png', kind: 'image' }],
+        minimax_h3_transformer_model: { key: checkpoint.key },
+        model: { key: 'h3-install-gone' },
+        num_frames: 124,
+      },
+      models: [panelCheckpoint, checkpoint],
+    });
+
+    expect(result?.values.model?.key).toBe(checkpoint.key);
+    expect(result?.fields).toContain('model');
+    expect(result?.values.h3TransformerModel).toBeNull();
+    expect(result?.mediaNames.references).toHaveLength(1);
+  });
+
+  it('drops a corrupt transformer-override recording that names a non-main', () => {
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: {
+        generation_mode: 'minimax_h3_ref2v',
+        minimax_h3_references: [{ detail: 'max', image_name: 'ref.png', kind: 'image' }],
+        minimax_h3_transformer_model: { key: ref2vTurbo.key },
+        model: { key: install.key },
+        num_frames: 124,
+      },
+      models: catalog,
+    });
+
+    expect(result?.values.model?.key).toBe(install.key);
+    expect(result?.values.h3TransformerModel).toBeNull();
+  });
 });
