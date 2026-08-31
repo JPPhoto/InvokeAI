@@ -449,10 +449,12 @@ describe('reference-extend linkage', () => {
 
   it('derives the tail trim: the window ending at the cutpoint, clamped at 0', () => {
     expect(deriveReferenceExtendClip(source24, FRAMES)).toMatchObject({ endFrame: 400, startFrame: 260 });
-    // Shorter than the tail window: sample from the clip's own start.
+    // Shorter than the tail window: fall back to the largest ON-GRID budget the
+    // clip supports (80 frames -> 73) so the window still ENDS on the cutpoint.
+    // Starting at 0 kept the same 73 frames but stopped 7 short of the seam.
     expect(deriveReferenceExtendClip({ ...SOURCE_VIDEO, fps: 24 }, FRAMES)).toMatchObject({
       endFrame: 79,
-      startFrame: 0,
+      startFrame: 7,
     });
   });
 
@@ -482,6 +484,41 @@ describe('reference-extend linkage', () => {
         const kept = snapDown(Math.min(resample(clip.endFrame - clip.startFrame + 1, fps), numFrames));
 
         expect({ fps, kept, numFrames }).toEqual({ fps, kept: budget, numFrames });
+      }
+    }
+  });
+
+  it('a clip SHORTER than the window still ends its tail on the cutpoint', () => {
+    // The clamped branch used to take the whole clip, whose length is
+    // arbitrary: off the 17n+5 grid, so the snap-down cut the difference from
+    // the END. Nothing about it needs an inexact estimate — it was the common
+    // case for any source under ~5.9s at 24 fps, and the sweep above could not
+    // see it because it only runs a 402-frame clip.
+    const resample = (n: number, fps: number) => Math.floor((n * 24) / fps + 0.5);
+    const snapDown = (n: number) => Math.max(1, Math.floor((n - 5) / 17)) * 17 + 5;
+
+    for (const fps of [12, 16, 23.976, 24, 25, 30]) {
+      for (const total of [40, 60, 80, 100, 120, 141, 200]) {
+        for (const numFrames of [90, 124, 141, 345]) {
+          const source = { ...longSource, endFrame: total - 1, fps, numFrames: total };
+          const clip = deriveReferenceExtendClip(source, numFrames);
+          const window = clip.endFrame - clip.startFrame + 1;
+          const kept = snapDown(Math.min(resample(window, fps), numFrames));
+
+          const discarded = Math.min(resample(window, fps), numFrames) - kept;
+
+          // At most a single frame is trimmed off the seam end -- the source's
+          // own frame boundaries sometimes cannot land on the grid exactly (12
+          // fps cannot reach an odd 141 at all). The old clamp shed up to 16.
+          expect({ discarded: discarded <= 1, fps, numFrames, total }).toEqual({
+            discarded: true,
+            fps,
+            numFrames,
+            total,
+          });
+          // And the window always still ends where it was asked to.
+          expect(clip.endFrame).toBe(source.endFrame);
+        }
       }
     }
   });

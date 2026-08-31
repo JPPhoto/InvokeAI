@@ -444,19 +444,58 @@ export const deriveReferenceExtendClip = (sourceVideo: VideoSourceClip, numFrame
   startFrame: referenceExtendStartFrame(sourceVideo, numFrames),
 });
 
+/** `snap_reference_num_frames`: down to the `17n + 5` grid the video VAE encodes whole. */
+const snapReferenceFrames = (frames: number): number => Math.max(1, Math.floor((frames - 5) / 17)) * 17 + 5;
+
+/** Source frames -> frames after the backend's 24 fps resample (ffmpeg's fps-filter count). */
+const resampledFrameCount = (sourceFrames: number, fps: number): number =>
+  Math.floor((sourceFrames * MINIMAX_H3_FPS) / fps + 0.5);
+
 /** The tail window's start index — see `deriveReferenceExtendClip`. */
 const referenceExtendStartFrame = (clip: VideoSourceClip, numFrames: number): number => {
-  const budget = Number.isFinite(numFrames)
-    ? Math.min(VIDEO_REFERENCE_EXTEND_TAIL_FRAMES, Math.trunc(numFrames))
-    : VIDEO_REFERENCE_EXTEND_TAIL_FRAMES;
   // A clip whose probe recorded no usable rate: the backend resamples at the
   // rate it probes, so 24 — a no-op conversion — is the only safe assumption.
   // A zero or negative rate would otherwise collapse the window to the 2-frame
   // floor, which is below the 13 frames text conditioning needs.
   const fps = Number.isFinite(clip.fps) && clip.fps > 0 ? clip.fps : MINIMAX_H3_FPS;
-  const tail = Math.max(MIN_VIDEO_TRIM_FRAMES, Math.ceil((budget * fps) / MINIMAX_H3_FPS));
+  const requested = Number.isFinite(numFrames)
+    ? Math.min(VIDEO_REFERENCE_EXTEND_TAIL_FRAMES, Math.trunc(numFrames))
+    : VIDEO_REFERENCE_EXTEND_TAIL_FRAMES;
+  // A clip shorter than the window cannot supply the whole budget, and simply
+  // taking what is there leaves the window OFF the 17n+5 grid — so the
+  // snap-down cuts the difference from the END, the frames at the cutpoint.
+  // (24 fps, a 120-frame clip, numFrames 345: a [0,118] window keeps 107 of
+  // its 119 frames and stops half a second short of the seam.) Falling back to
+  // the largest on-grid budget the clip DOES support keeps the same frames and
+  // lands them on the seam. Both bounds are already on the grid in the normal
+  // case, so this is an identity there.
+  const budget = Math.min(
+    requested,
+    snapReferenceFrames(Math.min(resampledFrameCount(clip.endFrame + 1, fps), requested))
+  );
 
-  return Math.max(0, clip.endFrame - (tail - 1));
+  return Math.max(0, clip.endFrame - (tailSourceFrames(budget, fps) - 1));
+};
+
+/**
+ * The fewest source frames that still resample to at least `budget` frames.
+ *
+ * `ceil(budget * fps / 24)` is the closed form and it is not exact: the
+ * resample is a step function, so the rounded-up count can overshoot the
+ * budget by a frame or two, and every overshot frame is discarded from the END
+ * — the seam. Walking back down to the smallest count that still reaches the
+ * budget lands on it exactly wherever the source's frame boundaries allow, and
+ * within a frame where they do not (12 fps cannot hit an odd 141 at all). The
+ * loop runs `24 / fps` times at most.
+ */
+const tailSourceFrames = (budget: number, fps: number): number => {
+  let tail = Math.max(MIN_VIDEO_TRIM_FRAMES, Math.ceil((budget * fps) / MINIMAX_H3_FPS));
+
+  while (tail > MIN_VIDEO_TRIM_FRAMES && resampledFrameCount(tail - 1, fps) >= budget) {
+    tail -= 1;
+  }
+
+  return tail;
 };
 
 /**
