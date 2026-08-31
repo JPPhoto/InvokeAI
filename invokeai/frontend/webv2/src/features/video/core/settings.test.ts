@@ -573,6 +573,50 @@ describe('reference-extend linkage', () => {
     expect(applyReferenceExtendSourceVideo(unlinked, null, 3, FRAMES)).toBe(unlinked);
   });
 
+  it('normalization re-establishes the linkage recall drops, and the invariants reach it', () => {
+    // `fromSourceVideo` never reaches metadata, so a recalled reference-extend
+    // panel arrives with its anchor UNFLAGGED beside the source video. Every
+    // invariant keys on the flag, so before this: not pinned (the model
+    // continued from whatever followed it), and not re-budgeted (a Frames
+    // change left the window overrunning -- 2s cut off the seam at 345 -> 90).
+    const recalled = { ...VIDEO_REFERENCE, clip: { ...VIDEO_REFERENCE.clip, video_name: 'long.mp4' } };
+    const normalized = normalizeVideoSettings(
+      createSettings({ references: [recalled, IMAGE_REFERENCE], sourceVideo: source24 })
+    );
+
+    // Flagged by clip identity -- the same rule the setter adopts by -- and pinned.
+    expect(normalized?.references).toHaveLength(2);
+    expect(normalized?.references[0]).toBe(IMAGE_REFERENCE);
+    expect(normalized?.references[1]).toMatchObject({
+      clip: { video_name: 'long.mp4' },
+      fromSourceVideo: true,
+    });
+
+    // The frame-count re-budget now reaches the recalled window.
+    const rebudgeted = applyReferenceExtendNumFrames(normalized!.references, 90);
+
+    expect(rebudgeted[1]).toMatchObject({ clip: { endFrame: 47, startFrame: 9 } });
+
+    // A flagged entry stays authoritative: an unflagged same-name entry beside
+    // it is NOT a second anchor.
+    const flaggedElsewhere = normalizeVideoSettings(
+      createSettings({
+        references: [recalled, { ...VIDEO_REFERENCE, fromSourceVideo: true }],
+        sourceVideo: source24,
+      })
+    );
+
+    expect(
+      flaggedElsewhere?.references.filter((entry) => entry.kind === 'video' && entry.fromSourceVideo === true)
+    ).toHaveLength(1);
+    expect(flaggedElsewhere?.references[1]).toMatchObject({ clip: { video_name: 'ref.mp4' }, fromSourceVideo: true });
+
+    // No source video: nothing to link, nothing flagged.
+    const unlinked = normalizeVideoSettings(createSettings({ references: [recalled] }));
+
+    expect(unlinked?.references[0]).not.toHaveProperty('fromSourceVideo');
+  });
+
   it('adopts an unflagged reference for the same clip instead of duplicating it (recall shape)', () => {
     const recalled = { ...VIDEO_REFERENCE, clip: { ...VIDEO_REFERENCE.clip, video_name: 'long.mp4' } };
     const result = applyReferenceExtendSourceVideo([IMAGE_REFERENCE, recalled], source24, 3, FRAMES);

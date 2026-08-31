@@ -161,11 +161,17 @@ export const VideoWidgetView = () => {
   // Synced in an effect rather than during render: this file's react-compiler
   // rule forbids touching a ref while rendering, and a gallery resolve lands
   // whole frames later, long after the commit.
-  const referencesRef = useRef(values.references);
+  // Keyed by PROJECT, not just latest: the widget is reconciled, never
+  // remounted, across a project switch (the <Activity> key is the panel
+  // instance), while `patch` stays bound to the project its render belonged
+  // to. A bare latest-list ref therefore tracks whichever project is ACTIVE —
+  // and a gallery resolve landing after a switch would write the new project's
+  // reference list into the old project, wholesale.
+  const referencesRef = useRef({ projectId, references: values.references });
 
   useEffect(() => {
-    referencesRef.current = values.references;
-  }, [values.references]);
+    referencesRef.current = { projectId, references: values.references };
+  }, [projectId, values.references]);
 
   // Chakra's `Field.Root` hands its single `ids.control` to EVERY control
   // inside it, and this Field holds three. Without an id of its own the
@@ -286,15 +292,17 @@ export const VideoWidgetView = () => {
   const setNumFrames = useCallback(
     (numFrames: number) =>
       patch(
-        referenceExtend
-          ? { numFrames, references: applyReferenceExtendNumFrames(referencesRef.current, numFrames) }
+        referenceExtend && referencesRef.current.projectId === projectId
+          ? { numFrames, references: applyReferenceExtendNumFrames(referencesRef.current.references, numFrames) }
           : { numFrames }
       ),
     // Reads the list through the ref so the Frames control keeps a stable
     // prop identity: depending on `values.references` re-created this on every
     // panel patch, re-rendering the slider against the file's stable-identity
-    // contract. Safe because the re-derive is idempotent in `numFrames`.
-    [patch, referenceExtend]
+    // contract. Safe because the re-derive is idempotent in `numFrames`. The
+    // project guard is unreachable for this synchronous caller; it keeps the
+    // ref's contract uniform.
+    [patch, projectId, referenceExtend]
   );
   const setSourceVideo = useCallback(
     (sourceVideo: VideoSourceClip | null) => {
@@ -329,7 +337,14 @@ export const VideoWidgetView = () => {
   // the LAST reference, so the anchor's position is derived, not user-set.
   const setReferences = useCallback(
     (update: (current: VideoReferenceItem[]) => VideoReferenceItem[]) => {
-      const updated = update(referencesRef.current);
+      // A pending edit whose project has moved on is DROPPED: this callback's
+      // `patch` still targets the project it rendered for, but that project's
+      // current list is gone from the ref. Losing one add because the user
+      // switched projects mid-resolve beats overwriting a list they can see.
+      if (referencesRef.current.projectId !== projectId) {
+        return;
+      }
+      const updated = update(referencesRef.current.references);
       const next = referenceExtend ? pinReferenceExtendAnchor(updated) : updated;
 
       patch({
@@ -339,7 +354,7 @@ export const VideoWidgetView = () => {
           : {}),
       });
     },
-    [patch, referenceExtend]
+    [patch, projectId, referenceExtend]
   );
   const clearReferences = useCallback(() => patch({ references: [] }), [patch]);
   const setLoras = useCallback(

@@ -114,17 +114,41 @@ export const isVideoReferenceItem = (value: unknown): value is VideoReferenceIte
  * from the tail would discard exactly the entry the extension depends on.
  * Images carry no ordering role and keep the front.
  */
-const sanitizeVideoReferences = (value: unknown): VideoReferenceItem[] => {
+const sanitizeVideoReferences = (value: unknown, sourceVideoName?: string): VideoReferenceItem[] => {
   if (!Array.isArray(value)) {
     return [];
   }
+  let valid = value.filter((entry) => isVideoReferenceItem(entry));
+
+  // Re-establish the linkage recall drops. `fromSourceVideo` is panel state
+  // and never reaches metadata, so a recalled panel arrives with its anchor
+  // UNFLAGGED beside the source video -- and every invariant keyed on the flag
+  // (the pin, the frame-count re-budget, the seam-anchored start index)
+  // silently lapses: a Frames change left the recalled window unbudgeted and
+  // the backend cut 2s off the seam. The flag is derivable, not just
+  // storable: the video reference naming the Initial Video's clip IS the
+  // anchor, the same identity `applyReferenceExtendSourceVideo` adopts by.
+  // An already-flagged entry stays authoritative.
+  if (
+    sourceVideoName !== undefined &&
+    !valid.some((entry) => entry.kind === 'video' && entry.fromSourceVideo === true)
+  ) {
+    const adopt = valid.findIndex((entry) => entry.kind === 'video' && entry.clip.video_name === sourceVideoName);
+
+    if (adopt >= 0) {
+      valid = valid.map((entry, index) =>
+        index === adopt && entry.kind === 'video' ? { ...entry, fromSourceVideo: true } : entry
+      );
+    }
+  }
+
   // Pin BEFORE the cap trim. The front-drop below assumes the anchor is last,
   // but a project saved by the build that PREPENDED it loads with the anchor
   // first -- so without this the overflow rule deletes the one entry it exists
   // to protect. Pinning here also heals those panels on load: normalization
   // runs on every read, whereas `setReferences` only fires once the user
   // touches the reference list.
-  const valid = pinReferenceExtendAnchor(value.filter((entry) => isVideoReferenceItem(entry)));
+  valid = pinReferenceExtendAnchor(valid);
   let videosToDrop = Math.max(0, valid.filter((entry) => entry.kind === 'video').length - VIDEO_REFERENCE_MAX_VIDEOS);
   const result: VideoReferenceItem[] = [];
   let images = 0;
@@ -221,7 +245,10 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
   // record somehow holds both, the references win deterministically. A source
   // video COEXISTS with references (Ref2VA reference-extend) — validation
   // rejects the pair on models that cannot consume it.
-  const references = sanitizeVideoReferences(values.references);
+  const references = sanitizeVideoReferences(
+    values.references,
+    isVideoSourceClip(values.sourceVideo) ? values.sourceVideo.video_name : undefined
+  );
   const hasReferences = references.length > 0;
   const firstFrameImage = !hasReferences && isImageWithDims(values.firstFrameImage) ? values.firstFrameImage : null;
   // A first frame and a source video are mutually exclusive; if a stale
