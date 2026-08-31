@@ -118,7 +118,13 @@ const sanitizeVideoReferences = (value: unknown): VideoReferenceItem[] => {
   if (!Array.isArray(value)) {
     return [];
   }
-  const valid = value.filter((entry) => isVideoReferenceItem(entry));
+  // Pin BEFORE the cap trim. The front-drop below assumes the anchor is last,
+  // but a project saved by the build that PREPENDED it loads with the anchor
+  // first -- so without this the overflow rule deletes the one entry it exists
+  // to protect. Pinning here also heals those panels on load: normalization
+  // runs on every read, whereas `setReferences` only fires once the user
+  // touches the reference list.
+  const valid = pinReferenceExtendAnchor(value.filter((entry) => isVideoReferenceItem(entry)));
   let videosToDrop = Math.max(0, valid.filter((entry) => entry.kind === 'video').length - VIDEO_REFERENCE_MAX_VIDEOS);
   const result: VideoReferenceItem[] = [];
   let images = 0;

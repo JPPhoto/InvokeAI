@@ -376,6 +376,37 @@ describe('references', () => {
     ]);
   });
 
+  it('normalization heals a panel saved with the anchor prepended', () => {
+    // The build before the anchor was pinned PREPENDED it, so those projects
+    // load with it at index 0. Normalization must move it last -- otherwise the
+    // generated frames continue from whatever reference follows it -- and it
+    // must do so BEFORE the cap trim, or the front-drop deletes the anchor.
+    const anchor = {
+      ...VIDEO_REFERENCE,
+      clip: { ...VIDEO_REFERENCE.clip, video_name: 'anchor.mp4' },
+      fromSourceVideo: true,
+    };
+    const named = (entry: { kind: string; clip?: { video_name: string } }) =>
+      entry.kind === 'video' ? entry.clip!.video_name : 'img';
+
+    const healed = normalizeVideoSettings(createSettings({ references: [anchor, IMAGE_REFERENCE] as never }));
+
+    expect(healed?.references.map(named as never)).toEqual(['img', 'anchor.mp4']);
+
+    // Over the cap, with the anchor in the position the old build left it.
+    const stale = [
+      anchor,
+      ...Array.from({ length: 3 }, (_unused, index) => ({
+        ...VIDEO_REFERENCE,
+        clip: { ...VIDEO_REFERENCE.clip, video_name: `v${index}.mp4` },
+      })),
+    ];
+    const trimmed = normalizeVideoSettings(createSettings({ references: stale as never }));
+
+    expect(trimmed?.references.map(named as never)).toEqual(['v1.mp4', 'v2.mp4', 'anchor.mp4']);
+    expect(trimmed?.references.at(-1)).toMatchObject({ fromSourceVideo: true });
+  });
+
   it('isVideoSettings rejects references combined with frame media', () => {
     expect(isVideoSettings(createSettings({ firstFrameImage: FIRST_FRAME, references: [IMAGE_REFERENCE] }))).toBe(
       false
