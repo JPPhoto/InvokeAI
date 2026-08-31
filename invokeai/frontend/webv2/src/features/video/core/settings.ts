@@ -104,15 +104,17 @@ export const isVideoReferenceItem = (value: unknown): value is VideoReferenceIte
 /**
  * Drops invalid entries and enforces the per-kind caps, preserving order.
  *
- * An over-cap list should never reach here — both add paths are gated on the
- * cap and the Initial Video field disables itself when the video slots are
- * full — so this is the guard for a stale or hand-edited project record.
+ * An over-cap list should never reach here — the add paths re-check the cap
+ * against the live list at apply time and the Initial Video field disables
+ * itself when the video slots are full — so this is the guard for a stale or
+ * hand-edited project record.
  *
- * Videos overflow from the FRONT. Request order is rotary order and the
- * generated frames continue from the LAST reference block, so on a
- * reference-extend panel the final video is the continuity anchor: dropping
- * from the tail would discard exactly the entry the extension depends on.
- * Images carry no ordering role and keep the front.
+ * Video overflow drops the NEWEST non-anchor entries: the surplus is whatever
+ * arrived last, and a plain front-drop deleted the user's OLDEST reference
+ * whenever a racing add slipped past the cap. The anchor is exempt whatever
+ * its position — request order is rotary order and the generated frames
+ * continue from the LAST block, so it is the one entry the extension depends
+ * on. Images carry no ordering role and keep the front.
  */
 const sanitizeVideoReferences = (value: unknown, sourceVideoName?: string): VideoReferenceItem[] => {
   if (!Array.isArray(value)) {
@@ -149,7 +151,18 @@ const sanitizeVideoReferences = (value: unknown, sourceVideoName?: string): Vide
   // runs on every read, whereas `setReferences` only fires once the user
   // touches the reference list.
   valid = pinReferenceExtendAnchor(valid);
+
   let videosToDrop = Math.max(0, valid.filter((entry) => entry.kind === 'video').length - VIDEO_REFERENCE_MAX_VIDEOS);
+  const dropped = new Set<VideoReferenceItem>();
+  for (let index = valid.length - 1; index >= 0 && videosToDrop > 0; index -= 1) {
+    const entry = valid[index]!;
+
+    if (entry.kind === 'video' && entry.fromSourceVideo !== true) {
+      dropped.add(entry);
+      videosToDrop -= 1;
+    }
+  }
+
   const result: VideoReferenceItem[] = [];
   let images = 0;
   for (const entry of valid) {
@@ -158,8 +171,7 @@ const sanitizeVideoReferences = (value: unknown, sourceVideoName?: string): Vide
         continue;
       }
       images += 1;
-    } else if (videosToDrop > 0) {
-      videosToDrop -= 1;
+    } else if (dropped.has(entry)) {
       continue;
     }
     result.push(entry);

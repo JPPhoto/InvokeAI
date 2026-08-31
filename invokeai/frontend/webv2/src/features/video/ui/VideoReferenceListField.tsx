@@ -301,14 +301,32 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         const [resolved] = await galleryImages.resolveMany([imageName]);
 
         if (resolved) {
-          onChange((current) => [
-            ...current,
-            {
-              detail: 'max',
-              image: { height: resolved.height, image_name: resolved.imageName, width: resolved.width },
-              kind: 'image',
-            },
-          ]);
+          // Re-check the cap against the LIVE list: the render-time gate was
+          // evaluated before the await, and another writer (a second drop, or
+          // the Initial Video placing its anchor) can fill the slots meanwhile.
+          // An over-cap write would survive to normalization, whose overflow
+          // rule then has to delete SOMETHING the user placed.
+          let declined = false;
+
+          onChange((current) => {
+            if (current.filter((entry) => entry.kind === 'image').length >= maxImages) {
+              declined = true;
+
+              return current;
+            }
+
+            return [
+              ...current,
+              {
+                detail: 'max',
+                image: { height: resolved.height, image_name: resolved.imageName, width: resolved.width },
+                kind: 'image',
+              },
+            ];
+          });
+          if (declined) {
+            setErrorMessage(t('widgets.video.referenceImageCapRace', { max: maxImages }));
+          }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -318,7 +336,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         setIsLoading(false);
       }
     },
-    [onChange, reportError]
+    [maxImages, onChange, reportError, t]
   );
 
   const addVideoReference = useCallback(
@@ -338,16 +356,31 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
             width: item.width,
           });
 
-          onChange((current) => [
-            ...current,
-            {
-              // References are truncated to the generated duration, not joined: default to
-              // the whole clip rather than the extend-mode 2-frame-tail trim.
-              clip: { ...clip, endFrame: Math.max(0, clip.numFrames - 1), startFrame: 0 },
-              conditioning: 'video_audio',
-              kind: 'video',
-            },
-          ]);
+          // Same live cap re-check as the image path -- the Initial Video's
+          // anchor is the writer that most easily fills the slots mid-await.
+          let declined = false;
+
+          onChange((current) => {
+            if (current.filter((entry) => entry.kind === 'video').length >= maxVideos) {
+              declined = true;
+
+              return current;
+            }
+
+            return [
+              ...current,
+              {
+                // References are truncated to the generated duration, not joined: default to
+                // the whole clip rather than the extend-mode 2-frame-tail trim.
+                clip: { ...clip, endFrame: Math.max(0, clip.numFrames - 1), startFrame: 0 },
+                conditioning: 'video_audio',
+                kind: 'video',
+              },
+            ];
+          });
+          if (declined) {
+            setErrorMessage(t('widgets.video.referenceVideoCapRace', { max: maxVideos }));
+          }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -357,7 +390,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         setIsLoading(false);
       }
     },
-    [onChange, reportError]
+    [maxVideos, onChange, reportError, t]
   );
 
   const handleDragEnd = useCallback(

@@ -338,7 +338,8 @@ describe('references', () => {
   });
 
   it('normalization drops malformed entries and enforces the caps, preserving order', () => {
-    // Videos over the cap overflow from the FRONT — see the over-cap test below.
+    // Videos over the cap drop the NEWEST non-anchor entries — the surplus is
+    // whatever arrived last. See the over-cap tests below.
     const tooMany = [
       ...Array.from({ length: 4 }, (_, index) => ({
         ...VIDEO_REFERENCE,
@@ -350,16 +351,16 @@ describe('references', () => {
     const normalized = normalizeVideoSettings(createSettings({ references: tooMany as never }));
 
     expect(normalized?.references.map((entry) => (entry.kind === 'video' ? entry.clip.video_name : 'img'))).toEqual([
+      'v0.mp4',
       'v1.mp4',
       'v2.mp4',
-      'v3.mp4',
       'img',
     ]);
   });
 
-  it('an over-cap video list overflows from the front, keeping the continuity anchor', () => {
-    // The anchor is last, so dropping from the tail would discard exactly the
-    // entry the extension depends on. Reachable only from a stale record.
+  it('over-cap overflow drops the newest videos but never the anchor', () => {
+    const named = (entry: { kind: string; clip?: { video_name: string } }) =>
+      entry.kind === 'video' ? entry.clip!.video_name : 'img';
     const tooMany = [
       IMAGE_REFERENCE,
       ...Array.from({ length: 5 }, (_unused, index) => ({
@@ -369,12 +370,32 @@ describe('references', () => {
     ];
     const normalized = normalizeVideoSettings(createSettings({ references: tooMany as never }));
 
-    expect(normalized?.references.map((entry) => (entry.kind === 'video' ? entry.clip.video_name : 'img'))).toEqual([
-      'img',
-      'v2.mp4',
-      'v3.mp4',
-      'v4.mp4',
-    ]);
+    expect(normalized?.references.map(named as never)).toEqual(['img', 'v0.mp4', 'v1.mp4', 'v2.mp4']);
+
+    // The race shape: an add slipped past the render-time cap gate while the
+    // Initial Video was placing its anchor. The surplus is the racing add (D),
+    // not the user's oldest reference (B) — a plain front-drop deleted B.
+    const anchor = {
+      ...VIDEO_REFERENCE,
+      clip: { ...VIDEO_REFERENCE.clip, video_name: 'anchor.mp4' },
+      fromSourceVideo: true,
+    };
+    const raced = ['b.mp4', 'c.mp4'].map((video_name) => ({
+      ...VIDEO_REFERENCE,
+      clip: { ...VIDEO_REFERENCE.clip, video_name },
+    }));
+    const healed = normalizeVideoSettings(
+      createSettings({
+        references: [
+          ...raced,
+          anchor,
+          { ...VIDEO_REFERENCE, clip: { ...VIDEO_REFERENCE.clip, video_name: 'd.mp4' } },
+        ] as never,
+      })
+    );
+
+    expect(healed?.references.map(named as never)).toEqual(['b.mp4', 'c.mp4', 'anchor.mp4']);
+    expect(healed?.references.at(-1)).toMatchObject({ fromSourceVideo: true });
   });
 
   it('normalization heals a panel saved with the anchor prepended', () => {
@@ -404,7 +425,7 @@ describe('references', () => {
     ];
     const trimmed = normalizeVideoSettings(createSettings({ references: stale as never }));
 
-    expect(trimmed?.references.map(named as never)).toEqual(['v1.mp4', 'v2.mp4', 'anchor.mp4']);
+    expect(trimmed?.references.map(named as never)).toEqual(['v0.mp4', 'v1.mp4', 'anchor.mp4']);
     expect(trimmed?.references.at(-1)).toMatchObject({ fromSourceVideo: true });
   });
 
