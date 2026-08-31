@@ -515,8 +515,16 @@ export const deriveReferenceExtendClip = (sourceVideo: VideoSourceClip, numFrame
   startFrame: referenceExtendStartFrame(sourceVideo, numFrames),
 });
 
-/** The highest source frame rate the tail-window math accepts as real; see the fps guard below. */
-const MAX_REFERENCE_SOURCE_FPS = 1000;
+/**
+ * The highest source frame rate the tail-window math accepts as real; see the
+ * fps guard below. The float plateau it guards (`tail + 1 === tail`) starts
+ * around fps 1.5e15, so 1e6 keeps nine orders of margin — a tighter bound of
+ * 1000 turned real high-rate containers (probe-reported 1200 fps decoded fine
+ * before) into backend hard failures: the 24 fps fallback sized a 141-SOURCE-
+ * frame window that the backend, resampling at the rate it probes itself,
+ * collapsed to 3 frames, under text conditioning's 13-frame minimum.
+ */
+const MAX_REFERENCE_SOURCE_FPS = 1e6;
 
 /** `snap_reference_num_frames`: down to the `17n + 5` grid the video VAE encodes whole. */
 const snapReferenceFrames = (frames: number): number => Math.max(1, Math.floor((frames - 5) / 17)) * 17 + 5;
@@ -534,7 +542,7 @@ const referenceExtendStartFrame = (clip: VideoSourceClip, numFrames: number): nu
   // bound is a hang guard: past ~2^53 source frames, `tailSourceFrames`'
   // adjustment loops cannot even step (`tail + 1 === tail` in floats) and spin
   // forever on the main thread — a hand-edited record with fps 1e17 froze the
-  // tab on the first Frames keystroke. No real container exceeds 1000 fps.
+  // tab on the first Frames keystroke.
   const fps =
     Number.isFinite(clip.fps) && clip.fps > 0 && clip.fps <= MAX_REFERENCE_SOURCE_FPS ? clip.fps : MINIMAX_H3_FPS;
   const requested = Number.isFinite(numFrames)

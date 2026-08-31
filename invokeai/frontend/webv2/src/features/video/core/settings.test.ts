@@ -697,9 +697,15 @@ describe('reference-extend linkage', () => {
       endFrame: 400,
       startFrame: 260,
     });
-    expect(deriveReferenceExtendClip({ ...source24, fps: 1001 }, 141)).toMatchObject({ startFrame: 260 });
-    // The boundary itself is still a real rate.
-    expect(deriveReferenceExtendClip({ ...source24, fps: 1000 }, 141)).not.toMatchObject({ startFrame: 260 });
+    // Below the bound, a genuinely high-rate clip still gets its REAL window:
+    // 1200 fps needs 7025 source frames for 141 resampled ones. A 1000-fps
+    // bound sent this through the 24 fallback, and the backend -- which
+    // resamples at the rate it probes itself -- collapsed the 141-source-frame
+    // window to 3 frames and raised under text conditioning's 13-frame floor.
+    const highRate = { ...source24, endFrame: 50000, fps: 1200, numFrames: 50001 };
+
+    expect(deriveReferenceExtendClip(highRate, 141)).toMatchObject({ endFrame: 50000, startFrame: 42976 });
+    expect(deriveReferenceExtendClip({ ...highRate, fps: 1e17 }, 141)).toMatchObject({ startFrame: 49860 });
   });
 
   it('adopts an unflagged reference for the same clip instead of duplicating it (recall shape)', () => {
