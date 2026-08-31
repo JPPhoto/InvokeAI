@@ -66,24 +66,7 @@ const addReferenceNodes = (
 ): BackendInvocationContract => {
   let chain: BackendInvocationContract | null = null;
   references.forEach((reference, index) => {
-    const node =
-      reference.kind === 'image'
-        ? addNode(graph, {
-            detail: reference.detail,
-            id: `reference_${index + 1}`,
-            image: toImageField(reference.image),
-            type: 'minimax_h3_image_reference',
-          })
-        : addNode(graph, {
-            conditioning: reference.conditioning,
-            // Same estimate-overshoot protection as the extend path: tail-window bounds
-            // compile as negative indices the backend resolves against the REAL count.
-            end_frame: toTailAwareIndex(reference.clip.endFrame, reference.clip.numFrames),
-            id: `reference_${index + 1}`,
-            start_frame: toTailAwareIndex(reference.clip.startFrame, reference.clip.numFrames),
-            type: 'minimax_h3_video_reference',
-            video: { video_name: reference.clip.video_name },
-          });
+    const node = addReferenceNode(graph, reference, index);
     const collect = addNode(graph, { id: `reference_collect_${index + 1}`, type: 'collect' });
 
     if (chain) {
@@ -98,6 +81,64 @@ const addReferenceNodes = (
   }
 
   return chain;
+};
+
+const addReferenceNode = (
+  graph: BackendGraphContract,
+  reference: VideoReferenceItem,
+  index: number
+): BackendInvocationContract => {
+  if (reference.kind === 'image') {
+    return addNode(graph, {
+      detail: reference.detail,
+      id: `reference_${index + 1}`,
+      image: toImageField(reference.image),
+      type: 'minimax_h3_image_reference',
+    });
+  }
+  // Same estimate-overshoot protection as the extend path: tail-window bounds
+  // compile as negative indices the backend resolves against the REAL count.
+  const endFrame = toTailAwareIndex(reference.clip.endFrame, reference.clip.numFrames);
+
+  return addNode(graph, {
+    conditioning: reference.conditioning,
+    end_frame: endFrame,
+    id: `reference_${index + 1}`,
+    start_frame: toReferenceStartIndex(reference, endFrame),
+    type: 'minimax_h3_video_reference',
+    video: { video_name: reference.clip.video_name },
+  });
+};
+
+/**
+ * A video reference's start bound, measured from the same end as its other bound.
+ *
+ * `toTailAwareIndex` sends a near-the-end bound out NEGATIVE, resolved against
+ * the clip's REAL frame count, and leaves anything further back POSITIVE, taken
+ * from the panel's ESTIMATE. That split is right for a hand-picked trim, whose
+ * start is an absolute position the estimate must not drift — but the linked
+ * tail window straddles it: the cutpoint end goes negative while the start,
+ * ~124 frames back, stays positive, so what the backend extracts is
+ * `tail + (real - estimate)` frames rather than `tail`. That length is a budget
+ * the backend enforces by discarding the overrun at the SEAM (see
+ * `deriveReferenceExtendClip`), so it has to survive an inexact estimate.
+ *
+ * The linked entry's start is not an absolute pick — it is defined as
+ * `tail - 1` frames before the cutpoint — so it rides the same negative anchor
+ * and the window keeps its length whatever the real count turns out to be. Two
+ * cases stay absolute: a start the clip's own beginning already clamped to 0
+ * ("sample from the top" is true at any real count), and a cutpoint far enough
+ * from the end that the end bound stayed positive, where both bounds already
+ * share the estimate.
+ */
+const toReferenceStartIndex = (reference: Extract<VideoReferenceItem, { kind: 'video' }>, endIndex: number): number => {
+  const { clip } = reference;
+
+  if (reference.fromSourceVideo !== true || clip.startFrame === 0 || endIndex >= 0) {
+    return toTailAwareIndex(clip.startFrame, clip.numFrames);
+  }
+
+  return endIndex - (clip.endFrame - clip.startFrame);
 };
 
 const addPromptAndSeedNodes = (graph: BackendGraphContract) => ({

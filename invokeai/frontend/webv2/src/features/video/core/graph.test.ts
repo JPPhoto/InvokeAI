@@ -557,6 +557,30 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     );
   });
 
+  it('reference-extend: only the linked tail window is anchored to the clip end', () => {
+    const linked = (clip: Record<string, unknown>, flag = true) => ({
+      clip: { fps: 24, height: 480, numFrames: 402, video_name: 'long.mp4', width: 832, ...clip },
+      conditioning: 'video_audio' as const,
+      ...(flag ? { fromSourceVideo: true } : {}),
+      kind: 'video' as const,
+    });
+    const startOf = (reference: unknown) =>
+      nodeOfType(
+        compileVideoGraph({ ...referenceSettings, references: [reference] } as never, model).backendGraph,
+        'minimax_h3_video_reference'
+      ).start_frame;
+
+    // A user's own reference keeps an absolute start: their trim is a position,
+    // not a length, and re-anchoring it would drift with the estimate.
+    expect(startOf(linked({ endFrame: 400, startFrame: 260 }, false))).toBe(260);
+    // A start the clip's own beginning clamped stays 0 — true at any real count.
+    expect(startOf(linked({ endFrame: 400, startFrame: 0 }))).toBe(0);
+    // A cutpoint far enough from the end that BOTH bounds keep the estimate.
+    expect(startOf(linked({ endFrame: 300, startFrame: 160 }))).toBe(160);
+    // The tail case: end went negative, so the start follows it.
+    expect(startOf(linked({ endFrame: 400, startFrame: 260 }))).toBe(-142);
+  });
+
   it('fl2va graphs are unchanged by the ref2va machinery', () => {
     const { backendGraph } = compileVideoGraph(settingsFor(componentSource), componentSource);
 
@@ -608,7 +632,12 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     // The linked reference is an ordinary first reference; the flag never reaches metadata.
     const videoReferences = nodesOfType(backendGraph, 'minimax_h3_video_reference');
 
-    expect(videoReferences[0]).toMatchObject({ id: 'reference_1', start_frame: 260 });
+    // Both bounds ride the SAME negative anchor, so the extracted window keeps
+    // its exact length whatever the clip's real frame count turns out to be.
+    // A positive start would have made it `tail + (real - estimate)` frames,
+    // and the overrun is discarded at the seam.
+    expect(videoReferences[0]).toMatchObject({ end_frame: -2, id: 'reference_1', start_frame: -142 });
+    expect((videoReferences[0].end_frame as number) - (videoReferences[0].start_frame as number)).toBe(140);
     const metadata = nodeOfType(backendGraph, 'core_metadata');
 
     expect(metadata.generation_mode).toBe('minimax_h3_ref2v');
