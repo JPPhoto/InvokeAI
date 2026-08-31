@@ -31,7 +31,7 @@ import { Button } from '@platform/ui/Button';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
 import { toaster } from '@platform/ui/toaster';
 import { ArrowLeftRightIcon, DicesIcon } from 'lucide-react';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useId, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { areVideoValuesEqual } from './videoComparators';
@@ -150,6 +150,13 @@ export const VideoWidgetView = () => {
   );
 
   const patch = useCallback((next: Partial<VideoWidgetValues>) => patchValues(next), [patchValues]);
+  // Chakra's `Field.Root` hands its single `ids.control` to EVERY control
+  // inside it, and this Field holds three. Without an id of its own the
+  // switch's hidden input collides with the seed NumberInput, so the
+  // `<label>` Switch.Root renders points at the seed field: clicking the
+  // toggle focused the seed input and never toggled anything.
+  const seedSwitchId = useId();
+  const seedSwitchIds = useMemo(() => ({ hiddenInput: `${seedSwitchId}-randomize-seed` }), [seedSwitchId]);
 
   useMountEffect(() => {
     void ensureModelsLoaded();
@@ -679,15 +686,22 @@ export const VideoWidgetView = () => {
                 <DicesIcon />
               </IconButton>
               <HStack gap="1">
-                <Switch.Root checked={values.shouldRandomizeSeed} size="sm" onCheckedChange={set.randomizeSeed}>
+                <Switch.Root
+                  checked={values.shouldRandomizeSeed}
+                  ids={seedSwitchIds}
+                  size="sm"
+                  onCheckedChange={set.randomizeSeed}
+                >
                   <Switch.HiddenInput />
                   <Switch.Control _checked={SWITCH_CHECKED_PROPS}>
                     <Switch.Thumb />
                   </Switch.Control>
+                  {/* Inside Switch.Root, so the words are part of the control
+                      (they were an inert sibling <Text> before). */}
+                  <Switch.Label color="fg.muted" fontSize="2xs">
+                    {t('widgets.video.randomizeSeed')}
+                  </Switch.Label>
                 </Switch.Root>
-                <Text color="fg.muted" fontSize="2xs">
-                  {t('widgets.video.randomizeSeed')}
-                </Text>
               </HStack>
             </HStack>
           </Field>
