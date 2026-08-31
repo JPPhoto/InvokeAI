@@ -315,14 +315,21 @@ export const VideoWidgetView = () => {
         );
 
         // Unchanged identity with a clip set means the video cap is full and
-        // no same-clip entry could be adopted: the extension would run with
-        // no continuity anchor at all, which deserves more than silence.
+        // no same-clip entry could be adopted. REFUSE the whole drop: patching
+        // the clip anyway produced an extension with no continuity anchor at
+        // all, behind nothing but a toast -- and the cap gate then froze the
+        // clip's trim sliders. (The gate cannot pre-empt this case: it can
+        // only ask about the clip currently set, and this drop is a different
+        // one.) Clearing is never refused -- removing the linked entry cannot
+        // overflow anything.
         if (sourceVideo && references === values.references) {
           toaster.create({
             description: t('widgets.video.referenceExtendCapFullDescription'),
             title: t('widgets.video.referenceExtendCapFull'),
             type: 'warning',
           });
+
+          return;
         }
         patch({ references, sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) });
         return;
