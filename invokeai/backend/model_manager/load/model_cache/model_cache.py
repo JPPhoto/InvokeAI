@@ -578,8 +578,10 @@ class ModelCache:
             )
             # Clear the cache by requesting a very large amount of space.
             # This is the same logic used by the "Clear Model Cache" button.
-            # Using 1000 GB ensures all unlocked models are removed.
-            self._make_room_internal(1000 * GB)
+            # Using 1000 GB ensures all unlocked models are removed. A surviving admission grace
+            # is abandoned by definition here — a healthy loader locks within seconds and every
+            # lock resets the keep-alive timer — so the timeout clear ignores it.
+            self._make_room_internal(1000 * GB, spare_awaiting_first_use=False)
         elif len(self._cached_models) > 0:
             # All models are locked, don't log at info level
             self._logger.debug(
@@ -1085,9 +1087,10 @@ class ModelCache:
         the last pass's.
         """
         if cache_entry.key not in self._cached_models:
-            # Same diagnostic as lock()/unlock() (issue 7513): a detached record's continuation
-            # passes should not run silently.
-            self._logger.info(
+            # Same diagnostic as lock()/unlock() (issue 7513) — but at DEBUG: lock() already said
+            # it once at INFO, and a paced stream repeats this method dozens of times, which turned
+            # one detached record into a page of identical log lines.
+            self._logger.debug(
                 f"Continuing paced lock of model cache entry {cache_entry.key} "
                 f"(Type: {cache_entry.cached_model.model.__class__.__name__}), but it has already been dropped from "
                 "the RAM cache. This is a sign that the model loading order is non-optimal in the invocation code "
@@ -1662,8 +1665,12 @@ class ModelCache:
         """
         return self._make_room_internal(bytes_needed)
 
-    def _make_room_internal(self, bytes_needed: int) -> CacheClearResult:
-        """Internal implementation of make_room(). Assumes the lock is already held."""
+    def _make_room_internal(self, bytes_needed: int, spare_awaiting_first_use: bool = True) -> CacheClearResult:
+        """Internal implementation of make_room(). Assumes the lock is already held.
+
+        `spare_awaiting_first_use=False` (the keep-alive timeout clear) also evicts entries whose
+        admission grace was never released — abandoned by definition after an idle period.
+        """
         self._logger.debug(f"Making room for {bytes_needed / MB:.2f}MB of RAM.")
         self._log_cache_state(title="Before dropping models:")
 
@@ -1688,7 +1695,16 @@ class ModelCache:
             model_key = self._cache_stack[pos]
             cache_entry = self._cached_models[model_key]
 
-            if not cache_entry.is_locked:
+            # awaiting_first_use marks the window between put() and the loader's first lock() —
+            # a window a SINGLE worker thread can re-enter this method inside, because multi-model
+            # invocations load their whole set before locking any of it (e.g. the H3 text encoder
+            # loads text_encoder, then tokenizer, then processor; the tokenizer's cold-load
+            # make_room runs with the 27GB text encoder admitted but not yet locked). Evicting
+            # such an entry frees NOTHING — the loader's handle keeps the model alive — while
+            # detaching the record from all cache accounting and turning every subsequent lock
+            # pass into an issue-7513 diagnostic. The asynchronous eviction paths (budget
+            # reconcile, peer eviction) already honor the grace; the synchronous path must too.
+            if not cache_entry.is_locked and not (spare_awaiting_first_use and cache_entry.awaiting_first_use):
                 ram_bytes_freed += cache_entry.cached_model.total_bytes()
                 self._logger.debug(
                     f"Dropping {model_key} from RAM cache to free {(cache_entry.cached_model.total_bytes() / MB):.2f}MB."
