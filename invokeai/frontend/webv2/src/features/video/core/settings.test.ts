@@ -6,6 +6,7 @@ import { MINIMAX_H3_NUM_FRAMES_CHOICES } from './dimensions';
 import {
   applyReferenceExtendSourceVideo,
   applyReferenceExtendNumFrames,
+  canPlaceReferenceExtendAnchor,
   pinReferenceExtendAnchor,
   clearDeletedVideoMedia,
   cloneVideoWidgetValues,
@@ -656,6 +657,38 @@ describe('reference-extend linkage', () => {
     const adopted = applyReferenceExtendSourceVideo([recalled, IMAGE_REFERENCE], source24, 3, FRAMES);
 
     expect(adopted[1]).toMatchObject({ fromSourceVideo: true, kind: 'video' });
+  });
+
+  it('canPlaceReferenceExtendAnchor agrees with the setter in every state', () => {
+    const video = (name: string, flagged = false) => ({
+      ...VIDEO_REFERENCE,
+      clip: { ...VIDEO_REFERENCE.clip, video_name: name },
+      ...(flagged ? { fromSourceVideo: true } : {}),
+    });
+    const states: VideoReferenceItem[][] = [
+      [],
+      [IMAGE_REFERENCE],
+      [video('a.mp4')],
+      [video('a.mp4'), video('b.mp4')],
+      [video('a.mp4'), video('b.mp4'), video('c.mp4')],
+      // Recall's shape: three unflagged videos, one naming the source clip.
+      [video('long.mp4'), video('b.mp4'), video('c.mp4')],
+      [video('a.mp4'), video('b.mp4'), video('long.mp4', true)],
+    ];
+
+    for (const references of states) {
+      const placed = applyReferenceExtendSourceVideo(references, source24, 3, FRAMES);
+      // The setter signals refusal by returning the input array unchanged.
+      const setterAccepted = placed !== references;
+
+      expect({
+        references: references.map((e) => (e.kind === 'video' ? e.clip.video_name : 'img')),
+        placed: canPlaceReferenceExtendAnchor(references, source24.video_name, 3),
+      }).toEqual({
+        references: references.map((e) => (e.kind === 'video' ? e.clip.video_name : 'img')),
+        placed: setterAccepted,
+      });
+    }
   });
 
   it('applyReferenceExtendNumFrames leaves unlinked references alone', () => {

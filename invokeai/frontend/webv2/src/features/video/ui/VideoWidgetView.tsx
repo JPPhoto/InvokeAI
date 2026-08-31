@@ -11,6 +11,7 @@ import { getVideoDurationSeconds, invertVideoAspectRatioId } from '@features/vid
 import {
   applyReferenceExtendSourceVideo,
   applyReferenceExtendNumFrames,
+  canPlaceReferenceExtendAnchor,
   pinReferenceExtendAnchor,
   normalizeVideoWidgetValues,
   resolveVideoMode,
@@ -404,12 +405,15 @@ export const VideoWidgetView = () => {
   const supportsReferences = policy.modes.includes('reference');
   const supportsInitialVideo = supportsExtend || referenceExtend;
   // Setting an Initial Video on a reference-extend panel has to place a linked
-  // tail reference, which needs a free video slot. With an anchor already
-  // present the drop only re-derives it in place, so it stays available.
+  // tail reference, which needs a free video slot -- unless an existing entry
+  // can be adopted, which consumes none. Deferring to the same predicate the
+  // setter's refusal uses keeps the two from drifting: gating on the flag alone
+  // disabled the field after a recall, which restores references UNFLAGGED
+  // beside the source video, and `disabled` reaches the clip's trim sliders too
+  // -- so the cutpoint could not be moved on a clip that was legitimately set.
   const initialVideoCapBlocked =
     referenceExtend &&
-    !values.references.some((entry) => entry.kind === 'video' && entry.fromSourceVideo === true) &&
-    values.references.filter((entry) => entry.kind === 'video').length >= maxVideoReferences;
+    !canPlaceReferenceExtendAnchor(values.references, values.sourceVideo?.video_name, maxVideoReferences);
   const hasConditioningMedia = Boolean(values.firstFrameImage || values.lastFrameImage || values.sourceVideo);
   const derivedSourceText = dimensions ? t(`widgets.video.dimensionSource.${dimensions.source}`) : undefined;
   const derivedSizeText = dimensions

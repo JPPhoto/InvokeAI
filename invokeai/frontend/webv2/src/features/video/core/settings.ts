@@ -525,6 +525,35 @@ export const pinReferenceExtendAnchor = (references: VideoReferenceItem[]): Vide
 };
 
 /**
+ * Whether setting `videoName` as the Initial Video could place its anchor.
+ *
+ * Mirrors `applyReferenceExtendSourceVideo`'s refusal condition so the UI gate
+ * cannot drift from what the setter actually does. An adoptable entry consumes
+ * no slot: the flagged anchor is rewritten in place, and so is an unflagged
+ * reference already naming the same clip -- which is exactly the shape recall
+ * restores, since `fromSourceVideo` is panel state and never reaches metadata.
+ *
+ * `videoName` is the clip currently set; for a clip not yet dropped its name is
+ * unknowable, so the answer is the conservative one -- whether a NEW anchor
+ * would fit.
+ */
+export const canPlaceReferenceExtendAnchor = (
+  references: VideoReferenceItem[],
+  videoName: string | undefined,
+  maxVideos: number
+): boolean => {
+  const videos = references.filter(
+    (entry): entry is Extract<VideoReferenceItem, { kind: 'video' }> => entry.kind === 'video'
+  );
+
+  return (
+    videos.some(
+      (entry) => entry.fromSourceVideo === true || (videoName !== undefined && entry.clip.video_name === videoName)
+    ) || videos.length < maxVideos
+  );
+};
+
+/**
  * Keeps the reference list in step with the Initial Video on a reference-extend
  * panel (pure; the setter and the model-selection transition both use it):
  *
