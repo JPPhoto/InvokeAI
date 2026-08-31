@@ -17,6 +17,8 @@ import { userEvent } from 'vitest/browser';
 let container: HTMLDivElement;
 let root: Root;
 
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
 beforeEach(() => {
   container = document.createElement('div');
   document.body.append(container);

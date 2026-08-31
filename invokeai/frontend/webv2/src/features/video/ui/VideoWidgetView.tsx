@@ -307,12 +307,15 @@ export const VideoWidgetView = () => {
   const setSourceVideo = useCallback(
     (sourceVideo: VideoSourceClip | null) => {
       if (referenceExtend) {
-        const references = applyReferenceExtendSourceVideo(
-          values.references,
-          sourceVideo,
-          maxVideoReferences,
-          values.numFrames
-        );
+        // Same project-scoped live read as `setReferences`: the clip field's
+        // adopt and upload paths call this after an await, and a captured
+        // list would clobber a reference added meanwhile. A write whose
+        // project has moved on is dropped.
+        if (referencesRef.current.projectId !== projectId) {
+          return;
+        }
+        const current = referencesRef.current.references;
+        const references = applyReferenceExtendSourceVideo(current, sourceVideo, maxVideoReferences, values.numFrames);
 
         // Unchanged identity with a clip set means the video cap is full and
         // no same-clip entry could be adopted. REFUSE the whole drop: patching
@@ -322,7 +325,7 @@ export const VideoWidgetView = () => {
         // only ask about the clip currently set, and this drop is a different
         // one.) Clearing is never refused -- removing the linked entry cannot
         // overflow anything.
-        if (sourceVideo && references === values.references) {
+        if (sourceVideo && references === current) {
           toaster.create({
             description: t('widgets.video.referenceExtendCapFullDescription'),
             title: t('widgets.video.referenceExtendCapFull'),
@@ -336,7 +339,7 @@ export const VideoWidgetView = () => {
       }
       patch({ sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) });
     },
-    [maxVideoReferences, patch, referenceExtend, t, values.numFrames, values.references]
+    [maxVideoReferences, patch, projectId, referenceExtend, t, values.numFrames]
   );
   // The single choke point for every list edit the reference field makes — add,
   // remove, retrim, reorder — so pinning the continuity anchor here covers all

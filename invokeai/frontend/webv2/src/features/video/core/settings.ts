@@ -519,17 +519,25 @@ const referenceExtendStartFrame = (clip: VideoSourceClip, numFrames: number): nu
 /**
  * The fewest source frames that still resample to at least `budget` frames.
  *
- * `ceil(budget * fps / 24)` is the closed form and it is not exact: the
- * resample is a step function, so the rounded-up count can overshoot the
- * budget by a frame or two, and every overshot frame is discarded from the END
- * — the seam. Walking back down to the smallest count that still reaches the
- * budget lands on it exactly wherever the source's frame boundaries allow, and
- * within a frame where they do not (12 fps cannot hit an odd 141 at all). The
- * loop runs `24 / fps` times at most.
+ * `floor(t * 24/fps + 0.5) >= budget` is, for an integer budget, exactly
+ * `t >= (budget - 0.5) * fps / 24` — so the smallest such `t` has a closed
+ * form. The two bounded loops absorb the last-ulp disagreements between that
+ * expression and `resampledFrameCount`'s association of the same arithmetic;
+ * each runs at most a step or two. (An earlier version walked down from
+ * `ceil(budget * fps / 24)` instead, which is `~fps / 24` iterations — 124 ms
+ * per Frames keystroke at an absurd-but-probeable rate.)
+ *
+ * Landing short is what matters: the resample is a step function, and every
+ * frame past the budget is discarded from the END — the seam. The minimum
+ * lands on the budget exactly wherever the source's frame boundaries allow,
+ * and within a frame where they cannot (12 fps cannot hit an odd 141 at all).
  */
 const tailSourceFrames = (budget: number, fps: number): number => {
-  let tail = Math.max(MIN_VIDEO_TRIM_FRAMES, Math.ceil((budget * fps) / MINIMAX_H3_FPS));
+  let tail = Math.max(MIN_VIDEO_TRIM_FRAMES, Math.ceil(((budget - 0.5) * fps) / MINIMAX_H3_FPS));
 
+  while (resampledFrameCount(tail, fps) < budget) {
+    tail += 1;
+  }
   while (tail > MIN_VIDEO_TRIM_FRAMES && resampledFrameCount(tail - 1, fps) >= budget) {
     tail -= 1;
   }

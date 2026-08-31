@@ -137,6 +137,13 @@ const addReferenceNode = (
  * clip, where its length cannot be honoured anyway; below the slop the absolute
  * form is always in range, and the drift it costs is the estimate error itself,
  * a frame or two.
+ *
+ * DECIDED: the slop is not widened beyond 3. An estimate error past the slop
+ * can still fail the relative form, but only on a clip barely longer than the
+ * window (it needs `error > startFrame`), and `TAIL_INDEX_SLOP` is this file's
+ * declared bound on how wrong the estimate gets. A wider guard would not
+ * remove the cliff — it would move it, and pay for the move with silent length
+ * drift on every clip inside the wider margin.
  */
 const toReferenceStartIndex = (reference: Extract<VideoReferenceItem, { kind: 'video' }>, endIndex: number): number => {
   const { clip } = reference;
