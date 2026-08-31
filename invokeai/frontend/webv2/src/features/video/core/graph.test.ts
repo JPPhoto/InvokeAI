@@ -573,8 +573,15 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     // A user's own reference keeps an absolute start: their trim is a position,
     // not a length, and re-anchoring it would drift with the estimate.
     expect(startOf(linked({ endFrame: 400, startFrame: 260 }, false))).toBe(260);
-    // A start the clip's own beginning clamped stays 0 — true at any real count.
+    // A start at or inside the estimate's slop stays ABSOLUTE: the relative
+    // form resolves to `startFrame + (real - estimate)`, and the backend
+    // rejects a negative index rather than clamping, so an estimate that
+    // overshoots by more than `startFrame` would fail the whole generation.
     expect(startOf(linked({ endFrame: 400, startFrame: 0 }))).toBe(0);
+    expect(startOf(linked({ endFrame: 400, startFrame: 1 }))).toBe(1);
+    expect(startOf(linked({ endFrame: 400, startFrame: 3 }))).toBe(3);
+    // Clear of the slop, the window rides the negative anchor again.
+    expect(startOf(linked({ endFrame: 400, startFrame: 4 }))).toBe(-398);
     // A cutpoint far enough from the end that BOTH bounds keep the estimate.
     expect(startOf(linked({ endFrame: 300, startFrame: 160 }))).toBe(160);
     // The tail case: end went negative, so the start follows it.

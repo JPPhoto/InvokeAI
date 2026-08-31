@@ -125,16 +125,23 @@ const addReferenceNode = (
  *
  * The linked entry's start is not an absolute pick — it is defined as
  * `tail - 1` frames before the cutpoint — so it rides the same negative anchor
- * and the window keeps its length whatever the real count turns out to be. Two
- * cases stay absolute: a start the clip's own beginning already clamped to 0
- * ("sample from the top" is true at any real count), and a cutpoint far enough
- * from the end that the end bound stayed positive, where both bounds already
- * share the estimate.
+ * and the window keeps its length whatever the real count turns out to be.
+ *
+ * Two cases stay absolute. A cutpoint far enough from the end leaves both
+ * bounds on the estimate already. And a start within `TAIL_INDEX_SLOP` of the
+ * clip's own beginning stays absolute because the relative form resolves to
+ * `startFrame + (real - estimate)`, which goes NEGATIVE once the estimate
+ * overshoots by more than `startFrame` — and `_ResolvedVideoRange.resolve`
+ * rejects an out-of-range index outright rather than clamping, failing the
+ * whole generation. That can only arise when the window fills nearly the entire
+ * clip, where its length cannot be honoured anyway; below the slop the absolute
+ * form is always in range, and the drift it costs is the estimate error itself,
+ * a frame or two.
  */
 const toReferenceStartIndex = (reference: Extract<VideoReferenceItem, { kind: 'video' }>, endIndex: number): number => {
   const { clip } = reference;
 
-  if (reference.fromSourceVideo !== true || clip.startFrame === 0 || endIndex >= 0) {
+  if (reference.fromSourceVideo !== true || endIndex >= 0 || clip.startFrame <= TAIL_INDEX_SLOP) {
     return toTailAwareIndex(clip.startFrame, clip.numFrames);
   }
 
@@ -166,10 +173,17 @@ const toImageField = (image: { image_name: string }) => ({ image_name: image.ima
 // start is always below the end, so the pair keeps its order when both go
 // negative). Mid-clip picks stay positive: a negative offset computed from
 // an overshooting estimate would drift them instead.
+/**
+ * How wrong the panel's `duration x fps` frame-count estimate is allowed to be.
+ * VFR containers overshoot it by a frame or two, so bounds within this many
+ * frames of the estimated end are emitted relative to the REAL end instead.
+ */
+const TAIL_INDEX_SLOP = 3;
+
 const toTailAwareIndex = (frame: number, estimatedNumFrames: number): number => {
   const tailOffset = estimatedNumFrames - 1 - frame;
 
-  return tailOffset <= 3 ? -(tailOffset + 1) : frame;
+  return tailOffset <= TAIL_INDEX_SLOP ? -(tailOffset + 1) : frame;
 };
 
 /**
