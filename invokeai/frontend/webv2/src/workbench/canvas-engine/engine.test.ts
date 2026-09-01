@@ -18233,3 +18233,56 @@ describe('Select Object canvas engine integration', () => {
     h.engine.lifecycle.dispose();
   });
 });
+
+describe('history entries and stepBy', () => {
+  it('enumerates the stroke entry and replays it with clamped stepBy', async () => {
+    const raf = createControllableRaf();
+    vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
+    vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
+    vi.stubGlobal(
+      'Path2D',
+      class FakePath2D {
+        closePath() {}
+        lineTo() {}
+        moveTo() {}
+        quadraticCurveTo() {}
+      }
+    );
+    const layer = { ...rasterLayer('a'), source: { bitmap: null, type: 'paint' as const } };
+    const document = { ...makeDoc(), stacks: stacksFrom([layer]), selectedLayerId: layer.id };
+    const { projectId, store } = createReducerBackedStore(document);
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      bitmapStore: createSpyBitmapStore(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId,
+      store,
+    });
+    const overlay = createInputCanvas();
+    const screen = createInputCanvas();
+    engine.surface.attach(screen.element, overlay.element);
+    raf.flush();
+    await flushMicrotasks();
+    raf.flush();
+
+    expect(engine.history.getEntries()).toEqual({ future: [], past: [] });
+
+    engine.tools.setTool('brush');
+    overlay.fire('pointerdown', pointerAt(5, 5));
+    overlay.fire('pointermove', pointerAt(12, 12));
+    overlay.fire('pointerup', pointerAt(12, 12, { buttons: 0 }));
+
+    const afterStroke = engine.history.getEntries();
+    expect(afterStroke.past).toHaveLength(1);
+    expect(afterStroke.future).toHaveLength(0);
+
+    engine.history.stepBy(-1);
+    expect(engine.history.getEntries()).toEqual({ future: afterStroke.past, past: [] });
+
+    // Clamped: asking for more redos than exist replays what is there and stops.
+    engine.history.stepBy(5);
+    expect(engine.history.getEntries()).toEqual({ future: [], past: afterStroke.past });
+
+    engine.lifecycle.dispose();
+  });
+});

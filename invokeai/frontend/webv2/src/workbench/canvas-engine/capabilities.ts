@@ -102,6 +102,8 @@ export interface CanvasInteractionState {
   gradientOptions: GradientToolOptions;
   hasFloatingSelection: boolean;
   hasSelection: boolean;
+  /** Monotonic signal for engine history-stack mutations (see the History pane). */
+  historyEpoch: number;
   invertBrushSizeScroll: boolean;
   lassoOptions: LassoToolOptions;
   marqueeOptions: MarqueeToolOptions;
@@ -193,10 +195,21 @@ export interface CanvasToolCapability {
   stepBrushSize(direction: 1 | -1): void;
 }
 
+/** Labels of the retained undo/redo steps, for the History pane. */
+export interface CanvasHistoryEntries {
+  /** Applied steps, oldest first; the last is what `undo()` reverts. */
+  past: readonly string[];
+  /** Undone steps, next-redo first. */
+  future: readonly string[];
+}
+
 export interface CanvasHistoryCapability {
   undo(): void;
   redo(): void;
   clearHistory(): void;
+  getEntries(): CanvasHistoryEntries;
+  /** Replays `offset` steps — negative undoes, positive redoes — clamped to the stacks. */
+  stepBy(offset: number): void;
 }
 
 export type LayerThumbnailRequestResult =
@@ -522,6 +535,12 @@ export interface CanvasEngineExportCapability extends CanvasExportCapability {
 }
 
 export interface CanvasEnginePreviewCapability extends CanvasPreviewCapability {
+  /**
+   * Draws a fit-to-`maxSizePx` composite of the whole document into `target`
+   * (sizing its backing store), for the Overview pane. Returns the drawn
+   * document rect, or null when no document is attached.
+   */
+  drawDocumentOverview(target: HTMLCanvasElement, maxSizePx: number): Rect | null;
   preloadStagedPreview(imageName: string): void;
   setGuardedFilterPreview(
     layerId: string,

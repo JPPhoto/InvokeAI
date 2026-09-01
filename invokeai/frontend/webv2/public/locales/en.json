@@ -1540,7 +1540,9 @@
       "workflow": "Workflow",
       "video": "Video",
       "color": "Color",
-      "swatches": "Swatches"
+      "swatches": "Swatches",
+      "history": "History",
+      "overview": "Overview"
     },
     "generate": {
       "activeCount_one": "{{count}} active",
@@ -3015,6 +3017,15 @@
         "resize": "Resize color pane",
         "swatches": "Swatches",
         "tabs": "Color panes"
+      },
+      "historyPane": {
+        "count_one": "{{count}} step",
+        "count_other": "{{count}} steps",
+        "empty": "No edits yet.",
+        "steps": "Edit history"
+      },
+      "overviewPane": {
+        "pan": "Pan the canvas view"
       }
     },
     "gallery": {

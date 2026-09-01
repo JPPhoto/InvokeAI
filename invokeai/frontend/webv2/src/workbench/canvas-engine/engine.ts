@@ -130,7 +130,7 @@ import {
 import { createPointerPipeline, type PointerPipeline } from '@workbench/canvas-engine/input/pointerPipeline';
 import { createWheelHandler } from '@workbench/canvas-engine/input/wheel';
 import { isEmpty, union } from '@workbench/canvas-engine/math/rect';
-import { createCheckerboardTile } from '@workbench/canvas-engine/render/compositor';
+import { compositeDocument, createCheckerboardTile } from '@workbench/canvas-engine/render/compositor';
 import { createFontLoader, domFontLoadApi } from '@workbench/canvas-engine/render/fontLoader';
 import { hasLayerDisplayEffect } from '@workbench/canvas-engine/render/layerDisplayEffect';
 import { createMaskPatternTile } from '@workbench/canvas-engine/render/maskFill';
@@ -138,7 +138,7 @@ import { renderOverlay } from '@workbench/canvas-engine/render/overlayRenderer';
 import { trimPaintCacheToAlpha } from '@workbench/canvas-engine/render/paintCacheTrim';
 import { createDomRasterBackend, type RasterBackend, type RasterSurface } from '@workbench/canvas-engine/render/raster';
 import { rasterizeSource, type ImageResolver, type RasterizeDeps } from '@workbench/canvas-engine/render/rasterizers';
-import { getLayerThumbnailDisplayKey } from '@workbench/canvas-engine/render/thumbnail';
+import { fitThumbnailSize, getLayerThumbnailDisplayKey } from '@workbench/canvas-engine/render/thumbnail';
 import { documentDeltaToLocal, liftSelectedPixels } from '@workbench/canvas-engine/selection/floatingSelection';
 import { ANTS_STEP_PX, createAntsAnimator, type AntsAnimator } from '@workbench/canvas-engine/selection/marchingAnts';
 import { createBboxTool } from '@workbench/canvas-engine/tools/bboxTool';
@@ -383,6 +383,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     gradientOptions: stores.gradientOptions,
     hasFloatingSelection: stores.hasFloatingSelection,
     hasSelection: stores.hasSelection,
+    historyEpoch: stores.historyEpoch,
     invertBrushSizeScroll: stores.invertBrushSizeScroll,
     lassoOptions: stores.lassoOptions,
     marqueeOptions: stores.marqueeOptions,
@@ -712,6 +713,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     isGestureActive: () => pipeline.isGestureActive(),
   });
   const history = historyController.history;
+  const unsubscribeHistoryEpoch = history.subscribe(() => stores.historyEpoch.set(stores.historyEpoch.get() + 1));
   const dispatchCanvasMutation = (
     action: CanvasProjectMutation,
     origin: 'system' | 'user' = history.isApplying() ? 'system' : 'user'
@@ -2553,6 +2555,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     cleanup.run(unsubscribeRuleOfThirds);
     cleanup.run(unsubscribeProjectPreviewLifecycle);
     cleanup.run(() => mutationContext.dispose());
+    cleanup.run(unsubscribeHistoryEpoch);
     cleanup.run(() => historyController.dispose());
     cleanup.run(() => persistenceController.dispose());
     cleanup.run(() => mirror.dispose());
@@ -2693,7 +2696,26 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     });
   const surface: CanvasSurfaceCapability = { attach, detach, resize };
   const viewportCapability: CanvasViewportCapability = { fitToView, fitToViewOnFirstShow, getViewport, setBboxGrid };
-  const historyCapability: CanvasHistoryCapability = { clearHistory, redo, undo };
+  const stepHistoryBy = (offset: number): void => {
+    const steps = Math.abs(Math.trunc(offset));
+    for (let i = 0; i < steps; i += 1) {
+      if (offset < 0 ? !history.canUndo() : !history.canRedo()) {
+        return;
+      }
+      if (offset < 0) {
+        undo();
+      } else {
+        redo();
+      }
+    }
+  };
+  const historyCapability: CanvasHistoryCapability = {
+    clearHistory,
+    getEntries: () => history.entries(),
+    redo,
+    stepBy: stepHistoryBy,
+    undo,
+  };
   const lifecycle: CanvasLifecycleCapability = {
     activate,
     beginCooldown,
@@ -2957,8 +2979,66 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     updateTextEditStyle,
     updateTransformSession,
   };
+  // The Overview pane's document composite: fit the whole document into the
+  // target at thumbnail scale through the canonical compositor, so ordering,
+  // blend modes, transforms, adjustments and mask fills match the main surface.
+  let overviewRequestedDoc: CanvasDocumentContractV3 | null = null;
+  const overviewRequestedLayerIds = new Set<string>();
+  const drawDocumentOverview = (target: HTMLCanvasElement, maxSizePx: number): Rect | null => {
+    const doc = mirror.getDocument();
+    const ctx = target.getContext('2d');
+    if (!doc || !ctx || doc.width <= 0 || doc.height <= 0) {
+      return null;
+    }
+    // The frame path rasterizes only what its viewport demands and the budget
+    // may evict what it culled; the overview wants everything, so ask for the
+    // missing caches and heal on the next content-epoch repaint (a publish
+    // bumps it). One request per layer per document: a source that cannot
+    // rasterize must not be retried (and re-toast) on every repaint. It never
+    // pins: under real memory pressure the budget still wins over the navigator.
+    if (overviewRequestedDoc !== doc) {
+      overviewRequestedDoc = doc;
+      overviewRequestedLayerIds.clear();
+    }
+    const missing: string[] = [];
+    for (const leaf of getDocumentLeaves(doc)) {
+      if (!leaf.isEnabled || !renderableSourceOf(leaf) || overviewRequestedLayerIds.has(leaf.id)) {
+        continue;
+      }
+      const entry = layerCache.peek(leaf.id);
+      if (!entry || entry.stale) {
+        missing.push(leaf.id);
+        overviewRequestedLayerIds.add(leaf.id);
+      }
+    }
+    if (missing.length > 0) {
+      scheduleLayerRasterization(missing);
+    }
+    const size = fitThumbnailSize(doc.width, doc.height, maxSizePx);
+    target.width = size.width;
+    target.height = size.height;
+    const scale = size.width / doc.width;
+    // Only `ctx`/`width`/`height` are read by the compositor; the element is not resized through the surface seam.
+    const surfaceLike = { canvas: target, ctx, height: size.height, width: size.width } as unknown as RasterSurface;
+    compositeDocument(
+      surfaceLike,
+      doc,
+      layerCache,
+      { a: scale, b: 0, c: 0, d: scale, e: 0, f: 0 },
+      {
+        adjustedSurface: getAdjustedSurface,
+        backend,
+        checkerboardTile: null,
+        derivedSurfaces: derivedSurfaceCache,
+        imageSmoothing: true,
+        maskPatternTile: getMaskPatternTile,
+      }
+    );
+    return { height: doc.height, width: doc.width, x: 0, y: 0 };
+  };
   const previewCapability: CanvasEnginePreviewCapability = {
     ...layerController.previews,
+    drawDocumentOverview,
     preloadStagedPreview,
     setGuardedFilterPreview,
     setStagedPreview,

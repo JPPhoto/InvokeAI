@@ -416,6 +416,8 @@ export interface EngineStores {
   canUndo: ScalarStore<boolean>;
   /** Whether the engine-owned canvas history has an entry to redo. */
   canRedo: ScalarStore<boolean>;
+  /** Bumped on every history-stack mutation, so a history list can re-read the entries. */
+  historyEpoch: ScalarStore<number>;
   /** Bbox tool options (aspect lock / ratio). */
   bboxOptions: ScalarStore<BboxToolOptions>;
   /** Lasso tool options (the committed boolean op mode). */
@@ -670,6 +672,7 @@ export const createEngineStores = (initialTool: ToolId = 'view'): EngineStores =
   brushOptions: createScalarStore<BrushOptions>({ ...DEFAULT_BRUSH_OPTIONS }, brushOptionsEqual),
   canRedo: createScalarStore<boolean>(false),
   canUndo: createScalarStore<boolean>(false),
+  historyEpoch: createScalarStore<number>(0),
   checkerboard: createScalarStore<boolean>(true),
   clipToBbox: createScalarStore<boolean>(false),
   checkerColors: createScalarStore<CheckerColors>({ ...DEFAULT_CHECKER_COLORS }, checkerColorsEqual),

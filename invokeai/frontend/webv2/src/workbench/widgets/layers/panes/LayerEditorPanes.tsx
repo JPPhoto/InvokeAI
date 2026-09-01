@@ -25,6 +25,8 @@ import {
   LAYER_EDITOR_PANE_MAX_SIZE_PX,
   LAYER_EDITOR_PANE_MIN_SIZE_PX,
 } from './editorPaneLayout';
+import { HistoryPane } from './HistoryPane';
+import { OverviewPane } from './OverviewPane';
 import { PropertiesPane } from './PropertiesPane';
 import { SwatchesPane } from './SwatchesPane';
 import { TransformPane } from './TransformPane';
@@ -299,6 +301,7 @@ const LayerPaneBlock = ({
 const EDITOR_PANES: ReadonlyArray<{ id: LayerEditorPaneId; labelKey: string }> = [
   { id: 'properties', labelKey: 'widgets.labels.properties' },
   { id: 'transform', labelKey: 'widgets.labels.transform' },
+  { id: 'history', labelKey: 'widgets.labels.history' },
 ];
 
 /**
@@ -352,7 +355,7 @@ export const LayerEditorPanes = ({
       onSelectPane={onSelectPane}
       panes={panes}
     >
-      {activePane === 'transform' ? <TransformPane /> : <PropertiesPane />}
+      {activePane === 'transform' ? <TransformPane /> : activePane === 'history' ? <HistoryPane /> : <PropertiesPane />}
     </LayerPaneBlock>
   );
 };
@@ -360,6 +363,7 @@ export const LayerEditorPanes = ({
 const COLOR_PANES: ReadonlyArray<{ id: LayerColorPaneId; labelKey: string }> = [
   { id: 'color', labelKey: 'widgets.labels.color' },
   { id: 'swatches', labelKey: 'widgets.labels.swatches' },
+  { id: 'overview', labelKey: 'widgets.labels.overview' },
 ];
 
 /**
@@ -414,7 +418,7 @@ export const LayerColorPane = ({
       onSelectPane={onSelectPane}
       panes={panes}
     >
-      {activePane === 'swatches' ? <SwatchesPane /> : <ColorPane />}
+      {activePane === 'swatches' ? <SwatchesPane /> : activePane === 'overview' ? <OverviewPane /> : <ColorPane />}
     </LayerPaneBlock>
   );
 };
@@ -445,11 +449,12 @@ const PaneTab = ({
       bg={isShown ? 'bg.emphasized' : 'transparent'}
       color={isShown ? 'fg' : 'fg.muted'}
       cursor="pointer"
-      flexShrink={0}
       fontSize="xs"
       fontWeight="600"
       h="7"
       id={`${blockId}-tab-${id}`}
+      minW="10"
+      overflow="hidden"
       px="2.5"
       role="tab"
       rounded="md"

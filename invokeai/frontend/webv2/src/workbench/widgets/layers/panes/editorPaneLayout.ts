@@ -1,6 +1,6 @@
 /** Pure layout contracts for the Layers widget's pane blocks; the manifest seeds them, so no React here. */
 
-export type LayerEditorPaneId = 'properties' | 'transform';
+export type LayerEditorPaneId = 'properties' | 'transform' | 'history';
 
 /** What every pane block persists: its preferred height and whether it is collapsed to its strip. */
 export interface PaneBlockLayout {
@@ -24,7 +24,8 @@ export const LAYER_EDITOR_PANE_DEFAULTS: LayerEditorPaneLayout = {
 export const clampLayerEditorPaneSize = (sizePx: number): number =>
   Math.min(LAYER_EDITOR_PANE_MAX_SIZE_PX, Math.max(LAYER_EDITOR_PANE_MIN_SIZE_PX, Math.round(sizePx)));
 
-const isPaneId = (value: unknown): value is LayerEditorPaneId => value === 'properties' || value === 'transform';
+const isPaneId = (value: unknown): value is LayerEditorPaneId =>
+  value === 'properties' || value === 'transform' || value === 'history';
 
 /** The persisted widget values are untyped; anything malformed falls back per field. */
 export const readLayerEditorPaneLayout = (values: Record<string, unknown>): LayerEditorPaneLayout => {
@@ -43,7 +44,7 @@ export const readLayerEditorPaneLayout = (values: Record<string, unknown>): Laye
 export const areLayerEditorPaneLayoutsEqual = (a: LayerEditorPaneLayout, b: LayerEditorPaneLayout): boolean =>
   a.activePane === b.activePane && a.isCollapsed === b.isCollapsed && a.sizePx === b.sizePx;
 
-export type LayerColorPaneId = 'color' | 'swatches';
+export type LayerColorPaneId = 'color' | 'swatches' | 'overview';
 
 export interface LayerColorPaneLayout extends PaneBlockLayout {
   activePane: LayerColorPaneId;
@@ -64,7 +65,8 @@ const LEGACY_COLOR_PANE_DEFAULT_SIZES = new Set([300, 420]);
 export const clampColorPaneSize = (sizePx: number): number =>
   Math.min(COLOR_PANE_MAX_SIZE_PX, Math.max(COLOR_PANE_MIN_SIZE_PX, Math.round(sizePx)));
 
-const isColorPaneId = (value: unknown): value is LayerColorPaneId => value === 'color' || value === 'swatches';
+const isColorPaneId = (value: unknown): value is LayerColorPaneId =>
+  value === 'color' || value === 'swatches' || value === 'overview';
 
 export const readColorPaneLayout = (values: Record<string, unknown>): LayerColorPaneLayout => {
   const raw = values.colorPane;

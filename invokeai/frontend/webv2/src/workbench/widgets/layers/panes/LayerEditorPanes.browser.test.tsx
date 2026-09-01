@@ -5,7 +5,7 @@ import type { FilterOperationSessionState } from '@workbench/canvas-operations/f
 import type { CanvasProjectMutationPort } from '@workbench/canvasProjectMutationPort';
 import type { Project } from '@workbench/projectContracts';
 
-import { ChakraProvider } from '@chakra-ui/react';
+import { Box, ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
 import {
   groupContract,
@@ -79,7 +79,9 @@ import type { LayerEditorPaneLayout } from './editorPaneLayout';
 
 import { ColorPane } from './ColorPane';
 import { LAYER_EDITOR_PANE_DEFAULTS } from './editorPaneLayout';
+import { HistoryPane } from './HistoryPane';
 import { LayerEditorPanes } from './LayerEditorPanes';
+import { OverviewPane } from './OverviewPane';
 import { PropertiesPane } from './PropertiesPane';
 import { SwatchesPane } from './SwatchesPane';
 import { TransformPane } from './TransformPane';
@@ -417,5 +419,40 @@ describe('Color pane', () => {
     );
     await settle();
     expect(canvasValues().colorPalette).toEqual([]);
+  });
+});
+
+const OverviewHarness = () => (
+  <Box h="260px" w="300px">
+    <OverviewPane />
+  </Box>
+);
+
+describe('History pane', () => {
+  it('shows the empty state with undo and redo disabled', async () => {
+    await mount(HistoryPane);
+    await expect.element(page.getByText('No edits yet.', { exact: true })).toBeVisible();
+    await expect.element(page.getByRole('button', { exact: true, name: 'Undo canvas edit' })).toBeDisabled();
+    await expect.element(page.getByRole('button', { exact: true, name: 'Redo canvas edit' })).toBeDisabled();
+  });
+});
+
+describe('Overview pane', () => {
+  it('draws the document composite and pans the viewport from a click', async () => {
+    await mount(OverviewHarness, 'layer');
+    const pan = page.getByRole('button', { exact: true, name: 'Pan the canvas view' });
+    await expect.element(pan).toBeVisible();
+    const canvasWidth = await pan.element().querySelector('canvas')!.width;
+    expect(canvasWidth).toBeGreaterThan(0);
+    const viewport = (
+      harness.engine as { viewport: { getViewport: () => { getState: () => { pan: { x: number; y: number } } } } }
+    ).viewport.getViewport();
+    const before = viewport.getState().pan;
+    await act(async () => {
+      await userEvent.click(pan);
+    });
+    await settle();
+    const after = viewport.getState().pan;
+    expect(after.x === before.x && after.y === before.y).toBe(false);
   });
 });
