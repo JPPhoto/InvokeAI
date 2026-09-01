@@ -28,12 +28,14 @@ import type { LayerRowCommands, LayerSurfaceAnchor } from './layerRowCommands';
 import type { LayerStackRowsByKind } from './layerTreeRows';
 import type { LayerStackActionsEngine } from './useLayerStackActions';
 
-import { LayerChildRow } from './LayerChildRow';
+import { ChildDragGhost, LayerChildRow } from './LayerChildRow';
 import {
+  layerChildDropCommand,
   layerChildRemoveLabelKey,
   layerChildRowCommand,
   layerChildRowKey,
   projectLayerChildRows,
+  type LayerChildDropTarget,
   type ProjectedChildRow,
 } from './layerChildRows';
 import { clearLayerChildSelection, selectLayerChild, useLayerChildSelection } from './layerChildSelection';
@@ -82,6 +84,12 @@ interface DragState {
   readonly depthOffset: number;
 }
 
+interface ChildDragState {
+  readonly child: ProjectedChildRow;
+  readonly overKey: string | null;
+  readonly edge: 'above' | 'below';
+}
+
 interface LayersTreeProps {
   degraded: boolean;
   dispatch: Dispatch<CanvasProjectMutation>;
@@ -114,6 +122,10 @@ const edgeOf = (
   }
   return y >= rect.top + rect.height / 2 ? 'below' : 'above';
 };
+
+/** Which half of a child row the pointer sits in; landings are always between rows. */
+const childEdgeOf = (rect: { top: number; height: number } | undefined, y: number): 'above' | 'below' =>
+  !rect || y >= rect.top + rect.height / 2 ? 'below' : 'above';
 
 const isMenuKey = (event: KeyboardEvent<HTMLElement>): boolean =>
   event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey);
@@ -165,6 +177,12 @@ export const LayersTree = ({
   useLayoutEffect(() => {
     dragRef.current = drag;
   }, [drag]);
+  // A child-row drag is its own mode: one row, landings only where its kind allows.
+  const [childDrag, setChildDrag] = useState<ChildDragState | null>(null);
+  const childDragRef = useRef<ChildDragState | null>(null);
+  useLayoutEffect(() => {
+    childDragRef.current = childDrag;
+  }, [childDrag]);
   const pointerStart = useRef({ x: 0, y: 0 });
   const pointerY = useRef(0);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -499,6 +517,12 @@ export const LayersTree = ({
           runStructural(t('widgets.layers.modifiers.reorderAdjustment'), command);
         }
       },
+      moveChildToLayer: (child, layerId) => {
+        const command = layerChildDropCommand(latest.current.document, child, { beforeItemId: null, layerId });
+        if (command) {
+          runStructural(t('widgets.layers.modifiers.moveReferenceImage'), command);
+        }
+      },
       openChildMenu: (child, anchor: LayerSurfaceAnchor) => setSurface({ anchor, child, kind: 'child-menu' }),
       openMenu: (id, anchor: LayerSurfaceAnchor) => setSurface({ anchor, id, kind: 'menu' }),
       openStackMenu: (stack, anchor: LayerSurfaceAnchor) => setSurface({ anchor, kind: 'stack-menu', stack }),
@@ -689,8 +713,30 @@ export const LayersTree = ({
   const sensors = useSensors(useSensor(PointerSensor, POINTER_SENSOR_OPTIONS));
   const dragDisabled = editingLocked || degraded || panel.filter.trim() !== '';
   const collisionDetection = useCallback<CollisionDetection>((args) => {
-    const current = dragRef.current;
     const stack = args.active.data.current?.stack as LayerStackKind | undefined;
+    const { childRowByKey: childRows } = latest.current;
+    const dragChild = childRows.get(String(args.active.id));
+    if (dragChild) {
+      // An adjustment lands only among its own layer's rows; a reference image
+      // also lands on any other regional layer or its reference rows.
+      return pointerWithin({
+        ...args,
+        droppableContainers: args.droppableContainers.filter((container) => {
+          const id = String(container.id);
+          if (id === dragChild.key) {
+            return false;
+          }
+          const overChild = childRows.get(id);
+          if (dragChild.kind === 'reference-image') {
+            return overChild
+              ? overChild.kind === 'reference-image'
+              : container.data.current?.stack === 'regional_guidance';
+          }
+          return overChild ? overChild.layerId === dragChild.layerId : id === dragChild.layerId;
+        }),
+      });
+    }
+    const current = dragRef.current;
     // Only a row of the same stack under the pointer counts: nothing snaps across stacks or gaps.
     // A child row counts as its owner, so it is out whenever the owner travels.
     return pointerWithin({
@@ -700,7 +746,7 @@ export const LayersTree = ({
           return false;
         }
         const id = String(container.id);
-        const owner = latest.current.childRowByKey.get(id)?.layerId ?? id;
+        const owner = childRows.get(id)?.layerId ?? id;
         return !(current?.travelling.has(owner) ?? false);
       }),
     });
@@ -709,6 +755,14 @@ export const LayersTree = ({
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
       const activeId = String(event.active.id);
+      const activator = event.activatorEvent as PointerEvent;
+      const dragChild = childRowByKey.get(activeId);
+      if (dragChild) {
+        pointerStart.current = { x: activator.clientX ?? 0, y: activator.clientY ?? 0 };
+        pointerY.current = pointerStart.current.y;
+        setChildDrag({ child: dragChild, edge: 'above', overKey: null });
+        return;
+      }
       const stack = event.active.data.current?.stack as LayerStackKind;
       const rows = stacks[stack].rows;
       const selected = new Set(selectedSet.has(activeId) ? selectedIds : [activeId]);
@@ -727,7 +781,6 @@ export const LayersTree = ({
           covering = row.vm.depth;
         }
       }
-      const activator = event.activatorEvent as PointerEvent;
       pointerStart.current = { x: activator.clientX ?? 0, y: activator.clientY ?? 0 };
       pointerY.current = pointerStart.current.y;
       setDrag({
@@ -743,12 +796,22 @@ export const LayersTree = ({
         travelling,
       });
     },
-    [selectedIds, selectedSet, stacks]
+    [childRowByKey, selectedIds, selectedSet, stacks]
   );
   const handleDragMove = useCallback((event: DragMoveEvent) => {
-    const depthOffset = Math.round(event.delta.x / LAYER_TREE_INDENT_PX);
     pointerY.current = pointerStart.current.y + event.delta.y;
     autoScroller.current?.update(pointerY.current);
+    if (childDragRef.current) {
+      setChildDrag((current) => {
+        if (!current) {
+          return current;
+        }
+        const edge = childEdgeOf(event.over?.rect, pointerY.current);
+        return current.edge !== edge ? { ...current, edge } : current;
+      });
+      return;
+    }
+    const depthOffset = Math.round(event.delta.x / LAYER_TREE_INDENT_PX);
     setDrag((current) => {
       if (!current) {
         return current;
@@ -760,6 +823,13 @@ export const LayersTree = ({
   const handleDragOver = useCallback(
     (event: DragOverEvent) => {
       const rawOverId = event.over ? String(event.over.id) : null;
+      if (childDragRef.current) {
+        const edge = childEdgeOf(event.over?.rect, pointerY.current);
+        setChildDrag((state) =>
+          state && (state.overKey !== rawOverId || state.edge !== edge) ? { ...state, edge, overKey: rawOverId } : state
+        );
+        return;
+      }
       // A child row stands in for its owner: the only landing beside it is below the owner.
       const overChild = rawOverId ? childRowByKey.get(rawOverId) : undefined;
       const overId = overChild ? overChild.layerId : rawOverId;
@@ -816,24 +886,99 @@ export const LayersTree = ({
     [engine, target]
   );
 
+  // The dragged child's landing plus the command it resolves to; the indicator shows only real landings.
+  const childDropPlan = useMemo(() => {
+    if (!childDrag?.overKey) {
+      return null;
+    }
+    const { child, edge, overKey } = childDrag;
+    const overChild = childRowByKey.get(overKey);
+    let dropTarget: LayerChildDropTarget;
+    let depth: number;
+    if (overChild) {
+      const ownerRow = stacks[overChild.stack].rows.find((row) => row.id === overChild.layerId);
+      const siblings = ownerRow ? projectLayerChildRows(ownerRow.vm) : [];
+      const index = siblings.findIndex((sibling) => sibling.itemId === overChild.itemId);
+      dropTarget = {
+        beforeItemId: edge === 'above' ? overChild.itemId : (siblings[index + 1]?.itemId ?? null),
+        layerId: overChild.layerId,
+      };
+      depth = overChild.depth;
+    } else {
+      // Onto a layer row: append to its items (cross-layer for reference images).
+      const ownerRow = stacks[child.stack].rows.find((row) => row.id === overKey);
+      if (!ownerRow) {
+        return null;
+      }
+      dropTarget = { beforeItemId: null, layerId: overKey };
+      depth = ownerRow.vm.depth + 1;
+    }
+    const command = layerChildDropCommand(document, child, dropTarget);
+    if (!command) {
+      return null;
+    }
+    // The model previews locks exactly as it will at drop; a refused landing shows no indicator.
+    if (engine && engine.document.model()?.refusalFor(command)) {
+      return null;
+    }
+    return { command, depth, dropTarget };
+  }, [childDrag, childRowByKey, document, engine, stacks]);
+
+  const childIndicator = useMemo(() => {
+    if (!childDropPlan) {
+      return null;
+    }
+    const { depth, dropTarget } = childDropPlan;
+    const beforeKey = dropTarget.beforeItemId ? layerChildRowKey(dropTarget.layerId, dropTarget.beforeItemId) : null;
+    const beforeIndex = beforeKey ? rowIndexByKey.get(beforeKey) : undefined;
+    if (beforeIndex !== undefined) {
+      return { left: depth * LAYER_TREE_INDENT_PX + 14, top: offsets[beforeIndex]! };
+    }
+    // The end of the layer's rendered children, or right below a childless owner row.
+    let index = rowIndexByKey.get(dropTarget.layerId);
+    if (index === undefined) {
+      return null;
+    }
+    while (panelRows[index + 1]?.kind === 'child') {
+      index += 1;
+    }
+    return { left: depth * LAYER_TREE_INDENT_PX + 14, top: offsets[index + 1]! };
+  }, [childDropPlan, offsets, panelRows, rowIndexByKey]);
+
   const finishDrag = useCallback(() => {
     clearHoverTimer();
     autoScroller.current?.stop();
     setDrag(null);
+    setChildDrag(null);
   }, [clearHoverTimer]);
   const handleDragEnd = useCallback(
     (_event: DragEndEvent) => {
       const landing = target;
       const refused = refusal;
+      const childLanding = childDragRef.current ? childDropPlan : null;
+      const childKind = childDragRef.current?.child.kind;
       finishDrag();
-      if (!landing || refused || dragDisabled) {
+      if (dragDisabled) {
+        return;
+      }
+      if (childKind) {
+        if (childLanding) {
+          const label =
+            childKind === 'reference-image'
+              ? t('widgets.layers.modifiers.moveReferenceImage')
+              : t('widgets.layers.modifiers.reorderAdjustment');
+          commitPrepared(label, (model) => model.prepare(childLanding.command));
+        }
+        return;
+      }
+      if (!landing || refused) {
         return;
       }
       commitPrepared(t('widgets.layers.actions.reorder'), (model) =>
         model.prepare({ beforeId: landing.beforeId, ids: landing.ids, parentId: landing.parentId, type: 'reparent' })
       );
     },
-    [commitPrepared, dragDisabled, finishDrag, refusal, t, target]
+    [childDropPlan, commitPrepared, dragDisabled, finishDrag, refusal, t, target]
   );
 
   const indicator = useMemo(() => {
@@ -978,7 +1123,9 @@ export const LayersTree = ({
                     <LayerChildRow
                       child={panelRow.child}
                       commands={commands}
-                      dimmed={drag?.travelling.has(panelRow.child.layerId) ?? false}
+                      dimmed={
+                        (drag?.travelling.has(panelRow.child.layerId) ?? false) || childDrag?.child.key === panelRow.key
+                      }
                       dragDisabled={dragDisabled}
                       editingLocked={editingLocked}
                       focused={panelRow.key === focusKey}
@@ -990,6 +1137,19 @@ export const LayersTree = ({
                 </VirtualSlot>
               );
             })}
+            {childIndicator ? (
+              <Box
+                aria-hidden
+                bg="accent.solid"
+                h="2px"
+                left={`${childIndicator.left}px`}
+                pointerEvents="none"
+                position="absolute"
+                right="2"
+                rounded="full"
+                top={`${childIndicator.top - 1}px`}
+              />
+            ) : null}
             {indicator ? (
               <Box
                 aria-hidden
@@ -1037,7 +1197,11 @@ export const LayersTree = ({
           </Box>
         ) : null}
         <DragOverlay dropAnimation={null} modifiers={OVERLAY_MODIFIERS}>
-          {activeVm && drag ? <LayerDragGhost count={drag.selectedCount} vm={activeVm} /> : null}
+          {childDrag ? (
+            <ChildDragGhost child={childDrag.child} />
+          ) : activeVm && drag ? (
+            <LayerDragGhost count={drag.selectedCount} vm={activeVm} />
+          ) : null}
         </DragOverlay>
       </Box>
       <LayerSurfaceHost

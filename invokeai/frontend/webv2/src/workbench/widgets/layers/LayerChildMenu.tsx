@@ -2,7 +2,16 @@ import type { ComponentProps } from 'react';
 
 import { HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { MenuContent } from '@platform/ui';
-import { ArrowDownIcon, ArrowUpIcon, CircleIcon, CircleOffIcon, CopyIcon, XIcon, type LucideIcon } from 'lucide-react';
+import {
+  ArrowDownIcon,
+  ArrowRightIcon,
+  ArrowUpIcon,
+  CircleIcon,
+  CircleOffIcon,
+  CopyIcon,
+  XIcon,
+  type LucideIcon,
+} from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -41,12 +50,15 @@ export const LayerChildMenu = ({
   child,
   commands,
   editingLocked,
+  moveTargets,
   onClose,
 }: {
   anchor: LayerSurfaceAnchor;
   child: ProjectedChildRow;
   commands: LayerRowCommands;
   editingLocked: boolean;
+  /** Other layers the item can move to (reference images), keyboard parity for the cross-layer drag. */
+  moveTargets: readonly { id: string; name: string }[];
   onClose: () => void;
 }) => {
   const { t } = useTranslation();
@@ -106,6 +118,15 @@ export const LayerChildMenu = ({
                 />
               </>
             ) : null}
+            {moveTargets.map((target) => (
+              <MoveToLayerItem
+                key={target.id}
+                child={child}
+                commands={commands}
+                disabled={editingLocked}
+                target={target}
+              />
+            ))}
             <ChildMenuItem
               disabled={editingLocked}
               icon={XIcon}
@@ -118,5 +139,29 @@ export const LayerChildMenu = ({
         </Menu.Positioner>
       </Portal>
     </Menu.Root>
+  );
+};
+
+const MoveToLayerItem = ({
+  child,
+  commands,
+  disabled,
+  target,
+}: {
+  child: ProjectedChildRow;
+  commands: LayerRowCommands;
+  disabled: boolean;
+  target: { id: string; name: string };
+}) => {
+  const { t } = useTranslation();
+  const handleSelect = useCallback(() => commands.moveChildToLayer(child, target.id), [child, commands, target.id]);
+  return (
+    <ChildMenuItem
+      disabled={disabled}
+      icon={ArrowRightIcon}
+      label={t('widgets.layers.modifiers.moveToLayer', { name: target.name })}
+      value={`move-to:${target.id}`}
+      onSelect={handleSelect}
+    />
   );
 };

@@ -41,6 +41,8 @@ export interface LayerRowCommands {
   removeChild(child: ProjectedChildRow): void;
   /** Ordered kinds only (adjustment entries): swap with the neighbour in `direction`. */
   moveChild(child: ProjectedChildRow, direction: -1 | 1): void;
+  /** Reference images only: append the item to another regional layer as one atomic edit. */
+  moveChildToLayer(child: ProjectedChildRow, layerId: string): void;
   /** Ordered kinds only: insert a copy directly after the entry. */
   duplicateChild(child: ProjectedChildRow): void;
   openChildMenu(child: ProjectedChildRow, anchor: LayerSurfaceAnchor): void;

@@ -55,6 +55,15 @@ export type DocumentCommand =
       readonly config: CanvasLayerConfigPatch;
       readonly before?: CanvasLayerConfigPatch;
     }
+  | {
+      /** One atomic edit patching several layers' config, e.g. moving a modifier between two of them. */
+      readonly type: 'patch-config-batch';
+      readonly patches: readonly {
+        readonly id: string;
+        readonly config: CanvasLayerConfigPatch;
+        readonly before?: CanvasLayerConfigPatch;
+      }[];
+    }
   | { readonly type: 'patch-source'; readonly id: string; readonly source: CanvasLayerSourceContract }
   | { readonly type: 'set-enabled'; readonly updates: readonly { id: string; isEnabled: boolean }[] }
   | { readonly type: 'set-hidden'; readonly updates: readonly { id: string; isHidden: boolean }[] }

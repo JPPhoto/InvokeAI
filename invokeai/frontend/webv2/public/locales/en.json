@@ -3034,7 +3034,9 @@
         "moveDown": "Move down",
         "moveUp": "Move up",
         "removeAdjustment": "Remove adjustment",
-        "reorderAdjustment": "Reorder adjustment"
+        "reorderAdjustment": "Reorder adjustment",
+        "moveReferenceImage": "Move reference image",
+        "moveToLayer": "Move to “{{name}}”"
       }
     },
     "gallery": {

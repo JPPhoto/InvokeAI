@@ -3,7 +3,7 @@ import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import type { Dispatch } from 'react';
 
-import { getDocumentNode } from '@workbench/canvas-engine/api';
+import { getDocumentLeaves, getDocumentNode } from '@workbench/canvas-engine/api';
 import { useCallback, useMemo } from 'react';
 
 import type { LayerRowCommands, LayerSurfaceAnchor } from './layerRowCommands';
@@ -72,6 +72,21 @@ export const LayerSurfaceHost = ({
     }
     return item.isEnabled === child.isEnabled ? child : { ...child, isEnabled: item.isEnabled };
   }, [document, surface]);
+  // Keyboard parity for the cross-layer drag: other regional layers a reference image can move to.
+  const moveTargets = useMemo(() => {
+    if (surface?.kind !== 'child-menu' || surface.child.kind !== 'reference-image') {
+      return [];
+    }
+    const { child } = surface;
+    return getDocumentLeaves(document)
+      .filter(
+        (leaf) =>
+          leaf.type === 'regional_guidance' &&
+          leaf.id !== child.layerId &&
+          !leaf.referenceImages.some((ref) => ref.id === child.itemId)
+      )
+      .map((leaf) => ({ id: leaf.id, name: leaf.name }));
+  }, [document, surface]);
   if (surface?.kind === 'stack-menu') {
     return (
       <LayerStackMenu
@@ -94,6 +109,7 @@ export const LayerSurfaceHost = ({
         child={liveChild}
         commands={commands}
         editingLocked={editingLocked}
+        moveTargets={moveTargets}
         onClose={onClose}
       />
     );

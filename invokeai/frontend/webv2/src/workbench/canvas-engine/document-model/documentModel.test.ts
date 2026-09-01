@@ -732,6 +732,76 @@ describe('createDocumentModel', () => {
       expect(Object.hasOwn(mask, 'noise')).toBe(false);
     });
 
+    it('round-trips an atomic cross-layer config batch and refuses malformed batches', () => {
+      const ref = {
+        config: {
+          beginEndStepPct: [0, 1] as [number, number],
+          clipVisionModel: 'ViT-H' as const,
+          image: null,
+          method: 'full' as const,
+          model: null,
+          type: 'ip_adapter' as const,
+          weight: 1,
+        },
+        id: 'ref1',
+        isEnabled: true,
+      };
+      const nodes = [
+        layer('ga', 'regional_guidance', { referenceImages: [ref] }),
+        layer('gb', 'regional_guidance'),
+        layer('r1'),
+      ];
+      const project = projectWith(nodes, 'ga');
+      const move = {
+        patches: [
+          {
+            before: { layerType: 'regional_guidance' as const, referenceImages: [ref] },
+            config: { layerType: 'regional_guidance' as const, referenceImages: [] },
+            id: 'ga',
+          },
+          {
+            before: { layerType: 'regional_guidance' as const, referenceImages: [] },
+            config: { layerType: 'regional_guidance' as const, referenceImages: [ref] },
+            id: 'gb',
+          },
+        ],
+        type: 'patch-config-batch' as const,
+      };
+      const { after } = roundTrip(project, move);
+      const leaves = getDocumentLeaves(after.canvas.document);
+      const refsOf = (id: string) => {
+        const found = leaves.find((leaf) => leaf.id === id);
+        return found?.type === 'regional_guidance' ? found.referenceImages.map((entry) => entry.id) : null;
+      };
+      expect(refsOf('ga')).toEqual([]);
+      expect(refsOf('gb')).toEqual(['ref1']);
+
+      expect(modelOf(project).prepare({ patches: [], type: 'patch-config-batch' })).toEqual({
+        operation: 'patch nothing',
+        status: 'unsupported',
+      });
+      expect(
+        modelOf(project).prepare({ patches: [move.patches[0]!, move.patches[0]!], type: 'patch-config-batch' })
+      ).toEqual({ operation: 'batch patches one layer twice', status: 'unsupported' });
+      const locked = projectWith(
+        [layer('ga', 'regional_guidance', { isLocked: true, referenceImages: [ref] }), nodes[1]!, layer('r1')],
+        'ga'
+      );
+      expect(modelOf(locked).prepare(move)).toMatchObject({ status: 'locked' });
+      expect(
+        modelOf(project).prepare({
+          patches: [
+            {
+              before: { layerType: 'regional_guidance', referenceImages: [ref] },
+              config: { layerType: 'regional_guidance', referenceImages: [ref] },
+              id: 'ga',
+            },
+          ],
+          type: 'patch-config-batch',
+        })
+      ).toEqual({ status: 'unchanged' });
+    });
+
     it('round-trips config, source and flag commands through the reducer, groups included', () => {
       const project = projectWith(tree(), 'r1');
       const control = roundTrip(project, {

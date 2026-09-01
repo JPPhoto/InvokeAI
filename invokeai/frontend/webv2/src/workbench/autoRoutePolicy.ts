@@ -140,6 +140,7 @@ const CANVAS_EDIT_CONFIDENCE = {
   toggleCanvasStagingVisibility: 'none',
   updateCanvasLayer: 'conditional',
   updateCanvasLayerConfig: 'high',
+  updateCanvasLayerConfigs: 'high',
   updateCanvasLayerSource: 'high',
 } satisfies Record<CanvasProjectMutation['type'], CanvasEditConfidence>;
 

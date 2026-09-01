@@ -235,12 +235,15 @@ const Harness = ({ initialNodes }: { initialNodes: CanvasNodeContract[] }) => {
         })()}
       </output>
       <output data-testid="regional-refs" style={HIDDEN}>
-        {(() => {
-          const layer = getDocumentLayer(document, 'rg');
-          return layer?.type === 'regional_guidance'
-            ? layer.referenceImages.map((ref) => `${ref.id}:${ref.isEnabled ? 'on' : 'off'}`).join(',') || 'empty'
-            : 'none';
-        })()}
+        {['rg', 'rg2']
+          .map((id) => {
+            const layer = getDocumentLayer(document, id);
+            return layer?.type === 'regional_guidance'
+              ? `${id}[${layer.referenceImages.map((ref) => `${ref.id}:${ref.isEnabled ? 'on' : 'off'}`).join(',')}]`
+              : null;
+          })
+          .filter(Boolean)
+          .join(' ') || 'none'}
       </output>
       <output data-testid="selected-layers" style={HIDDEN}>
         {panel.selectedIds.join(',') || 'none'}
@@ -625,11 +628,11 @@ describe('LayersTree projected child rows', () => {
     await renderTree(regionWithRefs());
     const dot = treeitem('Reference image 1').querySelector<HTMLButtonElement>('button[aria-label="Toggle active"]')!;
     await act(() => userEvent.click(dot));
-    expect(output('regional-refs')).toBe('ref1:off,ref2:on');
+    expect(output('regional-refs')).toBe('rg[ref1:off,ref2:on]');
     expect(output('selected-layer')).toBe('none');
     treeitem('Reference image 2').focus();
     await act(() => userEvent.keyboard('{Delete}'));
-    expect(output('regional-refs')).toBe('ref1:off');
+    expect(output('regional-refs')).toBe('rg[ref1:off]');
   });
 
   it('selecting a child selects its owner, records the sub-selection, and reveals Properties', async () => {
@@ -680,6 +683,43 @@ describe('LayersTree projected child rows', () => {
     const dot = treeitem('Saturation').querySelector<HTMLButtonElement>('button[aria-label="Toggle active"]')!;
     await act(() => userEvent.click(dot));
     expect(output('raster-adjustments')).toBe('a1:on,a2:off,a3:on');
+  });
+
+  it('reorders adjustment entries with a pointer drag', async () => {
+    await renderTree([
+      layerContract('r1', 'raster', {
+        adjustments: [
+          { brightness: 0.2, contrast: 0, id: 'a1', isEnabled: true, type: 'brightness-contrast' },
+          { curves: {}, id: 'a2', isEnabled: true, type: 'curves' },
+        ],
+        name: 'Painting',
+      }),
+    ]);
+    const curves = host!.querySelector<HTMLElement>('[data-layer-row-id="child:r1:a2"]')!;
+    const bc = host!.querySelector<HTMLElement>('[data-layer-row-id="child:r1:a1"]')!;
+    const start = centre(curves);
+    const end = centre(bc);
+    await act(() => pointer('pointerdown', curves, start.x, start.y));
+    await act(() => pointer('pointermove', document, start.x + 8, start.y));
+    await act(() => pointer('pointermove', document, end.x, end.y - 10));
+    await act(() => pointer('pointerup', document, end.x, end.y - 10));
+    expect(output('raster-adjustments')).toBe('a2:on,a1:on');
+  });
+
+  it('moves a reference image to another regional layer with a pointer drag', async () => {
+    await renderTree([
+      layerContract('rg', 'regional_guidance', { name: 'Region A', referenceImages: [referenceImage('ref1')] }),
+      layerContract('rg2', 'regional_guidance', { name: 'Region B' }),
+    ]);
+    const refRow = host!.querySelector<HTMLElement>('[data-layer-row-id="child:rg:ref1"]')!;
+    const targetRow = host!.querySelector<HTMLElement>('[data-layer-row-id="rg2"]')!;
+    const start = centre(refRow);
+    const end = centre(targetRow);
+    await act(() => pointer('pointerdown', refRow, start.x, start.y));
+    await act(() => pointer('pointermove', document, start.x + 8, start.y));
+    await act(() => pointer('pointermove', document, end.x, end.y));
+    await act(() => pointer('pointerup', document, end.x, end.y));
+    expect(output('regional-refs')).toBe('rg[] rg2[ref1:on]');
   });
 
   it('walks child rows from the keyboard and routes their context menu', async () => {

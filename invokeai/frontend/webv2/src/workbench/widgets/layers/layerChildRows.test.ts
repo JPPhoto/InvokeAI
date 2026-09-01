@@ -3,7 +3,13 @@ import type { RegionalGuidanceReferenceImage } from '@workbench/canvas-engine/ap
 import { documentFrom, layerContract } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it } from 'vitest';
 
-import { getLayerChildItem, layerChildRowCommand, layerChildRowKey, projectLayerChildRows } from './layerChildRows';
+import {
+  getLayerChildItem,
+  layerChildDropCommand,
+  layerChildRowCommand,
+  layerChildRowKey,
+  projectLayerChildRows,
+} from './layerChildRows';
 import { buildLayerStackRows } from './layerTreeRows';
 
 const referenceImage = (id: string, overrides: Partial<RegionalGuidanceReferenceImage> = {}) => ({
@@ -227,5 +233,71 @@ describe('adjustment rows', () => {
       layerChildRowCommand(document, { itemId: 'ref1', layerId: 'rg1' }, { newId: 'x', type: 'duplicate' })
     ).toBeNull();
     expect(getLayerChildItem(document, 'r1', 'a3')).toEqual({ isEnabled: true, kind: 'adjustment-curves' });
+  });
+});
+
+describe('layerChildDropCommand', () => {
+  const entries = () => [
+    { brightness: 0.1, contrast: 0, id: 'a1', isEnabled: true, type: 'brightness-contrast' as const },
+    { id: 'a2', isEnabled: false, saturation: -0.4, type: 'hsl' as const },
+    { curves: {}, id: 'a3', isEnabled: true, type: 'curves' as const },
+  ];
+  const twoRegions = () => [
+    layerContract('rg1', 'regional_guidance', { referenceImages: [referenceImage('ref1'), referenceImage('ref2')] }),
+    layerContract('rg2', 'regional_guidance', { referenceImages: [referenceImage('ref3')] }),
+    layerContract('r1', 'raster', { adjustments: entries() }),
+  ];
+  const adjustment = { itemId: 'a3', kind: 'adjustment-curves' as const, layerId: 'r1' };
+  const reference = { itemId: 'ref1', kind: 'reference-image' as const, layerId: 'rg1' };
+
+  it('reorders an adjustment within its layer and refuses cross-layer or no-op landings', () => {
+    const document = documentFrom(twoRegions());
+    const moved = layerChildDropCommand(document, adjustment, { beforeItemId: 'a1', layerId: 'r1' });
+    expect(
+      ((moved as { config: unknown }).config as { adjustments: { id: string }[] }).adjustments.map((e) => e.id)
+    ).toEqual(['a3', 'a1', 'a2']);
+    expect(layerChildDropCommand(document, adjustment, { beforeItemId: null, layerId: 'r1' })).toBeNull();
+    expect(layerChildDropCommand(document, adjustment, { beforeItemId: 'a3', layerId: 'r1' })).toBeNull();
+    expect(layerChildDropCommand(document, adjustment, { beforeItemId: null, layerId: 'rg1' })).toBeNull();
+  });
+
+  it('reorders a reference image within its layer', () => {
+    const document = documentFrom(twoRegions());
+    const moved = layerChildDropCommand(document, reference, { beforeItemId: null, layerId: 'rg1' });
+    expect(
+      ((moved as { config: unknown }).config as { referenceImages: { id: string }[] }).referenceImages.map((r) => r.id)
+    ).toEqual(['ref2', 'ref1']);
+  });
+
+  it('moves a reference image between regional layers as one atomic batch', () => {
+    const document = documentFrom(twoRegions());
+    const command = layerChildDropCommand(document, reference, { beforeItemId: 'ref3', layerId: 'rg2' });
+    expect(command).toMatchObject({ type: 'patch-config-batch' });
+    const patches = (command as unknown as { patches: { id: string; config: { referenceImages: { id: string }[] } }[] })
+      .patches;
+    expect(patches.map((patch) => [patch.id, patch.config.referenceImages.map((r) => r.id)])).toEqual([
+      ['rg1', ['ref2']],
+      ['rg2', ['ref1', 'ref3']],
+    ]);
+    expect(layerChildDropCommand(document, reference, { beforeItemId: null, layerId: 'r1' })).toBeNull();
+    expect(
+      layerChildDropCommand(document, { ...reference, itemId: 'gone' }, { beforeItemId: null, layerId: 'rg2' })
+    ).toBeNull();
+  });
+});
+
+describe('layerChildDropCommand id collisions', () => {
+  it('refuses a cross-layer move whose destination already holds the item id', () => {
+    const document = documentFrom([
+      layerContract('rg1', 'regional_guidance', { referenceImages: [referenceImage('ref1')] }),
+      layerContract('rg2', 'regional_guidance', { referenceImages: [referenceImage('ref1')] }),
+    ]);
+    expect(
+      layerChildDropCommand(
+        document,
+        { itemId: 'ref1', kind: 'reference-image', layerId: 'rg1' },
+        { beforeItemId: null, layerId: 'rg2' }
+      )
+    ).toBeNull();
   });
 });

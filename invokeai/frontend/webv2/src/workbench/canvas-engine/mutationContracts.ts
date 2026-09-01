@@ -113,6 +113,11 @@ export type CanvasProjectMutation =
   | { type: 'updateCanvasLayerSource'; id: string; source: CanvasLayerSourceContract }
   | { type: 'updateCanvasLayerConfig'; id: string; config: CanvasLayerConfigPatch }
   | {
+      /** One atomic config patch across several layers, e.g. moving a modifier between two of them. */
+      type: 'updateCanvasLayerConfigs';
+      updates: readonly { id: string; config: CanvasLayerConfigPatch }[];
+    }
+  | {
       type: 'convertCanvasLayer';
       id: string;
       targetType: CanvasLayerContract['type'];

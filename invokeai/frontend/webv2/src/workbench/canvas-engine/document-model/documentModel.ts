@@ -1224,6 +1224,59 @@ export const createDocumentModel = (
     );
   };
 
+  const preparePatchConfigBatch = (
+    command: Extract<DocumentCommand, { type: 'patch-config-batch' }>
+  ): PrepareEditResult => {
+    if (command.patches.length === 0) {
+      return { operation: 'patch nothing', status: 'unsupported' };
+    }
+    if (unique(command.patches.map((patch) => patch.id)).length !== command.patches.length) {
+      return { operation: 'batch patches one layer twice', status: 'unsupported' };
+    }
+    const forward: { id: string; config: CanvasLayerConfigPatch }[] = [];
+    const inverse: { id: string; config: CanvasLayerConfigPatch }[] = [];
+    const postconditions: EditPostcondition[] = [];
+    const touchedStacks = new Set<LayerStackKind>();
+    let changed = false;
+    for (const patch of command.patches) {
+      const found = editableLeaf(patch.id);
+      if ('status' in found) {
+        return found;
+      }
+      const { entry, layer } = found;
+      if (layer.type !== patch.config.layerType) {
+        return { actual: layer.type, expected: [patch.config.layerType], status: 'wrong-type' };
+      }
+      if (Object.keys(patch.config).length <= 1) {
+        return { operation: 'patch nothing', status: 'unsupported' };
+      }
+      if (patch.before && patch.before.layerType !== patch.config.layerType) {
+        return { operation: 'config baseline names another layer type', status: 'unsupported' };
+      }
+      if (patch.before && !sameKeys(patch.before, patch.config, CONFIG_CONTAINERS)) {
+        return { operation: 'config baseline names other fields', status: 'unsupported' };
+      }
+      changed ||= patch.before ? !sameValue(patch.before, patch.config) : !isConfigApplied(layer, patch.config);
+      forward.push({ config: patch.config, id: patch.id });
+      inverse.push({ config: patch.before ?? configInverse(layer, patch.config), id: patch.id });
+      postconditions.push({ config: patch.config, id: patch.id, kind: 'config' });
+      touchedStacks.add(entry.stack);
+    }
+    if (!changed) {
+      return { status: 'unchanged' };
+    }
+    return prepared(
+      { type: 'updateCanvasLayerConfigs', updates: forward },
+      { type: 'updateCanvasLayerConfigs', updates: [...inverse].reverse() },
+      {
+        postconditions,
+        selectionAfter: selectedLayerId,
+        touchedIds: command.patches.map((patch) => patch.id),
+        touchedStacks: [...touchedStacks],
+      }
+    );
+  };
+
   const preparePatchSource = (command: Extract<DocumentCommand, { type: 'patch-source' }>): PrepareEditResult => {
     const found = editableLeaf(command.id);
     if ('status' in found) {
@@ -1449,6 +1502,8 @@ export const createDocumentModel = (
           return preparePatch(command);
         case 'patch-config':
           return preparePatchConfig(command);
+        case 'patch-config-batch':
+          return preparePatchConfigBatch(command);
         case 'patch-source':
           return preparePatchSource(command);
         case 'set-enabled':

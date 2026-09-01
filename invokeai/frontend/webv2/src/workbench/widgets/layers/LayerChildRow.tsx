@@ -1,16 +1,16 @@
 import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
 
-import { Box, Icon, Text } from '@chakra-ui/react';
-import { useDroppable } from '@dnd-kit/core';
+import { Box, HStack, Icon, Text } from '@chakra-ui/react';
+import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { Row } from '@platform/ui';
 import { DropletIcon, GaugeIcon, ImageIcon, SplineIcon, SunMediumIcon, WavesIcon, type LucideIcon } from 'lucide-react';
 import { memo, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { LayerChildRowKind, ProjectedChildRow } from './layerChildRows';
 import type { LayerRowCommands } from './layerRowCommands';
 
 import { LayerActiveDot, ROW_SELECTION_FOCUS } from './LayerActiveDot';
+import { isOrderedChildKind, type LayerChildRowKind, type ProjectedChildRow } from './layerChildRows';
 import { LAYER_TREE_INDENT_PX } from './layerPanelRows';
 import { anchorFromPoint } from './layerRowCommands';
 
@@ -25,8 +25,12 @@ const CHILD_ROW_GLYPHS: Record<LayerChildRowKind, LucideIcon> = {
   'reference-image': ImageIcon,
 };
 
+/** Kinds whose rows can be picked up: reorderable entries and movable reference images. */
+export const isDraggableChildKind = (kind: LayerChildRowKind): boolean =>
+  kind === 'reference-image' || isOrderedChildKind(kind);
+
 /** The row's display name; reference images are numbered, other modifiers named by kind. */
-const childRowName = (child: ProjectedChildRow, t: (key: string) => string): string => {
+export const childRowName = (child: ProjectedChildRow, t: (key: string) => string): string => {
   switch (child.kind) {
     case 'reference-image':
       return `${t('widgets.layers.regionalGuidance.referenceImage')} ${child.posInSet}`;
@@ -76,13 +80,27 @@ const LayerChildRowComponent = ({
     disabled: dragDisabled,
     id: child.key,
   });
+  const { listeners, setNodeRef: setDragRef } = useDraggable({
+    data: { stack: child.stack },
+    disabled: dragDisabled || !isDraggableChildKind(child.kind),
+    id: child.key,
+  });
   const setRowRef = useCallback(
     (element: HTMLDivElement | null) => {
       rowElement.current = element;
       setDropRef(element);
+      setDragRef(element);
     },
-    [setDropRef]
+    [setDragRef, setDropRef]
   );
+  // Pointer listeners only, like layer rows: the tree owns the keyboard model.
+  const dragListeners = useMemo(() => {
+    if (dragDisabled || !listeners) {
+      return {};
+    }
+    const { onKeyDown: _onKeyDown, ...rest } = listeners;
+    return rest;
+  }, [dragDisabled, listeners]);
   const name = childRowName(child, t);
 
   const indentStyle = useMemo(() => ({ paddingLeft: `${child.depth * LAYER_TREE_INDENT_PX}px` }), [child.depth]);
@@ -123,6 +141,7 @@ const LayerChildRowComponent = ({
   return (
     <Box
       ref={setRowRef}
+      {...dragListeners}
       aria-label={name}
       aria-level={child.depth + 2}
       aria-posinset={child.posInSet}
@@ -192,3 +211,27 @@ const LayerChildRowComponent = ({
 };
 
 export const LayerChildRow = memo(LayerChildRowComponent);
+
+/** The compact card that follows the pointer while a child row is dragged. */
+export const ChildDragGhost = ({ child }: { child: ProjectedChildRow }) => {
+  const { t } = useTranslation();
+  return (
+    <HStack
+      bg="bg.panel"
+      borderColor="accent.solid"
+      borderWidth="1px"
+      boxShadow="lg"
+      cursor="grabbing"
+      gap="2"
+      maxW="14rem"
+      px="2"
+      py="1"
+      rounded="sm"
+    >
+      <Icon as={CHILD_ROW_GLYPHS[child.kind]} boxSize="3" color="fg.muted" flexShrink={0} />
+      <Text fontSize="2xs" fontWeight="700" truncate>
+        {childRowName(child, t)}
+      </Text>
+    </HStack>
+  );
+};

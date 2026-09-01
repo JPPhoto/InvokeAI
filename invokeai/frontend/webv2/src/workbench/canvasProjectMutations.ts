@@ -82,6 +82,7 @@ const CANVAS_PROJECT_MUTATION_TYPES: ReadonlySet<string> = new Set<CanvasProject
   'toggleCanvasStagingVisibility',
   'updateCanvasLayer',
   'updateCanvasLayerConfig',
+  'updateCanvasLayerConfigs',
   'updateCanvasLayerSource',
 ]);
 
@@ -828,6 +829,23 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
       return updateCanvasDocument(project, (document) =>
         mapLayer(document, mutation.id, (layer) => patchLayerConfig(layer, mutation.config))
       );
+    case 'updateCanvasLayerConfigs':
+      return updateCanvasDocument(project, (document) => {
+        // All-or-nothing, like setCanvasLayerPositions: a batch with any
+        // unresolvable target applies nothing (history replay must never
+        // half-apply an entry).
+        const applicable = mutation.updates.every((update) => {
+          const layer = getDocumentLayer(document, update.id);
+          return layer !== null && layer.type === update.config.layerType;
+        });
+        if (!applicable) {
+          return document;
+        }
+        return mutation.updates.reduce(
+          (current, update) => mapLayer(current, update.id, (layer) => patchLayerConfig(layer, update.config)),
+          document
+        );
+      });
     case 'convertCanvasLayer': {
       if (mutation.layer.type !== mutation.targetType) {
         return project;

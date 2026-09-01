@@ -204,6 +204,112 @@ export const layerChildRemoveLabelKey = (kind: LayerChildRowKind): string => {
 
 type PatchConfigCommand = Extract<DocumentCommand, { type: 'patch-config' }>;
 
+/** Where a dragged child row lands: before `beforeItemId` among `layerId`'s items, or at the end. */
+export interface LayerChildDropTarget {
+  readonly layerId: string;
+  readonly beforeItemId: string | null;
+}
+
+const insertAt = <T extends { id: string }>(items: readonly T[], item: T, beforeItemId: string | null): T[] => {
+  const index = beforeItemId === null ? items.length : items.findIndex((candidate) => candidate.id === beforeItemId);
+  return index < 0 ? [...items, item] : [...items.slice(0, index), item, ...items.slice(index)];
+};
+
+/**
+ * The document command a child-row drag resolves to, or `null` when it is a
+ * no-op or the landing is invalid. Adjustment entries reorder within their
+ * layer; a reference image also moves to another regional layer as ONE atomic
+ * cross-layer edit.
+ */
+export const layerChildDropCommand = (
+  document: CanvasDocumentContractV3,
+  child: Pick<ProjectedChildRow, 'kind' | 'layerId' | 'itemId'>,
+  target: LayerChildDropTarget
+): DocumentCommand | null => {
+  if (target.beforeItemId === child.itemId) {
+    return null;
+  }
+  const source = getDocumentLayer(document, child.layerId);
+  if (isOrderedChildKind(child.kind)) {
+    if (target.layerId !== child.layerId || source?.type !== 'raster') {
+      return null;
+    }
+    const before = source.adjustments ?? [];
+    const entry = before.find((candidate) => candidate.id === child.itemId);
+    if (!entry) {
+      return null;
+    }
+    const next = insertAt(
+      before.filter((candidate) => candidate.id !== child.itemId),
+      entry,
+      target.beforeItemId
+    );
+    if (next.every((candidate, index) => candidate === before[index])) {
+      return null;
+    }
+    return {
+      before: { adjustments: [...before], layerType: 'raster' },
+      config: { adjustments: next, layerType: 'raster' },
+      id: child.layerId,
+      type: 'patch-config',
+    };
+  }
+  if (child.kind !== 'reference-image' || source?.type !== 'regional_guidance') {
+    return null;
+  }
+  const ref = source.referenceImages.find((candidate) => candidate.id === child.itemId);
+  if (!ref) {
+    return null;
+  }
+  if (target.layerId === child.layerId) {
+    const before = source.referenceImages;
+    const next = insertAt(
+      before.filter((candidate) => candidate.id !== child.itemId),
+      ref,
+      target.beforeItemId
+    );
+    if (next.every((candidate, index) => candidate === before[index])) {
+      return null;
+    }
+    return {
+      before: { layerType: 'regional_guidance', referenceImages: [...before] },
+      config: { layerType: 'regional_guidance', referenceImages: next },
+      id: child.layerId,
+      type: 'patch-config',
+    };
+  }
+  const destination = getDocumentLayer(document, target.layerId);
+  if (destination?.type !== 'regional_guidance') {
+    return null;
+  }
+  // A duplicated layer can carry the same item id (cloneSubtree re-mints only
+  // node ids); landing there would alias two rows onto one key. Refuse.
+  if (destination.referenceImages.some((candidate) => candidate.id === child.itemId)) {
+    return null;
+  }
+  return {
+    patches: [
+      {
+        before: { layerType: 'regional_guidance', referenceImages: [...source.referenceImages] },
+        config: {
+          layerType: 'regional_guidance',
+          referenceImages: source.referenceImages.filter((candidate) => candidate.id !== child.itemId),
+        },
+        id: child.layerId,
+      },
+      {
+        before: { layerType: 'regional_guidance', referenceImages: [...destination.referenceImages] },
+        config: {
+          layerType: 'regional_guidance',
+          referenceImages: insertAt(destination.referenceImages, ref, target.beforeItemId),
+        },
+        id: target.layerId,
+      },
+    ],
+    type: 'patch-config-batch',
+  };
+};
+
 /**
  * The document command a child-row action resolves to, or `null` when the
  * layer or item is gone or the action changes nothing. Both sides of the patch
