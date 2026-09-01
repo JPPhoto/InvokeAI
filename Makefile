@@ -13,6 +13,8 @@ help:
 	@echo "test                     Run the unit tests."
 	@echo "frontend-install         Install the pnpm modules needed for the frontend"
 	@echo "frontend-build           Build the frontend for localhost:9090"
+	@echo "frontendv2-install       Install the pnpm modules needed for the webv2 frontend"
+	@echo "frontendv2-build         Build the webv2 frontend for localhost:9090"
 	@echo "frontend-test            Run the frontend test suite once"
 	@echo "frontend-dev             Run the frontend in developer mode on localhost:5173"
 	@echo "frontend-openapi         Generate the OpenAPI schema"
@@ -56,6 +58,15 @@ frontend-install:
 # Build the frontend
 frontend-build:
 	cd invokeai/frontend/web && pnpm build
+
+# Install the pnpm modules needed for the webv2 front end
+frontendv2-install:
+	rm -rf invokeai/frontend/webv2/node_modules
+	cd invokeai/frontend/webv2 && pnpm install
+
+# Build the webv2 frontend
+frontendv2-build:
+	cd invokeai/frontend/webv2 && pnpm build
 
 # Run the frontend test suite once
 frontend-test:
