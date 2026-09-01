@@ -10,17 +10,15 @@ import type { LayerSurfaceAnchor } from './layerRowCommands';
 
 import { CanvasLayerContextMenu, type LayerContextMenuEngine } from './LayerContextMenu';
 import { LayerGroupContextMenu, type LayerGroupContextMenuEngine } from './LayerGroupContextMenu';
-import { LayerPropertiesPopover, type LayerPropertiesEngine } from './LayerPropertiesPopover';
 import { LayerStackMenu } from './LayerStackMenu';
 
 export type LayerSurfaceEngine = LayerContextMenuEngine &
   LayerGroupContextMenuEngine &
-  LayerPropertiesEngine &
-  Pick<CanvasEngineHandle, 'exports' | 'projectId'>;
+  Pick<CanvasEngineHandle, 'document' | 'exports' | 'projectId'>;
 
 /** What the panel currently shows beside a row, addressed by node id rather than owned by the row. */
 export type LayerSurfaceRequest =
-  | { readonly kind: 'menu' | 'properties'; readonly id: string; readonly anchor: LayerSurfaceAnchor }
+  | { readonly kind: 'menu'; readonly id: string; readonly anchor: LayerSurfaceAnchor }
   | { readonly kind: 'stack-menu'; readonly stack: LayerStackKind; readonly anchor: LayerSurfaceAnchor };
 
 interface LayerSurfaceHostProps {
@@ -82,9 +80,6 @@ export const LayerSurfaceHost = ({
           stack={engine.document.model()?.getEntry(node.id)?.stack ?? 'raster'}
           onClose={onClose}
         />
-      ) : null}
-      {surface?.kind === 'properties' && node && node.type !== 'group' && !editingLocked ? (
-        <LayerPropertiesPopover key={node.id} anchor={surface.anchor} engine={engine} layer={node} onClose={onClose} />
       ) : null}
     </>
   );

@@ -53,7 +53,6 @@ import type {
   LayerContextSubmenuId,
 } from './layerContextMenuLayout';
 import type { LayerMenuDialogKind, LayerMenuDialogState } from './layerMenuState';
-import type { LayerPropertiesSection } from './layerPropertiesRequestStore';
 
 import { resolveDefaultControlModelForBase } from './controlModelOptions';
 import {
@@ -536,13 +535,10 @@ const LayerMenu = ({
     }
   }, [engine, layer.id, makeStatusError]);
 
-  const handleOpenProperties = useCallback(
-    (section: LayerPropertiesSection) => {
-      widgets.open({ region: 'right', widgetId: 'layers' });
-      requestLayerProperties(layer.id, section);
-    },
-    [layer.id, widgets]
-  );
+  const handleOpenProperties = useCallback(() => {
+    widgets.open({ region: 'right', widgetId: 'layers' });
+    requestLayerProperties(layer.id);
+  }, [layer.id, widgets]);
 
   const handleBooleanRaster = useCallback(
     async (operation: BooleanRasterOperation) => {

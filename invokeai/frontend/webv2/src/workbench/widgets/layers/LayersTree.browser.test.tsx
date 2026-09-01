@@ -183,6 +183,7 @@ const Harness = ({ initialNodes }: { initialNodes: CanvasNodeContract[] }) => {
         editingLocked={false}
         engine={engine}
         panel={panel}
+        onRevealProperties={() => undefined}
         projectId={PROJECT_ID}
         stacks={stacks}
       />

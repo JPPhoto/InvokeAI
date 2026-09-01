@@ -186,7 +186,7 @@ const LayerRowComponent = ({
   const handleOpenProperties = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       event.stopPropagation();
-      commands.openProperties(row.id, anchorFromRect(event.currentTarget.getBoundingClientRect()));
+      commands.openProperties(row.id);
     },
     [commands, row.id]
   );

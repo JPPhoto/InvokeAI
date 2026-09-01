@@ -13,6 +13,7 @@ import { useLayoutEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { GroupSelectedNotice } from './GroupSelectedNotice';
+import { LayerSection } from './LayerSection';
 import { PropertiesRow, PropertiesSection } from './PropertiesSection';
 
 const REGION_LABEL_KEYS = {
@@ -122,6 +123,7 @@ const ConnectedProperties = ({
         )}
         {ToolStatus ? <ToolStatus engine={engine} isExternalInteractionLocked={isSurfaceInteractionLocked} /> : null}
       </PropertiesSection>
+      <LayerSection disabled={isSurfaceInteractionLocked || running !== null} />
     </Stack>
   );
 };

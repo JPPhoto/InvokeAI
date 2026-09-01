@@ -179,11 +179,12 @@ describe('filter operation regions', () => {
       state({ draft: { settings: { high_threshold: 200, low_threshold: 100 }, type: 'canny_edge_detection' } })
     );
 
-    expect(modes).toContain('aria-label="Filter"');
+    // The select names itself through a real (visually hidden) label part.
+    expect(modes).toContain('>Filter</label>');
     expect(modes).toContain('>Auto<');
     expect(modes).not.toContain('>Process<');
 
-    expect(more).not.toContain('aria-label="Filter"');
+    expect(more).not.toContain('>Filter</label>');
     expect(more.indexOf('>Process<')).toBeLessThan(more.indexOf('>Reset<'));
     expect(more.indexOf('>Reset<')).toBeLessThan(more.indexOf('>Raster layer<'));
     expect(more.indexOf('>Raster layer<')).toBeLessThan(more.indexOf('>Control layer<'));

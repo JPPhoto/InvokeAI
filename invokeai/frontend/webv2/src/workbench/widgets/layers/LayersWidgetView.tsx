@@ -17,7 +17,6 @@ import type { LayerColorPaneLayout, LayerEditorPaneLayout } from './panes/editor
 import { LayerMultiSelectionActions } from './LayerMultiSelectionActions';
 import { LAYER_PANEL_DEGRADE_THRESHOLD } from './layerPanelRows';
 import { LayersPanelFooter } from './LayersPanelFooter';
-import { LayersPanelHeader } from './LayersPanelHeader';
 import { LayersTree } from './LayersTree';
 import { buildLayerStackRows } from './layerTreeRows';
 import {
@@ -29,11 +28,10 @@ import {
 import { LayerColorPane, LayerEditorPanes } from './panes/LayerEditorPanes';
 
 /**
- * The layers panel: a fixed header (selected layer's opacity + blend mode, global denoising
- * strength), a fixed selection toolbar, the virtualized tree of the four stacks, and a fixed
- * footer (summary, filter, density), and the editor panes (Properties, Transform) docked at the
- * bottom. Regions keep their geometry; their controls disable instead of appearing and
- * disappearing.
+ * The layers panel: the Color pane at the top, a fixed selection toolbar, the virtualized tree
+ * of the four stacks, a fixed footer (summary, filter, density), and the editor panes at the
+ * bottom — the selected layer's own editors live in the Properties pane. Regions keep their
+ * geometry; their controls disable instead of appearing and disappearing.
  */
 export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
   const { t } = useTranslation();
@@ -86,11 +84,17 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
     (next: LayerColorPaneLayout) => runtime.state.patch({ colorPane: next }),
     [runtime.state]
   );
+  const revealProperties = useCallback(
+    (layerId: string) => {
+      dispatch({ id: layerId, type: 'setCanvasSelectedLayer' });
+      runtime.state.patch({ editorPanes: { ...paneLayout, activePane: 'properties', isCollapsed: false } });
+    },
+    [dispatch, paneLayout, runtime.state]
+  );
 
   return (
     <Stack gap="1" h="full" minH="0">
       <LayerColorPane layout={colorPaneLayout} onLayoutChange={handleColorPaneLayout} />
-      <LayersPanelHeader />
       <LayerMultiSelectionActions
         document={document}
         editingLocked={editingLocked}
@@ -130,6 +134,7 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
             panel={panel}
             projectId={projectId}
             stacks={stacks}
+            onRevealProperties={revealProperties}
           />
         </Flex>
       )}

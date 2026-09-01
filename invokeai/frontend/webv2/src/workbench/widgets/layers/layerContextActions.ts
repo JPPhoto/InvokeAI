@@ -36,8 +36,6 @@ import {
   WorkflowIcon,
 } from 'lucide-react';
 
-import type { LayerPropertiesSection } from './layerPropertiesRequestStore';
-
 import { canConvertRasterControl, canMergeLayerDown } from './layerOps';
 
 export type LayerContextActionId =
@@ -114,7 +112,7 @@ export interface LayerContextActionEffects {
   startFilter(layerId: string): void;
   transform(): void;
   fitToBbox(): void;
-  openProperties(section: LayerPropertiesSection): void;
+  openProperties(): void;
   saveToAssets(): Promise<void>;
   copyToClipboard(): Promise<void>;
   cropToBbox(): Promise<void>;
@@ -442,7 +440,7 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
   },
   {
     defaultLabel: 'Adjustments',
-    handler: ({ effects }) => effects.openProperties('adjustments'),
+    handler: ({ effects }) => effects.openProperties(),
     icon: SlidersHorizontalIcon,
     id: 'adjustments',
     isEnabled: hasMutablePixels,

@@ -301,7 +301,7 @@ describe('layer context action registry', () => {
     getLayerContextActionDefinition('regional-auto-negative').handler(context);
 
     expect(effects.reorder).toHaveBeenCalledWith('front', 'move-to-front');
-    expect(effects.openProperties).toHaveBeenCalledWith('adjustments');
+    expect(effects.openProperties).toHaveBeenCalledWith();
     expect(effects.startFilter).toHaveBeenCalledWith(rasterLayer.id);
     expect(effects.booleanMerge).toHaveBeenCalledWith('intersect');
     expect(effects.copyTo).toHaveBeenCalledWith('control');

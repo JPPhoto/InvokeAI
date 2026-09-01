@@ -25,7 +25,7 @@ export interface LayerRowCommands {
   rename(id: string, name: string): void;
   endRename(): void;
   openMenu(id: string, anchor: LayerSurfaceAnchor): void;
-  openProperties(id: string, anchor: LayerSurfaceAnchor): void;
+  openProperties(id: string): void;
   openStackMenu(stack: LayerStackKind, anchor: LayerSurfaceAnchor): void;
   toggleCollapse(stack: LayerStackKind): void;
   /** `id` is a node id or a stack header key; the tree tells them apart. */

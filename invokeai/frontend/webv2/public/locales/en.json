@@ -1505,7 +1505,9 @@
       },
       "sections": {
         "operation": "Operation",
-        "tool": "Tool"
+        "tool": "Tool",
+        "generation": "Generation",
+        "layer": "Layer"
       }
     },
     "transform": {

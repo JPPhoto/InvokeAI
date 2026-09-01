@@ -1,11 +1,8 @@
 import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
-export type LayerPropertiesSection = 'filter' | 'adjustments';
-
 export interface LayerPropertiesRequest {
   layerId: string;
-  section: LayerPropertiesSection;
   token: number;
 }
 
@@ -22,8 +19,8 @@ registerAccountOwnedResource({
   name: 'layer-properties-requests',
 });
 
-export const requestLayerProperties = (layerId: string, section: LayerPropertiesSection): void => {
-  layerPropertiesRequestStore.setSnapshot({ request: { layerId, section, token: nextToken++ } });
+export const requestLayerProperties = (layerId: string): void => {
+  layerPropertiesRequestStore.setSnapshot({ request: { layerId, token: nextToken++ } });
 };
 
 export const clearLayerPropertiesRequest = (token?: number): void => {
@@ -37,17 +34,5 @@ export const clearLayerPropertiesRequest = (token?: number): void => {
 export const getLayerPropertiesRequest = (): LayerPropertiesRequest | null =>
   layerPropertiesRequestStore.getSnapshot().request;
 
-export const useLayerPropertiesRequest = (layerId: string): LayerPropertiesRequest | null =>
-  layerPropertiesRequestStore.useSelector(
-    (snapshot) => (snapshot.request?.layerId === layerId ? snapshot.request : null),
-    Object.is
-  );
-
 export const useCurrentLayerPropertiesRequest = (): LayerPropertiesRequest | null =>
   layerPropertiesRequestStore.useSelector((snapshot) => snapshot.request, Object.is);
-
-/** Whether the pending request targets one of `nodeIds`, so its stack must stay expanded to honour it. */
-export const isLayerPropertiesRequestedWithin = (
-  request: LayerPropertiesRequest | null,
-  nodeIds: readonly string[]
-): boolean => !!request && nodeIds.includes(request.layerId);

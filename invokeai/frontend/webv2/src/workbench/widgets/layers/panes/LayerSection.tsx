@@ -11,7 +11,7 @@ import type {
 } from '@workbench/canvas-engine/api';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 
-import { Box, createListCollection, Flex, HStack, NumberInput, Stack } from '@chakra-ui/react';
+import { Box, createListCollection, Flex, HStack, NumberInput, Stack, Switch, Text } from '@chakra-ui/react';
 import { useDebouncedDraftValue, useRegisterGenerateDraftFlusher } from '@features/generation/react';
 import { ColorPicker, Field, Select, Slider } from '@platform/ui';
 import { getDocumentLayer } from '@workbench/canvas-engine/api';
@@ -25,15 +25,22 @@ import {
 } from '@workbench/widgets/canvas/invoke/canvasStrength';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { AdjustmentsPopover } from '@workbench/widgets/layers/AdjustmentsPopover';
+import { ControlLayerSettings } from '@workbench/widgets/layers/ControlLayerSettings';
+import { DenoisingStrengthWave } from '@workbench/widgets/layers/DenoisingStrengthWave';
+import { InpaintMaskSettings } from '@workbench/widgets/layers/InpaintMaskSettings';
+import { applyStructuralPreview, CANVAS_BLEND_MODES } from '@workbench/widgets/layers/layerOps';
+import { RasterLayerFilterSection } from '@workbench/widgets/layers/RasterLayerFilterSection';
+import { RegionalGuidanceSettings } from '@workbench/widgets/layers/RegionalGuidanceSettings';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { DenoisingStrengthWave } from './DenoisingStrengthWave';
-import { applyStructuralPreview, CANVAS_BLEND_MODES } from './layerOps';
+import { GroupSelectedNotice } from './GroupSelectedNotice';
+import { PropertiesSection } from './PropertiesSection';
 
-type LayersPanelHeaderEngine = Pick<CanvasEngineHandle, 'document' | 'interaction' | 'layers'>;
+type LayerSectionEngine = Pick<CanvasEngineHandle, 'document' | 'exports' | 'interaction' | 'layers' | 'projectId'>;
 
 const STRENGTH_DEBOUNCE_MS = 250;
 const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: true } as const;
@@ -47,45 +54,130 @@ type MaskLayer = Extract<CanvasLayerContract, { type: 'inpaint_mask' | 'regional
 const isMaskLayer = (layer: CanvasLayerContract | null): layer is MaskLayer =>
   layer !== null && (layer.type === 'inpaint_mask' || layer.type === 'regional_guidance');
 
+// Reference equality is exact: the document index hands back the same node
+// object until the layer itself changes, and the section renders the whole
+// layer, so a narrower comparison would serve stale views of it.
 const selectSelectedLayer = (project: {
   canvas: { document: Pick<CanvasDocumentContractV3, 'stacks' | 'selectedLayerId'> };
 }): CanvasLayerContract | null => getDocumentLayer(project.canvas.document, project.canvas.document.selectedLayerId);
-
-export const isSameSelection = (left: CanvasLayerContract | null, right: CanvasLayerContract | null): boolean => {
-  if (left?.id !== right?.id || left?.opacity !== right?.opacity || left?.blendMode !== right?.blendMode) {
-    return false;
-  }
-  const leftFill = isMaskLayer(left) ? left.mask.fill.color : null;
-  const rightFill = isMaskLayer(right) ? right.mask.fill.color : null;
-  return leftFill === rightFill;
-};
 
 export const isLayerEditingDisabled = (layer: CanvasLayerContract | null, editingLocked: boolean): boolean =>
   !layer || editingLocked;
 
 /**
- * The slimmed Photoshop-style region above the layer groups (round 3): exactly two
- * rows — the global canvas denoising-strength slider + a per-selection Opacity row
- * (percent stepper + a mask-fill colour swatch for mask layers). Blend mode and the
- * per-type settings that used to stack here now live in each row's properties
- * popover, matching the legacy layout.
+ * The Layer and Generation sections of the Properties pane: the selected
+ * layer's blend mode, opacity, mask fill and type-specific settings (moved out
+ * of the Layers header and its per-row popover), plus the document-wide
+ * denoising strength. Every editor commits through the same document seams it
+ * always did — this is the one implementation, reparented.
  */
-export const LayersPanelHeader = () => {
+export const LayerSection = ({ disabled }: { disabled: boolean }) => {
+  const { t } = useTranslation();
   const engine = useCanvasEngine();
-  const layer = useActiveProjectSelector(selectSelectedLayer, isSameSelection);
+  const layer = useActiveProjectSelector(selectSelectedLayer);
+  const documentRevision = useActiveProjectSelector((project) => project.canvas.documentRevision);
   const editingLocked = useCanvasDocumentEditingLocked(engine);
 
   return (
-    <Stack gap="0">
-      <Box borderBottomWidth={1} px="1.5" py="1">
+    <>
+      <PropertiesSection
+        disabled={disabled}
+        subtitle={layer?.name ?? t('widgets.transform.noSelection')}
+        title={t('widgets.properties.sections.layer')}
+      >
+        {layer ? (
+          <Stack gap="2">
+            <Flex align="center" gap="2">
+              <BlendModeControl editingLocked={editingLocked} engine={engine} layer={layer} />
+              <OpacityRow editingLocked={editingLocked} engine={engine} layer={layer} />
+            </Flex>
+            <LayerTypeSettings documentRevision={documentRevision} engine={engine} layer={layer} />
+          </Stack>
+        ) : (
+          <GroupSelectedNotice />
+        )}
+      </PropertiesSection>
+      <PropertiesSection disabled={disabled} title={t('widgets.properties.sections.generation')}>
         <DenoisingStrengthControl />
-      </Box>
-      <Box borderBottomWidth={1} px="1.5" py="1">
-        <Flex align="center" gap="2">
-          <BlendModeControl editingLocked={editingLocked} engine={engine} layer={layer} />
-          <OpacityRow editingLocked={editingLocked} engine={engine} layer={layer} />
-        </Flex>
-      </Box>
+      </PropertiesSection>
+    </>
+  );
+};
+
+/** Dispatches to the correct per-type settings block for the layer. */
+const LayerTypeSettings = ({
+  documentRevision,
+  engine,
+  layer,
+}: {
+  documentRevision: number;
+  engine: LayerSectionEngine | null;
+  layer: CanvasLayerContract;
+}) => {
+  switch (layer.type) {
+    case 'inpaint_mask':
+      return <InpaintMaskSettings key={layer.id} engine={engine} layer={layer} />;
+    case 'regional_guidance':
+      return <RegionalGuidanceSettings key={layer.id} engine={engine} layer={layer} />;
+    case 'control':
+      return <ControlLayerSettings key={layer.id} engine={engine} layer={layer} onOperationStarted={noop} />;
+    case 'raster':
+      return (
+        <RasterLayerSettings
+          key={`${engine?.projectId ?? 'none'}-${layer.id}-${documentRevision}`}
+          engine={engine}
+          layer={layer}
+        />
+      );
+  }
+};
+
+// Starting an operation used to close the popover; the pane's Operation
+// section now simply appears above, so there is nothing to do.
+const noop = (): void => undefined;
+
+/** Raster-layer properties: transparency lock + non-destructive adjustments. */
+const RasterLayerSettings = ({
+  engine,
+  layer,
+}: {
+  engine: LayerSectionEngine | null;
+  layer: Extract<CanvasLayerContract, { type: 'raster' }>;
+}) => {
+  const commitPrepared = usePreparedCommit(engine);
+  const { t } = useTranslation();
+  const isLocked = layer.isTransparencyLocked === true;
+
+  const handleTransparencyLock = useCallback(
+    (details: { checked: boolean }) => {
+      commitPrepared(t('widgets.layers.adjustments.transparencyLock'), (model) =>
+        model.prepare({
+          before: { isTransparencyLocked: isLocked, layerType: 'raster' },
+          config: { isTransparencyLocked: details.checked, layerType: 'raster' },
+          id: layer.id,
+          type: 'patch-config',
+        })
+      );
+    },
+    [commitPrepared, isLocked, layer.id, t]
+  );
+
+  return (
+    <Stack gap="2">
+      <Switch.Root checked={isLocked} size="sm" onCheckedChange={handleTransparencyLock}>
+        <Switch.HiddenInput />
+        <Switch.Control>
+          <Switch.Thumb />
+        </Switch.Control>
+        <Switch.Label>
+          <Text fontSize="xs">{t('widgets.layers.adjustments.transparencyLock')}</Text>
+        </Switch.Label>
+      </Switch.Root>
+      <Text color="fg.muted" fontSize="2xs" fontWeight="700" textTransform="uppercase">
+        {t('widgets.layers.adjustments.title')}
+      </Text>
+      <AdjustmentsPopover engine={engine} layer={layer} />
+      <RasterLayerFilterSection engine={engine} layer={layer} onOperationStarted={noop} />
     </Stack>
   );
 };
@@ -101,7 +193,7 @@ const BlendModeControl = ({
   layer,
 }: {
   editingLocked: boolean;
-  engine: LayersPanelHeaderEngine | null;
+  engine: LayerSectionEngine | null;
   layer: CanvasLayerContract | null;
 }) => {
   const commitPrepared = usePreparedCommit(engine);
@@ -154,7 +246,7 @@ const OpacityRow = ({
   layer,
 }: {
   editingLocked: boolean;
-  engine: LayersPanelHeaderEngine | null;
+  engine: LayerSectionEngine | null;
   layer: CanvasLayerContract | null;
 }) => {
   const commitPrepared = usePreparedCommit(engine);
@@ -276,7 +368,7 @@ const MaskFillSwatch = ({
   layer,
 }: {
   disabled: boolean;
-  engine: LayersPanelHeaderEngine | null;
+  engine: LayerSectionEngine | null;
   layer: MaskLayer;
 }) => {
   const commitPrepared = usePreparedCommit(engine);

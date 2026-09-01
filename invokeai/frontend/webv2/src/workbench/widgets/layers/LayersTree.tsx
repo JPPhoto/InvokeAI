@@ -73,6 +73,8 @@ interface LayersTreeProps {
   document: CanvasDocumentContractV3;
   editingLocked: boolean;
   engine: LayersTreeEngine | null;
+  /** Reveals the Properties pane's Layer section for `layerId` (selecting it). */
+  onRevealProperties: (layerId: string) => void;
   panel: LayerPanelState;
   projectId: string;
   stacks: LayerStackRowsByKind;
@@ -112,6 +114,7 @@ export const LayersTree = ({
   document,
   editingLocked,
   engine,
+  onRevealProperties,
   panel,
   projectId,
   stacks,
@@ -393,7 +396,7 @@ export const LayersTree = ({
         focusItem(navigation.focus);
       },
       openMenu: (id, anchor: LayerSurfaceAnchor) => setSurface({ anchor, id, kind: 'menu' }),
-      openProperties: (id, anchor: LayerSurfaceAnchor) => setSurface({ anchor, id, kind: 'properties' }),
+      openProperties: (id) => onRevealProperties(id),
       openStackMenu: (stack, anchor: LayerSurfaceAnchor) => setSurface({ anchor, kind: 'stack-menu', stack }),
       rename: (id, name) => runStructural(t('widgets.layers.actions.rename'), { id, patch: { name }, type: 'patch' }),
       select: (id, modifiers: LayerSelectionModifiers) => {
@@ -434,7 +437,7 @@ export const LayersTree = ({
         }
       },
     }),
-    [focusItem, movingIds, runStructural, t]
+    [onRevealProperties, focusItem, movingIds, runStructural, t]
   );
 
   const closeSurface = useCallback(() => {
@@ -508,11 +511,14 @@ export const LayersTree = ({
     if (pending && pending.scrolled && !pending.opened) {
       const row = host.querySelector<HTMLElement>(`[data-layer-row-id="${CSS.escape(pending.id)}"]`);
       if (row) {
-        pendingProperties.current = { ...pending, opened: true };
-        setSurface({ anchor: anchorFromRect(row.getBoundingClientRect()), id: pending.id, kind: 'properties' });
+        // The row is on screen: reveal the Properties pane's Layer section and
+        // settle the request — there is no popover to keep open any more.
+        pendingProperties.current = null;
+        onRevealProperties(pending.id);
+        clearLayerPropertiesRequest(pending.token);
       }
     }
-  }, [panelRows, virtualItems]);
+  }, [onRevealProperties, panelRows, virtualItems]);
 
   // Focus repair: the browser drops focus to the body when a focused row unmounts, so the tree
   // remembers whether it owned focus and puts it back on the item that now holds the tab stop.
