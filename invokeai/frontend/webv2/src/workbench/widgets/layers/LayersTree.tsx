@@ -675,8 +675,12 @@ export const LayersTree = ({
 
   // Focus repair: the browser drops focus to the body when a focused row unmounts, so the tree
   // remembers whether it owned focus and puts it back on the item that now holds the tab stop.
-  const handleFocusCapture = useCallback(() => {
-    treeOwnsFocus.current = true;
+  // Portaled children (the stack hint card) route focus through this capture
+  // handler while their DOM lives outside the host; only real host focus counts.
+  const handleFocusCapture = useCallback((event: FocusEvent<HTMLElement>) => {
+    if (event.currentTarget.contains(event.target as Node)) {
+      treeOwnsFocus.current = true;
+    }
   }, []);
   const handleBlurCapture = useCallback((event: FocusEvent<HTMLElement>) => {
     if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) {

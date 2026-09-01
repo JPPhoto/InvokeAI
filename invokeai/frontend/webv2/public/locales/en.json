@@ -767,6 +767,34 @@
         "Can boost local detail, but may affect global coherence."
       ]
     },
+    "layerStackControl": {
+      "heading": "Control Layers",
+      "paragraphs": [
+        "Layers that guide generation with structural hints such as edges, depth, or pose maps.",
+        "Each control layer pairs its image with a control model and a weight that sets how strongly it steers the result."
+      ]
+    },
+    "layerStackInpaintMask": {
+      "heading": "Inpaint Masks",
+      "paragraphs": [
+        "Masks that mark regions of the image for regeneration.",
+        "Painted areas are regenerated on the next invoke; noise and denoise-limit modifiers tune how strongly the area may change."
+      ]
+    },
+    "layerStackRaster": {
+      "heading": "Raster Layers",
+      "paragraphs": [
+        "The pixel layers that compose your image and feed generation.",
+        "Layers apply top to bottom, and each can carry a stack of non-destructive adjustments such as levels, curves, or hue."
+      ]
+    },
+    "layerStackRegionalGuidance": {
+      "heading": "Regional Guidance",
+      "paragraphs": [
+        "Regions that apply prompts and reference images to part of the image.",
+        "Painted regions scope their prompts and reference images to just that area of the canvas."
+      ]
+    },
     "model": {
       "heading": "Model",
       "paragraphs": [
@@ -3045,12 +3073,6 @@
         "reorderAdjustment": "Reorder adjustment",
         "moveReferenceImage": "Move reference image",
         "moveToLayer": "Move to “{{name}}”"
-      },
-      "groupHints": {
-        "control": "Layers that guide generation with structural hints like edges, depth, or pose.",
-        "inpaint_mask": "Masks that mark regions of the image for regeneration.",
-        "raster": "The pixel layers that compose your image and feed generation.",
-        "regional_guidance": "Regions that apply prompts and reference images to part of the image."
       }
     },
     "gallery": {

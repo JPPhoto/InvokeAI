@@ -1,8 +1,10 @@
+import type { FeatureHintId } from '@platform/ui/hints/hintRegistry';
 import type { CanvasDocumentContractV3, LayerStackKind } from '@workbench/canvas-engine/api';
 import type { KeyboardEvent, MouseEvent } from 'react';
 
-import { Box, HStack, Icon, Text } from '@chakra-ui/react';
+import { Box, HStack, Icon, Text, VisuallyHidden } from '@chakra-ui/react';
 import { IconButton, Tooltip } from '@platform/ui';
+import { FeatureHint } from '@platform/ui/hints/FeatureHint';
 import { ChevronDownIcon } from 'lucide-react';
 import { memo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -13,6 +15,13 @@ import { anchorFromPoint } from './layerRowCommands';
 import { useLayerStackActions, type LayerStackActionsEngine } from './useLayerStackActions';
 
 const HEADER_FOCUS = { outline: '2px solid', outlineColor: 'accent.solid', outlineOffset: '-2px' };
+
+const STACK_HINTS: Record<LayerStackKind, FeatureHintId> = {
+  control: 'layerStackControl',
+  inpaint_mask: 'layerStackInpaintMask',
+  raster: 'layerStackRaster',
+  regional_guidance: 'layerStackRegionalGuidance',
+};
 
 interface LayerStackHeaderProps {
   collapsed: boolean;
@@ -84,46 +93,53 @@ const LayerStackHeaderComponent = ({
     },
     [commands, stack]
   );
+  const hintId = STACK_HINTS[stack];
+  const descriptionId = `layer-stack-hint-${stack}`;
   return (
-    <Box
-      ref={element}
-      aria-expanded={!collapsed}
-      aria-hidden={pinned || undefined}
-      aria-label={t(`widgets.layers.groups.${stack}`)}
-      aria-level={1}
-      aria-posinset={posInSet}
-      aria-setsize={setSize}
-      bg={pinned ? 'bg.panel' : 'transparent'}
-      data-layer-row-id={pinned ? undefined : rowKey}
-      h="full"
-      role={pinned ? undefined : 'treeitem'}
-      rounded="sm"
-      tabIndex={pinned ? undefined : focused ? 0 : -1}
-      _focusVisible={HEADER_FOCUS}
-      onClick={handleClick}
-      onContextMenu={handleContextMenu}
-      onFocus={pinned ? undefined : handleFocus}
-      onKeyDown={pinned ? undefined : handleKeyDown}
-    >
-      <HStack gap="1" h="full" pe="1.5" ps="0">
-        <IconButton
-          aria-label={t(collapsed ? 'widgets.layers.groupActions.expand' : 'widgets.layers.groupActions.collapse')}
-          color="fg.muted"
-          size="2xs"
-          tabIndex={-1}
-          variant="ghost"
-          onClick={handleToggle}
-          onMouseDown={keepFocus}
-        >
-          <Icon
-            as={ChevronDownIcon}
-            boxSize="3.5"
-            transform={collapsed ? 'rotate(-90deg)' : undefined}
-            transitionDuration="fast"
-            transitionProperty="transform"
-          />
-        </IconButton>
-        <Tooltip content={t(`widgets.layers.groupHints.${stack}`)} openDelay={600}>
+    // The informational popover triggers on the whole tree item, so it opens
+    // for the roving keyboard focus as well as hover; the persistent
+    // described-by span announces the gist without the card.
+    <FeatureHint hint={hintId}>
+      <Box
+        ref={element}
+        aria-describedby={pinned ? undefined : descriptionId}
+        aria-expanded={!collapsed}
+        aria-hidden={pinned || undefined}
+        aria-label={t(`widgets.layers.groups.${stack}`)}
+        aria-level={1}
+        aria-posinset={posInSet}
+        aria-setsize={setSize}
+        bg={pinned ? 'bg.panel' : 'transparent'}
+        data-layer-row-id={pinned ? undefined : rowKey}
+        h="full"
+        role={pinned ? undefined : 'treeitem'}
+        rounded="sm"
+        tabIndex={pinned ? undefined : focused ? 0 : -1}
+        _focusVisible={HEADER_FOCUS}
+        onClick={handleClick}
+        onContextMenu={handleContextMenu}
+        onFocus={pinned ? undefined : handleFocus}
+        onKeyDown={pinned ? undefined : handleKeyDown}
+      >
+        {pinned ? null : <VisuallyHidden id={descriptionId}>{t(`hints.${hintId}.paragraphs.0`)}</VisuallyHidden>}
+        <HStack gap="1" h="full" pe="1.5" ps="0">
+          <IconButton
+            aria-label={t(collapsed ? 'widgets.layers.groupActions.expand' : 'widgets.layers.groupActions.collapse')}
+            color="fg.muted"
+            size="2xs"
+            tabIndex={-1}
+            variant="ghost"
+            onClick={handleToggle}
+            onMouseDown={keepFocus}
+          >
+            <Icon
+              as={ChevronDownIcon}
+              boxSize="3.5"
+              transform={collapsed ? 'rotate(-90deg)' : undefined}
+              transitionDuration="fast"
+              transitionProperty="transform"
+            />
+          </IconButton>
           <Text
             color="fg.muted"
             cursor="pointer"
@@ -136,26 +152,26 @@ const LayerStackHeaderComponent = ({
           >
             {t(`widgets.layers.groups.${stack}`)} ({leafCount})
           </Text>
-        </Tooltip>
-        <HStack gap="0.5" onClick={stopPropagation} onMouseDown={keepFocus}>
-          {actions.map((action) => (
-            <Tooltip key={action.id} content={action.label}>
-              <IconButton
-                aria-label={action.label}
-                color="fg.muted"
-                disabled={action.disabled}
-                size="2xs"
-                tabIndex={-1}
-                variant="ghost"
-                onClick={action.run}
-              >
-                <Icon as={action.icon} boxSize="3.5" />
-              </IconButton>
-            </Tooltip>
-          ))}
+          <HStack gap="0.5" onClick={stopPropagation} onMouseDown={keepFocus}>
+            {actions.map((action) => (
+              <Tooltip key={action.id} content={action.label}>
+                <IconButton
+                  aria-label={action.label}
+                  color="fg.muted"
+                  disabled={action.disabled}
+                  size="2xs"
+                  tabIndex={-1}
+                  variant="ghost"
+                  onClick={action.run}
+                >
+                  <Icon as={action.icon} boxSize="3.5" />
+                </IconButton>
+              </Tooltip>
+            ))}
+          </HStack>
         </HStack>
-      </HStack>
-    </Box>
+      </Box>
+    </FeatureHint>
   );
 };
 
