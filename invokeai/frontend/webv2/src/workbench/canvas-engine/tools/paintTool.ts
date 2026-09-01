@@ -22,6 +22,7 @@ import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/docu
 import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
 import { isLeafPaintable, isLayerTransparencyLocked } from '@workbench/canvas-engine/document/layerEligibility';
 import { isMaskLayer } from '@workbench/canvas-engine/document/sources';
+import { fromTRS, invert } from '@workbench/canvas-engine/math/mat2d';
 
 import type { StrokeCommittedEvent, Tool, ToolContext } from './tool';
 
@@ -75,6 +76,13 @@ interface PaintTarget {
    * silently attenuate the mask (a ~50% denoise, invisible in the tinted overlay).
    */
   forceOpaque?: boolean;
+  /**
+   * The target layer's committed transform. The session paints layer-local
+   * pixels through its inverse so the stroke lands under the cursor even on a
+   * moved, scaled or rotated layer. Absent ⇒ identity (a freshly auto-created
+   * layer).
+   */
+  transform?: CanvasLayerContract['transform'];
 }
 
 /** Resolves (or auto-creates) the paint target for a gesture, or `null` to no-op. */
@@ -108,6 +116,7 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
       cancel: () => undefined,
       commit: (event) => ctx.emitStrokeCommitted(event),
       layerId: selected.id,
+      transform: selected.transform,
       transparencyLocked: selected.isTransparencyLocked === true,
     };
   }
@@ -127,6 +136,9 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
       cancel: transaction.cancel,
       commit: transaction.commitStroke,
       layerId: transaction.layerId,
+      // No transform on purpose: materialization BAKES the layer's placement
+      // into document-space pixels and resets the layer to identity, so the
+      // session's document coordinates already are the cache's coordinates.
     };
   }
 
@@ -151,6 +163,7 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
       commit: (event) => ctx.emitStrokeCommitted(event),
       forceOpaque: true,
       layerId: selected.id,
+      transform: selected.transform,
     };
   }
 
@@ -163,6 +176,7 @@ const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget
       cancel: transaction.cancel,
       commit: transaction.commitStroke,
       layerId: transaction.layerId,
+      // No transform on purpose: see the materialized-eraser branch above.
     };
   }
 
@@ -273,6 +287,18 @@ export const createPaintTool = (spec: PaintToolSpec): Tool => {
         return;
       }
       const composite = resolvedTarget.transparencyLocked && spec.id === 'brush' ? 'source-atop' : spec.composite;
+      const layerTransform = resolvedTarget.transform
+        ? fromTRS(
+            { x: resolvedTarget.transform.x, y: resolvedTarget.transform.y },
+            resolvedTarget.transform.rotation,
+            resolvedTarget.transform.scaleX,
+            resolvedTarget.transform.scaleY
+          )
+        : null;
+      if (layerTransform && !invert(layerTransform)) {
+        // A zero-scale layer has no paintable geometry to invert into.
+        return;
+      }
       target = resolvedTarget;
       try {
         session = createStrokeSession({
@@ -286,6 +312,7 @@ export const createPaintTool = (spec: PaintToolSpec): Tool => {
           createdLayer: target.createdLayer ?? null,
           ctx,
           layerId: target.layerId,
+          layerTransform,
           // Mask strokes are forced opaque (an alpha stencil is all-or-nothing); a
           // brush-opacity mask stroke would silently attenuate the denoise strength.
           opacity: target.forceOpaque ? 1 : spec.opacity(ctx),

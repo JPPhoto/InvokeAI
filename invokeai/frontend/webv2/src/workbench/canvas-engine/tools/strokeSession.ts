@@ -41,10 +41,11 @@ import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
-import type { PlacedSurface, PointerInput, Rect, Vec2 } from '@workbench/canvas-engine/types';
+import type { Mat2d, PlacedSurface, PointerInput, Rect, Vec2 } from '@workbench/canvas-engine/types';
 
 import { strokeToPath, type StrokeSamplePoint } from '@workbench/canvas-engine/freehand';
-import { expand, intersect, isEmpty, roundOut, union } from '@workbench/canvas-engine/math/rect';
+import { applyToPoint, getScale, identity, invert, multiply } from '@workbench/canvas-engine/math/mat2d';
+import { expand, intersect, isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 import { getPressureBands } from '@workbench/canvas-engine/pressureBands';
 
 import type { StrokeCommittedEvent, ToolContext } from './tool';
@@ -78,11 +79,12 @@ export interface StrokeSessionConfig {
   createdLayer?: { layer: CanvasLayerContract; anchor: CanvasNodeInsertionAnchor } | null;
   /**
    * The bounded selection mask to clip the stroke to (resolved once by the tool
-   * on pointer-down when a selection exists), as a placed surface in document
-   * (= layer-local) space. When set, the paint region is intersected with the
-   * mask bounds and the scratch stroke is masked (`destination-in`) before
-   * compositing, so pixels outside the selection are never written and the cache
-   * only grows within the selection. Absent ⇒ the no-selection hot path.
+   * on pointer-down when a selection exists), as a placed surface in DOCUMENT
+   * space. When set, the paint region is intersected with the mask bounds
+   * (mapped through the layer inverse) and the scratch stroke is masked
+   * (`destination-in`) before compositing, so pixels outside the selection are
+   * never written and the cache only grows within the selection. Absent ⇒ the
+   * no-selection hot path.
    */
   clipMask?: PlacedSurface | null;
   /**
@@ -97,6 +99,15 @@ export interface StrokeSessionConfig {
    * Absent/`null` ⇒ unclipped (the default, and the hot path).
    */
   clipRect?: Rect | null;
+  /**
+   * The target layer's local→document transform. Inputs and clips arrive in
+   * DOCUMENT space while the session runs in LAYER-LOCAL space (the cache, the
+   * damage it reports and the history patches all are), so every input crosses
+   * this boundary through the inverse — the compositor then carries the painted
+   * pixels back to the screen through the layer's own matrix. Absent ⇒
+   * identity, the untransformed-layer hot path.
+   */
+  layerTransform?: Mat2d | null;
 }
 
 /** The imperative handle a tool drives across a gesture. */
@@ -108,12 +119,6 @@ export interface StrokeSession {
   /** Restores the pre-stroke pixels and drops the session without an event. */
   cancel(): void;
 }
-
-const toSample = (input: PointerInput): StrokeSamplePoint => ({
-  pressure: input.pressure,
-  x: input.documentPoint.x,
-  y: input.documentPoint.y,
-});
 
 /**
  * Cache/scratch growth is snapped OUTWARD to this pixel grid. Without it, an
@@ -166,8 +171,9 @@ const padToChunk = (r: Rect, chunk: number): Rect => {
 type SurfaceContext = RasterSurface['ctx'];
 
 /**
- * Extra slack (document units) around the changed geometry, covering the
- * antialiased edge and the outward rounding of the bounds themselves.
+ * Extra slack (layer-local units, the space the stroke rasterizes in) around
+ * the changed geometry, covering the antialiased edge and the outward rounding
+ * of the bounds themselves.
  */
 const CHANGE_MARGIN = 2;
 
@@ -314,6 +320,24 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
   } = config;
 
   const layers: LayerCacheStore = ctx.layers;
+  // The document→layer-local boundary. The owning tool refuses degenerate
+  // (zero-scale) transforms before opening a session; the identity fallback
+  // keeps this total for direct callers.
+  const toLocal = (config.layerTransform && invert(config.layerTransform)) ?? identity();
+  // Brush geometry is authored in document units; in layer space it scales by
+  // the inverse (exact under rotation and uniform scale, the geometric mean
+  // under non-uniform — the stroke then stretches with the layer's own pixels).
+  const localSize = size * getScale(toLocal);
+  const clipMaskLocalRect = clipMask ? roundOut(transformBounds(toLocal, clipMask.rect)) : null;
+  const clipRectLocal = clipRect ? roundOut(transformBounds(toLocal, clipRect)) : null;
+  // Axis-aligned layers get the rect clip for free from the region clamp; a
+  // rotated/sheared layer's clamp is only the AABB, so the exact rect must also
+  // be cut out of the scratch like the selection mask is.
+  const clipRectNeedsMask = !!clipRect && (toLocal.b !== 0 || toLocal.c !== 0);
+  const toSample = (input: PointerInput): StrokeSamplePoint => {
+    const local = applyToPoint(toLocal, input.documentPoint);
+    return { pressure: input.pressure, x: local.x, y: local.y };
+  };
   // A per-frame scratch surface for the filled stroke, sized to the paint region.
   let stroke: RasterSurface | null = null;
 
@@ -324,7 +348,7 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
   let beforeImageData: ImageData | null = null;
   let accumRect: Rect | null = null;
   let previousPolygon: Vec2[] | null = null;
-  const chunk = growthChunk(size);
+  const chunk = growthChunk(localSize);
 
   /** Ensures the scratch surface is at least `w`×`h`. */
   const ensureStroke = (w: number, h: number): RasterSurface => {
@@ -340,15 +364,15 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
     if (points.length === 0) {
       return;
     }
-    const { bounds, path, polygon } = strokeToPath(points, { last, size, thinning }, ctx.createPath2D);
+    const { bounds, path, polygon } = strokeToPath(points, { last, size: localSize, thinning }, ctx.createPath2D);
     let dirty: Rect | null = roundOut(bounds);
     // Selection clip: only the region inside the selection can ever change, so
     // bound the dirty/growth region to the mask extent (and skip empty results).
-    if (clipMask) {
-      dirty = intersect(dirty, clipMask.rect);
+    if (clipMaskLocalRect) {
+      dirty = intersect(dirty, clipMaskLocalRect);
     }
-    if (dirty && clipRect) {
-      dirty = intersect(dirty, clipRect);
+    if (dirty && clipRectLocal) {
+      dirty = intersect(dirty, clipRectLocal);
     }
     if (!dirty || isEmpty(dirty)) {
       return;
@@ -363,17 +387,17 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
     // consumer stays coherent. When a selection clips the stroke, clamp the padded
     // region back to the mask so growth still never escapes the selection.
     let region = padToChunk(accumRect ? roundOut(union(accumRect, dirty)) : dirty, chunk);
-    if (clipMask) {
-      const clamped = intersect(region, clipMask.rect);
+    if (clipMaskLocalRect) {
+      const clamped = intersect(region, clipMaskLocalRect);
       if (clamped) {
         region = clamped;
       }
     }
-    if (clipRect) {
+    if (clipRectLocal) {
       // Clamping the region IS the bbox clip: the scratch is sized to the region
       // and the path is drawn translated into it, so anything beyond the rect
       // lands outside the surface and never reaches the cache.
-      const clamped = intersect(region, clipRect);
+      const clamped = intersect(region, clipRectLocal);
       if (clamped) {
         region = clamped;
       }
@@ -481,7 +505,7 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
       // full-alpha fill below exists to prevent. Replacing means the later (newer) band wins
       // in the overlap, which is the pressure the user is applying now.
       for (const band of getPressureBands(points)) {
-        const bandPath = strokeToPath(band.points, { last, size, thinning }, ctx.createPath2D).path;
+        const bandPath = strokeToPath(band.points, { last, size: localSize, thinning }, ctx.createPath2D).path;
 
         strokeCtx.globalCompositeOperation = 'destination-out';
         strokeCtx.globalAlpha = 1;
@@ -510,7 +534,30 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
       strokeCtx.clip();
       strokeCtx.globalCompositeOperation = 'destination-in';
       strokeCtx.globalAlpha = 1;
-      strokeCtx.drawImage(clipMask.surface.canvas, clipMask.rect.x - region.x, clipMask.rect.y - region.y);
+      // The mask is document-space; drawing it through the layer inverse keeps
+      // its exact shape clipping even on a rotated or scaled layer.
+      const maskMatrix = multiply({ a: 1, b: 0, c: 0, d: 1, e: -region.x, f: -region.y }, toLocal);
+      strokeCtx.setTransform(maskMatrix.a, maskMatrix.b, maskMatrix.c, maskMatrix.d, maskMatrix.e, maskMatrix.f);
+      strokeCtx.drawImage(clipMask.surface.canvas, clipMask.rect.x, clipMask.rect.y);
+      strokeCtx.restore();
+    }
+
+    // 4c. Bbox clip on a rotated/sheared layer: the region clamp above only
+    //     bounds the AABB, so keep exactly the pixels inside the document-space
+    //     rect, drawn through the same inverse the mask uses.
+    if (clipRect && clipRectNeedsMask) {
+      strokeCtx.setTransform(1, 0, 0, 1, 0, 0);
+      strokeCtx.save();
+      strokeCtx.beginPath();
+      strokeCtx.rect(refresh.x - region.x, refresh.y - region.y, refresh.width, refresh.height);
+      strokeCtx.clip();
+      strokeCtx.globalCompositeOperation = 'destination-in';
+      strokeCtx.globalAlpha = 1;
+      const rectMatrix = multiply({ a: 1, b: 0, c: 0, d: 1, e: -region.x, f: -region.y }, toLocal);
+      strokeCtx.setTransform(rectMatrix.a, rectMatrix.b, rectMatrix.c, rectMatrix.d, rectMatrix.e, rectMatrix.f);
+      strokeCtx.beginPath();
+      strokeCtx.rect(clipRect.x, clipRect.y, clipRect.width, clipRect.height);
+      strokeCtx.fill();
       strokeCtx.restore();
     }
 

@@ -3,6 +3,7 @@ import type { StubRasterBackend, StubRasterSurface } from '@workbench/canvas-eng
 import type { ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { PointerInput } from '@workbench/canvas-engine/types';
 
+import { fromTRS } from '@workbench/canvas-engine/math/mat2d';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { createStrokeSession } from '@workbench/canvas-engine/tools/strokeSession';
@@ -548,5 +549,54 @@ describe('strokeSession: pressure-dependent opacity', () => {
     const scratch = runPressureStroke(true, [0.5, 0.5, 0.5]);
 
     expect(scratch.callLog.filter((e) => e.op === 'fill')).toHaveLength(2);
+  });
+});
+
+describe('layer transforms', () => {
+  const sessionOn = (layerTransform: ReturnType<typeof fromTRS> | null, point: { x: number; y: number }) => {
+    const { backend } = createCapturingBackend();
+    const layers = createLayerCacheStore(backend);
+    const ctx = {
+      backend,
+      createPath2D: () => {
+        const path = { closePath: () => {}, lineTo: () => {}, moveTo: () => {}, quadraticCurveTo: () => {} };
+        return path as unknown as Path2D;
+      },
+      emitStrokeCommitted: vi.fn(),
+      invalidate: vi.fn(),
+      layers,
+      notifyLayerPainted: vi.fn(),
+    } as unknown as ToolContext;
+    const session = createStrokeSession({
+      color: '#ff0000',
+      composite: 'source-over',
+      ctx,
+      layerId: 'L',
+      layerTransform,
+      opacity: 1,
+      pressureOpacity: false,
+      size: 8,
+      thinning: 0,
+      tool: 'brush',
+    });
+    session.addPoints([pointer(point.x, point.y)]);
+    return session.commit();
+  };
+
+  it('maps document points through the layer inverse, so the stroke lands under the cursor', () => {
+    // Translated layer: doc (1010, 10) is layer-local (10, 10).
+    const translated = sessionOn(fromTRS({ x: 1000, y: 0 }, 0, 1, 1), { x: 1010, y: 10 });
+    expect(translated?.dirtyRect.x).toBe(0);
+    expect(translated?.dirtyRect.y).toBe(0);
+
+    // Scaled layer: doc (300, 300) on a 2x layer is layer-local (150, 150).
+    const scaled = sessionOn(fromTRS({ x: 0, y: 0 }, 0, 2, 2), { x: 300, y: 300 });
+    expect(scaled?.dirtyRect.x).toBe(128);
+    expect(scaled?.dirtyRect.y).toBe(128);
+
+    // Identity stays byte-for-byte where it always painted.
+    const plain = sessionOn(null, { x: 300, y: 300 });
+    expect(plain?.dirtyRect.x).toBe(256);
+    expect(plain?.dirtyRect.y).toBe(256);
   });
 });
