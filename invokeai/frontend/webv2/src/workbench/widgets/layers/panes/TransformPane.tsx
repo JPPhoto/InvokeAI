@@ -179,7 +179,7 @@ const ConnectedTransform = ({ engine }: { engine: CanvasEngineHandle }) => {
             </Button>
           </Flex>
         ) : (
-          <Text color="fg.subtle" fontSize="2xs">
+          <Text color="fg.muted" fontSize="2xs">
             {t('widgets.transform.hint')}
           </Text>
         )}

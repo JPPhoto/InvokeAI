@@ -253,6 +253,24 @@ describe('Properties pane', () => {
     expect(host!.textContent).toContain('Drag to pan and scroll to zoom.');
   });
 
+  it('keeps the Tool section mounted with stable geometry across every tool switch', async () => {
+    await mount(PropertiesPane);
+    await act(() => engine!.tools.setTool('brush'));
+    await settle();
+    const section = host!.querySelector<HTMLElement>('[role="group"][aria-label="Tool"]')!;
+    const { left, top } = section.getBoundingClientRect();
+    for (const tool of ['eraser', 'view', 'move', 'shape'] as const) {
+      await act(() => engine!.tools.setTool(tool));
+      await settle();
+      // Same node, same anchor: switching tools swaps rows inside the
+      // section but never unmounts or repositions the section itself.
+      expect(host!.querySelector('[role="group"][aria-label="Tool"]')).toBe(section);
+      const rect = section.getBoundingClientRect();
+      expect(rect.left).toBe(left);
+      expect(rect.top).toBe(top);
+    }
+  });
+
   it('puts a running operation first with Cancel, locks the tool rows in place and hands them focus over', async () => {
     await mount(PropertiesPane);
     await act(() => engine!.tools.setTool('brush'));
@@ -366,6 +384,34 @@ describe('Layer editor panes host', () => {
     });
     await settle();
     expect(host!.querySelector('[role="tabpanel"]')).not.toBeNull();
+  });
+
+  it('preserves a running operation draft across pane tab switches', async () => {
+    paneHarnessLayout = { ...LAYER_EDITOR_PANE_DEFAULTS };
+    await mount(LayerEditorPanesHarness);
+    await act(() => engine!.tools.setTool('brush'));
+    await act(() => operations!.start(true));
+    await settle();
+    const draft = operations!.getFilterSessionState()!.draft;
+    expect(host!.textContent).toContain('Operation');
+
+    await act(async () => {
+      await userEvent.click(page.getByRole('tab', { exact: true, name: 'Overview' }));
+    });
+    await settle();
+    await act(async () => {
+      await userEvent.click(page.getByRole('tab', { exact: true, name: 'Properties' }));
+    });
+    await settle();
+
+    // Drafts live engine-side; remounting the pane reads the same one back
+    // and the unmount must not cancel, reset, or commit the session.
+    expect(operations!.getFilterSessionState()!.draft).toBe(draft);
+    expect(operations!.resetFilterOperation).not.toHaveBeenCalled();
+    expect(operations!.cancelFilterOperation).not.toHaveBeenCalled();
+    expect(operations!.commitFilterOperation).not.toHaveBeenCalled();
+    expect(host!.textContent).toContain('Operation');
+    await expect.element(page.getByRole('button', { exact: true, name: 'Cancel' })).toBeEnabled();
   });
 
   it('collapses from the separator keyboard floor and hands focus to the expand button', async () => {

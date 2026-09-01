@@ -67,12 +67,12 @@ const ConnectedHistory = ({ engine }: { engine: CanvasEngineHandle }) => {
             <Icon as={Redo2Icon} boxSize="3.5" />
           </IconButton>
         </Tooltip>
-        <Text color="fg.subtle" fontSize="2xs" fontVariantNumeric="tabular-nums">
+        <Text color="fg.muted" fontSize="2xs" fontVariantNumeric="tabular-nums">
           {t('widgets.layers.historyPane.count', { count: past.length })}
         </Text>
       </HStack>
       {past.length === 0 && future.length === 0 ? (
-        <Flex align="center" color="fg.subtle" flex="1" fontSize="xs" justify="center" p="4">
+        <Flex align="center" color="fg.muted" flex="1" fontSize="xs" justify="center" p="4">
           {t('widgets.layers.historyPane.empty')}
         </Flex>
       ) : (
@@ -130,7 +130,10 @@ const HistoryStep = ({
       <chakra.button
         aria-current={isCurrent ? 'step' : undefined}
         bg={isCurrent ? 'bg.emphasized' : 'transparent'}
-        color={isCurrent ? 'fg' : isFuture ? 'fg.subtle' : 'fg.muted'}
+        // Future (redoable) steps read as dimmed via italics; fg.subtle fails
+        // WCAG contrast at this size, so color stays at fg.muted for both.
+        color={isCurrent ? 'fg' : 'fg.muted'}
+        fontStyle={isFuture ? 'italic' : undefined}
         cursor="pointer"
         flex="1"
         fontSize="xs"
