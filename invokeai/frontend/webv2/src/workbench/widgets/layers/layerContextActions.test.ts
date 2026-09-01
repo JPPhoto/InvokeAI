@@ -79,6 +79,8 @@ const makeState = (
     hasWorkflowBindings: true,
     interactionLocked: false,
     canGroupSelection: true,
+    canDeleteSelection: true,
+    canMergeSelection: true,
     layer,
     selectedIds: [layer.id],
     ...overrides,
@@ -97,6 +99,7 @@ const makeEffects = (): LayerContextActionEffects => ({
   fitToBbox: vi.fn(),
   group: vi.fn(),
   mergeDown: vi.fn(),
+  mergeSelected: vi.fn(),
   openProperties: vi.fn(),
   openRename: vi.fn(),
   openRunWorkflow: vi.fn(),
@@ -425,6 +428,12 @@ describe('getLayerContextActions', () => {
     const regional = createRegionalGuidanceLayer('Interaction region', 0, 'interaction-region');
     const contexts = [
       makeState(raster, { document: rasterDocument, interactionLocked: true }),
+      // A multi-selection context so the selection-only verbs are visible.
+      makeState(raster, {
+        document: rasterDocument,
+        interactionLocked: true,
+        selectedIds: [raster.id, 'interaction-raster-b'],
+      }),
       makeState(nonEmptyControlLayer, { interactionLocked: true }),
       makeState(inpaint, { interactionLocked: true }),
       makeState(regional, { interactionLocked: true }),
@@ -471,6 +480,7 @@ describe('getLayerContextActions', () => {
       'inpaint-noise',
       'inpaint-denoise-limit',
       'merge-down',
+      'merge-selected',
       'toggle-visibility',
       'toggle-hidden',
       'toggle-lock',
@@ -491,7 +501,10 @@ describe('getLayerContextActions', () => {
   it('disables locked-layer mutations but keeps toggle lock enabled', () => {
     const lockedRaster = { ...rasterLayer, isLocked: true };
     const below = paintLayer('below-locked-raster');
-    const actions = getLayerContextActions(makeState(lockedRaster, { document: makeDocument([lockedRaster, below]) }));
+    // The menu's model probe refuses removing a locked selection.
+    const actions = getLayerContextActions(
+      makeState(lockedRaster, { canDeleteSelection: false, document: makeDocument([lockedRaster, below]) })
+    );
 
     for (const id of [
       'fit-to-bbox',

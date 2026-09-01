@@ -1,8 +1,18 @@
+import type { LucideIcon } from 'lucide-react';
+
 import { HStack, Input, Text } from '@chakra-ui/react';
+import { IconButton } from '@platform/ui/Button';
+import { Tooltip } from '@platform/ui/Tooltip';
+import { CopyIcon, FolderPlusIcon, Trash2Icon } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import type { LayerSelectionCommands } from './useLayerSelectionCommands';
+
+const ACTION_TOOLTIP_POSITIONING = { placement: 'top' } as const;
+
 interface LayersPanelFooterProps {
+  commands: LayerSelectionCommands;
   degraded: boolean;
   filter: string;
   groupCount: number;
@@ -11,8 +21,14 @@ interface LayersPanelFooterProps {
   onFilterChange: (filter: string) => void;
 }
 
-/** The stable footer: document summary and name filter; nothing here appears or disappears. */
+/**
+ * The stable footer — the panel's one action strip: name filter, document
+ * summary, and the top-frequency selection verbs (duplicate, group, delete).
+ * Everything else lives in the context menu; nothing here appears or
+ * disappears — controls disable instead.
+ */
 const LayersPanelFooterComponent = ({
+  commands,
   degraded,
   filter,
   groupCount,
@@ -41,8 +57,56 @@ const LayersPanelFooterComponent = ({
           ? t('widgets.layers.footer.degraded')
           : `${t('widgets.layers.footer.layers', { count: leafCount })} · ${t('widgets.layers.footer.groups', { count: groupCount })} · ${t('widgets.layers.footer.selected', { count: selectedCount })}`}
       </Text>
+      <HStack gap="0.5">
+        <FooterAction
+          disabled={!commands.canDuplicate}
+          icon={CopyIcon}
+          label={t('widgets.layers.actions.duplicateSelected')}
+          onRun={commands.duplicateSelected}
+        />
+        <FooterAction
+          disabled={!commands.canGroup}
+          icon={FolderPlusIcon}
+          label={t('widgets.layers.actions.groupSelected')}
+          onRun={commands.groupSelected}
+        />
+        <FooterAction
+          colorPalette="red"
+          disabled={!commands.canDelete}
+          icon={Trash2Icon}
+          label={t('widgets.layers.actions.deleteSelected')}
+          onRun={commands.deleteSelected}
+        />
+      </HStack>
     </HStack>
   );
 };
+
+const FooterAction = ({
+  colorPalette,
+  disabled,
+  icon: ActionIcon,
+  label,
+  onRun,
+}: {
+  colorPalette?: string;
+  disabled: boolean;
+  icon: LucideIcon;
+  label: string;
+  onRun: () => void;
+}) => (
+  <Tooltip content={label} positioning={ACTION_TOOLTIP_POSITIONING}>
+    <IconButton
+      aria-label={label}
+      colorPalette={colorPalette}
+      disabled={disabled}
+      size="2xs"
+      variant="ghost"
+      onClick={onRun}
+    >
+      <ActionIcon />
+    </IconButton>
+  </Tooltip>
+);
 
 export const LayersPanelFooter = memo(LayersPanelFooterComponent);

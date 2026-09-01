@@ -14,7 +14,7 @@ import { useTranslation } from 'react-i18next';
 import type { LayerSurfaceAnchor } from './layerRowCommands';
 import type { LayerColorPaneLayout, LayerEditorPaneLayout, LayerTreeTabId } from './panes/editorPaneLayout';
 
-import { LayerMultiSelectionActions } from './LayerMultiSelectionActions';
+import { LayerBlendRow } from './LayerBlendRow';
 import { LAYER_PANEL_DEGRADE_THRESHOLD } from './layerPanelRows';
 import { useCurrentLayerPropertiesRequest } from './layerPropertiesRequestStore';
 import { anchorFromPoint } from './layerRowCommands';
@@ -31,13 +31,14 @@ import {
 } from './panes/editorPaneLayout';
 import { HistoryPane } from './panes/HistoryPane';
 import { LAYER_TREE_PANEL_ID, LayerColorPane, LayerEditorPanes, LayerTreeStrip } from './panes/LayerEditorPanes';
+import { useLayerSelectionCommands } from './useLayerSelectionCommands';
 
 /**
  * The layers panel: the Color pane at the top, then the flexible middle region tabbed between
- * the virtualized tree of the four stacks (with its selection toolbar and footer) and the edit
- * history, and the editor panes (Properties, Transform, Overview) at the bottom — the selected
- * layer's own editors live in the Properties pane. Regions keep their geometry; their controls
- * disable instead of appearing and disappearing.
+ * the layers view (blend/opacity row, the virtualized tree of the four stacks, and the footer
+ * action strip) and the edit history, with the editor panes (Properties, Transform, Overview)
+ * at the bottom — the selected layer's other editors live in the Properties pane. Regions keep
+ * their geometry; their controls disable instead of appearing and disappearing.
  */
 export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
   const { t } = useTranslation();
@@ -66,6 +67,7 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
     [stacks]
   );
 
+  const selectionCommands = useLayerSelectionCommands(engine, projectId, panel.selectedIds, editingLocked);
   const handleFilter = useCallback(
     (filter: string) => setLayerPanelFilter(projectId, selectedLayerId, filter),
     [projectId, selectedLayerId]
@@ -128,8 +130,9 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
         direction="column"
         flex="1"
         id={LAYER_TREE_PANEL_ID}
-        // The toolbar (40px) + tree floor (128px) + footer (40px); anything
-        // less lets the unshrinkable rows paint under the editor panes.
+        // The blend row (32px control + 8px padding) + tree floor (128px) +
+        // footer (40px); anything less lets the unshrinkable rows paint under
+        // the editor panes.
         minH="13rem"
         overflow="hidden"
         role="tabpanel"
@@ -138,13 +141,7 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
           <HistoryPane />
         ) : (
           <>
-            <LayerMultiSelectionActions
-              document={document}
-              editingLocked={editingLocked}
-              engine={engine}
-              projectId={projectId}
-              selectedIds={panel.selectedIds}
-            />
+            <LayerBlendRow engine={engine} />
             {nodeCount === 0 ? (
               <Flex
                 align="center"
@@ -183,6 +180,7 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
               </Flex>
             )}
             <LayersPanelFooter
+              commands={selectionCommands}
               degraded={degraded}
               filter={panel.filter}
               groupCount={counts.groups}

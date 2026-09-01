@@ -49,6 +49,8 @@ const actionsFor = (layer: CanvasLayerContract, layers: readonly CanvasLayerCont
     interactionLocked: false,
     selectedIds: [layer.id],
     canGroupSelection: true,
+    canDeleteSelection: true,
+    canMergeSelection: true,
     layer,
   });
 

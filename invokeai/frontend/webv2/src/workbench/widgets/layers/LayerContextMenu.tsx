@@ -11,22 +11,32 @@ import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngi
 import type { LucideIcon } from 'lucide-react';
 import type { ComponentProps, Dispatch, ReactNode } from 'react';
 
-import { HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
+import { HStack, Icon, Kbd, Menu, Portal, Text } from '@chakra-ui/react';
 import { galleryTransfers } from '@features/gallery';
 import { useModelsSelector } from '@features/models';
 import { IconButton, MenuContent, RenameDialog, Tooltip } from '@platform/ui';
 import {
+  canMergeSelectedRasters,
+  getDocumentIndex,
   getDocumentLayer,
   getSourceContentRect,
+  isGroupNode,
+  isHideableLayer,
   isNodeHidden,
+  isOverlayStack,
   lookupDocumentNodeState,
   renderableSourceOf,
 } from '@workbench/canvas-engine/api';
 import { getCanvasOperations } from '@workbench/canvas-operations/api';
+import { formatHotkeyForPlatform } from '@workbench/hotkeys/keys';
 import { publishLayerPanelSelection, readLayerPanelState, useLayerPanelState } from '@workbench/layerPanelState';
 import { useNotify } from '@workbench/useNotify';
 import { isCanvasInteractionLocked } from '@workbench/widgets/canvas/canvasInteractionLock';
-import { useCanvasDocumentEditingLocked, useLayerThumbnailVersion } from '@workbench/widgets/canvas/engineStoreHooks';
+import {
+  useCanvasDocumentEditingLocked,
+  useCanvasRasterContentEpoch,
+  useLayerThumbnailVersion,
+} from '@workbench/widgets/canvas/engineStoreHooks';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectId, useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import {
@@ -262,17 +272,34 @@ const LayerMenu = ({
 
   const reorder = useCallback(
     (kind: LayerStackMoveKind, label: string) => {
-      commitPrepared(label, (model) => model.prepare({ ids: [layer.id], kind, type: 'move' }));
+      commitPrepared(label, (model) =>
+        model.prepare({ ids: actionTargets({ layer, selectedIds }), kind, type: 'move' })
+      );
     },
-    [commitPrepared, layer.id]
+    [commitPrepared, layer, selectedIds]
   );
 
   const canGroup = canGroupSelection(engine?.document.model() ?? null, actionTargets({ layer, selectedIds }));
+  // Un-memoized on purpose, like `canGroup`: it reads live raster content
+  // (`hasExportableLayerContent`), which the content epoch re-renders for.
+  useCanvasRasterContentEpoch(engine);
+  const mergeModel = engine?.document.model() ?? null;
+  const mergeTargets = actionTargets({ layer, selectedIds });
+  const canMerge =
+    !!engine &&
+    !!mergeModel &&
+    mergeTargets.length > 1 &&
+    canMergeSelectedRasters(mergeModel.document, mergeModel.compileLeaves(), new Set(mergeTargets), (layerId) =>
+      engine.exports.hasExportableLayerContent(layerId)
+    );
+  const canDeleteSelection = !!mergeModel && mergeModel.refusalFor({ ids: mergeTargets, type: 'remove' }) === null;
   const hiddenByAncestor =
     (lookupDocumentNodeState(document, layer.id)?.documentHidden ?? false) && !isNodeHidden(layer);
   const actionState = useMemo<LayerContextActionState>(
     () => ({
+      canDeleteSelection,
       canGroupSelection: canGroup,
+      canMergeSelection: canMerge,
       hiddenByAncestor,
       canRunWorkflow: workflowAvailability.canRunWorkflow,
       document,
@@ -285,7 +312,9 @@ const LayerMenu = ({
     }),
     [
       hiddenByAncestor,
+      canDeleteSelection,
       canGroup,
+      canMerge,
       document,
       engine,
       hasSupportedContent,
@@ -301,16 +330,10 @@ const LayerMenu = ({
 
   const getActionLabel = useCallback(
     (id: LayerContextActionId) => {
-      if (id === 'duplicate') {
-        const panelSelection = readLayerPanelState(projectId, document.selectedLayerId);
-        if (panelSelection.selectedIds.includes(layer.id) && panelSelection.selectedIds.length > 1) {
-          return t('widgets.layers.actions.duplicateSelected');
-        }
-      }
       const action = actions.find((entry) => entry.id === id);
-      return action ? t(action.labelKey, { defaultValue: action.defaultLabel }) : id;
+      return action ? t(action.labelKey, { count: action.labelCount, defaultValue: action.defaultLabel }) : id;
     },
-    [actions, document.selectedLayerId, layer.id, projectId, t]
+    [actions, t]
   );
 
   const makeStatusError = useCallback(
@@ -348,8 +371,9 @@ const LayerMenu = ({
   }, [commitPrepared, document.selectedLayerId, engine, layer.id, notify, projectId, t]);
 
   const handleDelete = useCallback(() => {
-    commitPrepared(t('widgets.layers.actions.delete'), (model) => model.prepare({ ids: [layer.id], type: 'remove' }));
-  }, [commitPrepared, layer.id, t]);
+    const ids = actionTargets({ layer, selectedIds });
+    commitPrepared(getActionLabel('delete'), (model) => model.prepare({ ids, type: 'remove' }));
+  }, [commitPrepared, getActionLabel, layer, selectedIds]);
 
   const handleGroup = useCallback(() => {
     const ids = actionTargets({ layer, selectedIds });
@@ -358,6 +382,19 @@ const LayerMenu = ({
       throw makeStatusError(outcome.refusal.status === 'locked' ? 'locked' : 'unsupported');
     }
   }, [engine, layer, makeStatusError, projectId, selectedIds, t]);
+
+  const handleMergeSelected = useCallback(() => {
+    if (!engine) {
+      return;
+    }
+    void engine.layers.mergeSelectedRasterLayers(actionTargets({ layer, selectedIds })).then((result) => {
+      if (result === 'not-ready') {
+        notify.error(t('widgets.layers.actions.actionFailed'), t('widgets.layers.groupActions.mergeNotReady'));
+      } else if (result === 'over-budget') {
+        notify.error(t('widgets.layers.actions.actionFailed'), t('widgets.layers.groupActions.mergeOverBudget'));
+      }
+    });
+  }, [engine, layer, notify, selectedIds, t]);
 
   const handleMerge = useCallback(() => {
     // Pixel work: engine-only, and not recorded on the undo history.
@@ -414,18 +451,58 @@ const LayerMenu = ({
   );
 
   const handleToggleVisibility = useCallback(() => {
+    const targets = actionTargets({ layer, selectedIds });
+    if (targets.length > 1) {
+      const index = getDocumentIndex(document);
+      const isEnabled = !targets.every((id) => index.byId.get(id)?.node.isEnabled ?? true);
+      commitPrepared(
+        t(isEnabled ? 'widgets.layers.actions.showSelected' : 'widgets.layers.actions.hideSelected'),
+        (model) => model.prepare({ type: 'set-enabled', updates: targets.map((id) => ({ id, isEnabled })) })
+      );
+      return;
+    }
     patchBase(t('widgets.layers.actions.toggleVisibility'), { isEnabled: !layer.isEnabled });
-  }, [layer.isEnabled, patchBase, t]);
+  }, [commitPrepared, document, layer, patchBase, selectedIds, t]);
 
   const handleToggleHidden = useCallback(() => {
+    const targets = actionTargets({ layer, selectedIds });
+    if (targets.length > 1) {
+      const index = getDocumentIndex(document);
+      const nodes = targets.flatMap((id) => {
+        const entry = index.byId.get(id);
+        if (!entry) {
+          return [];
+        }
+        // Mirrors the model: overlay-stack groups can hide; leaves ask isHideableLayer.
+        return (isGroupNode(entry.node) ? isOverlayStack(entry.stack) : isHideableLayer(entry.node))
+          ? [entry.node]
+          : [];
+      });
+      const isHidden = !nodes.every((node) => isNodeHidden(node));
+      commitPrepared(
+        t(isHidden ? 'widgets.layers.actions.hideSelectedOnCanvas' : 'widgets.layers.actions.showSelectedOnCanvas'),
+        (model) => model.prepare({ type: 'set-hidden', updates: nodes.map((node) => ({ id: node.id, isHidden })) })
+      );
+      return;
+    }
     commitPrepared(t('widgets.layers.actions.toggleHidden'), (model) =>
       model.prepare({ type: 'set-hidden', updates: [{ id: layer.id, isHidden: !isNodeHidden(layer) }] })
     );
-  }, [commitPrepared, layer, t]);
+  }, [commitPrepared, document, layer, selectedIds, t]);
 
   const handleToggleLock = useCallback(() => {
+    const targets = actionTargets({ layer, selectedIds });
+    if (targets.length > 1) {
+      const index = getDocumentIndex(document);
+      const isLocked = !targets.every((id) => index.byId.get(id)?.node.isLocked ?? false);
+      commitPrepared(
+        t(isLocked ? 'widgets.layers.actions.lockSelected' : 'widgets.layers.actions.unlockSelected'),
+        (model) => model.prepare({ type: 'set-locked', updates: targets.map((id) => ({ id, isLocked })) })
+      );
+      return;
+    }
     patchBase(t('widgets.layers.actions.toggleLock'), { isLocked: !layer.isLocked });
-  }, [layer.isLocked, patchBase, t]);
+  }, [commitPrepared, document, layer, patchBase, selectedIds, t]);
 
   const openRename = useCallback(() => setDialogKind('rename'), [setDialogKind]);
   const closeDialog = useCallback(() => setDialogKind(null), [setDialogKind]);
@@ -661,6 +738,7 @@ const LayerMenu = ({
       group: handleGroup,
       fitToBbox: handleFitToBbox,
       mergeDown: handleMerge,
+      mergeSelected: handleMergeSelected,
       openProperties: handleOpenProperties,
       openRename,
       openRunWorkflow,
@@ -687,6 +765,7 @@ const LayerMenu = ({
       handleExtractMaskedArea,
       handleFitToBbox,
       handleGroup,
+      handleMergeSelected,
       handleLayerConfigAction,
       handleMerge,
       handleOpenProperties,
@@ -1057,7 +1136,7 @@ const LayerMenuIconActionItem = ({
 }: {
   action: LayerContextAction;
   runAction: (action: LayerContextAction) => void;
-  t: (key: string, options: { defaultValue: string }) => string;
+  t: (key: string, options: { count?: number; defaultValue: string }) => string;
 }) => {
   const onSelect = useCallback(() => runAction(action), [action, runAction]);
 
@@ -1065,7 +1144,7 @@ const LayerMenuIconActionItem = ({
     <LayerMenuIconItem
       disabled={action.isDisabled}
       icon={action.icon}
-      label={t(action.labelKey, { defaultValue: action.defaultLabel })}
+      label={t(action.labelKey, { count: action.labelCount, defaultValue: action.defaultLabel })}
       value={action.id}
       onSelect={onSelect}
     />
@@ -1079,7 +1158,7 @@ const LayerMenuActionItem = ({
 }: {
   action: LayerContextAction;
   runAction: (action: LayerContextAction) => void;
-  t: (key: string, options: { defaultValue: string }) => string;
+  t: (key: string, options: { count?: number; defaultValue: string }) => string;
 }) => {
   const onSelect = useCallback(() => runAction(action), [action, runAction]);
 
@@ -1087,8 +1166,9 @@ const LayerMenuActionItem = ({
     <LayerMenuItem
       color={action.tone === 'danger' ? 'fg.error' : undefined}
       disabled={action.isDisabled}
+      hint={action.hint}
       icon={action.icon}
-      label={t(action.labelKey, { defaultValue: action.defaultLabel })}
+      label={t(action.labelKey, { count: action.labelCount, defaultValue: action.defaultLabel })}
       value={action.id}
       onSelect={onSelect}
     />
@@ -1098,6 +1178,7 @@ const LayerMenuActionItem = ({
 const LayerMenuItem = ({
   color,
   disabled,
+  hint,
   icon,
   label,
   onSelect,
@@ -1105,6 +1186,8 @@ const LayerMenuItem = ({
 }: {
   color?: string;
   disabled?: boolean;
+  /** A raw hotkey string, formatted per platform and shown as trailing keycaps. */
+  hint?: string;
   icon: LucideIcon;
   label: string;
   onSelect: () => void;
@@ -1116,6 +1199,15 @@ const LayerMenuItem = ({
       <Text flex="1" fontSize="xs">
         {label}
       </Text>
+      {hint ? (
+        <HStack flexShrink={0} gap="0.5">
+          {formatHotkeyForPlatform(hint).map((part) => (
+            <Kbd key={part} size="sm" textTransform="lowercase">
+              {part}
+            </Kbd>
+          ))}
+        </HStack>
+      ) : null}
     </HStack>
   </Menu.Item>
 );

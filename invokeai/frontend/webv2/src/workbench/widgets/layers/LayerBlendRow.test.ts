@@ -1,9 +1,9 @@
 import { createEmptyPaintLayer } from '@workbench/widgets/layers/layerOps';
 import { describe, expect, it } from 'vitest';
 
-import { isLayerEditingDisabled } from './LayerSection';
+import { isLayerEditingDisabled } from './LayerBlendRow';
 
-describe('LayerSection editing state', () => {
+describe('LayerBlendRow editing state', () => {
   it('disables layer controls without a selection or while engine editing is locked', () => {
     const layer = createEmptyPaintLayer('Layer', 'layer');
     expect(isLayerEditingDisabled(null, false)).toBe(true);

@@ -39,6 +39,7 @@ import {
 import { canConvertRasterControl, canMergeLayerDown } from './layerOps';
 
 export type LayerContextActionId =
+  | 'merge-selected'
   | 'move-to-front'
   | 'move-forward'
   | 'move-backward'
@@ -98,6 +99,10 @@ export interface LayerContextActionState {
   selectedIds: readonly string[];
   /** The model's answer for grouping `actionTargets`, asked by the menu that owns the engine. */
   canGroupSelection: boolean;
+  /** The model's answer for removing `actionTargets`, asked the same way. */
+  canDeleteSelection: boolean;
+  /** Whether the whole multi-selection can merge into one raster, asked the same way. */
+  canMergeSelection: boolean;
   /** A group above the layer hides it on the canvas; the layer's own flag cannot override that. */
   hiddenByAncestor: boolean;
 }
@@ -105,6 +110,7 @@ export interface LayerContextActionState {
 export interface LayerContextActionEffects {
   reorder(kind: LayerStackMoveKind, actionId: LayerContextActionId): void;
   duplicate(): void;
+  mergeSelected(): void;
   group(): void;
   openRename(): void;
   openRunWorkflow(): void;
@@ -144,22 +150,28 @@ export interface LayerContextActionDefinition {
   order: number;
   supportedLayerTypes: readonly LayerType[];
   tone?: 'danger';
+  /** A raw hotkey string (e.g. `mod+]`) shown as a trailing hint on the item. */
+  hint?: string;
   isVisible(context: LayerContextActionState): boolean;
   isEnabled(context: LayerContextActionState): boolean;
   handler(context: LayerContextActionRuntimeContext): void | Promise<void>;
   getDefaultLabel?(context: LayerContextActionState): string;
   getLabelKey?(context: LayerContextActionState): string;
+  /** Interpolated into the label's plural key; the selection size for selection verbs. */
+  getLabelCount?(context: LayerContextActionState): number;
 }
 
 export interface LayerContextAction {
   id: LayerContextActionId;
   labelKey: string;
   defaultLabel: string;
+  labelCount?: number;
   icon: LucideIcon;
   section: LayerContextMenuSectionId;
   submenu?: LayerContextSubmenuId;
   order: number;
   tone?: 'danger';
+  hint?: string;
   isDisabled: boolean;
   handler(context: LayerContextActionRuntimeContext): void | Promise<void>;
 }
@@ -186,6 +198,17 @@ const layerEntry = (context: LayerContextActionState) => getDocumentIndex(contex
 /** The nodes a selection-wide action applies to: the whole selection when the layer is in it. */
 export const actionTargets = (context: Pick<LayerContextActionState, 'layer' | 'selectedIds'>): readonly string[] =>
   context.selectedIds.includes(context.layer.id) ? context.selectedIds : [context.layer.id];
+
+const targetCount = (context: LayerContextActionState): number => actionTargets(context).length;
+const isMultiTarget = (context: LayerContextActionState): boolean => targetCount(context) > 1;
+const targetNodes = (context: LayerContextActionState) => {
+  const index = getDocumentIndex(context.document);
+  return actionTargets(context).flatMap((id) => index.byId.get(id)?.node ?? []);
+};
+const allTargetsEnabled = (context: LayerContextActionState): boolean =>
+  targetNodes(context).every((node) => node.isEnabled);
+const allTargetsLocked = (context: LayerContextActionState): boolean =>
+  targetNodes(context).every((node) => node.isLocked);
 /** Locked in its own right or by a group above it: content edits are refused either way. */
 const isLayerFrozen = (context: LayerContextActionState): boolean =>
   context.layer.isLocked || (layerEntry(context)?.ancestorsLocked ?? false);
@@ -265,6 +288,7 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     defaultLabel: 'Move to front',
     handler: ({ effects }) => effects.reorder('front', 'move-to-front'),
     icon: ArrowUpToLineIcon,
+    hint: 'mod+shift+]',
     id: 'move-to-front',
     isEnabled: canMoveForward,
     isVisible: alwaysVisible,
@@ -278,6 +302,7 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     defaultLabel: 'Move forward',
     handler: ({ effects }) => effects.reorder('forward', 'move-forward'),
     icon: ArrowUpIcon,
+    hint: 'mod+]',
     id: 'move-forward',
     isEnabled: canMoveForward,
     isVisible: alwaysVisible,
@@ -291,6 +316,7 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     defaultLabel: 'Move backward',
     handler: ({ effects }) => effects.reorder('backward', 'move-backward'),
     icon: ArrowDownIcon,
+    hint: 'mod+[',
     id: 'move-backward',
     isEnabled: canMoveBackward,
     isVisible: alwaysVisible,
@@ -304,6 +330,7 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     defaultLabel: 'Move to back',
     handler: ({ effects }) => effects.reorder('back', 'move-to-back'),
     icon: ArrowDownToLineIcon,
+    hint: 'mod+shift+[',
     id: 'move-to-back',
     isEnabled: canMoveBackward,
     isVisible: alwaysVisible,
@@ -315,6 +342,10 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
   },
   {
     defaultLabel: 'Duplicate',
+    getDefaultLabel: (context) => (isMultiTarget(context) ? `Duplicate ${targetCount(context)} layers` : 'Duplicate'),
+    getLabelCount: targetCount,
+    getLabelKey: (context) =>
+      isMultiTarget(context) ? 'widgets.layers.actions.duplicateCount' : 'widgets.layers.actions.duplicate',
     handler: ({ effects }) => effects.duplicate(),
     icon: CopyIcon,
     id: 'duplicate',
@@ -327,6 +358,10 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
   },
   {
     defaultLabel: 'Group layers',
+    getDefaultLabel: (context) => (isMultiTarget(context) ? `Group ${targetCount(context)} layers` : 'Group layers'),
+    getLabelCount: targetCount,
+    getLabelKey: (context) =>
+      isMultiTarget(context) ? 'widgets.layers.actions.groupCount' : 'widgets.layers.actions.group',
     handler: ({ effects }) => effects.group(),
     icon: FolderPlusIcon,
     id: 'group',
@@ -551,6 +586,18 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     supportedLayerTypes: ALL_LAYER_TYPES,
   },
   {
+    defaultLabel: 'Merge selected layers',
+    handler: ({ effects }) => effects.mergeSelected(),
+    icon: MergeIcon,
+    id: 'merge-selected',
+    isEnabled: (context) => isInteractionFree(context) && context.canMergeSelection,
+    isVisible: isMultiTarget,
+    labelKey: 'widgets.layers.actions.mergeSelected',
+    order: 1,
+    section: 'operations',
+    supportedLayerTypes: ALL_LAYER_TYPES,
+  },
+  {
     defaultLabel: 'Intersect with layer below',
     handler: ({ effects }) => effects.booleanMerge('intersect'),
     icon: MergeIcon,
@@ -758,9 +805,23 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
   },
   {
     defaultLabel: 'Toggle visibility',
-    getDefaultLabel: (context) => (context.layer.isEnabled ? 'Hide' : 'Show'),
-    getIcon: (context) => (context.layer.isEnabled ? EyeOffIcon : EyeIcon),
-    getLabelKey: (context) => (context.layer.isEnabled ? 'widgets.layers.actions.hide' : 'widgets.layers.actions.show'),
+    getDefaultLabel: (context) =>
+      isMultiTarget(context)
+        ? allTargetsEnabled(context)
+          ? 'Hide selected'
+          : 'Show selected'
+        : context.layer.isEnabled
+          ? 'Hide'
+          : 'Show',
+    getIcon: (context) => (allTargetsEnabled(context) ? EyeOffIcon : EyeIcon),
+    getLabelKey: (context) =>
+      isMultiTarget(context)
+        ? allTargetsEnabled(context)
+          ? 'widgets.layers.actions.hideSelected'
+          : 'widgets.layers.actions.showSelected'
+        : context.layer.isEnabled
+          ? 'widgets.layers.actions.hide'
+          : 'widgets.layers.actions.show',
     handler: ({ effects }) => effects.toggleVisibility(),
     icon: EyeIcon,
     id: 'toggle-visibility',
@@ -789,10 +850,23 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
   },
   {
     defaultLabel: 'Toggle lock',
-    getDefaultLabel: (context) => (context.layer.isLocked ? 'Unlock' : 'Lock'),
-    getIcon: (context) => (context.layer.isLocked ? LockOpenIcon : LockIcon),
+    getDefaultLabel: (context) =>
+      isMultiTarget(context)
+        ? allTargetsLocked(context)
+          ? 'Unlock selected'
+          : 'Lock selected'
+        : context.layer.isLocked
+          ? 'Unlock'
+          : 'Lock',
+    getIcon: (context) => (allTargetsLocked(context) ? LockOpenIcon : LockIcon),
     getLabelKey: (context) =>
-      context.layer.isLocked ? 'widgets.layers.actions.unlock' : 'widgets.layers.actions.lock',
+      isMultiTarget(context)
+        ? allTargetsLocked(context)
+          ? 'widgets.layers.actions.unlockSelected'
+          : 'widgets.layers.actions.lockSelected'
+        : context.layer.isLocked
+          ? 'widgets.layers.actions.unlock'
+          : 'widgets.layers.actions.lock',
     handler: ({ effects }) => effects.toggleLock(),
     icon: LockIcon,
     id: 'toggle-lock',
@@ -805,10 +879,14 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
   },
   {
     defaultLabel: 'Delete',
+    getDefaultLabel: (context) => (isMultiTarget(context) ? `Delete ${targetCount(context)} layers` : 'Delete'),
+    getLabelCount: targetCount,
+    getLabelKey: (context) =>
+      isMultiTarget(context) ? 'widgets.layers.actions.deleteCount' : 'widgets.layers.actions.delete',
     handler: ({ effects }) => effects.delete(),
     icon: Trash2Icon,
     id: 'delete',
-    isEnabled: isLayerMutable,
+    isEnabled: (context) => isInteractionFree(context) && context.canDeleteSelection,
     isVisible: alwaysVisible,
     labelKey: 'widgets.layers.actions.delete',
     order: 0,
@@ -832,9 +910,11 @@ export const getLayerContextActions = (context: LayerContextActionState): LayerC
   ).map((definition) => ({
     defaultLabel: definition.getDefaultLabel?.(context) ?? definition.defaultLabel,
     handler: definition.handler,
+    hint: definition.hint,
     icon: definition.getIcon?.(context) ?? definition.icon,
     id: definition.id,
     isDisabled: !definition.isEnabled(context),
+    labelCount: definition.getLabelCount?.(context),
     labelKey: definition.getLabelKey?.(context) ?? definition.labelKey,
     order: definition.order,
     section: definition.section,
