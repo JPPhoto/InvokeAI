@@ -377,6 +377,13 @@ export const VideoSourceClipField = memo(
         ) : null}
         {sourceVideo ? (
           <Stack gap="2">
+            {/* The empty-state slot shows the reason when no clip is set; with
+                one set, the frozen trim sliders were the only symptom. */}
+            {disabled && disabledReason ? (
+              <Text color="fg.muted" fontSize="2xs" textWrap="pretty">
+                {disabledReason}
+              </Text>
+            ) : null}
             <Field helpText={t('widgets.video.trimHelp')} label={t('widgets.video.trimStart')}>
               <SliderNumberField
                 ariaLabel={t('widgets.video.trimStart')}
