@@ -18,6 +18,7 @@ import { StructuralLayerController } from './structuralLayerController';
 interface HarnessOptions {
   locked?: boolean;
   gestureActive?: boolean;
+  schedulePreview?: (flush: () => void) => () => void;
   /** Mirror refreshes only when asked, as when a store observer threw mid-notification. */
   mirrorLag?: boolean;
   /** Makes mirror refresh fail so an accepted mutation can never be mirrored. */
@@ -74,7 +75,12 @@ const createHarness = (options: HarnessOptions & { now?: () => number } = {}) =>
       return () => listeners.delete(listener);
     },
   });
-  const controller = new StructuralLayerController({ ctx, now: options.now ?? (() => 0), report });
+  const controller = new StructuralLayerController({
+    ctx,
+    now: options.now ?? (() => 0),
+    report,
+    schedulePreview: options.schedulePreview,
+  });
   return {
     controller,
     ctx,
@@ -97,6 +103,47 @@ const layerName = (document: CanvasDocumentContractV3, id = 'layer'): string | u
   getDocumentLeaves(document).find((layer) => layer.id === id)?.name;
 
 describe('StructuralLayerController', () => {
+  it('coalesces previews to one dispatch per flush, last value wins', () => {
+    let flush: (() => void) | null = null;
+    const harness = createHarness({
+      schedulePreview: (callback) => {
+        flush = callback;
+        return () => undefined;
+      },
+    });
+    expect(harness.controller.preview(rename('layer', 'A'))).toBe(true);
+    expect(harness.controller.preview(rename('layer', 'B'))).toBe(true);
+    expect(harness.dispatched).toHaveLength(0);
+    flush!();
+    expect(harness.dispatched).toHaveLength(1);
+    expect(layerName(harness.document())).toBe('B');
+  });
+
+  it('discards a pending preview when a commit lands, and on dispose', () => {
+    let cancelled = 0;
+    const harness = createHarness({
+      schedulePreview: () => () => {
+        cancelled += 1;
+      },
+    });
+    harness.controller.preview(rename('layer', 'Stale'));
+    expect(harness.controller.commit('Rename', rename('layer', 'Final'), rename('layer', 'Layer'))).toMatchObject({
+      status: 'committed',
+    });
+    expect(cancelled).toBe(1);
+    expect(layerName(harness.document())).toBe('Final');
+    harness.controller.preview(rename('layer', 'Orphan'));
+    harness.controller.dispose();
+    expect(cancelled).toBe(2);
+    expect(layerName(harness.document())).toBe('Final');
+  });
+
+  it('dispatches previews synchronously without an animation frame', () => {
+    const harness = createHarness();
+    expect(harness.controller.preview(rename('layer', 'Live'))).toBe(true);
+    expect(layerName(harness.document())).toBe('Live');
+  });
+
   it('commits through the guarded dispatch and records one failure-atomic history entry', () => {
     const { controller, document, history, mirror } = createHarness();
 

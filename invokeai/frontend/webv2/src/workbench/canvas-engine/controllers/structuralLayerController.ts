@@ -50,7 +50,18 @@ export interface StructuralLayerControllerOptions {
   readonly getSelectedLayerIds?: (document: CanvasDocumentContractV3) => readonly string[];
   readonly report?: (message: StructuralFailureReport, label: string, error: unknown) => void;
   readonly now?: () => number;
+  /** Defers a preview flush to the next paint, returning a cancel. Defaults to rAF, synchronous without one. */
+  readonly schedulePreview?: (flush: () => void) => () => void;
 }
+
+const defaultSchedulePreview = (flush: () => void): (() => void) => {
+  if (typeof requestAnimationFrame !== 'function') {
+    flush();
+    return () => undefined;
+  }
+  const frame = requestAnimationFrame(flush);
+  return () => cancelAnimationFrame(frame);
+};
 
 interface NudgeBurst {
   expiresAt: number;
@@ -72,9 +83,18 @@ export class StructuralLayerController {
   private burst: NudgeBurst | null = null;
   private disposed = false;
   private readonly now: () => number;
+  private pendingPreview: CanvasProjectMutation | null = null;
+  private cancelPreviewFlush: (() => void) | null = null;
 
   constructor(private readonly deps: StructuralLayerControllerOptions) {
     this.now = deps.now ?? Date.now;
+  }
+
+  /** A commit supersedes any preview still waiting for its frame. */
+  private discardPendingPreview(): void {
+    this.cancelPreviewFlush?.();
+    this.cancelPreviewFlush = null;
+    this.pendingPreview = null;
   }
 
   endBurst(): void {
@@ -100,6 +120,7 @@ export class StructuralLayerController {
       return refusal;
     }
     this.endBurst();
+    this.discardPendingPreview();
     const applied = this.apply(label, forward, inverse, options.verify);
     if (applied.status === 'committed') {
       this.deps.ctx.history.push(this.entry(label, forward, inverse));
@@ -121,6 +142,7 @@ export class StructuralLayerController {
       return { status: 'dispatch-rejected' };
     }
     this.endBurst();
+    this.discardPendingPreview();
     const applied = this.apply(
       label,
       edit.forward,
@@ -134,11 +156,32 @@ export class StructuralLayerController {
     return applied;
   }
 
+  /**
+   * Live gesture previews coalesce to one dispatch per frame: sliders, color
+   * pickers and curve drags fire per pointer move, and every dispatch fans out
+   * to the whole project-state subscriber tree. `true` means accepted, not
+   * delivered — a lock, gesture, or dispose landing before the flush drops it.
+   */
   preview(action: CanvasProjectMutation): boolean {
     if (!this.canCommit()) {
       return false;
     }
-    this.deps.ctx.dispatch(action);
+    this.pendingPreview = action;
+    if (this.cancelPreviewFlush === null) {
+      const schedule = this.deps.schedulePreview ?? defaultSchedulePreview;
+      // The scheduler may flush synchronously (no rAF); the cancel handle must not outlive the flush.
+      let flushed = false;
+      const cancel = schedule(() => {
+        flushed = true;
+        this.cancelPreviewFlush = null;
+        const pending = this.pendingPreview;
+        this.pendingPreview = null;
+        if (pending && this.canCommit()) {
+          this.deps.ctx.dispatch(pending);
+        }
+      });
+      this.cancelPreviewFlush = flushed ? null : cancel;
+    }
     return true;
   }
 
@@ -192,6 +235,7 @@ export class StructuralLayerController {
   dispose(): void {
     this.disposed = true;
     this.endBurst();
+    this.discardPendingPreview();
   }
 
   private refuse(options: StructuralCommitOptions): StructuralCommitResult | null {

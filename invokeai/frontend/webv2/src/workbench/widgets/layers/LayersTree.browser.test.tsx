@@ -733,6 +733,7 @@ describe('LayersTree projected child rows', () => {
     }
     const commits = getLayerRowCommits();
     expect(Object.keys(commits).filter((id) => id !== 'r1' && !id.startsWith('child:r1:'))).toEqual([]);
+    expect(commits['child:r1:a1']).toBe(30);
     expect(treeitem('Saturation').textContent).toContain('+30%');
   });
 

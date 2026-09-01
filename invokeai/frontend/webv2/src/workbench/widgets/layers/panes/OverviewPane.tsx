@@ -4,18 +4,31 @@ import { Box, chakra, Flex } from '@chakra-ui/react';
 import { useCanvasRasterContentEpoch } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useCanvasEngine, type CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const KEY_PAN_STEP_PX = 40;
+/** Floor between composite repaints; content changes inside the window coalesce into one trailing draw. */
+const REDRAW_INTERVAL_MS = 100;
+/** The outline updates on this cadence and transitions between positions, so tracking reads as a glide. */
+const VIEW_RECT_INTERVAL_MS = 80;
 
 const FOCUS_PROPS = { outline: '2px solid {colors.accent.solid}', outlineOffset: '2px' };
 
+const CHECKERBOARD_CSS = {
+  backgroundImage: 'repeating-conic-gradient({colors.bg.emphasized} 0% 25%, {colors.bg.inset} 0% 50%)',
+  backgroundSize: '12px 12px',
+};
+
+const VIEW_RECT_TRANSITION = `left ${VIEW_RECT_INTERVAL_MS}ms linear, top ${VIEW_RECT_INTERVAL_MS}ms linear, width ${VIEW_RECT_INTERVAL_MS}ms linear, height ${VIEW_RECT_INTERVAL_MS}ms linear`;
+
 /**
- * The navigator: a fit-to-pane composite of the whole document with the live
- * viewport outlined on top. Clicking or dragging centers the view there;
- * arrow keys pan when the preview is focused. Reads the engine's compositor
- * and viewport directly — no state of its own beyond the measured size.
+ * The navigator: a fit-to-pane composite of the whole document over a
+ * transparency checkerboard, with the live viewport outlined on top. Clicking
+ * or dragging centers the view there, the wheel zooms about the point under
+ * the cursor, and arrow keys pan when the preview is focused. Composite
+ * repaints and outline updates are throttled; the outline is positioned
+ * imperatively so pan/zoom never re-renders the pane.
  */
 export const OverviewPane = () => {
   const { t } = useTranslation();
@@ -42,14 +55,15 @@ const ConnectedOverview = ({ engine }: { engine: CanvasEngineHandle }) => {
   const { t } = useTranslation();
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const viewRectRef = useRef<HTMLDivElement>(null);
   const drag = useRef<AbortController | null>(null);
   const [hostSize, setHostSize] = useState<{ width: number; height: number }>({ height: 0, width: 0 });
-  const [viewRect, setViewRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
 
-  // Redraw triggers: any committed document change and live stroke content;
-  // the viewport rectangle tracks zoom/pan through its own subscription below.
   const contentEpoch = useCanvasRasterContentEpoch(engine);
-  const documentState = useActiveProjectSelector((project) => project.canvas.document);
+  const stacks = useActiveProjectSelector((project) => project.canvas.document.stacks);
+  const docWidth = useActiveProjectSelector((project) => project.canvas.document.width);
+  const docHeight = useActiveProjectSelector((project) => project.canvas.document.height);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -57,8 +71,6 @@ const ConnectedOverview = ({ engine }: { engine: CanvasEngineHandle }) => {
       return;
     }
     const observer = new ResizeObserver((observations) => {
-      // The content box: the client box includes the host padding, which would
-      // let the composite overflow into it and clip the document's edges.
       const content = observations[0]?.contentRect;
       if (content) {
         setHostSize({ height: content.height, width: content.width });
@@ -70,81 +82,171 @@ const ConnectedOverview = ({ engine }: { engine: CanvasEngineHandle }) => {
 
   useEffect(() => () => drag.current?.abort(), []);
 
-  // The preview geometry derives from the document and the measured pane —
-  // mirroring the engine's `fitThumbnailSize` math exactly, so the drawn
-  // bitmap and the rectangle overlay agree without a state round trip.
+  // Mirrors the engine's `fitThumbnailSize` math, so the drawn bitmap and the
+  // outline overlay agree without a state round trip.
   const frame = useMemo<OverviewFrame | null>(() => {
     const maxSize = Math.floor(Math.min(hostSize.width, hostSize.height));
-    const { height: docH, width: docW } = documentState;
-    if (maxSize < 16 || docW <= 0 || docH <= 0) {
+    if (maxSize < 16 || docWidth <= 0 || docHeight <= 0) {
       return null;
     }
-    const scale = Math.min(1, maxSize / docW, maxSize / docH);
+    const scale = Math.min(1, maxSize / docWidth, maxSize / docHeight);
     return {
-      heightPx: Math.max(1, Math.round(docH * scale)),
+      heightPx: Math.max(1, Math.round(docHeight * scale)),
       scale,
-      widthPx: Math.max(1, Math.round(docW * scale)),
+      widthPx: Math.max(1, Math.round(docWidth * scale)),
     };
-  }, [documentState, hostSize]);
+  }, [docHeight, docWidth, hostSize]);
+  const frameRef = useRef(frame);
+  useLayoutEffect(() => {
+    frameRef.current = frame;
+  }, [frame]);
 
-  // Repaint the composite when content or geometry changes; the effect only
-  // updates the external canvas, never React state.
-  useEffect(() => {
+  const redraw = useRef({ last: 0, timer: null as ReturnType<typeof setTimeout> | null });
+  // Only a real composite consumes throttle budget, so the pre-measure clearing
+  // draw never defers the first paint.
+  const drawComposite = useCallback((): boolean => {
     const canvas = canvasRef.current;
+    const current = frameRef.current;
     if (!canvas) {
-      return;
+      return false;
     }
-    if (!frame) {
+    if (!current) {
       canvas.width = 0;
       canvas.height = 0;
+      return false;
+    }
+    engine.previews.drawDocumentOverview(canvas, Math.max(current.widthPx, current.heightPx));
+    return true;
+  }, [engine]);
+  const scheduleRedraw = useCallback(() => {
+    const state = redraw.current;
+    if (state.timer !== null) {
       return;
     }
-    engine.previews.drawDocumentOverview(canvas, Math.max(frame.widthPx, frame.heightPx));
-  }, [contentEpoch, documentState, engine, frame]);
-
-  // Track the live viewport rectangle in preview coordinates.
+    const elapsed = Date.now() - state.last;
+    if (elapsed >= REDRAW_INTERVAL_MS) {
+      if (drawComposite()) {
+        state.last = Date.now();
+      }
+      return;
+    }
+    state.timer = setTimeout(() => {
+      state.timer = null;
+      if (drawComposite()) {
+        state.last = Date.now();
+      }
+    }, REDRAW_INTERVAL_MS - elapsed);
+  }, [drawComposite]);
   useEffect(() => {
-    if (!frame) {
-      return;
-    }
+    const state = redraw.current;
+    return () => {
+      if (state.timer !== null) {
+        clearTimeout(state.timer);
+      }
+    };
+  }, []);
+  useEffect(() => {
+    scheduleRedraw();
+  }, [contentEpoch, stacks, frame, scheduleRedraw]);
+
+  // The outline is written straight to the DOM on a throttled cadence; the CSS
+  // transition carries it between updates.
+  useEffect(() => {
     const viewport = engine.viewport.getViewport();
-    const update = () => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let last = 0;
+    const apply = () => {
+      const element = viewRectRef.current;
+      const current = frameRef.current;
+      if (!element) {
+        return;
+      }
       const size = viewport.getViewportSize();
-      if (size.width <= 0 || size.height <= 0) {
-        setViewRect(null);
+      if (!current || size.width <= 0 || size.height <= 0) {
+        element.style.visibility = 'hidden';
         return;
       }
       const topLeft = viewport.screenToDocument({ x: 0, y: 0 });
       const bottomRight = viewport.screenToDocument({ x: size.width, y: size.height });
-      setViewRect({
-        height: (bottomRight.y - topLeft.y) * frame.scale,
-        width: (bottomRight.x - topLeft.x) * frame.scale,
-        x: topLeft.x * frame.scale,
-        y: topLeft.y * frame.scale,
-      });
+      const width = (bottomRight.x - topLeft.x) * current.scale;
+      const height = (bottomRight.y - topLeft.y) * current.scale;
+      element.style.visibility = 'visible';
+      element.style.left = `${Math.max(-current.widthPx, Math.min(topLeft.x * current.scale, current.widthPx))}px`;
+      element.style.top = `${Math.max(-current.heightPx, Math.min(topLeft.y * current.scale, current.heightPx))}px`;
+      element.style.width = `${Math.max(4, Math.min(width, current.widthPx * 2))}px`;
+      element.style.height = `${Math.max(4, Math.min(height, current.heightPx * 2))}px`;
     };
-    update();
-    return viewport.subscribe(update);
+    const update = () => {
+      if (timer !== null) {
+        return;
+      }
+      const elapsed = Date.now() - last;
+      if (elapsed >= VIEW_RECT_INTERVAL_MS) {
+        last = Date.now();
+        apply();
+        return;
+      }
+      timer = setTimeout(() => {
+        timer = null;
+        last = Date.now();
+        apply();
+      }, VIEW_RECT_INTERVAL_MS - elapsed);
+    };
+    apply();
+    const unsubscribe = viewport.subscribe(update);
+    return () => {
+      unsubscribe();
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
+    };
   }, [engine, frame]);
 
   const centerOn = useCallback(
     (clientX: number, clientY: number) => {
       const canvas = canvasRef.current;
-      if (!canvas || !frame) {
+      const current = frameRef.current;
+      if (!canvas || !current) {
         return;
       }
       const bounds = canvas.getBoundingClientRect();
       const documentPoint = {
-        x: (clientX - bounds.left) / frame.scale,
-        y: (clientY - bounds.top) / frame.scale,
+        x: (clientX - bounds.left) / current.scale,
+        y: (clientY - bounds.top) / current.scale,
       };
       const viewport = engine.viewport.getViewport();
       const size = viewport.getViewportSize();
       const screenPoint = viewport.documentToScreen(documentPoint);
       viewport.panBy({ x: size.width / 2 - screenPoint.x, y: size.height / 2 - screenPoint.y });
     },
-    [engine, frame]
+    [engine]
   );
+
+  // React registers wheel listeners passively; zooming must preventDefault, so
+  // the listener is attached natively.
+  useEffect(() => {
+    const button = buttonRef.current;
+    if (!button) {
+      return;
+    }
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const canvas = canvasRef.current;
+      const current = frameRef.current;
+      if (!canvas || !current) {
+        return;
+      }
+      const bounds = canvas.getBoundingClientRect();
+      const documentPoint = {
+        x: (event.clientX - bounds.left) / current.scale,
+        y: (event.clientY - bounds.top) / current.scale,
+      };
+      const viewport = engine.viewport.getViewport();
+      viewport.wheelZoom(event.deltaY, viewport.documentToScreen(documentPoint));
+    };
+    button.addEventListener('wheel', handleWheel, { passive: false });
+    return () => button.removeEventListener('wheel', handleWheel);
+  }, [engine]);
 
   const onPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -152,8 +254,6 @@ const ConnectedOverview = ({ engine }: { engine: CanvasEngineHandle }) => {
         return;
       }
       event.preventDefault();
-      // preventDefault suppresses focus-on-click; take it explicitly so the
-      // arrow keys work right after a mouse interaction.
       event.currentTarget.focus();
       const controller = new AbortController();
       drag.current?.abort();
@@ -170,7 +270,6 @@ const ConnectedOverview = ({ engine }: { engine: CanvasEngineHandle }) => {
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLButtonElement>) => {
       if (event.key === 'Enter' || event.key === ' ') {
-        // The button's activation keys mirror double-click: fit the document.
         event.preventDefault();
         engine.viewport.fitToView();
         return;
@@ -195,25 +294,17 @@ const ConnectedOverview = ({ engine }: { engine: CanvasEngineHandle }) => {
     [engine]
   );
   const fit = useCallback(() => engine.viewport.fitToView(), [engine]);
-  const viewRectStyle = useMemo(() => {
-    if (!viewRect || !frame) {
-      return null;
-    }
-    return {
-      height: `${Math.max(4, Math.min(viewRect.height, frame.heightPx * 2))}px`,
-      left: `${Math.max(-frame.widthPx, Math.min(viewRect.x, frame.widthPx))}px`,
-      top: `${Math.max(-frame.heightPx, Math.min(viewRect.y, frame.heightPx))}px`,
-      width: `${Math.max(4, Math.min(viewRect.width, frame.widthPx * 2))}px`,
-    };
-  }, [frame, viewRect]);
 
   return (
     <Flex ref={hostRef} align="center" h="full" justify="center" minH="0" overflow="hidden" p="2">
       <chakra.button
+        ref={buttonRef}
         aria-label={t('widgets.layers.overviewPane.pan')}
+        css={CHECKERBOARD_CSS}
         cursor="crosshair"
         display="block"
         position="relative"
+        rounded="xs"
         type="button"
         _focusVisible={FOCUS_PROPS}
         onDoubleClick={fit}
@@ -221,16 +312,16 @@ const ConnectedOverview = ({ engine }: { engine: CanvasEngineHandle }) => {
         onPointerDown={onPointerDown}
       >
         <chakra.canvas ref={canvasRef} display="block" touchAction="none" />
-        {viewRectStyle ? (
-          <Box
-            borderColor="accent.solid"
-            borderWidth="1.5px"
-            pointerEvents="none"
-            position="absolute"
-            rounded="xs"
-            style={viewRectStyle}
-          />
-        ) : null}
+        <Box
+          ref={viewRectRef}
+          borderColor="accent.solid"
+          borderWidth="1.5px"
+          pointerEvents="none"
+          position="absolute"
+          rounded="xs"
+          transition={VIEW_RECT_TRANSITION}
+          visibility="hidden"
+        />
       </chakra.button>
     </Flex>
   );

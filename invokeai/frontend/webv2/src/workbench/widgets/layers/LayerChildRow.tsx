@@ -14,13 +14,14 @@ import {
   WavesIcon,
   type LucideIcon,
 } from 'lucide-react';
-import { memo, useCallback, useMemo, useRef } from 'react';
+import { memo, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { LayerRowCommands } from './layerRowCommands';
 
 import { LayerActiveDot, ROW_SELECTION_FOCUS } from './LayerActiveDot';
 import { childRowNameKey, isOrderedChildKind, type LayerChildRowKind, type ProjectedChildRow } from './layerChildRows';
+import { recordLayerRowCommit } from './layerPanelDiagnostics';
 import { LAYER_TREE_INDENT_PX } from './layerPanelRows';
 import { anchorFromPoint } from './layerRowCommands';
 import { LayerRowSurface } from './LayerRowSurface';
@@ -86,6 +87,10 @@ const LayerChildRowComponent = ({
   const rowElement = useRef<HTMLDivElement | null>(null);
   const nameInput = useRef<HTMLInputElement | null>(null);
   const renameCancelled = useRef(false);
+
+  useLayoutEffect(() => {
+    recordLayerRowCommit(child.key);
+  });
   const { setNodeRef: setDropRef } = useDroppable({
     data: { stack: child.stack },
     disabled: dragDisabled,
