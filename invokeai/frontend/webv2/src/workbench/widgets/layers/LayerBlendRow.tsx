@@ -3,7 +3,7 @@ import type { CanvasBlendMode, CanvasDocumentContractV3, CanvasLayerContract } f
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 
 import { createListCollection, Flex, HStack, NumberInput } from '@chakra-ui/react';
-import { Field, Select } from '@platform/ui';
+import { Select } from '@platform/ui';
 import { getDocumentLayer } from '@workbench/canvas-engine/api';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
@@ -15,6 +15,8 @@ import { useTranslation } from 'react-i18next';
 type LayerBlendRowEngine = Pick<CanvasEngineHandle, 'document' | 'exports' | 'interaction' | 'layers' | 'projectId'>;
 
 const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: true } as const;
+const BLEND_TRIGGER_PROPS = { fontSize: '2xs', h: '6', minH: '6' } as const;
+const OPACITY_INPUT_PROPS = { fontSize: '2xs', h: '6' } as const;
 
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
@@ -37,7 +39,7 @@ export const LayerBlendRow = ({ engine }: { engine: LayerBlendRowEngine | null }
   const editingLocked = useCanvasDocumentEditingLocked(engine);
 
   return (
-    <Flex align="center" flexShrink={0} gap="2" px="2" py="1">
+    <Flex align="center" flexShrink={0} gap="1.5" mx="1.5" pb="1" pt="0.5">
       <BlendModeControl editingLocked={editingLocked} engine={engine} layer={layer} />
       <OpacityRow editingLocked={editingLocked} engine={engine} layer={layer} />
     </Flex>
@@ -85,21 +87,20 @@ const BlendModeControl = ({
   );
 
   return (
-    <Field disabled={disabled} flex="1.5" label={t('widgets.layers.actions.blendMode')} orientation="horizontal">
-      <Select
-        aria-label={t('widgets.layers.actions.blendMode')}
-        collection={blendCollection}
-        disabled={disabled}
-        itemsMaxH="16rem"
-        minW="7rem"
-        positioning={SELECT_POSITIONING}
-        size="xs"
-        value={blendValue}
-        valueText={t(`widgets.layers.blendModes.${blendMode}`)}
-        w="full"
-        onValueChange={handleBlendChange}
-      />
-    </Field>
+    <Select
+      aria-label={t('widgets.layers.actions.blendMode')}
+      collection={blendCollection}
+      disabled={disabled}
+      flex="1"
+      itemsMaxH="16rem"
+      minW="0"
+      positioning={SELECT_POSITIONING}
+      size="xs"
+      triggerProps={BLEND_TRIGGER_PROPS}
+      value={blendValue}
+      valueText={t(`widgets.layers.blendModes.${blendMode}`)}
+      onValueChange={handleBlendChange}
+    />
   );
 };
 
@@ -195,26 +196,25 @@ const OpacityRow = ({
   );
 
   return (
-    <Field disabled={disabled} label={t('widgets.layers.actions.opacity')} orientation="horizontal">
-      <HStack ref={flushOnUnmountRef} gap="2">
-        <NumberInput.Root
-          disabled={disabled}
-          max={100}
-          min={0}
-          size="xs"
-          step={1}
-          value={opacityPercent}
-          w="20"
-          onValueChange={handleOpacityChange}
-        >
-          <NumberInput.Control onClick={commitPending} />
-          <NumberInput.Input
-            aria-label={t('widgets.layers.actions.opacity')}
-            onBlur={commitPending}
-            onKeyUp={handleInputKeyUp}
-          />
-        </NumberInput.Root>
-      </HStack>
-    </Field>
+    <HStack ref={flushOnUnmountRef} flexShrink={0} gap="2">
+      <NumberInput.Root
+        disabled={disabled}
+        max={100}
+        min={0}
+        size="xs"
+        step={1}
+        value={opacityPercent}
+        w="16"
+        onValueChange={handleOpacityChange}
+      >
+        <NumberInput.Control onClick={commitPending} />
+        <NumberInput.Input
+          aria-label={t('widgets.layers.actions.opacity')}
+          css={OPACITY_INPUT_PROPS}
+          onBlur={commitPending}
+          onKeyUp={handleInputKeyUp}
+        />
+      </NumberInput.Root>
+    </HStack>
   );
 };

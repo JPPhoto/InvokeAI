@@ -38,12 +38,7 @@ import {
   DEFAULT_INPAINT_MASK_FILL,
   fitLayerTransformToBbox,
   getControlTransparencyEffectPatch,
-  getInpaintDenoiseLimitPatch,
-  getInpaintNoisePatch,
   getRegionalGuidanceAutoNegativePatch,
-  getRegionalGuidanceNegativePromptPatch,
-  getRegionalGuidancePositivePromptPatch,
-  getRegionalGuidanceReferenceImagePatch,
   isMergeableRasterLayer,
   nextControlLayerName,
   nextInpaintMaskName,
@@ -457,26 +452,9 @@ describe('menu patch helpers', () => {
     expect(getControlTransparencyEffectPatch(layer)).toEqual({ layerType: 'control', withTransparencyEffect: false });
   });
 
-  it('builds regional prompt and reference image patches', () => {
+  it('builds the auto-negative toggle patch', () => {
     const layer = createRegionalGuidanceLayer('region', 0, 'r1');
-
-    expect(getRegionalGuidancePositivePromptPatch(layer)).toEqual({
-      layerType: 'regional_guidance',
-      positivePrompt: '',
-    });
-    expect(getRegionalGuidanceNegativePromptPatch(layer)).toEqual({
-      layerType: 'regional_guidance',
-      negativePrompt: '',
-    });
     expect(getRegionalGuidanceAutoNegativePatch(layer)).toEqual({ autoNegative: true, layerType: 'regional_guidance' });
-    expect(getRegionalGuidanceReferenceImagePatch(layer, 'sdxl').referenceImages).toHaveLength(1);
-  });
-
-  it('builds inpaint modifier patches', () => {
-    const layer = createInpaintMaskLayer('mask', 'm1');
-
-    expect(getInpaintNoisePatch(layer)).toEqual({ layerType: 'inpaint_mask', noiseLevel: 0.25 });
-    expect(getInpaintDenoiseLimitPatch(layer)).toEqual({ denoiseLimit: 0.8, layerType: 'inpaint_mask' });
   });
 });
 

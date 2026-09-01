@@ -46,7 +46,6 @@ import {
   CopyIcon,
   MergeIcon,
   MoreVerticalIcon,
-  PlusIcon,
 } from 'lucide-react';
 import { Fragment, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -100,12 +99,7 @@ import {
   createLayerId,
   fitLayerTransformToBbox,
   getControlTransparencyEffectPatch,
-  getInpaintDenoiseLimitPatch,
-  getInpaintNoisePatch,
   getRegionalGuidanceAutoNegativePatch,
-  getRegionalGuidanceNegativePromptPatch,
-  getRegionalGuidancePositivePromptPatch,
-  getRegionalGuidanceReferenceImagePatch,
 } from './layerOps';
 import { requestLayerProperties } from './layerPropertiesRequestStore';
 import { RunLayerWorkflowDialog, useLayerWorkflowAvailability } from './RunLayerWorkflowDialog';
@@ -698,21 +692,11 @@ const LayerMenu = ({
     (id: LayerConfigPatchKind) => {
       if (id === 'control-transparency-effect' && layer.type === 'control') {
         patchConfig(getActionLabel(id), getControlTransparencyEffectPatch(layer));
-      } else if (id === 'regional-positive-prompt' && layer.type === 'regional_guidance') {
-        patchConfig(getActionLabel(id), getRegionalGuidancePositivePromptPatch(layer));
-      } else if (id === 'regional-negative-prompt' && layer.type === 'regional_guidance') {
-        patchConfig(getActionLabel(id), getRegionalGuidanceNegativePromptPatch(layer));
-      } else if (id === 'regional-reference-image' && layer.type === 'regional_guidance') {
-        patchConfig(getActionLabel(id), getRegionalGuidanceReferenceImagePatch(layer, base));
       } else if (id === 'regional-auto-negative' && layer.type === 'regional_guidance') {
         patchConfig(getActionLabel(id), getRegionalGuidanceAutoNegativePatch(layer));
-      } else if (id === 'inpaint-noise' && layer.type === 'inpaint_mask') {
-        patchConfig(getActionLabel(id), getInpaintNoisePatch(layer));
-      } else if (id === 'inpaint-denoise-limit' && layer.type === 'inpaint_mask') {
-        patchConfig(getActionLabel(id), getInpaintDenoiseLimitPatch(layer));
       }
     },
-    [base, getActionLabel, layer, patchConfig]
+    [getActionLabel, layer, patchConfig]
   );
 
   const effects = useMemo<LayerContextActionEffects>(
@@ -984,12 +968,6 @@ export const CanvasLayerContextMenu = ({
 const stopPropagation = (event: { stopPropagation: () => void }): void => event.stopPropagation();
 
 const SUBMENU_META: Record<LayerContextSubmenuId, { defaultLabel: string; icon: LucideIcon; labelKey: string }> = {
-  'add-modifiers': {
-    defaultLabel: 'Add modifiers',
-    icon: PlusIcon,
-    labelKey: 'widgets.layers.menu.addModifiers',
-  },
-  'add-regional': { defaultLabel: 'Add', icon: PlusIcon, labelKey: 'widgets.layers.menu.add' },
   arrange: { defaultLabel: 'Arrange', icon: ArrowUpDownIcon, labelKey: 'widgets.layers.menu.arrange' },
   boolean: { defaultLabel: 'Boolean operations', icon: MergeIcon, labelKey: 'widgets.layers.menu.booleanOperations' },
   'convert-to': { defaultLabel: 'Convert to', icon: ArrowRightLeftIcon, labelKey: 'widgets.layers.menu.convertTo' },

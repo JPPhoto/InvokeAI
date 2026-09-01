@@ -10,6 +10,9 @@ import type {
 import type { Key, ReactNode } from 'react';
 
 import { Portal, Select as ChakraSelect, useFieldContext } from '@chakra-ui/react';
+import { useCallback, useRef } from 'react';
+
+import { Scrollable } from './Scrollable';
 
 const getDefaultItemKey = <T extends CollectionItem>(item: T, index: number): Key => {
   const keyedItem = item as { id?: Key; value?: Key };
@@ -26,8 +29,10 @@ const renderDefaultItem = <T extends CollectionItem>(item: T): ReactNode => {
 export interface SelectProps<T extends CollectionItem> extends Omit<SelectRootProps<T>, 'children'> {
   contentProps?: SelectContentProps;
   /**
-   * Caps the open menu's height; the content element itself scrolls, which is
-   * the element the select machine scrolls the highlighted item within.
+   * Caps the open menu's height and scrolls the items inside a Scrollable.
+   * The machine's own content-element scrolling is replaced by a
+   * `scrollToIndexFn` targeting the Scrollable viewport, so keyboard
+   * highlight, typeahead, and the open-reveal keep working.
    */
   itemsMaxH?: string;
   getItemKey?: (item: T, index: number) => Key;
@@ -62,8 +67,13 @@ export const Select = <T extends CollectionItem>({
   // own Label part there would duplicate that id; the field's visible label
   // already names the trigger.
   const field = useFieldContext();
+  const itemsRef = useRef<HTMLDivElement>(null);
+  const scrollToIndexFn = useCallback(({ index }: { index: number }) => {
+    const options = itemsRef.current?.querySelectorAll('[role="option"]');
+    options?.[index]?.scrollIntoView({ block: 'nearest' });
+  }, []);
   return (
-    <ChakraSelect.Root collection={collection} {...rootProps}>
+    <ChakraSelect.Root collection={collection} scrollToIndexFn={itemsMaxH ? scrollToIndexFn : undefined} {...rootProps}>
       {/* A real (visually hidden) Label part: the machine's trigger always points
         its aria-labelledby at this id, so a bare aria-label must materialize it —
         left on the Root it lands on a div, which ARIA prohibits. */}
@@ -79,16 +89,36 @@ export const Select = <T extends CollectionItem>({
       </ChakraSelect.Control>
       <Portal disabled={!portalled}>
         <ChakraSelect.Positioner {...positionerProps}>
-          <ChakraSelect.Content maxH={itemsMaxH} overflowY={itemsMaxH ? 'auto' : undefined} {...contentProps}>
-            {collection.items.map((item, index) => (
-              <ChakraSelect.Item key={getItemKey(item, index)} item={item}>
-                <ChakraSelect.ItemText>{renderItem(item)}</ChakraSelect.ItemText>
-                {itemIndicator ? <ChakraSelect.ItemIndicator /> : null}
-              </ChakraSelect.Item>
-            ))}
+          <ChakraSelect.Content {...contentProps}>
+            <SelectItems ref={itemsRef} maxH={itemsMaxH}>
+              {collection.items.map((item, index) => (
+                <ChakraSelect.Item key={getItemKey(item, index)} item={item}>
+                  <ChakraSelect.ItemText>{renderItem(item)}</ChakraSelect.ItemText>
+                  {itemIndicator ? <ChakraSelect.ItemIndicator /> : null}
+                </ChakraSelect.Item>
+              ))}
+            </SelectItems>
           </ChakraSelect.Content>
         </ChakraSelect.Positioner>
       </Portal>
     </ChakraSelect.Root>
   );
 };
+
+/** Items pass through untouched unless a max height asks for a scroll viewport. */
+const SelectItems = ({
+  children,
+  maxH,
+  ref,
+}: {
+  children: ReactNode;
+  maxH?: string;
+  ref: React.RefObject<HTMLDivElement | null>;
+}) =>
+  maxH ? (
+    <Scrollable ref={ref} maxH={maxH}>
+      {children}
+    </Scrollable>
+  ) : (
+    children
+  );

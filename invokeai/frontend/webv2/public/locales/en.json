@@ -2501,13 +2501,8 @@
     "layers": {
       "actions": {
         "addControlLayer": "Control layer",
-        "addDenoiseLimit": "Add denoise limit",
-        "addImageNoise": "Add image noise",
         "addInpaintMask": "Inpaint mask",
-        "addNegativePrompt": "Add negative prompt",
-        "addPositivePrompt": "Add positive prompt",
         "addRasterLayer": "Raster layer",
-        "addReferenceImage": "Add reference image",
         "addRegionalGuidance": "Regional guidance",
         "addRegionalReferenceImage": "Regional reference image",
         "actionFailed": "Layer action failed",
@@ -2583,7 +2578,6 @@
         "newGroup": "New group",
         "expandGroup": "Expand group",
         "collapseGroup": "Collapse group",
-        "selectFirstChild": "Select first layer in group",
         "indent": "Move into the group above",
         "outdent": "Move out of the group",
         "groupLocked": "Locked by a group",
@@ -2912,8 +2906,6 @@
         "regional": "Regional"
       },
       "menu": {
-        "add": "Add",
-        "addModifiers": "Add modifiers",
         "arrange": "Arrange",
         "booleanOperations": "Boolean operations",
         "convertTo": "Convert to",

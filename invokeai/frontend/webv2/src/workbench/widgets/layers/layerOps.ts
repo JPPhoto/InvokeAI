@@ -37,7 +37,6 @@ type RegionalGuidanceConfigPatch = {
   autoNegative?: boolean;
   referenceImages?: CanvasRegionalGuidanceLayerContract['referenceImages'];
 };
-type InpaintMaskConfigPatch = { layerType: 'inpaint_mask'; noiseLevel?: number; denoiseLimit?: number };
 /**
  * Re-exported so existing imports of `isMergeableRasterLayer` from this module
  * keep working; the canonical definition lives in the engine's `document/sources`
@@ -391,35 +390,9 @@ export const getControlTransparencyEffectPatch = (layer: CanvasControlLayerContr
   withTransparencyEffect: !layer.withTransparencyEffect,
 });
 
-export const getRegionalGuidancePositivePromptPatch = (
-  layer: CanvasRegionalGuidanceLayerContract
-): RegionalGuidanceConfigPatch => ({ layerType: 'regional_guidance', positivePrompt: layer.positivePrompt ?? '' });
-
-export const getRegionalGuidanceNegativePromptPatch = (
-  layer: CanvasRegionalGuidanceLayerContract
-): RegionalGuidanceConfigPatch => ({ layerType: 'regional_guidance', negativePrompt: layer.negativePrompt ?? '' });
-
 export const getRegionalGuidanceAutoNegativePatch = (
   layer: CanvasRegionalGuidanceLayerContract
 ): RegionalGuidanceConfigPatch => ({ autoNegative: !layer.autoNegative, layerType: 'regional_guidance' });
-
-export const getRegionalGuidanceReferenceImagePatch = (
-  layer: CanvasRegionalGuidanceLayerContract,
-  base: string | null
-): RegionalGuidanceConfigPatch => ({
-  layerType: 'regional_guidance',
-  referenceImages: [...layer.referenceImages, createRegionalReferenceImage(base)],
-});
-
-export const getInpaintNoisePatch = (layer: CanvasInpaintMaskLayerContract): InpaintMaskConfigPatch => ({
-  layerType: 'inpaint_mask',
-  noiseLevel: layer.noiseLevel === undefined ? 0.25 : undefined,
-});
-
-export const getInpaintDenoiseLimitPatch = (layer: CanvasInpaintMaskLayerContract): InpaintMaskConfigPatch => ({
-  denoiseLimit: layer.denoiseLimit === undefined ? 0.8 : undefined,
-  layerType: 'inpaint_mask',
-});
 
 /**
  * True when `layer` can be converted to a control layer (and vice-versa): only a

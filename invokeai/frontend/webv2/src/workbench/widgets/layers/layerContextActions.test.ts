@@ -473,12 +473,7 @@ describe('getLayerContextActions', () => {
       'convert-to-inpaint-mask',
       'convert-to-regional-guidance',
       'control-transparency-effect',
-      'regional-positive-prompt',
-      'regional-negative-prompt',
-      'regional-reference-image',
       'regional-auto-negative',
-      'inpaint-noise',
-      'inpaint-denoise-limit',
       'merge-down',
       'merge-selected',
       'toggle-visibility',
@@ -748,22 +743,15 @@ describe('getLayerContextActions', () => {
     expect(idsFor(rasterLayer)).not.toContain('copy-to-raster');
   });
 
-  it('exposes regional guidance add actions only for missing prompts', () => {
-    const layer = { ...createRegionalGuidanceLayer('Region', 0, 'region-prompts'), positivePrompt: 'already' };
+  it('keeps the surviving regional and inpaint verbs without the retired add actions', () => {
+    const region = createRegionalGuidanceLayer('Region', 0, 'region-prompts');
+    expect(idsFor(region)).toContain('regional-auto-negative');
+    expect(idsFor(region)).not.toContain('regional-positive-prompt' as never);
 
-    expect(idsFor(layer)).toContain('regional-negative-prompt');
-    expect(idsFor(layer)).toContain('regional-reference-image');
-    expect(idsFor(layer)).toContain('regional-auto-negative');
-    expect(idsFor(layer)).not.toContain('regional-positive-prompt');
-  });
-
-  it('exposes inpaint modifier add actions only for missing modifiers', () => {
-    const layer = { ...createInpaintMaskLayer('Mask', 'mask-modifiers'), noiseLevel: 0.25 };
-
-    expect(idsFor(layer)).toContain('inpaint-denoise-limit');
-    expect(idsFor(layer)).toContain('copy-to-regional-guidance');
-    expect(idsFor(layer)).toContain('extract-masked-area');
-    expect(idsFor(layer)).not.toContain('inpaint-noise');
+    const mask = createInpaintMaskLayer('Mask', 'mask-modifiers');
+    expect(idsFor(mask)).toContain('copy-to-regional-guidance');
+    expect(idsFor(mask)).toContain('extract-masked-area');
+    expect(idsFor(mask)).not.toContain('inpaint-noise' as never);
   });
 
   it('copies regional guidance to an inpaint mask without unsupported conversions', () => {

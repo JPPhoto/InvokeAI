@@ -71,12 +71,7 @@ export type LayerContextActionId =
   | 'convert-to-inpaint-mask'
   | 'convert-to-regional-guidance'
   | 'control-transparency-effect'
-  | 'regional-positive-prompt'
-  | 'regional-negative-prompt'
-  | 'regional-reference-image'
   | 'regional-auto-negative'
-  | 'inpaint-noise'
-  | 'inpaint-denoise-limit'
   | 'merge-down'
   | 'toggle-visibility'
   | 'toggle-hidden'
@@ -85,7 +80,7 @@ export type LayerContextActionId =
 
 export type LayerType = CanvasLayerContract['type'];
 export type LayerContextMenuSectionId = 'quick' | 'primary' | 'operations' | 'output' | 'state' | 'danger';
-export type LayerContextSubmenuId = 'arrange' | 'add-modifiers' | 'add-regional' | 'boolean' | 'copy-to' | 'convert-to';
+export type LayerContextSubmenuId = 'arrange' | 'boolean' | 'copy-to' | 'convert-to';
 
 export interface LayerContextActionState {
   canRunWorkflow: boolean;
@@ -176,14 +171,7 @@ export interface LayerContextAction {
   handler(context: LayerContextActionRuntimeContext): void | Promise<void>;
 }
 
-export type LayerConfigPatchKind =
-  | 'control-transparency-effect'
-  | 'regional-positive-prompt'
-  | 'regional-negative-prompt'
-  | 'regional-reference-image'
-  | 'regional-auto-negative'
-  | 'inpaint-noise'
-  | 'inpaint-denoise-limit';
+export type LayerConfigPatchKind = 'control-transparency-effect' | 'regional-auto-negative';
 
 const ALL_LAYER_TYPES = ['raster', 'control', 'inpaint_mask', 'regional_guidance'] as const;
 const RASTER_ONLY = ['raster'] as const;
@@ -371,71 +359,6 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     order: 20,
     section: 'quick',
     supportedLayerTypes: ALL_LAYER_TYPES,
-  },
-  {
-    defaultLabel: 'Add image noise',
-    handler: ({ effects }) => effects.patchConfig('inpaint-noise'),
-    icon: SlidersHorizontalIcon,
-    id: 'inpaint-noise',
-    isEnabled: isLayerMutable,
-    isVisible: (context) => context.layer.type === 'inpaint_mask' && context.layer.noiseLevel === undefined,
-    labelKey: 'widgets.layers.actions.addImageNoise',
-    order: 0,
-    section: 'primary',
-    submenu: 'add-modifiers',
-    supportedLayerTypes: INPAINT_ONLY,
-  },
-  {
-    defaultLabel: 'Add denoise limit',
-    handler: ({ effects }) => effects.patchConfig('inpaint-denoise-limit'),
-    icon: SlidersHorizontalIcon,
-    id: 'inpaint-denoise-limit',
-    isEnabled: isLayerMutable,
-    isVisible: (context) => context.layer.type === 'inpaint_mask' && context.layer.denoiseLimit === undefined,
-    labelKey: 'widgets.layers.actions.addDenoiseLimit',
-    order: 1,
-    section: 'primary',
-    submenu: 'add-modifiers',
-    supportedLayerTypes: INPAINT_ONLY,
-  },
-  {
-    defaultLabel: 'Add positive prompt',
-    handler: ({ effects }) => effects.patchConfig('regional-positive-prompt'),
-    icon: PencilIcon,
-    id: 'regional-positive-prompt',
-    isEnabled: isLayerMutable,
-    isVisible: (context) => context.layer.type === 'regional_guidance' && context.layer.positivePrompt === null,
-    labelKey: 'widgets.layers.actions.addPositivePrompt',
-    order: 0,
-    section: 'primary',
-    submenu: 'add-regional',
-    supportedLayerTypes: REGIONAL_ONLY,
-  },
-  {
-    defaultLabel: 'Add negative prompt',
-    handler: ({ effects }) => effects.patchConfig('regional-negative-prompt'),
-    icon: PencilIcon,
-    id: 'regional-negative-prompt',
-    isEnabled: isLayerMutable,
-    isVisible: (context) => context.layer.type === 'regional_guidance' && context.layer.negativePrompt === null,
-    labelKey: 'widgets.layers.actions.addNegativePrompt',
-    order: 1,
-    section: 'primary',
-    submenu: 'add-regional',
-    supportedLayerTypes: REGIONAL_ONLY,
-  },
-  {
-    defaultLabel: 'Add reference image',
-    handler: ({ effects }) => effects.patchConfig('regional-reference-image'),
-    icon: ImageIcon,
-    id: 'regional-reference-image',
-    isEnabled: isLayerMutable,
-    isVisible: alwaysVisible,
-    labelKey: 'widgets.layers.actions.addReferenceImage',
-    order: 2,
-    section: 'primary',
-    submenu: 'add-regional',
-    supportedLayerTypes: REGIONAL_ONLY,
   },
   {
     defaultLabel: 'Transform',

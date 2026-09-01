@@ -101,23 +101,18 @@ describe('getLayerContextMenuLayout', () => {
     ]);
   });
 
-  it('groups inpaint modifiers and regional additions into type-specific submenus', () => {
+  it('keeps the primary section lean now the panes own the per-type additions', () => {
     const inpaint = createInpaintMaskLayer('Mask', 'mask');
     const regional = createRegionalGuidanceLayer('Region', 0, 'region');
 
     expect(summarize(inpaint)[1]).toEqual({
       id: 'primary',
-      items: ['add-modifiers(inpaint-noise,inpaint-denoise-limit)', 'rename', 'fit-to-bbox', 'extract-masked-area'],
+      items: ['rename', 'fit-to-bbox', 'extract-masked-area'],
       presentation: 'list',
     });
     expect(summarize(regional)[1]).toEqual({
       id: 'primary',
-      items: [
-        'add-regional(regional-positive-prompt,regional-negative-prompt,regional-reference-image)',
-        'rename',
-        'fit-to-bbox',
-        'regional-auto-negative',
-      ],
+      items: ['rename', 'fit-to-bbox', 'regional-auto-negative'],
       presentation: 'list',
     });
   });
