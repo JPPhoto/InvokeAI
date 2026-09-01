@@ -3110,6 +3110,7 @@
       "initialFrames": "Start & End Images",
       "initialVideo": "Initial Video",
       "initialVideoBlocked": "Clear the first frame to extend a video instead.",
+      "initialVideoCapBlocked": "All 3 video reference slots are in use, so there is no room for the continuity reference this clip needs. Remove a video reference first.",
       "lastFrame": "Last Frame",
       "lastFrameExtendHelp": "Optional destination: the extension ends on this image.",
       "lastFrameHelp": "Optional: the video ends on this image (interpolates from the first frame).",
@@ -3151,7 +3152,28 @@
         "singleLow": "\"{{mainName}}\" is tagged as the low-noise expert. When running a single expert, the high-noise one is usually the better choice.",
         "swap": "Swap experts",
         "swapped": "The filename tags suggest these two experts are swapped. The wiring is authoritative — swap if unintended."
-      }
+      },
+      "addImageReference": "Add image ({{count}}/{{max}})",
+      "addReference": "Add reference",
+      "addVideoReference": "Add video ({{count}}/{{max}})",
+      "dropReference": "Drop Reference",
+      "moveReferenceDown": "Move reference down",
+      "moveReferenceUp": "Move reference up",
+      "referenceConditioningAudio": "Audio only",
+      "referenceConditioningVideo": "Video only",
+      "referenceConditioningVideoAudio": "Video + audio",
+      "referenceDetailMatch": "Match generation size",
+      "referenceDetailMax": "Max detail (2048px, slower)",
+      "referenceExtendCapFull": "Initial video not set",
+      "referenceExtendCapFullDescription": "All 3 video reference slots are in use, so there is no room for the continuity reference this clip needs. Remove a video reference, then drop the clip again.",
+      "referenceExtendHelp": "The generated video is appended to this clip at its End Frame. A linked video reference samples up to the last ~5 seconds before that cutpoint for continuity — never more than the generated clip's own length, since the model discards the overrun at the seam. Its trim re-derives whenever the cutpoints or the frame count change.",
+      "referenceImageCapRace": "All {{max}} image reference slots filled while this one was loading, so it was not added.",
+      "referenceVideoCapRace": "All {{max}} video reference slots filled while this one was loading, so it was not added.",
+      "referenceFromInitialVideo": "Initial video",
+      "references": "References",
+      "referencesHelp": "Up to 3 videos and 9 images condition the generation, in order — reordering references changes the result. A video reference can contribute its image track, its soundtrack, or both.",
+      "removeReference": "Remove reference",
+      "staleReferences": "References are set but the selected model cannot use them."
     }
   },
   "workflowLibrary": {

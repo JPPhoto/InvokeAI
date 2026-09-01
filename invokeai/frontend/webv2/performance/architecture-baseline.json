@@ -2,10 +2,10 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 837700,
+        "brotliBytes": 837716,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 836604,
+        "gzipBytes": 836624,
         "imageRawBytes": 156376,
         "initialRawBytes": 1948152,
         "largestAssetRawBytes": 746355,
@@ -287,10 +287,10 @@
         ]
       },
       "limits": {
-        "brotliBytes": 846077,
+        "brotliBytes": 846094,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 844971,
+        "gzipBytes": 844991,
         "imageRawBytes": 157940,
         "initialRawBytes": 1967634,
         "largestAssetRawBytes": 753819,
@@ -305,15 +305,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1057036,
+        "brotliBytes": 1057991,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1052334,
+        "gzipBytes": 1053293,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2600379,
+        "initialRawBytes": 2603620,
         "largestAssetRawBytes": 746355,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 114259,
+        "ownedRawBytes": 113925,
         "requestCount": 96,
         "scriptRequestCount": 80,
         "sourceOwners": [
@@ -866,15 +866,15 @@
         ]
       },
       "limits": {
-        "brotliBytes": 1067607,
+        "brotliBytes": 1068571,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 1062858,
+        "gzipBytes": 1063826,
         "imageRawBytes": 157940,
-        "initialRawBytes": 2626383,
+        "initialRawBytes": 2629657,
         "largestAssetRawBytes": 753819,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 114259,
+        "ownedRawBytes": 113925,
         "requestCount": 96,
         "scriptRequestCount": 80
       },
@@ -883,7 +883,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-01",
+  "capturedAt": "2026-08-30",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",
@@ -928,9 +928,7 @@
       "src/features/queue/ui/launchpad/QueueStatusBand.tsx",
       "src/workbench/launchpad/home/livePanels.ts"
     ],
-    "editorForbiddenInitialChunkNames": [
-      "ag-psd"
-    ],
+    "editorForbiddenInitialChunkNames": ["ag-psd"],
     "inactiveWidgetGateOwner": "deepen-widget-registry-loading"
   }
 }
