@@ -75,14 +75,15 @@ vi.mock('@workbench/useCanvasProjectMutationDispatch', () => ({
 }));
 vi.mock('@workbench/widgets/canvas/useCanvasEngine', () => ({ useCanvasEngine: () => harness.engine }));
 
+import { SegmentTabs, segmentTabsPanelId, segmentTabsTabId } from '@platform/ui/SegmentTabs';
 import { clearMaskTintTarget } from '@workbench/widgets/canvas/color-system/maskTintTarget';
 
-import type { LayerEditorPaneLayout, LayerTreeTabId } from './editorPaneLayout';
+import type { LayerEditorPaneLayout } from './editorPaneLayout';
 
 import { ColorPane } from './ColorPane';
 import { LAYER_EDITOR_PANE_DEFAULTS } from './editorPaneLayout';
 import { HistoryPane } from './HistoryPane';
-import { LAYER_TREE_PANEL_ID, LayerEditorPanes, LayerTreeStrip } from './LayerEditorPanes';
+import { LayerEditorPanes } from './LayerEditorPanes';
 import { OverviewPane } from './OverviewPane';
 import { PropertiesPane } from './PropertiesPane';
 import { SwatchesPane } from './SwatchesPane';
@@ -458,21 +459,32 @@ const OverviewHarness = () => (
   </Box>
 );
 
+const TREE_STRIP_TABS = [
+  { id: 'layers', label: 'Layers' },
+  { id: 'history', label: 'History' },
+];
+const TREE_STRIP_TRAILING = <span>trailing-slot</span>;
+
 const TreeStripHarness = () => {
-  const [tab, setTab] = useState<LayerTreeTabId>('layers');
+  const [tab, setTab] = useState('layers');
   return (
     <>
-      <LayerTreeStrip activeTab={tab} onSelectTab={setTab}>
-        <span>trailing-slot</span>
-      </LayerTreeStrip>
-      <Box id={LAYER_TREE_PANEL_ID} role="tabpanel">
+      <SegmentTabs
+        activeId={tab}
+        ariaLabel="Layer panel views"
+        idBase="layer-tree"
+        tabs={TREE_STRIP_TABS}
+        trailing={TREE_STRIP_TRAILING}
+        onSelect={setTab}
+      />
+      <Box aria-labelledby={segmentTabsTabId('layer-tree', tab)} id={segmentTabsPanelId('layer-tree')} role="tabpanel">
         {tab === 'history' ? 'history-panel' : 'layers-panel'}
       </Box>
     </>
   );
 };
 
-describe('Layer tree strip', () => {
+describe('Segment tab strip', () => {
   it('switches the middle region between the tree and history', async () => {
     await mount(TreeStripHarness);
     const layersTab = page.getByRole('tab', { exact: true, name: 'Layers' });

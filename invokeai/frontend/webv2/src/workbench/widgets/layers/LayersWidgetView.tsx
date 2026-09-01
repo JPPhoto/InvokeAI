@@ -1,6 +1,7 @@
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { Flex, Icon, Stack, Text } from '@chakra-ui/react';
+import { SegmentTabs, segmentTabsPanelId, segmentTabsTabId } from '@platform/ui/SegmentTabs';
 import { getDocumentIndex } from '@workbench/canvas-engine/api';
 import { setLayerPanelFilter, useLayerPanelState } from '@workbench/layerPanelState';
 import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
@@ -30,7 +31,7 @@ import {
   readLayerTreeTab,
 } from './panes/editorPaneLayout';
 import { HistoryPane } from './panes/HistoryPane';
-import { LAYER_TREE_PANEL_ID, LayerColorPane, LayerEditorPanes, LayerTreeStrip } from './panes/LayerEditorPanes';
+import { LayerColorPane, LayerEditorPanes } from './panes/LayerEditorPanes';
 import { useLayerSelectionCommands } from './useLayerSelectionCommands';
 
 /**
@@ -40,6 +41,12 @@ import { useLayerSelectionCommands } from './useLayerSelectionCommands';
  * at the bottom — the selected layer's other editors live in the Properties pane. Regions keep
  * their geometry; their controls disable instead of appearing and disappearing.
  */
+const TREE_TABS_ID_BASE = 'layer-tree';
+const TREE_TABS: ReadonlyArray<{ id: LayerTreeTabId; labelKey: string }> = [
+  { id: 'layers', labelKey: 'widgets.labels.layers' },
+  { id: 'history', labelKey: 'widgets.labels.history' },
+];
+
 export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
   const { t } = useTranslation();
   const engine = useCanvasEngine();
@@ -92,6 +99,8 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
     readLayerTreeTab(project.widgetInstances[runtime.instanceId]?.state.values ?? {})
   );
   const handleTreeTab = useCallback((tab: LayerTreeTabId) => runtime.state.patch({ treeTab: tab }), [runtime.state]);
+  const treeTabs = useMemo(() => TREE_TABS.map(({ id, labelKey }) => ({ id, label: t(labelKey) })), [t]);
+  const addLayerButton = useMemo(() => <LayersHeaderActions />, []);
   // A properties request (canvas context menu) must reach the tree, which only
   // mounts on the Layers tab — switch back so the reveal actually happens.
   const propertiesRequest = useCurrentLayerPropertiesRequest();
@@ -122,14 +131,19 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
   return (
     <Stack gap="1" h="full" minH="0">
       <LayerColorPane layout={colorPaneLayout} onLayoutChange={handleColorPaneLayout} />
-      <LayerTreeStrip activeTab={treeTab} onSelectTab={handleTreeTab}>
-        <LayersHeaderActions />
-      </LayerTreeStrip>
+      <SegmentTabs
+        activeId={treeTab}
+        ariaLabel={t('widgets.layers.treeTabs')}
+        idBase={TREE_TABS_ID_BASE}
+        tabs={treeTabs}
+        trailing={addLayerButton}
+        onSelect={handleTreeTab}
+      />
       <Flex
-        aria-labelledby={`layer-tree-tab-${treeTab}`}
+        aria-labelledby={segmentTabsTabId(TREE_TABS_ID_BASE, treeTab)}
         direction="column"
         flex="1"
-        id={LAYER_TREE_PANEL_ID}
+        id={segmentTabsPanelId(TREE_TABS_ID_BASE)}
         // The blend row (32px control + 8px padding) + tree floor (128px) +
         // footer (40px); anything less lets the unshrinkable rows paint under
         // the editor panes.

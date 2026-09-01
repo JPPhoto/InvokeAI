@@ -1,8 +1,9 @@
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 
-import { Box, chakra, Flex, HStack, Icon, Text } from '@chakra-ui/react';
+import { Box, Flex, Icon } from '@chakra-ui/react';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { IconButton } from '@platform/ui/Button';
+import { SEGMENT_TABS_HEIGHT_PX, SegmentTabs, segmentTabsPanelId, segmentTabsTabId } from '@platform/ui/SegmentTabs';
 import { Tooltip } from '@platform/ui/Tooltip';
 import { ChevronDownIcon, ChevronUpIcon } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -13,7 +14,6 @@ import type {
   LayerColorPaneLayout,
   LayerEditorPaneId,
   LayerEditorPaneLayout,
-  LayerTreeTabId,
   PaneBlockLayout,
 } from './editorPaneLayout';
 
@@ -31,12 +31,9 @@ import { PropertiesPane } from './PropertiesPane';
 import { SwatchesPane } from './SwatchesPane';
 import { TransformPane } from './TransformPane';
 
-/** The tab strip's height; a collapsed pane block is exactly this tall. */
-const STRIP_HEIGHT_PX = 40;
 const RESIZE_STEP_PX = 16;
 /** Parity with the shell panels: releasing at the floor stops there; collapse asks for a real push past it. */
 const COLLAPSE_OVERSHOOT_PX = 80;
-const TAB_HOVER_PROPS = { bg: 'bg.muted', color: 'fg' };
 const HANDLE_HOVER_PROPS = { bg: 'accent.solid', opacity: 0.45 };
 const HANDLE_FOCUS_PROPS = { bg: 'accent.solid', opacity: 0.65, outline: '2px solid {colors.accent.solid}' };
 
@@ -46,26 +43,6 @@ interface PaneBlockLabels {
   resize: string;
   tabs: string;
 }
-
-/** Roving focus for a horizontal tablist: arrows cycle, Home/End jump. */
-const focusSibling = (event: ReactKeyboardEvent<HTMLElement>) => {
-  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home' && event.key !== 'End') {
-    return;
-  }
-  const tabs = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
-  const current = tabs.indexOf(document.activeElement as HTMLElement);
-  if (current === -1) {
-    return;
-  }
-  event.preventDefault();
-  const next =
-    event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? tabs.length - 1
-        : (current + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length;
-  tabs[next]?.focus();
-};
 
 /**
  * One fixed pane block of the Layers panel: a tab strip over a panel, with a
@@ -108,7 +85,7 @@ const LayerPaneBlock = ({
   const toggleRef = useRef<HTMLButtonElement>(null);
   // Toward the panel's middle: the direction a drag or grow-key moves the handle.
   const growSign = edge === 'top' ? 1 : -1;
-  const panelId = `${blockId}-panel`;
+  const panelId = segmentTabsPanelId(blockId);
 
   useMountEffect(() => () => drag.current?.abort());
 
@@ -142,7 +119,7 @@ const LayerPaneBlock = ({
       const move = (moveEvent: PointerEvent) => {
         latest = sizePx + (moveEvent.clientY - startY) * growSign;
         // Past the overshoot the preview snaps to the strip, so the release's collapse is never a surprise.
-        setPreviewSizePx(latest <= minSizePx - COLLAPSE_OVERSHOOT_PX ? STRIP_HEIGHT_PX : clampSize(latest));
+        setPreviewSizePx(latest <= minSizePx - COLLAPSE_OVERSHOOT_PX ? SEGMENT_TABS_HEIGHT_PX : clampSize(latest));
       };
       const finish = (apply: boolean) => () => {
         controller.abort();
@@ -219,30 +196,8 @@ const LayerPaneBlock = ({
       />
     </Box>
   ) : null;
-  const strip = (
-    <HStack align="center" flexShrink={0} gap="0.5" h={`${STRIP_HEIGHT_PX}px`} minW="0" px="1.5">
-      <HStack
-        aria-label={labels.tabs}
-        aria-orientation="horizontal"
-        flex="1"
-        gap="0.5"
-        minW="0"
-        overflow="hidden"
-        role="tablist"
-        onKeyDown={focusSibling}
-      >
-        {panes.map((pane) => (
-          <PaneTab
-            key={pane.id}
-            blockId={blockId}
-            id={pane.id}
-            isExpanded={!isCollapsed}
-            isSelected={pane.id === activePane}
-            label={pane.label}
-            onSelect={onSelectPane}
-          />
-        ))}
-      </HStack>
+  const collapseButton = useMemo(
+    () => (
       <Tooltip content={collapseLabel}>
         <IconButton
           ref={toggleRef}
@@ -256,11 +211,23 @@ const LayerPaneBlock = ({
           <Icon as={collapseIcon} boxSize="3.5" />
         </IconButton>
       </Tooltip>
-    </HStack>
+    ),
+    [collapseIcon, collapseLabel, isCollapsed, toggle]
+  );
+  const strip = (
+    <SegmentTabs
+      activeId={activePane}
+      ariaLabel={labels.tabs}
+      idBase={blockId}
+      showActivePanel={!isCollapsed}
+      tabs={panes}
+      trailing={collapseButton}
+      onSelect={onSelectPane}
+    />
   );
   const panel = !isCollapsed ? (
     <Box
-      aria-labelledby={`${blockId}-tab-${activePane}`}
+      aria-labelledby={segmentTabsTabId(blockId, activePane)}
       flex="1"
       id={panelId}
       minH="0"
@@ -278,7 +245,7 @@ const LayerPaneBlock = ({
       data-pane-collapsed={isCollapsed ? '' : undefined}
       direction="column"
       flex={isCollapsed ? '0 0 auto' : `0 1 ${previewSizePx ?? sizePx}px`}
-      minH={`${STRIP_HEIGHT_PX}px`}
+      minH={`${SEGMENT_TABS_HEIGHT_PX}px`}
       overflow="hidden"
       {...(edge === 'top' ? { borderBottomWidth: '1px' } : { borderTopWidth: '1px' })}
     >
@@ -427,107 +394,5 @@ export const LayerColorPane = ({
     >
       {activePane === 'swatches' ? <SwatchesPane /> : <ColorPane />}
     </LayerPaneBlock>
-  );
-};
-
-const TREE_TABS: ReadonlyArray<{ id: LayerTreeTabId; labelKey: string }> = [
-  { id: 'layers', labelKey: 'widgets.labels.layers' },
-  { id: 'history', labelKey: 'widgets.labels.history' },
-];
-
-/** The middle region announces itself as this strip's tabpanel. */
-export const LAYER_TREE_PANEL_ID = 'layer-tree-panel';
-
-/**
- * The strip over the flexible middle region: the layer tree and the edit
- * history as sibling tabs, with the add-layer menu at the trailing edge. The
- * middle region is the tabpanel — it has no preferred size and no collapse.
- */
-export const LayerTreeStrip = ({
-  activeTab,
-  children,
-  onSelectTab,
-}: {
-  activeTab: LayerTreeTabId;
-  children?: ReactNode;
-  onSelectTab: (tab: LayerTreeTabId) => void;
-}) => {
-  const { t } = useTranslation();
-  const tabs = useMemo(() => TREE_TABS.map(({ id, labelKey }) => ({ id, label: t(labelKey) })), [t]);
-  const onSelect = useCallback((tab: string) => onSelectTab(tab as LayerTreeTabId), [onSelectTab]);
-
-  return (
-    <HStack align="center" flexShrink={0} gap="0.5" h={`${STRIP_HEIGHT_PX}px`} minW="0" px="1.5">
-      <HStack
-        aria-label={t('widgets.layers.treeTabs')}
-        aria-orientation="horizontal"
-        flex="1"
-        gap="0.5"
-        minW="0"
-        overflow="hidden"
-        role="tablist"
-        onKeyDown={focusSibling}
-      >
-        {tabs.map((tab) => (
-          <PaneTab
-            key={tab.id}
-            blockId="layer-tree"
-            id={tab.id}
-            isExpanded
-            isSelected={tab.id === activeTab}
-            label={tab.label}
-            onSelect={onSelect}
-          />
-        ))}
-      </HStack>
-      {children}
-    </HStack>
-  );
-};
-
-const PaneTab = ({
-  blockId,
-  id,
-  isExpanded,
-  isSelected,
-  label,
-  onSelect,
-}: {
-  blockId: string;
-  id: string;
-  /** Collapsed keeps the selected tab focusable and selected; only the shown look changes. */
-  isExpanded: boolean;
-  isSelected: boolean;
-  label: string;
-  onSelect: (pane: string) => void;
-}) => {
-  const select = useCallback(() => onSelect(id), [id, onSelect]);
-  const isShown = isSelected && isExpanded;
-
-  return (
-    <chakra.button
-      aria-controls={isShown ? `${blockId}-panel` : undefined}
-      aria-selected={isSelected}
-      bg={isShown ? 'bg.emphasized' : 'transparent'}
-      color={isShown ? 'fg' : 'fg.muted'}
-      cursor="pointer"
-      fontSize="xs"
-      fontWeight="600"
-      h="7"
-      id={`${blockId}-tab-${id}`}
-      minW="10"
-      overflow="hidden"
-      px="2.5"
-      role="tab"
-      rounded="md"
-      tabIndex={isSelected ? 0 : -1}
-      type="button"
-      _hover={isShown ? undefined : TAB_HOVER_PROPS}
-      onClick={select}
-    >
-      <Text as="span" truncate>
-        {label}
-      </Text>
-    </chakra.button>
   );
 };
