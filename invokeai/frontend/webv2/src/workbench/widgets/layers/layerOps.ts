@@ -4,6 +4,7 @@
  */
 
 import type {
+  CanvasAdjustmentEntry,
   CanvasBlendMode,
   CanvasControlLayerContract,
   CanvasDocumentContractV3,
@@ -251,6 +252,25 @@ export const createReferenceImageId = (): string =>
 /** Mints a fresh raster adjustment-entry id. */
 export const createAdjustmentId = (): string =>
   `adj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+/** A fresh adjustment entry of `type` at its identity values (invert has none). */
+export const createIdentityAdjustment = (type: CanvasAdjustmentEntry['type']): CanvasAdjustmentEntry => {
+  const id = createAdjustmentId();
+  switch (type) {
+    case 'brightness-contrast':
+      return { brightness: 0, contrast: 0, id, isEnabled: true, type };
+    case 'levels':
+      return { gamma: 1, id, inBlack: 0, inWhite: 255, isEnabled: true, outBlack: 0, outWhite: 255, type };
+    case 'curves':
+      return { curves: {}, id, isEnabled: true, type };
+    case 'hsl':
+      return { id, isEnabled: true, saturation: 0, type };
+    case 'hue':
+      return { id, isEnabled: true, rotation: 0, type };
+    case 'invert':
+      return { id, isEnabled: true, type };
+  }
+};
 
 /**
  * A fresh regional reference image, minting the config kind the region's base can

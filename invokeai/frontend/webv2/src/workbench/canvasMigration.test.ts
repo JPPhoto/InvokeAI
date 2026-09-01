@@ -119,6 +119,9 @@ describe('loadCanvasState', () => {
         isEnabled: true,
         type: 'curves',
       },
+      { gamma: 1.4, id: 'a4', inBlack: 12, inWhite: 240, isEnabled: true, outBlack: 5, outWhite: 250, type: 'levels' },
+      { id: 'a5', isEnabled: true, rotation: -45, type: 'hue' },
+      { id: 'a6', isEnabled: false, type: 'invert' },
     ];
     const adjustmentsOf = (loaded: CanvasStateContractV3) => {
       const layer = loaded.document.stacks.raster[0];
@@ -149,6 +152,28 @@ describe('loadCanvasState', () => {
     );
     expect(adjustmentsOf(malformed)).toBeUndefined();
     expect(malformed.document.stacks.raster).toHaveLength(1);
+
+    // Levels cross-field invariants are enforced: an inverted input range or non-positive gamma is malformed.
+    const invalidLevels = load(
+      withNodes([
+        {
+          ...createEmptyPaintLayer('Inverted', 'inverted'),
+          adjustments: [
+            {
+              gamma: 1,
+              id: 'l1',
+              inBlack: 200,
+              inWhite: 100,
+              isEnabled: true,
+              outBlack: 0,
+              outWhite: 255,
+              type: 'levels',
+            },
+          ],
+        },
+      ])
+    );
+    expect(adjustmentsOf(invalidLevels)).toBeUndefined();
   });
 
   it('normalizes control adapters in both the live document and saved snapshots', () => {

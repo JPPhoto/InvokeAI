@@ -25,16 +25,57 @@ export type LayerChildRowKind =
   | 'mask-noise'
   | 'mask-denoise'
   | 'adjustment-brightness-contrast'
+  | 'adjustment-levels'
+  | 'adjustment-curves'
   | 'adjustment-hsl'
-  | 'adjustment-curves';
+  | 'adjustment-hue'
+  | 'adjustment-invert';
+
+type AdjustmentChildKind = Extract<LayerChildRowKind, `adjustment-${string}`>;
 
 /** The row kind projecting an adjustment entry of `type`. */
-export const adjustmentChildKind = (type: CanvasAdjustmentEntry['type']): LayerChildRowKind => ADJUSTMENT_KIND_OF[type];
+export const adjustmentChildKind = (type: CanvasAdjustmentEntry['type']): AdjustmentChildKind =>
+  ADJUSTMENT_KIND_OF[type];
 
-const ADJUSTMENT_KIND_OF: Record<CanvasAdjustmentEntry['type'], LayerChildRowKind> = {
+const ADJUSTMENT_KIND_OF: Record<CanvasAdjustmentEntry['type'], AdjustmentChildKind> = {
   'brightness-contrast': 'adjustment-brightness-contrast',
   curves: 'adjustment-curves',
   hsl: 'adjustment-hsl',
+  hue: 'adjustment-hue',
+  invert: 'adjustment-invert',
+  levels: 'adjustment-levels',
+};
+
+const CHILD_ROW_NAME_KEYS: Record<Exclude<LayerChildRowKind, 'reference-image'>, string> = {
+  'adjustment-brightness-contrast': 'widgets.layers.modifiers.brightnessContrast',
+  'adjustment-curves': 'widgets.layers.adjustments.curves',
+  'adjustment-hsl': 'widgets.layers.adjustments.saturation',
+  'adjustment-hue': 'widgets.layers.adjustments.hue',
+  'adjustment-invert': 'widgets.layers.adjustments.invert',
+  'adjustment-levels': 'widgets.layers.adjustments.levels',
+  'mask-denoise': 'widgets.layers.modifiers.denoise',
+  'mask-noise': 'widgets.layers.modifiers.noise',
+};
+
+/** The i18n key naming a non-reference child row's kind, for rows and editor subtitles alike. */
+export const childRowNameKey = (kind: Exclude<LayerChildRowKind, 'reference-image'>): string =>
+  CHILD_ROW_NAME_KEYS[kind];
+
+const signedPercent = (value: number): string => `${value > 0 ? '+' : ''}${Math.round(value * 100)}%`;
+
+/** The compact fact shown beside an adjustment row's name, or `null` when it has none. */
+const adjustmentDetail = (entry: CanvasAdjustmentEntry): string | null => {
+  switch (entry.type) {
+    case 'hsl':
+      return signedPercent(entry.saturation);
+    case 'hue':
+      return `${Math.round(entry.rotation)}°`;
+    case 'brightness-contrast':
+    case 'levels':
+    case 'curves':
+    case 'invert':
+      return null;
+  }
 };
 
 /** Kinds whose list order is document truth; their rows offer Move up/down and Duplicate. */
@@ -59,8 +100,8 @@ export interface ProjectedChildRow {
   /** The owning layer and its ancestors are enabled; a gated dot when not. */
   readonly parentContributing: boolean;
   readonly image: { readonly imageName: string; readonly thumbnailUrl: string } | null;
-  /** The modifier's 0–1 magnitude, shown beside the name; `null` for reference images. */
-  readonly value: number | null;
+  /** A compact preformatted fact shown beside the name (a percent, degrees), or `null`. */
+  readonly detail: string | null;
 }
 
 export type LayerChildRowAction =
@@ -90,18 +131,18 @@ const maskModifierRows = (vm: SemanticNode, layer: CanvasInpaintMaskLayerContrac
   const items = [
     layer.noise
       ? {
+          detail: `${Math.round(layer.noise.level * 100)}%`,
           isEnabled: layer.noise.isEnabled,
           itemId: MASK_NOISE_ITEM_ID,
           kind: 'mask-noise' as const,
-          value: layer.noise.level,
         }
       : null,
     layer.denoise
       ? {
+          detail: `${Math.round(layer.denoise.limit * 100)}%`,
           isEnabled: layer.denoise.isEnabled,
           itemId: MASK_DENOISE_ITEM_ID,
           kind: 'mask-denoise' as const,
-          value: layer.denoise.limit,
         }
       : null,
   ].filter((item) => item !== null);
@@ -127,6 +168,7 @@ export const projectLayerChildRows = (vm: SemanticNode): readonly ProjectedChild
     const setSize = node.referenceImages.length;
     rows = node.referenceImages.map((ref, index): ProjectedChildRow => ({
       ...baseRow(vm),
+      detail: null,
       image: ref.config.image
         ? { imageName: ref.config.image.imageName, thumbnailUrl: ref.config.image.thumbnailUrl }
         : null,
@@ -136,7 +178,6 @@ export const projectLayerChildRows = (vm: SemanticNode): readonly ProjectedChild
       kind: 'reference-image',
       posInSet: index + 1,
       setSize,
-      value: null,
     }));
   } else if (node.type === 'inpaint_mask' && (node.noise || node.denoise)) {
     rows = maskModifierRows(vm, node);
@@ -144,6 +185,7 @@ export const projectLayerChildRows = (vm: SemanticNode): readonly ProjectedChild
     const setSize = node.adjustments.length;
     rows = node.adjustments.map((adjustment, index): ProjectedChildRow => ({
       ...baseRow(vm),
+      detail: adjustmentDetail(adjustment),
       image: null,
       isEnabled: adjustment.isEnabled,
       itemId: adjustment.id,
@@ -151,7 +193,6 @@ export const projectLayerChildRows = (vm: SemanticNode): readonly ProjectedChild
       kind: ADJUSTMENT_KIND_OF[adjustment.type],
       posInSet: index + 1,
       setSize,
-      value: adjustment.type === 'hsl' ? adjustment.saturation : null,
     }));
   } else {
     return EMPTY_CHILD_ROWS;
@@ -196,8 +237,11 @@ export const layerChildRemoveLabelKey = (kind: LayerChildRowKind): string => {
     case 'mask-denoise':
       return 'widgets.layers.modifiers.removeDenoise';
     case 'adjustment-brightness-contrast':
-    case 'adjustment-hsl':
+    case 'adjustment-levels':
     case 'adjustment-curves':
+    case 'adjustment-hsl':
+    case 'adjustment-hue':
+    case 'adjustment-invert':
       return 'widgets.layers.modifiers.removeAdjustment';
   }
 };

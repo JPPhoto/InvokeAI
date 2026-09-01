@@ -174,8 +174,27 @@ export interface CanvasAdjustmentCurves {
  */
 export type CanvasAdjustmentEntry =
   | { id: string; isEnabled: boolean; type: 'brightness-contrast'; brightness: number; contrast: number }
+  | {
+      id: string;
+      isEnabled: boolean;
+      type: 'levels';
+      /** Input remap: 0–255 with `inBlack < inWhite`; `gamma` is the midtone exponent base (1 = linear). */
+      inBlack: number;
+      inWhite: number;
+      gamma: number;
+      outBlack: number;
+      outWhite: number;
+    }
+  | { id: string; isEnabled: boolean; type: 'curves'; curves: CanvasAdjustmentCurves }
   | { id: string; isEnabled: boolean; type: 'hsl'; saturation: number }
-  | { id: string; isEnabled: boolean; type: 'curves'; curves: CanvasAdjustmentCurves };
+  | {
+      id: string;
+      isEnabled: boolean;
+      type: 'hue';
+      /** Rotation around the color wheel in degrees, -180 to 180. */
+      rotation: number;
+    }
+  | { id: string; isEnabled: boolean; type: 'invert' };
 
 /** A raster layer's ordered adjustment stack, applied top to bottom. */
 export type CanvasAdjustmentsContract = readonly CanvasAdjustmentEntry[];

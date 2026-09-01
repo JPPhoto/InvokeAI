@@ -123,8 +123,20 @@ export const isIdentityAdjustmentEntry = (entry: CanvasAdjustmentEntry): boolean
   switch (entry.type) {
     case 'brightness-contrast':
       return entry.brightness === 0 && entry.contrast === 0;
+    case 'levels':
+      return (
+        entry.inBlack === 0 &&
+        entry.inWhite === 255 &&
+        entry.gamma === 1 &&
+        entry.outBlack === 0 &&
+        entry.outWhite === 255
+      );
     case 'hsl':
       return entry.saturation === 0;
+    case 'hue':
+      return entry.rotation % 360 === 0;
+    case 'invert':
+      return false;
     case 'curves':
       return isIdentityCurve(entry.curves.r) && isIdentityCurve(entry.curves.g) && isIdentityCurve(entry.curves.b);
   }
@@ -138,8 +150,8 @@ export const isIdentityAdjustments = (adjustments: CanvasAdjustmentsContract | u
 
 /**
  * One step of the compiled pixel pass. Per-channel entries fold into LUT
- * segments (adjacent ones compose into ONE lut); a saturation entry is a
- * cross-channel luma lerp that cannot fold and stands alone.
+ * segments (adjacent ones compose into ONE lut); saturation and hue are
+ * cross-channel and stand alone.
  */
 export type CompiledAdjustmentSegment =
   | {
@@ -148,7 +160,8 @@ export type CompiledAdjustmentSegment =
       readonly g: Uint8ClampedArray;
       readonly b: Uint8ClampedArray;
     }
-  | { readonly kind: 'saturation'; readonly factor: number };
+  | { readonly kind: 'saturation'; readonly factor: number }
+  | { readonly kind: 'matrix'; readonly m: readonly number[] };
 
 const brightnessContrastLut = (brightness: number, contrast: number): Uint8ClampedArray => {
   const offset = brightness * 255;
@@ -158,6 +171,44 @@ const brightnessContrastLut = (brightness: number, contrast: number): Uint8Clamp
     lut[i] = clamp255(Math.round((i + offset - 128) * factor + 128));
   }
   return lut;
+};
+
+const levelsLut = (entry: Extract<CanvasAdjustmentEntry, { type: 'levels' }>): Uint8ClampedArray => {
+  const inSpan = Math.max(1, entry.inWhite - entry.inBlack);
+  const outSpan = entry.outWhite - entry.outBlack;
+  const exponent = 1 / Math.max(0.01, entry.gamma);
+  const lut = new Uint8ClampedArray(LUT_SIZE);
+  for (let i = 0; i < LUT_SIZE; i++) {
+    const normalized = Math.min(1, Math.max(0, (i - entry.inBlack) / inSpan));
+    lut[i] = clamp255(Math.round(entry.outBlack + Math.pow(normalized, exponent) * outSpan));
+  }
+  return lut;
+};
+
+const invertLut = (): Uint8ClampedArray => {
+  const lut = new Uint8ClampedArray(LUT_SIZE);
+  for (let i = 0; i < LUT_SIZE; i++) {
+    lut[i] = 255 - i;
+  }
+  return lut;
+};
+
+/** The SVG feColorMatrix `hueRotate` matrix: luminance-preserving rotation around the gray axis. */
+const hueRotateMatrix = (degrees: number): number[] => {
+  const radians = (degrees * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return [
+    0.213 + cos * 0.787 - sin * 0.213,
+    0.715 - cos * 0.715 - sin * 0.715,
+    0.072 - cos * 0.072 + sin * 0.928,
+    0.213 - cos * 0.213 + sin * 0.143,
+    0.715 + cos * 0.285 + sin * 0.14,
+    0.072 - cos * 0.072 - sin * 0.283,
+    0.213 - cos * 0.213 - sin * 0.787,
+    0.715 - cos * 0.715 + sin * 0.715,
+    0.072 + cos * 0.928 + sin * 0.072,
+  ];
 };
 
 /** `outer` applied after `inner`, folded into one table. */
@@ -170,13 +221,18 @@ const composeLut = (inner: Uint8ClampedArray, outer: Uint8ClampedArray): Uint8Cl
 };
 
 const entryLuts = (
-  entry: Extract<CanvasAdjustmentEntry, { type: 'brightness-contrast' | 'curves' }>
+  entry: Extract<CanvasAdjustmentEntry, { type: 'brightness-contrast' | 'levels' | 'invert' | 'curves' }>
 ): { r: Uint8ClampedArray; g: Uint8ClampedArray; b: Uint8ClampedArray } => {
-  if (entry.type === 'brightness-contrast') {
-    const lut = brightnessContrastLut(entry.brightness, entry.contrast);
-    return { b: lut, g: lut, r: lut };
+  if (entry.type === 'curves') {
+    return { b: buildCurveLut(entry.curves.b), g: buildCurveLut(entry.curves.g), r: buildCurveLut(entry.curves.r) };
   }
-  return { b: buildCurveLut(entry.curves.b), g: buildCurveLut(entry.curves.g), r: buildCurveLut(entry.curves.r) };
+  const lut =
+    entry.type === 'brightness-contrast'
+      ? brightnessContrastLut(entry.brightness, entry.contrast)
+      : entry.type === 'levels'
+        ? levelsLut(entry)
+        : invertLut();
+  return { b: lut, g: lut, r: lut };
 };
 
 /**
@@ -192,6 +248,10 @@ export const compileAdjustments = (adjustments: CanvasAdjustmentsContract | unde
     }
     if (entry.type === 'hsl') {
       segments.push({ factor: 1 + entry.saturation, kind: 'saturation' });
+      continue;
+    }
+    if (entry.type === 'hue') {
+      segments.push({ kind: 'matrix', m: hueRotateMatrix(entry.rotation) });
       continue;
     }
     const luts = entryLuts(entry);
@@ -223,8 +283,14 @@ export const adjustmentsKey = (adjustments: CanvasAdjustmentsContract | undefine
       switch (entry.type) {
         case 'brightness-contrast':
           return `bc:${entry.brightness},${entry.contrast}`;
+        case 'levels':
+          return `lv:${entry.inBlack},${entry.inWhite},${entry.gamma},${entry.outBlack},${entry.outWhite}`;
         case 'hsl':
           return `s:${entry.saturation}`;
+        case 'hue':
+          return `h:${entry.rotation}`;
+        case 'invert':
+          return 'inv';
         case 'curves':
           return `cv:${curveKey(entry.curves.r)}|${curveKey(entry.curves.g)}|${curveKey(entry.curves.b)}`;
       }
@@ -252,11 +318,19 @@ export const applyAdjustments = (imageData: ImageData, adjustments: CanvasAdjust
         r = segment.r[r];
         g = segment.g[g];
         b = segment.b[b];
-      } else {
+      } else if (segment.kind === 'saturation') {
         const lum = LUMA_R * r + LUMA_G * g + LUMA_B * b;
         r = clamp255(Math.round(lum + (r - lum) * segment.factor));
         g = clamp255(Math.round(lum + (g - lum) * segment.factor));
         b = clamp255(Math.round(lum + (b - lum) * segment.factor));
+      } else {
+        const { m } = segment;
+        const nr = m[0] * r + m[1] * g + m[2] * b;
+        const ng = m[3] * r + m[4] * g + m[5] * b;
+        const nb = m[6] * r + m[7] * g + m[8] * b;
+        r = clamp255(Math.round(nr));
+        g = clamp255(Math.round(ng));
+        b = clamp255(Math.round(nb));
       }
     }
     data[i] = r;

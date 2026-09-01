@@ -149,13 +149,21 @@ const AdjustmentEntryEditor = ({
   }, [engine, layer.id]);
 
   const handleScalarLive = useCallback(
-    (field: 'brightness' | 'contrast' | 'saturation', next: number) =>
-      patchLive({ ...entry, [field]: next } as CanvasAdjustmentEntry),
+    (field: ScalarField, next: number) => patchLive({ ...entry, [field]: next } as CanvasAdjustmentEntry),
     [entry, patchLive]
   );
   const handleScalarCommit = useCallback(
-    (field: 'brightness' | 'contrast' | 'saturation', next: number) =>
-      commitEntry(t(`widgets.layers.adjustments.${field}`), { ...entry, [field]: next } as CanvasAdjustmentEntry),
+    (field: ScalarField, next: number) =>
+      commitEntry(t(SCALAR_LABEL_KEYS[field]), { ...entry, [field]: next } as CanvasAdjustmentEntry),
+    [commitEntry, entry, t]
+  );
+  const handleLevelsLive = useCallback(
+    (patch: Partial<LevelsEntry>) => patchLive({ ...entry, ...patch } as CanvasAdjustmentEntry),
+    [entry, patchLive]
+  );
+  const handleLevelsCommit = useCallback(
+    (patch: Partial<LevelsEntry>) =>
+      commitEntry(t('widgets.layers.adjustments.levels'), { ...entry, ...patch } as CanvasAdjustmentEntry),
     [commitEntry, entry, t]
   );
   const handleCurvesLive = useCallback(
@@ -198,6 +206,28 @@ const AdjustmentEntryEditor = ({
           onLive={handleScalarLive}
         />
       );
+    case 'hue':
+      return (
+        <ScalarSlider
+          field="rotation"
+          formatValue={formatDegrees}
+          label={t('widgets.layers.adjustments.hue')}
+          max={180}
+          min={-180}
+          step={1}
+          value={entry.rotation}
+          onCommit={handleScalarCommit}
+          onLive={handleScalarLive}
+        />
+      );
+    case 'levels':
+      return <LevelsEditor entry={entry} onCommit={handleLevelsCommit} onLive={handleLevelsLive} />;
+    case 'invert':
+      return (
+        <Text color="fg.muted" fontSize="xs">
+          {t('widgets.layers.adjustments.invertHint')}
+        </Text>
+      );
     case 'curves':
       return (
         <CurvesEditor
@@ -210,17 +240,35 @@ const AdjustmentEntryEditor = ({
   }
 };
 
-type ScalarField = 'brightness' | 'contrast' | 'saturation';
+type ScalarField = 'brightness' | 'contrast' | 'saturation' | 'rotation';
+type LevelsEntry = Extract<CanvasAdjustmentEntry, { type: 'levels' }>;
+
+const SCALAR_LABEL_KEYS: Record<ScalarField, string> = {
+  brightness: 'widgets.layers.adjustments.brightness',
+  contrast: 'widgets.layers.adjustments.contrast',
+  rotation: 'widgets.layers.adjustments.hue',
+  saturation: 'widgets.layers.adjustments.saturation',
+};
+
+const formatDegrees = (value: number): string => `${Math.round(value)}°`;
 
 const ScalarSlider = ({
   field,
+  formatValue = formatSigned,
   label,
+  max = 1,
+  min = -1,
   onCommit,
   onLive,
+  step = 0.01,
   value,
 }: {
   field: ScalarField;
+  formatValue?: (value: number) => string;
   label: string;
+  max?: number;
+  min?: number;
+  step?: number;
   value: number;
   onLive: (field: ScalarField, next: number) => void;
   onCommit: (field: ScalarField, next: number) => void;
@@ -252,17 +300,148 @@ const ScalarSlider = ({
     <Field label={label}>
       <Slider
         aria-label={aria}
-        formatValue={formatSigned}
-        max={1}
-        min={-1}
+        formatValue={formatValue}
+        max={max}
+        min={min}
         size="sm"
-        step={0.01}
+        step={step}
         value={sliderValue}
         withThumbTooltip
         onValueChange={handleChange}
         onValueChangeEnd={handleChangeEnd}
       />
     </Field>
+  );
+};
+
+const formatGamma = (value: number): string => value.toFixed(2);
+
+/** A pair-of-thumbs range plus a gamma midtone: the classic input/output levels remap. */
+const LevelsEditor = ({
+  entry,
+  onCommit,
+  onLive,
+}: {
+  entry: LevelsEntry;
+  onLive: (patch: Partial<LevelsEntry>) => void;
+  onCommit: (patch: Partial<LevelsEntry>) => void;
+}) => {
+  const { t } = useTranslation();
+  const inputValue = useMemo(() => [entry.inBlack, entry.inWhite], [entry.inBlack, entry.inWhite]);
+  const gammaValue = useMemo(() => [entry.gamma], [entry.gamma]);
+  const outputValue = useMemo(() => [entry.outBlack, entry.outWhite], [entry.outBlack, entry.outWhite]);
+  const inputAria = useMemo(
+    () => [t('widgets.layers.adjustments.inputBlack'), t('widgets.layers.adjustments.inputWhite')],
+    [t]
+  );
+  const gammaAria = useMemo(() => [t('widgets.layers.adjustments.gamma')], [t]);
+  const outputAria = useMemo(
+    () => [t('widgets.layers.adjustments.outputBlack'), t('widgets.layers.adjustments.outputWhite')],
+    [t]
+  );
+
+  const rangePatch = useCallback(
+    (v: number[], black: 'inBlack' | 'outBlack', white: 'inWhite' | 'outWhite'): Partial<LevelsEntry> | null =>
+      v[0] !== undefined && v[1] !== undefined ? { [black]: v[0], [white]: v[1] } : null,
+    []
+  );
+  const handleInputChange = useCallback(
+    ({ value: v }: SliderValueChangeDetails) => {
+      const patch = rangePatch(v, 'inBlack', 'inWhite');
+      if (patch) {
+        onLive(patch);
+      }
+    },
+    [onLive, rangePatch]
+  );
+  const handleInputCommit = useCallback(
+    ({ value: v }: SliderValueChangeDetails) => {
+      const patch = rangePatch(v, 'inBlack', 'inWhite');
+      if (patch) {
+        onCommit(patch);
+      }
+    },
+    [onCommit, rangePatch]
+  );
+  const handleOutputChange = useCallback(
+    ({ value: v }: SliderValueChangeDetails) => {
+      const patch = rangePatch(v, 'outBlack', 'outWhite');
+      if (patch) {
+        onLive(patch);
+      }
+    },
+    [onLive, rangePatch]
+  );
+  const handleOutputCommit = useCallback(
+    ({ value: v }: SliderValueChangeDetails) => {
+      const patch = rangePatch(v, 'outBlack', 'outWhite');
+      if (patch) {
+        onCommit(patch);
+      }
+    },
+    [onCommit, rangePatch]
+  );
+  const handleGammaChange = useCallback(
+    ({ value: v }: SliderValueChangeDetails) => {
+      if (v[0] !== undefined && Number.isFinite(v[0])) {
+        onLive({ gamma: v[0] });
+      }
+    },
+    [onLive]
+  );
+  const handleGammaCommit = useCallback(
+    ({ value: v }: SliderValueChangeDetails) => {
+      if (v[0] !== undefined && Number.isFinite(v[0])) {
+        onCommit({ gamma: v[0] });
+      }
+    },
+    [onCommit]
+  );
+
+  return (
+    <Stack gap="3">
+      <Field label={t('widgets.layers.adjustments.inputLevels')}>
+        <Slider
+          aria-label={inputAria}
+          max={255}
+          min={0}
+          minStepsBetweenThumbs={1}
+          size="sm"
+          step={1}
+          value={inputValue}
+          withThumbTooltip
+          onValueChange={handleInputChange}
+          onValueChangeEnd={handleInputCommit}
+        />
+      </Field>
+      <Field label={t('widgets.layers.adjustments.gamma')}>
+        <Slider
+          aria-label={gammaAria}
+          formatValue={formatGamma}
+          max={4}
+          min={0.1}
+          size="sm"
+          step={0.01}
+          value={gammaValue}
+          withThumbTooltip
+          onValueChange={handleGammaChange}
+          onValueChangeEnd={handleGammaCommit}
+        />
+      </Field>
+      <Field label={t('widgets.layers.adjustments.outputLevels')}>
+        <Slider
+          aria-label={outputAria}
+          max={255}
+          min={0}
+          size="sm"
+          step={1}
+          value={outputValue}
+          withThumbTooltip
+          onValueChange={handleOutputChange}
+          onValueChangeEnd={handleOutputCommit}
+        />
+      </Field>
+    </Stack>
   );
 };
 

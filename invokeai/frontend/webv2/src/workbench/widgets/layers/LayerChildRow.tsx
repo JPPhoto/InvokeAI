@@ -3,14 +3,25 @@ import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
 import { Box, HStack, Icon, Text } from '@chakra-ui/react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { Row } from '@platform/ui';
-import { DropletIcon, GaugeIcon, ImageIcon, SplineIcon, SunMediumIcon, WavesIcon, type LucideIcon } from 'lucide-react';
+import {
+  ContrastIcon,
+  DropletIcon,
+  GaugeIcon,
+  ImageIcon,
+  RainbowIcon,
+  SlidersVerticalIcon,
+  SplineIcon,
+  SunMediumIcon,
+  WavesIcon,
+  type LucideIcon,
+} from 'lucide-react';
 import { memo, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { LayerRowCommands } from './layerRowCommands';
 
 import { LayerActiveDot, ROW_SELECTION_FOCUS } from './LayerActiveDot';
-import { isOrderedChildKind, type LayerChildRowKind, type ProjectedChildRow } from './layerChildRows';
+import { childRowNameKey, isOrderedChildKind, type LayerChildRowKind, type ProjectedChildRow } from './layerChildRows';
 import { LAYER_TREE_INDENT_PX } from './layerPanelRows';
 import { anchorFromPoint } from './layerRowCommands';
 
@@ -20,6 +31,9 @@ const CHILD_ROW_GLYPHS: Record<LayerChildRowKind, LucideIcon> = {
   'adjustment-brightness-contrast': SunMediumIcon,
   'adjustment-curves': SplineIcon,
   'adjustment-hsl': DropletIcon,
+  'adjustment-hue': RainbowIcon,
+  'adjustment-invert': ContrastIcon,
+  'adjustment-levels': SlidersVerticalIcon,
   'mask-denoise': GaugeIcon,
   'mask-noise': WavesIcon,
   'reference-image': ImageIcon,
@@ -30,22 +44,10 @@ export const isDraggableChildKind = (kind: LayerChildRowKind): boolean =>
   kind === 'reference-image' || isOrderedChildKind(kind);
 
 /** The row's display name; reference images are numbered, other modifiers named by kind. */
-export const childRowName = (child: ProjectedChildRow, t: (key: string) => string): string => {
-  switch (child.kind) {
-    case 'reference-image':
-      return `${t('widgets.layers.regionalGuidance.referenceImage')} ${child.posInSet}`;
-    case 'mask-noise':
-      return t('widgets.layers.modifiers.noise');
-    case 'mask-denoise':
-      return t('widgets.layers.modifiers.denoise');
-    case 'adjustment-brightness-contrast':
-      return t('widgets.layers.modifiers.brightnessContrast');
-    case 'adjustment-hsl':
-      return t('widgets.layers.adjustments.saturation');
-    case 'adjustment-curves':
-      return t('widgets.layers.adjustments.curves');
-  }
-};
+export const childRowName = (child: ProjectedChildRow, t: (key: string) => string): string =>
+  child.kind === 'reference-image'
+    ? `${t('widgets.layers.regionalGuidance.referenceImage')} ${child.posInSet}`
+    : t(childRowNameKey(child.kind));
 
 interface LayerChildRowProps {
   child: ProjectedChildRow;
@@ -200,9 +202,9 @@ const LayerChildRowComponent = ({
         <Text color={muted ? 'fg.muted' : undefined} flex="1" fontSize="2xs" fontWeight="600" minW="0" truncate>
           {name}
         </Text>
-        {child.value !== null ? (
+        {child.detail !== null ? (
           <Text color="fg.subtle" flexShrink={0} fontSize="2xs" fontVariantNumeric="tabular-nums">
-            {`${Math.round(child.value * 100)}%`}
+            {child.detail}
           </Text>
         ) : null}
       </Row>

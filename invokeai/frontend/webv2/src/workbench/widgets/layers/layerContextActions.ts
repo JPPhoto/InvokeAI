@@ -1,5 +1,6 @@
 import type {
   BooleanRasterOperation,
+  CanvasAdjustmentEntry,
   CanvasDocumentContractV3,
   CanvasLayerContract,
   LayerStackMoveKind,
@@ -33,7 +34,10 @@ import {
   MergeIcon,
   PencilIcon,
   SaveIcon,
+  ContrastIcon,
+  RainbowIcon,
   ScanSearchIcon,
+  SlidersVerticalIcon,
   SplineIcon,
   SunMediumIcon,
   WavesIcon,
@@ -49,8 +53,11 @@ export type LayerContextActionId =
   | 'add-noise'
   | 'add-denoise-limit'
   | 'add-brightness-contrast'
-  | 'add-hsl'
+  | 'add-levels'
   | 'add-curves'
+  | 'add-hsl'
+  | 'add-hue'
+  | 'add-invert'
   | 'merge-selected'
   | 'move-to-front'
   | 'move-forward'
@@ -138,7 +145,7 @@ export interface LayerContextActionEffects {
   patchConfig(kind: LayerConfigPatchKind): void;
   addReferenceImage(): void;
   addMaskModifier(field: 'noise' | 'denoise'): void;
-  addAdjustment(type: 'brightness-contrast' | 'hsl' | 'curves'): void;
+  addAdjustment(type: CanvasAdjustmentEntry['type']): void;
   mergeDown(): void;
   toggleVisibility(): void;
   toggleHidden(): void;
@@ -426,14 +433,14 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     supportedLayerTypes: RASTER_ONLY,
   },
   {
-    defaultLabel: 'Saturation',
-    handler: ({ effects }) => effects.addAdjustment('hsl'),
-    icon: DropletIcon,
-    id: 'add-hsl',
+    defaultLabel: 'Levels',
+    handler: ({ effects }) => effects.addAdjustment('levels'),
+    icon: SlidersVerticalIcon,
+    id: 'add-levels',
     isEnabled: isLayerMutable,
     isVisible: alwaysVisible,
-    labelKey: 'widgets.layers.adjustments.saturation',
-    order: 31.2,
+    labelKey: 'widgets.layers.adjustments.levels',
+    order: 31.1,
     section: 'primary',
     submenu: 'add-adjustment',
     supportedLayerTypes: RASTER_ONLY,
@@ -446,7 +453,46 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     isEnabled: isLayerMutable,
     isVisible: alwaysVisible,
     labelKey: 'widgets.layers.adjustments.curves',
+    order: 31.2,
+    section: 'primary',
+    submenu: 'add-adjustment',
+    supportedLayerTypes: RASTER_ONLY,
+  },
+  {
+    defaultLabel: 'Saturation',
+    handler: ({ effects }) => effects.addAdjustment('hsl'),
+    icon: DropletIcon,
+    id: 'add-hsl',
+    isEnabled: isLayerMutable,
+    isVisible: alwaysVisible,
+    labelKey: 'widgets.layers.adjustments.saturation',
+    order: 31.3,
+    section: 'primary',
+    submenu: 'add-adjustment',
+    supportedLayerTypes: RASTER_ONLY,
+  },
+  {
+    defaultLabel: 'Hue',
+    handler: ({ effects }) => effects.addAdjustment('hue'),
+    icon: RainbowIcon,
+    id: 'add-hue',
+    isEnabled: isLayerMutable,
+    isVisible: alwaysVisible,
+    labelKey: 'widgets.layers.adjustments.hue',
     order: 31.4,
+    section: 'primary',
+    submenu: 'add-adjustment',
+    supportedLayerTypes: RASTER_ONLY,
+  },
+  {
+    defaultLabel: 'Invert',
+    handler: ({ effects }) => effects.addAdjustment('invert'),
+    icon: ContrastIcon,
+    id: 'add-invert',
+    isEnabled: isLayerMutable,
+    isVisible: alwaysVisible,
+    labelKey: 'widgets.layers.adjustments.invert',
+    order: 31.5,
     section: 'primary',
     submenu: 'add-adjustment',
     supportedLayerTypes: RASTER_ONLY,

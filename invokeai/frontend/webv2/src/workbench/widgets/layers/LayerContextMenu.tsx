@@ -1,4 +1,5 @@
 import type {
+  CanvasAdjustmentEntry,
   CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasMaskContract,
@@ -100,7 +101,7 @@ import {
   copyRasterToRegionalGuidance,
   copyRegionalGuidanceToInpaintMask,
   createLayerId,
-  createAdjustmentId,
+  createIdentityAdjustment,
   createRegionalReferenceImage,
   fitLayerTransformToBbox,
   getControlTransparencyEffectPatch,
@@ -736,17 +737,11 @@ const LayerMenu = ({
   );
 
   const handleAddAdjustment = useCallback(
-    (type: 'brightness-contrast' | 'hsl' | 'curves') => {
+    (type: CanvasAdjustmentEntry['type']) => {
       if (layer.type !== 'raster') {
         return;
       }
-      const id = createAdjustmentId();
-      const entry =
-        type === 'brightness-contrast'
-          ? { brightness: 0, contrast: 0, id, isEnabled: true, type }
-          : type === 'hsl'
-            ? { id, isEnabled: true, saturation: 0, type }
-            : { curves: {}, id, isEnabled: true, type };
+      const entry = createIdentityAdjustment(type);
       const before = layer.adjustments ?? [];
       commitPrepared(t('widgets.layers.menu.addAdjustment'), (model) =>
         model.prepare({

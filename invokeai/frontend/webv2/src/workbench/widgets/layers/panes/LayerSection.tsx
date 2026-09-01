@@ -10,6 +10,7 @@ import { ControlLayerSettings } from '@workbench/widgets/layers/ControlLayerSett
 import { InpaintMaskSettings } from '@workbench/widgets/layers/InpaintMaskSettings';
 import {
   adjustmentChildKind,
+  childRowNameKey,
   MASK_DENOISE_ITEM_ID,
   MASK_NOISE_ITEM_ID,
   type LayerChildRowKind,
@@ -104,13 +105,8 @@ const resolveChildEditor = (
   if (layer.type === 'raster') {
     const entry = layer.adjustments?.find((candidate) => candidate.id === selection.itemId);
     if (entry) {
-      const subtitle =
-        entry.type === 'brightness-contrast'
-          ? t('widgets.layers.modifiers.brightnessContrast')
-          : entry.type === 'hsl'
-            ? t('widgets.layers.adjustments.saturation')
-            : t('widgets.layers.adjustments.curves');
-      return { itemId: selection.itemId, kind: adjustmentChildKind(entry.type), subtitle };
+      const kind = adjustmentChildKind(entry.type);
+      return { itemId: selection.itemId, kind, subtitle: t(childRowNameKey(kind)) };
     }
   }
   return null;

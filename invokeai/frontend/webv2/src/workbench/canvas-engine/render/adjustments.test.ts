@@ -22,6 +22,19 @@ const hsl = (saturation: number, overrides: EntryOverrides = {}) =>
   ({ id: 'hsl', isEnabled: true, saturation, type: 'hsl', ...overrides }) as const;
 const curves = (points: CanvasAdjustmentCurves) =>
   ({ curves: points, id: 'cv', isEnabled: true, type: 'curves' }) as const;
+const levels = (
+  inBlack: number,
+  inWhite: number,
+  gamma: number,
+  outBlack: number,
+  outWhite: number,
+  overrides: EntryOverrides = {}
+) =>
+  ({ gamma, id: 'lv', inBlack, inWhite, isEnabled: true, outBlack, outWhite, type: 'levels', ...overrides }) as const;
+const hue = (rotation: number, overrides: EntryOverrides = {}) =>
+  ({ id: 'hue', isEnabled: true, rotation, type: 'hue', ...overrides }) as const;
+const invert = (overrides: EntryOverrides = {}) =>
+  ({ id: 'inv', isEnabled: true, type: 'invert', ...overrides }) as const;
 
 describe('buildCurveLut', () => {
   it('is the identity for absent / empty / diagonal curves', () => {
@@ -102,6 +115,15 @@ describe('identity and keys', () => {
     ).toBe(false);
   });
 
+  it('recognizes identity levels and hue; invert always contributes', () => {
+    expect(isIdentityAdjustments([levels(0, 255, 1, 0, 255), hue(0), hue(360)])).toBe(true);
+    expect(isIdentityAdjustmentEntry(levels(1, 255, 1, 0, 255))).toBe(false);
+    expect(isIdentityAdjustmentEntry(levels(0, 255, 1.1, 0, 255))).toBe(false);
+    expect(isIdentityAdjustmentEntry(hue(90))).toBe(false);
+    expect(isIdentityAdjustmentEntry(invert())).toBe(false);
+    expect(isIdentityAdjustments([invert({ isEnabled: false })])).toBe(true);
+  });
+
   it('keys identify the pixel effect: stable across entry ids, sensitive to order and values', () => {
     expect(adjustmentsKey([bc(0, 0), hsl(0)])).toBe('identity');
     expect(adjustmentsKey([bc(0.2, 0)])).toBe(adjustmentsKey([bc(0.2, 0, { id: 'other' })]));
@@ -128,6 +150,13 @@ describe('compileAdjustments', () => {
 
     const split = compileAdjustments([bc(0.1, 0), hsl(0.5), bc(0, 0.3)]);
     expect(split.map((segment) => segment.kind)).toEqual(['lut', 'saturation', 'lut']);
+  });
+
+  it('folds levels and invert into the LUT chain and keeps hue as a matrix segment', () => {
+    const folded = compileAdjustments([levels(10, 240, 1.2, 0, 255), invert(), bc(0.1, 0)]);
+    expect(folded.map((segment) => segment.kind)).toEqual(['lut']);
+    const withHue = compileAdjustments([invert(), hue(90), levels(0, 200, 1, 0, 255)]);
+    expect(withHue.map((segment) => segment.kind)).toEqual(['lut', 'matrix', 'lut']);
   });
 
   it('a folded pair produces the same pixels as sequential application', () => {
@@ -182,6 +211,46 @@ describe('applyAdjustments', () => {
     expect(img.data[0]).toBe(luma);
     expect(img.data[1]).toBe(luma);
     expect(img.data[2]).toBe(luma);
+  });
+
+  it('inverts every channel exactly', () => {
+    const img = imageData([0, 128, 255, 200]);
+    applyAdjustments(img, [invert()]);
+    expect(Array.from(img.data)).toEqual([255, 127, 0, 200]);
+  });
+
+  it('remaps through levels: input range, gamma midtones, output range', () => {
+    // Input 64..192 stretched to full range: 64 → 0, 192 → 255, midpoint → 128.
+    const stretch = imageData([64, 128, 192, 255]);
+    applyAdjustments(stretch, [levels(64, 192, 1, 0, 255)]);
+    expect(Array.from(stretch.data.slice(0, 3))).toEqual([0, 128, 255]);
+    // Gamma 2 lifts midtones: 128 → 255 * (0.5)^(1/2) ≈ 180.
+    const midtones = imageData([128, 0, 255, 255]);
+    applyAdjustments(midtones, [levels(0, 255, 2, 0, 255)]);
+    expect(midtones.data[0]).toBe(Math.round(255 * Math.sqrt(128 / 255)));
+    expect(midtones.data[1]).toBe(0);
+    expect(midtones.data[2]).toBe(255);
+    // Output compression maps black to 50 and white to 200.
+    const compress = imageData([0, 255, 128, 255]);
+    applyAdjustments(compress, [levels(0, 255, 1, 50, 200)]);
+    expect(compress.data[0]).toBe(50);
+    expect(compress.data[1]).toBe(200);
+  });
+
+  it('hue rotation cycles the primaries and preserves grays', () => {
+    // 120° sends red toward green (the standard hueRotate matrix dims it; green must dominate).
+    const red = imageData([255, 0, 0, 255]);
+    applyAdjustments(red, [hue(120)]);
+    expect(red.data[0]).toBe(0);
+    expect(red.data[2]).toBe(0);
+    expect(red.data[1]).toBeGreaterThan(90);
+    // A full ±360° is identity; gray is on the rotation axis and never moves.
+    const gray = imageData([128, 128, 128, 255]);
+    applyAdjustments(gray, [hue(90)]);
+    expect(Array.from(gray.data)).toEqual([128, 128, 128, 255]);
+    const wrapped = imageData([200, 100, 50, 255]);
+    applyAdjustments(wrapped, [hue(360)]);
+    expect(Array.from(wrapped.data)).toEqual([200, 100, 50, 255]);
   });
 
   it('entry order changes the pixels; a disabled entry renders exactly as a removed one', () => {

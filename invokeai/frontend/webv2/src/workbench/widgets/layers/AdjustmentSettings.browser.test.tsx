@@ -37,6 +37,8 @@ let root: Root | null = null;
 const initialEntries = (): CanvasAdjustmentEntry[] => [
   { brightness: 0.1, contrast: 0, id: 'bc1', isEnabled: true, type: 'brightness-contrast' },
   { curves: {}, id: 'cv1', isEnabled: true, type: 'curves' },
+  { id: 'hue1', isEnabled: true, rotation: 0, type: 'hue' },
+  { gamma: 1, id: 'lv1', inBlack: 0, inWhite: 255, isEnabled: true, outBlack: 0, outWhite: 255, type: 'levels' },
 ];
 
 const createLayer = (): CanvasRasterLayerContractV2 =>
@@ -56,7 +58,7 @@ const createLayer = (): CanvasRasterLayerContractV2 =>
 const commits: PreparedDocumentEdit[] = [];
 let latestAdjustments: unknown = 'untouched';
 
-const Harness = () => {
+const Harness = ({ entryId }: { entryId: string }) => {
   const [layer, setLayer] = useState(createLayer);
 
   const engine = useMemo(() => {
@@ -90,7 +92,7 @@ const Harness = () => {
     // Rebuilt per layer change so the stub's model reflects the previewed layer, as the engine's does.
   }, [layer]);
 
-  return <AdjustmentSettings engine={engine} entryId="cv1" layer={layer} />;
+  return <AdjustmentSettings engine={engine} entryId={entryId} layer={layer} />;
 };
 
 const settle = (action: () => void): Promise<void> =>
@@ -101,7 +103,7 @@ const settle = (action: () => void): Promise<void> =>
     });
   });
 
-const render = async () => {
+const render = async (entryId = 'cv1') => {
   applyThemeToRoot('classic');
   host = document.createElement('div');
   host.style.width = '260px';
@@ -112,7 +114,7 @@ const render = async () => {
     root?.render(
       <I18nextProvider i18n={i18n}>
         <ChakraProvider value={system}>
-          <Harness />
+          <Harness entryId={entryId} />
         </ChakraProvider>
       </I18nextProvider>
     );
@@ -141,6 +143,49 @@ afterEach(async () => {
   host?.remove();
   host = null;
   root = null;
+});
+
+const sliderTracks = (): HTMLElement[] => Array.from(host!.querySelectorAll<HTMLElement>('[data-part="track"]'));
+
+/** A pointer press-and-release on a slider track at `fraction` of its width. */
+const pressTrack = async (track: HTMLElement, fraction: number): Promise<void> => {
+  const rect = track.getBoundingClientRect();
+  const x = rect.left + rect.width * fraction;
+  const y = rect.top + rect.height / 2;
+  await settle(() => pointer(track, 'pointerdown', x, y));
+  await settle(() => pointer(track, 'pointerup', x, y));
+};
+
+const forwardEntries = (edit: PreparedDocumentEdit): CanvasAdjustmentEntry[] =>
+  (edit.forward as unknown as { config: { adjustments: CanvasAdjustmentEntry[] } }).config.adjustments;
+
+describe('hue and levels editors', () => {
+  it('commits a hue rotation as one whole-stack patch', async () => {
+    await render('hue1');
+    const [track] = sliderTracks();
+    expect(track).toBeDefined();
+    await pressTrack(track!, 0.75);
+
+    expect(commits).toHaveLength(1);
+    const forward = forwardEntries(commits[0]!);
+    expect(forward[2]).toMatchObject({ id: 'hue1', type: 'hue' });
+    expect((forward[2] as { rotation: number }).rotation).toBeCloseTo(90, -1);
+    // Untouched siblings ride along unchanged.
+    expect(forward[0]).toEqual(initialEntries()[0]);
+  });
+
+  it('commits a levels input-range change while the other fields keep their values', async () => {
+    await render('lv1');
+    const tracks = sliderTracks();
+    expect(tracks).toHaveLength(3);
+    await pressTrack(tracks[0]!, 0.25);
+
+    expect(commits).toHaveLength(1);
+    const entry = forwardEntries(commits[0]!)[3] as Extract<CanvasAdjustmentEntry, { type: 'levels' }>;
+    expect(entry).toMatchObject({ gamma: 1, id: 'lv1', inWhite: 255, outBlack: 0, outWhite: 255 });
+    expect(entry.inBlack).toBeGreaterThan(50);
+    expect(entry.inBlack).toBeLessThan(80);
+  });
 });
 
 describe('curves entry editor', () => {

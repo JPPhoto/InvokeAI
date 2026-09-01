@@ -99,6 +99,20 @@ const zAdjustmentEntry = z.discriminatedUnion('type', [
     isEnabled: z.boolean(),
     type: z.literal('curves'),
   }),
+  z
+    .object({
+      gamma: zFiniteNumber,
+      id: z.string(),
+      inBlack: zFiniteNumber,
+      inWhite: zFiniteNumber,
+      isEnabled: z.boolean(),
+      outBlack: zFiniteNumber,
+      outWhite: zFiniteNumber,
+      type: z.literal('levels'),
+    })
+    .refine((entry) => entry.inBlack < entry.inWhite && entry.gamma > 0),
+  z.object({ id: z.string(), isEnabled: z.boolean(), rotation: zFiniteNumber, type: z.literal('hue') }),
+  z.object({ id: z.string(), isEnabled: z.boolean(), type: z.literal('invert') }),
 ]);
 const zAdjustments = z.array(zAdjustmentEntry);
 const zControlAdapter = z

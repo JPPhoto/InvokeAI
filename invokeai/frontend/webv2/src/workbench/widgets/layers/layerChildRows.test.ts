@@ -1,4 +1,4 @@
-import type { RegionalGuidanceReferenceImage } from '@workbench/canvas-engine/api';
+import type { CanvasAdjustmentEntry, RegionalGuidanceReferenceImage } from '@workbench/canvas-engine/api';
 
 import { documentFrom, layerContract } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it } from 'vitest';
@@ -130,9 +130,9 @@ describe('mask modifier rows', () => {
       maskWith({ denoise: { isEnabled: false, limit: 0.8 }, noise: { isEnabled: true, level: 0.25 } }),
     ]);
     const rows = projectLayerChildRows(maskRow(document).vm);
-    expect(rows.map((row) => [row.kind, row.itemId, row.isEnabled, row.value, row.posInSet, row.setSize])).toEqual([
-      ['mask-noise', 'noise', true, 0.25, 1, 2],
-      ['mask-denoise', 'denoise', false, 0.8, 2, 2],
+    expect(rows.map((row) => [row.kind, row.itemId, row.isEnabled, row.detail, row.posInSet, row.setSize])).toEqual([
+      ['mask-noise', 'noise', true, '25%', 1, 2],
+      ['mask-denoise', 'denoise', false, '80%', 2, 2],
     ]);
     expect(projectLayerChildRows(maskRow(documentFrom([maskWith()])).vm)).toEqual([]);
   });
@@ -176,19 +176,48 @@ describe('adjustment rows', () => {
     { id: 'a2', isEnabled: false, saturation: -0.4, type: 'hsl' as const },
     { curves: {}, id: 'a3', isEnabled: true, type: 'curves' as const },
   ];
-  const rasterWith = (adjustments = entries()) => layerContract('r1', 'raster', { adjustments });
+  const rasterWith = (adjustments: CanvasAdjustmentEntry[] = entries()) =>
+    layerContract('r1', 'raster', { adjustments });
   const rasterRow = (document: ReturnType<typeof documentFrom>) =>
     buildLayerStackRows(document.stacks, new Set()).raster.rows.find((row) => row.id === 'r1')!;
 
-  it('projects one row per entry, in stack order, with per-kind identity and the hsl value', () => {
+  it('projects one row per entry, in stack order, with per-kind identity and details', () => {
     const rows = projectLayerChildRows(rasterRow(documentFrom([rasterWith()])).vm);
-    expect(rows.map((row) => [row.kind, row.itemId, row.isEnabled, row.value])).toEqual([
+    expect(rows.map((row) => [row.kind, row.itemId, row.isEnabled, row.detail])).toEqual([
       ['adjustment-brightness-contrast', 'a1', true, null],
-      ['adjustment-hsl', 'a2', false, -0.4],
+      ['adjustment-hsl', 'a2', false, '-40%'],
       ['adjustment-curves', 'a3', true, null],
     ]);
     expect(rows[1]).toMatchObject({ posInSet: 2, setSize: 3 });
     expect(projectLayerChildRows(rasterRow(documentFrom([rasterWith([])])).vm)).toEqual([]);
+  });
+
+  it('projects levels, hue and invert entries with their kinds and details', () => {
+    const rows = projectLayerChildRows(
+      rasterRow(
+        documentFrom([
+          rasterWith([
+            {
+              gamma: 1.2,
+              id: 'l1',
+              inBlack: 10,
+              inWhite: 240,
+              isEnabled: true,
+              outBlack: 0,
+              outWhite: 255,
+              type: 'levels',
+            },
+            { id: 'h1', isEnabled: true, rotation: 90, type: 'hue' },
+            { id: 'i1', isEnabled: false, type: 'invert' },
+          ]),
+        ])
+      ).vm
+    );
+    expect(rows.map((row) => [row.kind, row.itemId, row.isEnabled, row.detail])).toEqual([
+      ['adjustment-levels', 'l1', true, null],
+      ['adjustment-hue', 'h1', true, '90°'],
+      ['adjustment-invert', 'i1', false, null],
+    ]);
   });
 
   it('moves an entry within the stack and refuses moves past the ends', () => {
