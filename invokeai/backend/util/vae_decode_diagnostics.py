@@ -72,9 +72,10 @@ def scan_module_for_nonfinite_weights(module: torch.nn.Module, compute_device_ty
     for name, tensor in list(module.named_parameters()) + list(module.named_buffers()):
         # Shared/tied tensors appear under multiple names; count each storage once. data_ptr
         # catches ties that wrap the same storage in distinct tensor objects; fall back to
-        # object identity for tensors without an addressable storage (e.g. meta).
+        # object identity for tensors without an addressable storage (data_ptr() is 0 on meta
+        # and zero-element tensors — one shared key there would hide all but the first).
         try:
-            key = tensor.data_ptr()
+            key = tensor.data_ptr() or id(tensor)
         except RuntimeError:
             key = id(tensor)
         if key in seen:
@@ -86,8 +87,9 @@ def scan_module_for_nonfinite_weights(module: torch.nn.Module, compute_device_ty
         try:
             if bool(torch.isfinite(tensor).all()):
                 continue
-        except RuntimeError:
-            # A tensor that cannot even be read (sick context, meta device) is itself a
+        except Exception:
+            # A tensor that cannot even be read (sick context, meta device, a dtype or wrapper
+            # subclass without isfinite — those raise TypeError, not RuntimeError) is itself a
             # finding; report it rather than aborting the whole scan.
             pass
         scan.nonfinite_names.append(f"{name}@{tensor.device}")

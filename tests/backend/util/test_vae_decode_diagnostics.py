@@ -95,3 +95,38 @@ def test_force_real_empty_cache_without_wrapper(monkeypatch):
 def test_allocator_state_summary_cpu_device_mentions_peer_state():
     summary = allocator_state_summary(torch.device("cpu"))
     assert "peer_generation_device_busy=" in summary
+
+
+def test_force_real_empty_cache_bypasses_installed_peer_aware_wrapper(monkeypatch):
+    """Integration: the bypass must reach the real entry point through the wrapper that
+    install_peer_aware_empty_cache actually builds, in the exact scenario the recovery targets
+    (a peer generation device mid-session, where the wrapper itself skips)."""
+    from invokeai.backend.util.device_pool import GENERATION_DEVICE_POOL
+    from invokeai.backend.util.devices import install_peer_aware_empty_cache
+
+    calls = {"real": 0}
+
+    def stub():
+        calls["real"] += 1
+
+    original = torch.cuda.empty_cache
+    monkeypatch.setattr(torch.cuda, "empty_cache", stub)
+    try:
+        install_peer_aware_empty_cache()
+        assert torch.cuda.empty_cache is not stub  # the wrapper is installed over the stub
+
+        GENERATION_DEVICE_POOL.reset()
+        GENERATION_DEVICE_POOL.set_generation_devices([torch.device("cuda:0"), torch.device("cuda:1")])
+        GENERATION_DEVICE_POOL.acquire_session(torch.device("cuda:1"))
+        try:
+            torch.cuda.empty_cache()
+            assert calls["real"] == 0  # the peer-aware wrapper skipped (peer busy)
+            force_real_empty_cache()
+            assert calls["real"] == 1  # the bypass reached the real entry point anyway
+        finally:
+            GENERATION_DEVICE_POOL.release_session(torch.device("cuda:1"))
+            GENERATION_DEVICE_POOL.reset()
+    finally:
+        # monkeypatch restores the attribute it replaced; make certain the pristine original is
+        # back regardless of ordering with the wrapper installation.
+        torch.cuda.empty_cache = original

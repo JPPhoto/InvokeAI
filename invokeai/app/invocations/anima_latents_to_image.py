@@ -240,6 +240,21 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
         achieved; never raises, since a black image plus a diagnostic log beats a failed
         generation.
         """
+        try:
+            return self._recover_nonfinite_decode_impl(context, vae, latents, decoded, latents_finite)
+        except Exception:
+            # The triage itself must never convert a black image into a failed generation.
+            context.logger.exception("VAE decode non-finite triage failed; returning the corrupt decode.")
+            return decoded
+
+    def _recover_nonfinite_decode_impl(
+        self,
+        context: InvocationContext,
+        vae: AutoencoderKLWan,
+        latents: torch.Tensor,
+        decoded: torch.Tensor,
+        latents_finite: bool,
+    ) -> torch.Tensor:
         device = latents.device
         scan = scan_module_for_nonfinite_weights(vae, device.type)
 
@@ -250,8 +265,9 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
             )
         elif not scan.clean:
             assessment = (
-                "the cached VAE WEIGHTS are corrupt — every decode will fail until the model is "
-                "reloaded (clearing the model cache should recover it)"
+                "NaN/Inf (or unreadable tensors) found among the cached VAE WEIGHTS — if genuinely "
+                "corrupt, every decode will fail until the model is reloaded (clearing the model "
+                "cache should recover it)"
             )
         else:
             assessment = (
@@ -278,9 +294,10 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
                 return retry
 
             # Attempt 2: force a REAL global empty_cache — bypassing the peer-aware skip — and
-            # retry. This can stall a peer GPU's in-flight step once, which is a better trade
-            # than a black image; if it heals the decode, the allocator-state mechanism is
-            # confirmed.
+            # retry. This stalls BOTH workers once: the peer's in-flight step, and this thread,
+            # which waits inside hipFree until that step's kernel completes (up to ~a minute on
+            # a long video step). Still a better trade than a black image; if it heals the
+            # decode, the allocator-state mechanism is confirmed.
             context.logger.warning(
                 "VAE decode still non-finite after a plain retry; forcing a global empty_cache "
                 "(a peer GPU's in-flight step may stall once) and retrying."
