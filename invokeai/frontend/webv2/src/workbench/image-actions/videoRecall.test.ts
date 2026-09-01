@@ -283,6 +283,7 @@ describe('buildVideoRecallSettings', () => {
     expect(result?.mediaNames).toEqual({
       firstFrameName: 'first.png',
       lastFrameName: null,
+      references: [],
       sourceVideoName: null,
       sourceVideoTrim: null,
     });
@@ -402,5 +403,63 @@ describe('buildVideoRecallSettings', () => {
         models: catalog,
       })
     ).toBeNull();
+  });
+});
+
+describe('ref2va reference recall', () => {
+  const catalog = [WAN_T2V, WAN_I2V, h3Model(), LIGHTNING_HIGH, LIGHTNING_LOW];
+  const currentValues = { ...createDefaultVideoWidgetValues([h3Model()]) };
+  const h3RefMetadata = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+    generation_mode: 'minimax_h3_ref2v',
+    height: 768,
+    minimax_h3_references: [
+      { conditioning: 'video_audio', end_frame: 47, kind: 'video', start_frame: 2, video_name: 'ref.mp4' },
+      { detail: 'match', image_name: 'ref.png', kind: 'image' },
+      { kind: 'video' },
+    ],
+    model: { base: 'minimax-h3', key: 'h3-main', name: 'MiniMax H3', type: 'main' },
+    num_frames: 124,
+    positive_prompt: 'a red fox',
+    seed: 7,
+    steps: 4,
+    width: 1344,
+    ...extra,
+  });
+
+  it('recognizes the ref2v generation mode as video metadata', () => {
+    expect(isVideoGenerationMetadata({ generation_mode: 'minimax_h3_ref2v' })).toBe(true);
+  });
+
+  it('reports the ordered references, tolerantly skipping malformed entries', () => {
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: h3RefMetadata(),
+      models: catalog,
+    });
+
+    expect(result?.fields).toContain('media');
+    expect(result?.mediaNames.references).toEqual([
+      { conditioning: 'video_audio', kind: 'video', name: 'ref.mp4', trim: { endFrame: 47, startFrame: 2 } },
+      { detail: 'match', kind: 'image', name: 'ref.png' },
+    ]);
+    // References replace the frame/source slots.
+    expect(result?.mediaNames.firstFrameName).toBeNull();
+    expect(result?.values.references).toEqual([]);
+  });
+
+  it("clears the panel's held media so the executor re-hydrates references on a clean slate", () => {
+    const holding = {
+      ...currentValues,
+      firstFrameImage: { height: 4, image_name: 'held.png', width: 4 },
+    };
+    const result = buildVideoRecallSettings({
+      currentValues: holding,
+      kind: 'all',
+      metadata: h3RefMetadata(),
+      models: catalog,
+    });
+
+    expect(result?.values.firstFrameImage).toBeNull();
   });
 });

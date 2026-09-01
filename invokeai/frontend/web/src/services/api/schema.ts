@@ -9030,7 +9030,7 @@ export type components = {
              * @description The generation mode that output this image
              * @default null
              */
-            generation_mode?: ("txt2img" | "img2img" | "inpaint" | "outpaint" | "sdxl_txt2img" | "sdxl_img2img" | "sdxl_inpaint" | "sdxl_outpaint" | "flux_txt2img" | "flux_img2img" | "flux_inpaint" | "flux_outpaint" | "flux2_txt2img" | "flux2_img2img" | "flux2_inpaint" | "flux2_outpaint" | "sd3_txt2img" | "sd3_img2img" | "sd3_inpaint" | "sd3_outpaint" | "cogview4_txt2img" | "cogview4_img2img" | "cogview4_inpaint" | "cogview4_outpaint" | "z_image_txt2img" | "z_image_img2img" | "z_image_inpaint" | "z_image_outpaint" | "ernie_image_txt2img" | "ideogram4_txt2img" | "qwen_image_txt2img" | "qwen_image_img2img" | "qwen_image_inpaint" | "qwen_image_outpaint" | "anima_txt2img" | "anima_img2img" | "anima_inpaint" | "anima_outpaint" | "krea2_txt2img" | "krea2_img2img" | "krea2_inpaint" | "krea2_outpaint" | "wan_txt2img" | "wan_img2img" | "wan_inpaint" | "wan_outpaint" | "wan_t2v" | "wan_i2v" | "wan_interpolate" | "wan_extend_video" | "minimax_h3_t2v" | "minimax_h3_i2v" | "minimax_h3_lf2v" | "minimax_h3_flf2v" | "minimax_h3_extend_video" | "minimax_h3_txt2img") | null;
+            generation_mode?: ("txt2img" | "img2img" | "inpaint" | "outpaint" | "sdxl_txt2img" | "sdxl_img2img" | "sdxl_inpaint" | "sdxl_outpaint" | "flux_txt2img" | "flux_img2img" | "flux_inpaint" | "flux_outpaint" | "flux2_txt2img" | "flux2_img2img" | "flux2_inpaint" | "flux2_outpaint" | "sd3_txt2img" | "sd3_img2img" | "sd3_inpaint" | "sd3_outpaint" | "cogview4_txt2img" | "cogview4_img2img" | "cogview4_inpaint" | "cogview4_outpaint" | "z_image_txt2img" | "z_image_img2img" | "z_image_inpaint" | "z_image_outpaint" | "ernie_image_txt2img" | "ideogram4_txt2img" | "qwen_image_txt2img" | "qwen_image_img2img" | "qwen_image_inpaint" | "qwen_image_outpaint" | "anima_txt2img" | "anima_img2img" | "anima_inpaint" | "anima_outpaint" | "krea2_txt2img" | "krea2_img2img" | "krea2_inpaint" | "krea2_outpaint" | "wan_txt2img" | "wan_img2img" | "wan_inpaint" | "wan_outpaint" | "wan_t2v" | "wan_i2v" | "wan_interpolate" | "wan_extend_video" | "minimax_h3_t2v" | "minimax_h3_i2v" | "minimax_h3_lf2v" | "minimax_h3_flf2v" | "minimax_h3_extend_video" | "minimax_h3_ref2v" | "minimax_h3_txt2img") | null;
             /**
              * Positive Prompt
              * @description The positive prompt parameter
@@ -9202,6 +9202,12 @@ export type components = {
              * @default null
              */
             minimax_h3_text_encoder_model?: components["schemas"]["ModelIdentifierField"] | null;
+            /**
+             * Minimax H3 References
+             * @description The ordered Ref2VA references this generation was conditioned on (names and options only; the media is re-resolved from the gallery at recall time)
+             * @default null
+             */
+            minimax_h3_references?: components["schemas"]["MiniMaxH3ReferenceMetadataField"][] | null;
             /**
              * Hrf Enabled
              * @description Whether or not high resolution fix was enabled.
@@ -30612,6 +30618,54 @@ export type components = {
              * @constant
              */
             type: "minimax_h3_reference_media_output";
+        };
+        /**
+         * MiniMaxH3ReferenceMetadataField
+         * @description One recorded Ref2VA reference: names and options only, in conditioning order.
+         */
+        MiniMaxH3ReferenceMetadataField: {
+            /**
+             * Kind
+             * @description Whether the reference was an image or a video.
+             * @enum {string}
+             */
+            kind: "image" | "video";
+            /**
+             * Image Name
+             * @description The reference image's name.
+             * @default null
+             */
+            image_name?: string | null;
+            /**
+             * Video Name
+             * @description The reference video's name.
+             * @default null
+             */
+            video_name?: string | null;
+            /**
+             * Conditioning
+             * @description A video reference's conditioning choice (video_audio / video / audio).
+             * @default null
+             */
+            conditioning?: string | null;
+            /**
+             * Detail
+             * @description An image reference's sizing choice (max / match).
+             * @default null
+             */
+            detail?: string | null;
+            /**
+             * Start Frame
+             * @description A video reference's trim start (inclusive).
+             * @default null
+             */
+            start_frame?: number | null;
+            /**
+             * End Frame
+             * @description A video reference's trim end (inclusive).
+             * @default null
+             */
+            end_frame?: number | null;
         };
         /**
          * MiniMaxH3TextEncoderField

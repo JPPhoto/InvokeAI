@@ -17,8 +17,10 @@ import {
   getVideoModelSelectionResult,
   getVideoModes,
   getVideoPromptPolicy,
+  getVideoTransformerSelectionResult,
   getVideoValidationReasons,
   getWanExpertWiringWarning,
+  resolveEffectiveVideoModel,
   isSupportedVideoModel,
   isValidVideoNumFrames,
   snapVideoNumFrames,
@@ -759,14 +761,13 @@ describe('component section policy', () => {
     expect(transformerSlot?.filter?.(h3Model('diffusers'), ctx)).toBe(false);
   });
 
-  it('excludes Ref2VA transformers from the H3 transformer picker until the reference mode lands', () => {
-    // TODO(ref2va): invert this expectation when reference-conditioned generation ships.
+  it('keeps Ref2VA transformers pickable - the variant switches the panel to the reference mode', () => {
     const model = h3Model();
     const policy = getVideoComponentSectionPolicy(model, settingsFor(model));
     const transformerSlot = policy.slots[0];
     const ctx = { model, selectedComponents: settingsFor(model), settings: settingsFor(model) };
 
-    expect(transformerSlot?.filter?.({ ...h3Model('checkpoint'), variant: 'ref2va' }, ctx)).toBe(false);
+    expect(transformerSlot?.filter?.({ ...h3Model('checkpoint'), variant: 'ref2va' }, ctx)).toBe(true);
   });
 });
 
@@ -1041,5 +1042,155 @@ describe('getVideoModelAvailabilityReasons', () => {
     const installed = getVideoModelAvailabilityReasons(model, settingsFor(model), [model]);
 
     expect(installed).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ref2VA: effective variant, reference mode, transitions
+
+const ref2vaTransformer = (key = 'h3-ref2va-ckpt'): MainModelConfig => ({
+  ...h3Model('checkpoint', key),
+  name: 'MiniMax H3 Ref2VA Transformer (int8, pruned)',
+  variant: 'ref2va',
+});
+
+const fl2vaTransformer = (key = 'h3-fl2va-ckpt'): MainModelConfig => ({
+  ...h3Model('checkpoint', key),
+  name: 'MiniMax H3 FL2VA Transformer (int8, pruned)',
+  variant: 'fl2va',
+});
+
+const imageReference = { detail: 'max', image: { height: 4, image_name: 'ref.png', width: 4 }, kind: 'image' } as const;
+
+describe('resolveEffectiveVideoModel', () => {
+  it('overrides the H3 variant with the selected transformer checkpoint', () => {
+    const model = h3Model();
+    const settings = settingsFor(model, { h3TransformerModel: ref2vaTransformer() });
+
+    expect(resolveEffectiveVideoModel(model, settings)?.variant).toBe('ref2va');
+    expect(resolveEffectiveVideoModel(model, settingsFor(model))?.variant).toBe('fl2va');
+  });
+
+  it('never touches non-H3 models', () => {
+    const model = wanModel('t2v_a14b', 'diffusers');
+
+    expect(resolveEffectiveVideoModel(model, settingsFor(model, { h3TransformerModel: ref2vaTransformer() }))).toBe(
+      model
+    );
+  });
+});
+
+describe('reference mode policy', () => {
+  it('a ref2va transformer switches the panel to the reference-only mode set', () => {
+    const model = h3Model();
+    const settings = settingsFor(model, { h3TransformerModel: ref2vaTransformer() });
+
+    expect(getVideoModelPolicy(model, settings).modes).toEqual(['reference']);
+    expect(getVideoModelPolicy(model, settings).references).toEqual({ maxImages: 9, maxVideos: 3 });
+    expect(getVideoModelPolicy(model, settingsFor(model)).references).toBeNull();
+  });
+
+  it('an unknown variant still falls back to fl2va, but ref2va never does', () => {
+    const unknown = { ...h3Model(), variant: 'novel_task' };
+
+    expect(getVideoModes(unknown)).toContain('txt2vid');
+    expect(getVideoModes({ ...h3Model(), variant: 'ref2va' })).toEqual(['reference']);
+  });
+
+  it('validates the reference rules', () => {
+    const model = h3Model();
+    const withRefTransformer = (overrides: Partial<VideoSettings>) =>
+      settingsFor(model, { h3TransformerModel: ref2vaTransformer(), ...overrides });
+
+    expect(getVideoValidationReasons(model, withRefTransformer({}))).toContain(
+      'Reference-to-video needs at least one image or video reference.'
+    );
+    expect(
+      getVideoValidationReasons(
+        model,
+        withRefTransformer({
+          references: [
+            {
+              clip: {
+                endFrame: 10,
+                fps: 24,
+                height: 4,
+                numFrames: 12,
+                startFrame: 0,
+                video_name: 'ref.mp4',
+                width: 4,
+              },
+              conditioning: 'audio',
+              kind: 'video',
+            },
+          ],
+        })
+      )
+    ).toContain(
+      'At least one reference must contribute visuals — add an image, or set a video reference to include video.'
+    );
+    expect(getVideoValidationReasons(model, withRefTransformer({ references: [imageReference] }))).toEqual([]);
+  });
+
+  it('rejects references on an fl2va-effective panel', () => {
+    const model = h3Model();
+    const reasons = getVideoValidationReasons(model, settingsFor(model, { references: [imageReference] }));
+
+    expect(reasons.some((reason) => reason.includes('reference-conditioned'))).toBe(true);
+  });
+});
+
+describe('getVideoTransformerSelectionResult', () => {
+  it('clears frame media when switching to a ref2va transformer, and references on the way back', () => {
+    const model = h3Model();
+    const first = { height: 4, image_name: 'kf.png', width: 4 };
+    const toRef = getVideoTransformerSelectionResult({
+      currentSettings: settingsFor(model, { firstFrameImage: first, modelKey: model.key }),
+      model,
+      models: [model],
+      transformer: ref2vaTransformer(),
+    });
+
+    expect(toRef.settings.firstFrameImage).toBeNull();
+    expect(toRef.settings.h3TransformerModel?.variant).toBe('ref2va');
+    expect(toRef.clearedLabels).toContain('First frame');
+
+    const backToFl = getVideoTransformerSelectionResult({
+      currentSettings: { ...toRef.settings, references: [imageReference] },
+      model,
+      models: [model],
+      transformer: fl2vaTransformer(),
+    });
+
+    expect(backToFl.settings.references).toEqual([]);
+    expect(backToFl.clearedLabels).toContain('References');
+  });
+});
+
+describe('ref2va accelerator auto-pick', () => {
+  const REF2V_TURBO = {
+    base: 'minimax-h3',
+    key: 'ref2v-turbo',
+    name: 'MiniMax H3 Ref2V Turbo LoRA',
+    type: 'lora' as const,
+  };
+  const FL2VA_TURBO = { base: 'minimax-h3', key: 'turbo', name: 'MiniMax H3 Turbo LoRA', type: 'lora' as const };
+
+  it('requires the ref2v-token repack for the ref2va variant and excludes it otherwise', () => {
+    expect(findMiniMaxH3TurboLora([REF2V_TURBO, FL2VA_TURBO], { variant: 'ref2va' })).toMatchObject({
+      key: 'ref2v-turbo',
+    });
+    expect(findMiniMaxH3TurboLora([REF2V_TURBO, FL2VA_TURBO], { variant: 'fl2va' })).toMatchObject({ key: 'turbo' });
+    expect(findMiniMaxH3TurboLora([FL2VA_TURBO], { variant: 'ref2va' })).toBeNull();
+  });
+
+  it('the accelerator toggle resolves through the effective variant (4-step ref2v turbo)', () => {
+    const model = h3Model();
+    const settings = settingsFor(model, { h3TransformerModel: ref2vaTransformer() });
+    const result = getAcceleratorToggleResult(settings, model, [model, REF2V_TURBO, FL2VA_TURBO], true);
+
+    expect(result.missingLoras).toBe(false);
+    expect(result.settings.acceleratorLoraKeys).toEqual(['ref2v-turbo']);
+    expect(result.settings.steps).toBe(4);
   });
 });

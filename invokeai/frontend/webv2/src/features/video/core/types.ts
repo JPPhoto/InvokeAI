@@ -10,7 +10,7 @@ import type {
  * How a video generation is conditioned. There is no explicit mode selector:
  * the mode is inferred from which inputs are filled — see `resolveVideoMode`.
  */
-export type VideoGenerationMode = 'txt2vid' | 'first-frame' | 'last-frame' | 'first-last' | 'extend';
+export type VideoGenerationMode = 'txt2vid' | 'first-frame' | 'last-frame' | 'first-last' | 'extend' | 'reference';
 
 /** A gallery video selected as the clip to extend, with the trim range to keep. */
 export interface VideoSourceClip {
@@ -23,6 +23,25 @@ export interface VideoSourceClip {
   startFrame: number;
   endFrame: number;
 }
+
+/**
+ * Which streams a Ref2VA video reference conditions. The graph-literal values of the
+ * `minimax_h3_video_reference` node: 'audio' maps to upstream's standalone audio-reference
+ * kind, sourced from the video's soundtrack.
+ */
+export type VideoReferenceConditioning = 'video_audio' | 'video' | 'audio';
+
+/** Ref2VA image-reference sizing: 'max' = 2048px short edge, 'match' = generation's pixel area. */
+export type VideoReferenceImageDetail = 'max' | 'match';
+
+/**
+ * One ordered Ref2VA reference. Order is part of the request contract — a different order
+ * is a different generation — so references live in a single ordered array whatever their
+ * kind. A video reference reuses `VideoSourceClip` for its trim bounds.
+ */
+export type VideoReferenceItem =
+  | { kind: 'video'; clip: VideoSourceClip; conditioning: VideoReferenceConditioning }
+  | { kind: 'image'; image: ImageWithDims; detail: VideoReferenceImageDetail };
 
 export type WanTargetResolution = '480p' | '720p' | '1080p';
 export type MiniMaxH3TargetResolution = '768 highres' | '768 lowres';
@@ -55,6 +74,12 @@ export interface VideoSettings {
   lastFrameImage: ImageWithDims | null;
   /** The clip to extend. Mutually exclusive with `firstFrameImage`. */
   sourceVideo: VideoSourceClip | null;
+  /**
+   * Ref2VA references, in conditioning order (up to 3 videos and 9 images). Mutually
+   * exclusive with `firstFrameImage`/`lastFrameImage`/`sourceVideo`; only a Ref2VA
+   * transformer consumes them — see `resolveVideoMode` and the `reference` mode.
+   */
+  references: VideoReferenceItem[];
   aspectRatioId: VideoAspectRatioId;
   targetResolution: VideoTargetResolution;
   numFrames: number;

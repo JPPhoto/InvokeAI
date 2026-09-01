@@ -296,3 +296,85 @@ describe('clearDeletedVideoMedia', () => {
     expect(clearDeletedVideoMedia(junk, new Set(['nonsense']), new Set())).toBe(junk);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Ref2VA references
+
+const IMAGE_REFERENCE = {
+  detail: 'max',
+  image: { height: 512, image_name: 'ref.png', width: 512 },
+  kind: 'image',
+} as const;
+const VIDEO_REFERENCE = {
+  clip: { endFrame: 47, fps: 24, height: 480, numFrames: 48, startFrame: 0, video_name: 'ref.mp4', width: 832 },
+  conditioning: 'video_audio',
+  kind: 'video',
+} as const;
+
+describe('references', () => {
+  it('reference mode wins the mode inference', () => {
+    expect(resolveVideoMode(createSettings({ references: [IMAGE_REFERENCE] }))).toBe('reference');
+    expect(resolveVideoMode(createSettings({ references: [VIDEO_REFERENCE], sourceVideo: SOURCE_VIDEO }))).toBe(
+      'reference'
+    );
+  });
+
+  it('normalization drops frame/source media when references are present', () => {
+    const normalized = normalizeVideoSettings(
+      createSettings({ firstFrameImage: FIRST_FRAME, references: [IMAGE_REFERENCE], sourceVideo: SOURCE_VIDEO })
+    );
+
+    expect(normalized?.references).toEqual([IMAGE_REFERENCE]);
+    expect(normalized?.firstFrameImage).toBeNull();
+    expect(normalized?.sourceVideo).toBeNull();
+  });
+
+  it('normalization drops malformed entries and enforces the caps, preserving order', () => {
+    const tooMany = [
+      ...Array.from({ length: 4 }, (_, index) => ({
+        ...VIDEO_REFERENCE,
+        clip: { ...VIDEO_REFERENCE.clip, video_name: `v${index}.mp4` },
+      })),
+      { kind: 'image' },
+      IMAGE_REFERENCE,
+    ];
+    const normalized = normalizeVideoSettings(createSettings({ references: tooMany as never }));
+
+    expect(normalized?.references.map((entry) => (entry.kind === 'video' ? entry.clip.video_name : 'img'))).toEqual([
+      'v0.mp4',
+      'v1.mp4',
+      'v2.mp4',
+      'img',
+    ]);
+  });
+
+  it('isVideoSettings rejects references combined with frame media', () => {
+    expect(isVideoSettings(createSettings({ firstFrameImage: FIRST_FRAME, references: [IMAGE_REFERENCE] }))).toBe(
+      false
+    );
+    expect(isVideoSettings(createSettings({ references: [IMAGE_REFERENCE] }))).toBe(true);
+  });
+
+  it('clone deep-copies references', () => {
+    const values = { ...createSettings({ references: [VIDEO_REFERENCE] }), model: null };
+    const clone = cloneVideoWidgetValues(values);
+
+    expect(clone.references).toEqual(values.references);
+    expect(clone.references[0]).not.toBe(values.references[0]);
+  });
+
+  it('clearDeletedVideoMedia filters deleted reference media, preserving order and identity', () => {
+    const values = createSettings({ references: [VIDEO_REFERENCE, IMAGE_REFERENCE] });
+    const untouched = clearDeletedVideoMedia(values, new Set(), new Set());
+
+    expect(untouched).toBe(values);
+
+    const swept = clearDeletedVideoMedia(values, new Set(['ref.png']), new Set());
+
+    expect(swept.references).toEqual([VIDEO_REFERENCE]);
+
+    const sweptVideo = clearDeletedVideoMedia(values, new Set(), new Set(['ref.mp4']));
+
+    expect(sweptVideo.references).toEqual([IMAGE_REFERENCE]);
+  });
+});

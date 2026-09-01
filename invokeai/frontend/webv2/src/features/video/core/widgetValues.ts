@@ -14,8 +14,10 @@ import {
   getVideoComponentSectionPolicy,
   getVideoModelAvailabilityReasons,
   getVideoModelSelectionResult,
+  getVideoModes,
   getVideoValidationReasons,
   isSupportedVideoModel,
+  resolveEffectiveVideoModel,
   type VideoComponentPolicyContext,
   type VideoComponentValueKey,
 } from './videoPolicies';
@@ -152,6 +154,17 @@ export const syncVideoWidgetValuesWithModels = (
     wanT5EncoderModel: syncComponent('wanT5EncoderModel', base.wanT5EncoderModel),
   };
 
+  // The transformer decides the task: if the Ref2VA transformer was uninstalled (and the
+  // slot re-resolved to null or an FL2VA file), the stored references are orphaned - the
+  // effective policy no longer has a reference mode - so drop them, identity-preserving.
+  if (next.references.length > 0 && model) {
+    const effectiveModel = resolveEffectiveVideoModel(model, next);
+
+    if (!getVideoModes(effectiveModel).includes('reference')) {
+      next.references = [];
+    }
+  }
+
   const isUnchanged =
     base === values &&
     next.model === values.model &&
@@ -164,6 +177,7 @@ export const syncVideoWidgetValuesWithModels = (
     next.componentSourceModel === values.componentSourceModel &&
     next.h3TransformerModel === values.h3TransformerModel &&
     next.h3TextEncoderModel === values.h3TextEncoderModel &&
+    next.references === values.references &&
     next.loras.length === values.loras.length &&
     next.loras.every((lora, index) => lora.model === values.loras[index]?.model);
 

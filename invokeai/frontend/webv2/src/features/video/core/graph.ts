@@ -16,7 +16,7 @@ import {
 } from '@features/generation/graph';
 import { getCompatibleDiffusersComponentSource } from '@features/generation/settings';
 
-import type { VideoGenerationMode, VideoSettings } from './types';
+import type { VideoGenerationMode, VideoReferenceItem, VideoSettings } from './types';
 
 import { resolveVideoMode } from './settings';
 import { getVideoDimensions, getVideoModelPolicy, getVideoValidationReasons } from './videoPolicies';
@@ -49,7 +49,55 @@ const MINIMAX_H3_GENERATION_MODES: Record<VideoGenerationMode, string> = {
   'first-frame': 'minimax_h3_i2v',
   'first-last': 'minimax_h3_flf2v',
   'last-frame': 'minimax_h3_lf2v',
+  reference: 'minimax_h3_ref2v',
   txt2vid: 'minimax_h3_t2v',
+};
+
+/**
+ * Adds the per-reference descriptor nodes and the ordered collection feeding both the
+ * Reference Conditioning node and the Prompt node (the same references must reach both —
+ * the denoise node cross-checks them). Collect order matters: reference order is part of
+ * the request contract, so the collectors are CHAINED (each appends its item after the
+ * inherited collection), the same trick the extend scaffolding uses for its join order.
+ */
+const addReferenceNodes = (
+  graph: BackendGraphContract,
+  references: readonly VideoReferenceItem[]
+): BackendInvocationContract => {
+  let chain: BackendInvocationContract | null = null;
+  references.forEach((reference, index) => {
+    const node =
+      reference.kind === 'image'
+        ? addNode(graph, {
+            detail: reference.detail,
+            id: `reference_${index + 1}`,
+            image: toImageField(reference.image),
+            type: 'minimax_h3_image_reference',
+          })
+        : addNode(graph, {
+            conditioning: reference.conditioning,
+            // Same estimate-overshoot protection as the extend path: tail-window bounds
+            // compile as negative indices the backend resolves against the REAL count.
+            end_frame: toTailAwareIndex(reference.clip.endFrame, reference.clip.numFrames),
+            id: `reference_${index + 1}`,
+            start_frame: toTailAwareIndex(reference.clip.startFrame, reference.clip.numFrames),
+            type: 'minimax_h3_video_reference',
+            video: { video_name: reference.clip.video_name },
+          });
+    const collect = addNode(graph, { id: `reference_collect_${index + 1}`, type: 'collect' });
+
+    if (chain) {
+      addEdge(graph, chain, 'collection', collect, 'collection');
+    }
+    addEdge(graph, node, 'reference', collect, 'item');
+    chain = collect;
+  });
+
+  if (!chain) {
+    throw new Error('Reference mode requires at least one reference.');
+  }
+
+  return chain;
 };
 
 const addPromptAndSeedNodes = (graph: BackendGraphContract) => ({
@@ -67,32 +115,33 @@ const toImageField = (image: { image_name: string }) => ({ image_name: image.ima
  * source with the freshly generated clip (2-frame crossfade over the seam).
  * Both intermediate video artifacts stay out of the gallery.
  */
+// The panel's frame count is an estimate (duration × fps; the records store
+// no exact count, and VFR uploads can overshoot by a frame or two). A trim
+// bound near the estimated ceiling therefore compiles as a NEGATIVE index —
+// resolved by the backend against the clip's REAL count — so "keep to the
+// end" can never land past it. Both bounds get the same treatment: a start
+// in the tail window would otherwise stay a positive estimate-based index
+// and land out of range exactly when the end's conversion saves it (the
+// start is always below the end, so the pair keeps its order when both go
+// negative). Mid-clip picks stay positive: a negative offset computed from
+// an overshooting estimate would drift them instead.
+const toTailAwareIndex = (frame: number, estimatedNumFrames: number): number => {
+  const tailOffset = estimatedNumFrames - 1 - frame;
+
+  return tailOffset <= 3 ? -(tailOffset + 1) : frame;
+};
+
 const addExtendScaffolding = (
   graph: BackendGraphContract,
   sourceVideo: NonNullable<VideoSettings['sourceVideo']>,
   newClip: BackendInvocationContract,
   options: { extractFps?: number } = {}
 ) => {
-  // The panel's frame count is an estimate (duration × fps; the records store
-  // no exact count, and VFR uploads can overshoot by a frame or two). A trim
-  // bound near the estimated ceiling therefore compiles as a NEGATIVE index —
-  // resolved by the backend against the clip's REAL count — so "keep to the
-  // end" can never land past it. Both bounds get the same treatment: a start
-  // in the tail window would otherwise stay a positive estimate-based index
-  // and land out of range exactly when the end's conversion saves it (the
-  // start is always below the end, so the pair keeps its order when both go
-  // negative). Mid-clip picks stay positive: a negative offset computed from
-  // an overshooting estimate would drift them instead.
-  const toTailAwareIndex = (frame: number): number => {
-    const tailOffset = sourceVideo.numFrames - 1 - frame;
-
-    return tailOffset <= 3 ? -(tailOffset + 1) : frame;
-  };
   const extract = addNode(graph, {
-    end_frame: toTailAwareIndex(sourceVideo.endFrame),
+    end_frame: toTailAwareIndex(sourceVideo.endFrame, sourceVideo.numFrames),
     id: 'source_video',
     is_intermediate: true,
-    start_frame: toTailAwareIndex(sourceVideo.startFrame),
+    start_frame: toTailAwareIndex(sourceVideo.startFrame, sourceVideo.numFrames),
     type: 'extract_video_range',
     use_cache: false,
     video: { video_name: sourceVideo.video_name },
@@ -394,13 +443,18 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
     type: 'minimax_h3_text_encoder',
     width: dimensions.width,
     ...keyframeLiterals,
+    ...(mode === 'reference' ? { num_frames: settings.numFrames } : {}),
   });
   const denoise = addNode(graph, {
     height: dimensions.height,
     id: 'denoise_latents',
     // The node's frame counts are a string Literal choice list.
     num_frames: String(settings.numFrames),
-    steps: settings.steps,
+    // The H3 node counts sigma grid points (terminal zero included), so node
+    // steps = model evaluations + 1. The panel's steps setting means model
+    // evaluations — the count a distilled turbo LoRA is trained for — so add
+    // the terminal point here. Metadata records the panel value.
+    steps: settings.steps + 1,
     type: 'minimax_h3_denoise',
     width: dimensions.width,
   });
@@ -411,7 +465,24 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
   addEdge(graph, posCond, 'conditioning', denoise, 'positive_conditioning');
   addEdge(graph, seed, 'value', denoise, 'seed');
 
-  const needsFrameConditioning = mode !== 'txt2vid';
+  if (mode === 'reference') {
+    const referenceChain = addReferenceNodes(graph, settings.references);
+    const referenceConditioning = addNode(graph, {
+      height: dimensions.height,
+      id: 'reference_conditioning',
+      num_frames: settings.numFrames,
+      type: 'minimax_h3_reference_conditioning',
+      width: dimensions.width,
+    });
+
+    addEdge(graph, referenceChain, 'collection', referenceConditioning, 'references');
+    addEdge(graph, referenceChain, 'collection', posCond, 'references');
+    addEdge(graph, modelLoader, 'vae', referenceConditioning, 'vae');
+    addEdge(graph, modelLoader, 'audio_vae', referenceConditioning, 'audio_vae');
+    addEdge(graph, referenceConditioning, 'reference_conditioning', denoise, 'reference_conditioning');
+  }
+
+  const needsFrameConditioning = mode !== 'txt2vid' && mode !== 'reference';
   let frameConditioning: BackendInvocationContract | null = null;
 
   if (needsFrameConditioning) {
@@ -463,6 +534,21 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
     extras: {
       ...(settings.h3TransformerModel ? { minimax_h3_transformer_model: settings.h3TransformerModel } : {}),
       ...(settings.h3TextEncoderModel ? { minimax_h3_text_encoder_model: settings.h3TextEncoderModel } : {}),
+      ...(mode === 'reference'
+        ? {
+            minimax_h3_references: settings.references.map((reference) =>
+              reference.kind === 'image'
+                ? { detail: reference.detail, image_name: reference.image.image_name, kind: 'image' }
+                : {
+                    conditioning: reference.conditioning,
+                    end_frame: reference.clip.endFrame,
+                    kind: 'video',
+                    start_frame: reference.clip.startFrame,
+                    video_name: reference.clip.video_name,
+                  }
+            ),
+          }
+        : {}),
     },
     generationMode: MINIMAX_H3_GENERATION_MODES[mode],
     graph,
