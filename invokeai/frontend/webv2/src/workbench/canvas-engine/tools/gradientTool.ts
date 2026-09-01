@@ -150,12 +150,22 @@ export const createGradientTool = (): Tool => {
       // positioned at the bbox origin via the layer transform. Angle-drag edits on
       // an existing gradient preserve its extent (the `...old` spread above).
       const options = ctx.stores.gradientOptions.get();
+      // The built-in FG→BG preset resolves the pair now; custom stops are
+      // explicit and independent of later pair edits.
+      const pair = ctx.stores.colorPair.get();
+      const stops =
+        options.preset === 'pair'
+          ? [
+              { color: `${pair.foreground}ff`, offset: 0 },
+              { color: `${pair.background}ff`, offset: 1 },
+            ]
+          : options.stops.map((stop) => ({ ...stop }));
       const layerId = ctx.createLayerId();
       const source: CanvasLayerSourceContract = {
         angle,
         height: doc.bbox.height,
         kind: options.kind,
-        stops: options.stops.map((stop) => ({ ...stop })),
+        stops,
         type: 'gradient',
         width: doc.bbox.width,
       };

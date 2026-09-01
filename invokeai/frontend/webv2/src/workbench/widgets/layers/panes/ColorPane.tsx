@@ -18,13 +18,17 @@ import { HsvBoxPicker } from '@platform/ui/HsvBoxPicker';
 import { HsvWheelPicker } from '@platform/ui/HsvWheelPicker';
 import { Scrollable } from '@platform/ui/Scrollable';
 import { Tooltip } from '@platform/ui/Tooltip';
+import { getDocumentLayer } from '@workbench/canvas-engine/api';
+import { armMaskTintTarget, clearMaskTintTarget } from '@workbench/widgets/canvas/color-system/maskTintTarget';
 import {
   useActiveColorCommands,
   useActiveColorPair,
   useActiveColorTarget,
 } from '@workbench/widgets/canvas/color-system/useActiveColors';
+import { useMaskTintEditor, type MaskTintEditor } from '@workbench/widgets/canvas/color-system/useMaskTintEditor';
 import { ToolbarNumberField } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
+import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { ArrowLeftRightIcon, CircleIcon, PipetteIcon, RotateCcwIcon, SquareIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -48,7 +52,17 @@ export const ColorPane = () => {
   const target = useActiveColorTarget();
   const commands = useActiveColorCommands();
   const mode = useColorPickerMode();
-  const activeHex = pair[target];
+  // The explicit non-pair target: the selected mask's tint, when armed. Its
+  // edits commit through the document seam — live preview, one entry a gesture.
+  const maskTint = useMaskTintEditor(engine);
+  const selectedMask = useActiveProjectSelector((project) => {
+    const { document } = project.canvas;
+    const layer = document.selectedLayerId ? getDocumentLayer(document, document.selectedLayerId) : null;
+    return layer && (layer.type === 'inpaint_mask' || layer.type === 'regional_guidance')
+      ? { color: layer.mask.fill.color, id: layer.id }
+      : null;
+  }, areSelectedMasksEqual);
+  const activeHex = maskTint ? maskTint.color : pair[target];
 
   // The picker holds HSV so hue survives greys; it resyncs from the pair only
   // when the pair changed to something the current HSV does not already mean.
@@ -66,9 +80,13 @@ export const ColorPane = () => {
       setHsv(next);
       const hex = hsvToHex(next);
       setSyncedHex(hex);
+      if (maskTint) {
+        maskTint.preview(hex);
+        return;
+      }
       commands.setPairColor(target, hex);
     },
-    [commands, target]
+    [commands, maskTint, target]
   );
   // Held arrow keys commit per repeat; the recents shelf hears only the
   // settled color, not two dozen intermediate hues. An immediate record (hex
@@ -89,10 +107,11 @@ export const ColorPane = () => {
     (next: HsvColor) => {
       applyHsv(next);
       const hex = hsvToHex(next);
+      maskTint?.commit(hex);
       settlePendingRecent(false);
       pendingRecent.current = { hex, timer: setTimeout(() => settlePendingRecent(true), 500) };
     },
-    [applyHsv, settlePendingRecent]
+    [applyHsv, maskTint, settlePendingRecent]
   );
   const applyHex = useCallback(
     (hex: string) => {
@@ -102,10 +121,14 @@ export const ColorPane = () => {
       // Flattened like the pair itself, so a recent swatch always matches what it sets.
       const opaque = formatHexColor(parseHexColor(hex));
       settlePendingRecent(false);
-      commands.setPairColor(target, opaque);
+      if (maskTint) {
+        maskTint.commit(opaque);
+      } else {
+        commands.setPairColor(target, opaque);
+      }
       recordRecentColor(opaque);
     },
-    [commands, settlePendingRecent, target]
+    [commands, maskTint, settlePendingRecent, target]
   );
   const sampleFromCanvas = useCallback(async () => {
     if (!engine) {
@@ -114,12 +137,17 @@ export const ColorPane = () => {
     const hex = await engine.tools.requestColorSample();
     if (hex) {
       // Routed through the command so the target is read when the sample lands,
-      // not when the pipette was armed.
+      // not when the pipette was armed. The pane's pipette is the mask tint's
+      // editor-specific sampler; the standing router never writes the tint.
       settlePendingRecent(false);
-      commands.applySampledColor(hex);
+      if (maskTint) {
+        maskTint.commit(hex);
+      } else {
+        commands.applySampledColor(hex);
+      }
       recordRecentColor(hex);
     }
-  }, [commands, engine, settlePendingRecent]);
+  }, [commands, engine, maskTint, settlePendingRecent]);
   const toggleMode = useCallback(() => setColorPickerMode(mode === 'wheel' ? 'box' : 'wheel'), [mode]);
   const modeLabel =
     mode === 'wheel' ? t('widgets.layers.colorPane.pickerModeBox') : t('widgets.layers.colorPane.pickerModeWheel');
@@ -136,7 +164,13 @@ export const ColorPane = () => {
         </Box>
         <Stack flex="1" gap="2" minW="0">
           <HStack gap="1">
-            <TargetChips pair={pair} target={target} onSelectTarget={commands.setTarget} />
+            <TargetChips
+              maskTint={maskTint}
+              pair={pair}
+              selectedMask={selectedMask}
+              target={target}
+              onSelectTarget={commands.setTarget}
+            />
             <Tooltip content={t('widgets.canvas.commands.swapColors')}>
               <IconButton
                 aria-label={t('widgets.canvas.commands.swapColors')}
@@ -186,32 +220,64 @@ export const ColorPane = () => {
   );
 };
 
+const areSelectedMasksEqual = (
+  a: { color: string; id: string } | null,
+  b: { color: string; id: string } | null
+): boolean => a?.id === b?.id && a?.color === b?.color;
+
 const TargetChips = ({
+  maskTint,
   onSelectTarget,
   pair,
+  selectedMask,
   target,
 }: {
+  maskTint: MaskTintEditor | null;
   onSelectTarget: (target: ActiveColorTarget) => void;
   pair: { foreground: string; background: string };
+  selectedMask: { color: string; id: string } | null;
   target: ActiveColorTarget;
 }) => {
   const { t } = useTranslation();
+  const selectPairTarget = useCallback(
+    (next: ActiveColorTarget) => {
+      // A pair chip always returns the pane to the pair, disarming the tint.
+      clearMaskTintTarget();
+      onSelectTarget(next);
+    },
+    [onSelectTarget]
+  );
+  const armTint = useCallback(() => {
+    if (selectedMask) {
+      armMaskTintTarget(selectedMask.id);
+    }
+  }, [selectedMask]);
   return (
     <HStack flexShrink={0} gap="1" mr="1">
       <TargetChip
         colorHex={pair.foreground}
-        isActive={target === 'foreground'}
+        isActive={!maskTint && target === 'foreground'}
         label={t('widgets.layers.colorPane.foreground')}
         target="foreground"
-        onSelect={onSelectTarget}
+        onSelect={selectPairTarget}
       />
       <TargetChip
         colorHex={pair.background}
-        isActive={target === 'background'}
+        isActive={!maskTint && target === 'background'}
         label={t('widgets.layers.colorPane.background')}
         target="background"
-        onSelect={onSelectTarget}
+        onSelect={selectPairTarget}
       />
+      {selectedMask ? (
+        // Revealed by a compatible selection, activated only explicitly.
+        <TargetChip
+          colorHex={maskTint?.color ?? selectedMask.color}
+          isActive={maskTint !== null}
+          label={t('widgets.layers.colorPane.maskTint')}
+          target="foreground"
+          onSelect={armTint}
+        />
+      ) : null}
     </HStack>
   );
 };

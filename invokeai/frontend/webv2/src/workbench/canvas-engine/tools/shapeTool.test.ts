@@ -129,9 +129,10 @@ describe('shape tool: creation', () => {
     expect(h.previewOf()).toBeNull();
   });
 
-  it('uses the shape options kind/fill/stroke for the created layer', () => {
+  it('resolves the pair at gesture start for the enabled fill and stroke', () => {
     const h = createHarness(makeDoc());
-    h.stores.shapeOptions.set({ fill: '#ff0000', kind: 'ellipse', stroke: '#0000ff', strokeWidth: 4 });
+    h.stores.shapeOptions.set({ fillEnabled: true, kind: 'ellipse', strokeEnabled: true, strokeWidth: 4 });
+    h.stores.colorPair.set({ background: '#0000ff', foreground: '#ff0000' });
     const tool = createShapeTool();
 
     down(tool, h.ctx, pointer(0, 0));

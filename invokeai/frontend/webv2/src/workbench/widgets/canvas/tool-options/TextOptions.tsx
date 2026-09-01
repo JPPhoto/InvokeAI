@@ -16,6 +16,7 @@ import {
   TEXT_FONT_WEIGHTS,
   getDocumentLayer,
 } from '@workbench/canvas-engine/api';
+import { useActiveColorCommands, useActiveColorPair } from '@workbench/widgets/canvas/color-system/useActiveColors';
 import { useTextEditSession, useTextOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
@@ -78,14 +79,18 @@ const AlignButton = ({
 
 /**
  * Displayed values: an open editing session's live source, else the selected
- * text layer, else the tool defaults. Edits always update the defaults, then
- * restyle the live session (folded into its single commit) or commit one
- * history entry on the selected layer; colors commit on release.
+ * text layer, else the tool defaults — with color from the active foreground
+ * when neither a session nor a selection owns one, so there is no second
+ * global text color. Style edits update the defaults, then restyle the live
+ * session (folded into its single commit) or commit one history entry on the
+ * selected layer; color edits with nothing to own them edit the pair.
  */
 const useTextEditor = (engine: ToolbarRegionProps['engine']) => {
   const { t } = useTranslation();
   const commitPrepared = usePreparedCommit(engine);
   const options = useTextOptions(engine);
+  const pair = useActiveColorPair();
+  const colorCommands = useActiveColorCommands();
   const session = useTextEditSession(engine);
   const selected = useActiveProjectSelector(
     (project): SelectedText | null => {
@@ -97,23 +102,41 @@ const useTextEditor = (engine: ToolbarRegionProps['engine']) => {
     },
     (a, b) => a?.id === b?.id && a?.source === b?.source
   );
-  const active: TextToolOptions = session ? session.source : (selected?.source ?? options);
-  const { align, color, fontFamily, fontSize, fontWeight, lineHeight } = active;
+  const styleSource = session ? session.source : (selected?.source ?? null);
+  const align = styleSource?.align ?? options.align;
+  const fontFamily = styleSource?.fontFamily ?? options.fontFamily;
+  const fontSize = styleSource?.fontSize ?? options.fontSize;
+  const fontWeight = styleSource?.fontWeight ?? options.fontWeight;
+  const lineHeight = styleSource?.lineHeight ?? options.lineHeight;
+  const color = styleSource?.color ?? pair.foreground;
+  const active = useMemo(
+    () => ({ align, color, fontFamily, fontSize, fontWeight, lineHeight }),
+    [align, color, fontFamily, fontSize, fontWeight, lineHeight]
+  );
   const applyEdit = useCallback(
-    (patch: Partial<TextToolOptions>, commit: boolean) => {
-      engine.interaction.set('textOptions', { align, color, fontFamily, fontSize, fontWeight, lineHeight, ...patch });
+    (patch: Partial<TextSource>, commit: boolean) => {
+      const { color: colorPatch, ...stylePatch } = patch;
+      if (Object.keys(stylePatch).length > 0) {
+        engine.interaction.set('textOptions', { align, fontFamily, fontSize, fontWeight, lineHeight, ...stylePatch });
+      }
       if (session) {
         engine.layers.updateTextEditStyle(patch);
         return;
       }
-      if (selected && commit) {
-        const after: TextSource = { ...selected.source, ...patch };
-        commitPrepared(t('widgets.canvas.toolOptions.textEdit'), (model) =>
-          model.prepare({ id: selected.id, source: after, type: 'patch-source' })
-        );
+      if (selected) {
+        if (commit) {
+          const after: TextSource = { ...selected.source, ...patch };
+          commitPrepared(t('widgets.canvas.toolOptions.textEdit'), (model) =>
+            model.prepare({ id: selected.id, source: after, type: 'patch-source' })
+          );
+        }
+        return;
+      }
+      if (colorPatch !== undefined) {
+        colorCommands.setPairColor('foreground', colorPatch);
       }
     },
-    [align, color, commitPrepared, engine, fontFamily, fontSize, fontWeight, lineHeight, selected, session, t]
+    [align, colorCommands, commitPrepared, engine, fontFamily, fontSize, fontWeight, lineHeight, selected, session, t]
   );
   return { active, applyEdit };
 };

@@ -23,12 +23,13 @@ import {
   captureAccountScope,
   isAccountScopeCurrent,
 } from '@platform/state/accountLifecycle';
-import { Button, ColorPicker, DropZone, Field, Select, Slider } from '@platform/ui';
+import { Button, ColorPicker, DropZone, Field, Select, Slider, Tooltip } from '@platform/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
+import { armMaskTintTarget } from '@workbench/widgets/canvas/color-system/maskTintTarget';
 import { type CanvasPreparedEngine, usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useWorkbenchCommands } from '@workbench/WorkbenchContext';
-import { ImageIcon, PlusIcon, XIcon } from 'lucide-react';
+import { ImageIcon, PlusIcon, XIcon, PaletteIcon } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -219,6 +220,7 @@ export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSett
     [engine, fill, layer.id]
   );
 
+  const handleArmTint = useCallback(() => armMaskTintTarget(layer.id), [layer.id]);
   const handleColorChangeEnd = useCallback(
     (hex: string) => {
       const before = fillBeforeRef.current ?? fill;
@@ -415,6 +417,18 @@ export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSett
             onValueChangeEnd={handleColorChangeEnd}
           />
         </Field>
+        <Tooltip content={t('widgets.layers.maskFill.editInColorPane')}>
+          <IconButton
+            aria-label={t('widgets.layers.maskFill.editInColorPane')}
+            alignSelf="flex-end"
+            color="fg.muted"
+            size="2xs"
+            variant="ghost"
+            onClick={handleArmTint}
+          >
+            <PaletteIcon size={14} />
+          </IconButton>
+        </Tooltip>
         <Field flex="1" label={t('widgets.layers.maskFill.style')} minW="0">
           <Select
             aria-label={t('widgets.layers.maskFill.style')}

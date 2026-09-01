@@ -119,7 +119,7 @@ import {
   createEngineStores,
   type EngineStores,
   type ScalarStore,
-  type TextToolOptions,
+  type TextStylePatch,
 } from '@workbench/canvas-engine/engineStores';
 import {
   exportRasterComposite as exportRasterCompositeWithDeps,
@@ -378,6 +378,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     checkerboard: stores.checkerboard,
     checkerColors: stores.checkerColors,
     clipToBbox: stores.clipToBbox,
+    colorPair: stores.colorPair,
     documentEditingLocked: stores.documentEditingLocked,
     eraserOptions: stores.eraserOptions,
     gradientOptions: stores.gradientOptions,
@@ -944,6 +945,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       getDocument: () => mirror.getDocument(),
       invalidate: (payload) => scheduler.invalidate(payload),
       isGestureActive: () => pipeline.isGestureActive(),
+      colors: stores.colorPair,
       options: stores.textOptions,
       session: stores.textEditSession,
     },
@@ -2430,9 +2432,9 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     editingController.text.setContentReader(reader);
   const openTextCreate = (point: Vec2): void => editingController.text.openCreate(point);
   const openTextEdit = (layerId: string): void => editingController.text.openEdit(layerId);
-  const updateTextEditStyle = (patch: Partial<TextToolOptions>): void => editingController.text.updateStyle(patch);
+  const updateTextEditStyle = (patch: TextStylePatch): void => editingController.text.updateStyle(patch);
   const cancelTextEdit = (): void => editingController.text.cancel();
-  const commitTextEdit = (content: string, styleChanges?: Partial<TextToolOptions>): StructuralCommitResult | null =>
+  const commitTextEdit = (content: string, styleChanges?: TextStylePatch): StructuralCommitResult | null =>
     editingController.text.commit(content, styleChanges);
   const commitOpenTextSession = (): boolean => editingController.text.commitOpen();
 

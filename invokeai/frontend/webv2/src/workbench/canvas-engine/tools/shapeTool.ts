@@ -131,6 +131,9 @@ export const createShapeTool = (): Tool => {
       }
 
       const options = ctx.stores.shapeOptions.get();
+      // The active pair, resolved now: the new shape gets explicit document
+      // colors; later pair edits never rewrite them.
+      const pair = ctx.stores.colorPair.get();
       const layerId = ctx.createLayerId();
       const layer: CanvasRasterLayerContractV2 = {
         blendMode: 'normal',
@@ -140,10 +143,10 @@ export const createShapeTool = (): Tool => {
         name: `Shape ${getDocumentLeaves(doc).length + 1}`,
         opacity: 1,
         source: {
-          fill: options.fill,
+          fill: options.fillEnabled ? pair.foreground : null,
           height: rect.height,
           kind: options.kind,
-          stroke: options.stroke,
+          stroke: options.strokeEnabled ? pair.background : null,
           strokeWidth: options.strokeWidth,
           type: 'shape',
           width: rect.width,

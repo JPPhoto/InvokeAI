@@ -6,14 +6,17 @@ import type {
 } from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { createListCollection } from '@chakra-ui/react';
+import { ToggleIconButton } from '@platform/ui/Button';
 import { ColorPicker } from '@platform/ui/ColorPicker';
 import { Select } from '@platform/ui/Select';
 import { getDocumentLayer } from '@workbench/canvas-engine/api';
+import { useActiveColorPair } from '@workbench/widgets/canvas/color-system/useActiveColors';
 import { useGradientOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
+import { PaletteIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -30,13 +33,16 @@ const SELECT_TRIGGER_PROPS = { minW: '6rem', w: '6rem' } as const;
 
 /**
  * Kind, angle and a minimal two-stop editor. Displayed values follow the
- * selected gradient layer, else the tool defaults; edits set the defaults AND
- * commit to a selected gradient layer (colors once on release).
+ * selected gradient layer, else the tool defaults — where the built-in FG→BG
+ * preset shows the live pair (resolved for real at gesture start) and editing
+ * a stop switches to explicit custom stops, independent of later pair edits.
+ * Edits commit to a selected gradient layer (colors once on release).
  */
 const useGradientEditor = (engine: ToolbarRegionProps['engine']) => {
   const { t } = useTranslation();
   const commitPrepared = usePreparedCommit(engine);
   const options = useGradientOptions(engine);
+  const pair = useActiveColorPair();
   const selected = useActiveProjectSelector(
     (project): SelectedGradient | null => {
       const { document } = project.canvas;
@@ -49,11 +55,18 @@ const useGradientEditor = (engine: ToolbarRegionProps['engine']) => {
   );
   const kind: GradientKind = selected ? selected.source.kind : options.kind;
   const angle = selected ? selected.source.angle : options.angle;
-  const stops = selected ? selected.source.stops : options.stops;
+  const pairStops = useMemo<GradientStop[]>(
+    () => [
+      { color: `${pair.foreground}ff`, offset: 0 },
+      { color: `${pair.background}ff`, offset: 1 },
+    ],
+    [pair.background, pair.foreground]
+  );
+  const stops = selected ? selected.source.stops : options.preset === 'pair' ? pairStops : options.stops;
 
   const apply = useCallback(
     (next: { angle: number; kind: GradientKind; stops: GradientStop[] }, commit: boolean) => {
-      engine.interaction.set('gradientOptions', next);
+      engine.interaction.set('gradientOptions', { ...options, angle: next.angle, kind: next.kind });
       if (selected && commit) {
         const after: GradientSource = { ...selected.source, ...next };
         commitPrepared(t('widgets.canvas.toolOptions.gradientEdit'), (model) =>
@@ -61,9 +74,27 @@ const useGradientEditor = (engine: ToolbarRegionProps['engine']) => {
         );
       }
     },
-    [commitPrepared, engine, selected, t]
+    [commitPrepared, engine, options, selected, t]
   );
-  return { angle, apply, kind, stops };
+  const setCustomStops = useCallback(
+    (nextStops: GradientStop[]) => {
+      engine.interaction.set('gradientOptions', { ...options, preset: 'custom', stops: nextStops });
+    },
+    [engine, options]
+  );
+  const setPreset = useCallback(
+    (preset: 'pair' | 'custom') => {
+      // Leaving the preset keeps what the chips currently show as the custom set.
+      engine.interaction.set('gradientOptions', {
+        ...options,
+        preset,
+        stops:
+          preset === 'custom' && options.preset === 'pair' ? pairStops.map((stop) => ({ ...stop })) : options.stops,
+      });
+    },
+    [engine, options, pairStops]
+  );
+  return { angle, apply, kind, preset: selected ? null : options.preset, setCustomStops, setPreset, stops };
 };
 
 const GradientAngle = ({ engine }: ToolbarRegionProps) => {
@@ -131,15 +162,24 @@ const GradientKindSelect = ({ engine }: ToolbarRegionProps) => {
 
 const GradientStops = ({ engine }: ToolbarRegionProps) => {
   const { t } = useTranslation();
-  const { angle, apply, kind, stops } = useGradientEditor(engine);
+  const { angle, apply, kind, preset, setCustomStops, setPreset, stops } = useGradientEditor(engine);
   const sampleColor = useColorSampler(engine);
   const start = stops[0] ?? { color: '#000000ff', offset: 0 };
   const end = stops[stops.length - 1] ?? { color: '#ffffffff', offset: 1 };
   const setStop = useCallback(
-    (index: number, color: string, commit: boolean) =>
-      apply({ angle, kind, stops: stops.map((stop, i) => (i === index ? { ...stop, color } : stop)) }, commit),
-    [angle, apply, kind, stops]
+    (index: number, color: string, commit: boolean) => {
+      const nextStops = stops.map((stop, i) => (i === index ? { ...stop, color } : stop));
+      if (preset === null) {
+        // A selected gradient: explicit document stops, one entry on release.
+        apply({ angle, kind, stops: nextStops }, commit);
+        return;
+      }
+      // No selection: stop edits make the custom set explicit.
+      setCustomStops(nextStops);
+    },
+    [angle, apply, kind, preset, setCustomStops, stops]
   );
+  const onPresetToggle = useCallback((checked: boolean) => setPreset(checked ? 'pair' : 'custom'), [setPreset]);
   const last = stops.length - 1;
   const onStart = useCallback((color: string) => setStop(0, color, false), [setStop]);
   const onStartEnd = useCallback((color: string) => setStop(0, color, true), [setStop]);
@@ -147,6 +187,14 @@ const GradientStops = ({ engine }: ToolbarRegionProps) => {
   const onEndEnd = useCallback((color: string) => setStop(last, color, true), [last, setStop]);
   return (
     <>
+      {/* Disabled, never removed, when a selected gradient owns the stops: the row keeps its geometry. */}
+      <ToggleIconButton
+        checked={preset === 'pair'}
+        disabled={preset === null}
+        icon={PaletteIcon}
+        label={t('widgets.canvas.toolOptions.gradientPairPreset')}
+        onCheckedChange={onPresetToggle}
+      />
       <ColorPicker
         aria-label={t('widgets.canvas.toolOptions.gradientStart')}
         value={start.color}

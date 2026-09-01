@@ -13,6 +13,8 @@ import {
   useActiveColorTarget,
   useColorPalette,
 } from '@workbench/widgets/canvas/color-system/useActiveColors';
+import { useMaskTintEditor } from '@workbench/widgets/canvas/color-system/useMaskTintEditor';
+import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
 import { PlusIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -24,12 +26,15 @@ import { useTranslation } from 'react-i18next';
  */
 export const SwatchesPane = () => {
   const { t } = useTranslation();
+  const engine = useCanvasEngine();
   const pair = useActiveColorPair();
   const target = useActiveColorTarget();
   const palette = useColorPalette();
   const commands = useActiveColorCommands();
   const recents = useRecentColors();
-  const activeHex = pair[target];
+  // The shelves write the pane's active target — the armed mask tint included.
+  const maskTint = useMaskTintEditor(engine);
+  const activeHex = maskTint ? maskTint.color : pair[target];
 
   const applyHex = useCallback(
     (hex: string) => {
@@ -39,10 +44,14 @@ export const SwatchesPane = () => {
       // Flattened like the pair itself, so a pick (even of a legacy alpha
       // recent) records what it actually sets.
       const opaque = formatHexColor(parseHexColor(hex));
-      commands.setPairColor(target, opaque);
+      if (maskTint) {
+        maskTint.commit(opaque);
+      } else {
+        commands.setPairColor(target, opaque);
+      }
       recordRecentColor(opaque);
     },
-    [commands, target]
+    [commands, maskTint, target]
   );
   const addToPalette = useCallback(() => commands.addPaletteColor(activeHex), [activeHex, commands]);
   const removeFromPalette = useCallback((color: string) => commands.removePaletteColor(color), [commands]);

@@ -18,6 +18,8 @@ import type { LayerStackKind } from './document/layerStacks';
 import type { CanvasTransactionOutcome, SubsetOf } from './editConcurrency';
 import type { CanvasEditGate } from './editGate';
 import type {
+  TextStylePatch,
+  ActiveColorPairState,
   BboxToolOptions,
   BrushOptions,
   CheckerColors,
@@ -97,6 +99,8 @@ export interface CanvasInteractionState {
   checkerboard: boolean;
   checkerColors: CheckerColors;
   clipToBbox: boolean;
+  /** The mirrored workbench pair; the engine reads it at gesture start, never writes it. */
+  colorPair: ActiveColorPairState;
   documentEditingLocked: boolean;
   eraserOptions: EraserOptions;
   gradientOptions: GradientToolOptions;
@@ -525,7 +529,7 @@ export interface CanvasEngineLayerCapability extends CanvasLayerCapability {
   openTextEdit(layerId: string): void;
   rasterizeLayer(layerId: string): boolean;
   setTextEditContentReader(reader: (() => string) | null): void;
-  updateTextEditStyle(patch: Partial<TextToolOptions>): void;
+  updateTextEditStyle(patch: TextStylePatch): void;
   updateTransformSession(transform: LayerTransform): void;
 }
 

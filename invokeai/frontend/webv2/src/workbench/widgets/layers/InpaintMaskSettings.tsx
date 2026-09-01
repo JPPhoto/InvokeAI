@@ -3,8 +3,10 @@ import type { CanvasInpaintMaskLayerContract, CanvasMaskFillContract } from '@wo
 import type { CanvasStructuralEngine } from '@workbench/widgets/layers/layerOps';
 
 import { createListCollection, HStack, Stack } from '@chakra-ui/react';
-import { Button, ColorPicker, Field, Select, Slider } from '@platform/ui';
+import { Button, ColorPicker, Field, IconButton, Select, Slider, Tooltip } from '@platform/ui';
+import { armMaskTintTarget } from '@workbench/widgets/canvas/color-system/maskTintTarget';
 import { type CanvasPreparedEngine, usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
+import { PaletteIcon } from 'lucide-react';
 import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -93,6 +95,7 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
     [engine, fill, layer.id]
   );
 
+  const handleArmTint = useCallback(() => armMaskTintTarget(layer.id), [layer.id]);
   const handleColorChangeEnd = useCallback(
     (hex: string) => {
       const before = fillBeforeRef.current ?? fill;
@@ -209,6 +212,18 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
             onValueChangeEnd={handleColorChangeEnd}
           />
         </Field>
+        <Tooltip content={t('widgets.layers.maskFill.editInColorPane')}>
+          <IconButton
+            aria-label={t('widgets.layers.maskFill.editInColorPane')}
+            alignSelf="flex-end"
+            color="fg.muted"
+            size="2xs"
+            variant="ghost"
+            onClick={handleArmTint}
+          >
+            <PaletteIcon size={14} />
+          </IconButton>
+        </Tooltip>
         <Field flex="1" label={t('widgets.layers.maskFill.style')} minW="0">
           <Select
             aria-label={t('widgets.layers.maskFill.style')}

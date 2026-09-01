@@ -10,6 +10,7 @@ import { ToggleIconButton } from '@platform/ui/Button';
 import { ColorPicker } from '@platform/ui/ColorPicker';
 import { Select } from '@platform/ui/Select';
 import { MAX_SHAPE_STROKE_WIDTH, getDocumentLayer } from '@workbench/canvas-engine/api';
+import { useActiveColorCommands, useActiveColorPair } from '@workbench/widgets/canvas/color-system/useActiveColors';
 import { useShapeOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import {
   ToolbarHint,
@@ -36,15 +37,19 @@ const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: false } as co
 const SELECT_TRIGGER_PROPS = { minW: '6rem', w: '6rem' } as const;
 
 /**
- * Displayed values follow the selected shape layer, else the tool defaults.
- * Edits set the defaults for the next shape AND, when a shape layer is
- * selected, commit to it: colors record one history entry on release, discrete
- * edits commit at once. C2 splits these two owners into Properties sections.
+ * Displayed values follow the selected shape layer, else the creation defaults
+ * — kind/width/enablement from the tool options and colors from the active
+ * pair (fill = foreground, stroke = background). A selected shape's edits
+ * commit to the document (colors record one history entry on release); with
+ * nothing selected the color chips edit the pair itself, so there is no second
+ * global shape color.
  */
 const useShapeEditor = (engine: ToolbarRegionProps['engine']) => {
   const { t } = useTranslation();
   const commitPrepared = usePreparedCommit(engine);
   const options = useShapeOptions(engine);
+  const pair = useActiveColorPair();
+  const colorCommands = useActiveColorCommands();
   const selected = useActiveProjectSelector(
     (project): SelectedShape | null => {
       const { document } = project.canvas;
@@ -56,30 +61,99 @@ const useShapeEditor = (engine: ToolbarRegionProps['engine']) => {
     (a, b) => a?.id === b?.id && a?.source === b?.source
   );
   const kind: ShapeKind = selected ? (selected.source.kind === 'ellipse' ? 'ellipse' : 'rect') : options.kind;
-  const fill = selected ? selected.source.fill : options.fill;
-  const stroke = selected ? selected.source.stroke : options.stroke;
+  const fill = selected ? selected.source.fill : options.fillEnabled ? pair.foreground : null;
+  const stroke = selected ? selected.source.stroke : options.strokeEnabled ? pair.background : null;
   const strokeWidth = selected ? selected.source.strokeWidth : options.strokeWidth;
 
-  const applyEdit = useCallback(
-    (patch: Partial<ShapeToolOptions>, commit: boolean) => {
-      engine.interaction.set('shapeOptions', { fill, kind, stroke, strokeWidth, ...patch });
-      if (selected && commit) {
-        const after: ShapeSource = { ...selected.source, ...patch };
-        commitPrepared(t('widgets.canvas.toolOptions.shapeEdit'), (model) =>
-          model.prepare({ id: selected.id, source: after, type: 'patch-source' })
-        );
+  const commitSource = useCallback(
+    (patch: Partial<ShapeSource>) => {
+      if (!selected) {
+        return;
       }
+      const after: ShapeSource = { ...selected.source, ...patch };
+      commitPrepared(t('widgets.canvas.toolOptions.shapeEdit'), (model) =>
+        model.prepare({ id: selected.id, source: after, type: 'patch-source' })
+      );
     },
-    [commitPrepared, engine, fill, kind, selected, stroke, strokeWidth, t]
+    [commitPrepared, selected, t]
   );
-  return { applyEdit, fill, kind, stroke, strokeWidth };
+  const setOptions = useCallback(
+    (patch: Partial<ShapeToolOptions>) => {
+      engine.interaction.set('shapeOptions', { ...options, ...patch });
+    },
+    [engine, options]
+  );
+  const setKind = useCallback(
+    (next: ShapeKind) => {
+      setOptions({ kind: next });
+      commitSource({ kind: next });
+    },
+    [commitSource, setOptions]
+  );
+  const setStrokeWidth = useCallback(
+    (value: number) => {
+      setOptions({ strokeWidth: value });
+      commitSource({ strokeWidth: value });
+    },
+    [commitSource, setOptions]
+  );
+  const setFillEnabled = useCallback(
+    (checked: boolean) => {
+      setOptions({ fillEnabled: checked });
+      commitSource({ fill: checked ? (selected?.source.fill ?? pair.foreground) : null });
+    },
+    [commitSource, pair.foreground, selected, setOptions]
+  );
+  const setStrokeEnabled = useCallback(
+    (checked: boolean) => {
+      setOptions({ strokeEnabled: checked });
+      commitSource({ stroke: checked ? (selected?.source.stroke ?? pair.background) : null });
+    },
+    [commitSource, pair.background, selected, setOptions]
+  );
+  const setFillColor = useCallback(
+    (hex: string, commit: boolean) => {
+      if (selected) {
+        if (commit) {
+          commitSource({ fill: hex });
+        }
+        return;
+      }
+      colorCommands.setPairColor('foreground', hex);
+    },
+    [colorCommands, commitSource, selected]
+  );
+  const setStrokeColor = useCallback(
+    (hex: string, commit: boolean) => {
+      if (selected) {
+        if (commit) {
+          commitSource({ stroke: hex });
+        }
+        return;
+      }
+      colorCommands.setPairColor('background', hex);
+    },
+    [colorCommands, commitSource, selected]
+  );
+  return {
+    fill,
+    kind,
+    setFillColor,
+    setFillEnabled,
+    setKind,
+    setStrokeColor,
+    setStrokeEnabled,
+    setStrokeWidth,
+    stroke,
+    strokeWidth,
+  };
 };
 
 const ShapeStrokeWidth = ({ engine }: ToolbarRegionProps) => {
   const { t } = useTranslation();
-  const { applyEdit, stroke, strokeWidth } = useShapeEditor(engine);
+  const { setStrokeWidth, stroke, strokeWidth } = useShapeEditor(engine);
   const onCommit = useNumberCommit(
-    useCallback((value: number) => applyEdit({ strokeWidth: Math.max(0, Math.round(value)) }, true), [applyEdit])
+    useCallback((value: number) => setStrokeWidth(Math.max(0, Math.round(value))), [setStrokeWidth])
   );
   return (
     <ToolbarNumberField
@@ -96,7 +170,7 @@ const ShapeStrokeWidth = ({ engine }: ToolbarRegionProps) => {
 
 const ShapeModes = ({ engine }: ToolbarRegionProps) => {
   const { t } = useTranslation();
-  const { applyEdit, fill, kind, stroke } = useShapeEditor(engine);
+  const { fill, kind, setFillEnabled, setKind, setStrokeEnabled, stroke } = useShapeEditor(engine);
   const kindCollection = useMemo(
     () =>
       createListCollection<{ label: string; value: ShapeKind }>({
@@ -112,19 +186,13 @@ const ShapeModes = ({ engine }: ToolbarRegionProps) => {
     ({ value }: SelectValueChangeDetails<{ label: string; value: ShapeKind }>) => {
       const next = value[0] as ShapeKind | undefined;
       if (next && next !== kind) {
-        applyEdit({ kind: next }, true);
+        setKind(next);
       }
     },
-    [applyEdit, kind]
+    [kind, setKind]
   );
-  const onFillToggle = useCallback(
-    (checked: boolean) => applyEdit({ fill: checked ? (fill ?? FALLBACK_COLOR) : null }, true),
-    [applyEdit, fill]
-  );
-  const onStrokeToggle = useCallback(
-    (checked: boolean) => applyEdit({ stroke: checked ? (stroke ?? FALLBACK_COLOR) : null }, true),
-    [applyEdit, stroke]
-  );
+  const onFillToggle = useCallback((checked: boolean) => setFillEnabled(checked), [setFillEnabled]);
+  const onStrokeToggle = useCallback((checked: boolean) => setStrokeEnabled(checked), [setStrokeEnabled]);
   return (
     <>
       <Select
@@ -161,12 +229,12 @@ const ShapeModes = ({ engine }: ToolbarRegionProps) => {
 /** Fill and stroke chips; a `none` fill or stroke shows a disabled chip so the slots keep their place. */
 const ShapeColors = ({ engine }: ToolbarRegionProps) => {
   const { t } = useTranslation();
-  const { applyEdit, fill, stroke } = useShapeEditor(engine);
+  const { fill, setFillColor, setStrokeColor, stroke } = useShapeEditor(engine);
   const sampleColor = useColorSampler(engine);
-  const onFillChange = useCallback((hex: string) => applyEdit({ fill: hex }, false), [applyEdit]);
-  const onFillChangeEnd = useCallback((hex: string) => applyEdit({ fill: hex }, true), [applyEdit]);
-  const onStrokeChange = useCallback((hex: string) => applyEdit({ stroke: hex }, false), [applyEdit]);
-  const onStrokeChangeEnd = useCallback((hex: string) => applyEdit({ stroke: hex }, true), [applyEdit]);
+  const onFillChange = useCallback((hex: string) => setFillColor(hex, false), [setFillColor]);
+  const onFillChangeEnd = useCallback((hex: string) => setFillColor(hex, true), [setFillColor]);
+  const onStrokeChange = useCallback((hex: string) => setStrokeColor(hex, false), [setStrokeColor]);
+  const onStrokeChangeEnd = useCallback((hex: string) => setStrokeColor(hex, true), [setStrokeColor]);
   return (
     <>
       <ColorPicker

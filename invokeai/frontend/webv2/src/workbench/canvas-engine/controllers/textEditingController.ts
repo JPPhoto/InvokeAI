@@ -2,7 +2,13 @@ import type { StructuralCommitResult } from '@workbench/canvas-engine/capabiliti
 import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
-import type { TextEditSession, TextSource, TextToolOptions } from '@workbench/canvas-engine/engineStores';
+import type {
+  ActiveColorPairState,
+  TextEditSession,
+  TextSource,
+  TextStylePatch,
+  TextToolOptions,
+} from '@workbench/canvas-engine/engineStores';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { Vec2 } from '@workbench/canvas-engine/types';
 
@@ -16,6 +22,8 @@ export interface TextEditingControllerOptions {
     set(value: TextEditSession | null): void;
   };
   readonly options: { get(): TextToolOptions };
+  /** The active pair; a new session's color is the foreground at open. */
+  readonly colors: { get(): ActiveColorPairState };
   readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly canEdit: () => boolean;
   readonly isGestureActive: () => boolean;
@@ -50,7 +58,7 @@ export class TextEditingController {
     const options = this.deps.options.get();
     return {
       align: options.align,
-      color: options.color,
+      color: this.deps.colors.get().foreground,
       content,
       fontFamily: options.fontFamily,
       fontSize: options.fontSize,
@@ -100,7 +108,7 @@ export class TextEditingController {
     this.deps.invalidate({ layers: [layerId] });
   }
 
-  updateStyle(patch: Partial<TextToolOptions>): void {
+  updateStyle(patch: TextStylePatch): void {
     const session = this.deps.session.get();
     if (this.disposed || !session) {
       return;

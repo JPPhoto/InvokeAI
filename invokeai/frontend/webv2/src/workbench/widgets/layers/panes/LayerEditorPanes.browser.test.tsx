@@ -75,6 +75,8 @@ vi.mock('@workbench/useCanvasProjectMutationDispatch', () => ({
 }));
 vi.mock('@workbench/widgets/canvas/useCanvasEngine', () => ({ useCanvasEngine: () => harness.engine }));
 
+import { clearMaskTintTarget } from '@workbench/widgets/canvas/color-system/maskTintTarget';
+
 import type { LayerEditorPaneLayout, LayerTreeTabId } from './editorPaneLayout';
 
 import { ColorPane } from './ColorPane';
@@ -174,7 +176,7 @@ const settle = () =>
 
 const IDENTITY = { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 };
 
-type Selection = 'none' | 'layer' | 'group';
+type Selection = 'none' | 'layer' | 'group' | 'mask';
 
 const mount = async (View: typeof PropertiesPane, selection: Selection = 'none') => {
   const base = { ...createInitialWorkbenchState().projects[0]!, id: 'p' };
@@ -183,11 +185,13 @@ const mount = async (View: typeof PropertiesPane, selection: Selection = 'none')
       ? []
       : selection === 'layer'
         ? [layerContract('l0', 'raster', { name: 'Paint', transform: { ...IDENTITY, rotation: 0.5, x: 10.4 } })]
-        : [groupContract('g0', [layerContract('l0', 'raster', { name: 'Paint' })], { name: 'Folder' })];
+        : selection === 'mask'
+          ? [layerContract('m0', 'inpaint_mask', { name: 'Mask' })]
+          : [groupContract('g0', [layerContract('l0', 'raster', { name: 'Paint' })], { name: 'Folder' })];
   harness.project = applyCanvasProjectMutation(base, {
     document: {
       ...createEmptyCanvasDocument(),
-      selectedLayerId: selection === 'none' ? null : selection === 'layer' ? 'l0' : 'g0',
+      selectedLayerId: selection === 'none' ? null : selection === 'layer' ? 'l0' : selection === 'mask' ? 'm0' : 'g0',
       stacks: stacksFrom(nodes),
     },
     type: 'replaceCanvasDocument',
@@ -397,6 +401,32 @@ describe('Color pane', () => {
       await userEvent.click(page.getByRole('button', { exact: true, name: 'Swap foreground and background colors' }));
     });
     expect(canvasValues().activeColors).toEqual({ background: '#000000', foreground: '#ffffff' });
+  });
+
+  it('reveals the Mask Tint target for a selected mask and arms it only explicitly', async () => {
+    clearMaskTintTarget();
+    await mount(ColorPane, 'mask');
+    const tintChip = page.getByRole('button', { exact: true, name: 'Mask tint' });
+    await expect.element(tintChip).toBeVisible();
+    // Revealed, not switched: the pair target keeps the wheel until armed.
+    await expect.element(tintChip).toHaveAttribute('aria-pressed', 'false');
+    const foreground = page.getByRole('button', { exact: true, name: 'Foreground color' });
+    await expect.element(foreground).toHaveAttribute('aria-pressed', 'true');
+    await act(async () => {
+      await userEvent.click(tintChip);
+    });
+    await expect.element(tintChip).toHaveAttribute('aria-pressed', 'true');
+    await expect.element(foreground).toHaveAttribute('aria-pressed', 'false');
+    // The armed target shows the mask's tint, not the pair.
+    expect((page.getByRole('textbox', { exact: true, name: 'Hex color' }).element() as HTMLInputElement).value).toBe(
+      '#e07575'
+    );
+    // A pair chip disarms the tint and returns to the pair.
+    await act(async () => {
+      await userEvent.click(foreground);
+    });
+    await expect.element(tintChip).toHaveAttribute('aria-pressed', 'false');
+    await expect.element(foreground).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('writes swatch picks to the active target', async () => {

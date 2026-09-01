@@ -133,6 +133,63 @@ describe('gradient tool: create when no gradient selected', () => {
     expect(h.commits[0]?.inverse).toEqual({ ids: ['grad-1'], type: 'removeCanvasLayers' });
     expect(h.previewOf()).toBeNull();
   });
+
+  it('resolves the FG→BG pair preset at gesture start', () => {
+    const h = createHarness(makeDoc());
+    h.stores.colorPair.set({ background: '#0000ff', foreground: '#ff0000' });
+    const tool = createGradientTool();
+
+    down(tool, h.ctx, pointer(0, 0));
+    move(tool, h.ctx, pointer(100, 0));
+    up(tool, h.ctx, pointer(100, 0));
+
+    const forward = h.commits[0]?.forward;
+    if (
+      forward?.type === 'addCanvasLayer' &&
+      forward.layer.type === 'raster' &&
+      forward.layer.source.type === 'gradient'
+    ) {
+      expect(forward.layer.source.stops).toEqual([
+        { color: '#ff0000ff', offset: 0 },
+        { color: '#0000ffff', offset: 1 },
+      ]);
+    } else {
+      throw new Error('expected a gradient layer');
+    }
+  });
+
+  it('uses the explicit custom stops verbatim, independent of the pair', () => {
+    const h = createHarness(makeDoc());
+    h.stores.colorPair.set({ background: '#0000ff', foreground: '#ff0000' });
+    h.stores.gradientOptions.set({
+      angle: 0,
+      kind: 'linear',
+      preset: 'custom',
+      stops: [
+        { color: '#11223344', offset: 0 },
+        { color: '#55667788', offset: 1 },
+      ],
+    });
+    const tool = createGradientTool();
+
+    down(tool, h.ctx, pointer(0, 0));
+    move(tool, h.ctx, pointer(100, 0));
+    up(tool, h.ctx, pointer(100, 0));
+
+    const forward = h.commits[0]?.forward;
+    if (
+      forward?.type === 'addCanvasLayer' &&
+      forward.layer.type === 'raster' &&
+      forward.layer.source.type === 'gradient'
+    ) {
+      expect(forward.layer.source.stops).toEqual([
+        { color: '#11223344', offset: 0 },
+        { color: '#55667788', offset: 1 },
+      ]);
+    } else {
+      throw new Error('expected a gradient layer');
+    }
+  });
 });
 
 describe('gradient tool: edit selected gradient layer', () => {

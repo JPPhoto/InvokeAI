@@ -27,6 +27,7 @@ const createTextOptions = () => ({
   createLayerId: () => 'text-1',
   getDocument: () => null,
   invalidate: vi.fn(),
+  colors: { get: () => ({ background: '#ffffff', foreground: '#000000' }) },
   isGestureActive: () => false,
   options: { get: () => ({}) as never },
   session: { get: () => null, set: vi.fn() },

@@ -19,6 +19,7 @@ const createHarness = (document: CanvasDocumentContractV3) => {
   const controller = new TextEditingController({
     canEdit: () => true,
     captureInsertionAnchor: createTestInsertionAnchorCapture('p', () => document?.stacks ?? EMPTY_STACKS),
+    colors: { get: () => ({ background: '#ffffff', foreground: '#123456' }) },
     commitStructural,
     createLayerId: () => 'text-new',
     getDocument: () => document,
@@ -48,6 +49,9 @@ describe('TextEditingController', () => {
     expect(h.getSession()).toBeNull();
     expect(h.commitStructural).toHaveBeenCalledOnce();
     expect(h.commitStructural.mock.calls[0]?.[0]).toBe('Add text');
+    // The session's color is the active foreground at open, not a tool option.
+    const forward = h.commitStructural.mock.calls[0]?.[1] as { layer?: { source?: { color?: string } } };
+    expect(forward.layer?.source?.color).toBe('#123456');
   });
 
   it('uses the registered content reader and cancels empty creates', () => {

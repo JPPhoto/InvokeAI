@@ -30,6 +30,15 @@ export const CanvasColorFeed = ({ engine }: { engine: CanvasEngineHandle | null 
     }
   }, [engine, colorPair.foreground]);
 
+  // The whole pair, for gesture-start reads: new shapes and text sessions
+  // capture it when they begin, and the gradient FG→BG preset resolves it.
+  useEffect(() => {
+    if (!engine) {
+      return;
+    }
+    engine.interaction.set('colorPair', { background: colorPair.background, foreground: colorPair.foreground });
+  }, [engine, colorPair.background, colorPair.foreground]);
+
   useEffect(() => {
     if (!engine) {
       return;

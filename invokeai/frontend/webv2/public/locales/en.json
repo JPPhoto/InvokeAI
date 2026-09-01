@@ -2421,7 +2421,8 @@
         "textLineHeight": "Line height",
         "textSize": "Font size",
         "textStyle": "Style",
-        "textWeight": "Weight"
+        "textWeight": "Weight",
+        "gradientPairPreset": "Foreground to background preset"
       },
       "tools": {
         "bbox": "Generation frame",
@@ -2902,7 +2903,8 @@
           "horizontal": "Horizontal",
           "solid": "Solid",
           "vertical": "Vertical"
-        }
+        },
+        "editInColorPane": "Edit tint in the Color pane"
       },
       "menuGroups": {
         "layers": "Layers",
@@ -3009,7 +3011,8 @@
         "removeSwatchHint": "{{color}} — right-click or press Delete to remove",
         "resize": "Resize color pane",
         "swatches": "Swatches",
-        "tabs": "Color panes"
+        "tabs": "Color panes",
+        "maskTint": "Mask tint"
       },
       "historyPane": {
         "count_one": "{{count}} step",
