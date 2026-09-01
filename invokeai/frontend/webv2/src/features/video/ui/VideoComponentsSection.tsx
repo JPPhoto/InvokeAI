@@ -15,12 +15,10 @@ import { ModelSelect } from '@features/models/react';
 import {
   getVideoComponentSectionPolicy,
   getVideoModelSelectionResult,
-  getVideoTransformerSelectionResult,
   getWanExpertWiringWarning,
 } from '@features/video/core/videoPolicies';
 import { Field } from '@platform/ui';
 import { Button } from '@platform/ui/Button';
-import { toaster } from '@platform/ui/toaster';
 import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -183,44 +181,10 @@ export const VideoComponentsSection = memo(function VideoComponentsSection({
   values: VideoWidgetValues;
 }) {
   const { t } = useTranslation();
-  const models = useModelsSelector((snapshot) => snapshot.models);
-  const modelsLoaded = useModelsSelector((snapshot) => snapshot.status) === 'loaded';
   const policy = useMemo(() => getVideoComponentSectionPolicy(values.model ?? undefined, values), [values]);
   const ctx = useMemo<VideoComponentPolicyContext | null>(
     () => (values.model ? { model: values.model, selectedComponents: values, settings: values } : null),
     [values]
-  );
-  // The H3 transformer slot decides the TASK (fl2va's five modes vs ref2va's reference
-  // mode), so changing it must run the same reconciliation a model selection runs — media
-  // the new task cannot consume is cleared, and the accelerator re-resolves to the task's
-  // own Turbo distillation. Judged against a loaded catalog only, like the expert swap: a
-  // transition computed against an empty catalog would strip the accelerator silently.
-  const handlePatch = useCallback(
-    (patch: Partial<VideoWidgetValues>) => {
-      if ('h3TransformerModel' in patch && values.model && modelsLoaded) {
-        const transformer = patch.h3TransformerModel ?? null;
-        const result = getVideoTransformerSelectionResult({
-          currentSettings: values,
-          model: values.model,
-          models,
-          transformer,
-        });
-
-        onPatch({ ...result.settings });
-        if (result.clearedLabels.length > 0) {
-          toaster.create({
-            description: t('widgets.video.settingsAdjustedDescription', {
-              labels: result.clearedLabels.join(', '),
-            }),
-            title: t('widgets.video.settingsAdjusted'),
-            type: 'info',
-          });
-        }
-        return;
-      }
-      onPatch(patch);
-    },
-    [models, modelsLoaded, onPatch, t, values]
   );
 
   if (!ctx || policy.slots.length === 0) {
@@ -240,7 +204,7 @@ export const VideoComponentsSection = memo(function VideoComponentsSection({
             ctx={ctx}
             slot={slot}
             value={values[slot.key as VideoComponentValueKey]}
-            onPatch={handlePatch}
+            onPatch={onPatch}
           />
         ))}
         <WanExpertWiringNotice values={values} onPatch={onPatch} />

@@ -17,11 +17,10 @@ import {
   getVideoModelSelectionResult,
   getVideoModes,
   getVideoPromptPolicy,
-  getVideoTransformerSelectionResult,
   getVideoValidationReasons,
   getWanExpertWiringWarning,
-  resolveEffectiveVideoModel,
   isSupportedVideoModel,
+  isVideoModelSelectable,
   isValidVideoNumFrames,
   snapVideoNumFrames,
   WAN_LIGHTNING_ACCELERATOR,
@@ -82,10 +81,23 @@ describe('isSupportedVideoModel', () => {
     expect(isSupportedVideoModel(wanModel('ti2v_5b', 'checkpoint'))).toBe(true);
   });
 
-  it('accepts MiniMax H3 mains only in Diffusers format', () => {
+  it('accepts MiniMax H3 mains in Diffusers and single-file checkpoint formats', () => {
     expect(isSupportedVideoModel(h3Model('diffusers'))).toBe(true);
-    // Single-file H3 checkpoints are transformer overrides, not selectable mains.
-    expect(isSupportedVideoModel(h3Model('checkpoint'))).toBe(false);
+    // The single-file transformer checkpoint IS the model identity now.
+    expect(isSupportedVideoModel(h3Model('checkpoint'))).toBe(true);
+    expect(isSupportedVideoModel({ ...h3Model('gguf_quantized'), format: 'gguf_quantized' })).toBe(false);
+  });
+
+  it('offers only runnable identity-bearing H3 models in the top selector', () => {
+    // Checkpoints of either task variant and full FL2VA Diffusers installs are
+    // selectable; a components-only folder belongs in the Model Components
+    // slot, and a Ref2VA folder's transformer weights are not folder-loadable.
+    expect(isVideoModelSelectable(h3Model('checkpoint'))).toBe(true);
+    expect(isVideoModelSelectable({ ...h3Model('checkpoint'), variant: 'ref2va' })).toBe(true);
+    expect(isVideoModelSelectable(h3Model('diffusers'))).toBe(true);
+    expect(isVideoModelSelectable({ ...h3Model('diffusers'), components_only: true })).toBe(false);
+    expect(isVideoModelSelectable({ ...h3Model('diffusers'), variant: 'ref2va' })).toBe(false);
+    expect(isVideoModelSelectable(wanModel('ti2v_5b', 'checkpoint'))).toBe(true);
   });
 
   it('rejects non-video bases and non-main types', () => {
@@ -631,44 +643,70 @@ describe('component section policy', () => {
     ).not.toContain('wanLowNoiseModel');
   });
 
-  it('requires both single-file overrides for a components-only MiniMax H3 install', () => {
-    // The slim "MiniMax H3 Components" folder carries tokenizer/processor/VAEs
-    // but no transformer or text-encoder weights (backend `components_only`):
-    // without the gate, Invoke enables and the loader fails mid-generation.
-    const componentsOnly = { ...h3Model(), components_only: true };
-    const bare = settingsFor(componentsOnly);
+  it('requires a component source (and a conditional text encoder) for a single-file H3 main', () => {
+    // The single-file checkpoint carries only the transformer; the loader
+    // sources tokenizer/processor/VAEs from a Diffusers install in the Model
+    // Components slot. A components-only source has no text-encoder weights,
+    // so the single-file Qwen3-VL encoder becomes required with it.
+    const checkpoint = h3Model('checkpoint');
+    const bare = settingsFor(checkpoint);
+    const componentsOnly = { ...h3Model('diffusers', 'h3-components'), components_only: true };
+    const encoder = { base: 'minimax-h3', key: 'h3-te-int8', name: 'H3 Text Encoder', type: 'qwen3_vl_encoder' };
 
-    expect(getVideoComponentSectionPolicy(componentsOnly, bare).defaultOpen).toBe(true);
+    expect(getVideoComponentSectionPolicy(checkpoint, bare).defaultOpen).toBe(true);
+    expect(getVideoComponentSectionPolicy(checkpoint, bare).slots.map((slot) => slot.key)).toEqual([
+      'componentSourceModel',
+      'h3TextEncoderModel',
+    ]);
 
-    const reasons = getVideoValidationReasons(componentsOnly, bare);
-
-    expect(reasons).toContainEqual(expect.stringContaining('select a single-file Transformer'));
-    expect(reasons).toContainEqual(expect.stringContaining('select a single-file Text encoder'));
-
-    // Both overrides selected → the gate opens.
-    const filled = settingsFor(componentsOnly, {
-      h3TextEncoderModel: { base: 'minimax-h3', key: 'h3-te-int8', name: 'H3 Text Encoder', type: 'qwen3_vl_encoder' },
-      h3TransformerModel: {
-        base: 'minimax-h3',
-        format: 'checkpoint',
-        key: 'h3-tf-int8',
-        name: 'H3 Transformer',
-        type: 'main',
-      },
-    });
-
-    expect(getVideoValidationReasons(componentsOnly, filled)).toEqual([]);
-
-    // One override alone is not enough.
-    expect(getVideoValidationReasons(componentsOnly, { ...filled, h3TextEncoderModel: null })).toContainEqual(
-      expect.stringContaining('select a single-file Text encoder')
+    expect(getVideoValidationReasons(checkpoint, bare)).toContainEqual(
+      expect.stringContaining('select a Diffusers MiniMax H3 install under Model Components')
     );
 
-    // A full Diffusers install keeps both slots optional.
+    // A full Diffusers source alone satisfies both slots.
+    expect(getVideoValidationReasons(checkpoint, settingsFor(checkpoint, { componentSourceModel: h3Model() }))).toEqual(
+      []
+    );
+
+    // A components-only source still needs the single-file encoder.
+    expect(
+      getVideoValidationReasons(checkpoint, settingsFor(checkpoint, { componentSourceModel: componentsOnly }))
+    ).toContainEqual(expect.stringContaining('select a single-file Text encoder'));
+    expect(
+      getVideoValidationReasons(
+        checkpoint,
+        settingsFor(checkpoint, { componentSourceModel: componentsOnly, h3TextEncoderModel: encoder })
+      )
+    ).toEqual([]);
+
+    // The source slot lists only Diffusers H3 installs.
+    const slot = getVideoComponentSectionPolicy(checkpoint, bare).slots[0];
+    const ctx = { model: checkpoint, selectedComponents: bare, settings: bare };
+
+    expect(slot?.filter?.(h3Model(), ctx)).toBe(true);
+    expect(slot?.filter?.(componentsOnly, ctx)).toBe(true);
+    expect(slot?.filter?.(h3Model('checkpoint', 'other-ckpt'), ctx)).toBe(false);
+    expect(slot?.filter?.(wanModel('i2v_a14b', 'diffusers'), ctx)).toBe(false);
+
+    // A full Diffusers install at top needs nothing.
     const full = h3Model();
 
     expect(getVideoValidationReasons(full, settingsFor(full))).toEqual([]);
     expect(getVideoComponentSectionPolicy(full, settingsFor(full)).defaultOpen).toBe(false);
+  });
+
+  it('steers a legacy components-only H3 main at top toward the checkpoint-as-model shape', () => {
+    const componentsOnly = { ...h3Model(), components_only: true };
+
+    expect(getVideoValidationReasons(componentsOnly, settingsFor(componentsOnly))).toEqual([
+      expect.stringContaining('Select a single-file MiniMax H3 transformer as the model'),
+    ]);
+    // The Ref2VA folder install cannot folder-load its transformer weights.
+    const ref2vaFolder = { ...h3Model(), variant: 'ref2va' };
+
+    expect(getVideoValidationReasons(ref2vaFolder, settingsFor(ref2vaFolder))).toEqual([
+      expect.stringContaining('Select a single-file Ref2VA transformer as the model'),
+    ]);
   });
 
   it('offers the component-source slot only for single-file mains, never listing the main itself', () => {
@@ -746,28 +784,13 @@ describe('component section policy', () => {
     expect(reasons).not.toContain('Video needs a Wan T5 Encoder for Wan models.');
   });
 
-  it('offers only optional single-file overrides for MiniMax H3', () => {
+  it('offers only the optional text-encoder override for a full Diffusers H3 main', () => {
     const model = h3Model();
     const policy = getVideoComponentSectionPolicy(model, settingsFor(model));
 
     expect(policy.defaultOpen).toBe(false);
-    expect(policy.slots.map((slot) => slot.key)).toEqual(['h3TransformerModel', 'h3TextEncoderModel']);
+    expect(policy.slots.map((slot) => slot.key)).toEqual(['h3TextEncoderModel']);
     expect(policy.slots.every((slot) => !slot.required)).toBe(true);
-
-    const transformerSlot = policy.slots[0];
-    const ctx = { model, selectedComponents: settingsFor(model), settings: settingsFor(model) };
-
-    expect(transformerSlot?.filter?.(h3Model('checkpoint'), ctx)).toBe(true);
-    expect(transformerSlot?.filter?.(h3Model('diffusers'), ctx)).toBe(false);
-  });
-
-  it('keeps Ref2VA transformers pickable - the variant switches the panel to the reference mode', () => {
-    const model = h3Model();
-    const policy = getVideoComponentSectionPolicy(model, settingsFor(model));
-    const transformerSlot = policy.slots[0];
-    const ctx = { model, selectedComponents: settingsFor(model), settings: settingsFor(model) };
-
-    expect(transformerSlot?.filter?.({ ...h3Model('checkpoint'), variant: 'ref2va' }, ctx)).toBe(true);
   });
 });
 
@@ -927,7 +950,9 @@ describe('getVideoModelSelectionResult', () => {
 
 describe('getVideoValidationReasons', () => {
   it('blocks unsupported models', () => {
-    expect(getVideoValidationReasons(h3Model('checkpoint'), settingsFor())).toEqual([
+    const sdxl = { base: 'sdxl', format: 'checkpoint', key: 'sdxl', name: 'SDXL', type: 'main' } as MainModelConfig;
+
+    expect(getVideoValidationReasons(sdxl, settingsFor())).toEqual([
       'Video needs a supported video model before it can be invoked.',
     ]);
   });
@@ -1046,7 +1071,7 @@ describe('getVideoModelAvailabilityReasons', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Ref2VA: effective variant, reference mode, transitions
+// Ref2VA: model-borne variant, reference mode, transitions
 
 const ref2vaTransformer = (key = 'h3-ref2va-ckpt'): MainModelConfig => ({
   ...h3Model('checkpoint', key),
@@ -1062,32 +1087,14 @@ const fl2vaTransformer = (key = 'h3-fl2va-ckpt'): MainModelConfig => ({
 
 const imageReference = { detail: 'max', image: { height: 4, image_name: 'ref.png', width: 4 }, kind: 'image' } as const;
 
-describe('resolveEffectiveVideoModel', () => {
-  it('overrides the H3 variant with the selected transformer checkpoint', () => {
-    const model = h3Model();
-    const settings = settingsFor(model, { h3TransformerModel: ref2vaTransformer() });
-
-    expect(resolveEffectiveVideoModel(model, settings)?.variant).toBe('ref2va');
-    expect(resolveEffectiveVideoModel(model, settingsFor(model))?.variant).toBe('fl2va');
-  });
-
-  it('never touches non-H3 models', () => {
-    const model = wanModel('t2v_a14b', 'diffusers');
-
-    expect(resolveEffectiveVideoModel(model, settingsFor(model, { h3TransformerModel: ref2vaTransformer() }))).toBe(
-      model
-    );
-  });
-});
-
 describe('reference mode policy', () => {
-  it('a ref2va transformer switches the panel to the reference-only mode set', () => {
-    const model = h3Model();
-    const settings = settingsFor(model, { h3TransformerModel: ref2vaTransformer() });
+  it('a ref2va transformer at top switches the panel to the reference-only mode set', () => {
+    const model = ref2vaTransformer();
+    const settings = settingsFor(model);
 
     expect(getVideoModelPolicy(model, settings).modes).toEqual(['reference']);
     expect(getVideoModelPolicy(model, settings).references).toEqual({ maxImages: 9, maxVideos: 3 });
-    expect(getVideoModelPolicy(model, settingsFor(model)).references).toBeNull();
+    expect(getVideoModelPolicy(h3Model(), settingsFor(h3Model())).references).toBeNull();
   });
 
   it('an unknown variant still falls back to fl2va, but ref2va never does', () => {
@@ -1098,9 +1105,11 @@ describe('reference mode policy', () => {
   });
 
   it('validates the reference rules', () => {
-    const model = h3Model();
+    const model = ref2vaTransformer();
+    // A full Diffusers source keeps the component slots satisfied, so only
+    // the reference rules under test can produce reasons.
     const withRefTransformer = (overrides: Partial<VideoSettings>) =>
-      settingsFor(model, { h3TransformerModel: ref2vaTransformer(), ...overrides });
+      settingsFor(model, { componentSourceModel: h3Model(), ...overrides });
 
     expect(getVideoValidationReasons(model, withRefTransformer({}))).toContain(
       'Reference-to-video needs at least one image or video reference.'
@@ -1132,7 +1141,7 @@ describe('reference mode policy', () => {
     expect(getVideoValidationReasons(model, withRefTransformer({ references: [imageReference] }))).toEqual([]);
   });
 
-  it('rejects references on an fl2va-effective panel', () => {
+  it('rejects references on an fl2va panel', () => {
     const model = h3Model();
     const reasons = getVideoValidationReasons(model, settingsFor(model, { references: [imageReference] }));
 
@@ -1140,30 +1149,39 @@ describe('reference mode policy', () => {
   });
 });
 
-describe('getVideoTransformerSelectionResult', () => {
+describe('H3 task switches through the top model selection', () => {
   it('clears frame media when switching to a ref2va transformer, and references on the way back', () => {
-    const model = h3Model();
+    const flModel = h3Model();
     const first = { height: 4, image_name: 'kf.png', width: 4 };
-    const toRef = getVideoTransformerSelectionResult({
-      currentSettings: settingsFor(model, { firstFrameImage: first, modelKey: model.key }),
-      model,
-      models: [model],
-      transformer: ref2vaTransformer(),
+    const toRef = getVideoModelSelectionResult({
+      currentSettings: settingsFor(flModel, { firstFrameImage: first, modelKey: flModel.key }),
+      model: ref2vaTransformer(),
+      models: [flModel],
     });
 
     expect(toRef.settings.firstFrameImage).toBeNull();
-    expect(toRef.settings.h3TransformerModel?.variant).toBe('ref2va');
     expect(toRef.clearedLabels).toContain('First frame');
 
-    const backToFl = getVideoTransformerSelectionResult({
+    const backToFl = getVideoModelSelectionResult({
       currentSettings: { ...toRef.settings, references: [imageReference] },
-      model,
-      models: [model],
-      transformer: fl2vaTransformer(),
+      model: fl2vaTransformer(),
+      models: [flModel],
     });
 
     expect(backToFl.settings.references).toEqual([]);
     expect(backToFl.clearedLabels).toContain('References');
+  });
+
+  it('a checkpoint-to-checkpoint switch keeps a compatible component source', () => {
+    const source = h3Model();
+    const from = settingsFor(fl2vaTransformer(), { componentSourceModel: source, modelKey: fl2vaTransformer().key });
+    const result = getVideoModelSelectionResult({
+      currentSettings: from,
+      model: ref2vaTransformer(),
+      models: [source],
+    });
+
+    expect(result.settings.componentSourceModel?.key).toBe(source.key);
   });
 });
 
@@ -1184,13 +1202,48 @@ describe('ref2va accelerator auto-pick', () => {
     expect(findMiniMaxH3TurboLora([FL2VA_TURBO], { variant: 'ref2va' })).toBeNull();
   });
 
-  it('the accelerator toggle resolves through the effective variant (4-step ref2v turbo)', () => {
-    const model = h3Model();
-    const settings = settingsFor(model, { h3TransformerModel: ref2vaTransformer() });
+  it('the accelerator toggle resolves through the model-borne variant (4-step ref2v turbo)', () => {
+    const model = ref2vaTransformer();
+    const settings = settingsFor(model);
     const result = getAcceleratorToggleResult(settings, model, [model, REF2V_TURBO, FL2VA_TURBO], true);
 
     expect(result.missingLoras).toBe(false);
     expect(result.settings.acceleratorLoraKeys).toEqual(['ref2v-turbo']);
     expect(result.settings.steps).toBe(4);
+  });
+});
+
+describe('H3 component-source seeding', () => {
+  it('defaults seed a component source for a checkpoint main, preferring a full install', () => {
+    const checkpoint = h3Model('checkpoint');
+    const componentsOnly = { ...h3Model('diffusers', 'h3-components'), components_only: true };
+    const full = h3Model();
+
+    expect(getDefaultVideoSettings(checkpoint, [componentsOnly, full]).componentSourceModel?.key).toBe(full.key);
+    expect(getDefaultVideoSettings(checkpoint, [componentsOnly]).componentSourceModel?.key).toBe(componentsOnly.key);
+    expect(getDefaultVideoSettings(checkpoint, []).componentSourceModel).toBeNull();
+    // Diffusers mains never get one seeded.
+    expect(getDefaultVideoSettings(full, [full]).componentSourceModel).toBeNull();
+  });
+
+  it('model selection fills an empty component-source slot but keeps an explicit pick', () => {
+    const checkpoint = h3Model('checkpoint');
+    const componentsOnly = { ...h3Model('diffusers', 'h3-components'), components_only: true };
+    const full = h3Model();
+    const fromEmpty = getVideoModelSelectionResult({
+      currentSettings: settingsFor(h3Model(), { modelKey: h3Model().key }),
+      model: checkpoint,
+      models: [full, componentsOnly],
+    });
+
+    expect(fromEmpty.settings.componentSourceModel?.key).toBe(full.key);
+
+    const explicit = getVideoModelSelectionResult({
+      currentSettings: settingsFor(checkpoint, { componentSourceModel: componentsOnly, modelKey: checkpoint.key }),
+      model: checkpoint,
+      models: [full, componentsOnly],
+    });
+
+    expect(explicit.settings.componentSourceModel?.key).toBe(componentsOnly.key);
   });
 });

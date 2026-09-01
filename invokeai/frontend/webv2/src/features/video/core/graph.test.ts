@@ -433,20 +433,32 @@ describe('compileVideoGraph — MiniMax H3', () => {
     expect(nodeOfType(backendGraph, 'core_metadata').generation_mode).toBe('minimax_h3_extend_video');
   });
 
-  it('passes the single-file overrides to the loader and the metadata', () => {
-    const transformer = { ...h3Model('h3-int8'), format: 'checkpoint' };
+  it('maps a single-file main onto the loader: component source as model, checkpoint as override', () => {
+    const checkpoint = { ...h3Model('h3-int8'), format: 'checkpoint' };
     const encoder = { base: 'minimax-h3', key: 'h3-te', name: 'H3 TE int8', type: 'qwen3_vl_encoder' as const };
-    const settings = settingsFor(model, { h3TextEncoderModel: encoder, h3TransformerModel: transformer });
-    const { backendGraph } = compileVideoGraph(settings, model);
+    const settings = settingsFor(checkpoint, { componentSourceModel: model, h3TextEncoderModel: encoder });
+    const { backendGraph } = compileVideoGraph(settings, checkpoint);
 
     expect(nodeOfType(backendGraph, 'minimax_h3_model_loader')).toMatchObject({
+      model: { key: model.key },
       text_encoder_model: { key: 'h3-te' },
       transformer_model: { key: 'h3-int8' },
     });
     expect(nodeOfType(backendGraph, 'core_metadata')).toMatchObject({
+      minimax_h3_component_source: { key: model.key },
       minimax_h3_text_encoder_model: { key: 'h3-te' },
-      minimax_h3_transformer_model: { key: 'h3-int8' },
+      model: { key: 'h3-int8' },
     });
+  });
+
+  it('a full Diffusers main is the loader model directly, with no overrides recorded', () => {
+    const { backendGraph } = compileVideoGraph(settingsFor(model), model);
+    const loader = nodeOfType(backendGraph, 'minimax_h3_model_loader');
+    const metadata = nodeOfType(backendGraph, 'core_metadata');
+
+    expect(loader).toMatchObject({ model: { key: model.key } });
+    expect(loader.transformer_model).toBeUndefined();
+    expect(metadata.minimax_h3_component_source).toBeUndefined();
   });
 
   it('refuses to compile fractional or off-grid frame counts', () => {
@@ -455,8 +467,8 @@ describe('compileVideoGraph — MiniMax H3', () => {
 });
 
 describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
-  const model = h3Model();
-  const ref2vaTransformer: MainModelConfig = {
+  const componentSource = h3Model();
+  const model: MainModelConfig = {
     base: 'minimax-h3',
     format: 'checkpoint',
     key: 'h3-ref2va-ckpt',
@@ -465,7 +477,7 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     variant: 'ref2va',
   };
   const referenceSettings = settingsFor(model, {
-    h3TransformerModel: ref2vaTransformer,
+    componentSourceModel: componentSource,
     references: [
       {
         clip: { endFrame: 47, fps: 24, height: 480, numFrames: 48, startFrame: 2, video_name: 'ref.mp4', width: 832 },
@@ -533,14 +545,20 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     ]);
   });
 
-  it('refuses to compile references on an fl2va transformer', () => {
-    const fl2vaSettings = { ...referenceSettings, h3TransformerModel: null };
+  it('refuses to compile references on an fl2va model', () => {
+    expect(() => compileVideoGraph({ ...referenceSettings, componentSourceModel: null }, componentSource)).toThrow(
+      /reference-conditioned/
+    );
+  });
 
-    expect(() => compileVideoGraph(fl2vaSettings, model)).toThrow(/reference-conditioned/);
+  it('refuses to compile a single-file main with no component source', () => {
+    expect(() => compileVideoGraph({ ...referenceSettings, componentSourceModel: null }, model)).toThrow(
+      /Model Components/
+    );
   });
 
   it('fl2va graphs are unchanged by the ref2va machinery', () => {
-    const { backendGraph } = compileVideoGraph(settingsFor(model), model);
+    const { backendGraph } = compileVideoGraph(settingsFor(componentSource), componentSource);
 
     expect(nodesOfType(backendGraph, 'minimax_h3_reference_conditioning')).toHaveLength(0);
     expect(nodesOfType(backendGraph, 'collect')).toHaveLength(0);

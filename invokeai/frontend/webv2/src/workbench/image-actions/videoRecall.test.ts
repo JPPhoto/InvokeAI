@@ -463,3 +463,116 @@ describe('ref2va reference recall', () => {
     expect(result?.values.firstFrameImage).toBeNull();
   });
 });
+
+describe('model-position recall shapes', () => {
+  const install = h3Model();
+  const checkpoint: MainModelConfig = {
+    base: 'minimax-h3',
+    format: 'checkpoint',
+    key: 'h3-ref2va-ckpt',
+    name: 'MiniMax H3 Ref2VA Transformer (int8, pruned)',
+    type: 'main',
+    variant: 'ref2va',
+  };
+  const ref2vTurbo = {
+    base: 'minimax-h3',
+    key: 'ref2v-turbo',
+    name: 'MiniMax H3 Ref2V Turbo LoRA',
+    type: 'lora' as const,
+  };
+  const catalog = [install, checkpoint, ref2vTurbo];
+  const currentValues = { ...createDefaultVideoWidgetValues([install]) };
+
+  it('promotes a legacy transformer-override recording onto the model slot before deriving the accelerator', () => {
+    // Pre model-positions metadata: the Diffusers install as `model`, the
+    // checkpoint as an override extra. The 4-step Ref2V Turbo derivation only
+    // succeeds if the promote lands first — it needs the ref2va variant.
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: {
+        generation_mode: 'minimax_h3_ref2v',
+        loras: [{ model: { key: ref2vTurbo.key }, weight: 1 }],
+        minimax_h3_references: [{ detail: 'max', image_name: 'ref.png', kind: 'image' }],
+        minimax_h3_transformer_model: { key: checkpoint.key },
+        model: { key: install.key },
+        num_frames: 124,
+        steps: 4,
+      },
+      models: catalog,
+    });
+
+    expect(result?.values.model?.key).toBe(checkpoint.key);
+    expect(result?.values.componentSourceModel?.key).toBe(install.key);
+    expect(result?.values.h3TransformerModel).toBeNull();
+    expect(result?.values.modelKey).toBe(checkpoint.key);
+    expect(result?.values).toMatchObject({ acceleratorEnabled: true, acceleratorLoraKeys: [ref2vTurbo.key] });
+  });
+
+  it('recalls the recorded component source for a checkpoint-main recording', () => {
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: {
+        generation_mode: 'minimax_h3_ref2v',
+        minimax_h3_component_source: { key: install.key },
+        minimax_h3_references: [{ detail: 'max', image_name: 'ref.png', kind: 'image' }],
+        model: { key: checkpoint.key },
+        num_frames: 124,
+      },
+      models: catalog,
+    });
+
+    expect(result?.fields).toContain('model');
+    expect(result?.values.model?.key).toBe(checkpoint.key);
+    expect(result?.values.componentSourceModel?.key).toBe(install.key);
+  });
+  it('promotes the recorded transformer even when the recorded install itself is gone', () => {
+    // The transformer defines the run; the panel's current model (a
+    // checkpoint) stands in for the missing install and must not suppress the
+    // promote — pre-fix the references were dropped as unsupported.
+    const panelCheckpoint: MainModelConfig = {
+      base: 'minimax-h3',
+      format: 'checkpoint',
+      key: 'h3-fl2va-ckpt',
+      name: 'MiniMax H3 FL2VA Transformer (int8)',
+      type: 'main',
+      variant: 'fl2va',
+    };
+    const result = buildVideoRecallSettings({
+      currentValues: { ...currentValues, model: panelCheckpoint, modelKey: panelCheckpoint.key },
+      kind: 'all',
+      metadata: {
+        generation_mode: 'minimax_h3_ref2v',
+        minimax_h3_references: [{ detail: 'max', image_name: 'ref.png', kind: 'image' }],
+        minimax_h3_transformer_model: { key: checkpoint.key },
+        model: { key: 'h3-install-gone' },
+        num_frames: 124,
+      },
+      models: [panelCheckpoint, checkpoint],
+    });
+
+    expect(result?.values.model?.key).toBe(checkpoint.key);
+    expect(result?.fields).toContain('model');
+    expect(result?.values.h3TransformerModel).toBeNull();
+    expect(result?.mediaNames.references).toHaveLength(1);
+  });
+
+  it('drops a corrupt transformer-override recording that names a non-main', () => {
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: {
+        generation_mode: 'minimax_h3_ref2v',
+        minimax_h3_references: [{ detail: 'max', image_name: 'ref.png', kind: 'image' }],
+        minimax_h3_transformer_model: { key: ref2vTurbo.key },
+        model: { key: install.key },
+        num_frames: 124,
+      },
+      models: catalog,
+    });
+
+    expect(result?.values.model?.key).toBe(install.key);
+    expect(result?.values.h3TransformerModel).toBeNull();
+  });
+});
