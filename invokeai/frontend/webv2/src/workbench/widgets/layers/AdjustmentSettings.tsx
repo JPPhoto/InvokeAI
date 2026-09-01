@@ -1,4 +1,4 @@
-import type { SliderValueChangeDetails } from '@chakra-ui/react';
+import type { SelectValueChangeDetails, SliderValueChangeDetails } from '@chakra-ui/react';
 import type {
   CanvasAdjustmentCurves,
   CanvasAdjustmentEntry,
@@ -195,6 +195,20 @@ const AdjustmentEntryEditor = ({
           />
         </Stack>
       );
+    case 'exposure':
+      return (
+        <ScalarSlider
+          field="stops"
+          formatValue={formatStops}
+          label={t('widgets.layers.adjustments.exposure')}
+          max={5}
+          min={-5}
+          step={0.05}
+          value={entry.stops}
+          onCommit={handleScalarCommit}
+          onLive={handleScalarLive}
+        />
+      );
     case 'hsl':
       return (
         <ScalarSlider
@@ -239,7 +253,7 @@ const AdjustmentEntryEditor = ({
   }
 };
 
-type ScalarField = 'brightness' | 'contrast' | 'saturation' | 'rotation';
+type ScalarField = 'brightness' | 'contrast' | 'saturation' | 'rotation' | 'stops';
 type LevelsEntry = Extract<CanvasAdjustmentEntry, { type: 'levels' }>;
 
 const SCALAR_LABEL_KEYS: Record<ScalarField, string> = {
@@ -247,9 +261,13 @@ const SCALAR_LABEL_KEYS: Record<ScalarField, string> = {
   contrast: 'widgets.layers.adjustments.contrast',
   rotation: 'widgets.layers.adjustments.hue',
   saturation: 'widgets.layers.adjustments.saturation',
+  stops: 'widgets.layers.adjustments.exposure',
 };
 
 const formatDegrees = (value: number): string => `${Math.round(value)}°`;
+const formatStops = (value: number): string => `${value > 0 ? '+' : ''}${value.toFixed(2)} EV`;
+
+const LEVELS_CHANNELS = ['rgb', 'r', 'g', 'b'] as const;
 
 const ScalarSlider = ({
   field,
@@ -339,6 +357,27 @@ const LevelsEditor = ({
     [t]
   );
 
+  const channelCollection = useMemo(
+    () =>
+      createListCollection({
+        items: LEVELS_CHANNELS.map((channel) => ({
+          label: t(`widgets.layers.adjustments.channels.${channel}`),
+          value: channel,
+        })),
+      }),
+    [t]
+  );
+  const channelValue = useMemo(() => [entry.channel ?? 'rgb'], [entry.channel]);
+  const handleChannelChange = useCallback(
+    ({ value: v }: SelectValueChangeDetails) => {
+      const channel = v[0] as LevelsEntry['channel'] | undefined;
+      if (channel && channel !== (entry.channel ?? 'rgb')) {
+        onCommit({ channel });
+      }
+    },
+    [entry.channel, onCommit]
+  );
+
   const rangePatch = useCallback(
     (v: number[], black: 'inBlack' | 'outBlack', white: 'inWhite' | 'outWhite'): Partial<LevelsEntry> | null =>
       v[0] !== undefined && v[1] !== undefined ? { [black]: v[0], [white]: v[1] } : null,
@@ -399,6 +438,17 @@ const LevelsEditor = ({
 
   return (
     <Stack gap="3">
+      <Field label={t('widgets.layers.adjustments.channel')}>
+        <Select
+          aria-label={t('widgets.layers.adjustments.channel')}
+          collection={channelCollection}
+          positioning={SELECT_POSITIONING}
+          size="xs"
+          value={channelValue}
+          valueText={t(`widgets.layers.adjustments.channels.${entry.channel ?? 'rgb'}`)}
+          onValueChange={handleChannelChange}
+        />
+      </Field>
       <Field label={t('widgets.layers.adjustments.inputLevels')}>
         <Slider
           aria-label={inputAria}

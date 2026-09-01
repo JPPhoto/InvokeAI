@@ -123,6 +123,8 @@ export const isIdentityAdjustmentEntry = (entry: CanvasAdjustmentEntry): boolean
   switch (entry.type) {
     case 'brightness-contrast':
       return entry.brightness === 0 && entry.contrast === 0;
+    case 'exposure':
+      return entry.stops === 0;
     case 'levels':
       return (
         entry.inBlack === 0 &&
@@ -193,6 +195,27 @@ const invertLut = (): Uint8ClampedArray => {
   return lut;
 };
 
+const srgbToLinear = (v: number): number => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+const linearToSrgb = (v: number): number => (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);
+
+/** True exposure: 2^stops in linear light, not a gamma-space brightness multiply. */
+const exposureLut = (stops: number): Uint8ClampedArray => {
+  const factor = Math.pow(2, stops);
+  const lut = new Uint8ClampedArray(LUT_SIZE);
+  for (let i = 0; i < LUT_SIZE; i++) {
+    lut[i] = clamp255(Math.round(linearToSrgb(Math.min(1, srgbToLinear(i / 255) * factor)) * 255));
+  }
+  return lut;
+};
+
+const identityLut = (): Uint8ClampedArray => {
+  const lut = new Uint8ClampedArray(LUT_SIZE);
+  for (let i = 0; i < LUT_SIZE; i++) {
+    lut[i] = i;
+  }
+  return lut;
+};
+
 /** The SVG feColorMatrix `hueRotate` matrix: luminance-preserving rotation around the gray axis. */
 const hueRotateMatrix = (degrees: number): number[] => {
   const radians = (degrees * Math.PI) / 180;
@@ -221,16 +244,28 @@ const composeLut = (inner: Uint8ClampedArray, outer: Uint8ClampedArray): Uint8Cl
 };
 
 const entryLuts = (
-  entry: Extract<CanvasAdjustmentEntry, { type: 'brightness-contrast' | 'levels' | 'invert' | 'curves' }>
+  entry: Extract<CanvasAdjustmentEntry, { type: 'brightness-contrast' | 'exposure' | 'levels' | 'invert' | 'curves' }>
 ): { r: Uint8ClampedArray; g: Uint8ClampedArray; b: Uint8ClampedArray } => {
   if (entry.type === 'curves') {
     return { b: buildCurveLut(entry.curves.b), g: buildCurveLut(entry.curves.g), r: buildCurveLut(entry.curves.r) };
   }
+  if (entry.type === 'levels') {
+    const lut = levelsLut(entry);
+    const channel = entry.channel ?? 'rgb';
+    if (channel === 'rgb') {
+      return { b: lut, g: lut, r: lut };
+    }
+    return {
+      b: channel === 'b' ? lut : identityLut(),
+      g: channel === 'g' ? lut : identityLut(),
+      r: channel === 'r' ? lut : identityLut(),
+    };
+  }
   const lut =
     entry.type === 'brightness-contrast'
       ? brightnessContrastLut(entry.brightness, entry.contrast)
-      : entry.type === 'levels'
-        ? levelsLut(entry)
+      : entry.type === 'exposure'
+        ? exposureLut(entry.stops)
         : invertLut();
   return { b: lut, g: lut, r: lut };
 };
@@ -283,8 +318,11 @@ export const adjustmentsKey = (adjustments: CanvasAdjustmentsContract | undefine
       switch (entry.type) {
         case 'brightness-contrast':
           return `bc:${entry.brightness},${entry.contrast}`;
+        case 'exposure':
+          return `ex:${entry.stops}`;
         case 'levels':
-          return `lv:${entry.inBlack},${entry.inWhite},${entry.gamma},${entry.outBlack},${entry.outWhite}`;
+          // Unscoped entries keep their pre-`channel` key so caches survive.
+          return `lv:${entry.channel && entry.channel !== 'rgb' ? `${entry.channel}:` : ''}${entry.inBlack},${entry.inWhite},${entry.gamma},${entry.outBlack},${entry.outWhite}`;
         case 'hsl':
           return `s:${entry.saturation}`;
         case 'hue':

@@ -182,6 +182,11 @@ interface CanvasAdjustmentEntryBase {
 export type CanvasAdjustmentEntry =
   | (CanvasAdjustmentEntryBase & { type: 'brightness-contrast'; brightness: number; contrast: number })
   | (CanvasAdjustmentEntryBase & {
+      type: 'exposure';
+      /** Photographic stops, −5 to +5, applied in linear light (2^stops). */
+      stops: number;
+    })
+  | (CanvasAdjustmentEntryBase & {
       type: 'levels';
       /** Input remap: 0–255 with `inBlack < inWhite`; `gamma` is the midtone exponent base (1 = linear). */
       inBlack: number;
@@ -189,6 +194,8 @@ export type CanvasAdjustmentEntry =
       gamma: number;
       outBlack: number;
       outWhite: number;
+      /** Which channels the remap drives; absent ⇒ all three. */
+      channel?: 'rgb' | 'r' | 'g' | 'b';
     })
   | (CanvasAdjustmentEntryBase & { type: 'curves'; curves: CanvasAdjustmentCurves })
   | (CanvasAdjustmentEntryBase & { type: 'hsl'; saturation: number })

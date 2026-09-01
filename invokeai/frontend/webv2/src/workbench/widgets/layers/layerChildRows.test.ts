@@ -209,6 +209,18 @@ describe('adjustment rows', () => {
             },
             { id: 'h1', isEnabled: true, rotation: 90, type: 'hue' },
             { id: 'i1', isEnabled: false, type: 'invert' },
+            { id: 'e1', isEnabled: true, stops: 1.5, type: 'exposure' },
+            {
+              channel: 'r',
+              gamma: 1,
+              id: 'l2',
+              inBlack: 0,
+              inWhite: 255,
+              isEnabled: true,
+              outBlack: 0,
+              outWhite: 200,
+              type: 'levels',
+            },
           ]),
         ])
       ).vm
@@ -217,6 +229,8 @@ describe('adjustment rows', () => {
       ['adjustment-levels', 'l1', true, null],
       ['adjustment-hue', 'h1', true, '90°'],
       ['adjustment-invert', 'i1', false, null],
+      ['adjustment-exposure', 'e1', true, '+1.5 EV'],
+      ['adjustment-levels', 'l2', true, 'R'],
     ]);
   });
 

@@ -174,6 +174,23 @@ describe('hue and levels editors', () => {
     expect(forward[0]).toEqual(initialEntries()[0]);
   });
 
+  it('commits a channel scope change as one whole-stack patch keeping the remap values', async () => {
+    await render('lv1');
+    const trigger = host!.querySelector<HTMLElement>(
+      '[aria-label="widgets.layers.adjustments.channel"] [data-part="trigger"], [data-part="trigger"]'
+    )!;
+    await settle(() => trigger.click());
+    const option = [...document.querySelectorAll<HTMLElement>('[data-part="item"]')].find(
+      (el) => el.textContent?.trim() === 'widgets.layers.adjustments.channels.r'
+    )!;
+    expect(option).toBeDefined();
+    await settle(() => option.click());
+
+    expect(commits).toHaveLength(1);
+    const entry = forwardEntries(commits[0]!)[3] as Extract<CanvasAdjustmentEntry, { type: 'levels' }>;
+    expect(entry).toMatchObject({ channel: 'r', gamma: 1, id: 'lv1', inBlack: 0, inWhite: 255 });
+  });
+
   it('commits a levels input-range change while the other fields keep their values', async () => {
     await render('lv1');
     const tracks = sliderTracks();

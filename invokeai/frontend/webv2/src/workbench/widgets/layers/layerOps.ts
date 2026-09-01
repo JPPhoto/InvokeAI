@@ -259,6 +259,8 @@ export const createIdentityAdjustment = (type: CanvasAdjustmentEntry['type']): C
   switch (type) {
     case 'brightness-contrast':
       return { brightness: 0, contrast: 0, id, isEnabled: true, type };
+    case 'exposure':
+      return { id, isEnabled: true, stops: 0, type };
     case 'levels':
       return { gamma: 1, id, inBlack: 0, inWhite: 255, isEnabled: true, outBlack: 0, outWhite: 255, type };
     case 'curves':

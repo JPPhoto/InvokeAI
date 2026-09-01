@@ -25,6 +25,7 @@ export type LayerChildRowKind =
   | 'mask-noise'
   | 'mask-denoise'
   | 'adjustment-brightness-contrast'
+  | 'adjustment-exposure'
   | 'adjustment-levels'
   | 'adjustment-curves'
   | 'adjustment-hsl'
@@ -40,6 +41,7 @@ export const adjustmentChildKind = (type: CanvasAdjustmentEntry['type']): Adjust
 const ADJUSTMENT_KIND_OF: Record<CanvasAdjustmentEntry['type'], AdjustmentChildKind> = {
   'brightness-contrast': 'adjustment-brightness-contrast',
   curves: 'adjustment-curves',
+  exposure: 'adjustment-exposure',
   hsl: 'adjustment-hsl',
   hue: 'adjustment-hue',
   invert: 'adjustment-invert',
@@ -49,6 +51,7 @@ const ADJUSTMENT_KIND_OF: Record<CanvasAdjustmentEntry['type'], AdjustmentChildK
 const CHILD_ROW_NAME_KEYS: Record<Exclude<LayerChildRowKind, 'reference-image'>, string> = {
   'adjustment-brightness-contrast': 'widgets.layers.modifiers.brightnessContrast',
   'adjustment-curves': 'widgets.layers.adjustments.curves',
+  'adjustment-exposure': 'widgets.layers.adjustments.exposure',
   'adjustment-hsl': 'widgets.layers.adjustments.saturation',
   'adjustment-hue': 'widgets.layers.adjustments.hue',
   'adjustment-invert': 'widgets.layers.adjustments.invert',
@@ -70,8 +73,13 @@ const adjustmentDetail = (entry: CanvasAdjustmentEntry): string | null => {
       return signedPercent(entry.saturation);
     case 'hue':
       return `${Math.round(entry.rotation)}°`;
-    case 'brightness-contrast':
+    case 'exposure': {
+      const stops = Number(entry.stops.toFixed(2));
+      return `${stops > 0 ? '+' : ''}${stops} EV`;
+    }
     case 'levels':
+      return entry.channel && entry.channel !== 'rgb' ? entry.channel.toUpperCase() : null;
+    case 'brightness-contrast':
     case 'curves':
     case 'invert':
       return null;
@@ -243,6 +251,7 @@ export const layerChildRemoveLabelKey = (kind: LayerChildRowKind): string => {
     case 'mask-denoise':
       return 'widgets.layers.modifiers.removeDenoise';
     case 'adjustment-brightness-contrast':
+    case 'adjustment-exposure':
     case 'adjustment-levels':
     case 'adjustment-curves':
     case 'adjustment-hsl':

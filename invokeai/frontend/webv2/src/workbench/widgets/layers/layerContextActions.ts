@@ -16,6 +16,7 @@ import {
   lookupLayerBelow,
 } from '@workbench/canvas-engine/api';
 import {
+  ApertureIcon,
   ArrowDownIcon,
   ArrowDownToLineIcon,
   ArrowUpIcon,
@@ -55,6 +56,7 @@ export type LayerContextActionId =
   | 'add-noise'
   | 'add-denoise-limit'
   | 'add-brightness-contrast'
+  | 'add-exposure'
   | 'add-levels'
   | 'add-curves'
   | 'add-hsl'
@@ -430,6 +432,19 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     isVisible: alwaysVisible,
     labelKey: 'widgets.layers.modifiers.brightnessContrast',
     order: 31,
+    section: 'primary',
+    submenu: 'add-adjustment',
+    supportedLayerTypes: RASTER_ONLY,
+  },
+  {
+    defaultLabel: 'Exposure',
+    handler: ({ effects }) => effects.addAdjustment('exposure'),
+    icon: ApertureIcon,
+    id: 'add-exposure',
+    isEnabled: isLayerMutable,
+    isVisible: alwaysVisible,
+    labelKey: 'widgets.layers.adjustments.exposure',
+    order: 31.05,
     section: 'primary',
     submenu: 'add-adjustment',
     supportedLayerTypes: RASTER_ONLY,

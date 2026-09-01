@@ -456,6 +456,7 @@ describe('getLayerContextActions', () => {
       'transform',
       'fit-to-bbox',
       'add-brightness-contrast',
+      'add-exposure',
       'add-levels',
       'add-curves',
       'add-hsl',
@@ -540,6 +541,7 @@ describe('getLayerContextActions', () => {
     for (const id of [
       'fit-to-bbox',
       'add-brightness-contrast',
+      'add-exposure',
       'add-levels',
       'add-curves',
       'add-hsl',

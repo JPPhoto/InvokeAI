@@ -3,6 +3,7 @@ import type { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent } from 'react
 import { Box, HStack, Icon, Input, Text } from '@chakra-ui/react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import {
+  ApertureIcon,
   ContrastIcon,
   DropletIcon,
   GaugeIcon,
@@ -33,6 +34,7 @@ const stopPropagation = (event: { stopPropagation: () => void }): void => event.
 const CHILD_ROW_GLYPHS: Record<LayerChildRowKind, LucideIcon> = {
   'adjustment-brightness-contrast': SunMediumIcon,
   'adjustment-curves': SplineIcon,
+  'adjustment-exposure': ApertureIcon,
   'adjustment-hsl': DropletIcon,
   'adjustment-hue': RainbowIcon,
   'adjustment-invert': ContrastIcon,

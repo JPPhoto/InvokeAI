@@ -31,6 +31,20 @@ const levels = (
   overrides: EntryOverrides = {}
 ) =>
   ({ gamma, id: 'lv', inBlack, inWhite, isEnabled: true, outBlack, outWhite, type: 'levels', ...overrides }) as const;
+const exposure = (stops: number, overrides: EntryOverrides = {}) =>
+  ({ id: 'ex', isEnabled: true, stops, type: 'exposure', ...overrides }) as const;
+const channelLevels = (channel: 'rgb' | 'r' | 'g' | 'b', outWhite: number) =>
+  ({
+    channel,
+    gamma: 1,
+    id: 'clv',
+    inBlack: 0,
+    inWhite: 255,
+    isEnabled: true,
+    outBlack: 0,
+    outWhite,
+    type: 'levels',
+  }) as const;
 const hue = (rotation: number, overrides: EntryOverrides = {}) =>
   ({ id: 'hue', isEnabled: true, rotation, type: 'hue', ...overrides }) as const;
 const invert = (overrides: EntryOverrides = {}) =>
@@ -173,6 +187,61 @@ describe('compileAdjustments', () => {
     const folded = imageData([10, 20, 30, 255, 200, 100, 50, 255]);
     applyAdjustments(folded, [curve, bc(0.1, 0.4)]);
     expect(Array.from(folded.data)).toEqual(Array.from(sequential.data));
+  });
+});
+
+describe('exposure and channel-scoped levels', () => {
+  it('treats zero stops as identity and any channel scope with default values as identity', () => {
+    expect(isIdentityAdjustmentEntry(exposure(0))).toBe(true);
+    expect(isIdentityAdjustmentEntry(exposure(0.5))).toBe(false);
+    expect(isIdentityAdjustmentEntry(channelLevels('r', 255))).toBe(true);
+  });
+
+  it('applies exposure in linear light: +1 stop doubles linear energy', () => {
+    // srgb 64 → linear ≈0.0513, doubled ≈0.1026 → srgb ≈90; srgb 188 → linear ≈0.503, doubled clamps → 255.
+    const img = imageData([64, 188, 0, 255]);
+    applyAdjustments(img, [exposure(1)]);
+    expect(Math.abs(img.data[0]! - 90)).toBeLessThanOrEqual(1);
+    expect(img.data[1]).toBe(255);
+    expect(img.data[2]).toBe(0);
+  });
+
+  it('darkening by a stop then brightening by a stop returns close to the original midtones', () => {
+    const img = imageData([128, 96, 160, 255]);
+    applyAdjustments(img, [exposure(-1)]);
+    applyAdjustments(img, [exposure(1)]);
+    expect(Math.abs(img.data[0]! - 128)).toBeLessThanOrEqual(2);
+    expect(Math.abs(img.data[1]! - 96)).toBeLessThanOrEqual(2);
+    expect(Math.abs(img.data[2]! - 160)).toBeLessThanOrEqual(2);
+  });
+
+  it('a channel-scoped levels entry remaps only its channel', () => {
+    const img = imageData([200, 200, 200, 255]);
+    applyAdjustments(img, [channelLevels('g', 128)]);
+    expect(img.data[0]).toBe(200);
+    expect(img.data[1]).toBe(Math.round((200 / 255) * 128));
+    expect(img.data[2]).toBe(200);
+  });
+
+  it('folds exposure and channel levels with neighbours into one LUT segment, bit-exact vs sequential', () => {
+    const folded = compileAdjustments([exposure(0.5), channelLevels('b', 200), invert()]);
+    expect(folded.map((segment) => segment.kind)).toEqual(['lut']);
+
+    const sequential = imageData([10, 20, 30, 255, 200, 100, 50, 255]);
+    applyAdjustments(sequential, [exposure(0.5)]);
+    applyAdjustments(sequential, [channelLevels('b', 200)]);
+    applyAdjustments(sequential, [invert()]);
+    const combined = imageData([10, 20, 30, 255, 200, 100, 50, 255]);
+    applyAdjustments(combined, [exposure(0.5), channelLevels('b', 200), invert()]);
+    expect([...combined.data]).toEqual([...sequential.data]);
+  });
+
+  it('keys distinguish stops and channel scope but keep unscoped levels keys unchanged', () => {
+    expect(adjustmentsKey([exposure(1)])).not.toBe(adjustmentsKey([exposure(2)]));
+    expect(adjustmentsKey([levels(10, 240, 1, 0, 255)])).toBe(
+      adjustmentsKey([{ ...levels(10, 240, 1, 0, 255), channel: 'rgb' }])
+    );
+    expect(adjustmentsKey([channelLevels('r', 128)])).not.toBe(adjustmentsKey([channelLevels('g', 128)]));
   });
 });
 

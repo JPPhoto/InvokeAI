@@ -92,6 +92,7 @@ const zAdjustmentEntry = z.discriminatedUnion('type', [
     contrast: zFiniteNumber,
     type: z.literal('brightness-contrast'),
   }),
+  z.object({ ...zAdjustmentBase, stops: zFiniteNumber, type: z.literal('exposure') }),
   z.object({ ...zAdjustmentBase, saturation: zFiniteNumber, type: z.literal('hsl') }),
   z.object({
     ...zAdjustmentBase,
@@ -101,6 +102,7 @@ const zAdjustmentEntry = z.discriminatedUnion('type', [
   z
     .object({
       ...zAdjustmentBase,
+      channel: z.enum(['rgb', 'r', 'g', 'b']).optional(),
       gamma: zFiniteNumber,
       inBlack: zFiniteNumber,
       inWhite: zFiniteNumber,

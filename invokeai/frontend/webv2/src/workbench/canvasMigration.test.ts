@@ -122,6 +122,18 @@ describe('loadCanvasState', () => {
       { gamma: 1.4, id: 'a4', inBlack: 12, inWhite: 240, isEnabled: true, outBlack: 5, outWhite: 250, type: 'levels' },
       { id: 'a5', isEnabled: true, rotation: -45, type: 'hue' },
       { id: 'a6', isEnabled: false, type: 'invert' },
+      { id: 'a7', isEnabled: true, stops: -1.5, type: 'exposure' },
+      {
+        channel: 'g',
+        gamma: 1,
+        id: 'a8',
+        inBlack: 0,
+        inWhite: 255,
+        isEnabled: true,
+        outBlack: 0,
+        outWhite: 128,
+        type: 'levels',
+      },
     ];
     const adjustmentsOf = (loaded: CanvasStateContractV3) => {
       const layer = loaded.document.stacks.raster[0];

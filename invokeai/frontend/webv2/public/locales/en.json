@@ -2860,12 +2860,14 @@
         "brightness": "Brightness",
         "channel": "Channel",
         "channels": {
-          "b": "Blue",
+          "rgb": "RGB",
+          "r": "Red",
           "g": "Green",
-          "r": "Red"
+          "b": "Blue"
         },
         "contrast": "Contrast",
         "curves": "Curves",
+        "exposure": "Exposure",
         "curvesHint": "Drag points to bend the curve. Double-click empty space to add a point; double-click a point to remove it.",
         "levels": "Levels",
         "inputLevels": "Input levels",
