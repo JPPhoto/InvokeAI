@@ -2,10 +2,12 @@ import type { LayerStackKind } from '@workbench/canvas-engine/api';
 
 import { LAYER_STACKS_TOP_FIRST } from '@workbench/canvas-engine/api';
 
+import type { ProjectedChildRow } from './layerChildRows';
 import type { LayerStackRows, LayerStackRowsByKind, LayerTreeRow } from './layerTreeRows';
 
 /** Fixed row height: the virtualizer never measures. */
 export const LAYER_ROW_HEIGHT_PX = 40;
+export const LAYER_CHILD_ROW_HEIGHT_PX = 32;
 export const LAYER_HEADER_HEIGHT_PX = 28;
 /** Horizontal offset per nesting level, in CSS pixels; the drag projection uses the same step. */
 export const LAYER_TREE_INDENT_PX = 16;
@@ -22,7 +24,23 @@ export type PanelRow =
       readonly posInSet: number;
       readonly setSize: number;
     }
-  | { readonly kind: 'node'; readonly key: string; readonly stack: LayerStackKind; readonly row: LayerTreeRow };
+  | {
+      readonly kind: 'node';
+      readonly key: string;
+      readonly stack: LayerStackKind;
+      readonly row: LayerTreeRow;
+      /** Projected child rows the node owns; `0` for groups and bare leaves. */
+      readonly childCount: number;
+      readonly childrenExpanded: boolean;
+    }
+  | { readonly kind: 'child'; readonly key: string; readonly stack: LayerStackKind; readonly child: ProjectedChildRow };
+
+/** How a flattening projects child rows beneath the layers that own them. */
+export interface PanelChildRowsSource {
+  rowsFor(row: LayerTreeRow): readonly ProjectedChildRow[];
+  /** Layers whose child rows are hidden; every other owner shows them. */
+  collapsedLayerIds: ReadonlySet<string>;
+}
 
 export const headerKey = (stack: LayerStackKind): string => `header:${stack}`;
 
@@ -38,7 +56,8 @@ export const stackOfHeaderKey = (key: string): LayerStackKind => key.slice('head
 export const flattenPanelRows = (
   stacks: LayerStackRowsByKind,
   collapsedStacks: readonly LayerStackKind[],
-  forceOpen: (stack: LayerStackKind) => boolean
+  forceOpen: (stack: LayerStackKind) => boolean,
+  childRows?: PanelChildRowsSource
 ): PanelRow[] => {
   const rows: PanelRow[] = [];
   const present = LAYER_STACKS_TOP_FIRST.filter((kind) => stacks[kind].nodeIds.length > 0);
@@ -55,7 +74,14 @@ export const flattenPanelRows = (
     });
     if (!collapsed) {
       for (const row of stack.rows) {
-        rows.push({ key: row.id, kind: 'node', row, stack: kind });
+        const children = childRows?.rowsFor(row) ?? [];
+        const childrenExpanded = children.length > 0 && !childRows!.collapsedLayerIds.has(row.id);
+        rows.push({ childCount: children.length, childrenExpanded, key: row.id, kind: 'node', row, stack: kind });
+        if (childrenExpanded) {
+          for (const child of children) {
+            rows.push({ child, key: child.key, kind: 'child', stack: kind });
+          }
+        }
       }
     }
   }
@@ -63,13 +89,18 @@ export const flattenPanelRows = (
 };
 
 export const panelRowHeight = (row: PanelRow): number =>
-  row.kind === 'header' ? LAYER_HEADER_HEIGHT_PX : LAYER_ROW_HEIGHT_PX;
+  row.kind === 'header'
+    ? LAYER_HEADER_HEIGHT_PX
+    : row.kind === 'child'
+      ? LAYER_CHILD_ROW_HEIGHT_PX
+      : LAYER_ROW_HEIGHT_PX;
 
 export type TreeNavigationKey = 'ArrowDown' | 'ArrowUp' | 'Home' | 'End' | 'ArrowLeft' | 'ArrowRight';
 
 export type TreeNavigation =
   | { readonly focus: string }
   | { readonly expand: string; readonly expanded: boolean }
+  | { readonly expandChildren: string; readonly expanded: boolean }
   | { readonly collapseStack: LayerStackKind; readonly collapsed: boolean };
 
 const positionsCache = new WeakMap<readonly PanelRow[], Map<string, number>>();
@@ -115,7 +146,17 @@ export const navigateTree = (
         const first = rows[position + 1];
         return first && first.kind === 'node' ? { focus: first.key } : null;
       }
+      if (current.kind === 'child') {
+        return null;
+      }
       const { row } = current;
+      if (current.childCount > 0) {
+        if (!current.childrenExpanded) {
+          return { expandChildren: row.id, expanded: true };
+        }
+        const first = rows[position + 1];
+        return first && first.kind === 'child' && first.child.layerId === row.id ? { focus: first.key } : null;
+      }
       if (row.vm.kind !== 'group' || row.vm.childCount === 0) {
         return null;
       }
@@ -129,9 +170,15 @@ export const navigateTree = (
       if (current.kind === 'header') {
         return current.collapsed ? null : { collapsed: true, collapseStack: current.stack.stack };
       }
+      if (current.kind === 'child') {
+        return { focus: current.child.layerId };
+      }
       const { row } = current;
       if (row.vm.kind === 'group' && row.expanded) {
         return { expand: row.id, expanded: false };
+      }
+      if (current.childrenExpanded) {
+        return { expandChildren: row.id, expanded: false };
       }
       return { focus: row.vm.parentId ?? headerKey(row.vm.stack) };
     }

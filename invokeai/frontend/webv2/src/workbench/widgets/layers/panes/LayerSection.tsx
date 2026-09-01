@@ -8,9 +8,11 @@ import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit
 import { AdjustmentsPopover } from '@workbench/widgets/layers/AdjustmentsPopover';
 import { ControlLayerSettings } from '@workbench/widgets/layers/ControlLayerSettings';
 import { InpaintMaskSettings } from '@workbench/widgets/layers/InpaintMaskSettings';
+import { useLayerChildSelection } from '@workbench/widgets/layers/layerChildSelection';
 import { RasterLayerFilterSection } from '@workbench/widgets/layers/RasterLayerFilterSection';
+import { ReferenceImageSettings } from '@workbench/widgets/layers/ReferenceImageSettings';
 import { RegionalGuidanceSettings } from '@workbench/widgets/layers/RegionalGuidanceSettings';
-import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
+import { useActiveProjectId, useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -37,14 +39,30 @@ export const LayerSection = ({ disabled }: { disabled: boolean }) => {
   const engine = useCanvasEngine();
   const layer = useActiveProjectSelector(selectSelectedLayer);
   const documentRevision = useActiveProjectSelector((project) => project.canvas.documentRevision);
+  // A sub-selected child row takes over the section: its own editor, its own name.
+  const projectId = useActiveProjectId();
+  const childSelection = useLayerChildSelection();
+  const childIndex =
+    layer?.type === 'regional_guidance' &&
+    childSelection?.projectId === projectId &&
+    childSelection.layerId === layer.id
+      ? layer.referenceImages.findIndex((ref) => ref.id === childSelection.itemId)
+      : -1;
+  const childRefId = childIndex >= 0 ? childSelection!.itemId : null;
 
   return (
     <PropertiesSection
       disabled={disabled}
-      subtitle={layer?.name ?? t('widgets.transform.noSelection')}
+      subtitle={
+        childRefId
+          ? `${t('widgets.layers.regionalGuidance.referenceImage')} ${childIndex + 1}`
+          : (layer?.name ?? t('widgets.transform.noSelection'))
+      }
       title={t('widgets.properties.sections.layer')}
     >
-      {layer ? (
+      {layer?.type === 'regional_guidance' && childRefId ? (
+        <ReferenceImageSettings key={`${layer.id}:${childRefId}`} engine={engine} layer={layer} refId={childRefId} />
+      ) : layer ? (
         <LayerTypeSettings documentRevision={documentRevision} engine={engine} layer={layer} />
       ) : (
         <GroupSelectedNotice />

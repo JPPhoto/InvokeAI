@@ -82,12 +82,14 @@ const makeState = (
     canDeleteSelection: true,
     canMergeSelection: true,
     layer,
+    modelBase: null,
     selectedIds: [layer.id],
     ...overrides,
   };
 };
 
 const makeEffects = (): LayerContextActionEffects => ({
+  addReferenceImage: vi.fn(),
   booleanMerge: vi.fn(() => Promise.resolve()),
   toggleHidden: vi.fn(),
   copyTo: vi.fn(),
@@ -474,6 +476,7 @@ describe('getLayerContextActions', () => {
       'convert-to-regional-guidance',
       'control-transparency-effect',
       'regional-auto-negative',
+      'add-reference-image',
       'merge-down',
       'merge-selected',
       'toggle-visibility',
@@ -485,6 +488,15 @@ describe('getLayerContextActions', () => {
     expect(actionIds).toHaveLength(LAYER_CONTEXT_ACTION_DEFINITIONS.length);
     expect(actionIds.filter((id) => !actionsById.has(id))).toEqual([]);
     expect([...new Set(actions.filter((action) => !action.isDisabled).map((action) => action.id))]).toEqual([]);
+  });
+
+  it('offers add-reference-image on regional layers unless the model base is flux2', () => {
+    const regional = makeLayer('regional_guidance');
+    expect(byId(getLayerContextActions(makeState(regional)), 'add-reference-image').isDisabled).toBe(false);
+    const flux2Actions = getLayerContextActions(makeState(regional, { modelBase: 'flux2' }));
+    expect(flux2Actions.some((action) => action.id === 'add-reference-image')).toBe(false);
+    const rasterActions = getLayerContextActions(makeState(makeLayer('raster')));
+    expect(rasterActions.some((action) => action.id === 'add-reference-image')).toBe(false);
   });
 
   it('still allows non-destructive copy and export from a locked layer when interaction is free', () => {

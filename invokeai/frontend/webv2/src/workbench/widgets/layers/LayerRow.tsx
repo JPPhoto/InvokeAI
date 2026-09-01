@@ -1,9 +1,9 @@
 import type { CanvasLayerContract, CanvasNodeContract, SemanticNode } from '@workbench/canvas-engine/api';
 import type { FocusEvent, KeyboardEvent, MouseEvent } from 'react';
 
-import { Badge, Box, HStack, Icon, Input, Text } from '@chakra-ui/react';
+import { Badge, Box, chakra, HStack, Icon, Input, Text } from '@chakra-ui/react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
-import { IconButton, Row, ToggleDot, Tooltip } from '@platform/ui';
+import { IconButton, Row, Tooltip } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { isGroupNode, isHideableLayer, isNodeHidden, isOverlayStack } from '@workbench/canvas-engine/api';
 import {
@@ -23,6 +23,7 @@ import type { LayerRowCommands } from './layerRowCommands';
 import type { LayerTreeRow } from './layerTreeRows';
 
 import { ControlLayerWarningIcon } from './ControlLayerWarningIcon';
+import { LayerActiveDot, ROW_SELECTION_FOCUS } from './LayerActiveDot';
 import { recordLayerRowCommit } from './layerPanelDiagnostics';
 import { LAYER_TREE_INDENT_PX } from './layerPanelRows';
 import { anchorFromPoint } from './layerRowCommands';
@@ -30,25 +31,8 @@ import { layerRowSummary } from './layerRowSummary';
 import { LayerThumbnail, type LayerThumbnailEngine } from './LayerThumbnail';
 import { layerTypeIcon } from './layerTypeIcon';
 
-const ROW_SELECTION_FOCUS = { outline: '2px solid', outlineColor: 'accent.solid', outlineOffset: '-2px' };
 const LAYER_ROW_BACKGROUND_TRANSITION = 'background min(40ms, var(--wb-motion-duration-fast)) ease-out';
-const VISIBILITY_DOT_BASE = {
-  borderRadius: 'full',
-  borderWidth: '1px',
-  content: '""',
-  h: '3',
-  inset: '50% auto auto 50%',
-  position: 'absolute',
-  transform: 'translate(-50%, -50%)',
-  transition: 'background var(--wb-motion-duration-fast), border-color var(--wb-motion-duration-fast)',
-  w: '3',
-};
-const VISIBILITY_DOT_CHECKED = { ...VISIBILITY_DOT_BASE, bg: 'accent.solid', borderColor: 'accent.solid' };
-/** Enabled on its own, but an ancestor keeps it out of the composite. */
-const VISIBILITY_DOT_GATED = { ...VISIBILITY_DOT_BASE, bg: 'transparent', borderColor: 'accent.solid' };
-const VISIBILITY_DOT_UNCHECKED = { ...VISIBILITY_DOT_BASE, bg: 'transparent', borderColor: 'border.emphasized' };
-const VISIBILITY_DOT_CHECKED_HOVER = { _before: { bg: 'accent.emphasized', borderColor: 'accent.emphasized' } };
-const VISIBILITY_DOT_UNCHECKED_HOVER = { _before: { borderColor: 'fg.muted' } };
+const CHEVRON_HOVER = { bg: 'bg.muted', color: 'fg' };
 
 const THUMBNAIL_SIZE = '8';
 
@@ -56,6 +40,9 @@ const THUMBNAIL_SIZE = '8';
 export type LayerRowDragState = 'source' | 'travelling' | null;
 
 interface LayerRowProps {
+  /** Projected child rows the layer owns; a chevron appears above zero. */
+  childCount: number;
+  childrenExpanded: boolean;
   commands: LayerRowCommands;
   drag: LayerRowDragState;
   /** Drag reordering is off: the editing lock or degraded mode. */
@@ -79,6 +66,8 @@ const stopPropagation = (event: { stopPropagation: () => void }): void => event.
  * keyboard through the row's menu, so the tree stays a single tab stop.
  */
 const LayerRowComponent = ({
+  childCount,
+  childrenExpanded,
   commands,
   drag,
   dragDisabled,
@@ -150,6 +139,13 @@ const LayerRowComponent = ({
     (event: { stopPropagation: () => void }) => {
       event.stopPropagation();
       commands.toggleExpanded(row.id);
+    },
+    [commands, row.id]
+  );
+  const handleToggleChildren = useCallback(
+    (event: { stopPropagation: () => void }) => {
+      event.stopPropagation();
+      commands.toggleChildren(row.id);
     },
     [commands, row.id]
   );
@@ -263,7 +259,7 @@ const LayerRowComponent = ({
       ref={setRowRef}
       {...dragListeners}
       aria-current={primary ? 'true' : undefined}
-      aria-expanded={group ? row.expanded : undefined}
+      aria-expanded={group ? row.expanded : childCount > 0 ? childrenExpanded : undefined}
       aria-label={node.name}
       aria-level={vm.depth + 2}
       aria-posinset={row.posInSet}
@@ -295,38 +291,15 @@ const LayerRowComponent = ({
         style={indentStyle}
         transition={LAYER_ROW_BACKGROUND_TRANSITION}
       >
-        <Box
-          display="flex"
-          flexShrink="0"
-          onClick={stopPropagation}
-          onMouseDown={keepRowFocus}
-          onPointerDown={stopPropagation}
-        >
-          <ToggleDot
-            _before={
-              node.isEnabled
-                ? disabledByAncestor
-                  ? VISIBILITY_DOT_GATED
-                  : VISIBILITY_DOT_CHECKED
-                : VISIBILITY_DOT_UNCHECKED
-            }
-            _focusVisible={ROW_SELECTION_FOCUS}
-            _hover={node.isEnabled ? VISIBILITY_DOT_CHECKED_HOVER : VISIBILITY_DOT_UNCHECKED_HOVER}
-            bg="transparent"
-            borderWidth="0"
-            checked={node.isEnabled}
-            cursor={editingLocked ? 'not-allowed' : 'pointer'}
-            disabled={editingLocked}
-            h="6"
-            label={t('widgets.layers.actions.toggleActive')}
-            position="relative"
-            tabIndex={-1}
-            tooltip={disabledByAncestor ? t('widgets.layers.actions.groupDisabled') : undefined}
-            transition="none"
-            w="6"
-            onCheckedChange={handleToggleVisible}
-          />
-        </Box>
+        <LayerActiveDot
+          checked={node.isEnabled}
+          disabled={editingLocked}
+          gated={disabledByAncestor}
+          label={t('widgets.layers.actions.toggleActive')}
+          tooltip={disabledByAncestor ? t('widgets.layers.actions.groupDisabled') : undefined}
+          onCheckedChange={handleToggleVisible}
+          onKeepRowFocus={keepRowFocus}
+        />
         {group ? (
           <GroupPreview engine={engine} expanded={row.expanded} node={node} thumbnails={thumbnails} />
         ) : !thumbnails ? (
@@ -349,7 +322,9 @@ const LayerRowComponent = ({
             <LayerThumbnail engine={engine} layer={layer!} />
           </Box>
         )}
-        {/* The identity slot: a group's disclosure chevron and a layer's type glyph share one box. */}
+        {/* The identity slot: a group's disclosure chevron, or the layer's type
+          glyph — with a small modifier chevron stacked beneath it, Krita-style,
+          when the layer projects child rows. */}
         {group ? (
           <IconButton
             aria-label={t(row.expanded ? 'widgets.layers.actions.collapseGroup' : 'widgets.layers.actions.expandGroup')}
@@ -370,8 +345,44 @@ const LayerRowComponent = ({
             />
           </IconButton>
         ) : (
-          <Box alignItems="center" boxSize="6" display="flex" flexShrink={0} justifyContent="center">
+          <Box
+            alignItems="center"
+            boxSize="6"
+            display="flex"
+            flexDirection="column"
+            flexShrink={0}
+            justifyContent="center"
+          >
             <Icon as={layerTypeIcon(layer!)} boxSize="3" color="fg.subtle" />
+            {childCount > 0 ? (
+              <chakra.button
+                aria-label={t(
+                  childrenExpanded ? 'widgets.layers.actions.hideModifiers' : 'widgets.layers.actions.showModifiers'
+                )}
+                alignItems="center"
+                color="fg.muted"
+                cursor="pointer"
+                display="flex"
+                h="3"
+                justifyContent="center"
+                rounded="xs"
+                tabIndex={-1}
+                type="button"
+                w="4"
+                _hover={CHEVRON_HOVER}
+                onClick={handleToggleChildren}
+                onMouseDown={keepRowFocus}
+                onPointerDown={stopPropagation}
+              >
+                <Icon
+                  as={ChevronRightIcon}
+                  boxSize="3"
+                  transform={childrenExpanded ? 'rotate(90deg)' : undefined}
+                  transitionDuration="fast"
+                  transitionProperty="transform"
+                />
+              </chakra.button>
+            ) : null}
           </Box>
         )}
         <Box

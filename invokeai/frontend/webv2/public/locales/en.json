@@ -2593,7 +2593,9 @@
         "showSelected": "Show selected",
         "hideSelectedOnCanvas": "Hide selected on canvas",
         "showSelectedOnCanvas": "Show selected on canvas",
-        "toggleActive": "Toggle layer active"
+        "toggleActive": "Toggle layer active",
+        "hideModifiers": "Hide modifiers",
+        "showModifiers": "Show modifiers"
       },
       "control": {
         "apply": "Apply",
@@ -3015,7 +3017,13 @@
       "overviewPane": {
         "pan": "Pan the canvas view"
       },
-      "treeTabs": "Layer panel views"
+      "treeTabs": "Layer panel views",
+      "modifiers": {
+        "disable": "Disable",
+        "enable": "Enable",
+        "parentDisabled": "Layer is disabled",
+        "toggleActive": "Toggle active"
+      }
     },
     "gallery": {
       "alwaysShowDimensions": "Always show dimensions",

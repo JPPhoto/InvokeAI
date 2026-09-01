@@ -127,6 +127,19 @@ describe('layer panel selection', () => {
     expect(reconcileLayerPanelState(collapsed, 'p', index, 'a')).toBe(collapsed);
   });
 
+  it('keeps a child-row focus while its owner exists and drops it with the owner', () => {
+    const focused = { ...createLayerPanelState('project', 'a'), focusId: 'child:b:ref1' };
+    expect(reconcileLayerPanelState(focused, 'project', indexOf(ids), 'a')).toBe(focused);
+    expect(reconcileLayerPanelState(focused, 'project', indexOf(['a', 'c']), 'a').focusId).toBe('a');
+  });
+
+  it('carries child-row collapse through a primary change and prunes removed owners', () => {
+    const collapsed = { ...createLayerPanelState('project', 'a'), collapsedChildLayerIds: ['a', 'gone'] };
+    expect(reconcileLayerPanelState(collapsed, 'project', indexOf(ids), 'b').collapsedChildLayerIds).toEqual(['a']);
+    expect(reconcileLayerPanelState(collapsed, 'project', indexOf(ids), 'a').collapsedChildLayerIds).toEqual(['a']);
+    expect(reconcileLayerPanelState(collapsed, 'other', indexOf(ids), 'b').collapsedChildLayerIds).toEqual([]);
+  });
+
   it('collapses to a new primary selected outside the panel and resets between projects', () => {
     const multi = selectLayerInPanel(createLayerPanelState('project', 'a'), 'c', ids, toggle);
     expect(reconcileLayerPanelState(multi, 'project', indexOf(ids), 'd').selectedIds).toEqual(['d']);

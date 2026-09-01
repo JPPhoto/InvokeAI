@@ -25,6 +25,7 @@ import {
   EyeOffIcon,
   FolderPlusIcon,
   ImageIcon,
+  ImagePlusIcon,
   LockIcon,
   LockOpenIcon,
   MergeIcon,
@@ -39,6 +40,7 @@ import {
 import { canConvertRasterControl, canMergeLayerDown } from './layerOps';
 
 export type LayerContextActionId =
+  | 'add-reference-image'
   | 'merge-selected'
   | 'move-to-front'
   | 'move-forward'
@@ -90,6 +92,8 @@ export interface LayerContextActionState {
   hasWorkflowBindings: boolean;
   interactionLocked: boolean;
   layer: CanvasLayerContract;
+  /** The selected generation model's base; gates model-dependent actions like reference images. */
+  modelBase: string | null;
   /** The panel's selection; an action on a selected layer applies to every selected node. */
   selectedIds: readonly string[];
   /** The model's answer for grouping `actionTargets`, asked by the menu that owns the engine. */
@@ -123,6 +127,7 @@ export interface LayerContextActionEffects {
   rasterize(): void;
   convertTo(target: LayerType): void;
   patchConfig(kind: LayerConfigPatchKind): void;
+  addReferenceImage(): void;
   mergeDown(): void;
   toggleVisibility(): void;
   toggleHidden(): void;
@@ -481,6 +486,18 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     isVisible: alwaysVisible,
     labelKey: 'widgets.layers.actions.toggleAutoNegative',
     order: 50,
+    section: 'primary',
+    supportedLayerTypes: REGIONAL_ONLY,
+  },
+  {
+    defaultLabel: 'Add reference image',
+    handler: ({ effects }) => effects.addReferenceImage(),
+    icon: ImagePlusIcon,
+    id: 'add-reference-image',
+    isEnabled: isLayerMutable,
+    isVisible: (context) => context.modelBase !== 'flux2',
+    labelKey: 'widgets.layers.regionalGuidance.addReferenceImage',
+    order: 55,
     section: 'primary',
     supportedLayerTypes: REGIONAL_ONLY,
   },

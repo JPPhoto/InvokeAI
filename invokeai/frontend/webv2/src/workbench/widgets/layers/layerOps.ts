@@ -253,9 +253,9 @@ export const createReferenceImageId = (): string =>
  * actually consume: FLUX regions use FLUX Redux (the only kind resolved for FLUX
  * in `resolveRegionalReferenceImages`), everything else uses an IP-Adapter (legacy
  * `initialRegionalGuidanceIPAdapter`). The model is chosen by the user; the image
- * is assigned via drop/upload. Shared by `RegionalGuidanceSettings` (the in-popover
- * "add reference image" button) and the header add-layer menu's "Regional Reference
- * Image" item, so both mint the same shape.
+ * is assigned via drop/upload. Shared by the layer context menu's "Add reference
+ * image" action and the header add-layer menu's "Regional Reference Image" item,
+ * so both mint the same shape.
  */
 export const createRegionalReferenceImage = (
   base: string | null,

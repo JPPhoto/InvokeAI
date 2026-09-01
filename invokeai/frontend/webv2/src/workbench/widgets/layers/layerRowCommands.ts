@@ -2,6 +2,8 @@ import type { LayerStackKind } from '@workbench/canvas-engine/api';
 import type { LayerSelectionModifiers } from '@workbench/layerPanelState';
 import type { KeyboardEvent } from 'react';
 
+import type { ProjectedChildRow } from './layerChildRows';
+
 /** A point or box the surface host anchors a menu or popover to, in viewport pixels. */
 export interface LayerSurfaceAnchor {
   readonly x: number;
@@ -27,7 +29,18 @@ export interface LayerRowCommands {
   openMenu(id: string, anchor: LayerSurfaceAnchor): void;
   openStackMenu(stack: LayerStackKind, anchor: LayerSurfaceAnchor): void;
   toggleCollapse(stack: LayerStackKind): void;
-  /** `id` is a node id or a stack header key; the tree tells them apart. */
+  /** Shows or hides a layer's projected child rows. */
+  toggleChildren(id: string): void;
+  /**
+   * Sub-selects a child row: its owner becomes the selected layer and its
+   * editor opens in Properties, unless `reveal: false` (a context menu selects
+   * without yanking the pane open).
+   */
+  selectChild(child: ProjectedChildRow, options?: { reveal?: boolean }): void;
+  setChildEnabled(child: ProjectedChildRow, isEnabled: boolean): void;
+  removeChild(child: ProjectedChildRow): void;
+  openChildMenu(child: ProjectedChildRow, anchor: LayerSurfaceAnchor): void;
+  /** `id` is a node id, a child-row key, or a stack header key; the tree tells them apart. */
   keyDown(id: string, event: KeyboardEvent<HTMLElement>): void;
 }
 

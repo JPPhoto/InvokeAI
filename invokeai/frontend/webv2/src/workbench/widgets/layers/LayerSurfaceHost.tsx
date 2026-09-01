@@ -3,11 +3,13 @@ import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import type { Dispatch } from 'react';
 
-import { getDocumentNode } from '@workbench/canvas-engine/api';
+import { getDocumentLayer, getDocumentNode } from '@workbench/canvas-engine/api';
 import { useCallback, useMemo } from 'react';
 
-import type { LayerSurfaceAnchor } from './layerRowCommands';
+import type { ProjectedChildRow } from './layerChildRows';
+import type { LayerRowCommands, LayerSurfaceAnchor } from './layerRowCommands';
 
+import { LayerChildMenu } from './LayerChildMenu';
 import { CanvasLayerContextMenu, type LayerContextMenuEngine } from './LayerContextMenu';
 import { LayerGroupContextMenu, type LayerGroupContextMenuEngine } from './LayerGroupContextMenu';
 import { LayerStackMenu } from './LayerStackMenu';
@@ -19,9 +21,11 @@ export type LayerSurfaceEngine = LayerContextMenuEngine &
 /** What the panel currently shows beside a row, addressed by node id rather than owned by the row. */
 export type LayerSurfaceRequest =
   | { readonly kind: 'menu'; readonly id: string; readonly anchor: LayerSurfaceAnchor }
-  | { readonly kind: 'stack-menu'; readonly stack: LayerStackKind; readonly anchor: LayerSurfaceAnchor };
+  | { readonly kind: 'stack-menu'; readonly stack: LayerStackKind; readonly anchor: LayerSurfaceAnchor }
+  | { readonly kind: 'child-menu'; readonly child: ProjectedChildRow; readonly anchor: LayerSurfaceAnchor };
 
 interface LayerSurfaceHostProps {
+  commands: LayerRowCommands;
   dispatch: Dispatch<CanvasProjectMutation>;
   document: CanvasDocumentContractV3;
   editingLocked: boolean;
@@ -36,6 +40,7 @@ interface LayerSurfaceHostProps {
  * closes itself.
  */
 export const LayerSurfaceHost = ({
+  commands,
   dispatch,
   document,
   editingLocked,
@@ -43,7 +48,7 @@ export const LayerSurfaceHost = ({
   surface,
   onClose,
 }: LayerSurfaceHostProps) => {
-  const node = surface && surface.kind !== 'stack-menu' ? getDocumentNode(document, surface.id) : null;
+  const node = surface?.kind === 'menu' ? getDocumentNode(document, surface.id) : null;
   const menuTarget = useMemo(
     () =>
       surface?.kind === 'menu' && node && node.type !== 'group'
@@ -52,6 +57,20 @@ export const LayerSurfaceHost = ({
     [node, surface]
   );
   const handleMenuClose = useCallback(() => onClose(), [onClose]);
+  // The child menu labels and toggles the item's LIVE state, not its state at open.
+  const liveChild = useMemo(() => {
+    if (surface?.kind !== 'child-menu') {
+      return null;
+    }
+    const { child } = surface;
+    const owner = getDocumentLayer(document, child.layerId);
+    const item =
+      owner?.type === 'regional_guidance' ? owner.referenceImages.find((ref) => ref.id === child.itemId) : undefined;
+    if (!item) {
+      return null;
+    }
+    return item.isEnabled === child.isEnabled ? child : { ...child, isEnabled: item.isEnabled };
+  }, [document, surface]);
   if (surface?.kind === 'stack-menu') {
     return (
       <LayerStackMenu
@@ -60,6 +79,20 @@ export const LayerSurfaceHost = ({
         editingLocked={editingLocked}
         engine={engine}
         stack={surface.stack}
+        onClose={onClose}
+      />
+    );
+  }
+  if (surface?.kind === 'child-menu') {
+    if (!liveChild) {
+      return null;
+    }
+    return (
+      <LayerChildMenu
+        anchor={surface.anchor}
+        child={liveChild}
+        commands={commands}
+        editingLocked={editingLocked}
         onClose={onClose}
       />
     );

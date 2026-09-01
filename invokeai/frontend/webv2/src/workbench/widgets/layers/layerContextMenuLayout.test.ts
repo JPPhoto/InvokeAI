@@ -52,6 +52,7 @@ const actionsFor = (layer: CanvasLayerContract, layers: readonly CanvasLayerCont
     canDeleteSelection: true,
     canMergeSelection: true,
     layer,
+    modelBase: null,
   });
 
 const layoutFor = (layer: CanvasLayerContract, layers: readonly CanvasLayerContract[] = [layer]) =>
@@ -112,7 +113,7 @@ describe('getLayerContextMenuLayout', () => {
     });
     expect(summarize(regional)[1]).toEqual({
       id: 'primary',
-      items: ['rename', 'fit-to-bbox', 'regional-auto-negative'],
+      items: ['rename', 'fit-to-bbox', 'regional-auto-negative', 'add-reference-image'],
       presentation: 'list',
     });
   });

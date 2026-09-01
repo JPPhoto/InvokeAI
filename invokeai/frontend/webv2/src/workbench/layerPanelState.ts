@@ -18,6 +18,8 @@ export interface LayerPanelState {
   readonly collapsedStacks: readonly LayerStackKind[];
   /** Groups whose children the panel shows; every other group is collapsed. */
   readonly expandedGroupIds: readonly string[];
+  /** Layers whose projected child rows are hidden; every other owner shows them. */
+  readonly collapsedChildLayerIds: readonly string[];
   /** The row that holds keyboard focus (roving tabindex); falls back to the primary. */
   readonly focusId: string | null;
   /** A name filter; empty shows everything. */
@@ -25,9 +27,13 @@ export interface LayerPanelState {
 }
 
 /** Panel preferences that survive a primary change and a project switch. */
-type LayerPanelCarry = Pick<LayerPanelState, 'collapsedStacks' | 'expandedGroupIds' | 'filter'>;
+type LayerPanelCarry = Pick<
+  LayerPanelState,
+  'collapsedStacks' | 'expandedGroupIds' | 'collapsedChildLayerIds' | 'filter'
+>;
 
 const DEFAULT_CARRY: LayerPanelCarry = {
+  collapsedChildLayerIds: [],
   collapsedStacks: [],
   expandedGroupIds: [],
   filter: '',
@@ -37,6 +43,18 @@ export interface LayerSelectionModifiers {
   additive: boolean;
   range: boolean;
 }
+
+/** Tree key of a projected child row; the panel's focus state holds these beside node ids. */
+export const layerChildRowKey = (layerId: string, itemId: string): string => `child:${layerId}:${itemId}`;
+
+export const parseChildRowKey = (key: string): { layerId: string; itemId: string } | null => {
+  if (!key.startsWith('child:')) {
+    return null;
+  }
+  const rest = key.slice('child:'.length);
+  const separator = rest.indexOf(':');
+  return separator > 0 ? { itemId: rest.slice(separator + 1), layerId: rest.slice(0, separator) } : null;
+};
 
 export interface LayerPanelSelectionUpdate {
   projectId: string;
@@ -66,6 +84,7 @@ export const createLayerPanelState = (
 });
 
 const carryOf = (state: LayerPanelState): LayerPanelCarry => ({
+  collapsedChildLayerIds: state.collapsedChildLayerIds,
   collapsedStacks: state.collapsedStacks,
   expandedGroupIds: state.expandedGroupIds,
   filter: state.filter,
@@ -82,7 +101,8 @@ export const isSameLayerPanelState = (left: LayerPanelState, right: LayerPanelSt
   left.filter === right.filter &&
   sameIds(left.selectedIds, right.selectedIds) &&
   sameIds(left.collapsedStacks, right.collapsedStacks) &&
-  sameIds(left.expandedGroupIds, right.expandedGroupIds);
+  sameIds(left.expandedGroupIds, right.expandedGroupIds) &&
+  sameIds(left.collapsedChildLayerIds, right.collapsedChildLayerIds);
 
 const stateFor = (snapshot: LayerPanelStore, projectId: string, primaryId: string | null): LayerPanelState => {
   const stored = snapshot.byProject[projectId];
@@ -147,6 +167,23 @@ export const setLayerGroupExpanded = (
   write({ ...current, expandedGroupIds: [...next] });
 };
 
+/** Shows or hides a layer's projected child rows; `collapsed` forces a state instead of toggling. */
+export const setLayerChildrenCollapsed = (
+  projectId: string,
+  primaryId: string | null,
+  layerId: string,
+  collapsed?: boolean
+): void => {
+  const current = readLayerPanelState(projectId, primaryId);
+  const next = new Set(current.collapsedChildLayerIds);
+  if (collapsed ?? !next.has(layerId)) {
+    next.add(layerId);
+  } else {
+    next.delete(layerId);
+  }
+  write({ ...current, collapsedChildLayerIds: [...next] });
+};
+
 export const setLayerPanelFocus = (projectId: string, primaryId: string | null, focusId: string | null): void => {
   const current = readLayerPanelState(projectId, primaryId);
   if (current.focusId !== focusId) {
@@ -182,6 +219,7 @@ export const reconcileLayerPanelState = (
     const carry = carryOf(state);
     return createLayerPanelState(projectId, validPrimaryId, {
       ...carry,
+      collapsedChildLayerIds: carry.collapsedChildLayerIds.filter((id) => index.byId.has(id)),
       collapsedStacks: primary
         ? carry.collapsedStacks.filter((stack) => stack !== primary.stack)
         : carry.collapsedStacks,
@@ -192,21 +230,25 @@ export const reconcileLayerPanelState = (
   }
   const existing = index.byId;
   const expandedGroupIds = state.expandedGroupIds.filter((id) => existing.has(id));
+  const collapsedChildLayerIds = state.collapsedChildLayerIds.filter((id) => existing.has(id));
   const selectedIds = [...new Set(state.selectedIds)].filter((id) => existing.has(id));
   if (validPrimaryId && !selectedIds.includes(validPrimaryId)) {
     selectedIds.push(validPrimaryId);
   }
   const anchorId = state.anchorId && existing.has(state.anchorId) ? state.anchorId : validPrimaryId;
-  const focusId = state.focusId && existing.has(state.focusId) ? state.focusId : validPrimaryId;
+  // A child-row focus survives while its owner exists; the panel falls back itself if the item is gone.
+  const focusOwnerId = state.focusId ? (parseChildRowKey(state.focusId)?.layerId ?? state.focusId) : null;
+  const focusId = state.focusId && focusOwnerId && existing.has(focusOwnerId) ? state.focusId : validPrimaryId;
   if (
     anchorId === state.anchorId &&
     focusId === state.focusId &&
     sameIds(selectedIds, state.selectedIds) &&
-    sameIds(expandedGroupIds, state.expandedGroupIds)
+    sameIds(expandedGroupIds, state.expandedGroupIds) &&
+    sameIds(collapsedChildLayerIds, state.collapsedChildLayerIds)
   ) {
     return state;
   }
-  return { ...state, anchorId, expandedGroupIds, focusId, selectedIds };
+  return { ...state, anchorId, collapsedChildLayerIds, expandedGroupIds, focusId, selectedIds };
 };
 
 /**

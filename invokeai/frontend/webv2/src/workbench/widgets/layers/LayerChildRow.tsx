@@ -1,0 +1,162 @@
+import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
+
+import { Box, Icon, Text } from '@chakra-ui/react';
+import { useDroppable } from '@dnd-kit/core';
+import { Row } from '@platform/ui';
+import { ImageIcon } from 'lucide-react';
+import { memo, useCallback, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import type { ProjectedChildRow } from './layerChildRows';
+import type { LayerRowCommands } from './layerRowCommands';
+
+import { LayerActiveDot, ROW_SELECTION_FOCUS } from './LayerActiveDot';
+import { LAYER_TREE_INDENT_PX } from './layerPanelRows';
+import { anchorFromPoint } from './layerRowCommands';
+
+const THUMBNAIL_IMG_STYLE: CSSProperties = { height: '100%', objectFit: 'cover', width: '100%' };
+
+interface LayerChildRowProps {
+  child: ProjectedChildRow;
+  commands: LayerRowCommands;
+  /** The owning layer travels in the current drag; the row dims with it. */
+  dimmed: boolean;
+  dragDisabled: boolean;
+  editingLocked: boolean;
+  focused: boolean;
+  selected: boolean;
+}
+
+/**
+ * One projected child row: a modifier the layer above owns, on the tree's
+ * roving tab stop. The dot toggles it, selecting it routes the Properties
+ * pane to its editor, and Delete removes it; hide/lock do not apply. The row
+ * registers a drop target so a layer drag over it lands below its owner.
+ */
+const LayerChildRowComponent = ({
+  child,
+  commands,
+  dimmed,
+  dragDisabled,
+  editingLocked,
+  focused,
+  selected,
+}: LayerChildRowProps) => {
+  const { t } = useTranslation();
+  const rowElement = useRef<HTMLDivElement | null>(null);
+  const { setNodeRef: setDropRef } = useDroppable({
+    data: { stack: child.stack },
+    disabled: dragDisabled,
+    id: child.key,
+  });
+  const setRowRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      rowElement.current = element;
+      setDropRef(element);
+    },
+    [setDropRef]
+  );
+  const name = `${t('widgets.layers.regionalGuidance.referenceImage')} ${child.posInSet}`;
+
+  const indentStyle = useMemo(() => ({ paddingLeft: `${child.depth * LAYER_TREE_INDENT_PX}px` }), [child.depth]);
+  const handleSelect = useCallback(() => commands.selectChild(child), [child, commands]);
+  const handleFocus = useCallback(() => commands.focus(child.key), [child.key, commands]);
+  const keepRowFocus = useCallback((event: MouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    rowElement.current?.focus();
+  }, []);
+  const handleToggle = useCallback((checked: boolean) => commands.setChildEnabled(child, checked), [child, commands]);
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLElement>) => {
+      if (event.target !== event.currentTarget) {
+        return;
+      }
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        commands.selectChild(child);
+        return;
+      }
+      commands.keyDown(child.key, event);
+    },
+    [child, commands]
+  );
+  const handleContextMenu = useCallback(
+    (event: MouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      if (!selected) {
+        commands.selectChild(child, { reveal: false });
+      }
+      commands.openChildMenu(child, anchorFromPoint(event.clientX, event.clientY));
+    },
+    [child, commands, selected]
+  );
+
+  const muted = !child.isEnabled || !child.parentContributing;
+
+  return (
+    <Box
+      ref={setRowRef}
+      aria-label={name}
+      aria-level={child.depth + 2}
+      aria-posinset={child.posInSet}
+      aria-selected={selected}
+      aria-setsize={child.setSize}
+      data-layer-row-id={child.key}
+      h="full"
+      opacity={dimmed ? 0.4 : undefined}
+      pb="0.5"
+      role="treeitem"
+      rounded="sm"
+      tabIndex={focused ? 0 : -1}
+      _focusVisible={ROW_SELECTION_FOCUS}
+      onClick={handleSelect}
+      onContextMenu={handleContextMenu}
+      onFocus={handleFocus}
+      onKeyDown={handleKeyDown}
+    >
+      <Row
+        active={selected ? 'emphasized' : undefined}
+        alignItems="center"
+        display="flex"
+        gap="1.5"
+        h="full"
+        px="1.5"
+        style={indentStyle}
+      >
+        <LayerActiveDot
+          checked={child.isEnabled}
+          disabled={editingLocked}
+          gated={!child.parentContributing}
+          label={t('widgets.layers.modifiers.toggleActive')}
+          tooltip={child.parentContributing ? undefined : t('widgets.layers.modifiers.parentDisabled')}
+          onCheckedChange={handleToggle}
+          onKeepRowFocus={keepRowFocus}
+        />
+        <Box
+          alignItems="center"
+          bg="bg.muted"
+          borderColor="border.subtle"
+          borderWidth="1px"
+          boxSize="6"
+          color="fg.muted"
+          display="flex"
+          flexShrink={0}
+          justifyContent="center"
+          overflow="hidden"
+          rounded="sm"
+        >
+          {child.image ? (
+            <img alt="" draggable={false} src={child.image.thumbnailUrl} style={THUMBNAIL_IMG_STYLE} />
+          ) : (
+            <Icon as={ImageIcon} boxSize="3" />
+          )}
+        </Box>
+        <Text color={muted ? 'fg.muted' : undefined} flex="1" fontSize="2xs" fontWeight="600" minW="0" truncate>
+          {name}
+        </Text>
+      </Row>
+    </Box>
+  );
+};
+
+export const LayerChildRow = memo(LayerChildRowComponent);

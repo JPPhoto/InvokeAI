@@ -5,7 +5,7 @@ import type { Project } from '@workbench/projectContracts';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
-import { createDocumentModel, getDocumentLeaves } from '@workbench/canvas-engine/api';
+import { createDocumentModel, getDocumentLayer, getDocumentLeaves } from '@workbench/canvas-engine/api';
 import {
   groupContract,
   layerContract,
@@ -29,6 +29,7 @@ import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 
+import { clearLayerChildSelection, getLayerChildSelection } from './layerChildSelection';
 import { getLayerRowCommits, resetLayerRowCommits } from './layerPanelDiagnostics';
 import { LAYER_PANEL_DEGRADE_THRESHOLD, LAYER_ROW_HEIGHT_PX } from './layerPanelRows';
 import { LayersTree, type LayersTreeEngine } from './LayersTree';
@@ -66,8 +67,8 @@ vi.mock('./LayerStackHeader', () => ({
   ),
 }));
 vi.mock('./LayerSurfaceHost', () => ({
-  LayerSurfaceHost: ({ surface }: { surface: { kind: string; id: string } | null }) => (
-    <output data-testid="surface">{surface ? `${surface.kind}:${surface.id}` : 'none'}</output>
+  LayerSurfaceHost: ({ surface }: { surface: { kind: string; id?: string; child?: { key: string } } | null }) => (
+    <output data-testid="surface">{surface ? `${surface.kind}:${surface.child?.key ?? surface.id}` : 'none'}</output>
   ),
 }));
 
@@ -85,14 +86,22 @@ void i18n.use(initReactI18next).init({
               collapseGroup: 'Collapse group',
               expandGroup: 'Expand group',
               groupLocked: 'Locked by a group',
+              hideModifiers: 'Hide modifiers',
               indent: 'Move into the group above',
               outdent: 'Move out of the group',
               rename: 'Rename',
               reorder: 'Reorder layer',
               select: 'Select {{name}}',
+              showModifiers: 'Show modifiers',
               toggleLock: 'Toggle lock',
               toggleActive: 'Toggle layer active',
               toggleVisibility: 'Toggle visibility',
+            },
+            modifiers: { disable: 'Disable', enable: 'Enable', toggleActive: 'Toggle active' },
+            regionalGuidance: {
+              referenceImage: 'Reference image',
+              referenceImages: 'Reference images',
+              removeReferenceImage: 'Remove reference image',
             },
             groupSummary_one: '{{count}} layer',
             groupSummary_other: '{{count}} layers',
@@ -116,6 +125,7 @@ const manyLayers = (count: number): CanvasNodeContract[] =>
 let dispatchExternal: (mutation: CanvasProjectMutation) => void = () => undefined;
 const thumbnailRequests = vi.fn();
 const refusalChecks = vi.fn();
+const revealRequests = vi.fn();
 
 const Harness = ({ initialNodes }: { initialNodes: CanvasNodeContract[] }) => {
   const [project, setProject] = useState<Project>(() => {
@@ -183,12 +193,20 @@ const Harness = ({ initialNodes }: { initialNodes: CanvasNodeContract[] }) => {
         editingLocked={false}
         engine={engine}
         panel={panel}
-        onRevealProperties={() => undefined}
+        onRevealProperties={revealRequests}
         projectId={PROJECT_ID}
         stacks={stacks}
       />
       <output data-testid="selected-layer" style={HIDDEN}>
         {document.selectedLayerId ?? 'none'}
+      </output>
+      <output data-testid="regional-refs" style={HIDDEN}>
+        {(() => {
+          const layer = getDocumentLayer(document, 'rg');
+          return layer?.type === 'regional_guidance'
+            ? layer.referenceImages.map((ref) => `${ref.id}:${ref.isEnabled ? 'on' : 'off'}`).join(',') || 'empty'
+            : 'none';
+        })()}
       </output>
       <output data-testid="selected-layers" style={HIDDEN}>
         {panel.selectedIds.join(',') || 'none'}
@@ -252,9 +270,11 @@ const centre = (element: Element) => {
 
 beforeEach(() => {
   clearLayerPanelStates();
+  clearLayerChildSelection();
   resetLayerRowCommits();
   thumbnailRequests.mockClear();
   refusalChecks.mockClear();
+  revealRequests.mockClear();
 });
 
 afterEach(async () => {
@@ -528,6 +548,79 @@ describe('LayersTree selection, surfaces and structure', () => {
     expect(output('layer-order')).toBe('inner,third,first');
     expect(readLayerPanelState(PROJECT_ID, null).expandedGroupIds).toContain('g');
     expect(treeitem('Third')).toHaveAttribute('aria-level', '3');
+  });
+});
+
+describe('LayersTree projected child rows', () => {
+  const referenceImage = (id: string, isEnabled = true) => ({
+    config: {
+      beginEndStepPct: [0, 1] as [number, number],
+      clipVisionModel: 'ViT-H' as const,
+      image: null,
+      method: 'full' as const,
+      model: null,
+      type: 'ip_adapter' as const,
+      weight: 1,
+    },
+    id,
+    isEnabled,
+  });
+  const regionWithRefs = (): CanvasNodeContract[] => [
+    layerContract('rg', 'regional_guidance', {
+      name: 'Region',
+      referenceImages: [referenceImage('ref1'), referenceImage('ref2')],
+    }),
+    paint('r1', 'Raster'),
+  ];
+
+  it('renders one row per reference image with tree semantics, and the chevron hides them', async () => {
+    await renderTree(regionWithRefs());
+    const ref1 = treeitem('Reference image 1');
+    expect(ref1).toHaveAttribute('aria-level', '3');
+    expect(ref1).toHaveAttribute('aria-posinset', '1');
+    expect(ref1).toHaveAttribute('aria-setsize', '2');
+    expect(treeitem('Region')).toHaveAttribute('aria-expanded', 'true');
+    await act(() => userEvent.click(host!.querySelector('button[aria-label="Hide modifiers"]')!));
+    expect(host!.querySelector('[role="treeitem"][aria-label="Reference image 1"]')).toBeNull();
+    expect(treeitem('Region')).toHaveAttribute('aria-expanded', 'false');
+    await act(() => userEvent.click(host!.querySelector('button[aria-label="Show modifiers"]')!));
+    expect(treeitem('Reference image 2')).not.toBeNull();
+  });
+
+  it('toggles the item from the dot and removes it with Delete, leaving siblings alone', async () => {
+    await renderTree(regionWithRefs());
+    const dot = treeitem('Reference image 1').querySelector<HTMLButtonElement>('button[aria-label="Toggle active"]')!;
+    await act(() => userEvent.click(dot));
+    expect(output('regional-refs')).toBe('ref1:off,ref2:on');
+    expect(output('selected-layer')).toBe('none');
+    treeitem('Reference image 2').focus();
+    await act(() => userEvent.keyboard('{Delete}'));
+    expect(output('regional-refs')).toBe('ref1:off');
+  });
+
+  it('selecting a child selects its owner, records the sub-selection, and reveals Properties', async () => {
+    await renderTree(regionWithRefs());
+    await act(() => userEvent.click(treeitem('Reference image 2')));
+    expect(output('selected-layer')).toBe('rg');
+    expect(getLayerChildSelection()).toMatchObject({ itemId: 'ref2', layerId: 'rg' });
+    expect(revealRequests).toHaveBeenCalledWith('rg');
+    // Selecting a layer row clears the sub-selection again.
+    await act(() => userEvent.click(treeitem('Raster')));
+    expect(getLayerChildSelection()).toBeNull();
+  });
+
+  it('walks child rows from the keyboard and routes their context menu', async () => {
+    await renderTree(regionWithRefs());
+    treeitem('Region').focus();
+    await act(() => userEvent.keyboard('{ArrowRight}'));
+    expect(document.activeElement).toBe(treeitem('Reference image 1'));
+    await act(() => userEvent.keyboard('{ArrowLeft}'));
+    expect(document.activeElement).toBe(treeitem('Region'));
+    await act(() => userEvent.keyboard('{ArrowLeft}'));
+    expect(treeitem('Region')).toHaveAttribute('aria-expanded', 'false');
+    await act(() => userEvent.keyboard('{ArrowRight}{ArrowRight}'));
+    await act(() => userEvent.keyboard('{Shift>}{F10}{/Shift}'));
+    expect(output('surface')).toBe('child-menu:child:rg:ref1');
   });
 });
 

@@ -16,6 +16,7 @@ import type { LayerSurfaceAnchor } from './layerRowCommands';
 import type { LayerColorPaneLayout, LayerEditorPaneLayout, LayerTreeTabId } from './panes/editorPaneLayout';
 
 import { LayerBlendRow } from './LayerBlendRow';
+import { reconcileLayerChildSelection } from './layerChildSelection';
 import { LAYER_PANEL_DEGRADE_THRESHOLD } from './layerPanelRows';
 import { useCurrentLayerPropertiesRequest } from './layerPropertiesRequestStore';
 import { anchorFromPoint } from './layerRowCommands';
@@ -57,6 +58,8 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
   const { selectedLayerId } = document;
 
   const panel = useLayerPanelState(projectId, selectedLayerId);
+  // The sub-selection survives only while its owner stays the selected layer.
+  useEffect(() => reconcileLayerChildSelection(projectId, document), [document, projectId]);
   const expandedGroupIds = useMemo(() => new Set(panel.expandedGroupIds), [panel.expandedGroupIds]);
   // Keyed on the forests, so a selection or bbox change never rebuilds a row.
   const stacks = useMemo(

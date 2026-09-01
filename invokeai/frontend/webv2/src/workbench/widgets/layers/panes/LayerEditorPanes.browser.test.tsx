@@ -61,6 +61,7 @@ vi.mock('@workbench/WorkbenchContext', async () => {
   const commands = { widgets: { patchValues } };
   const queries = { getSnapshot: () => ({ activeProject: harness.project! }) };
   return {
+    useActiveProjectId: () => harness.project!.id,
     useActiveProjectSelector: (selector: (project: Project) => unknown) => {
       const project = useSyncExternalStore(subscribe, () => harness.project!);
       return selector(project);

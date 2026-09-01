@@ -97,6 +97,7 @@ import {
   copyRasterToRegionalGuidance,
   copyRegionalGuidanceToInpaintMask,
   createLayerId,
+  createRegionalReferenceImage,
   fitLayerTransformToBbox,
   getControlTransparencyEffectPatch,
   getRegionalGuidanceAutoNegativePatch,
@@ -302,9 +303,11 @@ const LayerMenu = ({
       hasWorkflowBindings: workflowAvailability.hasWorkflowBindings,
       interactionLocked,
       layer,
+      modelBase: base,
       selectedIds,
     }),
     [
+      base,
       hiddenByAncestor,
       canDeleteSelection,
       canGroup,
@@ -699,8 +702,26 @@ const LayerMenu = ({
     [getActionLabel, layer, patchConfig]
   );
 
+  const handleAddReferenceImage = useCallback(() => {
+    if (layer.type !== 'regional_guidance') {
+      return;
+    }
+    commitPrepared(t('widgets.layers.regionalGuidance.referenceImages'), (model) =>
+      model.prepare({
+        before: { layerType: 'regional_guidance', referenceImages: [...layer.referenceImages] },
+        config: {
+          layerType: 'regional_guidance',
+          referenceImages: [...layer.referenceImages, createRegionalReferenceImage(base)],
+        },
+        id: layer.id,
+        type: 'patch-config',
+      })
+    );
+  }, [base, commitPrepared, layer, t]);
+
   const effects = useMemo<LayerContextActionEffects>(
     () => ({
+      addReferenceImage: handleAddReferenceImage,
       booleanMerge: handleBooleanRaster,
       convertTo: (target) => {
         const actionId: LayerContextActionId =
@@ -740,6 +761,7 @@ const LayerMenu = ({
     [
       convert,
       getActionLabel,
+      handleAddReferenceImage,
       handleBooleanRaster,
       handleCopyTo,
       handleCopyToClipboard,
