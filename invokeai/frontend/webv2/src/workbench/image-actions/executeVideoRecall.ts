@@ -248,7 +248,9 @@ export const executeVideoRecall = async ({
             firstFrameImage: null,
             lastFrameImage: null,
             references,
-            sourceVideo: null,
+            // A source video recorded alongside references is reference-extend
+            // state (hydrated above) — keep it; clear only a leftover.
+            sourceVideo: result.mediaNames.sourceVideoName ? result.values.sourceVideo : null,
           };
           recalledMedia = true;
         }
@@ -267,7 +269,9 @@ export const executeVideoRecall = async ({
       const effectiveModel = result.values.model;
 
       if (effectiveModel) {
-        const modes = getVideoModelPolicy(effectiveModel, result.values).modes;
+        const policy = getVideoModelPolicy(effectiveModel, result.values);
+        const modes = policy.modes;
+        const referenceExtend = Boolean(policy.references?.extend);
         let { firstFrameImage, lastFrameImage, sourceVideo } = result.values;
         let references = result.values.references;
 
@@ -276,13 +280,16 @@ export const executeVideoRecall = async ({
           references = [];
         }
         if (references.length > 0) {
-          // References replace the frame/source slots entirely.
+          // References replace the frame slots; the source video survives only
+          // on a reference-extend panel (the new clip is appended to it).
           firstFrameImage = null;
           lastFrameImage = null;
-          sourceVideo = null;
+          if (!referenceExtend) {
+            sourceVideo = null;
+          }
         }
 
-        if (sourceVideo && !modes.includes('extend')) {
+        if (sourceVideo && !modes.includes('extend') && !(references.length > 0 && referenceExtend)) {
           sourceVideo = null;
         }
         if (firstFrameImage && !modes.includes('first-frame') && !modes.includes('first-last')) {

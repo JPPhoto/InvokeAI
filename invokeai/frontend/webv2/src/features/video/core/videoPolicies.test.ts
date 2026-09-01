@@ -1093,7 +1093,7 @@ describe('reference mode policy', () => {
     const settings = settingsFor(model);
 
     expect(getVideoModelPolicy(model, settings).modes).toEqual(['reference']);
-    expect(getVideoModelPolicy(model, settings).references).toEqual({ maxImages: 9, maxVideos: 3 });
+    expect(getVideoModelPolicy(model, settings).references).toEqual({ extend: true, maxImages: 9, maxVideos: 3 });
     expect(getVideoModelPolicy(h3Model(), settingsFor(h3Model())).references).toBeNull();
   });
 
@@ -1245,5 +1245,108 @@ describe('H3 component-source seeding', () => {
     });
 
     expect(explicit.settings.componentSourceModel?.key).toBe(componentsOnly.key);
+  });
+});
+
+describe('reference-extend policy', () => {
+  const initialVideo = {
+    endFrame: 400,
+    fps: 24,
+    height: 480,
+    numFrames: 402,
+    startFrame: 0,
+    video_name: 'long.mp4',
+    width: 832,
+  };
+
+  it('accepts references alongside an initial video on ref2va, rejecting the pair elsewhere', () => {
+    const ref2va = ref2vaTransformer();
+    const combined = settingsFor(ref2va, {
+      componentSourceModel: h3Model(),
+      references: [imageReference],
+      sourceVideo: initialVideo,
+    });
+
+    expect(getVideoValidationReasons(ref2va, combined)).toEqual([]);
+
+    // FL2VA (and any non-reference model) still rejects the combination.
+    const fl2va = h3Model();
+    const reasons = getVideoValidationReasons(
+      fl2va,
+      settingsFor(fl2va, { references: [imageReference], sourceVideo: initialVideo })
+    );
+
+    expect(reasons).toContainEqual(expect.stringContaining('cannot be combined with an initial video on this model'));
+  });
+
+  it('a Wan -> Ref2VA switch snaps the frame count BEFORE sizing the tail window', () => {
+    // Wan's grid starts at 5 frames. Deriving the window before the snap sized
+    // it for that count, and the repair only ever shrank — so the panel landed
+    // on a 90-frame H3 generation with a 5-frame anchor, below the 13 frames
+    // `sample_text_conditioning_frames` needs. Generate failed outright.
+    for (const wanFrames of [5, 9, 21, 81]) {
+      const wan = wanModel('i2v-14b');
+      const toRef = getVideoModelSelectionResult({
+        currentSettings: settingsFor(wan, { modelKey: wan.key, numFrames: wanFrames, sourceVideo: initialVideo }),
+        model: ref2vaTransformer(),
+        models: [wan],
+      });
+      const linked = toRef.settings.references.find(
+        (entry) => entry.kind === 'video' && entry.fromSourceVideo === true
+      );
+
+      expect(toRef.settings.numFrames).toBe(90);
+      // 90 frames of 24 fps material off a 24 fps clip, whatever Wan was on.
+      expect(linked).toMatchObject({ clip: { endFrame: 400, startFrame: 311 } });
+    }
+  });
+
+  it('an FL2VA -> Ref2VA switch keeps the initial video and derives its linked tail reference', () => {
+    const fl2va = h3Model();
+    const toRef = getVideoModelSelectionResult({
+      currentSettings: settingsFor(fl2va, { modelKey: fl2va.key, sourceVideo: initialVideo }),
+      model: ref2vaTransformer(),
+      models: [fl2va],
+    });
+
+    expect(toRef.settings.sourceVideo).toEqual(initialVideo);
+    expect(toRef.clearedLabels).not.toContain('Initial video');
+    // The window is budgeted against the frame count the switch lands on
+    // (H3's 124-frame default, snapped AFTER the derivation): a reference
+    // longer than the generation is truncated at its seam end.
+    expect(toRef.settings.numFrames).toBe(124);
+    expect(toRef.settings.references[0]).toMatchObject({
+      clip: { endFrame: 400, startFrame: 277, video_name: 'long.mp4' },
+      conditioning: 'video_audio',
+      fromSourceVideo: true,
+      kind: 'video',
+    });
+
+    // A task-neutral re-selection of the same model must NOT re-derive a
+    // hand-tuned linked trim (only cutpoint changes do, via the setter).
+    const tuned = {
+      ...toRef.settings,
+      references: toRef.settings.references.map((entry, index) =>
+        index === 0 && entry.kind === 'video' ? { ...entry, clip: { ...entry.clip, startFrame: 300 } } : entry
+      ),
+    };
+    const reselected = getVideoModelSelectionResult({
+      currentSettings: tuned,
+      model: ref2vaTransformer(),
+      models: [fl2va],
+    });
+
+    expect(reselected.settings.references[0]).toMatchObject({ clip: { startFrame: 300 } });
+
+    // And back: the references (linked one included) clear; the clip stays
+    // for FL2VA's own extend mode.
+    const backToFl = getVideoModelSelectionResult({
+      currentSettings: toRef.settings,
+      model: fl2va,
+      models: [fl2va],
+    });
+
+    expect(backToFl.settings.references).toEqual([]);
+    expect(backToFl.settings.sourceVideo).toEqual(initialVideo);
   });
 });

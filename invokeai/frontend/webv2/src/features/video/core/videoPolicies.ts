@@ -38,7 +38,13 @@ import {
   WAN_TI2V_PIXEL_MULTIPLE,
   type VideoDimensions,
 } from './dimensions';
-import { MIN_VIDEO_TRIM_FRAMES, resolveVideoMode, VIDEO_ASPECT_RATIO_IDS } from './settings';
+import {
+  applyReferenceExtendSourceVideo,
+  applyReferenceExtendNumFrames,
+  MIN_VIDEO_TRIM_FRAMES,
+  resolveVideoMode,
+  VIDEO_ASPECT_RATIO_IDS,
+} from './settings';
 
 // Video capabilities registry keyed by model base AND variant: unlike still-image
 // generation, Wan's variants differ structurally (which conditioning modes exist,
@@ -118,7 +124,7 @@ interface VideoVariantConfig {
   accelerator: VideoAcceleratorConfig | null;
   audioOutput: boolean;
   /** Ref2VA reference caps; present only on variants whose modes include 'reference'. */
-  references?: { maxVideos: number; maxImages: number };
+  references?: { maxVideos: number; maxImages: number; extend?: boolean };
 }
 
 export const WAN_LIGHTNING_ACCELERATOR: VideoAcceleratorConfig = {
@@ -232,7 +238,10 @@ const MINIMAX_H3_REF2VA: VideoVariantConfig = {
   ...MINIMAX_H3_FL2VA,
   accelerator: MINIMAX_H3_REF2V_TURBO_ACCELERATOR,
   modes: ['reference'],
-  references: { maxImages: 9, maxVideos: 3 },
+  // `extend` = reference-extend: an Initial Video the new clip is appended to,
+  // with a linked tail reference for continuity (no frame conditioning — the
+  // panel derives a reference from the clip instead).
+  references: { extend: true, maxImages: 9, maxVideos: 3 },
 };
 
 export const VIDEO_GENERATION: Record<
@@ -455,7 +464,7 @@ export interface VideoModelPolicy {
     negativeHelpText?: string;
   };
   /** Ref2VA reference caps; null unless the effective variant has a reference mode. */
-  references: { maxVideos: number; maxImages: number } | null;
+  references: { maxVideos: number; maxImages: number; extend?: boolean } | null;
   ui: {
     cfgVisible: boolean;
     cfgLowNoiseVisible: boolean;
@@ -1400,9 +1409,47 @@ export const getVideoModelSelectionResult = ({
     addClearedLabel(clearedLabels, 'References');
   }
 
-  if (next.sourceVideo && !modes.includes('extend')) {
+  if (next.sourceVideo && !modes.includes('extend') && !config.references?.extend) {
     next.sourceVideo = null;
     addClearedLabel(clearedLabels, 'Initial video');
+  }
+
+  // The frame count is snapped BEFORE the tail reference is derived: the window
+  // is budgeted against it, and deriving first left a Wan panel's count (as low
+  // as 5) sizing a window for a 90-frame H3 generation — under the 13 frames
+  // text conditioning needs, so Generate failed outright.
+  const snappedFrames = snapVideoNumFrames(model, next.numFrames);
+  const framesChanged = snappedFrames !== next.numFrames;
+
+  if (framesChanged) {
+    next.numFrames = snappedFrames;
+    addClearedLabel(clearedLabels, 'Frames');
+  }
+
+  // Reference-extend: a surviving Initial Video (e.g. carried over from an
+  // FL2VA extend setup) gets its linked tail reference derived, so the switch
+  // lands on a generatable panel. Only when none exists yet: the transition
+  // also runs on task-neutral edits (a same-model re-selection, a component
+  // change), and re-deriving there would reset a hand-tuned trim the help
+  // text only promises to reset on cutpoint changes.
+  if (
+    config.references?.extend &&
+    next.sourceVideo &&
+    !next.references.some((entry) => entry.kind === 'video' && entry.fromSourceVideo === true)
+  ) {
+    next.references = applyReferenceExtendSourceVideo(
+      next.references,
+      next.sourceVideo,
+      config.references.maxVideos,
+      next.numFrames
+    );
+  }
+
+  // A tail reference carried in from another model keeps a window budgeted for
+  // that model's frame count. Only when the count actually moved: otherwise a
+  // task-neutral re-selection would reset a hand-tuned trim.
+  if (config.references?.extend && framesChanged) {
+    next.references = applyReferenceExtendNumFrames(next.references, next.numFrames);
   }
 
   if (next.firstFrameImage && !modes.includes('first-frame') && !modes.includes('first-last')) {
@@ -1425,13 +1472,6 @@ export const getVideoModelSelectionResult = ({
   if (!config.targetResolutions.some((option) => option.id === next.targetResolution)) {
     next.targetResolution = config.defaults.targetResolution;
     addClearedLabel(clearedLabels, 'Target resolution');
-  }
-
-  const snappedFrames = snapVideoNumFrames(model, next.numFrames);
-
-  if (snappedFrames !== next.numFrames) {
-    next.numFrames = snappedFrames;
-    addClearedLabel(clearedLabels, 'Frames');
   }
 
   const clampedFps =
@@ -1575,8 +1615,12 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
     reasons.push('A first frame and an initial video cannot be combined. Clear one of them.');
   }
 
-  if (settings.references.length > 0 && (settings.firstFrameImage || settings.lastFrameImage || settings.sourceVideo)) {
-    reasons.push('References cannot be combined with first/last frames or an initial video. Clear one side.');
+  if (settings.references.length > 0 && (settings.firstFrameImage || settings.lastFrameImage)) {
+    reasons.push('References cannot be combined with first/last frames. Clear one side.');
+  }
+
+  if (settings.references.length > 0 && settings.sourceVideo && !config.references?.extend) {
+    reasons.push('References cannot be combined with an initial video on this model. Clear one side.');
   }
 
   if (!config.modes.includes(mode)) {

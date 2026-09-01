@@ -575,4 +575,29 @@ describe('model-position recall shapes', () => {
     expect(result?.values.model?.key).toBe(install.key);
     expect(result?.values.h3TransformerModel).toBeNull();
   });
+
+  it('reports the source video alongside the references for a reference-extend recording', () => {
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: {
+        generation_mode: 'minimax_h3_ref2v',
+        minimax_h3_component_source: { key: install.key },
+        minimax_h3_references: [
+          { conditioning: 'video_audio', end_frame: 400, kind: 'video', start_frame: 260, video_name: 'long.mp4' },
+        ],
+        model: { key: checkpoint.key },
+        num_frames: 124,
+        source_video: { video_name: 'long.mp4' },
+        source_video_end_frame: 400,
+        source_video_start_frame: 10,
+      },
+      models: catalog,
+    });
+
+    expect(result?.fields).toContain('media');
+    expect(result?.mediaNames.references).toHaveLength(1);
+    expect(result?.mediaNames.sourceVideoName).toBe('long.mp4');
+    expect(result?.mediaNames.sourceVideoTrim).toEqual({ endFrame: 400, startFrame: 10 });
+  });
 });

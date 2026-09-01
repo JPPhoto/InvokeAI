@@ -51,10 +51,12 @@ const EXCLUSIVE_RIVAL_FIELDS: ReadonlyArray<{ key: string; rivalKey: string; wid
   { key: 'firstFrameImage', rivalKey: 'references', widgetId: 'video' },
   { key: 'lastFrameImage', rivalKey: 'references', widgetId: 'video' },
   { key: 'sourceVideo', rivalKey: 'firstFrameImage', widgetId: 'video' },
-  { key: 'sourceVideo', rivalKey: 'references', widgetId: 'video' },
   { key: 'references', rivalKey: 'firstFrameImage', widgetId: 'video' },
   { key: 'references', rivalKey: 'lastFrameImage', widgetId: 'video' },
-  { key: 'references', rivalKey: 'sourceVideo', widgetId: 'video' },
+  // sourceVideo <-> references is deliberately NOT a rival pair: the two
+  // coexist on a Ref2VA reference-extend panel, and normalization keeps both
+  // (validation owns rejecting the pair per model). Treating them as rivals
+  // made a FAILED gallery deletion permanently drop the other slot's value.
 ];
 
 const trackedFieldKey = (projectId: string, widgetId: WidgetTypeId, key: string): string =>

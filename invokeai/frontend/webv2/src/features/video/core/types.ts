@@ -40,7 +40,21 @@ export type VideoReferenceImageDetail = 'max' | 'match';
  * kind. A video reference reuses `VideoSourceClip` for its trim bounds.
  */
 export type VideoReferenceItem =
-  | { kind: 'video'; clip: VideoSourceClip; conditioning: VideoReferenceConditioning }
+  | {
+      kind: 'video';
+      clip: VideoSourceClip;
+      conditioning: VideoReferenceConditioning;
+      /**
+       * True on the reference the panel derives from the Initial Video in
+       * Ref2VA extend mode: it tracks that clip's identity, and its trim
+       * defaults re-derive from the cutpoint (up to ~5s of lead-in at 24 fps,
+       * capped at the generated frame count so the backend keeps the whole
+       * window) whenever the Initial Video trim or the frame count changes.
+       * It is an ordinary reference otherwise — reorderable, trimmable,
+       * removable — and the flag is panel state only, never in metadata.
+       */
+      fromSourceVideo?: boolean;
+    }
   | { kind: 'image'; image: ImageWithDims; detail: VideoReferenceImageDetail };
 
 export type WanTargetResolution = '480p' | '720p' | '1080p';
@@ -72,11 +86,17 @@ export interface VideoSettings {
    * either `firstFrameImage` or `sourceVideo`.
    */
   lastFrameImage: ImageWithDims | null;
-  /** The clip to extend. Mutually exclusive with `firstFrameImage`. */
+  /**
+   * The clip to extend. Mutually exclusive with `firstFrameImage`. On an
+   * FL2VA model this drives extend mode; on a Ref2VA model it coexists with
+   * `references` (reference-extend: the new clip is appended to it, and a
+   * linked tail reference provides continuity).
+   */
   sourceVideo: VideoSourceClip | null;
   /**
-   * Ref2VA references, in conditioning order (up to 3 videos and 9 images). Mutually
-   * exclusive with `firstFrameImage`/`lastFrameImage`/`sourceVideo`; only a Ref2VA
+   * Ref2VA references, in conditioning order (up to 3 videos and 9 images).
+   * Mutually exclusive with `firstFrameImage`/`lastFrameImage`; `sourceVideo`
+   * may coexist on a Ref2VA model (reference-extend). Only a Ref2VA
    * transformer consumes them — see `resolveVideoMode` and the `reference` mode.
    */
   references: VideoReferenceItem[];

@@ -67,8 +67,8 @@ const ReferenceCard = memo(function ReferenceCard({
   collections,
   disabled,
   index,
-  isFirst,
-  isLast,
+  canMoveDown,
+  canMoveUp,
   onMove,
   onRemove,
   onUpdate,
@@ -77,8 +77,8 @@ const ReferenceCard = memo(function ReferenceCard({
   collections: ReferenceCollections;
   disabled: boolean;
   index: number;
-  isFirst: boolean;
-  isLast: boolean;
+  canMoveDown: boolean;
+  canMoveUp: boolean;
   onMove: (index: number, direction: -1 | 1) => void;
   onRemove: (index: number) => void;
   onUpdate: (index: number, reference: VideoReferenceItem) => void;
@@ -150,6 +150,11 @@ const ReferenceCard = memo(function ReferenceCard({
           <HStack gap="1">
             {reference.kind === 'video' ? <FilmIcon size={12} /> : <ImagePlusIcon size={12} />}
             <MiddleTruncate flex="1" fontSize="xs" text={name} />
+            {reference.kind === 'video' && reference.fromSourceVideo === true ? (
+              <Badge flexShrink={0} size="xs" variant="outline">
+                {t('widgets.video.referenceFromInitialVideo')}
+              </Badge>
+            ) : null}
           </HStack>
           <Select
             collection={reference.kind === 'video' ? collections.conditioning : collections.detail}
@@ -184,7 +189,7 @@ const ReferenceCard = memo(function ReferenceCard({
         <Stack gap="0">
           <IconButton
             aria-label={t('widgets.video.moveReferenceUp')}
-            disabled={disabled || isFirst}
+            disabled={disabled || !canMoveUp}
             size="2xs"
             variant="ghost"
             onClick={handleMoveUp}
@@ -193,7 +198,7 @@ const ReferenceCard = memo(function ReferenceCard({
           </IconButton>
           <IconButton
             aria-label={t('widgets.video.moveReferenceDown')}
-            disabled={disabled || isLast}
+            disabled={disabled || !canMoveDown}
             size="2xs"
             variant="ghost"
             onClick={handleMoveDown}
@@ -225,7 +230,13 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   disabled?: boolean;
   maxImages: number;
   maxVideos: number;
-  onChange: (references: VideoReferenceItem[]) => void;
+  /**
+   * Accepts an UPDATER, not a snapshot. The add handlers `await` a gallery
+   * resolve before writing, and the Initial Video field and Frames slider both
+   * write references too -- a captured array would clobber whichever of those
+   * landed during the await.
+   */
+  onChange: (update: (current: VideoReferenceItem[]) => VideoReferenceItem[]) => void;
   references: VideoReferenceItem[];
 }) {
   const { t } = useTranslation();
@@ -235,6 +246,12 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // The continuity anchor is pinned last, so any move that would displace it is
+  // reverted the moment it is written -- the button fired a patch and the list
+  // came back unchanged. Present those as disabled rather than inert.
+  const anchorIndex = references.findIndex(
+    (reference) => reference.kind === 'video' && reference.fromSourceVideo === true
+  );
   const videoCount = references.filter((reference) => reference.kind === 'video').length;
   const imageCount = references.length - videoCount;
   const canAddVideo = videoCount < maxVideos;
@@ -284,14 +301,32 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         const [resolved] = await galleryImages.resolveMany([imageName]);
 
         if (resolved) {
-          onChange([
-            ...references,
-            {
-              detail: 'max',
-              image: { height: resolved.height, image_name: resolved.imageName, width: resolved.width },
-              kind: 'image',
-            },
-          ]);
+          // Re-check the cap against the LIVE list: the render-time gate was
+          // evaluated before the await, and another writer (a second drop, or
+          // the Initial Video placing its anchor) can fill the slots meanwhile.
+          // An over-cap write would survive to normalization, whose overflow
+          // rule then has to delete SOMETHING the user placed.
+          let declined = false;
+
+          onChange((current) => {
+            if (current.filter((entry) => entry.kind === 'image').length >= maxImages) {
+              declined = true;
+
+              return current;
+            }
+
+            return [
+              ...current,
+              {
+                detail: 'max',
+                image: { height: resolved.height, image_name: resolved.imageName, width: resolved.width },
+                kind: 'image',
+              },
+            ];
+          });
+          if (declined) {
+            setErrorMessage(t('widgets.video.referenceImageCapRace', { max: maxImages }));
+          }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -301,7 +336,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         setIsLoading(false);
       }
     },
-    [onChange, references, reportError]
+    [maxImages, onChange, reportError, t]
   );
 
   const addVideoReference = useCallback(
@@ -321,16 +356,31 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
             width: item.width,
           });
 
-          onChange([
-            ...references,
-            {
-              // References are truncated to the generated duration, not joined: default to
-              // the whole clip rather than the extend-mode 2-frame-tail trim.
-              clip: { ...clip, endFrame: Math.max(0, clip.numFrames - 1), startFrame: 0 },
-              conditioning: 'video_audio',
-              kind: 'video',
-            },
-          ]);
+          // Same live cap re-check as the image path -- the Initial Video's
+          // anchor is the writer that most easily fills the slots mid-await.
+          let declined = false;
+
+          onChange((current) => {
+            if (current.filter((entry) => entry.kind === 'video').length >= maxVideos) {
+              declined = true;
+
+              return current;
+            }
+
+            return [
+              ...current,
+              {
+                // References are truncated to the generated duration, not joined: default to
+                // the whole clip rather than the extend-mode 2-frame-tail trim.
+                clip: { ...clip, endFrame: Math.max(0, clip.numFrames - 1), startFrame: 0 },
+                conditioning: 'video_audio',
+                kind: 'video',
+              },
+            ];
+          });
+          if (declined) {
+            setErrorMessage(t('widgets.video.referenceVideoCapRace', { max: maxVideos }));
+          }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -340,7 +390,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         setIsLoading(false);
       }
     },
-    [onChange, references, reportError]
+    [maxVideos, onChange, reportError, t]
   );
 
   const handleDragEnd = useCallback(
@@ -420,32 +470,36 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
 
   const updateReference = useCallback(
     (index: number, reference: VideoReferenceItem) => {
-      onChange(references.map((entry, entryIndex) => (entryIndex === index ? reference : entry)));
+      onChange((current) => current.map((entry, entryIndex) => (entryIndex === index ? reference : entry)));
     },
-    [onChange, references]
+    [onChange]
   );
   const removeReference = useCallback(
     (index: number) => {
-      onChange(references.filter((_, entryIndex) => entryIndex !== index));
+      onChange((current) => current.filter((_, entryIndex) => entryIndex !== index));
     },
-    [onChange, references]
+    [onChange]
   );
   const moveReference = useCallback(
     (index: number, direction: -1 | 1) => {
-      const target = index + direction;
+      onChange((current) => {
+        const target = index + direction;
 
-      if (target < 0 || target >= references.length) {
-        return;
-      }
-      const next = [...references];
-      const [entry] = next.splice(index, 1);
+        if (target < 0 || target >= current.length) {
+          return current;
+        }
+        const next = [...current];
+        const [entry] = next.splice(index, 1);
 
-      if (entry) {
+        if (!entry) {
+          return current;
+        }
         next.splice(target, 0, entry);
-        onChange(next);
-      }
+
+        return next;
+      });
     },
-    [onChange, references]
+    [onChange]
   );
 
   return (
@@ -456,8 +510,8 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
           collections={collections}
           disabled={isInert}
           index={index}
-          isFirst={index === 0}
-          isLast={index === references.length - 1}
+          canMoveDown={index < references.length - 1 && index + 1 !== anchorIndex}
+          canMoveUp={index > 0 && index !== anchorIndex}
           reference={reference}
           onMove={moveReference}
           onRemove={removeReference}
