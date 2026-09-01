@@ -129,7 +129,7 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
   const closeAddMenu = useCallback(() => setAddMenuAnchor(null), []);
 
   return (
-    <Stack gap="0.5" h="full" minH="0">
+    <Stack gap="0" h="full" minH="0">
       <LayerColorPane layout={colorPaneLayout} onLayoutChange={handleColorPaneLayout} />
       <SegmentTabs
         activeId={treeTab}
@@ -143,10 +143,8 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
         aria-labelledby={segmentTabsTabId(TREE_TABS_ID_BASE, treeTab)}
         direction="column"
         flex="1"
+        gap="0.5"
         id={segmentTabsPanelId(TREE_TABS_ID_BASE)}
-        // The blend row (~30px) + tree floor (128px) + footer (40px), with a
-        // little slack; anything less lets the unshrinkable rows paint under
-        // the editor panes.
         minH="13rem"
         overflow="hidden"
         role="tabpanel"
@@ -169,7 +167,7 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
                 justify="center"
                 minH="8rem"
                 mx="2"
-                p="4"
+                px="4"
                 rounded="md"
                 onContextMenu={handleEmptyAreaContextMenu}
               >

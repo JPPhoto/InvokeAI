@@ -15,8 +15,8 @@ import { useTranslation } from 'react-i18next';
 type LayerBlendRowEngine = Pick<CanvasEngineHandle, 'document' | 'exports' | 'interaction' | 'layers' | 'projectId'>;
 
 const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: true } as const;
-const BLEND_TRIGGER_PROPS = { fontSize: '2xs', h: '6', minH: '6' } as const;
-const OPACITY_INPUT_PROPS = { fontSize: '2xs', h: '6' } as const;
+const BLEND_TRIGGER_PROPS = { fontSize: 'xs', h: '7', minH: '7' } as const;
+const OPACITY_INPUT_PROPS = { fontSize: 'xs', h: '7' } as const;
 
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
@@ -39,7 +39,7 @@ export const LayerBlendRow = ({ engine }: { engine: LayerBlendRowEngine | null }
   const editingLocked = useCanvasDocumentEditingLocked(engine);
 
   return (
-    <Flex align="center" flexShrink={0} gap="1.5" mx="1.5" pb="1" pt="0.5">
+    <Flex align="center" flexShrink={0} gap="1.5" mx="1.5">
       <BlendModeControl editingLocked={editingLocked} engine={engine} layer={layer} />
       <OpacityRow editingLocked={editingLocked} engine={engine} layer={layer} />
     </Flex>
@@ -201,7 +201,7 @@ const OpacityRow = ({
         disabled={disabled}
         max={100}
         min={0}
-        size="xs"
+        size="sm"
         step={1}
         value={opacityPercent}
         w="16"
