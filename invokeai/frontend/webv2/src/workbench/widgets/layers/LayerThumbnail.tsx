@@ -96,11 +96,11 @@ const LayerThumbnailContent = ({
       borderColor="border.subtle"
       borderWidth="1px"
       flexShrink={0}
-      h="9"
+      h="full"
       overflow="hidden"
       position="relative"
       rounded="sm"
-      w="9"
+      w="full"
     >
       <canvas ref={bindCanvas} style={drawn ? CANVAS_STYLE : { display: 'none' }} />
       {showFallback &&

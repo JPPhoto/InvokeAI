@@ -1,11 +1,11 @@
-import type { CanvasLayerContract, SemanticNode } from '@workbench/canvas-engine/api';
+import type { CanvasLayerContract, CanvasNodeContract, SemanticNode } from '@workbench/canvas-engine/api';
 import type { FocusEvent, KeyboardEvent, MouseEvent } from 'react';
 
-import { Badge, Box, HStack, Icon, Input, Stack, Text } from '@chakra-ui/react';
+import { Badge, Box, HStack, Icon, Input, Text } from '@chakra-ui/react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { IconButton, Row, ToggleDot, Tooltip } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
-import { isHideableLayer, isNodeHidden, isOverlayStack } from '@workbench/canvas-engine/api';
+import { isGroupNode, isHideableLayer, isNodeHidden, isOverlayStack } from '@workbench/canvas-engine/api';
 import {
   ChevronRightIcon,
   EyeIcon,
@@ -15,8 +15,6 @@ import {
   ImageIcon,
   LockIcon,
   LockOpenIcon,
-  MoreVerticalIcon,
-  SlidersHorizontalIcon,
 } from 'lucide-react';
 import { memo, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -27,9 +25,10 @@ import type { LayerTreeRow } from './layerTreeRows';
 import { ControlLayerWarningIcon } from './ControlLayerWarningIcon';
 import { recordLayerRowCommit } from './layerPanelDiagnostics';
 import { LAYER_TREE_INDENT_PX } from './layerPanelRows';
-import { anchorFromPoint, anchorFromRect } from './layerRowCommands';
+import { anchorFromPoint } from './layerRowCommands';
 import { layerRowSummary } from './layerRowSummary';
 import { LayerThumbnail, type LayerThumbnailEngine } from './LayerThumbnail';
+import { layerTypeIcon } from './layerTypeIcon';
 
 const ROW_SELECTION_FOCUS = { outline: '2px solid', outlineColor: 'accent.solid', outlineOffset: '-2px' };
 const LAYER_ROW_BACKGROUND_TRANSITION = 'background min(40ms, var(--wb-motion-duration-fast)) ease-out';
@@ -172,20 +171,6 @@ const LayerRowComponent = ({
     },
     [commands, node.isLocked, row.id]
   );
-  const handleOpenMenu = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => {
-      event.stopPropagation();
-      commands.openMenu(row.id, anchorFromRect(event.currentTarget.getBoundingClientRect()));
-    },
-    [commands, row.id]
-  );
-  const handleOpenProperties = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => {
-      event.stopPropagation();
-      commands.openProperties(row.id);
-    },
-    [commands, row.id]
-  );
   const handleContextMenu = useCallback(
     (event: MouseEvent<HTMLElement>) => {
       event.preventDefault();
@@ -288,6 +273,7 @@ const LayerRowComponent = ({
       data-primary={primary || undefined}
       h="full"
       opacity={drag ? 0.4 : undefined}
+      pb="0.5"
       role="treeitem"
       rounded="sm"
       tabIndex={focused ? 0 : -1}
@@ -299,9 +285,8 @@ const LayerRowComponent = ({
       onKeyDown={handleKeyDown}
     >
       <Row
-        active={selected ? 'muted' : undefined}
-        borderStartColor={primary ? 'accent.solid' : 'transparent'}
-        borderStartWidth="2px"
+        active={primary ? 'emphasized' : selected ? 'muted' : undefined}
+        alignItems="center"
         cursor={drag === 'source' ? 'grabbing' : 'default'}
         display="flex"
         gap="1.5"
@@ -310,183 +295,160 @@ const LayerRowComponent = ({
         style={indentStyle}
         transition={LAYER_ROW_BACKGROUND_TRANSITION}
       >
-        <HStack gap="1.5" h="full" w="full">
-          {group ? (
-            <IconButton
-              aria-label={t(
-                row.expanded ? 'widgets.layers.actions.collapseGroup' : 'widgets.layers.actions.expandGroup'
-              )}
-              color="fg.muted"
+        <Box
+          display="flex"
+          flexShrink="0"
+          onClick={stopPropagation}
+          onMouseDown={keepRowFocus}
+          onPointerDown={stopPropagation}
+        >
+          <ToggleDot
+            _before={
+              node.isEnabled
+                ? disabledByAncestor
+                  ? VISIBILITY_DOT_GATED
+                  : VISIBILITY_DOT_CHECKED
+                : VISIBILITY_DOT_UNCHECKED
+            }
+            _focusVisible={ROW_SELECTION_FOCUS}
+            _hover={node.isEnabled ? VISIBILITY_DOT_CHECKED_HOVER : VISIBILITY_DOT_UNCHECKED_HOVER}
+            bg="transparent"
+            borderWidth="0"
+            checked={node.isEnabled}
+            cursor={editingLocked ? 'not-allowed' : 'pointer'}
+            disabled={editingLocked}
+            h="6"
+            label={t('widgets.layers.actions.toggleActive')}
+            position="relative"
+            tabIndex={-1}
+            tooltip={disabledByAncestor ? t('widgets.layers.actions.groupDisabled') : undefined}
+            transition="none"
+            w="6"
+            onCheckedChange={handleToggleVisible}
+          />
+        </Box>
+        {group ? (
+          <GroupPreview engine={engine} expanded={row.expanded} node={node} thumbnails={thumbnails} />
+        ) : !thumbnails ? (
+          <Box
+            alignItems="center"
+            bg="bg.muted"
+            borderColor="border.subtle"
+            borderWidth="1px"
+            boxSize={THUMBNAIL_SIZE}
+            color="fg.muted"
+            display="flex"
+            flexShrink={0}
+            justifyContent="center"
+            rounded="sm"
+          >
+            <Icon as={ImageIcon} boxSize="4" />
+          </Box>
+        ) : (
+          <Box boxSize={THUMBNAIL_SIZE} flexShrink={0}>
+            <LayerThumbnail engine={engine} layer={layer!} />
+          </Box>
+        )}
+        {/* The identity slot: a group's disclosure chevron and a layer's type glyph share one box. */}
+        {group ? (
+          <IconButton
+            aria-label={t(row.expanded ? 'widgets.layers.actions.collapseGroup' : 'widgets.layers.actions.expandGroup')}
+            color="fg.muted"
+            size="2xs"
+            tabIndex={-1}
+            variant="ghost"
+            onClick={handleToggleExpanded}
+            onMouseDown={keepRowFocus}
+            onPointerDown={stopPropagation}
+          >
+            <Icon
+              as={ChevronRightIcon}
+              boxSize="3.5"
+              transform={row.expanded ? 'rotate(90deg)' : undefined}
+              transitionDuration="fast"
+              transitionProperty="transform"
+            />
+          </IconButton>
+        ) : (
+          <Box alignItems="center" boxSize="6" display="flex" flexShrink={0} justifyContent="center">
+            <Icon as={layerTypeIcon(layer!)} boxSize="3" color="fg.subtle" />
+          </Box>
+        )}
+        <Box
+          flex="1"
+          minW="0"
+          title={
+            group
+              ? vm.leafCount === 0
+                ? t('widgets.layers.groupEmpty')
+                : t('widgets.layers.groupSummary', { count: vm.leafCount })
+              : layerRowSummary(layer!, t)
+          }
+        >
+          {renaming ? (
+            <Input
+              ref={focusOnMount}
+              aria-label={t('widgets.layers.actions.rename')}
+              defaultValue={node.name}
               size="2xs"
-              tabIndex={-1}
-              variant="ghost"
-              onClick={handleToggleExpanded}
-              onMouseDown={keepRowFocus}
+              onBlur={handleNameBlur}
+              onClick={stopPropagation}
+              onKeyDown={handleNameKeyDown}
               onPointerDown={stopPropagation}
-            >
-              <Icon
-                as={ChevronRightIcon}
-                boxSize="3.5"
-                transform={row.expanded ? 'rotate(90deg)' : undefined}
-                transitionDuration="fast"
-                transitionProperty="transform"
-              />
-            </IconButton>
-          ) : null}
-          {group || !thumbnails ? (
-            <Box
-              alignItems="center"
-              bg="bg.muted"
-              borderColor="border.subtle"
-              borderWidth="1px"
-              boxSize={THUMBNAIL_SIZE}
-              color="fg.muted"
-              display="flex"
-              flexShrink={0}
-              justifyContent="center"
-              rounded="sm"
-            >
-              <Icon as={group ? (row.expanded ? FolderOpenIcon : FolderIcon) : ImageIcon} boxSize="4" />
-            </Box>
+            />
           ) : (
-            <Box boxSize={THUMBNAIL_SIZE} flexShrink={0}>
-              <LayerThumbnail engine={engine} layer={layer!} />
-            </Box>
+            <MiddleTruncate
+              color={vm.contributionEnabled ? undefined : 'fg.muted'}
+              fontSize="2xs"
+              fontWeight="700"
+              text={node.name}
+            />
           )}
-          <Stack flex="1" gap="0" justify="center" minW="0">
-            {renaming ? (
-              <Input
-                ref={focusOnMount}
-                aria-label={t('widgets.layers.actions.rename')}
-                defaultValue={node.name}
-                size="2xs"
-                onBlur={handleNameBlur}
-                onClick={stopPropagation}
-                onKeyDown={handleNameKeyDown}
-                onPointerDown={stopPropagation}
-              />
-            ) : (
-              <MiddleTruncate
-                color={vm.contributionEnabled ? undefined : 'fg.muted'}
-                fontSize="2xs"
-                fontWeight="700"
-                text={node.name}
-              />
-            )}
-            <HStack gap="1" minW="0">
-              {group ? (
-                <Text color="fg.muted" fontSize="2xs">
-                  {vm.leafCount === 0
-                    ? t('widgets.layers.groupEmpty')
-                    : t('widgets.layers.groupSummary', { count: vm.leafCount })}
-                </Text>
-              ) : (
-                <>
-                  <Text color="fg.muted" fontSize="2xs" minW="0" truncate>
-                    {layerRowSummary(layer!, t)}
-                  </Text>
-                  <ControlLayerWarningIcon contributing={vm.contributionEnabled} layer={layer!} />
-                </>
-              )}
-            </HStack>
-          </Stack>
-          {/* One control cluster on the same rhythm as the stack header; slots a row cannot use are held open. */}
-          <HStack flexShrink="0" gap="0.5" onClick={stopPropagation} onMouseDown={keepRowFocus}>
-            {hideable ? (
-              <Tooltip
-                content={
-                  hiddenByAncestor ? t('widgets.layers.actions.groupHidden') : t('widgets.layers.actions.toggleHidden')
-                }
-              >
-                <IconButton
-                  aria-label={t('widgets.layers.actions.toggleHidden')}
-                  aria-pressed={!ownHidden}
-                  color={vm.documentHidden ? 'fg.muted' : 'fg'}
-                  disabled={editingLocked || hiddenByAncestor}
-                  size="2xs"
-                  tabIndex={-1}
-                  variant="ghost"
-                  onClick={handleToggleHidden}
-                  onPointerDown={stopPropagation}
-                >
-                  {vm.documentHidden ? <EyeOffIcon /> : <EyeIcon />}
-                </IconButton>
-              </Tooltip>
-            ) : (
-              <Box boxSize="6" />
-            )}
-            <Box display="flex" flexShrink="0" onPointerDown={stopPropagation}>
-              <ToggleDot
-                _before={
-                  node.isEnabled
-                    ? disabledByAncestor
-                      ? VISIBILITY_DOT_GATED
-                      : VISIBILITY_DOT_CHECKED
-                    : VISIBILITY_DOT_UNCHECKED
-                }
-                _focusVisible={ROW_SELECTION_FOCUS}
-                _hover={node.isEnabled ? VISIBILITY_DOT_CHECKED_HOVER : VISIBILITY_DOT_UNCHECKED_HOVER}
-                bg="transparent"
-                borderWidth="0"
-                checked={node.isEnabled}
-                cursor={editingLocked ? 'not-allowed' : 'pointer'}
-                disabled={editingLocked}
-                h="6"
-                label={t('widgets.layers.actions.toggleVisibility')}
-                position="relative"
-                tabIndex={-1}
-                tooltip={disabledByAncestor ? t('widgets.layers.actions.groupDisabled') : undefined}
-                transition="none"
-                w="6"
-                onCheckedChange={handleToggleVisible}
-              />
-            </Box>
+        </Box>
+        {layer ? <ControlLayerWarningIcon contributing={vm.contributionEnabled} layer={layer} /> : null}
+        {/* One control cluster on the same rhythm as the stack header; slots a row cannot use are held open. */}
+        <HStack flexShrink="0" gap="0.5" onClick={stopPropagation} onMouseDown={keepRowFocus}>
+          {hideable ? (
             <Tooltip
               content={
-                lockedByAncestor ? t('widgets.layers.actions.groupLocked') : t('widgets.layers.actions.toggleLock')
+                hiddenByAncestor ? t('widgets.layers.actions.groupHidden') : t('widgets.layers.actions.toggleHidden')
               }
             >
               <IconButton
-                aria-label={t('widgets.layers.actions.toggleLock')}
-                color={node.isLocked ? 'fg' : 'fg.muted'}
-                disabled={editingLocked || lockedByAncestor}
+                aria-label={t('widgets.layers.actions.toggleHidden')}
+                aria-pressed={!ownHidden}
+                color={vm.documentHidden ? 'fg.muted' : 'fg'}
+                disabled={editingLocked || hiddenByAncestor}
                 size="2xs"
                 tabIndex={-1}
                 variant="ghost"
-                onClick={handleToggleLock}
+                onClick={handleToggleHidden}
                 onPointerDown={stopPropagation}
               >
-                {vm.effectiveLocked ? <LockIcon /> : <LockOpenIcon />}
+                {vm.documentHidden ? <EyeOffIcon /> : <EyeIcon />}
               </IconButton>
             </Tooltip>
-            {layer ? (
-              <IconButton
-                aria-label={t('widgets.layers.properties')}
-                color="fg.muted"
-                disabled={editingLocked}
-                size="2xs"
-                tabIndex={-1}
-                variant="ghost"
-                onClick={handleOpenProperties}
-                onPointerDown={stopPropagation}
-              >
-                <SlidersHorizontalIcon />
-              </IconButton>
-            ) : (
-              <Box boxSize="6" />
-            )}
+          ) : (
+            <Box boxSize="6" />
+          )}
+          <Tooltip
+            content={
+              lockedByAncestor ? t('widgets.layers.actions.groupLocked') : t('widgets.layers.actions.toggleLock')
+            }
+          >
             <IconButton
-              aria-label={t('widgets.layers.options')}
-              color="fg.muted"
+              aria-label={t('widgets.layers.actions.toggleLock')}
+              color={node.isLocked ? 'fg' : 'fg.muted'}
+              disabled={editingLocked || lockedByAncestor}
               size="2xs"
               tabIndex={-1}
               variant="ghost"
-              onClick={handleOpenMenu}
+              onClick={handleToggleLock}
               onPointerDown={stopPropagation}
             >
-              <MoreVerticalIcon />
+              {vm.effectiveLocked ? <LockIcon /> : <LockOpenIcon />}
             </IconButton>
-          </HStack>
+          </Tooltip>
         </HStack>
       </Row>
     </Box>
@@ -494,6 +456,85 @@ const LayerRowComponent = ({
 };
 
 export const LayerRow = memo(LayerRowComponent);
+
+/** The first few leaf layers of a group, depth first — what its preview tiles show. */
+const groupLeafPreviews = (node: CanvasNodeContract, limit = 4): CanvasLayerContract[] => {
+  const leaves: CanvasLayerContract[] = [];
+  const walk = (candidate: CanvasNodeContract): void => {
+    if (leaves.length >= limit) {
+      return;
+    }
+    if (isGroupNode(candidate)) {
+      for (const child of candidate.children) {
+        walk(child);
+      }
+      return;
+    }
+    leaves.push(candidate);
+  };
+  if (isGroupNode(node)) {
+    for (const child of node.children) {
+      walk(child);
+    }
+  }
+  return leaves;
+};
+
+/**
+ * A group's preview: a mini grid of its first leaves' live thumbnails, so a
+ * closed folder still shows what it holds; an empty group keeps the folder.
+ */
+const GroupPreview = ({
+  engine,
+  expanded,
+  node,
+  thumbnails,
+}: {
+  engine: LayerThumbnailEngine | null;
+  expanded: boolean;
+  node: CanvasNodeContract;
+  thumbnails: boolean;
+}) => {
+  const leaves = useMemo(() => (thumbnails ? groupLeafPreviews(node) : []), [node, thumbnails]);
+  if (leaves.length === 0) {
+    return (
+      <Box
+        alignItems="center"
+        bg="bg.muted"
+        borderColor="border.subtle"
+        borderWidth="1px"
+        boxSize={THUMBNAIL_SIZE}
+        color="fg.muted"
+        display="flex"
+        flexShrink={0}
+        justifyContent="center"
+        rounded="sm"
+      >
+        <Icon as={expanded ? FolderOpenIcon : FolderIcon} boxSize="4" />
+      </Box>
+    );
+  }
+  return (
+    <Box
+      borderColor="border.subtle"
+      borderWidth="1px"
+      boxSize={THUMBNAIL_SIZE}
+      display="grid"
+      flexShrink={0}
+      gap="1px"
+      gridAutoRows="1fr"
+      gridTemplateColumns={leaves.length === 1 ? '1fr' : '1fr 1fr'}
+      overflow="hidden"
+      rounded="sm"
+    >
+      {leaves.map((leaf) => (
+        <Box key={leaf.id} minH="0" minW="0" overflow="hidden">
+          <LayerThumbnail engine={engine} layer={leaf} />
+        </Box>
+      ))}
+    </Box>
+  );
+};
 
 /** The compact card that follows the pointer: the grabbed row's name plus how many rows travel. */
 export const LayerDragGhost = ({ count, vm }: { count: number; vm: SemanticNode }) => (

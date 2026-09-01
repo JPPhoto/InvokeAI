@@ -415,7 +415,6 @@ export const LayersTree = ({
         focusItem(navigation.focus);
       },
       openMenu: (id, anchor: LayerSurfaceAnchor) => setSurface({ anchor, id, kind: 'menu' }),
-      openProperties: (id) => onRevealProperties(id),
       openStackMenu: (stack, anchor: LayerSurfaceAnchor) => setSurface({ anchor, kind: 'stack-menu', stack }),
       rename: (id, name) => runStructural(t('widgets.layers.actions.rename'), { id, patch: { name }, type: 'patch' }),
       select: (id, modifiers: LayerSelectionModifiers) => {
@@ -435,7 +434,7 @@ export const LayersTree = ({
         }
       },
       setEnabled: (id, isEnabled) =>
-        runStructural(t('widgets.layers.actions.toggleVisibility'), {
+        runStructural(t('widgets.layers.actions.toggleActive'), {
           type: 'set-enabled',
           updates: [{ id, isEnabled }],
         }),
@@ -456,7 +455,7 @@ export const LayersTree = ({
         }
       },
     }),
-    [onRevealProperties, focusItem, movingIds, runStructural, t]
+    [focusItem, movingIds, runStructural, t]
   );
 
   const closeSurface = useCallback(() => {

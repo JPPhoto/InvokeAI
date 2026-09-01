@@ -105,7 +105,7 @@ const LayerStackHeaderComponent = ({
       onFocus={pinned ? undefined : handleFocus}
       onKeyDown={pinned ? undefined : handleKeyDown}
     >
-      <HStack gap="1" h="full" px="2.5">
+      <HStack gap="1" h="full" px="1.5">
         <IconButton
           aria-label={t(collapsed ? 'widgets.layers.groupActions.expand' : 'widgets.layers.groupActions.collapse')}
           color="fg.muted"

@@ -2598,7 +2598,8 @@
         "hideSelected": "Hide selected",
         "showSelected": "Show selected",
         "hideSelectedOnCanvas": "Hide selected on canvas",
-        "showSelectedOnCanvas": "Show selected on canvas"
+        "showSelectedOnCanvas": "Show selected on canvas",
+        "toggleActive": "Toggle layer active"
       },
       "control": {
         "apply": "Apply",
@@ -2919,7 +2920,6 @@
         "copyTo": "Copy to"
       },
       "options": "Layer options",
-      "properties": "Layer properties",
       "regionalGuidance": {
         "addReferenceImage": "Add reference image",
         "autoNegative": "Auto-Negative",

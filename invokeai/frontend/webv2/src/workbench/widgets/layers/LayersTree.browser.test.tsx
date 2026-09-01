@@ -91,12 +91,12 @@ void i18n.use(initReactI18next).init({
               reorder: 'Reorder layer',
               select: 'Select {{name}}',
               toggleLock: 'Toggle lock',
+              toggleActive: 'Toggle layer active',
               toggleVisibility: 'Toggle visibility',
             },
             groupSummary_one: '{{count}} layer',
             groupSummary_other: '{{count}} layers',
             groups: { raster: 'Raster Layers' },
-            options: 'Layer options',
             properties: 'Layer properties',
             tree: 'Layer tree',
             types: { paint: 'Paint' },
@@ -418,7 +418,7 @@ describe('LayersTree selection, surfaces and structure', () => {
   it('keeps the visibility dot isolated from row selection', async () => {
     await renderTree(trio());
     const dot = host!.querySelector<HTMLButtonElement>(
-      '[data-layer-row-id="first"] button[aria-label="Toggle visibility"]'
+      '[data-layer-row-id="first"] button[aria-label="Toggle layer active"]'
     )!;
     await act(() => userEvent.click(dot));
     expect(dot).toHaveAttribute('aria-pressed', 'false');
@@ -428,8 +428,8 @@ describe('LayersTree selection, surfaces and structure', () => {
   it('routes the row menu and right-click to the panel surface host by id', async () => {
     await renderTree(trio());
     await act(() =>
-      userEvent.click(
-        host!.querySelector<HTMLButtonElement>('[data-layer-row-id="second"] button[aria-label="Layer options"]')!
+      treeitem('Second').dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 20 })
       )
     );
     expect(output('surface')).toBe('menu:second');
