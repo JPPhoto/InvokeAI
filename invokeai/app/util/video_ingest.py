@@ -144,7 +144,12 @@ def ingest_media_to_mp4(src: Path, dst: Path, *, max_output_bytes: int) -> Inges
     probe = probe_media_streams(src)
     action = plan_ingest(probe)
 
-    common_output = ["-movflags", "+faststart", "-f", "mp4", str(dst)]
+    # `-fs` bounds the output *during* the encode, so a long audio wrap or a
+    # high-entropy transcode cannot grow the temp file past the upload cap before the
+    # post-hoc check runs. ffmpeg stops once the size is exceeded (the final file lands
+    # at or slightly above the cap) and exits 0, so the >= check below is what turns a
+    # truncated-at-cap file into an error.
+    common_output = ["-fs", str(max_output_bytes), "-movflags", "+faststart", "-f", "mp4", str(dst)]
     if action == "remux":
         args = [
             "-i",
@@ -224,11 +229,13 @@ def ingest_media_to_mp4(src: Path, dst: Path, *, max_output_bytes: int) -> Inges
         raise VideoIngestError("Timed out converting the uploaded file to MP4") from e
     if proc.returncode != 0:
         stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+        # The message reaches API clients; server temp paths are not theirs to see.
+        stderr = stderr.replace(str(src), src.name).replace(str(dst), dst.name)
         raise VideoIngestError(f"Could not convert the uploaded file to MP4: {stderr[-500:]}")
     try:
         output_bytes = dst.stat().st_size
     except OSError as e:
         raise VideoIngestError("Could not convert the uploaded file to MP4") from e
-    if output_bytes > max_output_bytes:
+    if output_bytes >= max_output_bytes:
         raise VideoIngestError("The converted video exceeds the maximum upload size")
     return action

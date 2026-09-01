@@ -742,6 +742,39 @@ def test_upload_audio_file_is_wrapped_and_marked(
     assert (create_kwargs["width"], create_kwargs["height"]) == (640, 360)
 
 
+def test_upload_mp4_with_non_aac_audio_gets_audio_normalized(
+    client: TestClient, mock_invoker: Invoker, user1_token: str, tmp_path: Path
+):
+    """An MP4 whose video is already h264 but whose audio track is not browser-safe
+    (mp3 here; AMR in older Android .3gp files) must NOT take the byte-identical fast
+    path — the audio is re-encoded to AAC while the h264 stream is copied."""
+    from invokeai.app.util.video_ingest import probe_media_streams
+
+    src = _make_fixture_media(
+        tmp_path / "clip.mp4",
+        *("-f", "lavfi", "-i", "testsrc2=s=64x48:r=8:d=1"),
+        *("-f", "lavfi", "-i", "sine=frequency=440:d=1"),
+        *("-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "libmp3lame", "-shortest"),
+    )
+    stored_audio_codecs: list[str | None] = []
+
+    def create(**kwargs: Any) -> VideoDTO:
+        stored_audio_codecs.append(probe_media_streams(Path(kwargs["source_path"])).audio_codec)
+        return _uploaded_video_dto()
+
+    mock_invoker.services.videos.create.side_effect = create
+
+    response = client.post(
+        "/api/v1/videos/upload",
+        params={"video_category": "user", "is_intermediate": False},
+        files={"file": ("clip.mp4", src.read_bytes(), "video/mp4")},
+        headers={"Authorization": f"Bearer {user1_token}"},
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    assert stored_audio_codecs == ["aac"]
+
+
 def test_upload_rejects_unrecognized_file_kind(client: TestClient, mock_invoker: Invoker, user1_token: str):
     mock_invoker.services.videos.create.side_effect = AssertionError("unrecognized upload reached creation")
 

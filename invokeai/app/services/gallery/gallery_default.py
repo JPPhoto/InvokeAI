@@ -284,6 +284,9 @@ class SqliteGalleryService(GalleryServiceABC):
             SUM(CASE WHEN kind = 'image' AND category = 'general' THEN 1 ELSE 0 END) AS image_count,
             SUM(CASE WHEN kind = 'image' AND category != 'general' THEN 1 ELSE 0 END) AS asset_count,
             SUM(CASE WHEN kind = 'video' THEN 1 ELSE 0 END) AS video_count,
+            -- Same not-'general' predicate as the image asset_count above (rather than the
+            -- listing services' explicit asset-category allowlist), so image and video
+            -- counts stay consistent within this query.
             SUM(CASE WHEN kind = 'video' AND category != 'general' THEN 1 ELSE 0 END) AS asset_video_count
         FROM ({union})
         GROUP BY DATE(created_at)

@@ -51,7 +51,7 @@ export const GalleryBoardRow = ({
   });
 
   const counts = getBoardCounts(board);
-  const mediaCount = counts.imageCount + counts.videoCount - counts.assetVideoCount;
+  const mediaCount = Math.max(0, counts.imageCount + counts.videoCount - counts.assetVideoCount);
   const countsBreakdown = t('widgets.gallery.boardCountsBreakdown', {
     assets: counts.assetCount + counts.assetVideoCount,
     media: mediaCount,

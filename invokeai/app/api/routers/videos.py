@@ -276,7 +276,11 @@ async def upload_video(
                 container_probe = await run_in_threadpool(probe_media_streams, tmp_path)
             except VideoIngestError as e:
                 raise HTTPException(status_code=415, detail=str(e))
-            needs_ingest = container_probe.video_codec != "h264"
+            # Both codecs must already be browser-safe to skip ingest: an mp4-family
+            # container can legally carry h264 video with AMR/opus/mp3/ac3 audio (e.g.
+            # older Android .3gp camera files), which browsers render as silent video.
+            # The remux branch stream-copies the h264 and normalizes only the audio.
+            needs_ingest = container_probe.video_codec != "h264" or container_probe.audio_codec not in (None, "aac")
 
         if needs_ingest:
             converted = tempfile.NamedTemporaryFile(prefix="invokeai_ingest_", suffix=".mp4", delete=False)
