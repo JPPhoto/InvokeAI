@@ -28,7 +28,7 @@ import type { LayerRowCommands, LayerSurfaceAnchor } from './layerRowCommands';
 import type { LayerStackRowsByKind } from './layerTreeRows';
 import type { LayerStackActionsEngine } from './useLayerStackActions';
 
-import { ChildDragGhost, LayerChildRow } from './LayerChildRow';
+import { ChildDragGhost, isRenameableChildKind, LayerChildRow } from './LayerChildRow';
 import {
   layerChildDropCommand,
   layerChildRemoveLabelKey,
@@ -177,7 +177,6 @@ export const LayersTree = ({
   useLayoutEffect(() => {
     dragRef.current = drag;
   }, [drag]);
-  // A child-row drag is its own mode: one row, landings only where its kind allows.
   const [childDrag, setChildDrag] = useState<ChildDragState | null>(null);
   const childDragRef = useRef<ChildDragState | null>(null);
   useLayoutEffect(() => {
@@ -201,7 +200,6 @@ export const LayersTree = ({
     [document, requestedId]
   );
   const forceOpen = useCallback((stack: LayerStackKind) => stack === requestedStack, [requestedStack]);
-  // A name filter matches layers; child rows sit out until it clears.
   const childRowsSource = useMemo<PanelChildRowsSource | undefined>(
     () =>
       panel.filter.trim() === ''
@@ -213,7 +211,6 @@ export const LayersTree = ({
     () => flattenPanelRows(stacks, panel.collapsedStacks, forceOpen, childRowsSource),
     [childRowsSource, forceOpen, panel.collapsedStacks, stacks]
   );
-  // Every item, header or node, by its tree key.
   const rowIndexByKey = useMemo(() => new Map(panelRows.map((row, index) => [row.key, index])), [panelRows]);
   const childRowByKey = useMemo(
     () => new Map(panelRows.flatMap((row) => (row.kind === 'child' ? [[row.key, row.child] as const] : []))),
@@ -224,6 +221,11 @@ export const LayersTree = ({
     childSelection && childSelection.projectId === projectId
       ? layerChildRowKey(childSelection.layerId, childSelection.itemId)
       : null;
+  const selectedChildOwnerId = childSelection && childSelection.projectId === projectId ? childSelection.layerId : null;
+  const primaryAncestorIds = useMemo(
+    () => new Set(primaryId ? (lookupDocumentNodeState(document, primaryId)?.parentIds ?? []) : []),
+    [document, primaryId]
+  );
   const offsets = useMemo(() => {
     const starts = new Float64Array(panelRows.length + 1);
     panelRows.forEach((row, index) => {
@@ -262,7 +264,6 @@ export const LayersTree = ({
     [focusIndex]
   );
   const getScrollElement = useCallback(() => scrollRef.current, []);
-  // Created once the scroll element exists; handlers reach it through the ref.
   const autoScroller = useRef<LayerTreeAutoScroller | null>(null);
   const estimateSize = useCallback((index: number) => panelRowHeight(panelRows[index]!), [panelRows]);
   const getItemKey = useCallback((index: number) => panelRows[index]?.key ?? index, [panelRows]);
@@ -273,11 +274,9 @@ export const LayersTree = ({
     getScrollElement,
     overscan: OVERSCAN_ROWS,
     rangeExtractor,
-    // A revealed row lands below the pinned header, never under it.
     scrollPaddingStart: LAYER_HEADER_HEIGHT_PX,
   });
   const virtualItems = virtualizer.virtualItems;
-  // Fixed sizes change only with the row list; re-measure then, never per snapshot.
   const measureVirtualizer = useEffectEvent(() => {
     virtualizer.measure();
   });
@@ -324,7 +323,6 @@ export const LayersTree = ({
       visibleRowIds,
     };
   });
-  // A keyboard move on a selected row carries the selection, exactly as a drag of it would.
   const movingIds = useCallback((key: string, stack: LayerStackKind): readonly string[] => {
     const { panel: current, stacks: forests } = latest.current;
     return current.selectedIds.includes(key)
@@ -354,7 +352,6 @@ export const LayersTree = ({
       }
       const { panel: current, projectId: project } = latest.current;
       const outcome = runStructural(t(layerChildRemoveLabelKey(child.kind)), command);
-      // The removed row's focus lands on its owner, not wherever the primary sits.
       if (outcome.status === 'committed' && current.focusId === child.key) {
         setLayerPanelFocus(project, current.primaryId, child.layerId);
       }
@@ -362,7 +359,6 @@ export const LayersTree = ({
     [runStructural, t]
   );
 
-  // One handle for every row and header; it reads the latest render through a ref so items never re-render for it.
   const commands = useMemo<LayerRowCommands>(
     () => ({
       endRename: () => setRenamingId(null),
@@ -473,7 +469,7 @@ export const LayersTree = ({
           return;
         } else if (event.key === 'F2') {
           event.preventDefault();
-          if (!latest.current.editingLocked && !childRow) {
+          if (!latest.current.editingLocked && (!childRow || isRenameableChildKind(childRow.kind))) {
             setRenamingId(key);
           }
           return;
@@ -528,6 +524,12 @@ export const LayersTree = ({
       openStackMenu: (stack, anchor: LayerSurfaceAnchor) => setSurface({ anchor, kind: 'stack-menu', stack }),
       removeChild: (child) => removeChildRow(child),
       rename: (id, name) => runStructural(t('widgets.layers.actions.rename'), { id, patch: { name }, type: 'patch' }),
+      renameChild: (child, name) => {
+        const command = layerChildRowCommand(latest.current.document, child, { name, type: 'rename' });
+        if (command) {
+          runStructural(t('widgets.layers.modifiers.renameAdjustment'), command);
+        }
+      },
       select: (id, modifiers: LayerSelectionModifiers) => {
         const {
           allNodeIds: all,
@@ -586,7 +588,6 @@ export const LayersTree = ({
       },
       toggleExpanded: (id) => {
         const { panel: current, projectId: project } = latest.current;
-        // A filter decides expansion itself; the chevron is inert until it is cleared.
         if (current.filter.trim() === '') {
           setLayerGroupExpanded(project, current.primaryId, [id]);
         }
@@ -649,7 +650,6 @@ export const LayersTree = ({
     }
   }, [document, primaryId, projectId, propertiesRequest, rowIndexByKey]);
 
-  // After paint: land a pending focus, and open a pending properties surface on its now-rendered row.
   useLayoutEffect(() => {
     const host = scrollRef.current;
     if (!host) {
@@ -666,8 +666,6 @@ export const LayersTree = ({
     if (pending && pending.scrolled && !pending.opened) {
       const row = host.querySelector<HTMLElement>(`[data-layer-row-id="${CSS.escape(pending.id)}"]`);
       if (row) {
-        // The row is on screen: reveal the Properties pane's Layer section and
-        // settle the request — there is no popover to keep open any more.
         pendingProperties.current = null;
         onRevealProperties(pending.id);
         clearLayerPropertiesRequest(pending.token);
@@ -717,8 +715,6 @@ export const LayersTree = ({
     const { childRowByKey: childRows } = latest.current;
     const dragChild = childRows.get(String(args.active.id));
     if (dragChild) {
-      // An adjustment lands only among its own layer's rows; a reference image
-      // also lands on any other regional layer or its reference rows.
       return pointerWithin({
         ...args,
         droppableContainers: args.droppableContainers.filter((container) => {
@@ -737,8 +733,6 @@ export const LayersTree = ({
       });
     }
     const current = dragRef.current;
-    // Only a row of the same stack under the pointer counts: nothing snaps across stacks or gaps.
-    // A child row counts as its owner, so it is out whenever the owner travels.
     return pointerWithin({
       ...args,
       droppableContainers: args.droppableContainers.filter((container) => {
@@ -830,7 +824,6 @@ export const LayersTree = ({
         );
         return;
       }
-      // A child row stands in for its owner: the only landing beside it is below the owner.
       const overChild = rawOverId ? childRowByKey.get(rawOverId) : undefined;
       const overId = overChild ? overChild.layerId : rawOverId;
       clearHoverTimer();
@@ -840,7 +833,6 @@ export const LayersTree = ({
           ? stacks[current.stack].rows.find((row) => row.id === overId)
           : undefined;
       const overIsGroup = over?.vm.kind === 'group';
-      // The pointer may enter a row between move events; the edge follows the row it is over now.
       const edge = overChild ? 'below' : edgeOf(event.over?.rect, pointerY.current, overIsGroup);
       const overIsChild = overChild !== undefined;
       setDrag((state) =>
@@ -874,7 +866,6 @@ export const LayersTree = ({
       rows: stacks[drag.stack].rows,
     });
   }, [drag, stacks]);
-  // The model is the authority on where the block may land; the indicator shows its answer before the drop.
   const refusal = useMemo(
     () =>
       target && engine
@@ -886,7 +877,6 @@ export const LayersTree = ({
     [engine, target]
   );
 
-  // The dragged child's landing plus the command it resolves to; the indicator shows only real landings.
   const childDropPlan = useMemo(() => {
     if (!childDrag?.overKey) {
       return null;
@@ -905,7 +895,6 @@ export const LayersTree = ({
       };
       depth = overChild.depth;
     } else {
-      // Onto a layer row: append to its items (cross-layer for reference images).
       const ownerRow = stacks[child.stack].rows.find((row) => row.id === overKey);
       if (!ownerRow) {
         return null;
@@ -917,7 +906,6 @@ export const LayersTree = ({
     if (!command) {
       return null;
     }
-    // The model previews locks exactly as it will at drop; a refused landing shows no indicator.
     if (engine && engine.document.model()?.refusalFor(command)) {
       return null;
     }
@@ -934,7 +922,6 @@ export const LayersTree = ({
     if (beforeIndex !== undefined) {
       return { left: depth * LAYER_TREE_INDENT_PX + 14, top: offsets[beforeIndex]! };
     }
-    // The end of the layer's rendered children, or right below a childless owner row.
     let index = rowIndexByKey.get(dropTarget.layerId);
     if (index === undefined) {
       return null;
@@ -990,7 +977,6 @@ export const LayersTree = ({
     if (target.beforeRowId) {
       top = offsets[rowIndexByKey.get(target.beforeRowId)!]!;
     } else {
-      // Below the stack's last node — and past any child rows it projects.
       const last = stackRows[stackRows.length - 1]!;
       let index = rowIndexByKey.get(last.id)!;
       while (panelRows[index + 1]?.kind === 'child') {
@@ -1091,6 +1077,7 @@ export const LayersTree = ({
             h={`${virtualizer.totalSize}px`}
             position="relative"
             role="tree"
+            userSelect="none"
             w="full"
           >
             {virtualItems.map((item) => {
@@ -1105,7 +1092,9 @@ export const LayersTree = ({
                 <VirtualSlot key={item.key} size={item.size} start={item.start}>
                   {panelRow.kind === 'node' ? (
                     <LayerRow
+                      ancestorOfPrimary={primaryAncestorIds.has(panelRow.row.id)}
                       childCount={panelRow.childCount}
+                      childSelected={panelRow.row.id === selectedChildOwnerId}
                       childrenExpanded={panelRow.childrenExpanded}
                       commands={commands}
                       drag={dragStateOf(panelRow.row.id)}
@@ -1129,6 +1118,7 @@ export const LayersTree = ({
                       dragDisabled={dragDisabled}
                       editingLocked={editingLocked}
                       focused={panelRow.key === focusKey}
+                      renaming={panelRow.key === renamingId}
                       selected={panelRow.key === selectedChildKey}
                     />
                   ) : (

@@ -10,7 +10,7 @@ const DOT_BASE = {
   borderWidth: '1px',
   content: '""',
   h: '3',
-  inset: '50% auto auto 50%',
+  inset: '50% auto auto calc(50% + 1.5px)',
   position: 'absolute',
   transform: 'translate(-50%, -50%)',
   transition: 'background var(--wb-motion-duration-fast), border-color var(--wb-motion-duration-fast)',

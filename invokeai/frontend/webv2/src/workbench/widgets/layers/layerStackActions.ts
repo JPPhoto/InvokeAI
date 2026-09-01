@@ -8,15 +8,16 @@ export type StackActionId = 'mergeVisible' | 'exportPsd' | 'toggleVisibility' | 
 /**
  * The right-aligned actions for a stack, in left-to-right render order (the "New" action sits
  * rightmost, nearest the panel's own add-layer menu). Only the raster stack offers "merge
- * visible" + "export to PSD"; every stack offers hide/show-all + new.
+ * visible" + "export to PSD". The overlay stacks offer hide/show-all: their layers are drawn
+ * only to show where an effect applies, so getting them out of the way is view hygiene. The
+ * raster stack has no such action — its layers ARE the image, and bulk-disabling the
+ * generation input is not a workflow, only an accident.
  */
 export const getStackActions = (stack: LayerStackKind): StackActionId[] => {
-  const actions: StackActionId[] = [];
   if (stack === 'raster') {
-    actions.push('mergeVisible', 'exportPsd');
+    return ['mergeVisible', 'exportPsd', 'new'];
   }
-  actions.push('toggleVisibility', 'new');
-  return actions;
+  return ['toggleVisibility', 'new'];
 };
 
 /** Whether the raster stack's "export to PSD" action has anything to export. */

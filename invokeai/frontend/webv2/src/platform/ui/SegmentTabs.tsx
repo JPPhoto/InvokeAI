@@ -1,7 +1,7 @@
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 
-import { chakra, HStack, Text } from '@chakra-ui/react';
-import { useCallback } from 'react';
+import { Box, chakra, HStack, Text } from '@chakra-ui/react';
+import { Fragment, useCallback } from 'react';
 
 const TAB_HOVER_PROPS = { bg: 'bg.muted', color: 'fg' };
 
@@ -72,16 +72,29 @@ export const SegmentTabs = <T extends string>({
       role="tablist"
       onKeyDown={focusSibling}
     >
-      {tabs.map((tab) => (
-        <SegmentTabButton
-          key={tab.id}
-          id={tab.id}
-          idBase={idBase}
-          isSelected={tab.id === activeId}
-          isShown={tab.id === activeId && showActivePanel}
-          label={tab.label}
-          onSelect={onSelect}
-        />
+      {tabs.map((tab, index) => (
+        <Fragment key={tab.id}>
+          {index > 0 ? (
+            <Box
+              aria-hidden
+              bg="border.emphasized"
+              flexShrink={0}
+              h="3.5"
+              opacity={tab.id === activeId || tabs[index - 1]!.id === activeId ? 0 : 1}
+              rounded="full"
+              transition="opacity var(--wb-motion-duration-fast)"
+              w="1px"
+            />
+          ) : null}
+          <SegmentTabButton
+            id={tab.id}
+            idBase={idBase}
+            isSelected={tab.id === activeId}
+            isShown={tab.id === activeId && showActivePanel}
+            label={tab.label}
+            onSelect={onSelect}
+          />
+        </Fragment>
       ))}
     </HStack>
     {trailing}

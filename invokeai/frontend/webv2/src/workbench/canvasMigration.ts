@@ -84,35 +84,33 @@ const zTransform = z.object({
 });
 const zFilter = z.object({ settings: z.record(z.string(), z.unknown()), type: z.string() });
 const zCurve = z.array(z.tuple([zFiniteNumber, zFiniteNumber]));
+const zAdjustmentBase = { id: z.string(), isEnabled: z.boolean(), name: z.string().optional() };
 const zAdjustmentEntry = z.discriminatedUnion('type', [
   z.object({
+    ...zAdjustmentBase,
     brightness: zFiniteNumber,
     contrast: zFiniteNumber,
-    id: z.string(),
-    isEnabled: z.boolean(),
     type: z.literal('brightness-contrast'),
   }),
-  z.object({ id: z.string(), isEnabled: z.boolean(), saturation: zFiniteNumber, type: z.literal('hsl') }),
+  z.object({ ...zAdjustmentBase, saturation: zFiniteNumber, type: z.literal('hsl') }),
   z.object({
+    ...zAdjustmentBase,
     curves: z.object({ b: zCurve.optional(), g: zCurve.optional(), r: zCurve.optional() }),
-    id: z.string(),
-    isEnabled: z.boolean(),
     type: z.literal('curves'),
   }),
   z
     .object({
+      ...zAdjustmentBase,
       gamma: zFiniteNumber,
-      id: z.string(),
       inBlack: zFiniteNumber,
       inWhite: zFiniteNumber,
-      isEnabled: z.boolean(),
       outBlack: zFiniteNumber,
       outWhite: zFiniteNumber,
       type: z.literal('levels'),
     })
     .refine((entry) => entry.inBlack < entry.inWhite && entry.gamma > 0),
-  z.object({ id: z.string(), isEnabled: z.boolean(), rotation: zFiniteNumber, type: z.literal('hue') }),
-  z.object({ id: z.string(), isEnabled: z.boolean(), type: z.literal('invert') }),
+  z.object({ ...zAdjustmentBase, rotation: zFiniteNumber, type: z.literal('hue') }),
+  z.object({ ...zAdjustmentBase, type: z.literal('invert') }),
 ]);
 const zAdjustments = z.array(zAdjustmentEntry);
 const zControlAdapter = z

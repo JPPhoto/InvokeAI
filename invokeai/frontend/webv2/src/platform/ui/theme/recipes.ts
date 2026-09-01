@@ -702,6 +702,7 @@ export const rowRecipe = defineRecipe({
     active: {
       none: {},
       muted: { bg: 'bg.muted' },
+      selected: { bg: 'bg.emphasized/60', _hover: { bg: 'bg.emphasized/60' } },
       emphasized: { bg: 'bg.emphasized', _hover: { bg: 'bg.emphasized' } },
       brand: {
         bg: 'brand.subtle',

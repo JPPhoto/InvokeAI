@@ -685,6 +685,57 @@ describe('LayersTree projected child rows', () => {
     expect(output('raster-adjustments')).toBe('a1:on,a2:off,a3:on');
   });
 
+  it('renames an adjustment entry inline with F2 and restores the kind name on an empty draft', async () => {
+    await renderTree([
+      layerContract('r1', 'raster', {
+        adjustments: [{ id: 'a1', isEnabled: true, saturation: 0.1, type: 'hsl' }],
+        name: 'Painting',
+      }),
+    ]);
+    treeitem('Saturation').focus();
+    await act(() => userEvent.keyboard('{F2}'));
+    const input = host!.querySelector<HTMLInputElement>('input[aria-label="Rename"]')!;
+    await act(() => userEvent.clear(input));
+    await act(() => userEvent.type(input, 'Pop'));
+    await act(() => userEvent.keyboard('{Enter}'));
+    expect(treeitem('Pop')).toBeTruthy();
+    expect(treeitem('Pop').textContent).toContain('+10%');
+
+    treeitem('Pop').focus();
+    await act(() => userEvent.keyboard('{F2}'));
+    const again = host!.querySelector<HTMLInputElement>('input[aria-label="Rename"]')!;
+    await act(() => userEvent.clear(again));
+    await act(() => userEvent.keyboard('{Enter}'));
+    expect(treeitem('Saturation')).toBeTruthy();
+  });
+
+  it('contains live preview ticks to the edited layer and its child rows', async () => {
+    await renderTree([
+      layerContract('r1', 'raster', {
+        adjustments: [{ id: 'a1', isEnabled: true, saturation: 0, type: 'hsl' }],
+        name: 'Painting',
+      }),
+      layerContract('r2', 'raster', { name: 'Bystander' }),
+      layerContract('rg', 'regional_guidance', { name: 'Region' }),
+    ]);
+    resetLayerRowCommits();
+    for (let tick = 1; tick <= 30; tick++) {
+      await act(() =>
+        dispatchExternal({
+          config: {
+            adjustments: [{ id: 'a1', isEnabled: true, saturation: tick / 100, type: 'hsl' }],
+            layerType: 'raster',
+          },
+          id: 'r1',
+          type: 'updateCanvasLayerConfig',
+        })
+      );
+    }
+    const commits = getLayerRowCommits();
+    expect(Object.keys(commits).filter((id) => id !== 'r1' && !id.startsWith('child:r1:'))).toEqual([]);
+    expect(treeitem('Saturation').textContent).toContain('+30%');
+  });
+
   it('reorders adjustment entries with a pointer drag', async () => {
     await renderTree([
       layerContract('r1', 'raster', {

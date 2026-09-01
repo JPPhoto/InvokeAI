@@ -32,7 +32,7 @@ import { applyStructuralPreview, CONTROL_ADAPTER_DEFAULTS, CONTROL_WEIGHT_BOUNDS
 import { runLayerFilterOperation } from './layerPropertiesOperation';
 import { useSelectedMainModel } from './useSelectedMainModel';
 
-const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: false } as const;
+const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: true } as const;
 
 const CONTROL_ADAPTER_KINDS: readonly ControlAdapterKind[] = [
   'controlnet',

@@ -15,6 +15,8 @@ import {
   ArrowDownToLineIcon,
   ArrowUpIcon,
   ArrowUpToLineIcon,
+  CircleIcon,
+  CircleOffIcon,
   CopyIcon,
   EyeIcon,
   EyeOffIcon,
@@ -199,8 +201,8 @@ export const LayerGroupContextMenu = ({
       <Menu.Separator borderColor="border.subtle" />
       <Menu.Item disabled={locked} value="enabled" onSelect={handleToggleEnabled}>
         <MenuRow
-          icon={group.isEnabled ? EyeOffIcon : EyeIcon}
-          label={t(group.isEnabled ? 'widgets.layers.actions.hide' : 'widgets.layers.actions.show')}
+          icon={group.isEnabled ? CircleOffIcon : CircleIcon}
+          label={t(group.isEnabled ? 'widgets.layers.actions.disableGroup' : 'widgets.layers.actions.enableGroup')}
         />
       </Menu.Item>
       {hideable ? (

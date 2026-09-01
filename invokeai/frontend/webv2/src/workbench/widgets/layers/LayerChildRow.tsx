@@ -1,8 +1,7 @@
-import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
+import type { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent } from 'react';
 
-import { Box, HStack, Icon, Text } from '@chakra-ui/react';
+import { Box, HStack, Icon, Input, Text } from '@chakra-ui/react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
-import { Row } from '@platform/ui';
 import {
   ContrastIcon,
   DropletIcon,
@@ -24,8 +23,11 @@ import { LayerActiveDot, ROW_SELECTION_FOCUS } from './LayerActiveDot';
 import { childRowNameKey, isOrderedChildKind, type LayerChildRowKind, type ProjectedChildRow } from './layerChildRows';
 import { LAYER_TREE_INDENT_PX } from './layerPanelRows';
 import { anchorFromPoint } from './layerRowCommands';
+import { LayerRowSurface } from './LayerRowSurface';
 
 const THUMBNAIL_IMG_STYLE: CSSProperties = { height: '100%', objectFit: 'cover', width: '100%' };
+
+const stopPropagation = (event: { stopPropagation: () => void }): void => event.stopPropagation();
 
 const CHILD_ROW_GLYPHS: Record<LayerChildRowKind, LucideIcon> = {
   'adjustment-brightness-contrast': SunMediumIcon,
@@ -43,11 +45,14 @@ const CHILD_ROW_GLYPHS: Record<LayerChildRowKind, LucideIcon> = {
 export const isDraggableChildKind = (kind: LayerChildRowKind): boolean =>
   kind === 'reference-image' || isOrderedChildKind(kind);
 
-/** The row's display name; reference images are numbered, other modifiers named by kind. */
+/** Kinds whose rows carry a user-given name: adjustment entries. */
+export const isRenameableChildKind = isOrderedChildKind;
+
+/** The row's display name: its custom name, a reference image's number, or its kind's name. */
 export const childRowName = (child: ProjectedChildRow, t: (key: string) => string): string =>
   child.kind === 'reference-image'
     ? `${t('widgets.layers.regionalGuidance.referenceImage')} ${child.posInSet}`
-    : t(childRowNameKey(child.kind));
+    : (child.customName ?? t(childRowNameKey(child.kind)));
 
 interface LayerChildRowProps {
   child: ProjectedChildRow;
@@ -57,6 +62,7 @@ interface LayerChildRowProps {
   dragDisabled: boolean;
   editingLocked: boolean;
   focused: boolean;
+  renaming: boolean;
   selected: boolean;
 }
 
@@ -73,10 +79,13 @@ const LayerChildRowComponent = ({
   dragDisabled,
   editingLocked,
   focused,
+  renaming,
   selected,
 }: LayerChildRowProps) => {
   const { t } = useTranslation();
   const rowElement = useRef<HTMLDivElement | null>(null);
+  const nameInput = useRef<HTMLInputElement | null>(null);
+  const renameCancelled = useRef(false);
   const { setNodeRef: setDropRef } = useDroppable({
     data: { stack: child.stack },
     disabled: dragDisabled,
@@ -95,7 +104,6 @@ const LayerChildRowComponent = ({
     },
     [setDragRef, setDropRef]
   );
-  // Pointer listeners only, like layer rows: the tree owns the keyboard model.
   const dragListeners = useMemo(() => {
     if (dragDisabled || !listeners) {
       return {};
@@ -137,6 +145,72 @@ const LayerChildRowComponent = ({
     },
     [child, commands, selected]
   );
+  const startRename = useCallback(
+    (event?: MouseEvent<HTMLElement>) => {
+      if (event && (event.target as HTMLElement).closest('button, input')) {
+        return;
+      }
+      if (!editingLocked && isRenameableChildKind(child.kind)) {
+        commands.startRename(child.key);
+      }
+    },
+    [child.key, child.kind, commands, editingLocked]
+  );
+  const finishRename = useCallback(
+    (refocus: boolean) => {
+      commands.endRename();
+      if (refocus) {
+        rowElement.current?.focus();
+      }
+    },
+    [commands]
+  );
+  const defaultName = child.kind === 'reference-image' ? null : t(childRowNameKey(child.kind));
+  const commitName = useCallback(
+    (refocus: boolean) => {
+      const draft = nameInput.current?.value.trim() ?? '';
+      const cancelled = renameCancelled.current;
+      // Refocusing the row blurs the still-mounted input, which re-enters this
+      // handler; claiming the commit first keeps it to one dispatch.
+      renameCancelled.current = true;
+      finishRename(refocus);
+      if (!cancelled) {
+        commands.renameChild(child, draft.length > 0 && draft !== defaultName ? draft : null);
+      }
+    },
+    [child, commands, defaultName, finishRename]
+  );
+  const handleNameBlur = useCallback(
+    (event: FocusEvent<HTMLInputElement>) => {
+      const next = event.relatedTarget;
+      if (next === null && !window.document.hasFocus()) {
+        return;
+      }
+      commitName(next === null);
+      if (next instanceof HTMLElement) {
+        next.focus();
+      }
+    },
+    [commitName]
+  );
+  const handleNameKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      event.stopPropagation();
+      if (event.key === 'Enter') {
+        commitName(true);
+      } else if (event.key === 'Escape') {
+        renameCancelled.current = true;
+        finishRename(true);
+      }
+    },
+    [commitName, finishRename]
+  );
+  const focusOnMount = useCallback((input: HTMLInputElement | null) => {
+    nameInput.current = input;
+    renameCancelled.current = false;
+    input?.focus();
+    input?.select();
+  }, []);
 
   const muted = !child.isEnabled || !child.parentContributing;
 
@@ -159,18 +233,11 @@ const LayerChildRowComponent = ({
       _focusVisible={ROW_SELECTION_FOCUS}
       onClick={handleSelect}
       onContextMenu={handleContextMenu}
+      onDoubleClick={startRename}
       onFocus={handleFocus}
       onKeyDown={handleKeyDown}
     >
-      <Row
-        active={selected ? 'emphasized' : undefined}
-        alignItems="center"
-        display="flex"
-        gap="1.5"
-        h="full"
-        px="1.5"
-        style={indentStyle}
-      >
+      <LayerRowSurface active={selected ? 'emphasized' : undefined} indentStyle={indentStyle}>
         <LayerActiveDot
           checked={child.isEnabled}
           disabled={editingLocked}
@@ -199,15 +266,31 @@ const LayerChildRowComponent = ({
             <Icon as={CHILD_ROW_GLYPHS[child.kind]} boxSize="3" />
           )}
         </Box>
-        <Text color={muted ? 'fg.muted' : undefined} flex="1" fontSize="2xs" fontWeight="600" minW="0" truncate>
-          {name}
-        </Text>
-        {child.detail !== null ? (
+        {renaming ? (
+          <Input
+            ref={focusOnMount}
+            aria-label={t('widgets.layers.actions.rename')}
+            defaultValue={name}
+            flex="1"
+            minW="0"
+            size="2xs"
+            userSelect="text"
+            onBlur={handleNameBlur}
+            onClick={stopPropagation}
+            onKeyDown={handleNameKeyDown}
+            onPointerDown={stopPropagation}
+          />
+        ) : (
+          <Text color={muted ? 'fg.muted' : undefined} flex="1" fontSize="2xs" fontWeight="600" minW="0" truncate>
+            {name}
+          </Text>
+        )}
+        {child.detail !== null && !renaming ? (
           <Text color="fg.subtle" flexShrink={0} fontSize="2xs" fontVariantNumeric="tabular-nums">
             {child.detail}
           </Text>
         ) : null}
-      </Row>
+      </LayerRowSurface>
     </Box>
   );
 };

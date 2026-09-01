@@ -153,4 +153,4 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
   );
 };
 
-const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: false } as const;
+const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: true } as const;

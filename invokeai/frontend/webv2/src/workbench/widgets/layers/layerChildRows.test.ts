@@ -220,6 +220,32 @@ describe('adjustment rows', () => {
     ]);
   });
 
+  it('renames an entry, clears the name with null, and refuses no-op renames and non-adjustment kinds', () => {
+    const document = documentFrom([rasterWith(), regionalWith([referenceImage('ref1')])]);
+    const named = layerChildRowCommand(document, { itemId: 'a1', layerId: 'r1' }, { name: 'Warm up', type: 'rename' });
+    const entriesOf = (command: NonNullable<typeof named>) =>
+      (command.config as unknown as { adjustments: CanvasAdjustmentEntry[] }).adjustments;
+    expect(entriesOf(named!).map((entry) => entry.name)).toEqual(['Warm up', undefined, undefined]);
+    expect(layerChildRowCommand(document, { itemId: 'a1', layerId: 'r1' }, { name: null, type: 'rename' })).toBeNull();
+    const renamed = documentFrom([
+      rasterWith([{ brightness: 0, contrast: 0, id: 'a1', isEnabled: true, name: 'Old', type: 'brightness-contrast' }]),
+    ]);
+    const cleared = layerChildRowCommand(renamed, { itemId: 'a1', layerId: 'r1' }, { name: null, type: 'rename' });
+    expect('name' in entriesOf(cleared!)[0]!).toBe(false);
+    expect(
+      layerChildRowCommand(document, { itemId: 'ref1', layerId: 'rg1' }, { name: 'Ref', type: 'rename' })
+    ).toBeNull();
+  });
+
+  it('projects the custom name of a renamed entry', () => {
+    const rows = projectLayerChildRows(
+      rasterRow(
+        documentFrom([rasterWith([{ id: 'h1', isEnabled: true, name: 'Shift teal', rotation: 30, type: 'hue' }])])
+      ).vm
+    );
+    expect(rows[0]).toMatchObject({ customName: 'Shift teal', detail: '30°' });
+  });
+
   it('moves an entry within the stack and refuses moves past the ends', () => {
     const document = documentFrom([rasterWith()]);
     const moved = layerChildRowCommand(document, { itemId: 'a2', layerId: 'r1' }, { direction: -1, type: 'move' });

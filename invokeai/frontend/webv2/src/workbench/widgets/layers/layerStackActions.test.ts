@@ -16,8 +16,8 @@ const imageRef = { height: 10, imageName: 'img', width: 10 };
 const entriesOf = (nodes: CanvasNodeContract[]) => compileDocumentNodes({ stacks: stacksFrom(nodes) });
 
 describe('getStackActions', () => {
-  it('offers merge-visible + export-psd only for the raster stack, with new rightmost everywhere', () => {
-    expect(getStackActions('raster')).toEqual(['mergeVisible', 'exportPsd', 'toggleVisibility', 'new']);
+  it('offers merge-visible + export-psd only to raster, hide-all only to overlay stacks', () => {
+    expect(getStackActions('raster')).toEqual(['mergeVisible', 'exportPsd', 'new']);
     for (const stack of ['control', 'inpaint_mask', 'regional_guidance'] as const) {
       expect(getStackActions(stack)).toEqual(['toggleVisibility', 'new']);
     }

@@ -462,7 +462,7 @@ const LayerMenu = ({
       const index = getDocumentIndex(document);
       const isEnabled = !targets.every((id) => index.byId.get(id)?.node.isEnabled ?? true);
       commitPrepared(
-        t(isEnabled ? 'widgets.layers.actions.showSelected' : 'widgets.layers.actions.hideSelected'),
+        t(isEnabled ? 'widgets.layers.actions.enableSelected' : 'widgets.layers.actions.disableSelected'),
         (model) => model.prepare({ type: 'set-enabled', updates: targets.map((id) => ({ id, isEnabled })) })
       );
       return;
@@ -486,7 +486,7 @@ const LayerMenu = ({
       });
       const isHidden = !nodes.every((node) => isNodeHidden(node));
       commitPrepared(
-        t(isHidden ? 'widgets.layers.actions.hideSelectedOnCanvas' : 'widgets.layers.actions.showSelectedOnCanvas'),
+        t(isHidden ? 'widgets.layers.actions.hideSelectedLayers' : 'widgets.layers.actions.showSelectedLayers'),
         (model) => model.prepare({ type: 'set-hidden', updates: nodes.map((node) => ({ id: node.id, isHidden })) })
       );
       return;

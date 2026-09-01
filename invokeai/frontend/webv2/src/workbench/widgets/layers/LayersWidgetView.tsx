@@ -58,24 +58,14 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
   const { selectedLayerId } = document;
 
   const panel = useLayerPanelState(projectId, selectedLayerId);
-  // The sub-selection survives only while its owner stays the selected layer.
   useEffect(() => reconcileLayerChildSelection(projectId, document), [document, projectId]);
   const expandedGroupIds = useMemo(() => new Set(panel.expandedGroupIds), [panel.expandedGroupIds]);
-  // Keyed on the forests, so a selection or bbox change never rebuilds a row.
   const stacks = useMemo(
     () => buildLayerStackRows(document.stacks, expandedGroupIds, panel.filter),
     [document.stacks, expandedGroupIds, panel.filter]
   );
   const nodeCount = getDocumentIndex(document).nodes.length;
   const degraded = nodeCount > LAYER_PANEL_DEGRADE_THRESHOLD;
-  const counts = useMemo(
-    () =>
-      Object.values(stacks).reduce(
-        (total, stack) => ({ groups: total.groups + stack.groupCount, leaves: total.leaves + stack.leafCount }),
-        { groups: 0, leaves: 0 }
-      ),
-    [stacks]
-  );
 
   const selectionCommands = useLayerSelectionCommands(engine, projectId, panel.selectedIds, editingLocked);
   const handleFilter = useCallback(
@@ -104,8 +94,6 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
   const handleTreeTab = useCallback((tab: LayerTreeTabId) => runtime.state.patch({ treeTab: tab }), [runtime.state]);
   const treeTabs = useMemo(() => TREE_TABS.map(({ id, labelKey }) => ({ id, label: t(labelKey) })), [t]);
   const addLayerButton = useMemo(() => <LayersHeaderActions />, []);
-  // A properties request (canvas context menu) must reach the tree, which only
-  // mounts on the Layers tab — switch back so the reveal actually happens.
   const propertiesRequest = useCurrentLayerPropertiesRequest();
   useEffect(() => {
     if (propertiesRequest && treeTab === 'history') {
@@ -119,8 +107,6 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
     },
     [dispatch, paneLayout, runtime.state]
   );
-  // Right-click on empty tree space offers the add-layer menu; rows and stack
-  // headers preventDefault their own menus first, so they always win.
   const [addMenuAnchor, setAddMenuAnchor] = useState<LayerSurfaceAnchor | null>(null);
   const handleEmptyAreaContextMenu = useCallback((event: MouseEvent<HTMLElement>) => {
     if (event.defaultPrevented || (event.target as HTMLElement).closest('[role="treeitem"]')) {
@@ -198,9 +184,6 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
               commands={selectionCommands}
               degraded={degraded}
               filter={panel.filter}
-              groupCount={counts.groups}
-              leafCount={counts.leaves}
-              selectedCount={panel.selectedIds.length}
               onFilterChange={handleFilter}
             />
             {addMenuAnchor ? <AddLayerContextMenu anchor={addMenuAnchor} onClose={closeAddMenu} /> : null}

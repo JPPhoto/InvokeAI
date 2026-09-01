@@ -826,10 +826,10 @@ describe('toggle-hidden', () => {
     expect(idsFor(rasterLayer)).not.toContain('toggle-hidden');
     const control = getLayerContextActions(makeState(nonEmptyControlLayer));
     expect(byId(control, 'toggle-hidden').isDisabled).toBe(false);
-    expect(byId(control, 'toggle-hidden').labelKey).toBe('widgets.layers.actions.hideOnCanvas');
-    expect(getEnglishTranslation('widgets.layers.actions.hideOnCanvas')).toBe('Hide on canvas');
+    expect(byId(control, 'toggle-hidden').labelKey).toBe('widgets.layers.actions.hideLayer');
+    expect(getEnglishTranslation('widgets.layers.actions.hideLayer')).toBe('Hide layer');
     const hidden = getLayerContextActions(makeState({ ...nonEmptyControlLayer, isHidden: true }));
-    expect(byId(hidden, 'toggle-hidden').labelKey).toBe('widgets.layers.actions.showOnCanvas');
+    expect(byId(hidden, 'toggle-hidden').labelKey).toBe('widgets.layers.actions.showLayer');
     const gated = getLayerContextActions(makeState(nonEmptyControlLayer, { hiddenByAncestor: true }));
     expect(byId(gated, 'toggle-hidden').isDisabled).toBe(true);
     const runtime = makeRuntimeContext(nonEmptyControlLayer);

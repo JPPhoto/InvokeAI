@@ -35,7 +35,7 @@ import { applyStructuralPreview } from './layerOps';
 
 export type AdjustmentsEngine = CanvasStructuralEngine & CanvasPreparedEngine;
 
-const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: false } as const;
+const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: true } as const;
 
 const CurveSvg = chakra('svg');
 const CurveRect = chakra('rect');
@@ -95,7 +95,6 @@ const AdjustmentEntryEditor = ({
 }) => {
   const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
-  // The whole stack when the current gesture started; undo restores it entirely.
   const gestureBaselineRef = useRef<readonly CanvasAdjustmentEntry[] | null>(null);
 
   const patchLive = useCallback(

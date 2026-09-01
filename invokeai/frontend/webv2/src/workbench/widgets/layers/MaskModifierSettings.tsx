@@ -52,8 +52,6 @@ export const MaskModifierSettings = ({
       if (next === undefined || !Number.isFinite(next) || !modifier) {
         return;
       }
-      // Live modifier as the base: only the magnitude previews, a mid-gesture
-      // enable toggle stays put.
       const config = {
         layerType: 'inpaint_mask',
         [field]: field === 'noise' ? { ...modifier, level: next } : { ...modifier, limit: next },

@@ -47,7 +47,6 @@ export const LayerSection = ({ disabled }: { disabled: boolean }) => {
   const engine = useCanvasEngine();
   const layer = useActiveProjectSelector(selectSelectedLayer);
   const documentRevision = useActiveProjectSelector((project) => project.canvas.documentRevision);
-  // A sub-selected child row takes over the section: its own editor, its own name.
   const projectId = useActiveProjectId();
   const childSelection = useLayerChildSelection();
   const child = resolveChildEditor(layer, childSelection?.projectId === projectId ? childSelection : null, t);
@@ -106,7 +105,7 @@ const resolveChildEditor = (
     const entry = layer.adjustments?.find((candidate) => candidate.id === selection.itemId);
     if (entry) {
       const kind = adjustmentChildKind(entry.type);
-      return { itemId: selection.itemId, kind, subtitle: t(childRowNameKey(kind)) };
+      return { itemId: selection.itemId, kind, subtitle: entry.name ?? t(childRowNameKey(kind)) };
     }
   }
   return null;
@@ -161,8 +160,6 @@ const LayerTypeSettings = ({
   }
 };
 
-// Starting an operation used to close the popover; the pane's Operation
-// section now simply appears above, so there is nothing to do.
 const noop = (): void => undefined;
 
 /** Raster-layer properties: transparency lock + non-destructive adjustments. */

@@ -46,7 +46,7 @@ const IP_ADAPTER_METHODS: readonly RegionalGuidanceIPAdapterMethod[] = [
   'style_precise',
 ];
 
-const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: false } as const;
+const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: true } as const;
 
 const COVER_IMG_STYLE: CSSProperties = { height: '100%', objectFit: 'cover', width: '100%' };
 
@@ -90,9 +90,6 @@ const useReferenceImageEditing = (
     [commitPrepared, layer.id, referenceImages, t]
   );
 
-  // Assigning the image goes through the same undo path as the other ref edits
-  // (`commitReferenceImages` → `updateCanvasLayerConfig`), so a drop/upload/clear
-  // is a single, undoable document change.
   const setReferenceImageAsset = useCallback(
     (refId: string, image: RegionalGuidanceReferenceImageAsset | null) => {
       commitReferenceImages(
@@ -126,7 +123,6 @@ const useReferenceImageEditing = (
     [notifications, queryClient, setReferenceImageAsset]
   );
 
-  // Routes all-image gallery-item drops to the ref slot the drop landed on.
   useDndMonitor({
     onDragEnd: (event) => {
       const overId = event.over?.id;
@@ -295,9 +291,6 @@ const ReferenceImageEditor = ({
     [config, referenceImage, replaceRef]
   );
 
-  // Local live value while dragging the weight slider — the thumb tracks the
-  // pointer without pushing a history entry / re-committing the ref per tick. The
-  // single commit lands on drag end. `null` ⇒ not dragging (show the stored value).
   const [liveWeight, setLiveWeight] = useState<number | null>(null);
 
   const handleWeight = useCallback(({ value }: SliderValueChangeDetails) => {

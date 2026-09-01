@@ -15,27 +15,16 @@ interface LayersPanelFooterProps {
   commands: LayerSelectionCommands;
   degraded: boolean;
   filter: string;
-  groupCount: number;
-  leafCount: number;
-  selectedCount: number;
   onFilterChange: (filter: string) => void;
 }
 
 /**
- * The stable footer — the panel's one action strip: name filter, document
- * summary, and the top-frequency selection verbs (duplicate, group, delete).
- * Everything else lives in the context menu; nothing here appears or
- * disappears — controls disable instead.
+ * The stable footer — the panel's one action strip: name filter and the
+ * top-frequency selection verbs (duplicate, group, delete). Everything else
+ * lives in the context menu; nothing here appears or disappears — controls
+ * disable instead.
  */
-const LayersPanelFooterComponent = ({
-  commands,
-  degraded,
-  filter,
-  groupCount,
-  leafCount,
-  selectedCount,
-  onFilterChange,
-}: LayersPanelFooterProps) => {
+const LayersPanelFooterComponent = ({ commands, degraded, filter, onFilterChange }: LayersPanelFooterProps) => {
   const { t } = useTranslation();
   const handleFilter = useCallback(
     (event: { target: { value: string } }) => onFilterChange(event.target.value),
@@ -52,11 +41,11 @@ const LayersPanelFooterComponent = ({
         value={filter}
         onChange={handleFilter}
       />
-      <Text color="fg.muted" flexShrink={0} fontSize="2xs" whiteSpace="nowrap">
-        {degraded
-          ? t('widgets.layers.footer.degraded')
-          : `${t('widgets.layers.footer.layers', { count: leafCount })} · ${t('widgets.layers.footer.groups', { count: groupCount })} · ${t('widgets.layers.footer.selected', { count: selectedCount })}`}
-      </Text>
+      {degraded ? (
+        <Text color="fg.muted" flexShrink={0} fontSize="2xs" whiteSpace="nowrap">
+          {t('widgets.layers.footer.degraded')}
+        </Text>
+      ) : null}
       <HStack gap="0.5">
         <FooterAction
           disabled={!commands.canDuplicate}

@@ -39,6 +39,8 @@ export interface LayerRowCommands {
   selectChild(child: ProjectedChildRow, options?: { reveal?: boolean }): void;
   setChildEnabled(child: ProjectedChildRow, isEnabled: boolean): void;
   removeChild(child: ProjectedChildRow): void;
+  /** Renameable kinds (adjustment entries): sets the custom name, `null` restoring the kind's own. */
+  renameChild(child: ProjectedChildRow, name: string | null): void;
   /** Ordered kinds only (adjustment entries): swap with the neighbour in `direction`. */
   moveChild(child: ProjectedChildRow, direction: -1 | 1): void;
   /** Reference images only: append the item to another regional layer as one atomic edit. */

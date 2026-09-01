@@ -38,7 +38,7 @@ const MASK_FILL_STYLES: readonly CanvasMaskFillContract['style'][] = [
   'vertical',
 ];
 
-const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: false } as const;
+const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: true } as const;
 
 const REGIONAL_PROMPT_HEIGHT_PX = 72;
 

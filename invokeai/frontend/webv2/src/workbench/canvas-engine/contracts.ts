@@ -167,16 +167,21 @@ export interface CanvasAdjustmentCurves {
   b?: [number, number][];
 }
 
+interface CanvasAdjustmentEntryBase {
+  id: string;
+  isEnabled: boolean;
+  /** A user-given name; absent entries display their type's name. */
+  name?: string;
+}
+
 /**
  * One non-destructive adjustment in a raster layer's ordered stack. List order
  * is application order; disabling keeps the tuned values out of every render
  * without losing them. The Layers tree projects each entry as a child row.
  */
 export type CanvasAdjustmentEntry =
-  | { id: string; isEnabled: boolean; type: 'brightness-contrast'; brightness: number; contrast: number }
-  | {
-      id: string;
-      isEnabled: boolean;
+  | (CanvasAdjustmentEntryBase & { type: 'brightness-contrast'; brightness: number; contrast: number })
+  | (CanvasAdjustmentEntryBase & {
       type: 'levels';
       /** Input remap: 0–255 with `inBlack < inWhite`; `gamma` is the midtone exponent base (1 = linear). */
       inBlack: number;
@@ -184,17 +189,15 @@ export type CanvasAdjustmentEntry =
       gamma: number;
       outBlack: number;
       outWhite: number;
-    }
-  | { id: string; isEnabled: boolean; type: 'curves'; curves: CanvasAdjustmentCurves }
-  | { id: string; isEnabled: boolean; type: 'hsl'; saturation: number }
-  | {
-      id: string;
-      isEnabled: boolean;
+    })
+  | (CanvasAdjustmentEntryBase & { type: 'curves'; curves: CanvasAdjustmentCurves })
+  | (CanvasAdjustmentEntryBase & { type: 'hsl'; saturation: number })
+  | (CanvasAdjustmentEntryBase & {
       type: 'hue';
       /** Rotation around the color wheel in degrees, -180 to 180. */
       rotation: number;
-    }
-  | { id: string; isEnabled: boolean; type: 'invert' };
+    })
+  | (CanvasAdjustmentEntryBase & { type: 'invert' });
 
 /** A raster layer's ordered adjustment stack, applied top to bottom. */
 export type CanvasAdjustmentsContract = readonly CanvasAdjustmentEntry[];

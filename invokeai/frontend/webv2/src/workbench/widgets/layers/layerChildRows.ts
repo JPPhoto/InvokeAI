@@ -102,13 +102,16 @@ export interface ProjectedChildRow {
   readonly image: { readonly imageName: string; readonly thumbnailUrl: string } | null;
   /** A compact preformatted fact shown beside the name (a percent, degrees), or `null`. */
   readonly detail: string | null;
+  /** The user-given name of a renameable item (adjustment entries), or `null`. */
+  readonly customName: string | null;
 }
 
 export type LayerChildRowAction =
   | { type: 'set-enabled'; isEnabled: boolean }
   | { type: 'remove' }
   | { type: 'move'; direction: -1 | 1 }
-  | { type: 'duplicate'; newId: string };
+  | { type: 'duplicate'; newId: string }
+  | { type: 'rename'; name: string | null };
 
 /** A child row's live item facts, resolved from the document; `null` when it is gone. */
 export interface LayerChildItem {
@@ -149,6 +152,7 @@ const maskModifierRows = (vm: SemanticNode, layer: CanvasInpaintMaskLayerContrac
   return items.map((item, index) => ({
     ...baseRow(vm),
     ...item,
+    customName: null,
     image: null,
     key: layerChildRowKey(layer.id, item.itemId),
     posInSet: index + 1,
@@ -168,6 +172,7 @@ export const projectLayerChildRows = (vm: SemanticNode): readonly ProjectedChild
     const setSize = node.referenceImages.length;
     rows = node.referenceImages.map((ref, index): ProjectedChildRow => ({
       ...baseRow(vm),
+      customName: null,
       detail: null,
       image: ref.config.image
         ? { imageName: ref.config.image.imageName, thumbnailUrl: ref.config.image.thumbnailUrl }
@@ -185,6 +190,7 @@ export const projectLayerChildRows = (vm: SemanticNode): readonly ProjectedChild
     const setSize = node.adjustments.length;
     rows = node.adjustments.map((adjustment, index): ProjectedChildRow => ({
       ...baseRow(vm),
+      customName: adjustment.name ?? null,
       detail: adjustmentDetail(adjustment),
       image: null,
       isEnabled: adjustment.isEnabled,
@@ -366,7 +372,7 @@ export const layerChildRowCommand = (
 ): PatchConfigCommand | null => {
   const layer = getDocumentLayer(document, target.layerId);
   if (layer?.type === 'regional_guidance') {
-    if (action.type === 'move' || action.type === 'duplicate') {
+    if (action.type === 'move' || action.type === 'duplicate' || action.type === 'rename') {
       return null;
     }
     if (!layer.referenceImages.some((ref) => ref.id === target.itemId)) {
@@ -388,7 +394,7 @@ export const layerChildRowCommand = (
     };
   }
   if (layer?.type === 'inpaint_mask') {
-    if (action.type === 'move' || action.type === 'duplicate') {
+    if (action.type === 'move' || action.type === 'duplicate' || action.type === 'rename') {
       return null;
     }
     const field =
@@ -443,6 +449,20 @@ export const layerChildRowCommand = (
             ? { ...source, curves: structuredClone(source.curves), id: action.newId }
             : { ...source, id: action.newId };
         next = [...before.slice(0, index + 1), copy, ...before.slice(index + 1)];
+        break;
+      }
+      case 'rename': {
+        const current = before[index]!;
+        if ((current.name ?? null) === action.name) {
+          return null;
+        }
+        next = before.map((entry, i) => {
+          if (i !== index) {
+            return entry;
+          }
+          const { name: _cleared, ...rest } = entry;
+          return action.name === null ? rest : { ...entry, name: action.name };
+        });
         break;
       }
     }

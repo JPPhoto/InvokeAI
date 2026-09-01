@@ -1,9 +1,9 @@
 import type { CanvasLayerContract, CanvasNodeContract, SemanticNode } from '@workbench/canvas-engine/api';
-import type { FocusEvent, KeyboardEvent, MouseEvent } from 'react';
+import type { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent } from 'react';
 
 import { Badge, Box, chakra, HStack, Icon, Input, Text } from '@chakra-ui/react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
-import { IconButton, Row, Tooltip } from '@platform/ui';
+import { IconButton, Tooltip } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { isGroupNode, isHideableLayer, isNodeHidden, isOverlayStack } from '@workbench/canvas-engine/api';
 import {
@@ -28,20 +28,26 @@ import { recordLayerRowCommit } from './layerPanelDiagnostics';
 import { LAYER_TREE_INDENT_PX } from './layerPanelRows';
 import { anchorFromPoint } from './layerRowCommands';
 import { layerRowSummary } from './layerRowSummary';
+import { LayerRowSurface } from './LayerRowSurface';
 import { LayerThumbnail, type LayerThumbnailEngine } from './LayerThumbnail';
 import { layerTypeIcon } from './layerTypeIcon';
 
-const LAYER_ROW_BACKGROUND_TRANSITION = 'background min(40ms, var(--wb-motion-duration-fast)) ease-out';
 const CHEVRON_HOVER = { bg: 'bg.muted', color: 'fg' };
 
 const THUMBNAIL_SIZE = '8';
+const GROUP_PILE_OFFSET_PX = 4;
+const GROUP_PILE_CARD_PX = 24;
 
 /** How a row takes part in the current drag. */
 export type LayerRowDragState = 'source' | 'travelling' | null;
 
 interface LayerRowProps {
+  /** A group on the primary layer's ancestor path; tinted as selection context. */
+  ancestorOfPrimary: boolean;
   /** Projected child rows the layer owns; a chevron appears above zero. */
   childCount: number;
+  /** One of this layer's child rows holds the sub-selection; the row yields the emphasis to it. */
+  childSelected: boolean;
   childrenExpanded: boolean;
   commands: LayerRowCommands;
   drag: LayerRowDragState;
@@ -66,7 +72,9 @@ const stopPropagation = (event: { stopPropagation: () => void }): void => event.
  * keyboard through the row's menu, so the tree stays a single tab stop.
  */
 const LayerRowComponent = ({
+  ancestorOfPrimary,
   childCount,
+  childSelected,
   childrenExpanded,
   commands,
   drag,
@@ -116,7 +124,6 @@ const LayerRowComponent = ({
     [commands, row.id]
   );
   const handleFocus = useCallback(() => commands.focus(row.id), [commands, row.id]);
-  // A pressed control never takes focus from the tree item; the row it belongs to keeps the tab stop.
   const keepRowFocus = useCallback((event: MouseEvent<HTMLElement>) => {
     event.preventDefault();
     rowElement.current?.focus();
@@ -177,11 +184,17 @@ const LayerRowComponent = ({
     },
     [commands, row.id, selected]
   );
-  const startRename = useCallback(() => {
-    if (!editingLocked) {
-      commands.startRename(row.id);
-    }
-  }, [commands, editingLocked, row.id]);
+  const startRename = useCallback(
+    (event?: MouseEvent<HTMLElement>) => {
+      if (event && (event.target as HTMLElement).closest('button, input')) {
+        return;
+      }
+      if (!editingLocked) {
+        commands.startRename(row.id);
+      }
+    },
+    [commands, editingLocked, row.id]
+  );
   const finishRename = useCallback(
     (refocus: boolean) => {
       commands.endRename();
@@ -195,6 +208,9 @@ const LayerRowComponent = ({
     (refocus: boolean) => {
       const name = nameInput.current?.value.trim() ?? '';
       const cancelled = renameCancelled.current;
+      // Refocusing the row blurs the still-mounted input, which re-enters this
+      // handler; claiming the commit first keeps it to one dispatch.
+      renameCancelled.current = true;
       finishRename(refocus);
       if (!cancelled && name && name !== node.name) {
         commands.rename(row.id, name);
@@ -238,8 +254,6 @@ const LayerRowComponent = ({
     input?.select();
   }, []);
 
-  // Pointer listeners only: the tree item owns its keyboard model; dnd-kit's keyboard activator,
-  // roledescription and instructions stay out of the accessibility tree.
   const dragListeners = useMemo(() => {
     if (dragDisabled || !listeners) {
       return {};
@@ -253,6 +267,15 @@ const LayerRowComponent = ({
   const hiddenByAncestor = vm.documentHidden && !ownHidden;
   const lockedByAncestor = vm.effectiveLocked && !node.isLocked;
   const disabledByAncestor = !vm.contributionEnabled && node.isEnabled;
+  const tone = primary
+    ? childSelected
+      ? 'muted'
+      : 'emphasized'
+    : selected
+      ? 'selected'
+      : ancestorOfPrimary
+        ? 'muted'
+        : undefined;
 
   return (
     <Box
@@ -280,17 +303,7 @@ const LayerRowComponent = ({
       onFocus={handleFocus}
       onKeyDown={handleKeyDown}
     >
-      <Row
-        active={primary ? 'emphasized' : selected ? 'muted' : undefined}
-        alignItems="center"
-        cursor={drag === 'source' ? 'grabbing' : 'default'}
-        display="flex"
-        gap="1.5"
-        h="full"
-        px="1.5"
-        style={indentStyle}
-        transition={LAYER_ROW_BACKGROUND_TRANSITION}
-      >
+      <LayerRowSurface active={tone} cursor={drag === 'source' ? 'grabbing' : 'default'} indentStyle={indentStyle}>
         <LayerActiveDot
           checked={node.isEnabled}
           disabled={editingLocked}
@@ -322,69 +335,56 @@ const LayerRowComponent = ({
             <LayerThumbnail engine={engine} layer={layer!} />
           </Box>
         )}
-        {/* The identity slot: a group's disclosure chevron, or the layer's type
-          glyph — with a small modifier chevron stacked beneath it, Krita-style,
-          when the layer projects child rows. */}
-        {group ? (
-          <IconButton
-            aria-label={t(row.expanded ? 'widgets.layers.actions.collapseGroup' : 'widgets.layers.actions.expandGroup')}
-            color="fg.muted"
-            size="2xs"
-            tabIndex={-1}
-            variant="ghost"
-            onClick={handleToggleExpanded}
-            onMouseDown={keepRowFocus}
-            onPointerDown={stopPropagation}
-          >
-            <Icon
-              as={ChevronRightIcon}
-              boxSize="3.5"
-              transform={row.expanded ? 'rotate(90deg)' : undefined}
-              transitionDuration="fast"
-              transitionProperty="transform"
-            />
-          </IconButton>
-        ) : (
-          <Box
-            alignItems="center"
-            boxSize="6"
-            display="flex"
-            flexDirection="column"
-            flexShrink={0}
-            justifyContent="center"
-          >
-            <Icon as={layerTypeIcon(layer!)} boxSize="3" color="fg.subtle" />
-            {childCount > 0 ? (
-              <chakra.button
-                aria-label={t(
-                  childrenExpanded ? 'widgets.layers.actions.hideModifiers' : 'widgets.layers.actions.showModifiers'
-                )}
-                alignItems="center"
-                color="fg.muted"
-                cursor="pointer"
-                display="flex"
-                h="3"
-                justifyContent="center"
-                rounded="xs"
-                tabIndex={-1}
-                type="button"
-                w="4"
-                _hover={CHEVRON_HOVER}
-                onClick={handleToggleChildren}
-                onMouseDown={keepRowFocus}
-                onPointerDown={stopPropagation}
-              >
-                <Icon
-                  as={ChevronRightIcon}
-                  boxSize="3"
-                  transform={childrenExpanded ? 'rotate(90deg)' : undefined}
-                  transitionDuration="fast"
-                  transitionProperty="transform"
-                />
-              </chakra.button>
-            ) : null}
-          </Box>
-        )}
+        <Box
+          alignItems="center"
+          display="flex"
+          flexDirection="column"
+          flexShrink={0}
+          h="6"
+          justifyContent="center"
+          w="5"
+        >
+          <Icon
+            as={group ? (row.expanded ? FolderOpenIcon : FolderIcon) : layerTypeIcon(layer!)}
+            boxSize="3"
+            color="fg.subtle"
+          />
+          {group || childCount > 0 ? (
+            <chakra.button
+              aria-label={t(
+                group
+                  ? row.expanded
+                    ? 'widgets.layers.actions.collapseGroup'
+                    : 'widgets.layers.actions.expandGroup'
+                  : childrenExpanded
+                    ? 'widgets.layers.actions.hideModifiers'
+                    : 'widgets.layers.actions.showModifiers'
+              )}
+              alignItems="center"
+              color="fg.muted"
+              cursor="pointer"
+              display="flex"
+              h="3"
+              justifyContent="center"
+              rounded="xs"
+              tabIndex={-1}
+              type="button"
+              w="4"
+              _hover={CHEVRON_HOVER}
+              onClick={group ? handleToggleExpanded : handleToggleChildren}
+              onMouseDown={keepRowFocus}
+              onPointerDown={stopPropagation}
+            >
+              <Icon
+                as={ChevronRightIcon}
+                boxSize="3"
+                transform={(group ? row.expanded : childrenExpanded) ? 'rotate(90deg)' : undefined}
+                transitionDuration="fast"
+                transitionProperty="transform"
+              />
+            </chakra.button>
+          ) : null}
+        </Box>
         <Box
           flex="1"
           minW="0"
@@ -402,6 +402,7 @@ const LayerRowComponent = ({
               aria-label={t('widgets.layers.actions.rename')}
               defaultValue={node.name}
               size="2xs"
+              userSelect="text"
               onBlur={handleNameBlur}
               onClick={stopPropagation}
               onKeyDown={handleNameKeyDown}
@@ -461,15 +462,15 @@ const LayerRowComponent = ({
             </IconButton>
           </Tooltip>
         </HStack>
-      </Row>
+      </LayerRowSurface>
     </Box>
   );
 };
 
 export const LayerRow = memo(LayerRowComponent);
 
-/** The first few leaf layers of a group, depth first — what its preview tiles show. */
-const groupLeafPreviews = (node: CanvasNodeContract, limit = 4): CanvasLayerContract[] => {
+/** The first few leaf layers of a group, depth first — what its preview pile shows. */
+const groupLeafPreviews = (node: CanvasNodeContract, limit = 3): CanvasLayerContract[] => {
   const leaves: CanvasLayerContract[] = [];
   const walk = (candidate: CanvasNodeContract): void => {
     if (leaves.length >= limit) {
@@ -492,8 +493,9 @@ const groupLeafPreviews = (node: CanvasNodeContract, limit = 4): CanvasLayerCont
 };
 
 /**
- * A group's preview: a mini grid of its first leaves' live thumbnails, so a
- * closed folder still shows what it holds; an empty group keeps the folder.
+ * A group's preview: its first leaves' live thumbnails stacked as a small pile,
+ * top layer in front, so a closed folder still shows what it holds; an empty
+ * group keeps the folder glyph.
  */
 const GroupPreview = ({
   engine,
@@ -507,6 +509,14 @@ const GroupPreview = ({
   thumbnails: boolean;
 }) => {
   const leaves = useMemo(() => (thumbnails ? groupLeafPreviews(node) : []), [node, thumbnails]);
+  const cardStyles = useMemo(
+    () =>
+      leaves.map((_, index): CSSProperties => {
+        const offset = index * GROUP_PILE_OFFSET_PX;
+        return { height: GROUP_PILE_CARD_PX, left: offset, top: offset, width: GROUP_PILE_CARD_PX };
+      }),
+    [leaves]
+  );
   if (leaves.length === 0) {
     return (
       <Box
@@ -526,23 +536,14 @@ const GroupPreview = ({
     );
   }
   return (
-    <Box
-      borderColor="border.subtle"
-      borderWidth="1px"
-      boxSize={THUMBNAIL_SIZE}
-      display="grid"
-      flexShrink={0}
-      gap="1px"
-      gridAutoRows="1fr"
-      gridTemplateColumns={leaves.length === 1 ? '1fr' : '1fr 1fr'}
-      overflow="hidden"
-      rounded="sm"
-    >
-      {leaves.map((leaf) => (
-        <Box key={leaf.id} minH="0" minW="0" overflow="hidden">
-          <LayerThumbnail engine={engine} layer={leaf} />
-        </Box>
-      ))}
+    <Box boxSize={THUMBNAIL_SIZE} flexShrink={0} position="relative">
+      {leaves
+        .map((leaf, index) => (
+          <Box key={leaf.id} overflow="hidden" position="absolute" rounded="sm" style={cardStyles[index]}>
+            <LayerThumbnail engine={engine} layer={leaf} />
+          </Box>
+        ))
+        .reverse()}
     </Box>
   );
 };

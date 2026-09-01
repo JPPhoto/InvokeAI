@@ -9,6 +9,7 @@ import {
   CircleIcon,
   CircleOffIcon,
   CopyIcon,
+  PencilIcon,
   XIcon,
   type LucideIcon,
 } from 'lucide-react';
@@ -77,6 +78,7 @@ export const LayerChildMenu = ({
   const handleToggle = useCallback(() => commands.setChildEnabled(child, !child.isEnabled), [child, commands]);
   const handleRemove = useCallback(() => commands.removeChild(child), [child, commands]);
   const handleDuplicate = useCallback(() => commands.duplicateChild(child), [child, commands]);
+  const handleRename = useCallback(() => commands.startRename(child.key), [child.key, commands]);
   const handleMoveUp = useCallback(() => commands.moveChild(child, -1), [child, commands]);
   const handleMoveDown = useCallback(() => commands.moveChild(child, 1), [child, commands]);
   const ordered = isOrderedChildKind(child.kind);
@@ -95,6 +97,13 @@ export const LayerChildMenu = ({
             />
             {ordered ? (
               <>
+                <ChildMenuItem
+                  disabled={editingLocked}
+                  icon={PencilIcon}
+                  label={t('widgets.layers.modifiers.renameAdjustment')}
+                  value="rename"
+                  onSelect={handleRename}
+                />
                 <ChildMenuItem
                   disabled={editingLocked}
                   icon={CopyIcon}

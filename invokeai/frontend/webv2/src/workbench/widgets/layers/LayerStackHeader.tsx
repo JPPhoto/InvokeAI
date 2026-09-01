@@ -123,18 +123,20 @@ const LayerStackHeaderComponent = ({
             transitionProperty="transform"
           />
         </IconButton>
-        <Text
-          color="fg.muted"
-          cursor="pointer"
-          flex="1"
-          fontSize="2xs"
-          fontWeight="700"
-          textTransform="uppercase"
-          truncate
-          userSelect="none"
-        >
-          {t(`widgets.layers.groups.${stack}`)} ({leafCount})
-        </Text>
+        <Tooltip content={t(`widgets.layers.groupHints.${stack}`)} openDelay={600}>
+          <Text
+            color="fg.muted"
+            cursor="pointer"
+            flex="1"
+            fontSize="2xs"
+            fontWeight="700"
+            textTransform="uppercase"
+            truncate
+            userSelect="none"
+          >
+            {t(`widgets.layers.groups.${stack}`)} ({leafCount})
+          </Text>
+        </Tooltip>
         <HStack gap="0.5" onClick={stopPropagation} onMouseDown={keepFocus}>
           {actions.map((action) => (
             <Tooltip key={action.id} content={action.label}>
