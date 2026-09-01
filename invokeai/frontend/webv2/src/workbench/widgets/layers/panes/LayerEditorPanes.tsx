@@ -13,6 +13,7 @@ import type {
   LayerColorPaneLayout,
   LayerEditorPaneId,
   LayerEditorPaneLayout,
+  LayerTreeTabId,
   PaneBlockLayout,
 } from './editorPaneLayout';
 
@@ -25,7 +26,6 @@ import {
   LAYER_EDITOR_PANE_MAX_SIZE_PX,
   LAYER_EDITOR_PANE_MIN_SIZE_PX,
 } from './editorPaneLayout';
-import { HistoryPane } from './HistoryPane';
 import { OverviewPane } from './OverviewPane';
 import { PropertiesPane } from './PropertiesPane';
 import { SwatchesPane } from './SwatchesPane';
@@ -46,6 +46,26 @@ interface PaneBlockLabels {
   resize: string;
   tabs: string;
 }
+
+/** Roving focus for a horizontal tablist: arrows cycle, Home/End jump. */
+const focusSibling = (event: ReactKeyboardEvent<HTMLElement>) => {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home' && event.key !== 'End') {
+    return;
+  }
+  const tabs = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
+  const current = tabs.indexOf(document.activeElement as HTMLElement);
+  if (current === -1) {
+    return;
+  }
+  event.preventDefault();
+  const next =
+    event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? tabs.length - 1
+        : (current + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length;
+  tabs[next]?.focus();
+};
 
 /**
  * One fixed pane block of the Layers panel: a tab strip over a panel, with a
@@ -171,25 +191,6 @@ const LayerPaneBlock = ({
     },
     [commitSize, edge, maxSizePx, minSizePx, patch, sizePx]
   );
-  const focusSibling = useCallback((event: ReactKeyboardEvent<HTMLElement>) => {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home' && event.key !== 'End') {
-      return;
-    }
-    const tabs = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
-    const current = tabs.indexOf(document.activeElement as HTMLElement);
-    if (current === -1) {
-      return;
-    }
-    event.preventDefault();
-    const next =
-      event.key === 'Home'
-        ? 0
-        : event.key === 'End'
-          ? tabs.length - 1
-          : (current + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length;
-    tabs[next]?.focus();
-  }, []);
-
   const collapseLabel = isCollapsed ? labels.expand : labels.collapse;
   const collapseIcon =
     edge === 'top' ? (isCollapsed ? ChevronDownIcon : ChevronUpIcon) : isCollapsed ? ChevronUpIcon : ChevronDownIcon;
@@ -301,12 +302,13 @@ const LayerPaneBlock = ({
 const EDITOR_PANES: ReadonlyArray<{ id: LayerEditorPaneId; labelKey: string }> = [
   { id: 'properties', labelKey: 'widgets.labels.properties' },
   { id: 'transform', labelKey: 'widgets.labels.transform' },
-  { id: 'history', labelKey: 'widgets.labels.history' },
+  { id: 'overview', labelKey: 'widgets.labels.overview' },
 ];
 
 /**
- * The editor panes under the tree: the active tool's Properties and the
- * selected layer's Transform, persisted through the widget's project state.
+ * The editor panes under the tree: the active tool's Properties, the selected
+ * layer's Transform, and the document Overview, persisted through the widget's
+ * project state.
  */
 export const LayerEditorPanes = ({
   layout,
@@ -355,7 +357,13 @@ export const LayerEditorPanes = ({
       onSelectPane={onSelectPane}
       panes={panes}
     >
-      {activePane === 'transform' ? <TransformPane /> : activePane === 'history' ? <HistoryPane /> : <PropertiesPane />}
+      {activePane === 'transform' ? (
+        <TransformPane />
+      ) : activePane === 'overview' ? (
+        <OverviewPane />
+      ) : (
+        <PropertiesPane />
+      )}
     </LayerPaneBlock>
   );
 };
@@ -363,7 +371,6 @@ export const LayerEditorPanes = ({
 const COLOR_PANES: ReadonlyArray<{ id: LayerColorPaneId; labelKey: string }> = [
   { id: 'color', labelKey: 'widgets.labels.color' },
   { id: 'swatches', labelKey: 'widgets.labels.swatches' },
-  { id: 'overview', labelKey: 'widgets.labels.overview' },
 ];
 
 /**
@@ -418,8 +425,63 @@ export const LayerColorPane = ({
       onSelectPane={onSelectPane}
       panes={panes}
     >
-      {activePane === 'swatches' ? <SwatchesPane /> : activePane === 'overview' ? <OverviewPane /> : <ColorPane />}
+      {activePane === 'swatches' ? <SwatchesPane /> : <ColorPane />}
     </LayerPaneBlock>
+  );
+};
+
+const TREE_TABS: ReadonlyArray<{ id: LayerTreeTabId; labelKey: string }> = [
+  { id: 'layers', labelKey: 'widgets.labels.layers' },
+  { id: 'history', labelKey: 'widgets.labels.history' },
+];
+
+/** The middle region announces itself as this strip's tabpanel. */
+export const LAYER_TREE_PANEL_ID = 'layer-tree-panel';
+
+/**
+ * The strip over the flexible middle region: the layer tree and the edit
+ * history as sibling tabs, with the add-layer menu at the trailing edge. The
+ * middle region is the tabpanel — it has no preferred size and no collapse.
+ */
+export const LayerTreeStrip = ({
+  activeTab,
+  children,
+  onSelectTab,
+}: {
+  activeTab: LayerTreeTabId;
+  children?: ReactNode;
+  onSelectTab: (tab: LayerTreeTabId) => void;
+}) => {
+  const { t } = useTranslation();
+  const tabs = useMemo(() => TREE_TABS.map(({ id, labelKey }) => ({ id, label: t(labelKey) })), [t]);
+  const onSelect = useCallback((tab: string) => onSelectTab(tab as LayerTreeTabId), [onSelectTab]);
+
+  return (
+    <HStack align="center" flexShrink={0} gap="0.5" h={`${STRIP_HEIGHT_PX}px`} minW="0" px="1.5">
+      <HStack
+        aria-label={t('widgets.layers.treeTabs')}
+        aria-orientation="horizontal"
+        flex="1"
+        gap="0.5"
+        minW="0"
+        overflow="hidden"
+        role="tablist"
+        onKeyDown={focusSibling}
+      >
+        {tabs.map((tab) => (
+          <PaneTab
+            key={tab.id}
+            blockId="layer-tree"
+            id={tab.id}
+            isExpanded
+            isSelected={tab.id === activeTab}
+            label={tab.label}
+            onSelect={onSelect}
+          />
+        ))}
+      </HStack>
+      {children}
+    </HStack>
   );
 };
 

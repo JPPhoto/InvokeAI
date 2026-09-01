@@ -75,12 +75,12 @@ vi.mock('@workbench/useCanvasProjectMutationDispatch', () => ({
 }));
 vi.mock('@workbench/widgets/canvas/useCanvasEngine', () => ({ useCanvasEngine: () => harness.engine }));
 
-import type { LayerEditorPaneLayout } from './editorPaneLayout';
+import type { LayerEditorPaneLayout, LayerTreeTabId } from './editorPaneLayout';
 
 import { ColorPane } from './ColorPane';
 import { LAYER_EDITOR_PANE_DEFAULTS } from './editorPaneLayout';
 import { HistoryPane } from './HistoryPane';
-import { LayerEditorPanes } from './LayerEditorPanes';
+import { LAYER_TREE_PANEL_ID, LayerEditorPanes, LayerTreeStrip } from './LayerEditorPanes';
 import { OverviewPane } from './OverviewPane';
 import { PropertiesPane } from './PropertiesPane';
 import { SwatchesPane } from './SwatchesPane';
@@ -427,6 +427,36 @@ const OverviewHarness = () => (
     <OverviewPane />
   </Box>
 );
+
+const TreeStripHarness = () => {
+  const [tab, setTab] = useState<LayerTreeTabId>('layers');
+  return (
+    <>
+      <LayerTreeStrip activeTab={tab} onSelectTab={setTab}>
+        <span>trailing-slot</span>
+      </LayerTreeStrip>
+      <Box id={LAYER_TREE_PANEL_ID} role="tabpanel">
+        {tab === 'history' ? 'history-panel' : 'layers-panel'}
+      </Box>
+    </>
+  );
+};
+
+describe('Layer tree strip', () => {
+  it('switches the middle region between the tree and history', async () => {
+    await mount(TreeStripHarness);
+    const layersTab = page.getByRole('tab', { exact: true, name: 'Layers' });
+    const historyTab = page.getByRole('tab', { exact: true, name: 'History' });
+    await expect.element(layersTab).toHaveAttribute('aria-selected', 'true');
+    expect(host!.textContent).toContain('layers-panel');
+    expect(host!.textContent).toContain('trailing-slot');
+    await act(async () => {
+      await userEvent.click(historyTab);
+    });
+    await expect.element(historyTab).toHaveAttribute('aria-selected', 'true');
+    expect(host!.textContent).toContain('history-panel');
+  });
+});
 
 describe('History pane', () => {
   it('shows the empty state with undo and redo disabled', async () => {

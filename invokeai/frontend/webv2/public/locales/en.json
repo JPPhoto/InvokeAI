@@ -3028,7 +3028,8 @@
       },
       "overviewPane": {
         "pan": "Pan the canvas view"
-      }
+      },
+      "treeTabs": "Layer panel views"
     },
     "gallery": {
       "alwaysShowDimensions": "Always show dimensions",

@@ -9,13 +9,15 @@ import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engine
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
 import { useActiveProjectId, useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { LayersIcon } from 'lucide-react';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { LayerColorPaneLayout, LayerEditorPaneLayout } from './panes/editorPaneLayout';
+import type { LayerColorPaneLayout, LayerEditorPaneLayout, LayerTreeTabId } from './panes/editorPaneLayout';
 
 import { LayerMultiSelectionActions } from './LayerMultiSelectionActions';
 import { LAYER_PANEL_DEGRADE_THRESHOLD } from './layerPanelRows';
+import { useCurrentLayerPropertiesRequest } from './layerPropertiesRequestStore';
+import { LayersHeaderActions } from './LayersHeaderActions';
 import { LayersPanelFooter } from './LayersPanelFooter';
 import { LayersTree } from './LayersTree';
 import { buildLayerStackRows } from './layerTreeRows';
@@ -24,14 +26,17 @@ import {
   areLayerEditorPaneLayoutsEqual,
   readColorPaneLayout,
   readLayerEditorPaneLayout,
+  readLayerTreeTab,
 } from './panes/editorPaneLayout';
-import { LayerColorPane, LayerEditorPanes } from './panes/LayerEditorPanes';
+import { HistoryPane } from './panes/HistoryPane';
+import { LAYER_TREE_PANEL_ID, LayerColorPane, LayerEditorPanes, LayerTreeStrip } from './panes/LayerEditorPanes';
 
 /**
- * The layers panel: the Color pane at the top, a fixed selection toolbar, the virtualized tree
- * of the four stacks, a fixed footer (summary, filter, density), and the editor panes at the
- * bottom — the selected layer's own editors live in the Properties pane. Regions keep their
- * geometry; their controls disable instead of appearing and disappearing.
+ * The layers panel: the Color pane at the top, then the flexible middle region tabbed between
+ * the virtualized tree of the four stacks (with its selection toolbar and footer) and the edit
+ * history, and the editor panes (Properties, Transform, Overview) at the bottom — the selected
+ * layer's own editors live in the Properties pane. Regions keep their geometry; their controls
+ * disable instead of appearing and disappearing.
  */
 export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
   const { t } = useTranslation();
@@ -84,6 +89,18 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
     (next: LayerColorPaneLayout) => runtime.state.patch({ colorPane: next }),
     [runtime.state]
   );
+  const treeTab = useActiveProjectSelector((project) =>
+    readLayerTreeTab(project.widgetInstances[runtime.instanceId]?.state.values ?? {})
+  );
+  const handleTreeTab = useCallback((tab: LayerTreeTabId) => runtime.state.patch({ treeTab: tab }), [runtime.state]);
+  // A properties request (canvas context menu) must reach the tree, which only
+  // mounts on the Layers tab — switch back so the reveal actually happens.
+  const propertiesRequest = useCurrentLayerPropertiesRequest();
+  useEffect(() => {
+    if (propertiesRequest && treeTab === 'history') {
+      runtime.state.patch({ treeTab: 'layers' });
+    }
+  }, [propertiesRequest, runtime.state, treeTab]);
   const revealProperties = useCallback(
     (layerId: string) => {
       dispatch({ id: layerId, type: 'setCanvasSelectedLayer' });
@@ -95,59 +112,80 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
   return (
     <Stack gap="1" h="full" minH="0">
       <LayerColorPane layout={colorPaneLayout} onLayoutChange={handleColorPaneLayout} />
-      <LayerMultiSelectionActions
-        document={document}
-        editingLocked={editingLocked}
-        engine={engine}
-        projectId={projectId}
-        selectedIds={panel.selectedIds}
-      />
-      {nodeCount === 0 ? (
-        <Flex
-          align="center"
-          borderColor="border.subtle"
-          borderStyle="dashed"
-          borderWidth="1px"
-          color="fg.subtle"
-          direction="column"
-          flex="1"
-          gap="2"
-          justify="center"
-          minH="8rem"
-          mx="2"
-          p="4"
-          rounded="md"
-        >
-          <Icon as={LayersIcon} boxSize="6" />
-          <Text fontSize="2xs" textAlign="center">
-            {t('widgets.layers.empty')}
-          </Text>
-        </Flex>
-      ) : (
-        <Flex direction="column" flex="1" minH="8rem">
-          <LayersTree
-            degraded={degraded}
-            dispatch={dispatch}
-            document={document}
-            editingLocked={editingLocked}
-            engine={engine}
-            panel={panel}
-            projectId={projectId}
-            stacks={stacks}
-            onRevealProperties={revealProperties}
-          />
-        </Flex>
-      )}
-      <LayersPanelFooter
-        degraded={degraded}
-        density={panel.density}
-        filter={panel.filter}
-        groupCount={counts.groups}
-        leafCount={counts.leaves}
-        selectedCount={panel.selectedIds.length}
-        onDensityChange={handleDensity}
-        onFilterChange={handleFilter}
-      />
+      <LayerTreeStrip activeTab={treeTab} onSelectTab={handleTreeTab}>
+        <LayersHeaderActions />
+      </LayerTreeStrip>
+      <Flex
+        aria-labelledby={`layer-tree-tab-${treeTab}`}
+        direction="column"
+        flex="1"
+        id={LAYER_TREE_PANEL_ID}
+        // The toolbar (40px) + tree floor (128px) + footer (40px); anything
+        // less lets the unshrinkable rows paint under the editor panes.
+        minH="13rem"
+        overflow="hidden"
+        role="tabpanel"
+      >
+        {treeTab === 'history' ? (
+          <HistoryPane />
+        ) : (
+          <>
+            <LayerMultiSelectionActions
+              document={document}
+              editingLocked={editingLocked}
+              engine={engine}
+              projectId={projectId}
+              selectedIds={panel.selectedIds}
+            />
+            {nodeCount === 0 ? (
+              <Flex
+                align="center"
+                borderColor="border.subtle"
+                borderStyle="dashed"
+                borderWidth="1px"
+                color="fg.subtle"
+                direction="column"
+                flex="1"
+                gap="2"
+                justify="center"
+                minH="8rem"
+                mx="2"
+                p="4"
+                rounded="md"
+              >
+                <Icon as={LayersIcon} boxSize="6" />
+                <Text fontSize="2xs" textAlign="center">
+                  {t('widgets.layers.empty')}
+                </Text>
+              </Flex>
+            ) : (
+              <Flex direction="column" flex="1" minH="8rem">
+                <LayersTree
+                  degraded={degraded}
+                  dispatch={dispatch}
+                  document={document}
+                  editingLocked={editingLocked}
+                  engine={engine}
+                  panel={panel}
+                  projectId={projectId}
+                  stacks={stacks}
+                  onRevealProperties={revealProperties}
+                />
+              </Flex>
+            )}
+            <LayersPanelFooter
+              degraded={degraded}
+              density={panel.density}
+              filter={panel.filter}
+              groupCount={counts.groups}
+              leafCount={counts.leaves}
+              selectedCount={panel.selectedIds.length}
+              onDensityChange={handleDensity}
+              onFilterChange={handleFilter}
+            />
+          </>
+        )}
+      </Flex>
       <LayerEditorPanes layout={paneLayout} onLayoutChange={handlePaneLayout} />
     </Stack>
   );
