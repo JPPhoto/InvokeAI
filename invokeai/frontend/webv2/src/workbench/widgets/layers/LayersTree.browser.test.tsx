@@ -268,14 +268,14 @@ afterEach(async () => {
 describe('LayersTree virtualization', () => {
   it('mounts only the rows near the viewport of a 2,000-layer document and keeps the tree height exact', async () => {
     await renderTree(manyLayers(2000));
-    const visible = Math.ceil(320 / LAYER_ROW_HEIGHT_PX.comfortable);
+    const visible = Math.ceil(320 / LAYER_ROW_HEIGHT_PX);
     expect(treeitems().length).toBeLessThanOrEqual(visible + 12 + 2);
     expect(treeitems().length).toBeGreaterThanOrEqual(visible);
     // Thumbnails are asked for once per mounted leaf and never again for the rest of the list.
     expect(thumbnailRequests.mock.calls.length).toBeLessThanOrEqual(treeitems().length);
     const tree = host!.querySelector<HTMLElement>('[role="tree"]')!;
     expect(tree.getAttribute('aria-multiselectable')).toBe('true');
-    expect(getComputedStyle(tree).height).toBe(`${2000 * LAYER_ROW_HEIGHT_PX.comfortable + 28}px`);
+    expect(getComputedStyle(tree).height).toBe(`${2000 * LAYER_ROW_HEIGHT_PX + 28}px`);
   });
 
   it('commits only the rows a selection change touches, and nothing on scroll', async () => {
@@ -448,7 +448,7 @@ describe('LayersTree selection, surfaces and structure', () => {
     expect(scroller.scrollTop).toBe(0);
     await act(() => dispatchExternal({ id: 'l1500', type: 'setCanvasSelectedLayer' }));
     await settle();
-    expect(scroller.scrollTop).toBeGreaterThan(1000 * LAYER_ROW_HEIGHT_PX.comfortable);
+    expect(scroller.scrollTop).toBeGreaterThan(1000 * LAYER_ROW_HEIGHT_PX);
     expect(treeitem('Layer 1500')).not.toBeNull();
 
     // Later list changes leave the scroll position alone.
@@ -459,7 +459,7 @@ describe('LayersTree selection, surfaces and structure', () => {
     expect(scroller.scrollTop).toBe(0);
 
     // A panel selection reveals nothing, but a later external change back to it does.
-    scroller.scrollTop = 1500 * LAYER_ROW_HEIGHT_PX.comfortable;
+    scroller.scrollTop = 1500 * LAYER_ROW_HEIGHT_PX;
     await settle();
     await act(() => userEvent.click(treeitem('Layer 1501')));
     const outside = document.createElement('input');
@@ -471,7 +471,7 @@ describe('LayersTree selection, surfaces and structure', () => {
     scroller.scrollTop = 0;
     await act(() => dispatchExternal({ id: 'l1501', type: 'setCanvasSelectedLayer' }));
     await settle();
-    expect(scroller.scrollTop).toBeGreaterThan(1000 * LAYER_ROW_HEIGHT_PX.comfortable);
+    expect(scroller.scrollTop).toBeGreaterThan(1000 * LAYER_ROW_HEIGHT_PX);
     outside.remove();
 
     // A primary inside a collapsed stack opens the stack and lands in view.

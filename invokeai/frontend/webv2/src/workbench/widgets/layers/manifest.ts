@@ -7,6 +7,8 @@ import { COLOR_PANE_DEFAULTS, LAYER_EDITOR_PANE_DEFAULTS } from './panes/editorP
 export const layersWidgetManifest: WidgetManifest = {
   allowMultiple: false,
   allowedRegions: ['right'],
+  // The rail context menu still offers close/move; the panel body is the chrome.
+  chrome: { header: 'hidden' },
   failurePolicy: { isolateRenderFailure: true, onRegistrationFailure: 'disable' },
   icon: LayersIcon,
   id: 'layers',

@@ -17,7 +17,6 @@ import {
   isSameLayerPanelState,
   reconcileLayerPanelStates,
   selectLayerInPanel,
-  setLayerPanelDensity,
   setLayerPanelFilter,
   setLayerPanelFocus,
   toggleLayerStackCollapsed,
@@ -231,7 +230,7 @@ describe('revealing an external primary', () => {
   });
 });
 
-describe('focus, density and filter', () => {
+describe('focus and filter', () => {
   beforeEach(() => clearLayerPanelStates());
 
   it('keeps a roving focus that follows the primary until a row is focused explicitly', () => {
@@ -250,13 +249,11 @@ describe('focus, density and filter', () => {
     expect(reconcileLayerPanelState(readLayerPanelState('p1', 'a'), 'p1', index, 'a').focusId).toBe('b');
   });
 
-  it('carries density and filter across primary changes and clears them on a project switch', () => {
-    setLayerPanelDensity('p1', 'a', 'compact');
+  it('carries the filter across primary changes and clears it on a project switch', () => {
     setLayerPanelFilter('p1', 'a', 'sky');
-    expect(readLayerPanelState('p1', 'b')).toMatchObject({ density: 'compact', filter: 'sky', primaryId: 'b' });
+    expect(readLayerPanelState('p1', 'b')).toMatchObject({ filter: 'sky', primaryId: 'b' });
     const index = indexStacks(stacksFrom([layerContract('x')]));
     expect(reconcileLayerPanelState(readLayerPanelState('p1', 'b'), 'p2', index, 'x')).toMatchObject({
-      density: 'comfortable',
       filter: '',
     });
   });

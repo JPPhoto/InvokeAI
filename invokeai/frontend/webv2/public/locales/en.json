@@ -1506,7 +1506,6 @@
       "sections": {
         "operation": "Operation",
         "tool": "Tool",
-        "generation": "Generation",
         "layer": "Layer"
       }
     },
@@ -1596,7 +1595,6 @@
       "deletePresetNamed": "Delete preset {{name}}",
       "deletePromptHistoryItem": "Delete prompt history item",
       "denoisingStrength": "Denoising strength",
-      "denoisingStrengthHelp": "How much the generation reworks the existing canvas content. Only applies to image-to-image (when content fills the generation frame).",
       "disableConcept": "Disable {{name}}",
       "disableReferenceImage": "Disable reference image",
       "dropImageToPrompt": "Describe this image",
@@ -2862,8 +2860,6 @@
         "screen": "Screen",
         "soft-light": "Soft light"
       },
-      "denoisingStrength": "Denoising strength",
-      "denoisingStrengthHelp": "How much the canvas image is changed. Lower keeps more of the original; higher allows bigger changes.",
       "empty": "No layers yet. Add a layer or paint on the canvas to get started.",
       "groupActions": {
         "collapse": "Collapse group",
@@ -2979,13 +2975,7 @@
         "groups_other": "{{count}} groups",
         "selected_one": "{{count}} selected",
         "selected_other": "{{count}} selected",
-        "degraded": "Large document: thumbnails and drag reordering are off.",
-        "density": {
-          "label": "Row density",
-          "compact": "Compact",
-          "comfortable": "Comfortable",
-          "large": "Large"
-        }
+        "degraded": "Large document: thumbnails and drag reordering are off."
       },
       "dropRefused": "Can't drop here: {{reason}}",
       "panes": {

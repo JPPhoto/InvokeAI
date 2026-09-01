@@ -1,9 +1,9 @@
 /**
  * Canvas compositing settings for the generate widget.
  *
- * Denoising strength USED to live here; it moved to the Properties pane's
- * Generation section (`widgets/layers/panes/LayerSection.tsx`). This section
- * holds the rest of the legacy canvas compositing controls — infill method,
+ * One of the Generate form's canvas-only sections (`GenerateCanvasSections`),
+ * alongside the denoising strength. This section
+ * holds the legacy canvas compositing controls — infill method,
  * coherence pass mode / edge size / min denoise, and mask blur — persisted
  * per-project in the canvas widget's own `state.values` (same store as
  * `denoisingStrength`), read back by `prepareCanvasInvocation` and threaded into

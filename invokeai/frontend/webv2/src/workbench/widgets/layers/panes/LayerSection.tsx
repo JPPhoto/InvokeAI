@@ -1,8 +1,4 @@
-import type {
-  NumberInput as ChakraNumberInput,
-  SelectValueChangeDetails,
-  SliderValueChangeDetails,
-} from '@chakra-ui/react';
+import type { NumberInput as ChakraNumberInput, SelectValueChangeDetails } from '@chakra-ui/react';
 import type {
   CanvasBlendMode,
   CanvasDocumentContractV3,
@@ -12,28 +8,18 @@ import type {
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 
 import { Box, createListCollection, Flex, HStack, NumberInput, Stack, Switch, Text } from '@chakra-ui/react';
-import { useDebouncedDraftValue, useRegisterGenerateDraftFlusher } from '@features/generation/react';
-import { ColorPicker, Field, Select, Slider } from '@platform/ui';
+import { ColorPicker, Field, Select } from '@platform/ui';
 import { getDocumentLayer } from '@workbench/canvas-engine/api';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
-import {
-  CANVAS_DENOISING_STRENGTH_KEY,
-  clampCanvasDenoisingStrength,
-  MAX_CANVAS_DENOISING_STRENGTH,
-  MIN_CANVAS_DENOISING_STRENGTH,
-  readCanvasDenoisingStrength,
-} from '@workbench/widgets/canvas/invoke/canvasStrength';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { AdjustmentsPopover } from '@workbench/widgets/layers/AdjustmentsPopover';
 import { ControlLayerSettings } from '@workbench/widgets/layers/ControlLayerSettings';
-import { DenoisingStrengthWave } from '@workbench/widgets/layers/DenoisingStrengthWave';
 import { InpaintMaskSettings } from '@workbench/widgets/layers/InpaintMaskSettings';
 import { applyStructuralPreview, CANVAS_BLEND_MODES } from '@workbench/widgets/layers/layerOps';
 import { RasterLayerFilterSection } from '@workbench/widgets/layers/RasterLayerFilterSection';
 import { RegionalGuidanceSettings } from '@workbench/widgets/layers/RegionalGuidanceSettings';
-import { getProjectWidgetValues } from '@workbench/widgetState';
-import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
+import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -42,10 +28,8 @@ import { PropertiesSection } from './PropertiesSection';
 
 type LayerSectionEngine = Pick<CanvasEngineHandle, 'document' | 'exports' | 'interaction' | 'layers' | 'projectId'>;
 
-const STRENGTH_DEBOUNCE_MS = 250;
 const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: true } as const;
 
-const formatStrengthPercent = (value: number): string => `${Math.round(value * 100)}%`;
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
 /** A mask layer whose fill colour the header swatch edits (inpaint mask / region). */
@@ -65,11 +49,10 @@ export const isLayerEditingDisabled = (layer: CanvasLayerContract | null, editin
   !layer || editingLocked;
 
 /**
- * The Layer and Generation sections of the Properties pane: the selected
- * layer's blend mode, opacity, mask fill and type-specific settings (moved out
- * of the Layers header and its per-row popover), plus the document-wide
- * denoising strength. Every editor commits through the same document seams it
- * always did — this is the one implementation, reparented.
+ * The Layer section of the Properties pane: the selected layer's blend mode,
+ * opacity, mask fill and type-specific settings (moved out of the Layers
+ * header and its per-row popover). Every editor commits through the same
+ * document seams it always did — this is the one implementation, reparented.
  */
 export const LayerSection = ({ disabled }: { disabled: boolean }) => {
   const { t } = useTranslation();
@@ -79,28 +62,23 @@ export const LayerSection = ({ disabled }: { disabled: boolean }) => {
   const editingLocked = useCanvasDocumentEditingLocked(engine);
 
   return (
-    <>
-      <PropertiesSection
-        disabled={disabled}
-        subtitle={layer?.name ?? t('widgets.transform.noSelection')}
-        title={t('widgets.properties.sections.layer')}
-      >
-        {layer ? (
-          <Stack gap="2">
-            <Flex align="center" gap="2">
-              <BlendModeControl editingLocked={editingLocked} engine={engine} layer={layer} />
-              <OpacityRow editingLocked={editingLocked} engine={engine} layer={layer} />
-            </Flex>
-            <LayerTypeSettings documentRevision={documentRevision} engine={engine} layer={layer} />
-          </Stack>
-        ) : (
-          <GroupSelectedNotice />
-        )}
-      </PropertiesSection>
-      <PropertiesSection disabled={disabled} title={t('widgets.properties.sections.generation')}>
-        <DenoisingStrengthControl />
-      </PropertiesSection>
-    </>
+    <PropertiesSection
+      disabled={disabled}
+      subtitle={layer?.name ?? t('widgets.transform.noSelection')}
+      title={t('widgets.properties.sections.layer')}
+    >
+      {layer ? (
+        <Stack gap="2">
+          <Flex align="center" gap="2">
+            <BlendModeControl editingLocked={editingLocked} engine={engine} layer={layer} />
+            <OpacityRow editingLocked={editingLocked} engine={engine} layer={layer} />
+          </Flex>
+          <LayerTypeSettings documentRevision={documentRevision} engine={engine} layer={layer} />
+        </Stack>
+      ) : (
+        <GroupSelectedNotice />
+      )}
+    </PropertiesSection>
   );
 };
 
@@ -424,92 +402,5 @@ const MaskFillSwatch = ({
         onValueChangeEnd={handleColorChangeEnd}
       />
     </Box>
-  );
-};
-
-const selectCanvasStrength = (project: Parameters<typeof getProjectWidgetValues>[0]): number =>
-  readCanvasDenoisingStrength(getProjectWidgetValues(project, 'canvas'));
-
-const DenoisingStrengthControl = () => {
-  const { t } = useTranslation();
-  const { widgets } = useWorkbenchCommands();
-  const projectId = useActiveProjectSelector((project) => project.id);
-  const strength = useActiveProjectSelector(selectCanvasStrength);
-
-  const commitStrength = useCallback(
-    (value: number) => {
-      widgets.patchValues('canvas', { [CANVAS_DENOISING_STRENGTH_KEY]: clampCanvasDenoisingStrength(value) });
-    },
-    [widgets]
-  );
-
-  const {
-    draftValue: draftStrength,
-    flushDraftValue,
-    setDraftValue: setStrength,
-  } = useDebouncedDraftValue({
-    delayMs: STRENGTH_DEBOUNCE_MS,
-    onCommit: commitStrength,
-    resetKey: projectId,
-    value: strength,
-  });
-
-  useRegisterGenerateDraftFlusher(flushDraftValue);
-
-  const strengthAriaLabel = useMemo(() => [t('widgets.layers.denoisingStrength')], [t]);
-  const strengthSliderValue = useMemo(() => [draftStrength], [draftStrength]);
-  const strengthNumberValue = useMemo(() => draftStrength.toFixed(2), [draftStrength]);
-  const strengthWave = useMemo(() => <DenoisingStrengthWave value={draftStrength} />, [draftStrength]);
-
-  const onSliderChange = useCallback(
-    ({ value }: SliderValueChangeDetails) => {
-      const next = value[0];
-      if (next !== undefined && Number.isFinite(next)) {
-        setStrength(next);
-      }
-    },
-    [setStrength]
-  );
-
-  const onNumberChange = useCallback(
-    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
-      if (Number.isFinite(valueAsNumber)) {
-        setStrength(valueAsNumber);
-      }
-    },
-    [setStrength]
-  );
-
-  return (
-    <Field label={t('widgets.layers.denoisingStrength')} labelEnd={strengthWave} orientation="horizontal">
-      <Flex direction="row" gap="2" align="center">
-        <Slider
-          aria-label={strengthAriaLabel}
-          flex="1"
-          formatValue={formatStrengthPercent}
-          max={MAX_CANVAS_DENOISING_STRENGTH}
-          min={MIN_CANVAS_DENOISING_STRENGTH}
-          minW="0"
-          size="sm"
-          step={0.01}
-          value={strengthSliderValue}
-          withThumbTooltip
-          onValueChange={onSliderChange}
-          ms="2"
-        />
-        <NumberInput.Root
-          max={MAX_CANVAS_DENOISING_STRENGTH}
-          min={MIN_CANVAS_DENOISING_STRENGTH}
-          size="xs"
-          step={0.05}
-          value={strengthNumberValue}
-          w="20"
-          onValueChange={onNumberChange}
-        >
-          <NumberInput.Control />
-          <NumberInput.Input aria-label={t('widgets.layers.denoisingStrength')} />
-        </NumberInput.Root>
-      </Flex>
-    </Field>
   );
 };

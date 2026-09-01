@@ -9,7 +9,6 @@ import { getDocumentIndex } from '@workbench/canvas-engine/api';
  * history. The primary selection stays `document.selectedLayerId`; `primaryId` mirrors the value
  * this state was built against so an external primary change collapses stale secondaries.
  */
-export type LayerPanelDensity = 'compact' | 'comfortable' | 'large';
 
 export interface LayerPanelState {
   readonly projectId: string;
@@ -21,17 +20,15 @@ export interface LayerPanelState {
   readonly expandedGroupIds: readonly string[];
   /** The row that holds keyboard focus (roving tabindex); falls back to the primary. */
   readonly focusId: string | null;
-  readonly density: LayerPanelDensity;
   /** A name filter; empty shows everything. */
   readonly filter: string;
 }
 
 /** Panel preferences that survive a primary change and a project switch. */
-type LayerPanelCarry = Pick<LayerPanelState, 'collapsedStacks' | 'expandedGroupIds' | 'density' | 'filter'>;
+type LayerPanelCarry = Pick<LayerPanelState, 'collapsedStacks' | 'expandedGroupIds' | 'filter'>;
 
 const DEFAULT_CARRY: LayerPanelCarry = {
   collapsedStacks: [],
-  density: 'comfortable',
   expandedGroupIds: [],
   filter: '',
 };
@@ -70,7 +67,6 @@ export const createLayerPanelState = (
 
 const carryOf = (state: LayerPanelState): LayerPanelCarry => ({
   collapsedStacks: state.collapsedStacks,
-  density: state.density,
   expandedGroupIds: state.expandedGroupIds,
   filter: state.filter,
 });
@@ -83,7 +79,6 @@ export const isSameLayerPanelState = (left: LayerPanelState, right: LayerPanelSt
   left.primaryId === right.primaryId &&
   left.anchorId === right.anchorId &&
   left.focusId === right.focusId &&
-  left.density === right.density &&
   left.filter === right.filter &&
   sameIds(left.selectedIds, right.selectedIds) &&
   sameIds(left.collapsedStacks, right.collapsedStacks) &&
@@ -156,13 +151,6 @@ export const setLayerPanelFocus = (projectId: string, primaryId: string | null, 
   const current = readLayerPanelState(projectId, primaryId);
   if (current.focusId !== focusId) {
     write({ ...current, focusId });
-  }
-};
-
-export const setLayerPanelDensity = (projectId: string, primaryId: string | null, density: LayerPanelDensity): void => {
-  const current = readLayerPanelState(projectId, primaryId);
-  if (current.density !== density) {
-    write({ ...current, density });
   }
 };
 

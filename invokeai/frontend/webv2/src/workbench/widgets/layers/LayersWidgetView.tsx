@@ -1,23 +1,24 @@
-import type { LayerPanelDensity } from '@workbench/layerPanelState';
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { Flex, Icon, Stack, Text } from '@chakra-ui/react';
 import { getDocumentIndex } from '@workbench/canvas-engine/api';
-import { setLayerPanelDensity, setLayerPanelFilter, useLayerPanelState } from '@workbench/layerPanelState';
+import { setLayerPanelFilter, useLayerPanelState } from '@workbench/layerPanelState';
 import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
 import { useActiveProjectId, useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { LayersIcon } from 'lucide-react';
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import type { LayerSurfaceAnchor } from './layerRowCommands';
 import type { LayerColorPaneLayout, LayerEditorPaneLayout, LayerTreeTabId } from './panes/editorPaneLayout';
 
 import { LayerMultiSelectionActions } from './LayerMultiSelectionActions';
 import { LAYER_PANEL_DEGRADE_THRESHOLD } from './layerPanelRows';
 import { useCurrentLayerPropertiesRequest } from './layerPropertiesRequestStore';
-import { LayersHeaderActions } from './LayersHeaderActions';
+import { anchorFromPoint } from './layerRowCommands';
+import { AddLayerContextMenu, LayersHeaderActions } from './LayersHeaderActions';
 import { LayersPanelFooter } from './LayersPanelFooter';
 import { LayersTree } from './LayersTree';
 import { buildLayerStackRows } from './layerTreeRows';
@@ -65,10 +66,6 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
     [stacks]
   );
 
-  const handleDensity = useCallback(
-    (density: LayerPanelDensity) => setLayerPanelDensity(projectId, selectedLayerId, density),
-    [projectId, selectedLayerId]
-  );
   const handleFilter = useCallback(
     (filter: string) => setLayerPanelFilter(projectId, selectedLayerId, filter),
     [projectId, selectedLayerId]
@@ -108,6 +105,17 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
     },
     [dispatch, paneLayout, runtime.state]
   );
+  // Right-click on empty tree space offers the add-layer menu; rows and stack
+  // headers preventDefault their own menus first, so they always win.
+  const [addMenuAnchor, setAddMenuAnchor] = useState<LayerSurfaceAnchor | null>(null);
+  const handleEmptyAreaContextMenu = useCallback((event: MouseEvent<HTMLElement>) => {
+    if (event.defaultPrevented || (event.target as HTMLElement).closest('[role="treeitem"]')) {
+      return;
+    }
+    event.preventDefault();
+    setAddMenuAnchor(anchorFromPoint(event.clientX, event.clientY));
+  }, []);
+  const closeAddMenu = useCallback(() => setAddMenuAnchor(null), []);
 
   return (
     <Stack gap="1" h="full" minH="0">
@@ -152,6 +160,7 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
                 mx="2"
                 p="4"
                 rounded="md"
+                onContextMenu={handleEmptyAreaContextMenu}
               >
                 <Icon as={LayersIcon} boxSize="6" />
                 <Text fontSize="2xs" textAlign="center">
@@ -159,7 +168,7 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
                 </Text>
               </Flex>
             ) : (
-              <Flex direction="column" flex="1" minH="8rem">
+              <Flex direction="column" flex="1" minH="8rem" onContextMenu={handleEmptyAreaContextMenu}>
                 <LayersTree
                   degraded={degraded}
                   dispatch={dispatch}
@@ -175,14 +184,13 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
             )}
             <LayersPanelFooter
               degraded={degraded}
-              density={panel.density}
               filter={panel.filter}
               groupCount={counts.groups}
               leafCount={counts.leaves}
               selectedCount={panel.selectedIds.length}
-              onDensityChange={handleDensity}
               onFilterChange={handleFilter}
             />
+            {addMenuAnchor ? <AddLayerContextMenu anchor={addMenuAnchor} onClose={closeAddMenu} /> : null}
           </>
         )}
       </Flex>

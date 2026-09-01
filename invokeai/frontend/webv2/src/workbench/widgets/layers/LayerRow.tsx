@@ -1,5 +1,4 @@
 import type { CanvasLayerContract, SemanticNode } from '@workbench/canvas-engine/api';
-import type { LayerPanelDensity } from '@workbench/layerPanelState';
 import type { FocusEvent, KeyboardEvent, MouseEvent } from 'react';
 
 import { Badge, Box, HStack, Icon, Input, Stack, Text } from '@chakra-ui/react';
@@ -52,15 +51,13 @@ const VISIBILITY_DOT_UNCHECKED = { ...VISIBILITY_DOT_BASE, bg: 'transparent', bo
 const VISIBILITY_DOT_CHECKED_HOVER = { _before: { bg: 'accent.emphasized', borderColor: 'accent.emphasized' } };
 const VISIBILITY_DOT_UNCHECKED_HOVER = { _before: { borderColor: 'fg.muted' } };
 
-const THUMBNAIL_SIZE: Record<LayerPanelDensity, string> = { comfortable: '8', compact: '5', large: '11' };
-const NAME_SIZE: Record<LayerPanelDensity, string> = { comfortable: '2xs', compact: '2xs', large: 'xs' };
+const THUMBNAIL_SIZE = '8';
 
 /** How a row takes part in the current drag. */
 export type LayerRowDragState = 'source' | 'travelling' | null;
 
 interface LayerRowProps {
   commands: LayerRowCommands;
-  density: LayerPanelDensity;
   drag: LayerRowDragState;
   /** Drag reordering is off: the editing lock or degraded mode. */
   dragDisabled: boolean;
@@ -84,7 +81,6 @@ const stopPropagation = (event: { stopPropagation: () => void }): void => event.
  */
 const LayerRowComponent = ({
   commands,
-  density,
   drag,
   dragDisabled,
   editingLocked,
@@ -343,7 +339,7 @@ const LayerRowComponent = ({
               bg="bg.muted"
               borderColor="border.subtle"
               borderWidth="1px"
-              boxSize={THUMBNAIL_SIZE[density]}
+              boxSize={THUMBNAIL_SIZE}
               color="fg.muted"
               display="flex"
               flexShrink={0}
@@ -353,7 +349,7 @@ const LayerRowComponent = ({
               <Icon as={group ? (row.expanded ? FolderOpenIcon : FolderIcon) : ImageIcon} boxSize="4" />
             </Box>
           ) : (
-            <Box boxSize={THUMBNAIL_SIZE[density]} flexShrink={0}>
+            <Box boxSize={THUMBNAIL_SIZE} flexShrink={0}>
               <LayerThumbnail engine={engine} layer={layer!} />
             </Box>
           )}
@@ -372,29 +368,27 @@ const LayerRowComponent = ({
             ) : (
               <MiddleTruncate
                 color={vm.contributionEnabled ? undefined : 'fg.muted'}
-                fontSize={NAME_SIZE[density]}
+                fontSize="2xs"
                 fontWeight="700"
                 text={node.name}
               />
             )}
-            {density !== 'compact' ? (
-              <HStack gap="1" minW="0">
-                {group ? (
-                  <Text color="fg.muted" fontSize="2xs">
-                    {vm.leafCount === 0
-                      ? t('widgets.layers.groupEmpty')
-                      : t('widgets.layers.groupSummary', { count: vm.leafCount })}
+            <HStack gap="1" minW="0">
+              {group ? (
+                <Text color="fg.muted" fontSize="2xs">
+                  {vm.leafCount === 0
+                    ? t('widgets.layers.groupEmpty')
+                    : t('widgets.layers.groupSummary', { count: vm.leafCount })}
+                </Text>
+              ) : (
+                <>
+                  <Text color="fg.muted" fontSize="2xs" minW="0" truncate>
+                    {layerRowSummary(layer!, t)}
                   </Text>
-                ) : (
-                  <>
-                    <Text color="fg.muted" fontSize="2xs" minW="0" truncate>
-                      {layerRowSummary(layer!, t)}
-                    </Text>
-                    <ControlLayerWarningIcon contributing={vm.contributionEnabled} layer={layer!} />
-                  </>
-                )}
-              </HStack>
-            ) : null}
+                  <ControlLayerWarningIcon contributing={vm.contributionEnabled} layer={layer!} />
+                </>
+              )}
+            </HStack>
           </Stack>
           {/* One control cluster on the same rhythm as the stack header; slots a row cannot use are held open. */}
           <HStack flexShrink="0" gap="0.5" onClick={stopPropagation} onMouseDown={keepRowFocus}>

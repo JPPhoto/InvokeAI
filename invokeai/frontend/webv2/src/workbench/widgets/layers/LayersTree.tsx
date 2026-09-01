@@ -105,7 +105,7 @@ const VirtualSlot = ({ children, size, start }: { children: ReactNode; size: num
 
 /**
  * The virtualized, keyboard-first layer tree: one scroll container, one drag context, one menu
- * host, fixed row heights per density, and a single roving tab stop over stack headers and rows.
+ * host, fixed row heights, and a single roving tab stop over stack headers and rows.
  * Rows receive a view model and a command handle; every subscription and commit lives here.
  */
 export const LayersTree = ({
@@ -142,7 +142,7 @@ export const LayersTree = ({
   // The primary the panel itself selected last; any other primary change came from outside and is revealed.
   const panelSelectedPrimary = useRef<string | null>(null);
   const revealedPrimary = useRef<string | null>(null);
-  const { density, selectedIds, primaryId } = panel;
+  const { selectedIds, primaryId } = panel;
 
   const requestedId = propertiesRequest?.layerId ?? null;
   const requestedStack = useMemo(
@@ -159,10 +159,10 @@ export const LayersTree = ({
   const offsets = useMemo(() => {
     const starts = new Float64Array(panelRows.length + 1);
     panelRows.forEach((row, index) => {
-      starts[index + 1] = starts[index]! + panelRowHeight(row, density);
+      starts[index + 1] = starts[index]! + panelRowHeight(row);
     });
     return starts;
-  }, [density, panelRows]);
+  }, [panelRows]);
   const headerIndexes = useMemo(
     () => panelRows.flatMap((row, index) => (row.kind === 'header' ? [index] : [])),
     [panelRows]
@@ -196,7 +196,7 @@ export const LayersTree = ({
   const getScrollElement = useCallback(() => scrollRef.current, []);
   // Created once the scroll element exists; handlers reach it through the ref.
   const autoScroller = useRef<LayerTreeAutoScroller | null>(null);
-  const estimateSize = useCallback((index: number) => panelRowHeight(panelRows[index]!, density), [density, panelRows]);
+  const estimateSize = useCallback((index: number) => panelRowHeight(panelRows[index]!), [panelRows]);
   const getItemKey = useCallback((index: number) => panelRows[index]?.key ?? index, [panelRows]);
   const virtualizer = useVirtualizer({
     count: panelRows.length,
@@ -209,13 +209,13 @@ export const LayersTree = ({
     scrollPaddingStart: LAYER_HEADER_HEIGHT_PX,
   });
   const virtualItems = virtualizer.virtualItems;
-  // Fixed sizes change only with the row list or the density; re-measure then, never per snapshot.
+  // Fixed sizes change only with the row list; re-measure then, never per snapshot.
   const measureVirtualizer = useEffectEvent(() => {
     virtualizer.measure();
   });
   useLayoutEffect(() => {
     measureVirtualizer();
-  }, [density, panelRows]);
+  }, [panelRows]);
   const virtualizerRef = useRef(virtualizer);
   useLayoutEffect(() => {
     virtualizerRef.current = virtualizer;
@@ -806,7 +806,6 @@ export const LayersTree = ({
                   {panelRow.kind === 'node' ? (
                     <LayerRow
                       commands={commands}
-                      density={density}
                       drag={dragStateOf(panelRow.row.id)}
                       dragDisabled={dragDisabled}
                       editingLocked={editingLocked}

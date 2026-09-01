@@ -1,12 +1,11 @@
 import type { LayerStackKind } from '@workbench/canvas-engine/api';
-import type { LayerPanelDensity } from '@workbench/layerPanelState';
 
 import { LAYER_STACKS_TOP_FIRST } from '@workbench/canvas-engine/api';
 
 import type { LayerStackRows, LayerStackRowsByKind, LayerTreeRow } from './layerTreeRows';
 
-/** Fixed row heights per density: the virtualizer never measures. */
-export const LAYER_ROW_HEIGHT_PX: Record<LayerPanelDensity, number> = { comfortable: 40, compact: 28, large: 56 };
+/** Fixed row height: the virtualizer never measures. */
+export const LAYER_ROW_HEIGHT_PX = 40;
 export const LAYER_HEADER_HEIGHT_PX = 28;
 /** Horizontal offset per nesting level, in CSS pixels; the drag projection uses the same step. */
 export const LAYER_TREE_INDENT_PX = 16;
@@ -63,8 +62,8 @@ export const flattenPanelRows = (
   return rows;
 };
 
-export const panelRowHeight = (row: PanelRow, density: LayerPanelDensity): number =>
-  row.kind === 'header' ? LAYER_HEADER_HEIGHT_PX : LAYER_ROW_HEIGHT_PX[density];
+export const panelRowHeight = (row: PanelRow): number =>
+  row.kind === 'header' ? LAYER_HEADER_HEIGHT_PX : LAYER_ROW_HEIGHT_PX;
 
 export type TreeNavigationKey = 'ArrowDown' | 'ArrowUp' | 'Home' | 'End' | 'ArrowLeft' | 'ArrowRight';
 
