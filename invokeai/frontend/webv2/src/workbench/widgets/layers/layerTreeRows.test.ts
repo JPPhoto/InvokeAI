@@ -83,6 +83,46 @@ describe('buildLayerStackRows', () => {
 describe('projectLayerDrop', () => {
   const rows = () => buildLayerStackRows(document().stacks, new Set(['G', 'H'])).raster.rows;
 
+  it('nests into a hovered group on the inside edge, including an empty one', () => {
+    // Into G, at its top, above its first rendered child.
+    expect(
+      projectLayerDrop({ activeIds: ['r5'], depthOffset: 0, edge: 'inside', overId: 'G', rows: rows() })
+    ).toMatchObject({
+      beforeId: 'r2',
+      depth: 1,
+      ids: ['r5'],
+      parentId: 'G',
+      stack: 'raster',
+    });
+    // An empty expanded group has no child rows; the inside edge is the way in.
+    const withEmpty = documentFrom([layer('r1'), group('E', []), layer('r5')]);
+    const emptyRows = buildLayerStackRows(withEmpty.stacks, new Set(['E'])).raster.rows;
+    expect(
+      projectLayerDrop({ activeIds: ['r5'], depthOffset: 0, edge: 'inside', overId: 'E', rows: emptyRows })
+    ).toMatchObject({
+      beforeId: null,
+      depth: 1,
+      ids: ['r5'],
+      parentId: 'E',
+      stack: 'raster',
+    });
+    // A COLLAPSED group with children drops at its top via the model child.
+    const collapsedRows = buildLayerStackRows(document().stacks, new Set()).raster.rows;
+    expect(
+      projectLayerDrop({ activeIds: ['r5'], depthOffset: 0, edge: 'inside', overId: 'G', rows: collapsedRows })
+    ).toMatchObject({
+      beforeId: 'r2',
+      depth: 1,
+      ids: ['r5'],
+      parentId: 'G',
+      stack: 'raster',
+    });
+    // The inside edge means nothing on a leaf.
+    expect(
+      projectLayerDrop({ activeIds: ['r5'], depthOffset: 0, edge: 'inside', overId: 'r1', rows: rows() })
+    ).toBeNull();
+  });
+
   it('drops between siblings at the same depth', () => {
     expect(
       projectLayerDrop({ activeIds: ['r5'], depthOffset: 0, edge: 'above', overId: 'r1', rows: rows() })

@@ -63,7 +63,8 @@ interface DragState {
   /** How many selected rows travel, the number the ghost shows. */
   readonly selectedCount: number;
   readonly overId: string | null;
-  readonly edge: 'above' | 'below';
+  readonly overIsGroup: boolean;
+  readonly edge: 'above' | 'inside' | 'below';
   readonly depthOffset: number;
 }
 
@@ -81,8 +82,24 @@ interface LayersTreeProps {
 }
 
 /** Which half of the row under the pointer it sits in. */
-const edgeOf = (rect: { top: number; height: number } | undefined, y: number): 'above' | 'below' =>
-  rect && y >= rect.top + rect.height / 2 ? 'below' : 'above';
+/**
+ * Groups expose a middle band that drops INTO them — the only comfortable way
+ * into an empty group; leaves split at the midline as before.
+ */
+const edgeOf = (
+  rect: { top: number; height: number } | undefined,
+  y: number,
+  overIsGroup: boolean
+): 'above' | 'inside' | 'below' => {
+  if (!rect) {
+    return 'above';
+  }
+  if (overIsGroup) {
+    const fraction = (y - rect.top) / rect.height;
+    return fraction < 0.3 ? 'above' : fraction > 0.7 ? 'below' : 'inside';
+  }
+  return y >= rect.top + rect.height / 2 ? 'below' : 'above';
+};
 
 const isMenuKey = (event: KeyboardEvent<HTMLElement>): boolean =>
   event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey);
@@ -97,7 +114,9 @@ const anchorOfItem = (host: HTMLElement | null, key: string): LayerSurfaceAnchor
 const VirtualSlot = ({ children, size, start }: { children: ReactNode; size: number; start: number }) => {
   const style = useMemo(() => ({ height: size, top: start }), [size, start]);
   return (
-    <Box left="0" position="absolute" right="0" role="presentation" style={style}>
+    // Absolute children ignore the container's padding; the slot carries the
+    // panel-edge inset itself, and the indicator and pinned header match it.
+    <Box left="1.5" position="absolute" right="1.5" role="presentation" style={style}>
       {children}
     </Box>
   );
@@ -600,6 +619,7 @@ export const LayersTree = ({
         depthOffset: 0,
         edge: 'above',
         overId: null,
+        overIsGroup: false,
         selectedCount: [...travelling].filter((id) => selected.has(id)).length,
         stack,
         travelling,
@@ -611,27 +631,31 @@ export const LayersTree = ({
     const depthOffset = Math.round(event.delta.x / LAYER_TREE_INDENT_PX);
     pointerY.current = pointerStart.current.y + event.delta.y;
     autoScroller.current?.update(pointerY.current);
-    const edge = edgeOf(event.over?.rect, pointerY.current);
-    setDrag((current) =>
-      current && (current.depthOffset !== depthOffset || current.edge !== edge)
-        ? { ...current, depthOffset, edge }
-        : current
-    );
+    setDrag((current) => {
+      if (!current) {
+        return current;
+      }
+      const edge = edgeOf(event.over?.rect, pointerY.current, current.overIsGroup);
+      return current.depthOffset !== depthOffset || current.edge !== edge ? { ...current, depthOffset, edge } : current;
+    });
   }, []);
   const handleDragOver = useCallback(
     (event: DragOverEvent) => {
       const overId = event.over ? String(event.over.id) : null;
-      // The pointer may enter a row between move events; the edge follows the row it is over now.
-      const edge = edgeOf(event.over?.rect, pointerY.current);
-      setDrag((current) =>
-        current && (current.overId !== overId || current.edge !== edge) ? { ...current, edge, overId } : current
-      );
       clearHoverTimer();
       const current = dragRef.current;
       const over =
         overId && current && overId !== current.activeId
           ? stacks[current.stack].rows.find((row) => row.id === overId)
           : undefined;
+      const overIsGroup = over?.vm.kind === 'group';
+      // The pointer may enter a row between move events; the edge follows the row it is over now.
+      const edge = edgeOf(event.over?.rect, pointerY.current, overIsGroup);
+      setDrag((state) =>
+        state && (state.overId !== overId || state.edge !== edge || state.overIsGroup !== overIsGroup)
+          ? { ...state, edge, overId, overIsGroup }
+          : state
+      );
       if (over && over.vm.kind === 'group' && !over.expanded && over.vm.childCount > 0) {
         hoverTimer.current = setTimeout(
           () => setLayerGroupExpanded(projectId, primaryId, [over.id], true),
@@ -698,7 +722,7 @@ export const LayersTree = ({
       const last = stackRows[stackRows.length - 1]!;
       top = offsets[rowIndexByKey.get(last.id)! + 1]!;
     }
-    return { left: target.depth * LAYER_TREE_INDENT_PX + 8, top };
+    return { left: target.depth * LAYER_TREE_INDENT_PX + 14, top };
   }, [drag, offsets, rowIndexByKey, stacks, target]);
 
   const refusalReason = refusal
@@ -859,9 +883,9 @@ export const LayersTree = ({
             borderBottomWidth="1px"
             borderColor="border.subtle"
             h={`${LAYER_HEADER_HEIGHT_PX}px`}
-            left="0"
+            left="1.5"
             position="absolute"
-            right="0"
+            right="1.5"
             style={pinnedStyle}
             top="0"
             zIndex="1"

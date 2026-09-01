@@ -1,6 +1,6 @@
 import type { LayerStackKind } from '@workbench/canvas-engine/api';
 
-import { CANVAS_MAX_NODE_DEPTH } from '@workbench/canvas-engine/api';
+import { CANVAS_MAX_NODE_DEPTH, isGroupNode } from '@workbench/canvas-engine/api';
 
 import type { LayerTreeRow } from './layerTreeRows';
 
@@ -24,8 +24,8 @@ export interface LayerDropInput {
   /** Every selected id that drags along; descendants of another dragged id are folded in. */
   readonly activeIds: readonly string[];
   readonly overId: string;
-  /** Whether the pointer sits in the upper or lower half of the row it is over. */
-  readonly edge: 'above' | 'below';
+  /** Where the pointer sits on the row it is over; `inside` (group rows only) nests into it. */
+  readonly edge: 'above' | 'inside' | 'below';
   /** How many indent steps the pointer has moved horizontally since the drag began. */
   readonly depthOffset: number;
 }
@@ -93,6 +93,32 @@ export const projectLayerDrop = (input: LayerDropInput): LayerDropTarget | null 
   }
   if (overIndex < 0) {
     return null;
+  }
+  if (input.edge === 'inside') {
+    // Straight into the hovered group, at its top — the one comfortable way
+    // into an empty group. The depth limit still applies to the whole block.
+    const over = remaining[overIndex]!;
+    if (over.vm.kind !== 'group') {
+      return null;
+    }
+    const depth = over.vm.depth + 1;
+    if (depth + deepestSubtree > CANVAS_MAX_NODE_DEPTH) {
+      return null;
+    }
+    const next = remaining[overIndex + 1];
+    // Top of the group: the first rendered child, or — for a collapsed group,
+    // whose children render nothing — its first model child, so the landing
+    // matches the indicator instead of quietly falling to the bottom.
+    const firstModelChildId = isGroupNode(over.vm.node) ? (over.vm.node.children[0]?.id ?? null) : null;
+    const beforeId = next && next.vm.parentId === over.id ? next.id : over.expanded ? null : firstModelChildId;
+    return {
+      beforeId,
+      beforeRowId: next?.id ?? null,
+      depth,
+      ids: outer.map((row) => row.id),
+      parentId: over.id,
+      stack: rows[0]!.vm.stack,
+    };
   }
   const insertAt = input.edge === 'above' ? overIndex : overIndex + 1;
   const previous = remaining[insertAt - 1];

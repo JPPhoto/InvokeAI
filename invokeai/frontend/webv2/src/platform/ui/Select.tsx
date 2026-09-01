@@ -25,6 +25,11 @@ const renderDefaultItem = <T extends CollectionItem>(item: T): ReactNode => {
 
 export interface SelectProps<T extends CollectionItem> extends Omit<SelectRootProps<T>, 'children'> {
   contentProps?: SelectContentProps;
+  /**
+   * Caps the open menu's height; the content element itself scrolls, which is
+   * the element the select machine scrolls the highlighted item within.
+   */
+  itemsMaxH?: string;
   getItemKey?: (item: T, index: number) => Key;
   indicatorGroupProps?: SelectIndicatorGroupProps;
   itemIndicator?: boolean;
@@ -43,6 +48,7 @@ export const Select = <T extends CollectionItem>({
   contentProps,
   getItemKey = getDefaultItemKey,
   indicatorGroupProps,
+  itemsMaxH,
   itemIndicator = true,
   portalled = true,
   positionerProps,
@@ -73,7 +79,7 @@ export const Select = <T extends CollectionItem>({
       </ChakraSelect.Control>
       <Portal disabled={!portalled}>
         <ChakraSelect.Positioner {...positionerProps}>
-          <ChakraSelect.Content {...contentProps}>
+          <ChakraSelect.Content maxH={itemsMaxH} overflowY={itemsMaxH ? 'auto' : undefined} {...contentProps}>
             {collection.items.map((item, index) => (
               <ChakraSelect.Item key={getItemKey(item, index)} item={item}>
                 <ChakraSelect.ItemText>{renderItem(item)}</ChakraSelect.ItemText>

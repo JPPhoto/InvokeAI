@@ -1,14 +1,9 @@
 import type { NumberInput as ChakraNumberInput, SelectValueChangeDetails } from '@chakra-ui/react';
-import type {
-  CanvasBlendMode,
-  CanvasDocumentContractV3,
-  CanvasLayerContract,
-  CanvasMaskFillContract,
-} from '@workbench/canvas-engine/api';
+import type { CanvasBlendMode, CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/api';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 
-import { Box, createListCollection, Flex, HStack, NumberInput } from '@chakra-ui/react';
-import { ColorPicker, Field, Select } from '@platform/ui';
+import { createListCollection, Flex, HStack, NumberInput } from '@chakra-ui/react';
+import { Field, Select } from '@platform/ui';
 import { getDocumentLayer } from '@workbench/canvas-engine/api';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
@@ -22,12 +17,6 @@ type LayerBlendRowEngine = Pick<CanvasEngineHandle, 'document' | 'exports' | 'in
 const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: true } as const;
 
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
-
-/** A mask layer whose fill colour the row's swatch edits (inpaint mask / region). */
-type MaskLayer = Extract<CanvasLayerContract, { type: 'inpaint_mask' | 'regional_guidance' }>;
-
-const isMaskLayer = (layer: CanvasLayerContract | null): layer is MaskLayer =>
-  layer !== null && (layer.type === 'inpaint_mask' || layer.type === 'regional_guidance');
 
 // Reference equality is exact: the document index hands back the same node
 // object until the layer itself changes.
@@ -101,6 +90,7 @@ const BlendModeControl = ({
         aria-label={t('widgets.layers.actions.blendMode')}
         collection={blendCollection}
         disabled={disabled}
+        itemsMaxH="16rem"
         minW="7rem"
         positioning={SELECT_POSITIONING}
         size="xs"
@@ -224,78 +214,7 @@ const OpacityRow = ({
             onKeyUp={handleInputKeyUp}
           />
         </NumberInput.Root>
-        {isMaskLayer(layer) ? <MaskFillSwatch disabled={editingLocked} engine={engine} layer={layer} /> : null}
       </HStack>
     </Field>
-  );
-};
-
-/**
- * The selected mask layer's fill-colour swatch (legacy `ActionBarFill`): a colour
- * swatch that opens the picker. Live edits during the drag are un-recorded; the
- * final colour lands as one undoable history entry, mirroring the slider pattern.
- */
-const MaskFillSwatch = ({
-  disabled,
-  engine,
-  layer,
-}: {
-  disabled: boolean;
-  engine: LayerBlendRowEngine | null;
-  layer: MaskLayer;
-}) => {
-  const commitPrepared = usePreparedCommit(engine);
-  const { t } = useTranslation();
-  const fillBeforeRef = useRef<CanvasMaskFillContract | null>(null);
-  const fill = layer.mask.fill;
-
-  const patchFill = useCallback(
-    (next: CanvasMaskFillContract, before: CanvasMaskFillContract) => {
-      const configFor = (value: CanvasMaskFillContract) =>
-        layer.type === 'inpaint_mask'
-          ? ({ layerType: 'inpaint_mask', mask: { fill: value } } as const)
-          : ({ layerType: 'regional_guidance', mask: { fill: value } } as const);
-      commitPrepared(t('widgets.layers.maskFill.fill'), (model) =>
-        model.prepare({ before: configFor(before), config: configFor(next), id: layer.id, type: 'patch-config' })
-      );
-    },
-    [commitPrepared, layer.id, layer.type, t]
-  );
-
-  const handleColorChange = useCallback(
-    (hex: string) => {
-      const next = { ...fill, color: hex };
-      const config =
-        layer.type === 'inpaint_mask'
-          ? ({ layerType: 'inpaint_mask', mask: { fill: next } } as const)
-          : ({ layerType: 'regional_guidance', mask: { fill: next } } as const);
-      if (!applyStructuralPreview(engine, { config, id: layer.id, type: 'updateCanvasLayerConfig' })) {
-        return;
-      }
-      if (fillBeforeRef.current === null) {
-        fillBeforeRef.current = fill;
-      }
-    },
-    [engine, fill, layer.id, layer.type]
-  );
-
-  const handleColorChangeEnd = useCallback(
-    (hex: string) => {
-      const before = fillBeforeRef.current ?? fill;
-      fillBeforeRef.current = null;
-      patchFill({ ...before, color: hex }, before);
-    },
-    [fill, patchFill]
-  );
-
-  return (
-    <Box aria-disabled={disabled} inert={disabled} opacity={disabled ? 0.5 : 1}>
-      <ColorPicker
-        aria-label={t('widgets.layers.maskFill.color')}
-        value={fill.color}
-        onValueChange={handleColorChange}
-        onValueChangeEnd={handleColorChangeEnd}
-      />
-    </Box>
   );
 };
