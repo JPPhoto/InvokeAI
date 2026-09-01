@@ -27,7 +27,10 @@ import { useTranslation } from 'react-i18next';
 import { GroupSelectedNotice } from './GroupSelectedNotice';
 import { PropertiesSection } from './PropertiesSection';
 
-type LayerSectionEngine = Pick<CanvasEngineHandle, 'document' | 'exports' | 'interaction' | 'layers' | 'projectId'>;
+type LayerSectionEngine = Pick<
+  CanvasEngineHandle,
+  'document' | 'exports' | 'interaction' | 'layers' | 'projectId' | 'tools'
+>;
 
 // Reference equality is exact: the document index hands back the same node
 // object until the layer itself changes, and the section renders the whole

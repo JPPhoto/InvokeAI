@@ -5,6 +5,7 @@ import type { CanvasStructuralEngine } from '@workbench/widgets/layers/layerOps'
 import { createListCollection, HStack, Stack } from '@chakra-ui/react';
 import { Button, ColorPicker, Field, IconButton, Select, Tooltip } from '@platform/ui';
 import { armMaskTintTarget } from '@workbench/widgets/canvas/color-system/maskTintTarget';
+import { type ColorSamplerEngine, useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { type CanvasPreparedEngine, usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { PaletteIcon } from 'lucide-react';
 import { useCallback, useMemo, useRef } from 'react';
@@ -23,7 +24,7 @@ const MASK_FILL_STYLES: readonly CanvasMaskFillContract['style'][] = [
 ];
 
 interface InpaintMaskSettingsProps {
-  engine: (CanvasStructuralEngine & CanvasPreparedEngine) | null;
+  engine: (CanvasStructuralEngine & CanvasPreparedEngine & ColorSamplerEngine) | null;
   layer: CanvasInpaintMaskLayerContract;
 }
 
@@ -37,6 +38,7 @@ interface InpaintMaskSettingsProps {
 export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps) => {
   const { t } = useTranslation();
   const commitPrepared = usePreparedCommit(engine);
+  const sampleColor = useColorSampler(engine);
   const fillBeforeRef = useRef<CanvasMaskFillContract | null>(null);
 
   const fill = layer.mask.fill;
@@ -118,6 +120,7 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
           <ColorPicker
             aria-label={colorAria}
             value={fill.color}
+            onSampleColor={sampleColor}
             onValueChange={handleColorChange}
             onValueChangeEnd={handleColorChangeEnd}
           />

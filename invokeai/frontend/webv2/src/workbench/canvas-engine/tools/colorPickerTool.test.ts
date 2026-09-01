@@ -183,6 +183,40 @@ describe('color picker tool', () => {
     expect(h.ctx.stores.brushOptions.get().color).toBe(defaultColor);
   });
 
+  it('stashes claimed samples without writing brushOptions and commits on release', () => {
+    const h = createHarness(makeDoc());
+    const tool = createColorPickerTool();
+    const defaultColor = h.ctx.stores.brushOptions.get().color;
+    const claimed: string[] = [];
+    h.ctx.resolveColorSample = (hex) => {
+      claimed.push(hex);
+      return true;
+    };
+    const commit = vi.fn();
+    h.ctx.commitColorSample = commit;
+
+    down(tool, h.ctx, pointer(10, 10));
+    expect(claimed).toEqual(['#0a141e']);
+    expect(commit).not.toHaveBeenCalled();
+    expect(h.ctx.stores.brushOptions.get().color).toBe(defaultColor);
+
+    up(tool, h.ctx, pointer(10, 10, { buttons: 0 }));
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards the stashed sample on gesture cancel and at each fresh press', () => {
+    const h = createHarness(makeDoc());
+    const tool = createColorPickerTool();
+    const discard = vi.fn();
+    h.ctx.discardColorSample = discard;
+
+    down(tool, h.ctx, pointer(10, 10));
+    expect(discard).toHaveBeenCalledTimes(1);
+
+    tool.onPointerCancel?.(h.ctx);
+    expect(discard).toHaveBeenCalledTimes(2);
+  });
+
   it('never dispatches and never emits a committed stroke', () => {
     const h = createHarness(makeDoc());
     const tool = createColorPickerTool();

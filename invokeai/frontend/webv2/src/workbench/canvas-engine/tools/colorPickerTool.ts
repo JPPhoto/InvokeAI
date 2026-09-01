@@ -63,10 +63,14 @@ export const createColorPickerTool = (): Tool => ({
     ctx.setOverlayCursor(null);
     ctx.invalidate({ overlay: true });
   },
+  onPointerCancel: (ctx) => {
+    ctx.discardColorSample?.();
+  },
   onPointerDown: (ctx, input) => {
     if ((input.buttons & PRIMARY_BUTTON) === 0) {
       return;
     }
+    ctx.discardColorSample?.();
     updateCursorRing(ctx, input);
     pickColorAt(ctx, input);
   },
@@ -78,5 +82,6 @@ export const createColorPickerTool = (): Tool => ({
   },
   onPointerUp: (ctx, input) => {
     updateCursorRing(ctx, input);
+    ctx.commitColorSample?.();
   },
 });

@@ -724,6 +724,89 @@ describe('createCanvasEngine', () => {
     engine.lifecycle.dispose();
   });
 
+  it('settles a claimed color sample on release, after the sampling gesture ends', async () => {
+    const raf = createControllableRaf();
+    vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
+    vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
+    const layer = {
+      ...rasterLayer('a'),
+      source: { bitmap: { height: 20, imageName: 'paint-pixels', width: 20 }, type: 'paint' as const },
+    };
+    const document = { ...makeDoc(), stacks: stacksFrom([layer]), selectedLayerId: layer.id };
+    const { projectId, store } = createReducerBackedStore(document);
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      bitmapStore: createSpyBitmapStore(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId,
+      store,
+    });
+    const overlay = createInputCanvas();
+    const screen = createInputCanvas();
+    engine.surface.attach(screen.element, overlay.element);
+    raf.flush();
+    await flushMicrotasks();
+    raf.flush();
+
+    let settled: string | null | undefined;
+    void engine.tools.requestColorSample().then((hex) => {
+      settled = hex;
+    });
+    overlay.fire('pointerdown', pointerAt(5, 5));
+    await flushMicrotasks();
+    // The press stashes the sample; settling waits for the gesture to end so a
+    // structural commit in the caller's continuation is not gesture-refused.
+    expect(settled).toBeUndefined();
+
+    overlay.fire('pointerup', pointerAt(5, 5, { buttons: 0 }));
+    await flushMicrotasks();
+    expect(settled).toBe('#000000');
+    engine.lifecycle.dispose();
+  });
+
+  it('keeps a cancelled gesture’s claim pending and settles it from the retry gesture', async () => {
+    const raf = createControllableRaf();
+    vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
+    vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
+    const layer = {
+      ...rasterLayer('a'),
+      source: { bitmap: { height: 20, imageName: 'paint-pixels', width: 20 }, type: 'paint' as const },
+    };
+    const document = { ...makeDoc(), stacks: stacksFrom([layer]), selectedLayerId: layer.id };
+    const { projectId, store } = createReducerBackedStore(document);
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      bitmapStore: createSpyBitmapStore(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId,
+      store,
+    });
+    const overlay = createInputCanvas();
+    const screen = createInputCanvas();
+    engine.surface.attach(screen.element, overlay.element);
+    raf.flush();
+    await flushMicrotasks();
+    raf.flush();
+
+    let settled: string | null | undefined;
+    void engine.tools.requestColorSample().then((hex) => {
+      settled = hex;
+    });
+    // A press stashes a color; the cancel discards that stash (so a dead
+    // gesture's color can never ride a later release — see the tool tests)
+    // without settling the claim, leaving the eyedropper armed for a retry.
+    overlay.fire('pointerdown', pointerAt(5, 5));
+    overlay.fire('pointercancel', pointerAt(5, 5, { buttons: 0 }));
+    await flushMicrotasks();
+    expect(settled).toBeUndefined();
+
+    overlay.fire('pointerdown', pointerAt(5, 5));
+    overlay.fire('pointerup', pointerAt(5, 5, { buttons: 0 }));
+    await flushMicrotasks();
+    expect(settled).toBe('#000000');
+    engine.lifecycle.dispose();
+  });
+
   it('returns stale when cooldown changes lifecycle generation during raster detachment', async () => {
     const pending = createDeferred<Blob>();
     const { store } = createReactiveStore(makeDoc());

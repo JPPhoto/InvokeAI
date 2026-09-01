@@ -12,6 +12,7 @@ import { PROMPT_ATTENTION_TARGET_PROPS, PromptTextarea } from '@features/generat
 import { Button, ColorPicker, Field, Select, Tooltip } from '@platform/ui';
 import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
 import { armMaskTintTarget } from '@workbench/widgets/canvas/color-system/maskTintTarget';
+import { type ColorSamplerEngine, useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { type CanvasPreparedEngine, usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { PaletteIcon } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -43,7 +44,7 @@ const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: true } as const
 const REGIONAL_PROMPT_HEIGHT_PX = 72;
 
 interface RegionalGuidanceSettingsProps {
-  engine: (CanvasStructuralEngine & CanvasPreparedEngine) | null;
+  engine: (CanvasStructuralEngine & CanvasPreparedEngine & ColorSamplerEngine) | null;
   layer: CanvasRegionalGuidanceLayerContract;
 }
 
@@ -59,6 +60,7 @@ interface RegionalGuidanceSettingsProps {
 export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSettingsProps) => {
   const { t } = useTranslation();
   const commitPrepared = usePreparedCommit(engine);
+  const sampleColor = useColorSampler(engine);
   const base = useSelectedModelBase();
   const showSyntaxHighlighting = useWorkbenchPreferenceSelector(
     (preferences) => preferences.showPromptSyntaxHighlighting
@@ -260,6 +262,7 @@ export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSett
           <ColorPicker
             aria-label={t('widgets.layers.maskFill.color')}
             value={fill.color}
+            onSampleColor={sampleColor}
             onValueChange={handleColorChange}
             onValueChangeEnd={handleColorChangeEnd}
           />

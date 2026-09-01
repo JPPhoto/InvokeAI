@@ -1011,12 +1011,20 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   /**
    * A one-shot color sample requested from outside the canvas — the color
    * picker's eyedropper button. While one is pending, the color-picker tool
-   * hands its next sample here instead of writing the brush color, and the tool
-   * that was active beforehand is restored. Cancelled (resolving `null`) by
-   * Escape, by any other tool switch, and by teardown, so the promise the
-   * caller is awaiting can never dangle.
+   * hands its samples here instead of writing the brush color: press and drag
+   * stash the latest color (`sampledHex`), and the release settles the promise
+   * and restores the tool that was active beforehand. Settling on release, not
+   * press, matters — the pointer gesture is already over, so a caller that
+   * commits the sample through the document transaction seam is not refused as
+   * `gesture-active`. Cancelled (resolving `null`) by Escape, by any other tool
+   * switch, and by teardown, so the promise the caller is awaiting can never
+   * dangle.
    */
-  let pendingColorSample: { previousToolId: ToolId; resolve: (hex: string | null) => void } | null = null;
+  let pendingColorSample: {
+    previousToolId: ToolId;
+    resolve: (hex: string | null) => void;
+    sampledHex: string | null;
+  } | null = null;
   // Where unclaimed eyedropper samples land while a workbench is attached.
   let colorSampleRouter: ((hex: string) => boolean) | null = null;
 
@@ -1070,10 +1078,20 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     openTextEdit: (layerId) => openTextEdit(layerId),
     resolveColorSample: (hex) => {
       if (pendingColorSample) {
-        settleColorSample(hex, true);
+        pendingColorSample.sampledHex = hex;
         return true;
       }
       return colorSampleRouter?.(hex) ?? false;
+    },
+    commitColorSample: () => {
+      if (pendingColorSample !== null && pendingColorSample.sampledHex !== null) {
+        settleColorSample(pendingColorSample.sampledHex, true);
+      }
+    },
+    discardColorSample: () => {
+      if (pendingColorSample !== null) {
+        pendingColorSample.sampledHex = null;
+      }
     },
     setLayerTransformOverride: (layerId, override) => {
       if (override) {
@@ -1812,14 +1830,16 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
    * Arms the eyedropper for one sample and resolves with the picked `#rrggbb`,
    * or `null` if the user cancels. Backs the color picker's eyedropper button,
    * which reads the composited document rather than the screen (and so works
-   * outside Chromium, and sees through the window chrome).
+   * outside Chromium, and sees through the window chrome). The promise settles
+   * on pointer release, after the sampling gesture ends, so the caller may
+   * commit the color through the document transaction seam synchronously.
    */
   const requestColorSample = (): Promise<string | null> => {
     // A second request supersedes the first; the earlier caller gets a cancel.
     settleColorSample(null, false);
 
     return new Promise<string | null>((resolve) => {
-      pendingColorSample = { previousToolId: interactionController.getActiveToolId(), resolve };
+      pendingColorSample = { previousToolId: interactionController.getActiveToolId(), resolve, sampledHex: null };
       interactionController.setTool('colorPicker');
     });
   };

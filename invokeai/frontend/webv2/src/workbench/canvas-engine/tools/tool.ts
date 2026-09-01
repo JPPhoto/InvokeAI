@@ -173,6 +173,22 @@ export interface ToolContext {
    */
   resolveColorSample?(hex: string): boolean;
   /**
+   * Settles a pending one-shot sample request with the latest color the
+   * gesture stashed via `resolveColorSample`. The color-picker tool calls this
+   * on pointer up — never mid-gesture — so the requester's promise resolves
+   * after the gesture ends and a structural commit in its continuation is not
+   * refused as `gesture-active`. No-op without a pending request or a stashed
+   * color.
+   */
+  commitColorSample?(): void;
+  /**
+   * Drops the color a pending sample request's gesture has stashed, without
+   * settling the request. The color-picker tool calls it when a gesture is
+   * cancelled and at the start of each fresh press, so a dead gesture's color
+   * can never be committed by a later release that sampled nothing.
+   */
+  discardColorSample?(): void;
+  /**
    * Re-evaluates the active tool's CSS cursor and applies it to the input
    * element. A tool calls this when its `cursor(ctx)` result changes off a plain
    * pointer-move (e.g. the bbox tool switching to a resize cursor while hovering a
