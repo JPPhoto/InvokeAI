@@ -174,7 +174,16 @@ describe('exportRasterComposite', () => {
     if (layer.type !== 'raster') {
       throw new Error('Expected raster layer');
     }
-    const { deps } = makeDeps(makeDoc([{ ...layer, adjustments: { brightness: 0.1, contrast: 0, saturation: 0 } }]));
+    const { deps } = makeDeps(
+      makeDoc([
+        {
+          ...layer,
+          adjustments: [
+            { brightness: 0.1, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+          ],
+        },
+      ])
+    );
     const reserve = vi.fn(() => ({ lease: { release: vi.fn() }, status: 'ok' as const }));
     deps.reserve = reserve;
 

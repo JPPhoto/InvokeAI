@@ -2,15 +2,15 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 841493,
+        "brotliBytes": 841126,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 840019,
+        "gzipBytes": 840009,
         "imageRawBytes": 156376,
-        "initialRawBytes": 1957790,
+        "initialRawBytes": 1958397,
         "largestAssetRawBytes": 746376,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 70892,
+        "ownedRawBytes": 70895,
         "requestCount": 42,
         "scriptRequestCount": 26,
         "sourceOwners": [
@@ -291,15 +291,15 @@
         ]
       },
       "limits": {
-        "brotliBytes": 849908,
+        "brotliBytes": 849538,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 848420,
+        "gzipBytes": 848410,
         "imageRawBytes": 157940,
-        "initialRawBytes": 1977368,
+        "initialRawBytes": 1977981,
         "largestAssetRawBytes": 753840,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 70892,
+        "ownedRawBytes": 70895,
         "requestCount": 42,
         "scriptRequestCount": 26
       },
@@ -309,15 +309,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1100667,
+        "brotliBytes": 1100278,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1095727,
+        "gzipBytes": 1095705,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2744326,
+        "initialRawBytes": 2745741,
         "largestAssetRawBytes": 746376,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 114600,
+        "ownedRawBytes": 114602,
         "requestCount": 97,
         "scriptRequestCount": 81,
         "sourceOwners": [
@@ -933,15 +933,15 @@
         ]
       },
       "limits": {
-        "brotliBytes": 1111674,
+        "brotliBytes": 1111281,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 1106685,
+        "gzipBytes": 1106663,
         "imageRawBytes": 157940,
-        "initialRawBytes": 2771770,
+        "initialRawBytes": 2773199,
         "largestAssetRawBytes": 753840,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 114600,
+        "ownedRawBytes": 114602,
         "requestCount": 97,
         "scriptRequestCount": 81
       },

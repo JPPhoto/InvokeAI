@@ -21,6 +21,7 @@ import {
   ArrowUpToLineIcon,
   CopyIcon,
   CropIcon,
+  DropletIcon,
   EyeIcon,
   EyeOffIcon,
   FolderPlusIcon,
@@ -33,6 +34,8 @@ import {
   PencilIcon,
   SaveIcon,
   ScanSearchIcon,
+  SplineIcon,
+  SunMediumIcon,
   WavesIcon,
   SlidersHorizontalIcon,
   Trash2Icon,
@@ -45,6 +48,9 @@ export type LayerContextActionId =
   | 'add-reference-image'
   | 'add-noise'
   | 'add-denoise-limit'
+  | 'add-brightness-contrast'
+  | 'add-hsl'
+  | 'add-curves'
   | 'merge-selected'
   | 'move-to-front'
   | 'move-forward'
@@ -55,7 +61,6 @@ export type LayerContextActionId =
   | 'rename'
   | 'transform'
   | 'fit-to-bbox'
-  | 'adjustments'
   | 'save-to-assets'
   | 'copy-to-clipboard'
   | 'crop-to-bbox'
@@ -86,7 +91,7 @@ export type LayerContextActionId =
 
 export type LayerType = CanvasLayerContract['type'];
 export type LayerContextMenuSectionId = 'quick' | 'primary' | 'operations' | 'output' | 'state' | 'danger';
-export type LayerContextSubmenuId = 'arrange' | 'boolean' | 'copy-to' | 'convert-to';
+export type LayerContextSubmenuId = 'arrange' | 'boolean' | 'copy-to' | 'convert-to' | 'add-adjustment';
 
 export interface LayerContextActionState {
   canRunWorkflow: boolean;
@@ -133,6 +138,7 @@ export interface LayerContextActionEffects {
   patchConfig(kind: LayerConfigPatchKind): void;
   addReferenceImage(): void;
   addMaskModifier(field: 'noise' | 'denoise'): void;
+  addAdjustment(type: 'brightness-contrast' | 'hsl' | 'curves'): void;
   mergeDown(): void;
   toggleVisibility(): void;
   toggleHidden(): void;
@@ -407,15 +413,42 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     supportedLayerTypes: ALL_LAYER_TYPES,
   },
   {
-    defaultLabel: 'Adjustments',
-    handler: ({ effects }) => effects.openProperties(),
-    icon: SlidersHorizontalIcon,
-    id: 'adjustments',
-    isEnabled: hasMutablePixels,
+    defaultLabel: 'Brightness/Contrast',
+    handler: ({ effects }) => effects.addAdjustment('brightness-contrast'),
+    icon: SunMediumIcon,
+    id: 'add-brightness-contrast',
+    isEnabled: isLayerMutable,
     isVisible: alwaysVisible,
-    labelKey: 'widgets.layers.actions.adjustments',
+    labelKey: 'widgets.layers.modifiers.brightnessContrast',
     order: 31,
     section: 'primary',
+    submenu: 'add-adjustment',
+    supportedLayerTypes: RASTER_ONLY,
+  },
+  {
+    defaultLabel: 'Saturation',
+    handler: ({ effects }) => effects.addAdjustment('hsl'),
+    icon: DropletIcon,
+    id: 'add-hsl',
+    isEnabled: isLayerMutable,
+    isVisible: alwaysVisible,
+    labelKey: 'widgets.layers.adjustments.saturation',
+    order: 31.2,
+    section: 'primary',
+    submenu: 'add-adjustment',
+    supportedLayerTypes: RASTER_ONLY,
+  },
+  {
+    defaultLabel: 'Curves',
+    handler: ({ effects }) => effects.addAdjustment('curves'),
+    icon: SplineIcon,
+    id: 'add-curves',
+    isEnabled: isLayerMutable,
+    isVisible: alwaysVisible,
+    labelKey: 'widgets.layers.adjustments.curves',
+    order: 31.4,
+    section: 'primary',
+    submenu: 'add-adjustment',
     supportedLayerTypes: RASTER_ONLY,
   },
   {

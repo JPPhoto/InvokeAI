@@ -143,7 +143,9 @@ describe('planPsdExport', () => {
   });
 
   it('passes non-destructive adjustments through for the executor to bake', () => {
-    const adjustments = { brightness: 0.2, contrast: 0, saturation: 0 };
+    const adjustments = [
+      { brightness: 0.2, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+    ];
     const plan = planPsdExport([layer({ adjustments })]);
     expect(findLayer(plan, 'a').adjustments).toBe(adjustments);
   });

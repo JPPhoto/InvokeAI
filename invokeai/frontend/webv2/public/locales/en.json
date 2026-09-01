@@ -2506,7 +2506,6 @@
         "addRegionalGuidance": "Regional guidance",
         "addRegionalReferenceImage": "Regional reference image",
         "actionFailed": "Layer action failed",
-        "adjustments": "Adjustments",
         "blendMode": "Blend mode",
         "busy": "The canvas is busy. Try again when the current action finishes.",
         "copyFailed": "The layer could not be copied.",
@@ -2838,9 +2837,7 @@
         "contrast": "Contrast",
         "curves": "Curves",
         "curvesHint": "Drag points to bend the curve. Double-click empty space to add a point; double-click a point to remove it.",
-        "reset": "Reset adjustments",
         "saturation": "Saturation",
-        "title": "Adjustments",
         "transparencyLock": "Lock transparency"
       },
       "blendModes": {
@@ -2913,7 +2910,8 @@
         "arrange": "Arrange",
         "booleanOperations": "Boolean operations",
         "convertTo": "Convert to",
-        "copyTo": "Copy to"
+        "copyTo": "Copy to",
+        "addAdjustment": "Add adjustment"
       },
       "options": "Layer options",
       "regionalGuidance": {
@@ -3030,7 +3028,13 @@
         "noise": "Noise",
         "noiseHelp": "Adds noise inside the masked area before generation.",
         "removeDenoise": "Remove denoise limit",
-        "removeNoise": "Remove noise"
+        "removeNoise": "Remove noise",
+        "brightnessContrast": "Brightness/Contrast",
+        "duplicateAdjustment": "Duplicate adjustment",
+        "moveDown": "Move down",
+        "moveUp": "Move up",
+        "removeAdjustment": "Remove adjustment",
+        "reorderAdjustment": "Reorder adjustment"
       }
     },
     "gallery": {

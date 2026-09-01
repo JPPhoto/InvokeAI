@@ -39,6 +39,10 @@ export interface LayerRowCommands {
   selectChild(child: ProjectedChildRow, options?: { reveal?: boolean }): void;
   setChildEnabled(child: ProjectedChildRow, isEnabled: boolean): void;
   removeChild(child: ProjectedChildRow): void;
+  /** Ordered kinds only (adjustment entries): swap with the neighbour in `direction`. */
+  moveChild(child: ProjectedChildRow, direction: -1 | 1): void;
+  /** Ordered kinds only: insert a copy directly after the entry. */
+  duplicateChild(child: ProjectedChildRow): void;
   openChildMenu(child: ProjectedChildRow, anchor: LayerSurfaceAnchor): void;
   /** `id` is a node id, a child-row key, or a stack header key; the tree tells them apart. */
   keyDown(id: string, event: KeyboardEvent<HTMLElement>): void;

@@ -17,7 +17,7 @@ import { lookupDocumentLayer, lookupDocumentLeaf } from '@workbench/canvas-engin
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { fromTRS } from '@workbench/canvas-engine/math/mat2d';
 import { isEmpty, roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
-import { applyAdjustments } from '@workbench/canvas-engine/render/adjustments';
+import { applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
 
 export type ExportLayerPixelsResult =
   | {
@@ -69,7 +69,8 @@ export class RasterExportController {
     shouldApply: boolean
   ): ExportLayerPixelsResult {
     const layer = result.guard.layer;
-    if (!shouldApply || layer.type !== 'raster' || !layer.adjustments) {
+    // Identity-aware: an emptied or all-disabled stack must not reserve or copy.
+    if (!shouldApply || layer.type !== 'raster' || isIdentityAdjustments(layer.adjustments)) {
       return result;
     }
     const reservation = this.options.reserve?.(result.rect.width * result.rect.height * 8);
@@ -206,7 +207,8 @@ export class RasterExportController {
       raw.release();
       return noReservedPixels({ status: 'empty' });
     }
-    const appliesAdjustments = options.applyAdjustments !== false && layer.type === 'raster' && !!layer.adjustments;
+    const appliesAdjustments =
+      options.applyAdjustments !== false && layer.type === 'raster' && !isIdentityAdjustments(layer.adjustments);
     const reservation = this.options.reserve?.(rect.width * rect.height * (appliesAdjustments ? 8 : 4));
     if (reservation?.status === 'over-budget') {
       raw.release();

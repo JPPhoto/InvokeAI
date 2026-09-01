@@ -5,10 +5,15 @@ import { Stack, Switch, Text } from '@chakra-ui/react';
 import { getDocumentLayer } from '@workbench/canvas-engine/api';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
-import { AdjustmentsPopover } from '@workbench/widgets/layers/AdjustmentsPopover';
+import { AdjustmentSettings } from '@workbench/widgets/layers/AdjustmentSettings';
 import { ControlLayerSettings } from '@workbench/widgets/layers/ControlLayerSettings';
 import { InpaintMaskSettings } from '@workbench/widgets/layers/InpaintMaskSettings';
-import { MASK_DENOISE_ITEM_ID, MASK_NOISE_ITEM_ID } from '@workbench/widgets/layers/layerChildRows';
+import {
+  adjustmentChildKind,
+  MASK_DENOISE_ITEM_ID,
+  MASK_NOISE_ITEM_ID,
+  type LayerChildRowKind,
+} from '@workbench/widgets/layers/layerChildRows';
 import { useLayerChildSelection } from '@workbench/widgets/layers/layerChildSelection';
 import { MaskModifierSettings } from '@workbench/widgets/layers/MaskModifierSettings';
 import { RasterLayerFilterSection } from '@workbench/widgets/layers/RasterLayerFilterSection';
@@ -64,7 +69,7 @@ export const LayerSection = ({ disabled }: { disabled: boolean }) => {
 };
 
 interface ChildEditorTarget {
-  readonly kind: 'reference-image' | 'mask-noise' | 'mask-denoise';
+  readonly kind: LayerChildRowKind;
   readonly itemId: string;
   readonly subtitle: string;
 }
@@ -96,6 +101,18 @@ const resolveChildEditor = (
       return { itemId: selection.itemId, kind: 'mask-denoise', subtitle: t('widgets.layers.modifiers.denoise') };
     }
   }
+  if (layer.type === 'raster') {
+    const entry = layer.adjustments?.find((candidate) => candidate.id === selection.itemId);
+    if (entry) {
+      const subtitle =
+        entry.type === 'brightness-contrast'
+          ? t('widgets.layers.modifiers.brightnessContrast')
+          : entry.type === 'hsl'
+            ? t('widgets.layers.adjustments.saturation')
+            : t('widgets.layers.adjustments.curves');
+      return { itemId: selection.itemId, kind: adjustmentChildKind(entry.type), subtitle };
+    }
+  }
   return null;
 };
 
@@ -113,6 +130,9 @@ const ChildEditor = ({
   }
   if ((child.kind === 'mask-noise' || child.kind === 'mask-denoise') && layer.type === 'inpaint_mask') {
     return <MaskModifierSettings engine={engine} kind={child.kind} layer={layer} />;
+  }
+  if (child.kind.startsWith('adjustment-') && layer.type === 'raster') {
+    return <AdjustmentSettings engine={engine} entryId={child.itemId} layer={layer} />;
   }
   return null;
 };
@@ -186,10 +206,6 @@ const RasterLayerSettings = ({
           <Text fontSize="xs">{t('widgets.layers.adjustments.transparencyLock')}</Text>
         </Switch.Label>
       </Switch.Root>
-      <Text color="fg.muted" fontSize="2xs" fontWeight="700" textTransform="uppercase">
-        {t('widgets.layers.adjustments.title')}
-      </Text>
-      <AdjustmentsPopover engine={engine} layer={layer} />
       <RasterLayerFilterSection engine={engine} layer={layer} onOperationStarted={noop} />
     </Stack>
   );

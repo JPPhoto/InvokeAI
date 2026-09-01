@@ -1,19 +1,27 @@
-import type { CanvasAdjustmentsContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasAdjustmentCurves, CanvasAdjustmentEntry } from '@workbench/canvas-engine/contracts';
 
 import { describe, expect, it } from 'vitest';
 
 import {
   adjustmentsKey,
   applyAdjustments,
-  buildAdjustmentLuts,
   buildCurveLut,
-  DEFAULT_ADJUSTMENTS,
+  compileAdjustments,
+  isIdentityAdjustmentEntry,
   isIdentityAdjustments,
 } from './adjustments';
 
 /** Builds an ImageData-like object (node has no DOM ImageData; the shape is enough). */
 const imageData = (pixels: number[]): ImageData =>
   ({ data: new Uint8ClampedArray(pixels), height: 1, width: pixels.length / 4 }) as ImageData;
+
+type EntryOverrides = Partial<Pick<CanvasAdjustmentEntry, 'id' | 'isEnabled'>>;
+const bc = (brightness: number, contrast: number, overrides: EntryOverrides = {}) =>
+  ({ brightness, contrast, id: 'bc', isEnabled: true, type: 'brightness-contrast', ...overrides }) as const;
+const hsl = (saturation: number, overrides: EntryOverrides = {}) =>
+  ({ id: 'hsl', isEnabled: true, saturation, type: 'hsl', ...overrides }) as const;
+const curves = (points: CanvasAdjustmentCurves) =>
+  ({ curves: points, id: 'cv', isEnabled: true, type: 'curves' }) as const;
 
 describe('buildCurveLut', () => {
   it('is the identity for absent / empty / diagonal curves', () => {
@@ -64,148 +72,130 @@ describe('buildCurveLut', () => {
   });
 });
 
-describe('buildAdjustmentLuts', () => {
-  it('is the identity for default adjustments', () => {
-    const { b, g, r } = buildAdjustmentLuts(DEFAULT_ADJUSTMENTS);
-    for (let i = 0; i < 256; i++) {
-      expect(r[i]).toBe(i);
-      expect(g[i]).toBe(i);
-      expect(b[i]).toBe(i);
-    }
-  });
-
-  it('applies additive brightness and clamps', () => {
-    const { r } = buildAdjustmentLuts({ brightness: 0.5, contrast: 0, saturation: 0 });
-    // +0.5*255 ≈ +128 (rounded).
-    expect(r[0]).toBe(128);
-    expect(r[200]).toBe(255); // clamped
-  });
-
-  it('applies contrast about mid-grey', () => {
-    const { r } = buildAdjustmentLuts({ brightness: 0, contrast: 1, saturation: 0 });
-    // factor 2 about 128: 128 stays, 0 → -128 clamp 0, 255 → 382 clamp 255.
-    expect(r[128]).toBe(128);
-    expect(r[0]).toBe(0);
-    expect(r[255]).toBe(255);
-    expect(r[64]).toBe(0); // (64-128)*2+128 = 0
-    expect(r[192]).toBe(255); // (192-128)*2+128 = 256 → clamp
-  });
-
-  it('composes curve → brightness → contrast', () => {
-    // A curve mapping everything to 100, then +0 brightness, contrast 0 → all 100.
-    const { r } = buildAdjustmentLuts({
-      brightness: 0,
-      contrast: 0,
-      curves: {
-        b: [
-          [0, 0],
-          [255, 255],
-        ],
-        g: [
-          [0, 0],
-          [255, 255],
-        ],
-        r: [
-          [0, 100],
-          [255, 100],
-        ],
-      },
-      saturation: 0,
-    });
-    expect(r[0]).toBe(100);
-    expect(r[255]).toBe(100);
-  });
-});
-
-describe('isIdentityAdjustments / adjustmentsKey', () => {
-  it('treats zeros + diagonal / absent curves as identity', () => {
+describe('identity and keys', () => {
+  it('treats zero values, diagonal/absent curves, disabled entries and empty stacks as identity', () => {
     expect(isIdentityAdjustments(undefined)).toBe(true);
-    expect(isIdentityAdjustments(DEFAULT_ADJUSTMENTS)).toBe(true);
+    expect(isIdentityAdjustments([])).toBe(true);
+    expect(isIdentityAdjustments([bc(0, 0), hsl(0), curves({})])).toBe(true);
     expect(
-      isIdentityAdjustments({
-        brightness: 0,
-        contrast: 0,
-        saturation: 0,
-        curves: {
-          b: [
-            [0, 0],
-            [255, 255],
-          ],
-          g: [
-            [0, 0],
-            [255, 255],
-          ],
+      isIdentityAdjustments([
+        curves({
           r: [
             [0, 0],
             [255, 255],
           ],
-        },
-      })
+        }),
+      ])
     ).toBe(true);
-    expect(adjustmentsKey(DEFAULT_ADJUSTMENTS)).toBe('identity');
-  });
-
-  it('is non-identity for any non-zero param or bent curve', () => {
-    expect(isIdentityAdjustments({ brightness: 0.1, contrast: 0, saturation: 0 })).toBe(false);
+    expect(isIdentityAdjustments([bc(0.5, 0, { isEnabled: false })])).toBe(true);
+    expect(isIdentityAdjustments([bc(0.5, 0)])).toBe(false);
     expect(
-      isIdentityAdjustments({
-        brightness: 0,
-        contrast: 0,
-        saturation: 0,
-        curves: {
-          b: [
-            [0, 0],
-            [255, 255],
-          ],
-          g: [
-            [0, 0],
-            [255, 255],
-          ],
+      isIdentityAdjustmentEntry(
+        curves({
           r: [
             [0, 0],
             [128, 200],
             [255, 255],
           ],
-        },
-      })
+        })
+      )
     ).toBe(false);
   });
 
-  it('produces distinct, stable keys per distinct adjustment', () => {
-    const a: CanvasAdjustmentsContract = { brightness: 0.2, contrast: 0, saturation: 0 };
-    const b: CanvasAdjustmentsContract = { brightness: 0.3, contrast: 0, saturation: 0 };
-    expect(adjustmentsKey(a)).toBe(adjustmentsKey({ ...a }));
-    expect(adjustmentsKey(a)).not.toBe(adjustmentsKey(b));
+  it('keys identify the pixel effect: stable across entry ids, sensitive to order and values', () => {
+    expect(adjustmentsKey([bc(0, 0), hsl(0)])).toBe('identity');
+    expect(adjustmentsKey([bc(0.2, 0)])).toBe(adjustmentsKey([bc(0.2, 0, { id: 'other' })]));
+    expect(adjustmentsKey([bc(0.2, 0)])).not.toBe(adjustmentsKey([bc(0.3, 0)]));
+    expect(adjustmentsKey([bc(0.2, 0), hsl(0.5)])).not.toBe(adjustmentsKey([hsl(0.5), bc(0.2, 0)]));
+    // A disabled entry keys exactly like an absent one.
+    expect(adjustmentsKey([bc(0.2, 0), hsl(0.5, { isEnabled: false })])).toBe(adjustmentsKey([bc(0.2, 0)]));
+  });
+});
+
+describe('compileAdjustments', () => {
+  it('folds adjacent per-channel entries into one LUT segment and keeps saturation apart', () => {
+    const folded = compileAdjustments([
+      curves({
+        r: [
+          [0, 0],
+          [128, 200],
+          [255, 255],
+        ],
+      }),
+      bc(0.1, 0.2),
+    ]);
+    expect(folded.map((segment) => segment.kind)).toEqual(['lut']);
+
+    const split = compileAdjustments([bc(0.1, 0), hsl(0.5), bc(0, 0.3)]);
+    expect(split.map((segment) => segment.kind)).toEqual(['lut', 'saturation', 'lut']);
+  });
+
+  it('a folded pair produces the same pixels as sequential application', () => {
+    const curve = curves({
+      r: [
+        [0, 0],
+        [64, 160],
+        [255, 255],
+      ],
+    });
+    const sequential = imageData([10, 20, 30, 255, 200, 100, 50, 255]);
+    applyAdjustments(sequential, [curve]);
+    applyAdjustments(sequential, [bc(0.1, 0.4)]);
+    const folded = imageData([10, 20, 30, 255, 200, 100, 50, 255]);
+    applyAdjustments(folded, [curve, bc(0.1, 0.4)]);
+    expect(Array.from(folded.data)).toEqual(Array.from(sequential.data));
   });
 });
 
 describe('applyAdjustments', () => {
-  it('is a no-op for identity adjustments', () => {
-    const img = imageData([10, 20, 30, 255]);
-    applyAdjustments(img, DEFAULT_ADJUSTMENTS);
-    expect(Array.from(img.data)).toEqual([10, 20, 30, 255]);
-  });
-
-  it('never modifies alpha', () => {
+  it('is a no-op for an identity stack and never modifies alpha', () => {
     const img = imageData([10, 20, 30, 128]);
-    applyAdjustments(img, { brightness: 0.5, contrast: 0, saturation: 0 });
+    applyAdjustments(img, [bc(0, 0), hsl(0)]);
+    expect(Array.from(img.data)).toEqual([10, 20, 30, 128]);
+    applyAdjustments(img, [bc(0.5, 0)]);
     expect(img.data[3]).toBe(128);
   });
 
-  it('brightens rgb', () => {
+  it('brightens rgb additively and clamps', () => {
     const img = imageData([10, 20, 30, 255]);
-    applyAdjustments(img, { brightness: 0.5, contrast: 0, saturation: 0 });
+    applyAdjustments(img, [bc(0.5, 0)]);
     expect(img.data[0]).toBe(138); // 10 + 128
     expect(img.data[1]).toBe(148);
     expect(img.data[2]).toBe(158);
+    const clamped = imageData([200, 0, 0, 255]);
+    applyAdjustments(clamped, [bc(0.5, 0)]);
+    expect(clamped.data[0]).toBe(255);
+  });
+
+  it('applies contrast about mid-grey', () => {
+    const img = imageData([64, 128, 192, 255]);
+    applyAdjustments(img, [bc(0, 1)]);
+    expect(img.data[0]).toBe(0); // (64-128)*2+128
+    expect(img.data[1]).toBe(128);
+    expect(img.data[2]).toBe(255);
   });
 
   it('fully desaturates to luma at saturation -1', () => {
     const img = imageData([200, 100, 50, 255]);
-    applyAdjustments(img, { brightness: 0, contrast: 0, saturation: -1 });
+    applyAdjustments(img, [hsl(-1)]);
     const luma = Math.round(0.299 * 200 + 0.587 * 100 + 0.114 * 50);
     expect(img.data[0]).toBe(luma);
     expect(img.data[1]).toBe(luma);
     expect(img.data[2]).toBe(luma);
+  });
+
+  it('entry order changes the pixels; a disabled entry renders exactly as a removed one', () => {
+    const source = [180, 60, 40, 255];
+    const bcFirst = imageData([...source]);
+    applyAdjustments(bcFirst, [bc(0.3, 0.5), hsl(-0.8)]);
+    const hslFirst = imageData([...source]);
+    applyAdjustments(hslFirst, [hsl(-0.8), bc(0.3, 0.5)]);
+    expect(Array.from(bcFirst.data)).not.toEqual(Array.from(hslFirst.data));
+
+    const withDisabled = imageData([...source]);
+    applyAdjustments(withDisabled, [bc(0.3, 0.5), hsl(-0.8, { isEnabled: false })]);
+    const without = imageData([...source]);
+    applyAdjustments(without, [bc(0.3, 0.5)]);
+    expect(Array.from(withDisabled.data)).toEqual(Array.from(without.data));
   });
 });

@@ -610,7 +610,7 @@ export {
 export type { LayerTransform } from './transform/transformMath';
 export type { ImageResolver } from './render/rasterizers';
 export type { Rect, SelectionOp, ToolId, Vec2 } from './types';
-export { adjustmentsKey, buildCurveLut, DEFAULT_ADJUSTMENTS } from './render/adjustments';
+export { adjustmentsKey, buildCurveLut } from './render/adjustments';
 export { DEFAULT_CHECKER_COLORS } from './render/compositor';
 export {
   getBaseRasterContentBounds,

@@ -1,12 +1,16 @@
 import type { SliderValueChangeDetails } from '@chakra-ui/react';
-import type { CanvasAdjustmentsContract, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/api';
+import type {
+  CanvasAdjustmentCurves,
+  CanvasAdjustmentEntry,
+  CanvasRasterLayerContractV2,
+} from '@workbench/canvas-engine/api';
 import type { CanvasPreparedEngine } from '@workbench/widgets/canvas/useStructuralCommit';
 import type { CanvasStructuralEngine } from '@workbench/widgets/layers/layerOps';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 
 import { chakra, createListCollection, HStack, Stack, Text } from '@chakra-ui/react';
-import { Button, Field, Select, Slider } from '@platform/ui';
-import { DEFAULT_ADJUSTMENTS, buildCurveLut } from '@workbench/canvas-engine/api';
+import { Field, Select, Slider } from '@platform/ui';
+import { buildCurveLut } from '@workbench/canvas-engine/api';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -20,6 +24,16 @@ import {
   getCurveGridCoordinates,
 } from './curveEditorMath';
 import { applyStructuralPreview } from './layerOps';
+
+/**
+ * The dedicated Properties editors of a raster layer's adjustment entries —
+ * the views their tree sub-selections open. Every edit replaces the layer's
+ * whole `adjustments` stack through one `patch-config`; a gesture previews
+ * live and lands exactly one history entry. Enable/remove/reorder live on the
+ * tree row, never here.
+ */
+
+export type AdjustmentsEngine = CanvasStructuralEngine & CanvasPreparedEngine;
 
 const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: false } as const;
 
@@ -52,206 +66,186 @@ const IDENTITY_CURVE: [number, number][] = [
   [255, 255],
 ];
 
-const withCurve = (
-  base: CanvasAdjustmentsContract,
-  channel: CurveChannel,
-  points: [number, number][]
-): CanvasAdjustmentsContract => ({
-  ...base,
-  curves: {
-    b: base.curves?.b ?? IDENTITY_CURVE,
-    g: base.curves?.g ?? IDENTITY_CURVE,
-    r: base.curves?.r ?? IDENTITY_CURVE,
-    [channel]: points,
-  },
-});
-
-const sameCurves = (left: CanvasAdjustmentsContract, right: CanvasAdjustmentsContract): boolean =>
-  CURVE_CHANNELS.every(
-    (channel) =>
-      JSON.stringify(left.curves?.[channel] ?? IDENTITY_CURVE) ===
-      JSON.stringify(right.curves?.[channel] ?? IDENTITY_CURVE)
-  );
-
 const formatSigned = (value: number): string => `${value > 0 ? '+' : ''}${Math.round(value * 100)}`;
 
-interface AdjustmentsPopoverProps {
+export const AdjustmentSettings = ({
+  engine,
+  entryId,
+  layer,
+}: {
   engine: AdjustmentsEngine | null;
+  entryId: string;
   layer: CanvasRasterLayerContractV2;
-}
-
-export const AdjustmentsPopover = ({ engine, layer }: AdjustmentsPopoverProps) => {
-  const adjustments = layer.adjustments ?? DEFAULT_ADJUSTMENTS;
-  return <AdjustmentsControls adjustments={adjustments} engine={engine} layer={layer} />;
+}) => {
+  const entry = layer.adjustments?.find((candidate) => candidate.id === entryId);
+  if (!entry) {
+    return null;
+  }
+  return <AdjustmentEntryEditor engine={engine} entry={entry} layer={layer} />;
 };
 
-export type AdjustmentsEngine = CanvasStructuralEngine & CanvasPreparedEngine;
-
-interface AdjustmentsControlsProps {
-  adjustments: CanvasAdjustmentsContract;
+const AdjustmentEntryEditor = ({
+  engine,
+  entry,
+  layer,
+}: {
   engine: AdjustmentsEngine | null;
+  entry: CanvasAdjustmentEntry;
   layer: CanvasRasterLayerContractV2;
-}
-
-type ScalarKey = 'brightness' | 'contrast' | 'saturation';
-
-const AdjustmentsControls = ({ adjustments, engine, layer }: AdjustmentsControlsProps) => {
+}) => {
   const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
-  // The layer's adjustments when the current gesture started; `undefined` when it had none, so undo
-  // restores "no adjustments" rather than the defaults the controls display.
-  const gestureBaselineRef = useRef<{ adjustments: CanvasAdjustmentsContract | undefined } | null>(null);
+  // The whole stack when the current gesture started; undo restores it entirely.
+  const gestureBaselineRef = useRef<readonly CanvasAdjustmentEntry[] | null>(null);
 
   const patchLive = useCallback(
-    (next: CanvasAdjustmentsContract) => {
-      gestureBaselineRef.current ??= { adjustments: layer.adjustments };
+    (next: CanvasAdjustmentEntry) => {
+      const entries = layer.adjustments ?? [];
+      gestureBaselineRef.current ??= entries;
       applyStructuralPreview(engine, {
-        config: { adjustments: next, layerType: 'raster' },
+        config: {
+          adjustments: entries.map((candidate) => (candidate.id === next.id ? next : candidate)),
+          layerType: 'raster',
+        },
         id: layer.id,
         type: 'updateCanvasLayerConfig',
       });
     },
-    [engine, layer]
+    [engine, layer.adjustments, layer.id]
   );
 
-  const commit = useCallback(
-    (label: string, next: CanvasAdjustmentsContract, before: CanvasAdjustmentsContract) => {
-      const baseline = gestureBaselineRef.current ? gestureBaselineRef.current.adjustments : before;
+  const commitEntry = useCallback(
+    (label: string, next: CanvasAdjustmentEntry) => {
+      const entries = layer.adjustments ?? [];
+      const baseline = gestureBaselineRef.current ?? entries;
       gestureBaselineRef.current = null;
+      // The tree dot owns enablement; a toggle landing mid-gesture stays put.
+      const committed = { ...next, isEnabled: entry.isEnabled };
       commitPrepared(label, (model) =>
         model.prepare({
-          before: { adjustments: baseline, layerType: 'raster' },
-          config: { adjustments: next, layerType: 'raster' },
+          before: { adjustments: [...baseline], layerType: 'raster' },
+          config: {
+            adjustments: entries.map((candidate) => (candidate.id === committed.id ? committed : candidate)),
+            layerType: 'raster',
+          },
           id: layer.id,
           type: 'patch-config',
         })
       );
     },
-    [commitPrepared, layer.id]
+    [commitPrepared, entry.isEnabled, layer.adjustments, layer.id]
   );
 
-  const handleScalarLive = useCallback(
-    (key: ScalarKey, next: number) => patchLive({ ...adjustments, [key]: next }),
-    [adjustments, patchLive]
-  );
-
-  const handleScalarCommit = useCallback(
-    (label: string, key: ScalarKey, next: number, before: CanvasAdjustmentsContract) => {
-      commit(label, { ...before, [key]: next }, before);
-    },
-    [commit]
-  );
-
-  const handleReset = useCallback(() => {
-    commit(t('widgets.layers.adjustments.reset'), { ...DEFAULT_ADJUSTMENTS }, adjustments);
-  }, [adjustments, commit, t]);
-
-  const handleCurveLive = useCallback(
-    (channel: CurveChannel, points: [number, number][]) => {
-      patchLive(withCurve(adjustments, channel, points));
-    },
-    [adjustments, patchLive]
-  );
-
-  const handleCurveCancel = useCallback(
-    (before: CanvasAdjustmentsContract) => {
-      const baseline = gestureBaselineRef.current ? gestureBaselineRef.current.adjustments : before;
-      gestureBaselineRef.current = null;
+  const cancelGesture = useCallback(() => {
+    const baseline = gestureBaselineRef.current;
+    gestureBaselineRef.current = null;
+    if (baseline) {
       applyStructuralPreview(engine, {
-        config: { adjustments: baseline, layerType: 'raster' },
+        config: { adjustments: [...baseline], layerType: 'raster' },
         id: layer.id,
         type: 'updateCanvasLayerConfig',
       });
-    },
-    [engine, layer.id]
+    }
+  }, [engine, layer.id]);
+
+  const handleScalarLive = useCallback(
+    (field: 'brightness' | 'contrast' | 'saturation', next: number) =>
+      patchLive({ ...entry, [field]: next } as CanvasAdjustmentEntry),
+    [entry, patchLive]
+  );
+  const handleScalarCommit = useCallback(
+    (field: 'brightness' | 'contrast' | 'saturation', next: number) =>
+      commitEntry(t(`widgets.layers.adjustments.${field}`), { ...entry, [field]: next } as CanvasAdjustmentEntry),
+    [commitEntry, entry, t]
+  );
+  const handleCurvesLive = useCallback(
+    (curves: CanvasAdjustmentCurves) => patchLive({ ...entry, curves } as CanvasAdjustmentEntry),
+    [entry, patchLive]
+  );
+  const handleCurvesCommit = useCallback(
+    (curves: CanvasAdjustmentCurves) =>
+      commitEntry(t('widgets.layers.adjustments.curves'), { ...entry, curves } as CanvasAdjustmentEntry),
+    [commitEntry, entry, t]
   );
 
-  const handleCurveCommit = useCallback(
-    (current: CanvasAdjustmentsContract, before: CanvasAdjustmentsContract) => {
-      if (sameCurves(current, before)) {
-        handleCurveCancel(before);
-        return;
-      }
-      commit(t('widgets.layers.adjustments.curves'), current, before);
-    },
-    [commit, handleCurveCancel, t]
-  );
-
-  return (
-    <Stack gap="3">
-      <AdjustmentSlider
-        adjustments={adjustments}
-        adjustmentKey="brightness"
-        label={t('widgets.layers.adjustments.brightness')}
-        onCommit={handleScalarCommit}
-        onLive={handleScalarLive}
-      />
-      <AdjustmentSlider
-        adjustments={adjustments}
-        adjustmentKey="contrast"
-        label={t('widgets.layers.adjustments.contrast')}
-        onCommit={handleScalarCommit}
-        onLive={handleScalarLive}
-      />
-      <AdjustmentSlider
-        adjustments={adjustments}
-        adjustmentKey="saturation"
-        label={t('widgets.layers.adjustments.saturation')}
-        onCommit={handleScalarCommit}
-        onLive={handleScalarLive}
-      />
-      <CurvesEditor
-        adjustments={adjustments}
-        onCancel={handleCurveCancel}
-        onCommit={handleCurveCommit}
-        onLive={handleCurveLive}
-      />
-      <Button size="xs" variant="ghost" onClick={handleReset}>
-        {t('widgets.layers.adjustments.reset')}
-      </Button>
-    </Stack>
-  );
+  switch (entry.type) {
+    case 'brightness-contrast':
+      return (
+        <Stack gap="3">
+          <ScalarSlider
+            field="brightness"
+            label={t('widgets.layers.adjustments.brightness')}
+            value={entry.brightness}
+            onCommit={handleScalarCommit}
+            onLive={handleScalarLive}
+          />
+          <ScalarSlider
+            field="contrast"
+            label={t('widgets.layers.adjustments.contrast')}
+            value={entry.contrast}
+            onCommit={handleScalarCommit}
+            onLive={handleScalarLive}
+          />
+        </Stack>
+      );
+    case 'hsl':
+      return (
+        <ScalarSlider
+          field="saturation"
+          label={t('widgets.layers.adjustments.saturation')}
+          value={entry.saturation}
+          onCommit={handleScalarCommit}
+          onLive={handleScalarLive}
+        />
+      );
+    case 'curves':
+      return (
+        <CurvesEditor
+          curves={entry.curves}
+          onCancel={cancelGesture}
+          onCommit={handleCurvesCommit}
+          onLive={handleCurvesLive}
+        />
+      );
+  }
 };
 
-interface AdjustmentSliderProps {
-  label: string;
-  adjustmentKey: ScalarKey;
-  adjustments: CanvasAdjustmentsContract;
-  onLive: (key: ScalarKey, next: number) => void;
-  onCommit: (label: string, key: ScalarKey, next: number, before: CanvasAdjustmentsContract) => void;
-}
+type ScalarField = 'brightness' | 'contrast' | 'saturation';
 
-const AdjustmentSlider = ({ adjustmentKey, adjustments, label, onCommit, onLive }: AdjustmentSliderProps) => {
-  const beforeRef = useRef<CanvasAdjustmentsContract | null>(null);
-  const value = adjustments[adjustmentKey] ?? 0;
+const ScalarSlider = ({
+  field,
+  label,
+  onCommit,
+  onLive,
+  value,
+}: {
+  field: ScalarField;
+  label: string;
+  value: number;
+  onLive: (field: ScalarField, next: number) => void;
+  onCommit: (field: ScalarField, next: number) => void;
+}) => {
   const sliderValue = useMemo(() => [value], [value]);
   const aria = useMemo(() => [label], [label]);
 
   const handleChange = useCallback(
     ({ value: v }: SliderValueChangeDetails) => {
       const next = v[0];
-      if (next === undefined || !Number.isFinite(next)) {
-        return;
+      if (next !== undefined && Number.isFinite(next)) {
+        onLive(field, next);
       }
-      if (beforeRef.current === null) {
-        beforeRef.current = adjustments;
-      }
-      onLive(adjustmentKey, next);
     },
-    [adjustmentKey, adjustments, onLive]
+    [field, onLive]
   );
 
   const handleChangeEnd = useCallback(
     ({ value: v }: SliderValueChangeDetails) => {
       const next = v[0];
-      const before = beforeRef.current ?? adjustments;
-      beforeRef.current = null;
-      if (next === undefined || !Number.isFinite(next)) {
-        return;
+      if (next !== undefined && Number.isFinite(next)) {
+        onCommit(field, next);
       }
-      onCommit(label, adjustmentKey, next, before);
     },
-    [adjustmentKey, adjustments, label, onCommit]
+    [field, onCommit]
   );
 
   return (
@@ -272,26 +266,32 @@ const AdjustmentSlider = ({ adjustmentKey, adjustments, label, onCommit, onLive 
   );
 };
 
-interface CurvesEditorProps {
-  adjustments: CanvasAdjustmentsContract;
-  onLive: (channel: CurveChannel, points: [number, number][]) => void;
-  onCancel: (before: CanvasAdjustmentsContract) => void;
-  onCommit: (current: CanvasAdjustmentsContract, before: CanvasAdjustmentsContract) => void;
-}
+const sameChannel = (left: CanvasAdjustmentCurves, right: CanvasAdjustmentCurves, channel: CurveChannel): boolean =>
+  JSON.stringify(left[channel] ?? IDENTITY_CURVE) === JSON.stringify(right[channel] ?? IDENTITY_CURVE);
 
-const CurvesEditor = ({ adjustments, onCancel, onCommit, onLive }: CurvesEditorProps) => {
+const CurvesEditor = ({
+  curves,
+  onCancel,
+  onCommit,
+  onLive,
+}: {
+  curves: CanvasAdjustmentCurves;
+  onLive: (curves: CanvasAdjustmentCurves) => void;
+  onCancel: () => void;
+  onCommit: (curves: CanvasAdjustmentCurves) => void;
+}) => {
   const { t } = useTranslation();
   const [channel, setChannel] = useState<CurveChannel>('r');
   const dragIndexRef = useRef<number | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const beforeRef = useRef<CanvasAdjustmentsContract | null>(null);
+  const beforeRef = useRef<CanvasAdjustmentCurves | null>(null);
   const latestPointsRef = useRef<[number, number][] | null>(null);
   const dragTargetRef = useRef<Element | null>(null);
 
   const points = useMemo<[number, number][]>(() => {
-    const raw = adjustments.curves?.[channel];
+    const raw = curves[channel];
     return raw && raw.length >= 2 ? [...raw].map(([x, y]) => [x, y] as [number, number]) : [...IDENTITY_CURVE];
-  }, [adjustments.curves, channel]);
+  }, [channel, curves]);
 
   const channelCollection = useMemo(
     () =>
@@ -336,10 +336,10 @@ const CurvesEditor = ({ adjustments, onCancel, onCommit, onLive }: CurvesEditorP
       event.currentTarget.setPointerCapture(event.pointerId);
       dragIndexRef.current = Number(event.currentTarget.dataset.index);
       dragTargetRef.current = event.currentTarget;
-      beforeRef.current = adjustments;
+      beforeRef.current = curves;
       latestPointsRef.current = null;
     },
-    [adjustments]
+    [curves]
   );
 
   const handleMove = useCallback(
@@ -363,9 +363,9 @@ const CurvesEditor = ({ adjustments, onCancel, onCommit, onLive }: CurvesEditorP
         next[index] = [Math.max(lo, Math.min(hi, next[index][0])), next[index][1]];
       }
       latestPointsRef.current = next;
-      onLive(channel, next);
+      onLive({ ...curves, [channel]: next });
     },
-    [channel, onLive, points, svgPointFromEvent]
+    [channel, curves, onLive, points, svgPointFromEvent]
   );
 
   const finishDrag = useCallback(
@@ -382,12 +382,13 @@ const CurvesEditor = ({ adjustments, onCancel, onCommit, onLive }: CurvesEditorP
       beforeRef.current = null;
       latestPointsRef.current = null;
       if (wasDragging && before && finalPoints) {
+        const current = { ...before, [channel]: finalPoints };
         finishCurveDragResult({
           before,
-          cancelled,
-          current: withCurve(before, channel, finalPoints),
-          onCommit: (current) => onCommit(current, before),
-          onPreview: onCancel,
+          cancelled: cancelled || sameChannel(current, before, channel),
+          current,
+          onCommit,
+          onPreview: () => onCancel(),
         });
       }
     },
@@ -408,9 +409,9 @@ const CurvesEditor = ({ adjustments, onCancel, onCommit, onLive }: CurvesEditorP
         return;
       }
       const next = [...points, [nx, ny] as [number, number]].sort((a, b) => a[0] - b[0]);
-      onCommit(withCurve(adjustments, channel, next), adjustments);
+      onCommit({ ...curves, [channel]: next });
     },
-    [adjustments, channel, onCommit, points, svgPointFromEvent]
+    [channel, curves, onCommit, points, svgPointFromEvent]
   );
 
   const handleRemove = useCallback(
@@ -420,16 +421,9 @@ const CurvesEditor = ({ adjustments, onCancel, onCommit, onLive }: CurvesEditorP
       if (index === 0 || index === points.length - 1 || points.length <= 2) {
         return;
       }
-      onCommit(
-        withCurve(
-          adjustments,
-          channel,
-          points.filter((_, i) => i !== index)
-        ),
-        adjustments
-      );
+      onCommit({ ...curves, [channel]: points.filter((_, i) => i !== index) });
     },
-    [adjustments, channel, onCommit, points]
+    [channel, curves, onCommit, points]
   );
 
   const channelValue = useMemo(() => [channel], [channel]);

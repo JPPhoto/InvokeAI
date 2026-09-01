@@ -37,6 +37,7 @@ import {
   type ProjectedChildRow,
 } from './layerChildRows';
 import { clearLayerChildSelection, selectLayerChild, useLayerChildSelection } from './layerChildSelection';
+import { createAdjustmentId } from './layerOps';
 import {
   flattenPanelRows,
   isHeaderKey,
@@ -482,6 +483,21 @@ export const LayersTree = ({
           return;
         }
         focusItem(navigation.focus);
+      },
+      duplicateChild: (child) => {
+        const command = layerChildRowCommand(latest.current.document, child, {
+          newId: createAdjustmentId(),
+          type: 'duplicate',
+        });
+        if (command) {
+          runStructural(t('widgets.layers.modifiers.duplicateAdjustment'), command);
+        }
+      },
+      moveChild: (child, direction) => {
+        const command = layerChildRowCommand(latest.current.document, child, { direction, type: 'move' });
+        if (command) {
+          runStructural(t('widgets.layers.modifiers.reorderAdjustment'), command);
+        }
       },
       openChildMenu: (child, anchor: LayerSurfaceAnchor) => setSurface({ anchor, child, kind: 'child-menu' }),
       openMenu: (id, anchor: LayerSurfaceAnchor) => setSurface({ anchor, id, kind: 'menu' }),

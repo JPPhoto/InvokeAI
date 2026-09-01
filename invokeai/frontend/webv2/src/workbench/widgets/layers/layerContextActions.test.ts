@@ -89,6 +89,7 @@ const makeState = (
 };
 
 const makeEffects = (): LayerContextActionEffects => ({
+  addAdjustment: vi.fn(),
   addMaskModifier: vi.fn(),
   addReferenceImage: vi.fn(),
   booleanMerge: vi.fn(() => Promise.resolve()),
@@ -299,7 +300,7 @@ describe('layer context action registry', () => {
     const context = makeRuntimeContext(rasterLayer, { effects });
 
     getLayerContextActionDefinition('move-to-front').handler(context);
-    getLayerContextActionDefinition('adjustments').handler(context);
+    getLayerContextActionDefinition('add-curves').handler(context);
     getLayerContextActionDefinition('filter').handler(context);
     getLayerContextActionDefinition('intersect').handler(context);
     getLayerContextActionDefinition('copy-to-control').handler(context);
@@ -307,7 +308,7 @@ describe('layer context action registry', () => {
     getLayerContextActionDefinition('regional-auto-negative').handler(context);
 
     expect(effects.reorder).toHaveBeenCalledWith('front', 'move-to-front');
-    expect(effects.openProperties).toHaveBeenCalledWith();
+    expect(effects.addAdjustment).toHaveBeenCalledWith('curves');
     expect(effects.startFilter).toHaveBeenCalledWith(rasterLayer.id);
     expect(effects.booleanMerge).toHaveBeenCalledWith('intersect');
     expect(effects.copyTo).toHaveBeenCalledWith('control');
@@ -318,8 +319,8 @@ describe('layer context action registry', () => {
 
 describe('getLayerContextActions', () => {
   it.each([
-    ['raster', 'adjustments', true],
-    ['control', 'adjustments', false],
+    ['raster', 'add-curves', true],
+    ['control', 'add-curves', false],
     ['inpaint_mask', 'extract-masked-area', true],
     ['control', 'extract-masked-area', false],
   ] as const)('resolves %s visibility for %s', (type, actionId, expected) => {
@@ -454,7 +455,9 @@ describe('getLayerContextActions', () => {
       'rename',
       'transform',
       'fit-to-bbox',
-      'adjustments',
+      'add-brightness-contrast',
+      'add-hsl',
+      'add-curves',
       'save-to-assets',
       'copy-to-clipboard',
       'crop-to-bbox',
@@ -533,7 +536,9 @@ describe('getLayerContextActions', () => {
 
     for (const id of [
       'fit-to-bbox',
-      'adjustments',
+      'add-brightness-contrast',
+      'add-hsl',
+      'add-curves',
       'filter',
       'select-object',
       'run-workflow',
@@ -607,7 +612,9 @@ describe('getLayerContextActions', () => {
         'rename',
         'transform',
         'fit-to-bbox',
-        'adjustments',
+        'add-brightness-contrast',
+        'add-hsl',
+        'add-curves',
         'save-to-assets',
         'copy-to-clipboard',
         'crop-to-bbox',

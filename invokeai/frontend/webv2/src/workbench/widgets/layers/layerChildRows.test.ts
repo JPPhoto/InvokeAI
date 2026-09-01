@@ -163,3 +163,69 @@ describe('mask modifier rows', () => {
     expect(getLayerChildItem(document, 'gone', 'noise')).toBeNull();
   });
 });
+
+describe('adjustment rows', () => {
+  const entries = () => [
+    { brightness: 0.1, contrast: 0, id: 'a1', isEnabled: true, type: 'brightness-contrast' as const },
+    { id: 'a2', isEnabled: false, saturation: -0.4, type: 'hsl' as const },
+    { curves: {}, id: 'a3', isEnabled: true, type: 'curves' as const },
+  ];
+  const rasterWith = (adjustments = entries()) => layerContract('r1', 'raster', { adjustments });
+  const rasterRow = (document: ReturnType<typeof documentFrom>) =>
+    buildLayerStackRows(document.stacks, new Set()).raster.rows.find((row) => row.id === 'r1')!;
+
+  it('projects one row per entry, in stack order, with per-kind identity and the hsl value', () => {
+    const rows = projectLayerChildRows(rasterRow(documentFrom([rasterWith()])).vm);
+    expect(rows.map((row) => [row.kind, row.itemId, row.isEnabled, row.value])).toEqual([
+      ['adjustment-brightness-contrast', 'a1', true, null],
+      ['adjustment-hsl', 'a2', false, -0.4],
+      ['adjustment-curves', 'a3', true, null],
+    ]);
+    expect(rows[1]).toMatchObject({ posInSet: 2, setSize: 3 });
+    expect(projectLayerChildRows(rasterRow(documentFrom([rasterWith([])])).vm)).toEqual([]);
+  });
+
+  it('moves an entry within the stack and refuses moves past the ends', () => {
+    const document = documentFrom([rasterWith()]);
+    const moved = layerChildRowCommand(document, { itemId: 'a2', layerId: 'r1' }, { direction: -1, type: 'move' });
+    expect(
+      (moved!.config as unknown as { adjustments: { id: string }[] }).adjustments.map((entry) => entry.id)
+    ).toEqual(['a2', 'a1', 'a3']);
+    expect(layerChildRowCommand(document, { itemId: 'a1', layerId: 'r1' }, { direction: -1, type: 'move' })).toBeNull();
+    expect(layerChildRowCommand(document, { itemId: 'a3', layerId: 'r1' }, { direction: 1, type: 'move' })).toBeNull();
+  });
+
+  it('duplicates an entry directly after itself with the minted id', () => {
+    const document = documentFrom([rasterWith()]);
+    const command = layerChildRowCommand(
+      document,
+      { itemId: 'a1', layerId: 'r1' },
+      { newId: 'a1-copy', type: 'duplicate' }
+    );
+    const ids = (command!.config as unknown as { adjustments: { id: string }[] }).adjustments.map((entry) => entry.id);
+    expect(ids).toEqual(['a1', 'a1-copy', 'a2', 'a3']);
+  });
+
+  it('toggles and removes entries, and refuses move/duplicate for non-adjustment kinds', () => {
+    const document = documentFrom([rasterWith(), regionalWith([referenceImage('ref1')])]);
+    const toggled = layerChildRowCommand(
+      document,
+      { itemId: 'a2', layerId: 'r1' },
+      { isEnabled: true, type: 'set-enabled' }
+    );
+    expect((toggled!.config as unknown as { adjustments: { isEnabled: boolean }[] }).adjustments[1]!.isEnabled).toBe(
+      true
+    );
+    const removed = layerChildRowCommand(document, { itemId: 'a2', layerId: 'r1' }, { type: 'remove' });
+    expect(
+      (removed!.config as unknown as { adjustments: { id: string }[] }).adjustments.map((entry) => entry.id)
+    ).toEqual(['a1', 'a3']);
+    expect(
+      layerChildRowCommand(document, { itemId: 'ref1', layerId: 'rg1' }, { direction: 1, type: 'move' })
+    ).toBeNull();
+    expect(
+      layerChildRowCommand(document, { itemId: 'ref1', layerId: 'rg1' }, { newId: 'x', type: 'duplicate' })
+    ).toBeNull();
+    expect(getLayerChildItem(document, 'r1', 'a3')).toEqual({ isEnabled: true, kind: 'adjustment-curves' });
+  });
+});

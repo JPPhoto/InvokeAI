@@ -19,7 +19,7 @@ import { bakePixelEditSurface } from './controlPixelEdit';
 const IDENTITY = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 } as const;
 
 const imageLayer = (overrides: Partial<CanvasRasterLayerContractV2> = {}): CanvasRasterLayerContractV2 => ({
-  adjustments: { brightness: 0.5, contrast: 0, saturation: 0 },
+  adjustments: [{ brightness: 0.5, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const }],
   blendMode: 'normal',
   id: 'image',
   isEnabled: true,

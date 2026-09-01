@@ -248,6 +248,10 @@ export const createRegionalGuidanceFromImage = (
 export const createReferenceImageId = (): string =>
   `rgref-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
+/** Mints a fresh raster adjustment-entry id. */
+export const createAdjustmentId = (): string =>
+  `adj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
 /**
  * A fresh regional reference image, minting the config kind the region's base can
  * actually consume: FLUX regions use FLUX Redux (the only kind resolved for FLUX

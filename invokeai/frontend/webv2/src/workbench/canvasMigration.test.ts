@@ -104,6 +104,53 @@ describe('loadCanvasState', () => {
     });
   });
 
+  it('round-trips a valid adjustment stack, drops the pre-stack object shape, and drops a stack with one malformed entry', () => {
+    const stack = [
+      { brightness: 0.2, contrast: -0.1, id: 'a1', isEnabled: true, type: 'brightness-contrast' },
+      { id: 'a2', isEnabled: false, saturation: 0.4, type: 'hsl' },
+      {
+        curves: {
+          r: [
+            [0, 10],
+            [255, 255],
+          ],
+        },
+        id: 'a3',
+        isEnabled: true,
+        type: 'curves',
+      },
+    ];
+    const adjustmentsOf = (loaded: CanvasStateContractV3) => {
+      const layer = loaded.document.stacks.raster[0];
+      return layer?.type === 'raster' ? layer.adjustments : null;
+    };
+
+    const valid = load(withNodes([{ ...createEmptyPaintLayer('Adjusted', 'adjusted'), adjustments: stack }]));
+    expect(adjustmentsOf(valid)).toEqual(stack);
+
+    const legacy = load(
+      withNodes([
+        {
+          ...createEmptyPaintLayer('Legacy', 'legacy'),
+          adjustments: { brightness: 0.2, contrast: 0, saturation: 0 },
+        },
+      ])
+    );
+    expect(adjustmentsOf(legacy)).toBeUndefined();
+
+    // One typo'd entry drops the WHOLE stack rather than failing the document — the accepted blast radius.
+    const malformed = load(
+      withNodes([
+        {
+          ...createEmptyPaintLayer('Broken', 'broken'),
+          adjustments: [stack[0], { id: 'bad', isEnabled: true, saturation: 'high', type: 'hsl' }],
+        },
+      ])
+    );
+    expect(adjustmentsOf(malformed)).toBeUndefined();
+    expect(malformed.document.stacks.raster).toHaveLength(1);
+  });
+
   it('normalizes control adapters in both the live document and saved snapshots', () => {
     const invalidLayer = {
       ...createControlLayer('Z Control', 'z-control'),

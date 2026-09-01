@@ -161,12 +161,24 @@ export interface CanvasLayerBaseContract {
   transform: { x: number; y: number; scaleX: number; scaleY: number; rotation: number };
 }
 
-export interface CanvasAdjustmentsContract {
-  brightness: number;
-  contrast: number;
-  saturation: number;
-  curves?: { r: [number, number][]; g: [number, number][]; b: [number, number][] };
+export interface CanvasAdjustmentCurves {
+  r?: [number, number][];
+  g?: [number, number][];
+  b?: [number, number][];
 }
+
+/**
+ * One non-destructive adjustment in a raster layer's ordered stack. List order
+ * is application order; disabling keeps the tuned values out of every render
+ * without losing them. The Layers tree projects each entry as a child row.
+ */
+export type CanvasAdjustmentEntry =
+  | { id: string; isEnabled: boolean; type: 'brightness-contrast'; brightness: number; contrast: number }
+  | { id: string; isEnabled: boolean; type: 'hsl'; saturation: number }
+  | { id: string; isEnabled: boolean; type: 'curves'; curves: CanvasAdjustmentCurves };
+
+/** A raster layer's ordered adjustment stack, applied top to bottom. */
+export type CanvasAdjustmentsContract = readonly CanvasAdjustmentEntry[];
 
 export interface CanvasControlAdapterContract {
   kind: 'controlnet' | 't2i_adapter' | 'control_lora' | 'z_image_control';

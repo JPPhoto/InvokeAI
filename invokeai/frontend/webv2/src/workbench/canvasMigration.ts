@@ -84,12 +84,23 @@ const zTransform = z.object({
 });
 const zFilter = z.object({ settings: z.record(z.string(), z.unknown()), type: z.string() });
 const zCurve = z.array(z.tuple([zFiniteNumber, zFiniteNumber]));
-const zAdjustments = z.object({
-  brightness: zFiniteNumber,
-  contrast: zFiniteNumber,
-  curves: z.object({ b: zCurve, g: zCurve, r: zCurve }).optional(),
-  saturation: zFiniteNumber,
-});
+const zAdjustmentEntry = z.discriminatedUnion('type', [
+  z.object({
+    brightness: zFiniteNumber,
+    contrast: zFiniteNumber,
+    id: z.string(),
+    isEnabled: z.boolean(),
+    type: z.literal('brightness-contrast'),
+  }),
+  z.object({ id: z.string(), isEnabled: z.boolean(), saturation: zFiniteNumber, type: z.literal('hsl') }),
+  z.object({
+    curves: z.object({ b: zCurve.optional(), g: zCurve.optional(), r: zCurve.optional() }),
+    id: z.string(),
+    isEnabled: z.boolean(),
+    type: z.literal('curves'),
+  }),
+]);
+const zAdjustments = z.array(zAdjustmentEntry);
 const zControlAdapter = z
   .object({
     beginEndStepPct: z.tuple([zFiniteNumber, zFiniteNumber]),
@@ -180,7 +191,8 @@ const zLayerBase = z.object({
 });
 const zCanvasLayer = z.discriminatedUnion('type', [
   zLayerBase.extend({
-    adjustments: zAdjustments.optional(),
+    // A pre-stack adjustments OBJECT is dropped rather than failing the document.
+    adjustments: zAdjustments.optional().catch(undefined),
     filter: zFilter.optional(),
     isTransparencyLocked: z.boolean().optional(),
     source: zLayerSource,

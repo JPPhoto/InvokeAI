@@ -48,6 +48,7 @@ import {
   CopyIcon,
   MergeIcon,
   MoreVerticalIcon,
+  SlidersHorizontalIcon,
 } from 'lucide-react';
 import { Fragment, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -99,6 +100,7 @@ import {
   copyRasterToRegionalGuidance,
   copyRegionalGuidanceToInpaintMask,
   createLayerId,
+  createAdjustmentId,
   createRegionalReferenceImage,
   fitLayerTransformToBbox,
   getControlTransparencyEffectPatch,
@@ -733,6 +735,31 @@ const LayerMenu = ({
     [commitPrepared, layer, t]
   );
 
+  const handleAddAdjustment = useCallback(
+    (type: 'brightness-contrast' | 'hsl' | 'curves') => {
+      if (layer.type !== 'raster') {
+        return;
+      }
+      const id = createAdjustmentId();
+      const entry =
+        type === 'brightness-contrast'
+          ? { brightness: 0, contrast: 0, id, isEnabled: true, type }
+          : type === 'hsl'
+            ? { id, isEnabled: true, saturation: 0, type }
+            : { curves: {}, id, isEnabled: true, type };
+      const before = layer.adjustments ?? [];
+      commitPrepared(t('widgets.layers.menu.addAdjustment'), (model) =>
+        model.prepare({
+          before: { adjustments: [...before], layerType: 'raster' },
+          config: { adjustments: [...before, entry], layerType: 'raster' },
+          id: layer.id,
+          type: 'patch-config',
+        })
+      );
+    },
+    [commitPrepared, layer, t]
+  );
+
   const handleAddReferenceImage = useCallback(() => {
     if (layer.type !== 'regional_guidance') {
       return;
@@ -752,6 +779,7 @@ const LayerMenu = ({
 
   const effects = useMemo<LayerContextActionEffects>(
     () => ({
+      addAdjustment: handleAddAdjustment,
       addMaskModifier: handleAddMaskModifier,
       addReferenceImage: handleAddReferenceImage,
       booleanMerge: handleBooleanRaster,
@@ -793,6 +821,7 @@ const LayerMenu = ({
     [
       convert,
       getActionLabel,
+      handleAddAdjustment,
       handleAddMaskModifier,
       handleAddReferenceImage,
       handleBooleanRaster,
@@ -1023,6 +1052,11 @@ export const CanvasLayerContextMenu = ({
 const stopPropagation = (event: { stopPropagation: () => void }): void => event.stopPropagation();
 
 const SUBMENU_META: Record<LayerContextSubmenuId, { defaultLabel: string; icon: LucideIcon; labelKey: string }> = {
+  'add-adjustment': {
+    defaultLabel: 'Add adjustment',
+    icon: SlidersHorizontalIcon,
+    labelKey: 'widgets.layers.menu.addAdjustment',
+  },
   arrange: { defaultLabel: 'Arrange', icon: ArrowUpDownIcon, labelKey: 'widgets.layers.menu.arrange' },
   boolean: { defaultLabel: 'Boolean operations', icon: MergeIcon, labelKey: 'widgets.layers.menu.booleanOperations' },
   'convert-to': { defaultLabel: 'Convert to', icon: ArrowRightLeftIcon, labelKey: 'widgets.layers.menu.convertTo' },

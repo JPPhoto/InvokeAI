@@ -180,7 +180,10 @@ describe('buildMaterializedPixelLayer', () => {
 
   it('clears raster adjustments after baking them into a paint source', () => {
     const before: CanvasLayerContract = {
-      adjustments: { brightness: 0.2, contrast: -0.1, saturation: 0.3 },
+      adjustments: [
+        { brightness: 0.2, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+      ],
       blendMode: 'normal',
       id: 'image',
       isEnabled: true,

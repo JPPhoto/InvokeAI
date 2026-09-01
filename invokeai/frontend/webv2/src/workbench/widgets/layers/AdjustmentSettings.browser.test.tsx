@@ -1,4 +1,8 @@
-import type { CanvasRasterLayerContractV2, PreparedDocumentEdit } from '@workbench/canvas-engine/api';
+import type {
+  CanvasAdjustmentEntry,
+  CanvasRasterLayerContractV2,
+  PreparedDocumentEdit,
+} from '@workbench/canvas-engine/api';
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
@@ -14,7 +18,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { type AdjustmentsEngine, AdjustmentsPopover } from './AdjustmentsPopover';
+import { type AdjustmentsEngine, AdjustmentSettings } from './AdjustmentSettings';
 import { CURVE_SIZE } from './curveEditorMath';
 
 const i18n = createInstance();
@@ -30,8 +34,14 @@ vi.mock('@workbench/useCanvasProjectMutationDispatch', () => ({
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 
+const initialEntries = (): CanvasAdjustmentEntry[] => [
+  { brightness: 0.1, contrast: 0, id: 'bc1', isEnabled: true, type: 'brightness-contrast' },
+  { curves: {}, id: 'cv1', isEnabled: true, type: 'curves' },
+];
+
 const createLayer = (): CanvasRasterLayerContractV2 =>
   ({
+    adjustments: initialEntries(),
     blendMode: 'normal',
     id: 'layer-1',
     isEnabled: true,
@@ -80,7 +90,7 @@ const Harness = () => {
     // Rebuilt per layer change so the stub's model reflects the previewed layer, as the engine's does.
   }, [layer]);
 
-  return <AdjustmentsPopover engine={engine} layer={layer} />;
+  return <AdjustmentSettings engine={engine} entryId="cv1" layer={layer} />;
 };
 
 const settle = (action: () => void): Promise<void> =>
@@ -133,8 +143,8 @@ afterEach(async () => {
   root = null;
 });
 
-describe('curves editor', () => {
-  it('moves a handle while dragging it', async () => {
+describe('curves entry editor', () => {
+  it('moves a handle while dragging and commits the whole stack with the pre-gesture inverse', async () => {
     const svg = await render();
     const target = handles(svg).at(-1)!;
     const before = Number(target.getAttribute('cy'));
@@ -151,15 +161,16 @@ describe('curves editor', () => {
     expect(commits).toHaveLength(1);
     const edit = commits[0]!;
     expect(edit.inverse).toMatchObject({ id: 'layer-1', type: 'updateCanvasLayerConfig' });
-    expect((edit.inverse as { config: { adjustments?: unknown } }).config.adjustments).toEqual(
-      createLayer().adjustments
-    );
-    expect(
-      (edit.forward as { config: { adjustments: { curves: { r: unknown[] } } } }).config.adjustments.curves.r
-    ).not.toEqual(createLayer().adjustments?.curves?.r);
+    expect((edit.inverse as { config: { adjustments?: unknown } }).config.adjustments).toEqual(initialEntries());
+    const forward = (edit.forward as unknown as { config: { adjustments: CanvasAdjustmentEntry[] } }).config
+      .adjustments;
+    // The untouched sibling entry rides along unchanged; the curves entry carries the new points.
+    expect(forward[0]).toEqual(initialEntries()[0]);
+    expect(forward[1]).toMatchObject({ id: 'cv1', type: 'curves' });
+    expect((forward[1] as { curves: { r?: unknown[] } }).curves.r).toBeDefined();
   });
 
-  it('records nothing when a drag ends where it started', async () => {
+  it('records nothing and restores the stack when a drag ends where it started', async () => {
     const svg = await render();
     const target = handles(svg).at(-1)!;
     const before = Number(target.getAttribute('cy'));
@@ -172,10 +183,10 @@ describe('curves editor', () => {
 
     expect(Number(handles(svg).at(-1)!.getAttribute('cy'))).toBeCloseTo(before, 5);
     expect(commits).toHaveLength(0);
-    expect(latestAdjustments).toBeUndefined();
+    expect(latestAdjustments).toEqual(initialEntries());
   });
 
-  it('restores the pre-drag curve and records nothing when the drag is cancelled', async () => {
+  it('restores the pre-drag stack and records nothing when the drag is cancelled', async () => {
     const svg = await render();
     const target = handles(svg).at(-1)!;
     const before = Number(target.getAttribute('cy'));
@@ -187,7 +198,7 @@ describe('curves editor', () => {
 
     expect(Number(handles(svg).at(-1)!.getAttribute('cy'))).toBeCloseTo(before, 5);
     expect(commits).toHaveLength(0);
-    expect(latestAdjustments).toBeUndefined();
+    expect(latestAdjustments).toEqual(initialEntries());
   });
 
   it('adds a point under the pointer rather than offset from it', async () => {

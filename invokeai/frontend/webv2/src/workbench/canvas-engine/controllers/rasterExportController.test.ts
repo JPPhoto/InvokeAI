@@ -66,7 +66,9 @@ describe('RasterExportController budget', () => {
     entry.hasPublishedPixels = true;
     entry.stale = false;
     const layer = {
-      adjustments: { brightness: 0.1, contrast: 0, saturation: 0 },
+      adjustments: [
+        { brightness: 0.1, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
       blendMode: 'normal' as const,
       id: 'layer',
       isEnabled: true,
@@ -116,7 +118,9 @@ describe('RasterExportController budget', () => {
     entry.hasPublishedPixels = true;
     entry.stale = false;
     const layer = {
-      adjustments: { brightness: 0.1, contrast: 0, saturation: 0 },
+      adjustments: [
+        { brightness: 0.1, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
       blendMode: 'normal' as const,
       id: 'layer',
       isEnabled: true,

@@ -575,7 +575,11 @@ describe('compositeDocument — raster adjustments', () => {
   it('draws the provided adjusted surface instead of the raw cache for a raster layer', () => {
     const backend = createTestStubRasterBackend();
     const caches = createLayerCacheStore(backend);
-    const layer = rasterLayer('a', { adjustments: { brightness: 0.5, contrast: 0, saturation: 0 } });
+    const layer = rasterLayer('a', {
+      adjustments: [
+        { brightness: 0.5, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
+    });
     const cache = caches.getOrCreate('a', 10, 10);
     const adjusted = backend.createSurface(10, 10);
     const target = backend.createSurface(200, 200);

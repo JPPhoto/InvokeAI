@@ -83,7 +83,15 @@ describe('getLayerContextMenuLayout', () => {
       },
       {
         id: 'primary',
-        items: ['transform', 'rename', 'fit-to-bbox', 'adjustments', 'filter', 'select-object', 'run-workflow'],
+        items: [
+          'transform',
+          'rename',
+          'fit-to-bbox',
+          'add-adjustment(add-brightness-contrast,add-hsl,add-curves)',
+          'filter',
+          'select-object',
+          'run-workflow',
+        ],
         presentation: 'list',
       },
       {

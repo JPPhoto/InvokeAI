@@ -536,17 +536,25 @@ describe('planRegionalMaskComposites', () => {
 describe('planComposites — raster adjustments in the base key', () => {
   it('folds a non-identity adjustment into the base-raster entry (and its key)', () => {
     const plain = rasterLayer('a');
-    const adjusted = rasterLayer('a', { adjustments: { brightness: 0.5, contrast: 0, saturation: 0 } });
+    const adjusted = rasterLayer('a', {
+      adjustments: [
+        { brightness: 0.5, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
+    });
     const plan = planComposites(makeDoc([adjusted]), BBOX);
     const ref = plan.entries[0]!.layers[0]!;
-    expect(ref.adjustments).toEqual({ brightness: 0.5, contrast: 0, saturation: 0 });
+    expect(ref.adjustments).toEqual(adjusted.type === 'raster' ? adjusted.adjustments : undefined);
     // A changed adjustment changes the entry key so the executor re-composites/uploads.
     expect(keyOf(makeDoc([plain]))).not.toBe(keyOf(makeDoc([adjusted])));
   });
 
   it('ignores an identity adjustment (no key churn)', () => {
     const plain = rasterLayer('a');
-    const identityAdj = rasterLayer('a', { adjustments: { brightness: 0, contrast: 0, saturation: 0 } });
+    const identityAdj = rasterLayer('a', {
+      adjustments: [
+        { brightness: 0, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
+    });
     expect(plan0(plain)).toBe(plan0(identityAdj));
   });
 });

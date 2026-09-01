@@ -97,13 +97,18 @@ void i18n.use(initReactI18next).init({
               toggleActive: 'Toggle layer active',
               toggleVisibility: 'Toggle visibility',
             },
+            adjustments: { curves: 'Curves', saturation: 'Saturation' },
             modifiers: {
+              brightnessContrast: 'Brightness/Contrast',
               denoise: 'Denoise limit',
               disable: 'Disable',
+              duplicateAdjustment: 'Duplicate adjustment',
               enable: 'Enable',
               noise: 'Noise',
+              removeAdjustment: 'Remove adjustment',
               removeDenoise: 'Remove denoise limit',
               removeNoise: 'Remove noise',
+              reorderAdjustment: 'Reorder adjustment',
               toggleActive: 'Toggle active',
             },
             regionalGuidance: {
@@ -207,6 +212,14 @@ const Harness = ({ initialNodes }: { initialNodes: CanvasNodeContract[] }) => {
       />
       <output data-testid="selected-layer" style={HIDDEN}>
         {document.selectedLayerId ?? 'none'}
+      </output>
+      <output data-testid="raster-adjustments" style={HIDDEN}>
+        {(() => {
+          const layer = getDocumentLayer(document, 'r1');
+          return layer?.type === 'raster'
+            ? (layer.adjustments?.map((entry) => `${entry.id}:${entry.isEnabled ? 'on' : 'off'}`).join(',') ?? 'none')
+            : 'none';
+        })()}
       </output>
       <output data-testid="mask-modifiers" style={HIDDEN}>
         {(() => {
@@ -647,6 +660,26 @@ describe('LayersTree projected child rows', () => {
     await act(() => userEvent.keyboard('{Delete}'));
     expect(output('mask-modifiers')).toBe('noise:off:0.25');
     expect(document.activeElement).toBe(treeitem('Mask'));
+  });
+
+  it('projects adjustment rows in stack order; the dot toggles one entry', async () => {
+    await renderTree([
+      layerContract('r1', 'raster', {
+        adjustments: [
+          { brightness: 0.2, contrast: 0, id: 'a1', isEnabled: true, type: 'brightness-contrast' },
+          { id: 'a2', isEnabled: true, saturation: -0.4, type: 'hsl' },
+          { curves: {}, id: 'a3', isEnabled: true, type: 'curves' },
+        ],
+        name: 'Painting',
+      }),
+    ]);
+    expect(treeitem('Brightness/Contrast')).toHaveAttribute('aria-posinset', '1');
+    expect(treeitem('Saturation')).toHaveAttribute('aria-posinset', '2');
+    expect(treeitem('Curves')).toHaveAttribute('aria-setsize', '3');
+    expect(treeitem('Saturation').textContent).toContain('-40%');
+    const dot = treeitem('Saturation').querySelector<HTMLButtonElement>('button[aria-label="Toggle active"]')!;
+    await act(() => userEvent.click(dot));
+    expect(output('raster-adjustments')).toBe('a1:on,a2:off,a3:on');
   });
 
   it('walks child rows from the keyboard and routes their context menu', async () => {

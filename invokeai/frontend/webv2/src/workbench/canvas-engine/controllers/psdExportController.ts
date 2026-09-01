@@ -16,6 +16,7 @@ import {
   type PsdExportPlan,
 } from '@workbench/canvas-engine/export/psdExport';
 import { isExportableRasterLayer } from '@workbench/canvas-engine/layerExportGuards';
+import { isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
 
 type RasterMemoryReservationResult =
   | { status: 'ok'; lease: { release(): void } }
@@ -117,7 +118,9 @@ export class PsdExportController {
             }
             return [
               {
-                adjustments: node.type === 'raster' ? node.adjustments : undefined,
+                // Identity-aware: an emptied stack must not trigger the executor's bake writeback.
+                adjustments:
+                  node.type === 'raster' && !isIdentityAdjustments(node.adjustments) ? node.adjustments : undefined,
                 blendMode: node.blendMode,
                 contentRect: detached.rect,
                 id: node.id,

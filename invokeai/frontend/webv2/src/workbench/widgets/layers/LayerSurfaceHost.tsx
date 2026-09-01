@@ -57,7 +57,10 @@ export const LayerSurfaceHost = ({
     [node, surface]
   );
   const handleMenuClose = useCallback(() => onClose(), [onClose]);
-  // The child menu labels and toggles the item's LIVE state, not its state at open.
+  // The child menu labels and toggles the item's LIVE state, not its state at
+  // open. Ordering facts (posInSet/setSize) stay the open-time snapshot: a
+  // stale Move up/down is safe because the command re-validates against the
+  // live document and refuses moves past the ends.
   const liveChild = useMemo(() => {
     if (surface?.kind !== 'child-menu') {
       return null;

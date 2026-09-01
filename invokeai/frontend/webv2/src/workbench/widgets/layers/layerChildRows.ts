@@ -1,4 +1,5 @@
 import type {
+  CanvasAdjustmentEntry,
   CanvasDocumentContractV3,
   CanvasInpaintMaskLayerContract,
   DocumentCommand,
@@ -19,7 +20,25 @@ export { layerChildRowKey };
  * round-trips through the same `patch-config` seam the Properties pane uses.
  */
 
-export type LayerChildRowKind = 'reference-image' | 'mask-noise' | 'mask-denoise';
+export type LayerChildRowKind =
+  | 'reference-image'
+  | 'mask-noise'
+  | 'mask-denoise'
+  | 'adjustment-brightness-contrast'
+  | 'adjustment-hsl'
+  | 'adjustment-curves';
+
+/** The row kind projecting an adjustment entry of `type`. */
+export const adjustmentChildKind = (type: CanvasAdjustmentEntry['type']): LayerChildRowKind => ADJUSTMENT_KIND_OF[type];
+
+const ADJUSTMENT_KIND_OF: Record<CanvasAdjustmentEntry['type'], LayerChildRowKind> = {
+  'brightness-contrast': 'adjustment-brightness-contrast',
+  curves: 'adjustment-curves',
+  hsl: 'adjustment-hsl',
+};
+
+/** Kinds whose list order is document truth; their rows offer Move up/down and Duplicate. */
+export const isOrderedChildKind = (kind: LayerChildRowKind): boolean => kind.startsWith('adjustment-');
 
 /** The synthetic item ids of a mask's singleton modifiers. */
 export const MASK_NOISE_ITEM_ID = 'noise';
@@ -44,7 +63,11 @@ export interface ProjectedChildRow {
   readonly value: number | null;
 }
 
-export type LayerChildRowAction = { type: 'set-enabled'; isEnabled: boolean } | { type: 'remove' };
+export type LayerChildRowAction =
+  | { type: 'set-enabled'; isEnabled: boolean }
+  | { type: 'remove' }
+  | { type: 'move'; direction: -1 | 1 }
+  | { type: 'duplicate'; newId: string };
 
 /** A child row's live item facts, resolved from the document; `null` when it is gone. */
 export interface LayerChildItem {
@@ -117,6 +140,19 @@ export const projectLayerChildRows = (vm: SemanticNode): readonly ProjectedChild
     }));
   } else if (node.type === 'inpaint_mask' && (node.noise || node.denoise)) {
     rows = maskModifierRows(vm, node);
+  } else if (node.type === 'raster' && node.adjustments && node.adjustments.length > 0) {
+    const setSize = node.adjustments.length;
+    rows = node.adjustments.map((adjustment, index): ProjectedChildRow => ({
+      ...baseRow(vm),
+      image: null,
+      isEnabled: adjustment.isEnabled,
+      itemId: adjustment.id,
+      key: layerChildRowKey(node.id, adjustment.id),
+      kind: ADJUSTMENT_KIND_OF[adjustment.type],
+      posInSet: index + 1,
+      setSize,
+      value: adjustment.type === 'hsl' ? adjustment.saturation : null,
+    }));
   } else {
     return EMPTY_CHILD_ROWS;
   }
@@ -143,6 +179,10 @@ export const getLayerChildItem = (
       return { isEnabled: layer.denoise.isEnabled, kind: 'mask-denoise' };
     }
   }
+  if (layer?.type === 'raster') {
+    const entry = layer.adjustments?.find((candidate) => candidate.id === itemId);
+    return entry ? { isEnabled: entry.isEnabled, kind: ADJUSTMENT_KIND_OF[entry.type] } : null;
+  }
   return null;
 };
 
@@ -155,6 +195,10 @@ export const layerChildRemoveLabelKey = (kind: LayerChildRowKind): string => {
       return 'widgets.layers.modifiers.removeNoise';
     case 'mask-denoise':
       return 'widgets.layers.modifiers.removeDenoise';
+    case 'adjustment-brightness-contrast':
+    case 'adjustment-hsl':
+    case 'adjustment-curves':
+      return 'widgets.layers.modifiers.removeAdjustment';
   }
 };
 
@@ -172,6 +216,9 @@ export const layerChildRowCommand = (
 ): PatchConfigCommand | null => {
   const layer = getDocumentLayer(document, target.layerId);
   if (layer?.type === 'regional_guidance') {
+    if (action.type === 'move' || action.type === 'duplicate') {
+      return null;
+    }
     if (!layer.referenceImages.some((ref) => ref.id === target.itemId)) {
       return null;
     }
@@ -191,6 +238,9 @@ export const layerChildRowCommand = (
     };
   }
   if (layer?.type === 'inpaint_mask') {
+    if (action.type === 'move' || action.type === 'duplicate') {
+      return null;
+    }
     const field =
       target.itemId === MASK_NOISE_ITEM_ID ? 'noise' : target.itemId === MASK_DENOISE_ITEM_ID ? 'denoise' : null;
     const current = field ? layer[field] : undefined;
@@ -204,6 +254,51 @@ export const layerChildRowCommand = (
     return {
       before: { [field]: current, layerType: 'inpaint_mask' },
       config: { [field]: next, layerType: 'inpaint_mask' },
+      id: target.layerId,
+      type: 'patch-config',
+    };
+  }
+  if (layer?.type === 'raster') {
+    const before = layer.adjustments ?? [];
+    const index = before.findIndex((entry) => entry.id === target.itemId);
+    if (index < 0) {
+      return null;
+    }
+    let next: CanvasAdjustmentEntry[];
+    switch (action.type) {
+      case 'set-enabled': {
+        if (before[index]!.isEnabled === action.isEnabled) {
+          return null;
+        }
+        next = before.map((entry, i) => (i === index ? { ...entry, isEnabled: action.isEnabled } : entry));
+        break;
+      }
+      case 'remove':
+        next = before.filter((_, i) => i !== index);
+        break;
+      case 'move': {
+        const to = index + action.direction;
+        if (to < 0 || to >= before.length) {
+          return null;
+        }
+        next = [...before];
+        [next[index], next[to]] = [next[to]!, next[index]!];
+        break;
+      }
+      case 'duplicate': {
+        const source = before[index]!;
+        // The copy must not alias the source's nested curve arrays.
+        const copy =
+          source.type === 'curves'
+            ? { ...source, curves: structuredClone(source.curves), id: action.newId }
+            : { ...source, id: action.newId };
+        next = [...before.slice(0, index + 1), copy, ...before.slice(index + 1)];
+        break;
+      }
+    }
+    return {
+      before: { adjustments: [...before], layerType: 'raster' },
+      config: { adjustments: next, layerType: 'raster' },
       id: target.layerId,
       type: 'patch-config',
     };

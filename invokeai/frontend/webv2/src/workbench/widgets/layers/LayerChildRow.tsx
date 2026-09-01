@@ -3,7 +3,7 @@ import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
 import { Box, Icon, Text } from '@chakra-ui/react';
 import { useDroppable } from '@dnd-kit/core';
 import { Row } from '@platform/ui';
-import { GaugeIcon, ImageIcon, WavesIcon, type LucideIcon } from 'lucide-react';
+import { DropletIcon, GaugeIcon, ImageIcon, SplineIcon, SunMediumIcon, WavesIcon, type LucideIcon } from 'lucide-react';
 import { memo, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -17,12 +17,15 @@ import { anchorFromPoint } from './layerRowCommands';
 const THUMBNAIL_IMG_STYLE: CSSProperties = { height: '100%', objectFit: 'cover', width: '100%' };
 
 const CHILD_ROW_GLYPHS: Record<LayerChildRowKind, LucideIcon> = {
+  'adjustment-brightness-contrast': SunMediumIcon,
+  'adjustment-curves': SplineIcon,
+  'adjustment-hsl': DropletIcon,
   'mask-denoise': GaugeIcon,
   'mask-noise': WavesIcon,
   'reference-image': ImageIcon,
 };
 
-/** The row's display name; reference images are numbered, singleton modifiers named by kind. */
+/** The row's display name; reference images are numbered, other modifiers named by kind. */
 const childRowName = (child: ProjectedChildRow, t: (key: string) => string): string => {
   switch (child.kind) {
     case 'reference-image':
@@ -31,6 +34,12 @@ const childRowName = (child: ProjectedChildRow, t: (key: string) => string): str
       return t('widgets.layers.modifiers.noise');
     case 'mask-denoise':
       return t('widgets.layers.modifiers.denoise');
+    case 'adjustment-brightness-contrast':
+      return t('widgets.layers.modifiers.brightnessContrast');
+    case 'adjustment-hsl':
+      return t('widgets.layers.adjustments.saturation');
+    case 'adjustment-curves':
+      return t('widgets.layers.adjustments.curves');
   }
 };
 

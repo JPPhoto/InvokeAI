@@ -1199,7 +1199,9 @@ describe('createCanvasEngine', () => {
   it('exportLayerPixels can bake raster adjustments in layer-local space without baking presentation props', async () => {
     const layer: CanvasRasterLayerContractV2 = {
       ...(rasterLayer('a') as CanvasRasterLayerContractV2),
-      adjustments: { brightness: 0.25, contrast: 0, saturation: 0 },
+      adjustments: [
+        { brightness: 0.25, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
       blendMode: 'multiply',
       opacity: 0.4,
       source: {
@@ -1498,7 +1500,9 @@ describe('createCanvasEngine', () => {
   it('exportBakedLayerPixels bakes raster adjustments into the exported surface only', async () => {
     const layer = {
       ...rasterLayer('a'),
-      adjustments: { brightness: 0.25, contrast: 0, saturation: 0 },
+      adjustments: [
+        { brightness: 0.25, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
     };
     const { store } = createFakeStore({ ...makeDoc(), stacks: stacksFrom([layer]) });
     const engine = createCanvasEngine({
@@ -1529,7 +1533,9 @@ describe('createCanvasEngine', () => {
   it('exportBakedLayerPixels applies adjustments exactly once when explicitly requested', async () => {
     const layer = {
       ...rasterLayer('a'),
-      adjustments: { brightness: 0.25, contrast: 0, saturation: 0 },
+      adjustments: [
+        { brightness: 0.25, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
     };
     const { store } = createFakeStore({ ...makeDoc(), stacks: stacksFrom([layer]) });
     const base = createTestStubRasterBackend();
@@ -1834,7 +1840,10 @@ describe('createCanvasEngine', () => {
   it('cropLayerToBbox crops only the bbox overlap and restores exact contracts/cache snapshots on undo/redo', async () => {
     const layer = {
       ...rasterLayer('a'),
-      adjustments: { brightness: 0.2, contrast: -0.1, saturation: 0.3 },
+      adjustments: [
+        { brightness: 0.2, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+      ],
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 5, y: 5 },
     };
     const document = { ...makeDoc(), bbox: { height: 8, width: 10, x: 8, y: 2 }, stacks: stacksFrom([layer]) };
@@ -2903,7 +2912,10 @@ const createRasterImageEraserHarness = (
   options: ControlPaintHarnessOptions = {}
 ) => {
   const layer: CanvasRasterLayerContractV2 = {
-    adjustments: { brightness: 0.1, contrast: 0.2, saturation: -0.1 },
+    adjustments: [
+      { brightness: 0.1, contrast: 0.2, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      { id: 'adj-hsl', isEnabled: true, saturation: -0.1, type: 'hsl' as const },
+    ],
     blendMode: 'screen',
     id: 'image',
     isEnabled: true,
@@ -4305,7 +4317,10 @@ const largeThumbnailLayer = (
   if (kind === 'raster') {
     return {
       ...rasterLayer('a'),
-      adjustments: { brightness: 0.25, contrast: -0.1, saturation: 0.3 },
+      adjustments: [
+        { brightness: 0.25, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+      ],
       source: { bitmap: image, offset: { x: -300, y: 250 }, type: 'paint' },
     } as CanvasRasterLayerContractV2;
   }
@@ -4419,7 +4434,10 @@ describe('drawLayerThumbnail', () => {
   it('draws adjusted raster pixels over the checkerboard', async () => {
     const layer = {
       ...rasterLayer('a'),
-      adjustments: { brightness: 0.2, contrast: -0.1, saturation: 0.3 },
+      adjustments: [
+        { brightness: 0.2, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+      ],
       opacity: 0.4,
     } as CanvasRasterLayerContractV2;
     const backend = createSeededThumbnailBackend([10, 20, 30, 255]);
@@ -4554,7 +4572,9 @@ describe('drawLayerThumbnail', () => {
       rasterLayer('a'),
       (layer: CanvasLayerContract) => ({
         ...layer,
-        adjustments: { brightness: 0.25, contrast: 0, saturation: 0 },
+        adjustments: [
+          { brightness: 0.25, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        ],
       }),
     ],
     [
@@ -4618,7 +4638,9 @@ describe('drawLayerThumbnail', () => {
 
     const adjusted = {
       ...layer,
-      adjustments: { brightness: 0.25, contrast: 0, saturation: 0 },
+      adjustments: [
+        { brightness: 0.25, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
     } as CanvasLayerContract;
     setDocument({ ...doc, stacks: stacksFrom([adjusted]) });
     setDocument({ ...doc, stacks: stacksFrom([rasterLayer('a', { imageName: 'a-v2' })]) });
@@ -8757,7 +8779,10 @@ describe('commitRasterFilterResult', () => {
   };
 
   const filterLayer = (id = 'L'): CanvasRasterLayerContractV2 => ({
-    adjustments: { brightness: 0.2, contrast: -0.1, saturation: 0.3 },
+    adjustments: [
+      { brightness: 0.2, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+    ],
     blendMode: 'multiply',
     id,
     isEnabled: true,
@@ -10325,7 +10350,10 @@ describe('commitGeneratedImageResult', () => {
   const generatedOrigin = { x: -9, y: 14 };
 
   const workflowRaster = (id = 'source'): CanvasRasterLayerContractV2 => ({
-    adjustments: { brightness: 0.2, contrast: -0.1, saturation: 0.3 },
+    adjustments: [
+      { brightness: 0.2, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+    ],
     blendMode: 'multiply',
     id,
     isEnabled: true,
@@ -13184,7 +13212,14 @@ describe('guarded filter previews', () => {
     await flushMicrotasks();
     setDocument({
       ...document,
-      stacks: stacksFrom([{ ...layer, adjustments: { brightness: 0.2, contrast: 0, saturation: 0 } }]),
+      stacks: stacksFrom([
+        {
+          ...layer,
+          adjustments: [
+            { brightness: 0.2, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+          ],
+        },
+      ]),
     });
     bitmaps.resolveBitmap(0);
 
@@ -13435,7 +13470,14 @@ describe('guarded filter previews', () => {
     const harness = await createPublishedGuardedPreview();
     harness.setDocument({
       ...harness.document,
-      stacks: stacksFrom([{ ...harness.layer, adjustments: { brightness: 0.3, contrast: 0, saturation: 0 } }]),
+      stacks: stacksFrom([
+        {
+          ...harness.layer,
+          adjustments: [
+            { brightness: 0.3, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+          ],
+        },
+      ]),
     });
     harness.raf.flush();
 
@@ -17994,7 +18036,10 @@ describe('Select Object canvas engine integration', () => {
     // baked world rect {4, 17, 20, 15}.
     const raster: CanvasLayerContract = {
       ...samLayer('adjusted-raster'),
-      adjustments: { brightness: 0.2, contrast: -0.1, saturation: 0.3 },
+      adjustments: [
+        { brightness: 0.2, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+      ],
       blendMode: 'multiply',
       opacity: 0.4,
       source: {
