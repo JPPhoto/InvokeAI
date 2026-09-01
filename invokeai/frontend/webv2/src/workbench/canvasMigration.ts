@@ -206,10 +206,10 @@ const zCanvasLayer = z.discriminatedUnion('type', [
     type: z.literal('regional_guidance'),
   }),
   zLayerBase.extend({
-    denoiseLimit: zFiniteNumber.optional(),
+    denoise: z.object({ isEnabled: z.boolean(), limit: zFiniteNumber }).optional(),
     isHidden: z.boolean().optional(),
     mask: zMask,
-    noiseLevel: zFiniteNumber.optional(),
+    noise: z.object({ isEnabled: z.boolean(), level: zFiniteNumber }).optional(),
     type: z.literal('inpaint_mask'),
   }),
 ]);

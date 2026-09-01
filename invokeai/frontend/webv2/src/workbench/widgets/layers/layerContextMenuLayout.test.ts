@@ -108,7 +108,7 @@ describe('getLayerContextMenuLayout', () => {
 
     expect(summarize(inpaint)[1]).toEqual({
       id: 'primary',
-      items: ['rename', 'fit-to-bbox', 'extract-masked-area'],
+      items: ['rename', 'fit-to-bbox', 'add-noise', 'add-denoise-limit', 'extract-masked-area'],
       presentation: 'list',
     });
     expect(summarize(regional)[1]).toEqual({

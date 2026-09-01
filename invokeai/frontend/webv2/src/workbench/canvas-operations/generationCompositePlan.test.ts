@@ -220,14 +220,18 @@ const inpaintMask = (
   overrides: Partial<{
     bitmap: CanvasImageRef | null;
     noiseLevel: number;
+    noiseEnabled: boolean;
     denoiseLimit: number;
+    denoiseEnabled: boolean;
     isEnabled: boolean;
     isHidden: boolean;
     offset: { x: number; y: number };
   }> = {}
 ): CanvasLayerContract => ({
   blendMode: 'normal',
-  denoiseLimit: overrides.denoiseLimit,
+  ...(overrides.denoiseLimit === undefined
+    ? {}
+    : { denoise: { isEnabled: overrides.denoiseEnabled ?? true, limit: overrides.denoiseLimit } }),
   id,
   isEnabled: overrides.isEnabled ?? true,
   isHidden: overrides.isHidden,
@@ -238,7 +242,9 @@ const inpaintMask = (
     ...(overrides.offset ? { offset: overrides.offset } : {}),
   },
   name: id,
-  noiseLevel: overrides.noiseLevel,
+  ...(overrides.noiseLevel === undefined
+    ? {}
+    : { noise: { isEnabled: overrides.noiseEnabled ?? true, level: overrides.noiseLevel } }),
   opacity: 1,
   transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
   type: 'inpaint_mask',
@@ -287,6 +293,14 @@ describe('planComposites — inpaint-mask entries', () => {
     expect(entry!.maskLayers![0]!.attributeValue).toBe(0.4);
   });
 
+  it('treats a disabled denoise modifier as the legacy default (disabled === absent)', () => {
+    const entry = entryOfKind(
+      makeDoc([inpaintMask('m1', { denoiseEnabled: false, denoiseLimit: 0.4 })]),
+      'inpaint-mask'
+    );
+    expect(entry!.maskLayers![0]!.attributeValue).toBe(1);
+  });
+
   it('unions multiple masks into the denoise-limit entry', () => {
     const doc = makeDoc([inpaintMask('a', { denoiseLimit: 0.3 }), inpaintMask('b')]);
     const entry = entryOfKind(doc, 'inpaint-mask');
@@ -306,6 +320,14 @@ describe('planComposites — noise-mask entries', () => {
     expect(entry).toBeDefined();
     expect(entry!.maskLayers!.map((l) => l.id)).toEqual(['withNoise']);
     expect(entry!.maskLayers![0]!.attributeValue).toBe(0.15);
+  });
+
+  it('treats a disabled noise modifier as absent, never as noise 0', () => {
+    const kinds = planComposites(
+      makeDoc([inpaintMask('m1', { noiseEnabled: false, noiseLevel: 0.4 })]),
+      BBOX
+    ).entries.map((e) => e.kind);
+    expect(kinds).toEqual(['base-raster', 'inpaint-mask']);
   });
 
   it('treats noiseLevel 0 as defined (included), distinct from undefined (excluded)', () => {

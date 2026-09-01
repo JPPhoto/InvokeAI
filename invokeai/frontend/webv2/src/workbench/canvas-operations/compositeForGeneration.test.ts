@@ -310,13 +310,13 @@ const inpaintMask = (
   overrides: Partial<{ denoiseLimit: number; noiseLevel: number }> = {}
 ): CanvasLayerContract => ({
   blendMode: 'normal',
-  denoiseLimit: overrides.denoiseLimit,
+  ...(overrides.denoiseLimit === undefined ? {} : { denoise: { isEnabled: true, limit: overrides.denoiseLimit } }),
   id,
   isEnabled: true,
   isLocked: false,
   mask: { bitmap: imageRef(`${id}-bmp`, 64, 48), fill: { color: '#ff0000', style: 'solid' } },
   name: id,
-  noiseLevel: overrides.noiseLevel,
+  ...(overrides.noiseLevel === undefined ? {} : { noise: { isEnabled: true, level: overrides.noiseLevel } }),
   opacity: 1,
   transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
   type: 'inpaint_mask',

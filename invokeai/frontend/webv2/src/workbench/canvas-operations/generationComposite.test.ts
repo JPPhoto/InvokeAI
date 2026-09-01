@@ -68,7 +68,7 @@ const inpaintMaskLayer = (id: string, noiseLevel?: number): CanvasLayerContract 
   isLocked: false,
   mask: { bitmap: { height: 64, imageName: `${id}-bmp`, width: 64 }, fill: { color: '#ff0000', style: 'solid' } },
   name: id,
-  ...(noiseLevel !== undefined ? { noiseLevel } : {}),
+  ...(noiseLevel !== undefined ? { noise: { isEnabled: true, level: noiseLevel } } : {}),
   opacity: 1,
   transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
   type: 'inpaint_mask',

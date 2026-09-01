@@ -6,8 +6,9 @@ import { CircleIcon, CircleOffIcon, XIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { ProjectedChildRow } from './layerChildRows';
 import type { LayerRowCommands, LayerSurfaceAnchor } from './layerRowCommands';
+
+import { layerChildRemoveLabelKey, type ProjectedChildRow } from './layerChildRows';
 
 type MenuPositioning = ComponentProps<typeof Menu.Root>['positioning'];
 
@@ -57,7 +58,7 @@ export const LayerChildMenu = ({
             <Menu.Item color="fg.error" disabled={editingLocked} value="remove" onSelect={handleRemove}>
               <HStack gap="2">
                 <Icon as={XIcon} boxSize="3.5" />
-                <Text fontSize="xs">{t('widgets.layers.regionalGuidance.removeReferenceImage')}</Text>
+                <Text fontSize="xs">{t(layerChildRemoveLabelKey(child.kind))}</Text>
               </HStack>
             </Menu.Item>
           </MenuContent>

@@ -15,6 +15,8 @@ import type {
   CanvasLayerContract,
   CanvasLayerSourceContract,
   CanvasMaskContract,
+  CanvasMaskDenoiseContract,
+  CanvasMaskNoiseContract,
   CanvasRasterLayerContractV2,
   CanvasRegionalGuidanceLayerContract,
   CanvasStagingAreaContractV2,
@@ -51,7 +53,13 @@ export type CanvasLayerConfigPatch =
       autoNegative?: boolean;
       referenceImages?: CanvasRegionalGuidanceLayerContract['referenceImages'];
     }
-  | { layerType: 'inpaint_mask'; mask?: Partial<CanvasMaskContract>; noiseLevel?: number; denoiseLimit?: number };
+  | {
+      layerType: 'inpaint_mask';
+      mask?: Partial<CanvasMaskContract>;
+      /** `null` removes the modifier; absent leaves it untouched. */
+      noise?: CanvasMaskNoiseContract | null;
+      denoise?: CanvasMaskDenoiseContract | null;
+    };
 
 export type CanvasProjectMutation =
   | {

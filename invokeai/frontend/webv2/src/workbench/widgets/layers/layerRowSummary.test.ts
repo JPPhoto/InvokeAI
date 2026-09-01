@@ -28,7 +28,12 @@ describe('layerRowSummary', () => {
     expect(layerRowSummary({ ...regional, positivePrompt: ' a red barn ' } as typeof regional, t)).toBe('a red barn');
     expect(layerRowSummary(regional, t)).toBe('widgets.layers.types.regional_guidance');
     const mask = layerContract('m', 'inpaint_mask');
-    expect(layerRowSummary({ ...mask, denoiseLimit: 0.6, noiseLevel: 0.2 } as typeof mask, t)).toBe(
+    expect(
+      layerRowSummary(
+        { ...mask, denoise: { isEnabled: true, limit: 0.6 }, noise: { isEnabled: true, level: 0.2 } } as typeof mask,
+        t
+      )
+    ).toBe(
       'widgets.layers.types.inpaint_mask · widgets.layers.summary.denoiseLimit:60 · widgets.layers.summary.noise:20'
     );
   });

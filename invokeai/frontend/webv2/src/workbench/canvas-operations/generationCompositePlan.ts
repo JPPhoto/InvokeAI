@@ -128,11 +128,11 @@ const deriveMaskKey = (kind: string, bbox: Rect, layers: CompositeMaskLayerRef[]
  * Plans the composites required to invoke `document` over `bbox`:
  * - one `base-raster` entry (the initial image);
  * - one `inpaint-mask` entry (grayscale denoise-limit mask) when enabled inpaint
- *   masks with content exist — an undefined `denoiseLimit` resolves to the legacy
- *   default (1.0, full denoise);
- * - one `noise-mask` entry when at least one such mask defines a `noiseLevel`
- *   (masks with an undefined `noiseLevel` are excluded, mirroring legacy — they
- *   must NOT be treated as noise 0).
+ *   masks with content exist — an absent OR DISABLED `denoise` modifier resolves
+ *   to the legacy default (1.0, full denoise);
+ * - one `noise-mask` entry when at least one such mask carries an ENABLED
+ *   `noise` modifier (absent and disabled are equivalent, mirroring legacy —
+ *   they must NOT be treated as noise 0).
  */
 export const planComposites = (document: CanvasDocumentContractV3, bbox: Rect): CompositePlan => {
   const entries: CompositeEntry[] = [planBaseRasterComposite(document, bbox)];
@@ -141,7 +141,7 @@ export const planComposites = (document: CanvasDocumentContractV3, bbox: Rect): 
 
   if (maskLayers.length > 0) {
     const denoiseRefs = maskLayers.map((layer) =>
-      toMaskLayerRef(layer, layer.denoiseLimit ?? DEFAULT_MASK_DENOISE_LIMIT)
+      toMaskLayerRef(layer, layer.denoise?.isEnabled ? layer.denoise.limit : DEFAULT_MASK_DENOISE_LIMIT)
     );
     entries.push({
       bbox,
@@ -152,8 +152,8 @@ export const planComposites = (document: CanvasDocumentContractV3, bbox: Rect): 
     });
 
     const noiseRefs = maskLayers
-      .filter((layer) => layer.noiseLevel !== undefined)
-      .map((layer) => toMaskLayerRef(layer, layer.noiseLevel as number));
+      .filter((layer) => layer.noise?.isEnabled)
+      .map((layer) => toMaskLayerRef(layer, layer.noise!.level));
 
     if (noiseRefs.length > 0) {
       entries.push({

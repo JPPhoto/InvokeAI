@@ -1958,13 +1958,13 @@ describe('createCanvasEngine', () => {
   it('cropLayerToBbox preserves mask fill/noise/denoise configuration while replacing pixels and offset', async () => {
     const layer: CanvasInpaintMaskLayerContract = {
       ...maskLayer('mask'),
-      denoiseLimit: 0.45,
+      denoise: { isEnabled: true, limit: 0.45 },
       mask: {
         bitmap: { height: 10, imageName: 'mask-img', width: 10 },
         fill: { color: '#123456', style: 'crosshatch' },
         offset: { x: 0, y: 0 },
       },
-      noiseLevel: 0.25,
+      noise: { isEnabled: true, level: 0.25 },
     };
     const document = { ...makeDoc(), bbox: { height: 7, width: 6, x: 2, y: 3 }, stacks: stacksFrom([layer]) };
     const { projectId, store } = createReducerBackedStore(document);
@@ -1978,9 +1978,9 @@ describe('createCanvasEngine', () => {
 
     expect(await engine.layers.cropLayerToBbox('mask')).toEqual({ status: 'cropped' });
     expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toMatchObject({
-      denoiseLimit: 0.45,
+      denoise: { isEnabled: true, limit: 0.45 },
       mask: { bitmap: null, fill: layer.mask.fill, offset: { x: 2, y: 3 } },
-      noiseLevel: 0.25,
+      noise: { isEnabled: true, level: 0.25 },
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'inpaint_mask',
     });

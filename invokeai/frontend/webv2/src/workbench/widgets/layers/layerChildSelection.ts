@@ -2,7 +2,8 @@ import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/api';
 
 import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
-import { getDocumentLayer } from '@workbench/canvas-engine/api';
+
+import { getLayerChildItem } from './layerChildRows';
 
 /**
  * The panel's sub-selection: the one projected child row being edited. Widget
@@ -37,12 +38,10 @@ export const reconcileLayerChildSelection = (projectId: string, document: Canvas
   if (!selection || selection.projectId !== projectId) {
     return;
   }
-  if (document.selectedLayerId !== selection.layerId) {
-    clearLayerChildSelection();
-    return;
-  }
-  const layer = getDocumentLayer(document, selection.layerId);
-  if (layer?.type !== 'regional_guidance' || !layer.referenceImages.some((ref) => ref.id === selection.itemId)) {
+  if (
+    document.selectedLayerId !== selection.layerId ||
+    !getLayerChildItem(document, selection.layerId, selection.itemId)
+  ) {
     clearLayerChildSelection();
   }
 };

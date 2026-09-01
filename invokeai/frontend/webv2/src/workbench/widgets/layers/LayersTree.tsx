@@ -30,6 +30,7 @@ import type { LayerStackActionsEngine } from './useLayerStackActions';
 
 import { LayerChildRow } from './LayerChildRow';
 import {
+  layerChildRemoveLabelKey,
   layerChildRowCommand,
   layerChildRowKey,
   projectLayerChildRows,
@@ -333,7 +334,7 @@ export const LayersTree = ({
         return;
       }
       const { panel: current, projectId: project } = latest.current;
-      const outcome = runStructural(t('widgets.layers.regionalGuidance.removeReferenceImage'), command);
+      const outcome = runStructural(t(layerChildRemoveLabelKey(child.kind)), command);
       // The removed row's focus lands on its owner, not wherever the primary sits.
       if (outcome.status === 'committed' && current.focusId === child.key) {
         setLayerPanelFocus(project, current.primaryId, child.layerId);

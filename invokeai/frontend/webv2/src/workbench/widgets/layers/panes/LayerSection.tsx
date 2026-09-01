@@ -8,7 +8,9 @@ import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit
 import { AdjustmentsPopover } from '@workbench/widgets/layers/AdjustmentsPopover';
 import { ControlLayerSettings } from '@workbench/widgets/layers/ControlLayerSettings';
 import { InpaintMaskSettings } from '@workbench/widgets/layers/InpaintMaskSettings';
+import { MASK_DENOISE_ITEM_ID, MASK_NOISE_ITEM_ID } from '@workbench/widgets/layers/layerChildRows';
 import { useLayerChildSelection } from '@workbench/widgets/layers/layerChildSelection';
+import { MaskModifierSettings } from '@workbench/widgets/layers/MaskModifierSettings';
 import { RasterLayerFilterSection } from '@workbench/widgets/layers/RasterLayerFilterSection';
 import { ReferenceImageSettings } from '@workbench/widgets/layers/ReferenceImageSettings';
 import { RegionalGuidanceSettings } from '@workbench/widgets/layers/RegionalGuidanceSettings';
@@ -42,26 +44,16 @@ export const LayerSection = ({ disabled }: { disabled: boolean }) => {
   // A sub-selected child row takes over the section: its own editor, its own name.
   const projectId = useActiveProjectId();
   const childSelection = useLayerChildSelection();
-  const childIndex =
-    layer?.type === 'regional_guidance' &&
-    childSelection?.projectId === projectId &&
-    childSelection.layerId === layer.id
-      ? layer.referenceImages.findIndex((ref) => ref.id === childSelection.itemId)
-      : -1;
-  const childRefId = childIndex >= 0 ? childSelection!.itemId : null;
+  const child = resolveChildEditor(layer, childSelection?.projectId === projectId ? childSelection : null, t);
 
   return (
     <PropertiesSection
       disabled={disabled}
-      subtitle={
-        childRefId
-          ? `${t('widgets.layers.regionalGuidance.referenceImage')} ${childIndex + 1}`
-          : (layer?.name ?? t('widgets.transform.noSelection'))
-      }
+      subtitle={child ? child.subtitle : (layer?.name ?? t('widgets.transform.noSelection'))}
       title={t('widgets.properties.sections.layer')}
     >
-      {layer?.type === 'regional_guidance' && childRefId ? (
-        <ReferenceImageSettings key={`${layer.id}:${childRefId}`} engine={engine} layer={layer} refId={childRefId} />
+      {child && layer ? (
+        <ChildEditor key={`${layer.id}:${child.itemId}`} child={child} engine={engine} layer={layer} />
       ) : layer ? (
         <LayerTypeSettings documentRevision={documentRevision} engine={engine} layer={layer} />
       ) : (
@@ -69,6 +61,60 @@ export const LayerSection = ({ disabled }: { disabled: boolean }) => {
       )}
     </PropertiesSection>
   );
+};
+
+interface ChildEditorTarget {
+  readonly kind: 'reference-image' | 'mask-noise' | 'mask-denoise';
+  readonly itemId: string;
+  readonly subtitle: string;
+}
+
+/** What the sub-selection edits, or `null` when it does not belong to `layer`. */
+const resolveChildEditor = (
+  layer: CanvasLayerContract | null,
+  selection: { layerId: string; itemId: string } | null,
+  t: (key: string) => string
+): ChildEditorTarget | null => {
+  if (!layer || !selection || selection.layerId !== layer.id) {
+    return null;
+  }
+  if (layer.type === 'regional_guidance') {
+    const index = layer.referenceImages.findIndex((ref) => ref.id === selection.itemId);
+    return index >= 0
+      ? {
+          itemId: selection.itemId,
+          kind: 'reference-image',
+          subtitle: `${t('widgets.layers.regionalGuidance.referenceImage')} ${index + 1}`,
+        }
+      : null;
+  }
+  if (layer.type === 'inpaint_mask') {
+    if (selection.itemId === MASK_NOISE_ITEM_ID && layer.noise) {
+      return { itemId: selection.itemId, kind: 'mask-noise', subtitle: t('widgets.layers.modifiers.noise') };
+    }
+    if (selection.itemId === MASK_DENOISE_ITEM_ID && layer.denoise) {
+      return { itemId: selection.itemId, kind: 'mask-denoise', subtitle: t('widgets.layers.modifiers.denoise') };
+    }
+  }
+  return null;
+};
+
+const ChildEditor = ({
+  child,
+  engine,
+  layer,
+}: {
+  child: ChildEditorTarget;
+  engine: LayerSectionEngine | null;
+  layer: CanvasLayerContract;
+}) => {
+  if (child.kind === 'reference-image' && layer.type === 'regional_guidance') {
+    return <ReferenceImageSettings engine={engine} layer={layer} refId={child.itemId} />;
+  }
+  if ((child.kind === 'mask-noise' || child.kind === 'mask-denoise') && layer.type === 'inpaint_mask') {
+    return <MaskModifierSettings engine={engine} kind={child.kind} layer={layer} />;
+  }
+  return null;
 };
 
 /** Dispatches to the correct per-type settings block for the layer. */

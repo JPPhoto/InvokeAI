@@ -2,6 +2,8 @@ import type {
   CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasMaskContract,
+  CanvasMaskDenoiseContract,
+  CanvasMaskNoiseContract,
   BooleanRasterOperation,
   LayerStackMoveKind,
   RegionalGuidanceReferenceImage,
@@ -119,7 +121,11 @@ type LayerConfigPatch =
       autoNegative?: boolean;
       referenceImages?: RegionalGuidanceReferenceImage[];
     }
-  | { layerType: 'inpaint_mask'; noiseLevel?: number; denoiseLimit?: number };
+  | {
+      layerType: 'inpaint_mask';
+      noise?: CanvasMaskNoiseContract | null;
+      denoise?: CanvasMaskDenoiseContract | null;
+    };
 
 const PANEL_POSITIONING: MenuPositioning = { placement: 'bottom-end' };
 
@@ -702,6 +708,31 @@ const LayerMenu = ({
     [getActionLabel, layer, patchConfig]
   );
 
+  const handleAddMaskModifier = useCallback(
+    (field: 'noise' | 'denoise') => {
+      if (layer.type !== 'inpaint_mask') {
+        return;
+      }
+      // A modifier that appeared since the menu rendered must not be stomped by the default.
+      if (layer[field] !== undefined) {
+        return;
+      }
+      // Legacy defaults: noise starts at 25%, the denoise limit at 80%.
+      const value = field === 'noise' ? { isEnabled: true, level: 0.25 } : { isEnabled: true, limit: 0.8 };
+      commitPrepared(
+        t(field === 'noise' ? 'widgets.layers.actions.addNoise' : 'widgets.layers.actions.addDenoiseLimit'),
+        (model) =>
+          model.prepare({
+            before: { [field]: null, layerType: 'inpaint_mask' },
+            config: { [field]: value, layerType: 'inpaint_mask' },
+            id: layer.id,
+            type: 'patch-config',
+          })
+      );
+    },
+    [commitPrepared, layer, t]
+  );
+
   const handleAddReferenceImage = useCallback(() => {
     if (layer.type !== 'regional_guidance') {
       return;
@@ -721,6 +752,7 @@ const LayerMenu = ({
 
   const effects = useMemo<LayerContextActionEffects>(
     () => ({
+      addMaskModifier: handleAddMaskModifier,
       addReferenceImage: handleAddReferenceImage,
       booleanMerge: handleBooleanRaster,
       convertTo: (target) => {
@@ -761,6 +793,7 @@ const LayerMenu = ({
     [
       convert,
       getActionLabel,
+      handleAddMaskModifier,
       handleAddReferenceImage,
       handleBooleanRaster,
       handleCopyTo,

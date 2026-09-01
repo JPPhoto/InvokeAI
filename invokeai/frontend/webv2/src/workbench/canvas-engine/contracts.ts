@@ -244,11 +244,24 @@ export interface CanvasRegionalGuidanceLayerContract extends CanvasLayerBaseCont
   isHidden?: boolean;
 }
 
+/** A mask's noise modifier; disabling keeps the tuned level out of generation without losing it. */
+export interface CanvasMaskNoiseContract {
+  level: number;
+  isEnabled: boolean;
+}
+
+/** A mask's denoise-limit modifier; disabled or absent, generation uses the default limit. */
+export interface CanvasMaskDenoiseContract {
+  limit: number;
+  isEnabled: boolean;
+}
+
 export interface CanvasInpaintMaskLayerContract extends CanvasLayerBaseContract {
   type: 'inpaint_mask';
   mask: CanvasMaskContract;
-  noiseLevel?: number;
-  denoiseLimit?: number;
+  /** Absent ⇒ the modifier was never added; the Layers tree projects it as a child row. */
+  noise?: CanvasMaskNoiseContract;
+  denoise?: CanvasMaskDenoiseContract;
   /**
    * Whether this layer's on-canvas preview is suppressed. DISPLAY ONLY — a
    * hidden layer still affects generation exactly as it would if visible, which

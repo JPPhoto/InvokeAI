@@ -3,13 +3,13 @@ import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import type { Dispatch } from 'react';
 
-import { getDocumentLayer, getDocumentNode } from '@workbench/canvas-engine/api';
+import { getDocumentNode } from '@workbench/canvas-engine/api';
 import { useCallback, useMemo } from 'react';
 
-import type { ProjectedChildRow } from './layerChildRows';
 import type { LayerRowCommands, LayerSurfaceAnchor } from './layerRowCommands';
 
 import { LayerChildMenu } from './LayerChildMenu';
+import { getLayerChildItem, type ProjectedChildRow } from './layerChildRows';
 import { CanvasLayerContextMenu, type LayerContextMenuEngine } from './LayerContextMenu';
 import { LayerGroupContextMenu, type LayerGroupContextMenuEngine } from './LayerGroupContextMenu';
 import { LayerStackMenu } from './LayerStackMenu';
@@ -63,9 +63,7 @@ export const LayerSurfaceHost = ({
       return null;
     }
     const { child } = surface;
-    const owner = getDocumentLayer(document, child.layerId);
-    const item =
-      owner?.type === 'regional_guidance' ? owner.referenceImages.find((ref) => ref.id === child.itemId) : undefined;
+    const item = getLayerChildItem(document, child.layerId, child.itemId);
     if (!item) {
       return null;
     }

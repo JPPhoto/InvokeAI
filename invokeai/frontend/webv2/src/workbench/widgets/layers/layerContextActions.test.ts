@@ -89,6 +89,7 @@ const makeState = (
 };
 
 const makeEffects = (): LayerContextActionEffects => ({
+  addMaskModifier: vi.fn(),
   addReferenceImage: vi.fn(),
   booleanMerge: vi.fn(() => Promise.resolve()),
   toggleHidden: vi.fn(),
@@ -477,6 +478,8 @@ describe('getLayerContextActions', () => {
       'control-transparency-effect',
       'regional-auto-negative',
       'add-reference-image',
+      'add-noise',
+      'add-denoise-limit',
       'merge-down',
       'merge-selected',
       'toggle-visibility',
@@ -497,6 +500,21 @@ describe('getLayerContextActions', () => {
     expect(flux2Actions.some((action) => action.id === 'add-reference-image')).toBe(false);
     const rasterActions = getLayerContextActions(makeState(makeLayer('raster')));
     expect(rasterActions.some((action) => action.id === 'add-reference-image')).toBe(false);
+  });
+
+  it('offers add-noise and add-denoise-limit only while the mask lacks that modifier', () => {
+    const bare = getLayerContextActions(makeState(makeLayer('inpaint_mask')));
+    expect(byId(bare, 'add-noise').isDisabled).toBe(false);
+    expect(byId(bare, 'add-denoise-limit').isDisabled).toBe(false);
+    const configured = getLayerContextActions(
+      makeState({
+        ...makeLayer('inpaint_mask'),
+        denoise: { isEnabled: false, limit: 0.8 },
+        noise: { isEnabled: true, level: 0.25 },
+      } as CanvasLayerContract)
+    );
+    expect(configured.some((action) => action.id === 'add-noise')).toBe(false);
+    expect(configured.some((action) => action.id === 'add-denoise-limit')).toBe(false);
   });
 
   it('still allows non-destructive copy and export from a locked layer when interaction is free', () => {

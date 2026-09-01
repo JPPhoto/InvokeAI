@@ -1,9 +1,9 @@
-import type { SelectValueChangeDetails, SliderValueChangeDetails } from '@chakra-ui/react';
+import type { SelectValueChangeDetails } from '@chakra-ui/react';
 import type { CanvasInpaintMaskLayerContract, CanvasMaskFillContract } from '@workbench/canvas-engine/api';
 import type { CanvasStructuralEngine } from '@workbench/widgets/layers/layerOps';
 
 import { createListCollection, HStack, Stack } from '@chakra-ui/react';
-import { Button, ColorPicker, Field, IconButton, Select, Slider, Tooltip } from '@platform/ui';
+import { Button, ColorPicker, Field, IconButton, Select, Tooltip } from '@platform/ui';
 import { armMaskTintTarget } from '@workbench/widgets/canvas/color-system/maskTintTarget';
 import { type CanvasPreparedEngine, usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { PaletteIcon } from 'lucide-react';
@@ -22,35 +22,24 @@ const MASK_FILL_STYLES: readonly CanvasMaskFillContract['style'][] = [
   'vertical',
 ];
 
-const formatUnitPercent = (value: number): string => `${Math.round(value * 100)}%`;
-
-const noiseConfig = (value: number | undefined) => ({ layerType: 'inpaint_mask', noiseLevel: value }) as const;
-const denoiseConfig = (value: number | undefined) => ({ layerType: 'inpaint_mask', denoiseLimit: value }) as const;
-
 interface InpaintMaskSettingsProps {
   engine: (CanvasStructuralEngine & CanvasPreparedEngine) | null;
   layer: CanvasInpaintMaskLayerContract;
 }
 
 /**
- * Per-layer settings for a selected inpaint mask, rendered as a section under the
- * layers-panel header region (plan §1.3): fill colour + style, noise level and
- * denoise-limit sliders (0–1), and an in-place mask invert. `noiseLevel` /
- * `denoiseLimit` are wired to the contract now (consumed by the NEXT task's graph
- * builder); they have no generation effect yet. Fill/noise/denoise edits go
- * through the canvas undo stack as prepared `patch-config` edits;
- * invert is an engine pixel op (its own undoable image patch).
+ * Per-layer settings for a selected inpaint mask: fill colour + style and an
+ * in-place mask invert. Noise and denoise limit are NOT here — they live as
+ * child rows in the Layers tree, each opening its own dedicated Properties
+ * editor (`MaskModifierSettings`). Fill edits go through the canvas undo stack
+ * as prepared `patch-config` edits; invert is an engine pixel op.
  */
 export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps) => {
   const { t } = useTranslation();
   const commitPrepared = usePreparedCommit(engine);
   const fillBeforeRef = useRef<CanvasMaskFillContract | null>(null);
-  const noiseBeforeRef = useRef<{ value: number | undefined } | null>(null);
-  const denoiseBeforeRef = useRef<{ value: number | undefined } | null>(null);
 
   const fill = layer.mask.fill;
-  const noiseLevel = layer.noiseLevel ?? 0;
-  const denoiseLimit = layer.denoiseLimit ?? 1;
 
   const styleCollection = useMemo(
     () =>
@@ -115,91 +104,12 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
     [commitFill, fill]
   );
 
-  const handleNoiseChange = useCallback(
-    ({ value }: SliderValueChangeDetails) => {
-      const next = value[0];
-      if (next === undefined || !Number.isFinite(next)) {
-        return;
-      }
-      if (
-        !applyStructuralPreview(engine, {
-          config: noiseConfig(next),
-          id: layer.id,
-          type: 'updateCanvasLayerConfig',
-        })
-      ) {
-        return;
-      }
-      noiseBeforeRef.current ??= { value: layer.noiseLevel };
-    },
-    [engine, layer]
-  );
-
-  const handleNoiseChangeEnd = useCallback(
-    ({ value }: SliderValueChangeDetails) => {
-      const next = value[0];
-      const before = noiseBeforeRef.current ? noiseBeforeRef.current.value : layer.noiseLevel;
-      noiseBeforeRef.current = null;
-      if (next === undefined || !Number.isFinite(next)) {
-        return;
-      }
-      commitPrepared(t('widgets.layers.maskFill.noiseLevel'), (model) =>
-        model.prepare({ before: noiseConfig(before), config: noiseConfig(next), id: layer.id, type: 'patch-config' })
-      );
-    },
-    [commitPrepared, layer.id, layer.noiseLevel, t]
-  );
-
-  const handleDenoiseChange = useCallback(
-    ({ value }: SliderValueChangeDetails) => {
-      const next = value[0];
-      if (next === undefined || !Number.isFinite(next)) {
-        return;
-      }
-      if (
-        !applyStructuralPreview(engine, {
-          config: denoiseConfig(next),
-          id: layer.id,
-          type: 'updateCanvasLayerConfig',
-        })
-      ) {
-        return;
-      }
-      denoiseBeforeRef.current ??= { value: layer.denoiseLimit };
-    },
-    [engine, layer]
-  );
-
-  const handleDenoiseChangeEnd = useCallback(
-    ({ value }: SliderValueChangeDetails) => {
-      const next = value[0];
-      const before = denoiseBeforeRef.current ? denoiseBeforeRef.current.value : layer.denoiseLimit;
-      denoiseBeforeRef.current = null;
-      if (next === undefined || !Number.isFinite(next)) {
-        return;
-      }
-      commitPrepared(t('widgets.layers.maskFill.denoiseLimit'), (model) =>
-        model.prepare({
-          before: denoiseConfig(before),
-          config: denoiseConfig(next),
-          id: layer.id,
-          type: 'patch-config',
-        })
-      );
-    },
-    [commitPrepared, layer.denoiseLimit, layer.id, t]
-  );
-
   const handleInvert = useCallback(() => {
     engine?.layers.invertMask(layer.id);
   }, [engine, layer.id]);
 
   const styleValue = useMemo(() => [fill.style], [fill.style]);
   const colorAria = t('widgets.layers.maskFill.color');
-  const noiseValue = useMemo(() => [noiseLevel], [noiseLevel]);
-  const denoiseValue = useMemo(() => [denoiseLimit], [denoiseLimit]);
-  const noiseAria = useMemo(() => [t('widgets.layers.maskFill.noiseLevel')], [t]);
-  const denoiseAria = useMemo(() => [t('widgets.layers.maskFill.denoiseLimit')], [t]);
 
   return (
     <Stack gap="2">
@@ -236,34 +146,6 @@ export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps)
           />
         </Field>
       </HStack>
-      <Field label={t('widgets.layers.maskFill.noiseLevel')}>
-        <Slider
-          aria-label={noiseAria}
-          formatValue={formatUnitPercent}
-          max={1}
-          min={0}
-          size="sm"
-          step={0.01}
-          value={noiseValue}
-          withThumbTooltip
-          onValueChange={handleNoiseChange}
-          onValueChangeEnd={handleNoiseChangeEnd}
-        />
-      </Field>
-      <Field label={t('widgets.layers.maskFill.denoiseLimit')}>
-        <Slider
-          aria-label={denoiseAria}
-          formatValue={formatUnitPercent}
-          max={1}
-          min={0}
-          size="sm"
-          step={0.01}
-          value={denoiseValue}
-          withThumbTooltip
-          onValueChange={handleDenoiseChange}
-          onValueChangeEnd={handleDenoiseChangeEnd}
-        />
-      </Field>
       <Button disabled={!engine} size="xs" variant="outline" onClick={handleInvert}>
         {t('widgets.layers.maskFill.invert')}
       </Button>

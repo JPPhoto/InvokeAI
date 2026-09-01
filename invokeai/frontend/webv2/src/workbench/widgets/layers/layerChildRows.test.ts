@@ -3,7 +3,7 @@ import type { RegionalGuidanceReferenceImage } from '@workbench/canvas-engine/ap
 import { documentFrom, layerContract } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it } from 'vitest';
 
-import { layerChildRowCommand, layerChildRowKey, projectLayerChildRows } from './layerChildRows';
+import { getLayerChildItem, layerChildRowCommand, layerChildRowKey, projectLayerChildRows } from './layerChildRows';
 import { buildLayerStackRows } from './layerTreeRows';
 
 const referenceImage = (id: string, overrides: Partial<RegionalGuidanceReferenceImage> = {}) => ({
@@ -111,5 +111,55 @@ describe('layerChildRowCommand', () => {
     expect(layerChildRowCommand(document, { itemId: 'ref1', layerId: 'r1' }, { type: 'remove' })).toBeNull();
     expect(layerChildRowCommand(document, { itemId: 'gone', layerId: 'rg1' }, { type: 'remove' })).toBeNull();
     expect(layerChildRowCommand(document, target, { isEnabled: true, type: 'set-enabled' })).toBeNull();
+  });
+});
+
+describe('mask modifier rows', () => {
+  const maskWith = (overrides = {}) => layerContract('m1', 'inpaint_mask', overrides);
+  const maskRow = (document: ReturnType<typeof documentFrom>) =>
+    buildLayerStackRows(document.stacks, new Set()).inpaint_mask.rows.find((row) => row.id === 'm1')!;
+
+  it('projects noise then denoise rows with their values and enablement', () => {
+    const document = documentFrom([
+      maskWith({ denoise: { isEnabled: false, limit: 0.8 }, noise: { isEnabled: true, level: 0.25 } }),
+    ]);
+    const rows = projectLayerChildRows(maskRow(document).vm);
+    expect(rows.map((row) => [row.kind, row.itemId, row.isEnabled, row.value, row.posInSet, row.setSize])).toEqual([
+      ['mask-noise', 'noise', true, 0.25, 1, 2],
+      ['mask-denoise', 'denoise', false, 0.8, 2, 2],
+    ]);
+    expect(projectLayerChildRows(maskRow(documentFrom([maskWith()])).vm)).toEqual([]);
+  });
+
+  it('toggles and removes a modifier through null-clearing patches', () => {
+    const document = documentFrom([maskWith({ noise: { isEnabled: true, level: 0.25 } })]);
+    const toggle = layerChildRowCommand(
+      document,
+      { itemId: 'noise', layerId: 'm1' },
+      { isEnabled: false, type: 'set-enabled' }
+    );
+    expect(toggle).toMatchObject({
+      before: { layerType: 'inpaint_mask', noise: { isEnabled: true, level: 0.25 } },
+      config: { layerType: 'inpaint_mask', noise: { isEnabled: false, level: 0.25 } },
+      id: 'm1',
+    });
+    const remove = layerChildRowCommand(document, { itemId: 'noise', layerId: 'm1' }, { type: 'remove' });
+    expect(remove).toMatchObject({ config: { layerType: 'inpaint_mask', noise: null } });
+    expect(layerChildRowCommand(document, { itemId: 'denoise', layerId: 'm1' }, { type: 'remove' })).toBeNull();
+    expect(
+      layerChildRowCommand(document, { itemId: 'noise', layerId: 'm1' }, { isEnabled: true, type: 'set-enabled' })
+    ).toBeNull();
+  });
+
+  it('resolves live child items across kinds', () => {
+    const document = documentFrom([
+      maskWith({ noise: { isEnabled: false, level: 0.5 } }),
+      regionalWith([referenceImage('ref1')]),
+    ]);
+    expect(getLayerChildItem(document, 'm1', 'noise')).toEqual({ isEnabled: false, kind: 'mask-noise' });
+    expect(getLayerChildItem(document, 'm1', 'denoise')).toBeNull();
+    expect(getLayerChildItem(document, 'rg1', 'ref1')).toEqual({ isEnabled: true, kind: 'reference-image' });
+    expect(getLayerChildItem(document, 'rg1', 'gone')).toBeNull();
+    expect(getLayerChildItem(document, 'gone', 'noise')).toBeNull();
   });
 });

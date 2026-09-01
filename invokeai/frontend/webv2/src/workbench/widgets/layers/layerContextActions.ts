@@ -24,6 +24,7 @@ import {
   EyeIcon,
   EyeOffIcon,
   FolderPlusIcon,
+  GaugeIcon,
   ImageIcon,
   ImagePlusIcon,
   LockIcon,
@@ -32,6 +33,7 @@ import {
   PencilIcon,
   SaveIcon,
   ScanSearchIcon,
+  WavesIcon,
   SlidersHorizontalIcon,
   Trash2Icon,
   WorkflowIcon,
@@ -41,6 +43,8 @@ import { canConvertRasterControl, canMergeLayerDown } from './layerOps';
 
 export type LayerContextActionId =
   | 'add-reference-image'
+  | 'add-noise'
+  | 'add-denoise-limit'
   | 'merge-selected'
   | 'move-to-front'
   | 'move-forward'
@@ -128,6 +132,7 @@ export interface LayerContextActionEffects {
   convertTo(target: LayerType): void;
   patchConfig(kind: LayerConfigPatchKind): void;
   addReferenceImage(): void;
+  addMaskModifier(field: 'noise' | 'denoise'): void;
   mergeDown(): void;
   toggleVisibility(): void;
   toggleHidden(): void;
@@ -500,6 +505,30 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     order: 55,
     section: 'primary',
     supportedLayerTypes: REGIONAL_ONLY,
+  },
+  {
+    defaultLabel: 'Add noise',
+    handler: ({ effects }) => effects.addMaskModifier('noise'),
+    icon: WavesIcon,
+    id: 'add-noise',
+    isEnabled: isLayerMutable,
+    isVisible: (context) => context.layer.type === 'inpaint_mask' && context.layer.noise === undefined,
+    labelKey: 'widgets.layers.actions.addNoise',
+    order: 55,
+    section: 'primary',
+    supportedLayerTypes: INPAINT_ONLY,
+  },
+  {
+    defaultLabel: 'Add denoise limit',
+    handler: ({ effects }) => effects.addMaskModifier('denoise'),
+    icon: GaugeIcon,
+    id: 'add-denoise-limit',
+    isEnabled: isLayerMutable,
+    isVisible: (context) => context.layer.type === 'inpaint_mask' && context.layer.denoise === undefined,
+    labelKey: 'widgets.layers.actions.addDenoiseLimit',
+    order: 56,
+    section: 'primary',
+    supportedLayerTypes: INPAINT_ONLY,
   },
   {
     defaultLabel: 'Extract masked area',

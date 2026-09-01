@@ -4807,10 +4807,10 @@ describe('workbenchReducer canvas v2 layer reducers', () => {
 
     state = workbenchReducer(state, {
       config: {
-        denoiseLimit: 0.8,
+        denoise: { isEnabled: true, limit: 0.8 },
         layerType: 'inpaint_mask',
         mask: { bitmap: { contentHash: 'h', height: 20, imageName: 'mask.png', width: 30 }, offset: { x: 4, y: 5 } },
-        noiseLevel: 0.25,
+        noise: { isEnabled: true, level: 0.25 },
       },
       id: 'm',
       type: 'updateCanvasLayerConfig',
@@ -4823,8 +4823,8 @@ describe('workbenchReducer canvas v2 layer reducers', () => {
       expect(layer.mask.bitmap).toMatchObject({ imageName: 'mask.png', width: 30, height: 20 });
       expect(layer.mask.offset).toEqual({ x: 4, y: 5 });
       expect(layer.mask.fill).toEqual({ color: '#e07575', style: 'diagonal' });
-      expect(layer.noiseLevel).toBe(0.25);
-      expect(layer.denoiseLimit).toBe(0.8);
+      expect(layer.noise).toEqual({ isEnabled: true, level: 0.25 });
+      expect(layer.denoise).toEqual({ isEnabled: true, limit: 0.8 });
     }
 
     // A fill-only patch replaces the fill while keeping the bitmap.
@@ -4840,16 +4840,16 @@ describe('workbenchReducer canvas v2 layer reducers', () => {
     }
   });
 
-  it('removes optional config fields when a patch explicitly sets them to undefined', () => {
+  it('removes optional config fields when a patch explicitly clears them', () => {
     const configuredMask: CanvasInpaintMaskLayerContract = {
       blendMode: 'normal',
-      denoiseLimit: 0.8,
+      denoise: { isEnabled: true, limit: 0.8 },
       id: 'm',
       isEnabled: true,
       isLocked: false,
       mask: { bitmap: null, fill: { color: '#e07575', style: 'diagonal' } },
       name: 'm',
-      noiseLevel: 0.25,
+      noise: { isEnabled: true, level: 0.25 },
       opacity: 1,
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'inpaint_mask',
@@ -4860,7 +4860,7 @@ describe('workbenchReducer canvas v2 layer reducers', () => {
     ]);
 
     state = workbenchReducer(state, {
-      config: { denoiseLimit: undefined, layerType: 'inpaint_mask', noiseLevel: undefined },
+      config: { denoise: null, layerType: 'inpaint_mask', noise: null },
       id: 'm',
       type: 'updateCanvasLayerConfig',
     });
@@ -4875,8 +4875,9 @@ describe('workbenchReducer canvas v2 layer reducers', () => {
 
     expect(mask?.type).toBe('inpaint_mask');
     if (mask?.type === 'inpaint_mask') {
-      expect(mask.noiseLevel).toBeUndefined();
-      expect(mask.denoiseLimit).toBeUndefined();
+      expect(mask.noise).toBeUndefined();
+      expect(mask.denoise).toBeUndefined();
+      expect(Object.hasOwn(mask, 'noise')).toBe(false);
     }
     expect(control?.type).toBe('control');
     if (control?.type === 'control') {

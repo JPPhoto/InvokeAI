@@ -544,12 +544,26 @@ const patchLayerConfig = (layer: CanvasLayerContract, config: CanvasLayerConfigP
     };
   }
   if (layer.type === 'inpaint_mask' && config.layerType === 'inpaint_mask') {
-    return {
+    const next = {
       ...layer,
       ...(config.mask ? { mask: { ...layer.mask, ...config.mask } } : {}),
-      ...(Object.hasOwn(config, 'noiseLevel') ? { noiseLevel: config.noiseLevel } : {}),
-      ...(Object.hasOwn(config, 'denoiseLimit') ? { denoiseLimit: config.denoiseLimit } : {}),
     };
+    // `null` removes the modifier; absent leaves it untouched.
+    if (Object.hasOwn(config, 'noise')) {
+      if (config.noise) {
+        next.noise = config.noise;
+      } else {
+        delete next.noise;
+      }
+    }
+    if (Object.hasOwn(config, 'denoise')) {
+      if (config.denoise) {
+        next.denoise = config.denoise;
+      } else {
+        delete next.denoise;
+      }
+    }
+    return next;
   }
   return layer;
 };

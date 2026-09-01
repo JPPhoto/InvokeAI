@@ -32,11 +32,11 @@ export const layerRowSummary = (layer: CanvasLayerContract, t: TFunction): strin
     }
     case 'inpaint_mask': {
       const parts = [t('widgets.layers.types.inpaint_mask')];
-      if (layer.denoiseLimit !== undefined) {
-        parts.push(t('widgets.layers.summary.denoiseLimit', { value: Math.round(layer.denoiseLimit * 100) }));
+      if (layer.denoise?.isEnabled) {
+        parts.push(t('widgets.layers.summary.denoiseLimit', { value: Math.round(layer.denoise.limit * 100) }));
       }
-      if (layer.noiseLevel !== undefined && layer.noiseLevel > 0) {
-        parts.push(t('widgets.layers.summary.noise', { value: Math.round(layer.noiseLevel * 100) }));
+      if (layer.noise?.isEnabled && layer.noise.level > 0) {
+        parts.push(t('widgets.layers.summary.noise', { value: Math.round(layer.noise.level * 100) }));
       }
       return parts.join(' · ');
     }

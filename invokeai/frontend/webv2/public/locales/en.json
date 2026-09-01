@@ -2595,7 +2595,9 @@
         "showSelectedOnCanvas": "Show selected on canvas",
         "toggleActive": "Toggle layer active",
         "hideModifiers": "Hide modifiers",
-        "showModifiers": "Show modifiers"
+        "showModifiers": "Show modifiers",
+        "addDenoiseLimit": "Add denoise limit",
+        "addNoise": "Add noise"
       },
       "control": {
         "apply": "Apply",
@@ -3022,7 +3024,13 @@
         "disable": "Disable",
         "enable": "Enable",
         "parentDisabled": "Layer is disabled",
-        "toggleActive": "Toggle active"
+        "toggleActive": "Toggle active",
+        "denoise": "Denoise limit",
+        "denoiseHelp": "Caps how strongly generation may repaint the masked area.",
+        "noise": "Noise",
+        "noiseHelp": "Adds noise inside the masked area before generation.",
+        "removeDenoise": "Remove denoise limit",
+        "removeNoise": "Remove noise"
       }
     },
     "gallery": {

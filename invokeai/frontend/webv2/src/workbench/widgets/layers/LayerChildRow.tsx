@@ -3,11 +3,11 @@ import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
 import { Box, Icon, Text } from '@chakra-ui/react';
 import { useDroppable } from '@dnd-kit/core';
 import { Row } from '@platform/ui';
-import { ImageIcon } from 'lucide-react';
+import { GaugeIcon, ImageIcon, WavesIcon, type LucideIcon } from 'lucide-react';
 import { memo, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { ProjectedChildRow } from './layerChildRows';
+import type { LayerChildRowKind, ProjectedChildRow } from './layerChildRows';
 import type { LayerRowCommands } from './layerRowCommands';
 
 import { LayerActiveDot, ROW_SELECTION_FOCUS } from './LayerActiveDot';
@@ -15,6 +15,24 @@ import { LAYER_TREE_INDENT_PX } from './layerPanelRows';
 import { anchorFromPoint } from './layerRowCommands';
 
 const THUMBNAIL_IMG_STYLE: CSSProperties = { height: '100%', objectFit: 'cover', width: '100%' };
+
+const CHILD_ROW_GLYPHS: Record<LayerChildRowKind, LucideIcon> = {
+  'mask-denoise': GaugeIcon,
+  'mask-noise': WavesIcon,
+  'reference-image': ImageIcon,
+};
+
+/** The row's display name; reference images are numbered, singleton modifiers named by kind. */
+const childRowName = (child: ProjectedChildRow, t: (key: string) => string): string => {
+  switch (child.kind) {
+    case 'reference-image':
+      return `${t('widgets.layers.regionalGuidance.referenceImage')} ${child.posInSet}`;
+    case 'mask-noise':
+      return t('widgets.layers.modifiers.noise');
+    case 'mask-denoise':
+      return t('widgets.layers.modifiers.denoise');
+  }
+};
 
 interface LayerChildRowProps {
   child: ProjectedChildRow;
@@ -56,7 +74,7 @@ const LayerChildRowComponent = ({
     },
     [setDropRef]
   );
-  const name = `${t('widgets.layers.regionalGuidance.referenceImage')} ${child.posInSet}`;
+  const name = childRowName(child, t);
 
   const indentStyle = useMemo(() => ({ paddingLeft: `${child.depth * LAYER_TREE_INDENT_PX}px` }), [child.depth]);
   const handleSelect = useCallback(() => commands.selectChild(child), [child, commands]);
@@ -148,12 +166,17 @@ const LayerChildRowComponent = ({
           {child.image ? (
             <img alt="" draggable={false} src={child.image.thumbnailUrl} style={THUMBNAIL_IMG_STYLE} />
           ) : (
-            <Icon as={ImageIcon} boxSize="3" />
+            <Icon as={CHILD_ROW_GLYPHS[child.kind]} boxSize="3" />
           )}
         </Box>
         <Text color={muted ? 'fg.muted' : undefined} flex="1" fontSize="2xs" fontWeight="600" minW="0" truncate>
           {name}
         </Text>
+        {child.value !== null ? (
+          <Text color="fg.subtle" flexShrink={0} fontSize="2xs" fontVariantNumeric="tabular-nums">
+            {`${Math.round(child.value * 100)}%`}
+          </Text>
+        ) : null}
       </Row>
     </Box>
   );

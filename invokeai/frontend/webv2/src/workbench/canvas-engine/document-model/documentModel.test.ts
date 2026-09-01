@@ -707,6 +707,31 @@ describe('createDocumentModel', () => {
       ).toEqual({ status: 'unchanged' });
     });
 
+    it('round-trips a mask modifier through add, toggle and null-remove with passing postconditions', () => {
+      const project = projectWith(flat(), 'i1');
+      const noise = { isEnabled: true, level: 0.25 };
+      const added = roundTrip(project, {
+        before: { layerType: 'inpaint_mask', noise: null },
+        config: { layerType: 'inpaint_mask', noise },
+        id: 'i1',
+        type: 'patch-config',
+      });
+      const toggled = roundTrip(added.after, {
+        before: { layerType: 'inpaint_mask', noise },
+        config: { layerType: 'inpaint_mask', noise: { ...noise, isEnabled: false } },
+        id: 'i1',
+        type: 'patch-config',
+      });
+      const removed = roundTrip(toggled.after, {
+        before: { layerType: 'inpaint_mask', noise: { ...noise, isEnabled: false } },
+        config: { layerType: 'inpaint_mask', noise: null },
+        id: 'i1',
+        type: 'patch-config',
+      });
+      const mask = getDocumentLeaves(removed.after.canvas.document).find((leaf) => leaf.id === 'i1')!;
+      expect(Object.hasOwn(mask, 'noise')).toBe(false);
+    });
+
     it('round-trips config, source and flag commands through the reducer, groups included', () => {
       const project = projectWith(tree(), 'r1');
       const control = roundTrip(project, {

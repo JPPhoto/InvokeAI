@@ -97,7 +97,15 @@ void i18n.use(initReactI18next).init({
               toggleActive: 'Toggle layer active',
               toggleVisibility: 'Toggle visibility',
             },
-            modifiers: { disable: 'Disable', enable: 'Enable', toggleActive: 'Toggle active' },
+            modifiers: {
+              denoise: 'Denoise limit',
+              disable: 'Disable',
+              enable: 'Enable',
+              noise: 'Noise',
+              removeDenoise: 'Remove denoise limit',
+              removeNoise: 'Remove noise',
+              toggleActive: 'Toggle active',
+            },
             regionalGuidance: {
               referenceImage: 'Reference image',
               referenceImages: 'Reference images',
@@ -199,6 +207,19 @@ const Harness = ({ initialNodes }: { initialNodes: CanvasNodeContract[] }) => {
       />
       <output data-testid="selected-layer" style={HIDDEN}>
         {document.selectedLayerId ?? 'none'}
+      </output>
+      <output data-testid="mask-modifiers" style={HIDDEN}>
+        {(() => {
+          const layer = getDocumentLayer(document, 'mask');
+          return layer?.type === 'inpaint_mask'
+            ? [
+                layer.noise ? `noise:${layer.noise.isEnabled ? 'on' : 'off'}:${layer.noise.level}` : null,
+                layer.denoise ? `denoise:${layer.denoise.isEnabled ? 'on' : 'off'}:${layer.denoise.limit}` : null,
+              ]
+                .filter(Boolean)
+                .join(',') || 'empty'
+            : 'none';
+        })()}
       </output>
       <output data-testid="regional-refs" style={HIDDEN}>
         {(() => {
@@ -607,6 +628,25 @@ describe('LayersTree projected child rows', () => {
     // Selecting a layer row clears the sub-selection again.
     await act(() => userEvent.click(treeitem('Raster')));
     expect(getLayerChildSelection()).toBeNull();
+  });
+
+  it('projects mask noise and denoise rows whose dots and Delete edit the modifiers', async () => {
+    await renderTree([
+      layerContract('mask', 'inpaint_mask', {
+        denoise: { isEnabled: true, limit: 0.8 },
+        name: 'Mask',
+        noise: { isEnabled: true, level: 0.25 },
+      }),
+    ]);
+    expect(treeitem('Noise')).toHaveAttribute('aria-level', '3');
+    expect(treeitem('Denoise limit')).toHaveAttribute('aria-posinset', '2');
+    const dot = treeitem('Noise').querySelector<HTMLButtonElement>('button[aria-label="Toggle active"]')!;
+    await act(() => userEvent.click(dot));
+    expect(output('mask-modifiers')).toBe('noise:off:0.25,denoise:on:0.8');
+    treeitem('Denoise limit').focus();
+    await act(() => userEvent.keyboard('{Delete}'));
+    expect(output('mask-modifiers')).toBe('noise:off:0.25');
+    expect(document.activeElement).toBe(treeitem('Mask'));
   });
 
   it('walks child rows from the keyboard and routes their context menu', async () => {
