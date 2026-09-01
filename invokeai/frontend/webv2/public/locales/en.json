@@ -3041,7 +3041,7 @@
       "uploadSuccessTitle_other": "Uploaded {{count}} files",
       "uploadSummary": "{{images}} and {{videos}} uploaded to {{board}}. {{failed}} failed.",
       "uploadsUnavailableForDateBoards": "Uploads are unavailable for date boards",
-      "uploadUnsupported": "No supported media files to upload (PNG, JPEG, WebP, or MP4).",
+      "uploadUnsupported": "No supported media files to upload (PNG, JPEG, or WebP images; video files; or audio files).",
       "videoCount_one": "{{count}} video",
       "videoCount_other": "{{count}} videos",
       "windowAnchored": "Showing this board from item {{index}}.",

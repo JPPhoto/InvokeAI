@@ -121,6 +121,7 @@ const Probe = ({
       {
         archived: false,
         assetCount: 0,
+        assetVideoCount: 0,
         id: 'board-1',
         imageCount: 2,
         kind: 'board',
@@ -131,6 +132,7 @@ const Probe = ({
       {
         archived: false,
         assetCount: 0,
+        assetVideoCount: 0,
         id: 'none',
         imageCount: 0,
         kind: 'uncategorized',

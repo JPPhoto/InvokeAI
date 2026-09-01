@@ -114,6 +114,7 @@ const fallbackBoards: GalleryBoard[] = [
   {
     archived: false,
     assetCount: 0,
+    assetVideoCount: 0,
     id: 'none',
     imageCount: 0,
     kind: 'uncategorized',

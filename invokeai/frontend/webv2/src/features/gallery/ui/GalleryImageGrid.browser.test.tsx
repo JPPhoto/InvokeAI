@@ -177,6 +177,7 @@ const previewSource: StreamingImageSource = {
 const board = {
   archived: false,
   assetCount: 0,
+  assetVideoCount: 0,
   id: 'board-a',
   imageCount: 3,
   kind: 'board',

@@ -52,6 +52,7 @@ const itemActions = { moveItemsToBoard: vi.fn(async () => {}) };
 const createBoard = (overrides: Partial<GalleryBoard> & Pick<GalleryBoard, 'id' | 'name'>): GalleryBoard => ({
   archived: false,
   assetCount: 3,
+  assetVideoCount: 0,
   imageCount: 50,
   kind: 'board',
   projectId: null,
