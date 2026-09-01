@@ -28,12 +28,48 @@ import { I18nextProvider } from 'react-i18next';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 
-const harness = vi.hoisted(() => ({ engine: null as unknown, project: null as Project | null }));
-
-vi.mock('@workbench/WorkbenchContext', () => ({
-  useActiveProjectSelector: (selector: (project: Project) => unknown) => selector(harness.project!),
-  useOptionalWorkbenchCommands: () => null,
+const harness = vi.hoisted(() => ({
+  engine: null as unknown,
+  listeners: new Set<() => void>(),
+  project: null as Project | null,
 }));
+
+vi.mock('@workbench/WorkbenchContext', async () => {
+  const { useSyncExternalStore } = await import('react');
+  const subscribe = (listener: () => void) => {
+    harness.listeners.add(listener);
+    return () => harness.listeners.delete(listener);
+  };
+  // Merges into the harness project's widget values and notifies, so pair
+  // edits re-render the way the real store does.
+  const patchValues = (typeId: string, values: Record<string, unknown>) => {
+    const project = harness.project!;
+    const entry = Object.entries(project.widgetInstances).find(([, instance]) => instance.typeId === typeId);
+    if (!entry) {
+      return;
+    }
+    const [instanceId, instance] = entry;
+    harness.project = {
+      ...project,
+      widgetInstances: {
+        ...project.widgetInstances,
+        [instanceId]: { ...instance, state: { ...instance.state, values: { ...instance.state.values, ...values } } },
+      },
+    };
+    harness.listeners.forEach((listener) => listener());
+  };
+  const commands = { widgets: { patchValues } };
+  const queries = { getSnapshot: () => ({ activeProject: harness.project! }) };
+  return {
+    useActiveProjectSelector: (selector: (project: Project) => unknown) => {
+      const project = useSyncExternalStore(subscribe, () => harness.project!);
+      return selector(project);
+    },
+    useOptionalWorkbenchCommands: () => null,
+    useWorkbenchCommands: () => commands,
+    useWorkbenchQueries: () => queries,
+  };
+});
 vi.mock('@workbench/useCanvasProjectMutationDispatch', () => ({
   useCanvasProjectMutationDispatch: () => () => true,
 }));
@@ -41,9 +77,11 @@ vi.mock('@workbench/widgets/canvas/useCanvasEngine', () => ({ useCanvasEngine: (
 
 import type { LayerEditorPaneLayout } from './editorPaneLayout';
 
+import { ColorPane } from './ColorPane';
 import { LAYER_EDITOR_PANE_DEFAULTS } from './editorPaneLayout';
 import { LayerEditorPanes } from './LayerEditorPanes';
 import { PropertiesPane } from './PropertiesPane';
+import { SwatchesPane } from './SwatchesPane';
 import { TransformPane } from './TransformPane';
 
 const i18n = createInstance();
@@ -332,5 +370,52 @@ describe('Layer editor panes host', () => {
     const expand = page.getByRole('button', { exact: true, name: 'Expand editor panes' });
     await expect.element(expand).toBeVisible();
     expect(document.activeElement).toBe(expand.element());
+  });
+});
+
+describe('Color pane', () => {
+  const canvasValues = () => harness.project!.widgetInstances.canvas!.state.values as Record<string, unknown>;
+
+  it('shows the pair on the wheel and switches the editing target', async () => {
+    await mount(ColorPane);
+    await expect.element(page.getByRole('slider', { exact: true, name: 'Hue' })).toBeVisible();
+    const foreground = page.getByRole('button', { exact: true, name: 'Foreground color' });
+    const background = page.getByRole('button', { exact: true, name: 'Background color' });
+    await expect.element(foreground).toHaveAttribute('aria-pressed', 'true');
+    await act(async () => {
+      await userEvent.click(background);
+    });
+    await expect.element(background).toHaveAttribute('aria-pressed', 'true');
+    await expect.element(foreground).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('swaps the pair from the chip row', async () => {
+    await mount(ColorPane);
+    await act(async () => {
+      await userEvent.click(page.getByRole('button', { exact: true, name: 'Swap foreground and background colors' }));
+    });
+    expect(canvasValues().activeColors).toEqual({ background: '#000000', foreground: '#ffffff' });
+  });
+
+  it('writes swatch picks to the active target', async () => {
+    await mount(SwatchesPane);
+    await act(async () => {
+      await userEvent.click(page.getByRole('button', { exact: true, name: '#e07575' }));
+    });
+    expect(canvasValues().activeColors).toMatchObject({ foreground: '#e07575' });
+  });
+
+  it('adds the current color to the project palette and removes it by right-click', async () => {
+    await mount(SwatchesPane);
+    await act(async () => {
+      await userEvent.click(page.getByRole('button', { exact: true, name: 'Add current color to palette' }));
+    });
+    expect(canvasValues().colorPalette).toEqual(['#000000']);
+    const paletteSwatch = page.getByRole('button', { exact: true, name: '#000000' }).last();
+    await act(() =>
+      paletteSwatch.element().dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    );
+    await settle();
+    expect(canvasValues().colorPalette).toEqual([]);
   });
 });

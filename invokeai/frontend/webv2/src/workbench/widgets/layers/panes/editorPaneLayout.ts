@@ -1,11 +1,15 @@
-/** Pure layout contract for the Layers widget's editor panes; the manifest seeds it, so no React here. */
+/** Pure layout contracts for the Layers widget's pane blocks; the manifest seeds them, so no React here. */
 
 export type LayerEditorPaneId = 'properties' | 'transform';
 
-export interface LayerEditorPaneLayout {
-  activePane: LayerEditorPaneId;
+/** What every pane block persists: its preferred height and whether it is collapsed to its strip. */
+export interface PaneBlockLayout {
   isCollapsed: boolean;
   sizePx: number;
+}
+
+export interface LayerEditorPaneLayout extends PaneBlockLayout {
+  activePane: LayerEditorPaneId;
 }
 
 export const LAYER_EDITOR_PANE_MIN_SIZE_PX = 140;
@@ -37,4 +41,45 @@ export const readLayerEditorPaneLayout = (values: Record<string, unknown>): Laye
 };
 
 export const areLayerEditorPaneLayoutsEqual = (a: LayerEditorPaneLayout, b: LayerEditorPaneLayout): boolean =>
+  a.activePane === b.activePane && a.isCollapsed === b.isCollapsed && a.sizePx === b.sizePx;
+
+export type LayerColorPaneId = 'color' | 'swatches';
+
+export interface LayerColorPaneLayout extends PaneBlockLayout {
+  activePane: LayerColorPaneId;
+}
+
+export const COLOR_PANE_MIN_SIZE_PX = 160;
+export const COLOR_PANE_MAX_SIZE_PX = 560;
+
+export const COLOR_PANE_DEFAULTS: LayerColorPaneLayout = {
+  activePane: 'color',
+  isCollapsed: false,
+  sizePx: 236,
+};
+
+/** Defaults from the unreleased taller layouts; a stored exact match adopts the current default. */
+const LEGACY_COLOR_PANE_DEFAULT_SIZES = new Set([300, 420]);
+
+export const clampColorPaneSize = (sizePx: number): number =>
+  Math.min(COLOR_PANE_MAX_SIZE_PX, Math.max(COLOR_PANE_MIN_SIZE_PX, Math.round(sizePx)));
+
+const isColorPaneId = (value: unknown): value is LayerColorPaneId => value === 'color' || value === 'swatches';
+
+export const readColorPaneLayout = (values: Record<string, unknown>): LayerColorPaneLayout => {
+  const raw = values.colorPane;
+  const layout = typeof raw === 'object' && raw !== null ? (raw as Partial<LayerColorPaneLayout>) : {};
+  return {
+    activePane: isColorPaneId(layout.activePane) ? layout.activePane : COLOR_PANE_DEFAULTS.activePane,
+    isCollapsed: typeof layout.isCollapsed === 'boolean' ? layout.isCollapsed : COLOR_PANE_DEFAULTS.isCollapsed,
+    sizePx:
+      typeof layout.sizePx === 'number' &&
+      Number.isFinite(layout.sizePx) &&
+      !LEGACY_COLOR_PANE_DEFAULT_SIZES.has(layout.sizePx)
+        ? clampColorPaneSize(layout.sizePx)
+        : COLOR_PANE_DEFAULTS.sizePx,
+  };
+};
+
+export const areColorPaneLayoutsEqual = (a: LayerColorPaneLayout, b: LayerColorPaneLayout): boolean =>
   a.activePane === b.activePane && a.isCollapsed === b.isCollapsed && a.sizePx === b.sizePx;

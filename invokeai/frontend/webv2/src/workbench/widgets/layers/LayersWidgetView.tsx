@@ -12,7 +12,7 @@ import { LayersIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { LayerEditorPaneLayout } from './panes/editorPaneLayout';
+import type { LayerColorPaneLayout, LayerEditorPaneLayout } from './panes/editorPaneLayout';
 
 import { LayerMultiSelectionActions } from './LayerMultiSelectionActions';
 import { LAYER_PANEL_DEGRADE_THRESHOLD } from './layerPanelRows';
@@ -20,8 +20,13 @@ import { LayersPanelFooter } from './LayersPanelFooter';
 import { LayersPanelHeader } from './LayersPanelHeader';
 import { LayersTree } from './LayersTree';
 import { buildLayerStackRows } from './layerTreeRows';
-import { areLayerEditorPaneLayoutsEqual, readLayerEditorPaneLayout } from './panes/editorPaneLayout';
-import { LayerEditorPanes } from './panes/LayerEditorPanes';
+import {
+  areColorPaneLayoutsEqual,
+  areLayerEditorPaneLayoutsEqual,
+  readColorPaneLayout,
+  readLayerEditorPaneLayout,
+} from './panes/editorPaneLayout';
+import { LayerColorPane, LayerEditorPanes } from './panes/LayerEditorPanes';
 
 /**
  * The layers panel: a fixed header (selected layer's opacity + blend mode, global denoising
@@ -73,9 +78,18 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
     (next: LayerEditorPaneLayout) => runtime.state.patch({ editorPanes: next }),
     [runtime.state]
   );
+  const colorPaneLayout = useActiveProjectSelector(
+    (project) => readColorPaneLayout(project.widgetInstances[runtime.instanceId]?.state.values ?? {}),
+    areColorPaneLayoutsEqual
+  );
+  const handleColorPaneLayout = useCallback(
+    (next: LayerColorPaneLayout) => runtime.state.patch({ colorPane: next }),
+    [runtime.state]
+  );
 
   return (
     <Stack gap="1" h="full" minH="0">
+      <LayerColorPane layout={colorPaneLayout} onLayoutChange={handleColorPaneLayout} />
       <LayersPanelHeader />
       <LayerMultiSelectionActions
         document={document}

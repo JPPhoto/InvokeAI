@@ -164,11 +164,12 @@ export interface ToolContext {
   /** Sets (or clears) the brush cursor ring drawn on the overlay. */
   setOverlayCursor(cursor: OverlayCursor | null): void;
   /**
-   * Hands a sampled color to a one-shot request made from outside the canvas
-   * (a color picker's eyedropper button), returning whether one was pending.
-   * The color-picker tool calls this before falling through to its default
-   * behavior of writing the brush color, so the alt-hold flow is unaffected.
-   * Absent in minimal test harnesses.
+   * Hands a sampled color to whoever claims it: a one-shot request made from
+   * outside the canvas (a color picker's eyedropper button) wins first, then
+   * the workbench's persistent router (which writes the active
+   * foreground/background target). Returns whether anyone took it; only then
+   * does the color-picker tool fall back to writing the brush color — the
+   * engine-standalone behavior. Absent in minimal test harnesses.
    */
   resolveColorSample?(hex: string): boolean;
   /**

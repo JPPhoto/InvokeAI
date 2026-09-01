@@ -1013,6 +1013,8 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
    * caller is awaiting can never dangle.
    */
   let pendingColorSample: { previousToolId: ToolId; resolve: (hex: string | null) => void } | null = null;
+  // Where unclaimed eyedropper samples land while a workbench is attached.
+  let colorSampleRouter: ((hex: string) => boolean) | null = null;
 
   const toolContext: ToolContext = {
     applyTransform: () => applyTransform(),
@@ -1063,11 +1065,11 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     openTextCreate: (docPoint) => openTextCreate(docPoint),
     openTextEdit: (layerId) => openTextEdit(layerId),
     resolveColorSample: (hex) => {
-      if (!pendingColorSample) {
-        return false;
+      if (pendingColorSample) {
+        settleColorSample(hex, true);
+        return true;
       }
-      settleColorSample(hex, true);
-      return true;
+      return colorSampleRouter?.(hex) ?? false;
     },
     setLayerTransformOverride: (layerId, override) => {
       if (override) {
@@ -2916,6 +2918,15 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     handleEscapePriority,
     onStrokeCommitted,
     requestColorSample,
+    setColorSampleRouter: (router) => {
+      colorSampleRouter = router;
+      return () => {
+        // Compare-and-clear: a later installer must not be evicted by an earlier one's cleanup.
+        if (colorSampleRouter === router) {
+          colorSampleRouter = null;
+        }
+      };
+    },
     setInteractionLocked,
   };
   const layersCapability: CanvasEngineLayerCapability = {

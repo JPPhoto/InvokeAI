@@ -471,6 +471,14 @@ export interface CanvasEngineToolCapability extends CanvasToolCapability {
    * tool either way. Backs the color picker's eyedropper button.
    */
   requestColorSample(): Promise<string | null>;
+  /**
+   * Installs the sink for eyedropper samples no one-shot request claims: the
+   * workbench routes them to the active foreground/background target. Without
+   * a router (or when it declines with false) the sample lands in the brush
+   * color option — the engine-standalone behavior. Returns a dispose that
+   * uninstalls only this router, so a stale cleanup cannot evict a newer one.
+   */
+  setColorSampleRouter(router: (hex: string) => boolean): () => void;
   setInteractionLocked(locked: boolean): void;
 }
 

@@ -108,7 +108,9 @@ const contextOf = (overrides: Partial<CanvasHotkeyContext> = {}): CanvasHotkeyCo
   isInteractionLocked: false,
   notifyLayerDuplicateFailed: vi.fn(),
   pasteFromClipboard,
+  resetActiveColors: vi.fn(),
   selectedLayerIds: ['a'],
+  swapActiveColors: vi.fn(),
   t: (key) => key,
   ...overrides,
 });
@@ -593,5 +595,21 @@ describe('group selection', () => {
       'widgets.canvas.commands.ungroupLayers',
       expect.objectContaining({ forward: expect.objectContaining({ removeIds: ['g'] }) })
     );
+  });
+});
+
+describe('active color pair commands', () => {
+  it('routes X to swap and D to reset, even while interaction is locked', () => {
+    for (const isInteractionLocked of [false, true]) {
+      const swapCtx = contextOf({ isInteractionLocked });
+      executeCanvasHotkeyCommand('canvas.toggleFillColor', swapCtx);
+      expect(swapCtx.swapActiveColors).toHaveBeenCalledTimes(1);
+      expect(swapCtx.resetActiveColors).not.toHaveBeenCalled();
+
+      const resetCtx = contextOf({ isInteractionLocked });
+      executeCanvasHotkeyCommand('canvas.setFillColorsToDefault', resetCtx);
+      expect(resetCtx.resetActiveColors).toHaveBeenCalledTimes(1);
+      expect(resetCtx.dispatch).not.toHaveBeenCalled();
+    }
   });
 });

@@ -49,6 +49,8 @@ import {
 import { CanvasSurface } from './CanvasSurface';
 import { CanvasSurfaceContextLayout } from './CanvasSurfaceContextLayout';
 import { resolveCheckerColors } from './checkerColors';
+import { CanvasColorFeed } from './color-system/CanvasColorFeed';
+import { useActiveColorCommands } from './color-system/useActiveColors';
 import { useCanvasOperation } from './engineStoreHooks';
 import { executeCanvasImageDropImport } from './executeCanvasImageDropImport';
 import { StagingBar } from './StagingBar';
@@ -131,6 +133,10 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
       }
     }
   }, [engine, settings]);
+
+  // The pair↔engine bridge lives in a null child so per-pointermove pair
+  // edits never re-render this shell; the commands feed the X/D hotkeys below.
+  const colorCommands = useActiveColorCommands();
 
   // The checkerboard fills the whole (unbounded) canvas, so its two square colors
   // come from theme tokens rather than hardcoded greys. Resolve them from the live
@@ -391,7 +397,9 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
       pasteFromClipboard,
       reportPreparedCommit: (outcome) => reportPreparedCommit(outcome, notify.error, t),
       reportStructuralCommit: (result) => reportStructuralCommit(result, notify.error, t),
+      resetActiveColors: colorCommands.resetPair,
       selectedLayerIds,
+      swapActiveColors: colorCommands.swapPair,
       t,
     });
   });
@@ -430,6 +438,9 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
       ['canvas.invertSelection', t('widgets.canvas.commands.invertSelection'), ['mod+shift+i']],
       ['canvas.brushSizeDown', t('widgets.canvas.commands.decreaseBrushSize'), ['[']],
       ['canvas.brushSizeUp', t('widgets.canvas.commands.increaseBrushSize'), [']']],
+      // The active color pair: X swaps, D resets to black/white.
+      ['canvas.toggleFillColor', t('widgets.canvas.commands.swapColors'), ['x']],
+      ['canvas.setFillColorsToDefault', t('widgets.canvas.commands.resetColors'), ['d']],
       // Move the selected layer: arrows nudge 1px, shift+arrows 10px.
       ['canvas.nudgeLeft', t('widgets.canvas.commands.nudgeLeft'), ['arrowleft']],
       ['canvas.nudgeRight', t('widgets.canvas.commands.nudgeRight'), ['arrowright']],
@@ -498,6 +509,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
       role="region"
       w="full"
     >
+      <CanvasColorFeed engine={engine} />
       <CanvasSurfaceContextLayout surface={canvasSurface} onContextMenu={handleSurfaceContextMenu}>
         <CanvasImageDropOverlay
           isDocumentEditingLocked={interactionCapabilities.isDocumentEditingLocked}

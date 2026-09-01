@@ -179,7 +179,10 @@
       "format": "Color format",
       "sampleFromCanvas": "Pick a color from the canvas",
       "sampleFromScreen": "Pick a color from the screen",
-      "opacity": "Opacity (%)"
+      "opacity": "Opacity (%)",
+      "hue": "Hue",
+      "saturationValue": "Saturation and value",
+      "saturationValueText": "Saturation {{saturation}}%, value {{value}}%"
     },
     "configure": "Configure",
     "copy": "Copy",
@@ -1535,7 +1538,9 @@
       "upscale": "Upscale",
       "versionStatus": "Version",
       "workflow": "Workflow",
-      "video": "Video"
+      "video": "Video",
+      "color": "Color",
+      "swatches": "Swatches"
     },
     "generate": {
       "activeCount_one": "{{count}} active",
@@ -2226,7 +2231,9 @@
         "toggleNonRasterLayers": "Hide control, guidance and mask layers",
         "undo": "Undo canvas edit",
         "groupLayers": "Group selected layers",
-        "ungroupLayers": "Ungroup selected layers"
+        "ungroupLayers": "Ungroup selected layers",
+        "swapColors": "Swap foreground and background colors",
+        "resetColors": "Reset colors to black and white"
       },
       "contextMenu": {
         "createError": "Couldn't create from BBox",
@@ -2982,6 +2989,32 @@
         "expand": "Expand editor panes",
         "resize": "Resize editor panes",
         "tabs": "Layer editor panes"
+      },
+      "colorPane": {
+        "addToPalette": "Add current color to palette",
+        "background": "Background color",
+        "channels": {
+          "blue": "Blue",
+          "brightness": "Brightness",
+          "green": "Green",
+          "hex": "Hex color",
+          "hue": "Hue",
+          "lightness": "Lightness",
+          "red": "Red",
+          "saturation": "Saturation"
+        },
+        "collapse": "Collapse color pane",
+        "expand": "Expand color pane",
+        "foreground": "Foreground color",
+        "format": "Color value format",
+        "palette": "Project palette",
+        "pickerModeBox": "Switch to box picker",
+        "pickerModeWheel": "Switch to wheel picker",
+        "recents": "Recent colors",
+        "removeSwatchHint": "{{color}} — right-click or press Delete to remove",
+        "resize": "Resize color pane",
+        "swatches": "Swatches",
+        "tabs": "Color panes"
       }
     },
     "gallery": {

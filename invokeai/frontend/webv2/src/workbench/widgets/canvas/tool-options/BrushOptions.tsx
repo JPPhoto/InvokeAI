@@ -10,6 +10,7 @@ import { HStack } from '@chakra-ui/react';
 import { ToggleIconButton } from '@platform/ui/Button';
 import { ColorPicker } from '@platform/ui/ColorPicker';
 import { MAX_BRUSH_SIZE, MIN_BRUSH_SIZE } from '@workbench/canvas-engine/api';
+import { useActiveColorCommands, useActiveColorPair } from '@workbench/widgets/canvas/color-system/useActiveColors';
 import { useBrushOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import {
   ToolbarNumberField,
@@ -199,15 +200,17 @@ const BrushOpacity = ({ engine }: ToolbarRegionProps) => {
   return <PaintOpacityControl opacity={options.opacity} setOpacity={setOpacity} />;
 };
 
+/** A mirror of the project foreground, not brush-owned state: the pair feeds the engine's brush color. */
 const BrushColor = ({ engine }: ToolbarRegionProps) => {
   const { t } = useTranslation();
-  const [options, set] = useBrushPatch(engine);
-  const onColorChange = useCallback((color: string) => set({ color }), [set]);
+  const pair = useActiveColorPair();
+  const { setPairColor } = useActiveColorCommands();
+  const onColorChange = useCallback((color: string) => setPairColor('foreground', color), [setPairColor]);
   const sampleColor = useColorSampler(engine);
   return (
     <ColorPicker
       aria-label={t('widgets.canvas.toolOptions.brushColor')}
-      value={options.color}
+      value={pair.foreground}
       onSampleColor={sampleColor}
       onValueChange={onColorChange}
     />

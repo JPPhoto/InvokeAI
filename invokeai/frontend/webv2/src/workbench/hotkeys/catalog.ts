@@ -42,6 +42,8 @@ const implemented = new Set([
   'canvas.nextEntity',
   'canvas.prevEntity',
   'canvas.redo',
+  'canvas.setFillColorsToDefault',
+  'canvas.toggleFillColor',
   'canvas.undo',
   'gallery.clearSelection',
   'gallery.deleteSelection',

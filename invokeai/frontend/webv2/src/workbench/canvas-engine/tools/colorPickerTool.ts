@@ -1,9 +1,10 @@
 /**
  * The color-picker tool: while held down (usually via the alt-hold temp-tool
  * switch the pointer pipeline already drives — see `input/pointerPipeline.ts`),
- * it samples the composited document color under the cursor and writes it into
- * the brush color option, so releasing alt drops the user right back into
- * painting with the picked color. Sampling reads the layer cache directly
+ * it samples the composited document color under the cursor and hands it to
+ * `resolveColorSample` — in the app that lands in the active
+ * foreground/background target, so releasing alt drops the user right back
+ * into painting with the picked color. Sampling reads the layer cache directly
  * through {@link sampleDocumentColor} — this tool never dispatches and never
  * touches pixels.
  *
@@ -31,9 +32,9 @@ const updateCursorRing = (ctx: ToolContext, input: PointerInput): void => {
 };
 
 /**
- * Samples the composited color under `input`. A one-shot request made from
- * outside the canvas (a color picker's eyedropper) claims the sample first;
- * otherwise it lands in the brush color option as it always has.
+ * Samples the composited color under `input` and offers it through
+ * `resolveColorSample` (one-shot claim, then the workbench router). The brush
+ * color option is only the engine-standalone fallback.
  */
 const pickColorAt = (ctx: ToolContext, input: PointerInput): void => {
   const doc = ctx.getDocument();

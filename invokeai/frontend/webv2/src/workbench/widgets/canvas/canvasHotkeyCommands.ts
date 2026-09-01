@@ -59,6 +59,10 @@ export interface CanvasHotkeyContext {
   readonly selectedLayerIds: readonly string[];
   readonly dispatch: CanvasProjectMutationDispatch;
   readonly copySelection: (cut: boolean) => void;
+  /** Swaps the project foreground/background pair — a preference, never a document edit. */
+  readonly swapActiveColors: () => void;
+  /** Resets the pair to the black-on-white default. */
+  readonly resetActiveColors: () => void;
   readonly pasteFromClipboard: () => void;
   readonly notifyLayerDuplicateFailed: () => void;
   readonly reportStructuralCommit: (result: StructuralCommitResult) => void;
@@ -94,6 +98,18 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
 
   if (commandId === 'canvas.deleteSelected' && ctx.hasSelectedStagedCandidate) {
     dispatch({ type: 'discardSelectedStagedImage' });
+    return;
+  }
+
+  // The color pair is a preference, not a document edit, so X/D stay live even
+  // while the surface is interaction-locked.
+  if (commandId === 'canvas.toggleFillColor') {
+    ctx.swapActiveColors();
+    return;
+  }
+
+  if (commandId === 'canvas.setFillColorsToDefault') {
+    ctx.resetActiveColors();
     return;
   }
 
