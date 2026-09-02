@@ -540,6 +540,31 @@ describe('LayersTree selection, surfaces and structure', () => {
     expect(scroller.scrollTop).toBe(0);
   });
 
+  it('validates a semantic drop command only once across equivalent adjacent hit regions', async () => {
+    await renderTree(trio());
+    const first = host!.querySelector<HTMLElement>('[data-layer-row-id="first"]')!;
+    const second = host!.querySelector<HTMLElement>('[data-layer-row-id="second"]')!;
+    const third = host!.querySelector<HTMLElement>('[data-layer-row-id="third"]')!;
+    const start = centre(first);
+    const secondRect = second.getBoundingClientRect();
+    const thirdRect = third.getBoundingClientRect();
+    await act(() => pointer('pointerdown', first, start.x, start.y));
+    await act(() => pointer('pointermove', document, start.x + 8, start.y));
+    await act(() => pointer('pointermove', document, start.x + 8, secondRect.bottom - 2));
+    await settle();
+    expect(refusalChecks).toHaveBeenCalled();
+    const belowSecond = JSON.stringify(refusalChecks.mock.calls.at(-1)?.[0]);
+
+    refusalChecks.mockClear();
+    await act(() => pointer('pointermove', document, start.x + 8, thirdRect.top + 2));
+    await settle();
+    expect(refusalChecks).not.toHaveBeenCalled();
+    await act(() => pointer('pointerup', document, start.x + 8, thirdRect.top + 2));
+
+    // Below the second row and above the third row describe the same insertion gap.
+    expect(belowSecond).toBe(JSON.stringify({ beforeId: 'third', ids: ['first'], parentId: null, type: 'reparent' }));
+  });
+
   it('scrolls the list while a drag rests in the edge band and asks the model once per target', async () => {
     await renderTree(manyLayers(200));
     const scroller = host!.querySelector<HTMLElement>('[role="tree"]')!.closest<HTMLElement>('[data-part="viewport"]')!;

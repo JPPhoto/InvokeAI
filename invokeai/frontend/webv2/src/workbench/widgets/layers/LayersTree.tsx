@@ -128,6 +128,15 @@ const edgeOf = (
 const childEdgeOf = (rect: { top: number; height: number } | undefined, y: number): 'above' | 'below' =>
   !rect || y >= rect.top + rect.height / 2 ? 'below' : 'above';
 
+type ReparentCommand = Extract<DocumentCommand, { type: 'reparent' }>;
+
+const reparentCommandForTarget = (target: LayerDropTarget): ReparentCommand => ({
+  beforeId: target.beforeId,
+  ids: target.ids,
+  parentId: target.parentId,
+  type: 'reparent',
+});
+
 const isMenuKey = (event: KeyboardEvent<HTMLElement>): boolean =>
   event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey);
 
@@ -874,15 +883,17 @@ export const LayersTree = ({
       rows: stacks[drag.stack].rows,
     });
   }, [drag, stacks]);
+  // Dnd-kit can describe one insertion gap as both "below row N" and "above row N+1". Key the
+  // model check by the semantic command so virtualized auto-scroll does not repeat the same
+  // validation. Finishing the drag clears the target, and the prepared commit revalidates against
+  // the current document before applying the landing.
+  const refusalCommandKey = target ? JSON.stringify(reparentCommandForTarget(target)) : null;
   const refusal = useMemo(
     () =>
-      target && engine
-        ? (engine.document
-            .model()
-            ?.refusalFor({ beforeId: target.beforeId, ids: target.ids, parentId: target.parentId, type: 'reparent' }) ??
-          null)
+      refusalCommandKey && engine
+        ? (engine.document.model()?.refusalFor(JSON.parse(refusalCommandKey) as ReparentCommand) ?? null)
         : null,
-    [engine, target]
+    [engine, refusalCommandKey]
   );
 
   const childDropPlan = useMemo(() => {
