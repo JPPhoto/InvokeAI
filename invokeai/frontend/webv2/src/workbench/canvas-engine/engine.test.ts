@@ -16114,6 +16114,68 @@ describe('engine selection: fill / erase', () => {
   });
 });
 
+describe('SAM preview animation', () => {
+  it('a published preview runs the animator and pulses the overlay; clearing stops both', async () => {
+    const raf = createControllableRaf();
+    vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
+    vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
+    // No reduce preference: the pulse path must actually run.
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    vi.stubGlobal(
+      'Path2D',
+      class FakePath2D {
+        closePath() {}
+        lineTo() {}
+        moveTo() {}
+        quadraticCurveTo() {}
+      }
+    );
+    const { store } = createReactiveStore(paintDoc());
+    const backend = createTestStubRasterBackend();
+    const { applicationHost, engine } = createCoreCanvasEngine({
+      backend,
+      imageResolver: () => Promise.resolve(new Blob()),
+      mutationPort: createTestMutationPort(store, 'p1'),
+      projectId: 'p1',
+      reportError: () => undefined,
+      uploadImage: () => Promise.resolve({ height: 1, imageName: 'durable', width: 1 }),
+      uploadIntermediateImage: () => Promise.resolve({ height: 1, imageName: 'transient', width: 1 }),
+    });
+    const screen = createFakeCanvas();
+    const overlay = createFakeCanvas();
+    engine.surface.attach(screen.element, overlay.element);
+    raf.flush();
+    await flushMicrotasks();
+    raf.flush();
+    raf.flush();
+    // Idle without a selection or preview: nothing schedules frames.
+    expect(raf.pendingCount()).toBe(0);
+
+    const surface = backend.createSurface(4, 4);
+    applicationHost.publishSamPreview({
+      data: surface,
+      guard: { layer: null } as never,
+      isolated: false,
+      rect: { height: 4, width: 4, x: 0, y: 0 },
+    });
+    // Drain the publish's own invalidate so it cannot masquerade as animation.
+    raf.flush();
+    raf.flush();
+    expect(raf.pendingCount()).toBeGreaterThan(0);
+    overlay.surface.callLog.length = 0;
+    raf.flush();
+    raf.flush();
+    // Each animator frame pulses an overlay redraw.
+    expect(overlay.surface.callLog.length).toBeGreaterThan(0);
+
+    applicationHost.clearSamPreview();
+    raf.flush();
+    raf.flush();
+    expect(raf.pendingCount()).toBe(0);
+    engine.lifecycle.dispose();
+  });
+});
+
 describe('engine selection: marching ants animation + overlay-only', () => {
   it('a selection redraws the overlay with ants and never composites the document', async () => {
     const raf = createControllableRaf();

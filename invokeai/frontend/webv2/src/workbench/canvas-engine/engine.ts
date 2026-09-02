@@ -146,6 +146,7 @@ import { rasterizeSource, type ImageResolver, type RasterizeDeps } from '@workbe
 import { fitThumbnailSize, getLayerThumbnailDisplayKey } from '@workbench/canvas-engine/render/thumbnail';
 import { documentDeltaToLocal, liftSelectedPixels } from '@workbench/canvas-engine/selection/floatingSelection';
 import { ANTS_STEP_PX, createAntsAnimator, type AntsAnimator } from '@workbench/canvas-engine/selection/marchingAnts';
+import { traceMaskOutlinePath } from '@workbench/canvas-engine/selection/maskOutline';
 import { createBboxTool } from '@workbench/canvas-engine/tools/bboxTool';
 import { createBrushTool } from '@workbench/canvas-engine/tools/brushTool';
 import { createColorPickerTool } from '@workbench/canvas-engine/tools/colorPickerTool';
@@ -1002,10 +1003,23 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
    * so the outline tracks the pixels in flight.
    */
 
+  const nowMs = (): number =>
+    typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+  const reducedMotionQuery =
+    typeof globalThis.matchMedia === 'function' ? globalThis.matchMedia('(prefers-reduced-motion: reduce)') : null;
+  // Reduced motion stills the pulse only; the 5fps ants march on, matching the
+  // selection ants' pre-existing behavior.
+  const samPulseActive = (): boolean =>
+    renderController.previews.getSam() !== null && reducedMotionQuery?.matches === false;
   const antsAnimator: AntsAnimator = createAntsAnimator({
     cancelFrame: (handle) => globalThis.cancelAnimationFrame(handle),
-    now: () =>
-      typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now(),
+    now: nowMs,
+    onFrame: () => {
+      // The SAM pulse is the one per-frame consumer; ants keep the 200ms step.
+      if (samPulseActive()) {
+        scheduler.invalidate({ overlay: true });
+      }
+    },
     onStep: () => {
       antsPhase += ANTS_STEP_PX;
       // Overlay-only: an ants tick never recomposites the document.
@@ -1014,9 +1028,24 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     requestFrame: (callback) => globalThis.requestAnimationFrame(callback),
   });
 
+  // Assumes data dims === rect dims (the decode bridge validates this), so the
+  // pixel-grid trace offset by rect origin is exact document space.
+  const traceSamOutline = (preview: { data: RasterSurface; rect: Rect }): Path2D | null => {
+    try {
+      const { data, rect } = preview;
+      const pixels = data.ctx.getImageData(0, 0, data.width, data.height);
+      const outline = traceMaskOutlinePath(pixels, { x: rect.x, y: rect.y });
+      return outline ? createPath2DImpl(outline) : null;
+    } catch {
+      // getImageData can throw (tainted/OOM); the preview then shows without ants.
+      return null;
+    }
+  };
+
   /** Runs the ants loop only while a selection exists AND render targets are bound. */
   function updateAntsAnimation(): void {
-    if (!disposed && selection.hasSelection() && renderController.getInputElement()) {
+    const animating = selection.hasSelection() || renderController.previews.getSam() !== null;
+    if (!disposed && animating && renderController.getInputElement()) {
       antsAnimator.start();
     } else {
       antsAnimator.stop();
@@ -1448,6 +1477,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   const overlayFrame = createOverlayFrame({
     getActiveToolId: () => interactionController.getActiveToolId(),
     getAntsPhase: () => antsPhase,
+    getSamPulseTime: () => (samPulseActive() ? nowMs() : null),
     getFloatingSelection: () => floatingSelection.get(),
     getOverlayCursor: () => overlayCursor,
     selection,
@@ -1960,6 +1990,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
 
   const clearSamPreview = (): void => {
     const previous = renderController.previews.clearSam();
+    updateAntsAnimation();
     if (previous) {
       scheduler.invalidate(previous.isolated ? { all: true } : { overlay: true });
     }
@@ -3116,8 +3147,12 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     publishFilterPreview: (layerId, imageName, rect, guard, filterType) =>
       setGuardedFilterPreview(layerId, { filterType, imageName, rect }, guard),
     publishSamPreview: (preview) => {
-      const isolationChanged = renderController.previews.getSam()?.isolated !== preview.isolated;
-      renderController.previews.setSam(preview);
+      const previous = renderController.previews.getSam();
+      const isolationChanged = previous?.isolated !== preview.isolated;
+      // An isolation toggle republishes the same surface; keep its outline.
+      const outline = previous?.data === preview.data ? (previous.outline ?? null) : traceSamOutline(preview);
+      renderController.previews.setSam({ ...preview, outline });
+      updateAntsAnimation();
       scheduler.invalidate(preview.isolated || isolationChanged ? { all: true } : { overlay: true });
       return undefined;
     },

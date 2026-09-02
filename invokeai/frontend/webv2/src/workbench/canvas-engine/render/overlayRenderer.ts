@@ -119,7 +119,14 @@ export interface OverlayState {
    */
   gradientPreview?: { start: Vec2; end: Vec2 } | null;
   /** Dedicated Select Object mask preview, already colorized by the engine. */
-  samPreview?: { surface: RasterSurface; rect: Rect; opacity: number } | null;
+  samPreview?: {
+    surface: RasterSurface;
+    rect: Rect;
+    opacity: number;
+    /** True-edge outline for marching ants, document space; `null` skips the ants. */
+    outline: Path2D | null;
+    phase: number;
+  } | null;
   /** Select Object visual prompt geometry in document space. */
   samInput?: { includePoints: readonly Vec2[]; excludePoints: readonly Vec2[]; bbox: Rect | null } | null;
 }
@@ -411,6 +418,9 @@ const drawSamPreview = (ctx: Ctx, state: OverlayState): void => {
   ctx.globalAlpha = preview.opacity;
   ctx.drawImage(preview.surface.canvas, preview.rect.x, preview.rect.y, preview.rect.width, preview.rect.height);
   ctx.restore();
+  if (preview.outline) {
+    drawMarchingAnts(ctx, state.view, { matrix: null, paths: [preview.outline], phase: preview.phase });
+  }
 };
 
 const drawSamGeometry = (ctx: Ctx, state: OverlayState): void => {

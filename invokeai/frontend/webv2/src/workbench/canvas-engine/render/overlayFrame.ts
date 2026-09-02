@@ -21,8 +21,16 @@ import { transformOverlayGeometry } from '@workbench/canvas-engine/transform/tra
 
 import type { FloatingSelectionFrame } from './floatingSelectionFrame';
 
-/** The SAM preview's fixed overlay opacity — it sits over the layer it describes. */
+/** The SAM preview's resting overlay opacity — it sits over the layer it describes. */
 const SAM_PREVIEW_OPACITY = 0.45;
+/** Pulse amplitude and full-cycle period, matching legacy's 1s yoyo tween. */
+const SAM_PREVIEW_PULSE = 0.15;
+const SAM_PULSE_PERIOD_MS = 2000;
+
+const samPreviewOpacity = (pulseTime: number | null): number =>
+  pulseTime === null
+    ? SAM_PREVIEW_OPACITY
+    : SAM_PREVIEW_OPACITY + SAM_PREVIEW_PULSE * Math.sin((pulseTime / SAM_PULSE_PERIOD_MS) * 2 * Math.PI);
 
 export type LayerTransformOverrides = ReadonlyMap<
   string,
@@ -37,6 +45,8 @@ export interface CreateOverlayFrameDeps {
   readonly getFloatingSelection: () => FloatingSelection | null;
   readonly getOverlayCursor: () => OverlayCursor | null;
   readonly getAntsPhase: () => number;
+  /** The clock while the SAM pulse animates, `null` for the static opacity (reduced motion, no preview). */
+  readonly getSamPulseTime: () => number | null;
 }
 
 export interface OverlayFrame {
@@ -143,7 +153,13 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
         ruleOfThirds: stores.ruleOfThirds.get(),
         samInput: samSession?.input.type === 'visual' ? samSession.input : null,
         samPreview: samPreview
-          ? { opacity: SAM_PREVIEW_OPACITY, rect: samPreview.rect, surface: samPreview.data }
+          ? {
+              opacity: samPreviewOpacity(deps.getSamPulseTime()),
+              outline: samPreview.outline ?? null,
+              phase: deps.getAntsPhase(),
+              rect: samPreview.rect,
+              surface: samPreview.data,
+            }
           : null,
         shapePreview: stores.shapePreview.get(),
         // The passive bbox frame follows the setting, but always renders while
