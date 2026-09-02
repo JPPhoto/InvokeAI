@@ -134,8 +134,9 @@ const createCommands = (
         (
           itemKeys: ActionPayload<'setGalleryMultiSelection'>['itemKeys'],
           primaryItem: ActionPayload<'setGalleryMultiSelection'>['primaryItem'],
-          projectId?: string
-        ) => ({ itemKeys, primaryItem, projectId })
+          projectId?: string,
+          selectionPage?: number
+        ) => ({ itemKeys, primaryItem, projectId, selectionPage })
       ),
       toggleItemSelection: command(
         'toggleGalleryItemInSelection',

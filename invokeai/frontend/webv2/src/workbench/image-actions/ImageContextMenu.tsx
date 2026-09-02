@@ -381,9 +381,11 @@ const SingleItemMenuItems = ({
     }
 
     openWidget('video', { preferredRegions: ['left'] });
-    // An initial video and a first frame are mutually exclusive in the panel.
+    // An initial video, a first frame, and Ref2VA references all claim the same
+    // conditioning slot: extending clears the rivals.
     widgets.patchValues('video', {
       firstFrameImage: null,
+      references: [],
       sourceVideo: createVideoSourceClip({
         durationSeconds: item.durationSeconds,
         fps: item.fps,
@@ -730,9 +732,11 @@ const SingleImageMenuItems = ({
   }, [generation, image.height, image.imageName, image.width, openWidget, widgets]);
   const handleSendToVideo = useCallback(() => {
     openWidget('video', { preferredRegions: ['left'] });
-    // The first frame and an initial video are mutually exclusive in the panel.
+    // The first frame, an initial video, and Ref2VA references all claim the same
+    // conditioning slot: sending a frame clears the rivals.
     widgets.patchValues('video', {
       firstFrameImage: { height: image.height, image_name: image.imageName, width: image.width },
+      references: [],
       sourceVideo: null,
     });
     generation.setSource('video');

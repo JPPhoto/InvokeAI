@@ -252,6 +252,30 @@ const deserializeProjectRecord = (record: ProjectRecordDTO): ProjectLoadResult =
   }
 };
 
+/**
+ * The baseline a server record establishes for the push comparison.
+ *
+ * It is the serialization of what this realm holds after hydrating the
+ * record, not the raw wire bytes. Hydration can legitimately change a
+ * document — a search only the writing session could resolve is dropped,
+ * along with the pages set against it — and a baseline taken from the bytes
+ * would read that as a local edit.
+ */
+const adoptRecordBaseline = (record: ProjectRecordDTO): { pushedDoc: string; result: ProjectLoadResult } => {
+  const result = deserializeProjectRecord(record);
+
+  // Do not use `getSerializedProjectDocument` here: taking a comparison
+  // baseline must not record the cover of a document this realm may never
+  // adopt (for example, the server side of conflict recovery).
+  return {
+    pushedDoc:
+      result.status === 'loaded'
+        ? JSON.stringify(serializeProjectDocument(result.project))
+        : JSON.stringify(record.data),
+    result,
+  };
+};
+
 const toServerSchemaRefusal = (
   error: unknown,
   projectId: string,
@@ -636,9 +660,10 @@ const pushNewProject = async (syncState: SyncedPersistenceState, project: Projec
         const existing = await apiGetProject(project.id, syncState.owner.signal);
 
         assertOwner(syncState);
+        const { pushedDoc } = adoptRecordBaseline(existing);
         const existingEntry: SyncEntry = {
           minimumCanvasSchemaVersion: existing.minimum_canvas_schema_version,
-          pushedDoc: JSON.stringify(existing.data),
+          pushedDoc,
           revision: existing.revision,
         };
 
@@ -910,7 +935,7 @@ const forkProjectAgainstServer = async (
   assertOwner(syncState);
   syncState.syncEntries.set(recovery.recoveredIdentity.id, {
     minimumCanvasSchemaVersion: recovery.created.minimum_canvas_schema_version,
-    pushedDoc: JSON.stringify(recovery.recoveredDocument),
+    pushedDoc: JSON.stringify(serializeProjectDocument(recoveredResult.project)),
     revision: recovery.created.revision,
   });
   syncState.pendingBoardAssignments.push({
@@ -950,7 +975,7 @@ const recoverConflictingProject = async (
     const server = await apiGetProject(project.id, syncState.owner.signal);
 
     assertOwner(syncState);
-    const serverDocJson = JSON.stringify(server.data);
+    const { pushedDoc: serverDocJson, result: serverResult } = adoptRecordBaseline(server);
     const serverEntry: SyncEntry = {
       minimumCanvasSchemaVersion: server.minimum_canvas_schema_version,
       pushedDoc: serverDocJson,
@@ -967,6 +992,10 @@ const recoverConflictingProject = async (
       syncState.syncEntries.set(project.id, serverEntry);
 
       return { kind: 'retry' };
+    }
+
+    if (serverResult.status !== 'loaded') {
+      return { kind: 'failed' };
     }
 
     const outcome = await forkProjectAgainstServer(
@@ -1053,7 +1082,7 @@ const forkDeletedProject = async (
 
     syncState.syncEntries.set(recovery.recoveredIdentity.id, {
       minimumCanvasSchemaVersion: recovery.created.minimum_canvas_schema_version,
-      pushedDoc: JSON.stringify(recovery.recoveredDocument),
+      pushedDoc: JSON.stringify(serializeProjectDocument(recoveredResult.project)),
       revision: recovery.created.revision,
     });
     syncState.pendingBoardAssignments.push({
@@ -1731,10 +1760,9 @@ const loadFromBackend = async (
     }
 
     const { record } = load;
-    const result = deserializeProjectRecord(record);
+    const { pushedDoc: serverDocJson, result } = adoptRecordBaseline(record);
 
     if (result.status === 'loaded') {
-      const serverDocJson = JSON.stringify(record.data);
       const localProject = localProjectById.get(record.project_id);
       const hasPendingLocalEdit = localProject && syncState.pendingProjectIds.has(record.project_id);
       const serverEntry: SyncEntry = {
@@ -2195,7 +2223,7 @@ export const createSyncedWorkbenchPersistence = (
 
   const adoptProjectRecord = (record: ProjectRecordDTO): ProjectLoadResult => {
     assertOwner(syncState);
-    const result = deserializeProjectRecord(record);
+    const { pushedDoc, result } = adoptRecordBaseline(record);
 
     if (result.status !== 'loaded') {
       return result;
@@ -2203,7 +2231,7 @@ export const createSyncedWorkbenchPersistence = (
 
     syncState.syncEntries.set(record.project_id, {
       minimumCanvasSchemaVersion: record.minimum_canvas_schema_version,
-      pushedDoc: JSON.stringify(record.data),
+      pushedDoc,
       revision: record.revision,
     });
     syncState.deletedProjectIds.delete(record.project_id);
