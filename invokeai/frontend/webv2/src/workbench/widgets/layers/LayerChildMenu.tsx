@@ -1,7 +1,7 @@
 import type { ComponentProps } from 'react';
 
-import { HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
-import { MenuContent } from '@platform/ui';
+import { Menu, Portal } from '@chakra-ui/react';
+import { MenuActionItem, MenuContent } from '@platform/ui';
 import {
   ArrowDownIcon,
   ArrowRightIcon,
@@ -11,7 +11,6 @@ import {
   CopyIcon,
   PencilIcon,
   XIcon,
-  type LucideIcon,
 } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -20,28 +19,7 @@ import type { LayerRowCommands, LayerSurfaceAnchor } from './layerRowCommands';
 
 import { isOrderedChildKind, layerChildRemoveLabelKey, type ProjectedChildRow } from './layerChildRows';
 
-const ChildMenuItem = ({
-  disabled,
-  icon,
-  label,
-  tone,
-  value,
-  onSelect,
-}: {
-  disabled: boolean;
-  icon: LucideIcon;
-  label: string;
-  tone?: 'danger';
-  value: string;
-  onSelect: () => void;
-}) => (
-  <Menu.Item color={tone === 'danger' ? 'fg.error' : undefined} disabled={disabled} value={value} onSelect={onSelect}>
-    <HStack gap="2">
-      <Icon as={icon} boxSize="3.5" color={tone === 'danger' ? undefined : 'fg.muted'} />
-      <Text fontSize="xs">{label}</Text>
-    </HStack>
-  </Menu.Item>
-);
+const ChildMenuItem = MenuActionItem;
 
 type MenuPositioning = ComponentProps<typeof Menu.Root>['positioning'];
 

@@ -14,10 +14,10 @@ import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngi
 import type { LucideIcon } from 'lucide-react';
 import type { ComponentProps, Dispatch, ReactNode } from 'react';
 
-import { HStack, Icon, Kbd, Menu, Portal, Text } from '@chakra-ui/react';
+import { HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { galleryTransfers } from '@features/gallery';
 import { useModelsSelector } from '@features/models';
-import { IconButton, MenuContent, RenameDialog, Tooltip } from '@platform/ui';
+import { IconButton, MenuActionItem, MenuContent, RenameDialog, Tooltip } from '@platform/ui';
 import {
   canMergeSelectedRasters,
   getDocumentIndex,
@@ -1207,6 +1207,7 @@ const LayerMenuIconActionItem = ({
       disabled={action.isDisabled}
       icon={action.icon}
       label={t(action.labelKey, { count: action.labelCount, defaultValue: action.defaultLabel })}
+      tone={action.tone}
       value={action.id}
       onSelect={onSelect}
     />
@@ -1226,11 +1227,11 @@ const LayerMenuActionItem = ({
 
   return (
     <LayerMenuItem
-      color={action.tone === 'danger' ? 'fg.error' : undefined}
       disabled={action.isDisabled}
       hint={action.hint}
       icon={action.icon}
       label={t(action.labelKey, { count: action.labelCount, defaultValue: action.defaultLabel })}
+      tone={action.tone}
       value={action.id}
       onSelect={onSelect}
     />
@@ -1238,55 +1239,47 @@ const LayerMenuActionItem = ({
 };
 
 const LayerMenuItem = ({
-  color,
   disabled,
   hint,
   icon,
   label,
   onSelect,
+  tone,
   value,
 }: {
-  color?: string;
   disabled?: boolean;
   /** A raw hotkey string, formatted per platform and shown as trailing keycaps. */
   hint?: string;
   icon: LucideIcon;
   label: string;
   onSelect: () => void;
+  tone?: 'danger';
   value: string;
 }) => (
-  <Menu.Item color={color} disabled={disabled} value={value} onSelect={onSelect}>
-    <HStack gap="2" minW="0" w="full">
-      <Icon as={icon} boxSize="3.5" color={color ?? 'fg.subtle'} flexShrink={0} />
-      <Text flex="1" fontSize="xs">
-        {label}
-      </Text>
-      {hint ? (
-        <HStack flexShrink={0} gap="0.5">
-          {formatHotkeyForPlatform(hint).map((part) => (
-            <Kbd key={part} size="sm" textTransform="lowercase">
-              {part}
-            </Kbd>
-          ))}
-        </HStack>
-      ) : null}
-    </HStack>
-  </Menu.Item>
+  <MenuActionItem
+    disabled={disabled}
+    hintParts={hint ? formatHotkeyForPlatform(hint) : undefined}
+    icon={icon}
+    label={label}
+    tone={tone}
+    value={value}
+    onSelect={onSelect}
+  />
 );
 
 const LayerMenuIconItem = ({
-  color,
   disabled,
   icon,
   label,
   onSelect,
+  tone,
   value,
 }: {
-  color?: string;
   disabled?: boolean;
   icon: LucideIcon;
   label: string;
   onSelect: () => void;
+  tone?: 'danger';
   value: string;
 }) => (
   <Tooltip
@@ -1298,14 +1291,14 @@ const LayerMenuIconItem = ({
   >
     <Menu.Item
       aria-label={label}
-      color={color}
+      color={tone === 'danger' ? 'fg.error' : undefined}
       disabled={disabled}
       flex="1"
       justifyContent="center"
       value={value}
       onSelect={onSelect}
     >
-      <Icon as={icon} boxSize="4" color={color ?? 'fg'} />
+      <Icon as={icon} boxSize="4" color={tone === 'danger' ? 'fg.error' : 'fg'} />
     </Menu.Item>
   </Tooltip>
 );

@@ -9,7 +9,7 @@ import type { LucideIcon } from 'lucide-react';
 import type { ComponentProps } from 'react';
 
 import { HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
-import { MenuContent, RenameDialog } from '@platform/ui';
+import { MenuActionItem, MenuContent, RenameDialog } from '@platform/ui';
 import { collectSubtree, getDocumentIndex, isOverlayStack } from '@workbench/canvas-engine/api';
 import { publishLayerPanelSelection, useLayerPanelState } from '@workbench/layerPanelState';
 import { useNotify } from '@workbench/useNotify';
@@ -43,6 +43,8 @@ import { createIdentityAdjustment } from './layerOps';
 
 const SUBMENU_POSITIONING = { placement: 'right-start' } as const;
 
+const noop = (): void => undefined;
+
 export type LayerGroupContextMenuEngine = Pick<CanvasEngineHandle, 'document' | 'layers' | 'projectId'>;
 
 type MenuPositioning = ComponentProps<typeof Menu.Root>['positioning'];
@@ -63,15 +65,6 @@ interface LayerGroupContextMenuProps {
   stack: LayerStackKind;
   onClose: () => void;
 }
-
-const MenuRow = ({ icon, label }: { icon: LucideIcon; label: string }) => (
-  <HStack gap="2" minW="0" w="full">
-    <Icon as={icon} boxSize="3.5" color="fg.subtle" flexShrink={0} />
-    <Text flex="1" fontSize="xs">
-      {label}
-    </Text>
-  </HStack>
-);
 
 /** The group menu the panel host opens for one group at a time: naming, grouping, arrangement, and state edits. */
 export const LayerGroupContextMenu = ({
@@ -183,7 +176,6 @@ export const LayerGroupContextMenu = ({
 
   const locked = editingLocked;
   const hideable = isOverlayStack(stack);
-  // Adjustment stacks apply to a group's composited children, raster stack only.
   const adjustable = stack === 'raster';
 
   const handleAddAdjustment = useCallback(
@@ -205,34 +197,53 @@ export const LayerGroupContextMenu = ({
   const items = (
     <MenuContent minW="13rem" py="1">
       {ARRANGE.map((entry) => (
-        <Menu.Item
+        <MenuActionItem
           key={entry.kind}
           disabled={locked || frozen}
+          icon={entry.icon}
+          label={t(`widgets.layers.actions.${entry.key}`)}
           value={entry.kind}
           onSelect={handleArrange(entry.kind, t(`widgets.layers.actions.${entry.key}`))}
-        >
-          <MenuRow icon={entry.icon} label={t(`widgets.layers.actions.${entry.key}`)} />
-        </Menu.Item>
+        />
       ))}
       <Menu.Separator borderColor="border.subtle" />
-      <Menu.Item disabled={locked} value="rename" onSelect={openRename}>
-        <MenuRow icon={PencilIcon} label={t('widgets.layers.actions.rename')} />
-      </Menu.Item>
-      <Menu.Item disabled={locked || !engine || frozen} value="duplicate" onSelect={handleDuplicate}>
-        <MenuRow icon={CopyIcon} label={t('widgets.layers.actions.duplicate')} />
-      </Menu.Item>
-      <Menu.Item disabled={locked || !groupable} value="group" onSelect={handleGroup}>
-        <MenuRow icon={FolderPlusIcon} label={t('widgets.layers.actions.group')} />
-      </Menu.Item>
-      <Menu.Item disabled={locked || frozen || group.isLocked} value="ungroup" onSelect={handleUngroup}>
-        <MenuRow icon={UngroupIcon} label={t('widgets.layers.actions.ungroup')} />
-      </Menu.Item>
+      <MenuActionItem
+        disabled={locked}
+        icon={PencilIcon}
+        label={t('widgets.layers.actions.rename')}
+        value="rename"
+        onSelect={openRename}
+      />
+      <MenuActionItem
+        disabled={locked || !engine || frozen}
+        icon={CopyIcon}
+        label={t('widgets.layers.actions.duplicate')}
+        value="duplicate"
+        onSelect={handleDuplicate}
+      />
+      <MenuActionItem
+        disabled={locked || !groupable}
+        icon={FolderPlusIcon}
+        label={t('widgets.layers.actions.group')}
+        value="group"
+        onSelect={handleGroup}
+      />
+      <MenuActionItem
+        disabled={locked || frozen || group.isLocked}
+        icon={UngroupIcon}
+        label={t('widgets.layers.actions.ungroup')}
+        value="ungroup"
+        onSelect={handleUngroup}
+      />
       {adjustable ? (
         locked || frozen || group.isLocked ? (
-          // Same disabled affordance the sibling items use, not a vanished verb.
-          <Menu.Item disabled value="add-adjustment">
-            <MenuRow icon={SlidersHorizontalIcon} label={t('widgets.layers.menu.addAdjustment')} />
-          </Menu.Item>
+          <MenuActionItem
+            disabled
+            icon={SlidersHorizontalIcon}
+            label={t('widgets.layers.menu.addAdjustment')}
+            value="add-adjustment"
+            onSelect={noop}
+          />
         ) : (
           <Menu.Root positioning={SUBMENU_POSITIONING}>
             <Menu.TriggerItem aria-label={t('widgets.layers.menu.addAdjustment')}>
@@ -248,9 +259,13 @@ export const LayerGroupContextMenu = ({
               <Menu.Positioner>
                 <MenuContent minW="13rem" py="1">
                   {ADJUSTMENT_ADD_ITEMS.map((item) => (
-                    <Menu.Item key={item.type} value={`add-${item.type}`} onSelect={handleAddAdjustment(item.type)}>
-                      <MenuRow icon={item.icon} label={t(item.labelKey)} />
-                    </Menu.Item>
+                    <MenuActionItem
+                      key={item.type}
+                      icon={item.icon}
+                      label={t(item.labelKey)}
+                      value={`add-${item.type}`}
+                      onSelect={handleAddAdjustment(item.type)}
+                    />
                   ))}
                 </MenuContent>
               </Menu.Positioner>
@@ -259,27 +274,38 @@ export const LayerGroupContextMenu = ({
         )
       ) : null}
       <Menu.Separator borderColor="border.subtle" />
-      <Menu.Item disabled={locked} value="enabled" onSelect={handleToggleEnabled}>
-        <MenuRow
-          icon={group.isEnabled ? CircleOffIcon : CircleIcon}
-          label={t(group.isEnabled ? 'widgets.layers.actions.disableGroup' : 'widgets.layers.actions.enableGroup')}
-        />
-      </Menu.Item>
+      <MenuActionItem
+        disabled={locked}
+        icon={group.isEnabled ? CircleOffIcon : CircleIcon}
+        label={t(group.isEnabled ? 'widgets.layers.actions.disableGroup' : 'widgets.layers.actions.enableGroup')}
+        value="enabled"
+        onSelect={handleToggleEnabled}
+      />
       {hideable ? (
-        <Menu.Item disabled={locked} value="hidden" onSelect={handleToggleHidden}>
-          <MenuRow icon={group.isHidden ? EyeIcon : EyeOffIcon} label={t('widgets.layers.actions.toggleHidden')} />
-        </Menu.Item>
-      ) : null}
-      <Menu.Item disabled={locked} value="lock" onSelect={handleToggleLock}>
-        <MenuRow
-          icon={group.isLocked ? LockOpenIcon : LockIcon}
-          label={t(group.isLocked ? 'widgets.layers.actions.unlock' : 'widgets.layers.actions.lock')}
+        <MenuActionItem
+          disabled={locked}
+          icon={group.isHidden ? EyeIcon : EyeOffIcon}
+          label={t('widgets.layers.actions.toggleHidden')}
+          value="hidden"
+          onSelect={handleToggleHidden}
         />
-      </Menu.Item>
+      ) : null}
+      <MenuActionItem
+        disabled={locked}
+        icon={group.isLocked ? LockOpenIcon : LockIcon}
+        label={t(group.isLocked ? 'widgets.layers.actions.unlock' : 'widgets.layers.actions.lock')}
+        value="lock"
+        onSelect={handleToggleLock}
+      />
       <Menu.Separator borderColor="border.subtle" />
-      <Menu.Item color="fg.error" disabled={locked || holdsLocked} value="delete" onSelect={handleDelete}>
-        <MenuRow icon={Trash2Icon} label={t('widgets.layers.actions.delete')} />
-      </Menu.Item>
+      <MenuActionItem
+        disabled={locked || holdsLocked}
+        icon={Trash2Icon}
+        label={t('widgets.layers.actions.delete')}
+        tone="danger"
+        value="delete"
+        onSelect={handleDelete}
+      />
     </MenuContent>
   );
 
