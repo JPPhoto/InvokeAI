@@ -9,7 +9,7 @@ import { Box, Text } from '@chakra-ui/react';
 import { DndContext, DragOverlay, pointerWithin, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { useMountEffect } from '@platform/react/useMountEffect';
-import { usePreservedScrollOffset } from '@platform/react/usePreservedScrollOffset';
+import { Scrollable } from '@platform/ui/Scrollable';
 import { getDocumentIndex, getDocumentNode, lookupDocumentNodeState } from '@workbench/canvas-engine/api';
 import {
   publishLayerPanelSelection,
@@ -169,7 +169,6 @@ export const LayersTree = ({
   const commitPrepared = usePreparedCommit(engine);
   const propertiesRequest = useCurrentLayerPropertiesRequest();
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  usePreservedScrollOffset(scrollRef);
   const [scrollTop, setScrollTop] = useState(0);
   const [surface, setSurface] = useState<LayerSurfaceRequest | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -688,6 +687,10 @@ export const LayersTree = ({
       treeOwnsFocus.current = false;
     }
   }, []);
+  const scrollViewportProps = useMemo(
+    () => ({ onBlurCapture: handleBlurCapture, onFocusCapture: handleFocusCapture, onScroll: handleScroll }),
+    [handleBlurCapture, handleFocusCapture, handleScroll]
+  );
   useLayoutEffect(() => {
     const host = scrollRef.current;
     if (!host || !focusKey || !treeOwnsFocus.current || renamingId !== null) {
@@ -1065,17 +1068,9 @@ export const LayersTree = ({
       onDragOver={handleDragOver}
       onDragStart={handleDragStart}
     >
-      <Box flex="1" minH="0" position="relative">
-        <Box
-          ref={scrollRef}
-          h="full"
-          overflowX="hidden"
-          overflowY="auto"
-          position="relative"
-          onBlurCapture={handleBlurCapture}
-          onFocusCapture={handleFocusCapture}
-          onScroll={handleScroll}
-        >
+      {/* `overflow=hidden` clips the pinned header's push-out translate at the tree's edge. */}
+      <Box flex="1" minH="0" overflow="hidden" position="relative">
+        <Scrollable h="full" viewportProps={scrollViewportProps} viewportRef={scrollRef}>
           <Box
             aria-label={t('widgets.layers.tree')}
             aria-multiselectable="true"
@@ -1178,7 +1173,7 @@ export const LayersTree = ({
               </Box>
             ) : null}
           </Box>
-        </Box>
+        </Scrollable>
         {pinnedHeader ? (
           <Box
             borderBottomWidth="1px"

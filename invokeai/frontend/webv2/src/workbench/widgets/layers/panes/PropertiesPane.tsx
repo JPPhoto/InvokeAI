@@ -71,8 +71,8 @@ const ConnectedProperties = ({
     [
       ['geometry', tool.geometry],
       ['intensity', tool.intensity],
-      ['color', tool.color],
       ['modes', tool.modes],
+      ['color', tool.color],
       ['more', tool.more],
     ] as const
   ).filter((entry): entry is [keyof typeof REGION_LABEL_KEYS, NonNullable<(typeof entry)[1]>] => !!entry[1]);

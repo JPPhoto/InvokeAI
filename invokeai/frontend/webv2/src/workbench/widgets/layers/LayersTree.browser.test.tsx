@@ -346,7 +346,7 @@ describe('LayersTree virtualization', () => {
     expect(thumbnailRequests).not.toHaveBeenCalled();
 
     resetLayerRowCommits();
-    const scroller = host!.querySelector<HTMLElement>('[role="tree"]')!.parentElement!;
+    const scroller = host!.querySelector<HTMLElement>('[role="tree"]')!.closest<HTMLElement>('[data-part="viewport"]')!;
     await act(() => {
       scroller.scrollTop = 7;
       scroller.dispatchEvent(new Event('scroll'));
@@ -434,7 +434,7 @@ describe('LayersTree keyboard and accessibility', () => {
     await act(() => userEvent.keyboard('{End}'));
     await settle();
     expect(document.activeElement).toBe(treeitem('Layer 1999'));
-    const scroller = host!.querySelector<HTMLElement>('[role="tree"]')!.parentElement!;
+    const scroller = host!.querySelector<HTMLElement>('[role="tree"]')!.closest<HTMLElement>('[data-part="viewport"]')!;
     await act(() => {
       scroller.scrollTop = 0;
       scroller.dispatchEvent(new Event('scroll'));
@@ -501,7 +501,7 @@ describe('LayersTree selection, surfaces and structure', () => {
 
   it('reveals a primary that changed outside the panel once, even inside a collapsed stack', async () => {
     await renderTree([layerContract('c1', 'control', { name: 'Control' }), ...manyLayers(2000)]);
-    const scroller = host!.querySelector<HTMLElement>('[role="tree"]')!.parentElement!;
+    const scroller = host!.querySelector<HTMLElement>('[role="tree"]')!.closest<HTMLElement>('[data-part="viewport"]')!;
     expect(scroller.scrollTop).toBe(0);
     await act(() => dispatchExternal({ id: 'l1500', type: 'setCanvasSelectedLayer' }));
     await settle();
@@ -542,7 +542,7 @@ describe('LayersTree selection, surfaces and structure', () => {
 
   it('scrolls the list while a drag rests in the edge band and asks the model once per target', async () => {
     await renderTree(manyLayers(200));
-    const scroller = host!.querySelector<HTMLElement>('[role="tree"]')!.parentElement!;
+    const scroller = host!.querySelector<HTMLElement>('[role="tree"]')!.closest<HTMLElement>('[data-part="viewport"]')!;
     const first = host!.querySelector<HTMLElement>('[data-layer-row-id="l0"]')!;
     const start = centre(first);
     const rect = scroller.getBoundingClientRect();
