@@ -1187,11 +1187,7 @@ export const createDocumentModel = (
     return { entry, layer: entry.node };
   };
 
-  /**
-   * The unlocked node a config patch may target: leaves through their own
-   * arms, and RASTER-stack groups through the 'group' arm (an overlay group
-   * composites coverage, not color — its adjustments patch is refused).
-   */
+  /** The unlocked config-patch target: a leaf, or a RASTER-stack group through the 'group' arm. */
   const editableConfigNode = (
     id: string,
     layerType: CanvasLayerConfigPatch['layerType']

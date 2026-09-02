@@ -207,10 +207,8 @@ export class MergeLayerController {
       ) {
         return 'not-ready';
       }
-      // Leaf identity alone misses two mid-await edits this feature introduces:
-      // an ancestor group's STACK changing (leaf objects untouched), and a
-      // re-parent in/out of an adjusted group that keeps the flat order. The
-      // scope plan folds both, so compare it against the pre-export plan.
+      // Leaf identity misses a mid-await ancestor-stack edit or an order-preserving
+      // re-parent; the scope plan folds both.
       const scopes = planGroupAdjustmentScopes(contributorLeaves, collectAdjustedGroups(document));
       const liveScopes = planGroupAdjustmentScopes(liveLeaves, collectAdjustedGroups(liveDocument));
       if (JSON.stringify(liveScopes) !== JSON.stringify(scopes)) {
@@ -230,10 +228,8 @@ export class MergeLayerController {
       const context = pixels.ctx;
       context.setTransform(1, 0, 0, 1, 0, 0);
       context.clearRect(0, 0, rect.width, rect.height);
-      // Contributors inside an adjusted group composite through an isolated
-      // buffer with the group's stack applied, exactly as the screen draws
-      // them — merged pixels must reproduce the screen, and a per-leaf bake
-      // cannot under member opacity/blending.
+      // Merged pixels must reproduce the screen; a per-leaf bake cannot under
+      // member opacity/blending.
       const drawMerged = (
         target: RasterSurface['ctx'],
         from: number,

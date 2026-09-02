@@ -192,13 +192,9 @@ export interface CompositeOptions {
   /** Optional deterministic render counters; omitted in the normal zero-overhead path. */
   diagnostics?: CanvasDiagnostics | null;
   /**
-   * Returns an adjusted GROUP's document-space composite (its members drawn,
-   * the group's stack applied), or `null` when the group currently has no
-   * drawable content. The engine wires a memoizing {@link
-   * import('./groupSurfaceCache').GroupSurfaceCache}. Members named in
-   * `excludeIds` are left out of the composite so the caller can draw them
-   * separately (pixel-edit skips, filter previews). Absent ⇒ group stacks are
-   * ignored and members draw flat (a bare test call).
+   * An adjusted group's document-space composite (stack applied), `null` when
+   * it has no drawable content; `excludeIds` members are left out for the
+   * caller to draw separately. Absent ⇒ members draw flat.
    */
   groupSurface?:
     | ((
@@ -567,11 +563,7 @@ export const compositeDocument = (
     isolationLayerId: opts.isolationLayerId ?? null,
     showOverlayStacks: ALL_OVERLAY_STACKS_SHOWN,
   });
-  // Adjusted-group scopes: their members composite through an isolated,
-  // stack-adjusted surface instead of drawing flat. Isolation mode inspects
-  // raw members, so scopes are bypassed while it is active; without a
-  // provider (bare test calls, color sampling in minimal harnesses) members
-  // draw flat too.
+  // Isolation mode inspects raw members, so scopes are bypassed while active.
   const scopes =
     opts.groupSurface && !isIsolated(opts) ? planGroupAdjustmentScopes(plan.leaves, collectAdjustedGroups(doc)) : [];
   let scopeIndex = 0;
@@ -605,10 +597,7 @@ export const compositeDocument = (
     if (scope && index === scope.start) {
       const members = plan.leaves.slice(scope.start, scope.end);
       const matrices = members.map((member) => getEffectiveLayerMatrix(member, opts));
-      // Members the caller draws through other channels are left out of the
-      // composite: a pixel-edit skip target, and filter-preview targets (the
-      // preview replaces the member's pixels and draws separately, without the
-      // group stack — a transient divergence that ends with the operation).
+      // Skip targets and filter previews draw separately, without the group stack.
       const excluded = new Set<string>();
       for (const member of members) {
         if (member.id === opts.skipLayerId || opts.layerPreviews?.has(member.id)) {
@@ -624,9 +613,7 @@ export const compositeDocument = (
         ctx.drawImage(result.surface.canvas, result.rect.x, result.rect.y);
         ctx.restore();
         opts.diagnostics?.increment('layersDrawn');
-        // Excluded members and in-flight floats still draw on top. A float
-        // whose member IS in the composite draws alone — its member's pixels
-        // are already in the group surface.
+        // A float whose member is in the composite draws alone.
         for (const member of members) {
           if (member.id === opts.skipLayerId) {
             continue;
@@ -641,7 +628,6 @@ export const compositeDocument = (
         scopeIndex += 1;
         continue;
       }
-      // No drawable content (or no cache yet): fall through to flat drawing.
       scopeIndex += 1;
     }
     const leaf = plan.leaves[index]!;

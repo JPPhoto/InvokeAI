@@ -1,20 +1,9 @@
 /**
- * Document-space composites of adjusted groups, memoized per group. The
- * screen compositor draws one cached surface per adjusted group instead of
- * the group's members, so pans and zooms cost one blit while member edits
- * rebuild only the owning group's surface.
- *
- * The cache key folds in everything the pixels depend on: the group's stack,
- * nested scopes, and every drawn member's cache version, appearance, and
- * effective matrix (transform overrides included — a transform session inside
- * an adjusted group rebuilds per tick, which is correct, just not free).
- *
- * Accepted fidelity tradeoff: the surface is document-resolution, so a
- * transformed member resamples twice (into doc space, then through the view),
- * and zoom > 100% upscales the group from doc resolution while flat layers
- * sample their caches in one pass. Buying per-frame LUT application on the
- * viewport back with per-edit memoization is the point; sharper zoomed-in
- * group rendering is a measured follow-up, not a default.
+ * Per-group memoized document-space composites of adjusted groups. Keyed on
+ * the scope shape plus every drawn member's cache version, appearance, and
+ * effective matrix (so a transform session inside an adjusted group rebuilds
+ * per tick). Accepted tradeoff: document resolution, so transformed members
+ * resample twice and zoom > 100% upscales the group surface.
  */
 
 import type { CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
@@ -59,7 +48,6 @@ export interface GroupSurfaceCache {
 
 const matKey = (m: Mat2d): string => `${m.a},${m.b},${m.c},${m.d},${m.e},${m.f}`;
 
-/** The stack surface budget: an adjusted group holds one doc-space surface. */
 export const createGroupSurfaceCache = (deps: GroupSurfaceDeps): GroupSurfaceCache => {
   const cache = new Map<string, { key: string; result: GroupSurfaceResult }>();
 
@@ -83,10 +71,7 @@ export const createGroupSurfaceCache = (deps: GroupSurfaceDeps): GroupSurfaceCac
     return `${scopeShapeKey(scope)}|${memberKeys.join('|')}|x:${[...excludeIds].sort().join(',')}`;
   };
 
-  /**
-   * Draws `[from, to)` (absolute plan indices; list order = bottom first) onto
-   * `ctx`. `baseIndex` is the absolute index of `members[0]`.
-   */
+  /** Draws `[from, to)` (absolute plan indices, bottom first); `baseIndex` = absolute index of `members[0]`. */
   const drawRange = (
     ctx: RasterSurface['ctx'],
     view: Mat2d,
@@ -102,7 +87,6 @@ export const createGroupSurfaceCache = (deps: GroupSurfaceDeps): GroupSurfaceCac
     for (let i = from; i < to;) {
       const child = childIndex < children.length ? children[childIndex]! : null;
       if (child && i >= child.start && i < child.end) {
-        // Nested adjusted group: isolate it exactly like the parent.
         const nested = build(child, members, memberMatrices, excludeIds, baseIndex);
         if (nested) {
           ctx.save();
@@ -144,7 +128,6 @@ export const createGroupSurfaceCache = (deps: GroupSurfaceDeps): GroupSurfaceCac
     excludeIds: ReadonlySet<string>,
     baseIndex: number
   ): GroupSurfaceResult | null => {
-    // Document-space bounds of the drawn members.
     let bounds: Rect | null = null;
     for (let i = scope.start; i < scope.end; i += 1) {
       const leaf = members[i - baseIndex]!;

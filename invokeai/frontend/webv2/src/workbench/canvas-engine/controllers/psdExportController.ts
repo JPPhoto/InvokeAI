@@ -93,12 +93,9 @@ export class PsdExportController {
         // The raster tree as it stands, minus leaves with nothing captured; the planner derives
         // effective visibility from the own flags, the same way Photoshop will.
         let missing: string | null = null;
-        // PSD has no representation for a GROUP's adjustment stack, so each
-        // enclosing stack is baked into every descendant leaf (own stack
-        // first, then innermost ancestor outward). Exact for opaque
-        // source-over members; under member opacity/blending it is the
-        // accepted approximation — and the merged preview flattens the same
-        // baked pixels, so the file stays self-consistent.
+        // PSD cannot represent a group stack: bake enclosing stacks into each
+        // leaf (own first, then innermost outward). Approximate under member
+        // opacity/blending; the merged preview flattens the same baked pixels.
         const toInputs = (
           nodes: readonly CanvasNodeContract[],
           ancestorStacks: readonly CanvasAdjustmentsContract[] = []

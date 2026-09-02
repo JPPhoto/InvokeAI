@@ -38,12 +38,7 @@ export interface CompositeLayerRef {
 export interface CompositeEntry {
   bbox: Rect;
   layers: readonly CompositeLayerRef[];
-  /**
-   * Adjusted-group isolation scopes over `layers` (index ranges, top-first,
-   * nested). A scope's members composite into an isolated buffer, the group's
-   * stack applies to the buffer, and the buffer composites onward — the
-   * pixels a pass-through walk cannot produce. Absent ⇒ fully pass-through.
-   */
+  /** Adjusted-group isolation scopes over `layers` (top-first, nested). Absent ⇒ fully pass-through. */
   groupScopes?: readonly GroupAdjustmentScope[];
 }
 
@@ -250,12 +245,7 @@ export const renderRasterComposite = async (
     ctx.restore();
   };
 
-  /**
-   * Draws `[start, end)` bottom→top onto `ctx`. A scope's members render into
-   * an isolated bbox-sized buffer first, the group's stack applies to that
-   * composite, and the buffer lands source-over — the group-adjustment
-   * semantics a per-leaf bake cannot reproduce under member opacity/blending.
-   */
+  /** Draws `[start, end)` bottom→top; a scope isolates into a buffer, applies its stack, lands source-over. */
   const renderRange = async (
     ctx: Ctx,
     start: number,

@@ -531,9 +531,8 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     return rasterController.getAdjustedSurface(layer, entry);
   };
 
-  // Memoized document-space composites of adjusted GROUPS. Members draw
-  // through the guarded `getAdjustedSurface` above, so a member's own stack
-  // (and the pixel-edit double-apply guard) behave identically inside a group.
+  // Members draw through the guarded `getAdjustedSurface`, so the pixel-edit
+  // double-apply guard holds inside groups too.
   const groupSurfaces = createGroupSurfaceCache({
     createSurface: (width, height) => backend.createSurface(width, height),
     getAdjustedSurface: (layer, entry) => getAdjustedSurface(layer, entry),
@@ -550,8 +549,6 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
    */
   const syncMemoryBaselines = (): void => {
     rasterController.memory.setBaseBytes(layerCache.byteSize());
-    // Group surfaces are derived pixels too: they must count against the same
-    // budget or an adjusted group's doc-space composite is invisible memory.
     rasterController.memory.setDerivedBytes(derivedSurfaceCache.byteSize() + groupSurfaces.byteSize());
   };
 
@@ -1027,16 +1024,10 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   }
 
   /**
-   * A one-shot color sample requested from outside the canvas — the color
-   * picker's eyedropper button. While one is pending, the color-picker tool
-   * hands its samples here instead of writing the brush color: press and drag
-   * stash the latest color (`sampledHex`), and the release settles the promise
-   * and restores the tool that was active beforehand. Settling on release, not
-   * press, matters — the pointer gesture is already over, so a caller that
-   * commits the sample through the document transaction seam is not refused as
-   * `gesture-active`. Cancelled (resolving `null`) by Escape, by any other tool
-   * switch, and by teardown, so the promise the caller is awaiting can never
-   * dangle.
+   * A one-shot sample claim from a picker's eyedropper button. Press/drag
+   * stash `sampledHex`; the RELEASE settles (the gesture is over, so the
+   * caller may commit structurally). Escape, tool switch, and teardown settle
+   * `null`, so the awaited promise never dangles.
    */
   let pendingColorSample: {
     previousToolId: ToolId;
@@ -1586,14 +1577,11 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       scheduler.invalidate({ all: true });
     },
     onLayersRecomposite: (ids) => {
-      // An ancestor group's stack changed: leaf pixels and caches are intact,
-      // and the group surface rebuilds itself off its key. Only recomposite.
       scheduler.invalidate({ layers: ids });
     },
     onLayersChanged: (ids, sourceChangedIds) => {
       const cleanup = createCleanupAccumulator();
-      // A removal that deletes a group together with its leaves reports leaf
-      // ids here (not onLayerOrderChanged), so the group cache prunes on both.
+      // A group deleted with its leaves reports here, not onLayerOrderChanged.
       {
         const doc = mirror.getDocument();
         cleanup.run(() => groupSurfaces.prune(doc ? new Set(getDocumentIndex(doc).byId.keys()) : new Set()));
@@ -1865,12 +1853,9 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   };
 
   /**
-   * Arms the eyedropper for one sample and resolves with the picked `#rrggbb`,
-   * or `null` if the user cancels. Backs the color picker's eyedropper button,
-   * which reads the composited document rather than the screen (and so works
-   * outside Chromium, and sees through the window chrome). The promise settles
-   * on pointer release, after the sampling gesture ends, so the caller may
-   * commit the color through the document transaction seam synchronously.
+   * Arms the eyedropper for one sample; resolves `#rrggbb` on pointer release
+   * (after the gesture, so the caller may commit structurally) or `null` on
+   * cancel. Reads the composited document, not the screen.
    */
   const requestColorSample = (): Promise<string | null> => {
     // A second request supersedes the first; the earlier caller gets a cancel.

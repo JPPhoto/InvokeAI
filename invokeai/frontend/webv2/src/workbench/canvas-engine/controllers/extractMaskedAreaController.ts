@@ -64,11 +64,7 @@ export interface ExtractMaskedAreaControllerOptions {
   ) => void;
 }
 
-/**
- * The raster forest reduced to `keep` leaves with the GROUP topology intact:
- * an adjusted group's stack must apply to the extracted composite exactly as
- * it applies on screen, so groups cannot be flattened away here.
- */
+/** The raster forest reduced to `keep` leaves, groups intact so their stacks still apply. */
 const filterRasterForest = (nodes: readonly CanvasNodeContract[], keep: ReadonlySet<string>): CanvasNodeContract[] =>
   nodes.flatMap((node): CanvasNodeContract[] => {
     if (isGroupNode(node)) {

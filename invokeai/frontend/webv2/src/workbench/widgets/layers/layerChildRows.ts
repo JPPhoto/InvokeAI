@@ -133,7 +133,6 @@ const adjustmentOwnerNode = (document: CanvasDocumentContractV3, id: string) => 
   return node && (node.type === 'raster' || node.type === 'group') ? node : null;
 };
 
-/** The whole-stack patch both adjustment owners share; the arm follows the owner's type. */
 const adjustmentsPatch = (
   ownerType: 'raster' | 'group',
   id: string,

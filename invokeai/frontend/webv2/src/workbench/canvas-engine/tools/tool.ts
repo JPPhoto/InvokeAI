@@ -173,27 +173,15 @@ export interface ToolContext {
    * engine-standalone behavior. Absent in minimal test harnesses.
    */
   resolveColorSample?(hex: string): boolean;
-  /**
-   * The compositor providers that make color sampling WYSIWYG (layer and
-   * group adjustment stacks, display effects). Absent in minimal harnesses;
-   * the sampler then reads raw cached pixels.
-   */
+  /** Compositor providers that make sampling WYSIWYG; absent ⇒ raw cached pixels. */
   sampleProviders?: Pick<CompositeOptions, 'adjustedSurface' | 'derivedSurfaces' | 'groupSurface'>;
   /**
-   * Settles a pending one-shot sample request with the latest color the
-   * gesture stashed via `resolveColorSample`. The color-picker tool calls this
-   * on pointer up — never mid-gesture — so the requester's promise resolves
-   * after the gesture ends and a structural commit in its continuation is not
-   * refused as `gesture-active`. No-op without a pending request or a stashed
-   * color.
+   * Settles a pending one-shot sample with the gesture's stashed color. Called
+   * on pointer up only, so a structural commit in the requester's continuation
+   * is not refused as `gesture-active`.
    */
   commitColorSample?(): void;
-  /**
-   * Drops the color a pending sample request's gesture has stashed, without
-   * settling the request. The color-picker tool calls it when a gesture is
-   * cancelled and at the start of each fresh press, so a dead gesture's color
-   * can never be committed by a later release that sampled nothing.
-   */
+  /** Drops the stashed sample (gesture cancel, fresh press) without settling the request. */
   discardColorSample?(): void;
   /**
    * Re-evaluates the active tool's CSS cursor and applies it to the input

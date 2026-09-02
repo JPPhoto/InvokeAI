@@ -1,13 +1,7 @@
 /**
- * Group adjustment scopes: which contiguous runs of a flat drawn-leaf list
- * must composite through an isolated buffer so a group's adjustment stack can
- * apply to the composite (not to each member). Both renderers — the screen
- * compositor and the export/generation raster composite — consume the same
- * scope shape, so their isolation semantics cannot drift.
- *
- * The planners rely on one structural fact: any list derived from the
- * document's preorder (or its reversal) keeps every subtree contiguous, so a
- * group's drawn members always form one run.
+ * Nested contiguous [start, end) scopes over a flat drawn list, one per
+ * adjusted group; both renderers consume the same shape. Relies on preorder
+ * (or its reversal) keeping every subtree contiguous.
  */
 
 import type { CanvasAdjustmentsContract, CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
@@ -27,11 +21,7 @@ export interface GroupAdjustmentScope {
   readonly children: readonly GroupAdjustmentScope[];
 }
 
-/**
- * The raster-stack groups whose adjustment stacks contribute (enabled group,
- * non-identity stack). Disabled groups drop out of drawing entirely upstream;
- * an identity stack composites pass-through by definition.
- */
+/** The raster-stack groups whose stacks contribute (non-identity; disabled groups never draw). */
 export const collectAdjustedGroups = (
   document: CanvasDocumentContractV3
 ): ReadonlyMap<string, CanvasAdjustmentsContract> => {
@@ -56,11 +46,7 @@ interface OpenScope {
   children: GroupAdjustmentScope[];
 }
 
-/**
- * Plans the nested scopes covering `items` (a flat drawn list; each item
- * carries its ancestor chain outermost-first). Items outside every adjusted
- * group produce no scope. Returns outermost scopes in list order.
- */
+/** Plans nested scopes over `items` (ancestor chains outermost-first); outermost scopes in list order. */
 export const planGroupAdjustmentScopes = (
   items: readonly { readonly parentIds: readonly string[] }[],
   adjusted: ReadonlyMap<string, CanvasAdjustmentsContract>
@@ -82,7 +68,6 @@ export const planGroupAdjustmentScopes = (
 
   items.forEach((item, index) => {
     const chain = item.parentIds.filter((id) => adjusted.has(id));
-    // Keep the still-matching prefix of open scopes, close the rest, open the new tail.
     let shared = 0;
     while (shared < open.length && shared < chain.length && open[shared]!.id === chain[shared]) {
       shared += 1;

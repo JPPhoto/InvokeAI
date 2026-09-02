@@ -201,11 +201,7 @@ export interface LayerContextAction {
 export type LayerConfigPatchKind = 'control-transparency-effect' | 'regional-auto-negative';
 
 const ALL_LAYER_TYPES = ['raster', 'control', 'inpaint_mask', 'regional_guidance'] as const;
-/**
- * The one add-adjustment catalog: the leaf context menu derives its `add-*`
- * actions from it and the group context menu renders it directly, so a new
- * entry type lands in both menus from one edit.
- */
+/** The one add-adjustment catalog; the leaf action registry and the group menu both render from it. */
 export const ADJUSTMENT_ADD_ITEMS: readonly {
   readonly defaultLabel: string;
   readonly icon: LucideIcon;

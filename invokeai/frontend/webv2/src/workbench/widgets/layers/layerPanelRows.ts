@@ -32,11 +32,7 @@ export type PanelRow =
       /** Projected child rows the node owns; `0` for bare leaves and rowless groups. */
       readonly childCount: number;
       readonly childrenExpanded: boolean;
-      /**
-       * The node's ARIA position among the parent group's COMBINED children
-       * (modifier rows first, then nodes) when the parent owns modifier rows;
-       * equal to the tree row's own values otherwise.
-       */
+      /** Position among the parent group's COMBINED children (modifier rows first, then nodes). */
       readonly ariaPosInSet: number;
       readonly ariaSetSize: number;
     }
@@ -87,15 +83,10 @@ export const flattenPanelRows = (
       stack,
     });
     if (!collapsed) {
-      // A group whose parent owns modifier rows shifts its node children into
-      // one COMBINED ARIA set (rows first, then nodes) so AT hears a single
-      // coherent set at that level.
       const rowOffsetByParent = new Map<string, number>();
       for (const row of stack.rows) {
         const isGroup = row.vm.kind === 'group';
-        // A group's modifier rows fold WITH its subtree: `aria-expanded`
-        // reflects the subtree, so nothing may render beneath a collapsed
-        // group. Leaves keep their separate per-owner fold.
+        // A group's rows fold WITH its subtree, keeping aria-expanded truthful.
         const children = isGroup && !row.expanded ? [] : (childRows?.rowsFor(row) ?? []);
         const childrenExpanded = children.length > 0 && (isGroup || !childRows!.collapsedLayerIds.has(row.id));
         const offset = rowOffsetByParent.get(row.vm.parentId ?? '') ?? 0;
@@ -186,7 +177,6 @@ export const navigateTree = (
         return null;
       }
       const { row } = current;
-      // A group expands its subtree before its modifier rows; a leaf has only rows.
       if (row.vm.kind === 'group' && row.vm.childCount > 0 && !row.expanded) {
         return { expand: row.id, expanded: true };
       }
@@ -210,8 +200,6 @@ export const navigateTree = (
         return { focus: current.child.layerId };
       }
       const { row } = current;
-      // Mirror of ArrowRight. A group's rows fold with its subtree, so only a
-      // LEAF's rows fold separately here.
       if (row.vm.kind !== 'group' && current.childrenExpanded) {
         return { expandChildren: row.id, expanded: false };
       }

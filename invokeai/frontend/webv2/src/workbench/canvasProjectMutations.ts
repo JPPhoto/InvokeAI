@@ -513,13 +513,7 @@ const patchNode = (node: CanvasNodeContract, patch: CanvasLayerBasePatch): Canva
   return { ...node, ...rest, transform: transform ? { ...node.transform, ...transform } : node.transform };
 };
 
-/**
- * The reducer-level half of the group-adjustments invariant: a group config
- * applies only to RASTER-stack groups (the model refuses earlier with a
- * reason; unvalidated dispatchers — previews, replays — must still be unable
- * to stamp a contract-invalid overlay-group stack). Mirrors the
- * `isHideableNode` guard on `setCanvasLayersHidden`.
- */
+/** Group configs apply only to raster-stack groups, even from unvalidated dispatchers (previews, replays). */
 const isConfigTargetValid = (
   document: CanvasDocumentContractV3,
   id: string,

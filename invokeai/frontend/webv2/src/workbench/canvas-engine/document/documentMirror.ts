@@ -27,11 +27,9 @@ export interface DocumentMirrorCallbacks {
    */
   onLayersChanged(changed: string[], sourceChanged: string[]): void;
   /**
-   * Leaves whose rendered contribution changed ONLY because an ancestor
-   * group's adjustment stack did: their pixels, sources, and effective flags
-   * are untouched, so the engine must recomposite them but must NOT run the
-   * destructive reactions `onLayersChanged` carries (float and pixel-edit
-   * cancellation). Optional so minimal harnesses need not care.
+   * Leaves changed ONLY by an ancestor group's adjustment stack: recomposite
+   * without `onLayersChanged`'s destructive reactions (float and pixel-edit
+   * cancellation).
    */
   onLayersRecomposite?(ids: string[]): void;
   /** The forests were restructured without any leaf changing: recomposite with the new order. */
@@ -97,8 +95,7 @@ const diffForests = (prev: CanvasDocumentIndex, next: CanvasDocumentIndex): Fore
   const changed = new Set<string>();
   const sourceChanged = new Set<string>();
   const recompositeOnly = new Set<string>();
-  // A group whose adjustment stack changed re-renders every leaf beneath it.
-  // `next.nodes` is preorder, so these ids are collected before their leaves.
+  // Preorder: a changed group's id is collected before its leaves are visited.
   const adjustedGroups = new Set<string>();
   let restructured = false;
   for (const entry of next.nodes) {

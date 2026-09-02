@@ -54,9 +54,6 @@ export const sampleDocumentColor = (
   // Reuse the canonical compositor so sampling shares its layer ordering,
   // cache-origin placement, transforms, blend modes, and display effects.
   // Omitting a checkerboard tile and staged preview keeps empty space transparent.
-  // The providers make the sample WYSIWYG: layer and group adjustment stacks
-  // apply exactly as the screen draws them. Absent (minimal harnesses), the
-  // sample reads raw cached pixels.
   compositeDocument(scratch, doc, layers, view, { backend, ...providers });
 
   const { data } = scratch.ctx.getImageData(0, 0, 1, 1);
