@@ -68,6 +68,8 @@ export interface StrokeSessionConfig {
   pressureOpacity: boolean;
   /** Fill color (brush only; ignored for the eraser). */
   color: string;
+  /** Edge hardness in [0, 1]: 1 keeps the crisp hot path; lower feathers the silhouette. */
+  hardness: number;
   /**
    * Cache composite operation: `source-over` (brush), `destination-out` (eraser),
    * or `source-atop` (transparency-locked brush — colour only where the layer is
@@ -328,6 +330,11 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
   // the inverse (exact under rotation and uniform scale, the geometric mean
   // under non-uniform — the stroke then stretches with the layer's own pixels).
   const localSize = size * getScale(toLocal);
+  // Blurring the one filled silhouette keeps soft edges uniform and non-compounding.
+  // Sub-quarter-pixel sigma is invisible; treating it as crisp keeps the banded hot path.
+  const rawSigma = ((1 - Math.min(1, Math.max(0, config.hardness))) * localSize) / 4;
+  const featherSigma = rawSigma < 0.25 ? 0 : rawSigma;
+  const featherBleed = Math.ceil(featherSigma * 3);
   const clipMaskLocalRect = clipMask ? roundOut(transformBounds(toLocal, clipMask.rect)) : null;
   const clipRectLocal = clipRect ? roundOut(transformBounds(toLocal, clipRect)) : null;
   // Axis-aligned layers get the rect clip for free from the region clamp; a
@@ -340,6 +347,8 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
   };
   // A per-frame scratch surface for the filled stroke, sized to the paint region.
   let stroke: RasterSurface | null = null;
+  // The feathered copy of the silhouette; allocated only when hardness < 1.
+  let soft: RasterSurface | null = null;
 
   const points: StrokeSamplePoint[] = [];
   // `beforeImageData` holds the pristine (pre-stroke) pixels of `accumRect`, in
@@ -360,12 +369,21 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
     return stroke;
   };
 
+  const ensureSoft = (w: number, h: number): RasterSurface => {
+    if (!soft) {
+      soft = ctx.backend.createSurface(w, h);
+    } else if (soft.width < w || soft.height < h) {
+      soft.resize(Math.max(soft.width, w), Math.max(soft.height, h));
+    }
+    return soft;
+  };
+
   const paint = (last: boolean): void => {
     if (points.length === 0) {
       return;
     }
     const { bounds, path, polygon } = strokeToPath(points, { last, size: localSize, thinning }, ctx.createPath2D);
-    let dirty: Rect | null = roundOut(bounds);
+    let dirty: Rect | null = roundOut(featherBleed > 0 ? expand(bounds, featherBleed) : bounds);
     // Selection clip: only the region inside the selection can ever change, so
     // bound the dirty/growth region to the mask extent (and skip empty results).
     if (clipMaskLocalRect) {
@@ -433,7 +451,8 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
     //    would only cost time — and rewriting the whole accumulated region every
     //    frame is what made a long stroke get slower the longer it got.
     const moved = previousPolygon ? changedVertexBounds(previousPolygon, polygon) : null;
-    const touched = previousRect && moved ? intersect(roundOut(expand(moved, CHANGE_MARGIN)), region) : region;
+    const touched =
+      previousRect && moved ? intersect(roundOut(expand(moved, CHANGE_MARGIN + featherBleed)), region) : region;
     // No intersection means the change fell outside the paintable region (a clip
     // can do that); fall back to the whole region rather than skip the frame.
     const changed = touched && !isEmpty(touched) ? touched : region;
@@ -473,7 +492,8 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
     //    refill and lose its earlier half. Refilling whole keeps the band sequence intact,
     //    at the cost of the per-frame saving above — which is why it stays opt-in.
     const scratchCleared = !previousRect || !sameRect(previousRect, region);
-    const refresh = scratchCleared || pressureOpacity ? region : changed;
+    // The blur reads the whole silhouette; a band-only refill would seam.
+    const refresh = scratchCleared || pressureOpacity || featherSigma > 0 ? region : changed;
     const scratch = ensureStroke(region.width, region.height);
     const strokeCtx = scratch.ctx;
     strokeCtx.setTransform(1, 0, 0, 1, -region.x, -region.y);
@@ -522,43 +542,58 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
 
     strokeCtx.restore();
 
+    // 4a. Feather before the clips — blurring after would bleed masked pixels
+    //     back outside the selection. Without `filter` support the stroke stays crisp.
+    let paintSurface = scratch;
+    if (featherSigma > 0) {
+      const softScratch = ensureSoft(region.width, region.height);
+      const softCtx = softScratch.ctx;
+      softCtx.setTransform(1, 0, 0, 1, 0, 0);
+      softCtx.clearRect(0, 0, softScratch.width, softScratch.height);
+      softCtx.filter = `blur(${featherSigma}px)`;
+      softCtx.drawImage(scratch.canvas, 0, 0);
+      softCtx.filter = 'none';
+      paintSurface = softScratch;
+    }
+    const paintCtx = paintSurface.ctx;
+
     // 4b. Selection clip: keep only the stroke pixels inside the selection mask.
     //     The mask is a placed surface; draw it at (maskOrigin - regionOrigin) in
     //     the scratch's region-local space. Confined to the same band — masking
     //     already-masked pixels a second time would multiply their alpha again.
     if (clipMask) {
-      strokeCtx.setTransform(1, 0, 0, 1, 0, 0);
-      strokeCtx.save();
-      strokeCtx.beginPath();
-      strokeCtx.rect(refresh.x - region.x, refresh.y - region.y, refresh.width, refresh.height);
-      strokeCtx.clip();
-      strokeCtx.globalCompositeOperation = 'destination-in';
-      strokeCtx.globalAlpha = 1;
+      paintCtx.setTransform(1, 0, 0, 1, 0, 0);
+      paintCtx.save();
+      paintCtx.beginPath();
+      paintCtx.rect(refresh.x - region.x, refresh.y - region.y, refresh.width, refresh.height);
+      paintCtx.clip();
+      paintCtx.globalCompositeOperation = 'destination-in';
+      paintCtx.globalAlpha = 1;
       // The mask is document-space; drawing it through the layer inverse keeps
       // its exact shape clipping even on a rotated or scaled layer.
       const maskMatrix = multiply({ a: 1, b: 0, c: 0, d: 1, e: -region.x, f: -region.y }, toLocal);
-      strokeCtx.setTransform(maskMatrix.a, maskMatrix.b, maskMatrix.c, maskMatrix.d, maskMatrix.e, maskMatrix.f);
-      strokeCtx.drawImage(clipMask.surface.canvas, clipMask.rect.x, clipMask.rect.y);
-      strokeCtx.restore();
+      paintCtx.setTransform(maskMatrix.a, maskMatrix.b, maskMatrix.c, maskMatrix.d, maskMatrix.e, maskMatrix.f);
+      paintCtx.drawImage(clipMask.surface.canvas, clipMask.rect.x, clipMask.rect.y);
+      paintCtx.restore();
     }
 
     // 4c. Bbox clip on a rotated/sheared layer: the region clamp above only
     //     bounds the AABB, so keep exactly the pixels inside the document-space
     //     rect, drawn through the same inverse the mask uses.
     if (clipRect && clipRectNeedsMask) {
-      strokeCtx.setTransform(1, 0, 0, 1, 0, 0);
-      strokeCtx.save();
-      strokeCtx.beginPath();
-      strokeCtx.rect(refresh.x - region.x, refresh.y - region.y, refresh.width, refresh.height);
-      strokeCtx.clip();
-      strokeCtx.globalCompositeOperation = 'destination-in';
-      strokeCtx.globalAlpha = 1;
+      paintCtx.setTransform(1, 0, 0, 1, 0, 0);
+      paintCtx.save();
+      paintCtx.beginPath();
+      paintCtx.rect(refresh.x - region.x, refresh.y - region.y, refresh.width, refresh.height);
+      paintCtx.clip();
+      paintCtx.globalCompositeOperation = 'destination-in';
+      paintCtx.globalAlpha = 1;
       const rectMatrix = multiply({ a: 1, b: 0, c: 0, d: 1, e: -region.x, f: -region.y }, toLocal);
-      strokeCtx.setTransform(rectMatrix.a, rectMatrix.b, rectMatrix.c, rectMatrix.d, rectMatrix.e, rectMatrix.f);
-      strokeCtx.beginPath();
-      strokeCtx.rect(clipRect.x, clipRect.y, clipRect.width, clipRect.height);
-      strokeCtx.fill();
-      strokeCtx.restore();
+      paintCtx.setTransform(rectMatrix.a, rectMatrix.b, rectMatrix.c, rectMatrix.d, rectMatrix.e, rectMatrix.f);
+      paintCtx.beginPath();
+      paintCtx.rect(clipRect.x, clipRect.y, clipRect.width, clipRect.height);
+      paintCtx.fill();
+      paintCtx.restore();
     }
 
     // 5. Composite the scratch stroke into the cache at the stroke opacity, using
@@ -572,7 +607,7 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
     targetCtx.clip();
     targetCtx.globalAlpha = opacity;
     targetCtx.globalCompositeOperation = composite;
-    targetCtx.drawImage(scratch.canvas, region.x - ox, region.y - oy);
+    targetCtx.drawImage(paintSurface.canvas, region.x - ox, region.y - oy);
     targetCtx.restore();
 
     // The cache pixels changed THIS frame — bump the version, WITH the band they

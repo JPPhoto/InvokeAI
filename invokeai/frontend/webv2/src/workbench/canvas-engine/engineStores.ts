@@ -31,6 +31,8 @@ export interface BrushOptions {
   color: string;
   /** Per-stroke opacity in [0, 1]. */
   opacity: number;
+  /** Edge hardness in [0, 1]: 1 is a crisp edge, lower feathers the silhouette. */
+  hardness: number;
   /** Whether pen pressure modulates the stroke width. */
   pressureAffectsWidth: boolean;
   /**
@@ -48,6 +50,8 @@ export interface EraserOptions {
   size: number;
   /** Per-stroke erase strength in [0, 1]. */
   opacity: number;
+  /** Edge hardness in [0, 1]: 1 is a crisp edge, lower feathers the silhouette. */
+  hardness: number;
 }
 
 /** Lasso (selection) tool options: how the path is drawn, and the op it applies. */
@@ -216,6 +220,7 @@ export const DEFAULT_COLOR_PAIR_STATE: ActiveColorPairState = { background: '#ff
 /** Sensible starting brush options. */
 export const DEFAULT_BRUSH_OPTIONS: BrushOptions = {
   color: '#000000',
+  hardness: 1,
   opacity: 1,
   pressureAffectsOpacity: false,
   pressureAffectsWidth: true,
@@ -224,6 +229,7 @@ export const DEFAULT_BRUSH_OPTIONS: BrushOptions = {
 
 /** Sensible starting eraser options. */
 export const DEFAULT_ERASER_OPTIONS: EraserOptions = {
+  hardness: 1,
   opacity: 1,
   size: 50,
 };
@@ -587,11 +593,12 @@ const brushOptionsEqual = (a: BrushOptions, b: BrushOptions): boolean =>
   a.size === b.size &&
   a.color === b.color &&
   a.opacity === b.opacity &&
+  a.hardness === b.hardness &&
   a.pressureAffectsWidth === b.pressureAffectsWidth &&
   a.pressureAffectsOpacity === b.pressureAffectsOpacity;
 
 const eraserOptionsEqual = (a: EraserOptions, b: EraserOptions): boolean =>
-  a.size === b.size && a.opacity === b.opacity;
+  a.size === b.size && a.opacity === b.opacity && a.hardness === b.hardness;
 
 const checkerColorsEqual = (a: CheckerColors, b: CheckerColors): boolean => a.a === b.a && a.b === b.b;
 

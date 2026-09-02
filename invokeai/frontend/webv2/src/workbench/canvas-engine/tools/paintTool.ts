@@ -43,6 +43,8 @@ export interface PaintToolSpec {
   color(ctx: ToolContext): string;
   /** Freehand thinning for this gesture; 0 disables pressure sensitivity. */
   thinning(ctx: ToolContext): number;
+  /** Edge hardness in [0, 1]; absent means 1 (crisp). */
+  hardness?(ctx: ToolContext): number;
   /** Whether pen pressure modulates alpha along the stroke. Absent means never (eraser). */
   pressureOpacity?(ctx: ToolContext): boolean;
 }
@@ -309,6 +311,9 @@ export const createPaintTool = (spec: PaintToolSpec): Tool => {
           clipRect: ctx.getStrokeClipRect?.() ?? null,
           color: target.color ?? spec.color(ctx),
           composite,
+          // Mask strokes are an all-or-nothing stencil; a feathered edge would
+          // silently attenuate the denoise strength.
+          hardness: target.forceOpaque ? 1 : (spec.hardness?.(ctx) ?? 1),
           createdLayer: target.createdLayer ?? null,
           ctx,
           layerId: target.layerId,

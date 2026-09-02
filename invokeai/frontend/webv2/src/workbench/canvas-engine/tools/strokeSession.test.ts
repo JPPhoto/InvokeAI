@@ -62,6 +62,7 @@ const runStroke = (opts: { withMask: boolean }) => {
   const session = createStrokeSession({
     clipMask,
     color: '#ff0000',
+    hardness: 1,
     composite: 'source-over',
     ctx,
     layerId: 'L',
@@ -138,6 +139,7 @@ describe('strokeSession: bbox-clipped painting', () => {
     const session = createStrokeSession({
       clipRect,
       color: '#ff0000',
+      hardness: 1,
       composite: 'source-over',
       ctx,
       layerId: 'L',
@@ -221,6 +223,7 @@ describe('strokeSession: content-sized cache growth', () => {
     const session = createStrokeSession({
       clipMask: null,
       color: '#ff0000',
+      hardness: 1,
       composite: 'source-over',
       ctx,
       layerId: 'L',
@@ -343,6 +346,7 @@ describe('strokeSession: cache version bump (live adjusted-surface invalidation)
     const session = createStrokeSession({
       clipMask: null,
       color: '#ff0000',
+      hardness: 1,
       composite: 'source-over',
       ctx,
       layerId: 'L',
@@ -395,6 +399,7 @@ describe('incremental "before" snapshot', () => {
     } as unknown as ToolContext;
     const session = createStrokeSession({
       color: '#ff0000',
+      hardness: 1,
       composite: 'source-over',
       ctx,
       layerId: 'L',
@@ -483,6 +488,7 @@ describe('strokeSession: pressure-dependent opacity', () => {
     const session = createStrokeSession({
       clipMask: null,
       color: '#ff0000',
+      hardness: 1,
       composite: 'source-over',
       ctx,
       layerId: 'L',
@@ -569,6 +575,7 @@ describe('layer transforms', () => {
     } as unknown as ToolContext;
     const session = createStrokeSession({
       color: '#ff0000',
+      hardness: 1,
       composite: 'source-over',
       ctx,
       layerId: 'L',

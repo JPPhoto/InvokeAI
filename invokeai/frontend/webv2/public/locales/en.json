@@ -2389,6 +2389,8 @@
       "toolOptions": {
         "brushColor": "Brush color",
         "brushSize": "Brush size",
+        "hardness": "Hardness",
+        "strokePreview": "Stroke preview",
         "deselect": "Deselect",
         "eraseSelection": "Erase",
         "eraserSize": "Eraser size",

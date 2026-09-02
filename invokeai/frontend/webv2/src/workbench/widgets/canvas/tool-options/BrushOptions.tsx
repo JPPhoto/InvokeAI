@@ -2,11 +2,12 @@ import type { NumberInput as ChakraNumberInput } from '@chakra-ui/react';
 import type { BrushOptions as BrushOptionsState } from '@workbench/canvas-engine/api';
 import type {
   ToolbarRegionProps,
+  ToolbarStatusProps,
   ToolPresentationAdapter,
 } from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 import type { KeyboardEvent } from 'react';
 
-import { HStack } from '@chakra-ui/react';
+import { chakra, HStack } from '@chakra-ui/react';
 import { ToggleIconButton } from '@platform/ui/Button';
 import { ColorPicker } from '@platform/ui/ColorPicker';
 import { MAX_BRUSH_SIZE, MIN_BRUSH_SIZE } from '@workbench/canvas-engine/api';
@@ -19,7 +20,7 @@ import {
 } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { DropletIcon, PenLineIcon } from 'lucide-react';
-import { useCallback } from 'react';
+import { useLayoutEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
 export const BRUSH_SIZE_SLIDER_MAX_SIZE = 600;
@@ -178,6 +179,119 @@ export const PaintOpacityControl = ({
   );
 };
 
+/** Hardness slider plus a percent field, shared by the brush and eraser. */
+export const PaintHardnessControl = ({
+  hardness,
+  setHardness,
+}: {
+  hardness: number;
+  setHardness: (hardness: number) => void;
+}) => {
+  const { t } = useTranslation();
+  const label = t('widgets.canvas.toolOptions.hardness');
+  const percent = Math.round(hardness * 100);
+  const onSlider = useCallback((value: number) => setHardness(value / 100), [setHardness]);
+  const onNumber = useCallback(
+    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
+      if (Number.isFinite(valueAsNumber)) {
+        setHardness(Math.max(0, Math.min(100, valueAsNumber)) / 100);
+      }
+    },
+    [setHardness]
+  );
+  return (
+    <>
+      <ToolbarSlider
+        aria-label={label}
+        formatValue={formatPercent}
+        max={100}
+        min={0}
+        value={percent}
+        onValueChange={onSlider}
+      />
+      <ToolbarNumberField
+        aria-label={label}
+        max={100}
+        min={0}
+        suffix="%"
+        value={String(percent)}
+        onValueChange={onNumber}
+      />
+    </>
+  );
+};
+
+/** Live stroke preview; the edge uses the stroke session's feather formula (sigma = (1 − hardness) · d / 4). */
+export const PaintStrokePreview = ({
+  color,
+  hardness,
+  opacity,
+  size,
+}: {
+  color: string;
+  hardness: number;
+  opacity: number;
+  size: number;
+}) => {
+  const { t } = useTranslation();
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) {
+      return;
+    }
+    const dpr = globalThis.devicePixelRatio || 1;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    canvas.width = Math.max(1, Math.round(width * dpr));
+    canvas.height = Math.max(1, Math.round(height * dpr));
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    // Fit radius + curve swing + the full 3-sigma feather inside the box, so
+    // softness has room to demonstrate instead of clipping at the edges.
+    const swing = height * 0.14;
+    const featherFactor = 1 + 1.5 * (1 - hardness);
+    const drawn = Math.max(1, Math.min(size, (height - 2 * swing - 8) / featherFactor));
+    const sigma = ((1 - hardness) * drawn) / 4;
+    ctx.filter = sigma > 0 ? `blur(${sigma}px)` : 'none';
+    ctx.globalAlpha = opacity;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = drawn;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    const inset = Math.max(12, drawn / 2 + sigma * 3);
+    const mid = height / 2;
+    ctx.moveTo(inset, mid + swing);
+    ctx.bezierCurveTo(width * 0.35, mid - swing * 2, width * 0.65, mid + swing * 2, width - inset, mid - swing);
+    ctx.stroke();
+    ctx.filter = 'none';
+  }, [color, hardness, opacity, size]);
+  return (
+    <chakra.canvas
+      ref={canvasRef}
+      aria-label={t('widgets.canvas.toolOptions.strokePreview')}
+      bg="bg.inset"
+      h="28"
+      role="img"
+      rounded="sm"
+      w="full"
+    />
+  );
+};
+
+const BrushPreview = ({ engine }: ToolbarStatusProps) => {
+  const options = useBrushOptions(engine);
+  return (
+    <PaintStrokePreview
+      color={options.color}
+      hardness={options.hardness}
+      opacity={options.opacity}
+      size={options.size}
+    />
+  );
+};
+
 const useBrushPatch = (engine: ToolbarRegionProps['engine']) => {
   const options = useBrushOptions(engine);
   const patch = useCallback(
@@ -198,6 +312,12 @@ const BrushOpacity = ({ engine }: ToolbarRegionProps) => {
   const [options, set] = useBrushPatch(engine);
   const setOpacity = useCallback((opacity: number) => set({ opacity }), [set]);
   return <PaintOpacityControl opacity={options.opacity} setOpacity={setOpacity} />;
+};
+
+const BrushHardness = ({ engine }: ToolbarRegionProps) => {
+  const [options, set] = useBrushPatch(engine);
+  const setHardness = useCallback((hardness: number) => set({ hardness }), [set]);
+  return <PaintHardnessControl hardness={options.hardness} setHardness={setHardness} />;
 };
 
 /** A mirror of the project foreground, not brush-owned state: the pair feeds the engine's brush color. */
@@ -245,12 +365,15 @@ export const brushAdapter: ToolPresentationAdapter = {
   rowLabels: {
     geometry: 'widgets.canvas.toolOptions.size',
     intensity: 'widgets.canvas.toolOptions.opacity',
+    modes: 'widgets.canvas.toolOptions.hardness',
     more: 'widgets.canvas.toolOptions.pressure',
   },
   color: BrushColor,
   geometry: BrushSize,
   id: 'brush',
   intensity: BrushOpacity,
+  modes: BrushHardness,
   more: BrushPressure,
   paintsLeaf: true,
+  status: BrushPreview,
 };
