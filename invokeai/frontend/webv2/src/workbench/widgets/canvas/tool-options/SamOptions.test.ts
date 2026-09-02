@@ -17,11 +17,9 @@ import {
   getSamErrorTranslationKey,
   getSamStatusTranslationKey,
   keepSamImageIntermediate,
-  SamModes,
-  SamMore,
+  selectObjectOperationForm,
   SamPromptBody,
   SamModeToggle,
-  SamStatus,
   SamStatusSlot,
   SamVisualInput,
 } from './SamOptions';
@@ -485,25 +483,33 @@ describe('select object regions', () => {
           createElement(I18nextProvider, { i18n: testI18n }, element)
         )
       );
-    const modes = render(createElement(SamModes, { engine: engine as never, isSurfaceInteractionLocked: false }));
-    const more = render(createElement(SamMore, { engine: engine as never, isSurfaceInteractionLocked: false }));
-    const status = render(createElement(SamStatus, { engine: engine as never, isExternalInteractionLocked: false }));
+    const [inputGroup, settingsGroup] = selectObjectOperationForm.groups;
+    const input = render(
+      createElement(inputGroup!.body, { engine: engine as never, isSurfaceInteractionLocked: false })
+    );
+    const settings = render(
+      createElement(settingsGroup!.body, { engine: engine as never, isSurfaceInteractionLocked: false })
+    );
+    const footer = render(
+      createElement(selectObjectOperationForm.footer, { engine: engine as never, isExternalInteractionLocked: false })
+    );
 
-    expect(modes.indexOf('>Visual<')).toBeLessThan(modes.indexOf('aria-label="Include 1"'));
-    expect(modes).not.toContain('>Invert<');
-    expect(modes).not.toContain('>Process<');
+    // Input group: mode, points, bbox indicator, invert switch — no verbs.
+    expect(input.indexOf('>Visual<')).toBeLessThan(input.indexOf('aria-label="Include 1"'));
+    expect(input.indexOf('aria-label="Include 1"')).toBeLessThan(input.indexOf('No bounding box'));
+    expect(input).toContain('>Invert<');
+    expect(input).not.toContain('>Process<');
 
-    expect(more.indexOf('>Invert<')).toBeLessThan(more.indexOf('No bounding box'));
-    expect(more).toContain('aria-label="Select Object settings"');
-    expect(more.indexOf('aria-label="Select Object settings"')).toBeLessThan(more.indexOf('>Process<'));
-    expect(more.indexOf('>Process<')).toBeLessThan(more.indexOf('>Reset<'));
-    expect(more.indexOf('>Reset<')).toBeLessThan(more.indexOf('aria-label="Save As"'));
-    for (const target of ['Selection', 'Raster layer', 'Control layer']) {
-      expect(more).toContain(`>${target}<`);
-    }
+    // Settings group: the set-once session dials.
+    expect(settings).toContain('aria-label="Select Object settings"');
+    expect(settings).not.toContain('>Process<');
 
-    expect(status).toContain('Layer 1 · Raster layer · 1024 × 768');
-    expect(status.indexOf('>Select Object<')).toBeLessThan(status.indexOf('>Apply<'));
-    expect(status.indexOf('>Apply<')).toBeLessThan(status.indexOf('>Cancel<'));
+    // Footer: chip, then Reset, Process, Apply (with the save-as menu trigger), Cancel.
+    expect(footer).toContain('Layer 1 · Raster layer · 1024 × 768');
+    expect(footer.indexOf('>Select Object<')).toBeLessThan(footer.indexOf('>Reset<'));
+    expect(footer.indexOf('>Reset<')).toBeLessThan(footer.indexOf('>Process<'));
+    expect(footer.indexOf('>Process<')).toBeLessThan(footer.indexOf('>Apply<'));
+    expect(footer.indexOf('>Apply<')).toBeLessThan(footer.indexOf('>Cancel<'));
+    expect(footer).toContain('aria-label="Save As"');
   });
 });

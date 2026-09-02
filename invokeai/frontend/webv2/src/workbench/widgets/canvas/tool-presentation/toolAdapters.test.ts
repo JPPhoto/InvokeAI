@@ -33,7 +33,6 @@ const englishCatalogModules = import.meta.glob('../../../../../public/locales/en
 const en = Object.values(englishCatalogModules)[0] as {
   widgets: {
     canvas: {
-      toolHints: Record<string, string>;
       tools: Record<string, string>;
     };
     properties: { rows: Record<string, string>; sections: Record<string, string> };
@@ -49,14 +48,9 @@ describe('tool presentation adapters', () => {
     }
   });
 
-  it('hints exactly the tools without a control', () => {
+  it('gives every tool controls or gesture cards; the bare-hint fallback is dead', () => {
     for (const toolId of TOOL_IDS) {
-      const adapter = TOOL_PRESENTATION_ADAPTERS[toolId];
-      if (hasToolControls(adapter)) {
-        expect(en.widgets.canvas.toolHints[toolId], toolId).toBeUndefined();
-      } else {
-        expect(en.widgets.canvas.toolHints[toolId], toolId).toEqual(expect.any(String));
-      }
+      expect(hasToolControls(TOOL_PRESENTATION_ADAPTERS[toolId]), toolId).toBe(true);
     }
   });
 

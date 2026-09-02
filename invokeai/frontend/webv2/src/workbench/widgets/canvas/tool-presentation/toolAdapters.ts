@@ -3,8 +3,9 @@ import type { ToolId } from '@workbench/canvas-engine/api';
 import { filterOperationForm } from '@workbench/widgets/canvas/tool-options/FilterOptions';
 import { bboxForm, moveForm, transformForm } from '@workbench/widgets/canvas/tool-options/geometryForm';
 import { gradientForm } from '@workbench/widgets/canvas/tool-options/GradientOptions';
+import { colorPickerForm, samToolForm, viewForm } from '@workbench/widgets/canvas/tool-options/hintForms';
 import { brushForm, eraserForm } from '@workbench/widgets/canvas/tool-options/paintForm';
-import { selectObjectOperationAdapter } from '@workbench/widgets/canvas/tool-options/SamOptions';
+import { selectObjectOperationForm } from '@workbench/widgets/canvas/tool-options/SamOptions';
 import { lassoForm, marqueeForm } from '@workbench/widgets/canvas/tool-options/selectionForm';
 import { shapeForm } from '@workbench/widgets/canvas/tool-options/ShapeOptions';
 import { textForm } from '@workbench/widgets/canvas/tool-options/TextOptions';
@@ -18,28 +19,25 @@ import type {
 
 import { isOperationPropertyForm, isToolPropertyForm } from './toolbarContracts';
 
-/** Tools with no primary settings show their name and hint; the shell never unmounts for them. */
-const hintOnly = (id: ToolId): ToolPresentationAdapter => ({ id });
-
 export const TOOL_PRESENTATION_ADAPTERS: Readonly<Record<ToolId, ToolPanePresentation>> = {
   bbox: bboxForm,
   brush: brushForm,
-  colorPicker: hintOnly('colorPicker'),
+  colorPicker: colorPickerForm,
   eraser: eraserForm,
   gradient: gradientForm,
   lasso: lassoForm,
   marquee: marqueeForm,
   move: moveForm,
-  sam: hintOnly('sam'),
+  sam: samToolForm,
   shape: shapeForm,
   text: textForm,
   transform: transformForm,
-  view: hintOnly('view'),
+  view: viewForm,
 };
 
 export const OPERATION_PRESENTATION_ADAPTERS: Readonly<Record<CanvasOperationKind, OperationPanePresentation>> = {
   filter: filterOperationForm,
-  'select-object': selectObjectOperationAdapter,
+  'select-object': selectObjectOperationForm,
 };
 
 export const hasToolRegions = (adapter: ToolPresentationAdapter): boolean =>

@@ -1,14 +1,27 @@
 import type {
-  OperationPresentationAdapter,
+  OperationPropertyForm,
   ToolbarRegionProps,
   ToolbarStatusProps,
 } from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 /* oxlint-disable react-perf/jsx-no-jsx-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop */
 import type { ChangeEvent } from 'react';
 
-import { createListCollection, HStack, Input, Stack, Switch, Text, VisuallyHidden } from '@chakra-ui/react';
+import {
+  Box,
+  createListCollection,
+  Flex,
+  Icon,
+  Input,
+  Menu,
+  Portal,
+  Stack,
+  Switch,
+  Text,
+  VisuallyHidden,
+} from '@chakra-ui/react';
 import { Button } from '@platform/ui/Button';
 import { Group } from '@platform/ui/Group';
+import { MenuActionItem, MenuContent } from '@platform/ui/Menu';
 import { Select } from '@platform/ui/Select';
 import { Tooltip } from '@platform/ui/Tooltip';
 import {
@@ -22,9 +35,9 @@ import {
   type SelectObjectSaveTarget,
 } from '@workbench/canvas-operations/api';
 import { useSamSession } from '@workbench/widgets/canvas/engineStoreHooks';
-import { ToolbarStatus } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
-import { SquareMinusIcon, SquarePlusIcon } from 'lucide-react';
-import { useCallback, useMemo } from 'react';
+import { PropertySwitchRow } from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
+import { ChevronDownIcon, SquareMinusIcon, SquarePlusIcon } from 'lucide-react';
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { OperationStatusChip, OperationStatusSlot } from './OperationStatusSlot';
@@ -397,7 +410,9 @@ export const SamSettings = ({
 };
 
 /** Input mode, the visual point labels or the prompt, and invert: what changes between previews. */
-export const SamModes = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
+
+/** The session's inputs: visual points or a prompt, plus the invert switch. */
+const SamInputSettings = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
   const { t } = useTranslation();
   const session = useSamSession(engine);
   const operations = getCanvasOperations(engine);
@@ -429,13 +444,16 @@ export const SamModes = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionPr
         }
       />
       {session.input.type === 'visual' ? (
-        <SamVisualInput
-          disabled={!eligibility.canEditInputs}
-          pointLabel={session.pointLabel}
-          viewModel={viewModel}
-          onExclude={() => operations.updateSelectObjectSession({ pointLabel: 'exclude' })}
-          onInclude={() => operations.updateSelectObjectSession({ pointLabel: 'include' })}
-        />
+        <>
+          <SamVisualInput
+            disabled={!eligibility.canEditInputs}
+            pointLabel={session.pointLabel}
+            viewModel={viewModel}
+            onExclude={() => operations.updateSelectObjectSession({ pointLabel: 'exclude' })}
+            onInclude={() => operations.updateSelectObjectSession({ pointLabel: 'include' })}
+          />
+          <SamBboxIndicator viewModel={viewModel} />
+        </>
       ) : (
         <SamPromptBody
           disabled={!eligibility.canEditInputs}
@@ -445,83 +463,44 @@ export const SamModes = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionPr
           }
         />
       )}
+      <PropertySwitchRow
+        checked={session.invert}
+        disabled={!eligibility.canEditInputs}
+        label={t('widgets.layers.selectObject.invert')}
+        onCheckedChange={(invert) => operations.updateSelectObjectSession({ invert })}
+      />
     </>
   );
 };
 
-/** Session settings plus the secondary commands; C2 moves these into Properties → Operation. */
-export const SamMore = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
-  const { t } = useTranslation();
+/** Set-once session settings: model, refinement, preview behavior. */
+const SamSettingsGroup = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
   const session = useSamSession(engine);
   const operations = getCanvasOperations(engine);
   if (!session) {
     return null;
   }
   const eligibility = getSamActionEligibility(session, isSurfaceInteractionLocked);
-  const actions = getSamActionHandlers(operations);
-  const isProcessing = isSamProcessingStatus(session.status);
-  const viewModel = getSamPanelViewModel(session, (layerName, width, height) =>
-    t('widgets.layers.selectObject.sourceLayerLabel', {
-      height,
-      name: layerName,
-      type: t(`widgets.layers.selectObject.saveAs_${session.layerType}`),
-      width,
-    })
-  );
   return (
-    <Stack gap="2" w="full">
-      <HStack gap="2">
-        <Button
-          aria-pressed={session.invert}
-          disabled={!eligibility.canEditInputs}
-          size="xs"
-          variant={session.invert ? 'solid' : 'ghost'}
-          onClick={() => operations.updateSelectObjectSession({ invert: !session.invert })}
-        >
-          {t('widgets.layers.selectObject.invert')}
-        </Button>
-        {session.input.type === 'visual' ? <SamBboxIndicator viewModel={viewModel} /> : null}
-      </HStack>
-      <SamSettings
-        eligibility={eligibility}
-        isProcessing={isProcessing}
-        session={session}
-        onModelChange={(model) => operations.updateSelectObjectSession({ model })}
-        onToggle={(key, value) => operations.updateSelectObjectSession({ [key]: value })}
-      />
-      <HStack flexWrap="wrap" gap="1">
-        <Button disabled={!eligibility.canProcess} loading={isProcessing} size="xs" onClick={actions.process}>
-          {t('widgets.layers.selectObject.process')}
-        </Button>
-        <Button disabled={!eligibility.canReset} size="xs" variant="ghost" onClick={actions.reset}>
-          {t('widgets.layers.selectObject.reset')}
-        </Button>
-      </HStack>
-      <HStack aria-label={t('widgets.layers.selectObject.saveAs')} flexWrap="wrap" gap="1" role="group">
-        {SAVE_TARGETS.map((target) => (
-          <Button
-            key={target}
-            disabled={!eligibility.canSave}
-            size="xs"
-            variant="ghost"
-            onClick={() => actions.save(target)}
-          >
-            {t(`widgets.layers.selectObject.saveAs_${target}`)}
-          </Button>
-        ))}
-      </HStack>
-    </Stack>
+    <SamSettings
+      eligibility={eligibility}
+      isProcessing={isSamProcessingStatus(session.status)}
+      session={session}
+      onModelChange={(model) => operations.updateSelectObjectSession({ model })}
+      onToggle={(key, value) => operations.updateSelectObjectSession({ [key]: value })}
+    />
   );
 };
 
-export const SamStatus = ({ engine, isExternalInteractionLocked }: ToolbarStatusProps) => {
+const APPLY_MENU_POSITIONING = { placement: 'top-end' } as const;
+
+/** The sticky footer: status chip, Reset, Process, Apply with its save-as menu, Cancel. */
+const SamFooter = ({ engine, isExternalInteractionLocked }: ToolbarStatusProps) => {
   const { t } = useTranslation();
   const session = useSamSession(engine);
   const actions = useMemo(() => getSamActionHandlers(getCanvasOperations(engine)), [engine]);
-  const onApply = useCallback(() => actions.apply(), [actions]);
-  const onCancel = useCallback(() => actions.cancel(), [actions]);
   if (!session) {
-    return <ToolbarStatus />;
+    return null;
   }
   const eligibility = getSamActionEligibility(session, isExternalInteractionLocked);
   const isProcessing = isSamProcessingStatus(session.status);
@@ -533,29 +512,97 @@ export const SamStatus = ({ engine, isExternalInteractionLocked }: ToolbarStatus
     width: session.sourceRect.width,
   });
   return (
-    <ToolbarStatus
-      applyDisabled={!eligibility.canApply}
-      applyLoading={session.status === 'committing'}
-      cancelDisabled={!eligibility.canCancel}
-      onApply={onApply}
-      onCancel={onCancel}
-    >
-      <OperationStatusChip
-        errorDetail={session.error?.detail ?? null}
-        errorText={session.error ? t(getSamErrorTranslationKey(session.error.code)) : null}
-        isBusy={isBusy}
-        sourceLabel={sourceLabel}
-        statusText={t(getSamStatusTranslationKey(session.status))}
-        technicalDetailsLabel={t('widgets.layers.selectObject.technicalDetails')}
-        title={t('widgets.layers.selectObject.title')}
-      />
-    </ToolbarStatus>
+    <Flex align="center" gap="1" minW="0" w="full">
+      {/* No nowrap: the chip's own two-line clamp must keep the details button visible. */}
+      <Box flex="1" minW="0" overflow="hidden">
+        <OperationStatusChip
+          errorDetail={session.error?.detail ?? null}
+          errorText={session.error ? t(getSamErrorTranslationKey(session.error.code)) : null}
+          isBusy={isBusy}
+          sourceLabel={sourceLabel}
+          statusText={t(getSamStatusTranslationKey(session.status))}
+          technicalDetailsLabel={t('widgets.layers.selectObject.technicalDetails')}
+          title={t('widgets.layers.selectObject.title')}
+        />
+      </Box>
+      <Button disabled={!eligibility.canReset} flexShrink={0} size="xs" variant="ghost" onClick={actions.reset}>
+        {t('widgets.layers.selectObject.reset')}
+      </Button>
+      <Button
+        disabled={!eligibility.canProcess}
+        flexShrink={0}
+        loading={isProcessing}
+        size="xs"
+        onClick={actions.process}
+      >
+        {t('widgets.layers.selectObject.process')}
+      </Button>
+      <Flex flexShrink={0}>
+        <Button
+          data-toolbar-action="apply"
+          disabled={!eligibility.canApply}
+          loading={session.status === 'committing'}
+          roundedRight="none"
+          size="xs"
+          variant="solid"
+          onClick={actions.apply}
+        >
+          {t('common.apply')}
+        </Button>
+        <Menu.Root positioning={APPLY_MENU_POSITIONING}>
+          <Menu.Trigger asChild>
+            <Button
+              aria-label={t('widgets.layers.selectObject.saveAs')}
+              disabled={!eligibility.canSave}
+              px="1"
+              roundedLeft="none"
+              size="xs"
+              variant="solid"
+            >
+              <Icon as={ChevronDownIcon} boxSize="3.5" />
+            </Button>
+          </Menu.Trigger>
+          <Portal>
+            <Menu.Positioner>
+              <MenuContent minW="12rem" py="1">
+                {SAVE_TARGETS.map((target) => (
+                  <MenuActionItem
+                    key={target}
+                    disabled={!eligibility.canSave}
+                    label={t(`widgets.layers.selectObject.saveAs_${target}`)}
+                    value={`save-${target}`}
+                    onSelect={() => actions.save(target)}
+                  />
+                ))}
+              </MenuContent>
+            </Menu.Positioner>
+          </Portal>
+        </Menu.Root>
+      </Flex>
+      <Button
+        data-toolbar-action="cancel"
+        disabled={!eligibility.canCancel}
+        flexShrink={0}
+        size="xs"
+        variant="ghost"
+        onClick={actions.cancel}
+      >
+        {t('common.cancel')}
+      </Button>
+    </Flex>
   );
 };
 
-export const selectObjectOperationAdapter: OperationPresentationAdapter = {
+export const selectObjectOperationForm: OperationPropertyForm = {
+  footer: SamFooter,
+  groups: [
+    { body: SamInputSettings, id: 'sam-input', labelKey: 'widgets.properties.groups.input' },
+    {
+      body: SamSettingsGroup,
+      collapsible: 'collapsed',
+      id: 'sam-settings',
+      labelKey: 'widgets.properties.groups.settings',
+    },
+  ],
   kind: 'select-object',
-  modes: SamModes,
-  more: SamMore,
-  status: SamStatus,
 };

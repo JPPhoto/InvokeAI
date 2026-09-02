@@ -187,3 +187,22 @@ export const EditTargetChip = ({ layerName }: { layerName: string | null }) => {
     </Flex>
   );
 };
+
+/**
+ * A small gesture/keymap table for tools whose whole story is how you point at
+ * the canvas: a chip naming the gesture, then what it does.
+ */
+export const HintCard = ({ rows }: { rows: readonly { gesture: string; effect: string }[] }) => (
+  <Stack gap="1">
+    {rows.map((row) => (
+      <Grid key={row.gesture} alignItems="baseline" columnGap="2" gridTemplateColumns="auto minmax(0, 1fr)">
+        <Badge colorPalette="gray" fontFamily="mono" size="sm" variant="surface">
+          {row.gesture}
+        </Badge>
+        <Text color="fg.muted" fontSize="xs">
+          {row.effect}
+        </Text>
+      </Grid>
+    ))}
+  </Stack>
+);

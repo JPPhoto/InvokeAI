@@ -291,7 +291,9 @@ describe('Properties pane', () => {
     await act(() => engine!.tools.setTool('view'));
     await settle();
     expect(page.getByRole('slider', { exact: true, name: 'Brush size' }).query()).toBeNull();
-    expect(host!.textContent).toContain('Drag to pan and scroll to zoom.');
+    // Hint-only tools show a gesture card now, not a single sentence.
+    expect(host!.textContent).toContain('Pan the canvas.');
+    expect(host!.textContent).toContain('Hold Space');
   });
 
   it('keeps a slider and its number field on one grid row and shares row identity brush↔eraser', async () => {
