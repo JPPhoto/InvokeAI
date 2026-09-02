@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
 
-import { chakra, Grid, Icon, Stack, Switch, Text } from '@chakra-ui/react';
+import { Badge, chakra, Flex, Grid, Icon, SegmentGroup, Stack, Switch, Text } from '@chakra-ui/react';
 import { ChevronDownIcon } from 'lucide-react';
 import { useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { setPropertyGroupCollapsed, usePropertyGroupCollapsed } from './propertyGroupStore';
 
@@ -113,5 +114,76 @@ export const PropertyGroup = ({
       )}
       {open ? children : null}
     </Stack>
+  );
+};
+
+/** A labelled choice row rendered as a full-width segmented control (≤5 options). */
+export const PropertySegmentedRow = <Value extends string>({
+  disabled,
+  label,
+  onValueChange,
+  options,
+  value,
+}: {
+  disabled?: boolean;
+  label: string;
+  onValueChange: (value: Value) => void;
+  options: readonly { value: Value; label: string }[];
+  value: Value;
+}) => {
+  const handleChange = useCallback(
+    ({ value: next }: SegmentGroup.ValueChangeDetails) => {
+      if (next !== null && next !== value) {
+        onValueChange(next as Value);
+      }
+    },
+    [onValueChange, value]
+  );
+  return (
+    <PropertyControlRow label={label}>
+      <SegmentGroup.Root
+        aria-label={label}
+        disabled={disabled}
+        gridColumn="2 / -1"
+        size="xs"
+        value={value}
+        w="full"
+        onValueChange={handleChange}
+      >
+        <SegmentGroup.Indicator />
+        {options.map((option) => (
+          <SegmentGroup.Item key={option.value} flex="1" justifyContent="center" value={option.value}>
+            <SegmentGroup.ItemText fontSize="2xs">{option.label}</SegmentGroup.ItemText>
+            <SegmentGroup.ItemHiddenInput />
+          </SegmentGroup.Item>
+        ))}
+      </SegmentGroup.Root>
+    </PropertyControlRow>
+  );
+};
+
+/**
+ * Names what a dual-role form is editing right now: the creation defaults, or
+ * the selected layer's own content. Shown once at the top of the affected
+ * form, per the C0 §4 target-chip decision.
+ */
+export const EditTargetChip = ({ layerName }: { layerName: string | null }) => {
+  const { t } = useTranslation();
+  return (
+    <Flex justify="flex-end">
+      <Badge
+        colorPalette={layerName === null ? 'gray' : 'blue'}
+        maxW="full"
+        size="sm"
+        title={layerName === null ? undefined : layerName}
+        variant="surface"
+      >
+        <Text minW="0" truncate>
+          {layerName === null
+            ? t('widgets.properties.target.defaults')
+            : t('widgets.properties.target.editing', { name: layerName })}
+        </Text>
+      </Badge>
+    </Flex>
   );
 };

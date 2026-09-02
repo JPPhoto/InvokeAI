@@ -2,14 +2,14 @@ import type { ToolId } from '@workbench/canvas-engine/api';
 
 import { bboxAdapter } from '@workbench/widgets/canvas/tool-options/BboxOptions';
 import { filterOperationAdapter } from '@workbench/widgets/canvas/tool-options/FilterOptions';
-import { gradientAdapter } from '@workbench/widgets/canvas/tool-options/GradientOptions';
+import { gradientForm } from '@workbench/widgets/canvas/tool-options/GradientOptions';
 import { lassoAdapter } from '@workbench/widgets/canvas/tool-options/LassoOptions';
 import { marqueeAdapter } from '@workbench/widgets/canvas/tool-options/MarqueeOptions';
 import { moveAdapter } from '@workbench/widgets/canvas/tool-options/MoveOptions';
 import { brushForm, eraserForm } from '@workbench/widgets/canvas/tool-options/paintForm';
 import { selectObjectOperationAdapter } from '@workbench/widgets/canvas/tool-options/SamOptions';
-import { shapeAdapter } from '@workbench/widgets/canvas/tool-options/ShapeOptions';
-import { textAdapter } from '@workbench/widgets/canvas/tool-options/TextOptions';
+import { shapeForm } from '@workbench/widgets/canvas/tool-options/ShapeOptions';
+import { textForm } from '@workbench/widgets/canvas/tool-options/TextOptions';
 import { transformAdapter } from '@workbench/widgets/canvas/tool-options/TransformOptions';
 
 import type {
@@ -29,13 +29,13 @@ export const TOOL_PRESENTATION_ADAPTERS: Readonly<Record<ToolId, ToolPanePresent
   brush: brushForm,
   colorPicker: hintOnly('colorPicker'),
   eraser: eraserForm,
-  gradient: gradientAdapter,
+  gradient: gradientForm,
   lasso: lassoAdapter,
   marquee: marqueeAdapter,
   move: moveAdapter,
   sam: hintOnly('sam'),
-  shape: shapeAdapter,
-  text: textAdapter,
+  shape: shapeForm,
+  text: textForm,
   transform: transformAdapter,
   view: hintOnly('view'),
 };

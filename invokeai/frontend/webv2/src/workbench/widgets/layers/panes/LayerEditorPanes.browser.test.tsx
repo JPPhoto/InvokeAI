@@ -1,4 +1,5 @@
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
+import type { CanvasLayerSourceContract } from '@workbench/canvas-engine/api';
 import type { CanvasOperationState } from '@workbench/canvas-operations/api';
 import type { CanvasEngine } from '@workbench/canvas-operations/createCanvasEngine';
 import type { FilterOperationSessionState } from '@workbench/canvas-operations/filterOperationSession';
@@ -179,7 +180,28 @@ const settle = () =>
 
 const IDENTITY = { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 };
 
-type Selection = 'none' | 'layer' | 'group' | 'mask';
+type Selection = 'none' | 'layer' | 'group' | 'mask' | 'shape' | 'gradient';
+
+const SHAPE_SOURCE = {
+  fill: '#ff0000',
+  height: 10,
+  kind: 'rect',
+  stroke: null,
+  strokeWidth: 2,
+  type: 'shape',
+  width: 10,
+} satisfies Extract<CanvasLayerSourceContract, { type: 'shape' }>;
+const GRADIENT_SOURCE = {
+  angle: 0,
+  height: 10,
+  kind: 'linear',
+  stops: [
+    { color: '#000000ff', offset: 0 },
+    { color: '#ffffffff', offset: 1 },
+  ],
+  type: 'gradient',
+  width: 10,
+} satisfies Extract<CanvasLayerSourceContract, { type: 'gradient' }>;
 
 const mount = async (View: typeof PropertiesPane, selection: Selection = 'none') => {
   const base = { ...createInitialWorkbenchState().projects[0]!, id: 'p' };
@@ -188,13 +210,17 @@ const mount = async (View: typeof PropertiesPane, selection: Selection = 'none')
       ? []
       : selection === 'layer'
         ? [layerContract('l0', 'raster', { name: 'Paint', transform: { ...IDENTITY, rotation: 0.5, x: 10.4 } })]
-        : selection === 'mask'
-          ? [layerContract('m0', 'inpaint_mask', { name: 'Mask' })]
-          : [groupContract('g0', [layerContract('l0', 'raster', { name: 'Paint' })], { name: 'Folder' })];
+        : selection === 'shape'
+          ? [layerContract('l0', 'raster', { name: 'My Shape', source: SHAPE_SOURCE })]
+          : selection === 'gradient'
+            ? [layerContract('l0', 'raster', { name: 'My Gradient', source: GRADIENT_SOURCE })]
+            : selection === 'mask'
+              ? [layerContract('m0', 'inpaint_mask', { name: 'Mask' })]
+              : [groupContract('g0', [layerContract('l0', 'raster', { name: 'Paint' })], { name: 'Folder' })];
   harness.project = applyCanvasProjectMutation(base, {
     document: {
       ...createEmptyCanvasDocument(),
-      selectedLayerId: selection === 'none' ? null : selection === 'layer' ? 'l0' : selection === 'mask' ? 'm0' : 'g0',
+      selectedLayerId: selection === 'none' ? null : selection === 'mask' ? 'm0' : selection === 'group' ? 'g0' : 'l0',
       stacks: stacksFrom(nodes),
     },
     type: 'replaceCanvasDocument',
@@ -288,6 +314,48 @@ describe('Properties pane', () => {
     const eraserSlider = page.getByRole('slider', { exact: true, name: 'Eraser size' }).element();
     expect(eraserSlider).toBe(slider);
     expect(page.getByRole('button', { exact: true, name: 'Brush color' }).query()).toBeNull();
+  });
+
+  it('labels the shape form with its edit target and gates stroke width on the stroke slot', async () => {
+    await mount(PropertiesPane);
+    await act(() => engine!.tools.setTool('shape'));
+    await settle();
+    // Nothing selected: the chip says the form edits the creation defaults.
+    expect(host!.textContent).toContain('Defaults');
+    await expect.element(page.getByRole('radio', { exact: true, name: 'Rectangle' })).toBeInTheDocument();
+
+    await act(() => root?.unmount());
+    await mount(PropertiesPane, 'shape');
+    await act(() => engine!.tools.setTool('shape'));
+    await settle();
+    expect(host!.textContent).toContain('Editing: My Shape');
+    // The fixture shape has no stroke, so the width slider is disabled in place.
+    const width = page.getByRole('slider', { exact: true, name: 'Stroke width' });
+    await expect.element(width).toBeVisible();
+    expect(width.element().getAttribute('data-disabled')).not.toBeNull();
+  });
+
+  it('names a selected gradient in the chip and moves a default stop from the keyboard', async () => {
+    await mount(PropertiesPane, 'gradient');
+    await act(() => engine!.tools.setTool('gradient'));
+    await settle();
+    expect(host!.textContent).toContain('Editing: My Gradient');
+    await expect.element(page.getByRole('button', { exact: true, name: 'Gradient stop at 0%' })).toBeVisible();
+
+    // The harness's mutation port refuses document dispatches, so the
+    // keyboard-move half runs against the creation DEFAULTS (options store).
+    await act(() => root?.unmount());
+    await mount(PropertiesPane);
+    await act(() => engine!.tools.setTool('gradient'));
+    await settle();
+    expect(host!.textContent).toContain('Defaults');
+    const startStop = page.getByRole('button', { exact: true, name: 'Gradient stop at 0%' });
+    await expect.element(startStop).toBeVisible();
+    await expect.element(page.getByRole('button', { exact: true, name: 'Gradient stop at 100%' })).toBeVisible();
+    await act(() => (startStop.element() as HTMLElement).focus());
+    await act(() => userEvent.keyboard('{ArrowRight}'));
+    await settle();
+    await expect.element(page.getByRole('button', { exact: true, name: 'Gradient stop at 1%' })).toBeVisible();
   });
 
   it('remembers a group collapse per user across remounts', async () => {

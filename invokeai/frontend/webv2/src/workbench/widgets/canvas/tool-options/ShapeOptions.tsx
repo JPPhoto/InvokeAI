@@ -1,21 +1,25 @@
-import type { SelectValueChangeDetails } from '@chakra-ui/react';
 import type { CanvasLayerSourceContract, ShapeToolOptions } from '@workbench/canvas-engine/api';
 import type {
   ToolbarRegionProps,
-  ToolPresentationAdapter,
+  ToolPropertyForm,
 } from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
-import { createListCollection } from '@chakra-ui/react';
+import { Text } from '@chakra-ui/react';
 import { ToggleIconButton } from '@platform/ui/Button';
 import { ColorPicker } from '@platform/ui/ColorPicker';
-import { Select } from '@platform/ui/Select';
 import { MAX_SHAPE_STROKE_WIDTH, getDocumentLayer } from '@workbench/canvas-engine/api';
 import { useActiveColorCommands, useActiveColorPair } from '@workbench/widgets/canvas/color-system/useActiveColors';
 import { useShapeOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import {
-  ToolbarHint,
+  EditTargetChip,
+  PropertyControlRow,
+  PropertySegmentedRow,
+} from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
+import {
   ToolbarNumberField,
+  ToolbarSlider,
   useNumberCommit,
+  useSliderGesture,
 } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
@@ -29,12 +33,11 @@ type ShapeKind = ShapeToolOptions['kind'];
 
 interface SelectedShape {
   id: string;
+  name: string;
   source: ShapeSource;
 }
 
 const FALLBACK_COLOR = '#000000';
-const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: false } as const;
-const SELECT_TRIGGER_PROPS = { minW: '6rem', w: '6rem' } as const;
 
 /**
  * Displayed values follow the selected shape layer, else the creation defaults
@@ -55,10 +58,10 @@ const useShapeEditor = (engine: ToolbarRegionProps['engine']) => {
       const { document } = project.canvas;
       const layer = document.selectedLayerId ? getDocumentLayer(document, document.selectedLayerId) : undefined;
       return layer && layer.type === 'raster' && layer.source.type === 'shape'
-        ? { id: layer.id, source: layer.source }
+        ? { id: layer.id, name: layer.name, source: layer.source }
         : null;
     },
-    (a, b) => a?.id === b?.id && a?.source === b?.source
+    (a, b) => a?.id === b?.id && a?.name === b?.name && a?.source === b?.source
   );
   const kind: ShapeKind = selected ? (selected.source.kind === 'ellipse' ? 'ellipse' : 'rect') : options.kind;
   const fill = selected ? selected.source.fill : options.fillEnabled ? pair.foreground : null;
@@ -90,6 +93,7 @@ const useShapeEditor = (engine: ToolbarRegionProps['engine']) => {
     },
     [commitSource, setOptions]
   );
+  const previewStrokeWidth = useCallback((value: number) => setOptions({ strokeWidth: value }), [setOptions]);
   const setStrokeWidth = useCallback(
     (value: number) => {
       setOptions({ strokeWidth: value });
@@ -138,9 +142,11 @@ const useShapeEditor = (engine: ToolbarRegionProps['engine']) => {
   return {
     fill,
     kind,
+    selectedName: selected?.name ?? null,
     setFillColor,
     setFillEnabled,
     setKind,
+    previewStrokeWidth,
     setStrokeColor,
     setStrokeEnabled,
     setStrokeWidth,
@@ -149,123 +155,100 @@ const useShapeEditor = (engine: ToolbarRegionProps['engine']) => {
   };
 };
 
-const ShapeStrokeWidth = ({ engine }: ToolbarRegionProps) => {
+const ShapeSettings = ({ engine }: ToolbarRegionProps) => {
   const { t } = useTranslation();
-  const { setStrokeWidth, stroke, strokeWidth } = useShapeEditor(engine);
-  const onCommit = useNumberCommit(
-    useCallback((value: number) => setStrokeWidth(Math.max(0, Math.round(value))), [setStrokeWidth])
-  );
-  return (
-    <ToolbarNumberField
-      aria-label={t('widgets.canvas.toolOptions.shapeStrokeWidth')}
-      disabled={stroke === null}
-      max={MAX_SHAPE_STROKE_WIDTH}
-      min={0}
-      suffix="px"
-      value={String(Math.round(strokeWidth))}
-      onValueCommit={onCommit}
-    />
-  );
-};
-
-const ShapeModes = ({ engine }: ToolbarRegionProps) => {
-  const { t } = useTranslation();
-  const { fill, kind, setFillEnabled, setKind, setStrokeEnabled, stroke } = useShapeEditor(engine);
-  const kindCollection = useMemo(
-    () =>
-      createListCollection<{ label: string; value: ShapeKind }>({
-        items: [
-          { label: t('widgets.canvas.toolOptions.shapeRect'), value: 'rect' },
-          { label: t('widgets.canvas.toolOptions.shapeEllipse'), value: 'ellipse' },
-        ],
-      }),
+  const editor = useShapeEditor(engine);
+  const sampleColor = useColorSampler(engine);
+  const kindOptions = useMemo(
+    () => [
+      { label: t('widgets.canvas.toolOptions.shapeRect'), value: 'rect' as const },
+      { label: t('widgets.canvas.toolOptions.shapeEllipse'), value: 'ellipse' as const },
+    ],
     [t]
   );
-  const kindValue = useMemo(() => [kind], [kind]);
-  const onKindChange = useCallback(
-    ({ value }: SelectValueChangeDetails<{ label: string; value: ShapeKind }>) => {
-      const next = value[0] as ShapeKind | undefined;
-      if (next && next !== kind) {
-        setKind(next);
-      }
-    },
-    [kind, setKind]
+  const onFillChange = useCallback((hex: string) => editor.setFillColor(hex, false), [editor]);
+  const onFillChangeEnd = useCallback((hex: string) => editor.setFillColor(hex, true), [editor]);
+  const onStrokeChange = useCallback((hex: string) => editor.setStrokeColor(hex, false), [editor]);
+  const onStrokeChangeEnd = useCallback((hex: string) => editor.setStrokeColor(hex, true), [editor]);
+  // Slider ticks preview through the options store; ONE document commit lands on release.
+  const previewWidth = useCallback(
+    (value: number) => editor.previewStrokeWidth(Math.max(0, Math.round(value))),
+    [editor]
   );
-  const onFillToggle = useCallback((checked: boolean) => setFillEnabled(checked), [setFillEnabled]);
-  const onStrokeToggle = useCallback((checked: boolean) => setStrokeEnabled(checked), [setStrokeEnabled]);
+  const setWidth = useCallback((value: number) => editor.setStrokeWidth(Math.max(0, Math.round(value))), [editor]);
+  const widthGesture = useSliderGesture(Math.round(editor.strokeWidth), setWidth, previewWidth);
+  const onWidthCommit = useNumberCommit(setWidth);
   return (
     <>
-      <Select
-        aria-label={t('widgets.canvas.toolOptions.shapeKind')}
-        collection={kindCollection}
-        positioning={SELECT_POSITIONING}
-        size="xs"
-        flexShrink={0}
-        triggerProps={SELECT_TRIGGER_PROPS}
-        w="6rem"
-        value={kindValue}
-        valueText={t(
-          kind === 'ellipse' ? 'widgets.canvas.toolOptions.shapeEllipse' : 'widgets.canvas.toolOptions.shapeRect'
-        )}
-        onValueChange={onKindChange}
+      <EditTargetChip layerName={editor.selectedName} />
+      <PropertySegmentedRow
+        label={t('widgets.properties.rows.kind')}
+        options={kindOptions}
+        value={editor.kind}
+        onValueChange={editor.setKind}
       />
-      <ToggleIconButton
-        checked={fill !== null}
-        icon={PaintBucketIcon}
-        label={t('widgets.canvas.toolOptions.shapeFill')}
-        onCheckedChange={onFillToggle}
-      />
-      <ToggleIconButton
-        checked={stroke !== null}
-        icon={SquareIcon}
-        label={t('widgets.canvas.toolOptions.shapeStroke')}
-        onCheckedChange={onStrokeToggle}
-      />
-      <ToolbarHint>{t('widgets.canvas.toolOptions.shapeHint')}</ToolbarHint>
+      {/* The chip stays enabled-looking but inert when the slot is off; the toggle owns enablement. */}
+      <PropertyControlRow label={t('widgets.canvas.toolOptions.shapeFill')}>
+        <ColorPicker
+          aria-label={t('widgets.canvas.toolOptions.shapeFill')}
+          disabled={editor.fill === null}
+          value={editor.fill ?? FALLBACK_COLOR}
+          onSampleColor={sampleColor}
+          onValueChange={onFillChange}
+          onValueChangeEnd={onFillChangeEnd}
+        />
+        <ToggleIconButton
+          checked={editor.fill !== null}
+          icon={PaintBucketIcon}
+          label={t('widgets.canvas.toolOptions.shapeFill')}
+          onCheckedChange={editor.setFillEnabled}
+        />
+      </PropertyControlRow>
+      <PropertyControlRow label={t('widgets.canvas.toolOptions.shapeStroke')}>
+        <ColorPicker
+          aria-label={t('widgets.canvas.toolOptions.shapeStroke')}
+          disabled={editor.stroke === null}
+          value={editor.stroke ?? FALLBACK_COLOR}
+          onSampleColor={sampleColor}
+          onValueChange={onStrokeChange}
+          onValueChangeEnd={onStrokeChangeEnd}
+        />
+        <ToggleIconButton
+          checked={editor.stroke !== null}
+          icon={SquareIcon}
+          label={t('widgets.canvas.toolOptions.shapeStroke')}
+          onCheckedChange={editor.setStrokeEnabled}
+        />
+      </PropertyControlRow>
+      <PropertyControlRow label={t('widgets.properties.rows.width')}>
+        <ToolbarSlider
+          aria-label={t('widgets.canvas.toolOptions.shapeStrokeWidth')}
+          disabled={editor.stroke === null}
+          max={MAX_SHAPE_STROKE_WIDTH}
+          min={0}
+          value={widthGesture.value}
+          onValueChange={widthGesture.onChange}
+          onValueChangeEnd={widthGesture.onChangeEnd}
+        />
+        <ToolbarNumberField
+          aria-label={t('widgets.canvas.toolOptions.shapeStrokeWidth')}
+          disabled={editor.stroke === null}
+          max={MAX_SHAPE_STROKE_WIDTH}
+          min={0}
+          suffix="px"
+          value={String(Math.round(editor.strokeWidth))}
+          onValueCommit={onWidthCommit}
+        />
+      </PropertyControlRow>
+      <Text color="fg.muted" fontSize="2xs">
+        {t('widgets.canvas.toolOptions.shapeHint')}
+      </Text>
     </>
   );
 };
 
-/** Fill and stroke chips; a `none` fill or stroke shows a disabled chip so the slots keep their place. */
-const ShapeColors = ({ engine }: ToolbarRegionProps) => {
-  const { t } = useTranslation();
-  const { fill, setFillColor, setStrokeColor, stroke } = useShapeEditor(engine);
-  const sampleColor = useColorSampler(engine);
-  const onFillChange = useCallback((hex: string) => setFillColor(hex, false), [setFillColor]);
-  const onFillChangeEnd = useCallback((hex: string) => setFillColor(hex, true), [setFillColor]);
-  const onStrokeChange = useCallback((hex: string) => setStrokeColor(hex, false), [setStrokeColor]);
-  const onStrokeChangeEnd = useCallback((hex: string) => setStrokeColor(hex, true), [setStrokeColor]);
-  return (
-    <>
-      <ColorPicker
-        aria-label={t('widgets.canvas.toolOptions.shapeFill')}
-        disabled={fill === null}
-        value={fill ?? FALLBACK_COLOR}
-        onSampleColor={sampleColor}
-        onValueChange={onFillChange}
-        onValueChangeEnd={onFillChangeEnd}
-      />
-      <ColorPicker
-        aria-label={t('widgets.canvas.toolOptions.shapeStroke')}
-        disabled={stroke === null}
-        value={stroke ?? FALLBACK_COLOR}
-        onSampleColor={sampleColor}
-        onValueChange={onStrokeChange}
-        onValueChangeEnd={onStrokeChangeEnd}
-      />
-    </>
-  );
-};
-
-export const shapeAdapter: ToolPresentationAdapter = {
-  rowLabels: {
-    color: 'widgets.canvas.toolOptions.shapeColors',
-    geometry: 'widgets.canvas.toolOptions.shapeStrokeWidth',
-    modes: 'widgets.canvas.toolOptions.shapeKind',
-  },
-  color: ShapeColors,
-  geometry: ShapeStrokeWidth,
+export const shapeForm: ToolPropertyForm = {
+  groups: [{ body: ShapeSettings, id: 'shape', labelKey: 'widgets.properties.groups.shape' }],
   id: 'shape',
-  modes: ShapeModes,
   paintsLeaf: true,
 };

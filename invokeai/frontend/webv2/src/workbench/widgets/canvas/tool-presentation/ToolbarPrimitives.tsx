@@ -152,6 +152,8 @@ interface ToolbarSliderProps {
   value: number;
   onKeyDownCapture?: (event: KeyboardEvent<HTMLDivElement>) => void;
   onValueChange: (value: number) => void;
+  /** Fires once when the drag or key gesture settles; document commits belong here, not in onValueChange. */
+  onValueChangeEnd?: (value: number) => void;
 }
 
 /** A slider that fills its region; pairs with a {@link ToolbarNumberField}. */
@@ -166,6 +168,7 @@ export const ToolbarSlider = ({
   value,
   onKeyDownCapture,
   onValueChange,
+  onValueChangeEnd,
 }: ToolbarSliderProps) => {
   const labels = useMemo(() => [ariaLabel], [ariaLabel]);
   const values = useMemo(() => [value], [value]);
@@ -182,6 +185,15 @@ export const ToolbarSlider = ({
     },
     [onValueChange]
   );
+  const handleChangeEnd = useCallback(
+    ({ value: next }: SliderValueChangeDetails) => {
+      const first = next[0];
+      if (onValueChangeEnd && first !== undefined && Number.isFinite(first)) {
+        onValueChangeEnd(first);
+      }
+    },
+    [onValueChangeEnd]
+  );
   return (
     <Slider
       aria-label={labels}
@@ -197,8 +209,46 @@ export const ToolbarSlider = ({
       value={values}
       onKeyDownCapture={onKeyDownCapture}
       onValueChange={handleChange}
+      onValueChangeEnd={onValueChangeEnd ? handleChangeEnd : undefined}
     />
   );
+};
+
+/**
+ * Drag-gesture state for a slider whose settled value lives in the document: the
+ * draft follows the thumb, `settle` runs ONCE on release (one history entry per
+ * gesture), and optional `preview` mirrors ticks into a non-committing store.
+ */
+export const useSliderGesture = (
+  committed: number,
+  settle: (value: number) => void,
+  preview?: (value: number) => void
+) => {
+  const [draft, setDraft] = useState<number | null>(null);
+  // The end event also fires for gestures that changed nothing (a thumb click,
+  // an arrow key at the boundary); settling those would record empty history
+  // entries, so a gesture only settles a genuinely different value.
+  const committedRef = useRef(committed);
+  useEffect(() => {
+    committedRef.current = committed;
+  }, [committed]);
+  const onChange = useCallback(
+    (value: number) => {
+      setDraft(value);
+      preview?.(value);
+    },
+    [preview]
+  );
+  const onChangeEnd = useCallback(
+    (value: number) => {
+      setDraft(null);
+      if (value !== committedRef.current) {
+        settle(value);
+      }
+    },
+    [settle]
+  );
+  return { onChange, onChangeEnd, value: draft ?? committed };
 };
 
 /** Apply and Cancel for a pending operation, session or float, after whatever the owner shows about it. */

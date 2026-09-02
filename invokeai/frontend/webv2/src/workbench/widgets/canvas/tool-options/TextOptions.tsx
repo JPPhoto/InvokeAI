@@ -2,7 +2,7 @@ import type { SelectValueChangeDetails } from '@chakra-ui/react';
 import type { CanvasLayerSourceContract, TextToolOptions } from '@workbench/canvas-engine/api';
 import type {
   ToolbarRegionProps,
-  ToolPresentationAdapter,
+  ToolPropertyForm,
 } from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 import { createListCollection, HStack } from '@chakra-ui/react';
@@ -18,7 +18,13 @@ import {
 } from '@workbench/canvas-engine/api';
 import { useActiveColorCommands, useActiveColorPair } from '@workbench/widgets/canvas/color-system/useActiveColors';
 import { useTextEditSession, useTextOptions } from '@workbench/widgets/canvas/engineStoreHooks';
-import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
+import { EditTargetChip, PropertyControlRow } from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
+import {
+  ToolbarNumberField,
+  ToolbarSlider,
+  useNumberCommit,
+  useSliderGesture,
+} from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
@@ -31,11 +37,11 @@ type TextAlign = TextToolOptions['align'];
 
 interface SelectedText {
   id: string;
+  name: string;
   source: TextSource;
 }
 
 const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: false } as const;
-const FAMILY_TRIGGER_PROPS = { minW: '7rem', w: '7rem' } as const;
 const WEIGHT_TRIGGER_PROPS = { minW: '4.5rem', w: '4.5rem' } as const;
 
 const ALIGN_ICONS: Record<TextAlign, typeof AlignLeftIcon> = {
@@ -97,10 +103,10 @@ const useTextEditor = (engine: ToolbarRegionProps['engine']) => {
       const { document } = project.canvas;
       const layer = document.selectedLayerId ? getDocumentLayer(document, document.selectedLayerId) : undefined;
       return layer && layer.type === 'raster' && layer.source.type === 'text'
-        ? { id: layer.id, source: layer.source }
+        ? { id: layer.id, name: layer.name, source: layer.source }
         : null;
     },
-    (a, b) => a?.id === b?.id && a?.source === b?.source
+    (a, b) => a?.id === b?.id && a?.name === b?.name && a?.source === b?.source
   );
   const styleSource = session ? session.source : (selected?.source ?? null);
   const align = styleSource?.align ?? options.align;
@@ -138,12 +144,22 @@ const useTextEditor = (engine: ToolbarRegionProps['engine']) => {
     },
     [align, colorCommands, commitPrepared, engine, fontFamily, fontSize, fontWeight, lineHeight, selected, session, t]
   );
-  return { active, applyEdit };
+  // The chip names what applyEdit actually writes: the SESSION when one is
+  // open (its layer's name, or the new-text placeholder in create mode), else
+  // the selected text layer, else the defaults.
+  const sessionLayerName = useActiveProjectSelector((project): string | null => {
+    if (!session?.layerId) {
+      return null;
+    }
+    return getDocumentLayer(project.canvas.document, session.layerId)?.name ?? null;
+  });
+  const targetName = session ? (sessionLayerName ?? t('widgets.properties.target.newText')) : (selected?.name ?? null);
+  return { active, applyEdit, targetName };
 };
 
-const TextFamily = ({ engine }: ToolbarRegionProps) => {
+const TextFontSettings = ({ engine }: ToolbarRegionProps) => {
   const { t } = useTranslation();
-  const { active, applyEdit } = useTextEditor(engine);
+  const { active, applyEdit, targetName } = useTextEditor(engine);
   const familyCollection = useMemo(
     () => createListCollection<{ label: string; value: string }>({ items: [...TEXT_FONT_FAMILIES] }),
     []
@@ -162,25 +178,6 @@ const TextFamily = ({ engine }: ToolbarRegionProps) => {
     },
     [active.fontFamily, applyEdit]
   );
-  return (
-    <Select
-      aria-label={t('widgets.canvas.toolOptions.textFont')}
-      collection={familyCollection}
-      positioning={SELECT_POSITIONING}
-      size="xs"
-      flexShrink={0}
-      triggerProps={FAMILY_TRIGGER_PROPS}
-      w="7rem"
-      value={familyValue}
-      valueText={familyLabel}
-      onValueChange={onFamily}
-    />
-  );
-};
-
-const TextStyle = ({ engine }: ToolbarRegionProps) => {
-  const { t } = useTranslation();
-  const { active, applyEdit } = useTextEditor(engine);
   const weightCollection = useMemo(
     () =>
       createListCollection<{ label: string; value: string }>({
@@ -198,85 +195,140 @@ const TextStyle = ({ engine }: ToolbarRegionProps) => {
     },
     [active.fontWeight, applyEdit]
   );
-  const onSize = useNumberCommit(
-    useCallback(
-      (value: number) =>
-        applyEdit({ fontSize: Math.min(MAX_TEXT_FONT_SIZE, Math.max(MIN_TEXT_FONT_SIZE, Math.round(value))) }, true),
-      [applyEdit]
-    )
+  // Ticks preview through the defaults/session; ONE document commit lands on release.
+  const previewSize = useCallback(
+    (value: number) =>
+      applyEdit({ fontSize: Math.min(MAX_TEXT_FONT_SIZE, Math.max(MIN_TEXT_FONT_SIZE, Math.round(value))) }, false),
+    [applyEdit]
   );
-  const onLineHeight = useNumberCommit(
-    useCallback(
-      (value: number) => applyEdit({ lineHeight: Math.max(0.5, Math.round(value * 10) / 10) }, true),
-      [applyEdit]
-    )
+  const setSize = useCallback(
+    (value: number) =>
+      applyEdit({ fontSize: Math.min(MAX_TEXT_FONT_SIZE, Math.max(MIN_TEXT_FONT_SIZE, Math.round(value))) }, true),
+    [applyEdit]
   );
-  const onAlign = useCallback((next: TextAlign) => applyEdit({ align: next }, true), [applyEdit]);
+  const sizeGesture = useSliderGesture(Math.round(active.fontSize), setSize, previewSize);
+  const onSize = useNumberCommit(setSize);
+  const previewLineHeight = useCallback(
+    (value: number) => applyEdit({ lineHeight: Math.max(0.5, Math.round(value * 10) / 10) }, false),
+    [applyEdit]
+  );
+  const setLineHeight = useCallback(
+    (value: number) => applyEdit({ lineHeight: Math.max(0.5, Math.round(value * 10) / 10) }, true),
+    [applyEdit]
+  );
+  const lineHeightGesture = useSliderGesture(active.lineHeight, setLineHeight, previewLineHeight);
+  const onLineHeight = useNumberCommit(setLineHeight);
   return (
     <>
-      <ToolbarNumberField
-        aria-label={t('widgets.canvas.toolOptions.textSize')}
-        max={MAX_TEXT_FONT_SIZE}
-        min={MIN_TEXT_FONT_SIZE}
-        suffix="px"
-        value={String(Math.round(active.fontSize))}
-        onValueCommit={onSize}
-      />
-      <Select
-        aria-label={t('widgets.canvas.toolOptions.textWeight')}
-        collection={weightCollection}
-        positioning={SELECT_POSITIONING}
-        size="xs"
-        flexShrink={0}
-        triggerProps={WEIGHT_TRIGGER_PROPS}
-        w="4.5rem"
-        value={weightValue}
-        valueText={String(active.fontWeight)}
-        onValueChange={onWeight}
-      />
-      <ToolbarNumberField
-        aria-label={t('widgets.canvas.toolOptions.textLineHeight')}
-        max={4}
-        min={0.5}
-        step={0.1}
-        value={active.lineHeight.toFixed(1)}
-        onValueCommit={onLineHeight}
-      />
+      <EditTargetChip layerName={targetName} />
+      <PropertyControlRow label={t('widgets.properties.rows.family')}>
+        <Select
+          aria-label={t('widgets.canvas.toolOptions.textFont')}
+          collection={familyCollection}
+          gridColumn="2 / -1"
+          positioning={SELECT_POSITIONING}
+          size="xs"
+          value={familyValue}
+          valueText={familyLabel}
+          w="full"
+          onValueChange={onFamily}
+        />
+      </PropertyControlRow>
+      <PropertyControlRow label={t('widgets.properties.rows.size')}>
+        <ToolbarSlider
+          aria-label={t('widgets.canvas.toolOptions.textSize')}
+          max={MAX_TEXT_FONT_SIZE}
+          min={MIN_TEXT_FONT_SIZE}
+          value={sizeGesture.value}
+          onValueChange={sizeGesture.onChange}
+          onValueChangeEnd={sizeGesture.onChangeEnd}
+        />
+        <ToolbarNumberField
+          aria-label={t('widgets.canvas.toolOptions.textSize')}
+          max={MAX_TEXT_FONT_SIZE}
+          min={MIN_TEXT_FONT_SIZE}
+          suffix="px"
+          value={String(Math.round(active.fontSize))}
+          onValueCommit={onSize}
+        />
+      </PropertyControlRow>
+      <PropertyControlRow label={t('widgets.properties.rows.weight')}>
+        <Select
+          aria-label={t('widgets.canvas.toolOptions.textWeight')}
+          collection={weightCollection}
+          flexShrink={0}
+          positioning={SELECT_POSITIONING}
+          size="xs"
+          triggerProps={WEIGHT_TRIGGER_PROPS}
+          value={weightValue}
+          valueText={String(active.fontWeight)}
+          w="4.5rem"
+          onValueChange={onWeight}
+        />
+      </PropertyControlRow>
+      <PropertyControlRow label={t('widgets.properties.rows.lineHeight')}>
+        <ToolbarSlider
+          aria-label={t('widgets.canvas.toolOptions.textLineHeight')}
+          max={4}
+          min={0.5}
+          step={0.1}
+          value={lineHeightGesture.value}
+          onValueChange={lineHeightGesture.onChange}
+          onValueChangeEnd={lineHeightGesture.onChangeEnd}
+        />
+        <ToolbarNumberField
+          aria-label={t('widgets.canvas.toolOptions.textLineHeight')}
+          max={4}
+          min={0.5}
+          step={0.1}
+          value={active.lineHeight.toFixed(1)}
+          onValueCommit={onLineHeight}
+        />
+      </PropertyControlRow>
+    </>
+  );
+};
+
+const TextParagraphSettings = ({ engine }: ToolbarRegionProps) => {
+  const { t } = useTranslation();
+  const { active, applyEdit } = useTextEditor(engine);
+  const onAlign = useCallback((next: TextAlign) => applyEdit({ align: next }, true), [applyEdit]);
+  return (
+    <PropertyControlRow label={t('widgets.properties.rows.align')}>
       <HStack gap="0.5">
         {ALIGN_VALUES.map((value) => (
           <AlignButton key={value} active={active.align === value} value={value} onSelect={onAlign} />
         ))}
       </HStack>
-    </>
+    </PropertyControlRow>
   );
 };
 
-const TextColor = ({ engine }: ToolbarRegionProps) => {
+const TextColorSettings = ({ engine }: ToolbarRegionProps) => {
   const { t } = useTranslation();
   const { active, applyEdit } = useTextEditor(engine);
   const sampleColor = useColorSampler(engine);
   const onChange = useCallback((hex: string) => applyEdit({ color: hex }, false), [applyEdit]);
   const onChangeEnd = useCallback((hex: string) => applyEdit({ color: hex }, true), [applyEdit]);
   return (
-    <ColorPicker
-      aria-label={t('widgets.canvas.toolOptions.textColor')}
-      value={active.color}
-      onSampleColor={sampleColor}
-      onValueChange={onChange}
-      onValueChangeEnd={onChangeEnd}
-    />
+    <PropertyControlRow label={t('widgets.properties.rows.color')}>
+      <ColorPicker
+        aria-label={t('widgets.canvas.toolOptions.textColor')}
+        value={active.color}
+        onSampleColor={sampleColor}
+        onValueChange={onChange}
+        onValueChangeEnd={onChangeEnd}
+      />
+    </PropertyControlRow>
   );
 };
 
-export const textAdapter: ToolPresentationAdapter = {
-  rowLabels: {
-    color: 'widgets.canvas.toolOptions.textColor',
-    geometry: 'widgets.canvas.toolOptions.textFont',
-    modes: 'widgets.canvas.toolOptions.textStyle',
-  },
-  color: TextColor,
-  geometry: TextFamily,
+export const textForm: ToolPropertyForm = {
+  groups: [
+    { body: TextFontSettings, id: 'text-font', labelKey: 'widgets.properties.groups.font' },
+    { body: TextParagraphSettings, id: 'text-paragraph', labelKey: 'widgets.properties.groups.paragraph' },
+    { body: TextColorSettings, id: 'text-color', labelKey: 'widgets.properties.rows.color' },
+  ],
   id: 'text',
-  modes: TextStyle,
   paintsLeaf: true,
 };
