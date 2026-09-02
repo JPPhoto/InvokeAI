@@ -4,6 +4,7 @@ import type { Rect } from '@workbench/canvas-engine/types';
 
 import { isEmpty } from '@workbench/canvas-engine/math/rect';
 import {
+  type CompositeEntry,
   getBaseRasterContentBounds,
   planBaseRasterComposite,
   renderRasterComposite,
@@ -44,6 +45,9 @@ export interface ExportRasterCompositeDeps extends RenderRasterCompositeDeps {
   pin?(layerIds: readonly string[]): { release(): void };
 }
 
+const countGroupScopes = (scopes: CompositeEntry['groupScopes']): number =>
+  (scopes ?? []).reduce((total, scope) => total + 1 + countGroupScopes(scope.children), 0);
+
 export const exportRasterComposite = async (
   request: RasterCompositeExportRequest,
   deps: ExportRasterCompositeDeps
@@ -65,8 +69,11 @@ export const exportRasterComposite = async (
   }
 
   // Each adjusted layer needs both a temporary surface and a same-sized
-  // ImageData buffer in addition to the final composite surface.
-  const surfaceCount = 1 + entry.layers.filter((layer) => layer.adjustments !== undefined).length * 2;
+  // ImageData buffer in addition to the final composite surface; each adjusted
+  // GROUP scope likewise isolates into a buffer plus an ImageData pass.
+  const surfaceCount =
+    1 +
+    (entry.layers.filter((layer) => layer.adjustments !== undefined).length + countGroupScopes(entry.groupScopes)) * 2;
   const reservation = deps.reserve?.(rect.width * rect.height * 4 * surfaceCount);
   if (reservation?.status === 'over-budget') {
     return { status: 'over-budget' };

@@ -20,6 +20,7 @@ import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStac
 import type { EngineStores } from '@workbench/canvas-engine/engineStores';
 import type { CreatePath2D } from '@workbench/canvas-engine/freehand';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
+import type { CompositeOptions } from '@workbench/canvas-engine/render/compositor';
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { OverlayCursor } from '@workbench/canvas-engine/render/overlayRenderer';
 import type { RasterBackend } from '@workbench/canvas-engine/render/raster';
@@ -172,6 +173,12 @@ export interface ToolContext {
    * engine-standalone behavior. Absent in minimal test harnesses.
    */
   resolveColorSample?(hex: string): boolean;
+  /**
+   * The compositor providers that make color sampling WYSIWYG (layer and
+   * group adjustment stacks, display effects). Absent in minimal harnesses;
+   * the sampler then reads raw cached pixels.
+   */
+  sampleProviders?: Pick<CompositeOptions, 'adjustedSurface' | 'derivedSurfaces' | 'groupSurface'>;
   /**
    * Settles a pending one-shot sample request with the latest color the
    * gesture stashed via `resolveColorSample`. The color-picker tool calls this

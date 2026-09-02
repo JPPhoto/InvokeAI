@@ -78,6 +78,7 @@ const makeHarness = (): Harness => {
       derivedSurfaceCache: { byteSize: () => 0 } as CreateCompositeFrameDeps['derivedSurfaceCache'],
       diagnostics: {} as CreateCompositeFrameDeps['diagnostics'],
       getAdjustedSurface: () => null,
+      getGroupSurface: () => null,
       getCheckerboardTile: () => surface(8, 8),
       getMaskPatternTile: () => null,
       layerCache: {

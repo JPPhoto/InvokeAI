@@ -2,10 +2,10 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 841574,
+        "brotliBytes": 841579,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 840585,
+        "gzipBytes": 840575,
         "imageRawBytes": 156376,
         "initialRawBytes": 1959360,
         "largestAssetRawBytes": 746376,
@@ -291,10 +291,10 @@
         ]
       },
       "limits": {
-        "brotliBytes": 849990,
+        "brotliBytes": 849995,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 848991,
+        "gzipBytes": 848981,
         "imageRawBytes": 157940,
         "initialRawBytes": 1978954,
         "largestAssetRawBytes": 753840,
@@ -309,12 +309,12 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1102144,
+        "brotliBytes": 1103113,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1097730,
+        "gzipBytes": 1098700,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2749535,
+        "initialRawBytes": 2752773,
         "largestAssetRawBytes": 746376,
         "otherAssetRawBytes": 0,
         "ownedRawBytes": 114628,
@@ -732,6 +732,7 @@
           "source:src/workbench/canvas-engine/render/adjustments.ts",
           "source:src/workbench/canvas-engine/render/compositor.ts",
           "source:src/workbench/canvas-engine/render/controlTransparency.ts",
+          "source:src/workbench/canvas-engine/render/groupAdjustmentScopes.ts",
           "source:src/workbench/canvas-engine/render/maskFill.ts",
           "source:src/workbench/canvas-engine/render/rasterComposite.ts",
           "source:src/workbench/canvas-engine/render/rasterizers/textRasterizer.ts",
@@ -933,12 +934,12 @@
         ]
       },
       "limits": {
-        "brotliBytes": 1113166,
+        "brotliBytes": 1114145,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 1108708,
+        "gzipBytes": 1109687,
         "imageRawBytes": 157940,
-        "initialRawBytes": 2777031,
+        "initialRawBytes": 2780301,
         "largestAssetRawBytes": 753840,
         "otherAssetRawBytes": 0,
         "ownedRawBytes": 114628,
@@ -950,7 +951,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-01",
+  "capturedAt": "2026-09-02",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",

@@ -15,7 +15,11 @@ import type { Viewport } from '@workbench/canvas-engine/viewport';
 import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
 import { isLayerContributing } from '@workbench/canvas-engine/document/layerEligibility';
 import { getSourceContentRect, isRenderableLayer, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
-import { compositeDocument, shouldSmoothAtZoom } from '@workbench/canvas-engine/render/compositor';
+import {
+  compositeDocument,
+  shouldSmoothAtZoom,
+  type CompositeOptions,
+} from '@workbench/canvas-engine/render/compositor';
 import { calculateActiveFrameLayerIds } from '@workbench/canvas-engine/render/frameDemand';
 import { enforceSurfaceBudget } from '@workbench/canvas-engine/render/surfaceBudget';
 
@@ -33,6 +37,7 @@ export interface CreateCompositeFrameDeps {
   readonly viewport: Viewport;
   readonly transformOverrides: LayerTransformOverrides;
   readonly getAdjustedSurface: (layer: CanvasLayerContract, entry: LayerCacheEntry) => RasterSurface | null;
+  readonly getGroupSurface: NonNullable<CompositeOptions['groupSurface']>;
   readonly getMaskPatternTile: (style: string, color: string) => RasterSurface | null;
   readonly getCheckerboardTile: () => RasterSurface;
   /** Starts (or joins) the rasterization of a layer whose cache is stale. */
@@ -186,6 +191,7 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
         // refreshes only the band the stroke reported writing, rather than
         // re-deriving from the whole layer (see adjustedSurfaceCache).
         adjustedSurface: deps.getAdjustedSurface,
+        groupSurface: deps.getGroupSurface,
         // The raster backend + mask fill tile resolver drive the mask colorize
         // path (alpha stencil → source-in fill colour/pattern, above all layers).
         backend: deps.backend,

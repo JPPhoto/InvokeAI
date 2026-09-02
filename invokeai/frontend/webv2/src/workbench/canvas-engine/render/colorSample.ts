@@ -19,7 +19,7 @@ import type { Mat2d, Vec2 } from '@workbench/canvas-engine/types';
 import type { LayerCacheStore } from './layerCache';
 import type { RasterBackend } from './raster';
 
-import { compositeDocument } from './compositor';
+import { compositeDocument, type CompositeOptions } from './compositor';
 
 /** An RGBA sample, channels in `[0, 255]`. */
 export interface RgbaSample {
@@ -40,7 +40,8 @@ export const sampleDocumentColor = (
   doc: CanvasDocumentContractV3,
   layers: LayerCacheStore,
   backend: RasterBackend,
-  docPoint: Vec2
+  docPoint: Vec2,
+  providers: Pick<CompositeOptions, 'adjustedSurface' | 'derivedSurfaces' | 'groupSurface'> = {}
 ): RgbaSample | null => {
   const px = Math.floor(docPoint.x);
   const py = Math.floor(docPoint.y);
@@ -53,7 +54,10 @@ export const sampleDocumentColor = (
   // Reuse the canonical compositor so sampling shares its layer ordering,
   // cache-origin placement, transforms, blend modes, and display effects.
   // Omitting a checkerboard tile and staged preview keeps empty space transparent.
-  compositeDocument(scratch, doc, layers, view, { backend });
+  // The providers make the sample WYSIWYG: layer and group adjustment stacks
+  // apply exactly as the screen draws them. Absent (minimal harnesses), the
+  // sample reads raw cached pixels.
+  compositeDocument(scratch, doc, layers, view, { backend, ...providers });
 
   const { data } = scratch.ctx.getImageData(0, 0, 1, 1);
   const alpha = data[3] ?? 0;

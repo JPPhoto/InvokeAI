@@ -1,11 +1,16 @@
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type {
+  CanvasDocumentContractV3,
+  CanvasLayerContract,
+  CanvasNodeContract,
+} from '@workbench/canvas-engine/contracts';
 import type { CanvasDiagnostics } from '@workbench/canvas-engine/diagnostics';
 import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
+import type { CompositeOptions } from '@workbench/canvas-engine/render/compositor';
 import type { DerivedSurfaceCache } from '@workbench/canvas-engine/render/derivedSurfaceCache';
 import type {
   LayerCacheEntry,
@@ -17,7 +22,7 @@ import type { Rect } from '@workbench/canvas-engine/types';
 
 import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
 import { getDocumentLayer, getDocumentLeaves, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
-import { createEmptyStacks } from '@workbench/canvas-engine/document/documentTree';
+import { createEmptyStacks, isGroupNode } from '@workbench/canvas-engine/document/documentTree';
 import { getSourceContentRect } from '@workbench/canvas-engine/document/sources';
 import { isEmpty } from '@workbench/canvas-engine/math/rect';
 import { compositeDocument } from '@workbench/canvas-engine/render/compositor';
@@ -46,6 +51,7 @@ export interface ExtractMaskedAreaControllerOptions {
   readonly rasterize: (layerId: string) => Promise<ExportResult>;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
   readonly getAdjustedSurface: (layer: CanvasLayerContract, entry: LayerCacheEntry) => RasterSurface | null;
+  readonly getGroupSurface?: CompositeOptions['groupSurface'];
   readonly getMaskPattern: (style: string, color: string) => RasterSurface | null;
   readonly createLayerId: () => string;
   readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => CanvasNodeInsertionAnchor;
@@ -58,8 +64,20 @@ export interface ExtractMaskedAreaControllerOptions {
   ) => void;
 }
 
-/** Owns guarded extraction of raster content through an inpaint mask. */
-/** Contributing raster leaves with content, top first, with ancestor state applied. */
+/**
+ * The raster forest reduced to `keep` leaves with the GROUP topology intact:
+ * an adjusted group's stack must apply to the extracted composite exactly as
+ * it applies on screen, so groups cannot be flattened away here.
+ */
+const filterRasterForest = (nodes: readonly CanvasNodeContract[], keep: ReadonlySet<string>): CanvasNodeContract[] =>
+  nodes.flatMap((node): CanvasNodeContract[] => {
+    if (isGroupNode(node)) {
+      const children = filterRasterForest(node.children, keep);
+      return children.length > 0 ? [{ ...node, children }] : [];
+    }
+    return keep.has(node.id) ? [node] : [];
+  });
+
 const contributingRasters = (
   document: CanvasDocumentContractV3,
   hasContent: (layerId: string) => boolean
@@ -68,6 +86,7 @@ const contributingRasters = (
     .filter((leaf) => leaf.stack === 'raster' && leaf.contributionEnabled && hasContent(leaf.id))
     .map((leaf) => leaf.layer);
 
+/** Owns guarded extraction of raster content through an inpaint mask. */
 export class ExtractMaskedAreaController {
   private disposed = false;
   constructor(private readonly deps: ExtractMaskedAreaControllerOptions) {}
@@ -177,11 +196,18 @@ export class ExtractMaskedAreaController {
       const pixels = this.deps.backend.createSurface(rect.width, rect.height);
       compositeDocument(
         pixels,
-        { ...document, stacks: { ...createEmptyStacks(), raster: contributors } },
+        {
+          ...document,
+          stacks: {
+            ...createEmptyStacks(),
+            raster: filterRasterForest(document.stacks.raster, new Set(contributors.map((layer) => layer.id))),
+          },
+        },
         this.deps.layers,
         { a: 1, b: 0, c: 0, d: 1, e: -rect.x, f: -rect.y },
         {
           adjustedSurface: this.deps.getAdjustedSurface,
+          groupSurface: this.deps.getGroupSurface,
           backend: this.deps.backend,
           derivedSurfaces: this.deps.derived,
           diagnostics: this.deps.diagnostics,

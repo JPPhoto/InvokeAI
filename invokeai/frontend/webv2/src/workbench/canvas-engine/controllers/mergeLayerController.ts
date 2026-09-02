@@ -15,9 +15,15 @@ import { removeNodes } from '@workbench/canvas-engine/document/documentTree';
 import { insertNodesAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import { haveSameStructure } from '@workbench/canvas-engine/document/layerStacks';
 import { mergeDownMatrix } from '@workbench/canvas-engine/document/mergeDown';
-import { canMergeSelectedRasters, getMergeVisibleRasterLayers } from '@workbench/canvas-engine/document/mergeVisible';
+import { canMergeSelectedRasters, getMergeVisibleRasterLeaves } from '@workbench/canvas-engine/document/mergeVisible';
 import { isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
+import { applyAdjustments } from '@workbench/canvas-engine/render/adjustments';
 import { blendToComposite } from '@workbench/canvas-engine/render/compositor';
+import {
+  collectAdjustedGroups,
+  planGroupAdjustmentScopes,
+  type GroupAdjustmentScope,
+} from '@workbench/canvas-engine/render/groupAdjustmentScopes';
 
 import type { CanvasMutationContext } from './mutationContext';
 
@@ -141,7 +147,11 @@ export class MergeLayerController {
     if (!document) {
       return 'nothing';
     }
-    const contributors = getMergeVisibleRasterLayers(compileDocumentLeaves(document), this.deps.hasExportableContent);
+    const contributorLeaves = getMergeVisibleRasterLeaves(
+      compileDocumentLeaves(document),
+      this.deps.hasExportableContent
+    );
+    const contributors = contributorLeaves.map((leaf) => leaf.layer);
     if (contributors.length < 2) {
       return 'nothing';
     }
@@ -187,14 +197,23 @@ export class MergeLayerController {
       }
 
       const liveDocument = this.deps.ctx.getDocument();
-      const liveContributors = liveDocument
-        ? getMergeVisibleRasterLayers(compileDocumentLeaves(liveDocument), this.deps.hasExportableContent)
+      const liveLeaves = liveDocument
+        ? getMergeVisibleRasterLeaves(compileDocumentLeaves(liveDocument), this.deps.hasExportableContent)
         : [];
       if (
         !liveDocument ||
-        liveContributors.length !== contributors.length ||
-        liveContributors.some((layer, index) => layer !== contributors[index])
+        liveLeaves.length !== contributors.length ||
+        liveLeaves.some((leaf, index) => leaf.layer !== contributors[index])
       ) {
+        return 'not-ready';
+      }
+      // Leaf identity alone misses two mid-await edits this feature introduces:
+      // an ancestor group's STACK changing (leaf objects untouched), and a
+      // re-parent in/out of an adjusted group that keeps the flat order. The
+      // scope plan folds both, so compare it against the pre-export plan.
+      const scopes = planGroupAdjustmentScopes(contributorLeaves, collectAdjustedGroups(document));
+      const liveScopes = planGroupAdjustmentScopes(liveLeaves, collectAdjustedGroups(liveDocument));
+      if (JSON.stringify(liveScopes) !== JSON.stringify(scopes)) {
         return 'not-ready';
       }
 
@@ -211,13 +230,43 @@ export class MergeLayerController {
       const context = pixels.ctx;
       context.setTransform(1, 0, 0, 1, 0, 0);
       context.clearRect(0, 0, rect.width, rect.height);
-      for (let index = successful.length - 1; index >= 0; index -= 1) {
-        const exported = successful[index]!;
-        const contributor = contributors[index]!;
-        context.globalAlpha = contributor.opacity;
-        context.globalCompositeOperation = blendToComposite(contributor.blendMode);
-        context.drawImage(exported.surface.canvas, exported.rect.x - rect.x, exported.rect.y - rect.y);
-      }
+      // Contributors inside an adjusted group composite through an isolated
+      // buffer with the group's stack applied, exactly as the screen draws
+      // them — merged pixels must reproduce the screen, and a per-leaf bake
+      // cannot under member opacity/blending.
+      const drawMerged = (
+        target: RasterSurface['ctx'],
+        from: number,
+        to: number,
+        range: readonly GroupAdjustmentScope[]
+      ): void => {
+        let scopeIndex = range.length - 1;
+        for (let index = to - 1; index >= from;) {
+          const scope = scopeIndex >= 0 ? range[scopeIndex]! : null;
+          if (scope && index >= scope.start && index < scope.end) {
+            const buffer = this.deps.backend.createSurface(rect.width, rect.height);
+            buffer.ctx.setTransform(1, 0, 0, 1, 0, 0);
+            buffer.ctx.clearRect(0, 0, rect.width, rect.height);
+            drawMerged(buffer.ctx, scope.start, scope.end, scope.children);
+            const scoped = buffer.ctx.getImageData(0, 0, rect.width, rect.height);
+            applyAdjustments(scoped, scope.adjustments);
+            buffer.ctx.putImageData(scoped, 0, 0);
+            target.globalAlpha = 1;
+            target.globalCompositeOperation = 'source-over';
+            target.drawImage(buffer.canvas, 0, 0);
+            index = scope.start - 1;
+            scopeIndex -= 1;
+            continue;
+          }
+          const exported = successful[index]!;
+          const contributor = contributors[index]!;
+          target.globalAlpha = contributor.opacity;
+          target.globalCompositeOperation = blendToComposite(contributor.blendMode);
+          target.drawImage(exported.surface.canvas, exported.rect.x - rect.x, exported.rect.y - rect.y);
+          index -= 1;
+        }
+      };
+      drawMerged(context, 0, successful.length, scopes);
       context.globalAlpha = 1;
       context.globalCompositeOperation = 'source-over';
 

@@ -1,5 +1,5 @@
 import type { CanvasDocumentSnapshot, PsdExportResult } from '@workbench/canvas-engine/capabilities';
-import type { CanvasNodeContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasAdjustmentsContract, CanvasNodeContract } from '@workbench/canvas-engine/contracts';
 import type {
   CanvasDetachedLayerSurface,
   CaptureRasterSnapshotResult,
@@ -93,12 +93,24 @@ export class PsdExportController {
         // The raster tree as it stands, minus leaves with nothing captured; the planner derives
         // effective visibility from the own flags, the same way Photoshop will.
         let missing: string | null = null;
-        const toInputs = (nodes: readonly CanvasNodeContract[]): PsdExportNodeInput[] =>
+        // PSD has no representation for a GROUP's adjustment stack, so each
+        // enclosing stack is baked into every descendant leaf (own stack
+        // first, then innermost ancestor outward). Exact for opaque
+        // source-over members; under member opacity/blending it is the
+        // accepted approximation — and the merged preview flattens the same
+        // baked pixels, so the file stays self-consistent.
+        const toInputs = (
+          nodes: readonly CanvasNodeContract[],
+          ancestorStacks: readonly CanvasAdjustmentsContract[] = []
+        ): PsdExportNodeInput[] =>
           nodes.flatMap((node): PsdExportNodeInput[] => {
             if (isGroupNode(node)) {
+              const stacks = isIdentityAdjustments(node.adjustments)
+                ? ancestorStacks
+                : [...ancestorStacks, node.adjustments!];
               return [
                 {
-                  children: toInputs(node.children),
+                  children: toInputs(node.children, stacks),
                   id: node.id,
                   isEnabled: node.isEnabled,
                   name: node.name,
@@ -116,11 +128,14 @@ export class PsdExportController {
               }
               return [];
             }
+            const combined = [
+              ...(node.type === 'raster' ? (node.adjustments ?? []) : []),
+              ...[...ancestorStacks].reverse().flat(),
+            ];
             return [
               {
                 // Identity-aware: an emptied stack must not trigger the executor's bake writeback.
-                adjustments:
-                  node.type === 'raster' && !isIdentityAdjustments(node.adjustments) ? node.adjustments : undefined,
+                adjustments: isIdentityAdjustments(combined) ? undefined : combined,
                 blendMode: node.blendMode,
                 contentRect: detached.rect,
                 id: node.id,

@@ -6,6 +6,7 @@ import type {
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
 import type { SemanticLeaf } from '@workbench/canvas-engine/document-model/semanticLeaf';
+import type { GroupAdjustmentScope } from '@workbench/canvas-engine/render/groupAdjustmentScopes';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Mat2d, Rect } from '@workbench/canvas-engine/types';
 
@@ -14,6 +15,10 @@ import { fromTRS, multiply } from '@workbench/canvas-engine/math/mat2d';
 import { roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 import { adjustmentsKey, applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
 import { blendToComposite } from '@workbench/canvas-engine/render/compositor';
+import {
+  collectAdjustedGroups,
+  planGroupAdjustmentScopes,
+} from '@workbench/canvas-engine/render/groupAdjustmentScopes';
 
 type Ctx = RasterSurface['ctx'];
 
@@ -33,6 +38,13 @@ export interface CompositeLayerRef {
 export interface CompositeEntry {
   bbox: Rect;
   layers: readonly CompositeLayerRef[];
+  /**
+   * Adjusted-group isolation scopes over `layers` (index ranges, top-first,
+   * nested). A scope's members composite into an isolated buffer, the group's
+   * stack applies to the buffer, and the buffer composites onward — the
+   * pixels a pass-through walk cannot produce. Absent ⇒ fully pass-through.
+   */
+  groupScopes?: readonly GroupAdjustmentScope[];
 }
 
 export interface BaseRasterCompositeEntry extends CompositeEntry {
@@ -152,16 +164,20 @@ export const getCompositeLayerBounds = (layers: readonly CompositeLayerRef[]): R
   return bounds;
 };
 
+const scopeKey = (scope: GroupAdjustmentScope): string =>
+  `${scope.id}@${scope.start}-${scope.end}:${adjustmentsKey(scope.adjustments)}(${scope.children.map(scopeKey).join(',')})`;
+
 /** Plans the enabled base-raster layers over an exact document-space rectangle. */
 export const planBaseRasterComposite = (document: CanvasDocumentContractV3, rect: Rect): BaseRasterCompositeEntry => {
-  const layers = compileDocumentLeaves(document)
-    .filter(isBaseRasterLeaf)
-    .map((leaf) => toLayerRef(leaf.layer, document));
+  const drawn = compileDocumentLeaves(document).filter(isBaseRasterLeaf);
+  const layers = drawn.map((leaf) => toLayerRef(leaf.layer, document));
+  const groupScopes = planGroupAdjustmentScopes(drawn, collectAdjustedGroups(document));
   return {
     bbox: rect,
-    key: `base-raster|${rectKey(rect)}|${layers.map(layerKey).join('|')}`,
+    key: `base-raster|${rectKey(rect)}|${layers.map(layerKey).join('|')}|${groupScopes.map(scopeKey).join('|')}`,
     kind: 'base-raster',
     layers,
+    ...(groupScopes.length > 0 ? { groupScopes } : {}),
   };
 };
 
@@ -196,21 +212,12 @@ export const renderRasterComposite = async (
   const { bbox } = entry;
   const width = Math.max(0, bbox.width);
   const height = Math.max(0, bbox.height);
-  const surface = deps.backend.createSurface(width, height);
-  const ctx = surface.ctx;
   const readImageData = deps.readImageData ?? defaultReadImageData;
   const writeImageData = deps.writeImageData ?? defaultWriteImageData;
-
-  setTransform(ctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
-  ctx.clearRect(0, 0, surface.width, surface.height);
-
   const view = bboxView(bbox);
-  // Layers are stored top-first (index 0 = top-most); draw bottom→top.
-  for (let i = entry.layers.length - 1; i >= 0; i--) {
-    const ref = entry.layers[i];
-    if (!ref) {
-      continue;
-    }
+  const fullRect: Rect = { height, width, x: 0, y: 0 };
+
+  const drawRef = async (ctx: Ctx, ref: CompositeLayerRef): Promise<void> => {
     const layerSurface = await deps.getLayerSurface(ref.id);
     if (ref.adjustments) {
       // Bake non-destructive adjustments so the generated image matches what the
@@ -222,7 +229,6 @@ export const renderRasterComposite = async (
       tempCtx.clearRect(0, 0, width, height);
       setTransform(tempCtx, multiply(view, layerMatrix(ref)));
       tempCtx.drawImage(layerSurface.surface.canvas, layerSurface.rect.x, layerSurface.rect.y);
-      const fullRect: Rect = { height, width, x: 0, y: 0 };
       const pixels = readImageData(temp, fullRect);
       applyAdjustments(pixels, ref.adjustments);
       writeImageData(temp, pixels, 0, 0);
@@ -232,7 +238,7 @@ export const renderRasterComposite = async (
       ctx.globalCompositeOperation = blendToComposite(ref.blendMode);
       ctx.drawImage(temp.canvas, 0, 0);
       ctx.restore();
-      continue;
+      return;
     }
     ctx.save();
     ctx.globalAlpha = ref.opacity;
@@ -242,7 +248,52 @@ export const renderRasterComposite = async (
     // layers place their pixels off-zero).
     ctx.drawImage(layerSurface.surface.canvas, layerSurface.rect.x, layerSurface.rect.y);
     ctx.restore();
-  }
+  };
 
+  /**
+   * Draws `[start, end)` bottom→top onto `ctx`. A scope's members render into
+   * an isolated bbox-sized buffer first, the group's stack applies to that
+   * composite, and the buffer lands source-over — the group-adjustment
+   * semantics a per-leaf bake cannot reproduce under member opacity/blending.
+   */
+  const renderRange = async (
+    ctx: Ctx,
+    start: number,
+    end: number,
+    scopes: readonly GroupAdjustmentScope[]
+  ): Promise<void> => {
+    let scopeIndex = scopes.length - 1;
+    for (let i = end - 1; i >= start;) {
+      const scope = scopeIndex >= 0 ? scopes[scopeIndex]! : null;
+      if (scope && i >= scope.start && i < scope.end) {
+        const buffer = deps.backend.createSurface(width, height);
+        setTransform(buffer.ctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+        buffer.ctx.clearRect(0, 0, width, height);
+        await renderRange(buffer.ctx, scope.start, scope.end, scope.children);
+        const pixels = readImageData(buffer, fullRect);
+        applyAdjustments(pixels, scope.adjustments);
+        writeImageData(buffer, pixels, 0, 0);
+        ctx.save();
+        setTransform(ctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.drawImage(buffer.canvas, 0, 0);
+        ctx.restore();
+        i = scope.start - 1;
+        scopeIndex -= 1;
+        continue;
+      }
+      const ref = entry.layers[i];
+      if (ref) {
+        await drawRef(ctx, ref);
+      }
+      i -= 1;
+    }
+  };
+
+  const surface = deps.backend.createSurface(width, height);
+  setTransform(surface.ctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+  surface.ctx.clearRect(0, 0, surface.width, surface.height);
+  await renderRange(surface.ctx, 0, entry.layers.length, entry.groupScopes ?? []);
   return surface;
 };

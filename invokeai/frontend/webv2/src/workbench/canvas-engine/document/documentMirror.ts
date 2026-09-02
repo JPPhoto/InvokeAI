@@ -26,6 +26,14 @@ export interface DocumentMirrorCallbacks {
    * keeps its raster cache.
    */
   onLayersChanged(changed: string[], sourceChanged: string[]): void;
+  /**
+   * Leaves whose rendered contribution changed ONLY because an ancestor
+   * group's adjustment stack did: their pixels, sources, and effective flags
+   * are untouched, so the engine must recomposite them but must NOT run the
+   * destructive reactions `onLayersChanged` carries (float and pixel-edit
+   * cancellation). Optional so minimal harnesses need not care.
+   */
+  onLayersRecomposite?(ids: string[]): void;
   /** The forests were restructured without any leaf changing: recomposite with the new order. */
   onLayerOrderChanged(): void;
   /** The document was replaced wholesale (dims/background change, appear/disappear) — full invalidate. */
@@ -75,6 +83,8 @@ const effectiveKey = (entry: CanvasNodeEntry): string =>
 interface ForestDiff {
   changed: string[];
   sourceChanged: string[];
+  /** Ancestor-adjustment fan-out only; disjoint from `changed`. */
+  recompositeOnly: string[];
   restructured: boolean;
 }
 
@@ -86,6 +96,7 @@ interface ForestDiff {
 const diffForests = (prev: CanvasDocumentIndex, next: CanvasDocumentIndex): ForestDiff => {
   const changed = new Set<string>();
   const sourceChanged = new Set<string>();
+  const recompositeOnly = new Set<string>();
   // A group whose adjustment stack changed re-renders every leaf beneath it.
   // `next.nodes` is preorder, so these ids are collected before their leaves.
   const adjustedGroups = new Set<string>();
@@ -114,11 +125,10 @@ const diffForests = (prev: CanvasDocumentIndex, next: CanvasDocumentIndex): Fore
       if (rasterSourceRef(before.node as CanvasLayerContract) !== rasterSourceRef(entry.node)) {
         sourceChanged.add(entry.node.id);
       }
-    } else if (
-      effectiveKey(before) !== effectiveKey(entry) ||
-      entry.path.some((ancestorId) => adjustedGroups.has(ancestorId))
-    ) {
+    } else if (effectiveKey(before) !== effectiveKey(entry)) {
       changed.add(entry.node.id);
+    } else if (entry.path.some((ancestorId) => adjustedGroups.has(ancestorId))) {
+      recompositeOnly.add(entry.node.id);
     }
   }
   for (const entry of prev.nodes) {
@@ -129,7 +139,12 @@ const diffForests = (prev: CanvasDocumentIndex, next: CanvasDocumentIndex): Fore
       }
     }
   }
-  return { changed: [...changed], restructured, sourceChanged: [...sourceChanged] };
+  return {
+    changed: [...changed],
+    recompositeOnly: [...recompositeOnly].filter((id) => !changed.has(id)),
+    restructured,
+    sourceChanged: [...sourceChanged],
+  };
 };
 
 /**
@@ -185,6 +200,9 @@ export const createDocumentMirror = (
             callbacks.onLayersChanged(diff.changed, diff.sourceChanged);
           } else if (diff.restructured) {
             callbacks.onLayerOrderChanged();
+          }
+          if (diff.recompositeOnly.length > 0) {
+            callbacks.onLayersRecomposite?.(diff.recompositeOnly);
           }
         }
         if (!bboxEqual(prevDoc.bbox, doc.bbox)) {

@@ -7,13 +7,17 @@ import { isLayerEditable } from './layerEligibility';
 export type HasMergeVisibleContent = (layerId: string) => boolean;
 
 /** Contributing raster leaves with content, top first. */
+export const getMergeVisibleRasterLeaves = (
+  leaves: readonly SemanticLeaf[],
+  hasContent: HasMergeVisibleContent
+): SemanticLeaf[] =>
+  leaves.filter((leaf) => leaf.stack === 'raster' && leaf.contributionEnabled && hasContent(leaf.id));
+
+/** Contributing raster layers with content, top first. */
 export const getMergeVisibleRasterLayers = (
   leaves: readonly SemanticLeaf[],
   hasContent: HasMergeVisibleContent
-): CanvasLayerContract[] =>
-  leaves
-    .filter((leaf) => leaf.stack === 'raster' && leaf.contributionEnabled && hasContent(leaf.id))
-    .map((leaf) => leaf.layer);
+): CanvasLayerContract[] => getMergeVisibleRasterLeaves(leaves, hasContent).map((leaf) => leaf.layer);
 
 /** Whether the raster stack's merge-visible action has at least two contributors. */
 export const canMergeVisibleRasters = (leaves: readonly SemanticLeaf[], hasContent: HasMergeVisibleContent): boolean =>

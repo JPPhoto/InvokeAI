@@ -93,6 +93,7 @@ const spyCallbacks = () => ({
   onDocumentReplaced: vi.fn<DocumentMirrorCallbacks['onDocumentReplaced']>(),
   onLayerOrderChanged: vi.fn<DocumentMirrorCallbacks['onLayerOrderChanged']>(),
   onLayersChanged: vi.fn<DocumentMirrorCallbacks['onLayersChanged']>(),
+  onLayersRecomposite: vi.fn<NonNullable<DocumentMirrorCallbacks['onLayersRecomposite']>>(),
   onSelectionChanged: vi.fn<NonNullable<DocumentMirrorCallbacks['onSelectionChanged']>>(),
   onStagingChanged: vi.fn<DocumentMirrorCallbacks['onStagingChanged']>(),
 });
@@ -493,7 +494,7 @@ describe('createDocumentMirror: groups', () => {
     expect(callbacks.onLayerOrderChanged).not.toHaveBeenCalled();
   });
 
-  it('fans a group adjustment-stack edit out to every descendant leaf, appearance-only', () => {
+  it('fans a group adjustment-stack edit out to descendants on the non-destructive recomposite channel', () => {
     const a = rasterLayer('a');
     const b = rasterLayer('b');
     const c = rasterLayer('c');
@@ -505,7 +506,10 @@ describe('createDocumentMirror: groups', () => {
       ...doc,
       stacks: stacksFrom([groupContract('g', [a, groupContract('h', [b])], { adjustments: stack }), c]),
     });
-    expect(callbacks.onLayersChanged).toHaveBeenLastCalledWith(['a', 'b'], []);
+    // The descendants' own pixels/flags are untouched, so the destructive
+    // onLayersChanged reactions (float and pixel-edit cancellation) must not run.
+    expect(callbacks.onLayersChanged).not.toHaveBeenCalled();
+    expect(callbacks.onLayersRecomposite).toHaveBeenLastCalledWith(['a', 'b']);
     expect(callbacks.onLayerOrderChanged).not.toHaveBeenCalled();
   });
 

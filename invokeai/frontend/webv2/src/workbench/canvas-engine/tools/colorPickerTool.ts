@@ -41,7 +41,7 @@ const pickColorAt = (ctx: ToolContext, input: PointerInput): void => {
   if (!doc) {
     return;
   }
-  const sample = sampleDocumentColor(doc, ctx.layers, ctx.backend, input.documentPoint);
+  const sample = sampleDocumentColor(doc, ctx.layers, ctx.backend, input.documentPoint, ctx.sampleProviders);
   if (!sample) {
     return;
   }

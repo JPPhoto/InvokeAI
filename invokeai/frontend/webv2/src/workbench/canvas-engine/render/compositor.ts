@@ -31,10 +31,12 @@ import { fromTRS, multiply } from '@workbench/canvas-engine/math/mat2d';
 import { intersect, isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 
 import type { DerivedSurfaceCache } from './derivedSurfaceCache';
+import type { GroupAdjustmentScope } from './groupAdjustmentScopes';
 import type { LayerCacheEntry, LayerCacheStore } from './layerCache';
 import type { RasterBackend, RasterSurface } from './raster';
 
 import { renderControlTransparency } from './controlTransparency';
+import { collectAdjustedGroups, planGroupAdjustmentScopes } from './groupAdjustmentScopes';
 import { colorizeMask } from './maskFill';
 
 /** Screen-space size (px) of each checkerboard square for transparent backgrounds. */
@@ -189,6 +191,23 @@ export interface CompositeOptions {
   floatingSelection?: { layerId: string; surface: RasterSurface; rect: Rect; matrix: Mat2d } | null;
   /** Optional deterministic render counters; omitted in the normal zero-overhead path. */
   diagnostics?: CanvasDiagnostics | null;
+  /**
+   * Returns an adjusted GROUP's document-space composite (its members drawn,
+   * the group's stack applied), or `null` when the group currently has no
+   * drawable content. The engine wires a memoizing {@link
+   * import('./groupSurfaceCache').GroupSurfaceCache}. Members named in
+   * `excludeIds` are left out of the composite so the caller can draw them
+   * separately (pixel-edit skips, filter previews). Absent ⇒ group stacks are
+   * ignored and members draw flat (a bare test call).
+   */
+  groupSurface?:
+    | ((
+        scope: GroupAdjustmentScope,
+        members: readonly SemanticLeaf[],
+        memberMatrices: readonly Mat2d[],
+        excludeIds: ReadonlySet<string>
+      ) => { surface: RasterSurface; rect: Rect } | null)
+    | null;
 }
 
 type Ctx = RasterSurface['ctx'];
@@ -548,10 +567,16 @@ export const compositeDocument = (
     isolationLayerId: opts.isolationLayerId ?? null,
     showOverlayStacks: ALL_OVERLAY_STACKS_SHOWN,
   });
-  for (const leaf of plan.leaves) {
-    if (leaf.id === opts.skipLayerId) {
-      continue;
-    }
+  // Adjusted-group scopes: their members composite through an isolated,
+  // stack-adjusted surface instead of drawing flat. Isolation mode inspects
+  // raw members, so scopes are bypassed while it is active; without a
+  // provider (bare test calls, color sampling in minimal harnesses) members
+  // draw flat too.
+  const scopes =
+    opts.groupSurface && !isIsolated(opts) ? planGroupAdjustmentScopes(plan.leaves, collectAdjustedGroups(doc)) : [];
+  let scopeIndex = 0;
+
+  const drawLeafFlat = (leaf: SemanticLeaf): void => {
     opts.diagnostics?.increment('layersConsidered');
     const float = opts.floatingSelection?.layerId === leaf.id ? opts.floatingSelection : null;
     const entry = caches.get(leaf.id);
@@ -562,17 +587,68 @@ export const compositeDocument = (
       if (float) {
         drawFloatingSelection(ctx, leaf, view, opts, float);
       }
-      continue;
+      return;
     }
     if (isDefinitelyOffscreen(leaf, entry, view, target, opts) && !float) {
       opts.diagnostics?.increment('layersCulled');
-      continue;
+      return;
     }
     drawCachedLayer(ctx, leaf, entry, view, opts);
     if (float) {
       drawFloatingSelection(ctx, leaf, view, opts, float);
     }
     opts.diagnostics?.increment('layersDrawn');
+  };
+
+  for (let index = 0; index < plan.leaves.length; index += 1) {
+    const scope = scopeIndex < scopes.length ? scopes[scopeIndex]! : null;
+    if (scope && index === scope.start) {
+      const members = plan.leaves.slice(scope.start, scope.end);
+      const matrices = members.map((member) => getEffectiveLayerMatrix(member, opts));
+      // Members the caller draws through other channels are left out of the
+      // composite: a pixel-edit skip target, and filter-preview targets (the
+      // preview replaces the member's pixels and draws separately, without the
+      // group stack — a transient divergence that ends with the operation).
+      const excluded = new Set<string>();
+      for (const member of members) {
+        if (member.id === opts.skipLayerId || opts.layerPreviews?.has(member.id)) {
+          excluded.add(member.id);
+        }
+      }
+      const result = opts.groupSurface!(scope, members, matrices, excluded);
+      if (result) {
+        ctx.save();
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+        setTransformFromMat(ctx, view);
+        ctx.drawImage(result.surface.canvas, result.rect.x, result.rect.y);
+        ctx.restore();
+        opts.diagnostics?.increment('layersDrawn');
+        // Excluded members and in-flight floats still draw on top. A float
+        // whose member IS in the composite draws alone — its member's pixels
+        // are already in the group surface.
+        for (const member of members) {
+          if (member.id === opts.skipLayerId) {
+            continue;
+          }
+          if (excluded.has(member.id)) {
+            drawLeafFlat(member);
+          } else if (opts.floatingSelection?.layerId === member.id) {
+            drawFloatingSelection(ctx, member, view, opts, opts.floatingSelection);
+          }
+        }
+        index = scope.end - 1;
+        scopeIndex += 1;
+        continue;
+      }
+      // No drawable content (or no cache yet): fall through to flat drawing.
+      scopeIndex += 1;
+    }
+    const leaf = plan.leaves[index]!;
+    if (leaf.id === opts.skipLayerId) {
+      continue;
+    }
+    drawLeafFlat(leaf);
   }
 
   if (opts.clipRect) {

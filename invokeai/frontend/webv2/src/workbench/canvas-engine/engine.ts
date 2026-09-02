@@ -114,7 +114,7 @@ import {
   createDocumentModel,
   type CanvasDocumentModel,
 } from '@workbench/canvas-engine/document-model/documentModel';
-import { getDocumentLayer, getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
+import { getDocumentIndex, getDocumentLayer, getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
 import {
   createEngineStores,
   type EngineStores,
@@ -130,8 +130,13 @@ import {
 import { createPointerPipeline, type PointerPipeline } from '@workbench/canvas-engine/input/pointerPipeline';
 import { createWheelHandler } from '@workbench/canvas-engine/input/wheel';
 import { isEmpty, union } from '@workbench/canvas-engine/math/rect';
-import { compositeDocument, createCheckerboardTile } from '@workbench/canvas-engine/render/compositor';
+import {
+  compositeDocument,
+  createCheckerboardTile,
+  type CompositeOptions,
+} from '@workbench/canvas-engine/render/compositor';
 import { createFontLoader, domFontLoadApi } from '@workbench/canvas-engine/render/fontLoader';
+import { createGroupSurfaceCache } from '@workbench/canvas-engine/render/groupSurfaceCache';
 import { hasLayerDisplayEffect } from '@workbench/canvas-engine/render/layerDisplayEffect';
 import { createMaskPatternTile } from '@workbench/canvas-engine/render/maskFill';
 import { renderOverlay } from '@workbench/canvas-engine/render/overlayRenderer';
@@ -526,6 +531,17 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     return rasterController.getAdjustedSurface(layer, entry);
   };
 
+  // Memoized document-space composites of adjusted GROUPS. Members draw
+  // through the guarded `getAdjustedSurface` above, so a member's own stack
+  // (and the pixel-edit double-apply guard) behave identically inside a group.
+  const groupSurfaces = createGroupSurfaceCache({
+    createSurface: (width, height) => backend.createSurface(width, height),
+    getAdjustedSurface: (layer, entry) => getAdjustedSurface(layer, entry),
+    getCacheEntry: (layerId) => layerCache.get(layerId),
+  });
+  const getGroupSurface: NonNullable<CompositeOptions['groupSurface']> = (scope, members, matrices, excludeIds) =>
+    groupSurfaces.get(scope, members, matrices, excludeIds);
+
   /**
    * Re-reads the live cache sizes into the memory budget. Both caches change
    * outside the budget's knowledge (a rasterize grows one, an eviction shrinks
@@ -534,7 +550,9 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
    */
   const syncMemoryBaselines = (): void => {
     rasterController.memory.setBaseBytes(layerCache.byteSize());
-    rasterController.memory.setDerivedBytes(derivedSurfaceCache.byteSize());
+    // Group surfaces are derived pixels too: they must count against the same
+    // budget or an adjusted group's doc-space composite is invisible memory.
+    rasterController.memory.setDerivedBytes(derivedSurfaceCache.byteSize() + groupSurfaces.byteSize());
   };
 
   // Completed-stroke subscribers (persistence P2.2, history P2.3).
@@ -1076,6 +1094,11 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     getSamInteraction: () => stores.samInteraction.get(),
     openTextCreate: (docPoint) => openTextCreate(docPoint),
     openTextEdit: (layerId) => openTextEdit(layerId),
+    sampleProviders: {
+      adjustedSurface: getAdjustedSurface,
+      derivedSurfaces: derivedSurfaceCache,
+      groupSurface: getGroupSurface,
+    },
     resolveColorSample: (hex) => {
       if (pendingColorSample) {
         pendingColorSample.sampledHex = hex;
@@ -1418,6 +1441,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     derivedSurfaceCache,
     diagnostics,
     getAdjustedSurface,
+    getGroupSurface,
     getCheckerboardTile,
     getMaskPatternTile,
     layerCache,
@@ -1477,6 +1501,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     },
     onDocumentReplaced: () => {
       const cleanup = createCleanupAccumulator();
+      cleanup.run(() => groupSurfaces.clear());
       cleanup.run(() => editingController.invalidateDocument());
       cleanup.run(() => pipeline.cancelActiveGesture());
       cleanup.run(cancelOpenPixelEdit);
@@ -1556,10 +1581,23 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       cleanup.throwIfFailed();
     },
     onLayerOrderChanged: () => {
+      const doc = mirror.getDocument();
+      groupSurfaces.prune(doc ? new Set(getDocumentIndex(doc).byId.keys()) : new Set());
       scheduler.invalidate({ all: true });
+    },
+    onLayersRecomposite: (ids) => {
+      // An ancestor group's stack changed: leaf pixels and caches are intact,
+      // and the group surface rebuilds itself off its key. Only recomposite.
+      scheduler.invalidate({ layers: ids });
     },
     onLayersChanged: (ids, sourceChangedIds) => {
       const cleanup = createCleanupAccumulator();
+      // A removal that deletes a group together with its leaves reports leaf
+      // ids here (not onLayerOrderChanged), so the group cache prunes on both.
+      {
+        const doc = mirror.getDocument();
+        cleanup.run(() => groupSurfaces.prune(doc ? new Set(getDocumentIndex(doc).byId.keys()) : new Set()));
+      }
       const floatLayerId = floatingSelection.get()?.layerId;
       if (floatLayerId && ids.includes(floatLayerId)) {
         // The float's layer was replaced or removed. Drop the float rather than
@@ -2803,6 +2841,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       endBurst: () => endNudgeBurst(),
       exportBaked: (layerId, includeDisabled) => exportBakedLayerPixelsForStructural(layerId, { includeDisabled }),
       getAdjustedSurface,
+      getGroupSurface,
       getDocument: () => mirror.getDocument(),
       getMaskPattern: getMaskPatternTile,
       getReducerDocument,
@@ -3052,6 +3091,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
         backend,
         checkerboardTile: null,
         derivedSurfaces: derivedSurfaceCache,
+        groupSurface: getGroupSurface,
         imageSmoothing: true,
         maskPatternTile: getMaskPatternTile,
       }
