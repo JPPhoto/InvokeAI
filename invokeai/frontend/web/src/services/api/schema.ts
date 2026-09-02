@@ -33763,6 +33763,18 @@ export type components = {
             data: {
                 [key: string]: unknown;
             };
+            /**
+             * Minimum Canvas Schema Version
+             * @description Oldest canvas schema that can safely edit this document
+             * @default 2
+             */
+            minimum_canvas_schema_version?: number;
+            /**
+             * Max Canvas Schema Version
+             * @description Newest canvas schema understood by this client
+             * @default 2
+             */
+            max_canvas_schema_version?: number;
         };
         /**
          * ProjectRecordDTO
@@ -33789,6 +33801,11 @@ export type components = {
              * @description Monotonic revision, incremented on every save
              */
             revision: number;
+            /**
+             * Minimum Canvas Schema Version
+             * @description Oldest canvas schema a client must support before it may read or write this project
+             */
+            minimum_canvas_schema_version: number;
             /**
              * Created At
              * @description When the project was created
@@ -33833,6 +33850,11 @@ export type components = {
              */
             revision: number;
             /**
+             * Minimum Canvas Schema Version
+             * @description Oldest canvas schema a client must support before it may read or write this project
+             */
+            minimum_canvas_schema_version: number;
+            /**
              * Created At
              * @description When the project was created
              */
@@ -33865,6 +33887,17 @@ export type components = {
              * @description The revision this save is based on; mismatch returns 409
              */
             expected_revision: number;
+            /**
+             * Minimum Canvas Schema Version
+             * @description New compatibility floor to store atomically with this document; omitted to keep the current floor
+             */
+            minimum_canvas_schema_version?: number | null;
+            /**
+             * Max Canvas Schema Version
+             * @description Newest canvas schema understood by this client
+             * @default 2
+             */
+            max_canvas_schema_version?: number;
         };
         /**
          * PromptEnhancerField
@@ -52895,7 +52928,10 @@ export interface operations {
     };
     get_project: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Newest canvas schema understood by this client */
+                max_canvas_schema_version?: number;
+            };
             header?: never;
             path: {
                 /** @description The id of the project to get */
