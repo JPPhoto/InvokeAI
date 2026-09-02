@@ -122,6 +122,20 @@ const ConnectedProperties = ({
                 <group.body {...regionProps} />
               </PropertyGroup>
             ))}
+            {form.footer ? (
+              <Flex
+                bg="bg.panel"
+                borderColor="border.subtle"
+                borderTopWidth="1px"
+                bottom="0"
+                mx="-3"
+                position="sticky"
+                px="3"
+                py="1.5"
+              >
+                <form.footer engine={engine} isExternalInteractionLocked={isSurfaceInteractionLocked} />
+              </Flex>
+            ) : null}
           </>
         ) : legacy && hasToolRegions(legacy) ? (
           rows.map(([region, Region]) => (

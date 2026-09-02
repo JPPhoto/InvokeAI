@@ -1,16 +1,13 @@
 import type { ToolId } from '@workbench/canvas-engine/api';
 
-import { bboxAdapter } from '@workbench/widgets/canvas/tool-options/BboxOptions';
 import { filterOperationAdapter } from '@workbench/widgets/canvas/tool-options/FilterOptions';
+import { bboxForm, moveForm, transformForm } from '@workbench/widgets/canvas/tool-options/geometryForm';
 import { gradientForm } from '@workbench/widgets/canvas/tool-options/GradientOptions';
-import { lassoAdapter } from '@workbench/widgets/canvas/tool-options/LassoOptions';
-import { marqueeAdapter } from '@workbench/widgets/canvas/tool-options/MarqueeOptions';
-import { moveAdapter } from '@workbench/widgets/canvas/tool-options/MoveOptions';
 import { brushForm, eraserForm } from '@workbench/widgets/canvas/tool-options/paintForm';
 import { selectObjectOperationAdapter } from '@workbench/widgets/canvas/tool-options/SamOptions';
+import { lassoForm, marqueeForm } from '@workbench/widgets/canvas/tool-options/selectionForm';
 import { shapeForm } from '@workbench/widgets/canvas/tool-options/ShapeOptions';
 import { textForm } from '@workbench/widgets/canvas/tool-options/TextOptions';
-import { transformAdapter } from '@workbench/widgets/canvas/tool-options/TransformOptions';
 
 import type {
   CanvasOperationKind,
@@ -25,18 +22,18 @@ import { isToolPropertyForm } from './toolbarContracts';
 const hintOnly = (id: ToolId): ToolPresentationAdapter => ({ id });
 
 export const TOOL_PRESENTATION_ADAPTERS: Readonly<Record<ToolId, ToolPanePresentation>> = {
-  bbox: bboxAdapter,
+  bbox: bboxForm,
   brush: brushForm,
   colorPicker: hintOnly('colorPicker'),
   eraser: eraserForm,
   gradient: gradientForm,
-  lasso: lassoAdapter,
-  marquee: marqueeAdapter,
-  move: moveAdapter,
+  lasso: lassoForm,
+  marquee: marqueeForm,
+  move: moveForm,
   sam: hintOnly('sam'),
   shape: shapeForm,
   text: textForm,
-  transform: transformAdapter,
+  transform: transformForm,
   view: hintOnly('view'),
 };
 

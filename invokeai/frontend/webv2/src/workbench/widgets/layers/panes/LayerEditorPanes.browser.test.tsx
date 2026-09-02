@@ -358,6 +358,44 @@ describe('Properties pane', () => {
     await expect.element(page.getByRole('button', { exact: true, name: 'Gradient stop at 1%' })).toBeVisible();
   });
 
+  it('keeps the Position row identity across move, frame and transform, with the transform footer live', async () => {
+    await mount(PropertiesPane, 'layer');
+    await act(() => engine!.tools.setTool('move'));
+    await settle();
+    const xField = page.getByRole('spinbutton', { exact: true, name: 'X' }).element();
+    await act(() => engine!.tools.setTool('bbox'));
+    await settle();
+    // Same DOM node: the shared Position group survives the switch, now
+    // editing the frame; the frame's Size and Aspect rows appear.
+    expect(page.getByRole('spinbutton', { exact: true, name: 'X' }).element()).toBe(xField);
+    await expect.element(page.getByRole('spinbutton', { exact: true, name: 'W' })).toBeVisible();
+
+    await act(() => engine!.tools.setTool('transform'));
+    await settle();
+    expect(page.getByRole('spinbutton', { exact: true, name: 'X' }).element()).toBe(xField);
+    // No session and no float: Apply/Cancel are pinned but disabled.
+    await expect.element(page.getByRole('button', { exact: true, name: 'Apply' })).toBeDisabled();
+    await expect.element(page.getByRole('button', { exact: true, name: 'Cancel' })).toBeDisabled();
+  });
+
+  it('shares the selection form between lasso and marquee with the actions cluster', async () => {
+    await mount(PropertiesPane);
+    await act(() => engine!.tools.setTool('lasso'));
+    await settle();
+    const freehand = page.getByRole('radio', { exact: true, name: 'Freehand' });
+    await expect.element(freehand).toBeVisible();
+    const modeGroup = host!.querySelector<HTMLElement>('[role="group"][aria-label="Selection mode"]')!;
+    expect(modeGroup).not.toBeNull();
+    await expect.element(page.getByRole('button', { exact: true, name: 'Deselect' })).toBeDisabled();
+
+    await act(() => engine!.tools.setTool('marquee'));
+    await settle();
+    // The op-mode buttons keep DOM identity; the shape choices swap per tool.
+    expect(host!.querySelector('[role="group"][aria-label="Selection mode"]')).toBe(modeGroup);
+    await expect.element(page.getByRole('radio', { exact: true, name: 'Rectangle' })).toBeVisible();
+    expect(page.getByRole('radio', { exact: true, name: 'Freehand' }).query()).toBeNull();
+  });
+
   it('remembers a group collapse per user across remounts', async () => {
     await mount(PropertiesPane);
     await act(() => engine!.tools.setTool('brush'));

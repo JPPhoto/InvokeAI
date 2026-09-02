@@ -1531,7 +1531,9 @@
         "gradient": "Gradient",
         "stops": "Stops",
         "font": "Font",
-        "paragraph": "Paragraph"
+        "paragraph": "Paragraph",
+        "frame": "Frame",
+        "selection": "Selection"
       },
       "foreground": "Foreground",
       "target": {
@@ -1554,7 +1556,10 @@
         "size": "Size",
         "weight": "Weight",
         "lineHeight": "Leading",
-        "align": "Align"
+        "align": "Align",
+        "aspect": "Aspect",
+        "shape": "Shape",
+        "mode": "Mode"
       },
       "sections": {
         "operation": "Operation",
@@ -2315,7 +2320,6 @@
         "fitBboxToLayers": "Fit frame to layers",
         "fitBboxToMasks": "Fit frame to masks",
         "fitToView": "Fit to view",
-        "frameSize": "Generation frame size",
         "newCanvas": "New canvas",
         "newCanvasConfirm": "Clear all layers and start a fresh canvas? This cannot be undone.",
         "newSession": "New session",
@@ -2421,7 +2425,6 @@
         "eraserSize": "Eraser size",
         "fillSelection": "Fill",
         "frameHeight": "H",
-        "frameSize": "Frame",
         "frameWidth": "W",
         "gradientAngle": "Angle",
         "gradientEdit": "Edit gradient",

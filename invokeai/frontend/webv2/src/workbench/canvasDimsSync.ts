@@ -5,7 +5,7 @@
  *
  * Legacy-compatible geometry: the generation frame remains the exact final
  * canvas footprint, including off-grid sizes. Resizing the bbox (tool gesture,
- * BboxOptions, undo/redo) drives width/height snapped to the selected model's
+ * the frame form, undo/redo) drives width/height snapped to the selected model's
  * hard processing grid; the canvas graph resizes inputs to that processing size
  * and the result back to the bbox. Unlike legacy's optional "Scale Before
  * Processing" policy, this does not silently upscale small bboxes to an optimal

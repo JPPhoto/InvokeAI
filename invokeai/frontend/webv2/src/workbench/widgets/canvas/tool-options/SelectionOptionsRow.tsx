@@ -6,7 +6,6 @@ import { Button, IconButton } from '@platform/ui/Button';
 import { Tooltip } from '@platform/ui/Tooltip';
 import { isLeafPixelEditEligible, lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import { useCanvasHasSelection } from '@workbench/widgets/canvas/engineStoreHooks';
-import { ToolbarHint } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { SquareIcon, SquareMinusIcon, SquarePlusIcon, SquaresIntersectIcon } from 'lucide-react';
 import { useCallback } from 'react';
@@ -61,27 +60,21 @@ const OpModeButton = ({
  * transiently with shift / alt while committing), plus the gesture hint while
  * no selection exists. The mode lives in each tool's own options store.
  */
-export const SelectionModes = ({
-  engine,
-  hintKey,
+/** The four op-mode toggles alone; the form places them in a labelled row. */
+export const SelectionOpModeButtons = ({
   mode,
   onModeChange,
-}: ToolbarRegionProps & {
-  hintKey: string;
+}: {
   mode: SelectionOp;
   onModeChange: (mode: SelectionOp) => void;
 }) => {
   const { t } = useTranslation();
-  const hasSelection = useCanvasHasSelection(engine);
   return (
-    <>
-      <HStack aria-label={t('widgets.canvas.toolOptions.selectionMode')} flexShrink={0} gap="1" role="group">
-        {OP_MODES.map((opMode) => (
-          <OpModeButton key={opMode} active={mode === opMode} mode={opMode} onSelect={onModeChange} />
-        ))}
-      </HStack>
-      {hasSelection ? null : <ToolbarHint>{t(hintKey)}</ToolbarHint>}
-    </>
+    <HStack aria-label={t('widgets.canvas.toolOptions.selectionMode')} flexShrink={0} gap="1" role="group">
+      {OP_MODES.map((opMode) => (
+        <OpModeButton key={opMode} active={mode === opMode} mode={opMode} onSelect={onModeChange} />
+      ))}
+    </HStack>
   );
 };
 

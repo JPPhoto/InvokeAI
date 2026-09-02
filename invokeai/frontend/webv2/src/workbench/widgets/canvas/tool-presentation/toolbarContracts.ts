@@ -62,8 +62,6 @@ export interface OperationPresentationAdapter {
 export interface ToolPropertyGroup {
   id: string;
   labelKey: string;
-  /** 'actions' renders a command cluster, visually distinct from settings. */
-  kind?: 'settings' | 'actions';
   /** Present makes the header a disclosure; the value is the default state. */
   collapsible?: 'open' | 'collapsed';
   body: ToolbarRegionComponent;
@@ -80,6 +78,8 @@ export interface ToolPropertyForm {
   paintsLeaf?: boolean;
   preview?: ComponentType<ToolbarStatusProps>;
   groups: readonly ToolPropertyGroup[];
+  /** Sticks to the pane's bottom edge while the form scrolls: session status, Apply, Cancel. */
+  footer?: ComponentType<ToolbarStatusProps>;
 }
 
 export type ToolPanePresentation = ToolPresentationAdapter | ToolPropertyForm;

@@ -5,6 +5,7 @@ import { Button } from '@platform/ui/Button';
 import { Scrollable } from '@platform/ui/Scrollable';
 import { getDocumentNode, lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import { useCanvasHasFloatingSelection, useTransformSession } from '@workbench/widgets/canvas/engineStoreHooks';
+import { clampScalePercent, round2, wrapDegrees } from '@workbench/widgets/canvas/tool-options/geometryForm';
 import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useCanvasEngine, type CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
@@ -17,16 +18,6 @@ import { PropertiesRow, PropertiesSection } from './PropertiesSection';
 
 const RAD_TO_DEG = 180 / Math.PI;
 const DEG_TO_RAD = Math.PI / 180;
-const MIN_SCALE_PERCENT = 1;
-const round2 = (n: number): number => Math.round(n * 100) / 100;
-/** Degrees in (-180, 180], so 270 reads and stores as -90. */
-const wrapDegrees = (degrees: number): number => {
-  const wrapped = ((((degrees + 180) % 360) + 360) % 360) - 180;
-  return wrapped === -180 ? 180 : wrapped;
-};
-/** A flip is a negative scale; a zero or near-zero one is not a transform anyone can undo by eye. */
-const clampScalePercent = (percent: number): number =>
-  percent < 0 ? Math.min(percent, -MIN_SCALE_PERCENT) : Math.max(percent, MIN_SCALE_PERCENT);
 
 interface SelectedNode {
   id: string;
