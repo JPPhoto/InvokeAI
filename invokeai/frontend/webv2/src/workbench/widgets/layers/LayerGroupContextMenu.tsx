@@ -1,4 +1,9 @@
-import type { CanvasGroupContract, LayerStackKind, LayerStackMoveKind } from '@workbench/canvas-engine/api';
+import type {
+  CanvasAdjustmentEntry,
+  CanvasGroupContract,
+  LayerStackKind,
+  LayerStackMoveKind,
+} from '@workbench/canvas-engine/api';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import type { LucideIcon } from 'lucide-react';
 import type { ComponentProps } from 'react';
@@ -15,6 +20,7 @@ import {
   ArrowDownToLineIcon,
   ArrowUpIcon,
   ArrowUpToLineIcon,
+  ChevronRightIcon,
   CircleIcon,
   CircleOffIcon,
   CopyIcon,
@@ -24,13 +30,18 @@ import {
   LockIcon,
   LockOpenIcon,
   PencilIcon,
+  SlidersHorizontalIcon,
   Trash2Icon,
   UngroupIcon,
 } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { ADJUSTMENT_ADD_ITEMS } from './layerContextActions';
 import { canGroupSelection, groupLayers, ungroupLayers } from './layerGroupCommands';
+import { createIdentityAdjustment } from './layerOps';
+
+const SUBMENU_POSITIONING = { placement: 'right-start' } as const;
 
 export type LayerGroupContextMenuEngine = Pick<CanvasEngineHandle, 'document' | 'layers' | 'projectId'>;
 
@@ -172,6 +183,24 @@ export const LayerGroupContextMenu = ({
 
   const locked = editingLocked;
   const hideable = isOverlayStack(stack);
+  // Adjustment stacks apply to a group's composited children, raster stack only.
+  const adjustable = stack === 'raster';
+
+  const handleAddAdjustment = useCallback(
+    (type: CanvasAdjustmentEntry['type']) => () => {
+      const entry = createIdentityAdjustment(type);
+      const before = group.adjustments ?? [];
+      commitPrepared(t('widgets.layers.menu.addAdjustment'), (model) =>
+        model.prepare({
+          before: { adjustments: [...before], layerType: 'group' },
+          config: { adjustments: [...before, entry], layerType: 'group' },
+          id: group.id,
+          type: 'patch-config',
+        })
+      );
+    },
+    [commitPrepared, group.adjustments, group.id, t]
+  );
 
   const items = (
     <MenuContent minW="13rem" py="1">
@@ -198,6 +227,37 @@ export const LayerGroupContextMenu = ({
       <Menu.Item disabled={locked || frozen || group.isLocked} value="ungroup" onSelect={handleUngroup}>
         <MenuRow icon={UngroupIcon} label={t('widgets.layers.actions.ungroup')} />
       </Menu.Item>
+      {adjustable ? (
+        locked || frozen || group.isLocked ? (
+          // Same disabled affordance the sibling items use, not a vanished verb.
+          <Menu.Item disabled value="add-adjustment">
+            <MenuRow icon={SlidersHorizontalIcon} label={t('widgets.layers.menu.addAdjustment')} />
+          </Menu.Item>
+        ) : (
+          <Menu.Root positioning={SUBMENU_POSITIONING}>
+            <Menu.TriggerItem aria-label={t('widgets.layers.menu.addAdjustment')}>
+              <HStack gap="2" minW="0" w="full">
+                <Icon as={SlidersHorizontalIcon} boxSize="3.5" color="fg.subtle" flexShrink={0} />
+                <Text flex="1" fontSize="xs">
+                  {t('widgets.layers.menu.addAdjustment')}
+                </Text>
+                <Icon as={ChevronRightIcon} boxSize="3" color="fg.subtle" flexShrink={0} />
+              </HStack>
+            </Menu.TriggerItem>
+            <Portal>
+              <Menu.Positioner>
+                <MenuContent minW="13rem" py="1">
+                  {ADJUSTMENT_ADD_ITEMS.map((item) => (
+                    <Menu.Item key={item.type} value={`add-${item.type}`} onSelect={handleAddAdjustment(item.type)}>
+                      <MenuRow icon={item.icon} label={t(item.labelKey)} />
+                    </Menu.Item>
+                  ))}
+                </MenuContent>
+              </Menu.Positioner>
+            </Portal>
+          </Menu.Root>
+        )
+      ) : null}
       <Menu.Separator borderColor="border.subtle" />
       <Menu.Item disabled={locked} value="enabled" onSelect={handleToggleEnabled}>
         <MenuRow

@@ -68,6 +68,11 @@ const IDENTITY_CURVE: [number, number][] = [
 
 const formatSigned = (value: number): string => `${value > 0 ? '+' : ''}${Math.round(value * 100)}`;
 
+/** An adjustment stack's owner: a raster layer or a raster-stack group. */
+export type AdjustmentOwner = Pick<CanvasRasterLayerContractV2, 'id' | 'adjustments'> & {
+  type: 'raster' | 'group';
+};
+
 export const AdjustmentSettings = ({
   engine,
   entryId,
@@ -75,7 +80,7 @@ export const AdjustmentSettings = ({
 }: {
   engine: AdjustmentsEngine | null;
   entryId: string;
-  layer: CanvasRasterLayerContractV2;
+  layer: AdjustmentOwner;
 }) => {
   const entry = layer.adjustments?.find((candidate) => candidate.id === entryId);
   if (!entry) {
@@ -91,26 +96,30 @@ const AdjustmentEntryEditor = ({
 }: {
   engine: AdjustmentsEngine | null;
   entry: CanvasAdjustmentEntry;
-  layer: CanvasRasterLayerContractV2;
+  layer: AdjustmentOwner;
 }) => {
   const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
   const gestureBaselineRef = useRef<readonly CanvasAdjustmentEntry[] | null>(null);
+  const configOf = useCallback(
+    (adjustments: CanvasAdjustmentEntry[]) =>
+      layer.type === 'group'
+        ? { adjustments, layerType: 'group' as const }
+        : { adjustments, layerType: 'raster' as const },
+    [layer.type]
+  );
 
   const patchLive = useCallback(
     (next: CanvasAdjustmentEntry) => {
       const entries = layer.adjustments ?? [];
       gestureBaselineRef.current ??= entries;
       applyStructuralPreview(engine, {
-        config: {
-          adjustments: entries.map((candidate) => (candidate.id === next.id ? next : candidate)),
-          layerType: 'raster',
-        },
+        config: configOf(entries.map((candidate) => (candidate.id === next.id ? next : candidate))),
         id: layer.id,
         type: 'updateCanvasLayerConfig',
       });
     },
-    [engine, layer.adjustments, layer.id]
+    [configOf, engine, layer.adjustments, layer.id]
   );
 
   const commitEntry = useCallback(
@@ -122,17 +131,14 @@ const AdjustmentEntryEditor = ({
       const committed = { ...next, isEnabled: entry.isEnabled };
       commitPrepared(label, (model) =>
         model.prepare({
-          before: { adjustments: [...baseline], layerType: 'raster' },
-          config: {
-            adjustments: entries.map((candidate) => (candidate.id === committed.id ? committed : candidate)),
-            layerType: 'raster',
-          },
+          before: configOf([...baseline]),
+          config: configOf(entries.map((candidate) => (candidate.id === committed.id ? committed : candidate))),
           id: layer.id,
           type: 'patch-config',
         })
       );
     },
-    [commitPrepared, entry.isEnabled, layer.adjustments, layer.id]
+    [commitPrepared, configOf, entry.isEnabled, layer.adjustments, layer.id]
   );
 
   const cancelGesture = useCallback(() => {
@@ -140,12 +146,12 @@ const AdjustmentEntryEditor = ({
     gestureBaselineRef.current = null;
     if (baseline) {
       applyStructuralPreview(engine, {
-        config: { adjustments: [...baseline], layerType: 'raster' },
+        config: configOf([...baseline]),
         id: layer.id,
         type: 'updateCanvasLayerConfig',
       });
     }
-  }, [engine, layer.id]);
+  }, [configOf, engine, layer.id]);
 
   const handleScalarLive = useCallback(
     (field: ScalarField, next: number) => patchLive({ ...entry, [field]: next } as CanvasAdjustmentEntry),

@@ -29,11 +29,25 @@ export type PanelRow =
       readonly key: string;
       readonly stack: LayerStackKind;
       readonly row: LayerTreeRow;
-      /** Projected child rows the node owns; `0` for groups and bare leaves. */
+      /** Projected child rows the node owns; `0` for bare leaves and rowless groups. */
       readonly childCount: number;
       readonly childrenExpanded: boolean;
+      /**
+       * The node's ARIA position among the parent group's COMBINED children
+       * (modifier rows first, then nodes) when the parent owns modifier rows;
+       * equal to the tree row's own values otherwise.
+       */
+      readonly ariaPosInSet: number;
+      readonly ariaSetSize: number;
     }
-  | { readonly kind: 'child'; readonly key: string; readonly stack: LayerStackKind; readonly child: ProjectedChildRow };
+  | {
+      readonly kind: 'child';
+      readonly key: string;
+      readonly stack: LayerStackKind;
+      readonly child: ProjectedChildRow;
+      /** The owner's combined child count (rows + node children) for a group owner. */
+      readonly ariaSetSize: number;
+    };
 
 /** How a flattening projects child rows beneath the layers that own them. */
 export interface PanelChildRowsSource {
@@ -73,13 +87,35 @@ export const flattenPanelRows = (
       stack,
     });
     if (!collapsed) {
+      // A group whose parent owns modifier rows shifts its node children into
+      // one COMBINED ARIA set (rows first, then nodes) so AT hears a single
+      // coherent set at that level.
+      const rowOffsetByParent = new Map<string, number>();
       for (const row of stack.rows) {
-        const children = childRows?.rowsFor(row) ?? [];
-        const childrenExpanded = children.length > 0 && !childRows!.collapsedLayerIds.has(row.id);
-        rows.push({ childCount: children.length, childrenExpanded, key: row.id, kind: 'node', row, stack: kind });
+        const isGroup = row.vm.kind === 'group';
+        // A group's modifier rows fold WITH its subtree: `aria-expanded`
+        // reflects the subtree, so nothing may render beneath a collapsed
+        // group. Leaves keep their separate per-owner fold.
+        const children = isGroup && !row.expanded ? [] : (childRows?.rowsFor(row) ?? []);
+        const childrenExpanded = children.length > 0 && (isGroup || !childRows!.collapsedLayerIds.has(row.id));
+        const offset = rowOffsetByParent.get(row.vm.parentId ?? '') ?? 0;
+        if (isGroup && childrenExpanded) {
+          rowOffsetByParent.set(row.id, children.length);
+        }
+        rows.push({
+          ariaPosInSet: row.posInSet + offset,
+          ariaSetSize: row.setSize + offset,
+          childCount: children.length,
+          childrenExpanded,
+          key: row.id,
+          kind: 'node',
+          row,
+          stack: kind,
+        });
         if (childrenExpanded) {
+          const combined = isGroup ? children.length + row.vm.childCount : children.length;
           for (const child of children) {
-            rows.push({ child, key: child.key, kind: 'child', stack: kind });
+            rows.push({ ariaSetSize: combined, child, key: child.key, kind: 'child', stack: kind });
           }
         }
       }
@@ -150,21 +186,21 @@ export const navigateTree = (
         return null;
       }
       const { row } = current;
-      if (current.childCount > 0) {
-        if (!current.childrenExpanded) {
-          return { expandChildren: row.id, expanded: true };
-        }
-        const first = rows[position + 1];
-        return first && first.kind === 'child' && first.child.layerId === row.id ? { focus: first.key } : null;
-      }
-      if (row.vm.kind !== 'group' || row.vm.childCount === 0) {
-        return null;
-      }
-      if (!row.expanded) {
+      // A group expands its subtree before its modifier rows; a leaf has only rows.
+      if (row.vm.kind === 'group' && row.vm.childCount > 0 && !row.expanded) {
         return { expand: row.id, expanded: true };
       }
-      const child = rows[position + 1];
-      return child && child.kind === 'node' && child.row.vm.parentId === row.id ? { focus: child.key } : null;
+      if (current.childCount > 0 && !current.childrenExpanded) {
+        return { expandChildren: row.id, expanded: true };
+      }
+      const next = rows[position + 1];
+      if (next && next.kind === 'child' && next.child.layerId === row.id) {
+        return { focus: next.key };
+      }
+      if (next && next.kind === 'node' && next.row.vm.parentId === row.id) {
+        return { focus: next.key };
+      }
+      return null;
     }
     case 'ArrowLeft': {
       if (current.kind === 'header') {
@@ -174,11 +210,13 @@ export const navigateTree = (
         return { focus: current.child.layerId };
       }
       const { row } = current;
+      // Mirror of ArrowRight. A group's rows fold with its subtree, so only a
+      // LEAF's rows fold separately here.
+      if (row.vm.kind !== 'group' && current.childrenExpanded) {
+        return { expandChildren: row.id, expanded: false };
+      }
       if (row.vm.kind === 'group' && row.expanded) {
         return { expand: row.id, expanded: false };
-      }
-      if (current.childrenExpanded) {
-        return { expandChildren: row.id, expanded: false };
       }
       return { focus: row.vm.parentId ?? headerKey(row.vm.stack) };
     }

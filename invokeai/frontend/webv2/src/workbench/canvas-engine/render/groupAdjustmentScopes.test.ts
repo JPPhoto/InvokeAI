@@ -19,10 +19,10 @@ const identityStack: CanvasAdjustmentsContract = [
 describe('collectAdjustedGroups', () => {
   it('collects only raster-stack groups with contributing stacks', () => {
     const doc = documentFrom({
-      control: [groupContract('og', [layerContract('c1', 'control')], { adjustments: stack('a') } as never)],
+      control: [groupContract('og', [layerContract('c1', 'control')], { adjustments: stack('a') })],
       raster: [
-        groupContract('g1', [layerContract('r1')], { adjustments: stack('b') } as never),
-        groupContract('g2', [layerContract('r2')], { adjustments: identityStack } as never),
+        groupContract('g1', [layerContract('r1')], { adjustments: stack('b') }),
+        groupContract('g2', [layerContract('r2')], { adjustments: identityStack }),
         groupContract('g3', [layerContract('r3')]),
       ],
     });

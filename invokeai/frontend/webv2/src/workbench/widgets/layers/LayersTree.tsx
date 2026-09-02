@@ -1097,6 +1097,8 @@ export const LayersTree = ({
                   {panelRow.kind === 'node' ? (
                     <LayerRow
                       ancestorOfPrimary={primaryAncestorIds.has(panelRow.row.id)}
+                      ariaPosInSet={panelRow.ariaPosInSet}
+                      ariaSetSize={panelRow.ariaSetSize}
                       childCount={panelRow.childCount}
                       childSelected={panelRow.row.id === selectedChildOwnerId}
                       childrenExpanded={panelRow.childrenExpanded}
@@ -1114,6 +1116,7 @@ export const LayersTree = ({
                     />
                   ) : panelRow.kind === 'child' ? (
                     <LayerChildRow
+                      ariaSetSize={panelRow.ariaSetSize}
                       child={panelRow.child}
                       commands={commands}
                       dimmed={

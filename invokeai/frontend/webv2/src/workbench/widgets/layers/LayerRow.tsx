@@ -42,6 +42,9 @@ const GROUP_PILE_CARD_PX = 24;
 export type LayerRowDragState = 'source' | 'travelling' | null;
 
 interface LayerRowProps {
+  /** Combined-set ARIA facts when the parent group owns modifier rows. */
+  ariaPosInSet?: number;
+  ariaSetSize?: number;
   /** A group on the primary layer's ancestor path; tinted as selection context. */
   ancestorOfPrimary: boolean;
   /** Projected child rows the layer owns; a chevron appears above zero. */
@@ -73,6 +76,8 @@ const stopPropagation = (event: { stopPropagation: () => void }): void => event.
  */
 const LayerRowComponent = ({
   ancestorOfPrimary,
+  ariaPosInSet,
+  ariaSetSize,
   childCount,
   childSelected,
   childrenExpanded,
@@ -285,9 +290,9 @@ const LayerRowComponent = ({
       aria-expanded={group ? row.expanded : childCount > 0 ? childrenExpanded : undefined}
       aria-label={node.name}
       aria-level={vm.depth + 2}
-      aria-posinset={row.posInSet}
+      aria-posinset={ariaPosInSet ?? row.posInSet}
       aria-selected={selected}
-      aria-setsize={row.setSize}
+      aria-setsize={ariaSetSize ?? row.setSize}
       data-layer-row-id={row.id}
       data-primary={primary || undefined}
       h="full"

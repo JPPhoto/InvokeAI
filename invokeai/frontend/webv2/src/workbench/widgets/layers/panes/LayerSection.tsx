@@ -1,8 +1,8 @@
-import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/api';
+import type { CanvasDocumentContractV3, CanvasLayerContract, CanvasNodeContract } from '@workbench/canvas-engine/api';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 
 import { Stack, Switch, Text } from '@chakra-ui/react';
-import { getDocumentLayer } from '@workbench/canvas-engine/api';
+import { getDocumentNode } from '@workbench/canvas-engine/api';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { AdjustmentSettings } from '@workbench/widgets/layers/AdjustmentSettings';
@@ -33,11 +33,11 @@ type LayerSectionEngine = Pick<
 >;
 
 // Reference equality is exact: the document index hands back the same node
-// object until the layer itself changes, and the section renders the whole
-// layer, so a narrower comparison would serve stale views of it.
-const selectSelectedLayer = (project: {
+// object until the node itself changes, and the section renders the whole
+// node, so a narrower comparison would serve stale views of it.
+const selectSelectedNode = (project: {
   canvas: { document: Pick<CanvasDocumentContractV3, 'stacks' | 'selectedLayerId'> };
-}): CanvasLayerContract | null => getDocumentLayer(project.canvas.document, project.canvas.document.selectedLayerId);
+}): CanvasNodeContract | null => getDocumentNode(project.canvas.document, project.canvas.document.selectedLayerId);
 
 /**
  * The Layer section of the Properties pane: the selected layer's type-specific
@@ -48,20 +48,21 @@ const selectSelectedLayer = (project: {
 export const LayerSection = ({ disabled }: { disabled: boolean }) => {
   const { t } = useTranslation();
   const engine = useCanvasEngine();
-  const layer = useActiveProjectSelector(selectSelectedLayer);
+  const node = useActiveProjectSelector(selectSelectedNode);
+  const layer = node && node.type !== 'group' ? node : null;
   const documentRevision = useActiveProjectSelector((project) => project.canvas.documentRevision);
   const projectId = useActiveProjectId();
   const childSelection = useLayerChildSelection();
-  const child = resolveChildEditor(layer, childSelection?.projectId === projectId ? childSelection : null, t);
+  const child = resolveChildEditor(node, childSelection?.projectId === projectId ? childSelection : null, t);
 
   return (
     <PropertiesSection
       disabled={disabled}
-      subtitle={child ? child.subtitle : (layer?.name ?? t('widgets.transform.noSelection'))}
+      subtitle={child ? child.subtitle : (node?.name ?? t('widgets.transform.noSelection'))}
       title={t('widgets.properties.sections.layer')}
     >
-      {child && layer ? (
-        <ChildEditor key={`${layer.id}:${child.itemId}`} child={child} engine={engine} layer={layer} />
+      {child && node ? (
+        <ChildEditor key={`${node.id}:${child.itemId}`} child={child} engine={engine} node={node} />
       ) : layer ? (
         <LayerTypeSettings documentRevision={documentRevision} engine={engine} layer={layer} />
       ) : (
@@ -79,7 +80,7 @@ interface ChildEditorTarget {
 
 /** What the sub-selection edits, or `null` when it does not belong to `layer`. */
 const resolveChildEditor = (
-  layer: CanvasLayerContract | null,
+  layer: CanvasNodeContract | null,
   selection: { layerId: string; itemId: string } | null,
   t: (key: string) => string
 ): ChildEditorTarget | null => {
@@ -104,7 +105,7 @@ const resolveChildEditor = (
       return { itemId: selection.itemId, kind: 'mask-denoise', subtitle: t('widgets.layers.modifiers.denoise') };
     }
   }
-  if (layer.type === 'raster') {
+  if (layer.type === 'raster' || layer.type === 'group') {
     const entry = layer.adjustments?.find((candidate) => candidate.id === selection.itemId);
     if (entry) {
       const kind = adjustmentChildKind(entry.type);
@@ -117,20 +118,20 @@ const resolveChildEditor = (
 const ChildEditor = ({
   child,
   engine,
-  layer,
+  node,
 }: {
   child: ChildEditorTarget;
   engine: LayerSectionEngine | null;
-  layer: CanvasLayerContract;
+  node: CanvasNodeContract;
 }) => {
-  if (child.kind === 'reference-image' && layer.type === 'regional_guidance') {
-    return <ReferenceImageSettings engine={engine} layer={layer} refId={child.itemId} />;
+  if (child.kind === 'reference-image' && node.type === 'regional_guidance') {
+    return <ReferenceImageSettings engine={engine} layer={node} refId={child.itemId} />;
   }
-  if ((child.kind === 'mask-noise' || child.kind === 'mask-denoise') && layer.type === 'inpaint_mask') {
-    return <MaskModifierSettings engine={engine} kind={child.kind} layer={layer} />;
+  if ((child.kind === 'mask-noise' || child.kind === 'mask-denoise') && node.type === 'inpaint_mask') {
+    return <MaskModifierSettings engine={engine} kind={child.kind} layer={node} />;
   }
-  if (child.kind.startsWith('adjustment-') && layer.type === 'raster') {
-    return <AdjustmentSettings engine={engine} entryId={child.itemId} layer={layer} />;
+  if (child.kind.startsWith('adjustment-') && (node.type === 'raster' || node.type === 'group')) {
+    return <AdjustmentSettings engine={engine} entryId={child.itemId} layer={node} />;
   }
   return null;
 };

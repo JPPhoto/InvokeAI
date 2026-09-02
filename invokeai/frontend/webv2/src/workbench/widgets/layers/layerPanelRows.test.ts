@@ -1,6 +1,10 @@
-import type { RegionalGuidanceReferenceImage } from '@workbench/canvas-engine/api';
+import type { CanvasAdjustmentEntry, RegionalGuidanceReferenceImage } from '@workbench/canvas-engine/api';
 
-import { documentFrom, layerContract } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import {
+  documentFrom,
+  groupContract,
+  layerContract,
+} from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it } from 'vitest';
 
 import type { PanelRow } from './layerPanelRows';
@@ -100,5 +104,51 @@ describe('navigateTree over child rows', () => {
     expect(navigateTree(flatten(), 'child:rg1:ref1', 'ArrowRight')).toBeNull();
     expect(navigateTree(flatten(), 'rg2', 'ArrowRight')).toBeNull();
     expect(navigateTree(flatten(new Set(['rg1'])), 'rg1', 'ArrowLeft')).toEqual({ focus: 'header:regional_guidance' });
+  });
+});
+
+describe('group-owned adjustment rows', () => {
+  const stack = (): CanvasAdjustmentEntry[] => [
+    { brightness: 0.2, contrast: 0, id: 'ga1', isEnabled: true, type: 'brightness-contrast' },
+    { id: 'ga2', isEnabled: true, type: 'invert' },
+  ];
+  const groupStacks = (expandedGroups: ReadonlySet<string>) =>
+    buildLayerStackRows(
+      documentFrom([
+        groupContract('g1', [layerContract('m1'), layerContract('m2'), layerContract('m3')], {
+          adjustments: stack(),
+        }),
+      ]).stacks,
+      expandedGroups
+    );
+  const flattenGroup = (expandedGroups: ReadonlySet<string> = new Set(['g1'])) =>
+    flattenPanelRows(groupStacks(expandedGroups), [], open, {
+      collapsedLayerIds: new Set(),
+      rowsFor: (row) => projectLayerChildRows(row.vm),
+    });
+
+  it("folds a group's rows with its subtree: a collapsed group renders neither", () => {
+    expect(keys(flattenGroup(new Set()))).toEqual(['header:raster', 'g1']);
+    expect(keys(flattenGroup())).toEqual(['header:raster', 'g1', 'child:g1:ga1', 'child:g1:ga2', 'm1', 'm2', 'm3']);
+  });
+
+  it('announces rows and member nodes as ONE combined ARIA set under the group', () => {
+    const rows = flattenGroup();
+    const children = rows.filter((row) => row.kind === 'child');
+    expect(children.map((row) => (row.kind === 'child' ? row.ariaSetSize : 0))).toEqual([5, 5]);
+    const members = rows.filter((row) => row.kind === 'node' && row.key.startsWith('m'));
+    expect(members.map((row) => (row.kind === 'node' ? [row.ariaPosInSet, row.ariaSetSize] : null))).toEqual([
+      [3, 5],
+      [4, 5],
+      [5, 5],
+    ]);
+  });
+
+  it('ArrowRight expands the subtree; ArrowLeft collapses it — never a separate rows fold', () => {
+    const collapsedRows = flattenGroup(new Set());
+    expect(navigateTree(collapsedRows, 'g1', 'ArrowRight')).toEqual({ expand: 'g1', expanded: true });
+    const expandedRows = flattenGroup();
+    expect(navigateTree(expandedRows, 'g1', 'ArrowRight')).toEqual({ focus: 'child:g1:ga1' });
+    expect(navigateTree(expandedRows, 'g1', 'ArrowLeft')).toEqual({ expand: 'g1', expanded: false });
   });
 });

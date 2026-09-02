@@ -1,6 +1,10 @@
 import type { CanvasAdjustmentEntry, RegionalGuidanceReferenceImage } from '@workbench/canvas-engine/api';
 
-import { documentFrom, layerContract } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import {
+  documentFrom,
+  groupContract,
+  layerContract,
+} from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -167,6 +171,72 @@ describe('mask modifier rows', () => {
     expect(getLayerChildItem(document, 'rg1', 'ref1')).toEqual({ isEnabled: true, kind: 'reference-image' });
     expect(getLayerChildItem(document, 'rg1', 'gone')).toBeNull();
     expect(getLayerChildItem(document, 'gone', 'noise')).toBeNull();
+  });
+});
+
+describe('group adjustment child rows', () => {
+  const groupWith = (adjustments: CanvasAdjustmentEntry[]) =>
+    groupContract('g1', [layerContract('r1')], { adjustments });
+  const groupRow = (document: ReturnType<typeof documentFrom>) =>
+    buildLayerStackRows(document.stacks, new Set()).raster.rows.find((row) => row.id === 'g1')!;
+  const stack = (): CanvasAdjustmentEntry[] => [
+    { brightness: 0.2, contrast: 0, id: 'ga1', isEnabled: true, type: 'brightness-contrast' },
+    { id: 'ga2', isEnabled: false, type: 'invert' },
+  ];
+
+  it("projects a group's adjustment entries exactly like a raster layer's", () => {
+    const rows = projectLayerChildRows(groupRow(documentFrom([groupWith(stack())])).vm);
+    expect(rows.map((row) => [row.kind, row.itemId, row.isEnabled, row.layerId])).toEqual([
+      ['adjustment-brightness-contrast', 'ga1', true, 'g1'],
+      ['adjustment-invert', 'ga2', false, 'g1'],
+    ]);
+  });
+
+  it('emits group-arm patches for toggle, move, rename, and drop reorder', () => {
+    const document = documentFrom([groupWith(stack())]);
+    const toggled = layerChildRowCommand(
+      document,
+      { itemId: 'ga2', layerId: 'g1' },
+      { isEnabled: true, type: 'set-enabled' }
+    );
+    expect(toggled).toMatchObject({
+      before: { layerType: 'group' },
+      config: { layerType: 'group' },
+      id: 'g1',
+      type: 'patch-config',
+    });
+    expect((toggled!.config as unknown as { adjustments: CanvasAdjustmentEntry[] }).adjustments[1]!.isEnabled).toBe(
+      true
+    );
+
+    const renamed = layerChildRowCommand(
+      document,
+      { itemId: 'ga1', layerId: 'g1' },
+      { name: 'Warmth', type: 'rename' }
+    );
+    expect((renamed!.config as unknown as { adjustments: CanvasAdjustmentEntry[] }).adjustments[0]!.name).toBe(
+      'Warmth'
+    );
+
+    const dropped = layerChildDropCommand(
+      document,
+      { itemId: 'ga1', kind: 'adjustment-brightness-contrast', layerId: 'g1' },
+      { beforeItemId: null, layerId: 'g1' }
+    );
+    expect(dropped).toMatchObject({ config: { layerType: 'group' }, id: 'g1' });
+    expect(
+      (dropped as unknown as { config: { adjustments: CanvasAdjustmentEntry[] } }).config.adjustments.map(
+        (entry) => entry.id
+      )
+    ).toEqual(['ga2', 'ga1']);
+  });
+
+  it('resolves group-owned child items', () => {
+    const document = documentFrom([groupWith(stack())]);
+    expect(getLayerChildItem(document, 'g1', 'ga1')).toEqual({
+      isEnabled: true,
+      kind: 'adjustment-brightness-contrast',
+    });
   });
 });
 

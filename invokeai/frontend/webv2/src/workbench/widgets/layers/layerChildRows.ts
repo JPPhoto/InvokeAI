@@ -7,7 +7,7 @@ import type {
   SemanticNode,
 } from '@workbench/canvas-engine/api';
 
-import { getDocumentLayer } from '@workbench/canvas-engine/api';
+import { getDocumentLayer, getDocumentNode } from '@workbench/canvas-engine/api';
 import { layerChildRowKey } from '@workbench/layerPanelState';
 
 export { layerChildRowKey };
@@ -127,6 +127,33 @@ export interface LayerChildItem {
   readonly isEnabled: boolean;
 }
 
+/** The node whose adjustment stack a child row edits: a raster layer or a raster-stack group. */
+const adjustmentOwnerNode = (document: CanvasDocumentContractV3, id: string) => {
+  const node = getDocumentNode(document, id);
+  return node && (node.type === 'raster' || node.type === 'group') ? node : null;
+};
+
+/** The whole-stack patch both adjustment owners share; the arm follows the owner's type. */
+const adjustmentsPatch = (
+  ownerType: 'raster' | 'group',
+  id: string,
+  before: readonly CanvasAdjustmentEntry[],
+  next: CanvasAdjustmentEntry[]
+): PatchConfigCommand =>
+  ownerType === 'group'
+    ? {
+        before: { adjustments: [...before], layerType: 'group' },
+        config: { adjustments: next, layerType: 'group' },
+        id,
+        type: 'patch-config',
+      }
+    : {
+        before: { adjustments: [...before], layerType: 'raster' },
+        config: { adjustments: next, layerType: 'raster' },
+        id,
+        type: 'patch-config',
+      };
+
 const EMPTY_CHILD_ROWS: readonly ProjectedChildRow[] = [];
 
 const childRowsByNode = new WeakMap<SemanticNode, readonly ProjectedChildRow[]>();
@@ -194,7 +221,7 @@ export const projectLayerChildRows = (vm: SemanticNode): readonly ProjectedChild
     }));
   } else if (node.type === 'inpaint_mask' && (node.noise || node.denoise)) {
     rows = maskModifierRows(vm, node);
-  } else if (node.type === 'raster' && node.adjustments && node.adjustments.length > 0) {
+  } else if ((node.type === 'raster' || node.type === 'group') && node.adjustments && node.adjustments.length > 0) {
     const setSize = node.adjustments.length;
     rows = node.adjustments.map((adjustment, index): ProjectedChildRow => ({
       ...baseRow(vm),
@@ -234,8 +261,9 @@ export const getLayerChildItem = (
       return { isEnabled: layer.denoise.isEnabled, kind: 'mask-denoise' };
     }
   }
-  if (layer?.type === 'raster') {
-    const entry = layer.adjustments?.find((candidate) => candidate.id === itemId);
+  const owner = layer ?? adjustmentOwnerNode(document, layerId);
+  if (owner && (owner.type === 'raster' || owner.type === 'group')) {
+    const entry = owner.adjustments?.find((candidate) => candidate.id === itemId);
     return entry ? { isEnabled: entry.isEnabled, kind: ADJUSTMENT_KIND_OF[entry.type] } : null;
   }
   return null;
@@ -290,10 +318,12 @@ export const layerChildDropCommand = (
   }
   const source = getDocumentLayer(document, child.layerId);
   if (isOrderedChildKind(child.kind)) {
-    if (target.layerId !== child.layerId || source?.type !== 'raster') {
+    const sourceOwner =
+      source?.type === 'raster' ? source : source ? null : adjustmentOwnerNode(document, child.layerId);
+    if (target.layerId !== child.layerId || !sourceOwner) {
       return null;
     }
-    const before = source.adjustments ?? [];
+    const before = sourceOwner.adjustments ?? [];
     const entry = before.find((candidate) => candidate.id === child.itemId);
     if (!entry) {
       return null;
@@ -306,12 +336,7 @@ export const layerChildDropCommand = (
     if (next.every((candidate, index) => candidate === before[index])) {
       return null;
     }
-    return {
-      before: { adjustments: [...before], layerType: 'raster' },
-      config: { adjustments: next, layerType: 'raster' },
-      id: child.layerId,
-      type: 'patch-config',
-    };
+    return adjustmentsPatch(sourceOwner.type, child.layerId, before, next);
   }
   if (child.kind !== 'reference-image' || source?.type !== 'regional_guidance') {
     return null;
@@ -423,8 +448,9 @@ export const layerChildRowCommand = (
       type: 'patch-config',
     };
   }
-  if (layer?.type === 'raster') {
-    const before = layer.adjustments ?? [];
+  const owner = layer?.type === 'raster' ? layer : layer ? null : adjustmentOwnerNode(document, target.layerId);
+  if (owner) {
+    const before = owner.adjustments ?? [];
     const index = before.findIndex((entry) => entry.id === target.itemId);
     if (index < 0) {
       return null;
@@ -475,12 +501,7 @@ export const layerChildRowCommand = (
         break;
       }
     }
-    return {
-      before: { adjustments: [...before], layerType: 'raster' },
-      config: { adjustments: next, layerType: 'raster' },
-      id: target.layerId,
-      type: 'patch-config',
-    };
+    return adjustmentsPatch(owner.type, target.layerId, before, next);
   }
   return null;
 };

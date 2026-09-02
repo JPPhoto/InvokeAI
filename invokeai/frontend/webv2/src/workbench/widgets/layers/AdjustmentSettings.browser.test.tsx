@@ -58,8 +58,19 @@ const createLayer = (): CanvasRasterLayerContractV2 =>
 const commits: PreparedDocumentEdit[] = [];
 let latestAdjustments: unknown = 'untouched';
 
-const Harness = ({ entryId }: { entryId: string }) => {
-  const [layer, setLayer] = useState(createLayer);
+const createGroupOwner = () =>
+  ({
+    adjustments: initialEntries(),
+    children: [],
+    id: 'group-1',
+    isEnabled: true,
+    isLocked: false,
+    name: 'Group 1',
+    type: 'group',
+  }) as unknown as CanvasRasterLayerContractV2;
+
+const Harness = ({ entryId, owner = 'raster' }: { entryId: string; owner?: 'raster' | 'group' }) => {
+  const [layer, setLayer] = useState(owner === 'group' ? createGroupOwner : createLayer);
 
   const engine = useMemo(() => {
     const apply = (mutation: CanvasProjectMutation): boolean => {
@@ -103,7 +114,7 @@ const settle = (action: () => void): Promise<void> =>
     });
   });
 
-const render = async (entryId = 'cv1') => {
+const render = async (entryId = 'cv1', owner: 'raster' | 'group' = 'raster') => {
   applyThemeToRoot('classic');
   host = document.createElement('div');
   host.style.width = '260px';
@@ -114,7 +125,7 @@ const render = async (entryId = 'cv1') => {
     root?.render(
       <I18nextProvider i18n={i18n}>
         <ChakraProvider value={system}>
-          <Harness entryId={entryId} />
+          <Harness entryId={entryId} owner={owner} />
         </ChakraProvider>
       </I18nextProvider>
     );
@@ -158,6 +169,21 @@ const pressTrack = async (track: HTMLElement, fraction: number): Promise<void> =
 
 const forwardEntries = (edit: PreparedDocumentEdit): CanvasAdjustmentEntry[] =>
   (edit.forward as unknown as { config: { adjustments: CanvasAdjustmentEntry[] } }).config.adjustments;
+
+describe('group-owned adjustment editors', () => {
+  it('previews and commits through the group config arm', async () => {
+    await render('hue1', 'group');
+    const [track] = sliderTracks();
+    expect(track).toBeDefined();
+    await pressTrack(track!, 0.75);
+
+    expect(commits).toHaveLength(1);
+    const forward = commits[0]!.forward as unknown as { config: { layerType: string }; id: string };
+    expect(forward.config.layerType).toBe('group');
+    expect(forward.id).toBe('group-1');
+    expect((forwardEntries(commits[0]!)[2] as { rotation: number }).rotation).toBeCloseTo(90, -1);
+  });
+});
 
 describe('hue and levels editors', () => {
   it('commits a hue rotation as one whole-stack patch', async () => {

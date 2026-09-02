@@ -201,6 +201,31 @@ export interface LayerContextAction {
 export type LayerConfigPatchKind = 'control-transparency-effect' | 'regional-auto-negative';
 
 const ALL_LAYER_TYPES = ['raster', 'control', 'inpaint_mask', 'regional_guidance'] as const;
+/**
+ * The one add-adjustment catalog: the leaf context menu derives its `add-*`
+ * actions from it and the group context menu renders it directly, so a new
+ * entry type lands in both menus from one edit.
+ */
+export const ADJUSTMENT_ADD_ITEMS: readonly {
+  readonly defaultLabel: string;
+  readonly icon: LucideIcon;
+  readonly labelKey: string;
+  readonly type: CanvasAdjustmentEntry['type'];
+}[] = [
+  {
+    defaultLabel: 'Brightness/Contrast',
+    icon: SunMediumIcon,
+    labelKey: 'widgets.layers.modifiers.brightnessContrast',
+    type: 'brightness-contrast',
+  },
+  { defaultLabel: 'Exposure', icon: ApertureIcon, labelKey: 'widgets.layers.adjustments.exposure', type: 'exposure' },
+  { defaultLabel: 'Levels', icon: SlidersVerticalIcon, labelKey: 'widgets.layers.adjustments.levels', type: 'levels' },
+  { defaultLabel: 'Curves', icon: SplineIcon, labelKey: 'widgets.layers.adjustments.curves', type: 'curves' },
+  { defaultLabel: 'Saturation', icon: DropletIcon, labelKey: 'widgets.layers.adjustments.saturation', type: 'hsl' },
+  { defaultLabel: 'Hue', icon: RainbowIcon, labelKey: 'widgets.layers.adjustments.hue', type: 'hue' },
+  { defaultLabel: 'Invert', icon: ContrastIcon, labelKey: 'widgets.layers.adjustments.invert', type: 'invert' },
+];
+
 const RASTER_ONLY = ['raster'] as const;
 const CONTROL_ONLY = ['control'] as const;
 const RASTER_AND_CONTROL = ['raster', 'control'] as const;
@@ -423,97 +448,19 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     section: 'primary',
     supportedLayerTypes: ALL_LAYER_TYPES,
   },
-  {
-    defaultLabel: 'Brightness/Contrast',
-    handler: ({ effects }) => effects.addAdjustment('brightness-contrast'),
-    icon: SunMediumIcon,
-    id: 'add-brightness-contrast',
+  ...ADJUSTMENT_ADD_ITEMS.map((item, index): LayerContextActionDefinition => ({
+    defaultLabel: item.defaultLabel,
+    handler: ({ effects }) => effects.addAdjustment(item.type),
+    icon: item.icon,
+    id: `add-${item.type}` as LayerContextActionId,
     isEnabled: isLayerMutable,
     isVisible: alwaysVisible,
-    labelKey: 'widgets.layers.modifiers.brightnessContrast',
-    order: 31,
+    labelKey: item.labelKey,
+    order: 31 + index * 0.05,
     section: 'primary',
     submenu: 'add-adjustment',
     supportedLayerTypes: RASTER_ONLY,
-  },
-  {
-    defaultLabel: 'Exposure',
-    handler: ({ effects }) => effects.addAdjustment('exposure'),
-    icon: ApertureIcon,
-    id: 'add-exposure',
-    isEnabled: isLayerMutable,
-    isVisible: alwaysVisible,
-    labelKey: 'widgets.layers.adjustments.exposure',
-    order: 31.05,
-    section: 'primary',
-    submenu: 'add-adjustment',
-    supportedLayerTypes: RASTER_ONLY,
-  },
-  {
-    defaultLabel: 'Levels',
-    handler: ({ effects }) => effects.addAdjustment('levels'),
-    icon: SlidersVerticalIcon,
-    id: 'add-levels',
-    isEnabled: isLayerMutable,
-    isVisible: alwaysVisible,
-    labelKey: 'widgets.layers.adjustments.levels',
-    order: 31.1,
-    section: 'primary',
-    submenu: 'add-adjustment',
-    supportedLayerTypes: RASTER_ONLY,
-  },
-  {
-    defaultLabel: 'Curves',
-    handler: ({ effects }) => effects.addAdjustment('curves'),
-    icon: SplineIcon,
-    id: 'add-curves',
-    isEnabled: isLayerMutable,
-    isVisible: alwaysVisible,
-    labelKey: 'widgets.layers.adjustments.curves',
-    order: 31.2,
-    section: 'primary',
-    submenu: 'add-adjustment',
-    supportedLayerTypes: RASTER_ONLY,
-  },
-  {
-    defaultLabel: 'Saturation',
-    handler: ({ effects }) => effects.addAdjustment('hsl'),
-    icon: DropletIcon,
-    id: 'add-hsl',
-    isEnabled: isLayerMutable,
-    isVisible: alwaysVisible,
-    labelKey: 'widgets.layers.adjustments.saturation',
-    order: 31.3,
-    section: 'primary',
-    submenu: 'add-adjustment',
-    supportedLayerTypes: RASTER_ONLY,
-  },
-  {
-    defaultLabel: 'Hue',
-    handler: ({ effects }) => effects.addAdjustment('hue'),
-    icon: RainbowIcon,
-    id: 'add-hue',
-    isEnabled: isLayerMutable,
-    isVisible: alwaysVisible,
-    labelKey: 'widgets.layers.adjustments.hue',
-    order: 31.4,
-    section: 'primary',
-    submenu: 'add-adjustment',
-    supportedLayerTypes: RASTER_ONLY,
-  },
-  {
-    defaultLabel: 'Invert',
-    handler: ({ effects }) => effects.addAdjustment('invert'),
-    icon: ContrastIcon,
-    id: 'add-invert',
-    isEnabled: isLayerMutable,
-    isVisible: alwaysVisible,
-    labelKey: 'widgets.layers.adjustments.invert',
-    order: 31.5,
-    section: 'primary',
-    submenu: 'add-adjustment',
-    supportedLayerTypes: RASTER_ONLY,
-  },
+  })),
   {
     defaultLabel: 'Filter',
     handler: ({ effects, layer }) => effects.startFilter(layer.id),

@@ -79,7 +79,7 @@ describe('group adjustment composite', () => {
     const document = docWith([
       groupContract('g', [raster('red', { opacity: 0.5 }), raster('white')], {
         adjustments: gammaStack('ga'),
-      } as never),
+      }),
     ]);
     const scene = sceneFor({ red: '#ff0000', white: '#ffffff' });
     const entry = planBaseRasterComposite(document, BBOX);
@@ -100,9 +100,9 @@ describe('group adjustment composite', () => {
     // so use a mid value: member is 25% gray (64). invert → 191; gamma-2 on
     // 191 → 255·sqrt(191/255) ≈ 221. Reversed: gamma-2(64) ≈ 128, invert → 127.
     const document = docWith([
-      groupContract('outer', [groupContract('inner', [raster('gray')], { adjustments: invertStack('ia') } as never)], {
+      groupContract('outer', [groupContract('inner', [raster('gray')], { adjustments: invertStack('ia') })], {
         adjustments: gammaStack('oa'),
-      } as never),
+      }),
     ]);
     const scene = sceneFor({ gray: '#404040' });
     const surface = await renderRasterComposite(planBaseRasterComposite(document, BBOX), scene);
@@ -114,7 +114,7 @@ describe('group adjustment composite', () => {
     const document = docWith([
       groupContract('g', [raster('red', { blendMode: 'multiply', opacity: 0.6 }), raster('white')], {
         adjustments: gammaStack('ga'),
-      } as never),
+      }),
       raster('under'),
     ]);
     const scene = sceneFor({ red: '#ff4040', under: '#2040c0', white: '#c0c0c0' });
@@ -153,11 +153,11 @@ describe('group adjustment composite', () => {
       groupContract(
         'outer',
         [
-          groupContract('i1', [raster('a')], { adjustments: invertStack('ia') } as never),
+          groupContract('i1', [raster('a')], { adjustments: invertStack('ia') }),
           raster('b', { opacity: 0.0 }),
-          groupContract('i2', [raster('d', { opacity: 0.0 })], { adjustments: invertStack('ib') } as never),
+          groupContract('i2', [raster('d', { opacity: 0.0 })], { adjustments: invertStack('ib') }),
         ],
-        { adjustments: gammaStack('oa') } as never
+        { adjustments: gammaStack('oa') }
       ),
     ]);
     const scene = sceneFor({ a: '#404040', b: '#404040', d: '#404040' });
@@ -179,7 +179,7 @@ describe('group adjustment composite', () => {
   });
 
   it('color-samples through a group stack when the providers are wired', () => {
-    const document = docWith([groupContract('g', [raster('gray')], { adjustments: invertStack('ia') } as never)]);
+    const document = docWith([groupContract('g', [raster('gray')], { adjustments: invertStack('ia') })]);
     const scene = sceneFor({ gray: '#404040' });
     const groupSurfaces = createGroupSurfaceCache({
       createSurface: (w, h) => scene.backend.createSurface(w, h),
@@ -199,8 +199,8 @@ describe('group adjustment composite', () => {
     const flat = docWith([groupContract('g', [raster('white')])]);
     expect(planBaseRasterComposite(flat, BBOX).groupScopes).toBeUndefined();
 
-    const adjusted = docWith([groupContract('g', [raster('white')], { adjustments: gammaStack('ga') } as never)]);
-    const inverted = docWith([groupContract('g', [raster('white')], { adjustments: invertStack('ia') } as never)]);
+    const adjusted = docWith([groupContract('g', [raster('white')], { adjustments: gammaStack('ga') })]);
+    const inverted = docWith([groupContract('g', [raster('white')], { adjustments: invertStack('ia') })]);
     expect(planBaseRasterComposite(adjusted, BBOX).key).not.toBe(planBaseRasterComposite(flat, BBOX).key);
     expect(planBaseRasterComposite(adjusted, BBOX).key).not.toBe(planBaseRasterComposite(inverted, BBOX).key);
   });

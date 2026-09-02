@@ -58,6 +58,8 @@ export const childRowName = (child: ProjectedChildRow, t: (key: string) => strin
     : (child.customName ?? t(childRowNameKey(child.kind)));
 
 interface LayerChildRowProps {
+  /** The owner's combined child count when a group owns both rows and nodes. */
+  ariaSetSize?: number;
   child: ProjectedChildRow;
   commands: LayerRowCommands;
   /** The owning layer travels in the current drag; the row dims with it. */
@@ -76,6 +78,7 @@ interface LayerChildRowProps {
  * registers a drop target so a layer drag over it lands below its owner.
  */
 const LayerChildRowComponent = ({
+  ariaSetSize,
   child,
   commands,
   dimmed,
@@ -229,7 +232,7 @@ const LayerChildRowComponent = ({
       aria-level={child.depth + 2}
       aria-posinset={child.posInSet}
       aria-selected={selected}
-      aria-setsize={child.setSize}
+      aria-setsize={ariaSetSize ?? child.setSize}
       data-layer-row-id={child.key}
       h="full"
       opacity={dimmed ? 0.4 : undefined}
