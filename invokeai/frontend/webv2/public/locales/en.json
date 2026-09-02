@@ -2628,7 +2628,8 @@
         "hideModifiers": "Hide modifiers",
         "showModifiers": "Show modifiers",
         "addDenoiseLimit": "Add denoise limit",
-        "addNoise": "Add noise"
+        "addNoise": "Add noise",
+        "addRegenerateRegion": "Add regenerate region"
       },
       "control": {
         "apply": "Apply",
@@ -3065,12 +3066,16 @@
         "denoise": "Denoise limit",
         "denoiseHelp": "Caps how strongly generation may repaint the masked area.",
         "noise": "Noise",
+        "regenerateRegion": "Regenerate region",
+        "removeRegion": "Remove regenerate region",
+        "regionHint": "Marks the area of this layer to regenerate. It rides the layer and joins the inpaint coverage while the layer is enabled.",
         "noiseHelp": "Adds noise inside the masked area before generation.",
         "removeDenoise": "Remove denoise limit",
         "removeNoise": "Remove noise",
         "brightnessContrast": "Brightness/Contrast",
         "duplicateAdjustment": "Duplicate adjustment",
         "renameAdjustment": "Rename adjustment",
+        "renameRegion": "Rename region",
         "moveDown": "Move down",
         "moveUp": "Move up",
         "removeAdjustment": "Remove adjustment",

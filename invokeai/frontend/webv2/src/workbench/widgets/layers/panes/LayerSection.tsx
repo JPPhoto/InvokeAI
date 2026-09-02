@@ -9,6 +9,7 @@ import { AdjustmentSettings } from '@workbench/widgets/layers/AdjustmentSettings
 import { ControlLayerSettings } from '@workbench/widgets/layers/ControlLayerSettings';
 import { InpaintMaskSettings } from '@workbench/widgets/layers/InpaintMaskSettings';
 import {
+  LAYER_REGION_ITEM_ID,
   adjustmentChildKind,
   childRowNameKey,
   MASK_DENOISE_ITEM_ID,
@@ -16,6 +17,7 @@ import {
   type LayerChildRowKind,
 } from '@workbench/widgets/layers/layerChildRows';
 import { useLayerChildSelection } from '@workbench/widgets/layers/layerChildSelection';
+import { LayerRegionSettings } from '@workbench/widgets/layers/LayerRegionSettings';
 import { MaskModifierSettings } from '@workbench/widgets/layers/MaskModifierSettings';
 import { RasterLayerFilterSection } from '@workbench/widgets/layers/RasterLayerFilterSection';
 import { ReferenceImageSettings } from '@workbench/widgets/layers/ReferenceImageSettings';
@@ -105,6 +107,13 @@ const resolveChildEditor = (
       return { itemId: selection.itemId, kind: 'mask-denoise', subtitle: t('widgets.layers.modifiers.denoise') };
     }
   }
+  if (layer.type === 'raster' && selection.itemId === LAYER_REGION_ITEM_ID && layer.inpaint) {
+    return {
+      itemId: selection.itemId,
+      kind: 'layer-region',
+      subtitle: layer.inpaint.name ?? t(childRowNameKey('layer-region')),
+    };
+  }
   if (layer.type === 'raster' || layer.type === 'group') {
     const entry = layer.adjustments?.find((candidate) => candidate.id === selection.itemId);
     if (entry) {
@@ -129,6 +138,9 @@ const ChildEditor = ({
   }
   if ((child.kind === 'mask-noise' || child.kind === 'mask-denoise') && node.type === 'inpaint_mask') {
     return <MaskModifierSettings engine={engine} kind={child.kind} layer={node} />;
+  }
+  if (child.kind === 'layer-region' && node.type === 'raster') {
+    return <LayerRegionSettings engine={engine} layer={node} />;
   }
   if (child.kind.startsWith('adjustment-') && (node.type === 'raster' || node.type === 'group')) {
     return <AdjustmentSettings engine={engine} entryId={child.itemId} layer={node} />;

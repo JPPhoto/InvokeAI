@@ -88,6 +88,7 @@ import { copyBlobToClipboard, saveLayerToAssets } from './layerExportActions';
 import { canGroupSelection, groupLayers } from './layerGroupCommands';
 import { resolveMenuTargetForRender } from './layerMenuState';
 import {
+  DEFAULT_INPAINT_MASK_FILL,
   convertRasterToControl,
   convertRasterToInpaintMask,
   convertRasterToRegionalGuidance,
@@ -736,6 +737,23 @@ const LayerMenu = ({
     [commitPrepared, layer, t]
   );
 
+  const handleAddLayerRegion = useCallback(() => {
+    if (layer.type !== 'raster' || layer.inpaint) {
+      return;
+    }
+    commitPrepared(t('widgets.layers.actions.addRegenerateRegion'), (model) =>
+      model.prepare({
+        before: { inpaint: null, layerType: 'raster' },
+        config: {
+          inpaint: { isEnabled: true, mask: { bitmap: null, fill: { ...DEFAULT_INPAINT_MASK_FILL } } },
+          layerType: 'raster',
+        },
+        id: layer.id,
+        type: 'patch-config',
+      })
+    );
+  }, [commitPrepared, layer, t]);
+
   const handleAddAdjustment = useCallback(
     (type: CanvasAdjustmentEntry['type']) => {
       if (layer.type !== 'raster') {
@@ -775,6 +793,7 @@ const LayerMenu = ({
   const effects = useMemo<LayerContextActionEffects>(
     () => ({
       addAdjustment: handleAddAdjustment,
+      addLayerRegion: handleAddLayerRegion,
       addMaskModifier: handleAddMaskModifier,
       addReferenceImage: handleAddReferenceImage,
       booleanMerge: handleBooleanRaster,
@@ -817,6 +836,7 @@ const LayerMenu = ({
       convert,
       getActionLabel,
       handleAddAdjustment,
+      handleAddLayerRegion,
       handleAddMaskModifier,
       handleAddReferenceImage,
       handleBooleanRaster,

@@ -90,6 +90,7 @@ const makeState = (
 
 const makeEffects = (): LayerContextActionEffects => ({
   addAdjustment: vi.fn(),
+  addLayerRegion: vi.fn(),
   addMaskModifier: vi.fn(),
   addReferenceImage: vi.fn(),
   booleanMerge: vi.fn(() => Promise.resolve()),
@@ -462,6 +463,7 @@ describe('getLayerContextActions', () => {
       'add-hsl',
       'add-hue',
       'add-invert',
+      'add-regenerate-region',
       'save-to-assets',
       'copy-to-clipboard',
       'crop-to-bbox',
@@ -547,6 +549,7 @@ describe('getLayerContextActions', () => {
       'add-hsl',
       'add-hue',
       'add-invert',
+      'add-regenerate-region',
       'filter',
       'select-object',
       'run-workflow',
@@ -626,6 +629,7 @@ describe('getLayerContextActions', () => {
         'add-hsl',
         'add-hue',
         'add-invert',
+        'add-regenerate-region',
         'save-to-assets',
         'copy-to-clipboard',
         'crop-to-bbox',

@@ -17,6 +17,7 @@ import {
 } from '@workbench/canvas-engine/api';
 import {
   ApertureIcon,
+  WandSparklesIcon,
   ArrowDownIcon,
   ArrowDownToLineIcon,
   ArrowUpIcon,
@@ -54,6 +55,7 @@ import { canConvertRasterControl, canMergeLayerDown } from './layerOps';
 export type LayerContextActionId =
   | 'add-reference-image'
   | 'add-noise'
+  | 'add-regenerate-region'
   | 'add-denoise-limit'
   | 'add-brightness-contrast'
   | 'add-exposure'
@@ -150,6 +152,7 @@ export interface LayerContextActionEffects {
   addReferenceImage(): void;
   addMaskModifier(field: 'noise' | 'denoise'): void;
   addAdjustment(type: CanvasAdjustmentEntry['type']): void;
+  addLayerRegion(): void;
   mergeDown(): void;
   toggleVisibility(): void;
   toggleHidden(): void;
@@ -544,6 +547,18 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     order: 55,
     section: 'primary',
     supportedLayerTypes: REGIONAL_ONLY,
+  },
+  {
+    defaultLabel: 'Add regenerate region',
+    handler: ({ effects }) => effects.addLayerRegion(),
+    icon: WandSparklesIcon,
+    id: 'add-regenerate-region',
+    isEnabled: isLayerMutable,
+    isVisible: (context) => context.layer.type === 'raster' && context.layer.inpaint === undefined,
+    labelKey: 'widgets.layers.actions.addRegenerateRegion',
+    order: 32,
+    section: 'primary',
+    supportedLayerTypes: RASTER_ONLY,
   },
   {
     defaultLabel: 'Add noise',

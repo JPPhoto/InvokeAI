@@ -32,6 +32,7 @@ import { ChildDragGhost, isRenameableChildKind, LayerChildRow } from './LayerChi
 import {
   layerChildDropCommand,
   layerChildRemoveLabelKey,
+  layerChildRenameLabelKey,
   layerChildRowCommand,
   layerChildRowKey,
   projectLayerChildRows,
@@ -527,7 +528,7 @@ export const LayersTree = ({
       renameChild: (child, name) => {
         const command = layerChildRowCommand(latest.current.document, child, { name, type: 'rename' });
         if (command) {
-          runStructural(t('widgets.layers.modifiers.renameAdjustment'), command);
+          runStructural(t(layerChildRenameLabelKey(child.kind)), command);
         }
       },
       select: (id, modifiers: LayerSelectionModifiers) => {

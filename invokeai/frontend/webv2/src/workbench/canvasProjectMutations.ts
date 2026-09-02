@@ -537,12 +537,17 @@ const patchLayerConfig = (layer: CanvasNodeContract, config: CanvasLayerConfigPa
     };
   }
   if (layer.type === 'raster' && config.layerType === 'raster') {
-    return {
+    const next = {
       ...layer,
       ...(Object.hasOwn(config, 'adjustments') ? { adjustments: config.adjustments } : {}),
+      ...(Object.hasOwn(config, 'inpaint') && config.inpaint !== null ? { inpaint: config.inpaint } : {}),
       ...(Object.hasOwn(config, 'isTransparencyLocked') ? { isTransparencyLocked: config.isTransparencyLocked } : {}),
       ...(Object.hasOwn(config, 'filter') ? { filter: config.filter } : {}),
     };
+    if (Object.hasOwn(config, 'inpaint') && config.inpaint === null) {
+      delete next.inpaint;
+    }
+    return next;
   }
   if (layer.type === 'control' && config.layerType === 'control') {
     return {

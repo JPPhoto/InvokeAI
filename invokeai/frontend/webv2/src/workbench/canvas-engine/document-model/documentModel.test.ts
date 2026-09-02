@@ -756,6 +756,34 @@ describe('createDocumentModel', () => {
       expect(rawDispatch.canvas.document).toBe(project.canvas.document);
     });
 
+    it('round-trips a layer regenerate region through add, toggle and null-remove', () => {
+      const project = projectWith(flat(), 'r1');
+      const inpaint = {
+        isEnabled: true,
+        mask: { bitmap: null, fill: { color: '#e07575', style: 'diagonal' as const } },
+      };
+      const added = roundTrip(project, {
+        before: { inpaint: null, layerType: 'raster' },
+        config: { inpaint, layerType: 'raster' },
+        id: 'r1',
+        type: 'patch-config',
+      });
+      const toggled = roundTrip(added.after, {
+        before: { inpaint, layerType: 'raster' },
+        config: { inpaint: { ...inpaint, isEnabled: false }, layerType: 'raster' },
+        id: 'r1',
+        type: 'patch-config',
+      });
+      const removed = roundTrip(toggled.after, {
+        before: { inpaint: { ...inpaint, isEnabled: false }, layerType: 'raster' },
+        config: { inpaint: null, layerType: 'raster' },
+        id: 'r1',
+        type: 'patch-config',
+      });
+      const layer = getDocumentLeaves(removed.after.canvas.document).find((leaf) => leaf.id === 'r1')!;
+      expect(Object.hasOwn(layer, 'inpaint')).toBe(false);
+    });
+
     it('round-trips a mask modifier through add, toggle and null-remove with passing postconditions', () => {
       const project = projectWith(flat(), 'i1');
       const noise = { isEnabled: true, level: 0.25 };

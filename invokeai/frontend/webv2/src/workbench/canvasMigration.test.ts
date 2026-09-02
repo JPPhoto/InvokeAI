@@ -104,6 +104,21 @@ describe('loadCanvasState', () => {
     });
   });
 
+  it('round-trips a layer regenerate region and drops a malformed one without failing the layer', () => {
+    const inpaint = {
+      isEnabled: true,
+      mask: { bitmap: null, fill: { color: '#e07575', style: 'diagonal' }, offset: { x: 4, y: -2 } },
+      name: 'Face',
+    };
+    const loaded = load(withNodes([{ ...createEmptyPaintLayer('Region', 'region'), inpaint }]));
+    const layer = loaded.document.stacks.raster[0];
+    expect(layer?.type === 'raster' ? layer.inpaint : null).toEqual(inpaint);
+
+    const malformed = load(withNodes([{ ...createEmptyPaintLayer('Bad', 'bad'), inpaint: { isEnabled: 'yes' } }]));
+    const badLayer = malformed.document.stacks.raster[0];
+    expect(badLayer?.type === 'raster' ? badLayer.inpaint : null).toBeUndefined();
+  });
+
   it('round-trips group adjustments in the raster stack, strips them from overlay groups, and drops a malformed group stack', () => {
     const stack = [{ brightness: 0.1, contrast: 0, id: 'ga1', isEnabled: true, type: 'brightness-contrast' }];
     const rasterGroup = {

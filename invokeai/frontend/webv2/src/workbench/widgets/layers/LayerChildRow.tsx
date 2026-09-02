@@ -4,6 +4,7 @@ import { Box, HStack, Icon, Input, Text } from '@chakra-ui/react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import {
   ApertureIcon,
+  WandSparklesIcon,
   ContrastIcon,
   DropletIcon,
   GaugeIcon,
@@ -39,6 +40,7 @@ const CHILD_ROW_GLYPHS: Record<LayerChildRowKind, LucideIcon> = {
   'adjustment-hue': RainbowIcon,
   'adjustment-invert': ContrastIcon,
   'adjustment-levels': SlidersVerticalIcon,
+  'layer-region': WandSparklesIcon,
   'mask-denoise': GaugeIcon,
   'mask-noise': WavesIcon,
   'reference-image': ImageIcon,
@@ -49,7 +51,8 @@ export const isDraggableChildKind = (kind: LayerChildRowKind): boolean =>
   kind === 'reference-image' || isOrderedChildKind(kind);
 
 /** Kinds whose rows carry a user-given name: adjustment entries. */
-export const isRenameableChildKind = isOrderedChildKind;
+export const isRenameableChildKind = (kind: LayerChildRowKind): boolean =>
+  kind === 'layer-region' || isOrderedChildKind(kind);
 
 /** The row's display name: its custom name, a reference image's number, or its kind's name. */
 export const childRowName = (child: ProjectedChildRow, t: (key: string) => string): string =>

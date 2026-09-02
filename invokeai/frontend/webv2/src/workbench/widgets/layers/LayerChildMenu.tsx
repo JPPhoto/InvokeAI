@@ -17,7 +17,13 @@ import { useTranslation } from 'react-i18next';
 
 import type { LayerRowCommands, LayerSurfaceAnchor } from './layerRowCommands';
 
-import { isOrderedChildKind, layerChildRemoveLabelKey, type ProjectedChildRow } from './layerChildRows';
+import { isRenameableChildKind } from './LayerChildRow';
+import {
+  isOrderedChildKind,
+  layerChildRemoveLabelKey,
+  layerChildRenameLabelKey,
+  type ProjectedChildRow,
+} from './layerChildRows';
 
 const ChildMenuItem = MenuActionItem;
 
@@ -73,15 +79,17 @@ export const LayerChildMenu = ({
               value="toggle"
               onSelect={handleToggle}
             />
+            {isRenameableChildKind(child.kind) ? (
+              <ChildMenuItem
+                disabled={editingLocked}
+                icon={PencilIcon}
+                label={t(layerChildRenameLabelKey(child.kind))}
+                value="rename"
+                onSelect={handleRename}
+              />
+            ) : null}
             {ordered ? (
               <>
-                <ChildMenuItem
-                  disabled={editingLocked}
-                  icon={PencilIcon}
-                  label={t('widgets.layers.modifiers.renameAdjustment')}
-                  value="rename"
-                  onSelect={handleRename}
-                />
                 <ChildMenuItem
                   disabled={editingLocked}
                   icon={CopyIcon}
@@ -90,14 +98,14 @@ export const LayerChildMenu = ({
                   onSelect={handleDuplicate}
                 />
                 <ChildMenuItem
-                  disabled={editingLocked || child.posInSet <= 1}
+                  disabled={editingLocked || (child.orderedPosInSet ?? 1) <= 1}
                   icon={ArrowUpIcon}
                   label={t('widgets.layers.modifiers.moveUp')}
                   value="move-up"
                   onSelect={handleMoveUp}
                 />
                 <ChildMenuItem
-                  disabled={editingLocked || child.posInSet >= child.setSize}
+                  disabled={editingLocked || (child.orderedPosInSet ?? 0) >= (child.orderedSetSize ?? 0)}
                   icon={ArrowDownIcon}
                   label={t('widgets.layers.modifiers.moveDown')}
                   value="move-down"

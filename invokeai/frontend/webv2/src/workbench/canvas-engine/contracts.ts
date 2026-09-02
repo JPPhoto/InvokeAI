@@ -236,10 +236,23 @@ export interface CanvasMaskContract {
   offset?: { x: number; y: number };
 }
 
+/**
+ * A raster layer's attached regenerate region: coverage in the PARENT's local
+ * space (it rides the layer's transform), unioned into generation's inpaint
+ * coverage while the layer contributes. Singleton, like a mask's noise
+ * modifier; absent ⇒ never added.
+ */
+export interface CanvasLayerRegionContract {
+  isEnabled: boolean;
+  name?: string;
+  mask: CanvasMaskContract;
+}
+
 export interface CanvasRasterLayerContractV2 extends CanvasLayerBaseContract {
   type: 'raster';
   source: CanvasLayerSourceContract;
   adjustments?: CanvasAdjustmentsContract;
+  inpaint?: CanvasLayerRegionContract;
   isTransparencyLocked?: boolean;
   filter?: { type: string; settings: Record<string, unknown> };
 }

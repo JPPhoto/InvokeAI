@@ -24,6 +24,7 @@ export type LayerChildRowKind =
   | 'reference-image'
   | 'mask-noise'
   | 'mask-denoise'
+  | 'layer-region'
   | 'adjustment-brightness-contrast'
   | 'adjustment-exposure'
   | 'adjustment-levels'
@@ -56,6 +57,7 @@ const CHILD_ROW_NAME_KEYS: Record<Exclude<LayerChildRowKind, 'reference-image'>,
   'adjustment-hue': 'widgets.layers.adjustments.hue',
   'adjustment-invert': 'widgets.layers.adjustments.invert',
   'adjustment-levels': 'widgets.layers.adjustments.levels',
+  'layer-region': 'widgets.layers.modifiers.regenerateRegion',
   'mask-denoise': 'widgets.layers.modifiers.denoise',
   'mask-noise': 'widgets.layers.modifiers.noise',
 };
@@ -92,6 +94,8 @@ export const isOrderedChildKind = (kind: LayerChildRowKind): boolean => kind.sta
 /** The synthetic item ids of a mask's singleton modifiers. */
 export const MASK_NOISE_ITEM_ID = 'noise';
 export const MASK_DENOISE_ITEM_ID = 'denoise';
+/** The synthetic item id of a raster layer's singleton regenerate region. */
+export const LAYER_REGION_ITEM_ID = 'inpaint';
 
 export interface ProjectedChildRow {
   /** Tree key, also the row's DOM id: `child:{layerId}:{itemId}`. */
@@ -104,6 +108,9 @@ export interface ProjectedChildRow {
   readonly depth: number;
   readonly posInSet: number;
   readonly setSize: number;
+  /** Position among the layer's ordered (reorderable) rows only; absent on singleton rows. */
+  readonly orderedPosInSet?: number;
+  readonly orderedSetSize?: number;
   readonly isEnabled: boolean;
   /** The owning layer and its ancestors are enabled; a gated dot when not. */
   readonly parentContributing: boolean;
@@ -220,20 +227,47 @@ export const projectLayerChildRows = (vm: SemanticNode): readonly ProjectedChild
     }));
   } else if (node.type === 'inpaint_mask' && (node.noise || node.denoise)) {
     rows = maskModifierRows(vm, node);
-  } else if ((node.type === 'raster' || node.type === 'group') && node.adjustments && node.adjustments.length > 0) {
-    const setSize = node.adjustments.length;
-    rows = node.adjustments.map((adjustment, index): ProjectedChildRow => ({
-      ...baseRow(vm),
-      customName: adjustment.name ?? null,
-      detail: adjustmentDetail(adjustment),
-      image: null,
-      isEnabled: adjustment.isEnabled,
-      itemId: adjustment.id,
-      key: layerChildRowKey(node.id, adjustment.id),
-      kind: ADJUSTMENT_KIND_OF[adjustment.type],
-      posInSet: index + 1,
-      setSize,
-    }));
+  } else if (
+    (node.type === 'raster' || node.type === 'group') &&
+    ((node.adjustments && node.adjustments.length > 0) || (node.type === 'raster' && node.inpaint))
+  ) {
+    const region = node.type === 'raster' ? node.inpaint : undefined;
+    // A foreign adjustment claiming the region's reserved item id would alias its row key.
+    const adjustments = (node.adjustments ?? []).filter((entry) => !region || entry.id !== LAYER_REGION_ITEM_ID);
+    const setSize = adjustments.length + (region ? 1 : 0);
+    const regionRows: ProjectedChildRow[] = region
+      ? [
+          {
+            ...baseRow(vm),
+            customName: region.name ?? null,
+            detail: null,
+            image: null,
+            isEnabled: region.isEnabled,
+            itemId: LAYER_REGION_ITEM_ID,
+            key: layerChildRowKey(node.id, LAYER_REGION_ITEM_ID),
+            kind: 'layer-region',
+            posInSet: 1,
+            setSize,
+          },
+        ]
+      : [];
+    rows = [
+      ...regionRows,
+      ...adjustments.map((adjustment, index): ProjectedChildRow => ({
+        ...baseRow(vm),
+        customName: adjustment.name ?? null,
+        detail: adjustmentDetail(adjustment),
+        image: null,
+        isEnabled: adjustment.isEnabled,
+        itemId: adjustment.id,
+        key: layerChildRowKey(node.id, adjustment.id),
+        kind: ADJUSTMENT_KIND_OF[adjustment.type],
+        orderedPosInSet: index + 1,
+        orderedSetSize: adjustments.length,
+        posInSet: regionRows.length + index + 1,
+        setSize,
+      })),
+    ];
   } else {
     return EMPTY_CHILD_ROWS;
   }
@@ -262,11 +296,18 @@ export const getLayerChildItem = (
   }
   const owner = layer ?? adjustmentOwnerNode(document, layerId);
   if (owner && (owner.type === 'raster' || owner.type === 'group')) {
+    if (owner.type === 'raster' && itemId === LAYER_REGION_ITEM_ID && owner.inpaint) {
+      return { isEnabled: owner.inpaint.isEnabled, kind: 'layer-region' };
+    }
     const entry = owner.adjustments?.find((candidate) => candidate.id === itemId);
     return entry ? { isEnabled: entry.isEnabled, kind: ADJUSTMENT_KIND_OF[entry.type] } : null;
   }
   return null;
 };
+
+/** The i18n key naming a child row's rename, for menus and history entries alike. */
+export const layerChildRenameLabelKey = (kind: LayerChildRowKind): string =>
+  kind === 'layer-region' ? 'widgets.layers.modifiers.renameRegion' : 'widgets.layers.modifiers.renameAdjustment';
 
 /** The i18n key naming a child row's removal, for menus and history entries alike. */
 export const layerChildRemoveLabelKey = (kind: LayerChildRowKind): string => {
@@ -277,6 +318,8 @@ export const layerChildRemoveLabelKey = (kind: LayerChildRowKind): string => {
       return 'widgets.layers.modifiers.removeNoise';
     case 'mask-denoise':
       return 'widgets.layers.modifiers.removeDenoise';
+    case 'layer-region':
+      return 'widgets.layers.modifiers.removeRegion';
     case 'adjustment-brightness-contrast':
     case 'adjustment-exposure':
     case 'adjustment-levels':
@@ -325,6 +368,14 @@ export const layerChildDropCommand = (
     const before = sourceOwner.adjustments ?? [];
     const entry = before.find((candidate) => candidate.id === child.itemId);
     if (!entry) {
+      return null;
+    }
+    // The region row always renders above the adjustments; nothing lands before it.
+    if (
+      target.beforeItemId === LAYER_REGION_ITEM_ID &&
+      sourceOwner.type === 'raster' &&
+      sourceOwner.inpaint !== undefined
+    ) {
       return null;
     }
     const next = insertAt(
@@ -448,6 +499,33 @@ export const layerChildRowCommand = (
     };
   }
   const owner = layer?.type === 'raster' ? layer : layer ? null : adjustmentOwnerNode(document, target.layerId);
+  if (owner?.type === 'raster' && target.itemId === LAYER_REGION_ITEM_ID && owner.inpaint) {
+    const current = owner.inpaint;
+    if (action.type === 'move' || action.type === 'duplicate') {
+      return null;
+    }
+    let next: typeof current | null;
+    if (action.type === 'remove') {
+      next = null;
+    } else if (action.type === 'set-enabled') {
+      if (current.isEnabled === action.isEnabled) {
+        return null;
+      }
+      next = { ...current, isEnabled: action.isEnabled };
+    } else {
+      if ((current.name ?? null) === action.name) {
+        return null;
+      }
+      const { name: _cleared, ...rest } = current;
+      next = action.name === null ? rest : { ...current, name: action.name };
+    }
+    return {
+      before: { inpaint: current, layerType: 'raster' },
+      config: { inpaint: next, layerType: 'raster' },
+      id: target.layerId,
+      type: 'patch-config',
+    };
+  }
   if (owner) {
     const before = owner.adjustments ?? [];
     const index = before.findIndex((entry) => entry.id === target.itemId);

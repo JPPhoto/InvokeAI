@@ -440,3 +440,97 @@ describe('layerChildDropCommand id collisions', () => {
     ).toBeNull();
   });
 });
+
+describe('layer regenerate region child row', () => {
+  const region = (overrides = {}) => ({
+    isEnabled: true,
+    mask: { bitmap: null, fill: { color: '#e07575', style: 'diagonal' as const } },
+    ...overrides,
+  });
+  const rasterWithRegion = (overrides = {}) => layerContract('r1', 'raster', { inpaint: region(overrides) });
+  const row = (document: ReturnType<typeof documentFrom>) =>
+    buildLayerStackRows(document.stacks, new Set()).raster.rows.find((r) => r.id === 'r1')!;
+
+  it('projects the region above the adjustment rows with a combined set', () => {
+    const document = documentFrom([
+      layerContract('r1', 'raster', {
+        adjustments: [{ id: 'a1', isEnabled: true, type: 'invert' }],
+        inpaint: region({ name: 'Face' }),
+      }),
+    ]);
+    const rows = projectLayerChildRows(row(document).vm);
+    expect(rows.map((r) => [r.kind, r.itemId, r.posInSet, r.setSize, r.customName])).toEqual([
+      ['layer-region', 'inpaint', 1, 2, 'Face'],
+      ['adjustment-invert', 'a1', 2, 2, null],
+    ]);
+    expect(rows[0]?.orderedPosInSet).toBeUndefined();
+    expect(rows[1]).toMatchObject({ orderedPosInSet: 1, orderedSetSize: 1 });
+  });
+
+  it('refuses an adjustment drop landing above the region row', () => {
+    const document = documentFrom([
+      layerContract('r1', 'raster', {
+        adjustments: [
+          { id: 'a1', isEnabled: true, type: 'invert' },
+          { id: 'a2', isEnabled: true, type: 'invert' },
+        ],
+        inpaint: region(),
+      }),
+    ]);
+    const child = { itemId: 'a2', kind: 'adjustment-invert' as const, layerId: 'r1' };
+    expect(layerChildDropCommand(document, child, { beforeItemId: 'inpaint', layerId: 'r1' })).toBeNull();
+    const landed = layerChildDropCommand(document, child, { beforeItemId: 'a1', layerId: 'r1' });
+    expect(landed).toMatchObject({ config: { adjustments: [{ id: 'a2' }, { id: 'a1' }] } });
+  });
+
+  it('routes a persisted adjustment whose id is "inpaint" to the adjustments when no region exists', () => {
+    const document = documentFrom([
+      layerContract('r1', 'raster', { adjustments: [{ id: 'inpaint', isEnabled: true, type: 'invert' }] }),
+    ]);
+    expect(getLayerChildItem(document, 'r1', 'inpaint')).toEqual({ isEnabled: true, kind: 'adjustment-invert' });
+    const toggled = layerChildRowCommand(
+      document,
+      { itemId: 'inpaint', layerId: 'r1' },
+      {
+        isEnabled: false,
+        type: 'set-enabled',
+      }
+    );
+    expect(toggled).toMatchObject({ config: { adjustments: [{ id: 'inpaint', isEnabled: false }] } });
+  });
+
+  it('hides a foreign "inpaint"-id adjustment row while a region exists', () => {
+    const document = documentFrom([
+      layerContract('r1', 'raster', {
+        adjustments: [
+          { id: 'inpaint', isEnabled: true, type: 'invert' },
+          { id: 'a1', isEnabled: true, type: 'invert' },
+        ],
+        inpaint: region(),
+      }),
+    ]);
+    const rows = projectLayerChildRows(row(document).vm);
+    expect(rows.map((r) => [r.kind, r.itemId, r.posInSet, r.setSize])).toEqual([
+      ['layer-region', 'inpaint', 1, 2],
+      ['adjustment-invert', 'a1', 2, 2],
+    ]);
+  });
+
+  it('resolves, toggles, renames, and null-removes the singleton; move and duplicate refuse', () => {
+    const document = documentFrom([rasterWithRegion()]);
+    expect(getLayerChildItem(document, 'r1', 'inpaint')).toEqual({ isEnabled: true, kind: 'layer-region' });
+
+    const target = { itemId: 'inpaint', layerId: 'r1' };
+    const toggled = layerChildRowCommand(document, target, { isEnabled: false, type: 'set-enabled' });
+    expect(toggled).toMatchObject({ config: { inpaint: { isEnabled: false }, layerType: 'raster' }, id: 'r1' });
+
+    const renamed = layerChildRowCommand(document, target, { name: 'Sky', type: 'rename' });
+    expect(renamed).toMatchObject({ config: { inpaint: { name: 'Sky' } } });
+
+    const removed = layerChildRowCommand(document, target, { type: 'remove' });
+    expect(removed).toMatchObject({ config: { inpaint: null, layerType: 'raster' } });
+
+    expect(layerChildRowCommand(document, target, { direction: 1, type: 'move' })).toBeNull();
+    expect(layerChildRowCommand(document, target, { newId: 'x', type: 'duplicate' })).toBeNull();
+  });
+});

@@ -7,6 +7,7 @@
 import type { ProjectEvent } from '@workbench/projectEventContracts';
 
 import type {
+  CanvasLayerRegionContract,
   CanvasAdjustmentsContract,
   CanvasControlAdapterContract,
   CanvasControlLayerContract,
@@ -36,6 +37,8 @@ export type CanvasLayerConfigPatch =
   | {
       layerType: 'raster';
       adjustments?: CanvasAdjustmentsContract;
+      /** `null` removes the region; absent leaves it untouched. */
+      inpaint?: CanvasLayerRegionContract | null;
       isTransparencyLocked?: boolean;
       filter?: CanvasRasterLayerContractV2['filter'];
     }
