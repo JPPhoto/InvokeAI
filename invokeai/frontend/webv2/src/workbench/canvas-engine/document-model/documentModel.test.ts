@@ -707,6 +707,55 @@ describe('createDocumentModel', () => {
       ).toEqual({ status: 'unchanged' });
     });
 
+    it('round-trips a group adjustment stack and refuses overlay, locked, and wrong-type targets', () => {
+      const stack = [
+        { brightness: 0.2, contrast: 0, id: 'ga1', isEnabled: true, type: 'brightness-contrast' as const },
+      ];
+      const project = projectWith(
+        [
+          group('G', [layer('r1')]),
+          group('GL', [layer('r2')], { isLocked: true }),
+          group('OG', [layer('c2', 'control')]),
+        ],
+        'r1'
+      );
+
+      const done = roundTrip(project, {
+        config: { adjustments: stack, layerType: 'group' },
+        id: 'G',
+        type: 'patch-config',
+      });
+      const adjusted = getDocumentIndex(done.after.canvas.document).byId.get('G')!.node;
+      expect(isGroupNode(adjusted) ? adjusted.adjustments : null).toEqual(stack);
+
+      const model = modelOf(project);
+      expect(
+        model.prepare({ config: { adjustments: stack, layerType: 'group' }, id: 'OG', type: 'patch-config' })
+      ).toEqual({ operation: 'adjust an overlay-stack group', status: 'unsupported' });
+      expect(
+        model.prepare({ config: { adjustments: stack, layerType: 'group' }, id: 'GL', type: 'patch-config' })
+      ).toEqual({ ids: ['GL'], status: 'locked' });
+      expect(
+        model.prepare({ config: { adjustments: stack, layerType: 'group' }, id: 'r1', type: 'patch-config' })
+      ).toEqual({ actual: 'raster', expected: ['group'], status: 'wrong-type' });
+      expect(
+        model.prepare({ config: { adjustments: stack, layerType: 'raster' }, id: 'G', type: 'patch-config' })
+      ).toEqual({
+        actual: 'group',
+        expected: ['raster', 'control', 'regional_guidance', 'inpaint_mask'],
+        status: 'wrong-type',
+      });
+
+      // The reducer holds the invariant on its own: an unvalidated dispatch
+      // (a preview, a replay) cannot stamp a stack onto an overlay group.
+      const rawDispatch = applyCanvasProjectMutation(project, {
+        config: { adjustments: stack, layerType: 'group' },
+        id: 'OG',
+        type: 'updateCanvasLayerConfig',
+      });
+      expect(rawDispatch.canvas.document).toBe(project.canvas.document);
+    });
+
     it('round-trips a mask modifier through add, toggle and null-remove with passing postconditions', () => {
       const project = projectWith(flat(), 'i1');
       const noise = { isEnabled: true, level: 0.25 };

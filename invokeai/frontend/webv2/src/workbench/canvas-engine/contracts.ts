@@ -326,9 +326,13 @@ export type CanvasLayerContract =
 export type CanvasLayerStackKind = CanvasLayerContract['type'];
 
 /**
- * A pass-through group. It belongs to exactly one stack forest and may contain only that
+ * A group. It belongs to exactly one stack forest and may contain only that
  * stack's leaves and groups. `isHidden` is display-only and valid only in overlay stacks, with the
  * meaning the overlay leaves already give it; a raster group has no display-only hidden state.
+ *
+ * A group composites pass-through unless it carries a non-identity `adjustments` stack, which is
+ * valid only on RASTER-stack groups (overlay groups composite coverage, not color) and applies to
+ * the group's composited children before the result reaches its parent.
  */
 export interface CanvasGroupContract {
   id: string;
@@ -337,6 +341,7 @@ export interface CanvasGroupContract {
   isEnabled: boolean;
   isLocked: boolean;
   isHidden?: boolean;
+  adjustments?: CanvasAdjustmentsContract;
   /** Index 0 is the top-most child. */
   children: CanvasNodeContract[];
 }

@@ -86,6 +86,9 @@ interface ForestDiff {
 const diffForests = (prev: CanvasDocumentIndex, next: CanvasDocumentIndex): ForestDiff => {
   const changed = new Set<string>();
   const sourceChanged = new Set<string>();
+  // A group whose adjustment stack changed re-renders every leaf beneath it.
+  // `next.nodes` is preorder, so these ids are collected before their leaves.
+  const adjustedGroups = new Set<string>();
   let restructured = false;
   for (const entry of next.nodes) {
     const before = prev.byId.get(entry.node.id);
@@ -101,6 +104,9 @@ const diffForests = (prev: CanvasDocumentIndex, next: CanvasDocumentIndex): Fore
       restructured = true;
     }
     if (isGroupNode(entry.node)) {
+      if (before.node !== entry.node && (before.node as typeof entry.node).adjustments !== entry.node.adjustments) {
+        adjustedGroups.add(entry.node.id);
+      }
       continue;
     }
     if (before.node !== entry.node) {
@@ -108,7 +114,10 @@ const diffForests = (prev: CanvasDocumentIndex, next: CanvasDocumentIndex): Fore
       if (rasterSourceRef(before.node as CanvasLayerContract) !== rasterSourceRef(entry.node)) {
         sourceChanged.add(entry.node.id);
       }
-    } else if (effectiveKey(before) !== effectiveKey(entry)) {
+    } else if (
+      effectiveKey(before) !== effectiveKey(entry) ||
+      entry.path.some((ancestorId) => adjustedGroups.has(ancestorId))
+    ) {
       changed.add(entry.node.id);
     }
   }

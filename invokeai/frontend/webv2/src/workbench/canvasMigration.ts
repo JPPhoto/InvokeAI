@@ -441,6 +441,8 @@ const describeIssue = (value: Record<string, unknown>, path: string, issues: rea
 };
 
 const zGroupShell = z.object({
+  // Like the raster arm: a malformed stack drops without failing the document.
+  adjustments: zAdjustments.optional().catch(undefined),
   id: z.string(),
   isEnabled: z.boolean(),
   isHidden: z.boolean().optional(),
@@ -518,6 +520,14 @@ const parseNode = (value: unknown, path: string, depth: number, context: ParseCo
   }
   if (context.stack === 'raster' || shell.data.isHidden === false) {
     delete shell.data.isHidden;
+  }
+  // Adjustments are the raster-stack mirror of the isHidden rule: overlay
+  // groups composite coverage, not color, so a stack there is meaningless.
+  // Stripped SILENTLY, unlike isHidden: diagnostics are fatal to the whole
+  // parse, and rejecting a document over a meaningless stack is worse than
+  // dropping the stack.
+  if (context.stack !== 'raster') {
+    delete shell.data.adjustments;
   }
   if (depth >= CANVAS_MAX_NODE_DEPTH) {
     context.diagnostics.push({ message: `group nests deeper than ${CANVAS_MAX_NODE_DEPTH} levels`, path });

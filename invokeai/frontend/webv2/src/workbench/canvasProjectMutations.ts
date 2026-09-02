@@ -25,6 +25,7 @@ import {
   deriveIndexForValueEdit,
   getDocumentIndex,
   getDocumentLayer,
+  getDocumentNode,
   hasDocumentNode,
   indexStacks,
   outermostNodes,
@@ -512,9 +513,34 @@ const patchNode = (node: CanvasNodeContract, patch: CanvasLayerBasePatch): Canva
   return { ...node, ...rest, transform: transform ? { ...node.transform, ...transform } : node.transform };
 };
 
-const patchLayerConfig = (layer: CanvasLayerContract, config: CanvasLayerConfigPatch): CanvasLayerContract => {
+/**
+ * The reducer-level half of the group-adjustments invariant: a group config
+ * applies only to RASTER-stack groups (the model refuses earlier with a
+ * reason; unvalidated dispatchers — previews, replays — must still be unable
+ * to stamp a contract-invalid overlay-group stack). Mirrors the
+ * `isHideableNode` guard on `setCanvasLayersHidden`.
+ */
+const isConfigTargetValid = (
+  document: CanvasDocumentContractV3,
+  id: string,
+  config: CanvasLayerConfigPatch
+): boolean => {
+  const node = getDocumentNode(document, id);
+  if (node === null || node.type !== config.layerType) {
+    return false;
+  }
+  return config.layerType !== 'group' || getDocumentIndex(document).byId.get(id)?.stack === 'raster';
+};
+
+const patchLayerConfig = (layer: CanvasNodeContract, config: CanvasLayerConfigPatch): CanvasNodeContract => {
   if (layer.type !== config.layerType) {
     return layer;
+  }
+  if (layer.type === 'group' && config.layerType === 'group') {
+    return {
+      ...layer,
+      ...(Object.hasOwn(config, 'adjustments') ? { adjustments: config.adjustments } : {}),
+    };
   }
   if (layer.type === 'raster' && config.layerType === 'raster') {
     return {
@@ -827,22 +853,21 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
       );
     case 'updateCanvasLayerConfig':
       return updateCanvasDocument(project, (document) =>
-        mapLayer(document, mutation.id, (layer) => patchLayerConfig(layer, mutation.config))
+        isConfigTargetValid(document, mutation.id, mutation.config)
+          ? mapNode(document, mutation.id, (node) => patchLayerConfig(node, mutation.config))
+          : document
       );
     case 'updateCanvasLayerConfigs':
       return updateCanvasDocument(project, (document) => {
         // All-or-nothing, like setCanvasLayerPositions: a batch with any
         // unresolvable target applies nothing (history replay must never
         // half-apply an entry).
-        const applicable = mutation.updates.every((update) => {
-          const layer = getDocumentLayer(document, update.id);
-          return layer !== null && layer.type === update.config.layerType;
-        });
+        const applicable = mutation.updates.every((update) => isConfigTargetValid(document, update.id, update.config));
         if (!applicable) {
           return document;
         }
         return mutation.updates.reduce(
-          (current, update) => mapLayer(current, update.id, (layer) => patchLayerConfig(layer, update.config)),
+          (current, update) => mapNode(current, update.id, (node) => patchLayerConfig(node, update.config)),
           document
         );
       });

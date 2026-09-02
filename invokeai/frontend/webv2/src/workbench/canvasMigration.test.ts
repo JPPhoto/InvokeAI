@@ -104,6 +104,33 @@ describe('loadCanvasState', () => {
     });
   });
 
+  it('round-trips group adjustments in the raster stack, strips them from overlay groups, and drops a malformed group stack', () => {
+    const stack = [{ brightness: 0.1, contrast: 0, id: 'ga1', isEnabled: true, type: 'brightness-contrast' }];
+    const rasterGroup = {
+      adjustments: stack,
+      children: [createEmptyPaintLayer('Inside', 'inside')],
+      id: 'rg',
+      isEnabled: true,
+      isLocked: false,
+      name: 'Adjusted',
+      type: 'group',
+    };
+    const rasterLoaded = load(withNodes([rasterGroup]));
+    const loadedGroup = rasterLoaded.document.stacks.raster[0];
+    expect(loadedGroup?.type === 'group' ? loadedGroup.adjustments : null).toEqual(stack);
+
+    const overlayGroup = { ...rasterGroup, children: [], id: 'og' };
+    const overlayLoaded = load(withNodes([overlayGroup], 'control'));
+    const loadedOverlay = overlayLoaded.document.stacks.control[0];
+    expect(loadedOverlay?.type === 'group' ? Object.hasOwn(loadedOverlay, 'adjustments') : null).toBe(false);
+
+    const malformed = { ...rasterGroup, adjustments: [{ id: 'bad', type: 'nope' }], id: 'mg' };
+    const malformedLoaded = load(withNodes([malformed]));
+    const loadedMalformed = malformedLoaded.document.stacks.raster[0];
+    expect(loadedMalformed?.type === 'group' ? loadedMalformed.adjustments : null).toBeUndefined();
+    expect(loadedMalformed?.type === 'group' ? loadedMalformed.children.length : 0).toBe(1);
+  });
+
   it('round-trips a valid adjustment stack, drops the pre-stack object shape, and drops a stack with one malformed entry', () => {
     const stack = [
       { brightness: 0.2, contrast: -0.1, id: 'a1', isEnabled: true, type: 'brightness-contrast' },

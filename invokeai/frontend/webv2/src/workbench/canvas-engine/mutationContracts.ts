@@ -40,6 +40,11 @@ export type CanvasLayerConfigPatch =
       filter?: CanvasRasterLayerContractV2['filter'];
     }
   | {
+      /** Raster-stack groups only; the model refuses the patch elsewhere. */
+      layerType: 'group';
+      adjustments?: CanvasAdjustmentsContract;
+    }
+  | {
       layerType: 'control';
       adapter?: Partial<CanvasControlAdapterContract>;
       withTransparencyEffect?: boolean;

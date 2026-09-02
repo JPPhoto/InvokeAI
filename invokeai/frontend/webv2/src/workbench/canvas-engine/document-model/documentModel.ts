@@ -1148,7 +1148,7 @@ export const createDocumentModel = (
     );
   };
 
-  const configInverse = (layer: CanvasLayerContract, config: CanvasLayerConfigPatch): CanvasLayerConfigPatch => {
+  const configInverse = (layer: CanvasNodeContract, config: CanvasLayerConfigPatch): CanvasLayerConfigPatch => {
     const current = layer as unknown as Record<string, unknown>;
     const inverse: Record<string, unknown> = { layerType: config.layerType };
     for (const [key, value] of Object.entries(config)) {
@@ -1187,12 +1187,42 @@ export const createDocumentModel = (
     return { entry, layer: entry.node };
   };
 
+  /**
+   * The unlocked node a config patch may target: leaves through their own
+   * arms, and RASTER-stack groups through the 'group' arm (an overlay group
+   * composites coverage, not color — its adjustments patch is refused).
+   */
+  const editableConfigNode = (
+    id: string,
+    layerType: CanvasLayerConfigPatch['layerType']
+  ): { entry: CanvasNodeEntry; node: CanvasNodeContract } | DocumentRefusal => {
+    if (layerType !== 'group') {
+      const found = editableLeaf(id);
+      return 'status' in found ? found : { entry: found.entry, node: found.layer };
+    }
+    const entry = index.byId.get(id);
+    if (!entry) {
+      return missing([id]);
+    }
+    if (!isGroupNode(entry.node)) {
+      return { actual: entry.node.type, expected: ['group'], status: 'wrong-type' };
+    }
+    if (entry.stack !== 'raster') {
+      return { operation: 'adjust an overlay-stack group', status: 'unsupported' };
+    }
+    const locked = frozenBy(index, entry);
+    if (locked.length > 0) {
+      return { ids: locked, status: 'locked' };
+    }
+    return { entry, node: entry.node };
+  };
+
   const preparePatchConfig = (command: Extract<DocumentCommand, { type: 'patch-config' }>): PrepareEditResult => {
-    const found = editableLeaf(command.id);
+    const found = editableConfigNode(command.id, command.config.layerType);
     if ('status' in found) {
       return found;
     }
-    const { entry, layer } = found;
+    const { entry, node: layer } = found;
     if (layer.type !== command.config.layerType) {
       return { actual: layer.type, expected: [command.config.layerType], status: 'wrong-type' };
     }
@@ -1239,11 +1269,11 @@ export const createDocumentModel = (
     const touchedStacks = new Set<LayerStackKind>();
     let changed = false;
     for (const patch of command.patches) {
-      const found = editableLeaf(patch.id);
+      const found = editableConfigNode(patch.id, patch.config.layerType);
       if ('status' in found) {
         return found;
       }
-      const { entry, layer } = found;
+      const { entry, node: layer } = found;
       if (layer.type !== patch.config.layerType) {
         return { actual: layer.type, expected: [patch.config.layerType], status: 'wrong-type' };
       }

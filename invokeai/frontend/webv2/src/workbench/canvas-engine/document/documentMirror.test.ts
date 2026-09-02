@@ -493,6 +493,22 @@ describe('createDocumentMirror: groups', () => {
     expect(callbacks.onLayerOrderChanged).not.toHaveBeenCalled();
   });
 
+  it('fans a group adjustment-stack edit out to every descendant leaf, appearance-only', () => {
+    const a = rasterLayer('a');
+    const b = rasterLayer('b');
+    const c = rasterLayer('c');
+    const stack = [{ brightness: 0.3, contrast: 0, id: 'ga', isEnabled: true, type: 'brightness-contrast' as const }];
+    const doc = makeDoc([groupContract('g', [a, groupContract('h', [b])]), c]);
+    const { callbacks, set } = setup(doc);
+
+    set({
+      ...doc,
+      stacks: stacksFrom([groupContract('g', [a, groupContract('h', [b])], { adjustments: stack }), c]),
+    });
+    expect(callbacks.onLayersChanged).toHaveBeenLastCalledWith(['a', 'b'], []);
+    expect(callbacks.onLayerOrderChanged).not.toHaveBeenCalled();
+  });
+
   it('stays silent on a group rename that changes no leaf and no structure', () => {
     const a = rasterLayer('a');
     const doc = makeDoc([groupContract('g', [a])]);
