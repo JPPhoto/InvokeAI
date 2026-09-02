@@ -26,7 +26,7 @@ import {
   useActiveColorTarget,
 } from '@workbench/widgets/canvas/color-system/useActiveColors';
 import { useMaskTintEditor, type MaskTintEditor } from '@workbench/widgets/canvas/color-system/useMaskTintEditor';
-import { ToolbarNumberField } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
+import { FormNumberField } from '@workbench/widgets/canvas/tool-presentation/FormControls';
 import { useCanvasEngine } from '@workbench/widgets/canvas/useCanvasEngine';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { ArrowLeftRightIcon, CircleIcon, PipetteIcon, RotateCcwIcon, SquareIcon } from 'lucide-react';
@@ -428,9 +428,7 @@ const ChannelNumber = ({
     },
     [index, onCommit]
   );
-  return (
-    <ToolbarNumberField aria-label={label} label={label.slice(0, 1)} value={String(value)} onValueCommit={commit} />
-  );
+  return <FormNumberField aria-label={label} label={label.slice(0, 1)} value={String(value)} onValueCommit={commit} />;
 };
 
 const HexField = ({ hex, onCommit }: { hex: string; onCommit: (hex: string) => void }) => {

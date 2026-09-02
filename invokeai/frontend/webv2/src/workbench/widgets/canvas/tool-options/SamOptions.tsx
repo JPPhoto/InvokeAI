@@ -1,8 +1,8 @@
 import type {
   OperationPropertyForm,
-  ToolbarRegionProps,
-  ToolbarStatusProps,
-} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
+  ToolFormProps,
+  ToolFooterProps,
+} from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
 /* oxlint-disable react-perf/jsx-no-jsx-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop */
 import type { ChangeEvent } from 'react';
 
@@ -412,7 +412,7 @@ export const SamSettings = ({
 /** Input mode, the visual point labels or the prompt, and invert: what changes between previews. */
 
 /** The session's inputs: visual points or a prompt, plus the invert switch. */
-const SamInputSettings = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
+const SamInputSettings = ({ engine, isSurfaceInteractionLocked }: ToolFormProps) => {
   const { t } = useTranslation();
   const session = useSamSession(engine);
   const operations = getCanvasOperations(engine);
@@ -474,7 +474,7 @@ const SamInputSettings = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionP
 };
 
 /** Set-once session settings: model, refinement, preview behavior. */
-const SamSettingsGroup = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
+const SamSettingsGroup = ({ engine, isSurfaceInteractionLocked }: ToolFormProps) => {
   const session = useSamSession(engine);
   const operations = getCanvasOperations(engine);
   if (!session) {
@@ -495,7 +495,7 @@ const SamSettingsGroup = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionP
 const APPLY_MENU_POSITIONING = { placement: 'top-end' } as const;
 
 /** The sticky footer: status chip, Reset, Process, Apply with its save-as menu, Cancel. */
-const SamFooter = ({ engine, isExternalInteractionLocked }: ToolbarStatusProps) => {
+const SamFooter = ({ engine, isExternalInteractionLocked }: ToolFooterProps) => {
   const { t } = useTranslation();
   const session = useSamSession(engine);
   const actions = useMemo(() => getSamActionHandlers(getCanvasOperations(engine)), [engine]);
@@ -539,7 +539,7 @@ const SamFooter = ({ engine, isExternalInteractionLocked }: ToolbarStatusProps) 
       </Button>
       <Flex flexShrink={0}>
         <Button
-          data-toolbar-action="apply"
+          data-pane-action="apply"
           disabled={!eligibility.canApply}
           loading={session.status === 'committing'}
           roundedRight="none"
@@ -580,7 +580,7 @@ const SamFooter = ({ engine, isExternalInteractionLocked }: ToolbarStatusProps) 
         </Menu.Root>
       </Flex>
       <Button
-        data-toolbar-action="cancel"
+        data-pane-action="cancel"
         disabled={!eligibility.canCancel}
         flexShrink={0}
         size="xs"

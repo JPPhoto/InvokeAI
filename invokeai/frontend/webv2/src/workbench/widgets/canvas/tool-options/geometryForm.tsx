@@ -1,11 +1,11 @@
 import type { AspectRatioId } from '@features/generation/contracts';
 import type { LayerTransform } from '@workbench/canvas-engine/api';
 import type {
-  ToolbarRegionProps,
-  ToolbarStatusProps,
+  ToolFormProps,
+  ToolFooterProps,
   ToolPropertyForm,
   ToolPropertyGroup,
-} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
 
 import { Flex } from '@chakra-ui/react';
 import { AspectRatioLockButton, AspectRatioSelect } from '@features/generation/components';
@@ -16,12 +16,12 @@ import {
   useCanvasHasFloatingSelection,
   useTransformSession,
 } from '@workbench/widgets/canvas/engineStoreHooks';
-import { PropertyControlRow } from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
 import {
-  ToolbarNumberField,
-  ToolbarStatus,
+  FormNumberField,
+  ApplyCancelBar,
   useNumberCommit,
-} from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
+} from '@workbench/widgets/canvas/tool-presentation/FormControls';
+import { PropertyControlRow } from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { useCallback } from 'react';
@@ -56,7 +56,7 @@ interface SelectedLeafTransform {
  * single Apply commit; otherwise each settled field is one undoable patch on
  * the selected, unlocked leaf.
  */
-export const useLayerTransformEditor = (engine: ToolbarRegionProps['engine'], labelKey = 'widgets.transform.edit') => {
+export const useLayerTransformEditor = (engine: ToolFormProps['engine'], labelKey = 'widgets.transform.edit') => {
   const { t } = useTranslation();
   const commitPrepared = usePreparedCommit(engine);
   const session = useTransformSession(engine);
@@ -92,7 +92,7 @@ export const useLayerTransformEditor = (engine: ToolbarRegionProps['engine'], la
  * else the selected layer / transform session. One component for every
  * geometry tool, so the X/Y fields keep DOM identity across tool switches.
  */
-const GeometryPositionSettings = ({ engine }: ToolbarRegionProps) => {
+const GeometryPositionSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const activeTool = useCanvasActiveTool(engine);
   const isFrame = activeTool === 'bbox';
@@ -120,14 +120,14 @@ const GeometryPositionSettings = ({ engine }: ToolbarRegionProps) => {
   // prefixes, so a row label would just repeat it.
   return (
     <Flex gap="2" w="full">
-      <ToolbarNumberField
+      <FormNumberField
         aria-label={t('widgets.canvas.toolOptions.positionX')}
         disabled={x === null}
         label={t('widgets.canvas.toolOptions.positionX')}
         value={x === null ? '' : String(x)}
         onValueCommit={onX}
       />
-      <ToolbarNumberField
+      <FormNumberField
         aria-label={t('widgets.canvas.toolOptions.positionY')}
         disabled={y === null}
         label={t('widgets.canvas.toolOptions.positionY')}
@@ -139,7 +139,7 @@ const GeometryPositionSettings = ({ engine }: ToolbarRegionProps) => {
 };
 
 /** Scale percent pair and rotation for the transform session / selected leaf. */
-export const TransformScaleSettings = ({ engine }: ToolbarRegionProps) => {
+export const TransformScaleSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const { patch, transform } = useLayerTransformEditor(engine);
   const onScaleX = useNumberCommit(
@@ -155,7 +155,7 @@ export const TransformScaleSettings = ({ engine }: ToolbarRegionProps) => {
     <>
       <PropertyControlRow label={t('widgets.transform.scale')}>
         <Flex gap="2" gridColumn="2 / -1">
-          <ToolbarNumberField
+          <FormNumberField
             aria-label={t('widgets.canvas.toolOptions.scaleWidth')}
             disabled={!transform}
             label={t('widgets.canvas.toolOptions.frameWidth')}
@@ -163,7 +163,7 @@ export const TransformScaleSettings = ({ engine }: ToolbarRegionProps) => {
             value={transform ? String(round2(transform.scaleX * 100)) : ''}
             onValueCommit={onScaleX}
           />
-          <ToolbarNumberField
+          <FormNumberField
             aria-label={t('widgets.canvas.toolOptions.scaleHeight')}
             disabled={!transform}
             label={t('widgets.canvas.toolOptions.frameHeight')}
@@ -174,7 +174,7 @@ export const TransformScaleSettings = ({ engine }: ToolbarRegionProps) => {
         </Flex>
       </PropertyControlRow>
       <PropertyControlRow label={t('widgets.transform.rotation')}>
-        <ToolbarNumberField
+        <FormNumberField
           aria-label={t('widgets.canvas.toolOptions.rotation')}
           disabled={!transform}
           suffix="°"
@@ -187,7 +187,7 @@ export const TransformScaleSettings = ({ engine }: ToolbarRegionProps) => {
 };
 
 /** Frame width/height plus the aspect preset and lock, as form rows. */
-const FrameSizeSettings = ({ engine }: ToolbarRegionProps) => {
+const FrameSizeSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const { bbox, commitBbox, grid, options, setHeight, setWidth } = useBboxEditor(engine);
   const onWidth = useNumberCommit(setWidth);
@@ -225,14 +225,14 @@ const FrameSizeSettings = ({ engine }: ToolbarRegionProps) => {
     <>
       <PropertyControlRow label={t('widgets.properties.rows.size')}>
         <Flex gap="2" gridColumn="2 / -1">
-          <ToolbarNumberField
+          <FormNumberField
             aria-label={t('widgets.canvas.toolOptions.frameWidth')}
             label={t('widgets.canvas.toolOptions.frameWidth')}
             min={1}
             value={String(bbox.width)}
             onValueCommit={onWidth}
           />
-          <ToolbarNumberField
+          <FormNumberField
             aria-label={t('widgets.canvas.toolOptions.frameHeight')}
             label={t('widgets.canvas.toolOptions.frameHeight')}
             min={1}
@@ -261,7 +261,7 @@ const FrameSizeSettings = ({ engine }: ToolbarRegionProps) => {
  * pixels instead of opening a layer session; the numerics meanwhile edit the
  * settled selected layer, matching the Transform pane.
  */
-const TransformFooter = ({ engine, isExternalInteractionLocked }: ToolbarStatusProps) => {
+const TransformFooter = ({ engine, isExternalInteractionLocked }: ToolFooterProps) => {
   const session = useTransformSession(engine);
   const hasFloat = useCanvasHasFloatingSelection(engine);
   // The root sticky footer sits OUTSIDE the inert tool section, so the
@@ -269,7 +269,7 @@ const TransformFooter = ({ engine, isExternalInteractionLocked }: ToolbarStatusP
   const disabled = isExternalInteractionLocked || (!session && !hasFloat);
   const onApply = useCallback(() => engine.layers.applyTransform(), [engine]);
   const onCancel = useCallback(() => engine.layers.cancelTransform(), [engine]);
-  return <ToolbarStatus applyDisabled={disabled} cancelDisabled={disabled} onApply={onApply} onCancel={onCancel} />;
+  return <ApplyCancelBar applyDisabled={disabled} cancelDisabled={disabled} onApply={onApply} onCancel={onCancel} />;
 };
 
 /** Shared literal: the same object in every geometry form, so the rows' DOM survives tool switches. */

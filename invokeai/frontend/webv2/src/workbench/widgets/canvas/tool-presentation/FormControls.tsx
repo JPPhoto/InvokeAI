@@ -2,7 +2,7 @@
 import type { NumberInput as ChakraNumberInput, SliderValueChangeDetails } from '@chakra-ui/react';
 import type { KeyboardEvent, ReactNode } from 'react';
 
-import { Box, Flex, Icon, InputGroup, NumberInput, Text } from '@chakra-ui/react';
+import { Box, Flex, Icon, InputGroup, NumberInput } from '@chakra-ui/react';
 import { Button } from '@platform/ui/Button';
 import { Slider } from '@platform/ui/Slider';
 import { MoveHorizontalIcon } from 'lucide-react';
@@ -10,9 +10,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /** Width of every numeric field, so X / Y / W / H line up across tools; fits "-1234.56" beside its affixes. */
-const TOOLBAR_NUMBER_FIELD_WIDTH_PX = 80;
+const FORM_NUMBER_FIELD_WIDTH_PX = 80;
 
-interface ToolbarNumberFieldProps {
+interface FormNumberFieldProps {
   'aria-label': string;
   disabled?: boolean;
   /** Short prefix drawn inside the field (X, Y, W, H); it doubles as the scrub handle. */
@@ -46,7 +46,7 @@ const END_ELEMENT_PROPS = { ...AFFIX_PROPS, pe: '1.5', pointerEvents: 'none' } a
  * rounded display back over a precise value. Only the accepted value shows
  * afterwards, so a clamped commit never leaves the field disagreeing with its owner.
  */
-export const ToolbarNumberField = ({
+export const FormNumberField = ({
   'aria-label': ariaLabel,
   disabled,
   label,
@@ -57,7 +57,7 @@ export const ToolbarNumberField = ({
   value,
   onValueChange,
   onValueCommit,
-}: ToolbarNumberFieldProps) => {
+}: FormNumberFieldProps) => {
   const [draft, setDraft] = useState<string | null>(null);
   const draftRef = useRef<string | null>(null);
   const scrubEnd = useRef<(() => void) | null>(null);
@@ -108,7 +108,7 @@ export const ToolbarNumberField = ({
       size="xs"
       step={step}
       value={live ? value : (draft ?? value)}
-      w={`${TOOLBAR_NUMBER_FIELD_WIDTH_PX}px`}
+      w={`${FORM_NUMBER_FIELD_WIDTH_PX}px`}
       onValueChange={live ? onValueChange : onDraftChange}
       onValueCommit={live ? undefined : onDraftCommit}
     >
@@ -141,7 +141,7 @@ export const useNumberCommit = (apply: (value: number) => void) =>
     [apply]
   );
 
-interface ToolbarSliderProps {
+interface FormSliderProps {
   'aria-label': string;
   disabled?: boolean;
   formatValue?: (value: number) => string;
@@ -156,8 +156,8 @@ interface ToolbarSliderProps {
   onValueChangeEnd?: (value: number) => void;
 }
 
-/** A slider that fills its region; pairs with a {@link ToolbarNumberField}. */
-export const ToolbarSlider = ({
+/** A slider that fills its region; pairs with a {@link FormNumberField}. */
+export const FormSlider = ({
   'aria-label': ariaLabel,
   disabled,
   formatValue,
@@ -169,7 +169,7 @@ export const ToolbarSlider = ({
   onKeyDownCapture,
   onValueChange,
   onValueChangeEnd,
-}: ToolbarSliderProps) => {
+}: FormSliderProps) => {
   const labels = useMemo(() => [ariaLabel], [ariaLabel]);
   const values = useMemo(() => [value], [value]);
   const valueText = useMemo(
@@ -252,7 +252,7 @@ export const useSliderGesture = (
 };
 
 /** Apply and Cancel for a pending operation, session or float, after whatever the owner shows about it. */
-export const ToolbarStatus = ({
+export const ApplyCancelBar = ({
   applyDisabled = true,
   applyLoading = false,
   cancelDisabled = true,
@@ -274,7 +274,7 @@ export const ToolbarStatus = ({
         {children}
       </Box>
       <Button
-        data-toolbar-action="apply"
+        data-pane-action="apply"
         disabled={applyDisabled}
         flexShrink={0}
         loading={applyLoading}
@@ -285,7 +285,7 @@ export const ToolbarStatus = ({
         {t('common.apply')}
       </Button>
       <Button
-        data-toolbar-action="cancel"
+        data-pane-action="cancel"
         disabled={cancelDisabled}
         flexShrink={0}
         size="xs"
@@ -297,10 +297,3 @@ export const ToolbarStatus = ({
     </Flex>
   );
 };
-
-/** Muted guidance for tools and states without a control to show. */
-export const ToolbarHint = ({ children }: { children: string }) => (
-  <Text color="fg.muted" data-toolbar-hint="" fontSize="xs" minW="0">
-    {children}
-  </Text>
-);

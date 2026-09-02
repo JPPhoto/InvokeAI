@@ -43,17 +43,3 @@ export const PropertiesSection = ({
     </Stack>
   );
 };
-
-/** One labelled row: a fixed label column and the controls packed after it, wrapping when the pane is narrow. */
-export const PropertiesRow = ({ children, label }: { children: ReactNode; label: string }) => (
-  <Flex align="flex-start" gap="2" minW="0">
-    <Flex align="center" flexShrink={0} minH="8" w="20">
-      <Text color="fg.muted" fontSize="xs">
-        {label}
-      </Text>
-    </Flex>
-    <Flex align="center" flex="1" flexWrap="wrap" gap="2" minH="8" minW="0">
-      {children}
-    </Flex>
-  </Flex>
-);

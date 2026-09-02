@@ -1,9 +1,9 @@
 import type { SelectionOp } from '@workbench/canvas-engine/api';
 import type {
-  ToolbarRegionProps,
+  ToolFormProps,
   ToolPropertyForm,
   ToolPropertyGroup,
-} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
 
 import { Text } from '@chakra-ui/react';
 import {
@@ -26,7 +26,7 @@ import { SelectionActions, SelectionOpModeButtons } from './SelectionOptionsRow'
  * rectangle/ellipse), the op mode, and the command cluster. One component set
  * reading the active tool, so the rows keep DOM identity lasso↔marquee.
  */
-const SelectionModeSettings = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
+const SelectionModeSettings = ({ engine, isSurfaceInteractionLocked }: ToolFormProps) => {
   const { t } = useTranslation();
   const activeTool = useCanvasActiveTool(engine);
   const isMarquee = activeTool === 'marquee';

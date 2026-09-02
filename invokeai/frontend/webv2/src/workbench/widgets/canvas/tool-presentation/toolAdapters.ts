@@ -10,16 +10,9 @@ import { lassoForm, marqueeForm } from '@workbench/widgets/canvas/tool-options/s
 import { shapeForm } from '@workbench/widgets/canvas/tool-options/ShapeOptions';
 import { textForm } from '@workbench/widgets/canvas/tool-options/TextOptions';
 
-import type {
-  CanvasOperationKind,
-  OperationPanePresentation,
-  ToolPanePresentation,
-  ToolPresentationAdapter,
-} from './toolbarContracts';
+import type { CanvasOperationKind, OperationPropertyForm, ToolPropertyForm } from './toolFormContracts';
 
-import { isOperationPropertyForm, isToolPropertyForm } from './toolbarContracts';
-
-export const TOOL_PRESENTATION_ADAPTERS: Readonly<Record<ToolId, ToolPanePresentation>> = {
+export const TOOL_PRESENTATION_ADAPTERS: Readonly<Record<ToolId, ToolPropertyForm>> = {
   bbox: bboxForm,
   brush: brushForm,
   colorPicker: colorPickerForm,
@@ -35,16 +28,7 @@ export const TOOL_PRESENTATION_ADAPTERS: Readonly<Record<ToolId, ToolPanePresent
   view: viewForm,
 };
 
-export const OPERATION_PRESENTATION_ADAPTERS: Readonly<Record<CanvasOperationKind, OperationPanePresentation>> = {
+export const OPERATION_PRESENTATION_ADAPTERS: Readonly<Record<CanvasOperationKind, OperationPropertyForm>> = {
   filter: filterOperationForm,
   'select-object': selectObjectOperationForm,
 };
-
-export const hasToolRegions = (adapter: ToolPresentationAdapter): boolean =>
-  !!(adapter.geometry || adapter.intensity || adapter.color || adapter.modes || adapter.more || adapter.status);
-
-/** Whether the pane has anything to render for the tool beyond its name and hint. */
-export const hasToolControls = (adapter: ToolPanePresentation): boolean =>
-  isToolPropertyForm(adapter) ? adapter.groups.length > 0 : hasToolRegions(adapter);
-
-export { isOperationPropertyForm, isToolPropertyForm };

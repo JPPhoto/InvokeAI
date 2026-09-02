@@ -1,8 +1,5 @@
 import type { CanvasLayerSourceContract, ShapeToolOptions } from '@workbench/canvas-engine/api';
-import type {
-  ToolbarRegionProps,
-  ToolPropertyForm,
-} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
+import type { ToolFormProps, ToolPropertyForm } from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
 
 import { Text } from '@chakra-ui/react';
 import { ToggleIconButton } from '@platform/ui/Button';
@@ -11,16 +8,16 @@ import { MAX_SHAPE_STROKE_WIDTH, getDocumentLayer } from '@workbench/canvas-engi
 import { useActiveColorCommands, useActiveColorPair } from '@workbench/widgets/canvas/color-system/useActiveColors';
 import { useShapeOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import {
+  FormNumberField,
+  FormSlider,
+  useNumberCommit,
+  useSliderGesture,
+} from '@workbench/widgets/canvas/tool-presentation/FormControls';
+import {
   EditTargetChip,
   PropertyControlRow,
   PropertySegmentedRow,
 } from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
-import {
-  ToolbarNumberField,
-  ToolbarSlider,
-  useNumberCommit,
-  useSliderGesture,
-} from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
@@ -47,7 +44,7 @@ const FALLBACK_COLOR = '#000000';
  * nothing selected the color chips edit the pair itself, so there is no second
  * global shape color.
  */
-const useShapeEditor = (engine: ToolbarRegionProps['engine']) => {
+const useShapeEditor = (engine: ToolFormProps['engine']) => {
   const { t } = useTranslation();
   const commitPrepared = usePreparedCommit(engine);
   const options = useShapeOptions(engine);
@@ -155,7 +152,7 @@ const useShapeEditor = (engine: ToolbarRegionProps['engine']) => {
   };
 };
 
-const ShapeSettings = ({ engine }: ToolbarRegionProps) => {
+const ShapeSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const editor = useShapeEditor(engine);
   const sampleColor = useColorSampler(engine);
@@ -221,7 +218,7 @@ const ShapeSettings = ({ engine }: ToolbarRegionProps) => {
         />
       </PropertyControlRow>
       <PropertyControlRow label={t('widgets.properties.rows.width')}>
-        <ToolbarSlider
+        <FormSlider
           aria-label={t('widgets.canvas.toolOptions.shapeStrokeWidth')}
           disabled={editor.stroke === null}
           max={MAX_SHAPE_STROKE_WIDTH}
@@ -230,7 +227,7 @@ const ShapeSettings = ({ engine }: ToolbarRegionProps) => {
           onValueChange={widthGesture.onChange}
           onValueChangeEnd={widthGesture.onChangeEnd}
         />
-        <ToolbarNumberField
+        <FormNumberField
           aria-label={t('widgets.canvas.toolOptions.shapeStrokeWidth')}
           disabled={editor.stroke === null}
           max={MAX_SHAPE_STROKE_WIDTH}

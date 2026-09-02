@@ -3,11 +3,7 @@ import type { KeyboardEvent } from 'react';
 
 import { chakra } from '@chakra-ui/react';
 import { MAX_BRUSH_SIZE, MIN_BRUSH_SIZE } from '@workbench/canvas-engine/api';
-import {
-  ToolbarNumberField,
-  ToolbarSlider,
-  useNumberCommit,
-} from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
+import { FormNumberField, FormSlider, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/FormControls';
 import { useLayoutEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -99,7 +95,7 @@ export const PaintSizeControl = ({
 
   return (
     <>
-      <ToolbarSlider
+      <FormSlider
         aria-label={label}
         formatValue={formatPx}
         getAriaValueText={formatPx}
@@ -110,7 +106,7 @@ export const PaintSizeControl = ({
         onKeyDownCapture={onSliderKeyDownCapture}
         onValueChange={onSlider}
       />
-      <ToolbarNumberField
+      <FormNumberField
         aria-label={label}
         max={MAX_BRUSH_SIZE}
         min={MIN_BRUSH_SIZE}
@@ -147,7 +143,7 @@ export const PaintOpacityControl = ({
   );
   return (
     <>
-      <ToolbarSlider
+      <FormSlider
         aria-label={label}
         formatValue={formatPercent}
         max={100}
@@ -155,7 +151,7 @@ export const PaintOpacityControl = ({
         value={percent}
         onValueChange={onSlider}
       />
-      <ToolbarNumberField
+      <FormNumberField
         aria-label={label}
         max={100}
         min={0}
@@ -189,7 +185,7 @@ export const PaintHardnessControl = ({
   );
   return (
     <>
-      <ToolbarSlider
+      <FormSlider
         aria-label={label}
         formatValue={formatPercent}
         max={100}
@@ -197,7 +193,7 @@ export const PaintHardnessControl = ({
         value={percent}
         onValueChange={onSlider}
       />
-      <ToolbarNumberField
+      <FormNumberField
         aria-label={label}
         max={100}
         min={0}

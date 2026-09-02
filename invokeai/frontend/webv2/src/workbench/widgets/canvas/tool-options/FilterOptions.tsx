@@ -1,8 +1,8 @@
 import type {
   OperationPropertyForm,
-  ToolbarRegionProps,
-  ToolbarStatusProps,
-} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
+  ToolFormProps,
+  ToolFooterProps,
+} from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
 
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
 import { Box, createListCollection, Flex, Icon, Menu, Portal } from '@chakra-ui/react';
@@ -72,7 +72,7 @@ export const getFilterStatusTranslationKey = (status: FilterOperationSessionStat
         ? 'widgets.layers.rasterFilter.statusError'
         : 'widgets.layers.selectObject.statusReady';
 
-const useFilterDraft = (engine: ToolbarRegionProps['engine']) => {
+const useFilterDraft = (engine: ToolFormProps['engine']) => {
   const operations = getCanvasOperations(engine);
   const setType = useCallback(
     (type: string) => {
@@ -102,7 +102,7 @@ const useFilterDraft = (engine: ToolbarRegionProps['engine']) => {
 };
 
 /** Filter choice (grouped by category) and auto-process: the iteration dials. */
-const FilterChooseSettings = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
+const FilterChooseSettings = ({ engine, isSurfaceInteractionLocked }: ToolFormProps) => {
   const { t } = useTranslation();
   const session = useFilterSession(engine);
   const { operations, setType } = useFilterDraft(engine);
@@ -167,7 +167,7 @@ const FilterChooseSettings = ({ engine, isSurfaceInteractionLocked }: ToolbarReg
 };
 
 /** The chosen filter's parameters. */
-const FilterParamsSettings = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
+const FilterParamsSettings = ({ engine, isSurfaceInteractionLocked }: ToolFormProps) => {
   const session = useFilterSession(engine);
   const { setSettings, setType } = useFilterDraft(engine);
   if (!session) {
@@ -191,7 +191,7 @@ const FilterParamsSettings = ({ engine, isSurfaceInteractionLocked }: ToolbarReg
  * The operation's sticky footer: the status chip, Reset, Process (hidden while
  * auto-process owns it), Apply with its save-as menu, and Cancel.
  */
-const FilterFooter = ({ engine, isExternalInteractionLocked }: ToolbarStatusProps) => {
+const FilterFooter = ({ engine, isExternalInteractionLocked }: ToolFooterProps) => {
   const { t } = useTranslation();
   const session = useFilterSession(engine);
   const { operations, reset } = useFilterDraft(engine);
@@ -236,7 +236,7 @@ const FilterFooter = ({ engine, isExternalInteractionLocked }: ToolbarStatusProp
       )}
       <Flex flexShrink={0}>
         <Button
-          data-toolbar-action="apply"
+          data-pane-action="apply"
           disabled={!eligibility.canApply}
           loading={session.status === 'committing'}
           roundedRight="none"
@@ -280,7 +280,7 @@ const FilterFooter = ({ engine, isExternalInteractionLocked }: ToolbarStatusProp
         </Menu.Root>
       </Flex>
       <Button
-        data-toolbar-action="cancel"
+        data-pane-action="cancel"
         disabled={!eligibility.canCancel}
         flexShrink={0}
         size="xs"

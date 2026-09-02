@@ -1,12 +1,9 @@
-import { Flex, Stack, Text } from '@chakra-ui/react';
+import { Flex, Stack } from '@chakra-ui/react';
 import { Scrollable } from '@platform/ui/Scrollable';
 import { isCanvasInteractionLocked } from '@workbench/widgets/canvas/canvasInteractionLock';
 import { useCanvasActiveTool, useCanvasOperation } from '@workbench/widgets/canvas/engineStoreHooks';
 import { PropertyGroup } from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
 import {
-  hasToolRegions,
-  isOperationPropertyForm,
-  isToolPropertyForm,
   OPERATION_PRESENTATION_ADAPTERS,
   TOOL_PRESENTATION_ADAPTERS,
 } from '@workbench/widgets/canvas/tool-presentation/toolAdapters';
@@ -17,19 +14,11 @@ import { useTranslation } from 'react-i18next';
 
 import { GroupSelectedNotice } from './GroupSelectedNotice';
 import { LayerSection } from './LayerSection';
-import { PropertiesRow, PropertiesSection } from './PropertiesSection';
-
-const REGION_LABEL_KEYS = {
-  color: 'widgets.properties.rows.color',
-  geometry: 'widgets.properties.rows.geometry',
-  intensity: 'widgets.properties.rows.intensity',
-  modes: 'widgets.properties.rows.modes',
-  more: 'widgets.properties.rows.more',
-} as const;
+import { PropertiesSection } from './PropertiesSection';
 
 /**
  * Full editors for what the canvas is doing: the running operation first, then
- * the active tool's settings. Reads and writes the engine's option stores and
+ * the active tool's form. Reads and writes the engine's option stores and
  * document transactions through the same adapters the canvas registers; it
  * mirrors no state of its own.
  */
@@ -66,34 +55,20 @@ const ConnectedProperties = ({
   const activeTool = useCanvasActiveTool(engine);
   const operation = useCanvasOperation(engine);
   const running = operation.status === 'active' ? OPERATION_PRESENTATION_ADAPTERS[operation.identity.kind] : null;
-  const runningForm = running && isOperationPropertyForm(running) ? running : null;
-  const runningLegacy = running && !isOperationPropertyForm(running) ? running : null;
   const tool = TOOL_PRESENTATION_ADAPTERS[activeTool];
   const toolName = t(`widgets.canvas.tools.${tool.id}`);
-  const form = isToolPropertyForm(tool) ? tool : null;
-  const legacy = isToolPropertyForm(tool) ? null : tool;
-  const ToolStatus = legacy?.status;
-  const Preview = form?.preview;
+  const Preview = tool.preview;
+  const regionProps = { engine, isSurfaceInteractionLocked };
   // The pane has ONE sticky footer: a running operation's, else the tool
   // form's; the operation always wins because the tool section is inert then.
-  const Footer = runningForm ? runningForm.footer : running ? null : form?.footer;
-  const regionProps = { engine, isSurfaceInteractionLocked };
-  const rows = (
-    [
-      ['geometry', legacy?.geometry],
-      ['intensity', legacy?.intensity],
-      ['modes', legacy?.modes],
-      ['color', legacy?.color],
-      ['more', legacy?.more],
-    ] as const
-  ).filter((entry): entry is [keyof typeof REGION_LABEL_KEYS, NonNullable<(typeof entry)[1]>] => !!entry[1]);
+  const Footer = running ? running.footer : tool.footer;
 
   // `inert` will blur a focused tool control once an operation starts; hand focus to the operation's Cancel first.
   const root = useRef<HTMLDivElement>(null);
   const toolSection = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (running && toolSection.current?.contains(document.activeElement)) {
-      root.current?.querySelector<HTMLElement>('[data-toolbar-action="cancel"]')?.focus();
+      root.current?.querySelector<HTMLElement>('[data-pane-action="cancel"]')?.focus();
     }
   }, [running]);
 
@@ -106,18 +81,11 @@ const ConnectedProperties = ({
           )}
           title={t('widgets.properties.sections.operation')}
         >
-          {runningForm
-            ? runningForm.groups.map((group) => (
-                <PropertyGroup key={group.id} collapsible={group.collapsible} id={group.id} label={t(group.labelKey)}>
-                  <group.body {...regionProps} />
-                </PropertyGroup>
-              ))
-            : null}
-          {runningLegacy?.modes ? <runningLegacy.modes {...regionProps} /> : null}
-          {runningLegacy?.more ? <runningLegacy.more {...regionProps} /> : null}
-          {runningLegacy ? (
-            <runningLegacy.status engine={engine} isExternalInteractionLocked={isSurfaceInteractionLocked} />
-          ) : null}
+          {running.groups.map((group) => (
+            <PropertyGroup key={group.id} collapsible={group.collapsible} id={group.id} label={t(group.labelKey)}>
+              <group.body {...regionProps} />
+            </PropertyGroup>
+          ))}
         </PropertiesSection>
       ) : null}
       <PropertiesSection
@@ -127,32 +95,14 @@ const ConnectedProperties = ({
         title={t('widgets.properties.sections.tool')}
       >
         {tool.paintsLeaf && !running ? <GroupSelectedNotice /> : null}
-        {form ? (
-          <>
-            {Preview ? <Preview engine={engine} isExternalInteractionLocked={isSurfaceInteractionLocked} /> : null}
-            {form.groups.map((group) => (
-              // Keyed by GROUP id, not tool id: tools sharing a group keep its
-              // DOM (and collapse state) alive across the tool switch.
-              <PropertyGroup key={group.id} collapsible={group.collapsible} id={group.id} label={t(group.labelKey)}>
-                <group.body {...regionProps} />
-              </PropertyGroup>
-            ))}
-          </>
-        ) : legacy && hasToolRegions(legacy) ? (
-          rows.map(([region, Region]) => (
-            <PropertiesRow
-              key={`${legacy.id}:${region}`}
-              label={t(legacy.rowLabels?.[region] ?? REGION_LABEL_KEYS[region])}
-            >
-              <Region {...regionProps} />
-            </PropertiesRow>
-          ))
-        ) : (
-          <Text color="fg.muted" fontSize="xs">
-            {t(`widgets.canvas.toolHints.${tool.id}`)}
-          </Text>
-        )}
-        {ToolStatus ? <ToolStatus engine={engine} isExternalInteractionLocked={isSurfaceInteractionLocked} /> : null}
+        {Preview ? <Preview engine={engine} isExternalInteractionLocked={isSurfaceInteractionLocked} /> : null}
+        {tool.groups.map((group) => (
+          // Keyed by GROUP id, not tool id: tools sharing a group keep its
+          // DOM (and collapse state) alive across the tool switch.
+          <PropertyGroup key={group.id} collapsible={group.collapsible} id={group.id} label={t(group.labelKey)}>
+            <group.body {...regionProps} />
+          </PropertyGroup>
+        ))}
       </PropertiesSection>
       <LayerSection disabled={isSurfaceInteractionLocked || running !== null} />
       {Footer ? (

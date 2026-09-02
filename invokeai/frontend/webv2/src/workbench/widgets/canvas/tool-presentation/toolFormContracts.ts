@@ -10,48 +10,21 @@ export type CanvasToolOptionsEngine = Pick<
 
 export type CanvasOperationKind = Extract<CanvasOperationState, { status: 'active' }>['identity']['kind'];
 
-export type ToolbarRegionId = 'geometry' | 'intensity' | 'color' | 'modes';
-
-export interface ToolbarRegionProps {
+export interface ToolFormProps {
   engine: CanvasToolOptionsEngine;
   /** Staging or generation owns the surface: mutating controls disable, Cancel stays. */
   isSurfaceInteractionLocked: boolean;
 }
 
-export interface ToolbarStatusProps {
+export interface ToolFooterProps {
   engine: CanvasToolOptionsEngine;
   isExternalInteractionLocked: boolean;
 }
 
-export type ToolbarRegionComponent = ComponentType<ToolbarRegionProps>;
+/** Preview cards take the footer's props: the engine plus the surface lock. */
+export type ToolPreviewProps = ToolFooterProps;
 
-/**
- * One tool's presentation: a component per region of its settings (geometry,
- * intensity, color, modes, and what only the full form shows), rendered by the
- * Properties widget. The adapter is a presentation seam over the engine's
- * option stores and document transactions; it owns no state.
- */
-export interface ToolPresentationAdapter {
-  id: ToolId;
-  /** Paints into one leaf: a selected group gets the "select a layer" notice instead of strokes. */
-  paintsLeaf?: boolean;
-  /** Translation keys naming the rows where the generic region name would mislead (brush "Size", not "Geometry"). */
-  rowLabels?: Partial<Record<ToolbarRegionId | 'more', string>>;
-  geometry?: ToolbarRegionComponent;
-  intensity?: ToolbarRegionComponent;
-  color?: ToolbarRegionComponent;
-  modes?: ToolbarRegionComponent;
-  more?: ToolbarRegionComponent;
-  status?: ComponentType<ToolbarStatusProps>;
-}
-
-/** A guarded operation's presentation: its inputs, its secondary controls and its status with Apply / Cancel. */
-export interface OperationPresentationAdapter {
-  kind: CanvasOperationKind;
-  modes?: ToolbarRegionComponent;
-  more?: ToolbarRegionComponent;
-  status: ComponentType<ToolbarStatusProps>;
-}
+export type ToolFormComponent = ComponentType<ToolFormProps>;
 
 /**
  * One named group of a tool's property form. Group ids are GLOBAL keys: shared
@@ -64,7 +37,7 @@ export interface ToolPropertyGroup {
   labelKey: string;
   /** Present makes the header a disclosure; the value is the default state. */
   collapsible?: 'open' | 'collapsed';
-  body: ToolbarRegionComponent;
+  body: ToolFormComponent;
 }
 
 /**
@@ -76,25 +49,16 @@ export interface ToolPropertyForm {
   id: ToolId;
   /** Paints into one leaf: a selected group gets the "select a layer" notice instead of strokes. */
   paintsLeaf?: boolean;
-  preview?: ComponentType<ToolbarStatusProps>;
+  preview?: ComponentType<ToolPreviewProps>;
   groups: readonly ToolPropertyGroup[];
   /** Sticks to the pane's bottom edge while the form scrolls: session status, Apply, Cancel. */
-  footer?: ComponentType<ToolbarStatusProps>;
+  footer?: ComponentType<ToolFooterProps>;
 }
-
-export type ToolPanePresentation = ToolPresentationAdapter | ToolPropertyForm;
-
-export const isToolPropertyForm = (adapter: ToolPanePresentation): adapter is ToolPropertyForm => 'groups' in adapter;
 
 /** A guarded operation's pane form: named groups plus the sticky footer that owns its verbs. */
 export interface OperationPropertyForm {
   kind: CanvasOperationKind;
   groups: readonly ToolPropertyGroup[];
   /** Status chip, Process/Reset, Apply and Cancel; pinned to the pane's bottom edge. */
-  footer: ComponentType<ToolbarStatusProps>;
+  footer: ComponentType<ToolFooterProps>;
 }
-
-export type OperationPanePresentation = OperationPresentationAdapter | OperationPropertyForm;
-
-export const isOperationPropertyForm = (adapter: OperationPanePresentation): adapter is OperationPropertyForm =>
-  'groups' in adapter;

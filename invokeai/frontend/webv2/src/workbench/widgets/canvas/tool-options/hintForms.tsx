@@ -1,7 +1,4 @@
-import type {
-  ToolbarRegionProps,
-  ToolPropertyForm,
-} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
+import type { ToolFormProps, ToolPropertyForm } from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
 
 import { HintCard } from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
 import { useMemo } from 'react';
@@ -12,7 +9,7 @@ import { useTranslation } from 'react-i18next';
  * mirror what `pointerPipeline`/the tools actually do — hold-keys included —
  * instead of the old single hint sentence.
  */
-const ViewHints = (_props: ToolbarRegionProps) => {
+const ViewHints = (_props: ToolFormProps) => {
   const { t } = useTranslation();
   const rows = useMemo(
     () => [
@@ -25,7 +22,7 @@ const ViewHints = (_props: ToolbarRegionProps) => {
   return <HintCard rows={rows} />;
 };
 
-const ColorPickerHints = (_props: ToolbarRegionProps) => {
+const ColorPickerHints = (_props: ToolFormProps) => {
   const { t } = useTranslation();
   const rows = useMemo(
     () => [
@@ -37,7 +34,7 @@ const ColorPickerHints = (_props: ToolbarRegionProps) => {
   return <HintCard rows={rows} />;
 };
 
-const SamToolHints = (_props: ToolbarRegionProps) => {
+const SamToolHints = (_props: ToolFormProps) => {
   const { t } = useTranslation();
   const rows = useMemo(
     () => [

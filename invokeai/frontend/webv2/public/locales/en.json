@@ -1572,10 +1572,6 @@
       },
       "rows": {
         "color": "Color",
-        "geometry": "Geometry",
-        "intensity": "Intensity",
-        "modes": "Modes",
-        "more": "More",
         "kind": "Kind",
         "width": "Width",
         "angle": "Angle",

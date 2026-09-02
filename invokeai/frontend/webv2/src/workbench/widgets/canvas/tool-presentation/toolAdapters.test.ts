@@ -2,13 +2,7 @@ import type { ToolId } from '@workbench/canvas-engine/api';
 
 import { describe, expect, it } from 'vitest';
 
-import {
-  hasToolControls,
-  isOperationPropertyForm,
-  isToolPropertyForm,
-  OPERATION_PRESENTATION_ADAPTERS,
-  TOOL_PRESENTATION_ADAPTERS,
-} from './toolAdapters';
+import { OPERATION_PRESENTATION_ADAPTERS, TOOL_PRESENTATION_ADAPTERS } from './toolAdapters';
 
 const TOOL_IDS = Object.keys({
   bbox: true,
@@ -48,9 +42,9 @@ describe('tool presentation adapters', () => {
     }
   });
 
-  it('gives every tool controls or gesture cards; the bare-hint fallback is dead', () => {
+  it('gives every tool a form with at least one group', () => {
     for (const toolId of TOOL_IDS) {
-      expect(hasToolControls(TOOL_PRESENTATION_ADAPTERS[toolId]), toolId).toBe(true);
+      expect(TOOL_PRESENTATION_ADAPTERS[toolId].groups.length, toolId).toBeGreaterThan(0);
     }
   });
 
@@ -59,9 +53,6 @@ describe('tool presentation adapters', () => {
       key.split('.').reduce<unknown>((node, part) => (node as Record<string, unknown> | undefined)?.[part], en);
     for (const toolId of TOOL_IDS) {
       const adapter = TOOL_PRESENTATION_ADAPTERS[toolId];
-      if (!isToolPropertyForm(adapter)) {
-        continue;
-      }
       const ids = adapter.groups.map((group) => group.id);
       expect(new Set(ids).size, toolId).toBe(ids.length);
       for (const group of adapter.groups) {
@@ -70,24 +61,16 @@ describe('tool presentation adapters', () => {
     }
   });
 
-  it('names every Properties row and section in the catalog', () => {
-    for (const row of ['geometry', 'intensity', 'color', 'modes', 'more']) {
-      expect(en.widgets.properties.rows[row], row).toEqual(expect.any(String));
-    }
+  it('names the Properties sections in the catalog', () => {
     expect(en.widgets.properties.sections.tool).toEqual(expect.any(String));
     expect(en.widgets.properties.sections.operation).toEqual(expect.any(String));
   });
 
-  it('gives every guarded operation a verbs slot so Apply and Cancel stay in place', () => {
+  it('gives every guarded operation groups and a footer so Apply and Cancel stay in place', () => {
     expect(Object.keys(OPERATION_PRESENTATION_ADAPTERS).sort()).toEqual(['filter', 'select-object']);
     for (const adapter of Object.values(OPERATION_PRESENTATION_ADAPTERS)) {
-      if (isOperationPropertyForm(adapter)) {
-        expect(adapter.footer).toBeDefined();
-        expect(adapter.groups.length).toBeGreaterThan(0);
-      } else {
-        expect(adapter.status).toBeDefined();
-        expect(adapter.modes).toBeDefined();
-      }
+      expect(adapter.footer).toBeDefined();
+      expect(adapter.groups.length).toBeGreaterThan(0);
     }
   });
 });

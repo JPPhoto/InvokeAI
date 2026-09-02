@@ -6,7 +6,8 @@ import { Scrollable } from '@platform/ui/Scrollable';
 import { getDocumentNode, lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import { useCanvasHasFloatingSelection, useTransformSession } from '@workbench/widgets/canvas/engineStoreHooks';
 import { clampScalePercent, round2, wrapDegrees } from '@workbench/widgets/canvas/tool-options/geometryForm';
-import { ToolbarNumberField, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
+import { FormNumberField, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/FormControls';
+import { PropertyControlRow } from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
 import { useCanvasEngine, type CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
@@ -14,7 +15,7 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { GroupSelectedNotice } from './GroupSelectedNotice';
-import { PropertiesRow, PropertiesSection } from './PropertiesSection';
+import { PropertiesSection } from './PropertiesSection';
 
 const RAD_TO_DEG = 180 / Math.PI;
 const DEG_TO_RAD = Math.PI / 180;
@@ -109,8 +110,8 @@ const ConnectedTransform = ({ engine }: { engine: CanvasEngineHandle }) => {
   const onApply = useCallback(() => engine.layers.applyTransform(), [engine]);
   const onCancel = useCallback(() => engine.layers.cancelTransform(), [engine]);
   const pending = session !== null || hasFloat;
-  const field = (props: Omit<Parameters<typeof ToolbarNumberField>[0], 'disabled'>) => (
-    <ToolbarNumberField {...props} disabled={!editable} />
+  const field = (props: Omit<Parameters<typeof FormNumberField>[0], 'disabled'>) => (
+    <FormNumberField {...props} disabled={!editable} />
   );
 
   return (
@@ -122,44 +123,48 @@ const ConnectedTransform = ({ engine }: { engine: CanvasEngineHandle }) => {
         title={t('widgets.transform.title')}
       >
         {selected?.isGroup && !session ? <GroupSelectedNotice hint={t('widgets.transform.groupSelected')} /> : null}
-        <PropertiesRow label={t('widgets.transform.position')}>
-          {field({
-            'aria-label': t('widgets.canvas.toolOptions.positionX'),
-            label: t('widgets.canvas.toolOptions.positionX'),
-            value: transform ? String(Math.round(transform.x)) : '',
-            onValueCommit: onX,
-          })}
-          {field({
-            'aria-label': t('widgets.canvas.toolOptions.positionY'),
-            label: t('widgets.canvas.toolOptions.positionY'),
-            value: transform ? String(Math.round(transform.y)) : '',
-            onValueCommit: onY,
-          })}
-        </PropertiesRow>
-        <PropertiesRow label={t('widgets.transform.scale')}>
-          {field({
-            'aria-label': t('widgets.canvas.toolOptions.scaleWidth'),
-            label: t('widgets.canvas.toolOptions.frameWidth'),
-            suffix: '%',
-            value: transform ? String(round2(transform.scaleX * 100)) : '',
-            onValueCommit: onScaleX,
-          })}
-          {field({
-            'aria-label': t('widgets.canvas.toolOptions.scaleHeight'),
-            label: t('widgets.canvas.toolOptions.frameHeight'),
-            suffix: '%',
-            value: transform ? String(round2(transform.scaleY * 100)) : '',
-            onValueCommit: onScaleY,
-          })}
-        </PropertiesRow>
-        <PropertiesRow label={t('widgets.transform.rotation')}>
+        <PropertyControlRow label={t('widgets.transform.position')}>
+          <Flex gap="2" gridColumn="2 / -1">
+            {field({
+              'aria-label': t('widgets.canvas.toolOptions.positionX'),
+              label: t('widgets.canvas.toolOptions.positionX'),
+              value: transform ? String(Math.round(transform.x)) : '',
+              onValueCommit: onX,
+            })}
+            {field({
+              'aria-label': t('widgets.canvas.toolOptions.positionY'),
+              label: t('widgets.canvas.toolOptions.positionY'),
+              value: transform ? String(Math.round(transform.y)) : '',
+              onValueCommit: onY,
+            })}
+          </Flex>
+        </PropertyControlRow>
+        <PropertyControlRow label={t('widgets.transform.scale')}>
+          <Flex gap="2" gridColumn="2 / -1">
+            {field({
+              'aria-label': t('widgets.canvas.toolOptions.scaleWidth'),
+              label: t('widgets.canvas.toolOptions.frameWidth'),
+              suffix: '%',
+              value: transform ? String(round2(transform.scaleX * 100)) : '',
+              onValueCommit: onScaleX,
+            })}
+            {field({
+              'aria-label': t('widgets.canvas.toolOptions.scaleHeight'),
+              label: t('widgets.canvas.toolOptions.frameHeight'),
+              suffix: '%',
+              value: transform ? String(round2(transform.scaleY * 100)) : '',
+              onValueCommit: onScaleY,
+            })}
+          </Flex>
+        </PropertyControlRow>
+        <PropertyControlRow label={t('widgets.transform.rotation')}>
           {field({
             'aria-label': t('widgets.canvas.toolOptions.rotation'),
             suffix: '°',
             value: transform ? String(round2(wrapDegrees(transform.rotation * RAD_TO_DEG))) : '',
             onValueCommit: onRotation,
           })}
-        </PropertiesRow>
+        </PropertyControlRow>
         {pending ? (
           <Flex gap="2" justify="flex-end">
             <Button size="xs" variant="ghost" onClick={onCancel}>

@@ -1,9 +1,9 @@
 import type {
-  ToolbarRegionProps,
-  ToolbarStatusProps,
+  ToolFormProps,
+  ToolFooterProps,
   ToolPropertyForm,
   ToolPropertyGroup,
-} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
+} from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
 
 import { ColorPicker } from '@platform/ui/ColorPicker';
 import { useActiveColorCommands, useActiveColorPair } from '@workbench/widgets/canvas/color-system/useActiveColors';
@@ -31,7 +31,7 @@ const ERASER_PREVIEW_COLOR = '#9aa2b1';
  * switch, which is what makes the "stable geometry across related tools"
  * invariant hold in the form world.
  */
-const usePaintOptions = (engine: ToolbarRegionProps['engine']) => {
+const usePaintOptions = (engine: ToolFormProps['engine']) => {
   const activeTool = useCanvasActiveTool(engine);
   const brush = useBrushOptions(engine);
   const eraser = useEraserOptions(engine);
@@ -50,7 +50,7 @@ const usePaintOptions = (engine: ToolbarRegionProps['engine']) => {
   return { isEraser, options, set };
 };
 
-const PaintPreview = ({ engine }: ToolbarStatusProps) => {
+const PaintPreview = ({ engine }: ToolFooterProps) => {
   const { isEraser, options } = usePaintOptions(engine);
   const pair = useActiveColorPair();
   return (
@@ -63,7 +63,7 @@ const PaintPreview = ({ engine }: ToolbarStatusProps) => {
   );
 };
 
-const PaintStrokeSettings = ({ engine }: ToolbarRegionProps) => {
+const PaintStrokeSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const { isEraser, options, set } = usePaintOptions(engine);
   const setSize = useCallback((size: number) => set({ size: clampBrushSize(size) }), [set]);
@@ -89,7 +89,7 @@ const PaintStrokeSettings = ({ engine }: ToolbarRegionProps) => {
 };
 
 /** A mirror of the project foreground, not brush-owned state: the pair feeds the engine's brush color. */
-const PaintColorSettings = ({ engine }: ToolbarRegionProps) => {
+const PaintColorSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const pair = useActiveColorPair();
   const { setPairColor } = useActiveColorCommands();
@@ -108,7 +108,7 @@ const PaintColorSettings = ({ engine }: ToolbarRegionProps) => {
 };
 
 /** Width and opacity are separate pressure responses (opacity also costs a scratch refill per frame). */
-const PaintDynamicsSettings = ({ engine }: ToolbarRegionProps) => {
+const PaintDynamicsSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const brush = useBrushOptions(engine);
   const set = useCallback(

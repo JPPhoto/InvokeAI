@@ -1,9 +1,6 @@
 import type { SelectValueChangeDetails } from '@chakra-ui/react';
 import type { CanvasLayerSourceContract, TextToolOptions } from '@workbench/canvas-engine/api';
-import type {
-  ToolbarRegionProps,
-  ToolPropertyForm,
-} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
+import type { ToolFormProps, ToolPropertyForm } from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
 
 import { createListCollection, HStack } from '@chakra-ui/react';
 import { IconButton } from '@platform/ui/Button';
@@ -18,13 +15,13 @@ import {
 } from '@workbench/canvas-engine/api';
 import { useActiveColorCommands, useActiveColorPair } from '@workbench/widgets/canvas/color-system/useActiveColors';
 import { useTextEditSession, useTextOptions } from '@workbench/widgets/canvas/engineStoreHooks';
-import { EditTargetChip, PropertyControlRow } from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
 import {
-  ToolbarNumberField,
-  ToolbarSlider,
+  FormNumberField,
+  FormSlider,
   useNumberCommit,
   useSliderGesture,
-} from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
+} from '@workbench/widgets/canvas/tool-presentation/FormControls';
+import { EditTargetChip, PropertyControlRow } from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
@@ -91,7 +88,7 @@ const AlignButton = ({
  * session (folded into its single commit) or commit one history entry on the
  * selected layer; color edits with nothing to own them edit the pair.
  */
-const useTextEditor = (engine: ToolbarRegionProps['engine']) => {
+const useTextEditor = (engine: ToolFormProps['engine']) => {
   const { t } = useTranslation();
   const commitPrepared = usePreparedCommit(engine);
   const options = useTextOptions(engine);
@@ -157,7 +154,7 @@ const useTextEditor = (engine: ToolbarRegionProps['engine']) => {
   return { active, applyEdit, targetName };
 };
 
-const TextFontSettings = ({ engine }: ToolbarRegionProps) => {
+const TextFontSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const { active, applyEdit, targetName } = useTextEditor(engine);
   const familyCollection = useMemo(
@@ -235,7 +232,7 @@ const TextFontSettings = ({ engine }: ToolbarRegionProps) => {
         />
       </PropertyControlRow>
       <PropertyControlRow label={t('widgets.properties.rows.size')}>
-        <ToolbarSlider
+        <FormSlider
           aria-label={t('widgets.canvas.toolOptions.textSize')}
           max={MAX_TEXT_FONT_SIZE}
           min={MIN_TEXT_FONT_SIZE}
@@ -243,7 +240,7 @@ const TextFontSettings = ({ engine }: ToolbarRegionProps) => {
           onValueChange={sizeGesture.onChange}
           onValueChangeEnd={sizeGesture.onChangeEnd}
         />
-        <ToolbarNumberField
+        <FormNumberField
           aria-label={t('widgets.canvas.toolOptions.textSize')}
           max={MAX_TEXT_FONT_SIZE}
           min={MIN_TEXT_FONT_SIZE}
@@ -267,7 +264,7 @@ const TextFontSettings = ({ engine }: ToolbarRegionProps) => {
         />
       </PropertyControlRow>
       <PropertyControlRow label={t('widgets.properties.rows.lineHeight')}>
-        <ToolbarSlider
+        <FormSlider
           aria-label={t('widgets.canvas.toolOptions.textLineHeight')}
           max={4}
           min={0.5}
@@ -276,7 +273,7 @@ const TextFontSettings = ({ engine }: ToolbarRegionProps) => {
           onValueChange={lineHeightGesture.onChange}
           onValueChangeEnd={lineHeightGesture.onChangeEnd}
         />
-        <ToolbarNumberField
+        <FormNumberField
           aria-label={t('widgets.canvas.toolOptions.textLineHeight')}
           max={4}
           min={0.5}
@@ -289,7 +286,7 @@ const TextFontSettings = ({ engine }: ToolbarRegionProps) => {
   );
 };
 
-const TextParagraphSettings = ({ engine }: ToolbarRegionProps) => {
+const TextParagraphSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const { active, applyEdit } = useTextEditor(engine);
   const onAlign = useCallback((next: TextAlign) => applyEdit({ align: next }, true), [applyEdit]);
@@ -304,7 +301,7 @@ const TextParagraphSettings = ({ engine }: ToolbarRegionProps) => {
   );
 };
 
-const TextColorSettings = ({ engine }: ToolbarRegionProps) => {
+const TextColorSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const { active, applyEdit } = useTextEditor(engine);
   const sampleColor = useColorSampler(engine);

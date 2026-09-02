@@ -1,5 +1,5 @@
 import type { SelectionOp } from '@workbench/canvas-engine/api';
-import type { ToolbarRegionProps } from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
+import type { ToolFormProps } from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
 
 import { HStack } from '@chakra-ui/react';
 import { Button, IconButton } from '@platform/ui/Button';
@@ -83,7 +83,7 @@ export const SelectionOpModeButtons = ({
  * (unlocked, visible) paint layer — the same rule the engine enforces; invert
  * and deselect need only a selection.
  */
-export const SelectionActions = ({ engine }: ToolbarRegionProps) => {
+export const SelectionActions = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const hasSelection = useCanvasHasSelection(engine);
   const canPaintTarget = useActiveProjectSelector((project) => {

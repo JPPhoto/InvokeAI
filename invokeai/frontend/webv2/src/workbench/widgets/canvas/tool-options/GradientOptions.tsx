@@ -1,8 +1,5 @@
 import type { CanvasLayerSourceContract, GradientStop, GradientToolOptions } from '@workbench/canvas-engine/api';
-import type {
-  ToolbarRegionProps,
-  ToolPropertyForm,
-} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
+import type { ToolFormProps, ToolPropertyForm } from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
 import type { KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 
 import { Box, chakra, Flex, IconButton as ChakraIconButton, Icon } from '@chakra-ui/react';
@@ -11,17 +8,17 @@ import { getDocumentLayer } from '@workbench/canvas-engine/api';
 import { useActiveColorPair } from '@workbench/widgets/canvas/color-system/useActiveColors';
 import { useGradientOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import {
+  FormNumberField,
+  FormSlider,
+  useNumberCommit,
+  useSliderGesture,
+} from '@workbench/widgets/canvas/tool-presentation/FormControls';
+import {
   EditTargetChip,
   PropertyControlRow,
   PropertySegmentedRow,
   PropertySwitchRow,
 } from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
-import {
-  ToolbarNumberField,
-  ToolbarSlider,
-  useNumberCommit,
-  useSliderGesture,
-} from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
@@ -47,7 +44,7 @@ interface SelectedGradient {
  * switches to explicit custom stops, independent of later pair edits. Edits
  * commit to a selected gradient layer (stop gestures once on release).
  */
-const useGradientEditor = (engine: ToolbarRegionProps['engine']) => {
+const useGradientEditor = (engine: ToolFormProps['engine']) => {
   const { t } = useTranslation();
   const commitPrepared = usePreparedCommit(engine);
   const options = useGradientOptions(engine);
@@ -336,7 +333,7 @@ const StopHandle = ({
   );
 };
 
-const GradientSettings = ({ engine }: ToolbarRegionProps) => {
+const GradientSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const editor = useGradientEditor(engine);
   const kindOptions = useMemo(
@@ -371,7 +368,7 @@ const GradientSettings = ({ engine }: ToolbarRegionProps) => {
         onValueChange={setKind}
       />
       <PropertyControlRow label={t('widgets.properties.rows.angle')}>
-        <ToolbarSlider
+        <FormSlider
           aria-label={t('widgets.canvas.toolOptions.gradientAngle')}
           disabled={editor.kind === 'radial'}
           max={360}
@@ -380,7 +377,7 @@ const GradientSettings = ({ engine }: ToolbarRegionProps) => {
           onValueChange={angleGesture.onChange}
           onValueChangeEnd={angleGesture.onChangeEnd}
         />
-        <ToolbarNumberField
+        <FormNumberField
           aria-label={t('widgets.canvas.toolOptions.gradientAngle')}
           disabled={editor.kind === 'radial'}
           max={360}
@@ -394,7 +391,7 @@ const GradientSettings = ({ engine }: ToolbarRegionProps) => {
   );
 };
 
-const GradientStopsSettings = ({ engine }: ToolbarRegionProps) => {
+const GradientStopsSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const editor = useGradientEditor(engine);
   const sampleColor = useColorSampler(engine);
@@ -470,7 +467,7 @@ const GradientStopsSettings = ({ engine }: ToolbarRegionProps) => {
               onValueChange={onColorChange}
               onValueChangeEnd={onColorChangeEnd}
             />
-            <ToolbarNumberField
+            <FormNumberField
               aria-label={t('widgets.properties.rows.offset')}
               max={100}
               min={0}
