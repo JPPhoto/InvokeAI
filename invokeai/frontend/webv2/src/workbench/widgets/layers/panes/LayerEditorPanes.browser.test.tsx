@@ -325,6 +325,8 @@ describe('Properties pane', () => {
     // Nothing selected: the chip says the form edits the creation defaults.
     expect(host!.textContent).toContain('Defaults');
     await expect.element(page.getByRole('radio', { exact: true, name: 'Rectangle' })).toBeInTheDocument();
+    await expect.element(page.getByRole('radio', { exact: true, name: 'Triangle' })).toBeInTheDocument();
+    await expect.element(page.getByRole('radio', { exact: true, name: 'Star' })).toBeInTheDocument();
 
     await act(() => root?.unmount());
     await mount(PropertiesPane, 'shape');

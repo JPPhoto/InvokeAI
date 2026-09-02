@@ -60,7 +60,12 @@ const useShapeEditor = (engine: ToolFormProps['engine']) => {
     },
     (a, b) => a?.id === b?.id && a?.name === b?.name && a?.source === b?.source
   );
-  const kind: ShapeKind = selected ? (selected.source.kind === 'ellipse' ? 'ellipse' : 'rect') : options.kind;
+  // Polygon shapes (no tool kind) display as rect; every parametric kind passes through.
+  const kind: ShapeKind = selected
+    ? selected.source.kind === 'polygon'
+      ? 'rect'
+      : selected.source.kind
+    : options.kind;
   const fill = selected ? selected.source.fill : options.fillEnabled ? pair.foreground : null;
   const stroke = selected ? selected.source.stroke : options.strokeEnabled ? pair.background : null;
   const strokeWidth = selected ? selected.source.strokeWidth : options.strokeWidth;
@@ -160,6 +165,8 @@ const ShapeSettings = ({ engine }: ToolFormProps) => {
     () => [
       { label: t('widgets.canvas.toolOptions.shapeRect'), value: 'rect' as const },
       { label: t('widgets.canvas.toolOptions.shapeEllipse'), value: 'ellipse' as const },
+      { label: t('widgets.canvas.toolOptions.shapeTriangle'), value: 'triangle' as const },
+      { label: t('widgets.canvas.toolOptions.shapeStar'), value: 'star' as const },
     ],
     [t]
   );

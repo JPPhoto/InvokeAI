@@ -100,6 +100,9 @@ export interface CanvasImageRef {
   contentHash?: string;
 }
 
+/** The drag-drawable shape kinds; `polygon` (point lists) stays a non-tool source. */
+export type ParametricShapeKind = 'rect' | 'ellipse' | 'triangle' | 'star';
+
 export type CanvasLayerSourceContract =
   | {
       type: 'paint';
@@ -127,7 +130,7 @@ export type CanvasLayerSourceContract =
     }
   | {
       type: 'shape';
-      kind: 'rect' | 'ellipse' | 'polygon';
+      kind: ParametricShapeKind | 'polygon';
       points?: { x: number; y: number }[];
       width: number;
       height: number;

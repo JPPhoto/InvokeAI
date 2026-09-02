@@ -291,11 +291,7 @@ const hasFilterableLayerContent = (context: LayerContextActionState): boolean =>
   if (context.layer.type !== 'raster') {
     return false;
   }
-  return (
-    source.type === 'text' ||
-    source.type === 'gradient' ||
-    (source.type === 'shape' && (source.kind === 'rect' || source.kind === 'ellipse'))
-  );
+  return source.type === 'text' || source.type === 'gradient' || (source.type === 'shape' && source.kind !== 'polygon');
 };
 
 /** Where the layer sits among its siblings (index 0 = top), or null when absent. */

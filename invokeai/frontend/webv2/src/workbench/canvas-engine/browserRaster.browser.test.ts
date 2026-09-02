@@ -13,6 +13,7 @@ import { sampleDocumentColor } from '@workbench/canvas-engine/render/colorSample
 import { compositeDocument } from '@workbench/canvas-engine/render/compositor';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createDomRasterBackend, type RasterSurface } from '@workbench/canvas-engine/render/raster';
+import { rasterizeShapeSource } from '@workbench/canvas-engine/render/rasterizers/shapeRasterizer';
 import { rasterizeTextSource } from '@workbench/canvas-engine/render/rasterizers/textRasterizer';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -285,6 +286,45 @@ describe('real browser raster acceptance', () => {
     const parsed = readPsd(bytes!, { useImageData: true });
     expect(Array.from(parsed.imageData!.data)).toEqual(expected);
     expect(parsed.children?.map((child) => child.name)).toEqual(['Base', 'Group']);
+  });
+
+  it('rasterizes triangle and star shapes with the documented geometry', async () => {
+    const backend = createDomRasterBackend();
+    const deps = {
+      backend,
+      documentSize: { height: 64, width: 64 },
+      resolver: () => Promise.resolve(new Blob()),
+      store: createLayerCacheStore(backend),
+    };
+    const alphaAt = (surface: { ctx: CanvasRenderingContext2D }, x: number, y: number) =>
+      surface.ctx.getImageData(x, y, 1, 1).data[3]!;
+
+    const triangle = await rasterizeShapeSource(
+      { fill: '#ff0000', height: 64, kind: 'triangle', stroke: null, strokeWidth: 0, type: 'shape', width: 64 },
+      deps
+    );
+    const tri = triangle.surface as { ctx: CanvasRenderingContext2D };
+    expect(alphaAt(tri, 32, 32)).toBeGreaterThan(0);
+    expect(alphaAt(tri, 32, 4)).toBeGreaterThan(0);
+    expect(alphaAt(tri, 4, 62)).toBeGreaterThan(0);
+    expect(alphaAt(tri, 4, 4)).toBe(0);
+    expect(alphaAt(tri, 60, 4)).toBe(0);
+
+    const star = await rasterizeShapeSource(
+      { fill: '#00ff00', height: 64, kind: 'star', stroke: null, strokeWidth: 0, type: 'shape', width: 64 },
+      deps
+    );
+    const st = star.surface as { ctx: CanvasRenderingContext2D };
+    expect(alphaAt(st, 32, 32)).toBeGreaterThan(0);
+    expect(alphaAt(st, 32, 4)).toBeGreaterThan(0);
+    expect(alphaAt(st, 46, 32)).toBeGreaterThan(0);
+    // The left spike reaches where a triangle would be empty, and the bottom
+    // concave notch is empty where a triangle would be filled — these two pins
+    // discriminate the star from every other kind.
+    expect(alphaAt(st, 5, 22)).toBeGreaterThan(0);
+    expect(alphaAt(st, 32, 60)).toBe(0);
+    expect(alphaAt(st, 52, 32)).toBe(0);
+    expect(alphaAt(st, 4, 4)).toBe(0);
   });
 
   it('writes folder opacity/blend natively and isolates the folder in the merged preview', async () => {

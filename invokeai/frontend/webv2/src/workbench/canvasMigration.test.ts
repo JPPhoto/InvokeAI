@@ -119,6 +119,18 @@ describe('loadCanvasState', () => {
     expect(badLayer?.type === 'raster' ? badLayer.inpaint : null).toBeUndefined();
   });
 
+  it('round-trips triangle and star shape sources', () => {
+    const shape = (kind: string) => ({
+      ...createEmptyPaintLayer(kind, kind),
+      source: { fill: '#ff0000', height: 10, kind, stroke: null, strokeWidth: 0, type: 'shape', width: 10 },
+    });
+    const loaded = load(withNodes([shape('triangle'), shape('star')]));
+    const kinds = loaded.document.stacks.raster.map((layer) =>
+      layer.type === 'raster' && layer.source.type === 'shape' ? layer.source.kind : null
+    );
+    expect(kinds).toEqual(['triangle', 'star']);
+  });
+
   it('round-trips group adjustments in the raster stack, strips them from overlay groups, and drops a malformed group stack', () => {
     const stack = [{ brightness: 0.1, contrast: 0, id: 'ga1', isEnabled: true, type: 'brightness-contrast' }];
     const rasterGroup = {

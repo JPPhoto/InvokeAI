@@ -67,7 +67,7 @@ export const renderableSourceOf = (layer: CanvasLayerContract): CanvasLayerSourc
 
 /**
  * True when a layer's source is one the engine can rasterize today: image,
- * paint, gradient, text, or a rect/ellipse shape. A `polygon` shape has no
+ * paint, gradient, text, or a parametric (non-polygon) shape. A `polygon` shape has no
  * rasterizer yet (deferred), so it is not renderable.
  */
 export const isRenderableLayer = (layer: CanvasLayerContract): boolean => {

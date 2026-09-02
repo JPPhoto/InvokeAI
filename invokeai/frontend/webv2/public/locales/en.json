@@ -2485,6 +2485,8 @@
         "shapeFill": "Fill",
         "shapeHint": "Drag to draw a shape.",
         "shapeRect": "Rectangle",
+        "shapeStar": "Star",
+        "shapeTriangle": "Triangle",
         "shapeStroke": "Stroke",
         "shapeStrokeWidth": "Stroke width",
         "size": "Size",

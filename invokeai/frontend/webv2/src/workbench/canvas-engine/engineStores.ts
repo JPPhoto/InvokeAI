@@ -11,7 +11,7 @@
  * Zero React, zero import-time side effects.
  */
 
-import type { CanvasLayerSourceContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasLayerSourceContract, ParametricShapeKind } from '@workbench/canvas-engine/contracts';
 import type { SamInteractionState } from '@workbench/canvas-engine/samInteraction';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { Rect, SelectionOp, ToolId, Vec2 } from '@workbench/canvas-engine/types';
@@ -98,7 +98,7 @@ export interface GradientStop {
  * shape color; a selected shape's explicit fill/stroke is document state.
  */
 export interface ShapeToolOptions {
-  kind: 'rect' | 'ellipse';
+  kind: ParametricShapeKind;
   fillEnabled: boolean;
   strokeEnabled: boolean;
   strokeWidth: number;
@@ -474,7 +474,7 @@ export interface EngineStores {
    * when idle. The overlay renders the shape outline in place of a committed
    * layer so the drag tracks without dispatching; cleared on commit/cancel.
    */
-  shapePreview: ScalarStore<{ rect: Rect; kind: 'rect' | 'ellipse' } | null>;
+  shapePreview: ScalarStore<{ rect: Rect; kind: ParametricShapeKind } | null>;
   /**
    * The live gradient-tool drag preview: the drag vector's start/end points in
    * document space, drawn on the overlay as a direction indicator (a gradient
@@ -628,8 +628,8 @@ const gradientOptionsEqual = (a: GradientToolOptions, b: GradientToolOptions): b
 
 /** Shared by the shape and marquee previews — both are a rect plus a shape kind. */
 const rectShapePreviewEqual = (
-  a: { rect: Rect; kind: 'rect' | 'ellipse' } | null,
-  b: { rect: Rect; kind: 'rect' | 'ellipse' } | null
+  a: { rect: Rect; kind: ParametricShapeKind } | null,
+  b: { rect: Rect; kind: ParametricShapeKind } | null
 ): boolean => {
   if (a === null || b === null) {
     return a === b;
@@ -735,7 +735,7 @@ export const createEngineStores = (initialTool: ToolId = 'view'): EngineStores =
   ruleOfThirds: createScalarStore<boolean>(false),
   samInteraction: createScalarStore(null),
   shapeOptions: createScalarStore<ShapeToolOptions>({ ...DEFAULT_SHAPE_OPTIONS }, shapeOptionsEqual),
-  shapePreview: createScalarStore<{ rect: Rect; kind: 'rect' | 'ellipse' } | null>(null, rectShapePreviewEqual),
+  shapePreview: createScalarStore<{ rect: Rect; kind: ParametricShapeKind } | null>(null, rectShapePreviewEqual),
   showBbox: createScalarStore<boolean>(true),
   showGrid: createScalarStore<boolean>(false),
   snapToGrid: createScalarStore<boolean>(true),

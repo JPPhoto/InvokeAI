@@ -12,10 +12,12 @@
  * side effects.
  */
 
+import type { ParametricShapeKind } from '@workbench/canvas-engine/contracts';
 import type { Mat2d, Rect, Vec2 } from '@workbench/canvas-engine/types';
 
 import { applyToPoint, getScale, invert } from '@workbench/canvas-engine/math/mat2d';
 import { transformBounds } from '@workbench/canvas-engine/math/rect';
+import { buildParametricShapePath } from '@workbench/canvas-engine/render/rasterizers/shapeRasterizer';
 import { drawMarchingAnts, type MarchingAntsRender } from '@workbench/canvas-engine/selection/marchingAnts';
 import { BBOX_HANDLES, bboxHandlePoint } from '@workbench/canvas-engine/tools/bboxHitTest';
 import { TRANSFORM_ROTATE_NUB_PX } from '@workbench/canvas-engine/transform/transformMath';
@@ -53,10 +55,10 @@ export interface OverlayCursor {
   radiusDoc: number;
 }
 
-/** A live rect-or-ellipse drag outline in document space (shape and marquee tools). */
+/** A live parametric-shape drag outline in document space (shape and marquee tools). */
 export interface RectShapePreview {
   rect: Rect;
-  kind: 'rect' | 'ellipse';
+  kind: ParametricShapeKind;
 }
 
 /** Everything the overlay needs to draw a frame. */
@@ -357,20 +359,8 @@ const drawRectShapePreview = (ctx: Ctx, state: OverlayState, preview: RectShapeP
   ctx.strokeStyle = LAYER_OUTLINE_COLOR;
   ctx.lineWidth = 1;
   ctx.setLineDash([...BBOX_DASH]);
-  ctx.beginPath();
-  if (preview.kind === 'ellipse') {
-    ctx.ellipse(
-      screen.x + screen.width / 2,
-      screen.y + screen.height / 2,
-      Math.abs(screen.width) / 2,
-      Math.abs(screen.height) / 2,
-      0,
-      0,
-      Math.PI * 2
-    );
-  } else {
-    ctx.rect(screen.x, screen.y, screen.width, screen.height);
-  }
+  // The same path the rasterizer commits, so the outline is the shape it makes.
+  buildParametricShapePath(ctx, preview.kind, screen.x, screen.y, Math.abs(screen.width), Math.abs(screen.height), 0);
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.restore();

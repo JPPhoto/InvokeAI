@@ -59,7 +59,7 @@ const zLayerSource = z.discriminatedUnion('type', [
   z.object({
     fill: z.string().nullable(),
     height: zFiniteNumber,
-    kind: z.enum(['rect', 'ellipse', 'polygon']),
+    kind: z.enum(['rect', 'ellipse', 'triangle', 'star', 'polygon']),
     points: z.array(zCoordinate).optional(),
     stroke: z.string().nullable(),
     strokeWidth: zFiniteNumber,

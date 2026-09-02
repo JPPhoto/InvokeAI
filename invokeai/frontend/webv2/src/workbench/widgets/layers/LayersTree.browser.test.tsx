@@ -552,13 +552,26 @@ describe('LayersTree selection, surfaces and structure', () => {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 120);
     });
-    const scrolled = scroller.scrollTop;
-    expect(scrolled).toBeGreaterThan(0);
+    expect(scroller.scrollTop).toBeGreaterThan(0);
     await act(() => pointer('pointermove', document, start.x, rect.top + rect.height / 2));
+    // A queued edge-band tick may still land after the move, so the invariant
+    // is that scrolling STOPS: wait for scrollTop to hold still, then assert
+    // it stays put — not that it equals a value captured mid-flight.
+    let settled = scroller.scrollTop;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 30);
+      });
+      const next = scroller.scrollTop;
+      if (next === settled) {
+        break;
+      }
+      settled = next;
+    }
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 60);
     });
-    expect(scroller.scrollTop).toBe(scrolled);
+    expect(scroller.scrollTop).toBe(settled);
     const checks = refusalChecks.mock.calls.length;
     await act(() => pointer('pointerup', document, start.x, rect.top + rect.height / 2));
     expect(checks).toBeLessThanOrEqual(6);
