@@ -554,27 +554,39 @@ describe('LayersTree selection, surfaces and structure', () => {
     });
     expect(scroller.scrollTop).toBeGreaterThan(0);
     await act(() => pointer('pointermove', document, start.x, rect.top + rect.height / 2));
-    // A queued edge-band tick may still land after the move, so the invariant
-    // is that scrolling STOPS: wait for scrollTop to hold still, then assert
-    // it stays put — not that it equals a value captured mid-flight.
-    let settled = scroller.scrollTop;
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 30);
+    // The move reaches the scroller through dnd-kit's rAF listener and the
+    // scroll loop itself is rAF-driven, so settle in frame time, not timer
+    // time: timers keep firing while rAF is starved under suite load, and a
+    // timer-based poll can declare "settled" before the queued frames flush.
+    // Ten consecutive frames with an unchanged scrollTop means both the move
+    // was delivered and the loop is parked.
+    const nextFrame = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
       });
+    let settled = scroller.scrollTop;
+    let stillFrames = 0;
+    for (let attempt = 0; attempt < 600 && stillFrames < 10; attempt += 1) {
+      await nextFrame();
       const next = scroller.scrollTop;
       if (next === settled) {
-        break;
+        stillFrames += 1;
+      } else {
+        settled = next;
+        stillFrames = 0;
       }
-      settled = next;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 60);
-    });
+    expect(stillFrames).toBe(10);
     expect(scroller.scrollTop).toBe(settled);
-    const checks = refusalChecks.mock.calls.length;
+    // "Once per target": how many rows scrolled under the pointer depends on
+    // timing, so assert dedup, not a count — every check was for a distinct
+    // drop target, never a repeat for the target already under the pointer.
+    // Holds because the edge only recomputes on dragMove/over transitions;
+    // (row N, below) and (row N+1, above) map to the same command, so an
+    // edge recompute per scroll tick would break this.
+    const checked = refusalChecks.mock.calls.map(([command]) => JSON.stringify(command));
     await act(() => pointer('pointerup', document, start.x, rect.top + rect.height / 2));
-    expect(checks).toBeLessThanOrEqual(6);
+    expect(new Set(checked).size).toBe(checked.length);
   });
 
   it('reorders with a pointer drag and reparents from the keyboard', async () => {

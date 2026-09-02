@@ -417,6 +417,29 @@ describe('tool selection', () => {
     });
     expect(engine.interaction.set).toHaveBeenCalledWith('marqueeOptions', { kind: 'rect' });
   });
+
+  it('shape selects the tool when it is not active', () => {
+    const engine = run('canvas.tool.shape', {
+      engine: createEngine({ shapeOptions: { kind: 'triangle' } as never }),
+    });
+    expect(engine.tools.setTool).toHaveBeenCalledWith('shape');
+    expect(engine.interaction.set).not.toHaveBeenCalledWith('shapeOptions', expect.anything());
+  });
+
+  it('shape cycles rect → ellipse when already active, keeping the other options', () => {
+    const engine = run('canvas.tool.shape', {
+      engine: createEngine({ activeTool: 'shape', shapeOptions: { fillEnabled: true, kind: 'rect' } as never }),
+    });
+    expect(engine.tools.setTool).not.toHaveBeenCalled();
+    expect(engine.interaction.set).toHaveBeenCalledWith('shapeOptions', { fillEnabled: true, kind: 'ellipse' });
+  });
+
+  it('shape cycles star back around to rect', () => {
+    const engine = run('canvas.tool.shape', {
+      engine: createEngine({ activeTool: 'shape', shapeOptions: { kind: 'star' } as never }),
+    });
+    expect(engine.interaction.set).toHaveBeenCalledWith('shapeOptions', { kind: 'rect' });
+  });
 });
 
 describe('history, selection, and brush size', () => {

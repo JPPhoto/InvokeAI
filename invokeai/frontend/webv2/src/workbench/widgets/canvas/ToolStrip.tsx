@@ -1,9 +1,15 @@
-import type { CanvasCoreStoreCapability, CanvasToolCapability, ToolId } from '@workbench/canvas-engine/api';
+import type {
+  CanvasCoreStoreCapability,
+  CanvasToolCapability,
+  ParametricShapeKind,
+  ToolId,
+} from '@workbench/canvas-engine/api';
 
 import { Box } from '@chakra-ui/react';
 import { Toolbar, ToolbarButton } from '@platform/ui/Toolbar';
 import {
   BrushIcon,
+  CircleIcon,
   EraserIcon,
   FrameIcon,
   HandIcon,
@@ -11,15 +17,19 @@ import {
   MoveIcon,
   PaintBucketIcon,
   Rotate3dIcon,
-  ShapesIcon,
   SquareDashedIcon,
+  SquareIcon,
+  StarIcon,
+  TriangleIcon,
   TypeIcon,
 } from 'lucide-react';
-import { useCallback } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { isCanvasToolEnabled } from './canvasInteractionLock';
-import { useCanvasActiveTool } from './engineStoreHooks';
+import { useCanvasActiveTool, useShapeOptions } from './engineStoreHooks';
+import { recordSelectFamilyTool, useSelectFamilyTool, type SelectFamilyTool } from './toolFamilyStore';
+import { ToolFamilyButton, type ToolFlyoutItem } from './ToolStripFlyout';
 
 type ToolStripEngine = CanvasCoreStoreCapability & { readonly tools: CanvasToolCapability };
 
@@ -39,6 +49,109 @@ const ToolStripButton = ({ engine, icon, isInteractionLocked, label, toolId }: T
 
   return (
     <ToolbarButton disabled={isDisabled} icon={icon} isActive={activeTool === toolId} label={label} onClick={onClick} />
+  );
+};
+
+const SHAPE_KIND_ICONS: Record<ParametricShapeKind, React.ElementType> = {
+  ellipse: CircleIcon,
+  rect: SquareIcon,
+  star: StarIcon,
+  triangle: TriangleIcon,
+};
+const SHAPE_KIND_ORDER: readonly ParametricShapeKind[] = ['rect', 'ellipse', 'triangle', 'star'];
+const SHAPE_KIND_LABEL_KEYS: Record<ParametricShapeKind, string> = {
+  ellipse: 'widgets.canvas.toolOptions.shapeEllipse',
+  rect: 'widgets.canvas.toolOptions.shapeRect',
+  star: 'widgets.canvas.toolOptions.shapeStar',
+  triangle: 'widgets.canvas.toolOptions.shapeTriangle',
+};
+
+/** The Shape slot: one tool id, the flyout switching which kind the next drag draws. */
+const ShapeFamilyButton = ({
+  engine,
+  isInteractionLocked,
+}: {
+  engine: ToolStripEngine;
+  isInteractionLocked: boolean;
+}) => {
+  const { t } = useTranslation();
+  const activeTool = useCanvasActiveTool(engine);
+  const options = useShapeOptions(engine);
+  const items: ToolFlyoutItem[] = useMemo(
+    () =>
+      SHAPE_KIND_ORDER.map((kind) => ({
+        icon: SHAPE_KIND_ICONS[kind],
+        id: kind,
+        label: t(SHAPE_KIND_LABEL_KEYS[kind]),
+      })),
+    [t]
+  );
+  const onActivate = useCallback(() => engine.tools.setTool('shape'), [engine]);
+  const onSelectSubtool = useCallback(
+    (id: string) => {
+      engine.interaction.set('shapeOptions', { ...options, kind: id as ParametricShapeKind });
+      engine.tools.setTool('shape');
+    },
+    [engine, options]
+  );
+  return (
+    <ToolFamilyButton
+      currentId={options.kind}
+      disabled={!isCanvasToolEnabled('shape', isInteractionLocked)}
+      icon={SHAPE_KIND_ICONS[options.kind]}
+      isActive={activeTool === 'shape'}
+      items={items}
+      label={t('widgets.canvas.tools.shape')}
+      onActivate={onActivate}
+      onSelectSubtool={onSelectSubtool}
+    />
+  );
+};
+
+/** The Select slot: marquee and lasso as one family; the slot stands for the last one used. */
+const SelectFamilyButton = ({
+  engine,
+  isInteractionLocked,
+}: {
+  engine: ToolStripEngine;
+  isInteractionLocked: boolean;
+}) => {
+  const { t } = useTranslation();
+  const activeTool = useCanvasActiveTool(engine);
+  const stored = useSelectFamilyTool();
+  // A hotkey or programmatic switch into the family also becomes its memory.
+  useEffect(() => {
+    if (activeTool === 'marquee' || activeTool === 'lasso') {
+      recordSelectFamilyTool(activeTool);
+    }
+  }, [activeTool]);
+  const current: SelectFamilyTool = activeTool === 'marquee' || activeTool === 'lasso' ? activeTool : stored;
+  const items: ToolFlyoutItem[] = useMemo(
+    () => [
+      { icon: SquareDashedIcon, id: 'marquee', label: t('widgets.canvas.tools.marquee') },
+      { icon: LassoIcon, id: 'lasso', label: t('widgets.canvas.tools.lasso') },
+    ],
+    [t]
+  );
+  const onActivate = useCallback(() => engine.tools.setTool(current), [current, engine]);
+  const onSelectSubtool = useCallback(
+    (id: string) => {
+      recordSelectFamilyTool(id as SelectFamilyTool);
+      engine.tools.setTool(id as ToolId);
+    },
+    [engine]
+  );
+  return (
+    <ToolFamilyButton
+      currentId={current}
+      disabled={!isCanvasToolEnabled(current, isInteractionLocked)}
+      icon={current === 'lasso' ? LassoIcon : SquareDashedIcon}
+      isActive={activeTool === 'marquee' || activeTool === 'lasso'}
+      items={items}
+      label={t(current === 'lasso' ? 'widgets.canvas.tools.lasso' : 'widgets.canvas.tools.marquee')}
+      onActivate={onActivate}
+      onSelectSubtool={onSelectSubtool}
+    />
   );
 };
 
@@ -109,13 +222,7 @@ const ToolStripRoot = ({
           label={t('widgets.canvas.tools.eraser')}
           toolId="eraser"
         />
-        <ToolStripButton
-          engine={engine}
-          icon={ShapesIcon}
-          isInteractionLocked={isInteractionLocked}
-          label={t('widgets.canvas.tools.shape')}
-          toolId="shape"
-        />
+        <ShapeFamilyButton engine={engine} isInteractionLocked={isInteractionLocked} />
         <ToolStripButton
           engine={engine}
           icon={PaintBucketIcon}
@@ -130,20 +237,7 @@ const ToolStripRoot = ({
           label={t('widgets.canvas.tools.text')}
           toolId="text"
         />
-        <ToolStripButton
-          engine={engine}
-          icon={SquareDashedIcon}
-          isInteractionLocked={isInteractionLocked}
-          label={t('widgets.canvas.tools.marquee')}
-          toolId="marquee"
-        />
-        <ToolStripButton
-          engine={engine}
-          icon={LassoIcon}
-          isInteractionLocked={isInteractionLocked}
-          label={t('widgets.canvas.tools.lasso')}
-          toolId="lasso"
-        />
+        <SelectFamilyButton engine={engine} isInteractionLocked={isInteractionLocked} />
       </Toolbar>
     </Box>
   );
