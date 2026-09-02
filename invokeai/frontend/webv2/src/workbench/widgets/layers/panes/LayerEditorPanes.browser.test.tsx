@@ -20,12 +20,13 @@ import {
 import { attachCanvasOperations } from '@workbench/canvas-operations/operationAccess';
 import { createEmptyCanvasDocument, createEmptyCanvasState } from '@workbench/canvasMigration';
 import { applyCanvasProjectMutation } from '@workbench/canvasProjectMutations';
+import { resetPropertyGroupCollapse } from '@workbench/widgets/canvas/tool-presentation/propertyGroupStore';
 import { createInitialWorkbenchState } from '@workbench/workbenchState';
 import { createInstance } from 'i18next';
 import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider } from 'react-i18next';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 
 const harness = vi.hoisted(() => ({
@@ -237,7 +238,13 @@ const LayerEditorPanesHarness = () => {
 };
 
 describe('Properties pane', () => {
-  it('shows the active tool as labelled rows and swaps them with the tool', async () => {
+  // Collapse overrides persist in localStorage, which the browser session
+  // shares across test FILES; reset around every test so no order dependence
+  // leaks in either direction.
+  beforeEach(() => resetPropertyGroupCollapse());
+  afterEach(() => resetPropertyGroupCollapse());
+
+  it('shows the active tool as a grouped form and swaps it with the tool', async () => {
     await mount(PropertiesPane);
     await act(() => engine!.tools.setTool('brush'));
     await settle();
@@ -245,12 +252,64 @@ describe('Properties pane', () => {
     await expect.element(page.getByRole('slider', { exact: true, name: 'Brush size' })).toBeVisible();
     await expect.element(page.getByRole('slider', { exact: true, name: 'Opacity' })).toBeVisible();
     await expect.element(page.getByRole('button', { exact: true, name: 'Brush color' })).toBeVisible();
-    await expect.element(page.getByRole('button', { exact: true, name: 'Pen pressure affects width' })).toBeVisible();
+    // Dynamics ships collapsed; the disclosure opens it to labelled switches.
+    const dynamics = page.getByRole('button', { exact: true, name: 'Dynamics' });
+    await expect.element(dynamics).toHaveAttribute('aria-expanded', 'false');
+    expect(page.getByRole('checkbox', { exact: true, name: 'Pen pressure affects width' }).query()).toBeNull();
+    await act(() => userEvent.click(dynamics));
+    await expect.element(page.getByRole('checkbox', { exact: true, name: 'Pen pressure affects width' })).toBeVisible();
+    await expect
+      .element(page.getByRole('checkbox', { exact: true, name: 'Pen pressure affects opacity' }))
+      .toBeVisible();
 
     await act(() => engine!.tools.setTool('view'));
     await settle();
     expect(page.getByRole('slider', { exact: true, name: 'Brush size' }).query()).toBeNull();
     expect(host!.textContent).toContain('Drag to pan and scroll to zoom.');
+  });
+
+  it('keeps a slider and its number field on one grid row and shares row identity brush↔eraser', async () => {
+    await mount(PropertiesPane);
+    await act(() => engine!.tools.setTool('brush'));
+    await settle();
+    const slider = page.getByRole('slider', { exact: true, name: 'Brush size' }).element() as HTMLElement;
+    const field = page.getByRole('spinbutton', { exact: true, name: 'Brush size' }).element() as HTMLElement;
+    // One grid row: the slider and its field never wrap apart (compare row
+    // centers; the two controls have different heights).
+    const centerOf = (el: HTMLElement) => {
+      const rect = el.getBoundingClientRect();
+      return rect.top + rect.height / 2;
+    };
+    expect(Math.abs(centerOf(slider) - centerOf(field))).toBeLessThan(8);
+
+    await act(() => engine!.tools.setTool('eraser'));
+    await settle();
+    // Same DOM node, relabelled: the shared Stroke group survives the switch.
+    const eraserSlider = page.getByRole('slider', { exact: true, name: 'Eraser size' }).element();
+    expect(eraserSlider).toBe(slider);
+    expect(page.getByRole('button', { exact: true, name: 'Brush color' }).query()).toBeNull();
+  });
+
+  it('remembers a group collapse per user across remounts', async () => {
+    await mount(PropertiesPane);
+    await act(() => engine!.tools.setTool('brush'));
+    await settle();
+    await act(() => userEvent.click(page.getByRole('button', { exact: true, name: 'Dynamics' })));
+    await expect
+      .element(page.getByRole('button', { exact: true, name: 'Dynamics' }))
+      .toHaveAttribute('aria-expanded', 'true');
+
+    await act(() => root?.unmount());
+    await mount(PropertiesPane);
+    await act(() => engine!.tools.setTool('brush'));
+    await settle();
+    await expect
+      .element(page.getByRole('button', { exact: true, name: 'Dynamics' }))
+      .toHaveAttribute('aria-expanded', 'true');
+    // The override reached storage, not just the in-memory store.
+    expect(JSON.parse(window.localStorage.getItem('invokeai:v7:webv2:tool-property-collapsed') ?? '{}')).toMatchObject({
+      'paint-dynamics': false,
+    });
   });
 
   it('keeps the Tool section mounted with stable geometry across every tool switch', async () => {

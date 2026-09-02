@@ -2,7 +2,12 @@ import type { ToolId } from '@workbench/canvas-engine/api';
 
 import { describe, expect, it } from 'vitest';
 
-import { hasToolRegions, OPERATION_PRESENTATION_ADAPTERS, TOOL_PRESENTATION_ADAPTERS } from './toolAdapters';
+import {
+  hasToolControls,
+  isToolPropertyForm,
+  OPERATION_PRESENTATION_ADAPTERS,
+  TOOL_PRESENTATION_ADAPTERS,
+} from './toolAdapters';
 
 const TOOL_IDS = Object.keys({
   bbox: true,
@@ -46,10 +51,26 @@ describe('tool presentation adapters', () => {
   it('hints exactly the tools without a control', () => {
     for (const toolId of TOOL_IDS) {
       const adapter = TOOL_PRESENTATION_ADAPTERS[toolId];
-      if (hasToolRegions(adapter)) {
+      if (hasToolControls(adapter)) {
         expect(en.widgets.canvas.toolHints[toolId], toolId).toBeUndefined();
       } else {
         expect(en.widgets.canvas.toolHints[toolId], toolId).toEqual(expect.any(String));
+      }
+    }
+  });
+
+  it('resolves every form group label in the English catalog and keeps group ids unique per form', () => {
+    const resolve = (key: string): unknown =>
+      key.split('.').reduce<unknown>((node, part) => (node as Record<string, unknown> | undefined)?.[part], en);
+    for (const toolId of TOOL_IDS) {
+      const adapter = TOOL_PRESENTATION_ADAPTERS[toolId];
+      if (!isToolPropertyForm(adapter)) {
+        continue;
+      }
+      const ids = adapter.groups.map((group) => group.id);
+      expect(new Set(ids).size, toolId).toBe(ids.length);
+      for (const group of adapter.groups) {
+        expect(resolve(group.labelKey), `${toolId}:${group.id}`).toEqual(expect.any(String));
       }
     }
   });

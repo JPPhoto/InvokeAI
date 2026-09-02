@@ -2,8 +2,10 @@ import { Flex, Stack, Text } from '@chakra-ui/react';
 import { Scrollable } from '@platform/ui/Scrollable';
 import { isCanvasInteractionLocked } from '@workbench/widgets/canvas/canvasInteractionLock';
 import { useCanvasActiveTool, useCanvasOperation } from '@workbench/widgets/canvas/engineStoreHooks';
+import { PropertyGroup } from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
 import {
   hasToolRegions,
+  isToolPropertyForm,
   OPERATION_PRESENTATION_ADAPTERS,
   TOOL_PRESENTATION_ADAPTERS,
 } from '@workbench/widgets/canvas/tool-presentation/toolAdapters';
@@ -65,15 +67,18 @@ const ConnectedProperties = ({
   const running = operation.status === 'active' ? OPERATION_PRESENTATION_ADAPTERS[operation.identity.kind] : null;
   const tool = TOOL_PRESENTATION_ADAPTERS[activeTool];
   const toolName = t(`widgets.canvas.tools.${tool.id}`);
-  const ToolStatus = tool.status;
+  const form = isToolPropertyForm(tool) ? tool : null;
+  const legacy = isToolPropertyForm(tool) ? null : tool;
+  const ToolStatus = legacy?.status;
+  const Preview = form?.preview;
   const regionProps = { engine, isSurfaceInteractionLocked };
   const rows = (
     [
-      ['geometry', tool.geometry],
-      ['intensity', tool.intensity],
-      ['modes', tool.modes],
-      ['color', tool.color],
-      ['more', tool.more],
+      ['geometry', legacy?.geometry],
+      ['intensity', legacy?.intensity],
+      ['modes', legacy?.modes],
+      ['color', legacy?.color],
+      ['more', legacy?.more],
     ] as const
   ).filter((entry): entry is [keyof typeof REGION_LABEL_KEYS, NonNullable<(typeof entry)[1]>] => !!entry[1]);
 
@@ -107,11 +112,22 @@ const ConnectedProperties = ({
         title={t('widgets.properties.sections.tool')}
       >
         {tool.paintsLeaf && !running ? <GroupSelectedNotice /> : null}
-        {hasToolRegions(tool) ? (
+        {form ? (
+          <>
+            {Preview ? <Preview engine={engine} isExternalInteractionLocked={isSurfaceInteractionLocked} /> : null}
+            {form.groups.map((group) => (
+              // Keyed by GROUP id, not tool id: tools sharing a group keep its
+              // DOM (and collapse state) alive across the tool switch.
+              <PropertyGroup key={group.id} collapsible={group.collapsible} id={group.id} label={t(group.labelKey)}>
+                <group.body {...regionProps} />
+              </PropertyGroup>
+            ))}
+          </>
+        ) : legacy && hasToolRegions(legacy) ? (
           rows.map(([region, Region]) => (
             <PropertiesRow
-              key={`${tool.id}:${region}`}
-              label={t(tool.rowLabels?.[region] ?? REGION_LABEL_KEYS[region])}
+              key={`${legacy.id}:${region}`}
+              label={t(legacy.rowLabels?.[region] ?? REGION_LABEL_KEYS[region])}
             >
               <Region {...regionProps} />
             </PropertiesRow>

@@ -1,25 +1,13 @@
 import type { NumberInput as ChakraNumberInput } from '@chakra-ui/react';
-import type { BrushOptions as BrushOptionsState } from '@workbench/canvas-engine/api';
-import type {
-  ToolbarRegionProps,
-  ToolbarStatusProps,
-  ToolPresentationAdapter,
-} from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 import type { KeyboardEvent } from 'react';
 
-import { chakra, HStack } from '@chakra-ui/react';
-import { ToggleIconButton } from '@platform/ui/Button';
-import { ColorPicker } from '@platform/ui/ColorPicker';
+import { chakra } from '@chakra-ui/react';
 import { MAX_BRUSH_SIZE, MIN_BRUSH_SIZE } from '@workbench/canvas-engine/api';
-import { useActiveColorCommands, useActiveColorPair } from '@workbench/widgets/canvas/color-system/useActiveColors';
-import { useBrushOptions } from '@workbench/widgets/canvas/engineStoreHooks';
 import {
   ToolbarNumberField,
   ToolbarSlider,
   useNumberCommit,
 } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
-import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
-import { DropletIcon, PenLineIcon } from 'lucide-react';
 import { useLayoutEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -278,102 +266,4 @@ export const PaintStrokePreview = ({
       w="full"
     />
   );
-};
-
-const BrushPreview = ({ engine }: ToolbarStatusProps) => {
-  const options = useBrushOptions(engine);
-  return (
-    <PaintStrokePreview
-      color={options.color}
-      hardness={options.hardness}
-      opacity={options.opacity}
-      size={options.size}
-    />
-  );
-};
-
-const useBrushPatch = (engine: ToolbarRegionProps['engine']) => {
-  const options = useBrushOptions(engine);
-  const patch = useCallback(
-    (changes: Partial<BrushOptionsState>) => engine.interaction.set('brushOptions', { ...options, ...changes }),
-    [engine, options]
-  );
-  return [options, patch] as const;
-};
-
-const BrushSize = ({ engine }: ToolbarRegionProps) => {
-  const { t } = useTranslation();
-  const [options, set] = useBrushPatch(engine);
-  const setSize = useCallback((size: number) => set({ size: clampBrushSize(size) }), [set]);
-  return <PaintSizeControl label={t('widgets.canvas.toolOptions.brushSize')} setSize={setSize} size={options.size} />;
-};
-
-const BrushOpacity = ({ engine }: ToolbarRegionProps) => {
-  const [options, set] = useBrushPatch(engine);
-  const setOpacity = useCallback((opacity: number) => set({ opacity }), [set]);
-  return <PaintOpacityControl opacity={options.opacity} setOpacity={setOpacity} />;
-};
-
-const BrushHardness = ({ engine }: ToolbarRegionProps) => {
-  const [options, set] = useBrushPatch(engine);
-  const setHardness = useCallback((hardness: number) => set({ hardness }), [set]);
-  return <PaintHardnessControl hardness={options.hardness} setHardness={setHardness} />;
-};
-
-/** A mirror of the project foreground, not brush-owned state: the pair feeds the engine's brush color. */
-const BrushColor = ({ engine }: ToolbarRegionProps) => {
-  const { t } = useTranslation();
-  const pair = useActiveColorPair();
-  const { setPairColor } = useActiveColorCommands();
-  const onColorChange = useCallback((color: string) => setPairColor('foreground', color), [setPairColor]);
-  const sampleColor = useColorSampler(engine);
-  return (
-    <ColorPicker
-      aria-label={t('widgets.canvas.toolOptions.brushColor')}
-      value={pair.foreground}
-      onSampleColor={sampleColor}
-      onValueChange={onColorChange}
-    />
-  );
-};
-
-/** Width and opacity are separate pressure responses (opacity also costs a scratch refill per frame). */
-const BrushPressure = ({ engine }: ToolbarRegionProps) => {
-  const { t } = useTranslation();
-  const [options, set] = useBrushPatch(engine);
-  const onWidth = useCallback((pressureAffectsWidth: boolean) => set({ pressureAffectsWidth }), [set]);
-  const onOpacity = useCallback((pressureAffectsOpacity: boolean) => set({ pressureAffectsOpacity }), [set]);
-  return (
-    <HStack gap="1">
-      <ToggleIconButton
-        checked={options.pressureAffectsWidth}
-        icon={PenLineIcon}
-        label={t('widgets.canvas.toolOptions.pressureAffectsWidth')}
-        onCheckedChange={onWidth}
-      />
-      <ToggleIconButton
-        checked={options.pressureAffectsOpacity}
-        icon={DropletIcon}
-        label={t('widgets.canvas.toolOptions.pressureAffectsOpacity')}
-        onCheckedChange={onOpacity}
-      />
-    </HStack>
-  );
-};
-
-export const brushAdapter: ToolPresentationAdapter = {
-  rowLabels: {
-    geometry: 'widgets.canvas.toolOptions.size',
-    intensity: 'widgets.canvas.toolOptions.opacity',
-    modes: 'widgets.canvas.toolOptions.hardness',
-    more: 'widgets.canvas.toolOptions.pressure',
-  },
-  color: BrushColor,
-  geometry: BrushSize,
-  id: 'brush',
-  intensity: BrushOpacity,
-  modes: BrushHardness,
-  more: BrushPressure,
-  paintsLeaf: true,
-  status: BrushPreview,
 };

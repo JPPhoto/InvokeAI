@@ -1524,6 +1524,11 @@
     },
     "properties": {
       "noCanvas": "Open a canvas to edit its properties.",
+      "groups": {
+        "stroke": "Stroke",
+        "dynamics": "Dynamics"
+      },
+      "foreground": "Foreground",
       "rows": {
         "color": "Color",
         "geometry": "Geometry",
@@ -2421,7 +2426,6 @@
         "positionY": "Y",
         "pressureAffectsOpacity": "Pen pressure affects opacity",
         "pressureAffectsWidth": "Pen pressure affects width",
-        "pressure": "Pressure",
         "rotation": "Rotation",
         "scaleHeight": "H %",
         "scaleWidth": "W %",
