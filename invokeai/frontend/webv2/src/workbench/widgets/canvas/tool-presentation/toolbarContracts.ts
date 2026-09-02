@@ -85,3 +85,16 @@ export interface ToolPropertyForm {
 export type ToolPanePresentation = ToolPresentationAdapter | ToolPropertyForm;
 
 export const isToolPropertyForm = (adapter: ToolPanePresentation): adapter is ToolPropertyForm => 'groups' in adapter;
+
+/** A guarded operation's pane form: named groups plus the sticky footer that owns its verbs. */
+export interface OperationPropertyForm {
+  kind: CanvasOperationKind;
+  groups: readonly ToolPropertyGroup[];
+  /** Status chip, Process/Reset, Apply and Cancel; pinned to the pane's bottom edge. */
+  footer: ComponentType<ToolbarStatusProps>;
+}
+
+export type OperationPanePresentation = OperationPresentationAdapter | OperationPropertyForm;
+
+export const isOperationPropertyForm = (adapter: OperationPanePresentation): adapter is OperationPropertyForm =>
+  'groups' in adapter;

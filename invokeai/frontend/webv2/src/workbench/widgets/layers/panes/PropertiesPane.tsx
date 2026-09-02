@@ -5,6 +5,7 @@ import { useCanvasActiveTool, useCanvasOperation } from '@workbench/widgets/canv
 import { PropertyGroup } from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
 import {
   hasToolRegions,
+  isOperationPropertyForm,
   isToolPropertyForm,
   OPERATION_PRESENTATION_ADAPTERS,
   TOOL_PRESENTATION_ADAPTERS,
@@ -65,12 +66,17 @@ const ConnectedProperties = ({
   const activeTool = useCanvasActiveTool(engine);
   const operation = useCanvasOperation(engine);
   const running = operation.status === 'active' ? OPERATION_PRESENTATION_ADAPTERS[operation.identity.kind] : null;
+  const runningForm = running && isOperationPropertyForm(running) ? running : null;
+  const runningLegacy = running && !isOperationPropertyForm(running) ? running : null;
   const tool = TOOL_PRESENTATION_ADAPTERS[activeTool];
   const toolName = t(`widgets.canvas.tools.${tool.id}`);
   const form = isToolPropertyForm(tool) ? tool : null;
   const legacy = isToolPropertyForm(tool) ? null : tool;
   const ToolStatus = legacy?.status;
   const Preview = form?.preview;
+  // The pane has ONE sticky footer: a running operation's, else the tool
+  // form's; the operation always wins because the tool section is inert then.
+  const Footer = runningForm ? runningForm.footer : running ? null : form?.footer;
   const regionProps = { engine, isSurfaceInteractionLocked };
   const rows = (
     [
@@ -100,9 +106,18 @@ const ConnectedProperties = ({
           )}
           title={t('widgets.properties.sections.operation')}
         >
-          {running.modes ? <running.modes {...regionProps} /> : null}
-          {running.more ? <running.more {...regionProps} /> : null}
-          <running.status engine={engine} isExternalInteractionLocked={isSurfaceInteractionLocked} />
+          {runningForm
+            ? runningForm.groups.map((group) => (
+                <PropertyGroup key={group.id} collapsible={group.collapsible} id={group.id} label={t(group.labelKey)}>
+                  <group.body {...regionProps} />
+                </PropertyGroup>
+              ))
+            : null}
+          {runningLegacy?.modes ? <runningLegacy.modes {...regionProps} /> : null}
+          {runningLegacy?.more ? <runningLegacy.more {...regionProps} /> : null}
+          {runningLegacy ? (
+            <runningLegacy.status engine={engine} isExternalInteractionLocked={isSurfaceInteractionLocked} />
+          ) : null}
         </PropertiesSection>
       ) : null}
       <PropertiesSection
@@ -122,20 +137,6 @@ const ConnectedProperties = ({
                 <group.body {...regionProps} />
               </PropertyGroup>
             ))}
-            {form.footer ? (
-              <Flex
-                bg="bg.panel"
-                borderColor="border.subtle"
-                borderTopWidth="1px"
-                bottom="0"
-                mx="-3"
-                position="sticky"
-                px="3"
-                py="1.5"
-              >
-                <form.footer engine={engine} isExternalInteractionLocked={isSurfaceInteractionLocked} />
-              </Flex>
-            ) : null}
           </>
         ) : legacy && hasToolRegions(legacy) ? (
           rows.map(([region, Region]) => (
@@ -154,6 +155,19 @@ const ConnectedProperties = ({
         {ToolStatus ? <ToolStatus engine={engine} isExternalInteractionLocked={isSurfaceInteractionLocked} /> : null}
       </PropertiesSection>
       <LayerSection disabled={isSurfaceInteractionLocked || running !== null} />
+      {Footer ? (
+        <Flex
+          bg="bg.panel"
+          borderColor="border.subtle"
+          borderTopWidth="1px"
+          bottom="0"
+          position="sticky"
+          px="3"
+          py="1.5"
+        >
+          <Footer engine={engine} isExternalInteractionLocked={isSurfaceInteractionLocked} />
+        </Flex>
+      ) : null}
     </Stack>
   );
 };

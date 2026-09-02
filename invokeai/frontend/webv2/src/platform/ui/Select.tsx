@@ -26,6 +26,24 @@ const renderDefaultItem = <T extends CollectionItem>(item: T): ReactNode => {
   return labelledItem.label ?? labelledItem.value;
 };
 
+/** Consecutive same-group runs, keeping the collection's flat order and indices. */
+const partitionByGroup = <T,>(
+  items: readonly T[],
+  groupBy: (item: T) => string
+): { group: string; items: T[]; startIndex: number }[] => {
+  const runs: { group: string; items: T[]; startIndex: number }[] = [];
+  items.forEach((item, index) => {
+    const group = groupBy(item);
+    const last = runs[runs.length - 1];
+    if (last && last.group === group) {
+      last.items.push(item);
+    } else {
+      runs.push({ group, items: [item], startIndex: index });
+    }
+  });
+  return runs;
+};
+
 export interface SelectProps<T extends CollectionItem> extends Omit<SelectRootProps<T>, 'children'> {
   contentProps?: SelectContentProps;
   /**
@@ -35,6 +53,13 @@ export interface SelectProps<T extends CollectionItem> extends Omit<SelectRootPr
    * highlight, typeahead, and the open-reveal keep working.
    */
   itemsMaxH?: string;
+  /**
+   * Renders labelled item groups: consecutive items with the same group key
+   * share one header. Items must already be ordered by group.
+   */
+  groupBy?: (item: T) => string;
+  /** The visible header for a group key; defaults to the key itself. */
+  renderGroupLabel?: (group: string) => ReactNode;
   getItemKey?: (item: T, index: number) => Key;
   indicatorGroupProps?: SelectIndicatorGroupProps;
   itemIndicator?: boolean;
@@ -52,11 +77,13 @@ export const Select = <T extends CollectionItem>({
   collection,
   contentProps,
   getItemKey = getDefaultItemKey,
+  groupBy,
   indicatorGroupProps,
   itemsMaxH,
   itemIndicator = true,
   portalled = true,
   positionerProps,
+  renderGroupLabel,
   renderItem = renderDefaultItem,
   triggerProps,
   valueText,
@@ -91,12 +118,26 @@ export const Select = <T extends CollectionItem>({
         <ChakraSelect.Positioner {...positionerProps}>
           <ChakraSelect.Content {...contentProps}>
             <SelectItems ref={itemsRef} maxH={itemsMaxH}>
-              {collection.items.map((item, index) => (
-                <ChakraSelect.Item key={getItemKey(item, index)} item={item}>
-                  <ChakraSelect.ItemText>{renderItem(item)}</ChakraSelect.ItemText>
-                  {itemIndicator ? <ChakraSelect.ItemIndicator /> : null}
-                </ChakraSelect.Item>
-              ))}
+              {groupBy
+                ? partitionByGroup(collection.items, groupBy).map(({ group, items, startIndex }) => (
+                    <ChakraSelect.ItemGroup key={group}>
+                      <ChakraSelect.ItemGroupLabel>
+                        {renderGroupLabel ? renderGroupLabel(group) : group}
+                      </ChakraSelect.ItemGroupLabel>
+                      {items.map((item, offset) => (
+                        <ChakraSelect.Item key={getItemKey(item, startIndex + offset)} item={item}>
+                          <ChakraSelect.ItemText>{renderItem(item)}</ChakraSelect.ItemText>
+                          {itemIndicator ? <ChakraSelect.ItemIndicator /> : null}
+                        </ChakraSelect.Item>
+                      ))}
+                    </ChakraSelect.ItemGroup>
+                  ))
+                : collection.items.map((item, index) => (
+                    <ChakraSelect.Item key={getItemKey(item, index)} item={item}>
+                      <ChakraSelect.ItemText>{renderItem(item)}</ChakraSelect.ItemText>
+                      {itemIndicator ? <ChakraSelect.ItemIndicator /> : null}
+                    </ChakraSelect.Item>
+                  ))}
             </SelectItems>
           </ChakraSelect.Content>
         </ChakraSelect.Positioner>

@@ -261,10 +261,12 @@ const FrameSizeSettings = ({ engine }: ToolbarRegionProps) => {
  * pixels instead of opening a layer session; the numerics meanwhile edit the
  * settled selected layer, matching the Transform pane.
  */
-const TransformFooter = ({ engine }: ToolbarStatusProps) => {
+const TransformFooter = ({ engine, isExternalInteractionLocked }: ToolbarStatusProps) => {
   const session = useTransformSession(engine);
   const hasFloat = useCanvasHasFloatingSelection(engine);
-  const disabled = !session && !hasFloat;
+  // The root sticky footer sits OUTSIDE the inert tool section, so the
+  // surface lock must be honored here, not inherited.
+  const disabled = isExternalInteractionLocked || (!session && !hasFloat);
   const onApply = useCallback(() => engine.layers.applyTransform(), [engine]);
   const onCancel = useCallback(() => engine.layers.cancelTransform(), [engine]);
   return <ToolbarStatus applyDisabled={disabled} cancelDisabled={disabled} onApply={onApply} onCancel={onCancel} />;

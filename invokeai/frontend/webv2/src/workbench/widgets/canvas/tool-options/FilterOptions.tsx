@@ -1,25 +1,30 @@
 import type {
-  OperationPresentationAdapter,
+  OperationPropertyForm,
   ToolbarRegionProps,
   ToolbarStatusProps,
 } from '@workbench/widgets/canvas/tool-presentation/toolbarContracts';
 
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
-import { HStack, Stack } from '@chakra-ui/react';
+import { Box, createListCollection, Flex, Icon, Menu, Portal } from '@chakra-ui/react';
 import { galleryDurability } from '@features/gallery';
 import { Button } from '@platform/ui/Button';
-import { Tooltip } from '@platform/ui/Tooltip';
+import { MenuActionItem, MenuContent } from '@platform/ui/Menu';
+import { Select } from '@platform/ui/Select';
 import {
   buildFilterDefaults,
+  CONTROL_FILTERS,
+  FILTER_CATEGORY_ORDER,
   getCanvasOperations,
   getFilterDefinition,
   isFilterConfigValid,
+  recordLastUsedFilterType,
   type FilterOperationSessionState,
 } from '@workbench/canvas-operations/api';
 import { useFilterSession } from '@workbench/widgets/canvas/engineStoreHooks';
-import { ToolbarStatus } from '@workbench/widgets/canvas/tool-presentation/ToolbarPrimitives';
+import { PropertySwitchRow } from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
 import { LayerFilterControls } from '@workbench/widgets/layers/LayerFilterControls';
-import { useCallback } from 'react';
+import { ChevronDownIcon } from 'lucide-react';
+import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { OperationStatusChip } from './OperationStatusSlot';
@@ -72,6 +77,7 @@ const useFilterDraft = (engine: ToolbarRegionProps['engine']) => {
   const setType = useCallback(
     (type: string) => {
       const definition = getFilterDefinition(type);
+      recordLastUsedFilterType(type);
       operations.updateFilterOperation({ settings: definition ? buildFilterDefaults(definition) : {}, type });
     },
     [operations]
@@ -95,136 +101,205 @@ const useFilterDraft = (engine: ToolbarRegionProps['engine']) => {
   return { operations, reset, setSettings, setType };
 };
 
-/** Filter type and auto-process: the choices made while iterating on a preview. */
-export const FilterModes = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
+/** Filter choice (grouped by category) and auto-process: the iteration dials. */
+const FilterChooseSettings = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
   const { t } = useTranslation();
   const session = useFilterSession(engine);
-  const { operations, setSettings, setType } = useFilterDraft(engine);
+  const { operations, setType } = useFilterDraft(engine);
+  const filterCollection = useMemo(() => {
+    const order = new Map<string, number>(FILTER_CATEGORY_ORDER.map((category, index) => [category, index]));
+    const items = [...CONTROL_FILTERS]
+      .sort(
+        (a, b) =>
+          (order.get(a.category) ?? 0) - (order.get(b.category) ?? 0) ||
+          t(`widgets.layers.control.filters.${a.type}`, a.type).localeCompare(
+            t(`widgets.layers.control.filters.${b.type}`, b.type)
+          )
+      )
+      .map((filter) => ({
+        category: filter.category,
+        label: t(`widgets.layers.control.filters.${filter.type}`, filter.type),
+        value: filter.type,
+      }));
+    return createListCollection({ items });
+  }, [t]);
+  const filterValue = useMemo(() => [session?.draft.type ?? ''], [session?.draft.type]);
+  const groupBy = useCallback((item: { category: string }) => item.category, []);
+  const renderGroupLabel = useCallback(
+    (category: string) => t(`widgets.layers.rasterFilter.categories.${category}`, category),
+    [t]
+  );
+  const onTypeChange = useCallback(
+    ({ value }: { value: string[] }) => {
+      if (value[0]) {
+        setType(value[0]);
+      }
+    },
+    [setType]
+  );
   if (!session) {
     return null;
   }
   const eligibility = getFilterActionEligibility(session, isSurfaceInteractionLocked);
   return (
     <>
-      <LayerFilterControls
+      <Select
+        aria-label={t('widgets.layers.control.filter')}
+        collection={filterCollection}
         disabled={!eligibility.canEdit}
-        filterType={session.draft.type}
-        focusFilter={false}
-        parts="type"
-        settings={session.draft.settings}
-        variant="operation"
-        onFilterTypeChange={setType}
-        onSettingsChange={setSettings}
+        groupBy={groupBy}
+        itemsMaxH="18rem"
+        renderGroupLabel={renderGroupLabel}
+        size="xs"
+        value={filterValue}
+        valueText={t(`widgets.layers.control.filters.${session.draft.type}`, session.draft.type)}
+        w="full"
+        onValueChange={onTypeChange}
       />
-      <Tooltip content={t('widgets.layers.rasterFilter.autoProcessDescription')}>
-        <Button
-          aria-pressed={session.autoProcess}
-          disabled={!eligibility.canEdit}
-          flexShrink={0}
-          size="xs"
-          variant={session.autoProcess ? 'solid' : 'ghost'}
-          onClick={() => operations.setFilterOperationAutoProcess(!session.autoProcess)}
-        >
-          {t('widgets.layers.rasterFilter.autoProcess')}
-        </Button>
-      </Tooltip>
+      <PropertySwitchRow
+        checked={session.autoProcess}
+        disabled={!eligibility.canEdit}
+        label={t('widgets.layers.rasterFilter.autoProcess')}
+        onCheckedChange={(checked) => operations.setFilterOperationAutoProcess(checked)}
+      />
     </>
   );
 };
 
-/** The filter's parameters and its secondary commands; C2 moves these into Properties → Operation. */
-export const FilterMore = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
-  const { t } = useTranslation();
+/** The chosen filter's parameters. */
+const FilterParamsSettings = ({ engine, isSurfaceInteractionLocked }: ToolbarRegionProps) => {
   const session = useFilterSession(engine);
-  const { operations, reset, setSettings, setType } = useFilterDraft(engine);
+  const { setSettings, setType } = useFilterDraft(engine);
   if (!session) {
     return null;
   }
   const eligibility = getFilterActionEligibility(session, isSurfaceInteractionLocked);
-  const saveTargets = getFilterSaveTargetEligibility(eligibility);
   return (
-    <Stack gap="2" w="full">
-      <LayerFilterControls
-        disabled={!eligibility.canEdit}
-        filterType={session.draft.type}
-        focusFilter={false}
-        parts="params"
-        settings={session.draft.settings}
-        onFilterTypeChange={setType}
-        onSettingsChange={setSettings}
-      />
-      <HStack flexWrap="wrap" gap="1">
-        <Button
-          disabled={!eligibility.canProcess}
-          loading={session.status === 'processing'}
-          size="xs"
-          onClick={() => void operations.processFilterOperation()}
-        >
-          {t('widgets.layers.selectObject.process')}
-        </Button>
-        <Button disabled={!eligibility.canReset} size="xs" variant="ghost" onClick={reset}>
-          {t('widgets.layers.selectObject.reset')}
-        </Button>
-        <Button
-          disabled={!saveTargets.raster}
-          size="xs"
-          variant="ghost"
-          onClick={() => void operations.commitFilterOperation('raster', galleryDurability.makeCanvasAsset)}
-        >
-          {t('widgets.layers.selectObject.saveAs_raster')}
-        </Button>
-        <Button
-          disabled={!saveTargets.control}
-          size="xs"
-          variant="ghost"
-          onClick={() => void operations.commitFilterOperation('control', galleryDurability.makeCanvasAsset)}
-        >
-          {t('widgets.layers.selectObject.saveAs_control')}
-        </Button>
-      </HStack>
-    </Stack>
+    <LayerFilterControls
+      disabled={!eligibility.canEdit}
+      filterType={session.draft.type}
+      focusFilter={false}
+      parts="params"
+      settings={session.draft.settings}
+      onFilterTypeChange={setType}
+      onSettingsChange={setSettings}
+    />
   );
 };
 
-export const FilterStatus = ({ engine, isExternalInteractionLocked }: ToolbarStatusProps) => {
+/**
+ * The operation's sticky footer: the status chip, Reset, Process (hidden while
+ * auto-process owns it), Apply with its save-as menu, and Cancel.
+ */
+const FilterFooter = ({ engine, isExternalInteractionLocked }: ToolbarStatusProps) => {
   const { t } = useTranslation();
   const session = useFilterSession(engine);
-  const operations = getCanvasOperations(engine);
+  const { operations, reset } = useFilterDraft(engine);
   const onApply = useCallback(
     () => void operations.commitFilterOperation('apply', galleryDurability.makeCanvasAsset),
     [operations]
   );
   const onCancel = useCallback(() => operations.cancelFilterOperation(), [operations]);
   if (!session) {
-    return <ToolbarStatus />;
+    return null;
   }
   const eligibility = getFilterActionEligibility(session, isExternalInteractionLocked);
+  const saveTargets = getFilterSaveTargetEligibility(eligibility);
   const sourceLabel = `${session.layerName} · ${t(`widgets.layers.selectObject.saveAs_${session.layerType}`)}`;
   const isBusy = !session.error && (session.status === 'processing' || session.status === 'committing');
   return (
-    <ToolbarStatus
-      applyDisabled={!eligibility.canApply}
-      applyLoading={session.status === 'committing'}
-      cancelDisabled={!eligibility.canCancel}
-      onApply={onApply}
-      onCancel={onCancel}
-    >
-      <OperationStatusChip
-        errorDetail={null}
-        errorText={session.error}
-        isBusy={isBusy}
-        sourceLabel={sourceLabel}
-        statusText={t(getFilterStatusTranslationKey(session.status))}
-        technicalDetailsLabel={t('widgets.layers.selectObject.technicalDetails')}
-        title={t('widgets.layers.rasterFilter.title')}
-      />
-    </ToolbarStatus>
+    <Flex align="center" gap="1" minW="0" w="full">
+      <Box flex="1" minW="0" overflow="hidden" whiteSpace="nowrap">
+        <OperationStatusChip
+          errorDetail={null}
+          errorText={session.error}
+          isBusy={isBusy}
+          sourceLabel={sourceLabel}
+          statusText={t(getFilterStatusTranslationKey(session.status))}
+          technicalDetailsLabel={t('widgets.layers.selectObject.technicalDetails')}
+          title={t('widgets.layers.rasterFilter.title')}
+        />
+      </Box>
+      <Button disabled={!eligibility.canReset} flexShrink={0} size="xs" variant="ghost" onClick={reset}>
+        {t('widgets.layers.selectObject.reset')}
+      </Button>
+      {session.autoProcess ? null : (
+        <Button
+          disabled={!eligibility.canProcess}
+          flexShrink={0}
+          loading={session.status === 'processing'}
+          size="xs"
+          onClick={() => void operations.processFilterOperation()}
+        >
+          {t('widgets.layers.selectObject.process')}
+        </Button>
+      )}
+      <Flex flexShrink={0}>
+        <Button
+          data-toolbar-action="apply"
+          disabled={!eligibility.canApply}
+          loading={session.status === 'committing'}
+          roundedRight="none"
+          size="xs"
+          variant="solid"
+          onClick={onApply}
+        >
+          {t('common.apply')}
+        </Button>
+        <Menu.Root positioning={APPLY_MENU_POSITIONING}>
+          <Menu.Trigger asChild>
+            <Button
+              aria-label={t('widgets.layers.rasterFilter.applyAs')}
+              disabled={!eligibility.canSave}
+              px="1"
+              roundedLeft="none"
+              size="xs"
+              variant="solid"
+            >
+              <Icon as={ChevronDownIcon} boxSize="3.5" />
+            </Button>
+          </Menu.Trigger>
+          <Portal>
+            <Menu.Positioner>
+              <MenuContent minW="12rem" py="1">
+                <MenuActionItem
+                  disabled={!saveTargets.raster}
+                  label={t('widgets.layers.selectObject.saveAs_raster')}
+                  value="save-raster"
+                  onSelect={() => void operations.commitFilterOperation('raster', galleryDurability.makeCanvasAsset)}
+                />
+                <MenuActionItem
+                  disabled={!saveTargets.control}
+                  label={t('widgets.layers.selectObject.saveAs_control')}
+                  value="save-control"
+                  onSelect={() => void operations.commitFilterOperation('control', galleryDurability.makeCanvasAsset)}
+                />
+              </MenuContent>
+            </Menu.Positioner>
+          </Portal>
+        </Menu.Root>
+      </Flex>
+      <Button
+        data-toolbar-action="cancel"
+        disabled={!eligibility.canCancel}
+        flexShrink={0}
+        size="xs"
+        variant="ghost"
+        onClick={onCancel}
+      >
+        {t('common.cancel')}
+      </Button>
+    </Flex>
   );
 };
 
-export const filterOperationAdapter: OperationPresentationAdapter = {
+const APPLY_MENU_POSITIONING = { placement: 'top-end' } as const;
+
+export const filterOperationForm: OperationPropertyForm = {
+  footer: FilterFooter,
+  groups: [
+    { body: FilterChooseSettings, id: 'filter-choose', labelKey: 'widgets.layers.control.filter' },
+    { body: FilterParamsSettings, id: 'filter-params', labelKey: 'widgets.properties.groups.settings' },
+  ],
   kind: 'filter',
-  modes: FilterModes,
-  more: FilterMore,
-  status: FilterStatus,
 };

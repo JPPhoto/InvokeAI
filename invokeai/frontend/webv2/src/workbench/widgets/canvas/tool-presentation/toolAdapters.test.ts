@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   hasToolControls,
+  isOperationPropertyForm,
   isToolPropertyForm,
   OPERATION_PRESENTATION_ADAPTERS,
   TOOL_PRESENTATION_ADAPTERS,
@@ -83,11 +84,16 @@ describe('tool presentation adapters', () => {
     expect(en.widgets.properties.sections.operation).toEqual(expect.any(String));
   });
 
-  it('gives both guarded operations a status region so Apply and Cancel stay in place', () => {
+  it('gives every guarded operation a verbs slot so Apply and Cancel stay in place', () => {
     expect(Object.keys(OPERATION_PRESENTATION_ADAPTERS).sort()).toEqual(['filter', 'select-object']);
     for (const adapter of Object.values(OPERATION_PRESENTATION_ADAPTERS)) {
-      expect(adapter.status).toBeDefined();
-      expect(adapter.modes).toBeDefined();
+      if (isOperationPropertyForm(adapter)) {
+        expect(adapter.footer).toBeDefined();
+        expect(adapter.groups.length).toBeGreaterThan(0);
+      } else {
+        expect(adapter.status).toBeDefined();
+        expect(adapter.modes).toBeDefined();
+      }
     }
   });
 });

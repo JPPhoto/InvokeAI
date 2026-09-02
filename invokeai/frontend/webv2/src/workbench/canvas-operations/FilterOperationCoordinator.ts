@@ -24,6 +24,7 @@ import {
   getFilterDefinition,
   isFilterConfigValid,
 } from '@workbench/canvas-operations/filterGraphs';
+import { readLastUsedFilterType } from '@workbench/canvas-operations/filterPreferences';
 
 import { createFilterOperationSession } from './filterOperationSession';
 import { runLayerFilter } from './layerFilterRunner';
@@ -118,7 +119,8 @@ export const createFilterOperationCoordinator = (deps: FilterOperationCoordinato
     if (!guard) {
       return 'not-ready';
     }
-    const initialType = layer.filter?.type ?? recommendedFilterType ?? DEFAULT_CONTROL_FILTER_TYPE;
+    const initialType =
+      layer.filter?.type ?? recommendedFilterType ?? readLastUsedFilterType() ?? DEFAULT_CONTROL_FILTER_TYPE;
     const initialFilter = layer.filter ? structuredClone(layer.filter) : null;
     const definition = getFilterDefinition(initialType);
     const draft = initialFilter ?? {

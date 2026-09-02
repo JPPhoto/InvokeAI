@@ -1525,6 +1525,7 @@
     "properties": {
       "noCanvas": "Open a canvas to edit its properties.",
       "groups": {
+        "settings": "Settings",
         "stroke": "Stroke",
         "dynamics": "Dynamics",
         "shape": "Shape",
@@ -2780,8 +2781,16 @@
         "weight": "Weight"
       },
       "rasterFilter": {
-        "autoProcess": "Auto",
-        "autoProcessDescription": "Process automatically when settings change",
+        "applyAs": "Apply as",
+        "autoProcess": "Process automatically",
+        "categories": {
+          "edge": "Edge detection",
+          "depth": "Depth & normal",
+          "pose": "Pose & face",
+          "color": "Color & tone",
+          "noise": "Blur & noise",
+          "upscale": "Upscale"
+        },
         "busy": "Finish the current canvas interaction, then try again.",
         "cancel": "Cancel",
         "commitFailure": "The filtered pixels could not be committed: {{message}}",

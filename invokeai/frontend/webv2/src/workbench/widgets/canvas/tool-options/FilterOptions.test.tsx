@@ -4,6 +4,7 @@ import type { ComponentProps } from 'react';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
+import { CONTROL_FILTERS, FILTER_CATEGORY_ORDER } from '@workbench/canvas-operations/api';
 import { attachCanvasOperations } from '@workbench/canvas-operations/operationAccess';
 import { createInstance } from 'i18next';
 import { createElement } from 'react';
@@ -12,9 +13,7 @@ import { I18nextProvider } from 'react-i18next';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  FilterModes,
-  FilterMore,
-  FilterStatus,
+  filterOperationForm,
   getFilterActionEligibility,
   getFilterSaveTargetEligibility,
   getFilterStatusTranslationKey,
@@ -165,53 +164,64 @@ const renderRegions = (session: FilterOperationSessionState) => {
         createElement(I18nextProvider, { i18n: testI18n }, element)
       )
     );
+  const [choose, params] = filterOperationForm.groups;
   return {
-    modes: render(createElement(FilterModes, { engine: engine as never, isSurfaceInteractionLocked: false })),
-    more: render(createElement(FilterMore, { engine: engine as never, isSurfaceInteractionLocked: false })),
+    choose: render(createElement(choose!.body, { engine: engine as never, isSurfaceInteractionLocked: false })),
+    footer: render(
+      createElement(filterOperationForm.footer, { engine: engine as never, isExternalInteractionLocked: false })
+    ),
     operations,
-    status: render(createElement(FilterStatus, { engine: engine as never, isExternalInteractionLocked: false })),
+    params: render(createElement(params!.body, { engine: engine as never, isSurfaceInteractionLocked: false })),
   };
 };
 
-describe('filter operation regions', () => {
-  it('splits type and auto-process into the bar, parameters and secondary commands into More, and keeps Apply / Cancel in status', () => {
-    const { modes, more, status } = renderRegions(
+describe('filter operation form', () => {
+  it('puts the choice and auto switch in one group, parameters in the next, and every verb in the footer', () => {
+    const { choose, footer, params } = renderRegions(
       state({ draft: { settings: { high_threshold: 200, low_threshold: 100 }, type: 'canny_edge_detection' } })
     );
 
     // The select names itself through a real (visually hidden) label part.
-    expect(modes).toContain('>Filter</label>');
-    expect(modes).toContain('>Auto<');
-    expect(modes).not.toContain('>Process<');
+    expect(choose).toContain('>Filter</label>');
+    expect(choose).toContain('>Process automatically<');
+    expect(choose).not.toContain('>Process<');
 
-    expect(more).not.toContain('>Filter</label>');
-    expect(more.indexOf('>Process<')).toBeLessThan(more.indexOf('>Reset<'));
-    expect(more.indexOf('>Reset<')).toBeLessThan(more.indexOf('>Raster layer<'));
-    expect(more.indexOf('>Raster layer<')).toBeLessThan(more.indexOf('>Control layer<'));
+    expect(params).not.toContain('>Filter</label>');
+    expect(params).toContain('Low threshold');
 
-    expect(status).toContain('Portrait · Raster layer');
-    expect(status).toContain('role="status"');
-    expect(status.indexOf('>Filter<')).toBeLessThan(status.indexOf('>Apply<'));
-    expect(status.indexOf('>Apply<')).toBeLessThan(status.indexOf('>Cancel<'));
+    expect(footer).toContain('Portrait · Raster layer');
+    expect(footer).toContain('role="status"');
+    // Auto-process on: no Process verb; Reset then Apply then Cancel.
+    expect(footer).not.toContain('>Process<');
+    expect(footer.indexOf('>Reset<')).toBeLessThan(footer.indexOf('>Apply<'));
+    expect(footer.indexOf('>Apply<')).toBeLessThan(footer.indexOf('>Cancel<'));
   });
 
-  it('disables Process and Auto while processing and keeps Cancel live', () => {
-    const { modes, more, status } = renderRegions(state({ status: 'processing' }));
+  it('shows Process only with auto-process off, disabled while processing, and keeps Cancel live', () => {
+    const manual = renderRegions(state({ autoProcess: false })).footer;
+    expect(manual).toContain('>Process<');
 
-    const processIdx = more.indexOf('>Process<');
-    const processButtonTag = more.slice(more.lastIndexOf('<button', processIdx), processIdx);
+    const busy = renderRegions(state({ autoProcess: false, status: 'processing' })).footer;
+    const processIdx = busy.indexOf('>Process<');
+    const processButtonTag = busy.slice(busy.lastIndexOf('<button', processIdx), processIdx);
     expect(processButtonTag).toContain('disabled=""');
     expect(processButtonTag).toContain('data-loading=""');
-
-    const autoIdx = modes.indexOf('>Auto<');
-    expect(modes.slice(modes.lastIndexOf('<button', autoIdx), autoIdx)).toContain('disabled=""');
-
-    const cancelIdx = status.indexOf('>Cancel<');
-    expect(status.slice(status.lastIndexOf('<button', cancelIdx), cancelIdx)).not.toContain('disabled=""');
+    const cancelIdx = busy.indexOf('>Cancel<');
+    expect(busy.slice(busy.lastIndexOf('<button', cancelIdx), cancelIdx)).not.toContain('disabled=""');
   });
 
-  it('marks the Auto chip pressed state from the session', () => {
-    expect(renderRegions(state({ autoProcess: true })).modes).toContain('aria-pressed="true"');
-    expect(renderRegions(state({ autoProcess: false })).modes).toContain('aria-pressed="false"');
+  it('reflects the auto-process switch state from the session', () => {
+    const switchState = (markup: string): string | null =>
+      /data-scope="switch"[^>]*data-part="root"[^>]*data-state="([a-z]+)"/.exec(markup)?.[1] ?? null;
+    expect(switchState(renderRegions(state({ autoProcess: true })).choose)).toBe('checked');
+    expect(switchState(renderRegions(state({ autoProcess: false })).choose)).toBe('unchecked');
+  });
+
+  it('assigns every filter a picker category covered by the display order', () => {
+    // The grouped select renders in a portal, so the taxonomy is asserted here.
+    for (const filter of CONTROL_FILTERS) {
+      expect(FILTER_CATEGORY_ORDER, filter.type).toContain(filter.category);
+    }
+    expect(new Set(CONTROL_FILTERS.map((filter) => filter.category)).size).toBe(FILTER_CATEGORY_ORDER.length);
   });
 });
