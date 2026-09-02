@@ -146,6 +146,36 @@ describe('loadCanvasState', () => {
     expect(loadedMalformed?.type === 'group' ? loadedMalformed.children.length : 0).toBe(1);
   });
 
+  it('round-trips group opacity and blend in the raster stack, strips them from overlay groups, and drops malformed values', () => {
+    const rasterGroup = {
+      blendMode: 'multiply',
+      children: [createEmptyPaintLayer('Inside', 'inside')],
+      id: 'rg',
+      isEnabled: true,
+      isLocked: false,
+      name: 'Faded',
+      opacity: 0.5,
+      type: 'group',
+    };
+    const rasterLoaded = load(withNodes([rasterGroup]));
+    const loadedGroup = rasterLoaded.document.stacks.raster[0];
+    expect(loadedGroup?.type === 'group' ? loadedGroup.opacity : null).toBe(0.5);
+    expect(loadedGroup?.type === 'group' ? loadedGroup.blendMode : null).toBe('multiply');
+
+    const overlayGroup = { ...rasterGroup, children: [], id: 'og' };
+    const overlayLoaded = load(withNodes([overlayGroup], 'control'));
+    const loadedOverlay = overlayLoaded.document.stacks.control[0];
+    expect(loadedOverlay?.type === 'group' ? Object.hasOwn(loadedOverlay, 'opacity') : null).toBe(false);
+    expect(loadedOverlay?.type === 'group' ? Object.hasOwn(loadedOverlay, 'blendMode') : null).toBe(false);
+
+    const malformed = { ...rasterGroup, blendMode: 'plasma', id: 'mg', opacity: 7 };
+    const malformedLoaded = load(withNodes([malformed]));
+    const loadedMalformed = malformedLoaded.document.stacks.raster[0];
+    expect(loadedMalformed?.type === 'group' ? loadedMalformed.opacity : null).toBeUndefined();
+    expect(loadedMalformed?.type === 'group' ? loadedMalformed.blendMode : null).toBeUndefined();
+    expect(loadedMalformed?.type === 'group' ? loadedMalformed.children.length : 0).toBe(1);
+  });
+
   it('round-trips a valid adjustment stack, drops the pre-stack object shape, and drops a stack with one malformed entry', () => {
     const stack = [
       { brightness: 0.2, contrast: -0.1, id: 'a1', isEnabled: true, type: 'brightness-contrast' },

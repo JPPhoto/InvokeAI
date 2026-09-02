@@ -111,13 +111,17 @@ export interface PsdExportLayerInput {
   adjustments?: CanvasAdjustmentsContract;
 }
 
-/** A raster group: a pass-through folder in the PSD, children top-first. */
+/** A raster group: a folder in the PSD, children top-first. */
 export interface PsdExportGroupInput {
   type: 'group';
   id: string;
   name: string;
   /** The group's own flag; a disabled group is a hidden folder. */
   isEnabled: boolean;
+  /** 0..1; PSD folders carry opacity natively. Absent means 1. */
+  opacity?: number;
+  /** PSD folders carry a blend mode natively. Absent means 'normal'. */
+  blendMode?: CanvasBlendMode;
   children: readonly PsdExportNodeInput[];
 }
 
@@ -159,6 +163,11 @@ export interface PsdPlanFolder {
   id: string;
   name: string;
   hidden: boolean;
+  /** 0..1; written onto the folder, and applied when the preview isolates it. */
+  opacity: number;
+  blendMode: BlendMode;
+  /** Canvas `globalCompositeOperation` for the flattened composite preview. */
+  compositeBlend: GlobalCompositeOperation;
   children: PsdPlanNode[];
 }
 
@@ -289,7 +298,27 @@ export const planPsdExport = (
       if (isGroupInput(node)) {
         const children = buildTree(node.children);
         if (children.length > 0) {
-          out.push({ children, hidden: !node.isEnabled, id: node.id, kind: 'folder', name: node.name });
+          const blendMode = node.blendMode ?? 'normal';
+          const opacity = clamp01(node.opacity ?? 1);
+          // A default group is PASS-THROUGH: its members blend with what is
+          // below the group. Photoshop's folder default is the same, so only a
+          // group that actually composites in isolation (opacity or blend)
+          // gets an isolating folder blend key.
+          const isolated = opacity !== 1 || blendMode !== 'normal';
+          const mapped = BLEND_MODE_TO_PSD[blendMode];
+          if (!mapped) {
+            unmappedBlends.add(blendMode);
+          }
+          out.push({
+            blendMode: isolated ? (mapped ?? 'normal') : 'pass through',
+            children,
+            compositeBlend: blendToComposite(blendMode),
+            hidden: !node.isEnabled,
+            id: node.id,
+            kind: 'folder',
+            name: node.name,
+            opacity,
+          });
         }
         continue;
       }
@@ -456,26 +485,58 @@ export const executePsdExport = async (
   const toChildren = (nodes: readonly PsdPlanNode[]): AgPsdLayer[] =>
     nodes.map((node) =>
       node.kind === 'folder'
-        ? { children: toChildren(node.children), hidden: node.hidden, name: node.name, opened: true }
+        ? {
+            blendMode: node.blendMode,
+            children: toChildren(node.children),
+            hidden: node.hidden,
+            name: node.name,
+            opacity: node.opacity,
+            opened: true,
+          }
         : bakedById.get(node.id)!
     );
   const children = toChildren(plan.tree);
 
-  // Flatten the contributing layers (bottom-to-top = plan order) into the merged
-  // composite the PSD carries as its full-document preview.
+  // Flatten the contributing tree (bottom-to-top at every level) into the merged
+  // composite the PSD carries as its full-document preview. A folder with
+  // non-default opacity/blend is isolated into a buffer first — readers apply
+  // those properties to the folder's composite, and the preview must match the
+  // file's own layers.
   throwIfAborted(deps.signal);
+  const surfaceById = new Map(baked.map(({ planLayer, surface }) => [planLayer.id, surface]));
+  const drawPreview = (ctx: Ctx, nodes: readonly PsdPlanNode[]): void => {
+    for (const node of nodes) {
+      if (node.hidden) {
+        continue;
+      }
+      if (node.kind === 'folder') {
+        if (node.opacity === 1 && node.compositeBlend === 'source-over') {
+          drawPreview(ctx, node.children);
+          continue;
+        }
+        const buffer = deps.backend.createSurface(plan.width, plan.height);
+        setTransform(buffer.ctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+        buffer.ctx.clearRect(0, 0, plan.width, plan.height);
+        drawPreview(buffer.ctx, node.children);
+        ctx.globalAlpha = node.opacity;
+        ctx.globalCompositeOperation = node.compositeBlend;
+        ctx.drawImage(buffer.canvas, 0, 0);
+        continue;
+      }
+      const surface = surfaceById.get(node.id);
+      if (!surface) {
+        continue;
+      }
+      ctx.globalAlpha = node.opacity;
+      ctx.globalCompositeOperation = node.compositeBlend;
+      ctx.drawImage(surface.canvas, node.left, node.top);
+    }
+  };
   const composite = deps.backend.createSurface(plan.width, plan.height);
   const cctx = composite.ctx;
   setTransform(cctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
   cctx.clearRect(0, 0, plan.width, plan.height);
-  for (const { planLayer, surface } of baked) {
-    if (!planLayer.contributes) {
-      continue;
-    }
-    cctx.globalAlpha = planLayer.opacity;
-    cctx.globalCompositeOperation = planLayer.compositeBlend;
-    cctx.drawImage(surface.canvas, planLayer.left, planLayer.top);
-  }
+  drawPreview(cctx, plan.tree);
   cctx.globalAlpha = 1;
   cctx.globalCompositeOperation = 'source-over';
 

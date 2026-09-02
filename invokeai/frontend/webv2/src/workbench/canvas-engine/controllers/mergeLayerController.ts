@@ -17,13 +17,13 @@ import { haveSameStructure } from '@workbench/canvas-engine/document/layerStacks
 import { mergeDownMatrix } from '@workbench/canvas-engine/document/mergeDown';
 import { canMergeSelectedRasters, getMergeVisibleRasterLeaves } from '@workbench/canvas-engine/document/mergeVisible';
 import { isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
-import { applyAdjustments } from '@workbench/canvas-engine/render/adjustments';
+import { applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
 import { blendToComposite } from '@workbench/canvas-engine/render/compositor';
 import {
-  collectAdjustedGroups,
-  planGroupAdjustmentScopes,
-  type GroupAdjustmentScope,
-} from '@workbench/canvas-engine/render/groupAdjustmentScopes';
+  collectCompositedGroups,
+  planGroupCompositeScopes,
+  type GroupCompositeScope,
+} from '@workbench/canvas-engine/render/groupCompositeScopes';
 
 import type { CanvasMutationContext } from './mutationContext';
 
@@ -209,8 +209,8 @@ export class MergeLayerController {
       }
       // Leaf identity misses a mid-await ancestor-stack edit or an order-preserving
       // re-parent; the scope plan folds both.
-      const scopes = planGroupAdjustmentScopes(contributorLeaves, collectAdjustedGroups(document));
-      const liveScopes = planGroupAdjustmentScopes(liveLeaves, collectAdjustedGroups(liveDocument));
+      const scopes = planGroupCompositeScopes(contributorLeaves, collectCompositedGroups(document));
+      const liveScopes = planGroupCompositeScopes(liveLeaves, collectCompositedGroups(liveDocument));
       if (JSON.stringify(liveScopes) !== JSON.stringify(scopes)) {
         return 'not-ready';
       }
@@ -234,7 +234,7 @@ export class MergeLayerController {
         target: RasterSurface['ctx'],
         from: number,
         to: number,
-        range: readonly GroupAdjustmentScope[]
+        range: readonly GroupCompositeScope[]
       ): void => {
         let scopeIndex = range.length - 1;
         for (let index = to - 1; index >= from;) {
@@ -244,11 +244,13 @@ export class MergeLayerController {
             buffer.ctx.setTransform(1, 0, 0, 1, 0, 0);
             buffer.ctx.clearRect(0, 0, rect.width, rect.height);
             drawMerged(buffer.ctx, scope.start, scope.end, scope.children);
-            const scoped = buffer.ctx.getImageData(0, 0, rect.width, rect.height);
-            applyAdjustments(scoped, scope.adjustments);
-            buffer.ctx.putImageData(scoped, 0, 0);
-            target.globalAlpha = 1;
-            target.globalCompositeOperation = 'source-over';
+            if (!isIdentityAdjustments(scope.adjustments)) {
+              const scoped = buffer.ctx.getImageData(0, 0, rect.width, rect.height);
+              applyAdjustments(scoped, scope.adjustments);
+              buffer.ctx.putImageData(scoped, 0, 0);
+            }
+            target.globalAlpha = scope.opacity;
+            target.globalCompositeOperation = blendToComposite(scope.blendMode);
             target.drawImage(buffer.canvas, 0, 0);
             index = scope.start - 1;
             scopeIndex -= 1;

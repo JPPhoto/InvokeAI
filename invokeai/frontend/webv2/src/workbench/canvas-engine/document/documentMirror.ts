@@ -112,7 +112,13 @@ const diffForests = (prev: CanvasDocumentIndex, next: CanvasDocumentIndex): Fore
       restructured = true;
     }
     if (isGroupNode(entry.node)) {
-      if (before.node !== entry.node && (before.node as typeof entry.node).adjustments !== entry.node.adjustments) {
+      const beforeGroup = before.node as typeof entry.node;
+      if (
+        before.node !== entry.node &&
+        (beforeGroup.adjustments !== entry.node.adjustments ||
+          beforeGroup.opacity !== entry.node.opacity ||
+          beforeGroup.blendMode !== entry.node.blendMode)
+      ) {
         adjustedGroups.add(entry.node.id);
       }
       continue;

@@ -42,7 +42,7 @@ import {
   reorderSiblings,
 } from '@workbench/canvas-engine/document/layerStacks';
 import { repairSelectedLayerId } from '@workbench/canvas-engine/document/selectionRepair';
-import { GROUP_PATCH_KEYS } from '@workbench/canvas-engine/mutationContracts';
+import { GROUP_PATCH_KEYS, LOCK_EXEMPT_PATCH_KEYS } from '@workbench/canvas-engine/mutationContracts';
 
 import type {
   DocumentCommand,
@@ -1122,11 +1122,21 @@ export const createDocumentModel = (
           status: 'wrong-type',
         };
       }
+      // Opacity/blend apply to a group's isolated composite; overlay groups
+      // composite coverage, so the fields are meaningless there (the same rule
+      // as group adjustments).
+      if ((command.patch.opacity !== undefined || command.patch.blendMode !== undefined) && entry.stack !== 'raster') {
+        return { operation: 'blend an overlay-stack group', status: 'unsupported' };
+      }
     }
     if (command.before && !sameKeys(command.before, command.patch, PATCH_CONTAINERS)) {
       return { operation: 'patch baseline names other fields', status: 'unsupported' };
     }
-    if ((Object.keys(command.patch) as (keyof CanvasLayerBasePatch)[]).some((key) => !GROUP_PATCH_KEYS.includes(key))) {
+    if (
+      (Object.keys(command.patch) as (keyof CanvasLayerBasePatch)[]).some(
+        (key) => !LOCK_EXEMPT_PATCH_KEYS.includes(key)
+      )
+    ) {
       const locked = frozenBy(index, entry);
       if (locked.length > 0) {
         return { ids: locked, status: 'locked' };

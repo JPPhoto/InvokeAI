@@ -32,12 +32,12 @@ import { fromTRS, multiply } from '@workbench/canvas-engine/math/mat2d';
 import { intersect, isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 
 import type { DerivedSurfaceCache } from './derivedSurfaceCache';
-import type { GroupAdjustmentScope } from './groupAdjustmentScopes';
+import type { GroupCompositeScope } from './groupCompositeScopes';
 import type { LayerCacheEntry, LayerCacheStore } from './layerCache';
 import type { RasterBackend, RasterSurface } from './raster';
 
 import { renderControlTransparency } from './controlTransparency';
-import { collectAdjustedGroups, planGroupAdjustmentScopes } from './groupAdjustmentScopes';
+import { collectCompositedGroups, planGroupCompositeScopes } from './groupCompositeScopes';
 import { colorizeMask } from './maskFill';
 
 /** Screen-space size (px) of each checkerboard square for transparent backgrounds. */
@@ -207,7 +207,7 @@ export interface CompositeOptions {
    */
   groupSurface?:
     | ((
-        scope: GroupAdjustmentScope,
+        scope: GroupCompositeScope,
         members: readonly SemanticLeaf[],
         memberMatrices: readonly Mat2d[],
         excludeIds: ReadonlySet<string>
@@ -622,7 +622,7 @@ export const compositeDocument = (
   });
   // Isolation mode inspects raw members, so scopes are bypassed while active.
   const scopes =
-    opts.groupSurface && !isIsolated(opts) ? planGroupAdjustmentScopes(plan.leaves, collectAdjustedGroups(doc)) : [];
+    opts.groupSurface && !isIsolated(opts) ? planGroupCompositeScopes(plan.leaves, collectCompositedGroups(doc)) : [];
   let scopeIndex = 0;
 
   const drawLeafFlat = (leaf: SemanticLeaf): void => {
@@ -664,8 +664,8 @@ export const compositeDocument = (
       const result = opts.groupSurface!(scope, members, matrices, excluded);
       if (result) {
         ctx.save();
-        ctx.globalAlpha = 1;
-        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = scope.opacity;
+        ctx.globalCompositeOperation = blendToComposite(scope.blendMode);
         setTransformFromMat(ctx, view);
         ctx.drawImage(result.surface.canvas, result.rect.x, result.rect.y);
         ctx.restore();

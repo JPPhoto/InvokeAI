@@ -6,7 +6,7 @@ import type {
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
 import type { SemanticLeaf } from '@workbench/canvas-engine/document-model/semanticLeaf';
-import type { GroupAdjustmentScope } from '@workbench/canvas-engine/render/groupAdjustmentScopes';
+import type { GroupCompositeScope } from '@workbench/canvas-engine/render/groupCompositeScopes';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Mat2d, Rect } from '@workbench/canvas-engine/types';
 
@@ -16,9 +16,9 @@ import { roundOut, transformBounds, union } from '@workbench/canvas-engine/math/
 import { adjustmentsKey, applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
 import { blendToComposite } from '@workbench/canvas-engine/render/compositor';
 import {
-  collectAdjustedGroups,
-  planGroupAdjustmentScopes,
-} from '@workbench/canvas-engine/render/groupAdjustmentScopes';
+  collectCompositedGroups,
+  planGroupCompositeScopes,
+} from '@workbench/canvas-engine/render/groupCompositeScopes';
 
 type Ctx = RasterSurface['ctx'];
 
@@ -39,7 +39,7 @@ export interface CompositeEntry {
   bbox: Rect;
   layers: readonly CompositeLayerRef[];
   /** Adjusted-group isolation scopes over `layers` (top-first, nested). Absent ⇒ fully pass-through. */
-  groupScopes?: readonly GroupAdjustmentScope[];
+  groupScopes?: readonly GroupCompositeScope[];
 }
 
 export interface BaseRasterCompositeEntry extends CompositeEntry {
@@ -159,14 +159,14 @@ export const getCompositeLayerBounds = (layers: readonly CompositeLayerRef[]): R
   return bounds;
 };
 
-const scopeKey = (scope: GroupAdjustmentScope): string =>
-  `${scope.id}@${scope.start}-${scope.end}:${adjustmentsKey(scope.adjustments)}(${scope.children.map(scopeKey).join(',')})`;
+const scopeKey = (scope: GroupCompositeScope): string =>
+  `${scope.id}@${scope.start}-${scope.end}:${adjustmentsKey(scope.adjustments)}:${scope.opacity}:${scope.blendMode}(${scope.children.map(scopeKey).join(',')})`;
 
 /** Plans the enabled base-raster layers over an exact document-space rectangle. */
 export const planBaseRasterComposite = (document: CanvasDocumentContractV3, rect: Rect): BaseRasterCompositeEntry => {
   const drawn = compileDocumentLeaves(document).filter(isBaseRasterLeaf);
   const layers = drawn.map((leaf) => toLayerRef(leaf.layer, document));
-  const groupScopes = planGroupAdjustmentScopes(drawn, collectAdjustedGroups(document));
+  const groupScopes = planGroupCompositeScopes(drawn, collectCompositedGroups(document));
   return {
     bbox: rect,
     key: `base-raster|${rectKey(rect)}|${layers.map(layerKey).join('|')}|${groupScopes.map(scopeKey).join('|')}`,
@@ -250,7 +250,7 @@ export const renderRasterComposite = async (
     ctx: Ctx,
     start: number,
     end: number,
-    scopes: readonly GroupAdjustmentScope[]
+    scopes: readonly GroupCompositeScope[]
   ): Promise<void> => {
     let scopeIndex = scopes.length - 1;
     for (let i = end - 1; i >= start;) {
@@ -260,13 +260,15 @@ export const renderRasterComposite = async (
         setTransform(buffer.ctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
         buffer.ctx.clearRect(0, 0, width, height);
         await renderRange(buffer.ctx, scope.start, scope.end, scope.children);
-        const pixels = readImageData(buffer, fullRect);
-        applyAdjustments(pixels, scope.adjustments);
-        writeImageData(buffer, pixels, 0, 0);
+        if (!isIdentityAdjustments(scope.adjustments)) {
+          const pixels = readImageData(buffer, fullRect);
+          applyAdjustments(pixels, scope.adjustments);
+          writeImageData(buffer, pixels, 0, 0);
+        }
         ctx.save();
         setTransform(ctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
-        ctx.globalAlpha = 1;
-        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = scope.opacity;
+        ctx.globalCompositeOperation = blendToComposite(scope.blendMode);
         ctx.drawImage(buffer.canvas, 0, 0);
         ctx.restore();
         i = scope.start - 1;

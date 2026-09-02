@@ -14,6 +14,7 @@ import {
   type ExecutePsdExportDeps,
   type PsdExportNodeInput,
   type PsdExportPlan,
+  type PsdPlanNode,
 } from '@workbench/canvas-engine/export/psdExport';
 import { isExportableRasterLayer } from '@workbench/canvas-engine/layerExportGuards';
 import { isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
@@ -41,8 +42,19 @@ export const PSD_ALLOCATION_BYTES_PER_PIXEL = 8;
 export const derivePsdPixelAreaLimit = (availableBytes: number): number =>
   Math.max(0, Math.floor(availableBytes / PSD_ALLOCATION_BYTES_PER_PIXEL));
 
+const countIsolatedFolders = (nodes: readonly PsdPlanNode[]): number =>
+  nodes.reduce(
+    (total, node) =>
+      node.kind === 'folder'
+        ? total +
+          countIsolatedFolders(node.children) +
+          (node.opacity !== 1 || node.compositeBlend !== 'source-over' ? 1 : 0)
+        : total,
+    0
+  );
+
 const getRequiredAllocationPixelArea = (plan: Extract<PsdExportPlan, { status: 'ok' }>): number =>
-  plan.width * plan.height +
+  plan.width * plan.height * (1 + countIsolatedFolders(plan.tree)) +
   plan.layers.reduce((total, layer) => total + layer.worldRect.width * layer.worldRect.height, 0);
 
 /** Owns immutable PSD snapshot capture, budget reservation, execution, and cancellation. */
@@ -107,10 +119,12 @@ export class PsdExportController {
                 : [...ancestorStacks, node.adjustments!];
               return [
                 {
+                  blendMode: node.blendMode,
                   children: toInputs(node.children, stacks),
                   id: node.id,
                   isEnabled: node.isEnabled,
                   name: node.name,
+                  opacity: node.opacity,
                   type: 'group',
                 },
               ];

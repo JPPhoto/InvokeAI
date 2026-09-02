@@ -623,12 +623,44 @@ describe('createDocumentModel', () => {
       });
       expect(after.canvas.document.stacks.raster[1]).toMatchObject({ isEnabled: false, name: 'Folder' });
       expect(edit.inverse).toEqual({ id: 'G', patch: { isEnabled: true, name: 'G' }, type: 'updateCanvasLayer' });
-      expect(modelOf(project).prepare({ id: 'G', patch: { opacity: 0.5 }, type: 'patch' })).toMatchObject({
-        actual: 'group',
-        status: 'wrong-type',
-      });
       expect(modelOf(project).prepare({ id: 'G', patch: { transform: { x: 1 } }, type: 'patch' })).toMatchObject({
         status: 'wrong-type',
+      });
+    });
+
+    it('patches opacity and blend on a raster-stack group, with an inverse restoring absence', () => {
+      const project = projectWith(tree(), 'G');
+      const { after, edit } = roundTrip(project, {
+        id: 'G',
+        patch: { blendMode: 'multiply', opacity: 0.5 },
+        type: 'patch',
+      });
+      expect(after.canvas.document.stacks.raster[1]).toMatchObject({ blendMode: 'multiply', opacity: 0.5 });
+      expect(edit.inverse).toEqual({
+        id: 'G',
+        patch: { blendMode: undefined, opacity: undefined },
+        type: 'updateCanvasLayer',
+      });
+    });
+
+    it('refuses opacity and blend on an overlay-stack group and on a locked group', () => {
+      const overlay = projectWith([group('OG', [layer('c1', 'control')])], null);
+      expect(modelOf(overlay).prepare({ id: 'OG', patch: { opacity: 0.5 }, type: 'patch' })).toEqual({
+        operation: 'blend an overlay-stack group',
+        status: 'unsupported',
+      });
+      expect(modelOf(overlay).prepare({ id: 'OG', patch: { blendMode: 'multiply' }, type: 'patch' })).toEqual({
+        operation: 'blend an overlay-stack group',
+        status: 'unsupported',
+      });
+      // Renaming a locked group stays allowed; its appearance does not.
+      const locked = projectWith([group('LG', [layer('r1')], { isLocked: true })], null);
+      expect(modelOf(locked).prepare({ id: 'LG', patch: { opacity: 0.5 }, type: 'patch' })).toEqual({
+        ids: ['LG'],
+        status: 'locked',
+      });
+      expect(modelOf(locked).prepare({ id: 'LG', patch: { name: 'renamed' }, type: 'patch' })).toMatchObject({
+        status: 'prepared',
       });
     });
 

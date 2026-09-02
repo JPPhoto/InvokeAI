@@ -356,6 +356,10 @@ export interface CanvasGroupContract {
   isEnabled: boolean;
   isLocked: boolean;
   isHidden?: boolean;
+  /** Raster-stack groups only; absent means 1. Applies to the group's isolated composite. */
+  opacity?: number;
+  /** Raster-stack groups only; absent means 'normal'. Applies to the group's isolated composite. */
+  blendMode?: CanvasBlendMode;
   adjustments?: CanvasAdjustmentsContract;
   /** Index 0 is the top-most child. */
   children: CanvasNodeContract[];

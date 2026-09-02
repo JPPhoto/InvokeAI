@@ -13,6 +13,7 @@ import {
   type CanvasRasterLayerContractV2,
   type CanvasStackForests,
   type CanvasStateContractV3,
+  type LayerStackKind,
   type ReorderSiblingsCommand,
   CANVAS_MAX_NODE_COUNT,
   CANVAS_MAX_NODE_DEPTH,
@@ -502,10 +503,19 @@ const reorderCanvasSiblings = (
   return withStacks(document, stacks);
 };
 
-const patchNode = (node: CanvasNodeContract, patch: CanvasLayerBasePatch): CanvasNodeContract => {
+/** Opacity/blend apply only to raster-stack groups, even from unvalidated dispatchers (previews, replays). */
+const patchNode = (
+  node: CanvasNodeContract,
+  patch: CanvasLayerBasePatch,
+  stack: LayerStackKind
+): CanvasNodeContract => {
   if (isGroupNode(node)) {
     const allowed = Object.fromEntries(
-      Object.entries(patch).filter(([key]) => GROUP_PATCH_KEYS.includes(key as keyof CanvasLayerBasePatch))
+      Object.entries(patch).filter(
+        ([key]) =>
+          GROUP_PATCH_KEYS.includes(key as keyof CanvasLayerBasePatch) &&
+          (stack === 'raster' || (key !== 'opacity' && key !== 'blendMode'))
+      )
     );
     return Object.keys(allowed).length === 0 ? node : { ...node, ...allowed };
   }
@@ -832,7 +842,9 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
       return updateCanvasDocument(project, (document) => reorderCanvasSiblings(document, mutation.orders));
     case 'updateCanvasLayer':
       return updateCanvasDocument(project, (document) =>
-        mapNode(document, mutation.id, (node) => patchNode(node, mutation.patch))
+        mapNode(document, mutation.id, (node) =>
+          patchNode(node, mutation.patch, getDocumentIndex(document).byId.get(mutation.id)?.stack ?? 'raster')
+        )
       );
     case 'replaceCanvasLayer':
       return mutation.layer.id === mutation.layerId

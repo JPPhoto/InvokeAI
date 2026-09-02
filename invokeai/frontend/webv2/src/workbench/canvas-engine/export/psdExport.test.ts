@@ -234,6 +234,83 @@ describe('planPsdExport — folders', () => {
     expect(names(plan.tree)).toEqual(['Root']);
   });
 
+  it('plans folder opacity and blend (defaulting when absent) and reports unmapped folder blends', () => {
+    const plan = planPsdExport([
+      group('plain', [layer({ id: 'p1' })]),
+      { ...group('styled', [layer({ id: 's1' })]), blendMode: 'multiply', opacity: 0.25 },
+      { ...group('odd', [layer({ id: 'o1' })]), blendMode: 'plasma' as CanvasBlendMode },
+    ]);
+    if (plan.status !== 'ok') {
+      throw new Error(plan.status);
+    }
+    const folders = plan.tree.filter((node): node is PsdPlanFolder => node.kind === 'folder');
+    // A default group is pass-through; writing 'normal' would isolate it in
+    // Photoshop and change how members blend with layers below the group.
+    expect(folders.find((f) => f.id === 'plain')).toMatchObject({
+      blendMode: 'pass through',
+      compositeBlend: 'source-over',
+      opacity: 1,
+    });
+    expect(folders.find((f) => f.id === 'styled')).toMatchObject({
+      blendMode: 'multiply',
+      compositeBlend: 'multiply',
+      opacity: 0.25,
+    });
+    // An unmapped blend still isolates (it is non-normal); only the KEY falls back.
+    expect(folders.find((f) => f.id === 'odd')).toMatchObject({ blendMode: 'normal' });
+    expect(plan.unmappedBlends).toEqual(['plasma']);
+  });
+
+  it('round-trips folder opacity and blend through ag-psd', async () => {
+    const plan = planPsdExport([
+      { ...group('Styled', [layer({ id: 'in', name: 'In' })]), blendMode: 'screen', opacity: 0.5 },
+      layer({ id: 'base', name: 'Base' }),
+    ]);
+    const backend = createTestStubRasterBackend();
+    const imageDataOf = (width: number, height: number): ImageData =>
+      ({ data: new Uint8ClampedArray(width * height * 4), height, width }) as ImageData;
+    let bytes: ArrayBuffer | null = null;
+    await executePsdExport(plan, 'styled.psd', {
+      backend,
+      download: (data) => {
+        bytes = data;
+      },
+      getLayerSurface: () =>
+        Promise.resolve({ rect: { height: 50, width: 100, x: 0, y: 0 }, surface: backend.createSurface(100, 50) }),
+      readImageData: (_surface, rect) => imageDataOf(rect.width, rect.height),
+      writeImageData: () => undefined,
+      writePsd: (psd) => Promise.resolve(writePsd(psd, { generateThumbnail: false })),
+    });
+    const parsed = readPsd(bytes!, { skipCompositeImageData: true, skipLayerImageData: true, skipThumbnail: true });
+    const folder = parsed.children!.find((child) => child.name === 'Styled')!;
+    expect(folder.blendMode).toBe('screen');
+    expect(folder.opacity).toBeCloseTo(0.5, 2);
+  });
+
+  it('round-trips a default folder as pass-through', async () => {
+    const plan = planPsdExport([
+      group('Plain', [layer({ id: 'in', name: 'In' })]),
+      layer({ id: 'base', name: 'Base' }),
+    ]);
+    const backend = createTestStubRasterBackend();
+    const imageDataOf = (width: number, height: number): ImageData =>
+      ({ data: new Uint8ClampedArray(width * height * 4), height, width }) as ImageData;
+    let bytes: ArrayBuffer | null = null;
+    await executePsdExport(plan, 'plain.psd', {
+      backend,
+      download: (data) => {
+        bytes = data;
+      },
+      getLayerSurface: () =>
+        Promise.resolve({ rect: { height: 50, width: 100, x: 0, y: 0 }, surface: backend.createSurface(100, 50) }),
+      readImageData: (_surface, rect) => imageDataOf(rect.width, rect.height),
+      writeImageData: () => undefined,
+      writePsd: (psd) => Promise.resolve(writePsd(psd, { generateThumbnail: false })),
+    });
+    const parsed = readPsd(bytes!, { skipCompositeImageData: true, skipLayerImageData: true, skipThumbnail: true });
+    expect(parsed.children!.find((child) => child.name === 'Plain')!.blendMode).toBe('pass through');
+  });
+
   it('round-trips folder hierarchy, order, names and leaf properties through ag-psd', async () => {
     const plan = planPsdExport([
       group('Shading', [layer({ blendMode: 'multiply', id: 'shade', name: 'Shade', opacity: 0.5 })], false),

@@ -178,25 +178,26 @@ const zReferenceImage = z.object({
   id: z.string(),
   isEnabled: z.boolean(),
 });
+const zBlendMode = z.enum([
+  'normal',
+  'multiply',
+  'screen',
+  'overlay',
+  'darken',
+  'lighten',
+  'color-dodge',
+  'color-burn',
+  'hard-light',
+  'soft-light',
+  'difference',
+  'exclusion',
+  'hue',
+  'saturation',
+  'color',
+  'luminosity',
+]);
 const zLayerBase = z.object({
-  blendMode: z.enum([
-    'normal',
-    'multiply',
-    'screen',
-    'overlay',
-    'darken',
-    'lighten',
-    'color-dodge',
-    'color-burn',
-    'hard-light',
-    'soft-light',
-    'difference',
-    'exclusion',
-    'hue',
-    'saturation',
-    'color',
-    'luminosity',
-  ]),
+  blendMode: zBlendMode,
   id: z.string(),
   isEnabled: z.boolean(),
   isLocked: z.boolean(),
@@ -448,11 +449,13 @@ const describeIssue = (value: Record<string, unknown>, path: string, issues: rea
 const zGroupShell = z.object({
   // Like the raster arm: a malformed stack drops without failing the document.
   adjustments: zAdjustments.optional().catch(undefined),
+  blendMode: zBlendMode.optional().catch(undefined),
   id: z.string(),
   isEnabled: z.boolean(),
   isHidden: z.boolean().optional(),
   isLocked: z.boolean(),
   name: z.string(),
+  opacity: z.number().min(0).max(1).optional().catch(undefined),
   type: z.literal('group'),
 });
 
@@ -526,13 +529,15 @@ const parseNode = (value: unknown, path: string, depth: number, context: ParseCo
   if (context.stack === 'raster' || shell.data.isHidden === false) {
     delete shell.data.isHidden;
   }
-  // Adjustments are the raster-stack mirror of the isHidden rule: overlay
-  // groups composite coverage, not color, so a stack there is meaningless.
-  // Stripped SILENTLY, unlike isHidden: diagnostics are fatal to the whole
-  // parse, and rejecting a document over a meaningless stack is worse than
-  // dropping the stack.
+  // Adjustments, opacity and blend are the raster-stack mirror of the isHidden
+  // rule: overlay groups composite coverage, not color, so all three are
+  // meaningless there. Stripped SILENTLY, unlike isHidden: diagnostics are
+  // fatal to the whole parse, and rejecting a document over a meaningless
+  // property is worse than dropping it.
   if (context.stack !== 'raster') {
     delete shell.data.adjustments;
+    delete shell.data.blendMode;
+    delete shell.data.opacity;
   }
   if (depth >= CANVAS_MAX_NODE_DEPTH) {
     context.diagnostics.push({ message: `group nests deeper than ${CANVAS_MAX_NODE_DEPTH} levels`, path });

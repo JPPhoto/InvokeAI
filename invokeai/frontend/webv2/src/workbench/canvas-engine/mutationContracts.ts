@@ -25,13 +25,22 @@ import type {
 import type { CanvasNodeInsertion, CanvasNodeInsertionAnchor, CanvasNodeMove } from './document/insertionAnchors';
 import type { ReorderSiblingsCommand } from './document/layerStacks';
 
-/** Base fields a node accepts; a group takes only `name`, `isEnabled` and `isLocked`. */
+/** Base fields a node accepts; a group takes `name`, `isEnabled`, `isLocked`, `opacity` and `blendMode`. */
 export type CanvasLayerBasePatch = Partial<
   Pick<CanvasLayerBaseContract, 'name' | 'isEnabled' | 'isLocked' | 'opacity' | 'blendMode'>
 > & { transform?: Partial<CanvasLayerBaseContract['transform']> };
 
 /** The base fields a group carries; anything else in a patch does not apply to it. */
-export const GROUP_PATCH_KEYS: readonly (keyof CanvasLayerBasePatch)[] = ['name', 'isEnabled', 'isLocked'];
+export const GROUP_PATCH_KEYS: readonly (keyof CanvasLayerBasePatch)[] = [
+  'name',
+  'isEnabled',
+  'isLocked',
+  'opacity',
+  'blendMode',
+];
+
+/** Patch keys allowed on a locked node (renaming or unlocking never needs the lock lifted first). */
+export const LOCK_EXEMPT_PATCH_KEYS: readonly (keyof CanvasLayerBasePatch)[] = ['name', 'isEnabled', 'isLocked'];
 
 export type CanvasLayerConfigPatch =
   | {

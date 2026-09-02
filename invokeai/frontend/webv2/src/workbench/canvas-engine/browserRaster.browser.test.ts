@@ -286,4 +286,61 @@ describe('real browser raster acceptance', () => {
     expect(Array.from(parsed.imageData!.data)).toEqual(expected);
     expect(parsed.children?.map((child) => child.name)).toEqual(['Base', 'Group']);
   });
+
+  it('writes folder opacity/blend natively and isolates the folder in the merged preview', async () => {
+    const backend = createDomRasterBackend();
+    const fill = (color: string) => {
+      const surface = backend.createSurface(2, 2);
+      surface.ctx.fillStyle = color;
+      surface.ctx.fillRect(0, 0, 2, 2);
+      return surface;
+    };
+    const surfaces = { base: fill('#0000ff'), red: fill('#ff0000'), white: fill('#ffffff') };
+    const leaf = (id: string, name: string) => ({
+      blendMode: 'normal' as const,
+      contentRect: { height: 2, width: 2, x: 0, y: 0 },
+      id,
+      isEnabled: true,
+      name,
+      opacity: 1,
+      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+    });
+    // Opaque red over opaque white inside a 50% folder over a blue base. The
+    // FOLDER composite is pure red, so the preview must be red 50% over blue —
+    // per-leaf flattening would let white bleed through.
+    const plan = planPsdExport([
+      {
+        blendMode: 'normal',
+        children: [leaf('red', 'Red'), leaf('white', 'White')],
+        id: 'g',
+        isEnabled: true,
+        name: 'Faded',
+        opacity: 0.5,
+        type: 'group',
+      },
+      leaf('base', 'Base'),
+    ]);
+    let bytes: ArrayBuffer | null = null;
+    await executePsdExport(plan, 'folder-opacity.psd', {
+      backend,
+      download: (data) => {
+        bytes = data;
+      },
+      getLayerSurface: (id) =>
+        Promise.resolve({ rect: { height: 2, width: 2, x: 0, y: 0 }, surface: surfaces[id as keyof typeof surfaces] }),
+    });
+
+    const reference = backend.createSurface(2, 2);
+    reference.ctx.drawImage(surfaces.base.canvas, 0, 0);
+    reference.ctx.globalAlpha = 0.5;
+    reference.ctx.drawImage(surfaces.red.canvas, 0, 0);
+    const expected = Array.from(reference.ctx.getImageData(0, 0, 2, 2).data);
+
+    const { readPsd } = await import('ag-psd');
+    const parsed = readPsd(bytes!, { useImageData: true });
+    expect(Array.from(parsed.imageData!.data)).toEqual(expected);
+    const folder = parsed.children!.find((child) => child.name === 'Faded')!;
+    expect(folder.opacity).toBeCloseTo(0.5, 2);
+    expect(folder.blendMode).toBe('normal');
+  });
 });

@@ -1887,7 +1887,7 @@ describe('createCanvasEngine', () => {
       stacks: stacksFrom([
         {
           ...layer,
-          source: { bitmap: { height: 20, imageName: 'paint-pixels', width: 20 }, type: 'paint' },
+          source: { bitmap: { height: 20, imageName: 'paint-pixels', width: 20 }, type: 'paint' as const },
         },
       ]),
     };
@@ -4963,7 +4963,7 @@ describe('requestLayerThumbnail', () => {
     setDocument({
       ...doc,
       stacks: stacksFrom([
-        { ...second, source: { bitmap: { height: 10, imageName: 'new', width: 10 }, type: 'paint' } },
+        { ...second, source: { bitmap: { height: 10, imageName: 'new', width: 10 }, type: 'paint' as const } },
       ]),
     });
     expect(bitmap.close).toHaveBeenCalledTimes(1);
@@ -5428,7 +5428,9 @@ describe('mergeLayerDown', () => {
       ...doc,
       stacks: stacksFrom(
         getDocumentLeaves(doc).map((layer) =>
-          layer.id === emptyId ? { ...layer, source: { bitmap: null, offset: { x: 0, y: 0 }, type: 'paint' } } : layer
+          layer.id === emptyId
+            ? { ...layer, source: { bitmap: null, offset: { x: 0, y: 0 }, type: 'paint' as const } }
+            : layer
         )
       ),
     };
@@ -5826,7 +5828,7 @@ describe('extract masked canvas area', () => {
           ...maskLayer('mask'),
           mask: {
             bitmap: { height: 20, imageName: 'mask-bitmap', width: 20 },
-            fill: { color: '#e07575', style: 'diagonal' },
+            fill: { color: '#e07575', style: 'diagonal' as const },
             offset: { x: 15, y: 25 },
           },
         },
@@ -6046,7 +6048,7 @@ describe('extract masked canvas area', () => {
                 source: {
                   bitmap: { height: 40, imageName: 'upper-v2', width: 40 },
                   offset: { x: 0, y: 0 },
-                  type: 'paint',
+                  type: 'paint' as const,
                 },
               }
             : layer
@@ -14072,7 +14074,10 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
       stacks: stacksFrom([
         {
           ...layer,
-          source: { bitmap: { contentHash: 'h', height: 100, imageName: 'persisted', width: 100 }, type: 'paint' },
+          source: {
+            bitmap: { contentHash: 'h', height: 100, imageName: 'persisted', width: 100 },
+            type: 'paint' as const,
+          },
         },
       ]),
     });
@@ -14122,7 +14127,7 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
     setDocument({
       ...doc2,
       stacks: stacksFrom([
-        { ...imgLayer, source: { image: { height: 10, imageName: 'a-v2', width: 10 }, type: 'image' } },
+        { ...imgLayer, source: { image: { height: 10, imageName: 'a-v2', width: 10 }, type: 'image' as const } },
       ]),
     });
     raf.flush();
@@ -14349,7 +14354,7 @@ describe('hasExportableLayerContent', () => {
     // cache synchronously. Do not run the scheduled frame that would rebuild it.
     setDocument({
       ...doc,
-      stacks: stacksFrom([{ ...layer, source: { bitmap: null, type: 'paint' } }]),
+      stacks: stacksFrom([{ ...layer, source: { bitmap: null, type: 'paint' as const } }]),
     });
     const { target } = createThumbnailTarget();
     expect(engine.previews.drawLayerThumbnail('stale-paint', target, 96)).toBe(true);
@@ -18042,7 +18047,7 @@ describe('Select Object canvas engine integration', () => {
       stacks: stacksFrom([
         {
           ...outside,
-          source: { image: { height: 10, imageName: 'inside.png', width: 10 }, type: 'image' },
+          source: { image: { height: 10, imageName: 'inside.png', width: 10 }, type: 'image' as const },
         },
       ]),
     });

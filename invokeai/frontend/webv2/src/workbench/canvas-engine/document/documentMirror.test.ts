@@ -234,7 +234,7 @@ describe('createDocumentMirror', () => {
     const sourceSwap: CanvasDocumentContractV3 = {
       ...doc,
       stacks: stacksFrom([
-        { ...swapped, source: { image: { height: 10, imageName: 'a-v2', width: 10 }, type: 'image' } },
+        { ...swapped, source: { image: { height: 10, imageName: 'a-v2', width: 10 }, type: 'image' as const } },
       ]),
     };
     store.setState({ projects: [{ canvas: { ...canvas, document: sourceSwap }, id: 'p1' }] });
@@ -263,7 +263,7 @@ describe('createDocumentMirror', () => {
     // changed but NOT source-changed — invalidating would clear unflushed strokes.
     const fillEdit: CanvasDocumentContractV3 = {
       ...doc,
-      stacks: stacksFrom([{ ...mask, mask: { bitmap: null, fill: { color: '#00ff00', style: 'grid' } } }]),
+      stacks: stacksFrom([{ ...mask, mask: { bitmap: null, fill: { color: '#00ff00', style: 'grid' as const } } }]),
     };
     store.setState({ projects: [{ canvas: { ...canvas, document: fillEdit }, id: 'p1' }] });
     expect(callbacks.onLayersChanged).toHaveBeenLastCalledWith(['m'], []);
@@ -511,6 +511,26 @@ describe('createDocumentMirror: groups', () => {
     expect(callbacks.onLayersChanged).not.toHaveBeenCalled();
     expect(callbacks.onLayersRecomposite).toHaveBeenLastCalledWith(['a', 'b']);
     expect(callbacks.onLayerOrderChanged).not.toHaveBeenCalled();
+  });
+
+  it('fans a group opacity or blend edit out to descendants on the same recomposite channel', () => {
+    const a = rasterLayer('a');
+    const b = rasterLayer('b');
+    const doc = makeDoc([groupContract('g', [a, groupContract('h', [b])])]);
+    const { callbacks, set } = setup(doc);
+
+    set({ ...doc, stacks: stacksFrom([groupContract('g', [a, groupContract('h', [b])], { opacity: 0.5 })]) });
+    expect(callbacks.onLayersChanged).not.toHaveBeenCalled();
+    expect(callbacks.onLayersRecomposite).toHaveBeenLastCalledWith(['a', 'b']);
+
+    set({
+      ...doc,
+      stacks: stacksFrom([
+        groupContract('g', [a, groupContract('h', [b], { blendMode: 'multiply' })], { opacity: 0.5 }),
+      ]),
+    });
+    expect(callbacks.onLayersChanged).not.toHaveBeenCalled();
+    expect(callbacks.onLayersRecomposite).toHaveBeenLastCalledWith(['b']);
   });
 
   it('stays silent on a group rename that changes no leaf and no structure', () => {

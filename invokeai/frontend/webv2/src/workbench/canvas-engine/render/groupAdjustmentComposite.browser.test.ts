@@ -195,6 +195,104 @@ describe('group adjustment composite', () => {
     expect(adjusted?.r).toBe(255 - 0x40);
   });
 
+  it('applies group opacity to the isolated composite, matching the export renderer', async () => {
+    // Opaque red over opaque white inside a 50%-opacity group, over a blue
+    // base: the GROUP composite is pure red (white hidden underneath), so the
+    // result is red 50% over blue. Per-leaf opacity instead would let white
+    // bleed through inside the group.
+    const document = docWith([groupContract('g', [raster('red'), raster('white')], { opacity: 0.5 }), raster('under')]);
+    const scene = sceneFor({ red: '#ff0000', under: '#0000ff', white: '#ffffff' });
+    const plan = planBaseRasterComposite(document, BBOX);
+    expect(plan.groupScopes).toHaveLength(1);
+    const exported = await renderRasterComposite(plan, scene);
+    const [r, g, b] = centerPixel(exported);
+    expect(Math.abs(r! - 128)).toBeLessThanOrEqual(2);
+    expect(g).toBe(0);
+    expect(Math.abs(b! - 128)).toBeLessThanOrEqual(2);
+
+    const groupSurfaces = createGroupSurfaceCache({
+      createSurface: (w, h) => scene.backend.createSurface(w, h),
+      getAdjustedSurface: () => null,
+      getCacheEntry: (id) => scene.caches.get(id),
+    });
+    const screen = scene.backend.createSurface(WIDTH, HEIGHT);
+    compositeDocument(screen, document, scene.caches, identity(), {
+      backend: scene.backend,
+      groupSurface: (scope, members, matrices, exclude) => groupSurfaces.get(scope, members, matrices, exclude),
+    });
+    const screenPx = centerPixel(screen);
+    const exportPx = centerPixel(exported);
+    for (let channel = 0; channel < 4; channel += 1) {
+      expect(Math.abs(screenPx[channel]! - exportPx[channel]!)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('applies group blend mode when the isolated composite lands, on screen and in export', async () => {
+    // Mid-gray group multiplied over a white base: 0x80 × 0xff = 0x80. A
+    // per-leaf multiply would be identical here, so also nest: outer normal
+    // group holding a multiply group proves the landing applies INSIDE parents.
+    const document = docWith([groupContract('g', [raster('gray')], { blendMode: 'multiply' }), raster('under')]);
+    const scene = sceneFor({ gray: '#808080', under: '#ffffff' });
+    const exported = await renderRasterComposite(planBaseRasterComposite(document, BBOX), scene);
+    expect(Math.abs(centerPixel(exported)[0]! - 0x80)).toBeLessThanOrEqual(1);
+
+    const nested = docWith([
+      groupContract('outer', [groupContract('inner', [raster('gray')], { blendMode: 'multiply' }), raster('mid')], {
+        adjustments: invertStack('oa'),
+      }),
+    ]);
+    const nestedScene = sceneFor({ gray: '#808080', mid: '#c0c0c0' });
+    // inner multiplies onto mid inside outer's buffer: 0x80×0xc0/0xff ≈ 0x60;
+    // outer's invert flips it to ≈ 0x9f.
+    const nestedExport = await renderRasterComposite(planBaseRasterComposite(nested, BBOX), nestedScene);
+    expect(Math.abs(centerPixel(nestedExport)[0]! - (255 - 0x60))).toBeLessThanOrEqual(3);
+
+    const groupSurfaces = createGroupSurfaceCache({
+      createSurface: (w, h) => nestedScene.backend.createSurface(w, h),
+      getAdjustedSurface: () => null,
+      getCacheEntry: (id) => nestedScene.caches.get(id),
+    });
+    const screen = nestedScene.backend.createSurface(WIDTH, HEIGHT);
+    compositeDocument(screen, nested, nestedScene.caches, identity(), {
+      backend: nestedScene.backend,
+      groupSurface: (scope, members, matrices, exclude) => groupSurfaces.get(scope, members, matrices, exclude),
+    });
+    const screenPx = centerPixel(screen);
+    const exportPx = centerPixel(nestedExport);
+    for (let channel = 0; channel < 4; channel += 1) {
+      expect(Math.abs(screenPx[channel]! - exportPx[channel]!)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('reuses the cached group surface across an opacity scrub (only the landing changes)', () => {
+    const scene = sceneFor({ red: '#ff0000' });
+    let builds = 0;
+    const groupSurfaces = createGroupSurfaceCache({
+      createSurface: (w, h) => {
+        builds += 1;
+        return scene.backend.createSurface(w, h);
+      },
+      getAdjustedSurface: () => null,
+      getCacheEntry: (id) => scene.caches.get(id),
+    });
+    const compositeAt = (opacity: number) => {
+      const document = docWith([groupContract('g', [raster('red')], { opacity })]);
+      const screen = scene.backend.createSurface(WIDTH, HEIGHT);
+      compositeDocument(screen, document, scene.caches, identity(), {
+        backend: scene.backend,
+        groupSurface: (scope, members, matrices, exclude) => groupSurfaces.get(scope, members, matrices, exclude),
+      });
+      return centerPixel(screen);
+    };
+    const at30 = compositeAt(0.3);
+    const at60 = compositeAt(0.6);
+    const at90 = compositeAt(0.9);
+    expect(builds).toBe(1);
+    expect(Math.abs(at30[3]! - 77)).toBeLessThanOrEqual(2);
+    expect(Math.abs(at60[3]! - 153)).toBeLessThanOrEqual(2);
+    expect(Math.abs(at90[3]! - 230)).toBeLessThanOrEqual(2);
+  });
+
   it('holds two keys per group so alternating consumers (frame vs overview) stop rebuilding', () => {
     // A transform session makes the frame composite session matrices while the
     // overview composites the settled contract: two keys for one group, forever

@@ -55,7 +55,10 @@ export const sameValue = (left: unknown, right: unknown): boolean => {
 export const isPatchApplied = (node: CanvasNodeContract, patch: CanvasLayerBasePatch): boolean =>
   (Object.keys(patch) as (keyof CanvasLayerBasePatch)[]).every((key) => {
     if (isGroupNode(node)) {
-      return GROUP_PATCH_KEYS.includes(key) && node[key as 'name' | 'isEnabled' | 'isLocked'] === patch[key];
+      return (
+        GROUP_PATCH_KEYS.includes(key) &&
+        node[key as 'name' | 'isEnabled' | 'isLocked' | 'opacity' | 'blendMode'] === patch[key]
+      );
     }
     return key === 'transform'
       ? (Object.keys(patch.transform ?? {}) as (keyof CanvasLayerContract['transform'])[]).every(

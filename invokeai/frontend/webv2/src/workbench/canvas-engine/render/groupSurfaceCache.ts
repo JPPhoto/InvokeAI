@@ -1,9 +1,11 @@
 /**
- * Per-group memoized document-space composites of adjusted groups. Keyed on
- * the scope shape plus every drawn member's cache version, appearance, and
- * effective matrix (so a transform session inside an adjusted group rebuilds
- * per tick). Accepted tradeoff: document resolution, so transformed members
- * resample twice and zoom > 100% upscales the group surface.
+ * Per-group memoized document-space composites of composited groups (adjustment
+ * stack, opacity, or blend mode). Keyed on the scope shape plus every drawn
+ * member's cache version, appearance, and effective matrix (so a transform
+ * session inside a composited group rebuilds per tick); the scope's own
+ * opacity/blend land at draw time and stay out of the key. Accepted tradeoff:
+ * document resolution, so transformed members resample twice and zoom > 100%
+ * upscales the group surface.
  */
 
 import type { CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
@@ -14,10 +16,10 @@ import type { Mat2d, Rect } from '@workbench/canvas-engine/types';
 
 import { multiply } from '@workbench/canvas-engine/math/mat2d';
 import { roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
-import { adjustmentsKey, applyAdjustments } from '@workbench/canvas-engine/render/adjustments';
+import { adjustmentsKey, applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
 import { blendToComposite } from '@workbench/canvas-engine/render/compositor';
 
-import type { GroupAdjustmentScope } from './groupAdjustmentScopes';
+import type { GroupCompositeScope } from './groupCompositeScopes';
 
 export interface GroupSurfaceResult {
   readonly surface: RasterSurface;
@@ -36,7 +38,7 @@ export interface GroupSurfaceCache {
   /** Total RGBA bytes the cached group surfaces hold, for the memory budget. */
   byteSize(): number;
   get(
-    scope: GroupAdjustmentScope,
+    scope: GroupCompositeScope,
     members: readonly SemanticLeaf[],
     memberMatrices: readonly Mat2d[],
     excludeIds: ReadonlySet<string>
@@ -56,13 +58,19 @@ const SLOTS_PER_GROUP = 2;
 export const createGroupSurfaceCache = (deps: GroupSurfaceDeps): GroupSurfaceCache => {
   const cache = new Map<string, { key: string; result: GroupSurfaceResult }[]>();
 
-  const scopeShapeKey = (scope: GroupAdjustmentScope): string =>
+  // A scope's OWN opacity/blend are applied by the consumer when the surface
+  // lands, so they stay out of its shape key (an opacity scrub reuses the
+  // surface); a CHILD scope's opacity/blend are baked in here by `drawRange`,
+  // so children key with them.
+  const childScopeKey = (scope: GroupCompositeScope): string =>
+    `${scopeShapeKey(scope)}:${scope.opacity}:${scope.blendMode}`;
+  const scopeShapeKey = (scope: GroupCompositeScope): string =>
     `${scope.id}@${scope.start}-${scope.end}:${adjustmentsKey(scope.adjustments)}(${scope.children
-      .map(scopeShapeKey)
+      .map(childScopeKey)
       .join(',')})`;
 
   const buildKey = (
-    scope: GroupAdjustmentScope,
+    scope: GroupCompositeScope,
     members: readonly SemanticLeaf[],
     memberMatrices: readonly Mat2d[],
     excludeIds: ReadonlySet<string>
@@ -86,7 +94,7 @@ export const createGroupSurfaceCache = (deps: GroupSurfaceDeps): GroupSurfaceCac
     baseIndex: number,
     from: number,
     to: number,
-    children: readonly GroupAdjustmentScope[]
+    children: readonly GroupCompositeScope[]
   ): void => {
     let childIndex = 0;
     for (let i = from; i < to;) {
@@ -95,8 +103,8 @@ export const createGroupSurfaceCache = (deps: GroupSurfaceDeps): GroupSurfaceCac
         const nested = build(child, members, memberMatrices, excludeIds, baseIndex);
         if (nested) {
           ctx.save();
-          ctx.globalAlpha = 1;
-          ctx.globalCompositeOperation = 'source-over';
+          ctx.globalAlpha = child.opacity;
+          ctx.globalCompositeOperation = blendToComposite(child.blendMode);
           ctx.setTransform(view.a, view.b, view.c, view.d, view.e, view.f);
           ctx.drawImage(nested.surface.canvas, nested.rect.x, nested.rect.y);
           ctx.restore();
@@ -127,7 +135,7 @@ export const createGroupSurfaceCache = (deps: GroupSurfaceDeps): GroupSurfaceCac
   };
 
   const build = (
-    scope: GroupAdjustmentScope,
+    scope: GroupCompositeScope,
     members: readonly SemanticLeaf[],
     memberMatrices: readonly Mat2d[],
     excludeIds: ReadonlySet<string>,
@@ -159,9 +167,13 @@ export const createGroupSurfaceCache = (deps: GroupSurfaceDeps): GroupSurfaceCac
     ctx.clearRect(0, 0, rect.width, rect.height);
     const view: Mat2d = { a: 1, b: 0, c: 0, d: 1, e: -rect.x, f: -rect.y };
     drawRange(ctx, view, members, memberMatrices, excludeIds, baseIndex, scope.start, scope.end, scope.children);
-    const pixels = ctx.getImageData(0, 0, rect.width, rect.height);
-    applyAdjustments(pixels, scope.adjustments);
-    ctx.putImageData(pixels, 0, 0);
+    // A group scoped only for opacity/blend has an identity stack: skip the
+    // full-surface pixel round trip.
+    if (!isIdentityAdjustments(scope.adjustments)) {
+      const pixels = ctx.getImageData(0, 0, rect.width, rect.height);
+      applyAdjustments(pixels, scope.adjustments);
+      ctx.putImageData(pixels, 0, 0);
+    }
     return { rect, surface };
   };
 

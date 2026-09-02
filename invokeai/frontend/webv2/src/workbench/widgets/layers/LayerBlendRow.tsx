@@ -1,10 +1,10 @@
 import type { NumberInput as ChakraNumberInput, SelectValueChangeDetails } from '@chakra-ui/react';
-import type { CanvasBlendMode, CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/api';
+import type { CanvasBlendMode, CanvasDocumentContractV3, CanvasNodeContract } from '@workbench/canvas-engine/api';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 
 import { createListCollection, Flex, HStack, NumberInput } from '@chakra-ui/react';
 import { Select } from '@platform/ui';
-import { getDocumentLayer } from '@workbench/canvas-engine/api';
+import { getDocumentIndex, isGroupNode } from '@workbench/canvas-engine/api';
 import { useCanvasDocumentEditingLocked } from '@workbench/widgets/canvas/engineStoreHooks';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { applyStructuralPreview, CANVAS_BLEND_MODES } from '@workbench/widgets/layers/layerOps';
@@ -21,21 +21,32 @@ const OPACITY_INPUT_PROPS = { fontSize: 'xs', h: '7' } as const;
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
 // Reference equality is exact: the document index hands back the same node
-// object until the layer itself changes.
-const selectSelectedLayer = (project: {
+// object until the node itself changes. A raster-stack GROUP is a valid target
+// (opacity/blend on its isolated composite); overlay-stack groups are not.
+export const selectBlendTarget = (project: {
   canvas: { document: Pick<CanvasDocumentContractV3, 'stacks' | 'selectedLayerId'> };
-}): CanvasLayerContract | null => getDocumentLayer(project.canvas.document, project.canvas.document.selectedLayerId);
+}): CanvasNodeContract | null => {
+  const document = project.canvas.document;
+  if (!document.selectedLayerId) {
+    return null;
+  }
+  const entry = getDocumentIndex(document).byId.get(document.selectedLayerId);
+  if (!entry) {
+    return null;
+  }
+  return isGroupNode(entry.node) && entry.stack !== 'raster' ? null : entry.node;
+};
 
-export const isLayerEditingDisabled = (layer: CanvasLayerContract | null, editingLocked: boolean): boolean =>
+export const isLayerEditingDisabled = (layer: CanvasNodeContract | null, editingLocked: boolean): boolean =>
   !layer || editingLocked;
 
 /**
  * The fixed blend-mode + opacity row above the layer tree, Photoshop-style. It
- * edits the selected layer and simply disables without one — the row never
- * appears or disappears.
+ * edits the selected layer or raster-stack group and simply disables without
+ * one — the row never appears or disappears.
  */
 export const LayerBlendRow = ({ engine }: { engine: LayerBlendRowEngine | null }) => {
-  const layer = useActiveProjectSelector(selectSelectedLayer);
+  const layer = useActiveProjectSelector(selectBlendTarget);
   const editingLocked = useCanvasDocumentEditingLocked(engine);
 
   return (
@@ -58,7 +69,7 @@ const BlendModeControl = ({
 }: {
   editingLocked: boolean;
   engine: LayerBlendRowEngine | null;
-  layer: CanvasLayerContract | null;
+  layer: CanvasNodeContract | null;
 }) => {
   const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
@@ -76,7 +87,7 @@ const BlendModeControl = ({
   const handleBlendChange = useCallback(
     ({ value }: SelectValueChangeDetails<BlendModeOption>) => {
       const mode = value[0] as CanvasBlendMode | undefined;
-      if (!layer || !mode || mode === layer.blendMode) {
+      if (!layer || !mode || mode === (layer.blendMode ?? 'normal')) {
         return;
       }
       commitPrepared(t('widgets.layers.actions.blendMode'), (model) =>
@@ -111,7 +122,7 @@ const OpacityRow = ({
 }: {
   editingLocked: boolean;
   engine: LayerBlendRowEngine | null;
-  layer: CanvasLayerContract | null;
+  layer: CanvasNodeContract | null;
 }) => {
   const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
@@ -163,7 +174,7 @@ const OpacityRow = ({
         return;
       }
       if (pendingRef.current === null) {
-        pendingRef.current = { before: layer.opacity, id: layer.id, latest: next };
+        pendingRef.current = { before: layer.opacity ?? 1, id: layer.id, latest: next };
       } else {
         pendingRef.current.latest = next;
       }

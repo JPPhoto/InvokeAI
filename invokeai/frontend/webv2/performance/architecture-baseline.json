@@ -2,12 +2,12 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 841579,
+        "brotliBytes": 841899,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 840575,
+        "gzipBytes": 840891,
         "imageRawBytes": 156376,
-        "initialRawBytes": 1959360,
+        "initialRawBytes": 1960354,
         "largestAssetRawBytes": 746376,
         "otherAssetRawBytes": 0,
         "ownedRawBytes": 70904,
@@ -291,12 +291,12 @@
         ]
       },
       "limits": {
-        "brotliBytes": 849995,
+        "brotliBytes": 850318,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 848981,
+        "gzipBytes": 849300,
         "imageRawBytes": 157940,
-        "initialRawBytes": 1978954,
+        "initialRawBytes": 1979958,
         "largestAssetRawBytes": 753840,
         "otherAssetRawBytes": 0,
         "ownedRawBytes": 70904,
@@ -309,12 +309,12 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1103113,
+        "brotliBytes": 1104007,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1098700,
+        "gzipBytes": 1099574,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2752773,
+        "initialRawBytes": 2755775,
         "largestAssetRawBytes": 746376,
         "otherAssetRawBytes": 0,
         "ownedRawBytes": 114628,
@@ -732,7 +732,7 @@
           "source:src/workbench/canvas-engine/render/adjustments.ts",
           "source:src/workbench/canvas-engine/render/compositor.ts",
           "source:src/workbench/canvas-engine/render/controlTransparency.ts",
-          "source:src/workbench/canvas-engine/render/groupAdjustmentScopes.ts",
+          "source:src/workbench/canvas-engine/render/groupCompositeScopes.ts",
           "source:src/workbench/canvas-engine/render/maskFill.ts",
           "source:src/workbench/canvas-engine/render/rasterComposite.ts",
           "source:src/workbench/canvas-engine/render/rasterizers/textRasterizer.ts",
@@ -934,12 +934,12 @@
         ]
       },
       "limits": {
-        "brotliBytes": 1114145,
+        "brotliBytes": 1115048,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 1109687,
+        "gzipBytes": 1110570,
         "imageRawBytes": 157940,
-        "initialRawBytes": 2780301,
+        "initialRawBytes": 2783333,
         "largestAssetRawBytes": 753840,
         "otherAssetRawBytes": 0,
         "ownedRawBytes": 114628,
