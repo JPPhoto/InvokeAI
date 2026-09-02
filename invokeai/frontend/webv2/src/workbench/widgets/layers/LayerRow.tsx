@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import type { LayerRowCommands } from './layerRowCommands';
 import type { LayerTreeRow } from './layerTreeRows';
 
+import { colorLabelHex } from './colorLabels';
 import { ControlLayerWarningIcon } from './ControlLayerWarningIcon';
 import { LayerActiveDot, ROW_SELECTION_FOCUS } from './LayerActiveDot';
 import { recordLayerRowCommit } from './layerPanelDiagnostics';
@@ -298,6 +299,7 @@ const LayerRowComponent = ({
       h="full"
       opacity={drag ? 0.4 : undefined}
       pb="0.5"
+      position="relative"
       role="treeitem"
       rounded="sm"
       tabIndex={focused ? 0 : -1}
@@ -308,6 +310,21 @@ const LayerRowComponent = ({
       onFocus={handleFocus}
       onKeyDown={handleKeyDown}
     >
+      {node.colorLabel ? (
+        // A fixed gutter column regardless of nesting depth, like a desktop
+        // editor's label swatch; display-only, so it takes no pointer events.
+        <Box
+          bg={colorLabelHex(node.colorLabel)}
+          bottom="1.5"
+          data-color-label={node.colorLabel}
+          left="0"
+          pointerEvents="none"
+          position="absolute"
+          rounded="full"
+          top="1"
+          w="2px"
+        />
+      ) : null}
       <LayerRowSurface active={tone} cursor={drag === 'source' ? 'grabbing' : 'default'} indentStyle={indentStyle}>
         <LayerActiveDot
           checked={node.isEnabled}

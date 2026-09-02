@@ -287,6 +287,33 @@ describe('planPsdExport — folders', () => {
     expect(folder.opacity).toBeCloseTo(0.5, 2);
   });
 
+  it('round-trips color labels as native PSD layer colors on layers and folders', async () => {
+    const plan = planPsdExport([
+      { ...group('Tagged', [layer({ colorLabel: 'red', id: 'in', name: 'In' })]), colorLabel: 'violet' },
+      layer({ id: 'base', name: 'Base' }),
+    ]);
+    const backend = createTestStubRasterBackend();
+    const imageDataOf = (width: number, height: number): ImageData =>
+      ({ data: new Uint8ClampedArray(width * height * 4), height, width }) as ImageData;
+    let bytes: ArrayBuffer | null = null;
+    await executePsdExport(plan, 'labels.psd', {
+      backend,
+      download: (data) => {
+        bytes = data;
+      },
+      getLayerSurface: () =>
+        Promise.resolve({ rect: { height: 50, width: 100, x: 0, y: 0 }, surface: backend.createSurface(100, 50) }),
+      readImageData: (_surface, rect) => imageDataOf(rect.width, rect.height),
+      writeImageData: () => undefined,
+      writePsd: (psd) => Promise.resolve(writePsd(psd, { generateThumbnail: false })),
+    });
+    const parsed = readPsd(bytes!, { skipCompositeImageData: true, skipLayerImageData: true, skipThumbnail: true });
+    const folder = parsed.children!.find((child) => child.name === 'Tagged')!;
+    expect(folder.layerColor).toBe('violet');
+    expect(folder.children![0]!.layerColor).toBe('red');
+    expect(parsed.children!.find((child) => child.name === 'Base')!.layerColor ?? 'none').toBe('none');
+  });
+
   it('round-trips a default folder as pass-through', async () => {
     const plan = planPsdExport([
       group('Plain', [layer({ id: 'in', name: 'In' })]),

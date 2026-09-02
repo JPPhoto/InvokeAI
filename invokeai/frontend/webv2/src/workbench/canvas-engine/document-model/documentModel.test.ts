@@ -643,6 +643,31 @@ describe('createDocumentModel', () => {
       });
     });
 
+    it('patches a color label on leaves and groups in any stack, locked included, and clears to absence', () => {
+      const project = projectWith(
+        [layer('r1', 'raster', { isLocked: true }), group('OG', [layer('c1', 'control')])],
+        null
+      );
+      // Organizational, so the lock does not gate it.
+      const { after, edit } = roundTrip(project, { id: 'r1', patch: { colorLabel: 'red' }, type: 'patch' });
+      expect(after.canvas.document.stacks.raster[0]).toMatchObject({ colorLabel: 'red' });
+      expect(edit.inverse).toEqual({ id: 'r1', patch: { colorLabel: undefined }, type: 'updateCanvasLayer' });
+
+      const overlayGroup = roundTrip(project, { id: 'OG', patch: { colorLabel: 'blue' }, type: 'patch' });
+      expect(overlayGroup.after.canvas.document.stacks.control[0]).toMatchObject({ colorLabel: 'blue' });
+
+      const cleared = applyCanvasProjectMutation(after, {
+        id: 'r1',
+        patch: { colorLabel: undefined },
+        type: 'updateCanvasLayer',
+      });
+      expect(
+        cleared.canvas.document.stacks.raster[0] && 'colorLabel' in cleared.canvas.document.stacks.raster[0]
+          ? cleared.canvas.document.stacks.raster[0].colorLabel
+          : undefined
+      ).toBeUndefined();
+    });
+
     it('refuses opacity and blend on an overlay-stack group and on a locked group', () => {
       const overlay = projectWith([group('OG', [layer('c1', 'control')])], null);
       expect(modelOf(overlay).prepare({ id: 'OG', patch: { opacity: 0.5 }, type: 'patch' })).toEqual({

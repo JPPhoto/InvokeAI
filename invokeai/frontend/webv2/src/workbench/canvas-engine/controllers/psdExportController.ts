@@ -121,6 +121,7 @@ export class PsdExportController {
                 {
                   blendMode: node.blendMode,
                   children: toInputs(node.children, stacks),
+                  colorLabel: node.colorLabel,
                   id: node.id,
                   isEnabled: node.isEnabled,
                   name: node.name,
@@ -148,6 +149,7 @@ export class PsdExportController {
                 // Identity-aware: an emptied stack must not trigger the executor's bake writeback.
                 adjustments: isIdentityAdjustments(combined) ? undefined : combined,
                 blendMode: node.blendMode,
+                colorLabel: node.colorLabel,
                 contentRect: detached.rect,
                 id: node.id,
                 isEnabled: node.isEnabled,

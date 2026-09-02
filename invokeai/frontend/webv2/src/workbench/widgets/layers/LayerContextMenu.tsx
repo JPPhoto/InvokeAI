@@ -1,5 +1,6 @@
 import type {
   CanvasAdjustmentEntry,
+  CanvasColorLabel,
   CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasMaskContract,
@@ -49,6 +50,7 @@ import {
   CopyIcon,
   MergeIcon,
   MoreVerticalIcon,
+  PaletteIcon,
   SlidersHorizontalIcon,
 } from 'lucide-react';
 import { Fragment, useCallback, useMemo, useState } from 'react';
@@ -511,6 +513,15 @@ const LayerMenu = ({
     patchBase(t('widgets.layers.actions.toggleLock'), { isLocked: !layer.isLocked });
   }, [commitPrepared, document, layer, patchBase, selectedIds, t]);
 
+  const handleSetColorLabel = useCallback(
+    (label: CanvasColorLabel | null) => {
+      // `undefined` clears: the reducer writes the key as undefined and
+      // serialization drops it, so "no label" round-trips as absence.
+      patchBase(t('widgets.layers.menu.colorLabel'), { colorLabel: label ?? undefined });
+    },
+    [patchBase, t]
+  );
+
   const openRename = useCallback(() => setDialogKind('rename'), [setDialogKind]);
   const closeDialog = useCallback(() => setDialogKind(null), [setDialogKind]);
   const openRunWorkflow = useCallback(() => setDialogKind('run-workflow'), [setDialogKind]);
@@ -827,6 +838,7 @@ const LayerMenu = ({
       rasterize: handleRasterize,
       reorder: (kind, actionId) => reorder(kind, getActionLabel(actionId)),
       saveToAssets: handleSaveToAssets,
+      setColorLabel: handleSetColorLabel,
       toggleLock: handleToggleLock,
       toggleHidden: handleToggleHidden,
       toggleVisibility: handleToggleVisibility,
@@ -854,6 +866,7 @@ const LayerMenu = ({
       handleOpenProperties,
       handleRasterize,
       handleSaveToAssets,
+      handleSetColorLabel,
       handleToggleLock,
       handleToggleHidden,
       handleToggleVisibility,
@@ -1074,6 +1087,7 @@ const SUBMENU_META: Record<LayerContextSubmenuId, { defaultLabel: string; icon: 
   },
   arrange: { defaultLabel: 'Arrange', icon: ArrowUpDownIcon, labelKey: 'widgets.layers.menu.arrange' },
   boolean: { defaultLabel: 'Boolean operations', icon: MergeIcon, labelKey: 'widgets.layers.menu.booleanOperations' },
+  'color-label': { defaultLabel: 'Color label', icon: PaletteIcon, labelKey: 'widgets.layers.menu.colorLabel' },
   'convert-to': { defaultLabel: 'Convert to', icon: ArrowRightLeftIcon, labelKey: 'widgets.layers.menu.convertTo' },
   'copy-to': { defaultLabel: 'Copy to', icon: CopyIcon, labelKey: 'widgets.layers.menu.copyTo' },
 };
@@ -1250,6 +1264,7 @@ const LayerMenuActionItem = ({
       disabled={action.isDisabled}
       hint={action.hint}
       icon={action.icon}
+      iconColor={action.iconColor}
       label={t(action.labelKey, { count: action.labelCount, defaultValue: action.defaultLabel })}
       tone={action.tone}
       value={action.id}
@@ -1262,6 +1277,7 @@ const LayerMenuItem = ({
   disabled,
   hint,
   icon,
+  iconColor,
   label,
   onSelect,
   tone,
@@ -1271,6 +1287,7 @@ const LayerMenuItem = ({
   /** A raw hotkey string, formatted per platform and shown as trailing keycaps. */
   hint?: string;
   icon: LucideIcon;
+  iconColor?: string;
   label: string;
   onSelect: () => void;
   tone?: 'danger';
@@ -1280,6 +1297,7 @@ const LayerMenuItem = ({
     disabled={disabled}
     hintParts={hint ? formatHotkeyForPlatform(hint) : undefined}
     icon={icon}
+    iconColor={iconColor}
     label={label}
     tone={tone}
     value={value}

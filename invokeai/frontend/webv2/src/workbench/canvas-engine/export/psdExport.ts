@@ -40,7 +40,7 @@
  *   user sees. Opacity/blend stay as PSD layer properties (not baked).
  */
 
-import type { CanvasAdjustmentsContract, CanvasBlendMode } from '@workbench/canvas-engine/contracts';
+import type { CanvasAdjustmentsContract, CanvasBlendMode, CanvasColorLabel } from '@workbench/canvas-engine/contracts';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Mat2d, Rect } from '@workbench/canvas-engine/types';
 import type { BlendMode, Layer as AgPsdLayer, Psd } from 'ag-psd';
@@ -107,6 +107,8 @@ export interface PsdExportLayerInput {
   blendMode: CanvasBlendMode;
   /** The layer's own flag; a disabled layer is exported with `hidden: true`, not dropped. */
   isEnabled: boolean;
+  /** Organizational color label; PSD carries it natively as `layerColor`. */
+  colorLabel?: CanvasColorLabel;
   /** Non-destructive adjustments to bake into the layer's pixels, if any. */
   adjustments?: CanvasAdjustmentsContract;
 }
@@ -122,6 +124,8 @@ export interface PsdExportGroupInput {
   opacity?: number;
   /** PSD folders carry a blend mode natively. Absent means 'normal'. */
   blendMode?: CanvasBlendMode;
+  /** Organizational color label; PSD carries it natively as `layerColor`. */
+  colorLabel?: CanvasColorLabel;
   children: readonly PsdExportNodeInput[];
 }
 
@@ -154,6 +158,7 @@ export interface PsdPlanLayer {
   hidden: boolean;
   /** Enabled with every folder above it enabled: the leaves the merged preview flattens. */
   contributes: boolean;
+  colorLabel?: CanvasColorLabel;
   adjustments?: CanvasAdjustmentsContract;
 }
 
@@ -168,6 +173,7 @@ export interface PsdPlanFolder {
   blendMode: BlendMode;
   /** Canvas `globalCompositeOperation` for the flattened composite preview. */
   compositeBlend: GlobalCompositeOperation;
+  colorLabel?: CanvasColorLabel;
   children: PsdPlanNode[];
 }
 
@@ -272,6 +278,7 @@ export const planPsdExport = (
       adjustments: input.adjustments,
       blendMode: mapped ?? 'normal',
       bottom: top + worldRect.height,
+      colorLabel: input.colorLabel,
       compositeBlend: blendToComposite(input.blendMode),
       contentRect: input.contentRect,
       contributes,
@@ -312,6 +319,7 @@ export const planPsdExport = (
           out.push({
             blendMode: isolated ? (mapped ?? 'normal') : 'pass through',
             children,
+            colorLabel: node.colorLabel,
             compositeBlend: blendToComposite(blendMode),
             hidden: !node.isEnabled,
             id: node.id,
@@ -476,6 +484,7 @@ export const executePsdExport = async (
       hidden: planLayer.hidden,
       imageData,
       left: planLayer.left,
+      ...(planLayer.colorLabel ? { layerColor: planLayer.colorLabel } : {}),
       name: planLayer.name,
       opacity: planLayer.opacity,
       right: planLayer.right,
@@ -489,6 +498,7 @@ export const executePsdExport = async (
             blendMode: node.blendMode,
             children: toChildren(node.children),
             hidden: node.hidden,
+            ...(node.colorLabel ? { layerColor: node.colorLabel } : {}),
             name: node.name,
             opacity: node.opacity,
             opened: true,

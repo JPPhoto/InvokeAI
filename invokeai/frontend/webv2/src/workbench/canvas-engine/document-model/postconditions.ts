@@ -57,7 +57,7 @@ export const isPatchApplied = (node: CanvasNodeContract, patch: CanvasLayerBaseP
     if (isGroupNode(node)) {
       return (
         GROUP_PATCH_KEYS.includes(key) &&
-        node[key as 'name' | 'isEnabled' | 'isLocked' | 'opacity' | 'blendMode'] === patch[key]
+        node[key as 'name' | 'isEnabled' | 'isLocked' | 'opacity' | 'blendMode' | 'colorLabel'] === patch[key]
       );
     }
     return key === 'transform'

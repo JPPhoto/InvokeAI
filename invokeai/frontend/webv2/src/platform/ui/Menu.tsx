@@ -17,6 +17,8 @@ export interface MenuActionItemProps {
   value: string;
   label: string;
   icon?: LucideIcon;
+  /** CSS color for the icon (e.g. a swatch); the theme tone otherwise. */
+  iconColor?: string;
   tone?: 'danger';
   disabled?: boolean;
   /** Trailing keycap strings, already formatted for the platform. */
@@ -25,11 +27,26 @@ export interface MenuActionItemProps {
 }
 
 /** The shared icon+label menu item; `tone: 'danger'` colors the whole row, icon included. */
-export const MenuActionItem = ({ disabled, hintParts, icon, label, onSelect, tone, value }: MenuActionItemProps) => (
+export const MenuActionItem = ({
+  disabled,
+  hintParts,
+  icon,
+  iconColor,
+  label,
+  onSelect,
+  tone,
+  value,
+}: MenuActionItemProps) => (
   <Menu.Item color={tone === 'danger' ? 'fg.error' : undefined} disabled={disabled} value={value} onSelect={onSelect}>
     <HStack gap="2" minW="0" w="full">
       {icon ? (
-        <Icon as={icon} boxSize="3.5" color={tone === 'danger' ? 'fg.error' : 'fg.subtle'} flexShrink={0} />
+        <Icon
+          as={icon}
+          boxSize="3.5"
+          color={tone === 'danger' ? 'fg.error' : (iconColor ?? 'fg.subtle')}
+          fill={iconColor ?? 'none'}
+          flexShrink={0}
+        />
       ) : null}
       <Text flex="1" fontSize="xs">
         {label}

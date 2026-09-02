@@ -1,6 +1,7 @@
 import type {
   BooleanRasterOperation,
   CanvasAdjustmentEntry,
+  CanvasColorLabel,
   CanvasDocumentContractV3,
   CanvasLayerContract,
   LayerStackMoveKind,
@@ -50,6 +51,7 @@ import {
   WorkflowIcon,
 } from 'lucide-react';
 
+import { COLOR_LABEL_ITEMS } from './colorLabels';
 import { canConvertRasterControl, canMergeLayerDown } from './layerOps';
 
 export type LayerContextActionId =
@@ -100,11 +102,13 @@ export type LayerContextActionId =
   | 'toggle-visibility'
   | 'toggle-hidden'
   | 'toggle-lock'
+  | 'color-label-none'
+  | `color-label-${CanvasColorLabel}`
   | 'delete';
 
 export type LayerType = CanvasLayerContract['type'];
 export type LayerContextMenuSectionId = 'quick' | 'primary' | 'operations' | 'output' | 'state' | 'danger';
-export type LayerContextSubmenuId = 'arrange' | 'boolean' | 'copy-to' | 'convert-to' | 'add-adjustment';
+export type LayerContextSubmenuId = 'arrange' | 'boolean' | 'copy-to' | 'convert-to' | 'add-adjustment' | 'color-label';
 
 export interface LayerContextActionState {
   canRunWorkflow: boolean;
@@ -153,6 +157,7 @@ export interface LayerContextActionEffects {
   addMaskModifier(field: 'noise' | 'denoise'): void;
   addAdjustment(type: CanvasAdjustmentEntry['type']): void;
   addLayerRegion(): void;
+  setColorLabel(label: CanvasColorLabel | null): void;
   mergeDown(): void;
   toggleVisibility(): void;
   toggleHidden(): void;
@@ -170,6 +175,8 @@ export interface LayerContextActionDefinition {
   defaultLabel: string;
   icon: LucideIcon;
   getIcon?(context: LayerContextActionState): LucideIcon;
+  /** CSS color for the item's icon (label swatches); the theme tone otherwise. */
+  iconColor?: string;
   section: LayerContextMenuSectionId;
   submenu?: LayerContextSubmenuId;
   order: number;
@@ -192,6 +199,7 @@ export interface LayerContextAction {
   defaultLabel: string;
   labelCount?: number;
   icon: LucideIcon;
+  iconColor?: string;
   section: LayerContextMenuSectionId;
   submenu?: LayerContextSubmenuId;
   order: number;
@@ -900,6 +908,34 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     section: 'state',
     supportedLayerTypes: ALL_LAYER_TYPES,
   },
+  // Color labels are organizational, so a locked layer still takes one.
+  ...COLOR_LABEL_ITEMS.map((item, index): LayerContextActionDefinition => ({
+    defaultLabel: item.defaultLabel,
+    handler: ({ effects }) => effects.setColorLabel(item.value),
+    icon: CircleIcon,
+    iconColor: item.hex,
+    id: `color-label-${item.value}`,
+    isEnabled: isInteractionFree,
+    isVisible: alwaysVisible,
+    labelKey: item.labelKey,
+    order: 15 + index,
+    section: 'state',
+    submenu: 'color-label',
+    supportedLayerTypes: ALL_LAYER_TYPES,
+  })),
+  {
+    defaultLabel: 'None',
+    handler: ({ effects }) => effects.setColorLabel(null),
+    icon: CircleOffIcon,
+    id: 'color-label-none',
+    isEnabled: (context) => isInteractionFree(context) && context.layer.colorLabel !== undefined,
+    isVisible: alwaysVisible,
+    labelKey: 'widgets.layers.labels.none',
+    order: 15 + COLOR_LABEL_ITEMS.length,
+    section: 'state',
+    submenu: 'color-label',
+    supportedLayerTypes: ALL_LAYER_TYPES,
+  },
   {
     defaultLabel: 'Delete',
     getDefaultLabel: (context) => (isMultiTarget(context) ? `Delete ${targetCount(context)} layers` : 'Delete'),
@@ -935,6 +971,7 @@ export const getLayerContextActions = (context: LayerContextActionState): LayerC
     handler: definition.handler,
     hint: definition.hint,
     icon: definition.getIcon?.(context) ?? definition.icon,
+    iconColor: definition.iconColor,
     id: definition.id,
     isDisabled: !definition.isEnabled(context),
     labelCount: definition.getLabelCount?.(context),

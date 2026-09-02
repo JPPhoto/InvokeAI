@@ -106,7 +106,15 @@ describe('getLayerContextMenuLayout', () => {
         presentation: 'list',
       },
       { id: 'output', items: ['crop-to-bbox', 'save-to-assets'], presentation: 'list' },
-      { id: 'state', items: ['toggle-visibility', 'toggle-lock'], presentation: 'list' },
+      {
+        id: 'state',
+        items: [
+          'toggle-visibility',
+          'toggle-lock',
+          'color-label(color-label-red,color-label-orange,color-label-yellow,color-label-green,color-label-blue,color-label-violet,color-label-gray,color-label-none)',
+        ],
+        presentation: 'list',
+      },
       { id: 'danger', items: ['delete'], presentation: 'list' },
     ]);
   });

@@ -885,3 +885,16 @@ describe('LayersTree list changes', () => {
     expect(document.activeElement).toBe(treeitem('Renamed'));
   });
 });
+
+describe('LayersTree color labels', () => {
+  it('shows a color-label strip on labelled rows only', async () => {
+    await renderTree([
+      layerContract('tagged', 'raster', { colorLabel: 'red', name: 'Tagged' }),
+      groupContract('folder', [paint('inside', 'Inside')], { colorLabel: 'blue' }),
+      paint('plain', 'Plain'),
+    ]);
+    expect(host!.querySelector('[data-layer-row-id="tagged"] [data-color-label="red"]')).not.toBeNull();
+    expect(host!.querySelector('[data-layer-row-id="folder"] [data-color-label="blue"]')).not.toBeNull();
+    expect(host!.querySelector('[data-layer-row-id="plain"] [data-color-label]')).toBeNull();
+  });
+});

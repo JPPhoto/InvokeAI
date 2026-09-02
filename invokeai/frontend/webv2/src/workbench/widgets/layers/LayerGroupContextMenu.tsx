@@ -1,5 +1,6 @@
 import type {
   CanvasAdjustmentEntry,
+  CanvasColorLabel,
   CanvasGroupContract,
   LayerStackKind,
   LayerStackMoveKind,
@@ -29,6 +30,7 @@ import {
   FolderPlusIcon,
   LockIcon,
   LockOpenIcon,
+  PaletteIcon,
   PencilIcon,
   SlidersHorizontalIcon,
   Trash2Icon,
@@ -37,6 +39,7 @@ import {
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { COLOR_LABEL_ITEMS } from './colorLabels';
 import { ADJUSTMENT_ADD_ITEMS } from './layerContextActions';
 import { canGroupSelection, groupLayers, ungroupLayers } from './layerGroupCommands';
 import { createIdentityAdjustment } from './layerOps';
@@ -194,6 +197,14 @@ export const LayerGroupContextMenu = ({
     [commitPrepared, group.adjustments, group.id, t]
   );
 
+  const handleSetColorLabel = useCallback(
+    (label: CanvasColorLabel | null) => () =>
+      commitPrepared(t('widgets.layers.menu.colorLabel'), (model) =>
+        model.prepare({ id: group.id, patch: { colorLabel: label ?? undefined }, type: 'patch' })
+      ),
+    [commitPrepared, group.id, t]
+  );
+
   const items = (
     <MenuContent minW="13rem" py="1">
       {ARRANGE.map((entry) => (
@@ -297,6 +308,50 @@ export const LayerGroupContextMenu = ({
         value="lock"
         onSelect={handleToggleLock}
       />
+      {!locked ? (
+        <Menu.Root positioning={SUBMENU_POSITIONING}>
+          <Menu.TriggerItem aria-label={t('widgets.layers.menu.colorLabel')}>
+            <HStack gap="2" minW="0" w="full">
+              <Icon as={PaletteIcon} boxSize="3.5" color="fg.subtle" flexShrink={0} />
+              <Text flex="1" fontSize="xs">
+                {t('widgets.layers.menu.colorLabel')}
+              </Text>
+              <Icon as={ChevronRightIcon} boxSize="3" color="fg.subtle" flexShrink={0} />
+            </HStack>
+          </Menu.TriggerItem>
+          <Portal>
+            <Menu.Positioner>
+              <MenuContent minW="10rem" py="1">
+                {COLOR_LABEL_ITEMS.map((item) => (
+                  <MenuActionItem
+                    key={item.value}
+                    icon={CircleIcon}
+                    iconColor={item.hex}
+                    label={t(item.labelKey, { defaultValue: item.defaultLabel })}
+                    value={`color-label-${item.value}`}
+                    onSelect={handleSetColorLabel(item.value)}
+                  />
+                ))}
+                <MenuActionItem
+                  disabled={group.colorLabel === undefined}
+                  icon={CircleOffIcon}
+                  label={t('widgets.layers.labels.none', { defaultValue: 'None' })}
+                  value="color-label-none"
+                  onSelect={handleSetColorLabel(null)}
+                />
+              </MenuContent>
+            </Menu.Positioner>
+          </Portal>
+        </Menu.Root>
+      ) : (
+        <MenuActionItem
+          disabled
+          icon={PaletteIcon}
+          label={t('widgets.layers.menu.colorLabel')}
+          value="color-label"
+          onSelect={noop}
+        />
+      )}
       <Menu.Separator borderColor="border.subtle" />
       <MenuActionItem
         disabled={locked || holdsLocked}

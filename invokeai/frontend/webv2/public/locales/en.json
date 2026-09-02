@@ -2957,7 +2957,18 @@
         "booleanOperations": "Boolean operations",
         "convertTo": "Convert to",
         "copyTo": "Copy to",
-        "addAdjustment": "Add adjustment"
+        "addAdjustment": "Add adjustment",
+        "colorLabel": "Color label"
+      },
+      "labels": {
+        "none": "None",
+        "red": "Red",
+        "orange": "Orange",
+        "yellow": "Yellow",
+        "green": "Green",
+        "blue": "Blue",
+        "violet": "Violet",
+        "gray": "Gray"
       },
       "options": "Layer options",
       "regionalGuidance": {

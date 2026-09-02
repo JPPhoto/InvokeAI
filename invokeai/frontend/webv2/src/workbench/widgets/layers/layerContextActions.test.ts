@@ -113,6 +113,7 @@ const makeEffects = (): LayerContextActionEffects => ({
   patchConfig: vi.fn(),
   rasterize: vi.fn(),
   reorder: vi.fn(),
+  setColorLabel: vi.fn(),
   saveToAssets: vi.fn(() => Promise.resolve()),
   toggleLock: vi.fn(),
   toggleVisibility: vi.fn(),
@@ -494,12 +495,39 @@ describe('getLayerContextActions', () => {
       'toggle-visibility',
       'toggle-hidden',
       'toggle-lock',
+      'color-label-red',
+      'color-label-orange',
+      'color-label-yellow',
+      'color-label-green',
+      'color-label-blue',
+      'color-label-violet',
+      'color-label-gray',
+      'color-label-none',
       'delete',
     ];
 
     expect(actionIds).toHaveLength(LAYER_CONTEXT_ACTION_DEFINITIONS.length);
     expect(actionIds.filter((id) => !actionsById.has(id))).toEqual([]);
     expect([...new Set(actions.filter((action) => !action.isDisabled).map((action) => action.id))]).toEqual([]);
+  });
+
+  it('offers color labels on every layer type, locked layers included, and routes to the effect', () => {
+    const locked = { ...makeLayer('raster'), isLocked: true };
+    const actions = getLayerContextActions(makeState(locked));
+    const red = byId(actions, 'color-label-red');
+    expect(red.isDisabled).toBe(false);
+    expect(red.submenu).toBe('color-label');
+    expect(red.iconColor).toBeDefined();
+    // None only clears an existing label.
+    expect(byId(actions, 'color-label-none').isDisabled).toBe(true);
+    const labelled = getLayerContextActions(makeState({ ...makeLayer('raster'), colorLabel: 'red' }));
+    expect(byId(labelled, 'color-label-none').isDisabled).toBe(false);
+
+    const effects = makeEffects();
+    red.handler({ ...makeState(locked), effects });
+    expect(effects.setColorLabel).toHaveBeenCalledWith('red');
+    byId(labelled, 'color-label-none').handler({ ...makeState(locked), effects });
+    expect(effects.setColorLabel).toHaveBeenLastCalledWith(null);
   });
 
   it('offers add-reference-image on regional layers unless the model base is flux2', () => {

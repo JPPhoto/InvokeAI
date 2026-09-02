@@ -462,9 +462,10 @@ describe('convertRasterControlLayer', () => {
   it('converts raster→control preserving source/id/name/transform and applying the default adapter', () => {
     const source = { image: { height: 48, imageName: 'pic', width: 64 }, type: 'image' } as const;
     const transform = { rotation: 10, scaleX: 2, scaleY: 2, x: 5, y: 6 };
-    const raster = paintLayer('r', { name: 'My Layer', opacity: 0.5, source, transform });
+    const raster = paintLayer('r', { colorLabel: 'red', name: 'My Layer', opacity: 0.5, source, transform });
     const converted = convertRasterControlLayer(raster, 'control');
     expect(converted).toMatchObject({
+      colorLabel: 'red',
       id: 'r',
       name: 'My Layer',
       opacity: 0.5,

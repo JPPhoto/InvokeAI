@@ -212,11 +212,14 @@ const randomCommand = (random: () => number, document: CanvasDocumentContractV3)
       const id = pick(random, ids);
       const roll = random();
       const patch =
-        roll < 0.4
+        roll < 0.3
           ? { name: `n${Math.floor(random() * 100)}` }
-          : roll < 0.7
+          : roll < 0.55
             ? { opacity: random() }
-            : { transform: { x: Math.round(random() * 50) } };
+            : roll < 0.8
+              ? { transform: { x: Math.round(random() * 50) } }
+              : // Clears exercise the explicit-undefined inverse path.
+                { colorLabel: random() < 0.3 ? undefined : random() < 0.5 ? ('red' as const) : ('blue' as const) };
       return { id, patch, type: 'patch' };
     }
     case 'translate':

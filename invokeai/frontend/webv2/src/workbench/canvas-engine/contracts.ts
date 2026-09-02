@@ -151,6 +151,10 @@ export type CanvasLayerSourceContract =
       height?: number;
     };
 
+/** Photoshop's layer-color palette; also the PSD `layerColor` vocabulary. */
+export const CANVAS_COLOR_LABELS = ['red', 'orange', 'yellow', 'green', 'blue', 'violet', 'gray'] as const;
+export type CanvasColorLabel = (typeof CANVAS_COLOR_LABELS)[number];
+
 export interface CanvasLayerBaseContract {
   id: string;
   name: string;
@@ -158,6 +162,8 @@ export interface CanvasLayerBaseContract {
   isLocked: boolean;
   opacity: number;
   blendMode: CanvasBlendMode;
+  /** Organizational color label; display-only, absent means none. */
+  colorLabel?: CanvasColorLabel;
   transform: { x: number; y: number; scaleX: number; scaleY: number; rotation: number };
 }
 
@@ -360,6 +366,8 @@ export interface CanvasGroupContract {
   opacity?: number;
   /** Raster-stack groups only; absent means 'normal'. Applies to the group's isolated composite. */
   blendMode?: CanvasBlendMode;
+  /** Organizational color label; display-only, absent means none. */
+  colorLabel?: CanvasColorLabel;
   adjustments?: CanvasAdjustmentsContract;
   /** Index 0 is the top-most child. */
   children: CanvasNodeContract[];

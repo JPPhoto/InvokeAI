@@ -475,6 +475,7 @@ const cloneMask = (mask: CanvasMaskContract): CanvasMaskContract => ({
 
 const destinationBase = (layer: CanvasLayerContract, id: string, isCopy: boolean): CanvasLayerBaseContract => ({
   blendMode: layer.blendMode,
+  ...(layer.colorLabel ? { colorLabel: layer.colorLabel } : {}),
   id,
   isEnabled: layer.isEnabled,
   isLocked: layer.isLocked,

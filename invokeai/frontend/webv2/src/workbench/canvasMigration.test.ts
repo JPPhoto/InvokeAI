@@ -146,6 +146,29 @@ describe('loadCanvasState', () => {
     expect(loadedMalformed?.type === 'group' ? loadedMalformed.children.length : 0).toBe(1);
   });
 
+  it('round-trips color labels on leaves and groups in any stack, and drops malformed values', () => {
+    const labelled = load(withNodes([{ ...createEmptyPaintLayer('Tagged', 'tagged'), colorLabel: 'violet' }]));
+    const leaf = labelled.document.stacks.raster[0];
+    expect(leaf && 'colorLabel' in leaf ? leaf.colorLabel : null).toBe('violet');
+
+    const overlayGroup = {
+      children: [],
+      colorLabel: 'green',
+      id: 'og',
+      isEnabled: true,
+      isLocked: false,
+      name: 'Overlay',
+      type: 'group',
+    };
+    const overlayLoaded = load(withNodes([overlayGroup], 'control'));
+    const loadedOverlay = overlayLoaded.document.stacks.control[0];
+    expect(loadedOverlay?.type === 'group' ? loadedOverlay.colorLabel : null).toBe('green');
+
+    const malformed = load(withNodes([{ ...createEmptyPaintLayer('Bad', 'bad'), colorLabel: 'magenta' }]));
+    const badLeaf = malformed.document.stacks.raster[0];
+    expect(badLeaf && 'colorLabel' in badLeaf ? badLeaf.colorLabel : null).toBeUndefined();
+  });
+
   it('round-trips group opacity and blend in the raster stack, strips them from overlay groups, and drops malformed values', () => {
     const rasterGroup = {
       blendMode: 'multiply',

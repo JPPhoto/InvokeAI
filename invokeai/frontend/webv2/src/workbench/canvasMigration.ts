@@ -196,8 +196,10 @@ const zBlendMode = z.enum([
   'color',
   'luminosity',
 ]);
+const zColorLabel = z.enum(['red', 'orange', 'yellow', 'green', 'blue', 'violet', 'gray']);
 const zLayerBase = z.object({
   blendMode: zBlendMode,
+  colorLabel: zColorLabel.optional().catch(undefined),
   id: z.string(),
   isEnabled: z.boolean(),
   isLocked: z.boolean(),
@@ -450,6 +452,7 @@ const zGroupShell = z.object({
   // Like the raster arm: a malformed stack drops without failing the document.
   adjustments: zAdjustments.optional().catch(undefined),
   blendMode: zBlendMode.optional().catch(undefined),
+  colorLabel: zColorLabel.optional().catch(undefined),
   id: z.string(),
   isEnabled: z.boolean(),
   isHidden: z.boolean().optional(),

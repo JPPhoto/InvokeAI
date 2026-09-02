@@ -575,7 +575,7 @@ export interface CanvasEngine {
 // Public Canvas-owned value contracts. These remain serializable and contain
 // no engine implementation, mutable store, controller, or construction type.
 export type * from './contracts';
-export { CANVAS_MAX_NODE_COUNT, CANVAS_MAX_NODE_DEPTH } from './contracts';
+export { CANVAS_COLOR_LABELS, CANVAS_MAX_NODE_COUNT, CANVAS_MAX_NODE_DEPTH } from './contracts';
 export type BooleanRasterOperation = 'intersect' | 'cutout' | 'cutaway' | 'exclude';
 export interface StagedPreviewPlacement extends Rect {
   opacity: number;
