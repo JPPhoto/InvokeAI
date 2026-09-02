@@ -607,3 +607,50 @@ describe('layer transforms', () => {
     expect(plain?.dirtyRect.y).toBe(256);
   });
 });
+
+describe('tap collapse', () => {
+  const sessionWithDrift = (drift: number) => {
+    const { backend } = createCapturingBackend();
+    const layers = createLayerCacheStore(backend);
+    layers.getOrCreate('L', 400, 400);
+    const ctx = {
+      backend,
+      createPath2D: () =>
+        ({ closePath: () => {}, lineTo: () => {}, moveTo: () => {}, quadraticCurveTo: () => {} }) as unknown as Path2D,
+      emitStrokeCommitted: vi.fn(),
+      invalidate: vi.fn(),
+      layers,
+      notifyLayerPainted: vi.fn(),
+    } as unknown as ToolContext;
+    const session = createStrokeSession({
+      clipMask: null,
+      color: '#f00',
+      composite: 'source-over',
+      ctx,
+      hardness: 1,
+      layerId: 'L',
+      opacity: 1,
+      pressureOpacity: false,
+      size: 50,
+      thinning: 0.5,
+      tool: 'brush',
+    });
+    session.addPoints([pointer(100, 100)]);
+    if (drift > 0) {
+      session.addPoints([pointer(100 + drift / 2, 100)]);
+      session.addPoints([pointer(100 + drift, 100)]);
+    }
+    return session.commit();
+  };
+
+  it('renders a click that drifted under a quarter diameter as the round tap dot', () => {
+    const clean = sessionWithDrift(0)!.dirtyRect;
+    expect(sessionWithDrift(6)!.dirtyRect).toEqual(clean);
+    expect(sessionWithDrift(12)!.dirtyRect).toEqual(clean);
+  });
+
+  it('still extends a deliberate drag past the collapse threshold', () => {
+    const clean = sessionWithDrift(0)!.dirtyRect;
+    expect(sessionWithDrift(40)!.dirtyRect.width).toBeGreaterThan(clean.width);
+  });
+});

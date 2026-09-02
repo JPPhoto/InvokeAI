@@ -41,7 +41,7 @@ import type { Viewport } from '@workbench/canvas-engine/viewport';
 export interface StrokeCommittedEvent {
   /** The layer that received the stroke. */
   layerId: string;
-  /** The painted region in document space (integer bounds, clamped to the document). */
+  /** The painted region in LAYER-LOCAL space (integer bounds, clamped to the paintable region). */
   dirtyRect: Rect;
   /** Cache pixels within `dirtyRect` before the stroke. */
   beforeImageData: ImageData;

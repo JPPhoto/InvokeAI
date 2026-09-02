@@ -351,6 +351,10 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
   let soft: RasterSurface | null = null;
 
   const points: StrokeSamplePoint[] = [];
+  // A click that drifts a few pixels must read as a round dot, not a capsule
+  // stretched by the flick. Below this much total travel the aim point (the
+  // first sample) IS the stroke.
+  const tapCollapseLength = Math.max(2, localSize * 0.25);
   // `beforeImageData` holds the pristine (pre-stroke) pixels of `accumRect`, in
   // LAYER-LOCAL coordinates — so it stays valid across a cache growth-realloc
   // (which only shifts the surface origin, not the layer-local geometry).
@@ -382,7 +386,17 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
     if (points.length === 0) {
       return;
     }
-    const { bounds, path, polygon } = strokeToPath(points, { last, size: localSize, thinning }, ctx.createPath2D);
+    let effective: readonly StrokeSamplePoint[] = points;
+    if (points.length > 1) {
+      let travel = 0;
+      for (let i = 1; i < points.length && travel < tapCollapseLength; i++) {
+        travel += Math.hypot(points[i]!.x - points[i - 1]!.x, points[i]!.y - points[i - 1]!.y);
+      }
+      if (travel < tapCollapseLength) {
+        effective = [points[0]!];
+      }
+    }
+    const { bounds, path, polygon } = strokeToPath(effective, { last, size: localSize, thinning }, ctx.createPath2D);
     let dirty: Rect | null = roundOut(featherBleed > 0 ? expand(bounds, featherBleed) : bounds);
     // Selection clip: only the region inside the selection can ever change, so
     // bound the dirty/growth region to the mask extent (and skip empty results).
@@ -504,7 +518,7 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
     strokeCtx.clearRect(refresh.x, refresh.y, refresh.width, refresh.height);
     strokeCtx.fillStyle = color;
 
-    const tapPoint = points.length === 1 ? points[0] : undefined;
+    const tapPoint = effective.length === 1 ? effective[0] : undefined;
     const isSubpixelTap =
       tapPoint !== undefined && bounds.width > 0 && bounds.width < 1 && bounds.height > 0 && bounds.height < 1;
 
@@ -524,7 +538,7 @@ export const createStrokeSession = (config: StrokeSessionConfig): StrokeSession 
       // would compound alpha wherever bands overlap — the exact darkening the single
       // full-alpha fill below exists to prevent. Replacing means the later (newer) band wins
       // in the overlap, which is the pressure the user is applying now.
-      for (const band of getPressureBands(points)) {
+      for (const band of getPressureBands(effective)) {
         const bandPath = strokeToPath(band.points, { last, size: localSize, thinning }, ctx.createPath2D).path;
 
         strokeCtx.globalCompositeOperation = 'destination-out';
