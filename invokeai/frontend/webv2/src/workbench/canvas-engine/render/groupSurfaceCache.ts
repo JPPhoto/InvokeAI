@@ -48,8 +48,13 @@ export interface GroupSurfaceCache {
 
 const matKey = (m: Mat2d): string => `${m.a},${m.b},${m.c},${m.d},${m.e},${m.f}`;
 
+// The frame composites with live session matrices while the overview composites
+// the settled contract, so one group legitimately holds two keys at once; two
+// slots stop those consumers evicting each other every tick.
+const SLOTS_PER_GROUP = 2;
+
 export const createGroupSurfaceCache = (deps: GroupSurfaceDeps): GroupSurfaceCache => {
-  const cache = new Map<string, { key: string; result: GroupSurfaceResult }>();
+  const cache = new Map<string, { key: string; result: GroupSurfaceResult }[]>();
 
   const scopeShapeKey = (scope: GroupAdjustmentScope): string =>
     `${scope.id}@${scope.start}-${scope.end}:${adjustmentsKey(scope.adjustments)}(${scope.children
@@ -163,24 +168,35 @@ export const createGroupSurfaceCache = (deps: GroupSurfaceDeps): GroupSurfaceCac
   return {
     byteSize: () => {
       let bytes = 0;
-      for (const { result } of cache.values()) {
-        bytes += result.rect.width * result.rect.height * 4;
+      for (const slots of cache.values()) {
+        for (const { result } of slots) {
+          bytes += result.rect.width * result.rect.height * 4;
+        }
       }
       return bytes;
     },
     clear: () => cache.clear(),
     get: (scope, members, memberMatrices, excludeIds) => {
       const key = buildKey(scope, members, memberMatrices, excludeIds);
-      const cached = cache.get(scope.id);
-      if (cached && cached.key === key) {
-        return cached.result;
+      const slots = cache.get(scope.id) ?? [];
+      const hitIndex = slots.findIndex((slot) => slot.key === key);
+      if (hitIndex >= 0) {
+        const hit = slots[hitIndex]!;
+        if (hitIndex > 0) {
+          slots.splice(hitIndex, 1);
+          slots.unshift(hit);
+        }
+        return hit.result;
       }
       const result = build(scope, members, memberMatrices, excludeIds, scope.start);
       if (result) {
-        cache.set(scope.id, { key, result });
-      } else {
-        cache.delete(scope.id);
+        slots.unshift({ key, result });
+        slots.length = Math.min(slots.length, SLOTS_PER_GROUP);
+        cache.set(scope.id, slots);
       }
+      // A null build (every member excluded or unrasterized) keeps existing
+      // slots: keys fully determine validity, so a warm slot held by the other
+      // consumer can only ever hit when genuinely valid.
       return result;
     },
     prune: (liveGroupIds) => {

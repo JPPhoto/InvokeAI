@@ -195,6 +195,64 @@ describe('group adjustment composite', () => {
     expect(adjusted?.r).toBe(255 - 0x40);
   });
 
+  it('holds two keys per group so alternating consumers (frame vs overview) stop rebuilding', () => {
+    // A transform session makes the frame composite session matrices while the
+    // overview composites the settled contract: two keys for one group, forever
+    // alternating. Two slots must absorb that; a third key still evicts.
+    const scene = sceneFor({ red: '#ff0000' });
+    let builds = 0;
+    const groupSurfaces = createGroupSurfaceCache({
+      createSurface: (w, h) => {
+        builds += 1;
+        return scene.backend.createSurface(w, h);
+      },
+      getAdjustedSurface: () => null,
+      getCacheEntry: (id) => scene.caches.get(id),
+    });
+    const docAt = (x: number) =>
+      docWith([
+        groupContract('g', [raster('red', { transform: { rotation: 0, scaleX: 1, scaleY: 1, x, y: 0 } })], {
+          adjustments: invertStack('ia'),
+        }),
+      ]);
+    const composite = (x: number) => {
+      const screen = scene.backend.createSurface(WIDTH, HEIGHT);
+      compositeDocument(screen, docAt(x), scene.caches, identity(), {
+        backend: scene.backend,
+        groupSurface: (scope, members, matrices, exclude) => groupSurfaces.get(scope, members, matrices, exclude),
+      });
+      return screen;
+    };
+
+    const first = centerPixel(composite(0));
+    composite(1);
+    expect(builds).toBe(2);
+    composite(0);
+    composite(1);
+    composite(0);
+    expect(builds).toBe(2);
+    expect(centerPixel(composite(0))).toEqual(first);
+
+    composite(2);
+    expect(builds).toBe(3);
+    // x:2 evicted the least-recently-used slot (x:1); x:0 is still warm.
+    composite(0);
+    expect(builds).toBe(3);
+    composite(1);
+    expect(builds).toBe(4);
+
+    // A null build (all members excluded, e.g. under a filter preview) must not
+    // evict the warm slots the other consumer still needs.
+    const screen = scene.backend.createSurface(WIDTH, HEIGHT);
+    compositeDocument(screen, docAt(1), scene.caches, identity(), {
+      backend: scene.backend,
+      groupSurface: (scope, members, matrices) => groupSurfaces.get(scope, members, matrices, new Set(['red'])),
+    });
+    const buildsAfterNull = builds;
+    composite(1);
+    expect(builds).toBe(buildsAfterNull);
+  });
+
   it('keeps identity and pass-through groups on the flat path and keys the plan by group stacks', () => {
     const flat = docWith([groupContract('g', [raster('white')])]);
     expect(planBaseRasterComposite(flat, BBOX).groupScopes).toBeUndefined();
