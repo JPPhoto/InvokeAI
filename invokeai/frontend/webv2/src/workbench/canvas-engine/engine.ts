@@ -3110,6 +3110,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
         groupSurface: getGroupSurface,
         imageSmoothing: true,
         maskPatternTile: getMaskPatternTile,
+        regionOverlays: true,
       }
     );
     return { height: doc.height, width: doc.width, x: 0, y: 0 };

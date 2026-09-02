@@ -128,12 +128,13 @@ const zControlAdapter = z
     return begin >= 0 && end <= 1 && begin < end;
   })
   .refine(({ kind, weight }) => weight >= (kind === 'z_image_control' ? 0 : -1) && weight <= 2);
+const zMaskFill = z.object({
+  color: z.string(),
+  style: z.enum(['solid', 'grid', 'crosshatch', 'diagonal', 'horizontal', 'vertical']),
+});
 const zMask = z.object({
   bitmap: zImageRef.nullable(),
-  fill: z.object({
-    color: z.string(),
-    style: z.enum(['solid', 'grid', 'crosshatch', 'diagonal', 'horizontal', 'vertical']),
-  }),
+  fill: zMaskFill,
   offset: zCoordinate.optional(),
 });
 const zGeneratedImage = z.object({
@@ -207,7 +208,10 @@ const zCanvasLayer = z.discriminatedUnion('type', [
   zLayerBase.extend({
     // A pre-stack adjustments OBJECT is dropped rather than failing the document.
     adjustments: zAdjustments.optional().catch(undefined),
-    inpaint: z.object({ isEnabled: z.boolean(), mask: zMask, name: z.string().optional() }).optional().catch(undefined),
+    inpaint: z
+      .object({ fill: zMaskFill, isEnabled: z.boolean(), name: z.string().optional() })
+      .optional()
+      .catch(undefined),
     filter: zFilter.optional(),
     isTransparencyLocked: z.boolean().optional(),
     source: zLayerSource,

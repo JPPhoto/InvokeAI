@@ -53,8 +53,8 @@ export const LayerRegionSettings = ({ engine, layer }: LayerRegionSettingsProps)
       }
       commitPrepared(t('widgets.layers.maskFill.fill'), (model) =>
         model.prepare({
-          before: { inpaint: { ...region, mask: { ...region.mask, fill: before } }, layerType: 'raster' },
-          config: { inpaint: { ...region, mask: { ...region.mask, fill: next } }, layerType: 'raster' },
+          before: { inpaint: { ...region, fill: before }, layerType: 'raster' },
+          config: { inpaint: { ...region, fill: next }, layerType: 'raster' },
           id: layer.id,
           type: 'patch-config',
         })
@@ -71,7 +71,7 @@ export const LayerRegionSettings = ({ engine, layer }: LayerRegionSettingsProps)
       if (
         !applyStructuralPreview(engine, {
           config: {
-            inpaint: { ...region, mask: { ...region.mask, fill: { ...region.mask.fill, color: hex } } },
+            inpaint: { ...region, fill: { ...region.fill, color: hex } },
             layerType: 'raster',
           },
           id: layer.id,
@@ -80,7 +80,7 @@ export const LayerRegionSettings = ({ engine, layer }: LayerRegionSettingsProps)
       ) {
         return;
       }
-      fillBeforeRef.current ??= region.mask.fill;
+      fillBeforeRef.current ??= region.fill;
     },
     [engine, layer.id, region]
   );
@@ -90,7 +90,7 @@ export const LayerRegionSettings = ({ engine, layer }: LayerRegionSettingsProps)
       if (!region) {
         return;
       }
-      const before = fillBeforeRef.current ?? region.mask.fill;
+      const before = fillBeforeRef.current ?? region.fill;
       fillBeforeRef.current = null;
       commitFill({ ...before, color: hex }, before);
     },
@@ -100,18 +100,18 @@ export const LayerRegionSettings = ({ engine, layer }: LayerRegionSettingsProps)
   const handleStyleChange = useCallback(
     ({ value }: SelectValueChangeDetails) => {
       const style = value[0] as CanvasMaskFillContract['style'] | undefined;
-      if (region && style && style !== region.mask.fill.style) {
-        commitFill({ ...region.mask.fill, style }, region.mask.fill);
+      if (region && style && style !== region.fill.style) {
+        commitFill({ ...region.fill, style }, region.fill);
       }
     },
     [commitFill, region]
   );
 
-  const styleValue = useMemo(() => [region?.mask.fill.style ?? 'solid'], [region?.mask.fill.style]);
+  const styleValue = useMemo(() => [region?.fill.style ?? 'solid'], [region?.fill.style]);
   if (!region) {
     return null;
   }
-  const fill = region.mask.fill;
+  const fill = region.fill;
 
   return (
     <Stack gap="2">

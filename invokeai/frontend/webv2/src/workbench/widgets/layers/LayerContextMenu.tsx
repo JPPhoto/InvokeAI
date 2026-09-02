@@ -745,7 +745,7 @@ const LayerMenu = ({
       model.prepare({
         before: { inpaint: null, layerType: 'raster' },
         config: {
-          inpaint: { isEnabled: true, mask: { bitmap: null, fill: { ...DEFAULT_INPAINT_MASK_FILL } } },
+          inpaint: { fill: { ...DEFAULT_INPAINT_MASK_FILL }, isEnabled: true },
           layerType: 'raster',
         },
         id: layer.id,

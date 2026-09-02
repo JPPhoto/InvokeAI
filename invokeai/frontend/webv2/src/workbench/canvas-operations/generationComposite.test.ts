@@ -343,6 +343,31 @@ describe('composeForGeneration', () => {
     expect(result.composites.maskImageName).toBe('composite-2.png');
   });
 
+  it("composites a regenerate-region raster's own surface into the inpaint mask", async () => {
+    const base = rasterLayer('base');
+    const regionLayer: CanvasRasterLayerContractV2 = {
+      ...base,
+      inpaint: { fill: { color: '#e07575', style: 'diagonal' }, isEnabled: true },
+    };
+    const harness = makeHost(makeDoc([regionLayer]));
+    const detectMode = vi.fn((facts: GenerationModeFacts) =>
+      facts.hasActiveInpaintMask ? ('inpaint' as const) : ('img2img' as const)
+    );
+
+    const result = await compose(harness.host, { detectMode });
+
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') {
+      return;
+    }
+    // Base upload + the region-driven inpaint-mask upload; the mask composite
+    // read the raster layer's own surface — the mask IS the layer content.
+    expect(result.composites.mode).toBe('inpaint');
+    expect(result.composites.maskImageName).toBe('composite-2.png');
+    expect(harness.surfaceIds).toContain('base');
+    expect(detectMode).toHaveBeenCalledWith(expect.objectContaining({ hasActiveInpaintMask: true }));
+  });
+
   it.each([
     { expectedMask: null, expectedNoise: null, expectedUploads: 2, mode: 'img2img' as const },
     { expectedMask: 'composite-2.png', expectedNoise: 'composite-3.png', expectedUploads: 3, mode: 'inpaint' as const },

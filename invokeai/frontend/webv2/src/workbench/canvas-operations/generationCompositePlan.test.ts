@@ -283,6 +283,53 @@ describe('planComposites — inpaint-mask entries', () => {
     expect(entry!.maskLayers!.map((l) => l.id)).toEqual(['shown', 'hidden']);
   });
 
+  it("unions a regenerate-region raster's own alpha into the inpaint mask at full denoise", () => {
+    const region = { fill: { color: '#e07575', style: 'diagonal' as const }, isEnabled: true };
+    const doc = makeDoc([rasterLayer('r1', { inpaint: region }), inpaintMask('m1')]);
+    const entry = entryOfKind(doc, 'inpaint-mask');
+    expect(entry!.maskLayers!.map((l) => l.id)).toEqual(['m1', 'r1']);
+    const ref = entry!.maskLayers![1]!;
+    expect(ref.attributeValue).toBe(1);
+    expect(ref.sourceRef).toBe('region:image:r1');
+    expect(ref.contentSize).toEqual({ height: 48, width: 64 });
+  });
+
+  it('emits an inpaint-mask entry for a region alone, and never a noise entry for it', () => {
+    const region = { fill: { color: '#e07575', style: 'diagonal' as const }, isEnabled: true };
+    const kinds = planComposites(makeDoc([rasterLayer('r1', { inpaint: region })]), BBOX).entries.map((e) => e.kind);
+    expect(kinds).toEqual(['base-raster', 'inpaint-mask']);
+  });
+
+  it('excludes disabled regions, empty paint layers, disabled layers, and unrasterizable polygons', () => {
+    const region = { fill: { color: '#e07575', style: 'diagonal' as const }, isEnabled: true };
+    const doc = makeDoc([
+      rasterLayer('on', { inpaint: region }),
+      rasterLayer('off', { inpaint: { ...region, isEnabled: false } }),
+      rasterLayer('empty', { inpaint: region, source: { bitmap: null, type: 'paint' } }),
+      rasterLayer('layer-off', { inpaint: region, isEnabled: false }),
+      rasterLayer('poly', {
+        inpaint: region,
+        source: { fill: '#fff', height: 10, kind: 'polygon', width: 10, type: 'shape' } as never,
+      }),
+    ]);
+    const entry = entryOfKind(doc, 'inpaint-mask');
+    expect(entry!.maskLayers!.map((l) => l.id)).toEqual(['on']);
+  });
+
+  it("keys a parametric-source region on the source's pixel-determining fields", () => {
+    const region = { fill: { color: '#e07575', style: 'diagonal' as const }, isEnabled: true };
+    const textDoc = (content: string) =>
+      makeDoc([
+        rasterLayer('t1', {
+          inpaint: region,
+          source: { color: '#fff', content, fontFamily: 'Inter', fontSize: 24, type: 'text' } as never,
+        }),
+      ]);
+    const keyFor = (doc: CanvasDocumentContractV3) => entryOfKind(doc, 'inpaint-mask')!.key;
+    expect(keyFor(textDoc('HELLO'))).not.toBe(keyFor(textDoc('WORLD')));
+    expect(keyFor(textDoc('HELLO'))).toBe(keyFor(textDoc('HELLO')));
+  });
+
   it('resolves an undefined denoiseLimit to the legacy default (1.0)', () => {
     const entry = entryOfKind(makeDoc([inpaintMask('m1')]), 'inpaint-mask');
     expect(entry!.maskLayers![0]!.attributeValue).toBe(1);

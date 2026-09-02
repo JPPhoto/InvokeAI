@@ -11,7 +11,7 @@ import type { Mat2d } from '@workbench/canvas-engine/types';
 import { createCanvasDiagnostics } from '@workbench/canvas-engine/diagnostics';
 import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { identity } from '@workbench/canvas-engine/math/mat2d';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { RasterCallLogEntry, StubRasterSurface } from './raster.testStub';
 
@@ -375,6 +375,76 @@ describe('compositeDocument', () => {
     expect(findSet(colorized!.callLog, 'fillStyle')).toContain('#ff0000');
     // The colorized overlay is then blitted onto the target.
     expect(target.callLog.some((e) => e.op === 'drawImage')).toBe(true);
+  });
+
+  it("draws an enabled regenerate region as the layer's OWN content colorized above it; a disabled one draws nothing extra", () => {
+    const base = createTestStubRasterBackend();
+    const created: StubRasterSurface[] = [];
+    const backend = {
+      ...base,
+      createSurface: (w: number, h: number): StubRasterSurface => {
+        const surface = base.createSurface(w, h);
+        created.push(surface);
+        return surface;
+      },
+    };
+    const caches = createLayerCacheStore(backend);
+    const cacheEntry = caches.getOrCreate('r', 10, 10);
+    const layer = rasterLayer('r', {
+      inpaint: { fill: { color: '#e07575', style: 'solid' }, isEnabled: true },
+    });
+    const target = backend.createSurface(200, 200);
+
+    compositeDocument(target, makeDoc([layer]), caches, VIEW, { backend, regionOverlays: true });
+
+    // The colorize reads the LAYER's cache surface — the mask IS the content.
+    const colorized = created.find(
+      (s) =>
+        s !== target &&
+        s !== (cacheEntry.surface as StubRasterSurface) &&
+        s.callLog.some((e) => e.op === 'set' && e.args[0] === 'globalCompositeOperation' && e.args[1] === 'source-in')
+    );
+    expect(colorized).toBeDefined();
+    expect(findSet(colorized!.callLog, 'fillStyle')).toContain('#e07575');
+    // Layer blit + colorized coverage blit both land on the target.
+    expect(target.callLog.filter((e) => e.op === 'drawImage')).toHaveLength(2);
+
+    const disabledTarget = backend.createSurface(200, 200);
+    const disabledLayer = rasterLayer('r', {
+      inpaint: { fill: { color: '#e07575', style: 'solid' }, isEnabled: false },
+    });
+    compositeDocument(disabledTarget, makeDoc([disabledLayer]), caches, VIEW, { backend, regionOverlays: true });
+    expect(disabledTarget.callLog.filter((e) => e.op === 'drawImage')).toHaveLength(1);
+  });
+
+  it('overlays a region member above its adjusted group composite', () => {
+    const backend = createTestStubRasterBackend();
+    const caches = createLayerCacheStore(backend);
+    caches.getOrCreate('r', 10, 10);
+    const target = backend.createSurface(200, 200);
+    const groupResult = backend.createSurface(50, 50);
+    const layer = rasterLayer('r', {
+      inpaint: { fill: { color: '#e07575', style: 'solid' }, isEnabled: true },
+    });
+    const doc = makeDoc([]);
+    doc.stacks.raster = [
+      {
+        adjustments: [{ id: 'ga', isEnabled: true, type: 'invert' }],
+        children: [layer],
+        id: 'g1',
+        isEnabled: true,
+        isLocked: false,
+        name: 'g1',
+        type: 'group',
+      } as never,
+    ];
+    const groupSurface = vi.fn(() => ({ rect: { height: 50, width: 50, x: 0, y: 0 }, surface: groupResult }));
+
+    compositeDocument(target, doc, caches, VIEW, { backend, groupSurface, regionOverlays: true });
+
+    expect(groupSurface).toHaveBeenCalled();
+    // Group composite blit + the member's colorized region overlay.
+    expect(target.callLog.filter((e) => e.op === 'drawImage')).toHaveLength(2);
   });
 
   it('performs no effect allocations or pixel readbacks on a warmed unchanged composite', () => {

@@ -213,6 +213,8 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
         // map per frame for the overwhelmingly common case of none.
         layerPreviews: !isolatedGuard && previews.filterCount() > 0 ? previews.filterSnapshot() : null,
         maskPatternTile: deps.getMaskPatternTile,
+        // Screen frames are display-time: the region tint may draw.
+        regionOverlays: true,
         // Candidate-specific placement wins for final images. Progress frames
         // and legacy image inputs continue to follow the CURRENT bbox origin.
         stagedPreview:

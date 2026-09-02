@@ -106,8 +106,8 @@ describe('loadCanvasState', () => {
 
   it('round-trips a layer regenerate region and drops a malformed one without failing the layer', () => {
     const inpaint = {
+      fill: { color: '#e07575', style: 'diagonal' },
       isEnabled: true,
-      mask: { bitmap: null, fill: { color: '#e07575', style: 'diagonal' }, offset: { x: 4, y: -2 } },
       name: 'Face',
     };
     const loaded = load(withNodes([{ ...createEmptyPaintLayer('Region', 'region'), inpaint }]));

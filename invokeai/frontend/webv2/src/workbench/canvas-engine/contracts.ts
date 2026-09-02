@@ -237,15 +237,17 @@ export interface CanvasMaskContract {
 }
 
 /**
- * A raster layer's attached regenerate region: coverage in the PARENT's local
- * space (it rides the layer's transform), unioned into generation's inpaint
- * coverage while the layer contributes. Singleton, like a mask's noise
- * modifier; absent ⇒ never added.
+ * A raster layer's attached regenerate region: the layer's OWN content alpha
+ * presented as a live inpaint mask ("copy to inpaint mask", non-destructively).
+ * Every stroke, erase, and transform of the layer updates the coverage, which
+ * unions into generation's inpaint mask while the layer contributes. Singleton,
+ * like a mask's noise modifier; absent ⇒ never added. Carries no pixels of its
+ * own — only the overlay fill.
  */
 export interface CanvasLayerRegionContract {
   isEnabled: boolean;
   name?: string;
-  mask: CanvasMaskContract;
+  fill: CanvasMaskFillContract;
 }
 
 export interface CanvasRasterLayerContractV2 extends CanvasLayerBaseContract {

@@ -17,6 +17,7 @@ import type {
   CanvasBlendMode,
   CanvasDocumentContractV3,
   CanvasLayerContract,
+  CanvasMaskFillContract,
 } from '@workbench/canvas-engine/contracts';
 import type { CanvasDiagnostics } from '@workbench/canvas-engine/diagnostics';
 import type { SemanticLeaf } from '@workbench/canvas-engine/document-model/semanticLeaf';
@@ -155,6 +156,14 @@ export interface CompositeOptions {
    * the checkerboard). Absent ⇒ solid fills only.
    */
   maskPatternTile?: ((style: string, color: string) => RasterSurface | null) | null;
+  /**
+   * Opt-in for the regenerate-region overlays (a raster layer's own alpha
+   * colorized above it while its region is enabled). STRICTLY display-time:
+   * only screen frames and the Overview pass it — a composite whose pixels are
+   * consumed (generation, extraction, color sampling, exports) must not, or the
+   * tint becomes real content.
+   */
+  regionOverlays?: boolean;
   /**
    * Transient per-layer content previews (a non-destructive control-filter
    * preview): a layer with an entry here draws the preview surface at its returned
@@ -481,7 +490,55 @@ const drawCachedLayer = (
     ctx.drawImage((adjusted ?? entry.surface).canvas, origin.x, origin.y);
   }
 
+  if (opts.regionOverlays && layer.type === 'raster' && layer.inpaint?.isEnabled && !preview && !isIsolated(opts)) {
+    drawRegionCoverage(ctx, layer.id, layer.inpaint.fill, entry, opts);
+  }
+
   ctx.restore();
+};
+
+/**
+ * Draws a raster layer's regenerate region: the layer's OWN content alpha,
+ * colorized like an inpaint mask and laid directly above the layer through the
+ * same (already applied) transform. The mask IS the layer — every stroke,
+ * erase, and transform updates it live, with nothing separate to persist.
+ */
+const drawRegionCoverage = (
+  ctx: Ctx,
+  layerId: string,
+  fill: CanvasMaskFillContract,
+  coverage: { surface: RasterSurface; rect: Rect; version: number },
+  opts: CompositeOptions
+): void => {
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = MASK_TINT_ALPHA;
+  if (opts.backend) {
+    const tile = opts.maskPatternTile ? opts.maskPatternTile(fill.style, fill.color) : null;
+    const colorized = opts.derivedSurfaces
+      ? opts.derivedSurfaces.get({
+          create: (target) =>
+            colorizeMask(
+              opts.backend!,
+              coverage.surface,
+              coverage.surface.width,
+              coverage.surface.height,
+              fill,
+              tile,
+              target
+            ),
+          kind: 'region-fill',
+          layerId,
+          paramsKey: `${fill.style}:${fill.color}`,
+          source: coverage.surface,
+          sourceVersion: coverage.version,
+        })
+      : colorizeMask(opts.backend, coverage.surface, coverage.surface.width, coverage.surface.height, fill, tile);
+    ctx.drawImage(colorized.canvas, coverage.rect.x, coverage.rect.y);
+    return;
+  }
+  ctx.fillStyle = fill.color;
+  ctx.drawImage(coverage.surface.canvas, coverage.rect.x, coverage.rect.y);
+  ctx.fillRect(coverage.rect.x, coverage.rect.y, coverage.rect.width, coverage.rect.height);
 };
 
 /**
@@ -622,6 +679,27 @@ export const compositeDocument = (
             drawLeafFlat(member);
           } else if (opts.floatingSelection?.layerId === member.id) {
             drawFloatingSelection(ctx, member, view, opts, opts.floatingSelection);
+          }
+        }
+        // Region overlays are display-only, so they ride ABOVE the group
+        // composite rather than being baked into (and staled with) its memo.
+        for (let memberIndex = 0; opts.regionOverlays && memberIndex < members.length; memberIndex += 1) {
+          const member = members[memberIndex]!;
+          const { layer } = member;
+          if (
+            excluded.has(member.id) ||
+            member.id === opts.skipLayerId ||
+            layer.type !== 'raster' ||
+            !layer.inpaint?.isEnabled
+          ) {
+            continue;
+          }
+          const memberEntry = caches.get(member.id);
+          if (memberEntry && memberEntry.rect.width > 0 && memberEntry.rect.height > 0) {
+            ctx.save();
+            setTransformFromMat(ctx, multiply(view, matrices[memberIndex]!));
+            drawRegionCoverage(ctx, layer.id, layer.inpaint.fill, memberEntry, opts);
+            ctx.restore();
           }
         }
         index = scope.end - 1;

@@ -760,7 +760,7 @@ describe('createDocumentModel', () => {
       const project = projectWith(flat(), 'r1');
       const inpaint = {
         isEnabled: true,
-        mask: { bitmap: null, fill: { color: '#e07575', style: 'diagonal' as const } },
+        fill: { color: '#e07575', style: 'diagonal' as const },
       };
       const added = roundTrip(project, {
         before: { inpaint: null, layerType: 'raster' },

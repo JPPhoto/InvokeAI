@@ -444,7 +444,7 @@ describe('layerChildDropCommand id collisions', () => {
 describe('layer regenerate region child row', () => {
   const region = (overrides = {}) => ({
     isEnabled: true,
-    mask: { bitmap: null, fill: { color: '#e07575', style: 'diagonal' as const } },
+    fill: { color: '#e07575', style: 'diagonal' as const },
     ...overrides,
   });
   const rasterWithRegion = (overrides = {}) => layerContract('r1', 'raster', { inpaint: region(overrides) });
