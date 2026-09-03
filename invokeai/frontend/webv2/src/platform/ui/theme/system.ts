@@ -242,6 +242,16 @@ const config = defineConfig({
       margin: 0,
       overflow: 'hidden',
     },
+    // Interactive elements keep the default arrow even over their text —
+    // without this, non-button rows (picker options, menu items) compute
+    // `auto` and show the I-beam. Recipes still override (e.g. not-allowed).
+    // Attribute values stay unquoted: serialized markup assertions (SamOptions)
+    // grep for the quoted forms. No `[role=combobox]` — zag puts that role on
+    // type-able inputs, which must keep the I-beam.
+    'button, [role=button], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=option], [role=tab], [role=radio], [role=checkbox], [role=switch]':
+      {
+        cursor: 'default',
+      },
     // While a gallery-item drag is in flight (body flag set by
     // GalleryDragCursor) the closed-hand cursor applies everywhere: without
     // the descendant rule, every element that sets its own cursor (buttons,
