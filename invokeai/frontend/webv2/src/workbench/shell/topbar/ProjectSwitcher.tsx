@@ -1,5 +1,6 @@
 import type { Project } from '@workbench/projectContracts';
 import type { ProjectSummary } from '@workbench/projects/library';
+import type { MouseEvent } from 'react';
 
 import { Icon, Menu, Portal, Stack, Text } from '@chakra-ui/react';
 import { flushGenerateDrafts } from '@features/generation/react';
@@ -70,6 +71,15 @@ export const ProjectSwitcher = () => {
       void refreshProjectLibrary();
     }
   }, []);
+
+  // Right-click opens the same dropdown: the trigger IS this control's context.
+  const handleTriggerContextMenu = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      handleMenuOpenChange({ open: true });
+    },
+    [handleMenuOpenChange]
+  );
 
   const getProject = useCallback((projectId: string): Project | null => queries.getProject(projectId), [queries]);
 
@@ -168,6 +178,7 @@ export const ProjectSwitcher = () => {
             aria-label={t('topbar.projectSwitcher.trigger', { name: activeProjectName })}
             size="sm"
             variant="ghost"
+            onContextMenu={handleTriggerContextMenu}
           >
             <MiddleTruncate css={HIDE_BELOW_PROJECT_NAME_WIDTH} fontWeight="500" minW="0" text={activeProjectName} />
             <Icon as={ChevronsUpDownIcon} boxSize="3" color="fg.subtle" flexShrink={0} />

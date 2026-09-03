@@ -19,6 +19,9 @@ export const tooltipSlotRecipe = defineSlotRecipe({
       borderWidth: '1px',
       boxShadow: 'lg',
       color: 'fg',
+      // Chakra's `fast` scale-fade drags on an annotation this small.
+      _open: { ...chakraSlotRecipes.tooltip.base?.content?._open, animationDuration: 'faster' },
+      _closed: { ...chakraSlotRecipes.tooltip.base?.content?._closed, animationDuration: 'faster' },
     },
     arrowTip: {
       ...chakraSlotRecipes.tooltip.base?.arrowTip,
@@ -190,7 +193,7 @@ export const buttonRecipe = defineRecipe({
     size: {
       ...chakraRecipes.button.variants?.size,
       xs: { ...chakraRecipes.button.variants?.size?.xs, h: '7', minW: '7' },
-      sm: { ...chakraRecipes.button.variants?.size?.sm, h: '8', minW: '8', textStyle: 'xs' },
+      sm: { ...chakraRecipes.button.variants?.size?.sm, h: '8', minW: '8', px: '3', textStyle: 'xs' },
       md: { ...chakraRecipes.button.variants?.size?.md, h: '9', minW: '9', textStyle: 'xs' },
     },
     variant: {

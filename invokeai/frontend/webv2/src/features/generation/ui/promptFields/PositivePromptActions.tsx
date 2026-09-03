@@ -222,16 +222,23 @@ export const AddPromptTriggerButton = ({
   onOpenPromptTriggerPicker: (anchorElement: HTMLElement) => void;
 }) => {
   const { t } = useTranslation();
+  // Not disabled while open like it used to be: the greyed button read as
+  // broken next to the other action popovers' expanded tint. The guard keeps
+  // the dismiss-then-click sequence from immediately reopening.
   const handleClick = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => onOpenPromptTriggerPicker(event.currentTarget),
-    [onOpenPromptTriggerPicker]
+    (event: MouseEvent<HTMLButtonElement>) => {
+      if (!isOpen) {
+        onOpenPromptTriggerPicker(event.currentTarget);
+      }
+    },
+    [isOpen, onOpenPromptTriggerPicker]
   );
 
   return (
     <Tooltip content={t('widgets.generate.addPromptTrigger')}>
       <IconButton
+        aria-expanded={isOpen}
         aria-label={t('widgets.generate.addPromptTrigger')}
-        disabled={isOpen}
         size="2xs"
         variant="ghost"
         onClick={handleClick}
@@ -341,8 +348,13 @@ export const PromptTriggerPopover = ({
 const PromptTriggerEmptyState = () => {
   const { t } = useTranslation();
 
+  // The same anatomy as the image-to-prompt popover's no-model branch:
+  // uppercase title, one subtle line, the model-manager button.
   return (
-    <Stack align="start" gap="1" px="1">
+    <Stack align="start" gap="2.5">
+      <Text color="fg.subtle" fontSize="2xs" fontWeight="700" textTransform="uppercase">
+        {t('widgets.generate.addPromptTrigger')}
+      </Text>
       <Text color="fg.subtle" fontSize="xs">
         {t('widgets.generate.noPromptTriggersAvailable')}
       </Text>

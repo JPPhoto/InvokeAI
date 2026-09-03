@@ -1,5 +1,5 @@
 import type { BoxProps } from '@chakra-ui/react';
-import type { ReactNode, Ref } from 'react';
+import type { PointerEvent, ReactNode, Ref } from 'react';
 
 import { Box } from '@chakra-ui/react';
 import { inputShellInteraction } from '@theme/recipes';
@@ -11,6 +11,22 @@ export interface InputShellProps extends BoxProps {
   /** Trailing adornments (clear/help buttons), outside the content cell. */
   endElement?: ReactNode;
 }
+
+/** Chrome clicks focus the field like a native input; adornment controls keep their own clicks. */
+const focusInnerInput = (event: PointerEvent<HTMLDivElement>) => {
+  const target = event.target as HTMLElement;
+
+  if (target.closest('button, input, textarea, select, a')) {
+    return;
+  }
+
+  const input = event.currentTarget.querySelector<HTMLElement>('input, textarea, [contenteditable]');
+
+  if (input) {
+    event.preventDefault();
+    input.focus();
+  }
+};
 
 /**
  * The themed input's chrome for composite fields whose focusable element lives
@@ -27,13 +43,18 @@ export const InputShell = ({ children, endElement, ref, startElement, ...boxProp
     borderRadius="control"
     borderWidth="1px"
     css={inputShellInteraction}
+    cursor="text"
     display="flex"
     gap="1.5"
     h="7"
     minW="0"
-    px="2"
+    // Trailing icon buttons carry their own inset; full end padding pushes
+    // them visibly further from the border than the leading glyph sits.
+    pe={endElement ? '1' : '2'}
+    ps="2"
     textStyle="xs"
     w="full"
+    onPointerDown={focusInnerInput}
     {...boxProps}
   >
     {startElement}

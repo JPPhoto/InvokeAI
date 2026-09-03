@@ -18,7 +18,7 @@ import {
   Scrollable,
   Tooltip,
 } from '@platform/ui';
-import { BookmarkIcon, PencilIcon, PlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
+import { BookmarkIcon, CheckIcon, PencilIcon, PlusIcon, SearchIcon, Trash2Icon } from 'lucide-react';
 import { useCallback, useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -82,7 +82,6 @@ const PresetRow = ({
   return (
     <HStack gap="0.5">
       <Row
-        active={isActive ? 'accent' : 'none'}
         aria-current={isActive || undefined}
         asChild
         flex="1"
@@ -91,13 +90,16 @@ const PresetRow = ({
         minW="0"
         px="2"
         rounded="control"
-        _hover={isActive ? undefined : PRESET_ROW_HOVER_PROPS}
+        _hover={PRESET_ROW_HOVER_PROPS}
       >
         <button type="button" onClick={handleApply}>
-          <Icon as={BookmarkIcon} boxSize="3.5" color={isActive ? 'accent.contrast' : 'fg.subtle'} flexShrink={0} />
-          <Text flex="1" fontSize="xs" minW="0" textAlign="start" truncate>
+          <Icon as={BookmarkIcon} boxSize="3.5" color="fg.subtle" flexShrink={0} />
+          <Text flex="1" fontSize="xs" fontWeight={isActive ? '600' : undefined} minW="0" textAlign="start" truncate>
             {preset.label}
           </Text>
+          {/* The applied marker: a check, not a filled row — the popover
+              surface stays quiet and the accent stays an accent. */}
+          {isActive ? <Icon as={CheckIcon} boxSize="3.5" color="accent.fg" flexShrink={0} /> : null}
         </button>
       </Row>
       <Tooltip content={t('common.rename')}>
