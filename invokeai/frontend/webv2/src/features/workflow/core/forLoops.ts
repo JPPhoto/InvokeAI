@@ -20,6 +20,37 @@ export type ForLoopGraphError =
   | 'nodes.forLoopLinkageDuplicate'
   | 'nodes.forReturnOwnership';
 
+const FOR_LOOP_VALIDATION_PREFIX = 'For loop validation failed: ';
+const FOR_LOOP_GRAPH_ERRORS: ReadonlySet<string> = new Set([
+  'nodes.forLoopMissingIterationOutput',
+  'nodes.forLoopReturnCount',
+  'nodes.forLoopUnterminatedBody',
+  'nodes.forLoopNestedUnsupported',
+  'nodes.forLoopIterateUnsupported',
+  'nodes.forLoopIteratorInputUnsupported',
+  'nodes.forLoopFinalOutputInBody',
+  'nodes.forLoopBodyEscape',
+  'nodes.forLoopInputCount',
+  'nodes.forReturnInputCount',
+  'nodes.forLoopLinkageMissing',
+  'nodes.forLoopLinkageInvalid',
+  'nodes.forLoopLinkageDuplicate',
+  'nodes.forReturnOwnership',
+]);
+
+export const localizeForLoopValidationReason = (reason: string, translate: (key: string) => string): string => {
+  if (!reason.startsWith(FOR_LOOP_VALIDATION_PREFIX) || !reason.endsWith('.')) {
+    return reason;
+  }
+
+  const error = reason.slice(FOR_LOOP_VALIDATION_PREFIX.length, -1);
+  if (!FOR_LOOP_GRAPH_ERRORS.has(error)) {
+    return reason;
+  }
+
+  return `${translate('nodes.forLoopValidationFailed')}: ${translate(error)}.`;
+};
+
 export type LoopBodyBoundaryStatus =
   | 'complete'
   | 'missing_linkage'
@@ -714,7 +745,7 @@ export const validateForLoopGraph = (
         (edge) =>
           edge.source.node_id === node.id &&
           FINAL_OUTPUT_FIELDS.has(edge.source.field) &&
-          bodyPathNodeIds.has(edge.destination.node_id)
+          (bodyPathNodeIds.has(edge.destination.node_id) || hasPath(edge.destination.node_id, returnId))
       )
     ) {
       return 'nodes.forLoopFinalOutputInBody';

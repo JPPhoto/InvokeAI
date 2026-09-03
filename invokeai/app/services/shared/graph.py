@@ -3516,7 +3516,9 @@ class Graph(BaseModel):
                     return "For loop body does not support iterator-derived external inputs"
 
         for edge in self._get_for_final_output_edges(node_id):
-            if edge.destination.node_id in body_path_nodes:
+            if edge.destination.node_id in body_path_nodes or nx.has_path(
+                graph, edge.destination.node_id, return_node_id
+            ):
                 return "final-scoped For outputs cannot feed the loop body"
 
         for body_node_id in body_path_nodes:

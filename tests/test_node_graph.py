@@ -819,6 +819,31 @@ def test_graph_rejects_final_scoped_for_output_into_body():
         g.validate_self()
 
 
+def test_graph_rejects_final_scoped_for_output_through_branch_to_return():
+    g = Graph()
+    loop = ForInvocation(id="for", collection=["a", "b"])
+    body = AnyTypeTestInvocation(id="body")
+    body_return = ForReturnInvocation(id="return")
+    downstream = AnyTypeTestInvocation(id="downstream")
+    downstream_tail = AnyTypeTestInvocation(id="downstream_tail")
+
+    for node in (loop, body, body_return, downstream, downstream_tail):
+        g.add_node(node)
+    g.edges.extend(
+        [
+            create_edge(loop.id, "item", body.id, "value"),
+            create_edge(body.id, "value", body_return.id, "output"),
+            create_edge(loop.id, "final_state", downstream.id, "value"),
+            create_edge(downstream.id, "value", downstream_tail.id, "value"),
+            create_edge(downstream_tail.id, "value", body_return.id, "state"),
+            create_loop_linkage(loop.id, body_return.id),
+        ]
+    )
+
+    with pytest.raises(InvalidEdgeError, match="final-scoped"):
+        g.validate_self()
+
+
 def test_graph_rejects_orphan_for_return():
     g = Graph()
     body_return = ForReturnInvocation(id="return")

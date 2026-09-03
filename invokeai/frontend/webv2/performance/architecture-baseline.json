@@ -2,10 +2,10 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 842332,
+        "brotliBytes": 842323,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 841167,
+        "gzipBytes": 841164,
         "imageRawBytes": 156376,
         "initialRawBytes": 1961176,
         "largestAssetRawBytes": 746400,
@@ -291,10 +291,10 @@
         ]
       },
       "limits": {
-        "brotliBytes": 850756,
+        "brotliBytes": 850747,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 849579,
+        "gzipBytes": 849576,
         "imageRawBytes": 157940,
         "initialRawBytes": 1980788,
         "largestAssetRawBytes": 753864,
@@ -309,12 +309,12 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1111234,
+        "brotliBytes": 1115456,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1106583,
+        "gzipBytes": 1110555,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2776741,
+        "initialRawBytes": 2792218,
         "largestAssetRawBytes": 746400,
         "otherAssetRawBytes": 0,
         "ownedRawBytes": 114915,
@@ -616,6 +616,7 @@
           "source:src/features/workflow/core/connectors.ts",
           "source:src/features/workflow/core/document.ts",
           "source:src/features/workflow/core/fields.ts",
+          "source:src/features/workflow/core/forLoops.ts",
           "source:src/features/workflow/core/graphIndex.ts",
           "source:src/features/workflow/core/types.ts",
           "source:src/features/workflow/core/validation.ts",
@@ -936,12 +937,12 @@
         ]
       },
       "limits": {
-        "brotliBytes": 1122347,
+        "brotliBytes": 1126611,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 1117649,
+        "gzipBytes": 1121661,
         "imageRawBytes": 157940,
-        "initialRawBytes": 2804509,
+        "initialRawBytes": 2820141,
         "largestAssetRawBytes": 753864,
         "otherAssetRawBytes": 0,
         "ownedRawBytes": 114915,
@@ -953,7 +954,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-02",
+  "capturedAt": "2026-09-03",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",

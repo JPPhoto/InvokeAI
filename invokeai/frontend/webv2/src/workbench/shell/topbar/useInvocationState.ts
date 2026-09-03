@@ -31,6 +31,33 @@ import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const selectInvocationRouteInput = createInvocationRouteInputSelector();
+const FOR_LOOP_VALIDATION_PREFIX = 'For loop validation failed: ';
+const FOR_LOOP_GRAPH_ERRORS: ReadonlySet<string> = new Set([
+  'nodes.forLoopMissingIterationOutput',
+  'nodes.forLoopReturnCount',
+  'nodes.forLoopUnterminatedBody',
+  'nodes.forLoopNestedUnsupported',
+  'nodes.forLoopIterateUnsupported',
+  'nodes.forLoopIteratorInputUnsupported',
+  'nodes.forLoopFinalOutputInBody',
+  'nodes.forLoopBodyEscape',
+  'nodes.forLoopInputCount',
+  'nodes.forReturnInputCount',
+  'nodes.forLoopLinkageMissing',
+  'nodes.forLoopLinkageInvalid',
+  'nodes.forLoopLinkageDuplicate',
+  'nodes.forReturnOwnership',
+]);
+const localizeForLoopValidationReason = (reason: string, translate: (key: string) => string): string => {
+  if (!reason.startsWith(FOR_LOOP_VALIDATION_PREFIX) || !reason.endsWith('.')) {
+    return reason;
+  }
+
+  const error = reason.slice(FOR_LOOP_VALIDATION_PREFIX.length, -1);
+  return FOR_LOOP_GRAPH_ERRORS.has(error)
+    ? `${translate('nodes.forLoopValidationFailed')}: ${translate(error)}.`
+    : reason;
+};
 const areTypeIdSetsEqual = (left: ReadonlySet<WidgetTypeId>, right: ReadonlySet<WidgetTypeId>): boolean =>
   left.size === right.size && [...left].every((typeId) => right.has(typeId));
 
@@ -111,9 +138,9 @@ export const useInvocationState = (): InvocationState => {
     () => [
       ...(isConnected ? [] : ['The backend is disconnected.']),
       ...(expansionReason === null ? [] : [expansionReason]),
-      ...resolvedRoute.validationReasons,
+      ...resolvedRoute.validationReasons.map((reason) => localizeForLoopValidationReason(reason, t)),
     ],
-    [expansionReason, isConnected, resolvedRoute.validationReasons]
+    [expansionReason, isConnected, resolvedRoute.validationReasons, t]
   );
   const isValid = isInvocationRouteValid(resolvedRoute) && isConnected && expansionReason === null;
 

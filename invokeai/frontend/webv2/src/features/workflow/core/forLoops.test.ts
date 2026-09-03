@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { WorkflowEdge, WorkflowInvocationNode } from './types';
 
 import { createProjectGraph } from './document';
-import { getCanonicalWorkflowEdges, validateForLoopGraph } from './forLoops';
+import { getCanonicalWorkflowEdges, localizeForLoopValidationReason, validateForLoopGraph } from './forLoops';
 
 const node = (id: string, type: string): WorkflowInvocationNode => ({
   data: {
@@ -49,6 +49,21 @@ const linkedGraph = () => {
 };
 
 describe('For/ForReturn graph contracts', () => {
+  it('localizes scheduler validation reasons without changing unrelated messages', () => {
+    const translate = (key: string) =>
+      ({
+        'nodes.forLoopFinalOutputInBody': 'Final outputs cannot feed the loop body',
+        'nodes.forLoopValidationFailed': 'For loop validation failed',
+      })[key] ?? key;
+
+    expect(
+      localizeForLoopValidationReason('For loop validation failed: nodes.forLoopFinalOutputInBody.', translate)
+    ).toBe('For loop validation failed: Final outputs cannot feed the loop body.');
+    expect(localizeForLoopValidationReason('The graph contains a cycle.', translate)).toBe(
+      'The graph contains a cycle.'
+    );
+  });
+
   it('accepts a direct loop linkage and excludes it from data-flow traversal', () => {
     const { document } = linkedGraph();
 
@@ -115,6 +130,29 @@ describe('For/ForReturn graph contracts', () => {
     };
 
     expect(validateForLoopGraph(document)).toBeNull();
+  });
+
+  it('rejects a final-scoped output routed through a branch that joins the return', () => {
+    const document = {
+      ...createProjectGraph('final-output-branch-test'),
+      nodes: [
+        node('for', 'for'),
+        node('body', 'number'),
+        node('return', 'for_return'),
+        node('downstream', 'number'),
+        node('downstream-tail', 'number'),
+      ],
+      edges: [
+        edge('iteration', 'for', 'item', 'body', 'value'),
+        edge('body-output', 'body', 'value', 'return', 'output'),
+        edge('final-branch', 'for', 'final_state', 'downstream', 'value'),
+        edge('final-branch-tail', 'downstream', 'value', 'downstream-tail', 'value'),
+        edge('final-branch-return', 'downstream-tail', 'value', 'return', 'state'),
+        edge('linkage', 'for', 'loop_linkage', 'return', 'loop_linkage', 'loop_linkage'),
+      ],
+    };
+
+    expect(validateForLoopGraph(document)).toBe('nodes.forLoopFinalOutputInBody');
   });
 
   it('rejects a nested For with an external outer continuation condition', () => {
