@@ -17557,6 +17557,12 @@
             "title": "Asset Count",
             "description": "The number of assets in the board."
           },
+          "asset_video_count": {
+            "type": "integer",
+            "title": "Asset Video Count",
+            "description": "The number of asset-category (non-'general') videos in the board.",
+            "default": 0
+          },
           "owner_username": {
             "anyOf": [
               {
@@ -96748,6 +96754,12 @@
             "type": "integer",
             "title": "Video Count",
             "description": "The number of videos for this date.",
+            "default": 0
+          },
+          "asset_video_count": {
+            "type": "integer",
+            "title": "Asset Video Count",
+            "description": "The number of asset-category (non-'general') videos for this date.",
             "default": 0
           },
           "cover_image_name": {

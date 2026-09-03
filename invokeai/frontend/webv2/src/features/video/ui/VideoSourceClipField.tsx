@@ -76,7 +76,7 @@ export const VideoSourceClipField = memo(
     sourceVideo: VideoSourceClip | null;
   }) {
     const { t } = useTranslation();
-    const { reportError, touchGalleryImages } = useVideoUiActions();
+    const { getUploadBoardId, reportError, touchGalleryImages } = useVideoUiActions();
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -144,7 +144,7 @@ export const VideoSourceClipField = memo(
         setIsLoading(true);
 
         try {
-          const uploaded = await galleryTransfers.uploadVideo(file, 'none', { signal: owner.signal });
+          const uploaded = await galleryTransfers.uploadVideo(file, getUploadBoardId(), { signal: owner.signal });
 
           assertAccountScopeCurrent(owner);
           onChange(
@@ -169,7 +169,7 @@ export const VideoSourceClipField = memo(
           setIsLoading(false);
         }
       },
-      [onChange, reportError, t, touchGalleryImages]
+      [getUploadBoardId, onChange, reportError, t, touchGalleryImages]
     );
 
     const handleFileChange = useCallback(

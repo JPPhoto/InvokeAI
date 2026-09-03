@@ -29,6 +29,7 @@ import { getQueueItemSnapshotBatchCount, getQueueItemSnapshotDimensions } from '
 const UNCATEGORIZED_BOARD: GalleryBoard = {
   archived: false,
   assetCount: 0,
+  assetVideoCount: 0,
   id: 'none',
   imageCount: 0,
   kind: 'uncategorized',
@@ -428,6 +429,7 @@ export const getGalleryStateView = (
     : [
         {
           ...UNCATEGORIZED_BOARD,
+          assetVideoCount: items.filter((item) => item.kind === 'video' && item.category !== 'general').length,
           imageCount: items.filter((item) => item.kind === 'image' && item.category === 'general').length,
           projectId: null,
           videoCount: items.filter((item) => item.kind === 'video').length,
@@ -511,8 +513,9 @@ export const getGalleryStateView = (
 
 export const getBoardCounts = (
   board: GalleryBoard
-): { assetCount: number; imageCount: number; videoCount: number } => ({
+): { assetCount: number; assetVideoCount: number; imageCount: number; videoCount: number } => ({
   assetCount: board.assetCount,
+  assetVideoCount: board.assetVideoCount,
   imageCount: board.imageCount,
   videoCount: board.videoCount,
 });

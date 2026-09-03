@@ -2,10 +2,10 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 842323,
+        "brotliBytes": 842334,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 841164,
+        "gzipBytes": 841162,
         "imageRawBytes": 156376,
         "initialRawBytes": 1961176,
         "largestAssetRawBytes": 746400,
@@ -291,10 +291,10 @@
         ]
       },
       "limits": {
-        "brotliBytes": 850747,
+        "brotliBytes": 850758,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 849576,
+        "gzipBytes": 849574,
         "imageRawBytes": 157940,
         "initialRawBytes": 1980788,
         "largestAssetRawBytes": 753864,
@@ -309,15 +309,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1115456,
+        "brotliBytes": 1116758,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1110555,
+        "gzipBytes": 1111769,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2792218,
+        "initialRawBytes": 2797064,
         "largestAssetRawBytes": 746400,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 114915,
+        "ownedRawBytes": 115249,
         "requestCount": 98,
         "scriptRequestCount": 82,
         "sourceOwners": [
@@ -937,15 +937,15 @@
         ]
       },
       "limits": {
-        "brotliBytes": 1126611,
+        "brotliBytes": 1127926,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 1121661,
+        "gzipBytes": 1122887,
         "imageRawBytes": 157940,
-        "initialRawBytes": 2820141,
+        "initialRawBytes": 2825035,
         "largestAssetRawBytes": 753864,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 114915,
+        "ownedRawBytes": 115249,
         "requestCount": 98,
         "scriptRequestCount": 82
       },
@@ -999,7 +999,9 @@
       "src/features/queue/ui/launchpad/QueueStatusBand.tsx",
       "src/workbench/launchpad/home/livePanels.ts"
     ],
-    "editorForbiddenInitialChunkNames": ["ag-psd"],
+    "editorForbiddenInitialChunkNames": [
+      "ag-psd"
+    ],
     "inactiveWidgetGateOwner": "deepen-widget-registry-loading"
   }
 }
