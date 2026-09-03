@@ -382,7 +382,7 @@ const PresetTab = ({
       onPointerDown={handlePointerDown}
       onPointerEnter={handlePreload}
     >
-      <Icon as={icon} boxSize="3.5" flexShrink={0} />
+      <Icon as={icon} boxSize="3.5" color={isActive ? 'brand.fg' : undefined} flexShrink={0} />
       <Text as="span" css={HIDE_BELOW_PRESET_LABEL_WIDTH}>
         {preset.label}
       </Text>

@@ -1,7 +1,7 @@
 import type { GenerateSettings } from '@features/generation/core/types';
 import type { ChangeEvent } from 'react';
 
-import { HStack, Icon, Input, InputGroup, Popover, Portal, Stack, Text } from '@chakra-ui/react';
+import { HStack, Icon, Input, InputGroup, Popover, Portal, Separator, Stack, Text } from '@chakra-ui/react';
 import {
   getGenerateModelSelectionResult,
   isSupportedGenerateModel,
@@ -34,6 +34,7 @@ const POPOVER_POSITIONING = { placement: 'bottom-end' } as const;
 const SEARCH_START_ELEMENT = <Icon as={SearchIcon} boxSize="3" color="fg.subtle" />;
 // The rows sit on the popover's `bg.muted` surface; hover one surface step up.
 const PRESET_ROW_HOVER_PROPS = { bg: 'bg.emphasized/60' };
+const PRESET_ROW_SEPARATOR = <Separator borderColor="border.subtle" />;
 /** Below this many presets, a search box is more furniture than help. */
 const SEARCH_VISIBLE_MIN_PRESETS = 6;
 
@@ -282,10 +283,10 @@ export const GeneratePresetsPopover = () => {
             <IconButton
               aria-label={triggerLabel}
               color="fg.muted"
-              px={activePreset ? '1' : undefined}
+              px={activePreset ? '1' : '0'}
               size="2xs"
               variant="ghost"
-              w={activePreset ? 'auto' : undefined}
+              w={activePreset ? 'auto' : '6'}
             >
               <Icon as={BookmarkIcon} boxSize="3.5" />
               {activePreset ? (
@@ -334,7 +335,7 @@ export const GeneratePresetsPopover = () => {
                     </Text>
                   ) : (
                     <Scrollable maxH="16rem">
-                      <Stack gap="0.5">
+                      <Stack gap="0.5" separator={PRESET_ROW_SEPARATOR}>
                         {filteredPresets.map((preset) => (
                           <PresetRow
                             key={preset.id}

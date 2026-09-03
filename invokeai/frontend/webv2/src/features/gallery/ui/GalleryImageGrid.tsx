@@ -494,6 +494,10 @@ export const GalleryImageGrid = () => {
                       align="center"
                       h={`${GALLERY_STARRED_SEPARATOR_HEIGHT_PX}px`}
                       left="0"
+                      // The starred row above already carries its trailing grid
+                      // gap; centering over the remaining height keeps the rule
+                      // equidistant from both thumbnail edges.
+                      pb={`${GALLERY_GRID_GAP_PX}px`}
                       position="absolute"
                       top="0"
                       transform={`translateY(${virtualRow.start}px)`}
