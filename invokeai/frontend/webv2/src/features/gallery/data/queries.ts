@@ -292,6 +292,44 @@ const fetchSharedDateBoardNames = (
   });
 };
 
+/**
+ * One read of a row range from the listing a filter names. The semantic/date
+ * dispatch and the shared name-list handling live here so the per-page
+ * queryFn and the invalidation-time window rebuild can never disagree about
+ * how a filter's rows are fetched. Semantic and date-board queries share one
+ * mechanism: the ordered name list is fetched once (shared across pages, both
+ * consumers, and the 60s stale window) and the range hydrates a slice of it —
+ * which keeps semantic ranks consistent across pages and keeps a dropped-file
+ * reference from re-uploading its blob on every fetch. Clamps to `limit`,
+ * distrusting the server exactly as the per-page path always has.
+ */
+export const fetchGalleryItemsRange = async (
+  client: QueryClient,
+  owner: AccountScope,
+  filter: CanonicalGalleryItemsFilter,
+  { limit, offset, signal }: { limit: number; offset: number; signal: AbortSignal }
+): Promise<GalleryItemsPage> => {
+  let result: GalleryItemsPage;
+
+  if (filter.semantic || isDateBoardId(filter.boardId)) {
+    const namesOptions = galleryItemNamesOptionsForOwner(owner, filter);
+    const names = await fetchSharedDateBoardNames(client, namesOptions.queryKey, signal, () =>
+      client.fetchQuery(namesOptions)
+    );
+
+    assertAccountScopeCurrent(owner);
+    signal.throwIfAborted();
+    result = await hydrateGalleryDateBoardItemPage({ ...names, limit, offset, signal });
+  } else {
+    result = await listGalleryItems({ ...filter, limit, offset, signal });
+  }
+
+  assertAccountScopeCurrent(owner);
+  signal.throwIfAborted();
+
+  return result.items.length <= limit ? result : { ...result, items: result.items.slice(0, limit) };
+};
+
 export const galleryBoardsOptions = (query: GalleryBoardsQuery = {}) => {
   const owner = captureAccountScope();
   const canonicalQuery = canonicalizeBoardsQuery(query);
@@ -369,46 +407,12 @@ export const galleryItemsInfiniteOptions = (
     },
     initialPageParam,
     maxPages: GALLERY_MAX_INFINITE_PAGES,
-    queryFn: async ({ client, pageParam, signal }) => {
-      const requestSignal = AbortSignal.any([signal, owner.signal]);
-      let result: GalleryItemsPage;
-
-      // Semantic and date-board queries share one mechanism: the ordered name
-      // list is fetched once (shared across pages, both consumers, and the
-      // 60s stale window) and every page hydrates a slice of it. For semantic
-      // queries this is also what keeps ranks consistent across pages — and
-      // what keeps a dropped-file reference from re-uploading its blob on
-      // every page fetch.
-      if (filter.semantic || isDateBoardId(filter.boardId)) {
-        const namesOptions = galleryItemNamesOptionsForOwner(owner, filter);
-        const names = await fetchSharedDateBoardNames(client, namesOptions.queryKey, requestSignal, () =>
-          client.fetchQuery(namesOptions)
-        );
-
-        assertAccountScopeCurrent(owner);
-        requestSignal.throwIfAborted();
-        result = await hydrateGalleryDateBoardItemPage({
-          ...names,
-          limit: GALLERY_PAGE_SIZE,
-          offset: pageParam,
-          signal: requestSignal,
-        });
-      } else {
-        result = await listGalleryItems({
-          ...filter,
-          limit: GALLERY_PAGE_SIZE,
-          offset: pageParam,
-          signal: requestSignal,
-        });
-      }
-
-      assertAccountScopeCurrent(owner);
-      requestSignal.throwIfAborted();
-
-      return result.items.length <= GALLERY_PAGE_SIZE
-        ? result
-        : { ...result, items: result.items.slice(0, GALLERY_PAGE_SIZE) };
-    },
+    queryFn: ({ client, pageParam, signal }) =>
+      fetchGalleryItemsRange(client, owner, filter, {
+        limit: GALLERY_PAGE_SIZE,
+        offset: pageParam,
+        signal: AbortSignal.any([signal, owner.signal]),
+      }),
     queryKey: galleryKeys.items(owner, filter, normalizedWindow),
     staleTime: 60_000,
   });
