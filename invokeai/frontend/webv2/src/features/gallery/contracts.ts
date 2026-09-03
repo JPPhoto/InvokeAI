@@ -69,6 +69,7 @@ export {
   type GallerySelectedImageQuery,
 } from './ui/galleryStateView';
 export {
+  getGalleryDeletionSuccessor,
   getPersistedSelectedGalleryItemKeys,
   getSelectedGalleryImageFromValues,
   getSelectedGalleryItemFromValues,

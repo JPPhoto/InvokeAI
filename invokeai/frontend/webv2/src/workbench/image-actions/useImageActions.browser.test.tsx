@@ -888,7 +888,7 @@ const galleryItem = (kind: GalleryItem['kind'], name: string): GalleryItem => {
 };
 
 describe('primary successor after confirmed deletion', () => {
-  it('selects the nearest surviving predecessor from ordered names before a successor', async () => {
+  it('selects the next surviving item in display order — the one that takes the deleted slot', async () => {
     const before = galleryItem('video', 'before.mp4');
     const primary = galleryItem('image', 'primary.png');
     const after = galleryItem('image', 'after.png');
@@ -909,21 +909,51 @@ describe('primary successor after confirmed deletion', () => {
       await getItemActions().deleteItems([{ kind: 'image', name: 'primary.png' }]);
     });
 
-    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(before, 'project-1');
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(after, 'project-1');
   });
 
-  it('resolves an unloaded predecessor by qualified ref', async () => {
+  it('does not jump into the leading starred block when deleting the first regular item', async () => {
+    // Ordered names lead with the starred section under infinite pagination;
+    // the successor must stay in the regular section the primary came from.
+    const starred = { ...galleryItem('image', 'starred.png'), starred: true };
     const primary = galleryItem('image', 'primary.png');
-    const after = galleryItem('image', 'after.png');
+    const nextRegular = galleryItem('image', 'next-regular.png');
+    currentItemActionContext = {
+      filterIdentity: 'filter-a',
+      items: [starred, primary, nextRegular],
+      loadOrderedRefs: () =>
+        Promise.resolve([
+          { kind: 'image' as const, name: starred.name },
+          { kind: 'image' as const, name: primary.name },
+          { kind: 'image' as const, name: nextRegular.name },
+        ]),
+      selectedItemKey: 'image:primary.png',
+    };
+    mocks.itemDelete.mockResolvedValue({
+      affectedBoardIds: ['board-1'],
+      failed: [],
+      succeeded: [{ kind: 'image', name: primary.name }],
+    });
+
+    await act(async () => {
+      await getItemActions().deleteItems([{ kind: 'image', name: primary.name }]);
+    });
+
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(nextRegular, 'project-1');
+  });
+
+  it('resolves an unloaded successor by qualified ref', async () => {
+    const primary = galleryItem('image', 'primary.png');
+    const before = galleryItem('image', 'before.png');
     const unloaded = galleryItem('video', 'unloaded.mp4');
     currentItemActionContext = {
       filterIdentity: 'filter-a',
-      items: [primary, after],
+      items: [before, primary],
       loadOrderedRefs: () =>
         Promise.resolve([
+          { kind: 'image' as const, name: before.name },
           { kind: 'video' as const, name: unloaded.name },
           { kind: 'image' as const, name: primary.name },
-          { kind: 'image' as const, name: after.name },
         ]),
       selectedItemKey: 'image:primary.png',
     };
@@ -1040,7 +1070,7 @@ describe('primary successor after confirmed deletion', () => {
       await getItemActions().deleteItems([{ kind: 'image', name: 'primary.png' }]);
     });
 
-    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(before, 'project-1', 30, true);
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(after, 'project-1', 30, true);
   });
 
   it('opens an item in Preview at the page the host navigates from', () => {
