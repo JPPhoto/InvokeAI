@@ -112,6 +112,7 @@ export const DynamicPromptsButton = ({
                   activeId={tab}
                   ariaLabel={t('widgets.generate.dynamicPrompts.title')}
                   idBase={tabsIdBase}
+                  isCompact
                   tabs={tabItems}
                   onSelect={handleTabChange}
                 />

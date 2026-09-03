@@ -222,6 +222,7 @@ export const GraphPreviewDialog = ({
                 activeId={mode}
                 ariaLabel={t('graphPreview.title')}
                 idBase={modeTabsIdBase}
+                isCompact
                 tabs={modeTabs}
                 onSelect={handleModeChange}
               />

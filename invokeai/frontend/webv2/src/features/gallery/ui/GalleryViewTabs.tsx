@@ -64,6 +64,7 @@ export const GalleryViewTabs = ({ idBase }: { idBase: string }) => {
       activeId={gallery.galleryView}
       ariaLabel={t('common.view')}
       idBase={idBase}
+      isCompact
       tabs={tabs}
       onSelect={handleViewChange}
     />

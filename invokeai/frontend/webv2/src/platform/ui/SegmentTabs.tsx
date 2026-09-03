@@ -49,6 +49,7 @@ export const SegmentTabs = <T extends string>({
   activeId,
   ariaLabel,
   idBase,
+  isCompact = false,
   onSelect,
   showActivePanel = true,
   tabs,
@@ -57,12 +58,21 @@ export const SegmentTabs = <T extends string>({
   activeId: T;
   ariaLabel: string;
   idBase: string;
+  /** Embedded strips (popovers, dialog headers) drop the panel-strip height and outer padding. */
+  isCompact?: boolean;
   onSelect: (id: T) => void;
   showActivePanel?: boolean;
   tabs: readonly SegmentTab<T>[];
   trailing?: ReactNode;
 }) => (
-  <HStack align="center" flexShrink={0} gap="0.5" h={`${SEGMENT_TABS_HEIGHT_PX}px`} minW="0" px="1.5">
+  <HStack
+    align="center"
+    flexShrink={0}
+    gap="0.5"
+    h={isCompact ? '8' : `${SEGMENT_TABS_HEIGHT_PX}px`}
+    minW="0"
+    px={isCompact ? '0' : '1.5'}
+  >
     <HStack
       aria-label={ariaLabel}
       aria-orientation="horizontal"
