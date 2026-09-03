@@ -315,6 +315,11 @@ const config = defineConfig({
         button: { value: 'default' },
         switch: { value: 'default' },
       },
+      radii: {
+        // The shared corner for interactive controls — buttons and the
+        // segment-tab pills meet between Chakra's l2 (4px) and md (6px).
+        control: { value: '0.3125rem' },
+      },
       fonts: {
         body: {
           value: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",

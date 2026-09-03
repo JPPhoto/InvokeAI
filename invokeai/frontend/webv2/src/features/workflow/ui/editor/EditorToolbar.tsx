@@ -93,8 +93,8 @@ export const EditorToolbar = ({
                   `Popover.Trigger asChild` would clone that component's Tooltip
                   wrapper instead of the button. Size is load bearing — `Toolbar`
                   is a column Stack, so it stretches every sibling to the widest
-                  child, and one `sm` button here squared off the whole strip at
-                  36px while the rest stayed 32px tall. */}
+                  child, and one `sm` button here once widened the whole strip
+                  past the `xs` squares. */}
               <IconButton
                 aria-label="Node opacity"
                 aria-pressed={nodeOpacity < 1}

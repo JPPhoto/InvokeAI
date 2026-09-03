@@ -7,6 +7,10 @@ import { useTranslation } from 'react-i18next';
 
 import { getBatchCount } from './useInvocationState';
 
+// Chakra's xs input is one notch taller than the app's xs button; the attached
+// Invoke capsule needs both on the shared 28px box.
+const INPUT_HEIGHT_VARS = { '--input-height': 'sizes.7' };
+
 /**
  * How many times the current graph runs per Invoke.
  *
@@ -46,9 +50,10 @@ export const IterationsField = () => {
     <Tooltip content={t('topbar.iterations.tooltip', { count: batchCount })} showArrow>
       <NumberInput.Root
         allowMouseWheel
+        css={INPUT_HEIGHT_VARS}
         flexShrink={0}
         min={MIN_BATCH_COUNT}
-        rounded="l2"
+        rounded="control"
         size="xs"
         value={String(batchCount)}
         w="14"

@@ -130,7 +130,7 @@ describe('RoutingControl', () => {
     const sourceBounds = sourceIcon!.getBoundingClientRect();
     const destinationBounds = destinationIcon!.getBoundingClientRect();
     expect(buttonBounds.width).toBe(36);
-    expect(buttonBounds.height).toBe(32);
+    expect(buttonBounds.height).toBe(28);
     expect(buttonBounds.height).toBe(heightReference!.getBoundingClientRect().height);
     expect(destinationBounds.left - sourceBounds.left).toBeGreaterThanOrEqual(8);
     expect(destinationBounds.top - sourceBounds.top).toBeGreaterThanOrEqual(8);

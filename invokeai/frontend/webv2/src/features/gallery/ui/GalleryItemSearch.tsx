@@ -200,7 +200,7 @@ export const GalleryItemSearch = () => {
       outline={isDropTargetActive ? '2px solid' : undefined}
       outlineColor={isDropTargetActive ? 'accent.solid' : undefined}
       position="relative"
-      rounded="l2"
+      rounded="control"
       w="full"
       onDragLeave={handleNativeDragLeave}
       onDragOver={handleNativeDragOver}

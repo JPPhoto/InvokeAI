@@ -44,10 +44,10 @@ export const RoutingControl = ({ state }: { state: InvocationState }) => {
     [`data-routing-${type}-icon`]: '',
     icon: getWidgetById(type === 'source' ? sourceTypeId : invocation.destination)?.manifest.icon,
     position: 'absolute',
-    top: type === 'source' ? '4px' : undefined,
-    left: type === 'source' ? '4px' : undefined,
-    bottom: type === 'destination' ? '4px' : undefined,
-    right: type === 'destination' ? '4px' : undefined,
+    top: type === 'source' ? '2px' : undefined,
+    left: type === 'source' ? '2px' : undefined,
+    bottom: type === 'destination' ? '2px' : undefined,
+    right: type === 'destination' ? '2px' : undefined,
   });
 
   return (
@@ -87,10 +87,10 @@ export const RoutingControl = ({ state }: { state: InvocationState }) => {
                     borderWidth="1px"
                     boxSize="3.5"
                     data-routing-source-icon=""
-                    left="4px"
+                    left="2px"
                     position="absolute"
                     rounded="xs"
-                    top="4px"
+                    top="2px"
                   />
                 )}
                 <WidgetIcon {...getWidgetIconProps('destination')} />

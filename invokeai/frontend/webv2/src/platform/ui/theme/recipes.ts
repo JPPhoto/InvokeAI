@@ -175,12 +175,19 @@ export const tabsSlotRecipe = defineSlotRecipe({
 
 export const buttonRecipe = defineRecipe({
   ...chakraRecipes.button,
+  base: {
+    ...chakraRecipes.button.base,
+    borderRadius: 'control',
+  },
   variants: {
     ...chakraRecipes.button.variants,
+    // One notch denser than Chakra's scale: `xs` lands on the segment-tab
+    // pill height, so the controls that share a row share a silhouette.
     size: {
       ...chakraRecipes.button.variants?.size,
-      sm: { ...chakraRecipes.button.variants?.size?.sm, textStyle: 'xs' },
-      md: { ...chakraRecipes.button.variants?.size?.md, textStyle: 'xs' },
+      xs: { ...chakraRecipes.button.variants?.size?.xs, h: '7', minW: '7' },
+      sm: { ...chakraRecipes.button.variants?.size?.sm, h: '8', minW: '8', textStyle: 'xs' },
+      md: { ...chakraRecipes.button.variants?.size?.md, h: '9', minW: '9', textStyle: 'xs' },
     },
     variant: {
       ...chakraRecipes.button.variants?.variant,
@@ -221,7 +228,9 @@ export const segmentGroupSlotRecipe = defineSlotRecipe({
       '--segment-indicator-shadow': 'none',
       bg: 'transparent',
       borderColor: 'border.subtle',
-      borderRadius: 'md',
+      // The buttons' shared corner outside, minus the 1px border inside — the
+      // sm segment radius already sits at that inner value.
+      borderRadius: 'control',
       borderWidth: '1px',
       boxShadow: 'none',
     },
@@ -277,14 +286,14 @@ export const segmentGroupSlotRecipe = defineSlotRecipe({
       xs: {
         item: {
           ...chakraSlotRecipes.segmentGroup.variants?.size?.xs?.item,
-          height: 'calc({sizes.8} - 2px)',
+          height: 'calc({sizes.7} - 2px)',
           px: '2.5',
         },
       },
       sm: {
         item: {
           ...chakraSlotRecipes.segmentGroup.variants?.size?.sm?.item,
-          height: 'calc({sizes.9} - 2px)',
+          height: 'calc({sizes.8} - 2px)',
           px: '3.5',
           textStyle: 'xs',
         },
