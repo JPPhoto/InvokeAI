@@ -53,6 +53,8 @@ import { useActiveLayoutPresetId, useLayoutDrift } from './useLayoutDrift';
 import { useTopbarShortcut } from './useTopbarShortcut';
 
 const PRESET_MENU_ATTRIBUTE = 'data-preset-menu';
+const TAB_FILL_TRANSITION =
+  'background var(--chakra-durations-faster) ease, border-color var(--chakra-durations-faster) ease, color var(--chakra-durations-faster) ease';
 const PRESET_SCROLL_CSS = { '&::-webkit-scrollbar': { display: 'none' }, scrollbarWidth: 'none' } as const;
 const PRESET_TAB_KEYS_BLOCKED_DURING_DRAG = new Set(['ArrowDown', 'ArrowLeft', 'ArrowRight', 'End', 'Home']);
 const DND_MODIFIERS = [restrictToHorizontalAxis, restrictToParentElement];
@@ -282,7 +284,10 @@ const PresetTab = ({
       opacity: isDragging ? 0.5 : undefined,
       position: 'relative' as const,
       transform: CSS.Translate.toString(transform),
-      transition,
+      // dnd-kit's inline transform transition replaces the recipe's CSS
+      // transition outright, which froze hover/selected fills; compose the
+      // buttons' fill fade back in (motion-aware duration token).
+      transition: [transition, TAB_FILL_TRANSITION].filter(Boolean).join(', '),
       zIndex: isDragging ? 1 : undefined,
     }),
     [isDragging, transform, transition]
