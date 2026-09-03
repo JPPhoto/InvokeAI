@@ -3,6 +3,7 @@ import type { WorkflowEdge, WorkflowNode, ProjectGraphState } from './types';
 import { getResolvedWorkflowEdgesIndexed, resolveLoopLinkagePath } from './connectors';
 import { createWorkflowGraphIndex } from './graphIndex';
 import { isInvocationNode } from './types';
+import { LOOP_LINKAGE_FIELD } from './validation';
 
 export type ForLoopGraphError =
   | 'nodes.forLoopMissingIterationOutput'
@@ -67,9 +68,20 @@ export interface LoopBodyBoundary {
   status: LoopBodyBoundaryStatus;
 }
 
-const LOOP_LINKAGE_FIELD = 'loop_linkage';
 const ITERATION_OUTPUT_FIELDS = new Set(['item', 'index', 'total', 'state']);
 const FINAL_OUTPUT_FIELDS = new Set(['output_collection', 'final_state']);
+
+export const shouldAddForReturnLoopLinkage = (
+  targetType: string,
+  resolvedSource: { fieldName: string; nodeId: string } | null,
+  resolvedSourceNode: WorkflowNode | undefined,
+  edges: readonly WorkflowEdge[]
+): boolean =>
+  targetType === 'for_return' &&
+  ITERATION_OUTPUT_FIELDS.has(resolvedSource?.fieldName ?? '') &&
+  resolvedSourceNode?.type === 'invocation' &&
+  resolvedSourceNode.data.type === 'for' &&
+  !edges.some((edge) => edge.source === resolvedSourceNode.id && edge.sourceHandle === LOOP_LINKAGE_FIELD);
 
 type LoopNode = { id: string; type: string };
 type LoopEdge = {
@@ -182,11 +194,17 @@ export const getForLoopBodyBoundaries = (nodes: WorkflowNode[], edges: WorkflowE
 
   const linkedReturnByForId = new Map<string, string>();
   const linkedForByReturnId = new Map<string, string>();
-  let duplicateLinkage = false;
+  const duplicateForIds = new Set<string>();
+  const duplicateReturnIds = new Set<string>();
 
   for (const edge of canonicalEdges.filter((candidate) => candidate.type === 'loop_linkage')) {
-    if (linkedReturnByForId.has(edge.source.node_id) || linkedForByReturnId.has(edge.destination.node_id)) {
-      duplicateLinkage = true;
+    const existingForId = linkedForByReturnId.get(edge.destination.node_id);
+    if (linkedReturnByForId.has(edge.source.node_id) || existingForId !== undefined) {
+      duplicateForIds.add(edge.source.node_id);
+      if (existingForId !== undefined) {
+        duplicateForIds.add(existingForId);
+        duplicateReturnIds.add(edge.destination.node_id);
+      }
       continue;
     }
     linkedReturnByForId.set(edge.source.node_id, edge.destination.node_id);
@@ -209,7 +227,7 @@ export const getForLoopBodyBoundaries = (nodes: WorkflowNode[], edges: WorkflowE
       const returnNodeId = linkedReturnId ?? (reachableReturns.length === 1 ? reachableReturns[0] : undefined);
       let status: LoopBodyBoundaryStatus;
 
-      if (duplicateLinkage && linkedReturnId !== undefined) {
+      if (duplicateForIds.has(forNode.id) || (linkedReturnId !== undefined && duplicateReturnIds.has(linkedReturnId))) {
         status = 'duplicate_linkage';
       } else if (linkedReturnId === undefined) {
         status = 'missing_linkage';
@@ -259,8 +277,7 @@ export const validateForLoopGraph = (
     allEdges.some(
       (edge) =>
         edge.type === 'default' &&
-        edge.source.field === LOOP_LINKAGE_FIELD &&
-        edge.destination.field === LOOP_LINKAGE_FIELD &&
+        (edge.source.field === LOOP_LINKAGE_FIELD || edge.destination.field === LOOP_LINKAGE_FIELD) &&
         nodesById.has(edge.source.node_id) &&
         nodesById.has(edge.destination.node_id)
     )

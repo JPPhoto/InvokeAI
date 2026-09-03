@@ -16,6 +16,7 @@ import {
   getCompatibleOutputTemplate,
   LOOP_LINKAGE_FIELD,
   resolveConnectorSource,
+  shouldAddForReturnLoopLinkage,
   parseWorkflowJson,
   serializeWorkflowJson,
 } from '@features/workflow/utility';
@@ -451,16 +452,12 @@ export const WorkflowDialogHost = () => {
               ? { fieldName: addNodeConnection.sourceHandle, nodeId: sourceNode.id, type: null }
               : null;
         const resolvedSourceNode = currentGraph.nodes.find((candidate) => candidate.id === resolvedSource?.nodeId);
-        const shouldAddLoopLinkage =
-          template.type === 'for_return' &&
-          addNodeConnection.sourceHandle !== LOOP_LINKAGE_FIELD &&
-          ['item', 'index', 'total', 'state'].includes(addNodeConnection.sourceHandle) &&
-          ['item', 'index', 'total', 'state'].includes(resolvedSource?.fieldName ?? '') &&
-          resolvedSourceNode?.type === 'invocation' &&
-          resolvedSourceNode.data.type === 'for' &&
-          !currentGraph.edges.some(
-            (candidate) => candidate.source === resolvedSourceNode.id && candidate.sourceHandle === LOOP_LINKAGE_FIELD
-          );
+        const shouldAddLoopLinkage = shouldAddForReturnLoopLinkage(
+          template.type,
+          resolvedSource,
+          resolvedSourceNode,
+          currentGraph.edges
+        );
 
         if (shouldAddLoopLinkage && resolvedSourceNode?.type === 'invocation') {
           editGraph({

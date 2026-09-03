@@ -110,6 +110,7 @@ def _build_nested_for_graph(
     collection: list[list[int]] | None = None,
     break_inner_after_first: bool = False,
     break_outer_after_first: bool = False,
+    include_after: bool = True,
 ) -> Graph:
     graph = Graph()
     graph.add_node(
@@ -131,7 +132,8 @@ def _build_nested_for_graph(
     graph.add_node(ForRunnerConditionInvocation(id="outer_condition", continue_condition=not break_outer_after_first))
     graph.add_node(ForRunnerCollectionInvocation(id="outer_output"))
     graph.add_node(ForReturnInvocation(id="outer_return"))
-    graph.add_node(ForRunnerCollectionInvocation(id="after"))
+    if include_after:
+        graph.add_node(ForRunnerCollectionInvocation(id="after"))
     graph.add_edge(create_edge("outer_for", "item", "inner_collection", "value"))
     graph.add_edge(create_edge("inner_collection", "collection", "inner_for", "collection"))
     graph.add_edge(create_edge("inner_for", "item", "inner_body", "value"))
@@ -141,7 +143,8 @@ def _build_nested_for_graph(
     graph.add_edge(create_edge("inner_for", "output_collection", "outer_condition", "value"))
     graph.add_edge(create_edge("outer_condition", "value", "outer_return", "continue_condition"))
     graph.add_edge(create_edge("outer_for", "state", "outer_return", "state"))
-    graph.add_edge(create_edge("outer_for", "output_collection", "after", "collection"))
+    if include_after:
+        graph.add_edge(create_edge("outer_for", "output_collection", "after", "collection"))
     graph.add_edge(create_loop_linkage("outer_for", "outer_return"))
     graph.add_edge(create_loop_linkage("inner_for", "inner_return"))
     return graph
@@ -405,6 +408,35 @@ def test_session_runner_completes_nested_for_and_releases_outer_final_outputs(
 
     [after_exec_id] = session.source_prepared_mapping["after"]
     assert session.results[after_exec_id] == ForRunnerCollectionOutput(collection=[[1, 2], [3, 4]])
+
+
+def test_session_runner_completes_nested_for_without_downstream_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = GraphExecutionState(graph=_build_nested_for_graph(include_after=False))
+    runner, _cancel_event, session_queue, _events = _build_runner(monkeypatch)
+    queue_item = _build_queue_item(session)
+    session_queue.add_queue_item(queue_item)
+
+    runner.run(queue_item)
+
+    assert queue_item.status == "completed"
+    assert session_queue.completed_item_ids == [queue_item.item_id]
+    assert session.is_complete()
+
+
+def test_session_runner_does_not_duplicate_empty_nested_loop_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = GraphExecutionState(graph=_build_nested_for_graph(collection=[[], []]))
+    runner, _cancel_event, session_queue, _events = _build_runner(monkeypatch)
+    queue_item = _build_queue_item(session)
+    session_queue.add_queue_item(queue_item)
+
+    runner.run(queue_item)
+
+    assert queue_item.status == "completed"
+    assert len(session.executed_history) == len(set(session.executed_history))
 
 
 def test_session_runner_completes_nested_for_with_empty_inner_collection(

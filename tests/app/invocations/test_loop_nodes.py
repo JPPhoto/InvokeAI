@@ -73,6 +73,13 @@ def test_state_get_output_schema_exposes_any_value_output() -> None:
     assert schema["properties"]["value"]["ui_type"] == "AnyField"
 
 
+def test_state_get_output_schema_describes_configured_default() -> None:
+    schema = LoopStateValueOutput.model_json_schema()
+
+    assert StateGetInvocation.UIConfig.version == "1.0.3"
+    assert "configured default" in schema["properties"]["value"]["description"]
+
+
 def test_state_merge_invocation_schema_exposes_any_values_input() -> None:
     schema = StateMergeInvocation.model_json_schema()
 

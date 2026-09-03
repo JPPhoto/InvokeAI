@@ -461,4 +461,96 @@ describe('compileProjectGraph', () => {
       },
     ]);
   });
+
+  it('rejects a loop-linkage source reused as ordinary connector data', () => {
+    const forTemplate: InvocationTemplate = {
+      ...template('for', {
+        collection: input('collection', {
+          default: [],
+          type: { batch: false, cardinality: 'COLLECTION', name: 'CollectionField' },
+        }),
+      }),
+      outputs: {
+        item: {
+          description: '',
+          name: 'item',
+          outputScope: 'iteration',
+          title: 'Item',
+          type: { batch: false, cardinality: 'SINGLE', name: 'CollectionItemField' },
+        },
+        loop_linkage: {
+          description: '',
+          name: 'loop_linkage',
+          title: 'Loop linkage',
+          type: { batch: false, cardinality: 'SINGLE', name: 'AnyField' },
+        },
+        output_collection: {
+          description: '',
+          name: 'output_collection',
+          outputScope: 'final',
+          title: 'Output collection',
+          type: { batch: false, cardinality: 'COLLECTION', name: 'CollectionField' },
+        },
+      },
+    };
+    const returnTemplate: InvocationTemplate = {
+      ...template('for_return', {
+        loop_linkage: input('loop_linkage', {
+          input: 'connection',
+          type: { batch: false, cardinality: 'SINGLE', name: 'AnyField' },
+        }),
+        output: input('output', { type: { batch: false, cardinality: 'SINGLE', name: 'CollectionItemField' } }),
+      }),
+      outputs: {},
+    };
+    const sinkTemplate = template('sink', { value: input('value') });
+    const forNode = buildInvocationNode(forTemplate, { x: 0, y: 0 });
+    const returnNode = buildInvocationNode(returnTemplate, { x: 100, y: 0 });
+    const sinkNode = buildInvocationNode(sinkTemplate, { x: 200, y: 0 });
+    const connector = buildConnectorNode({ x: 50, y: 0 });
+    const document: ProjectGraphState = {
+      ...createProjectGraph('invalid-loop-linkage-source'),
+      edges: [
+        {
+          id: 'item',
+          source: forNode.id,
+          sourceHandle: 'item',
+          target: returnNode.id,
+          targetHandle: 'output',
+          type: 'default',
+        },
+        {
+          id: 'linkage',
+          source: forNode.id,
+          sourceHandle: 'loop_linkage',
+          target: returnNode.id,
+          targetHandle: 'loop_linkage',
+          type: 'loop_linkage',
+        },
+        {
+          id: 'connector-in',
+          source: forNode.id,
+          sourceHandle: 'loop_linkage',
+          target: connector.id,
+          targetHandle: 'in',
+          type: 'default',
+        },
+        {
+          id: 'connector-out',
+          source: connector.id,
+          sourceHandle: 'out',
+          target: sinkNode.id,
+          targetHandle: 'value',
+          type: 'default',
+        },
+      ],
+      nodes: [forNode, returnNode, sinkNode, connector],
+    };
+    const loopTemplates = { for: forTemplate, for_return: returnTemplate, sink: sinkTemplate };
+
+    expect(getProjectGraphReadiness(document, { error: null, status: 'loaded', templates: loopTemplates })).toEqual({
+      canInvoke: false,
+      reasons: ['For loop validation failed: nodes.forLoopLinkageInvalid.'],
+    });
+  });
 });

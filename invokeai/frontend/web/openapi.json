@@ -60165,7 +60165,7 @@
               }
             ],
             "default": null,
-            "description": "The value read from the loop state, or None when the key is missing",
+            "description": "The value read from the loop state, or the configured default when the key is missing",
             "field_kind": "output",
             "title": "Value",
             "ui_hidden": false,
@@ -89319,7 +89319,7 @@
         "tags": ["loop", "state"],
         "title": "Get Loop State Value",
         "type": "object",
-        "version": "1.0.2",
+        "version": "1.0.3",
         "output": {
           "$ref": "#/components/schemas/LoopStateValueOutput"
         }

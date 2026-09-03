@@ -29,7 +29,7 @@ class LoopStateOutput(BaseInvocationOutput):
 class LoopStateValueOutput(BaseInvocationOutput):
     value: Optional[Any] = OutputField(
         default=None,
-        description="The value read from the loop state, or None when the key is missing",
+        description="The value read from the loop state, or the configured default when the key is missing",
         ui_type=UIType.Any,
     )
 
@@ -42,7 +42,7 @@ class StateEmptyInvocation(BaseInvocation):
         return LoopStateOutput(state=LoopState())
 
 
-@invocation("state_get", title="Get Loop State Value", tags=["loop", "state"], category="workflow", version="1.0.2")
+@invocation("state_get", title="Get Loop State Value", tags=["loop", "state"], category="workflow", version="1.0.3")
 class StateGetInvocation(BaseInvocation):
     """Reads a value from loop state."""
 

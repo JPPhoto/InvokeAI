@@ -99,6 +99,14 @@ class _SupportedNestedForBody:
     continuation_nodes: frozenset[str]
 
 
+@dataclass(frozen=True)
+class _SupportedNestedIterateBody:
+    body_path_nodes: set[str]
+    return_node_id: str
+    iterate_node_id: str
+    collect_node_id: str
+
+
 class EdgeConnection(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -381,7 +389,8 @@ class _IfBranchScheduler:
         if all(n in self._state.executed for n in prepared_nodes):
             if source_node_id not in self._state.executed:
                 self._state.executed.add(source_node_id)
-                self._state.executed_history.append(source_node_id)
+                if source_node_id not in self._state.executed_history:
+                    self._state.executed_history.append(source_node_id)
 
     def try_resolve_if_node(self, exec_node_id: str) -> None:
         if exec_node_id in self._state._resolved_if_exec_branches:
@@ -955,9 +964,12 @@ class _ExecutionMaterializer:
         prepared_for_id: str,
         graph: "nx.DiGraph",
         execution_graph: "nx.DiGraph",
-        nested_body: tuple[set[str], str, str, str],
+        nested_body: _SupportedNestedIterateBody,
     ) -> Optional[str]:
-        body_path_nodes, source_return_id, source_iterate_id, source_collect_id = nested_body
+        body_path_nodes = nested_body.body_path_nodes
+        source_return_id = nested_body.return_node_id
+        source_iterate_id = nested_body.iterate_node_id
+        source_collect_id = nested_body.collect_node_id
         prepared_for_node = self._state.execution_graph.get_node(prepared_for_id)
         outer_iteration_path = self._state._get_iteration_path(prepared_for_id)
         if isinstance(prepared_for_node, ForInvocation) and prepared_for_node.index >= 0:
@@ -1362,7 +1374,8 @@ class _ExecutionMaterializer:
     def _mark_source_node_empty(self, source_node_id: str) -> None:
         self._state.source_prepared_mapping[source_node_id] = set()
         self._state.executed.add(source_node_id)
-        self._state.executed_history.append(source_node_id)
+        if source_node_id not in self._state.executed_history:
+            self._state.executed_history.append(source_node_id)
 
     def _index_prepared_nodes_by_iteration_path(
         self, prepared_nodes: set[str], input_edges: list[Edge]
@@ -1885,8 +1898,8 @@ class _ExecutionScheduler:
             nested_body = self._state.graph._get_supported_for_nested_iterate_body(source_for_id, graph)
             nested_for_body = self._state.graph._get_supported_for_nested_for_body(source_for_id, graph)
             if nested_body is not None:
-                body_path_nodes, _return_id, iterate_id, _collect_id = nested_body
-                deferred_node_ids = (iterate_id,)
+                body_path_nodes = nested_body.body_path_nodes
+                deferred_node_ids = (nested_body.iterate_node_id,)
             elif nested_for_body is None:
                 continue
             else:
@@ -2033,7 +2046,9 @@ class _ExecutionScheduler:
                 (iterate_path := self._state._get_iteration_path(prepared_iterate_id))[: len(prepared_for_path)]
                 == prepared_for_path
                 and len(iterate_path) > len(prepared_for_path)
-                for prepared_iterate_id in self._state._prepared_registry().get_prepared_ids(nested_body[2])
+                for prepared_iterate_id in self._state._prepared_registry().get_prepared_ids(
+                    nested_body.iterate_node_id
+                )
             ):
                 self._state._materializer().create_for_body_iteration(
                     source_for_id=source_for_id, prepared_for_id=exec_node_id
@@ -2042,7 +2057,7 @@ class _ExecutionScheduler:
                 self._try_materialize_deferred_nested_for_body(exec_node_id)
         else:
             self._try_materialize_deferred_nested_for_body(exec_node_id)
-        if len(self._state.executed_history) == len(self._state.graph.nodes):
+        if self._state.is_complete():
             self._state.execution_graph._invalidate_edge_indexes()
             self._state._ready_queues = {}
             self._state._ready_node_ids = set()
@@ -3203,7 +3218,7 @@ class Graph(BaseModel):
 
     def _get_supported_for_nested_iterate_body(
         self, node_id: str, graph: "nx.DiGraph"
-    ) -> tuple[set[str], str, str, str] | None:
+    ) -> _SupportedNestedIterateBody | None:
         """Returns the bounded internal Iterate body contract, if this For uses it."""
         body_path_to_return = self._get_for_body_path_to_return(node_id, graph)
         if body_path_to_return is None:
@@ -3267,7 +3282,12 @@ class Graph(BaseModel):
             ):
                 return None
 
-        return body_path_nodes, return_node_id, iterate_node_id, collect_node_id
+        return _SupportedNestedIterateBody(
+            body_path_nodes=body_path_nodes,
+            return_node_id=return_node_id,
+            iterate_node_id=iterate_node_id,
+            collect_node_id=collect_node_id,
+        )
 
     def _get_supported_for_nested_for_body(self, node_id: str, graph: "nx.DiGraph") -> _SupportedNestedForBody | None:
         """Returns the supported recursive nested For contract, if this For uses it.
@@ -4005,7 +4025,8 @@ class GraphExecutionState(BaseModel):
         for source_node_id in source_node_ids:
             if source_node_id not in self.executed:
                 self.executed.add(source_node_id)
-                self.executed_history.append(source_node_id)
+                if source_node_id not in self.executed_history:
+                    self.executed_history.append(source_node_id)
 
     def _get_for_parent_iteration_paths(self, source_for_id: str) -> set[tuple[int, ...]]:
         return {
@@ -4211,7 +4232,8 @@ class GraphExecutionState(BaseModel):
             for source_node_id in nx.topological_sort(self.graph.nx_graph_flat()):
                 if source_node_id in completed_source_ids and source_node_id not in self.executed:
                     self.executed.add(source_node_id)
-                    self.executed_history.append(source_node_id)
+                    if source_node_id not in self.executed_history:
+                        self.executed_history.append(source_node_id)
         return complete
 
     def has_error(self) -> bool:

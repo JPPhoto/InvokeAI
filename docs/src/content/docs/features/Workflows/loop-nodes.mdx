@@ -3,7 +3,7 @@ title: Loop Nodes
 description: Repeat workflow steps over a collection and optionally carry values from one iteration to the next.
 sidebar:
   order: 4
-lastUpdated: 2026-08-30
+lastUpdated: 2026-09-03
 ---
 
 Loop nodes let a workflow repeat the same group of steps for every item in a collection. For example, a workflow can
@@ -38,6 +38,10 @@ association, not a data value. The remaining values move through the ports and e
 The loop is not executable until its two boundary nodes are paired. Connect `For.loop_linkage` directly to the matching
 `ForReturn.loop_linkage`. When you add `ForReturn` from an iteration-output connection in the node picker, the editor can
 create this association for you. Replacing either boundary node requires pairing the replacement again.
+
+Deleting a connector preserves its through-connections by reconnecting the upstream source to surviving downstream
+targets. Deleting a complete loop-linkage alias collapses it to a direct `loop_linkage` edge; ordinary connector paths
+remain ordinary data edges.
 
 ### A Simple Example
 
@@ -146,7 +150,7 @@ These nodes make the collection relationship explicit before the loop:
   collections may have different lengths.
 - **Zip Collections** pairs items by position. Both collections must have the same length; a mismatch is an error.
 - **Cartesian Product of Collections** creates every possible pair, one item from each collection. The collections may
-  have different lengths. The result is limited to 100,000 pairs.
+  have different lengths. Products larger than 100,000 pairs fail with an error.
 
 Choose based on the relationship between the items:
 

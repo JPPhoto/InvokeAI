@@ -24562,7 +24562,7 @@ export type components = {
         LoopStateValueOutput: {
             /**
              * Value
-             * @description The value read from the loop state, or None when the key is missing
+             * @description The value read from the loop state, or the configured default when the key is missing
              * @default null
              */
             value: unknown | null;

@@ -1,4 +1,5 @@
 from collections.abc import Mapping, MutableMapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from invokeai.app.invocations.baseinvocation import Classification, InvocationRegistry
@@ -18,6 +19,13 @@ class UnsupportedWorkflowNodeError(ValueError):
 
 class InvalidWorkflowInputError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class _ConnectorLoopLinkagePath:
+    source_id: str
+    target_id: str
+    edge_path: tuple[Mapping[str, Any], ...]
 
 
 def _is_mapping(value: Any) -> bool:
@@ -298,7 +306,7 @@ def _resolve_connector_source(
 
 def _resolve_for_connector_loop_linkage_path(
     edge: Mapping[str, Any], workflow_nodes: dict[str, Mapping[str, Any]], workflow_edges: Sequence[Mapping[str, Any]]
-) -> tuple[str, str, list[Mapping[str, Any]]] | None:
+) -> _ConnectorLoopLinkagePath | None:
     """Resolve one connector alias path from a For to its direct ForReturn association."""
     if edge.get("sourceHandle") != "loop_linkage" or edge.get("targetHandle") != CONNECTOR_INPUT_HANDLE:
         return None
@@ -340,7 +348,7 @@ def _resolve_for_connector_loop_linkage_path(
         if _is_invocation_node(target_node):
             if target_node.get("data", {}).get("type") != "for_return" or target_handle != "loop_linkage":
                 return None
-            return source_id, target_id, path_edges
+            return _ConnectorLoopLinkagePath(source_id=source_id, target_id=target_id, edge_path=tuple(path_edges))
         if (
             not isinstance(target_id, str)
             or not _is_connector_node(target_node)
@@ -362,7 +370,7 @@ def build_graph_from_workflow(workflow: Mapping[str, Any]) -> Graph:
     default_edges = _get_default_edges(workflow_edges)
     loop_linkage_edges = _get_loop_linkage_edges(workflow_edges)
 
-    connector_loop_linkage_paths: list[tuple[str, str, list[Mapping[str, Any]]]] = []
+    connector_loop_linkage_paths: list[_ConnectorLoopLinkagePath] = []
     connector_loop_linkage_edge_ids: set[int] = set()
     linked_for_ids = {
         edge.get("source")
@@ -393,14 +401,14 @@ def build_graph_from_workflow(workflow: Mapping[str, Any]) -> Graph:
             raise InvalidWorkflowInputError(
                 "loop_linkage connector path must resolve to exactly one For and one ForReturn without branching"
             )
-        if path[0] in linked_for_ids or path[1] in linked_return_ids:
+        if path.source_id in linked_for_ids or path.target_id in linked_return_ids:
             raise InvalidWorkflowInputError(
                 "loop_linkage connector path must resolve to exactly one For and one ForReturn without branching"
             )
         connector_loop_linkage_paths.append(path)
-        connector_loop_linkage_edge_ids.update(id(path_edge) for path_edge in path[2])
-        linked_for_ids.add(path[0])
-        linked_return_ids.add(path[1])
+        connector_loop_linkage_edge_ids.update(id(path_edge) for path_edge in path.edge_path)
+        linked_for_ids.add(path.source_id)
+        linked_return_ids.add(path.target_id)
 
     parsed_nodes: dict[str, dict[str, Any]] = {}
     for node in workflow_nodes.values():
@@ -502,12 +510,12 @@ def build_graph_from_workflow(workflow: Mapping[str, Any]) -> Graph:
             }
         )
 
-    for source_id, target_id, _ in connector_loop_linkage_paths:
+    for path in connector_loop_linkage_paths:
         parsed_edges.append(
             {
                 "type": "loop_linkage",
-                "source": {"node_id": source_id, "field": "loop_linkage"},
-                "destination": {"node_id": target_id, "field": "loop_linkage"},
+                "source": {"node_id": path.source_id, "field": "loop_linkage"},
+                "destination": {"node_id": path.target_id, "field": "loop_linkage"},
             }
         )
 

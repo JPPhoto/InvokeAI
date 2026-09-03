@@ -3,7 +3,13 @@ import { describe, expect, it } from 'vitest';
 import type { WorkflowEdge, WorkflowInvocationNode } from './types';
 
 import { createProjectGraph } from './document';
-import { getCanonicalWorkflowEdges, localizeForLoopValidationReason, validateForLoopGraph } from './forLoops';
+import {
+  getCanonicalWorkflowEdges,
+  getForLoopBodyBoundaries,
+  localizeForLoopValidationReason,
+  shouldAddForReturnLoopLinkage,
+  validateForLoopGraph,
+} from './forLoops';
 
 const node = (id: string, type: string): WorkflowInvocationNode => ({
   data: {
@@ -62,6 +68,43 @@ describe('For/ForReturn graph contracts', () => {
     expect(localizeForLoopValidationReason('The graph contains a cycle.', translate)).toBe(
       'The graph contains a cycle.'
     );
+  });
+
+  it('promotes connector-routed For iteration output to direct loop linkage', () => {
+    const forNode = node('for', 'for');
+
+    expect(shouldAddForReturnLoopLinkage('for_return', { fieldName: 'item', nodeId: forNode.id }, forNode, [])).toBe(
+      true
+    );
+  });
+
+  it('scopes duplicate linkage status to the affected loop', () => {
+    const document = {
+      ...createProjectGraph('duplicate-boundary-test'),
+      nodes: [
+        node('for-a', 'for'),
+        node('body-a', 'number'),
+        node('return-a', 'for_return'),
+        node('for-b', 'for'),
+        node('body-b', 'number'),
+        node('return-b', 'for_return'),
+        node('stray-return', 'for_return'),
+      ],
+      edges: [
+        edge('a-item', 'for-a', 'item', 'body-a', 'value'),
+        edge('a-output', 'body-a', 'value', 'return-a', 'output'),
+        edge('a-linkage', 'for-a', 'loop_linkage', 'return-a', 'loop_linkage', 'loop_linkage'),
+        edge('a-duplicate', 'for-a', 'loop_linkage', 'stray-return', 'loop_linkage', 'loop_linkage'),
+        edge('b-item', 'for-b', 'item', 'body-b', 'value'),
+        edge('b-output', 'body-b', 'value', 'return-b', 'output'),
+        edge('b-linkage', 'for-b', 'loop_linkage', 'return-b', 'loop_linkage', 'loop_linkage'),
+      ],
+    };
+
+    const boundaries = getForLoopBodyBoundaries(document.nodes, document.edges);
+
+    expect(boundaries.find((boundary) => boundary.forNodeId === 'for-a')?.status).toBe('duplicate_linkage');
+    expect(boundaries.find((boundary) => boundary.forNodeId === 'for-b')?.status).toBe('complete');
   });
 
   it('accepts a direct loop linkage and excludes it from data-flow traversal', () => {
