@@ -132,8 +132,10 @@ export const tabsSlotRecipe = defineSlotRecipe({
         ...chakraSlotRecipes.tabs.variants?.variant?.subtle,
         trigger: {
           ...chakraSlotRecipes.tabs.variants?.variant?.subtle?.trigger,
+          // `bg.muted` disappears against muted-family chrome (the topbar
+          // preset strip); one surface step up reads everywhere.
           _hover: {
-            '&:not([data-selected])': { bg: 'bg.muted' },
+            '&:not([data-selected])': { bg: 'bg.emphasized/60' },
           },
         },
       },
