@@ -396,6 +396,7 @@
       "remaining_one": "{{count}} image remaining. Open queue",
       "remaining_other": "{{count}} images remaining. Open queue",
       "route": "{{source}} to {{destination}} · {{graph}}",
+      "shiftCancelsAll": "Shift-click cancels all",
       "waitingForProgress": "Backend accepted batch; waiting for progress event.",
       "waitingToStart": "Waiting to start"
     },
