@@ -3,7 +3,11 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { Box, chakra, HStack, Text } from '@chakra-ui/react';
 import { Fragment, useCallback } from 'react';
 
-const TAB_HOVER_PROPS = { bg: 'bg.muted', color: 'fg' };
+// Accent-tinted translucent fills, so the strip reads the same on the layer
+// panels and on popover/dialog surfaces that share the solid fills' color,
+// and sits in the menus' cool-tinted interaction family.
+const TAB_HOVER_PROPS = { bg: 'gray.hoverTint/8', color: 'fg' };
+const TAB_SHOWN_BG = 'gray.hoverTint/15';
 
 /** The strip's fixed height; collapsed blocks and drag snaps size against it. */
 export const SEGMENT_TABS_HEIGHT_PX = 40;
@@ -137,7 +141,7 @@ const SegmentTabButton = <T extends string>({
     <chakra.button
       aria-controls={isShown ? segmentTabsPanelId(idBase) : undefined}
       aria-selected={isSelected}
-      bg={isShown ? 'bg.emphasized' : 'transparent'}
+      bg={isShown ? TAB_SHOWN_BG : 'transparent'}
       color={isShown ? 'fg' : 'fg.muted'}
       fontSize="xs"
       fontWeight="600"

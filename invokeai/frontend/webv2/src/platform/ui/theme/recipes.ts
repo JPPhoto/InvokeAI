@@ -185,24 +185,24 @@ export const buttonRecipe = defineRecipe({
     variant: {
       ...chakraRecipes.button.variants?.variant,
       // Chakra's ghost/outline hover is the solid `subtle` fill, whose
-      // lightness collides with muted/control surfaces (invisible hover); an
-      // fg-derived translucent fill reads on every surface and keeps the
-      // palette tint.
+      // lightness collides with muted/control surfaces (invisible hover); a
+      // translucent `hoverTint` fill reads on every surface, leans toward the
+      // accent on the default palette, and keeps the tint of the others.
       ghost: {
         ...chakraRecipes.button.variants?.variant?.ghost,
-        _hover: { bg: 'colorPalette.fg/10' },
-        _expanded: { bg: 'colorPalette.fg/10' },
+        _hover: { bg: 'colorPalette.hoverTint/10' },
+        _expanded: { bg: 'colorPalette.hoverTint/10' },
       },
       outline: {
         ...chakraRecipes.button.variants?.variant?.outline,
-        _hover: { bg: 'colorPalette.fg/10' },
-        _expanded: { bg: 'colorPalette.fg/10' },
+        _hover: { bg: 'colorPalette.hoverTint/10' },
+        _expanded: { bg: 'colorPalette.hoverTint/10' },
       },
       // Stock Chakra gives plain buttons no hover state at all; they take the
       // same surface-proof fill as ghost.
       plain: {
         ...chakraRecipes.button.variants?.variant?.plain,
-        _hover: { bg: 'colorPalette.fg/10' },
+        _hover: { bg: 'colorPalette.hoverTint/10' },
       },
     },
   } as unknown as typeof chakraRecipes.button.variants,

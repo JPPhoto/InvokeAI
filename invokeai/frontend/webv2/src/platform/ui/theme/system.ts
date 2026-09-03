@@ -189,7 +189,23 @@ const semanticColors = {
     border: grayToken((theme) =>
       theme.colorScheme === 'light' ? theme.colors.neutral[400] : theme.colors.neutral[500]
     ),
+    /**
+     * Interaction-fill base for the default palette: fg pulled toward the
+     * accent, so translucent hovers read in the menus' cool-tinted family
+     * instead of a flat gray. Used at low alpha (`gray.hoverTint/10`).
+     */
+    hoverTint: grayToken(
+      (theme) =>
+        `color-mix(in oklab, ${theme.colors.accent.solid} 40%, ${
+          theme.colorScheme === 'light' ? theme.colors.neutral[950] : theme.colors.neutral[50]
+        })`
+    ),
   },
+  // Palette-tinted interaction fills for the non-default palettes buttons use.
+  red: { hoverTint: { value: '{colors.red.fg}' } },
+  orange: { hoverTint: { value: '{colors.orange.fg}' } },
+  green: { hoverTint: { value: '{colors.green.fg}' } },
+  blue: { hoverTint: { value: '{colors.blue.fg}' } },
   /**
    * Invoke identity palette (lime). Authored from two seeds (`solid` + `contrast`),
    * like `accent`; the rest derive. `brand.fg` is the seed on the dark themes and a
@@ -206,6 +222,7 @@ const semanticColors = {
     emphasized: mix(brandSolid, 36, surface),
     focusRing: colorToken(accentSolid),
     border: colorToken(brandSolid),
+    hoverTint: colorToken(brandFg),
   },
   /** Selection / focus palette (blue). Use via `accent.solid` or `colorPalette="accent"`. */
   accent: {
@@ -217,6 +234,7 @@ const semanticColors = {
     emphasized: mix(accentSolid, 36, surface),
     focusRing: colorToken(accentSolid),
     border: colorToken(accentSolid),
+    hoverTint: colorToken(accentSolid),
   },
 };
 

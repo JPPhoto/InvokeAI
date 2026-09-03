@@ -1,6 +1,6 @@
 /* oxlint-disable react-perf/jsx-no-new-object-as-prop */
 import { ChakraProvider } from '@chakra-ui/react';
-import { getContrastRatio } from '@platform/ui/theme/contrastRatio.testing';
+import { compositeColors, getContrastRatio } from '@platform/ui/theme/contrastRatio.testing';
 import { system } from '@theme/system';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -73,11 +73,13 @@ describe('GalleryViewTabs', () => {
     const count = counts[shownIndex]!;
     const style = getComputedStyle(count);
 
-    const ratio = getContrastRatio(
-      style.color,
+    // The shown fill is translucent, so measure against what it composites to
+    // over the surface beneath.
+    const effectiveTabBg = compositeColors(
       getComputedStyle(tabs[shownIndex]!).backgroundColor,
-      Number(style.opacity)
+      getComputedStyle(document.body).backgroundColor
     );
+    const ratio = getContrastRatio(style.color, effectiveTabBg, Number(style.opacity));
 
     expect(ratio).toBeGreaterThanOrEqual(4.5);
   });
