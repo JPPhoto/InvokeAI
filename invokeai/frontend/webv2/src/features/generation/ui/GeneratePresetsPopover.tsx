@@ -86,12 +86,11 @@ const PresetRow = ({
         aria-current={isActive || undefined}
         asChild
         flex="1"
-        h="auto"
+        h="7"
         justifyContent="start"
         minW="0"
         px="2"
-        py="1.5"
-        rounded="sm"
+        rounded="control"
         _hover={isActive ? undefined : PRESET_ROW_HOVER_PROPS}
       >
         <button type="button" onClick={handleApply}>
@@ -104,7 +103,7 @@ const PresetRow = ({
       <Tooltip content={t('common.rename')}>
         <IconButton
           aria-label={t('widgets.generate.renamePresetNamed', { name: preset.label })}
-          size="2xs"
+          size="xs"
           variant="ghost"
           onClick={handleRename}
         >
@@ -115,7 +114,7 @@ const PresetRow = ({
         <IconButton
           aria-label={t('widgets.generate.deletePresetNamed', { name: preset.label })}
           colorPalette="red"
-          size="2xs"
+          size="xs"
           variant="ghost"
           onClick={handleDelete}
         >
