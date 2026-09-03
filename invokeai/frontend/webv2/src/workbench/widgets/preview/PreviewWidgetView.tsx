@@ -27,6 +27,7 @@ import {
   isGalleryImageItem,
   legacyGeneratedImageToGalleryItem,
   normalizeGalleryImage,
+  requestGalleryItemReveal,
   toGalleryItemKey,
   toGalleryItemRef,
   type GalleryQueuePlaceholder,
@@ -275,7 +276,11 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     [account]
   );
   const selectGalleryItemAtPage = useCallback(
-    (item: GalleryItem, selectionPage: number) => gallery.selectItem(item, undefined, selectionPage, true),
+    (item: GalleryItem, selectionPage: number) => {
+      gallery.selectItem(item, undefined, selectionPage, true);
+      // Deliberate navigation: the grid follows it, unlike auto-selection.
+      requestGalleryItemReveal(toGalleryItemKey(item));
+    },
     [gallery]
   );
   const {

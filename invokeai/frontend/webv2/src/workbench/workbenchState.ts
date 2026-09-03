@@ -348,9 +348,10 @@ type WorkbenchReducerAction =
     }
   | { type: 'setGalleryCompareImage'; image: GalleryImageItem | null; projectId?: string }
   | { type: 'selectGalleryBoard'; boardId: string; projectId?: string }
+  | { type: 'clearGallerySelection'; projectId?: string }
   | { type: 'setGalleryView'; galleryView: 'images' | 'assets'; projectId?: string }
   | { type: 'setGallerySearchTerm'; searchTerm: string; projectId?: string }
-  | { type: 'updateGallerySettings'; settings: Partial<GallerySettings>; projectId?: string }
+  | { type: 'updateGallerySettings'; settings: Partial<Omit<GallerySettings, 'starredFirst'>>; projectId?: string }
   | { type: 'setGalleryPage'; page: number; projectId?: string }
   | { type: 'setGalleryPageInfo'; totalImages: number; projectId?: string }
   | {
@@ -2798,7 +2799,7 @@ const patchGalleryItemsAcrossProjects = (
             ...(values.selectedImageQuery as Record<string, unknown>),
             boardId: changes.boardId,
             page: 0,
-            paginationMode: 'infinite',
+            paginationMode: getGallerySettings(values).paginationMode,
             searchTerm: '',
           }
         : values.selectedImageQuery;
@@ -3108,7 +3109,7 @@ const updateGalleryWithResultImages = (project: Project, images: GeneratedImageC
             galleryView: nextSelectedImage.imageCategory === 'general' ? 'images' : 'assets',
             imageOrderDir: gallerySettings.imageOrderDir,
             page: 0,
-            paginationMode: 'infinite',
+            paginationMode: gallerySettings.paginationMode,
             searchTerm: '',
           },
         }
@@ -4656,6 +4657,13 @@ export const __workbenchReducerInternal = (
         action.projectId
       );
     }
+    case 'clearGallerySelection': {
+      return updateGalleryValues(
+        state,
+        (values) => ({ ...values, selectedImage: null, selectedImageName: null, selectedImageNames: [] }),
+        action.projectId
+      );
+    }
     case 'setGalleryView': {
       return updateGalleryValues(
         state,
@@ -4693,11 +4701,9 @@ export const __workbenchReducerInternal = (
       );
     }
     case 'setGalleryPage': {
-      return updateGalleryValues(
-        state,
-        (values) => ({ ...values, galleryPage: Math.max(0, action.page) }),
-        action.projectId
-      );
+      const galleryPage = Number.isFinite(action.page) ? Math.max(0, Math.floor(action.page)) : 0;
+
+      return updateGalleryValues(state, (values) => ({ ...values, galleryPage }), action.projectId);
     }
     case 'setGalleryPageInfo': {
       if (!Number.isFinite(action.totalImages)) {

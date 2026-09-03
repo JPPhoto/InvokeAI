@@ -1,4 +1,7 @@
 export interface GeneratedImageContract {
+  /** Backend creation timestamp, when known; `queuedAt` is the (earlier)
+   * submission instant, so ordering must prefer this field. */
+  createdAt?: string;
   height: number;
   imageName: string;
   imageUrl: string;

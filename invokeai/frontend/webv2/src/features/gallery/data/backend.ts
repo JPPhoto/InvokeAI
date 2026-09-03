@@ -262,6 +262,7 @@ const getGalleryVideoTotal = async ({
 
 const mapImage = (image: BackendImageDTO): GalleryImage => ({
   boardId: image.board_id ?? 'none',
+  createdAt: image.created_at,
   height: image.height,
   imageCategory: image.image_category,
   imageName: image.image_name,

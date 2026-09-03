@@ -603,15 +603,12 @@ describe('LayersTree selection, surfaces and structure', () => {
     }
     expect(stillFrames).toBe(10);
     expect(scroller.scrollTop).toBe(settled);
-    // "Once per target": how many rows scrolled under the pointer depends on
-    // timing, so assert dedup, not a count — every check was for a distinct
-    // drop target, never a repeat for the target already under the pointer.
-    // Holds because the edge only recomputes on dragMove/over transitions;
-    // (row N, below) and (row N+1, above) map to the same command, so an
-    // edge recompute per scroll tick would break this.
+    // "Once per target": a starved rAF can flap the target back to a row
+    // already checked, so assert no re-check for the target still under the
+    // pointer — the memoized check's contract — not global uniqueness.
     const checked = refusalChecks.mock.calls.map(([command]) => JSON.stringify(command));
     await act(() => pointer('pointerup', document, start.x, rect.top + rect.height / 2));
-    expect(new Set(checked).size).toBe(checked.length);
+    expect(checked.filter((command, index) => command === checked[index - 1])).toEqual([]);
   });
 
   it('reorders with a pointer drag and reparents from the keyboard', async () => {

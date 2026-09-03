@@ -40,14 +40,14 @@ describe('getGalleryBoardGroups', () => {
   it('splits archived boards into their own section instead of the main list', () => {
     const groups = groupsOf();
 
-    expect(groups.yourBoards.map((board) => board.id)).toEqual(['dogs', 'cats', 'other', 'mine', 'none']);
+    expect(groups.yourBoards.map((board) => board.id)).toEqual(['none', 'dogs', 'cats', 'other', 'mine']);
     expect(groups.archivedBoards.map((board) => board.id)).toEqual(['gorl']);
   });
 
-  it('puts Uncategorized last and hoists the project board first', () => {
+  it('pins Uncategorized first, then the hoisted project board, then other boards', () => {
     const groups = groupsOf({ projectBoardId: 'cats' });
 
-    expect(groups.yourBoards.map((board) => board.id)).toEqual(['cats', 'dogs', 'other', 'mine', 'none']);
+    expect(groups.yourBoards.map((board) => board.id)).toEqual(['none', 'cats', 'dogs', 'other', 'mine']);
   });
 
   it('hides the date and archived sections when their toggles are off', () => {
@@ -55,19 +55,19 @@ describe('getGalleryBoardGroups', () => {
 
     expect(groups.archivedBoards).toEqual([]);
     expect(groups.dateBoards).toEqual([]);
-    expect(groups.yourBoards.map((board) => board.id)).toEqual(['dogs', 'cats', 'other', 'mine', 'none']);
+    expect(groups.yourBoards.map((board) => board.id)).toEqual(['none', 'dogs', 'cats', 'other', 'mine']);
   });
 
   it('drops boards owned by another project when they are hidden', () => {
     const groups = groupsOf({ showOtherProjects: false });
 
-    expect(groups.yourBoards.map((board) => board.id)).toEqual(['dogs', 'cats', 'none']);
+    expect(groups.yourBoards.map((board) => board.id)).toEqual(['none', 'dogs', 'cats']);
   });
 
   it('keeps the open project own board even while other projects are hidden', () => {
     const groups = groupsOf({ projectBoardId: 'mine', showOtherProjects: false });
 
-    expect(groups.yourBoards.map((board) => board.id)).toEqual(['mine', 'dogs', 'cats', 'none']);
+    expect(groups.yourBoards.map((board) => board.id)).toEqual(['none', 'mine', 'dogs', 'cats']);
   });
 
   it('filters every section by a case-insensitive substring match', () => {
@@ -80,7 +80,7 @@ describe('getGalleryBoardGroups', () => {
   });
 
   it('matches anywhere in the name, so Uncategorized answers to "cat"', () => {
-    expect(groupsOf({ searchTerm: 'cat' }).yourBoards.map((board) => board.id)).toEqual(['cats', 'none']);
+    expect(groupsOf({ searchTerm: 'cat' }).yourBoards.map((board) => board.id)).toEqual(['none', 'cats']);
   });
 
   it('offers to create only when the search names no existing board', () => {
