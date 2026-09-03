@@ -3,6 +3,7 @@ import type { WidgetRegionDropState } from '@workbench/widgetDnd';
 import type { PlacedWidgetRegionItem, WidgetPlacementInstanceMeta } from '@workbench/widgetRegionViewModel';
 
 import { Box, Popover, Portal } from '@chakra-ui/react';
+import { useDroppable } from '@dnd-kit/core';
 import { horizontalListSortingStrategy } from '@dnd-kit/sortable';
 import { PopoverContent, Row, Tooltip } from '@platform/ui';
 import {
@@ -14,6 +15,7 @@ import {
   type WidgetEnableMenuItem,
   type WidgetInstanceContextMenuTarget,
 } from '@workbench/widget-frame';
+import { getWidgetRegionEndDropData, getWidgetRegionEndDropId } from '@workbench/widgetDnd';
 import { resolveWidgetLabel } from '@workbench/widgetLabels';
 import { closeWidgetPlacement, openWidgetPlacement, revealWidgetPlacement } from '@workbench/widgetPlacementCommands';
 import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from '@workbench/widgetPlacementMeta';
@@ -44,6 +46,16 @@ const BOTTOM_MENU_TRIGGER = { kind: 'bottom' } as const;
  * theme.
  */
 const COMPACT_ROW_HOVER_PROPS = { bg: 'bg.emphasized', color: 'fg' };
+
+/** The stretch between the clusters doubles as the "move to the right side" drop target. */
+const BottomEndDropZone = () => {
+  const { setNodeRef } = useDroppable({
+    data: getWidgetRegionEndDropData('bottom'),
+    id: getWidgetRegionEndDropId('bottom'),
+  });
+
+  return <Box ref={setNodeRef} alignSelf="stretch" flex="1" />;
+};
 const COMPACT_ROW_ACTIVE_PROPS = { bg: 'bg.emphasized', color: 'brand.fg' };
 const COMPACT_ROW_ACTIVE_HOVER_PROPS = { bg: 'bg.emphasized', color: 'brand.fg' };
 const TOOLTIP_POSITIONING = { placement: 'top' } as const;
@@ -76,8 +88,8 @@ export const StatusBar = ({ dropState }: { dropState: WidgetRegionDropState }) =
   });
   // The trailing cluster: placement stays in `instanceIds` order within each
   // side, so drag-reorders keep working; only the render splits. Cluster
-  // membership moves through the context menu alone — a drag across the
-  // spacer reorders within the item's own cluster rather than migrating it.
+  // membership moves via the context menu, by dropping onto the spacer, or by
+  // landing beside a widget of the other cluster (see `resolveWidgetDragEnd`).
   const alignEndIds = useMemo(
     () => new Set(bottomRegion.alignEndInstanceIds ?? []),
     [bottomRegion.alignEndInstanceIds]
@@ -168,7 +180,7 @@ export const StatusBar = ({ dropState }: { dropState: WidgetRegionDropState }) =
         onToggle={toggleBottomWidget}
       />
 
-      <Box flex="1" />
+      <BottomEndDropZone />
       {endItems.map((item) => (
         <CompactBottomWidget
           key={item.id}
