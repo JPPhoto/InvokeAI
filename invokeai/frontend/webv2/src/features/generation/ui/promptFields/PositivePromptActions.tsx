@@ -467,12 +467,8 @@ const ExpandPromptButton = ({
       positioning={POPOVER_POSITIONING_BOTTOM_END}
       onOpenChange={handleOpenChange}
     >
-      <Tooltip
-        content={
-          textLlmModels.length === 0 ? t('widgets.generate.noTextLlmInstalled') : t('widgets.generate.expandPrompt')
-        }
-        ids={popoverIds}
-      >
+      {/* Always the feature name: the popover explains a missing model and offers the way out. */}
+      <Tooltip content={t('widgets.generate.expandPrompt')} ids={popoverIds}>
         <Popover.Trigger asChild>
           <IconButton
             aria-label={t('widgets.generate.expandPrompt')}
@@ -643,12 +639,7 @@ const ImageToPromptButton = ({
       positioning={POPOVER_POSITIONING_BOTTOM_END}
       onOpenChange={handleOpenChange}
     >
-      <Tooltip
-        content={
-          llavaModels.length === 0 ? t('widgets.generate.noVisionModelInstalled') : t('widgets.generate.imageToPrompt')
-        }
-        ids={popoverIds}
-      >
+      <Tooltip content={t('widgets.generate.imageToPrompt')} ids={popoverIds}>
         <Popover.Trigger asChild>
           <IconButton
             aria-label={t('widgets.generate.imageToPrompt')}

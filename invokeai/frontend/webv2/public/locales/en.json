@@ -1835,8 +1835,6 @@
       "noPromptHistoryYet": "No prompt history yet.",
       "noPromptTriggersAvailable": "No prompt triggers available.",
       "noSupportedModels": "No compatible generation model was found on the backend.",
-      "noTextLlmInstalled": "No Text LLM installed",
-      "noVisionModelInstalled": "No vision model installed",
       "offCount_one": "{{count}} off",
       "offCount_other": "{{count}} off",
       "openModelManager": "Open Model Manager",
