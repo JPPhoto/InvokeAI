@@ -47,7 +47,6 @@ const DROP_ZONE_FOCUS_PROPS = {
 };
 const DROP_ZONE_DISABLED_PROPS = { cursor: 'not-allowed', opacity: 0.6 };
 const DROP_ZONE_BUSY_PROPS = { disabled: true };
-const DROP_ZONE_HOVER_PROPS = { bg: 'bg.muted', color: 'fg' };
 
 const getSingleGalleryDragItem = (data: unknown): { kind: 'image' | 'video'; name: string } | null => {
   if (!isGalleryItemDragData(data) || data.items.length !== 1) {
@@ -544,7 +543,8 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
           ref={setNodeRef}
           {...(isInert ? DROP_ZONE_DISABLED_PROPS : {})}
           {...(isLoading ? DROP_ZONE_BUSY_PROPS : {})}
-          {...(isOver && acceptsActiveDrag ? DROP_ZONE_HOVER_PROPS : {})}
+          isDisabled={isInert}
+          isOver={isOver && acceptsActiveDrag}
           _focusVisible={DROP_ZONE_FOCUS_PROPS}
           position="relative"
         >

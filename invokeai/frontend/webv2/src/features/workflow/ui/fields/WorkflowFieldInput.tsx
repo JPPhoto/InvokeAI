@@ -95,6 +95,9 @@ export interface WorkflowFieldInputProps {
 
 const invalidProps = (invalid: boolean | undefined) => (invalid ? { 'aria-invalid': true } : {});
 
+// The media well's hover, matching DropZone's pointer-hover accent preview.
+const MEDIA_INPUT_HOVER_PROPS = { borderColor: 'accent.solid' };
+
 const toFiniteNumber = (raw: string): number | null => {
   if (raw.trim() === '') {
     return null;
@@ -623,7 +626,9 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
               justifyContent="center"
               overflow="hidden"
               rounded="sm"
+              transition="border-color var(--wb-motion-duration-fast) ease"
               w="full"
+              _hover={MEDIA_INPUT_HOVER_PROPS}
             >
               {failedThumbnail !== mediaName ? (
                 <Image
@@ -663,7 +668,9 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
             h="full"
             justifyContent="center"
             rounded="sm"
+            transition="border-color var(--wb-motion-duration-fast) ease"
             w="full"
+            _hover={MEDIA_INPUT_HOVER_PROPS}
           >
             <Text color="fg.subtle" fontSize="xs">
               {`Drop a ${config.noun} here`}

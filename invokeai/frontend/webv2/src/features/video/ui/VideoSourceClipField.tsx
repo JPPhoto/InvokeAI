@@ -229,6 +229,7 @@ export const VideoSourceClipField = memo(
           aria-disabled={disabled}
           aria-label={sourceVideo ? t('widgets.video.replaceClip') : t('widgets.video.uploadClip')}
           cursor={disabled ? 'not-allowed' : undefined}
+          isDisabled={isInert}
           isOver={isOver}
           {...(isLoading ? DROP_ZONE_BUSY_PROPS : undefined)}
           minH="24"

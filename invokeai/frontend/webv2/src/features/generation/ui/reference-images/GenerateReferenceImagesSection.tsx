@@ -245,6 +245,7 @@ export const GenerateReferenceImagesContent = ({
           flex="1"
           fontSize="2xs"
           gap="2"
+          isDisabled={!canAdd}
           isOver={isOver}
           justifyContent="center"
           minH="12"

@@ -181,6 +181,7 @@ export const VideoFrameImageField = memo(
           aria-disabled={disabled}
           aria-label={image ? t('widgets.video.replaceFrame') : t('widgets.video.uploadFrame')}
           cursor={disabled ? 'not-allowed' : undefined}
+          isDisabled={isInert}
           isOver={isOver}
           {...(isLoading ? DROP_ZONE_BUSY_PROPS : undefined)}
           minH="20"
