@@ -74,7 +74,20 @@ export const StatusBar = ({ dropState }: { dropState: WidgetRegionDropState }) =
 
     return [{ ...item, isExpandable: isExpandableBottomItem(item), isPopover: isPopoverBottomItem(item) }];
   });
-  const sortableInstanceIds = useMemo(() => compactItems.map((item) => item.id), [compactItems]);
+  // The trailing cluster: placement stays in `instanceIds` order within each
+  // side, so drag-reorders keep working; only the render splits. Cluster
+  // membership moves through the context menu alone — a drag across the
+  // spacer reorders within the item's own cluster rather than migrating it.
+  const alignEndIds = useMemo(
+    () => new Set(bottomRegion.alignEndInstanceIds ?? []),
+    [bottomRegion.alignEndInstanceIds]
+  );
+  const startItems = compactItems.filter((item) => !alignEndIds.has(item.id));
+  const endItems = compactItems.filter((item) => alignEndIds.has(item.id));
+  const sortableInstanceIds = useMemo(
+    () => [...startItems.map((item) => item.id), ...endItems.map((item) => item.id)],
+    [startItems, endItems]
+  );
   const openEnableMenu = useCallback((event: MouseEvent) => {
     event.preventDefault();
     setEnableMenuTarget({ x: event.clientX, y: event.clientY });
@@ -107,6 +120,12 @@ export const StatusBar = ({ dropState }: { dropState: WidgetRegionDropState }) =
       revealWidgetPlacement({ instanceId, project: placementProject, region: 'bottom', widgets }),
     [placementProject, widgets]
   );
+  const setItemAlignment = useCallback(
+    (item: WidgetEnableMenuItem, align: 'start' | 'end') =>
+      widgets.setAlignment({ align, instanceId: item.id, region: 'bottom' }),
+    [widgets]
+  );
+  const isItemAlignedEnd = useCallback((item: WidgetEnableMenuItem) => alignEndIds.has(item.id), [alignEndIds]);
   const handleContextClose = useCallback(() => setEnableMenuTarget(null), []);
   const handleInstanceClose = useCallback(() => setInstanceMenuTarget(null), []);
 
@@ -128,7 +147,7 @@ export const StatusBar = ({ dropState }: { dropState: WidgetRegionDropState }) =
       w="full"
       onContextMenu={openEnableMenu}
     >
-      {compactItems.map((item) => (
+      {startItems.map((item) => (
         <CompactBottomWidget
           key={item.id}
           item={item}
@@ -148,10 +167,23 @@ export const StatusBar = ({ dropState }: { dropState: WidgetRegionDropState }) =
         onContextClose={handleContextClose}
         onToggle={toggleBottomWidget}
       />
+
+      <Box flex="1" />
+      {endItems.map((item) => (
+        <CompactBottomWidget
+          key={item.id}
+          item={item}
+          isActive={item.isExpandable && item.id === bottomRegion.activeInstanceId && !bottomRegion.isCollapsed}
+          onContextMenu={openInstanceMenu}
+          onSelect={handleSelect}
+        />
+      ))}
       <WidgetInstanceContextMenu
+        isAlignedEnd={isItemAlignedEnd}
         target={instanceMenuTarget}
         onClose={handleInstanceClose}
         onRemove={toggleBottomWidget}
+        onSetAlignment={setItemAlignment}
       />
     </WidgetStrip>
   );

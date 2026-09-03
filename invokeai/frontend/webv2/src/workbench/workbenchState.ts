@@ -235,6 +235,7 @@ type WorkbenchReducerAction =
       activeInstanceId?: WidgetInstanceId;
       instanceIds: WidgetInstanceId[];
     }
+  | { type: 'setWidgetInstanceAlignment'; region: WidgetRegion; instanceId: WidgetInstanceId; align: 'start' | 'end' }
   | { type: 'setRegionWidgetCollapsed'; region: WidgetRegion; isCollapsed: boolean }
   | { type: 'setRegionWidgetSize'; region: WidgetRegion; sizePx: number }
   | { type: 'floatWidget'; instanceId: WidgetInstanceId }
@@ -2166,6 +2167,9 @@ const isWidgetRegionState = (
       (record.activeInstanceId.length > 0 &&
         record.activeInstanceId in widgetInstances &&
         (instanceIds.length === 0 || instanceIds.includes(record.activeInstanceId)))) &&
+    (record.alignEndInstanceIds === undefined ||
+      (Array.isArray(record.alignEndInstanceIds) &&
+        record.alignEndInstanceIds.every((instanceId) => typeof instanceId === 'string'))) &&
     typeof record.isCollapsed === 'boolean' &&
     typeof record.sizePx === 'number' &&
     Number.isFinite(record.sizePx) &&
@@ -4109,6 +4113,25 @@ export const __workbenchReducerInternal = (
         // a pure reorder leaves the same panel in front and must not re-route.
         return applyAutoRouteForRegionFront(nextProject, previousRegion, action.region, context);
       });
+    }
+    case 'setWidgetInstanceAlignment': {
+      return updateActiveProject(state, (project) =>
+        updateProjectWidgetRegion(project, action.region, (region) => {
+          const current = region.alignEndInstanceIds ?? [];
+          const isAlignedEnd = current.includes(action.instanceId);
+
+          if (action.align === 'end' ? isAlignedEnd : !isAlignedEnd) {
+            return region;
+          }
+
+          const next =
+            action.align === 'end'
+              ? [...current, action.instanceId]
+              : current.filter((instanceId) => instanceId !== action.instanceId);
+
+          return { ...region, alignEndInstanceIds: next };
+        })
+      );
     }
     case 'setRegionWidgetCollapsed': {
       if (action.region === 'center') {
