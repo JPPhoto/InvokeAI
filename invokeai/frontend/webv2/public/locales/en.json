@@ -1315,6 +1315,17 @@
     "nodeType": "Type: {{type}}",
     "nodeVersion": "Version: {{version}}",
     "nodeClassification": "Classification: {{classification}}",
+    "iterationOutputs": "Iteration outputs",
+    "finalOutputs": "Final outputs",
+    "forLoopBodyBoundary": "For loop body",
+    "forLoopBodyBoundaryStatus": {
+      "missing_linkage": "missing loop linkage",
+      "invalid_linkage": "invalid loop linkage",
+      "duplicate_linkage": "duplicate loop linkage",
+      "missing_return": "missing ForReturn",
+      "multiple_returns": "multiple ForReturns",
+      "orphan_return": "orphan ForReturn"
+    },
     "nodeDetailsAria": "Details for {{title}}",
     "nodePackLabel": "Node pack: {{name}}",
     "nodesDirectory": "Nodes Directory",

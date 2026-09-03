@@ -1,40 +1,30 @@
-import { Box, Text } from '@invoke-ai/ui-library';
+import type { WorkflowEdge, WorkflowNode } from '@features/workflow/contracts';
+
+import { Box, Text } from '@chakra-ui/react';
+import { getForLoopBodyBoundaries, type LoopBodyBoundaryStatus } from '@features/workflow/utility';
 import { useNodes, useReactFlow, ViewportPortal } from '@xyflow/react';
-import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
-import { getForLoopBodyBoundaries, type LoopBodyBoundaryStatus } from 'features/nodes/util/graph/loopBodyBoundary';
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import type { WorkflowFlowEdge, WorkflowFlowNode } from './flowAdapters';
+
 const BOUNDARY_PADDING = 24;
 
-const getStatusColor = (status: LoopBodyBoundaryStatus) => {
-  if (status === 'complete') {
-    return {
-      border: 'var(--invoke-colors-teal-400)',
-      text: 'var(--invoke-colors-teal-200)',
-    };
-  }
-  return {
-    border: 'var(--invoke-colors-orange-400)',
-    text: 'var(--invoke-colors-orange-200)',
-  };
-};
+const getStatusColor = (status: LoopBodyBoundaryStatus) =>
+  status === 'complete' ? { border: 'green.400', text: 'green.200' } : { border: 'orange.400', text: 'orange.200' };
 
-type Props = {
-  edges: AnyEdge[];
-};
-
-const LoopBodyBoundaryOverlay = ({ edges }: Props) => {
+export const LoopBodyBoundaryOverlay = ({ edges }: { edges: WorkflowEdge[] }) => {
   const { t } = useTranslation();
-  const nodes = useNodes<AnyNode>();
-  const { getNodesBounds } = useReactFlow<AnyNode, AnyEdge>();
-
+  const flowNodes = useNodes<WorkflowFlowNode>();
+  const { getNodesBounds } = useReactFlow<WorkflowFlowNode, WorkflowFlowEdge>();
+  const nodes = useMemo<WorkflowNode[]>(() => flowNodes.map((node) => node.data.documentNode), [flowNodes]);
   const boundaries = useMemo(() => getForLoopBodyBoundaries(nodes, edges), [edges, nodes]);
 
   return (
     <ViewportPortal>
       {boundaries.map((boundary) => {
         const bounds = getNodesBounds(boundary.bodyNodeIds);
+
         if (bounds.width <= 0 || bounds.height <= 0) {
           return null;
         }
@@ -48,17 +38,17 @@ const LoopBodyBoundaryOverlay = ({ edges }: Props) => {
         return (
           <Box
             key={`${boundary.forNodeId ?? 'orphan'}-${boundary.returnNodeId ?? 'return'}-${boundary.status}`}
-            position="absolute"
-            pointerEvents="none"
-            transform={`translate(${bounds.x - BOUNDARY_PADDING}px, ${bounds.y - BOUNDARY_PADDING}px)`}
-            width={bounds.width + BOUNDARY_PADDING * 2}
-            height={bounds.height + BOUNDARY_PADDING * 2}
+            aria-label={label}
             border="2px dashed"
             borderColor={colors.border}
             borderRadius="base"
             data-loop-body-boundary={boundary.forNodeId ?? boundary.returnNodeId}
             data-loop-body-status={boundary.status}
-            aria-label={label}
+            h={bounds.height + BOUNDARY_PADDING * 2}
+            pointerEvents="none"
+            position="absolute"
+            transform={`translate(${bounds.x - BOUNDARY_PADDING}px, ${bounds.y - BOUNDARY_PADDING}px)`}
+            w={bounds.width + BOUNDARY_PADDING * 2}
             zIndex={0}
           >
             <Text
@@ -66,7 +56,7 @@ const LoopBodyBoundaryOverlay = ({ edges }: Props) => {
               top={-6}
               left={8}
               px={1}
-              bg="base.900"
+              bg="bg.canvas"
               color={colors.text}
               fontSize="xs"
               lineHeight="short"

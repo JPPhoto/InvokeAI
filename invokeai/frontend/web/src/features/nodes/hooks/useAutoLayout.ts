@@ -83,12 +83,10 @@ export const useAutoLayout = (): (() => void) => {
       });
     });
 
-    let edgesToLayout: Edge[] = edges.filter((edge) => edge.type !== 'loop_linkage');
+    let edgesToLayout: Edge[] = edges;
     if (isLayoutSelection) {
       const nodesToLayoutIds = new Set(nodesToLayout.map((n) => n.id));
-      edgesToLayout = edges.filter(
-        (edge) => edge.type !== 'loop_linkage' && nodesToLayoutIds.has(edge.source) && nodesToLayoutIds.has(edge.target)
-      );
+      edgesToLayout = edges.filter((edge) => nodesToLayoutIds.has(edge.source) && nodesToLayoutIds.has(edge.target));
     }
 
     edgesToLayout.forEach((edge) => {

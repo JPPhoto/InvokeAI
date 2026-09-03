@@ -86,6 +86,7 @@ export interface WorkflowPreviewGraph {
     sourceField: string;
     targetNodeId: string;
     targetField: string;
+    type?: 'default' | 'loop_linkage';
   }>;
   backendGraph?: unknown;
 }

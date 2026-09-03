@@ -14,9 +14,12 @@ import {
   CONNECTOR_OUTPUT_HANDLE,
   resolveConnectorSourceIndexed,
   resolveConnectorTargetsIndexed,
+  resolveLoopLinkagePath,
 } from './connectors';
 import { createWorkflowGraphIndex, type WorkflowGraphIndex } from './graphIndex';
 import { isConnectorNode, isInvocationNode } from './types';
+
+export const LOOP_LINKAGE_FIELD = 'loop_linkage';
 
 /**
  * Connection validation, ported from the legacy editor's
@@ -106,6 +109,9 @@ export const wouldCreateCycle = (sourceNodeId: string, targetNodeId: string, edg
     visited.add(nodeId);
 
     for (const edge of edges) {
+      if (edge.type === 'loop_linkage') {
+        continue;
+      }
       if (edge.source === nodeId) {
         stack.push(edge.target);
       }
@@ -120,6 +126,9 @@ export const hasAnyCycle = (nodes: WorkflowNode[], edges: WorkflowEdge[]): boole
   const adjacency = new Map<string, string[]>();
 
   for (const edge of edges) {
+    if (edge.type === 'loop_linkage') {
+      continue;
+    }
     adjacency.set(edge.source, [...(adjacency.get(edge.source) ?? []), edge.target]);
   }
 
@@ -300,6 +309,78 @@ const hasValidSourceHandle = (node: WorkflowNode, handle: string, templates: Inv
   return isConnectorNode(node) && handle === CONNECTOR_OUTPUT_HANDLE;
 };
 
+const isLoopLinkageHandle = (handle: string): boolean => handle === LOOP_LINKAGE_FIELD;
+
+const isValidLoopLinkageConnection = (
+  sourceNode: WorkflowNode,
+  sourceHandle: string,
+  targetNode: WorkflowNode,
+  targetHandle: string,
+  document: Pick<ProjectGraphState, 'edges' | 'nodes'>,
+  index: WorkflowGraphIndex,
+  templates: InvocationTemplates
+): boolean => {
+  if (isInvocationNode(sourceNode) && isInvocationNode(targetNode)) {
+    return (
+      sourceNode.data.type === 'for' &&
+      targetNode.data.type === 'for_return' &&
+      sourceHandle === LOOP_LINKAGE_FIELD &&
+      targetHandle === LOOP_LINKAGE_FIELD
+    );
+  }
+
+  if (isInvocationNode(sourceNode) && isConnectorNode(targetNode)) {
+    return (
+      sourceNode.data.type === 'for' && sourceHandle === LOOP_LINKAGE_FIELD && targetHandle === CONNECTOR_INPUT_HANDLE
+    );
+  }
+
+  if (isConnectorNode(sourceNode) && isInvocationNode(targetNode)) {
+    if (
+      targetNode.data.type !== 'for_return' ||
+      targetHandle !== LOOP_LINKAGE_FIELD ||
+      sourceHandle !== CONNECTOR_OUTPUT_HANDLE
+    ) {
+      return false;
+    }
+
+    const resolvedSource = resolveConnectorSourceIndexed(sourceNode.id, index, templates);
+    const resolvedSourceNode = resolvedSource ? index.nodesById.get(resolvedSource.nodeId) : undefined;
+
+    return (
+      resolvedSource !== null &&
+      resolvedSourceNode !== undefined &&
+      isInvocationNode(resolvedSourceNode) &&
+      resolvedSourceNode.data.type === 'for' &&
+      resolvedSource.fieldName === LOOP_LINKAGE_FIELD &&
+      resolveLoopLinkagePath(
+        {
+          id: '__candidate-loop-linkage__',
+          source: sourceNode.id,
+          sourceHandle,
+          target: targetNode.id,
+          targetHandle,
+          type: 'default',
+        },
+        document.nodes,
+        [
+          ...document.edges,
+          {
+            id: '__candidate-loop-linkage__',
+            source: sourceNode.id,
+            sourceHandle,
+            target: targetNode.id,
+            targetHandle,
+            type: 'default',
+          },
+        ]
+      ) !== null
+    );
+  }
+
+  return false;
+};
+
 /** Returns a human-readable rejection reason, or null when the connection is valid. */
 export const validateConnection = (
   candidate: ConnectionCandidate,
@@ -322,6 +403,12 @@ export const validateConnection = (
 
   if (!hasValidSourceHandle(sourceNode, sourceHandle, templates)) {
     return 'One of the fields has no known definition.';
+  }
+
+  if (isLoopLinkageHandle(sourceHandle) || isLoopLinkageHandle(targetHandle)) {
+    if (!isValidLoopLinkageConnection(sourceNode, sourceHandle, targetNode, targetHandle, document, index, templates)) {
+      return 'For loop linkage must connect a For to its ForReturn.';
+    }
   }
 
   if (isConnectorNode(targetNode)) {

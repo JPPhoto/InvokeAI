@@ -46,17 +46,13 @@ import {
   isStatefulFieldType,
   isStringCollectionFieldType,
 } from 'features/nodes/types/field';
-import type { InvocationInputFieldSchema } from 'features/nodes/types/openapi';
+import type { InvocationFieldSchema } from 'features/nodes/types/openapi';
 import { isSchemaObject } from 'features/nodes/types/openapi';
 import { t } from 'i18next';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type FieldInputTemplateBuilder<T extends FieldInputTemplate = any> = // valid `any`!
-  (arg: {
-    schemaObject: InvocationInputFieldSchema;
-    baseField: Omit<T, 'type' | 'default'>;
-    fieldType: T['type'];
-  }) => T;
+  (arg: { schemaObject: InvocationFieldSchema; baseField: Omit<T, 'type' | 'default'>; fieldType: T['type'] }) => T;
 
 const buildIntegerFieldInputTemplate: FieldInputTemplateBuilder<IntegerFieldInputTemplate> = ({
   schemaObject,
@@ -629,7 +625,7 @@ const TEMPLATE_BUILDER_MAP: Record<StatefulFieldType['name'], FieldInputTemplate
 };
 
 export const buildFieldInputTemplate = (
-  fieldSchema: InvocationInputFieldSchema,
+  fieldSchema: InvocationFieldSchema,
   fieldName: string,
   fieldType: FieldType
 ): FieldInputTemplate => {

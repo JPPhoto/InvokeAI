@@ -16,9 +16,7 @@ import {
 import { selectNodesSlice } from 'features/nodes/store/selectors';
 import { findUnoccupiedPosition } from 'features/nodes/store/util/findUnoccupiedPosition';
 import { validateConnection } from 'features/nodes/store/util/validateConnection';
-import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
 import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
-import { isInvocationNode } from 'features/nodes/types/invocation';
 import { t } from 'i18next';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -136,39 +134,6 @@ const _pasteSelection = (withEdgesToCopiedNodes?: boolean) => {
         );
         return;
       }
-    } else if (e.type === 'loop_linkage') {
-      const sourceNode = validationNodes.find((n) => n.id === e.source);
-      const targetNode = validationNodes.find((n) => n.id === e.target);
-      if (
-        !sourceNode ||
-        !targetNode ||
-        !isInvocationNode(sourceNode) ||
-        !isInvocationNode(targetNode) ||
-        sourceNode.data.type !== 'for' ||
-        targetNode.data.type !== 'for_return' ||
-        e.sourceHandle !== LOOP_LINKAGE_FIELD ||
-        e.targetHandle !== LOOP_LINKAGE_FIELD
-      ) {
-        log.warn(
-          {
-            edgeId: e.id,
-            source: e.source,
-            sourceHandle: e.sourceHandle,
-            target: e.target,
-            targetHandle: e.targetHandle,
-          },
-          `Invalid loop linkage edge, cannot paste`
-        );
-        return;
-      }
-      if (
-        validationEdges.some(
-          (edge) => edge.type === 'loop_linkage' && (edge.source === e.source || edge.target === e.target)
-        )
-      ) {
-        log.warn({ edgeId: e.id, source: e.source, target: e.target }, `Duplicate loop linkage edge, cannot paste`);
-        return;
-      }
     } else if (e.type === 'default') {
       const { type, source, sourceHandle, target, targetHandle } = e;
 
@@ -200,7 +165,7 @@ const _pasteSelection = (withEdgesToCopiedNodes?: boolean) => {
         return;
       }
     } else {
-      // All our edges should be either "collapsed", "default", or "loop_linkage" type.
+      // All our edges should be either "collapsed" or "default" type, so if we get here, something is wrong
       const { type } = e;
       log.warn({ edge: { type } }, `Invalid edge type, cannot paste`);
       return;

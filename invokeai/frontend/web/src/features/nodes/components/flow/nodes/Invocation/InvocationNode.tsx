@@ -1,18 +1,20 @@
 import type { SystemStyleObject } from '@invoke-ai/ui-library';
 import { Flex, Grid, GridItem } from '@invoke-ai/ui-library';
 import { InputFieldGate } from 'features/nodes/components/flow/nodes/Invocation/fields/InputFieldGate';
+import { OutputFieldGate } from 'features/nodes/components/flow/nodes/Invocation/fields/OutputFieldGate';
+import { OutputFieldNodesEditorView } from 'features/nodes/components/flow/nodes/Invocation/fields/OutputFieldNodesEditorView';
 import {
   useInputFieldNamesAnyOrDirect,
   useInputFieldNamesConnection,
   useInputFieldNamesMissing,
 } from 'features/nodes/hooks/useInputFieldNamesByStatus';
+import { useOutputFieldNames } from 'features/nodes/hooks/useOutputFieldNames';
 import { useWithFooter } from 'features/nodes/hooks/useWithFooter';
 import { memo } from 'react';
 
 import { InputFieldEditModeNodes } from './fields/InputFieldEditModeNodes';
 import InvocationNodeFooter from './InvocationNodeFooter';
 import InvocationNodeHeader from './InvocationNodeHeader';
-import { OutputFields } from './OutputFields';
 
 type Props = {
   nodeId: string;
@@ -104,3 +106,19 @@ const MissingFields = memo(({ nodeId }: { nodeId: string }) => {
   );
 });
 MissingFields.displayName = 'MissingFields';
+
+const OutputFields = memo(({ nodeId }: { nodeId: string }) => {
+  const fieldNames = useOutputFieldNames();
+  return (
+    <>
+      {fieldNames.map((fieldName, i) => (
+        <GridItem gridColumnStart={2} gridRowStart={i + 1} key={`${nodeId}.${fieldName}.output-field`}>
+          <OutputFieldGate nodeId={nodeId} fieldName={fieldName}>
+            <OutputFieldNodesEditorView nodeId={nodeId} fieldName={fieldName} />
+          </OutputFieldGate>
+        </GridItem>
+      ))}
+    </>
+  );
+});
+OutputFields.displayName = 'OutputFields';

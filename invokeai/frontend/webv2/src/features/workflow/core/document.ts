@@ -16,6 +16,7 @@ import type {
   XYPosition,
 } from './types';
 
+import { getConnectorDeletionSpliceConnections } from './connectors';
 import { isInvocationNode, isNotesNode } from './types';
 
 /**
@@ -424,9 +425,33 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
         return document;
       }
 
+      const removedConnectorIds = new Set(
+        document.nodes.filter((node) => removedNodeIds.has(node.id) && node.type === 'connector').map((node) => node.id)
+      );
+      const spliceEdges = [...removedConnectorIds].flatMap((connectorId) =>
+        getConnectorDeletionSpliceConnections(connectorId, document.nodes, document.edges, removedConnectorIds)
+      );
+      const remainingNodeIds = new Set(
+        document.nodes.filter((node) => !removedNodeIds.has(node.id)).map((node) => node.id)
+      );
+      const existingEdgeKeys = new Set(
+        document.edges.map((edge) => `${edge.source}:${edge.sourceHandle}->${edge.target}:${edge.targetHandle}`)
+      );
+      const edges = document.edges.filter(
+        (edge) => !removedNodeIds.has(edge.source) && !removedNodeIds.has(edge.target)
+      );
+
+      for (const edge of spliceEdges) {
+        const key = `${edge.source}:${edge.sourceHandle}->${edge.target}:${edge.targetHandle}`;
+        if (remainingNodeIds.has(edge.source) && remainingNodeIds.has(edge.target) && !existingEdgeKeys.has(key)) {
+          existingEdgeKeys.add(key);
+          edges.push(edge);
+        }
+      }
+
       return {
         ...document,
-        edges: document.edges.filter((edge) => !removedNodeIds.has(edge.source) && !removedNodeIds.has(edge.target)),
+        edges,
         form: removeNodeFieldElements(document.form, removedNodeIds),
         nodes: document.nodes.filter((node) => !removedNodeIds.has(node.id)),
       };

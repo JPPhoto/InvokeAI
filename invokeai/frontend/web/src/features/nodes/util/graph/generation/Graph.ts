@@ -125,7 +125,7 @@ export class Graph {
       });
     }
 
-    Object.assign(node, changes as object);
+    Object.assign(node, changes);
 
     return node;
   }

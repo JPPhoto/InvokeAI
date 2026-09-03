@@ -1,13 +1,13 @@
 import { startCase } from 'es-toolkit/compat';
 import type { FieldOutputTemplate, FieldType } from 'features/nodes/types/field';
-import type { InvocationOutputFieldSchema } from 'features/nodes/types/openapi';
+import type { InvocationFieldSchema } from 'features/nodes/types/openapi';
 
 export const buildFieldOutputTemplate = (
-  fieldSchema: InvocationOutputFieldSchema,
+  fieldSchema: InvocationFieldSchema,
   fieldName: string,
   fieldType: FieldType
 ): FieldOutputTemplate => {
-  const { title, description, ui_hidden, ui_type, ui_order, output_scope } = fieldSchema;
+  const { title, description, ui_hidden, ui_type, ui_order } = fieldSchema;
 
   const template: FieldOutputTemplate = {
     fieldKind: 'output',
@@ -18,7 +18,6 @@ export const buildFieldOutputTemplate = (
     ui_hidden,
     ui_type,
     ui_order,
-    output_scope,
   };
 
   return template;

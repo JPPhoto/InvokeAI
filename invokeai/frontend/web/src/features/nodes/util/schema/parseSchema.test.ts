@@ -1,26 +1,9 @@
 import { omit, pick } from 'es-toolkit/compat';
-import {
-  call_saved_workflow,
-  for_loop,
-  for_return,
-  schema,
-  templates,
-  workflow_return,
-} from 'features/nodes/store/util/testUtils';
-import type { InvocationTemplate } from 'features/nodes/types/invocation';
+import { call_saved_workflow, schema, templates, workflow_return } from 'features/nodes/store/util/testUtils';
 import { parseSchema } from 'features/nodes/util/schema/parseSchema';
-import type { OpenAPIV3_1 } from 'openapi-types';
 import { describe, expect, it } from 'vitest';
 
-import generatedSchemaJSON from '../../../../../openapi.json?raw';
-
 const stripUndefinedDeep = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
-const normalizeInputUiHidden = (template: InvocationTemplate): InvocationTemplate => ({
-  ...template,
-  inputs: Object.fromEntries(
-    Object.entries(template.inputs).map(([name, input]) => [name, { ...input, ui_hidden: input.ui_hidden ?? false }])
-  ),
-});
 
 describe('parseSchema', () => {
   it('should parse the schema', () => {
@@ -62,68 +45,5 @@ describe('parseSchema', () => {
     }
     expect(collectionInput.type.name).toBe('CollectionField');
     expect(collectionInput.ui_type).toBe('CollectionField');
-  });
-  it('should keep the loop test templates aligned with the generated schema', () => {
-    const generatedSchema = JSON.parse(generatedSchemaJSON) as OpenAPIV3_1.Document;
-    const parsed = parseSchema(generatedSchema, ['for', 'for_return']);
-
-    expect(
-      stripUndefinedDeep(
-        Object.fromEntries(Object.entries(parsed).map(([type, template]) => [type, normalizeInputUiHidden(template)]))
-      )
-    ).toEqual(
-      stripUndefinedDeep({
-        for: normalizeInputUiHidden(for_loop),
-        for_return: normalizeInputUiHidden(for_return),
-      })
-    );
-
-    // Keep this explicit check so the generated schema and hand-maintained loop fixture cannot drift together.
-    expect(parsed.for_return?.version).toBe('1.3.2');
-    expect(parsed.for_return?.inputs.continue_condition).toMatchObject({
-      input: 'any',
-      required: false,
-      default: true,
-      type: { name: 'BooleanField' },
-    });
-  });
-  it('should expose state_set.value as an AnyField connection input', () => {
-    const generatedSchema = JSON.parse(generatedSchemaJSON) as OpenAPIV3_1.Document;
-    const parsed = parseSchema(generatedSchema, ['state_set']);
-    const valueInput = parsed.state_set?.inputs.value;
-
-    expect(valueInput).toMatchObject({
-      input: 'connection',
-      ui_type: 'AnyField',
-      type: { name: 'AnyField', cardinality: 'SINGLE', batch: false },
-    });
-    expect(valueInput?.default).toBeUndefined();
-  });
-  it('should expose state_get.default and value as AnyField connections', () => {
-    const generatedSchema = JSON.parse(generatedSchemaJSON) as OpenAPIV3_1.Document;
-    const parsed = parseSchema(generatedSchema, ['state_get']);
-    const template = parsed.state_get;
-
-    expect(template?.inputs.default).toMatchObject({
-      input: 'connection',
-      ui_type: 'AnyField',
-      type: { name: 'AnyField', cardinality: 'SINGLE', batch: false },
-    });
-    expect(template?.inputs.default?.default).toBeUndefined();
-    expect(template?.outputs.value).toMatchObject({
-      ui_type: 'AnyField',
-      type: { name: 'AnyField', cardinality: 'SINGLE', batch: false },
-    });
-  });
-  it('should expose state_merge.values as an AnyField connection input', () => {
-    const generatedSchema = JSON.parse(generatedSchemaJSON) as OpenAPIV3_1.Document;
-    const parsed = parseSchema(generatedSchema, ['state_merge']);
-    const valuesInput = parsed.state_merge?.inputs.values;
-
-    expect(valuesInput).toMatchObject({
-      input: 'connection',
-      ui_type: 'AnyField',
-      type: { name: 'AnyField', cardinality: 'SINGLE', batch: false },
-    });
   });
 });

@@ -31,15 +31,12 @@ import {
   nodesChanged,
 } from 'features/nodes/store/nodesSlice';
 import { selectNodesSlice } from 'features/nodes/store/selectors';
-import type { PendingConnection, Templates } from 'features/nodes/store/types';
-import { resolvePendingConnectionSource } from 'features/nodes/store/util/connectorTopology';
 import { findUnoccupiedPosition } from 'features/nodes/store/util/findUnoccupiedPosition';
 import { getFirstValidConnection } from 'features/nodes/store/util/getFirstValidConnection';
 import { connectionToEdge } from 'features/nodes/store/util/reactFlowUtil';
 import { validateConnectionTypes } from 'features/nodes/store/util/validateConnectionTypes';
 import { selectShouldGroupNodesByCategory } from 'features/nodes/store/workflowSettingsSlice';
-import { LOOP_LINKAGE_FIELD } from 'features/nodes/types/constants';
-import type { AnyEdge, AnyNode, InvocationTemplate } from 'features/nodes/types/invocation';
+import type { AnyEdge, AnyNode } from 'features/nodes/types/invocation';
 import { isInvocationNode } from 'features/nodes/types/invocation';
 import { useRegisteredHotkeys } from 'features/system/components/HotkeysModal/useHotkeyData';
 import { toast } from 'features/toast/toast';
@@ -57,6 +54,7 @@ import {
   PiLightningFill,
 } from 'react-icons/pi';
 import type { S } from 'services/api/types';
+import { objectEntries } from 'tsafe';
 import { useDebounce } from 'use-debounce';
 
 const useAddNode = () => {
@@ -132,34 +130,6 @@ const useAddNode = () => {
         if (connection) {
           const newEdge = connectionToEdge(connection);
           store.dispatch(edgesChanged([{ type: 'add', item: newEdge }]));
-
-          const resolvedSource = resolvePendingConnectionSource(pendingConnection, nodes, edges, templates);
-          const sourceNode = resolvedSource
-            ? nodes.find((candidate) => candidate.id === resolvedSource.nodeId)
-            : nodes.find((candidate) => candidate.id === source);
-          if (
-            newEdge.type === 'default' &&
-            node.data.type === 'for_return' &&
-            sourceNode &&
-            isInvocationNode(sourceNode) &&
-            sourceNode.data.type === 'for' &&
-            resolvedSource?.outputScope === 'iteration' &&
-            !edges.some((edge) => edge.type === 'loop_linkage' && edge.source === sourceNode.id)
-          ) {
-            store.dispatch(
-              edgesChanged([
-                {
-                  type: 'add',
-                  item: connectionToEdge({
-                    source: sourceNode.id,
-                    sourceHandle: LOOP_LINKAGE_FIELD,
-                    target: node.id,
-                    targetHandle: LOOP_LINKAGE_FIELD,
-                  }),
-                },
-              ])
-            );
-          }
         }
       }
     },
@@ -373,161 +343,6 @@ const filter = memoize(
   (item: FilterableItem, searchTerm: string) => `${item.type}-${searchTerm}`
 );
 
-type PendingConnectionContext = {
-  nodes: AnyNode[];
-  edges: AnyEdge[];
-  templates: Templates;
-};
-
-const isForIterationOutputConnection = (
-  pendingConnection: PendingConnection | null,
-  context?: PendingConnectionContext
-) => {
-  if (!pendingConnection || pendingConnection.handleType !== 'source') {
-    return false;
-  }
-
-  const resolvedSource = context
-    ? resolvePendingConnectionSource(pendingConnection, context.nodes, context.edges, context.templates)
-    : null;
-  if (resolvedSource && context) {
-    const sourceNode = context.nodes.find((node) => node.id === resolvedSource.nodeId);
-    return (
-      isInvocationNode(sourceNode) &&
-      sourceNode.data.type === 'for' &&
-      (resolvedSource.outputScope === 'iteration' ||
-        (resolvedSource.nodeId === pendingConnection.nodeId &&
-          pendingConnection.fieldTemplate.fieldKind === 'output' &&
-          pendingConnection.fieldTemplate.output_scope === 'iteration'))
-    );
-  }
-
-  return (
-    pendingConnection.fieldTemplate.fieldKind === 'output' &&
-    pendingConnection.fieldTemplate.output_scope === 'iteration'
-  );
-};
-
-export const getPendingConnectionNodeItems = (
-  templatesArray: InvocationTemplate[],
-  pendingConnection: PendingConnection,
-  searchTerm: string,
-  context?: PendingConnectionContext
-): NodeCommandItemData[] => {
-  const items: NodeCommandItemData[] = [];
-
-  for (const template of templatesArray) {
-    if (!filter(template, searchTerm)) {
-      continue;
-    }
-
-    if (
-      pendingConnection.handleId === LOOP_LINKAGE_FIELD &&
-      template.type !== (pendingConnection.handleType === 'source' ? 'for_return' : 'for')
-    ) {
-      continue;
-    }
-
-    const candidateFields = pendingConnection.handleType === 'source' ? template.inputs : template.outputs;
-    for (const fieldTemplate of Object.values(candidateFields)) {
-      const sourceType =
-        pendingConnection.handleType === 'source' ? pendingConnection.fieldTemplate.type : fieldTemplate.type;
-      const targetType =
-        pendingConnection.handleType === 'target' ? pendingConnection.fieldTemplate.type : fieldTemplate.type;
-
-      if (validateConnectionTypes(sourceType, targetType)) {
-        items.push({
-          label: template.title,
-          value: template.type,
-          description: template.description,
-          classification: template.classification,
-          nodePack: template.nodePack,
-          category: template.category,
-        });
-        break;
-      }
-    }
-  }
-
-  return sortNodeCommandItems(items, searchTerm, pendingConnection, context);
-};
-
-export const sortNodeCommandItems = (
-  items: NodeCommandItemData[],
-  searchTerm: string,
-  pendingConnection: PendingConnection | null,
-  context?: PendingConnectionContext
-): NodeCommandItemData[] => {
-  const sortedItems = [...items];
-  const shouldPromoteForReturn = isForIterationOutputConnection(pendingConnection, context);
-  const lowerSearch = searchTerm.toLowerCase();
-
-  sortedItems.sort((a, b) => {
-    // Contextual ForReturn priority is a hard first key, including when For is an exact title match.
-    if (shouldPromoteForReturn) {
-      if (a.value === 'for_return' && b.value !== 'for_return') {
-        return -1;
-      }
-      if (a.value !== 'for_return' && b.value === 'for_return') {
-        return 1;
-      }
-    }
-
-    if (searchTerm) {
-      const aExact = a.label.toLowerCase() === lowerSearch;
-      const bExact = b.label.toLowerCase() === lowerSearch;
-      if (aExact && !bExact) {
-        return -1;
-      }
-      if (!aExact && bExact) {
-        return 1;
-      }
-    }
-
-    return 0;
-  });
-
-  return sortedItems;
-};
-
-export const sortNodeCommandItemGroups = (
-  groups: [string, NodeCommandItemData[]][],
-  searchTerm: string,
-  shouldPromoteForReturn: boolean
-): [string, NodeCommandItemData[]][] => {
-  const lowerSearch = searchTerm.toLowerCase();
-  return [...groups].sort(([a, aItems], [b, bItems]) => {
-    if (shouldPromoteForReturn) {
-      const aHasForReturn = aItems.some((item) => item.value === 'for_return');
-      const bHasForReturn = bItems.some((item) => item.value === 'for_return');
-      if (aHasForReturn && !bHasForReturn) {
-        return -1;
-      }
-      if (!aHasForReturn && bHasForReturn) {
-        return 1;
-      }
-    }
-
-    if (searchTerm) {
-      const aHasExact = aItems.some((item) => item.label.toLowerCase() === lowerSearch);
-      const bHasExact = bItems.some((item) => item.label.toLowerCase() === lowerSearch);
-      if (aHasExact && !bHasExact) {
-        return -1;
-      }
-      if (!aHasExact && bHasExact) {
-        return 1;
-      }
-    }
-    if (a === 'other') {
-      return 1;
-    }
-    if (b === 'other') {
-      return -1;
-    }
-    return a.localeCompare(b);
-  });
-};
-
 const categoryItemSx: SystemStyleObject = {
   cursor: 'pointer',
   userSelect: 'none',
@@ -581,13 +396,7 @@ const NodeCommandList = memo(
   }) => {
     const { t } = useTranslation();
     const templatesArray = useStore($templatesArray);
-    const templates = useStore($templates);
     const pendingConnection = useStore($pendingConnection);
-    const { nodes, edges } = useAppSelector(selectNodesSlice);
-    const pendingConnectionContext = useMemo<PendingConnectionContext>(
-      () => ({ nodes, edges, templates }),
-      [nodes, edges, templates]
-    );
     const shouldGroupNodesByCategory = useAppSelector(selectShouldGroupNodesByCategory);
     const currentImageFilterItem = useMemo<FilterableItem>(
       () => ({
@@ -645,22 +454,50 @@ const NodeCommandList = memo(
           }
         }
       } else {
-        _items.push(
-          ...getPendingConnectionNodeItems(templatesArray, pendingConnection, searchTerm, pendingConnectionContext)
-        );
+        for (const template of templatesArray) {
+          if (filter(template, searchTerm)) {
+            const candidateFields = pendingConnection.handleType === 'source' ? template.inputs : template.outputs;
+
+            for (const [_fieldName, fieldTemplate] of objectEntries(candidateFields)) {
+              const sourceType =
+                pendingConnection.handleType === 'source' ? pendingConnection.fieldTemplate.type : fieldTemplate.type;
+              const targetType =
+                pendingConnection.handleType === 'target' ? pendingConnection.fieldTemplate.type : fieldTemplate.type;
+
+              if (validateConnectionTypes(sourceType, targetType)) {
+                _items.push({
+                  label: template.title,
+                  value: template.type,
+                  description: template.description,
+                  classification: template.classification,
+                  nodePack: template.nodePack,
+                  category: template.category,
+                });
+                break;
+              }
+            }
+          }
+        }
       }
 
-      return sortNodeCommandItems(_items, searchTerm, pendingConnection, pendingConnectionContext);
-    }, [
-      pendingConnection,
-      templatesArray,
-      pendingConnectionContext,
-      searchTerm,
-      currentImageFilterItem,
-      notesFilterItem,
-    ]);
+      // Sort exact title matches to the top when searching
+      if (searchTerm) {
+        const lowerSearch = searchTerm.toLowerCase();
+        _items.sort((a, b) => {
+          const aExact = a.label.toLowerCase() === lowerSearch;
+          const bExact = b.label.toLowerCase() === lowerSearch;
+          if (aExact && !bExact) {
+            return -1;
+          }
+          if (!aExact && bExact) {
+            return 1;
+          }
+          return 0;
+        });
+      }
 
-    const shouldPromoteForReturn = isForIterationOutputConnection(pendingConnection, pendingConnectionContext);
+      return _items;
+    }, [pendingConnection, templatesArray, searchTerm, currentImageFilterItem, notesFilterItem]);
 
     const groupedItems = useMemo(() => {
       const groups: Record<string, NodeCommandItemData[]> = {};
@@ -671,8 +508,29 @@ const NodeCommandList = memo(
         }
         groups[cat].push(item);
       }
-      return sortNodeCommandItemGroups(Object.entries(groups), searchTerm, shouldPromoteForReturn);
-    }, [items, searchTerm, shouldPromoteForReturn]);
+      // Sort categories alphabetically, but put "other" last.
+      // When searching, prioritize categories that contain an exact title match.
+      const lowerSearch = searchTerm.toLowerCase();
+      return Object.entries(groups).sort(([a, aItems], [b, bItems]) => {
+        if (searchTerm) {
+          const aHasExact = aItems.some((item) => item.label.toLowerCase() === lowerSearch);
+          const bHasExact = bItems.some((item) => item.label.toLowerCase() === lowerSearch);
+          if (aHasExact && !bHasExact) {
+            return -1;
+          }
+          if (!aHasExact && bHasExact) {
+            return 1;
+          }
+        }
+        if (a === 'other') {
+          return 1;
+        }
+        if (b === 'other') {
+          return -1;
+        }
+        return a.localeCompare(b);
+      });
+    }, [items, searchTerm]);
 
     // When searching, auto-expand all categories; when not searching, use manual state
     const isSearching = searchTerm.length > 0;
@@ -708,10 +566,7 @@ const NodeCommandList = memo(
           </Flex>
         )}
         {groupedItems.map(([category, categoryItems]) => {
-          const isExpanded =
-            isSearching ||
-            expandedCategories.has(category) ||
-            (shouldPromoteForReturn && categoryItems.some((item) => item.value === 'for_return'));
+          const isExpanded = isSearching || expandedCategories.has(category);
           return (
             <Box key={category}>
               <CommandItem value={`__category__:${category}`} onSelect={onSelect} asChild>
