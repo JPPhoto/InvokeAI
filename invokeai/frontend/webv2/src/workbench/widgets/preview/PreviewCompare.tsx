@@ -166,7 +166,6 @@ export const PreviewCompare = ({
             css={getFittedFrameCss(baseImage.width, baseImage.height)}
             overflow="hidden"
             position="relative"
-            rounded="lg"
             style={sliderTouchStyle}
             onLostPointerCapture={endDrag}
             onPointerCancel={endDrag}
@@ -326,7 +325,6 @@ const HoverCompareFrame = ({
       overflow="hidden"
       position="relative"
       role="region"
-      rounded="lg"
       tabIndex={0}
       touchAction="none"
       onBlur={handleBlur}
@@ -401,7 +399,6 @@ const CompareSidePane = ({
       cursor={isZoomed ? 'grab' : undefined}
       overflow="hidden"
       position="relative"
-      rounded="lg"
       // Keeps the browser's own pan and pinch off the pane, so a two-finger
       // gesture reaches the shared loupe instead of zooming the page — but only
       // where there is a loupe: mismatched dimensions leave the panes without
