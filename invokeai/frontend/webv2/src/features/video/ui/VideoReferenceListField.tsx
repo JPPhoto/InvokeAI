@@ -259,7 +259,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   references: VideoReferenceItem[];
 }) {
   const { t } = useTranslation();
-  const { reportError, touchGalleryImages } = useVideoUiActions();
+  const { getUploadBoardId, reportError, touchGalleryImages } = useVideoUiActions();
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -438,12 +438,12 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
 
       try {
         if (kind === 'video') {
-          const uploaded = await galleryTransfers.uploadVideo(file, 'none', { signal: owner.signal });
+          const uploaded = await galleryTransfers.uploadVideo(file, getUploadBoardId(), { signal: owner.signal });
 
           assertAccountScopeCurrent(owner);
           await addVideoReference(uploaded.name);
         } else {
-          const uploaded = await galleryTransfers.upload(file, 'none', { signal: owner.signal });
+          const uploaded = await galleryTransfers.upload(file, getUploadBoardId(), { signal: owner.signal });
 
           assertAccountScopeCurrent(owner);
           await addImageReference(uploaded.imageName);
@@ -461,7 +461,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         setIsLoading(false);
       }
     },
-    [addImageReference, addVideoReference, reportError, touchGalleryImages]
+    [addImageReference, addVideoReference, getUploadBoardId, reportError, touchGalleryImages]
   );
 
   const handleImageFileChange = useCallback(
@@ -568,7 +568,9 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         </Text>
       ) : null}
       <Input accept={IMAGE_UPLOAD_ACCEPT} hidden ref={imageInputRef} type="file" onChange={handleImageFileChange} />
-      <Input accept="video/*" hidden ref={videoInputRef} type="file" onChange={handleVideoFileChange} />
+      {/* Audio files upload too: the server wraps them into waveform videos, which is
+          how audio-only reference clips enter the pipeline. */}
+      <Input accept="video/*,audio/*" hidden ref={videoInputRef} type="file" onChange={handleVideoFileChange} />
     </Stack>
   );
 });
