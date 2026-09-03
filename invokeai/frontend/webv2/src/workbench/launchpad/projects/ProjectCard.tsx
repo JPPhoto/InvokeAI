@@ -1,25 +1,25 @@
 import type { ProjectSummary } from '@workbench/projects/library';
 import type { MouseEvent } from 'react';
 
-import { Box, Flex, Icon, Menu, Stack, Text } from '@chakra-ui/react';
+import { Box, Flex, Icon, Stack, Text } from '@chakra-ui/react';
 import { IconButton } from '@platform/ui/Button';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Link } from '@tanstack/react-router';
 import { formatRelativeTime } from '@workbench/launchpad/formatRelativeTime';
 import { isProjectSummaryCompatible } from '@workbench/projects/library';
 import { EllipsisVerticalIcon, PinIcon } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { ProjectActionsMenu } from './ProjectActionsMenu';
+import { useProjectActionsMenu, useProjectActionsMenuTrigger } from './ProjectActionsMenuHost';
 import { ProjectCompatibilityBadge } from './ProjectCompatibilityBadge';
 import { ProjectCover } from './ProjectCover';
-import { useProjectCardActions } from './useProjectCardActions';
 
 /**
  * One saved project in the library grid. The whole card is a deep link into
  * the editor (`/app?project=…` — hovering preloads the editor chunk); the
- * corner menu and right-click carry the library actions.
+ * corner menu and right-click carry the library actions, served by the page's
+ * shared `ProjectActionsMenuHost`.
  */
 
 const CARD_HOVER = { bg: 'bg.muted', borderColor: 'border.emphasized' } as const;
@@ -38,25 +38,16 @@ export const ProjectCard = ({
   onTogglePin: (projectId: string) => void;
 }) => {
   const { t } = useTranslation();
-  const actions = useProjectCardActions(summary);
-  const [isActionsOpen, setIsActionsOpen] = useState(false);
-  const [contextMenuTarget, setContextMenuTarget] = useState<{ x: number; y: number } | null>(null);
+  const menu = useProjectActionsMenu();
   const isCompatible = isProjectSummaryCompatible(summary);
 
   const projectSearch = useMemo(() => ({ project: summary.id }), [summary.id]);
-  const handleContextMenu = useCallback((event: MouseEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setContextMenuTarget({ x: event.clientX, y: event.clientY });
-    setIsActionsOpen(true);
-  }, []);
-  const handleOpenChange = useCallback((event: { open: boolean }) => {
-    setIsActionsOpen(event.open);
-
-    if (!event.open) {
-      setContextMenuTarget(null);
-    }
-  }, []);
-  const clearContextMenuTarget = useCallback(() => setContextMenuTarget(null), []);
+  const menuTarget = useMemo(() => ({ isPinned, onTogglePin, summary }), [isPinned, onTogglePin, summary]);
+  const handleContextMenu = useCallback(
+    (event: MouseEvent<HTMLDivElement>) => menu.openAtPointer(event, menuTarget),
+    [menu, menuTarget]
+  );
+  const menuTrigger = useProjectActionsMenuTrigger(menuTarget);
   const handleTogglePin = useCallback(() => onTogglePin(summary.id), [onTogglePin, summary.id]);
 
   return (
@@ -120,29 +111,18 @@ export const ProjectCard = ({
       </Box>
 
       <Box bottom="2" pointerEvents="auto" position="absolute" right="2" zIndex="1">
-        <ProjectActionsMenu
-          actions={actions}
-          contextMenuTarget={contextMenuTarget}
-          isOpen={isActionsOpen}
-          isCompatible={isCompatible}
-          isPinned={isPinned}
-          projectId={summary.id}
-          projectName={summary.name}
-          onOpenChange={handleOpenChange}
-          onTogglePin={handleTogglePin}
+        <IconButton
+          aria-expanded={menuTrigger.isExpanded}
+          aria-haspopup="menu"
+          aria-label={t('common.actions')}
+          color="fg.muted"
+          size="2xs"
+          variant="ghost"
+          onClick={menuTrigger.onClick}
+          onPointerDown={menuTrigger.onPointerDown}
         >
-          <Menu.Trigger asChild>
-            <IconButton
-              aria-label={t('common.actions')}
-              color="fg.muted"
-              size="2xs"
-              variant="ghost"
-              onClick={clearContextMenuTarget}
-            >
-              <EllipsisVerticalIcon />
-            </IconButton>
-          </Menu.Trigger>
-        </ProjectActionsMenu>
+          <EllipsisVerticalIcon />
+        </IconButton>
       </Box>
     </Box>
   );

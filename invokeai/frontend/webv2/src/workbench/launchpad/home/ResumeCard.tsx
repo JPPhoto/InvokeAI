@@ -1,18 +1,20 @@
 import type { ProjectSummary } from '@workbench/projects/library';
 import type { MouseEvent } from 'react';
 
-import { Box, Flex, HStack, Menu, Stack, Text } from '@chakra-ui/react';
+import { Box, Flex, HStack, Stack, Text } from '@chakra-ui/react';
 import { Button, IconButton } from '@platform/ui/Button';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Link } from '@tanstack/react-router';
 import { formatRelativeTime } from '@workbench/launchpad/formatRelativeTime';
-import { ProjectActionsMenu } from '@workbench/launchpad/projects/ProjectActionsMenu';
+import {
+  useProjectActionsMenu,
+  useProjectActionsMenuTrigger,
+} from '@workbench/launchpad/projects/ProjectActionsMenuHost';
 import { ProjectCompatibilityBadge } from '@workbench/launchpad/projects/ProjectCompatibilityBadge';
 import { ProjectCover } from '@workbench/launchpad/projects/ProjectCover';
-import { useProjectCardActions } from '@workbench/launchpad/projects/useProjectCardActions';
 import { isProjectSummaryCompatible } from '@workbench/projects/library';
 import { ArrowRightIcon, EllipsisVerticalIcon } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -40,26 +42,16 @@ export const ResumeCard = ({
   onTogglePin: (projectId: string) => void;
 }) => {
   const { t } = useTranslation();
-  const actions = useProjectCardActions(summary);
-  const [isActionsOpen, setIsActionsOpen] = useState(false);
-  const [contextMenuTarget, setContextMenuTarget] = useState<{ x: number; y: number } | null>(null);
+  const menu = useProjectActionsMenu();
   const search = useMemo(() => ({ project: summary.id }), [summary.id]);
   const isCompatible = isProjectSummaryCompatible(summary);
 
-  const handleContextMenu = useCallback((event: MouseEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setContextMenuTarget({ x: event.clientX, y: event.clientY });
-    setIsActionsOpen(true);
-  }, []);
-  const handleOpenChange = useCallback((event: { open: boolean }) => {
-    setIsActionsOpen(event.open);
-
-    if (!event.open) {
-      setContextMenuTarget(null);
-    }
-  }, []);
-  const clearContextMenuTarget = useCallback(() => setContextMenuTarget(null), []);
-  const handleTogglePin = useCallback(() => onTogglePin(summary.id), [onTogglePin, summary.id]);
+  const menuTarget = useMemo(() => ({ isPinned, onTogglePin, summary }), [isPinned, onTogglePin, summary]);
+  const handleContextMenu = useCallback(
+    (event: MouseEvent<HTMLDivElement>) => menu.openAtPointer(event, menuTarget),
+    [menu, menuTarget]
+  );
+  const menuTrigger = useProjectActionsMenuTrigger(menuTarget);
 
   return (
     <Flex
@@ -121,29 +113,18 @@ export const ResumeCard = ({
               <ArrowRightIcon />
             </Button>
           )}
-          <ProjectActionsMenu
-            actions={actions}
-            contextMenuTarget={contextMenuTarget}
-            isOpen={isActionsOpen}
-            isCompatible={isCompatible}
-            isPinned={isPinned}
-            projectId={summary.id}
-            projectName={summary.name}
-            onOpenChange={handleOpenChange}
-            onTogglePin={handleTogglePin}
+          <IconButton
+            aria-expanded={menuTrigger.isExpanded}
+            aria-haspopup="menu"
+            aria-label={t('common.actions')}
+            color="fg.muted"
+            size="xs"
+            variant="ghost"
+            onClick={menuTrigger.onClick}
+            onPointerDown={menuTrigger.onPointerDown}
           >
-            <Menu.Trigger asChild>
-              <IconButton
-                aria-label={t('common.actions')}
-                color="fg.muted"
-                size="xs"
-                variant="ghost"
-                onClick={clearContextMenuTarget}
-              >
-                <EllipsisVerticalIcon />
-              </IconButton>
-            </Menu.Trigger>
-          </ProjectActionsMenu>
+            <EllipsisVerticalIcon />
+          </IconButton>
         </HStack>
       </Flex>
     </Flex>
