@@ -2,9 +2,8 @@ import type { ImageMapClusterLabelInfo, ImageMapImageLabels, ImageMapPoint } fro
 import type { ClusterAnnotation } from '@workbench/image-map/imageMapTraces';
 import type { AxisRanges } from '@workbench/image-map/imageMapViewport';
 import type { PlotlyHTMLElement } from 'plotly.js';
-import type { CSSProperties } from 'react';
 
-import { Box } from '@chakra-ui/react';
+import { Box, chakra, HStack, Stack, Text } from '@chakra-ui/react';
 import {
   getImageCluster,
   getPersistedSelectedGalleryItemKeys,
@@ -13,7 +12,7 @@ import {
   parseGallerySemanticReference,
 } from '@features/gallery/contracts';
 import { attachWheelZoom } from '@workbench/image-map/attachWheelZoom';
-import { getClusterColor, isClusterColorLight } from '@workbench/image-map/clusterPalette';
+import { getClusterColor } from '@workbench/image-map/clusterPalette';
 import { collectClusterSelection } from '@workbench/image-map/clusterSelection';
 import { getImageLabels } from '@workbench/image-map/imageLabelCache';
 import { imageMapStore } from '@workbench/image-map/imageMapStore';
@@ -82,37 +81,27 @@ interface HoverCluster {
   clusterSize: number;
 }
 
-const FIRST_TAG_STYLE: CSSProperties = { fontStyle: 'italic', fontWeight: 'bold' };
-const REST_TAG_STYLE: CSSProperties = { fontStyle: 'italic' };
-const HOVER_IMG_STYLE: CSSProperties = {
-  borderRadius: '6px',
-  display: 'block',
-  margin: '0 auto',
-  maxHeight: `${HOVER_PREVIEW_MAX_PX}px`,
-  maxWidth: `${HOVER_PREVIEW_MAX_PX}px`,
-};
-
-/** "a, b, c" with the first tag emphasized, all on the cluster color. */
-const HoverTagsRow = ({ prefix, tags, style }: { prefix: string; tags: string[]; style: CSSProperties }) => (
-  <Box fontSize="xs" px="2" py="0.5" style={style} textAlign="center">
-    {prefix}
+/** "Label: a, b, c" with the first (primary) tag emphasized. */
+const HoverTagsRow = ({ prefix, tags }: { prefix: string; tags: string[] }) => (
+  <Text color="fg.muted" fontSize="xs">
+    <chakra.span color="fg.subtle">{prefix}</chakra.span>
     {tags.map((tag, index) => (
-      <span key={tag} style={index === 0 ? FIRST_TAG_STYLE : REST_TAG_STYLE}>
+      <chakra.span key={tag} fontWeight={index === 0 ? '600' : undefined}>
         {index > 0 ? ', ' : ''}
         {tag}
-      </span>
+      </chakra.span>
     ))}
-  </Box>
+  </Text>
 );
 
 /**
  * The hover card: thumbnail, filename, cluster identity/size, and the top
- * cluster and image tags — PhotoMapAI's popup. The card is tinted with the
- * hovered cluster's color, and the text flips dark/light to stay readable on
- * it. Its size depends on async content (the thumbnail and the lazily
- * fetched image tags), so it renders invisibly, is measured, and is then
- * placed beside the cursor — flipped to the other side when it would leave
- * the viewport. Parents key this by image name so a new hover starts clean.
+ * cluster and image tags — PhotoMapAI's popup on the app's dropdown chrome,
+ * with the cluster's palette color confined to a swatch dot. Its size depends
+ * on async content (the thumbnail and the lazily fetched image tags), so it
+ * renders invisibly, is measured, and is then placed beside the cursor —
+ * flipped to the other side when it would leave the viewport. Parents key
+ * this by image name so a new hover starts clean.
  */
 const MapHoverCard = ({
   preview,
@@ -168,59 +157,55 @@ const MapHoverCard = ({
     setPosition({ left, top });
   }, [preview.clientX, preview.clientY, imageLabels, imageLoaded, clusterLabel, hoverCluster]);
 
-  // The palette color drives every style on the card; memoized so JSX gets
-  // stable objects (and text stays readable via the dark/light flip).
-  const styles = useMemo(() => {
-    const clusterColor = getClusterColor(hoverCluster.cluster);
-    const lightBackground = isClusterColorLight(clusterColor);
-    const color = lightBackground ? '#222222' : '#FFFFFF';
-    const textShadow = lightBackground ? '0 1px 2px #FFFFFF' : '0 1px 2px #000000';
-
-    return {
-      band: { background: 'rgba(0, 0, 0, 0.25)', color, textShadow } satisfies CSSProperties,
-      card: { background: clusterColor, border: `2px solid ${clusterColor}` } satisfies CSSProperties,
-      filename: { color, textShadow, wordBreak: 'break-all' } satisfies CSSProperties,
-      tags: { color, textShadow } satisfies CSSProperties,
-    };
-  }, [hoverCluster.cluster]);
-
+  const handleImageSettled = useCallback(() => setImageLoaded(true), []);
+  const clusterColor = getClusterColor(hoverCluster.cluster);
   const clusterTags = clusterLabel ? [clusterLabel.label, ...clusterLabel.alternates].slice(0, 3) : null;
   const imageTags = imageLabels ? [imageLabels.label, ...imageLabels.alternates].slice(0, 3) : null;
 
   return (
-    <Box
+    <Stack
+      bg="bg.muted"
+      borderColor="border.emphasized"
+      borderWidth="1px"
+      color="fg"
+      gap="1"
       left={`${position?.left ?? 0}px`}
       maxW="60"
       p="2"
-      pb="1"
       pointerEvents="none"
       position="fixed"
       ref={cardRef}
-      rounded="lg"
+      rounded="md"
       shadow="lg"
-      style={styles.card}
       top={`${position?.top ?? 0}px`}
       visibility={position ? 'visible' : 'hidden'}
       zIndex="tooltip"
     >
-      <img
+      <chakra.img
         alt={preview.imageName}
-        onError={() => setImageLoaded(true)}
-        onLoad={() => setImageLoaded(true)}
+        display="block"
+        maxH={`${HOVER_PREVIEW_MAX_PX}px`}
+        maxW={`${HOVER_PREVIEW_MAX_PX}px`}
+        mx="auto"
+        onError={handleImageSettled}
+        onLoad={handleImageSettled}
+        rounded="l2"
         src={preview.url}
-        style={HOVER_IMG_STYLE}
       />
-      <Box fontSize="xs" mt="1" style={styles.filename} textAlign="center">
+      <HStack gap="1.5">
+        <Box bg={clusterColor} boxSize="2" flexShrink={0} rounded="full" />
+        <Text fontSize="xs" fontWeight="600">
+          {hoverCluster.cluster < 0
+            ? 'Unclustered'
+            : `Cluster ${hoverCluster.cluster} · ${hoverCluster.clusterSize} images`}
+        </Text>
+      </HStack>
+      <Text color="fg.muted" fontSize="xs" wordBreak="break-all">
         {preview.imageName}
-      </Box>
-      <Box fontSize="xs" fontWeight="bold" mt="1" py="0.5" rounded="sm" style={styles.band} textAlign="center">
-        {hoverCluster.cluster < 0
-          ? 'Unclustered'
-          : `Cluster ${hoverCluster.cluster} (size=${hoverCluster.clusterSize})`}
-      </Box>
-      {clusterTags ? <HoverTagsRow prefix="Cluster tags: " style={styles.tags} tags={clusterTags} /> : null}
-      {imageTags ? <HoverTagsRow prefix="Image tags: " style={styles.tags} tags={imageTags} /> : null}
-    </Box>
+      </Text>
+      {clusterTags ? <HoverTagsRow prefix="Cluster tags: " tags={clusterTags} /> : null}
+      {imageTags ? <HoverTagsRow prefix="Image tags: " tags={imageTags} /> : null}
+    </Stack>
   );
 };
 
