@@ -224,13 +224,7 @@ export const GraphPreviewDialog = ({
                   {subtitle}
                 </Text>
               </Stack>
-              <SegmentedControl
-                isFullWidth={false}
-                options={modeOptions}
-                value={mode}
-                variant="pill"
-                onChange={handleModeChange}
-              />
+              <SegmentedControl isFullWidth={false} options={modeOptions} value={mode} onChange={handleModeChange} />
             </Dialog.Header>
             <Dialog.Body display="flex" flex="1" flexDirection="column" gap="3" minH="0">
               {hasInvalidReasons ? (

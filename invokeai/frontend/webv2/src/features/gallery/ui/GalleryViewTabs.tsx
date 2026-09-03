@@ -61,7 +61,6 @@ export const GalleryViewTabs = () => {
       isFullWidth={false}
       options={options}
       value={gallery.galleryView}
-      variant="pill"
       onChange={handleViewChange}
     />
   );
