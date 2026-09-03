@@ -1,16 +1,19 @@
-import { ChakraProvider } from '@chakra-ui/react';
+import { ChakraProvider, Popover, Portal, Text } from '@chakra-ui/react';
 import { system } from '@theme/system';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { PopoverContent } from './Popover';
 import { Scrollable } from './Scrollable';
 
 /**
  * zag pins `min-width: fit-content` inline on the scroll-area content box. A
  * horizontal strip needs that; a vertical area must not inherit it, because it
  * renders no horizontal scrollbar — anything pushed sideways there is simply
- * unreachable. These two tests are the whole contract.
+ * unreachable. The popover test covers the other zag trap: an initial measure
+ * that lands while the popover mounts at zero size leaves the machine's
+ * "has overflow" default standing, stranding a phantom thumb.
  */
 
 let host: HTMLDivElement | null = null;
@@ -64,5 +67,40 @@ describe('Scrollable', () => {
     );
 
     expect(viewport.scrollWidth).toBeGreaterThan(viewport.clientWidth);
+  });
+
+  it('hides the scrollbar for non-overflowing content inside a popover', async () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+
+    await act(async () => {
+      root?.render(
+        <ChakraProvider value={system}>
+          <Popover.Root lazyMount open unmountOnExit>
+            <Portal>
+              <Popover.Positioner>
+                <PopoverContent w="22rem">
+                  <Popover.Body p="2.5">
+                    <Scrollable h="14rem" label="preview">
+                      <Text fontSize="xs">one short row</Text>
+                    </Scrollable>
+                  </Popover.Body>
+                </PopoverContent>
+              </Popover.Positioner>
+            </Portal>
+          </Popover.Root>
+        </ChakraProvider>
+      );
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, 400);
+      });
+    });
+
+    const scrollbar = document.querySelector<HTMLElement>('[data-scope="scroll-area"][data-part="scrollbar"]')!;
+
+    expect(scrollbar).not.toBeNull();
+    expect(scrollbar.hasAttribute('data-overflow-y')).toBe(false);
+    expect(getComputedStyle(scrollbar).display).toBe('none');
   });
 });

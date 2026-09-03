@@ -69,6 +69,9 @@ export const CommandPaletteDialog = ({
       finalFocusEl={getCommandPaletteReturnFocusElement}
       lazyMount
       open={isOpen}
+      // Not the recipe's centered tool-window placement: a palette hangs from
+      // the top band (its positioner pins the exact offset).
+      placement="top"
       restoreFocus
       scrollBehavior="inside"
       unmountOnExit

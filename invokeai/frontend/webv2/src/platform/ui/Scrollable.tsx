@@ -1,6 +1,7 @@
 import type { ComponentProps, ReactNode, RefObject } from 'react';
 
 import { ScrollArea } from '@chakra-ui/react';
+import { useMountEffect } from '@platform/react/useMountEffect';
 import { usePreservedScrollOffset } from '@platform/react/usePreservedScrollOffset';
 import { useRef } from 'react';
 
@@ -54,6 +55,72 @@ export const Scrollable = ({
   // The shell keeps widgets mounted across layout switches, and a scroll
   // container that stops being rendered loses its offset outright.
   usePreservedScrollOffset(resolvedViewportRef);
+
+  // Zag's initial measure can race a popover's zero-size mount (its resize
+  // observers can even end up watching pre-remount nodes), and its
+  // "has overflow" default then strands a phantom thumb on content that never
+  // overflowed. Whenever a check finds that contradiction on the live nodes,
+  // one synthetic scroll routes a re-measure through zag's own event path —
+  // and clears the contradiction, so the checks cannot loop. Scroll listeners
+  // on these viewports must tolerate a no-op scroll event.
+  useMountEffect(() => {
+    // Always through the ref: a popover's presence pass can remount the
+    // subtree, and a node captured at effect time goes dead (which is also
+    // how zag's own observers end up blind here).
+    const hasPhantomScrollbar = () => {
+      const viewport = resolvedViewportRef.current;
+      // `:scope >`: a nested Scrollable's scrollbar must not answer for ours.
+      const scrollbar = viewport?.parentElement?.querySelector(':scope > [data-part="scrollbar"]');
+
+      if (!viewport || !scrollbar) {
+        return false;
+      }
+
+      const phantomY = scrollbar.hasAttribute('data-overflow-y') && viewport.scrollHeight <= viewport.clientHeight;
+      const phantomX = scrollbar.hasAttribute('data-overflow-x') && viewport.scrollWidth <= viewport.clientWidth;
+
+      return Boolean(phantomY || phantomX);
+    };
+
+    let observed: HTMLElement | null = null;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const observer = new ResizeObserver(() => check());
+
+    const check = () => {
+      const viewport = resolvedViewportRef.current;
+
+      if (!viewport) {
+        return;
+      }
+
+      if (viewport !== observed) {
+        if (observed) {
+          observer.unobserve(observed);
+        }
+
+        observer.observe(viewport);
+        observed = viewport;
+      }
+
+      if (hasPhantomScrollbar()) {
+        viewport.dispatchEvent(new Event('scroll'));
+      }
+    };
+
+    // The timed checks catch a presence remount the observer can no longer
+    // see; each re-syncs observation to the ref's current node, and the
+    // re-synced observer covers real resizes from then on.
+    for (const delay of [64, 250, 600]) {
+      timers.push(setTimeout(check, delay));
+    }
+
+    check();
+
+    return () => {
+      timers.forEach(clearTimeout);
+      observer.disconnect();
+    };
+  });
 
   return (
     <ScrollArea.Root size="xs" variant="hover" {...rootProps}>
