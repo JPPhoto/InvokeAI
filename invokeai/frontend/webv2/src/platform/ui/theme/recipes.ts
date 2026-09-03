@@ -197,6 +197,9 @@ export const segmentGroupSlotRecipe = defineSlotRecipe({
     },
     indicator: {
       ...chakraSlotRecipes.segmentGroup.base?.indicator,
+      // Zag slides the indicator via inline `var(--transition-duration, 150ms)`;
+      // pointing the var at the motion-aware `fast` token collapses it under reduce motion.
+      '--transition-duration': '{durations.fast}',
       shadow: 'none',
       zIndex: 0,
     },
