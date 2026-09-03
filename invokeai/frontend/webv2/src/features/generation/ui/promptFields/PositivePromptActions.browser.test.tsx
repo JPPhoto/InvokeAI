@@ -91,8 +91,11 @@ describe('PromptTriggerPopover', () => {
 
     const messageBounds = message.getBoundingClientRect();
     const actionBounds = action.getBoundingClientRect();
+    // The action pads its hover pill and pulls itself left by the same amount,
+    // so its TEXT is what lines up with the copy, not its box edge.
+    const actionTextLeft = actionBounds.left + Number.parseFloat(getComputedStyle(action).paddingLeft);
 
-    expect(Math.abs(messageBounds.left - actionBounds.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(messageBounds.left - actionTextLeft)).toBeLessThanOrEqual(1);
     expect(actionBounds.top - messageBounds.bottom).toBeLessThanOrEqual(8);
   });
 });

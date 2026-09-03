@@ -198,11 +198,11 @@ export const buttonRecipe = defineRecipe({
         _hover: { bg: 'colorPalette.fg/10' },
         _expanded: { bg: 'colorPalette.fg/10' },
       },
-      // Plain buttons are link-shaped actions; stock Chakra gives them no
-      // hover state at all.
+      // Stock Chakra gives plain buttons no hover state at all; they take the
+      // same surface-proof fill as ghost.
       plain: {
         ...chakraRecipes.button.variants?.variant?.plain,
-        _hover: { textDecoration: 'underline' },
+        _hover: { bg: 'colorPalette.fg/10' },
       },
     },
   } as unknown as typeof chakraRecipes.button.variants,

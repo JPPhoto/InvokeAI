@@ -59,7 +59,7 @@ const OpenModelManagerButton = ({ modelType }: { modelType?: string }) => {
   );
 
   return (
-    <Button alignSelf="start" px="0" size="xs" variant="plain" onClick={handleClick}>
+    <Button alignSelf="start" ms="-1.5" px="1.5" size="xs" variant="plain" onClick={handleClick}>
       {t('widgets.generate.openModelManager')}
     </Button>
   );
