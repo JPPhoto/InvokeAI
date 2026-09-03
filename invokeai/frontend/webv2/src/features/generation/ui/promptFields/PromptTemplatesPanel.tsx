@@ -27,6 +27,9 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const THUMBNAIL_SIZE = '7';
+// The rows sit on the popover's `bg.muted` surface, where the row recipe's
+// `bg.muted/60` hover is invisible — hover needs the next surface step.
+const TEMPLATE_ROW_HOVER_PROPS = { bg: 'bg.emphasized/60' };
 const TEMPLATE_THUMBNAIL_FALLBACK = (
   <Box
     alignItems="center"
@@ -396,6 +399,7 @@ const TemplateRow = ({
         px="2"
         py="1.5"
         rounded="sm"
+        _hover={isActive ? undefined : TEMPLATE_ROW_HOVER_PROPS}
       >
         <button type="button" onClick={handleApply}>
           <TemplateThumbnail template={template} />

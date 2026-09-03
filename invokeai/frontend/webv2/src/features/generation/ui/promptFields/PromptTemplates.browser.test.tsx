@@ -108,6 +108,8 @@ let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+const TEMPLATE_ROW_HOVER_PROBE_PROPS = { bg: 'bg.emphasized/60' };
+
 const userTemplate: PromptTemplateRecord = {
   hasImage: false,
   id: 'user-1',
@@ -160,8 +162,11 @@ const StatefulPromptTemplatesPanel = ({ catalog }: { catalog: PromptTemplateCata
 
   return (
     <>
-      <Box aria-hidden bg="bg.muted/60" data-testid="row-hover-style-probe" />
-      <Row asChild>
+      {/* The popover surface is bg.muted, so template rows hover one step up;
+          the probe Row carries the same override so the rest of the Row
+          contract (focus ring, transitions) is still compared like for like. */}
+      <Box aria-hidden bg="bg.emphasized/60" data-testid="row-hover-style-probe" />
+      <Row asChild _hover={TEMPLATE_ROW_HOVER_PROBE_PROPS}>
         <button aria-label="Row probe" type="button">
           Row probe
         </button>
