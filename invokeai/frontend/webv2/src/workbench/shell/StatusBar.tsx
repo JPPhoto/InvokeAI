@@ -38,11 +38,12 @@ const BOTTOM_MENU_POSITIONING = { placement: 'top-end' } as const;
 const WIDGET_POPOVER_POSITIONING = { placement: 'top-end' } as const;
 const BOTTOM_MENU_TRIGGER = { kind: 'bottom' } as const;
 /**
- * Same three-step ladder as the side rails (see `WidgetBar`): the brand hue
- * marks the open widget through its content colour, on a neutral fill, because
- * a brand tint of this bar is indistinguishable from it on the light theme.
+ * Same ladder as the side rails (see `WidgetBar`): hover and active share one
+ * fill, and the brand hue marks the open widget through its content colour,
+ * because a brand tint of this bar is indistinguishable from it on the light
+ * theme.
  */
-const COMPACT_ROW_HOVER_PROPS = { bg: 'bg.muted', color: 'fg' };
+const COMPACT_ROW_HOVER_PROPS = { bg: 'bg.emphasized', color: 'fg' };
 const COMPACT_ROW_ACTIVE_PROPS = { bg: 'bg.emphasized', color: 'brand.fg' };
 const COMPACT_ROW_ACTIVE_HOVER_PROPS = { bg: 'bg.emphasized', color: 'brand.fg' };
 const TOOLTIP_POSITIONING = { placement: 'top' } as const;
