@@ -686,6 +686,24 @@ export const dialogSlotRecipe = defineSlotRecipe({
   },
 });
 
+/**
+ * Chakra hides a scrollbar only when NEITHER axis overflows
+ * (`&:not([data-overflow-x], [data-overflow-y])`), so a vertical-only bar
+ * sticks around — thumb clamped to its minimum size — whenever content merely
+ * spills sideways (nowrap rows, wide JSON). Each bar answers for its own axis.
+ */
+export const scrollAreaSlotRecipe = defineSlotRecipe({
+  ...chakraSlotRecipes.scrollArea,
+  base: {
+    ...chakraSlotRecipes.scrollArea.base,
+    scrollbar: {
+      ...chakraSlotRecipes.scrollArea.base?.scrollbar,
+      '&[data-orientation="vertical"]:not([data-overflow-y])': { display: 'none' },
+      '&[data-orientation="horizontal"]:not([data-overflow-x])': { display: 'none' },
+    },
+  },
+});
+
 export const sliderSlotRecipe = defineSlotRecipe({
   ...chakraSlotRecipes.slider,
   base: {

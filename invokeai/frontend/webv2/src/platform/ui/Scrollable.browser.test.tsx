@@ -30,6 +30,19 @@ afterEach(async () => {
 /** No spaces and no hyphens: nothing the layout can break on, so it contributes its whole width to min-content. */
 const UNBREAKABLE = 'AVeryLongUnbreakableWorkflowNameThatHasNowhereToWrap';
 
+/** Zag's measure timing varies under load; poll instead of guessing a delay. */
+const waitFor = async (predicate: () => boolean, timeoutMs = 3000): Promise<void> => {
+  const startedAt = Date.now();
+
+  await act(async () => {
+    while (!predicate() && Date.now() - startedAt < timeoutMs) {
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, 25);
+      });
+    }
+  });
+};
+
 const renderScrollable = async (children: ReactNode, orientation: 'horizontal' | 'vertical'): Promise<HTMLElement> => {
   host = document.createElement('div');
   host.style.cssText = 'width:200px;height:80px;';
@@ -57,7 +70,7 @@ describe('Scrollable', () => {
     expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth + 1);
   });
 
-  it('still lets a horizontal strip outgrow its viewport', async () => {
+  it('still lets a horizontal strip outgrow its viewport, scrollbar shown', async () => {
     const viewport = await renderScrollable(
       <div style={{ display: 'flex', whiteSpace: 'nowrap' }}>
         {UNBREAKABLE}
@@ -67,6 +80,45 @@ describe('Scrollable', () => {
     );
 
     expect(viewport.scrollWidth).toBeGreaterThan(viewport.clientWidth);
+
+    // The orientation guard must not over-hide: a bar whose own axis
+    // overflows stays visible.
+    const scrollbar = document.querySelector<HTMLElement>(
+      '[data-scope="scroll-area"][data-part="scrollbar"][data-orientation="horizontal"]'
+    )!;
+
+    await waitFor(() => getComputedStyle(scrollbar).display !== 'none');
+    expect(getComputedStyle(scrollbar).display).not.toBe('none');
+  });
+
+  it('hides the vertical scrollbar when only sideways spill exists', async () => {
+    // Chakra's stock guard hides a scrollbar only when NEITHER axis
+    // overflows, so nowrap rows spilling sideways pinned a min-size thumb on
+    // the vertical bar (dynamic prompts, JSON previews). The theme's
+    // orientation-scoped guard is what this pins.
+    const viewport = await renderScrollable(
+      <div style={{ whiteSpace: 'nowrap' }}>
+        {UNBREAKABLE}
+        {UNBREAKABLE}
+        {UNBREAKABLE}
+      </div>,
+      'vertical'
+    );
+
+    expect(viewport.scrollHeight).toBeLessThanOrEqual(viewport.clientHeight);
+
+    const scrollbar = document.querySelector<HTMLElement>(
+      '[data-scope="scroll-area"][data-part="scrollbar"][data-orientation="vertical"]'
+    )!;
+
+    await waitFor(() => getComputedStyle(scrollbar).display === 'none');
+
+    expect(scrollbar).not.toBeNull();
+    // The spill is real and zag records it; only the orientation guard keeps
+    // the vertical bar out of it.
+    expect(scrollbar.hasAttribute('data-overflow-x')).toBe(true);
+    expect(viewport.scrollWidth).toBeGreaterThan(viewport.clientWidth);
+    expect(getComputedStyle(scrollbar).display).toBe('none');
   });
 
   it('hides the scrollbar for non-overflowing content inside a popover', async () => {
@@ -93,13 +145,14 @@ describe('Scrollable', () => {
         </ChakraProvider>
       );
       await new Promise<void>((resolve) => {
-        globalThis.setTimeout(resolve, 400);
+        globalThis.setTimeout(resolve, 50);
       });
     });
 
     const scrollbar = document.querySelector<HTMLElement>('[data-scope="scroll-area"][data-part="scrollbar"]')!;
 
     expect(scrollbar).not.toBeNull();
+    await waitFor(() => !scrollbar.hasAttribute('data-overflow-y'));
     expect(scrollbar.hasAttribute('data-overflow-y')).toBe(false);
     expect(getComputedStyle(scrollbar).display).toBe('none');
   });
