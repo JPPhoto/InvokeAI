@@ -181,6 +181,7 @@ describe('getGalleryImageByName', () => {
 
     await expect(getGalleryImageByName('folder/workflow result.png', controller.signal)).resolves.toEqual({
       boardId: 'board-1',
+      createdAt: '2026-07-09T12:00:00.000Z',
       height: 360,
       imageCategory: 'general',
       imageName: 'folder/workflow result.png',

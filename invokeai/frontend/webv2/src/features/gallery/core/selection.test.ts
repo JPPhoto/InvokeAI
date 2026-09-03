@@ -113,6 +113,7 @@ describe('persisted Gallery selection readers', () => {
   it('converts a canonical image item for legacy image-only consumers', () => {
     expect(selection.getSelectedGalleryImageFromValues({ selectedImage: imageItem })).toEqual({
       boardId: imageItem.boardId,
+      createdAt: imageItem.createdAt,
       height: imageItem.height,
       imageCategory: imageItem.category,
       imageName: imageItem.name,
