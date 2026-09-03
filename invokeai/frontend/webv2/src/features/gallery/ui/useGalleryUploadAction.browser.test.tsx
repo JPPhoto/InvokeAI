@@ -80,6 +80,7 @@ const adapter: GalleryUiAdapter = {
   antialiasProgressImages: false,
   exportProject: vi.fn(),
   gallery: {
+    clearSelection: noop,
     reconcileDeletedBoardOutcome: noop,
     selectBoard: noop,
     selectImage: noop,
