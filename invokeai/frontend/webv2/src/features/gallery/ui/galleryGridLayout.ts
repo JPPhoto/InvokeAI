@@ -95,10 +95,9 @@ const chunkGalleryCellsIntoRows = (
 };
 
 /**
- * The grid's whole row model in one pure pass: under a starred-first listing
- * the starred items become a disclosure section above the regular items,
- * while a flat listing chunks every item in order. Pending queue placeholders
- * slot in at the position their images will land.
+ * The grid's row model in one pure pass: a starred-first listing gets a
+ * disclosure section, a flat one chunks in order, and placeholders slot in
+ * where their images will land.
  */
 export const buildGalleryGridRows = ({
   columnCount,

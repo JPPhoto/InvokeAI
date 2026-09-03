@@ -362,12 +362,8 @@ const getGalleryWindowSpan = (
 };
 
 /**
- * Refreshes an active multi-page window in place: one span-sized read
- * re-covers the whole row range the window holds and its pages are swapped
- * atomically, so rows never leave the screen. Returns false — leaving the
- * caller to the collapse path — when the read fails or something else touched
- * the entry meanwhile (the same last-writer-wins rule as the optimistic
- * patches above).
+ * Swaps an active window's pages atomically from one span-sized read. False
+ * falls back to the collapse: the read failed or the entry changed meanwhile.
  */
 const rebuildGalleryItemWindow = async (client: QueryClient, owner: AccountScope, query: Query): Promise<boolean> => {
   const filter = getGalleryItemsFilterFromKey(query.queryKey);
@@ -383,9 +379,8 @@ const rebuildGalleryItemWindow = async (client: QueryClient, owner: AccountScope
     return false;
   }
 
-  // Name-hydrated windows fetch each video individually, so re-reading a
-  // video-heavy span on every mutation would dwarf what the collapse path
-  // ever cost. The window's current contents are the estimate.
+  // Name-hydrated windows fetch videos one by one; re-reading a video-heavy
+  // span every mutation would cost more than the collapse ever did.
   if (
     (filter.semantic !== undefined || isDateBoardId(filter.boardId)) &&
     before.pages.reduce((count, page) => count + page.items.filter((item) => item.kind === 'video').length, 0) >
@@ -475,12 +470,9 @@ const runGalleryInvalidation = async (
 
   const rebuiltQueryHashes = new Set<string>();
 
-  // Refetching an infinite query replays every retained page, one request per
-  // page. An ACTIVE multi-page window instead refreshes with one span-sized
-  // read that swaps its pages atomically — collapsing it and letting the grid
-  // refill rearranged the rows under the user on every mutation. Windows
-  // nobody renders just collapse to their pinned page; the next mount
-  // refetches one page and can grow the window again.
+  // An ACTIVE multi-page window swaps in one span read — collapsing it
+  // rearranges the rows under the user; unwatched windows just collapse to
+  // their pinned page and regrow on the next mount.
   for (const query of getGalleryItemListQueries(client, owner)) {
     const data = query.state.data;
 

@@ -889,6 +889,8 @@ const galleryItem = (kind: GalleryItem['kind'], name: string): GalleryItem => {
 
 describe('primary successor after confirmed deletion', () => {
   it('selects the next surviving item in display order — the one that takes the deleted slot', async () => {
+    // Also what keeps deletion out of the leading starred block. Pinned at the
+    // unit level in core/selection.test.ts.
     const before = galleryItem('video', 'before.mp4');
     const primary = galleryItem('image', 'primary.png');
     const after = galleryItem('image', 'after.png');
@@ -910,36 +912,6 @@ describe('primary successor after confirmed deletion', () => {
     });
 
     expect(mocks.gallerySelectItem).toHaveBeenCalledWith(after, 'project-1');
-  });
-
-  it('does not jump into the leading starred block when deleting the first regular item', async () => {
-    // Ordered names lead with the starred section under infinite pagination;
-    // the successor must stay in the regular section the primary came from.
-    const starred = { ...galleryItem('image', 'starred.png'), starred: true };
-    const primary = galleryItem('image', 'primary.png');
-    const nextRegular = galleryItem('image', 'next-regular.png');
-    currentItemActionContext = {
-      filterIdentity: 'filter-a',
-      items: [starred, primary, nextRegular],
-      loadOrderedRefs: () =>
-        Promise.resolve([
-          { kind: 'image' as const, name: starred.name },
-          { kind: 'image' as const, name: primary.name },
-          { kind: 'image' as const, name: nextRegular.name },
-        ]),
-      selectedItemKey: 'image:primary.png',
-    };
-    mocks.itemDelete.mockResolvedValue({
-      affectedBoardIds: ['board-1'],
-      failed: [],
-      succeeded: [{ kind: 'image', name: primary.name }],
-    });
-
-    await act(async () => {
-      await getItemActions().deleteItems([{ kind: 'image', name: primary.name }]);
-    });
-
-    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(nextRegular, 'project-1');
   });
 
   it('resolves an unloaded successor by qualified ref', async () => {

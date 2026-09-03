@@ -157,10 +157,8 @@ describe('mergeGalleryItemWindow', () => {
   });
 
   it('places a completed batch image by its creation time, not the batch submission time', () => {
-    // A batch is submitted at T0 and its images complete one by one much
-    // later. Each overlaid recent must sort by when its image was actually
-    // created, or every fresh completion lands *below* its already-listed
-    // siblings until the backend refetch catches up, reshuffling the grid.
+    // Overlaid recents must sort by creation time, or each fresh completion
+    // lands below its already-listed siblings until the refetch catches up.
     const backendItems = [
       createBackendItem('batch-2.png', '2026-08-29 13:05:00.000'),
       createBackendItem('batch-1.png', '2026-08-29 13:04:00.000'),

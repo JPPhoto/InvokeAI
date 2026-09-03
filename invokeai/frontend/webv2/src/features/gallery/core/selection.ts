@@ -97,11 +97,8 @@ export const getPersistedSelectedGalleryItemKeys = (galleryValues: Record<string
 };
 
 /**
- * The item that should hold the selection after `primaryKey` is deleted: the
- * next eligible entry in display order — the one that visually slides into
- * the deleted slot — then, when nothing later survives, the nearest earlier
- * entry. Earlier-first walking crosses the starred/regular section boundary
- * under starred-first ordering, so later always wins.
+ * Successor after deleting `primaryKey`: the next eligible entry in display
+ * order, else the nearest earlier one — later-first stays out of the starred block.
  */
 export const getGalleryDeletionSuccessor = (
   orderedRefs: readonly GalleryItemRef[],

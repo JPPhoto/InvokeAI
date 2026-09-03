@@ -407,12 +407,24 @@ describe('Gallery window rebuild', () => {
     searchTerm: '',
     starredFirst: false,
   };
+  const dateFilter: GalleryItemsFilter = { ...listFilter, boardId: 'by_date:2026-07-25' };
 
   const createPageItems = (prefix: string, count: number): GalleryItem[] =>
     Array.from({ length: count }, (_, index) => createItem(`${prefix}-${index}.png`));
 
   const observeItems = (client: QueryClient, filter: GalleryItemsFilter): (() => void) =>
     new InfiniteQueryObserver(client, galleryItemsInfiniteOptions(filter)).subscribe(() => undefined);
+
+  /** A two-page stale window under `filter`, ready for an invalidation pass. */
+  const setUpStaleWindow = (filter: GalleryItemsFilter = listFilter, pages?: GalleryItem[][]) => {
+    const client = createClient();
+    const key = galleryKeys.items(captureAccountScope(), canonicalizeGalleryItemsFilter(filter));
+    const windowPages = pages ?? [createPageItems('stale-a', 60), createPageItems('stale-b', 60)];
+
+    client.setQueryData(key, createData(windowPages));
+
+    return { client, key, pages: windowPages };
+  };
 
   beforeEach(() => {
     accountLifecycle.activate('gallery-window-rebuild-test');
@@ -422,10 +434,7 @@ describe('Gallery window rebuild', () => {
   });
 
   it('refreshes an observed multi-page window with one span request, leaving it fresh and in place', async () => {
-    const client = createClient();
-    const key = getItemsKey('board-1');
-
-    client.setQueryData(key, createData([createPageItems('stale-a', 60), createPageItems('stale-b', 60)]));
+    const { client, key } = setUpStaleWindow();
     const unsubscribe = observeItems(client, listFilter);
 
     vi.mocked(listGalleryItems).mockResolvedValue({ items: createPageItems('fresh', 100), total: 100 });
@@ -447,11 +456,7 @@ describe('Gallery window rebuild', () => {
   });
 
   it('still collapses an unobserved multi-page window to its anchor page', async () => {
-    const client = createClient();
-    const key = getItemsKey('board-1');
-    const firstPage = createPageItems('stale-a', 60);
-
-    client.setQueryData(key, createData([firstPage, createPageItems('stale-b', 60)]));
+    const { client, key, pages } = setUpStaleWindow();
 
     await invalidateGalleryItems(client);
 
@@ -459,16 +464,12 @@ describe('Gallery window rebuild', () => {
 
     expect(vi.mocked(listGalleryItems)).not.toHaveBeenCalled();
     expect(data.pageParams).toEqual([0]);
-    expect(data.pages[0]?.items).toBe(firstPage);
+    expect(data.pages[0]?.items).toBe(pages[0]);
     expect(client.getQueryState(key)?.isInvalidated).toBe(true);
   });
 
   it('falls back to the collapse when the span request fails', async () => {
-    const client = createClient();
-    const key = getItemsKey('board-1');
-    const firstPage = createPageItems('stale-a', 60);
-
-    client.setQueryData(key, createData([firstPage, createPageItems('stale-b', 60)]));
+    const { client, key, pages } = setUpStaleWindow();
     const unsubscribe = observeItems(client, listFilter);
 
     vi.mocked(listGalleryItems).mockRejectedValue(new Error('offline'));
@@ -479,21 +480,18 @@ describe('Gallery window rebuild', () => {
 
     expect(vi.mocked(listGalleryItems)).toHaveBeenCalledWith(expect.objectContaining({ limit: 120, offset: 0 }));
     expect(data.pageParams).toEqual([0]);
-    expect(data.pages[0]?.items).toBe(firstPage);
+    expect(data.pages[0]?.items).toBe(pages[0]);
     unsubscribe();
   });
 
   it('discards a rebuild that lost to a concurrent cache write', async () => {
-    const client = createClient();
-    const key = getItemsKey('board-1');
+    const { client, key } = setUpStaleWindow();
     const concurrentPage = [createItem('concurrent.png')];
     let unsubscribe: (() => void) | undefined;
 
-    client.setQueryData(key, createData([createPageItems('stale-a', 60), createPageItems('stale-b', 60)]));
     vi.mocked(listGalleryItems).mockImplementation(() => {
       client.setQueryData(key, createData([concurrentPage, [createItem('concurrent-b.png')]]));
-      // Deactivate before the trailing invalidation so it does not refetch
-      // through this self-writing mock; the collapse outcome stays inspectable.
+      // Deactivate so the trailing invalidation cannot refetch through this mock.
       unsubscribe?.();
 
       return Promise.resolve({ items: createPageItems('fresh', 120), total: 120 });
@@ -510,16 +508,7 @@ describe('Gallery window rebuild', () => {
   });
 
   it('rebuilds an observed date-board window through a fresh name list and one span hydration', async () => {
-    const client = createClient();
-    const dateFilter: GalleryItemsFilter = {
-      boardId: 'by_date:2026-07-25',
-      galleryView: 'images',
-      searchTerm: '',
-      starredFirst: false,
-    };
-    const key = galleryKeys.items(captureAccountScope(), canonicalizeGalleryItemsFilter(dateFilter));
-
-    client.setQueryData(key, createData([createPageItems('stale-a', 60), createPageItems('stale-b', 60)]));
+    const { client, key } = setUpStaleWindow(dateFilter);
     const unsubscribe = observeItems(client, dateFilter);
 
     vi.mocked(listGalleryDateBoardItemNames).mockResolvedValue({
@@ -549,19 +538,14 @@ describe('Gallery window rebuild', () => {
   });
 
   it('bails to the collapse when a page fetch starts during the span read', async () => {
-    const client = createClient();
-    const key = getItemsKey('board-1');
-
-    client.setQueryData(key, createData([createPageItems('stale-a', 60), createPageItems('stale-b', 60)]));
-
+    const { client, key } = setUpStaleWindow();
     const observer = new InfiniteQueryObserver(client, galleryItemsInfiniteOptions(listFilter));
     const unsubscribe = observer.subscribe(() => undefined);
 
     vi.mocked(listGalleryItems).mockImplementation(({ limit, offset }) => {
       if (limit === 120) {
-        // A user scroll lands while the span read is in flight. Its fetch
-        // snapshotted the pre-rebuild pages, so a swap now would be clobbered
-        // the moment it resolves — the rebuild must stand down.
+        // A scroll mid-span-read snapshotted the old pages; a swap would be
+        // clobbered when it resolves, so the rebuild must stand down.
         void observer.fetchNextPage();
 
         return Promise.resolve({ items: createPageItems('fresh', 120), total: 200 });
@@ -579,18 +563,14 @@ describe('Gallery window rebuild', () => {
     await invalidateGalleryItems(client);
 
     const data = getData(client, key);
-    const names = data.pages.flatMap((page) => page.items.map((item) => item.name));
 
-    expect(names).not.toContain('fresh-0.png');
+    expect(data.pages.flatMap((page) => page.items.map((item) => item.name))).not.toContain('fresh-0.png');
     expect(data.pageParams).toEqual([0]);
     unsubscribe();
   });
 
   it('keeps one empty page when the span comes back empty', async () => {
-    const client = createClient();
-    const key = getItemsKey('board-1');
-
-    client.setQueryData(key, createData([createPageItems('stale-a', 60), createPageItems('stale-b', 60)]));
+    const { client, key } = setUpStaleWindow();
     const unsubscribe = observeItems(client, listFilter);
 
     vi.mocked(listGalleryItems).mockResolvedValue({ items: [], total: 0 });
@@ -606,18 +586,9 @@ describe('Gallery window rebuild', () => {
   });
 
   it('collapses a video-heavy name-hydrated window instead of re-reading every video', async () => {
-    const client = createClient();
-    const dateFilter: GalleryItemsFilter = {
-      boardId: 'by_date:2026-07-25',
-      galleryView: 'images',
-      searchTerm: '',
-      starredFirst: false,
-    };
-    const key = galleryKeys.items(captureAccountScope(), canonicalizeGalleryItemsFilter(dateFilter));
     const createVideos = (prefix: string): GalleryItem[] =>
       Array.from({ length: 60 }, (_, index) => createItem(`${prefix}-${index}.mp4`, 'board-1', false, 'video'));
-
-    client.setQueryData(key, createData([createVideos('stale-a'), createVideos('stale-b')]));
+    const { client, key } = setUpStaleWindow(dateFilter, [createVideos('stale-a'), createVideos('stale-b')]);
     const unsubscribe = observeItems(client, dateFilter);
 
     vi.mocked(listGalleryDateBoardItemNames).mockResolvedValue({ items: [], starredCount: 0, total: 0 });
@@ -625,8 +596,7 @@ describe('Gallery window rebuild', () => {
 
     await invalidateGalleryItems(client);
 
-    // The collapsed window's own single-page refetch is fine; the span-sized
-    // re-read (which would fetch every video individually) must not happen.
+    // The collapsed window may refetch one page; the span-sized re-read must not happen.
     expect(vi.mocked(hydrateGalleryDateBoardItemPage)).not.toHaveBeenCalledWith(
       expect.objectContaining({ limit: 120 })
     );
@@ -635,15 +605,8 @@ describe('Gallery window rebuild', () => {
   });
 
   it('does not re-read a window watched only by a disabled observer', async () => {
-    const client = createClient();
-    const key = getItemsKey('board-1');
-
-    client.setQueryData(key, createData([createPageItems('stale-a', 60), createPageItems('stale-b', 60)]));
-
-    const observer = new InfiniteQueryObserver(client, {
-      ...galleryItemsInfiniteOptions(listFilter),
-      enabled: false,
-    });
+    const { client, key } = setUpStaleWindow();
+    const observer = new InfiniteQueryObserver(client, { ...galleryItemsInfiniteOptions(listFilter), enabled: false });
     const unsubscribe = observer.subscribe(() => undefined);
 
     await invalidateGalleryItems(client);

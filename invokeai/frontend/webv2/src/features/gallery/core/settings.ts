@@ -17,8 +17,7 @@ export const GALLERY_BOARD_PANEL_MIN_WIDTH_PX = 180;
 export const GALLERY_BOARD_PANEL_MAX_WIDTH_PX = 420;
 
 /**
- * User-tunable gallery settings, persisted as plain entries in the gallery
- * widget's `values` record so they survive workbench autosave/hydration —
+ * User-tunable gallery settings, persisted in the widget's `values` record —
  * except `starredFirst`, which is derived, never stored.
  */
 export interface GallerySettings {
@@ -48,11 +47,8 @@ export interface GallerySettings {
 }
 
 /**
- * Starred items form a dedicated grid section only under infinite pagination,
- * where the window resets to the top of the listing on any board, search, or
- * view change and fetching starred first keeps that section complete.
- * Paginated pages are flat chronological slices: a starred-first order cut
- * into fixed pages spills the section across page boundaries.
+ * Starred items form a section only under infinite pagination; a starred-first
+ * order cut into fixed pages spills the section across page boundaries.
  */
 export const isGalleryStarredFirst = (paginationMode: GalleryPaginationMode): boolean => paginationMode === 'infinite';
 

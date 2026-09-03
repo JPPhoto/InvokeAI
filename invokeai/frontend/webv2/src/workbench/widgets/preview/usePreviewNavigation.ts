@@ -188,9 +188,7 @@ export const usePreviewNavigation = ({
     shouldFollowLive && activePlaceholder ? activePlaceholder.boardId : selectedImageQuery.boardId;
   const navigationGalleryView = shouldFollowLive ? 'images' : selectedImageQuery.galleryView;
   const navigationOrderDir = shouldFollowLive ? imageOrderDir : selectedImageQuery.imageOrderDir;
-  // Following live means watching the gallery's own listing, so its mode —
-  // not the stamped one — decides the ordering, exactly as `imageOrderDir`
-  // substitutes above.
+  // Live-follow watches the gallery's own listing, so its mode decides.
   const navigationStarredFirst = isGalleryStarredFirst(
     shouldFollowLive ? galleryPaginationMode : selectedImageQuery.paginationMode
   );

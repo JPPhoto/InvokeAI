@@ -240,41 +240,23 @@ describe('gallery state view', () => {
         searchTerm: '',
       },
     };
+    const pageOf = (values: Record<string, unknown>, stamp: Record<string, unknown> = {}) =>
+      getGalleryStateView(
+        { ...stamped, ...values, selectedImageQuery: { ...stamped.selectedImageQuery, ...stamp } },
+        boards,
+        [],
+        false
+      ).revealTargetPage;
 
-    expect(getGalleryStateView(stamped, boards, [], false).revealTargetPage).toBe(2);
+    expect(pageOf({})).toBe(2);
     expect(getGalleryStateView(stamped, boards, [], false).page).toBe(0);
-    expect(
-      getGalleryStateView({ ...stamped, selectedBoardId: 'board-1' }, boards, [], false).revealTargetPage
-    ).toBeNull();
-    expect(
-      getGalleryStateView({ ...stamped, paginationMode: 'infinite' }, boards, [], false).revealTargetPage
-    ).toBeNull();
-    expect(
-      getGalleryStateView(
-        { ...stamped, selectedImageQuery: { ...stamped.selectedImageQuery, galleryView: 'assets' } },
-        boards,
-        [],
-        false
-      ).revealTargetPage
-    ).toBeNull();
-    expect(
-      getGalleryStateView(
-        { ...stamped, selectedImageQuery: { ...stamped.selectedImageQuery, paginationMode: 'infinite' } },
-        boards,
-        [],
-        false
-      ).revealTargetPage
-    ).toBeNull();
-    expect(getGalleryStateView({ ...stamped, imageOrderDir: 'ASC' }, boards, [], false).revealTargetPage).toBeNull();
-    expect(getGalleryStateView({ ...stamped, searchTerm: 'cats' }, boards, [], false).revealTargetPage).toBeNull();
-    expect(
-      getGalleryStateView(
-        { ...stamped, semanticImageQuery: { imageName: 'ref.png', kind: 'image' } },
-        boards,
-        [],
-        false
-      ).revealTargetPage
-    ).toBeNull();
+    expect(pageOf({ selectedBoardId: 'board-1' })).toBeNull();
+    expect(pageOf({ paginationMode: 'infinite' })).toBeNull();
+    expect(pageOf({}, { galleryView: 'assets' })).toBeNull();
+    expect(pageOf({}, { paginationMode: 'infinite' })).toBeNull();
+    expect(pageOf({ imageOrderDir: 'ASC' })).toBeNull();
+    expect(pageOf({ searchTerm: 'cats' })).toBeNull();
+    expect(pageOf({ semanticImageQuery: { imageName: 'ref.png', kind: 'image' } })).toBeNull();
   });
 
   it('derives starred-first from the pagination mode: sectioned infinite window, flat paginated pages', () => {

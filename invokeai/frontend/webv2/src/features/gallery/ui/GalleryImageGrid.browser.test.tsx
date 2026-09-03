@@ -1099,13 +1099,17 @@ describe('GalleryImageGrid reveal requests', () => {
     expect(mocks.scrollToIndex).toHaveBeenCalledTimes(1);
   });
 
-  it('follows the selection onto its paginated page when the revealed item is not loaded', async () => {
-    const gallery = createGallery({
+  /** A persisted off-page selection of deep.png with page-zero content loaded. */
+  const createOffPageGallery = (revealTargetPage: number | null) =>
+    createGallery({
       items: [createItem('image', 'page-zero.png')],
-      revealTargetPage: 2,
+      revealTargetPage,
       selectedItemKey: null,
       selectedItemKeys: ['image:deep.png'],
     });
+
+  it('follows the selection onto its paginated page when the revealed item is not loaded', async () => {
+    const gallery = createOffPageGallery(2);
 
     await renderGallery(gallery);
     await interact(() => requestGalleryItemReveal('image:deep.png'));
@@ -1125,12 +1129,7 @@ describe('GalleryImageGrid reveal requests', () => {
   });
 
   it('follows a reveal onto its page at most once, so a missing item cannot pull the user back', async () => {
-    const gallery = createGallery({
-      items: [createItem('image', 'page-zero.png')],
-      revealTargetPage: 2,
-      selectedItemKey: null,
-      selectedItemKeys: ['image:deep.png'],
-    });
+    const gallery = createOffPageGallery(2);
 
     await renderGallery(gallery);
     await interact(() => requestGalleryItemReveal('image:deep.png'));
@@ -1144,12 +1143,7 @@ describe('GalleryImageGrid reveal requests', () => {
   });
 
   it('does not page-follow a selection stamped for a different listing', async () => {
-    const gallery = createGallery({
-      items: [createItem('image', 'page-zero.png')],
-      revealTargetPage: null,
-      selectedItemKey: null,
-      selectedItemKeys: ['image:deep.png'],
-    });
+    const gallery = createOffPageGallery(null);
 
     await renderGallery(gallery);
     await interact(() => requestGalleryItemReveal('image:deep.png'));
@@ -1158,18 +1152,12 @@ describe('GalleryImageGrid reveal requests', () => {
   });
 
   it('retires a pending reveal once the persisted selection moves to another off-page item', async () => {
-    const gallery = createGallery({
-      items: [createItem('image', 'page-zero.png')],
-      revealTargetPage: null,
-      selectedItemKey: null,
-      selectedItemKeys: ['image:deep.png'],
-    });
+    const gallery = createOffPageGallery(null);
 
     await renderGallery(gallery);
     await interact(() => requestGalleryItemReveal('image:deep.png'));
 
-    // An auto-selected fresh image replaces the persisted selection while
-    // both stay off-page (the visible key is null throughout).
+    // An off-page auto-select replaces the persisted selection.
     await renderGallery({
       ...gallery,
       items: [createItem('image', 'page-zero.png')],

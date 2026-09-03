@@ -64,10 +64,8 @@ export const getGalleryBoardGroups = ({
   const dateBoards = showDates ? boards.filter((board) => board.kind === 'date' && matchesBoardSearch(board)) : [];
   const archivedBoards = showArchived ? regularBoards.filter((board) => board.archived) : [];
 
-  // Uncategorized is the one fixed system row, so it keeps a fixed seat at
-  // the top — as the legacy gallery pinned it — instead of drifting further
-  // down as boards accumulate. The pin holds during a search too: rows keep
-  // their familiar slots under a quick filter.
+  // The one fixed system row keeps a fixed seat at the top (legacy-gallery
+  // parity) instead of drifting down as boards accumulate.
   const yourBoards = [
     ...(uncategorizedBoard && matchesBoardSearch(uncategorizedBoard) ? [uncategorizedBoard] : []),
     ...(projectBoard && matchesBoardSearch(projectBoard) ? [projectBoard] : []),

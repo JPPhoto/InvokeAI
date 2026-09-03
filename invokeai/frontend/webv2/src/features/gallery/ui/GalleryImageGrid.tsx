@@ -244,10 +244,8 @@ export const GalleryImageGrid = () => {
       return;
     }
 
-    // A different selection landing after the reveal (the user clicked
-    // something else) retires it — a late page load must not scroll away
-    // from what they chose. The persisted set covers off-page selections,
-    // whose visible key is null.
+    // Another selection retires the reveal; the persisted set catches
+    // off-page selections whose visible key is null.
     if (
       (gallery.selectedItemKey !== null && gallery.selectedItemKey !== pending.itemKey) ||
       (gallery.selectedItemKeys.length > 0 && !gallery.selectedItemKeys.includes(pending.itemKey))

@@ -293,15 +293,10 @@ const fetchSharedDateBoardNames = (
 };
 
 /**
- * One read of a row range from the listing a filter names. The semantic/date
- * dispatch and the shared name-list handling live here so the per-page
- * queryFn and the invalidation-time window rebuild can never disagree about
- * how a filter's rows are fetched. Semantic and date-board queries share one
- * mechanism: the ordered name list is fetched once (shared across pages, both
- * consumers, and the 60s stale window) and the range hydrates a slice of it —
- * which keeps semantic ranks consistent across pages and keeps a dropped-file
- * reference from re-uploading its blob on every fetch. Clamps to `limit`,
- * distrusting the server exactly as the per-page path always has.
+ * One range read of a filter's listing, shared by the per-page queryFn and
+ * the window rebuild so the two cannot diverge. Name-list filters hydrate a
+ * slice of one shared name fetch — re-running a semantic search re-uploads a
+ * dropped file's blob. The result is clamped to `limit`.
  */
 export const fetchGalleryItemsRange = async (
   client: QueryClient,

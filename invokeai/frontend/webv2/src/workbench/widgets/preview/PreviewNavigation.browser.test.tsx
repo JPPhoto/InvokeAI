@@ -1160,8 +1160,7 @@ describe('preview keyboard navigation boundary', () => {
     await render();
     await pressArrow('ArrowRight');
 
-    // Starred-first ordering would put starred-mid at the head and step onto
-    // oldest here; the paginated grid is flat, so its true neighbor wins.
+    // Under starred-first the step would land on oldest; flat pages win.
     expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'image', name: 'starred-mid' }),
       undefined,

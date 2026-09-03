@@ -116,9 +116,8 @@ interface GalleryOrderImage {
   starred?: boolean;
 }
 
-// Newest-first placeholders land where their images will: at the top of a
-// flat listing, or just below the leading starred block of a starred-first
-// one. Oldest-first listings take them at the end either way.
+// Newest-first placeholders land at the top (below any leading starred
+// block); oldest-first listings take them at the end.
 export const getGalleryPlaceholderInsertionIndex = (
   images: GalleryOrderImage[],
   imageOrderDir: GalleryOrderDir,
@@ -381,12 +380,10 @@ const getVisibleGalleryQueuePlaceholders = (
 };
 
 /**
- * Whether the current page or window can show where a NEW image will land.
- * Placeholders stand in for images-to-come, so they render only there. In
- * infinite mode that is the unanchored window (a deep reveal shows a slice
- * nowhere near the landing). Newest-first pages land on page 0; oldest-first
- * pages land at row `total` — unknowable until the total is, and on a page
- * that does not exist yet when the last one is exactly full.
+ * Whether this page/window can show where a NEW image lands (placeholders
+ * render only there): page 0 for newest-first and the unanchored infinite
+ * window; the row-`total` page for oldest-first — deliberately nonexistent
+ * when the last page is exactly full, and unknowable without a total.
  */
 const isGalleryWindowAtIncomingItemLanding = (
   settings: GallerySettings,

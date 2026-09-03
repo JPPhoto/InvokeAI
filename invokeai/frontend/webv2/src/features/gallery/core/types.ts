@@ -1,9 +1,6 @@
 export interface GeneratedImageContract {
-  /**
-   * Backend creation timestamp, when known. `queuedAt` is the submission
-   * instant, which for a queued batch predates creation by the whole wait —
-   * ordering against backend rows must prefer this field.
-   */
+  /** Backend creation timestamp, when known; `queuedAt` is the (earlier)
+   * submission instant, so ordering must prefer this field. */
   createdAt?: string;
   height: number;
   imageName: string;
