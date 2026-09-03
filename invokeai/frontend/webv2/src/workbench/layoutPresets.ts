@@ -40,7 +40,6 @@ const defaultInstanceTypes: Record<WidgetInstanceId, WidgetTypeId> = {
   queue: 'queue',
   'queue-status': 'queue-status',
   'server-status': 'server-status',
-  'version-status': 'version-status',
   workflow: 'workflow',
   'workflow:bottom': 'workflow',
   'workflow:center': 'workflow',

@@ -1621,7 +1621,6 @@
       "queueStatus": "Queue status",
       "serverStatus": "Server Status",
       "upscale": "Upscale",
-      "versionStatus": "Version",
       "workflow": "Workflow",
       "video": "Video",
       "color": "Color",
@@ -3346,11 +3345,6 @@
       "disconnected": "Disconnected from Server",
       "label": "Server Status",
       "labelWithError": "{{label}}: {{error}}"
-    },
-    "versionStatus": {
-      "chipLabel": "Version 7.0",
-      "description": "Invoke V7 shell version 7.0.",
-      "label": "Version"
     },
     "video": {
       "accelerator": "{{label}} (fast)",

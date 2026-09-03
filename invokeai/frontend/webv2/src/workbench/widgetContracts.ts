@@ -25,7 +25,6 @@ export type FirstPartyWidgetTypeId =
   | 'upscale'
   | 'video'
   | 'users'
-  | 'version-status'
   | 'workflow';
 
 export type WidgetTypeId = FirstPartyWidgetTypeId | (string & {});
