@@ -50,12 +50,16 @@ const LLAVA_MODEL_TYPES = ['llava_onevision'];
  * explained inside the popover rather than by disabling the trigger, so the
  * dead end always has a door.
  */
-const OpenModelManagerButton = () => {
+const OpenModelManagerButton = ({ modelType }: { modelType?: string }) => {
   const { t } = useTranslation();
   const { openManager } = useGenerationUi().models;
+  const handleClick = useCallback(
+    () => openManager(modelType === undefined ? undefined : { modelType }),
+    [modelType, openManager]
+  );
 
   return (
-    <Button alignSelf="start" px="0" size="xs" variant="plain" onClick={openManager}>
+    <Button alignSelf="start" px="0" size="xs" variant="plain" onClick={handleClick}>
       {t('widgets.generate.openModelManager')}
     </Button>
   );
@@ -493,7 +497,7 @@ const ExpandPromptButton = ({
                     <Text color="fg.subtle" fontSize="xs">
                       {t('widgets.generate.installTextLlmToExpandPrompts')}
                     </Text>
-                    <OpenModelManagerButton />
+                    <OpenModelManagerButton modelType="text_llm" />
                   </>
                 ) : (
                   <>
@@ -669,7 +673,7 @@ const ImageToPromptButton = ({
                     <Text color="fg.subtle" fontSize="xs">
                       {t('widgets.generate.installVisionModelToGeneratePrompts')}
                     </Text>
-                    <OpenModelManagerButton />
+                    <OpenModelManagerButton modelType="llava_onevision" />
                   </>
                 ) : (
                   <>
