@@ -39,14 +39,14 @@ export const DropZone = ({ children, isDisabled, isOver, variant = 'inline', _ho
     () => ({
       ...(variant === 'inline' && !isDisabled ? { borderColor: 'accent.solid' } : null),
       ..._hover,
-      ...(isOver ? { bg: 'accent.muted', borderColor: 'accent.solid' } : null),
+      ...(isOver ? { bg: 'accent.solid/15', borderColor: 'accent.solid' } : null),
     }),
     [_hover, isDisabled, isOver, variant]
   );
 
   return (
     <Box
-      bg={isOver ? 'accent.muted' : variant === 'overlay' ? 'bg.muted/80' : undefined}
+      bg={isOver ? 'accent.solid/15' : variant === 'overlay' ? 'bg.muted/60' : undefined}
       borderColor={isOver ? 'accent.solid' : 'border.emphasized'}
       borderStyle="dashed"
       borderWidth={variant === 'overlay' ? '2px' : '1px'}

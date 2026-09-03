@@ -13,6 +13,8 @@ import type { WidgetInstanceId, WidgetTypeId } from '@workbench/widgetContracts'
 
 import { BUILT_IN_LAYOUT_PRESET_LABELS } from '@workbench/launchpad/intents';
 
+// Notifications read as ambient status, not a tool: they live on the right.
+const defaultBottomAlignEndInstanceIds: WidgetInstanceId[] = ['notifications'];
 const defaultBottomInstanceIds: WidgetInstanceId[] = [
   'server-status',
   'queue-status',
@@ -47,15 +49,23 @@ const defaultInstanceTypes: Record<WidgetInstanceId, WidgetTypeId> = {
 
 const createRegion = ({
   activeInstanceId,
+  alignEndInstanceIds,
   instanceIds,
   isCollapsed = false,
   sizePx,
 }: {
   activeInstanceId: WidgetInstanceId;
+  alignEndInstanceIds?: WidgetInstanceId[];
   instanceIds: WidgetInstanceId[];
   isCollapsed?: boolean;
   sizePx: number;
-}): WidgetRegionState => ({ activeInstanceId, instanceIds, isCollapsed, sizePx });
+}): WidgetRegionState => ({
+  activeInstanceId,
+  ...(alignEndInstanceIds ? { alignEndInstanceIds } : {}),
+  instanceIds,
+  isCollapsed,
+  sizePx,
+});
 
 const createWidgetInstances = (
   widgetRegions: Record<WidgetRegion, WidgetRegionState>
@@ -156,6 +166,7 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
     widgetRegions: {
       bottom: createRegion({
         activeInstanceId: 'gallery:bottom',
+        alignEndInstanceIds: defaultBottomAlignEndInstanceIds,
         instanceIds: defaultBottomInstanceIds,
         isCollapsed: true,
         sizePx: 180,
@@ -195,6 +206,7 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
     widgetRegions: {
       bottom: createRegion({
         activeInstanceId: 'gallery:bottom',
+        alignEndInstanceIds: defaultBottomAlignEndInstanceIds,
         instanceIds: defaultBottomInstanceIds,
         isCollapsed: true,
         sizePx: 180,
@@ -228,6 +240,7 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
     widgetRegions: {
       bottom: createRegion({
         activeInstanceId: 'gallery:bottom',
+        alignEndInstanceIds: defaultBottomAlignEndInstanceIds,
         instanceIds: defaultBottomInstanceIds,
         isCollapsed: true,
         sizePx: 180,
@@ -263,6 +276,7 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
     widgetRegions: {
       bottom: createRegion({
         activeInstanceId: 'gallery:bottom',
+        alignEndInstanceIds: defaultBottomAlignEndInstanceIds,
         instanceIds: defaultBottomInstanceIds,
         isCollapsed: true,
         sizePx: 180,

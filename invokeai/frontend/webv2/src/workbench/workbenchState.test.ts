@@ -994,7 +994,10 @@ describe('workbench widget alignment', () => {
       type: 'setWidgetInstanceAlignment',
     });
 
-    expect(getActiveProject(alignedEnd).widgetRegions.bottom.alignEndInstanceIds).toEqual([instanceId]);
+    expect(getActiveProject(alignedEnd).widgetRegions.bottom.alignEndInstanceIds).toEqual([
+      ...(getActiveProject(initial).widgetRegions.bottom.alignEndInstanceIds ?? []),
+      instanceId,
+    ]);
     // Placement itself is untouched: alignment is a render split, not a move.
     expect(getActiveProject(alignedEnd).widgetRegions.bottom.instanceIds).toEqual(
       getActiveProject(initial).widgetRegions.bottom.instanceIds
@@ -1007,7 +1010,9 @@ describe('workbench widget alignment', () => {
       type: 'setWidgetInstanceAlignment',
     });
 
-    expect(getActiveProject(alignedStart).widgetRegions.bottom.alignEndInstanceIds).toEqual([]);
+    expect(getActiveProject(alignedStart).widgetRegions.bottom.alignEndInstanceIds).toEqual(
+      getActiveProject(initial).widgetRegions.bottom.alignEndInstanceIds ?? []
+    );
   });
 
   it('aligning an already-aligned widget is a no-op', () => {
