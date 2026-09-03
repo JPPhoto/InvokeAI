@@ -476,7 +476,7 @@ describe('workbench widget region defaults', () => {
     const state = createInitialWorkbenchState();
     const project = getActiveProject(state);
 
-    expect(project.widgetRegions.left.instanceIds).toEqual(['generate', 'upscale', 'video']);
+    expect(project.widgetRegions.left.instanceIds).toEqual(['generate', 'upscale']);
     expect(project.widgetRegions.right.instanceIds).toEqual(['gallery', 'image-map', 'queue']);
     expect(project.widgetRegions.bottom.instanceIds).toEqual([
       'server-status',
@@ -612,12 +612,9 @@ describe('workbench widget region defaults', () => {
       type: 'hydrateWorkbench',
     });
 
-    expect(getActiveProject(migrated).widgetRegions.left.instanceIds).toEqual([
-      'generate',
-      'workflow',
-      'upscale',
-      'video',
-    ]);
+    // No Video adoption any more: the curated defaults exclude it, so the
+    // legacy splice adds Upscale alone.
+    expect(getActiveProject(migrated).widgetRegions.left.instanceIds).toEqual(['generate', 'workflow', 'upscale']);
     expect(getActiveProject(migrated).widgetInstances.upscale?.typeId).toBe('upscale');
     expect(getActiveProject(customized).widgetRegions.left.instanceIds).toEqual(['generate', 'gallery']);
   });
@@ -1316,7 +1313,7 @@ describe('workbench layout presets', () => {
     expect(project.layout.panels).toEqual({ isBottomOpen: false, isLeftOpen: true, isRightOpen: true });
     expect(project.widgetRegions.left).toMatchObject({
       activeInstanceId: 'generate',
-      instanceIds: ['generate', 'upscale', 'video'],
+      instanceIds: ['generate', 'upscale'],
       isCollapsed: false,
       sizePx: 450,
     });
@@ -3233,6 +3230,8 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     };
     let state = createInitialWorkbenchState();
 
+    // Video is no longer placed by the non-video defaults; add it first.
+    state = workbenchReducer(state, { region: 'left', type: 'toggleRegionWidget', widgetId: 'video' });
     state = workbenchReducer(state, {
       sourceId: 'generate',
       type: 'patchProjectPromptDraft',

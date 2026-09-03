@@ -150,6 +150,9 @@ describe('auto invocation route switching on widget reveal', () => {
   it('leaves the route alone when a background tab is closed', () => {
     let state = createInitialWorkbenchState();
 
+    // Place Video (defaults no longer carry it), then push it to the background.
+    state = workbenchReducer(state, { region: 'left', type: 'toggleRegionWidget', widgetId: 'video' });
+    state = workbenchReducer(state, { region: 'left', type: 'selectRegionWidget', widgetId: 'generate' });
     state = workbenchReducer(state, { sourceId: 'workflow', type: 'setInvocationSource' });
     // `video` is not the front tab, so closing it reveals nothing.
     state = workbenchReducer(state, { region: 'left', type: 'toggleRegionWidget', widgetId: 'video' });
@@ -161,7 +164,8 @@ describe('auto invocation route switching on widget reveal', () => {
   it('follows the tab promoted when the front tab is closed', () => {
     let state = createInitialWorkbenchState();
 
-    state = workbenchReducer(state, { region: 'left', type: 'selectRegionWidget', widgetId: 'video' });
+    // Placing Video reveals it, which is also the route-follow being tested.
+    state = workbenchReducer(state, { region: 'left', type: 'toggleRegionWidget', widgetId: 'video' });
 
     expect(getInvocation(state)).toMatchObject({ sourceId: 'video' });
 
@@ -269,6 +273,8 @@ describe('auto invocation route switching on widget reveal', () => {
   it('follows a widget floated out, raised, or docked back', () => {
     let state = createInitialWorkbenchState();
 
+    state = workbenchReducer(state, { region: 'left', type: 'toggleRegionWidget', widgetId: 'video' });
+    state = workbenchReducer(state, { region: 'left', type: 'selectRegionWidget', widgetId: 'generate' });
     state = workbenchReducer(state, { instanceId: 'video', type: 'floatWidget' });
 
     expect(getInvocation(state)).toMatchObject({ destination: 'gallery', sourceId: 'video' });

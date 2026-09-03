@@ -173,7 +173,7 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
       }),
       left: createRegion({
         activeInstanceId: 'generate',
-        instanceIds: ['generate', 'upscale', 'video'],
+        instanceIds: ['generate', 'upscale'],
         sizePx: 450,
       }),
       right: createRegion({
@@ -206,7 +206,7 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
       }),
       left: createRegion({
         activeInstanceId: 'generate',
-        instanceIds: ['generate', 'upscale', 'video'],
+        instanceIds: ['generate', 'upscale'],
         sizePx: 450,
       }),
       right: createRegion({

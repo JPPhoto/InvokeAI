@@ -1370,15 +1370,6 @@ const LEGACY_DEFAULT_LEFT_REGION_WIDGET_IDS: readonly WidgetInstanceId[][] = [
   ['generate', 'workflow', 'gallery'],
 ];
 
-// Every left rail shipped as a default between the Upscale and Video widgets
-// (including pre-upscale defaults after the splice above normalizes them).
-const PRE_VIDEO_DEFAULT_LEFT_REGION_WIDGET_IDS: readonly WidgetInstanceId[][] = [
-  ['generate', 'upscale'],
-  ['generate', 'workflow', 'upscale'],
-  ['workflow', 'generate', 'upscale'],
-  ['generate', 'workflow', 'upscale', 'gallery'],
-];
-
 const ensureLeftRegion = (leftRegion: WidgetRegionState | undefined): WidgetRegionState => {
   const fallback = createWidgetRegions().left;
 
@@ -1401,21 +1392,9 @@ const ensureLeftRegion = (leftRegion: WidgetRegionState | undefined): WidgetRegi
     }
   }
 
-  // Same treatment for rails persisted before the Video widget shipped: only a
-  // rail that exactly matches a shipped default (after the upscale splice above)
-  // adopts it — a customized rail is left alone.
-  if (region.instanceIds.includes('upscale') && !region.instanceIds.includes('video')) {
-    const preVideoMatch = PRE_VIDEO_DEFAULT_LEFT_REGION_WIDGET_IDS.some(
-      (ids) => ids.length === region.instanceIds.length && ids.every((id, index) => region.instanceIds[index] === id)
-    );
-
-    if (preVideoMatch) {
-      const instanceIds = [...region.instanceIds];
-
-      instanceIds.splice(instanceIds.indexOf('upscale') + 1, 0, 'video');
-      region = { ...region, instanceIds };
-    }
-  }
+  // The Video widget is deliberately absent from the non-video defaults now,
+  // so nothing backfills it any more; it lives in the Video preset and stays
+  // addable everywhere.
 
   return region;
 };
