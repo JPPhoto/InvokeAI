@@ -1,3 +1,4 @@
+import type { GenerateSettings } from '@features/generation/core/types';
 import type { ChangeEvent } from 'react';
 
 import { HStack, Icon, Input, InputGroup, Popover, Portal, Stack, Text } from '@chakra-ui/react';
@@ -38,12 +39,36 @@ const SEARCH_VISIBLE_MIN_PRESETS = 6;
 
 type PresetDialogState = { mode: 'save' } | { mode: 'rename'; preset: GeneratePresetRecord };
 
+/**
+ * "These settings are still this preset" must ignore what applying a preset
+ * does not write (`getGenerateFormCommitPatch` drops `batchCount`) and what is
+ * presentation or volatile: prompt-box heights, the template view mode, and
+ * the seed while it randomizes.
+ */
+const getPresetComparisonKey = (settings: GenerateSettings): string => {
+  const comparable: Record<string, unknown> = { ...settings };
+
+  delete comparable.batchCount;
+  delete comparable.negativePromptHeightPx;
+  delete comparable.positivePromptHeightPx;
+  delete comparable.promptTemplateViewMode;
+
+  if (settings.shouldRandomizeSeed) {
+    delete comparable.seed;
+  }
+
+  return JSON.stringify(comparable);
+};
+
 const PresetRow = ({
+  isActive,
   preset,
   onApply,
   onDelete,
   onRename,
 }: {
+  /** The current settings still equal this preset's snapshot. */
+  isActive: boolean;
   preset: GeneratePresetRecord;
   onApply: (preset: GeneratePresetRecord) => void;
   onDelete: (preset: GeneratePresetRecord) => void;
@@ -57,6 +82,8 @@ const PresetRow = ({
   return (
     <HStack gap="0.5">
       <Row
+        active={isActive ? 'accent' : 'none'}
+        aria-current={isActive || undefined}
         asChild
         flex="1"
         h="auto"
@@ -65,10 +92,10 @@ const PresetRow = ({
         px="2"
         py="1.5"
         rounded="sm"
-        _hover={PRESET_ROW_HOVER_PROPS}
+        _hover={isActive ? undefined : PRESET_ROW_HOVER_PROPS}
       >
         <button type="button" onClick={handleApply}>
-          <Icon as={BookmarkIcon} boxSize="3.5" color="fg.subtle" flexShrink={0} />
+          <Icon as={BookmarkIcon} boxSize="3.5" color={isActive ? 'accent.contrast' : 'fg.subtle'} flexShrink={0} />
           <Text flex="1" fontSize="xs" minW="0" textAlign="start" truncate>
             {preset.label}
           </Text>
@@ -120,7 +147,7 @@ export const GeneratePresetsPopover = () => {
   const projectId = ui.project.activeProjectId;
   const presets = ui.presets.presets;
   const supportedModels = useMemo(() => models.filter(isSupportedGenerateModel), [models]);
-  const settings = normalizeGenerateSettings(ui.project.generateValues);
+  const settings = useMemo(() => normalizeGenerateSettings(ui.project.generateValues), [ui.project.generateValues]);
   const canSave = supportedModels.some((model) => model.key === settings?.modelKey);
 
   const filteredPresets = useMemo(() => {
@@ -128,6 +155,28 @@ export const GeneratePresetsPopover = () => {
 
     return term ? presets.filter((preset) => preset.label.toLowerCase().includes(term)) : presets;
   }, [presets, searchTerm]);
+
+  // Normalization builds its object in one code path, so serialized equality
+  // of the comparison keys is a faithful match test.
+  const presetKeys = useMemo(
+    () =>
+      presets.map((preset) => {
+        const normalized = normalizeGenerateSettings(preset.values);
+
+        return normalized ? getPresetComparisonKey(normalized) : null;
+      }),
+    [presets]
+  );
+  const activePreset = useMemo(() => {
+    if (!settings) {
+      return null;
+    }
+
+    const currentKey = getPresetComparisonKey(settings);
+    const index = presetKeys.findIndex((key) => key !== null && key === currentKey);
+
+    return index >= 0 ? (presets[index] ?? null) : null;
+  }, [presetKeys, presets, settings]);
 
   const handleOpenChange = useCallback((event: { open: boolean }) => {
     setIsOpen(event.open);
@@ -212,6 +261,8 @@ export const GeneratePresetsPopover = () => {
   }, [pendingDelete, ui.presets]);
 
   const presetsLabel = t('widgets.generate.presets');
+  // Tooltip and accessible name carry the visible preset label (label-in-name).
+  const triggerLabel = activePreset ? `${presetsLabel} · ${activePreset.label}` : presetsLabel;
 
   return (
     <>
@@ -223,10 +274,24 @@ export const GeneratePresetsPopover = () => {
         unmountOnExit
         onOpenChange={handleOpenChange}
       >
-        <Tooltip content={presetsLabel} ids={triggerIds}>
+        <Tooltip content={triggerLabel} ids={triggerIds}>
           <Popover.Trigger asChild>
-            <IconButton aria-label={presetsLabel} color="fg.muted" size="2xs" variant="ghost">
+            {/* The applied preset's name rides beside the icon while the
+                current settings still match it, like the dynamic-prompts count. */}
+            <IconButton
+              aria-label={triggerLabel}
+              color="fg.muted"
+              px={activePreset ? '1' : undefined}
+              size="2xs"
+              variant="ghost"
+              w={activePreset ? 'auto' : undefined}
+            >
               <Icon as={BookmarkIcon} boxSize="3.5" />
+              {activePreset ? (
+                <Text as="span" fontSize="2xs" maxW="8rem" truncate>
+                  {activePreset.label}
+                </Text>
+              ) : null}
             </IconButton>
           </Popover.Trigger>
         </Tooltip>
@@ -272,6 +337,7 @@ export const GeneratePresetsPopover = () => {
                         {filteredPresets.map((preset) => (
                           <PresetRow
                             key={preset.id}
+                            isActive={preset.id === activePreset?.id}
                             preset={preset}
                             onApply={applyPreset}
                             onDelete={setPendingDelete}
