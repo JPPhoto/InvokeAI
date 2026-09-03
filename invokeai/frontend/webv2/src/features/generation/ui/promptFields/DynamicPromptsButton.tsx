@@ -6,6 +6,7 @@ import { WildcardsPanel } from '@features/generation/ui/promptFields/WildcardsPa
 import { useDynamicPrompts } from '@features/generation/ui/useDynamicPrompts';
 import { useWildcards } from '@features/generation/ui/useWildcards';
 import { IconButton } from '@platform/ui/Button';
+import { PopoverContent } from '@platform/ui/Popover';
 import { Tooltip } from '@platform/ui/Tooltip';
 import { BracesIcon } from 'lucide-react';
 import { useCallback, useId, useMemo, useState } from 'react';
@@ -105,7 +106,7 @@ export const DynamicPromptsButton = ({
       </Tooltip>
       <Portal>
         <Popover.Positioner>
-          <Popover.Content bg="bg.muted" borderColor="border.emphasized" borderWidth="1px" w="26rem">
+          <PopoverContent w="26rem">
             <Popover.Body p="2.5">
               <Stack gap="2.5">
                 {/* `alignSelf` keeps the tabs to their content width; stretched across
@@ -131,7 +132,7 @@ export const DynamicPromptsButton = ({
                 )}
               </Stack>
             </Popover.Body>
-          </Popover.Content>
+          </PopoverContent>
         </Popover.Positioner>
       </Portal>
     </Popover.Root>

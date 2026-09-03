@@ -58,6 +58,32 @@ export const hoverCardSlotRecipe = defineSlotRecipe({
   defaultVariants: { size: 'xs' },
 });
 
+/**
+ * Popover chrome: same raised surface as the tooltip/hover-card family, with
+ * an arrow pointing at the anchor. Extends Chakra's default recipe so the
+ * `arrow` slot keeps its `--arrow-size`/`--arrow-background` vars (which
+ * derive from `--popover-bg`); replacing the base wholesale would render
+ * arrows at zero size.
+ */
+export const popoverSlotRecipe = defineSlotRecipe({
+  ...chakraSlotRecipes.popover,
+  base: {
+    ...chakraSlotRecipes.popover.base,
+    content: {
+      ...chakraSlotRecipes.popover.base?.content,
+      '--popover-bg': 'colors.bg.muted',
+      borderColor: 'border.emphasized',
+      borderWidth: '1px',
+      boxShadow: 'lg',
+      color: 'fg',
+    },
+    arrowTip: {
+      ...chakraSlotRecipes.popover.base?.arrowTip,
+      borderColor: 'border.emphasized',
+    },
+  },
+});
+
 export const tabsSlotRecipe = defineSlotRecipe({
   ...chakraSlotRecipes.tabs,
   base: {

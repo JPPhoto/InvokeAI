@@ -12,7 +12,7 @@ import { useModelsUi } from '@features/models/ui/ModelsUiContext';
 import { setPickerCompactView, useModelsUiSelector } from '@features/models/ui/uiStore';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { areArraysEqual } from '@platform/state/selectors';
-import { Button, CloseButton, IconButton, Tooltip } from '@platform/ui';
+import { Button, CloseButton, IconButton, PopoverContent, Tooltip } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Picker } from '@platform/ui/Picker';
 import { Link } from '@tanstack/react-router';
@@ -296,13 +296,14 @@ export const ModelSelect = ({
         </Box>
         <Portal>
           <Popover.Positioner>
-            <Popover.Content
+            <PopoverContent
               css={dropdownContent}
               maxH="min(24rem, var(--available-height))"
               maxW="min(26rem, calc(100vw - 1rem))"
               minW="min(20rem, calc(100vw - 1rem))"
               overflow="hidden"
               p="0"
+              showArrow={false}
             >
               <Picker<ModelConfig>
                 emptyMessage={t('models.scopeNoCompatibleInstalled', { scope: scopeLabel })}
@@ -368,7 +369,7 @@ export const ModelSelect = ({
                 }
                 onSelect={selectModel}
               />
-            </Popover.Content>
+            </PopoverContent>
           </Popover.Positioner>
         </Portal>
       </Popover.Root>

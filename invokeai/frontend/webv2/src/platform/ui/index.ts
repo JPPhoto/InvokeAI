@@ -10,6 +10,7 @@ export * from './Group';
 export * from './JsonPreview';
 export * from './Menu';
 export * from './Panel';
+export * from './Popover';
 export * from './RenameDialog';
 export * from './ResizableTextarea';
 export * from './Row';

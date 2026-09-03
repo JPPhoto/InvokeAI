@@ -27,7 +27,7 @@ import { SystemPromptsField } from '@features/generation/ui/promptFields/SystemP
 import { useSystemPrompts } from '@features/generation/ui/promptFields/useSystemPrompts';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { getApiErrorMessage } from '@platform/transport/http';
-import { Button, IconButton, Scrollable, Tooltip } from '@platform/ui';
+import { Button, IconButton, PopoverContent, Scrollable, Tooltip } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import {
   EyeIcon,
@@ -286,7 +286,7 @@ export const PromptTriggerPopover = ({
     <Popover.Root lazyMount open={open} positioning={popoverPositioning} unmountOnExit onOpenChange={handleOpenChange}>
       <Portal>
         <Popover.Positioner>
-          <Popover.Content bg="bg.muted" borderColor="border.emphasized" borderWidth="1px" w="22rem">
+          <PopoverContent w="22rem">
             <Popover.Body p="2.5">
               {/* With nothing to search or scroll, the popover hugs its empty
                   state instead of holding the full list height open. */}
@@ -327,7 +327,7 @@ export const PromptTriggerPopover = ({
                 </Stack>
               )}
             </Popover.Body>
-          </Popover.Content>
+          </PopoverContent>
         </Popover.Positioner>
       </Portal>
     </Popover.Root>
@@ -482,7 +482,7 @@ const ExpandPromptButton = ({
       </Tooltip>
       <Portal>
         <Popover.Positioner>
-          <Popover.Content bg="bg.muted" borderColor="border.emphasized" borderWidth="1px" w="22rem">
+          <PopoverContent w="22rem">
             <Popover.Body p="2.5">
               <Stack gap="2.5">
                 <Text color="fg.subtle" fontSize="2xs" fontWeight="700" textTransform="uppercase">
@@ -528,7 +528,7 @@ const ExpandPromptButton = ({
                 )}
               </Stack>
             </Popover.Body>
-          </Popover.Content>
+          </PopoverContent>
         </Popover.Positioner>
       </Portal>
     </Popover.Root>
@@ -658,7 +658,7 @@ const ImageToPromptButton = ({
       </Tooltip>
       <Portal>
         <Popover.Positioner>
-          <Popover.Content bg="bg.muted" borderColor="border.emphasized" borderWidth="1px" w="22rem">
+          <PopoverContent w="22rem">
             <Popover.Body p="2.5">
               <Stack gap="2.5">
                 <Text color="fg.subtle" fontSize="2xs" fontWeight="700" textTransform="uppercase">
@@ -711,7 +711,7 @@ const ImageToPromptButton = ({
                 )}
               </Stack>
             </Popover.Body>
-          </Popover.Content>
+          </PopoverContent>
         </Popover.Positioner>
       </Portal>
     </Popover.Root>
@@ -757,7 +757,7 @@ const PositivePromptHistoryButton = ({ onUsePrompt }: Pick<PositivePromptActions
       </Tooltip>
       <Portal>
         <Popover.Positioner>
-          <Popover.Content bg="bg.muted" borderColor="border.emphasized" borderWidth="1px" w="24rem">
+          <PopoverContent w="24rem">
             <Popover.Body p="2.5">
               <Stack gap="2" maxH="18rem">
                 <HStack justify="space-between">
@@ -797,7 +797,7 @@ const PositivePromptHistoryButton = ({ onUsePrompt }: Pick<PositivePromptActions
                 </Text>
               </Stack>
             </Popover.Body>
-          </Popover.Content>
+          </PopoverContent>
         </Popover.Positioner>
       </Portal>
     </Popover.Root>

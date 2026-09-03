@@ -4,6 +4,7 @@ import { Box, Code, HStack, Icon, Popover, Portal, Stack, Text } from '@chakra-u
 import { semanticReferenceFromDataTransfer } from '@features/gallery/core/semanticImageQuery';
 import { describeDateRange, findInvalidDateToken, formatIsoDate, parseDateTokens } from '@platform/search/dateTokens';
 import { CloseButton, IconButton } from '@platform/ui/Button';
+import { PopoverContent } from '@platform/ui/Popover';
 import { CircleHelpIcon, ImageIcon, MapIcon, SparklesIcon } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -307,7 +308,7 @@ const GallerySearchHelp = () => {
       </Popover.Trigger>
       <Portal>
         <Popover.Positioner>
-          <Popover.Content maxW="18rem" p="3">
+          <PopoverContent maxW="18rem" p="3">
             <Stack gap="2">
               <Text fontSize="xs" fontWeight="600">
                 {t('widgets.gallery.searchHelpTitle')}
@@ -328,7 +329,7 @@ const GallerySearchHelp = () => {
                 ))}
               </Stack>
             </Stack>
-          </Popover.Content>
+          </PopoverContent>
         </Popover.Positioner>
       </Portal>
     </Popover.Root>
