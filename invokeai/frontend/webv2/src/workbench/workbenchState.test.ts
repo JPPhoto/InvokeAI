@@ -3912,7 +3912,6 @@ describe('workbench account and project settings', () => {
 
     expect(getActiveProject(state).settings).toEqual({
       antialiasProgressImages: true,
-      showProgressDetails: false,
       showProgressImagesInViewer: true,
       useCpuNoise: false,
     });

@@ -48,7 +48,6 @@ export const DEVELOPER_LOG_NAMESPACES: DeveloperLogNamespace[] = [
 
 export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
   antialiasProgressImages: false,
-  showProgressDetails: false,
   showProgressImagesInViewer: true,
   useCpuNoise: true,
 };
@@ -270,10 +269,6 @@ export const normalizeProjectSettings = (settings?: Partial<ProjectSettings>): P
     typeof settings?.antialiasProgressImages === 'boolean'
       ? settings.antialiasProgressImages
       : DEFAULT_PROJECT_SETTINGS.antialiasProgressImages,
-  showProgressDetails:
-    typeof settings?.showProgressDetails === 'boolean'
-      ? settings.showProgressDetails
-      : DEFAULT_PROJECT_SETTINGS.showProgressDetails,
   showProgressImagesInViewer:
     typeof settings?.showProgressImagesInViewer === 'boolean'
       ? settings.showProgressImagesInViewer

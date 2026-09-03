@@ -15,7 +15,6 @@ export type { WorkbenchLanguage } from '@platform/i18n/languages';
  */
 export interface ProjectSettings {
   useCpuNoise: boolean;
-  showProgressDetails: boolean;
   antialiasProgressImages: boolean;
   /**
    * Not surfaced in the Settings dialog: the Preview widget's header owns this

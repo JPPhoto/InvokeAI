@@ -483,12 +483,6 @@ const ProjectSection = () => {
     },
     [updateProjectSettings]
   );
-  const updateShowProgressDetails = useCallback(
-    (checked: boolean) => {
-      updateProjectSettings({ showProgressDetails: checked });
-    },
-    [updateProjectSettings]
-  );
   const updateAntialiasProgressImages = useCallback(
     (checked: boolean) => {
       updateProjectSettings({ antialiasProgressImages: checked });
@@ -512,13 +506,6 @@ const ProjectSection = () => {
         description="Use CPU noise generation for deterministic legacy-compatible outputs."
         label="Use CPU noise"
         onChange={updateUseCpuNoise}
-      />
-      <SettingToggle
-        checked={settings.showProgressDetails}
-        comingSoon
-        description="Show detailed invocation progress when the backend reports it."
-        label="Show progress details"
-        onChange={updateShowProgressDetails}
       />
       <SettingToggle
         checked={settings.antialiasProgressImages}
@@ -773,13 +760,11 @@ const WorkspaceSection = () => {
 
 const SettingToggle = ({
   checked,
-  comingSoon,
   description,
   label,
   onChange,
 }: {
   checked: boolean;
-  comingSoon?: boolean;
   description?: string;
   label: string;
   onChange: (checked: boolean) => void;
@@ -794,7 +779,6 @@ const SettingToggle = ({
     <Switch.Root
       alignItems="center"
       checked={checked}
-      disabled={comingSoon}
       display="flex"
       gap="4"
       justifyContent="space-between"
@@ -820,14 +804,12 @@ const SettingToggle = ({
 };
 
 const SettingSelect = ({
-  comingSoon,
   description,
   label,
   onChange,
   options,
   value,
 }: {
-  comingSoon?: boolean;
   description?: string;
   label: string;
   onChange: (value: string) => void;
@@ -850,7 +832,6 @@ const SettingSelect = ({
   return (
     <Field.Root
       alignItems={FIELD_ALIGN_ITEMS}
-      disabled={comingSoon}
       display="flex"
       flexDirection={FIELD_FLEX_DIRECTION}
       gap="3"
@@ -868,7 +849,6 @@ const SettingSelect = ({
       </Stack>
       <Select
         collection={collection}
-        disabled={comingSoon}
         flexShrink={0}
         maxW={SELECT_MAX_WIDTH}
         size="sm"
