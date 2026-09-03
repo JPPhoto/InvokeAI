@@ -456,8 +456,8 @@ const BehaviorSection = () => {
       />
       <SettingToggle
         checked={showPromptSyntaxHighlighting}
-        description="Experimental. Color prompt syntax in prompt fields without changing the prompt text or validation behavior."
-        label="Highlight prompt syntax (experimental)"
+        description="Color prompt syntax in prompt fields without changing the prompt text or validation behavior."
+        label="Highlight prompt syntax"
         onChange={updateShowPromptSyntaxHighlighting}
       />
     </SettingsSection>

@@ -73,7 +73,7 @@ export const DEFAULT_PREFERENCES: WorkbenchPreferences = {
   preferNumericAttentionStyle: false,
   queueJobsScope: 'all',
   reduceMotion: false,
-  showPromptSyntaxHighlighting: false,
+  showPromptSyntaxHighlighting: true,
   showFocusRegionHighlight: true,
   themeId: DEFAULT_THEME_ID,
   workflowEdgeStyle: 'curved',

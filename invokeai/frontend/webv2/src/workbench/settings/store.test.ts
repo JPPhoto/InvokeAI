@@ -357,18 +357,18 @@ describe('normalizeProjectSettings', () => {
 });
 
 describe('normalizeWorkbenchPreferences prompt editing', () => {
-  it('defaults prompt syntax highlighting and numeric attention style off', () => {
-    expect(store.normalizeWorkbenchPreferences({}).showPromptSyntaxHighlighting).toBe(false);
+  it('defaults prompt syntax highlighting on and numeric attention style off', () => {
+    expect(store.normalizeWorkbenchPreferences({}).showPromptSyntaxHighlighting).toBe(true);
     expect(store.normalizeWorkbenchPreferences({}).preferNumericAttentionStyle).toBe(false);
   });
 
-  it('round-trips both prompt preferences', () => {
+  it('round-trips both prompt preferences past their defaults', () => {
     const normalized = store.normalizeWorkbenchPreferences({
       preferNumericAttentionStyle: true,
-      showPromptSyntaxHighlighting: true,
+      showPromptSyntaxHighlighting: false,
     });
 
-    expect(normalized.showPromptSyntaxHighlighting).toBe(true);
+    expect(normalized.showPromptSyntaxHighlighting).toBe(false);
     expect(normalized.preferNumericAttentionStyle).toBe(true);
   });
 });

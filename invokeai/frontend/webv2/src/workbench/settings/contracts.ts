@@ -67,7 +67,7 @@ export interface WorkbenchPreferences {
   notifyOnEnqueue: boolean;
   /** Write numeric attention weights (`(word)1.1`) when the attention hotkeys insert them. */
   preferNumericAttentionStyle: boolean;
-  /** Experimental. Color prompt syntax in prompt fields; changes rendering only. */
+  /** Color prompt syntax in prompt fields; changes rendering only. */
   showPromptSyntaxHighlighting: boolean;
   developerLogEnabled: boolean;
   developerLogLevel: DeveloperLogLevel;
