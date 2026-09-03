@@ -628,22 +628,61 @@ export const comboboxSlotRecipe = defineSlotRecipe({
   },
 });
 
+/**
+ * The one dialog look: compact tool windows on a single surface. Density and
+ * chrome live here — a dialog file should carry structure, not styling.
+ * Chakra's stock 24px gutters, `lg` title, and top placement all read as a
+ * marketing modal rather than a desktop app's dialog.
+ */
 export const dialogSlotRecipe = defineSlotRecipe({
   ...chakraSlotRecipes.dialog,
   base: {
     ...chakraSlotRecipes.dialog.base,
     content: {
       ...chakraSlotRecipes.dialog.base?.content,
+      bg: 'bg.subtle',
       borderColor: 'border.subtle',
       borderWidth: '1px',
+      color: 'fg',
     },
-    // Chakra's stock `lg` title reads as a page heading; dialogs here are
-    // compact tool windows, so titles match the app's `sm`/700 convention.
+    header: {
+      ...chakraSlotRecipes.dialog.base?.header,
+      px: '4',
+      pt: '3',
+      pb: '2',
+    },
+    body: {
+      ...chakraSlotRecipes.dialog.base?.body,
+      px: '4',
+      pt: '1.5',
+      pb: '4',
+    },
+    footer: {
+      ...chakraSlotRecipes.dialog.base?.footer,
+      gap: '2',
+      px: '4',
+      pt: '1',
+      pb: '3',
+    },
     title: {
       ...chakraSlotRecipes.dialog.base?.title,
       fontWeight: '700',
-      textStyle: 'sm',
+      textStyle: 'xs',
     },
+    description: {
+      ...chakraSlotRecipes.dialog.base?.description,
+      color: 'fg.subtle',
+      textStyle: 'xs',
+    },
+    closeTrigger: {
+      ...chakraSlotRecipes.dialog.base?.closeTrigger,
+      top: '1.5',
+      insetEnd: '1.5',
+    },
+  },
+  defaultVariants: {
+    ...chakraSlotRecipes.dialog.defaultVariants,
+    placement: 'center',
   },
 });
 

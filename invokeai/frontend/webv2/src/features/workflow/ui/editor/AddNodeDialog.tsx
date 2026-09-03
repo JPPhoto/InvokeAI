@@ -229,7 +229,6 @@ export const AddNodeDialog = ({
     <Dialog.Root
       lazyMount
       open={isOpen}
-      placement="center"
       scrollBehavior="inside"
       size="md"
       unmountOnExit

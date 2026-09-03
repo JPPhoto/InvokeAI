@@ -75,7 +75,7 @@ export const LayoutPresetManagerDialogBody = () => {
             <Dialog.Header>
               <Dialog.Title>{t('topbar.presets.manage')}</Dialog.Title>
               <Dialog.CloseTrigger asChild>
-                <CloseButton size="sm" />
+                <CloseButton />
               </Dialog.CloseTrigger>
             </Dialog.Header>
             <Dialog.Body>
@@ -99,7 +99,7 @@ export const LayoutPresetManagerDialogBody = () => {
               </DndContext>
             </Dialog.Body>
             <Dialog.Footer>
-              <Button size="xs" variant="outline" onClick={closeLayoutPresetManager}>
+              <Button size="xs" variant="ghost" onClick={closeLayoutPresetManager}>
                 {t('common.done')}
               </Button>
             </Dialog.Footer>

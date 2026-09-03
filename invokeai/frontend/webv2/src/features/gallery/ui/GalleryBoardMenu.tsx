@@ -181,8 +181,8 @@ export const GalleryBoardMenu = ({
                   onKeyDown={handleRenameKeyDown}
                 />
               </Dialog.Body>
-              <Dialog.Footer gap="2">
-                <Button size="xs" variant="outline" onClick={handleCancelRename}>
+              <Dialog.Footer>
+                <Button size="xs" variant="ghost" onClick={handleCancelRename}>
                   {t('common.cancel')}
                 </Button>
                 <Button disabled={renameValue.trim().length === 0} size="xs" onClick={submitRename}>
@@ -217,8 +217,8 @@ export const GalleryBoardMenu = ({
                   </Text>
                 </Stack>
               </Dialog.Body>
-              <Dialog.Footer gap="2">
-                <Button size="xs" variant="outline" onClick={handleCancelDelete}>
+              <Dialog.Footer>
+                <Button size="xs" variant="ghost" onClick={handleCancelDelete}>
                   {t('common.cancel')}
                 </Button>
                 <Button colorPalette="red" size="xs" variant="outline" onClick={handleDeleteBoardOnly}>

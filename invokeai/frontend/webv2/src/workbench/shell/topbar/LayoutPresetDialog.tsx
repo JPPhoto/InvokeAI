@@ -184,7 +184,7 @@ export const LayoutPresetDialog = ({
               <Dialog.Header>
                 <Dialog.Title>{title}</Dialog.Title>
                 <Dialog.CloseTrigger asChild>
-                  <CloseButton size="sm" type="button" />
+                  <CloseButton type="button" />
                 </Dialog.CloseTrigger>
               </Dialog.Header>
               <Dialog.Body>
@@ -252,7 +252,7 @@ export const LayoutPresetDialog = ({
                 </Stack>
               </Dialog.Body>
               <Dialog.Footer>
-                <Button size="xs" type="button" variant="outline" onClick={onClose}>
+                <Button size="xs" type="button" variant="ghost" onClick={onClose}>
                   {t('common.cancel')}
                 </Button>
                 <Button disabled={!canSubmit} size="xs" type="submit">

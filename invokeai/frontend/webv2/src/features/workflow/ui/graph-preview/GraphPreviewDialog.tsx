@@ -196,13 +196,7 @@ export const GraphPreviewDialog = ({
   }, [t, sourceLabel, source.isLive]);
 
   return (
-    <Dialog.Root
-      open={isOpen}
-      placement="center"
-      size="xl"
-      onExitComplete={onExitComplete}
-      onOpenChange={handleOpenChange}
-    >
+    <Dialog.Root open={isOpen} size="xl" onExitComplete={onExitComplete} onOpenChange={handleOpenChange}>
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
@@ -214,9 +208,7 @@ export const GraphPreviewDialog = ({
             <Dialog.Header alignItems="center" flexDirection="row" justifyContent="space-between">
               <Stack gap="0.5" minW="0">
                 <Dialog.Title>{t('graphPreview.title')}</Dialog.Title>
-                <Text color="fg.muted" fontSize="xs">
-                  {subtitle}
-                </Text>
+                <Dialog.Description>{subtitle}</Dialog.Description>
               </Stack>
               <SegmentTabs
                 activeId={mode}
@@ -314,7 +306,7 @@ export const GraphPreviewDialog = ({
                     {t('graphPreview.invokeRoute', { route: dialogRoute.label })}
                   </Button>
                 ) : null}
-                <Button size="xs" variant="outline" onClick={closeDialog}>
+                <Button size="xs" variant="ghost" onClick={closeDialog}>
                   {t('common.close')}
                 </Button>
               </Box>

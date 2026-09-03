@@ -111,7 +111,6 @@ export const SettingsDialog = ({ isOpen, onClose }: { isOpen: boolean; onClose: 
       closeOnInteractOutside={false}
       lazyMount
       open={isOpen}
-      placement="center"
       scrollBehavior="inside"
       size="xl"
       unmountOnExit
@@ -161,7 +160,7 @@ const SettingsDialogContent = ({ onClose }: { onClose: () => void }) => {
             <SettingsTabs />
           </Dialog.Body>
           <Dialog.CloseTrigger asChild>
-            <CloseButton size="sm" />
+            <CloseButton />
           </Dialog.CloseTrigger>
         </Dialog.Content>
       </Dialog.Positioner>
