@@ -654,6 +654,32 @@ export const colorPickerSlotRecipe = defineSlotRecipe({
   },
 });
 
+/**
+ * Skeletons sweep a subtle highlight instead of pulsing. The gradient rests on
+ * the same `bg.emphasized` surface the stock pulse used; the band is a small
+ * fg lift so it stays quiet on every theme. Reduce-motion is handled by the
+ * global `.chakra-skeleton` animation kill in `system.ts`.
+ */
+export const skeletonRecipe = defineRecipe({
+  ...chakraRecipes.skeleton,
+  variants: {
+    ...chakraRecipes.skeleton.variants,
+    variant: {
+      ...chakraRecipes.skeleton.variants?.variant,
+      shine: {
+        ...chakraRecipes.skeleton.variants?.variant?.shine,
+        '--duration': '2s',
+        '--end-color': 'colors.bg.emphasized',
+        '--start-color': 'color-mix(in oklab, {colors.fg} 8%, {colors.bg.emphasized})',
+      },
+    },
+  } as unknown as typeof chakraRecipes.skeleton.variants,
+  defaultVariants: {
+    ...chakraRecipes.skeleton.defaultVariants,
+    variant: 'shine',
+  },
+});
+
 export const panelRecipe = defineRecipe({
   base: {
     bg: 'bg.subtle',

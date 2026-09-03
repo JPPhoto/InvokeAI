@@ -99,7 +99,7 @@ export const WorkflowLibraryCard = ({
           {enrichment.status === 'pending' ? (
             // Enrichment in flight. An unreadable workflow ('error') gets no
             // placeholder and no error styling — the facts simply stay absent.
-            <Skeleton data-enrichment-placeholder h="3" rounded="sm" variant="pulse" w="14" />
+            <Skeleton data-enrichment-placeholder h="3" rounded="sm" w="14" />
           ) : null}
           {primaryBase ? (
             <Badge flexShrink={0} size="xs" variant="subtle">

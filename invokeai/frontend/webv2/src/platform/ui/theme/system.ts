@@ -13,6 +13,7 @@ import {
   progressCircleSlotRecipe,
   segmentGroupSlotRecipe,
   selectSlotRecipe,
+  skeletonRecipe,
   sliderSlotRecipe,
   tabsSlotRecipe,
   textareaRecipe,
@@ -262,8 +263,11 @@ const config = defineConfig({
       '--wb-motion-animation-iteration-count': '1',
       scrollBehavior: 'auto !important',
     },
+    // `backgroundImage` too: the shine gradient frozen mid-sweep reads as a
+    // smudge, so reduce-motion falls back to the flat fill.
     ':root[data-reduce-motion="true"] .chakra-skeleton': {
       animation: 'none !important',
+      backgroundImage: 'none !important',
     },
     // A loading spinner is essential status, not decoration — frozen, its arc
     // reads as a broken icon. It slows to a crawl instead of stopping; WCAG
@@ -314,6 +318,7 @@ const config = defineConfig({
     recipes: {
       button: buttonRecipe,
       input: inputRecipe,
+      skeleton: skeletonRecipe,
       textarea: textareaRecipe,
     },
     slotRecipes: {
