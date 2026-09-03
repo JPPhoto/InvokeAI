@@ -7,6 +7,7 @@ import {
   type GalleryItem,
   type GalleryItemKey,
 } from '@features/gallery/core/items';
+import { GALLERY_PAGE_SIZE } from '@features/gallery/core/paging';
 import { getBoundedRecentImages } from '@features/gallery/core/recentImages';
 import {
   getPersistedSelectedGalleryItemKeys,
@@ -18,7 +19,6 @@ import {
   type GallerySemanticReference,
 } from '@features/gallery/core/semanticImageQuery';
 import { getGallerySettings, type GallerySettings } from '@features/gallery/core/settings';
-import { GALLERY_PAGE_SIZE } from '@features/gallery/data/queries';
 import { getQueueItemSnapshotBatchCount, getQueueItemSnapshotDimensions } from '@features/queue/contracts';
 
 /**

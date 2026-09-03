@@ -4,6 +4,7 @@ import type { GalleryBoardOrderBy, GalleryOrderDir, GalleryView } from '@feature
 import type { AccountScope } from '@platform/state/accountLifecycle';
 
 import { toGalleryItemKey } from '@features/gallery/core/items';
+import { GALLERY_MAX_INFINITE_PAGES, GALLERY_MAX_ROWS, GALLERY_PAGE_SIZE } from '@features/gallery/core/paging';
 import { toGallerySemanticQuery } from '@features/gallery/core/semanticImageQuery';
 import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/accountLifecycle';
 import {
@@ -27,9 +28,7 @@ import {
   listSemanticGalleryItemNames,
 } from './backend';
 
-export const GALLERY_PAGE_SIZE = 60;
-export const GALLERY_MAX_INFINITE_PAGES = 10;
-export const GALLERY_MAX_ROWS = GALLERY_PAGE_SIZE * GALLERY_MAX_INFINITE_PAGES;
+export { GALLERY_MAX_INFINITE_PAGES, GALLERY_MAX_ROWS, GALLERY_PAGE_SIZE };
 
 export interface GalleryBoardsQuery {
   includeArchived?: boolean;
