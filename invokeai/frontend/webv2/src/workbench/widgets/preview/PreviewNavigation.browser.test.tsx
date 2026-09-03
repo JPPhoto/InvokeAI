@@ -5,6 +5,7 @@ import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { DndContext } from '@dnd-kit/core';
+import { requestGalleryItemReveal } from '@features/gallery/contracts';
 import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 import { system } from '@theme/system';
 import i18next from 'i18next';
@@ -181,6 +182,11 @@ vi.mock('@features/gallery/queries', () => ({
       staleTime: Infinity,
     };
   },
+}));
+
+vi.mock('@features/gallery/contracts', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  requestGalleryItemReveal: vi.fn(),
 }));
 
 vi.mock('@workbench/image-actions', () => ({
@@ -487,6 +493,13 @@ describe('preview keyboard navigation boundary', () => {
     } finally {
       document.removeEventListener('keydown', documentKeydown);
     }
+  });
+
+  it('reveals each navigated item so the gallery grid can follow', async () => {
+    await render();
+    await pressArrow('ArrowRight');
+
+    expect(vi.mocked(requestGalleryItemReveal)).toHaveBeenCalledWith('image:oldest');
   });
 
   it('keeps a just-completed batch navigable before the backend refetch lands', async () => {

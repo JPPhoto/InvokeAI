@@ -86,8 +86,15 @@ export interface GalleryStateView {
   galleryView: GalleryView;
   items: GalleryItem[];
   isLoading: boolean;
+  /** The grid's current page in paginated mode; the window anchor otherwise. */
+  page: number;
   pendingPlaceholders: GalleryQueuePlaceholder[];
   projectBoardId: string | null;
+  /**
+   * The selection's stamped paginated page, when the stamp names the listing
+   * the grid is showing; null otherwise. Reveals follow it across pages.
+   */
+  revealTargetPage: number | null;
   searchTerm: string;
   selectedBoardId: string;
   selectedItemKey: GalleryItemKey | null;
@@ -466,6 +473,17 @@ export const getGalleryStateView = (
     liveFollowEnabled,
     selectedItemKey: visibleSelectedItemKey,
   });
+  const selectedImageQuery = getGallerySelectedImageQuery(values);
+  const revealTargetPage =
+    settings.paginationMode === 'paginated' &&
+    selectedImageQuery.paginationMode === 'paginated' &&
+    semanticImageQuery === null &&
+    selectedImageQuery.boardId === selectedBoardId &&
+    selectedImageQuery.galleryView === galleryView &&
+    selectedImageQuery.imageOrderDir === settings.imageOrderDir &&
+    selectedImageQuery.searchTerm === searchTerm
+      ? selectedImageQuery.page
+      : null;
 
   return {
     anchoredWindowPage: isAnchoredInfiniteWindow ? page : 0,
@@ -475,6 +493,7 @@ export const getGalleryStateView = (
     galleryView,
     items,
     isLoading,
+    page,
     pendingPlaceholders:
       settings.showPendingItems && semanticImageQuery === null && showsIncomingItemLanding
         ? getVisibleGalleryQueuePlaceholders(generationSequence.chronologicalSlots, {
@@ -485,6 +504,7 @@ export const getGalleryStateView = (
           })
         : [],
     projectBoardId: getGalleryProjectBoardId(values),
+    revealTargetPage,
     searchTerm,
     selectedBoardId,
     selectedItemKey: visibleSelectedItemKey,

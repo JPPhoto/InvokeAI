@@ -4692,11 +4692,9 @@ export const __workbenchReducerInternal = (
       );
     }
     case 'setGalleryPage': {
-      return updateGalleryValues(
-        state,
-        (values) => ({ ...values, galleryPage: Math.max(0, action.page) }),
-        action.projectId
-      );
+      const galleryPage = Number.isFinite(action.page) ? Math.max(0, Math.floor(action.page)) : 0;
+
+      return updateGalleryValues(state, (values) => ({ ...values, galleryPage }), action.projectId);
     }
     case 'setGalleryPageInfo': {
       if (!Number.isFinite(action.totalImages)) {

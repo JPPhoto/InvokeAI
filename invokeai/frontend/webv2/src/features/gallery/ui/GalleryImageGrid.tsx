@@ -50,6 +50,9 @@ import { useGalleryUploadInput } from './useGalleryUploadInput';
 const viewportWidthCache = new Map<string, number>();
 const STARRED_TRIGGER_HOVER_STYLES = { color: 'fg' } as const;
 
+// Module-scoped so a grid remount cannot replay an already-followed reveal.
+let lastPageFollowedRevealToken = 0;
+
 const dragEventContainsFiles = (event: DragEvent): boolean => Array.from(event.dataTransfer.types).includes('Files');
 
 /** The disclosure row above the starred items, styled to match board rows. */
@@ -247,8 +250,12 @@ export const GalleryImageGrid = () => {
 
     // A different selection landing after the reveal (the user clicked
     // something else) retires it — a late page load must not scroll away
-    // from what they chose.
-    if (gallery.selectedItemKey !== null && gallery.selectedItemKey !== pending.itemKey) {
+    // from what they chose. The persisted set covers off-page selections,
+    // whose visible key is null.
+    if (
+      (gallery.selectedItemKey !== null && gallery.selectedItemKey !== pending.itemKey) ||
+      (gallery.selectedItemKeys.length > 0 && !gallery.selectedItemKeys.includes(pending.itemKey))
+    ) {
       pendingRevealRef.current = null;
 
       return;
@@ -262,6 +269,20 @@ export const GalleryImageGrid = () => {
     // instead of honoring it when the section is expanded again.
     if (itemIndex >= 0 && scrollToItemIndex(itemIndex)) {
       pendingRevealRef.current = null;
+
+      return;
+    }
+
+    // The item may live on another paginated page: follow once per reveal, so
+    // a reveal whose item never materializes cannot keep pulling the user back.
+    if (
+      itemIndex < 0 &&
+      gallery.revealTargetPage !== null &&
+      gallery.revealTargetPage !== gallery.page &&
+      lastPageFollowedRevealToken !== pending.token
+    ) {
+      lastPageFollowedRevealToken = pending.token;
+      galleryCommands.setPage(gallery.revealTargetPage);
     }
   });
 

@@ -203,6 +203,57 @@ describe('gallery state view', () => {
     });
   });
 
+  it('exposes the selection page only when its stamp names the listing the grid shows', () => {
+    const stamped = {
+      galleryPage: 0,
+      paginationMode: 'paginated',
+      selectedBoardId: 'none',
+      selectedImageQuery: {
+        boardId: 'none',
+        galleryView: 'images',
+        imageOrderDir: 'DESC',
+        page: 2,
+        paginationMode: 'paginated',
+        searchTerm: '',
+      },
+    };
+
+    expect(getGalleryStateView(stamped, boards, [], false).revealTargetPage).toBe(2);
+    expect(getGalleryStateView(stamped, boards, [], false).page).toBe(0);
+    expect(
+      getGalleryStateView({ ...stamped, selectedBoardId: 'board-1' }, boards, [], false).revealTargetPage
+    ).toBeNull();
+    expect(
+      getGalleryStateView({ ...stamped, paginationMode: 'infinite' }, boards, [], false).revealTargetPage
+    ).toBeNull();
+    expect(
+      getGalleryStateView(
+        { ...stamped, selectedImageQuery: { ...stamped.selectedImageQuery, galleryView: 'assets' } },
+        boards,
+        [],
+        false
+      ).revealTargetPage
+    ).toBeNull();
+    expect(
+      getGalleryStateView(
+        { ...stamped, selectedImageQuery: { ...stamped.selectedImageQuery, paginationMode: 'infinite' } },
+        boards,
+        [],
+        false
+      ).revealTargetPage
+    ).toBeNull();
+    expect(getGalleryStateView({ ...stamped, imageOrderDir: 'ASC' }, boards, [], false).revealTargetPage).toBeNull();
+    expect(getGalleryStateView({ ...stamped, searchTerm: 'cats' }, boards, [], false).revealTargetPage).toBeNull();
+    expect(
+      getGalleryStateView(
+        { ...stamped, semanticImageQuery: { imageName: 'ref.png', kind: 'image' } },
+        boards,
+        [],
+        false
+      ).revealTargetPage
+    ).toBeNull();
+  });
+
   it('derives starred-first from the pagination mode: sectioned infinite window, flat paginated pages', () => {
     expect(getGalleryStateView({ paginationMode: 'infinite' }, boards, [], false).settings.starredFirst).toBe(true);
     expect(getGalleryStateView({ paginationMode: 'paginated' }, boards, [], false).settings.starredFirst).toBe(false);

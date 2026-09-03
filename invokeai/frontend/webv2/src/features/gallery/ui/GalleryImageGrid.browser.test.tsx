@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   fetchNames: vi.fn(),
   measure: vi.fn(),
   scrollToIndex: vi.fn(),
+  setPage: vi.fn(),
   virtualizerOptions: [] as Array<{
     count: number;
     estimateSize: (index: number) => number;
@@ -218,7 +219,9 @@ const createGallery = (overrides: Partial<GalleryStateView> = {}): GalleryStateV
     galleryView: 'images',
     isLoading: false,
     items,
+    page: 0,
     pendingPlaceholders: [],
+    revealTargetPage: null,
     projectBoardId: null,
     searchTerm: '',
     selectedBoardId: board.id,
@@ -319,7 +322,7 @@ const createAdapter = (): GalleryUiAdapter =>
       setCompareImage: noop,
       setCompareItem: noop,
       setItemMultiSelection: noop,
-      setPage: noop,
+      setPage: mocks.setPage,
       setPageInfo: noop,
       setSearchTerm: noop,
       setView: noop,
@@ -1091,6 +1094,93 @@ describe('GalleryImageGrid reveal requests', () => {
 
     await click(getButton('Expand starred items'));
     expect(mocks.scrollToIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it('follows the selection onto its paginated page when the revealed item is not loaded', async () => {
+    const gallery = createGallery({
+      items: [createItem('image', 'page-zero.png')],
+      revealTargetPage: 2,
+      selectedItemKey: null,
+      selectedItemKeys: ['image:deep.png'],
+    });
+
+    await renderGallery(gallery);
+    await interact(() => requestGalleryItemReveal('image:deep.png'));
+
+    expect(mocks.setPage).toHaveBeenCalledWith(2);
+    expect(mocks.scrollToIndex).not.toHaveBeenCalled();
+
+    // The page arrives; the still-pending reveal settles by scrolling.
+    await renderGallery({
+      ...gallery,
+      items: [createItem('image', 'deep.png')],
+      page: 2,
+      selectedItemKey: 'image:deep.png',
+    });
+
+    expect(mocks.scrollToIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it('follows a reveal onto its page at most once, so a missing item cannot pull the user back', async () => {
+    const gallery = createGallery({
+      items: [createItem('image', 'page-zero.png')],
+      revealTargetPage: 2,
+      selectedItemKey: null,
+      selectedItemKeys: ['image:deep.png'],
+    });
+
+    await renderGallery(gallery);
+    await interact(() => requestGalleryItemReveal('image:deep.png'));
+    expect(mocks.setPage).toHaveBeenCalledTimes(1);
+
+    // The stamped page arrives without the item, then the user pages away.
+    await renderGallery({ ...gallery, items: [createItem('image', 'page-two.png')], page: 2 });
+    await renderGallery({ ...gallery, items: [createItem('image', 'page-four.png')], page: 4 });
+
+    expect(mocks.setPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not page-follow a selection stamped for a different listing', async () => {
+    const gallery = createGallery({
+      items: [createItem('image', 'page-zero.png')],
+      revealTargetPage: null,
+      selectedItemKey: null,
+      selectedItemKeys: ['image:deep.png'],
+    });
+
+    await renderGallery(gallery);
+    await interact(() => requestGalleryItemReveal('image:deep.png'));
+
+    expect(mocks.setPage).not.toHaveBeenCalled();
+  });
+
+  it('retires a pending reveal once the persisted selection moves to another off-page item', async () => {
+    const gallery = createGallery({
+      items: [createItem('image', 'page-zero.png')],
+      revealTargetPage: null,
+      selectedItemKey: null,
+      selectedItemKeys: ['image:deep.png'],
+    });
+
+    await renderGallery(gallery);
+    await interact(() => requestGalleryItemReveal('image:deep.png'));
+
+    // An auto-selected fresh image replaces the persisted selection while
+    // both stay off-page (the visible key is null throughout).
+    await renderGallery({
+      ...gallery,
+      items: [createItem('image', 'page-zero.png')],
+      selectedItemKeys: ['image:fresh.png'],
+    });
+
+    // The revealed item arriving later must not scroll a retired reveal.
+    await renderGallery({
+      ...gallery,
+      items: [createItem('image', 'deep.png')],
+      selectedItemKeys: ['image:fresh.png'],
+    });
+
+    expect(mocks.scrollToIndex).not.toHaveBeenCalled();
   });
 
   it('retires a pending reveal once a different selection lands', async () => {
