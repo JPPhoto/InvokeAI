@@ -2,9 +2,9 @@ import type { GraphPreviewSourceState, WorkflowInvocationSourceId } from '@featu
 import type { ReactFlowInstance } from '@xyflow/react';
 import type { ReactNode } from 'react';
 
-import { Box, Dialog, Icon, Portal, SegmentGroup, Stack, Text } from '@chakra-ui/react';
+import { Box, Dialog, Icon, Portal, Stack, Text } from '@chakra-ui/react';
 import { useWorkflowGraphPreview } from '@features/workflow/ui/WorkflowUiContext';
-import { Button, JsonPreview, toaster } from '@platform/ui';
+import { Button, JsonPreview, SegmentedControl, toaster } from '@platform/ui';
 import { CheckIcon, ChevronUpIcon, CopyIcon, TriangleAlertIcon } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -110,9 +110,9 @@ export const GraphPreviewDialog = ({
   );
 
   const handleOpenChange = useCallback((event: { open: boolean }) => closeAndReset(event.open), [closeAndReset]);
-  const handleModeChange = useCallback((event: { value: string | null }) => {
-    if (isPreviewMode(event.value)) {
-      setMode(event.value);
+  const handleModeChange = useCallback((value: string) => {
+    if (isPreviewMode(value)) {
+      setMode(value);
     }
   }, []);
   const closeDialog = useCallback(() => closeAndReset(false), [closeAndReset]);
@@ -194,6 +194,7 @@ export const GraphPreviewDialog = ({
       .catch(() => toaster.create({ title: t('graphPreview.copyFailed'), type: 'error' }));
   }, [graph, t]);
 
+  const modeOptions = useMemo(() => modeItems.map((item) => ({ label: t(item.labelKey), value: item.value })), [t]);
   const jsonLabel = useMemo(() => t('graphPreview.graphJsonLabel', { title: sourceLabel }), [t, sourceLabel]);
   const subtitle = useMemo(() => {
     const compiledFrom = t('graphPreview.compiledFrom', { source: sourceLabel });
@@ -223,15 +224,7 @@ export const GraphPreviewDialog = ({
                   {subtitle}
                 </Text>
               </Stack>
-              <SegmentGroup.Root size="xs" value={mode} onValueChange={handleModeChange}>
-                <SegmentGroup.Indicator />
-                {modeItems.map((item) => (
-                  <SegmentGroup.Item key={item.value} value={item.value}>
-                    <SegmentGroup.ItemHiddenInput />
-                    <SegmentGroup.ItemText>{t(item.labelKey)}</SegmentGroup.ItemText>
-                  </SegmentGroup.Item>
-                ))}
-              </SegmentGroup.Root>
+              <SegmentedControl isFullWidth={false} options={modeOptions} value={mode} onChange={handleModeChange} />
             </Dialog.Header>
             <Dialog.Body display="flex" flex="1" flexDirection="column" gap="3" minH="0">
               {hasInvalidReasons ? (

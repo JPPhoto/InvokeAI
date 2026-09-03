@@ -1,7 +1,8 @@
 import type { GalleryView } from '@features/gallery/core/types';
 
-import { SegmentGroup, Text } from '@chakra-ui/react';
-import { useCallback } from 'react';
+import { Text } from '@chakra-ui/react';
+import { SegmentedControl } from '@platform/ui';
+import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { getGalleryCountForView } from './galleryBoardLabels';
@@ -11,7 +12,6 @@ const GALLERY_VIEW_TABS = [
   { labelKey: 'common.media', value: 'images' },
   { labelKey: 'common.assets', value: 'assets' },
 ] satisfies { labelKey: string; value: GalleryView }[];
-const CHECKED_VIEW_TAB_STYLES = { bg: 'accent.solid', color: 'accent.contrast' } as const;
 
 /**
  * Media / Assets, each carrying the selected board's count for that view so
@@ -27,30 +27,16 @@ export const GalleryViewTabs = () => {
   const { actions, gallery } = useGalleryWidget();
   const selectedBoard = gallery.boards.find((board) => board.id === gallery.selectedBoardId);
 
-  const handleViewChange = useCallback(
-    (event: { value: string | null }) => {
-      if (event.value) {
-        actions.setView(event.value as GalleryView);
-      }
-    },
-    [actions]
-  );
+  const handleViewChange = useCallback((value: string) => actions.setView(value as GalleryView), [actions]);
 
-  return (
-    <SegmentGroup.Root
-      aria-label={t('common.view')}
-      size="xs"
-      value={gallery.galleryView}
-      onValueChange={handleViewChange}
-    >
-      <SegmentGroup.Indicator />
-      {GALLERY_VIEW_TABS.map(({ labelKey, value }) => {
+  const options = useMemo(
+    () =>
+      GALLERY_VIEW_TABS.map(({ labelKey, value }) => {
         const count = selectedBoard ? getGalleryCountForView(selectedBoard, value) : null;
 
-        return (
-          <SegmentGroup.Item key={value} value={value} _checked={CHECKED_VIEW_TAB_STYLES}>
-            <SegmentGroup.ItemHiddenInput />
-            <SegmentGroup.ItemText display="flex" fontSize="xs" gap="1.5">
+        return {
+          label: (
+            <Text as="span" display="flex" gap="1.5">
               {t(labelKey)}
               {count === null ? null : (
                 // Dimmed from the item's own text colour rather than pinned to
@@ -61,10 +47,21 @@ export const GalleryViewTabs = () => {
                   {count}
                 </Text>
               )}
-            </SegmentGroup.ItemText>
-          </SegmentGroup.Item>
-        );
-      })}
-    </SegmentGroup.Root>
+            </Text>
+          ),
+          value,
+        };
+      }),
+    [selectedBoard, t]
+  );
+
+  return (
+    <SegmentedControl
+      ariaLabel={t('common.view')}
+      isFullWidth={false}
+      options={options}
+      value={gallery.galleryView}
+      onChange={handleViewChange}
+    />
   );
 };

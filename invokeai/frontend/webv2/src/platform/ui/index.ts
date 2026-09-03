@@ -16,6 +16,7 @@ export * from './RenameDialog';
 export * from './ResizableTextarea';
 export * from './Row';
 export * from './Scrollable';
+export * from './SegmentedControl';
 export * from './SegmentTabs';
 export * from './Select';
 export * from './Slider';
