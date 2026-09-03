@@ -24,7 +24,7 @@ import { useProjectCardActions } from './useProjectCardActions';
 
 const CARD_HOVER = { bg: 'bg.muted', borderColor: 'border.emphasized' } as const;
 const REVEAL_ON_HOVER = { opacity: 1 } as const;
-const LINK_STYLE = { inset: 0, position: 'absolute' } as const;
+const LINK_STYLE = { cursor: 'default', inset: 0, position: 'absolute' } as const;
 const CARD_TRANSITION =
   'border-color var(--wb-motion-duration-medium) ease, background var(--wb-motion-duration-medium) ease';
 

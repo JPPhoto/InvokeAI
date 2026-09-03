@@ -23,7 +23,7 @@ import { useProjectCardActions } from './useProjectCardActions';
  * only the shape differs.
  */
 
-const LINK_STYLE = { inset: 0, position: 'absolute' } as const;
+const LINK_STYLE = { cursor: 'default', inset: 0, position: 'absolute' } as const;
 const REVEAL_ON_HOVER = { opacity: 1 } as const;
 const THUMBNAIL_WIDTH = '14';
 

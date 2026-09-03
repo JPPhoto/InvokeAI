@@ -1,15 +1,18 @@
 import type { ProjectSummary } from '@workbench/projects/library';
+import type { MouseEvent } from 'react';
 
-import { Box, Flex, Stack, Text } from '@chakra-ui/react';
-import { Button } from '@platform/ui/Button';
+import { Box, Flex, HStack, Menu, Stack, Text } from '@chakra-ui/react';
+import { Button, IconButton } from '@platform/ui/Button';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Link } from '@tanstack/react-router';
 import { formatRelativeTime } from '@workbench/launchpad/formatRelativeTime';
+import { ProjectActionsMenu } from '@workbench/launchpad/projects/ProjectActionsMenu';
 import { ProjectCompatibilityBadge } from '@workbench/launchpad/projects/ProjectCompatibilityBadge';
 import { ProjectCover } from '@workbench/launchpad/projects/ProjectCover';
+import { useProjectCardActions } from '@workbench/launchpad/projects/useProjectCardActions';
 import { isProjectSummaryCompatible } from '@workbench/projects/library';
-import { ArrowRightIcon } from 'lucide-react';
-import { useMemo } from 'react';
+import { ArrowRightIcon, EllipsisVerticalIcon } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -17,19 +20,46 @@ import { useTranslation } from 'react-i18next';
  *
  * Returning users almost always want the thing they were last working on, and
  * making them find it in a grid of equals is the small tax the old home screen
- * charged on every visit.
+ * charged on every visit. It is still a library project, so it carries the
+ * same actions menu as the grid cards — on right-click and on the corner dots.
  */
 
 const CARD_HOVER = { bg: 'bg.muted', borderColor: 'border.emphasized' } as const;
-const LINK_STYLE = { inset: 0, position: 'absolute' } as const;
+const LINK_STYLE = { cursor: 'default', inset: 0, position: 'absolute' } as const;
 const CARD_TRANSITION =
   'border-color var(--wb-motion-duration-medium) ease, background var(--wb-motion-duration-medium) ease';
 const COVER_WIDTH = { base: '32', sm: '40' } as const;
 
-export const ResumeCard = ({ summary }: { summary: ProjectSummary }) => {
+export const ResumeCard = ({
+  isPinned,
+  summary,
+  onTogglePin,
+}: {
+  isPinned: boolean;
+  summary: ProjectSummary;
+  onTogglePin: (projectId: string) => void;
+}) => {
   const { t } = useTranslation();
+  const actions = useProjectCardActions(summary);
+  const [isActionsOpen, setIsActionsOpen] = useState(false);
+  const [contextMenuTarget, setContextMenuTarget] = useState<{ x: number; y: number } | null>(null);
   const search = useMemo(() => ({ project: summary.id }), [summary.id]);
   const isCompatible = isProjectSummaryCompatible(summary);
+
+  const handleContextMenu = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setContextMenuTarget({ x: event.clientX, y: event.clientY });
+    setIsActionsOpen(true);
+  }, []);
+  const handleOpenChange = useCallback((event: { open: boolean }) => {
+    setIsActionsOpen(event.open);
+
+    if (!event.open) {
+      setContextMenuTarget(null);
+    }
+  }, []);
+  const clearContextMenuTarget = useCallback(() => setContextMenuTarget(null), []);
+  const handleTogglePin = useCallback(() => onTogglePin(summary.id), [onTogglePin, summary.id]);
 
   return (
     <Flex
@@ -42,6 +72,7 @@ export const ResumeCard = ({ summary }: { summary: ProjectSummary }) => {
       rounded="lg"
       transition={CARD_TRANSITION}
       _hover={CARD_HOVER}
+      onContextMenu={handleContextMenu}
     >
       {isCompatible ? (
         <Link
@@ -60,9 +91,11 @@ export const ResumeCard = ({ summary }: { summary: ProjectSummary }) => {
           title={t('projects.file.updateClient')}
         />
       )}
-      <Box flexShrink={0} pointerEvents="none" w={COVER_WIDTH}>
-        <ProjectCover coverUrl={summary.coverUrl} />
-      </Box>
+      <Flex align="center" flexShrink={0} p="1.5" pointerEvents="none" w={COVER_WIDTH}>
+        <Box overflow="hidden" rounded="md" w="full">
+          <ProjectCover coverUrl={summary.coverUrl} />
+        </Box>
+      </Flex>
       <Flex align="center" flex="1" gap="3" justify="space-between" minW="0" p="4" pointerEvents="none" wrap="wrap">
         <Stack gap="0.5" minW="0">
           <Text color="fg.muted" fontSize="2xs" fontWeight="600" textTransform="uppercase">
@@ -74,7 +107,7 @@ export const ResumeCard = ({ summary }: { summary: ProjectSummary }) => {
           </Text>
           <ProjectCompatibilityBadge summary={summary} />
         </Stack>
-        <Box pointerEvents="auto">
+        <HStack gap="1.5" pointerEvents="auto">
           {isCompatible ? (
             <Button asChild size="xs" variant="solid">
               <Link search={search} to="/app">
@@ -88,7 +121,30 @@ export const ResumeCard = ({ summary }: { summary: ProjectSummary }) => {
               <ArrowRightIcon />
             </Button>
           )}
-        </Box>
+          <ProjectActionsMenu
+            actions={actions}
+            contextMenuTarget={contextMenuTarget}
+            isOpen={isActionsOpen}
+            isCompatible={isCompatible}
+            isPinned={isPinned}
+            projectId={summary.id}
+            projectName={summary.name}
+            onOpenChange={handleOpenChange}
+            onTogglePin={handleTogglePin}
+          >
+            <Menu.Trigger asChild>
+              <IconButton
+                aria-label={t('common.actions')}
+                color="fg.muted"
+                size="xs"
+                variant="ghost"
+                onClick={clearContextMenuTarget}
+              >
+                <EllipsisVerticalIcon />
+              </IconButton>
+            </Menu.Trigger>
+          </ProjectActionsMenu>
+        </HStack>
       </Flex>
     </Flex>
   );
