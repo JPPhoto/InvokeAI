@@ -11,10 +11,11 @@ import { ConfirmDialog } from '@platform/ui/ConfirmDialog';
 import { MenuContent } from '@platform/ui/Menu';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { RenameDialog } from '@platform/ui/RenameDialog';
+import { toaster } from '@platform/ui/toaster';
 import { QueueCircularProgress } from '@workbench/components/QueueProgressIndicator';
 import { formatRelativeTime } from '@workbench/launchpad/formatRelativeTime';
 import { OpenProjectDialog } from '@workbench/projects/components';
-import { refreshProjectLibrary, useProjectLibrarySelector } from '@workbench/projects/library';
+import { refreshProjectLibrary, renameLibraryProject, useProjectLibrarySelector } from '@workbench/projects/library';
 import { useProjectActions } from '@workbench/projects/useProjectActions';
 import { useExportOpenProject } from '@workbench/projects/useProjectFileActions';
 import { useOpenWorkbenchWidget } from '@workbench/useOpenWorkbenchWidget';
@@ -81,13 +82,27 @@ export const ProjectSwitcher = () => {
   const hideOpenDialog = useCallback(() => setIsOpenDialogVisible(false), []);
   const closeRenameDialog = useCallback(() => setRenameTarget(null), []);
   const closeDeleteDialog = useCallback(() => setDeleteTarget(null), []);
+  // Through the library, not the bare store command: the library path flushes
+  // an open project immediately, which is what renames its board on the server.
   const renameProject = useCallback(
-    (name: string) => {
-      if (renameTarget) {
-        projects.rename(renameTarget.id, name);
+    async (name: string) => {
+      if (!renameTarget) {
+        return;
+      }
+
+      try {
+        await renameLibraryProject(renameTarget.id, name);
+      } catch (error) {
+        toaster.create({
+          description: error instanceof Error ? error.message : undefined,
+          title: t('projects.renameFailed'),
+          type: 'error',
+        });
+        // The rename dialog stays open on a rejection, so the user keeps their input.
+        throw error;
       }
     },
-    [projects, renameTarget]
+    [renameTarget, t]
   );
   const confirmDeleteProject = useCallback(async () => {
     const project = deleteTarget ? getProject(deleteTarget.id) : null;

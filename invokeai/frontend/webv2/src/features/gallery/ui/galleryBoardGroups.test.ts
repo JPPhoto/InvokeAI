@@ -70,6 +70,21 @@ describe('getGalleryBoardGroups', () => {
     expect(groups.yourBoards.map((board) => board.id)).toEqual(['none', 'mine', 'dogs', 'cats']);
   });
 
+  /** The fetched list can lag a rename; the live project name wins for the open project's row. */
+  it('shows the open project board under the live project name, and searches by it', () => {
+    const groups = groupsOf({ projectBoardId: 'mine', projectName: 'Renamed' });
+
+    expect(groups.yourBoards.find((board) => board.id === 'mine')?.name).toBe('Renamed');
+    expect(
+      groupsOf({ projectBoardId: 'mine', projectName: 'Renamed', searchTerm: 'renamed' }).yourBoards
+    ).toContainEqual(expect.objectContaining({ id: 'mine' }));
+    expect(
+      groupsOf({ projectBoardId: 'mine', projectName: 'Renamed', searchTerm: 'My project' }).yourBoards.map(
+        (board) => board.id
+      )
+    ).not.toContain('mine');
+  });
+
   it('filters every section by a case-insensitive substring match', () => {
     const groups = groupsOf({ searchTerm: 'DOG' });
 

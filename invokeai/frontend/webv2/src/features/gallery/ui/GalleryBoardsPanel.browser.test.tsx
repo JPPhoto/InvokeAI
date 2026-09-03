@@ -183,9 +183,10 @@ describe('GalleryBoardsPanel', () => {
 
     await renderPanel({ ...createGallery(), boards: ownedBoards, projectBoardId: 'cats' } as GalleryStateView);
 
-    const catsRow = getBoardRows().find((row) => row.textContent?.includes('Cats'));
+    // The hoisted row shows the live project name, not the stored board name.
+    const projectRow = getBoardRows().find((row) => row.textContent?.includes('Project'));
 
-    expect(catsRow?.textContent).toContain('common.project');
+    expect(projectRow?.textContent).toContain('common.project');
   });
 
   it('shows media and asset counts together, so the row does not change meaning with the tab', async () => {
