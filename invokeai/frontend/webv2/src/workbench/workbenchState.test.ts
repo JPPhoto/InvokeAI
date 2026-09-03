@@ -3318,6 +3318,19 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(galleryValues.selectedImageName).toBe('image:gallery-image.png');
   });
 
+  it('normalizes the gallery page to a non-negative integer', () => {
+    let state = primeGenerate();
+
+    state = workbenchReducer(state, { page: 2.9, type: 'setGalleryPage' });
+    expect(getProjectWidgetValues(getActiveProject(state), 'gallery').galleryPage).toBe(2);
+
+    state = workbenchReducer(state, { page: -3, type: 'setGalleryPage' });
+    expect(getProjectWidgetValues(getActiveProject(state), 'gallery').galleryPage).toBe(0);
+
+    state = workbenchReducer(state, { page: Number.NaN, type: 'setGalleryPage' });
+    expect(getProjectWidgetValues(getActiveProject(state), 'gallery').galleryPage).toBe(0);
+  });
+
   it('releases a mid-board infinite window anchor when a result lands on the viewed board', () => {
     // A deep reveal from the image map anchors the infinite window mid-board.
     // New images land at the TOP of that listing, which the anchored window
@@ -3679,6 +3692,25 @@ describe('workbenchReducer Phase 5 generation flow', () => {
 
     expect(getActiveProject(state).settings.showProgressImagesInViewer).toBe(false);
     expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImageName).toBe('image:selected.png');
+  });
+
+  it('clears the Gallery selection while keeping the compare image and navigation stamp', () => {
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, { item: createGalleryImageItem('selected.png'), type: 'selectGalleryItem' });
+    state = workbenchReducer(state, {
+      image: createGalleryImageItem('compare.png'),
+      type: 'setGalleryCompareImage',
+    });
+    state = workbenchReducer(state, { type: 'clearGallerySelection' });
+
+    const values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+
+    expect(values.selectedImage).toBeNull();
+    expect(values.selectedImageName).toBeNull();
+    expect(values.selectedImageNames).toEqual([]);
+    expect(values.compareImage).toMatchObject({ name: 'compare.png' });
+    expect(values.selectedImageQuery).toBeDefined();
   });
 
   it('preserves a manually selected image when later Gallery results arrive', () => {
