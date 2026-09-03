@@ -114,6 +114,7 @@ export const DynamicPromptsButton = ({
                   isFullWidth={false}
                   options={tabItems}
                   value={tab}
+                  variant="pill"
                   onChange={handleTabChange}
                 />
                 {tab === 'preview' ? (
