@@ -180,6 +180,29 @@ export const buttonRecipe = defineRecipe({
       sm: { ...chakraRecipes.button.variants?.size?.sm, textStyle: 'xs' },
       md: { ...chakraRecipes.button.variants?.size?.md, textStyle: 'xs' },
     },
+    variant: {
+      ...chakraRecipes.button.variants?.variant,
+      // Chakra's ghost/outline hover is the solid `subtle` fill, whose
+      // lightness collides with muted/control surfaces (invisible hover); an
+      // fg-derived translucent fill reads on every surface and keeps the
+      // palette tint.
+      ghost: {
+        ...chakraRecipes.button.variants?.variant?.ghost,
+        _hover: { bg: 'colorPalette.fg/10' },
+        _expanded: { bg: 'colorPalette.fg/10' },
+      },
+      outline: {
+        ...chakraRecipes.button.variants?.variant?.outline,
+        _hover: { bg: 'colorPalette.fg/10' },
+        _expanded: { bg: 'colorPalette.fg/10' },
+      },
+      // Plain buttons are link-shaped actions; stock Chakra gives them no
+      // hover state at all.
+      plain: {
+        ...chakraRecipes.button.variants?.variant?.plain,
+        _hover: { textDecoration: 'underline' },
+      },
+    },
   } as unknown as typeof chakraRecipes.button.variants,
 });
 
