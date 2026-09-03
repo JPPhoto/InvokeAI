@@ -1445,6 +1445,7 @@
     "language": "Language",
     "languageDescription": "Interface language. New workbench copy falls back to English until translators add coverage.",
     "tabs": {
+      "about": "About",
       "appearance": "Appearance",
       "behavior": "Behavior",
       "developer": "Developer",
@@ -1454,6 +1455,14 @@
       "workflow": "Workflow",
       "workspace": "Workspace",
       "imageMap": "Image Map"
+    },
+    "about": {
+      "title": "About Invoke",
+      "description": "Version and system information for this Invoke server.",
+      "github": "GitHub",
+      "discord": "Discord",
+      "loading": "Loading system information…",
+      "systemInformation": "System information"
     },
     "imageMapVocabulary": {
       "title": "Cluster Label Vocabulary",
@@ -1512,6 +1521,8 @@
       "unshade": "Unshade"
     },
     "loadingLabel": "Loading {{label}}",
+    "moveToLeftSide": "Move to left side",
+    "moveToRightSide": "Move to right side",
     "removeWidget": "Remove {{label}}",
     "panelLabel": "{{region}} widget panel",
     "resizePanel": "Resize {{region}} widget panel",

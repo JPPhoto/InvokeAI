@@ -39,6 +39,7 @@ import {
   Code2Icon,
   DatabaseIcon,
   FolderIcon,
+  InfoIcon,
   KeyboardIcon,
   ListOrderedIcon,
   MapIcon,
@@ -53,6 +54,7 @@ import {
 import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { AboutSettings } from './AboutSettings';
 import { GenerationDevicesSettings } from './GenerationDevicesSettings';
 import { HotkeysSettingsSection } from './HotkeysSettingsSection';
 import { ImageMapVocabularySettings } from './ImageMapVocabularySettings';
@@ -227,6 +229,12 @@ const SettingsTabs = () => {
         icon: DatabaseIcon,
         label: t('settings.tabs.workspace'),
         value: 'workspace',
+      },
+      {
+        children: <AboutSection />,
+        icon: InfoIcon,
+        label: t('settings.tabs.about'),
+        value: 'about',
       },
     ],
     [hasWorkbench, t]
@@ -585,6 +593,18 @@ const QueueSection = () => {
         title="Generation Devices"
       >
         <GenerationDevicesSettings />
+      </SettingsSection>
+    </Stack>
+  );
+};
+
+const AboutSection = () => {
+  const { t } = useTranslation();
+
+  return (
+    <Stack gap="6">
+      <SettingsSection description={t('settings.about.description')} title={t('settings.about.title')}>
+        <AboutSettings />
       </SettingsSection>
     </Stack>
   );

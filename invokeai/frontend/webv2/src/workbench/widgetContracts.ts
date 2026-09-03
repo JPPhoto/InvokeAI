@@ -283,7 +283,8 @@ export type SettingsSectionId =
   | 'workflow'
   | 'imageMap'
   | 'developer'
-  | 'workspace';
+  | 'workspace'
+  | 'about';
 
 export interface WidgetManifest {
   /** Widget runtime API contract version. Defaults to 1 during registry normalization. */
