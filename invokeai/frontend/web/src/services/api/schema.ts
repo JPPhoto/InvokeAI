@@ -5307,6 +5307,12 @@ export type components = {
              */
             asset_count: number;
             /**
+             * Asset Video Count
+             * @description The number of asset-category (non-'general') videos in the board.
+             * @default 0
+             */
+            asset_video_count?: number;
+            /**
              * Owner Username
              * @description The username of the board owner (for admin view).
              */
@@ -42594,6 +42600,12 @@ export type components = {
              * @default 0
              */
             video_count?: number;
+            /**
+             * Asset Video Count
+             * @description The number of asset-category (non-'general') videos for this date.
+             * @default 0
+             */
+            asset_video_count?: number;
             /**
              * Cover Image Name
              * @description The most recent image name for this date.

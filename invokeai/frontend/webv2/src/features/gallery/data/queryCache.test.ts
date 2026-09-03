@@ -329,6 +329,7 @@ describe('getGalleryItemBoardIdsFromCaches', () => {
 const createBoard = (id: string, overrides: Partial<GalleryBoard> = {}): GalleryBoard => ({
   archived: false,
   assetCount: 0,
+  assetVideoCount: 0,
   id,
   imageCount: 1,
   kind: 'board',

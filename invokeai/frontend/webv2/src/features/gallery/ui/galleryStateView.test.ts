@@ -18,6 +18,7 @@ const boards: GalleryBoard[] = [
   {
     archived: false,
     assetCount: 0,
+    assetVideoCount: 0,
     id: 'none',
     imageCount: 1,
     kind: 'uncategorized',
@@ -28,6 +29,7 @@ const boards: GalleryBoard[] = [
   {
     archived: false,
     assetCount: 0,
+    assetVideoCount: 0,
     id: 'board-1',
     imageCount: 2,
     kind: 'board',
@@ -177,6 +179,7 @@ describe('gallery state view', () => {
   it('exposes image, video, and asset counts for board labels', () => {
     expect(getBoardCounts({ ...boards[1], videoCount: 3 })).toEqual({
       assetCount: 0,
+      assetVideoCount: 0,
       imageCount: 2,
       videoCount: 3,
     });
