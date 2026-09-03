@@ -23,6 +23,9 @@ import { useTranslation } from 'react-i18next';
 /** Rendering every row of a 10,000-prompt expansion would cost more than it tells the user. */
 const MAX_PREVIEW_ROWS = 200;
 const TABULAR_NUMS = { fontVariantNumeric: 'tabular-nums' } as const;
+// The rows sit on the popover's `bg.muted` surface, where the row recipe's
+// `bg.muted/60` hover is invisible — hover needs the next surface step.
+const PROMPT_ROW_HOVER_PROPS = { bg: 'bg.emphasized/60' } as const;
 const MENU_POSITIONING = { placement: 'bottom-start' } as const;
 const SWITCH_CHECKED = { bg: 'accent.solid' } as const;
 
@@ -256,6 +259,7 @@ const DynamicPromptRow = ({
       textStyle="xs"
       title={t('widgets.generate.dynamicPrompts.usePrompt')}
       whiteSpace="nowrap"
+      _hover={PROMPT_ROW_HOVER_PROPS}
     >
       <button type="button" onClick={handleClick}>
         <Text as="span" color="fg.subtle" css={TABULAR_NUMS} fontSize="2xs">
