@@ -84,6 +84,8 @@ export interface GalleryStateView {
   compareImageKey: GalleryItemKey | null;
   currentItem: GalleryCurrentItem;
   galleryView: GalleryView;
+  /** A compare image is set and differs from the visible image selection. */
+  isComparisonActive: boolean;
   items: GalleryItem[];
   isLoading: boolean;
   /** The grid's current page in paginated mode; the window anchor otherwise. */
@@ -253,6 +255,10 @@ export const getGallerySearchTerm = (values: Record<string, unknown>): string =>
 export const getGallerySemanticImageQuery = (values: Record<string, unknown>): GallerySemanticReference | null =>
   parseGallerySemanticReference(values.semanticImageQuery);
 
+/** The saved board choice as persisted, before any resolution against loaded boards. */
+export const getGalleryRawSelectedBoardId = (values: Record<string, unknown>): string | null =>
+  typeof values.selectedBoardId === 'string' ? values.selectedBoardId : null;
+
 /**
  * Where new results land, resolved against the boards this install actually has.
  *
@@ -263,9 +269,10 @@ export const getGallerySemanticImageQuery = (values: Record<string, unknown>): G
  *
  * An empty board list means "still loading", not "no such board", so nothing resolves yet.
  */
-export const getGallerySelectedBoardId = (values: Record<string, unknown>, backendBoards: GalleryBoard[]): string => {
-  const selectedBoardId = typeof values.selectedBoardId === 'string' ? values.selectedBoardId : null;
-
+export const resolveGallerySelectedBoardId = (
+  { projectBoardId, selectedBoardId }: { projectBoardId: string | null; selectedBoardId: string | null },
+  backendBoards: GalleryBoard[]
+): string => {
   if (backendBoards.length === 0) {
     return selectedBoardId ?? 'none';
   }
@@ -274,14 +281,18 @@ export const getGallerySelectedBoardId = (values: Record<string, unknown>, backe
     return selectedBoardId;
   }
 
-  const projectBoardId = getGalleryProjectBoardId(values);
-
   if (projectBoardId !== null && backendBoards.some((board) => board.id === projectBoardId)) {
     return projectBoardId;
   }
 
   return 'none';
 };
+
+export const getGallerySelectedBoardId = (values: Record<string, unknown>, backendBoards: GalleryBoard[]): string =>
+  resolveGallerySelectedBoardId(
+    { projectBoardId: getGalleryProjectBoardId(values), selectedBoardId: getGalleryRawSelectedBoardId(values) },
+    backendBoards
+  );
 
 export const getGalleryPage = (values: Record<string, unknown>): number =>
   typeof values.galleryPage === 'number' && Number.isFinite(values.galleryPage)
@@ -350,23 +361,6 @@ export const getGalleryCompareImage = (values: Record<string, unknown>): Gallery
     selectedImage: values.compareImage,
     selectedImageName: null,
   });
-
-export const getGalleryQueuePlaceholders = (
-  queueItems: QueueItem[],
-  {
-    galleryView,
-    imageOrderDir = 'ASC',
-    searchTerm,
-    selectedBoardId,
-  }: { galleryView: GalleryView; imageOrderDir?: GalleryOrderDir; searchTerm: string; selectedBoardId: string }
-): GalleryQueuePlaceholder[] => {
-  return getVisibleGalleryQueuePlaceholders(getGalleryGenerationSequence(queueItems, null).chronologicalSlots, {
-    galleryView,
-    imageOrderDir,
-    searchTerm,
-    selectedBoardId,
-  });
-};
 
 const getVisibleGalleryQueuePlaceholders = (
   chronologicalSlots: GalleryQueuePlaceholder[],
@@ -491,6 +485,7 @@ export const getGalleryStateView = (
     compareImageKey,
     currentItem,
     galleryView,
+    isComparisonActive,
     items,
     isLoading,
     page,

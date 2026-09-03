@@ -74,6 +74,7 @@ const createGallery = (settings: Partial<GallerySettings> = {}): GalleryStateVie
     compareImageKey: null,
     currentItem: null,
     galleryView: 'images',
+    isComparisonActive: false,
     isLoading: false,
     items: [],
     page: 0,

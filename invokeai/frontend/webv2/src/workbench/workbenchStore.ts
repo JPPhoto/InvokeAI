@@ -94,6 +94,7 @@ const createCommands = (
       appendStagingCandidate: command('appendCanvasStagingCandidate'),
     },
     gallery: {
+      clearSelection: command('clearGallerySelection', (projectId?: string) => ({ projectId })),
       patchItems: command(
         'patchGalleryItems',
         (

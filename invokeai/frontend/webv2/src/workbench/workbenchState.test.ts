@@ -3694,6 +3694,25 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImageName).toBe('image:selected.png');
   });
 
+  it('clears the Gallery selection while keeping the compare image and navigation stamp', () => {
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, { item: createGalleryImageItem('selected.png'), type: 'selectGalleryItem' });
+    state = workbenchReducer(state, {
+      image: createGalleryImageItem('compare.png'),
+      type: 'setGalleryCompareImage',
+    });
+    state = workbenchReducer(state, { type: 'clearGallerySelection' });
+
+    const values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+
+    expect(values.selectedImage).toBeNull();
+    expect(values.selectedImageName).toBeNull();
+    expect(values.selectedImageNames).toEqual([]);
+    expect(values.compareImage).toMatchObject({ name: 'compare.png' });
+    expect(values.selectedImageQuery).toBeDefined();
+  });
+
   it('preserves a manually selected image when later Gallery results arrive', () => {
     let state = primeGenerate();
     state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });

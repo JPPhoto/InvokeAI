@@ -54,6 +54,7 @@ export interface GalleryItemContextMenuProps {
 }
 
 export interface GalleryCommandsPort {
+  clearSelection(): void;
   reconcileDeletedBoardOutcome(outcome: GalleryBoardDeletionResult): void;
   selectBoard(boardId: string): void;
   selectItem(item: GalleryItem): void;

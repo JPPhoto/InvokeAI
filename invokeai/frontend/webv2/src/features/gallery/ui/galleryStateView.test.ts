@@ -9,7 +9,6 @@ import {
   getGalleryCurrentItem,
   getGalleryGenerationSequence,
   getGalleryLiveSlots,
-  getGalleryQueuePlaceholders,
   getGallerySelectedBoardId,
   getGallerySemanticImageQuery,
   getGalleryStateView,
@@ -112,6 +111,9 @@ const createQueueItem = ({
   status,
 });
 
+const getPendingPlaceholders = (queueItems: QueueItem[], values: Record<string, unknown>) =>
+  getGalleryStateView(values, boards, [], false, queueItems).pendingPlaceholders;
+
 describe('gallery state view', () => {
   it('preserves a selected backend board id while boards are still loading', () => {
     const values = { selectedBoardId: 'board-1' };
@@ -201,6 +203,27 @@ describe('gallery state view', () => {
       starredFirst: true,
       thumbnailFit: 'square',
     });
+  });
+
+  it('exposes comparison state only while an image selection differs from the compare image', () => {
+    const selected = createImageItem('selected.png');
+    const values = {
+      compareImage: createImageItem('compare.png'),
+      selectedBoardId: 'none',
+      selectedImageName: 'image:selected.png',
+    };
+
+    expect(getGalleryStateView(values, boards, [selected], false).isComparisonActive).toBe(true);
+    expect(
+      getGalleryStateView({ ...values, compareImage: selected }, boards, [selected], false).isComparisonActive
+    ).toBe(false);
+    expect(getGalleryStateView(values, boards, [], false).isComparisonActive).toBe(false);
+
+    const video = createVideoItem('clip');
+
+    expect(
+      getGalleryStateView({ ...values, selectedImageName: 'video:clip' }, boards, [video], false).isComparisonActive
+    ).toBe(false);
   });
 
   it('exposes the selection page only when its stamp names the listing the grid shows', () => {
@@ -358,11 +381,7 @@ describe('gallery state view', () => {
       createQueueItem({ batchCount: 2, boardId: 'board-1', status: 'pending' }),
       createQueueItem({ backendItemIds: [11, 12, 13], boardId: 'board-1', status: 'running' }),
     ];
-    const placeholders = getGalleryQueuePlaceholders(queueItems, {
-      galleryView: 'images',
-      searchTerm: '',
-      selectedBoardId: 'board-1',
-    });
+    const placeholders = getPendingPlaceholders(queueItems, { imageOrderDir: 'ASC', selectedBoardId: 'board-1' });
 
     expect(placeholders).toHaveLength(5);
     expect(placeholders[0]).toMatchObject({
@@ -383,11 +402,7 @@ describe('gallery state view', () => {
       }),
     ];
 
-    const placeholders = getGalleryQueuePlaceholders(queueItems, {
-      galleryView: 'images',
-      searchTerm: '',
-      selectedBoardId: 'board-1',
-    });
+    const placeholders = getPendingPlaceholders(queueItems, { imageOrderDir: 'ASC', selectedBoardId: 'board-1' });
 
     expect(placeholders.map((placeholder) => placeholder.itemIndex)).toEqual([2, 3]);
   });
@@ -475,10 +490,8 @@ describe('gallery state view', () => {
       status: 'running',
     });
 
-    const placeholders = getGalleryQueuePlaceholders([newerBatch, earlierBatch], {
-      galleryView: 'images',
+    const placeholders = getPendingPlaceholders([newerBatch, earlierBatch], {
       imageOrderDir: 'DESC',
-      searchTerm: '',
       selectedBoardId: 'board-1',
     });
 
@@ -546,11 +559,7 @@ describe('gallery state view', () => {
       }),
     ];
 
-    const placeholders = getGalleryQueuePlaceholders(queueItems, {
-      galleryView: 'images',
-      searchTerm: '',
-      selectedBoardId: 'board-1',
-    });
+    const placeholders = getPendingPlaceholders(queueItems, { imageOrderDir: 'ASC', selectedBoardId: 'board-1' });
 
     expect(placeholders.map((placeholder) => placeholder.itemIndex)).toEqual([3]);
   });
@@ -562,20 +571,14 @@ describe('gallery state view', () => {
       createQueueItem({ boardId: 'board-1', destination: 'canvas', status: 'pending' }),
     ];
 
-    expect(
-      getGalleryQueuePlaceholders(queueItems, { galleryView: 'images', searchTerm: '', selectedBoardId: 'board-1' })
-    ).toEqual([]);
+    expect(getPendingPlaceholders(queueItems, { selectedBoardId: 'board-1' })).toEqual([]);
   });
 
   it('hides placeholders while searching or browsing assets', () => {
     const queueItems = [createQueueItem({ boardId: 'none', status: 'pending' })];
 
-    expect(
-      getGalleryQueuePlaceholders(queueItems, { galleryView: 'images', searchTerm: 'cat', selectedBoardId: 'none' })
-    ).toEqual([]);
-    expect(
-      getGalleryQueuePlaceholders(queueItems, { galleryView: 'assets', searchTerm: '', selectedBoardId: 'none' })
-    ).toEqual([]);
+    expect(getPendingPlaceholders(queueItems, { searchTerm: 'cat', selectedBoardId: 'none' })).toEqual([]);
+    expect(getPendingPlaceholders(queueItems, { galleryView: 'assets', selectedBoardId: 'none' })).toEqual([]);
     expect(
       getGalleryStateView({ selectedBoardId: 'none' }, boards, [], false, queueItems).pendingPlaceholders
     ).toHaveLength(1);

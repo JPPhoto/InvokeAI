@@ -217,6 +217,7 @@ const createGallery = (overrides: Partial<GalleryStateView> = {}): GalleryStateV
     compareImageKey: null,
     currentItem: { itemKey: 'image:first.png', kind: 'item' },
     galleryView: 'images',
+    isComparisonActive: false,
     isLoading: false,
     items,
     page: 0,
@@ -315,6 +316,7 @@ const createAdapter = (): GalleryUiAdapter =>
     account: { enableLiveFollow: noop },
     antialiasProgressImages: false,
     gallery: {
+      clearSelection: noop,
       reconcileDeletedBoardOutcome: noop,
       selectBoard: noop,
       selectImage: noop,
@@ -751,6 +753,7 @@ describe('GalleryImageGrid mixed item cells', () => {
     await renderGallery(
       createGallery({
         compareImageKey: 'image:compare.png',
+        isComparisonActive: true,
         items: [image, video],
         selectedItemKey: 'image:first.png',
         selectedItemKeys: ['image:first.png'],

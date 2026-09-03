@@ -348,6 +348,7 @@ type WorkbenchReducerAction =
     }
   | { type: 'setGalleryCompareImage'; image: GalleryImageItem | null; projectId?: string }
   | { type: 'selectGalleryBoard'; boardId: string; projectId?: string }
+  | { type: 'clearGallerySelection'; projectId?: string }
   | { type: 'setGalleryView'; galleryView: 'images' | 'assets'; projectId?: string }
   | { type: 'setGallerySearchTerm'; searchTerm: string; projectId?: string }
   | { type: 'updateGallerySettings'; settings: Partial<Omit<GallerySettings, 'starredFirst'>>; projectId?: string }
@@ -4652,6 +4653,13 @@ export const __workbenchReducerInternal = (
           selectedBoardId: action.boardId,
           selectedImageNames: [],
         }),
+        action.projectId
+      );
+    }
+    case 'clearGallerySelection': {
+      return updateGalleryValues(
+        state,
+        (values) => ({ ...values, selectedImage: null, selectedImageName: null, selectedImageNames: [] }),
         action.projectId
       );
     }

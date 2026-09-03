@@ -154,11 +154,7 @@ export const GalleryImageGrid = () => {
 
   const columnCount = getGalleryColumnCount({ imageDensityPercent, widthPx: viewportWidth });
   const isFollowingLive = gallery.currentItem?.kind === 'placeholder';
-  const isComparisonActive =
-    gallery.selectedItemKey?.startsWith('image:') === true &&
-    gallery.compareImageKey !== null &&
-    gallery.selectedItemKey !== null &&
-    gallery.compareImageKey !== gallery.selectedItemKey;
+  const isComparisonActive = gallery.isComparisonActive;
   const selectedBoard = gallery.boards.find((board) => board.id === gallery.selectedBoardId);
   const selectedBoardName = selectedBoard
     ? getGalleryBoardLabel(selectedBoard, t)
