@@ -4,9 +4,9 @@ import type { ReactNode } from 'react';
 
 import { Box, Dialog, Icon, Portal, Stack, Text } from '@chakra-ui/react';
 import { useWorkflowGraphPreview } from '@features/workflow/ui/WorkflowUiContext';
-import { Button, JsonPreview, SegmentedControl, toaster } from '@platform/ui';
+import { Button, JsonPreview, SegmentTabs, segmentTabsPanelId, segmentTabsTabId, toaster } from '@platform/ui';
 import { CheckIcon, ChevronUpIcon, CopyIcon, TriangleAlertIcon } from 'lucide-react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { GraphPreviewFlow } from './GraphPreviewFlow';
@@ -34,14 +34,11 @@ interface GraphPreviewDialogProps {
 
 type PreviewMode = 'graph' | 'list' | 'json';
 
-const MODE_VALUES: readonly PreviewMode[] = ['graph', 'list', 'json'];
-const isPreviewMode = (value: string | null): value is PreviewMode => MODE_VALUES.includes(value as PreviewMode);
-
 const modeItems = [
   { labelKey: 'graphPreview.graph', value: 'graph' },
   { labelKey: 'graphPreview.list', value: 'list' },
   { labelKey: 'common.json', value: 'json' },
-] as const;
+] as const satisfies readonly { labelKey: string; value: PreviewMode }[];
 
 const COPY_RESET_DELAY_MS = 1500;
 const SELECT_AND_REVEAL_FIT_VIEW_OPTIONS = { duration: 150, maxZoom: 1 } as const;
@@ -84,6 +81,7 @@ export const GraphPreviewDialog = ({
 }: GraphPreviewDialogProps) => {
   const { t } = useTranslation();
   const graphPreview = useWorkflowGraphPreview();
+  const modeTabsIdBase = useId();
   const [mode, setMode] = useState<PreviewMode>('graph');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [hasCopied, setHasCopied] = useState(false);
@@ -110,11 +108,7 @@ export const GraphPreviewDialog = ({
   );
 
   const handleOpenChange = useCallback((event: { open: boolean }) => closeAndReset(event.open), [closeAndReset]);
-  const handleModeChange = useCallback((value: string) => {
-    if (isPreviewMode(value)) {
-      setMode(value);
-    }
-  }, []);
+  const handleModeChange = useCallback((value: PreviewMode) => setMode(value), []);
   const closeDialog = useCallback(() => closeAndReset(false), [closeAndReset]);
   const invokeRoute = useCallback(() => {
     void graphPreview.invoke(sourceId).then((submitted) => {
@@ -194,7 +188,7 @@ export const GraphPreviewDialog = ({
       .catch(() => toaster.create({ title: t('graphPreview.copyFailed'), type: 'error' }));
   }, [graph, t]);
 
-  const modeOptions = useMemo(() => modeItems.map((item) => ({ label: t(item.labelKey), value: item.value })), [t]);
+  const modeTabs = useMemo(() => modeItems.map((item) => ({ id: item.value, label: t(item.labelKey) })), [t]);
   const jsonLabel = useMemo(() => t('graphPreview.graphJsonLabel', { title: sourceLabel }), [t, sourceLabel]);
   const subtitle = useMemo(() => {
     const compiledFrom = t('graphPreview.compiledFrom', { source: sourceLabel });
@@ -224,9 +218,24 @@ export const GraphPreviewDialog = ({
                   {subtitle}
                 </Text>
               </Stack>
-              <SegmentedControl isFullWidth={false} options={modeOptions} value={mode} onChange={handleModeChange} />
+              <SegmentTabs
+                activeId={mode}
+                ariaLabel={t('graphPreview.title')}
+                idBase={modeTabsIdBase}
+                tabs={modeTabs}
+                onSelect={handleModeChange}
+              />
             </Dialog.Header>
-            <Dialog.Body display="flex" flex="1" flexDirection="column" gap="3" minH="0">
+            <Dialog.Body
+              aria-labelledby={segmentTabsTabId(modeTabsIdBase, mode)}
+              display="flex"
+              flex="1"
+              flexDirection="column"
+              gap="3"
+              id={segmentTabsPanelId(modeTabsIdBase)}
+              minH="0"
+              role="tabpanel"
+            >
               {hasInvalidReasons ? (
                 <InvalidBanner>
                   <Text>

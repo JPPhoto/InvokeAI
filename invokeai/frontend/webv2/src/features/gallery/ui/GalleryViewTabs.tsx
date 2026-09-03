@@ -1,7 +1,7 @@
 import type { GalleryView } from '@features/gallery/core/types';
 
 import { Text } from '@chakra-ui/react';
-import { SegmentedControl } from '@platform/ui';
+import { SegmentTabs } from '@platform/ui';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -15,53 +15,57 @@ const GALLERY_VIEW_TABS = [
 
 /**
  * Media / Assets, each carrying the selected board's count for that view so
- * the split is legible before you switch.
- *
- * A segmented control rather than a tablist: this chooses which items the grid
- * queries and owns no panel of its own. Real tabs publish `aria-controls`
- * pointing at a tabpanel, and there is none to point at — the grid is a
- * sibling slot each layout shell places independently.
+ * the split is legible before you switch. The same `SegmentTabs` strip the
+ * layer panes use; each layout shell wires the tabpanel by putting
+ * `segmentTabsPanelId(idBase)` on its grid container.
  */
-export const GalleryViewTabs = () => {
+export const GalleryViewTabs = ({ idBase }: { idBase: string }) => {
   const { t } = useTranslation();
   const { actions, gallery } = useGalleryWidget();
   const selectedBoard = gallery.boards.find((board) => board.id === gallery.selectedBoardId);
 
-  const handleViewChange = useCallback((value: string) => actions.setView(value as GalleryView), [actions]);
+  // SegmentTabs re-fires selecting the active tab (its collapsible-toggle
+  // affordance); a same-view write would only dirty the widget values.
+  const handleViewChange = useCallback(
+    (value: GalleryView) => {
+      if (value !== gallery.galleryView) {
+        actions.setView(value);
+      }
+    },
+    [actions, gallery.galleryView]
+  );
 
-  const options = useMemo(
+  const tabs = useMemo(
     () =>
       GALLERY_VIEW_TABS.map(({ labelKey, value }) => {
         const count = selectedBoard ? getGalleryCountForView(selectedBoard, value) : null;
 
         return {
+          id: value,
           label: (
             <Text as="span" display="flex" gap="1.5">
               {t(labelKey)}
               {count === null ? null : (
-                // Dimmed from the item's own text colour rather than pinned to
-                // `fg.muted`: the checked item swaps to `accent.contrast`, and a
-                // fixed muted grey is unreadable on the accent fill. 0.8 is the
-                // dimmest that still clears 4.5:1 in both states.
+                // Dimmed from the tab's own text colour, so it tracks the
+                // shown/idle swap; 0.8 stays comfortably legible on both.
                 <Text as="span" color="currentColor" fontVariantNumeric="tabular-nums" opacity="0.8">
                   {count}
                 </Text>
               )}
             </Text>
           ),
-          value,
         };
       }),
     [selectedBoard, t]
   );
 
   return (
-    <SegmentedControl
+    <SegmentTabs
+      activeId={gallery.galleryView}
       ariaLabel={t('common.view')}
-      isFullWidth={false}
-      options={options}
-      value={gallery.galleryView}
-      onChange={handleViewChange}
+      idBase={idBase}
+      tabs={tabs}
+      onSelect={handleViewChange}
     />
   );
 };

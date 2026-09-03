@@ -10,7 +10,8 @@ export const SEGMENT_TABS_HEIGHT_PX = 40;
 
 export interface SegmentTab<T extends string = string> {
   id: T;
-  label: string;
+  /** Usually a string; gallery tabs carry a dimmed count span. */
+  label: ReactNode;
 }
 
 /** Roving focus for a horizontal tablist: arrows cycle, Home/End jump. */
@@ -117,7 +118,7 @@ const SegmentTabButton = <T extends string>({
   isSelected: boolean;
   /** Selected AND its panel is visible; a collapsed block keeps selection without the shown look. */
   isShown: boolean;
-  label: string;
+  label: ReactNode;
   onSelect: (id: T) => void;
 }) => {
   const select = useCallback(() => onSelect(id), [id, onSelect]);

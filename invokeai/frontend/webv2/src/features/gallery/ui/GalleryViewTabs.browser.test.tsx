@@ -24,8 +24,7 @@ afterEach(async () => {
 
 const renderViewTabs = async (): Promise<{
   counts: HTMLElement[];
-  indicator: HTMLElement;
-  items: HTMLElement[];
+  tabs: HTMLElement[];
 }> => {
   host = document.createElement('div');
   document.body.append(host);
@@ -44,34 +43,20 @@ const renderViewTabs = async (): Promise<{
     root?.render(
       <ChakraProvider value={system}>
         <GalleryWidgetContext value={value}>
-          <GalleryViewTabs />
+          <GalleryViewTabs idBase="gallery-view-tabs-test" />
         </GalleryWidgetContext>
       </ChakraProvider>
     );
   });
 
-  // Match the release accessibility journey: wait until Ark has measured the
-  // moving indicator and removed its initial checked-item fallback styling.
-  await act(
-    () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => {
-            setTimeout(resolve, 200);
-          })
-        );
-      })
-  );
-
-  const items = [...host.querySelectorAll<HTMLElement>('[data-part="item"]')];
+  const tabs = [...host.querySelectorAll<HTMLElement>('[role="tab"]')];
 
   return {
-    // The count is the only span in an item whose text is purely numeric.
-    counts: items.map((item) =>
-      [...item.querySelectorAll<HTMLElement>('span')].find((span) => /^\d+$/.test(span.textContent!.trim()))!
+    // The count is the only span in a tab whose text is purely numeric.
+    counts: tabs.map((tab) =>
+      [...tab.querySelectorAll<HTMLElement>('span')].find((span) => /^\d+$/.test(span.textContent!.trim()))!
     ),
-    indicator: host.querySelector<HTMLElement>('[data-part="indicator"]')!,
-    items,
+    tabs,
   };
 };
 
@@ -82,17 +67,15 @@ describe('GalleryViewTabs', () => {
     expect(counts.map((count) => count.textContent)).toEqual(['148', '7']);
   });
 
-  it('keeps the count readable against the selected segment itself', async () => {
-    const { counts, items } = await renderViewTabs();
-    const checkedIndex = items.findIndex((item) => item.dataset.state === 'checked');
-    const count = counts[checkedIndex]!;
+  it('keeps the count readable against the shown tab itself', async () => {
+    const { counts, tabs } = await renderViewTabs();
+    const shownIndex = tabs.findIndex((tab) => tab.getAttribute('aria-selected') === 'true');
+    const count = counts[shownIndex]!;
     const style = getComputedStyle(count);
 
-    // Axe evaluates the selected item's own background rather than a moving
-    // indicator sibling behind it, so that local surface must carry the fill.
     const ratio = getContrastRatio(
       style.color,
-      getComputedStyle(items[checkedIndex]!).backgroundColor,
+      getComputedStyle(tabs[shownIndex]!).backgroundColor,
       Number(style.opacity)
     );
 
