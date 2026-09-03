@@ -2,7 +2,7 @@ import type { DateTokenParse } from '@platform/search/dateTokens';
 
 import { Box, Icon, Input } from '@chakra-ui/react';
 import { parseDateTokens } from '@platform/search/dateTokens';
-import { formControlInteraction } from '@theme/recipes';
+import { InputShell } from '@platform/ui/InputShell';
 import { SearchIcon } from 'lucide-react';
 import { useCallback, useMemo, useRef, type ReactNode } from 'react';
 
@@ -52,12 +52,9 @@ export const getGallerySearchSegments = (value: string, parse: DateTokenParse): 
   return segments;
 };
 
-const FIELD_CSS = {
-  ...formControlInteraction,
-  _focusWithin: { borderColor: 'accent.solid', outline: '1px solid {colors.accent.solid}' },
-} as const;
-
 const PLACEHOLDER_PROPS = { color: 'fg.subtle' } as const;
+
+const SEARCH_START_ELEMENT = <Icon as={SearchIcon} boxSize="3.5" color="fg.subtle" flexShrink={0} />;
 
 const MIRROR_CHIP_CSS = {
   borderRadius: 'sm',
@@ -105,78 +102,64 @@ export const GallerySearchField = ({
   }, []);
 
   return (
-    <Box
-      alignItems="center"
+    <InputShell
       aria-invalid={isInvalid || undefined}
-      bg="bg"
-      borderColor="border.emphasized"
-      borderWidth="1px"
-      css={FIELD_CSS}
-      display="flex"
-      gap="1.5"
-      h="8"
-      minW="0"
+      endElement={endElement}
       position="relative"
-      px="2"
-      rounded="md"
-      w="full"
+      startElement={SEARCH_START_ELEMENT}
     >
-      <Icon as={SearchIcon} boxSize="3.5" color="fg.subtle" flexShrink={0} />
-      <Box flex="1" minW="0" position="relative">
-        {/* Flex-centred: Chakra reads a scale number in `lineHeight` as a
-            unitless multiplier, which drops the text out of the field. */}
-        <Box
-          ref={mirrorRef}
-          alignItems="center"
-          aria-hidden="true"
-          display="flex"
-          fontSize="xs"
-          inset="0"
-          pointerEvents="none"
-          position="absolute"
-          whiteSpace="pre"
-        >
-          {segments.map((segment, index) =>
-            segment.kind === 'chip' ? (
-              <Box
-                key={`${segment.text}-${String(index)}`}
-                as="span"
-                bg={segment.isInvalid ? 'bg.error' : 'accent.subtle'}
-                color={segment.isInvalid ? 'fg.error' : 'accent.fg'}
-                css={MIRROR_CHIP_CSS}
-              >
-                {segment.text}
-              </Box>
-            ) : (
-              <Box key={`text-${String(index)}`} as="span">
-                {segment.text}
-              </Box>
-            )
-          )}
-        </Box>
-        <Input
-          aria-describedby={describedById}
-          aria-invalid={isInvalid || undefined}
-          aria-label={ariaLabel}
-          bg="transparent"
-          border="0"
-          borderRadius="0"
-          caretColor="fg"
-          color="transparent"
-          fontSize="xs"
-          h="8"
-          minW="0"
-          px="0"
-          _placeholder={PLACEHOLDER_PROPS}
-          placeholder={placeholder}
-          position="relative"
-          w="full"
-          value={value}
-          onChange={handleChange}
-          onScroll={handleScroll}
-        />
+      {/* Flex-centred: Chakra reads a scale number in `lineHeight` as a
+          unitless multiplier, which drops the text out of the field. */}
+      <Box
+        ref={mirrorRef}
+        alignItems="center"
+        aria-hidden="true"
+        display="flex"
+        fontSize="xs"
+        inset="0"
+        pointerEvents="none"
+        position="absolute"
+        whiteSpace="pre"
+      >
+        {segments.map((segment, index) =>
+          segment.kind === 'chip' ? (
+            <Box
+              key={`${segment.text}-${String(index)}`}
+              as="span"
+              bg={segment.isInvalid ? 'bg.error' : 'accent.subtle'}
+              color={segment.isInvalid ? 'fg.error' : 'accent.fg'}
+              css={MIRROR_CHIP_CSS}
+            >
+              {segment.text}
+            </Box>
+          ) : (
+            <Box key={`text-${String(index)}`} as="span">
+              {segment.text}
+            </Box>
+          )
+        )}
       </Box>
-      {endElement}
-    </Box>
+      <Input
+        aria-describedby={describedById}
+        aria-invalid={isInvalid || undefined}
+        aria-label={ariaLabel}
+        bg="transparent"
+        border="0"
+        borderRadius="0"
+        caretColor="fg"
+        color="transparent"
+        fontSize="xs"
+        h="8"
+        minW="0"
+        px="0"
+        _placeholder={PLACEHOLDER_PROPS}
+        placeholder={placeholder}
+        position="relative"
+        w="full"
+        value={value}
+        onChange={handleChange}
+        onScroll={handleScroll}
+      />
+    </InputShell>
   );
 };

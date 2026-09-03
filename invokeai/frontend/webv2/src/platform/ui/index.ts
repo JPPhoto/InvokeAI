@@ -7,6 +7,7 @@ export * from './DropTargetOverlay';
 export * from './DropZone';
 export * from './Field';
 export * from './Group';
+export * from './InputShell';
 export * from './JsonPreview';
 export * from './Menu';
 export * from './Panel';

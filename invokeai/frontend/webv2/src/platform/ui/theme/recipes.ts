@@ -304,6 +304,16 @@ export const formControlInteraction = {
 
 const formControlOpen = { borderColor: 'accent.solid' };
 
+/**
+ * `formControlInteraction` keyed on focus-within, for composite fields whose
+ * focusable element lives inside the frame (see `platform/ui/InputShell`).
+ */
+export const inputShellInteraction = {
+  ...formControlInteraction,
+  _focusWithin: formControlFocused,
+  _hover: { ...formControlInteraction._hover, _focusWithin: formControlFocused },
+};
+
 export const inputRecipe = defineRecipe({
   ...chakraRecipes.input,
   variants: {
