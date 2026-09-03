@@ -2,9 +2,9 @@ import type { WidgetInstanceId } from '@workbench/widgetContracts';
 import type { WidgetRegionDropState } from '@workbench/widgetDnd';
 import type { PlacedWidgetRegionItem, WidgetPlacementInstanceMeta } from '@workbench/widgetRegionViewModel';
 
-import { Box } from '@chakra-ui/react';
+import { Box, Popover, Portal } from '@chakra-ui/react';
 import { horizontalListSortingStrategy } from '@dnd-kit/sortable';
-import { Row, Tooltip } from '@platform/ui';
+import { PopoverContent, Row, Tooltip } from '@platform/ui';
 import {
   WidgetEnableMenu,
   WidgetInstanceContextMenu,
@@ -22,6 +22,7 @@ import {
   getWidgetRegionItems,
   isCompactBottomItem,
   isExpandableBottomItem,
+  isPopoverBottomItem,
 } from '@workbench/widgetRegionViewModel';
 import { getWidgetById, getWidgetsForRegion } from '@workbench/widgetRegistry';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
@@ -30,9 +31,11 @@ import { useTranslation } from 'react-i18next';
 
 interface BottomWidgetItem extends PlacedWidgetRegionItem<WidgetPlacementInstanceMeta> {
   isExpandable: boolean;
+  isPopover: boolean;
 }
 
 const BOTTOM_MENU_POSITIONING = { placement: 'top-end' } as const;
+const WIDGET_POPOVER_POSITIONING = { placement: 'top-end' } as const;
 const BOTTOM_MENU_TRIGGER = { kind: 'bottom' } as const;
 /**
  * Same three-step ladder as the side rails (see `WidgetBar`): the brand hue
@@ -68,7 +71,7 @@ export const StatusBar = ({ dropState }: { dropState: WidgetRegionDropState }) =
       return [];
     }
 
-    return [{ ...item, isExpandable: isExpandableBottomItem(item) }];
+    return [{ ...item, isExpandable: isExpandableBottomItem(item), isPopover: isPopoverBottomItem(item) }];
   });
   const sortableInstanceIds = useMemo(() => compactItems.map((item) => item.id), [compactItems]);
   const openEnableMenu = useCallback((event: MouseEvent) => {
@@ -169,28 +172,40 @@ const CompactBottomWidget = ({
     region: 'bottom',
     typeId: item.typeId,
   });
-  const rowDragHandleProps = item.isExpandable
+  const [isPopoverOpen, setIsPopoverOpen] = useState(false);
+  const isActivatable = item.isExpandable || item.isPopover;
+  const rowDragHandleProps = isActivatable
     ? Object.fromEntries(Object.entries(dragHandleProps).filter(([key]) => key !== 'onKeyDown'))
     : dragHandleProps;
   const handleKeyDown = useCallback(
-    (event: KeyboardEvent) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        onSelect(item.id);
+    (event: KeyboardEvent<HTMLElement>) => {
+      if (event.key !== 'Enter' && event.key !== ' ') {
+        return;
       }
+
+      event.preventDefault();
+
+      // A popover chip is a real Popover.Trigger; a div gets no native
+      // Enter/Space click, so synthesize one for the trigger's own handling.
+      if (item.isPopover) {
+        event.currentTarget.click();
+        return;
+      }
+
+      onSelect(item.id);
     },
-    [item.id, onSelect]
+    [item.id, item.isPopover, onSelect]
   );
   const activationProps = useMemo(
     () =>
-      item.isExpandable
+      isActivatable
         ? {
             role: 'button' as const,
             tabIndex: 0,
             onKeyDown: handleKeyDown,
           }
         : {},
-    [handleKeyDown, item.isExpandable]
+    [handleKeyDown, isActivatable]
   );
   const handleClick = useCallback(() => {
     if (item.isExpandable) {
@@ -198,41 +213,88 @@ const CompactBottomWidget = ({
     }
   }, [item.id, item.isExpandable, onSelect]);
   const handleContextMenu = useCallback((event: MouseEvent) => onContextMenu(item, event), [item, onContextMenu]);
+  const handlePopoverOpenChange = useCallback((event: { open: boolean }) => setIsPopoverOpen(event.open), []);
   const tooltipContent = useMemo(() => (item.instance ? <BottomWidgetTooltipContent item={item} /> : null), [item]);
+  const isRowActive = item.isPopover ? isPopoverOpen : isActive;
 
+  const row = (
+    <Row
+      {...rowDragHandleProps}
+      aria-label={item.label}
+      aria-pressed={item.isPopover ? undefined : isRowActive}
+      color={isRowActive ? undefined : 'fg.muted'}
+      cursor={isDragging ? 'grabbing' : 'default'}
+      h="full"
+      w="auto"
+      {...(isRowActive ? COMPACT_ROW_ACTIVE_PROPS : null)}
+      _hover={isRowActive ? COMPACT_ROW_ACTIVE_HOVER_PROPS : COMPACT_ROW_HOVER_PROPS}
+      {...activationProps}
+      onClick={handleClick}
+      onContextMenu={handleContextMenu}
+    >
+      {item.instance ? (
+        <WidgetRendererById instanceId={item.id} widget={item.widget} presentation="compact" region="bottom" />
+      ) : null}
+    </Row>
+  );
+  // The Row is the popover's actual trigger (toggle, dismissal exemption,
+  // focus restore, aria) while the outer Box keeps the tooltip's trigger id —
+  // two elements, so the two machines never fight over one `id`.
   const content = (
     <Box ref={setNodeRef} h="full" style={style}>
-      <Row
-        {...rowDragHandleProps}
-        aria-label={item.label}
-        aria-pressed={isActive}
-        color={isActive ? undefined : 'fg.muted'}
-        cursor={isDragging ? 'grabbing' : item.isExpandable ? 'pointer' : 'default'}
-        h="full"
-        w="auto"
-        {...(isActive ? COMPACT_ROW_ACTIVE_PROPS : null)}
-        _hover={isActive ? COMPACT_ROW_ACTIVE_HOVER_PROPS : COMPACT_ROW_HOVER_PROPS}
-        {...activationProps}
-        onClick={handleClick}
-        onContextMenu={handleContextMenu}
-      >
-        {item.instance ? (
-          <WidgetRendererById instanceId={item.id} widget={item.widget} presentation="compact" region="bottom" />
-        ) : null}
-      </Row>
+      {item.isPopover ? <Popover.Trigger asChild>{row}</Popover.Trigger> : row}
     </Box>
   );
-  if (item.isExpandable) {
+  const labelTooltip = (
+    <Tooltip
+      closeDelay={80}
+      content={item.failureMessage ? `${item.label}: ${item.failureMessage}` : item.label}
+      openDelay={250}
+      positioning={TOOLTIP_POSITIONING}
+    >
+      {content}
+    </Tooltip>
+  );
+
+  if (item.isPopover) {
+    // VSCode-style notification center: the chip anchors a large dismissable
+    // popover instead of claiming the shared bottom panel.
     return (
-      <Tooltip
-        closeDelay={80}
-        content={item.failureMessage ? `${item.label}: ${item.failureMessage}` : item.label}
-        openDelay={250}
-        positioning={TOOLTIP_POSITIONING}
+      <Popover.Root
+        lazyMount
+        open={isPopoverOpen}
+        positioning={WIDGET_POPOVER_POSITIONING}
+        unmountOnExit
+        onOpenChange={handlePopoverOpenChange}
       >
-        {content}
-      </Tooltip>
+        {labelTooltip}
+        <Portal>
+          <Popover.Positioner>
+            <PopoverContent
+              display="flex"
+              flexDirection="column"
+              maxH="min(28rem, var(--available-height))"
+              overflow="hidden"
+              p="0"
+              w="26rem"
+            >
+              {item.instance ? (
+                <WidgetRendererById
+                  instanceId={item.id}
+                  widget={item.widget}
+                  presentation="expanded"
+                  region="popover"
+                />
+              ) : null}
+            </PopoverContent>
+          </Popover.Positioner>
+        </Portal>
+      </Popover.Root>
     );
+  }
+
+  if (item.isExpandable) {
+    return labelTooltip;
   }
 
   return (

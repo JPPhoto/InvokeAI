@@ -296,7 +296,8 @@ export interface WidgetManifest {
   allowedRegions: WidgetRegion[];
   allowMultiple: boolean;
   icon: WidgetIconComponent;
-  bottomPanel?: 'expandable' | 'tooltip';
+  /** `popover`: the compact chip opens a dismissable popover instead of claiming the bottom panel. */
+  bottomPanel?: 'expandable' | 'tooltip' | 'popover';
   centerPlacement?: 'toolbar' | 'view';
   /** Opt-in: the widget can be detached into a movable floating window. */
   allowFloating?: boolean;
