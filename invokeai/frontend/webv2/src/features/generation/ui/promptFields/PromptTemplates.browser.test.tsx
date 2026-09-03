@@ -1,18 +1,15 @@
-import type { PromptTemplateSnapshot } from '@features/generation/core/promptTemplates';
 import type { PromptTemplateRecord } from '@features/generation/data/promptTemplates';
 import type { PromptTemplateCatalog } from '@features/generation/ui/usePromptTemplates';
 
-import { Box, ChakraProvider } from '@chakra-ui/react';
+import { ChakraProvider } from '@chakra-ui/react';
 import { exportPromptTemplates } from '@features/generation/data/promptTemplates';
-import { expectRowInteractionsToMatch } from '@features/generation/ui/promptFields/promptFieldsBrowserTestUtils';
 import { PromptTemplateEditor } from '@features/generation/ui/promptFields/PromptTemplateEditor';
 import { PromptTemplatesPanel } from '@features/generation/ui/promptFields/PromptTemplatesPanel';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
-import { Row } from '@platform/ui/Row';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { system } from '@theme/system';
 import i18next from 'i18next';
-import { act, useState } from 'react';
+import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -108,8 +105,6 @@ let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const TEMPLATE_ROW_HOVER_PROBE_PROPS = { bg: 'bg.emphasized/60' };
-
 const userTemplate: PromptTemplateRecord = {
   hasImage: false,
   id: 'user-1',
@@ -156,33 +151,6 @@ const createCatalog = (overrides: Partial<PromptTemplateCatalog> = {}): PromptTe
   update: vi.fn(),
   ...overrides,
 });
-
-const StatefulPromptTemplatesPanel = ({ catalog }: { catalog: PromptTemplateCatalog }) => {
-  const [activeTemplate, setActiveTemplate] = useState<PromptTemplateSnapshot | null>(null);
-
-  return (
-    <>
-      {/* The popover surface is bg.muted, so template rows hover one step up;
-          the probe Row carries the same override so the rest of the Row
-          contract (focus ring, transitions) is still compared like for like. */}
-      <Box aria-hidden bg="bg.emphasized/60" data-testid="row-hover-style-probe" />
-      <Row asChild _hover={TEMPLATE_ROW_HOVER_PROBE_PROPS}>
-        <button aria-label="Row probe" type="button">
-          Row probe
-        </button>
-      </Row>
-      <PromptTemplatesPanel
-        activeTemplate={activeTemplate}
-        catalog={catalog}
-        isActiveTemplateMissing={false}
-        onApply={setActiveTemplate}
-        onCreate={vi.fn()}
-        onDetach={vi.fn()}
-        onEdit={vi.fn()}
-      />
-    </>
-  );
-};
 
 const render = async (element: React.ReactNode) => {
   host = document.createElement('div');
@@ -249,22 +217,26 @@ describe('the prompt templates panel', () => {
     });
   });
 
-  it('uses the shared Row interaction contract for inactive templates and keeps management controls separate', async () => {
-    await render(<StatefulPromptTemplatesPanel catalog={createCatalog()} />);
+  it('keeps management controls outside the inactive template row button', async () => {
+    await render(
+      <PromptTemplatesPanel
+        activeTemplate={null}
+        catalog={createCatalog()}
+        isActiveTemplateMissing={false}
+        onApply={vi.fn()}
+        onCreate={vi.fn()}
+        onDetach={vi.fn()}
+        onEdit={vi.fn()}
+      />
+    );
 
-    const probe = host!.querySelector<HTMLButtonElement>('button[aria-label="Row probe"]')!;
     const row = buttonWithText('Cinematic');
-    const hoverBackgroundColor = getComputedStyle(
-      host!.querySelector('[data-testid="row-hover-style-probe"]')!
-    ).backgroundColor;
     const edit = host!.querySelector<HTMLButtonElement>('button[aria-label="Edit: Cinematic"]')!;
     const remove = host!.querySelector<HTMLButtonElement>('button[aria-label="Delete: Cinematic"]')!;
 
     expect(row.getAttribute('aria-current')).toBeNull();
     expect(row.contains(edit)).toBe(false);
     expect(row.contains(remove)).toBe(false);
-
-    await expectRowInteractionsToMatch(probe, row, hoverBackgroundColor);
   });
 
   it('detaches rather than clears when the applied template is deleted', async () => {

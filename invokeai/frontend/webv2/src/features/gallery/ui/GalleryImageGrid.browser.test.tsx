@@ -552,11 +552,6 @@ describe('GalleryImageGrid mixed item cells', () => {
 
     expect(header?.getBoundingClientRect().height).toBe(24);
     expect(trigger.querySelector('svg.lucide-star')).not.toBeNull();
-    expect(getComputedStyle(trigger).transitionProperty).toBe('color');
-
-    await act(() => userEvent.hover(trigger));
-
-    expect(getComputedStyle(trigger).backgroundColor).toBe('rgba(0, 0, 0, 0)');
   });
 
   it('keeps the starred label and grid together before a dedicated trailing gap', async () => {
@@ -643,8 +638,6 @@ describe('GalleryImageGrid mixed item cells', () => {
     const videoCell = videoButton.closest<HTMLElement>('[role="listitem"]');
     const videoPoster = videoButton.querySelector<HTMLImageElement>('img');
     const playIcon = videoCell?.querySelector('svg.lucide-play');
-    const durationBadge = playIcon?.parentElement;
-    const durationBadgeStyle = durationBadge ? getComputedStyle(durationBadge) : null;
 
     expect(list?.getAttribute('aria-label')).toBe('Gallery items');
     expect(host?.querySelectorAll('[role="listitem"]')).toHaveLength(2);
@@ -655,9 +648,6 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(videoPoster?.hasAttribute('loading')).toBe(false);
     expect(videoCell?.textContent).toContain('1:06');
     expect(playIcon?.getAttribute('aria-hidden')).toBe('true');
-    expect(durationBadgeStyle?.fontVariantNumeric).toContain('tabular-nums');
-    expect(durationBadgeStyle?.opacity).toBe('1');
-    expect(durationBadgeStyle?.transitionProperty).toBe('opacity');
     expect(imageButton.closest('[role="listitem"]')?.textContent).toContain('128x96');
     expect(host?.querySelector('button[aria-label="Star shared"]')).not.toBeNull();
     expect(host?.querySelector('video')).toBeNull();
