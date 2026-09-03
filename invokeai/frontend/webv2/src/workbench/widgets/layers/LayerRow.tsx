@@ -384,7 +384,6 @@ const LayerRowComponent = ({
               )}
               alignItems="center"
               color="fg.muted"
-              cursor="pointer"
               display="flex"
               h="3"
               justifyContent="center"

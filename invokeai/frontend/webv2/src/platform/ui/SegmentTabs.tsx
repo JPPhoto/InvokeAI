@@ -128,7 +128,6 @@ const SegmentTabButton = <T extends string>({
       aria-selected={isSelected}
       bg={isShown ? 'bg.emphasized' : 'transparent'}
       color={isShown ? 'fg' : 'fg.muted'}
-      cursor="pointer"
       fontSize="xs"
       fontWeight="600"
       h="7"

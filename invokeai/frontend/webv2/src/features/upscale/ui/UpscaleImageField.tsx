@@ -169,7 +169,6 @@ export const UpscaleImageField = memo(
           as="button"
           aria-busy={isLoading}
           aria-label={inputImage ? t('widgets.upscale.replaceImage') : t('widgets.upscale.uploadImage')}
-          cursor="pointer"
           isOver={isOver}
           {...(isLoading ? DROP_ZONE_BUSY_PROPS : undefined)}
           minH="24"

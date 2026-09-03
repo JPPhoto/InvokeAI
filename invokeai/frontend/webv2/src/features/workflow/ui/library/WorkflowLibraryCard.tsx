@@ -62,7 +62,6 @@ export const WorkflowLibraryCard = ({
       bg={isSelected ? 'bg.emphasized' : 'bg.subtle'}
       borderColor={isSelected ? 'accent.solid' : 'border.subtle'}
       borderWidth="1px"
-      cursor="pointer"
       data-workflow-card={workflowId}
       minW="0"
       overflow="hidden"

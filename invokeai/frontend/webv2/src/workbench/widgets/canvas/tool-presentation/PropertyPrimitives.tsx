@@ -87,7 +87,6 @@ export const PropertyGroup = ({
           alignItems="center"
           aria-expanded={open}
           color="fg.muted"
-          cursor="pointer"
           display="flex"
           gap="1"
           rounded="xs"

@@ -86,7 +86,6 @@ const GalleryStarredSectionHeader = ({
         aria-label={t(isOpen ? 'widgets.gallery.collapseStarredItems' : 'widgets.gallery.expandStarredItems')}
         alignItems="center"
         color="fg.muted"
-        cursor="pointer"
         display="flex"
         flex="1"
         gap="1"
@@ -449,7 +448,6 @@ export const GalleryImageGrid = () => {
             <input {...uploadInputProps} />
             <DropZone
               alignItems="center"
-              cursor="pointer"
               display="flex"
               flex="1"
               fontSize="xs"

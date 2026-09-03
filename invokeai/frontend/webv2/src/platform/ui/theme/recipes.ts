@@ -682,7 +682,6 @@ export const rowRecipe = defineRecipe({
   base: {
     alignItems: 'center',
     borderRadius: 'sm',
-    cursor: 'pointer',
     display: 'flex',
     gap: '2',
     textAlign: 'start',
@@ -763,7 +762,6 @@ export const themeCardRecipe = defineSlotRecipe({
       borderColor: 'border.subtle',
       borderRadius: 'lg',
       borderWidth: '1px',
-      cursor: 'pointer',
       display: 'flex',
       flexDirection: 'column',
       gap: '2.5',

@@ -276,6 +276,12 @@ const config = defineConfig({
   },
   theme: {
     tokens: {
+      // Pro-app convention: controls keep the default arrow cursor; pointer is
+      // reserved for links. Overrides Chakra's `button`/`switch` pointer tokens.
+      cursor: {
+        button: { value: 'default' },
+        switch: { value: 'default' },
+      },
       fonts: {
         body: {
           value: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",

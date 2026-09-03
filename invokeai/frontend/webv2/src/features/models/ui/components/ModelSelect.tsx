@@ -432,7 +432,6 @@ const BaseChip = ({
   <Badge
     aria-pressed={isSelected}
     colorPalette={getModelBaseColorPalette(base)}
-    cursor="pointer"
     fontSize="2xs"
     role="button"
     size="sm"

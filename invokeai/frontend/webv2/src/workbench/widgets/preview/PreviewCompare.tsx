@@ -323,7 +323,6 @@ const HoverCompareFrame = ({
       borderColor="border.emphasized"
       borderWidth="1px"
       css={getFittedFrameCss(baseImage.width, baseImage.height)}
-      cursor="pointer"
       overflow="hidden"
       position="relative"
       role="region"

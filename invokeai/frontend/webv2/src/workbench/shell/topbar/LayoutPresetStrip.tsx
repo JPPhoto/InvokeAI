@@ -368,7 +368,7 @@ const PresetTab = ({
       {...listeners}
       aria-label={showDrift ? `${preset.label}, ${t('topbar.presets.unsaved')}` : preset.label}
       aria-keyshortcuts={isActive ? 'ArrowDown' : undefined}
-      cursor={isDragging ? 'grabbing' : 'pointer'}
+      cursor={isDragging ? 'grabbing' : 'default'}
       data-layout-preset-id={preset.id}
       gap="1.5"
       style={dndStyle}

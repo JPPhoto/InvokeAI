@@ -167,7 +167,6 @@ const CommandPaletteContent = ({
                 bg="bg.emphasized"
                 borderRadius="sm"
                 color="fg"
-                cursor="pointer"
                 display="inline-flex"
                 flexShrink={0}
                 fontSize="xs"

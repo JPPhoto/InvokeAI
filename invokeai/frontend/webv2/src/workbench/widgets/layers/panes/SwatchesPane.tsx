@@ -177,7 +177,6 @@ const Swatch = ({
       aria-pressed={isActive}
       borderColor={isActive ? 'accent.solid' : 'border.subtle'}
       borderWidth="1px"
-      cursor="pointer"
       h="6"
       rounded="sm"
       style={style}
