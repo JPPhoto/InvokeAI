@@ -108,7 +108,7 @@ export const QueueCluster = () => {
             fontVariantNumeric="tabular-nums"
             overflow="hidden"
             position="relative"
-            size="xs"
+            size="sm"
             px={2}
             variant={tone === 'idle' ? 'outline' : 'subtle'}
             onClick={handleOpenQueue}
@@ -136,7 +136,7 @@ export const QueueCluster = () => {
             <IconButton
               aria-label={isCancelAllArmed && cancelAll ? cancelAll.label : cancelCurrent.label}
               color="fg.error"
-              size="xs"
+              size="sm"
               variant="outline"
               onClick={handleCancelClick}
               onPointerEnter={handleCancelPointerEnter}
@@ -155,7 +155,7 @@ export const QueueCluster = () => {
           <IconButton
             aria-label={t('topbar.queue.actions')}
             color="fg.subtle"
-            size="xs"
+            size="sm"
             minW="0"
             w="6"
             variant="outline"

@@ -132,10 +132,12 @@ export const tabsSlotRecipe = defineSlotRecipe({
         ...chakraSlotRecipes.tabs.variants?.variant?.subtle,
         trigger: {
           ...chakraSlotRecipes.tabs.variants?.variant?.subtle?.trigger,
-          // `bg.muted` disappears against muted-family chrome (the topbar
-          // preset strip); one surface step up reads everywhere.
+          // The buttons' corner and translucent accent-leaning hover (see
+          // `SegmentTabs`): solid subtle fills vanish against muted chrome.
+          // Selected stays the stock accent fill — nav sidebars rely on it.
+          borderRadius: 'control',
           _hover: {
-            '&:not([data-selected])': { bg: 'bg.emphasized/60' },
+            '&:not([data-selected])': { bg: 'gray.hoverTint/10', color: 'fg' },
           },
         },
       },
@@ -178,6 +180,8 @@ export const buttonRecipe = defineRecipe({
   base: {
     ...chakraRecipes.button.base,
     borderRadius: 'control',
+    // Chakra's `moderate` hover fade reads as lag on a busy workbench.
+    transitionDuration: 'faster',
   },
   variants: {
     ...chakraRecipes.button.variants,
@@ -352,6 +356,14 @@ export const inputRecipe = defineRecipe({
   ...chakraRecipes.input,
   variants: {
     ...chakraRecipes.input.variants,
+    // The same one-notch drop as the button scale, so same-named sizes share a
+    // row height (select/combobox/numberInput repeat it for their vars).
+    size: {
+      ...chakraRecipes.input.variants?.size,
+      xs: { ...chakraRecipes.input.variants?.size?.xs, '--input-height': 'sizes.7' },
+      sm: { ...chakraRecipes.input.variants?.size?.sm, '--input-height': 'sizes.8' },
+      md: { ...chakraRecipes.input.variants?.size?.md, '--input-height': 'sizes.9' },
+    },
     variant: {
       ...chakraRecipes.input.variants?.variant,
       outline: { ...chakraRecipes.input.variants?.variant?.outline, ...formControlNoFocusRing },
@@ -384,6 +396,21 @@ export const numberInputSlotRecipe = defineSlotRecipe({
   ...chakraSlotRecipes.numberInput,
   variants: {
     ...chakraSlotRecipes.numberInput.variants,
+    size: {
+      ...chakraSlotRecipes.numberInput.variants?.size,
+      xs: {
+        ...chakraSlotRecipes.numberInput.variants?.size?.xs,
+        input: { ...chakraSlotRecipes.numberInput.variants?.size?.xs?.input, '--input-height': 'sizes.7' },
+      },
+      sm: {
+        ...chakraSlotRecipes.numberInput.variants?.size?.sm,
+        input: { ...chakraSlotRecipes.numberInput.variants?.size?.sm?.input, '--input-height': 'sizes.8' },
+      },
+      md: {
+        ...chakraSlotRecipes.numberInput.variants?.size?.md,
+        input: { ...chakraSlotRecipes.numberInput.variants?.size?.md?.input, '--input-height': 'sizes.9' },
+      },
+    },
     variant: {
       ...chakraSlotRecipes.numberInput.variants?.variant,
       outline: {
@@ -421,6 +448,7 @@ export const dropdownContent = {
 };
 
 export const dropdownItem = {
+  borderRadius: 'l2',
   _highlighted: { bg: 'bg.emphasized' },
   _hover: { bg: 'bg.emphasized' },
   _focusVisible: {
@@ -475,6 +503,21 @@ export const selectSlotRecipe = defineSlotRecipe({
   // anchored to Chakra's own map, which the spread-with-override loses.
   variants: {
     ...chakraSlotRecipes.select.variants,
+    size: {
+      ...chakraSlotRecipes.select.variants?.size,
+      xs: {
+        ...chakraSlotRecipes.select.variants?.size?.xs,
+        root: { ...chakraSlotRecipes.select.variants?.size?.xs?.root, '--select-trigger-height': 'sizes.7' },
+      },
+      sm: {
+        ...chakraSlotRecipes.select.variants?.size?.sm,
+        root: { ...chakraSlotRecipes.select.variants?.size?.sm?.root, '--select-trigger-height': 'sizes.8' },
+      },
+      md: {
+        ...chakraSlotRecipes.select.variants?.size?.md,
+        root: { ...chakraSlotRecipes.select.variants?.size?.md?.root, '--select-trigger-height': 'sizes.9' },
+      },
+    },
     variant: {
       ...chakraSlotRecipes.select.variants?.variant,
       outline: {
@@ -493,7 +536,7 @@ export const selectSlotRecipe = defineSlotRecipe({
         },
       },
     },
-  } as typeof chakraSlotRecipes.select.variants,
+  } as unknown as typeof chakraSlotRecipes.select.variants,
   base: {
     ...chakraSlotRecipes.select.base,
     trigger: {
@@ -520,6 +563,21 @@ export const comboboxSlotRecipe = defineSlotRecipe({
   ...chakraSlotRecipes.combobox,
   variants: {
     ...chakraSlotRecipes.combobox.variants,
+    size: {
+      ...chakraSlotRecipes.combobox.variants?.size,
+      xs: {
+        ...chakraSlotRecipes.combobox.variants?.size?.xs,
+        root: { ...chakraSlotRecipes.combobox.variants?.size?.xs?.root, '--combobox-input-height': 'sizes.7' },
+      },
+      sm: {
+        ...chakraSlotRecipes.combobox.variants?.size?.sm,
+        root: { ...chakraSlotRecipes.combobox.variants?.size?.sm?.root, '--combobox-input-height': 'sizes.8' },
+      },
+      md: {
+        ...chakraSlotRecipes.combobox.variants?.size?.md,
+        root: { ...chakraSlotRecipes.combobox.variants?.size?.md?.root, '--combobox-input-height': 'sizes.9' },
+      },
+    },
     variant: {
       ...chakraSlotRecipes.combobox.variants?.variant,
       outline: {

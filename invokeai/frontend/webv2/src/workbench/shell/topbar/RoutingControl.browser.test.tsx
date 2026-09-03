@@ -77,7 +77,7 @@ const renderControl = async (state: InvocationState) => {
     root?.render(
       <ChakraProvider value={system}>
         <Group attached>
-          <Button data-routing-height-reference="" size="xs">
+          <Button data-routing-height-reference="" size="sm">
             Invoke
           </Button>
           <RoutingControl state={state} />
@@ -130,7 +130,7 @@ describe('RoutingControl', () => {
     const sourceBounds = sourceIcon!.getBoundingClientRect();
     const destinationBounds = destinationIcon!.getBoundingClientRect();
     expect(buttonBounds.width).toBe(36);
-    expect(buttonBounds.height).toBe(28);
+    expect(buttonBounds.height).toBe(32);
     expect(buttonBounds.height).toBe(heightReference!.getBoundingClientRect().height);
     expect(destinationBounds.left - sourceBounds.left).toBeGreaterThanOrEqual(8);
     expect(destinationBounds.top - sourceBounds.top).toBeGreaterThanOrEqual(8);
@@ -141,7 +141,7 @@ describe('RoutingControl', () => {
       root?.render(
         <ChakraProvider value={system}>
           <Group attached>
-            <Button data-routing-height-reference="" size="xs">
+            <Button data-routing-height-reference="" size="sm">
               Invoke
             </Button>
             <RoutingControl state={LOCKED_STATE} />

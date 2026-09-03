@@ -153,6 +153,7 @@ const SegmentTabButton = <T extends string>({
       role="tab"
       rounded="control"
       tabIndex={isSelected ? 0 : -1}
+      transition="background var(--wb-motion-duration-fast), color var(--wb-motion-duration-fast)"
       type="button"
       _hover={isShown ? undefined : TAB_HOVER_PROPS}
       onClick={select}

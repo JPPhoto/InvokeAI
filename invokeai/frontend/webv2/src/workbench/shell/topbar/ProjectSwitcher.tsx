@@ -167,7 +167,7 @@ export const ProjectSwitcher = () => {
         <Menu.Trigger asChild>
           <Button
             aria-label={t('topbar.projectSwitcher.trigger', { name: activeProjectName })}
-            size="xs"
+            size="sm"
             variant="ghost"
           >
             <MiddleTruncate css={HIDE_BELOW_PROJECT_NAME_WIDTH} fontWeight="500" minW="0" text={activeProjectName} />

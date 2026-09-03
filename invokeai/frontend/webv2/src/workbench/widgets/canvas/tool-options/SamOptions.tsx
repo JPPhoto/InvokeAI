@@ -302,7 +302,6 @@ export const SamPromptBody = ({
         autoComplete="off"
         disabled={disabled}
         flexShrink={0}
-        h="8"
         placeholder={t('widgets.layers.selectObject.promptGuidance')}
         size="xs"
         value={prompt}

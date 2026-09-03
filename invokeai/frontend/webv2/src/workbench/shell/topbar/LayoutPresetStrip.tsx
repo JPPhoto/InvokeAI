@@ -223,7 +223,7 @@ export const LayoutPresetStrip = () => {
         <Tooltip content={t('topbar.presets.saveAsTooltip')} showArrow>
           <IconButton
             aria-label={t('topbar.presets.saveAsTooltip')}
-            size="xs"
+            size="sm"
             variant="ghost"
             onClick={openSaveAsDialog}
           >
@@ -374,6 +374,7 @@ const PresetTab = ({
       style={dndStyle}
       touchAction="pan-x"
       value={preset.id}
+      _selected={PRESET_TAB_SELECTED_PROPS}
       onClick={handleClick}
       onContextMenu={handleContextMenu}
       onFocus={handlePreload}
@@ -407,6 +408,10 @@ const PresetTab = ({
 };
 
 const MENU_AFFORDANCE_HOVER_PROPS = { bg: 'bg.emphasized', color: 'fg' } as const;
+
+// The strip sits on topbar chrome the accent.subtle fill blends into; the
+// SegmentTabs translucent shown-tab fill reads there (nav sidebars keep stock).
+const PRESET_TAB_SELECTED_PROPS = { bg: 'gray.hoverTint/15', color: 'fg' } as const;
 
 const DriftDot = () => <Box aria-hidden="true" bg="accent.solid" boxSize="1.5" flexShrink={0} rounded="full" />;
 
