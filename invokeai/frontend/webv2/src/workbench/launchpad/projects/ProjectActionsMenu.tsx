@@ -17,8 +17,6 @@ import type { ProjectCardActions } from './useProjectCardActions';
  * overflow button offer the same things in the same order everywhere.
  */
 
-const MENU_ITEM_DELETE_HOVER = { bg: 'bg.error', color: 'fg.error' } as const;
-
 export interface ProjectActionsMenuProps {
   actions: ProjectCardActions;
   isCompatible: boolean;
@@ -168,7 +166,7 @@ const MenuBody = ({
         {t('common.export')}
       </Menu.Item>
       <Menu.Separator />
-      <Menu.Item color="fg.error" value="delete" _hover={MENU_ITEM_DELETE_HOVER} onClick={onDelete}>
+      <Menu.Item data-danger="" value="delete" onClick={onDelete}>
         <Icon as={Trash2Icon} boxSize="3.5" />
         {t('common.delete')}…
       </Menu.Item>

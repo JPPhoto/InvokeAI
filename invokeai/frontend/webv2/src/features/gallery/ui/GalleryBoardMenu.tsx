@@ -328,8 +328,8 @@ const BoardDeleteMenuItem = ({
 
   return (
     <BoardMenuItem
-      color="fg.error"
       icon={Trash2Icon}
+      isDanger
       label={t('widgets.gallery.deleteBoard')}
       value="delete-board"
       onClick={handleClick}
@@ -338,21 +338,21 @@ const BoardDeleteMenuItem = ({
 };
 
 const BoardMenuItem = ({
-  color,
   icon,
+  isDanger,
   label,
   value,
   onClick,
 }: {
-  color?: string;
   icon: LucideIcon;
+  isDanger?: boolean;
   label: string;
   value: string;
   onClick: () => void;
 }) => (
-  <Menu.Item color={color} value={value} onClick={onClick}>
+  <Menu.Item data-danger={isDanger ? '' : undefined} value={value} onClick={onClick}>
     <HStack gap="2" minW="0" w="full">
-      <Icon as={icon} boxSize="3.5" color={color ?? 'fg.subtle'} flexShrink={0} />
+      <Icon as={icon} boxSize="3.5" color={isDanger ? undefined : 'fg.subtle'} flexShrink={0} />
       <Text flex="1" fontSize="xs">
         {label}
       </Text>

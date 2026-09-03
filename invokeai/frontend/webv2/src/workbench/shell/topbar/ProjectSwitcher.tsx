@@ -43,7 +43,6 @@ import { projectSwitcherStore, setProjectSwitcherOpen } from './projectSwitcherS
 import { HIDE_BELOW_PROJECT_NAME_WIDTH } from './topbarBreakpoints';
 
 const MENU_POSITIONING = { placement: 'bottom-start' } as const;
-const DELETE_HOVER_PROPS = { bg: 'bg.error', color: 'fg.error' } as const;
 const RECENT_PROJECT_LIMIT = 5;
 
 export const ProjectSwitcher = () => {
@@ -200,12 +199,7 @@ export const ProjectSwitcher = () => {
                 <Icon as={XIcon} boxSize="3.5" />
                 <Menu.ItemText>{t('common.close')}</Menu.ItemText>
               </Menu.Item>
-              <Menu.Item
-                color="fg.error"
-                value="delete-project"
-                _hover={DELETE_HOVER_PROPS}
-                onClick={deleteActiveProject}
-              >
+              <Menu.Item data-danger="" value="delete-project" onClick={deleteActiveProject}>
                 <Icon as={Trash2Icon} boxSize="3.5" />
                 <Menu.ItemText>{t('projects.deleteProjectWithEllipsis')}</Menu.ItemText>
               </Menu.Item>

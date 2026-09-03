@@ -529,7 +529,7 @@ const PresetMenu = ({
                 <Menu.ItemText>{t('topbar.presets.editWithEllipsis')}</Menu.ItemText>
               </Menu.Item>
               {isCustom ? (
-                <Menu.Item color="fg.error" value="delete-preset" _hover={DELETE_HOVER_PROPS} onClick={remove}>
+                <Menu.Item data-danger="" value="delete-preset" onClick={remove}>
                   <Icon as={Trash2Icon} boxSize="3.5" />
                   <Menu.ItemText>{t('topbar.presets.deleteWithEllipsis')}</Menu.ItemText>
                 </Menu.Item>
@@ -547,5 +547,3 @@ const PresetMenu = ({
     </Menu.Root>
   );
 };
-
-const DELETE_HOVER_PROPS = { bg: 'bg.error', color: 'fg.error' } as const;

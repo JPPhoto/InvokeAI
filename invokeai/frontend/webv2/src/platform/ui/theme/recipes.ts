@@ -449,6 +449,13 @@ export const dropdownContent = {
 
 export const dropdownItem = {
   borderRadius: 'l2',
+  // One `data-danger` attribute is the whole destructive treatment; every
+  // delete/uninstall/clear item opts in instead of restyling locally.
+  '&[data-danger]': {
+    color: 'fg.error',
+    _highlighted: { bg: 'bg.error' },
+    _hover: { bg: 'bg.error' },
+  },
   _highlighted: { bg: 'bg.emphasized' },
   _hover: { bg: 'bg.emphasized' },
   _focusVisible: {
