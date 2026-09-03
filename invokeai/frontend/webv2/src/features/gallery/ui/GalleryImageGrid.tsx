@@ -29,6 +29,7 @@ import {
   buildGalleryGridRows,
   GALLERY_GRID_GAP_PX,
   GALLERY_STARRED_HEADER_HEIGHT_PX,
+  GALLERY_STARRED_SEPARATOR_HEIGHT_PX,
   getGalleryCellSizePx,
   getGalleryColumnCount,
   getGalleryGridRowHeightPx,
@@ -473,14 +474,33 @@ export const GalleryImageGrid = () => {
                 {virtualRows.map((virtualRow) => {
                   const row = rows[virtualRow.index];
 
-                  return row?.kind === 'starred-header' ? (
-                    <GalleryStarredSectionHeader
+                  if (row?.kind === 'starred-header') {
+                    return (
+                      <GalleryStarredSectionHeader
+                        key={virtualRow.key}
+                        isOpen={isStarredOpen}
+                        itemCount={row.itemCount}
+                        offsetPx={virtualRow.start}
+                        onToggle={handleToggleStarredSection}
+                      />
+                    );
+                  }
+
+                  return row?.kind === 'starred-gap' && row.withSeparator ? (
+                    <Flex
                       key={virtualRow.key}
-                      isOpen={isStarredOpen}
-                      itemCount={row.itemCount}
-                      offsetPx={virtualRow.start}
-                      onToggle={handleToggleStarredSection}
-                    />
+                      aria-hidden="true"
+                      data-gallery-starred-separator
+                      align="center"
+                      h={`${GALLERY_STARRED_SEPARATOR_HEIGHT_PX}px`}
+                      left="0"
+                      position="absolute"
+                      top="0"
+                      transform={`translateY(${virtualRow.start}px)`}
+                      w="full"
+                    >
+                      <Box bg="border.subtle" h="1px" w="full" />
+                    </Flex>
                   ) : null;
                 })}
                 <Box

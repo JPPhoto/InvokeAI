@@ -17,6 +17,7 @@ import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { requestGalleryItemReveal } from '@features/gallery/core/selection';
 import { getGallerySettings } from '@features/gallery/core/settings';
 import { GalleryUiProvider, type GalleryUiAdapter } from '@features/gallery/react';
+import { GALLERY_STARRED_SEPARATOR_HEIGHT_PX } from '@features/gallery/ui/galleryGridLayout';
 import { isGalleryImageDragData } from '@features/gallery/utility';
 import { parseDateTokens } from '@platform/search/dateTokens';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
@@ -573,7 +574,9 @@ describe('GalleryImageGrid mixed item cells', () => {
 
     expect((headerRect?.top ?? 0) - (listRect?.top ?? 0)).toBeCloseTo(0, 0);
     expect(starredRect.top - (headerRect?.bottom ?? 0)).toBeLessThan(4);
-    expect(regularRect.top - starredRect.bottom).toBeCloseTo(12, 0);
+    // The trailing gap holds a hairline separator while the section is open.
+    expect(regularRect.top - starredRect.bottom).toBeCloseTo(8 + GALLERY_STARRED_SEPARATOR_HEIGHT_PX, 0);
+    expect(host?.querySelector('[data-gallery-starred-separator]')).not.toBeNull();
 
     await click(getButton('Collapse starred items'));
 
@@ -584,6 +587,7 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect((collapsedHeaderRect?.top ?? 0) - (listRect?.top ?? 0)).toBeCloseTo(0, 0);
     expect(collapsedSectionGap).toBeGreaterThanOrEqual(4);
     expect(collapsedSectionGap).toBeLessThan(8);
+    expect(host?.querySelector('[data-gallery-starred-separator]')).toBeNull();
   });
 
   it('collapses only the starred items and omits the disclosure when no stars are loaded', async () => {
