@@ -180,7 +180,7 @@ describe('gallery state view', () => {
     });
   });
 
-  it('parses persisted gallery settings with safe defaults and keeps the starred section complete', () => {
+  it('parses persisted gallery settings with safe defaults and ignores a persisted starredFirst', () => {
     const gallery = getGalleryStateView({ boardOrderBy: 'board_name', starredFirst: false }, boards, [], false);
 
     expect(gallery.settings).toEqual({
@@ -201,6 +201,11 @@ describe('gallery state view', () => {
       starredFirst: true,
       thumbnailFit: 'square',
     });
+  });
+
+  it('derives starred-first from the pagination mode: sectioned infinite window, flat paginated pages', () => {
+    expect(getGalleryStateView({ paginationMode: 'infinite' }, boards, [], false).settings.starredFirst).toBe(true);
+    expect(getGalleryStateView({ paginationMode: 'paginated' }, boards, [], false).settings.starredFirst).toBe(false);
   });
 
   it('qualifies legacy names and preserves ordered mixed-media selection keys', () => {
@@ -539,6 +544,40 @@ describe('gallery state view', () => {
     expect(gallery.pendingPlaceholders).toEqual([]);
     expect((gallery as typeof gallery & { items?: GalleryItem[] }).items).toEqual([image]);
     expect(gallery.settings.showPendingItems).toBe(false);
+  });
+
+  it('shows placeholders only on the paginated page where new images land', () => {
+    const queueItems = [createQueueItem({ boardId: 'none', status: 'pending' })];
+    const getPlaceholders = (values: Record<string, unknown>) =>
+      getGalleryStateView(
+        { paginationMode: 'paginated', selectedBoardId: 'none', ...values },
+        boards,
+        [],
+        false,
+        queueItems
+      ).pendingPlaceholders;
+
+    // Newest-first: new images land on page 0.
+    expect(getPlaceholders({ galleryPage: 0 })).toHaveLength(1);
+    expect(getPlaceholders({ galleryPage: 2 })).toHaveLength(0);
+
+    // Oldest-first: they land at row `total`, which needs the known total.
+    expect(getPlaceholders({ galleryPage: 2, galleryTotalImages: 150, imageOrderDir: 'ASC' })).toHaveLength(1);
+    expect(getPlaceholders({ galleryPage: 0, galleryTotalImages: 150, imageOrderDir: 'ASC' })).toHaveLength(0);
+    expect(getPlaceholders({ galleryPage: 0, imageOrderDir: 'ASC' })).toHaveLength(0);
+
+    // An exactly-full last page means the image lands on a page that does not
+    // exist yet, which no current page can show.
+    expect(getPlaceholders({ galleryPage: 1, galleryTotalImages: 120, imageOrderDir: 'ASC' })).toHaveLength(0);
+  });
+
+  it('hides placeholders while an infinite window is anchored mid-board', () => {
+    const queueItems = [createQueueItem({ boardId: 'none', status: 'pending' })];
+
+    expect(
+      getGalleryStateView({ galleryPage: 11, selectedBoardId: 'none' }, boards, [], false, queueItems)
+        .pendingPlaceholders
+    ).toHaveLength(0);
   });
 });
 

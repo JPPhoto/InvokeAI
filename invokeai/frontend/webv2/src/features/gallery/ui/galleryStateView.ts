@@ -18,6 +18,7 @@ import {
   type GallerySemanticReference,
 } from '@features/gallery/core/semanticImageQuery';
 import { getGallerySettings, type GallerySettings } from '@features/gallery/core/settings';
+import { GALLERY_PAGE_SIZE } from '@features/gallery/data/queries';
 import { getQueueItemSnapshotBatchCount, getQueueItemSnapshotDimensions } from '@features/queue/contracts';
 
 /**
@@ -106,15 +107,20 @@ interface GalleryOrderImage {
   starred?: boolean;
 }
 
-// Starred-first placement is pinned in gallery/core/settings.ts, so this
-// always inserts after the leading starred block rather than branching on a
-// flag that no longer varies.
+// Newest-first placeholders land where their images will: at the top of a
+// flat listing, or just below the leading starred block of a starred-first
+// one. Oldest-first listings take them at the end either way.
 export const getGalleryPlaceholderInsertionIndex = (
   images: GalleryOrderImage[],
-  imageOrderDir: GalleryOrderDir
+  imageOrderDir: GalleryOrderDir,
+  starredFirst: boolean
 ): number => {
   if (imageOrderDir !== 'DESC') {
     return images.length;
+  }
+
+  if (!starredFirst) {
+    return 0;
   }
 
   const firstUnstarredIndex = images.findIndex((image) => !image.starred);
@@ -373,6 +379,26 @@ const getVisibleGalleryQueuePlaceholders = (
   return imageOrderDir === 'DESC' ? [...placeholders].reverse() : placeholders;
 };
 
+/**
+ * Whether the current page or window can show where a NEW image will land.
+ * Placeholders stand in for images-to-come, so they render only there. In
+ * infinite mode that is the unanchored window (a deep reveal shows a slice
+ * nowhere near the landing). Newest-first pages land on page 0; oldest-first
+ * pages land at row `total` — unknowable until the total is, and on a page
+ * that does not exist yet when the last one is exactly full.
+ */
+const isGalleryWindowAtIncomingItemLanding = (
+  settings: GallerySettings,
+  page: number,
+  totalImages: number | null
+): boolean => {
+  if (settings.paginationMode === 'infinite' || settings.imageOrderDir === 'DESC') {
+    return page === 0;
+  }
+
+  return totalImages !== null && page === Math.floor(totalImages / GALLERY_PAGE_SIZE);
+};
+
 export const getGalleryStateView = (
   values: Record<string, unknown>,
   backendBoards: GalleryBoard[],
@@ -421,16 +447,15 @@ export const getGalleryStateView = (
   // pending placeholders (which stand in for images-to-come) are hidden while
   // a semantic query is active — exactly as they are for a text search.
   const semanticImageQuery = getGallerySemanticImageQuery(values);
-  // Placeholders stand in for images that will land at the TOP of the board's
-  // listing. An infinite window anchored mid-board (a deep reveal) shows a
-  // slice nowhere near the top, so they are hidden there too.
-  const isAnchoredInfiniteWindow = settings.paginationMode === 'infinite' && getGalleryPage(values) > 0;
+  const page = getGalleryPage(values);
+  const isAnchoredInfiniteWindow = settings.paginationMode === 'infinite' && page > 0;
+  const showsIncomingItemLanding = isGalleryWindowAtIncomingItemLanding(settings, page, getGalleryTotalImages(values));
   const visibleActivePlaceholder =
     settings.showPendingItems &&
     galleryView === 'images' &&
     searchTerm.trim() === '' &&
     semanticImageQuery === null &&
-    !isAnchoredInfiniteWindow
+    showsIncomingItemLanding
       ? generationSequence.liveSlot?.boardId === selectedBoardId
         ? generationSequence.liveSlot
         : null
@@ -443,7 +468,7 @@ export const getGalleryStateView = (
   });
 
   return {
-    anchoredWindowPage: isAnchoredInfiniteWindow ? getGalleryPage(values) : 0,
+    anchoredWindowPage: isAnchoredInfiniteWindow ? page : 0,
     boards,
     compareImageKey,
     currentItem,
@@ -451,7 +476,7 @@ export const getGalleryStateView = (
     items,
     isLoading,
     pendingPlaceholders:
-      settings.showPendingItems && semanticImageQuery === null && !isAnchoredInfiniteWindow
+      settings.showPendingItems && semanticImageQuery === null && showsIncomingItemLanding
         ? getVisibleGalleryQueuePlaceholders(generationSequence.chronologicalSlots, {
             galleryView,
             imageOrderDir: settings.imageOrderDir,

@@ -135,7 +135,8 @@ export const GalleryImageGrid = () => {
   const [viewportWidth, setViewportWidth] = useState(() => viewportWidthCache.get(region) ?? 0);
   const dragDepthRef = useRef(0);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const { imageDensityPercent, imageOrderDir, paginationMode, showImageDimensions, thumbnailFit } = gallery.settings;
+  const { imageDensityPercent, imageOrderDir, paginationMode, showImageDimensions, starredFirst, thumbnailFit } =
+    gallery.settings;
 
   const {
     actionSelectionRefs,
@@ -171,8 +172,9 @@ export const GalleryImageGrid = () => {
         isStarredOpen,
         items: gallery.items,
         pendingPlaceholders: gallery.pendingPlaceholders,
+        starredFirst,
       }),
-    [columnCount, gallery.items, gallery.pendingPlaceholders, imageOrderDir, isStarredOpen]
+    [columnCount, gallery.items, gallery.pendingPlaceholders, imageOrderDir, isStarredOpen, starredFirst]
   );
 
   const rowCount = rows.length;

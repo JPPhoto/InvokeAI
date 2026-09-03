@@ -15,7 +15,7 @@ import {
 } from '@dnd-kit/core';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { requestGalleryItemReveal } from '@features/gallery/core/selection';
-import { DEFAULT_GALLERY_SETTINGS } from '@features/gallery/core/settings';
+import { getGallerySettings } from '@features/gallery/core/settings';
 import { GalleryUiProvider, type GalleryUiAdapter } from '@features/gallery/react';
 import { isGalleryImageDragData } from '@features/gallery/utility';
 import { parseDateTokens } from '@platform/search/dateTokens';
@@ -200,6 +200,9 @@ const createFilter = (gallery: GalleryStateView): GalleryItemsFilter => {
   };
 };
 
+/** Infinite-mode settings — the only mode where the starred section renders. */
+const SECTIONED_SETTINGS = { ...getGallerySettings({}), imageDensityPercent: 0 };
+
 const createGallery = (overrides: Partial<GalleryStateView> = {}): GalleryStateView => {
   const items = overrides.items ?? [
     createItem('image', 'first.png'),
@@ -222,7 +225,7 @@ const createGallery = (overrides: Partial<GalleryStateView> = {}): GalleryStateV
     selectedItemKey: 'image:first.png',
     selectedItemKeys: ['image:first.png'],
     semanticImageQuery: null,
-    settings: { ...DEFAULT_GALLERY_SETTINGS, imageDensityPercent: 0, paginationMode: 'paginated' },
+    settings: { ...getGallerySettings({ paginationMode: 'paginated' }), imageDensityPercent: 0 },
     ...overrides,
   };
 };
@@ -482,6 +485,7 @@ describe('GalleryImageGrid mixed item cells', () => {
     await renderGallery(
       createGallery({
         items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+        settings: SECTIONED_SETTINGS,
       })
     );
 
@@ -505,6 +509,7 @@ describe('GalleryImageGrid mixed item cells', () => {
     await renderGallery(
       createGallery({
         items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+        settings: SECTIONED_SETTINGS,
       }),
       false,
       background
@@ -532,6 +537,7 @@ describe('GalleryImageGrid mixed item cells', () => {
     await renderGallery(
       createGallery({
         items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+        settings: SECTIONED_SETTINGS,
       })
     );
 
@@ -551,6 +557,7 @@ describe('GalleryImageGrid mixed item cells', () => {
     await renderGallery(
       createGallery({
         items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+        settings: SECTIONED_SETTINGS,
       })
     );
 
@@ -578,6 +585,7 @@ describe('GalleryImageGrid mixed item cells', () => {
     await renderGallery(
       createGallery({
         items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+        settings: SECTIONED_SETTINGS,
       })
     );
 
@@ -587,10 +595,28 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(host?.querySelector('button[aria-label="Select starred.png for preview"]')).toBeNull();
     expect(host?.querySelector('button[aria-label="Select regular.png for preview"]')).not.toBeNull();
 
-    await renderGallery(createGallery({ items: [createItem('image', 'regular.png')] }));
+    await renderGallery(createGallery({ items: [createItem('image', 'regular.png')], settings: SECTIONED_SETTINGS }));
 
     expect(host?.querySelector('button[aria-label="Expand starred items"]')).toBeNull();
     expect(host?.querySelector('button[aria-label="Collapse starred items"]')).toBeNull();
+  });
+
+  it('renders starred items inline with no section on flat paginated pages', async () => {
+    await renderGallery(
+      createGallery({
+        items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+      })
+    );
+
+    expect(host?.querySelector('button[aria-label="Collapse starred items"]')).toBeNull();
+    expect(
+      Array.from(host?.querySelectorAll('[data-gallery-section]') ?? []).map((row) =>
+        row.getAttribute('data-gallery-section')
+      )
+    ).toEqual(['regular']);
+    expect(
+      host?.querySelector('[data-gallery-section="regular"] button[aria-label="Select starred.png for preview"]')
+    ).not.toBeNull();
   });
 
   it('renders same-name media independently and gives a video a static accessible poster', async () => {
@@ -1055,6 +1081,7 @@ describe('GalleryImageGrid reveal requests', () => {
       items: [starred, createItem('image', 'regular.png')],
       selectedItemKey: 'image:starred.png',
       selectedItemKeys: ['image:starred.png'],
+      settings: SECTIONED_SETTINGS,
     });
 
     await renderGallery(gallery);
@@ -1103,6 +1130,7 @@ describe('GalleryImageGrid virtualization', () => {
   it('re-measures when the row model changes without a resize, and only then', async () => {
     const gallery = createGallery({
       items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+      settings: SECTIONED_SETTINGS,
     });
 
     await renderGallery(gallery);
@@ -1132,7 +1160,7 @@ describe('GalleryImageGrid virtualization', () => {
     await renderGallery(
       createGallery({
         items,
-        settings: { ...DEFAULT_GALLERY_SETTINGS, imageDensityPercent: 0, paginationMode: 'infinite' },
+        settings: SECTIONED_SETTINGS,
       })
     );
     await vi.waitFor(() => expect(actionMocks.loadMore).toHaveBeenCalled());

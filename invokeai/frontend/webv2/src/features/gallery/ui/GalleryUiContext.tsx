@@ -66,7 +66,7 @@ export interface GalleryCommandsPort {
   setSearchTerm(searchTerm: string): void;
   setView(view: GalleryView): void;
   toggleItemSelection(item: GalleryItem, nextPrimaryItem: GalleryItem | null): void;
-  updateSettings(settings: Partial<GallerySettings>): void;
+  updateSettings(settings: Partial<Omit<GallerySettings, 'starredFirst'>>): void;
 }
 
 export interface GalleryNotificationsPort {

@@ -350,7 +350,7 @@ type WorkbenchReducerAction =
   | { type: 'selectGalleryBoard'; boardId: string; projectId?: string }
   | { type: 'setGalleryView'; galleryView: 'images' | 'assets'; projectId?: string }
   | { type: 'setGallerySearchTerm'; searchTerm: string; projectId?: string }
-  | { type: 'updateGallerySettings'; settings: Partial<GallerySettings>; projectId?: string }
+  | { type: 'updateGallerySettings'; settings: Partial<Omit<GallerySettings, 'starredFirst'>>; projectId?: string }
   | { type: 'setGalleryPage'; page: number; projectId?: string }
   | { type: 'setGalleryPageInfo'; totalImages: number; projectId?: string }
   | {
@@ -2797,7 +2797,7 @@ const patchGalleryItemsAcrossProjects = (
             ...(values.selectedImageQuery as Record<string, unknown>),
             boardId: changes.boardId,
             page: 0,
-            paginationMode: 'infinite',
+            paginationMode: getGallerySettings(values).paginationMode,
             searchTerm: '',
           }
         : values.selectedImageQuery;
@@ -3107,7 +3107,7 @@ const updateGalleryWithResultImages = (project: Project, images: GeneratedImageC
             galleryView: nextSelectedImage.imageCategory === 'general' ? 'images' : 'assets',
             imageOrderDir: gallerySettings.imageOrderDir,
             page: 0,
-            paginationMode: 'infinite',
+            paginationMode: gallerySettings.paginationMode,
             searchTerm: '',
           },
         }

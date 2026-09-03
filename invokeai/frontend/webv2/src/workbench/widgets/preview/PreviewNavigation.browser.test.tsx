@@ -1117,6 +1117,46 @@ describe('preview keyboard navigation boundary', () => {
     );
   });
 
+  it('walks the flat chronological order on paginated pages instead of lifting starred items', async () => {
+    const galleryValues = mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>;
+    const selected = {
+      ...mocks.recentImages[0],
+      boardId: 'none',
+      imageCategory: 'general' as const,
+      imageName: 'freshly-selected',
+      queuedAt: '2026-07-21T12:02:30.000Z',
+      starred: false,
+    };
+
+    galleryValues.galleryPage = 0;
+    galleryValues.paginationMode = 'paginated';
+    galleryValues.recentImages = [];
+    galleryValues.selectedImage = selected;
+    galleryValues.selectedImageName = selected.imageName;
+    mocks.galleryItemPages = [
+      {
+        items: [
+          createImageItem('newest', '2026-07-21T12:03:00.000Z'),
+          { ...createImageItem('starred-mid', '2026-07-21T12:02:00.000Z'), starred: true },
+          createImageItem('oldest', '2026-07-21T12:01:00.000Z'),
+        ],
+        total: 3,
+      },
+    ];
+
+    await render();
+    await pressArrow('ArrowRight');
+
+    // Starred-first ordering would put starred-mid at the head and step onto
+    // oldest here; the paginated grid is flat, so its true neighbor wins.
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'starred-mid' }),
+      undefined,
+      0,
+      true
+    );
+  });
+
   it('does not carry the page the preview opened on onto a ranked pick', async () => {
     const selected = {
       ...mocks.recentImages[0],

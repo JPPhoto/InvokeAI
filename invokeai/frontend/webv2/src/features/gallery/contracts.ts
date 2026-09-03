@@ -47,6 +47,7 @@ export {
 export {
   DEFAULT_GALLERY_SETTINGS,
   getGallerySettings,
+  isGalleryStarredFirst,
   type GalleryPaginationMode,
   type GallerySettings,
   type GalleryThumbnailFit,
