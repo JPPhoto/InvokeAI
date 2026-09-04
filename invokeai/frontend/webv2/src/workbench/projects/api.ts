@@ -1,7 +1,7 @@
 import type { AccountScope } from '@platform/state/accountLifecycle';
 
 import { assertAccountScopeCurrent } from '@platform/state/accountLifecycle';
-import { ApiError, apiFetch, apiFetchJson } from '@platform/transport/http';
+import { ApiError, apiFetch, apiFetchJson, sleep } from '@platform/transport/http';
 import {
   DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
   MAX_SUPPORTED_CANVAS_SCHEMA_VERSION,
@@ -15,6 +15,8 @@ import {
  */
 
 const PROJECTS_BASE = '/api/v1/projects';
+const PROJECT_WRITE_MAX_ATTEMPTS = 9;
+const PROJECT_WRITE_RETRY_WINDOW_MS = 125_000;
 // The path's queue segment is ignored by the backend (kept for compatibility).
 const CLIENT_STATE_BASE = '/api/v1/client_state/default';
 
@@ -80,27 +82,115 @@ export const getProject = (projectId: string, signal?: AbortSignal): Promise<Pro
     { signal }
   );
 
-export const createProject = (request: ProjectCreateRequest, signal?: AbortSignal): Promise<ProjectRecordDTO> =>
-  apiFetchJson<ProjectRecordDTO>(`${PROJECTS_BASE}/`, {
-    body: JSON.stringify({
-      ...request,
-      max_canvas_schema_version: MAX_SUPPORTED_CANVAS_SCHEMA_VERSION,
-      minimum_canvas_schema_version: request.minimum_canvas_schema_version ?? DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
-    }),
-    method: 'POST',
-    signal,
+const isProjectWriteBusyError = (error: unknown): error is ApiError => {
+  if (!(error instanceof ApiError) || error.status !== 429) {
+    return false;
+  }
+  try {
+    return (JSON.parse(error.message) as { detail?: { code?: unknown } }).detail?.code === 'project_write_busy';
+  } catch {
+    return false;
+  }
+};
+
+const getRetryDelayMs = (error: ApiError): number => {
+  const raw = error.headers.get('Retry-After');
+  if (raw === null) {
+    return 1_000;
+  }
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1_000;
+  }
+  const date = Date.parse(raw);
+  return Number.isFinite(date) ? Math.max(date - Date.now(), 0) : 1_000;
+};
+
+interface ProjectWriteRetryBudget {
+  attempts: number;
+  readonly deadline: number;
+}
+
+const createProjectWriteRetryBudget = (): ProjectWriteRetryBudget => ({
+  attempts: 0,
+  deadline: Date.now() + PROJECT_WRITE_RETRY_WINDOW_MS,
+});
+
+const requestProjectWrite = async <T>(
+  request: () => Promise<T>,
+  signal: AbortSignal | undefined,
+  budget: ProjectWriteRetryBudget = createProjectWriteRetryBudget()
+): Promise<T> => {
+  while (budget.attempts < PROJECT_WRITE_MAX_ATTEMPTS) {
+    budget.attempts += 1;
+    try {
+      return await request();
+    } catch (error) {
+      if (!isProjectWriteBusyError(error) || budget.attempts >= PROJECT_WRITE_MAX_ATTEMPTS) {
+        throw error;
+      }
+      const retryAfterMs = getRetryDelayMs(error);
+      const backoffCeilingMs = Math.min(1_000 * 2 ** (budget.attempts - 1), 30_000);
+      const remainingMs = budget.deadline - Date.now();
+      const delayMs =
+        budget.attempts === PROJECT_WRITE_MAX_ATTEMPTS - 1
+          ? Math.max(retryAfterMs, remainingMs - 1_000)
+          : retryAfterMs + Math.random() * backoffCeilingMs;
+
+      if (delayMs > remainingMs) {
+        throw error;
+      }
+      await sleep(delayMs, signal);
+    }
+  }
+
+  throw new Error('Project write retry budget exhausted');
+};
+
+const serializeCreateProjectRequest = (request: ProjectCreateRequest): string =>
+  JSON.stringify({
+    ...request,
+    max_canvas_schema_version: MAX_SUPPORTED_CANVAS_SCHEMA_VERSION,
+    minimum_canvas_schema_version: request.minimum_canvas_schema_version ?? DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
   });
+
+const createProjectFromBody = (
+  body: string,
+  signal: AbortSignal | undefined,
+  budget: ProjectWriteRetryBudget
+): Promise<ProjectRecordDTO> =>
+  requestProjectWrite(
+    () =>
+      apiFetchJson<ProjectRecordDTO>(`${PROJECTS_BASE}/`, {
+        body,
+        method: 'POST',
+        signal,
+      }),
+    signal,
+    budget
+  );
+
+export const createProject = (request: ProjectCreateRequest, signal?: AbortSignal): Promise<ProjectRecordDTO> =>
+  createProjectFromBody(serializeCreateProjectRequest(request), signal, createProjectWriteRetryBudget());
 
 export const updateProject = (
   projectId: string,
   request: ProjectUpdateRequest,
   signal?: AbortSignal
-): Promise<ProjectRecordDTO> =>
-  apiFetchJson<ProjectRecordDTO>(`${PROJECTS_BASE}/${encodeURIComponent(projectId)}`, {
-    body: JSON.stringify({ ...request, max_canvas_schema_version: MAX_SUPPORTED_CANVAS_SCHEMA_VERSION }),
-    method: 'PUT',
+): Promise<ProjectRecordDTO> => {
+  const body = JSON.stringify({ ...request, max_canvas_schema_version: MAX_SUPPORTED_CANVAS_SCHEMA_VERSION });
+
+  return requestProjectWrite(
+    () =>
+      apiFetchJson<ProjectRecordDTO>(`${PROJECTS_BASE}/${encodeURIComponent(projectId)}`, {
+        body,
+        method: 'PUT',
+        signal,
+      }),
     signal,
-  });
+    createProjectWriteRetryBudget()
+  );
+};
 
 export const deleteProject = async (projectId: string, signal?: AbortSignal): Promise<void> => {
   await apiFetch(`${PROJECTS_BASE}/${encodeURIComponent(projectId)}`, { method: 'DELETE', signal });
@@ -166,6 +256,45 @@ export const getProjectCanvasSchemaCompatibilityRefusal = (
 export const isProjectCanvasSchemaUnsupportedError = (error: unknown): boolean =>
   getProjectCanvasSchemaCompatibilityRefusal(error) !== null;
 
+export interface ProjectWriteSizeRefusal {
+  actualBytes: number;
+  kind: 'document' | 'request';
+  maxBytes: number;
+}
+
+export const getProjectWriteSizeRefusal = (error: unknown): ProjectWriteSizeRefusal | null => {
+  if (!(error instanceof ApiError) || error.status !== 413) {
+    return null;
+  }
+
+  try {
+    const body = JSON.parse(error.message) as {
+      detail?: { actual_bytes?: unknown; code?: unknown; max_bytes?: unknown };
+    };
+    const actualBytes = body.detail?.actual_bytes;
+    const maxBytes = body.detail?.max_bytes;
+
+    const kind =
+      body.detail?.code === 'project_document_too_large'
+        ? 'document'
+        : body.detail?.code === 'project_request_too_large'
+          ? 'request'
+          : null;
+
+    return kind !== null &&
+      typeof actualBytes === 'number' &&
+      Number.isSafeInteger(actualBytes) &&
+      typeof maxBytes === 'number' &&
+      Number.isSafeInteger(maxBytes) &&
+      maxBytes > 0 &&
+      actualBytes > maxBytes
+      ? { actualBytes, kind, maxBytes }
+      : null;
+  } catch {
+    return null;
+  }
+};
+
 /**
  * A create that never reached the server, and is therefore safe to compensate for.
  *
@@ -203,6 +332,8 @@ export const createProjectSettled = async (
   owner: AccountScope
 ): Promise<ProjectRecordDTO> => {
   const projectId = request.project_id;
+  const body = serializeCreateProjectRequest(request);
+  const writeBudget = createProjectWriteRetryBudget();
 
   /**
    * A 409 says the id or the board is spoken for, without saying by whom. Because the server has
@@ -232,7 +363,7 @@ export const createProjectSettled = async (
   };
 
   try {
-    return await createProject(request, owner.signal);
+    return await createProjectFromBody(body, owner.signal, writeBudget);
   } catch (error) {
     assertAccountScopeCurrent(owner);
 
@@ -243,13 +374,13 @@ export const createProjectSettled = async (
     }
 
     try {
-      return await createProject(request, owner.signal);
+      return await createProjectFromBody(body, owner.signal, writeBudget);
     } catch (retryError) {
       assertAccountScopeCurrent(owner);
 
       // Still no answer. Unknown must not authorize deletion, so the original failure stands and
       // the uploads are left where they are: clutter is recoverable, a gutted project is not.
-      if (isIndeterminate(retryError)) {
+      if (isIndeterminate(retryError) || isProjectWriteBusyError(retryError)) {
         throw error;
       }
 

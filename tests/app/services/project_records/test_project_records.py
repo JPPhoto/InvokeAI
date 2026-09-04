@@ -3,11 +3,14 @@
 import pytest
 
 from invokeai.app.services.config.config_default import InvokeAIAppConfig
+from invokeai.app.services.project_records import project_records_sqlite
 from invokeai.app.services.project_records.project_records_common import (
     ProjectBoardNotFoundError,
     ProjectBoardUnavailableError,
     ProjectCanvasSchemaDowngradeError,
     ProjectCanvasSchemaUnsupportedError,
+    ProjectDocumentInvalidError,
+    ProjectDocumentTooLargeError,
     ProjectRecordConflictError,
     ProjectRecordExistsError,
     ProjectRecordNotFoundError,
@@ -53,6 +56,74 @@ def test_create_and_get_roundtrip(project_records: ProjectRecordsSqlite) -> None
 
     fetched = project_records.get(SYSTEM_USER_ID, created.project_id)
     assert fetched == created
+
+
+def test_oversized_documents_are_rejected_before_a_board_is_created(
+    project_records: ProjectRecordsSqlite, db: SqliteDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(project_records_sqlite, "PROJECT_DOCUMENT_MAX_BYTES", 16)
+
+    with pytest.raises(ProjectDocumentTooLargeError) as exc_info:
+        project_records.create(SYSTEM_USER_ID, "Too large", {"value": "x" * 32})
+
+    assert exc_info.value.max_bytes == 16
+    with db.transaction() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM boards WHERE board_name = ?", ("Too large",))
+        assert cursor.fetchone()[0] == 0
+
+
+def test_oversized_updates_preserve_the_acknowledged_revision(
+    project_records: ProjectRecordsSqlite, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created = project_records.create(SYSTEM_USER_ID, "Project", {"value": "small"})
+    monkeypatch.setattr(project_records_sqlite, "PROJECT_DOCUMENT_MAX_BYTES", 16)
+
+    with pytest.raises(ProjectDocumentTooLargeError):
+        project_records.update(
+            SYSTEM_USER_ID,
+            created.project_id,
+            expected_revision=created.revision,
+            name="Too large",
+            data={"value": "x" * 32},
+        )
+
+    stored = project_records.get(SYSTEM_USER_ID, created.project_id)
+    assert stored.name == "Project"
+    assert stored.revision == created.revision
+    assert stored.data == {"value": "small"}
+
+
+def test_document_limit_counts_compact_utf8_bytes(
+    project_records: ProjectRecordsSqlite, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(project_records_sqlite, "PROJECT_DOCUMENT_MAX_BYTES", 14)
+
+    created = project_records.create(SYSTEM_USER_ID, "Exact", {"value": "é"})
+    assert created.data == {"value": "é"}
+
+    with pytest.raises(ProjectDocumentTooLargeError) as exc_info:
+        project_records.create(SYSTEM_USER_ID, "Over", {"value": "éa"})
+
+    assert exc_info.value.actual_bytes == 15
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), "\ud800"])
+def test_non_json_safe_document_values_are_rejected(project_records: ProjectRecordsSqlite, value: object) -> None:
+    with pytest.raises(ProjectDocumentInvalidError):
+        project_records.create(SYSTEM_USER_ID, "Invalid", {"value": value})
+
+
+def test_oversized_legacy_documents_remain_readable_and_deletable(
+    project_records: ProjectRecordsSqlite, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created = project_records.create(SYSTEM_USER_ID, "Legacy", {"value": "x" * 32})
+    monkeypatch.setattr(project_records_sqlite, "PROJECT_DOCUMENT_MAX_BYTES", 16)
+
+    assert project_records.get(SYSTEM_USER_ID, created.project_id).data == {"value": "x" * 32}
+    project_records.delete(SYSTEM_USER_ID, created.project_id)
+
+    with pytest.raises(ProjectRecordNotFoundError):
+        project_records.get(SYSTEM_USER_ID, created.project_id)
 
 
 def test_create_with_client_id_and_duplicate_rejected(project_records: ProjectRecordsSqlite) -> None:
