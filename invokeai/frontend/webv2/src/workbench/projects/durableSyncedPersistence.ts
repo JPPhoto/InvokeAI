@@ -7,6 +7,8 @@ import {
   isCanvasSchemaVersionSupported,
   MAX_SUPPORTED_CANVAS_SCHEMA_VERSION,
 } from '@workbench/canvasSchemaVersion';
+import { hasActiveQueueRuns } from '@workbench/queue-integration/activeQueueRuns';
+import { createAccountOwnedQueueRunJournal } from '@workbench/queue-integration/queueRunJournal';
 import {
   createDraftProject,
   createInitialWorkbenchState,
@@ -59,10 +61,10 @@ import { selectCoverImageName } from './projectAssets';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   PROJECT_DOCUMENT_MAX_BYTES,
-  serializeProjectDocumentV2,
   serializeProjectDocumentV2Json,
 } from './projectDocument';
 import { deserializeProjectDocument, deserializeProjectRecord } from './projectHydration';
+import { acquireProjectMutationLock } from './projectLifecycleLocks';
 import { fetchSessionBlobStrict, serializeSessionBlob, SESSION_STATE_KEY } from './session';
 import { getOpenProject, reportProjectSync, reportProjectSyncEntry, resolveProjectSyncConflict } from './syncStore';
 import { deleteWorkbenchDatabase } from './workbenchDatabase';
@@ -187,9 +189,20 @@ export interface DurableWorkbenchSaveResult {
   snapshot: HydratedWorkbenchSnapshot;
 }
 
+export interface QueueRecoveryProject {
+  projectId: string;
+  reason: 'open-limit' | 'project-unavailable';
+}
+
+export interface QueueRecoveryState {
+  projects: QueueRecoveryProject[];
+  status: 'available' | 'unavailable';
+}
+
 export interface DurableHydratedWorkbenchSnapshot extends HydratedWorkbenchSnapshot {
   conflicts: ProjectConflictInfo[];
   localDraftStatus: LocalDraftStatus;
+  queueRecovery: QueueRecoveryState;
 }
 
 export interface DurableProjectPersistenceApi {
@@ -224,12 +237,15 @@ interface DurableSyncedPersistenceDependencies {
   api?: DurableProjectPersistenceApi;
   autoOpenDraftByteLimit?: number;
   autoOpenDraftLimit?: number;
+  autoOpenQueueRunProjectLimit?: number;
   clearLegacyStorage?: () => void;
   databaseDeleteTimeoutMs?: number;
   deleteDatabase?: typeof deleteWorkbenchDatabase;
   draftStore?: Promise<ProjectDraftStore>;
   editorSession?: Promise<EditorSession>;
   now?: () => string;
+  projectMutationLock?: (projectId: string) => ReturnType<typeof acquireProjectMutationLock>;
+  queueRunJournal?: typeof createAccountOwnedQueueRunJournal;
   saveDraftAsNew?: SaveDraftAsNew;
   writerToken?: string;
 }
@@ -342,6 +358,7 @@ export class ProjectDraftWriteRejectedError extends Error {
 
 export interface DurableSyncedWorkbenchPersistence {
   acknowledgeProjectResolution(projectId: string): void;
+  abortProjectResolution(projectId: string): void;
   adoptProjectRecord(record: ProjectRecordDTO): ProjectLoadResult;
   clearWorkbench(): Promise<void>;
   close(): void;
@@ -384,6 +401,11 @@ export const createDurableSyncedWorkbenchPersistence = (
   const api = dependencies.api ?? productionApi;
   const autoOpenDraftByteLimit = dependencies.autoOpenDraftByteLimit ?? 64 * 1024 * 1024;
   const autoOpenDraftLimit = dependencies.autoOpenDraftLimit ?? 8;
+  const requestedQueueRunProjectLimit = dependencies.autoOpenQueueRunProjectLimit ?? 8;
+  const autoOpenQueueRunProjectLimit =
+    Number.isSafeInteger(requestedQueueRunProjectLimit) && requestedQueueRunProjectLimit >= 0
+      ? requestedQueueRunProjectLimit
+      : 8;
   const clearLegacyStorage =
     dependencies.clearLegacyStorage ??
     (() => {
@@ -402,6 +424,41 @@ export const createDurableSyncedWorkbenchPersistence = (
     (draftStorePromise ??= dependencies.draftStore ?? createAccountOwnedProjectDraftStore(owner));
   const getEditorSessionForService = () => (editorSessionPromise ??= dependencies.editorSession ?? getEditorSession());
   const now = dependencies.now ?? (() => new Date().toISOString());
+  const getProjectMutationLock =
+    dependencies.projectMutationLock ??
+    ((projectId: string) => acquireProjectMutationLock(owner.storageSuffix, projectId));
+  const openQueueRunJournal = dependencies.queueRunJournal ?? createAccountOwnedQueueRunJournal;
+  const listQueueRunProjectIds = async (): Promise<
+    { kind: 'available'; projectIds: string[] } | { kind: 'unavailable' }
+  > => {
+    let journal: Awaited<ReturnType<typeof openQueueRunJournal>>;
+    try {
+      journal = await openQueueRunJournal(owner);
+    } catch {
+      return { kind: 'unavailable' };
+    }
+    try {
+      return await journal.listProjectIds();
+    } catch {
+      return { kind: 'unavailable' };
+    } finally {
+      journal.close();
+    }
+  };
+  const assertNoDurableQueueRuns = async (projectId: string): Promise<void> => {
+    const journal = await openQueueRunJournal(owner);
+    try {
+      const result = await journal.listForProject(projectId);
+      if (result.kind === 'unavailable') {
+        throw new Error('Active queue runs could not be verified.');
+      }
+      if (result.entries.length > 0) {
+        throw new Error('Wait for active queue runs to finish before resolving this project.');
+      }
+    } finally {
+      journal.close();
+    }
+  };
   const writerToken = dependencies.writerToken ?? crypto.randomUUID();
   const saveAsNew = dependencies.saveDraftAsNew ?? saveDraftAsNew;
   const deleteDatabase = dependencies.deleteDatabase ?? deleteWorkbenchDatabase;
@@ -426,6 +483,7 @@ export const createDurableSyncedWorkbenchPersistence = (
   const closedRetargetTargetsAwaitingAck = new Set<string>();
   const draftEditorSessionIds = new Map<string, string>();
   const copyCaptureProjectIds = new Set<string>();
+  const projectMutationLocks = new Map<string, { release(): Promise<void> }>();
   const reservedCopyTargetIds = new Set<string>();
   const projectResolutionFences = new Map<
     string,
@@ -455,6 +513,14 @@ export const createDurableSyncedWorkbenchPersistence = (
     localDraftStatus = localDraftFailures.size === 0 ? 'ok' : 'unavailable';
   };
   const projectDraftFailureKey = (projectId: string): string => `project:${projectId}`;
+  const releaseProjectMutation = (projectId: string): void => {
+    const lock = projectMutationLocks.get(projectId);
+    if (!lock) {
+      return;
+    }
+    projectMutationLocks.delete(projectId);
+    void lock.release().catch(() => undefined);
+  };
 
   const assertOwner = (): void => assertAccountScopeCurrent(owner);
   const assertNotCleared = (): void => {
@@ -498,6 +564,10 @@ export const createDurableSyncedWorkbenchPersistence = (
       return;
     }
     isClosed = true;
+    for (const [projectId, lock] of projectMutationLocks) {
+      projectMutationLocks.delete(projectId);
+      void lock.release().catch(() => undefined);
+    }
     if (draftStorePromise) {
       void draftStorePromise.then((store) => store.close());
     }
@@ -1614,7 +1684,9 @@ export const createDurableSyncedWorkbenchPersistence = (
   return {
     acknowledgeProjectResolution: (projectId) => {
       projectResolutionFences.delete(projectId);
+      releaseProjectMutation(projectId);
     },
+    abortProjectResolution: releaseProjectMutation,
     adoptProjectRecord: (record) => {
       assertOwner();
       if (reservedCopyTargetIds.has(record.project_id)) {
@@ -1839,8 +1911,13 @@ export const createDurableSyncedWorkbenchPersistence = (
         const session = await getEditorSessionForService();
         let summaries: ProjectSummaryDTO[];
         let sessionBlob: WorkbenchSessionBlob | null;
+        let queueRunProjects: Awaited<ReturnType<typeof listQueueRunProjectIds>>;
         try {
-          [summaries, sessionBlob] = await Promise.all([api.listProjects(owner.signal), api.loadSession(owner.signal)]);
+          [summaries, sessionBlob, queueRunProjects] = await Promise.all([
+            api.listProjects(owner.signal),
+            api.loadSession(owner.signal),
+            listQueueRunProjectIds(),
+          ]);
         } catch (error) {
           throw new WorkbenchBackendUnavailableError(error);
         }
@@ -1919,8 +1996,24 @@ export const createDurableSyncedWorkbenchPersistence = (
         const sessionProjectIds = sessionBlob
           ? (sessionBlob.openProjectIds ?? summaries.map((summary) => summary.project_id))
           : summaries.slice(0, 1).map((summary) => summary.project_id);
+        const alreadyRequestedProjectIds = new Set([
+          ...sessionProjectIds,
+          ...handoffTargetIds,
+          ...(options?.openProjectId ? [options.openProjectId] : []),
+        ]);
+        const queueRunProjectCandidates =
+          queueRunProjects.kind === 'available'
+            ? [...new Set(queueRunProjects.projectIds)]
+                .filter((projectId) => !alreadyRequestedProjectIds.has(projectId))
+                .sort((left, right) => left.localeCompare(right))
+            : [];
+        const queueRunProjectIds = queueRunProjectCandidates.slice(0, autoOpenQueueRunProjectLimit);
+        const recoverableQueueProjects: QueueRecoveryProject[] = queueRunProjectCandidates
+          .slice(autoOpenQueueRunProjectLimit)
+          .map((projectId) => ({ projectId, reason: 'open-limit' }));
         const alwaysOpenProjectIds = new Set([
           ...sessionProjectIds,
+          ...queueRunProjectIds,
           ...handoffTargetIds,
           ...(options?.openProjectId ? [options.openProjectId] : []),
         ]);
@@ -1951,6 +2044,7 @@ export const createDurableSyncedWorkbenchPersistence = (
         }
         const requestedIds = new Set([
           ...sessionProjectIds.map((projectId) => loadRetargets.get(projectId) ?? projectId),
+          ...queueRunProjectIds,
           ...draftIds,
           ...handoffTargetIds,
           ...(options?.openProjectId ? [options.openProjectId] : []),
@@ -2158,6 +2252,12 @@ export const createDurableSyncedWorkbenchPersistence = (
         });
         assertOwner();
 
+        for (const projectId of queueRunProjectIds) {
+          if (!loadedProjects.has(projectId)) {
+            recoverableQueueProjects.push({ projectId, reason: 'project-unavailable' });
+          }
+        }
+
         const projects = [...requestedIds].flatMap((projectId) => {
           const project = loadedProjects.get(projectId);
           return project ? [project] : [];
@@ -2192,7 +2292,15 @@ export const createDurableSyncedWorkbenchPersistence = (
         reportSync(projects);
         const snapshot = toSnapshot(state, now());
         snapshot.refusedProjects = refusedProjects;
-        return { ...snapshot, conflicts: [...conflicts.values()], localDraftStatus };
+        return {
+          ...snapshot,
+          conflicts: [...conflicts.values()],
+          localDraftStatus,
+          queueRecovery: {
+            projects: recoverableQueueProjects.filter(({ projectId }) => !loadedProjects.has(projectId)),
+            status: queueRunProjects.kind,
+          },
+        };
       })();
       loadPromise = loading;
       void loading.catch(() => {
@@ -2252,7 +2360,20 @@ export const createDurableSyncedWorkbenchPersistence = (
         recomputeHasPending();
       });
     },
-    resolveConflictDiscard: (projectId) => {
+    resolveConflictDiscard: async (projectId) => {
+      const mutationLock = await getProjectMutationLock(projectId);
+      if (mutationLock.kind === 'contended') {
+        throw new Error('Wait for active queue runs to finish before discarding this project.');
+      }
+      if (mutationLock.kind === 'unavailable') {
+        throw new Error('Discard is unavailable because cross-tab coordination could not be established.');
+      }
+      try {
+        await assertNoDurableQueueRuns(projectId);
+      } catch (error) {
+        await mutationLock.release();
+        throw error;
+      }
       projectResolutionFences.set(projectId, { kind: 'pending' });
       return enqueue(async () => {
         await deleteDraft(projectId);
@@ -2266,35 +2387,56 @@ export const createDurableSyncedWorkbenchPersistence = (
         if (lastKnownState) {
           lastKnownState = applyProjectResolutionFences(lastKnownState);
         }
+        projectMutationLocks.set(projectId, mutationLock);
       }).catch((error) => {
         projectResolutionFences.delete(projectId);
+        void mutationLock.release().catch(() => undefined);
         throw error;
       });
     },
-    resolveConflictSaveAsNew: (inputProject) => {
+    resolveConflictSaveAsNew: async (inputProject) => {
+      if (hasActiveQueueRuns(inputProject)) {
+        throw new Error('Wait for active queue runs to finish before saving this project as new.');
+      }
       if (isTerminallyCleared) {
-        return Promise.reject(new Error('Workbench persistence was cleared and must be reloaded.'));
+        throw new Error('Workbench persistence was cleared and must be reloaded.');
       }
       if (copyCaptureProjectIds.has(inputProject.id)) {
-        return Promise.reject(new Error('A project copy is already being saved.'));
+        throw new Error('A project copy is already being saved.');
       }
-      const invocationGeneration = generations.get(inputProject.id) ?? 0;
-      let reservedTargetId: string | null = null;
       copyCaptureProjectIds.add(inputProject.id);
+      const invocationGeneration = generations.get(inputProject.id) ?? 0;
+      const mutationLock = await getProjectMutationLock(inputProject.id).catch((error) => {
+        copyCaptureProjectIds.delete(inputProject.id);
+        throw error;
+      });
+      if (mutationLock.kind === 'contended') {
+        copyCaptureProjectIds.delete(inputProject.id);
+        throw new Error('Wait for active queue runs to finish before saving this project as new.');
+      }
+      if (mutationLock.kind === 'unavailable') {
+        copyCaptureProjectIds.delete(inputProject.id);
+        throw new Error('Saving as new is unavailable because cross-tab coordination could not be established.');
+      }
+      try {
+        await assertNoDurableQueueRuns(inputProject.id);
+      } catch (error) {
+        copyCaptureProjectIds.delete(inputProject.id);
+        await mutationLock.release();
+        throw error;
+      }
+      let reservedTargetId: string | null = null;
+      let handedOffMutationLock = false;
       return enqueue(async () => {
         const projectId = inputProject.id;
         const currentDocument = serializeProjectDocumentV2Json(inputProject);
         let owned = await requireDraft(projectId);
-        let copyProjectGeneration = invocationGeneration;
         if (
           owned.draft.documentJson !== currentDocument.documentJson &&
           owned.draft.generation <= invocationGeneration
         ) {
           await stageProject(inputProject, currentDocument);
           owned = await requireDraft(projectId);
-        }
-        if (owned.draft.documentJson === currentDocument.documentJson) {
-          copyProjectGeneration = owned.draft.generation;
         }
         const { editorSessionId, store } = owned;
         const durable = await store.get(projectId, editorSessionId);
@@ -2308,7 +2450,9 @@ export const createDurableSyncedWorkbenchPersistence = (
           throw new Error('Save as new requires an up-to-date local recovery draft. Free browser storage and retry.');
         }
         const draft = durable.draft;
-        const project = inputProject;
+        const copyProjectGeneration = draft.generation;
+        const sourceDocument = JSON.parse(draft.documentJson) as Record<string, unknown>;
+        const sourceProjectName = typeof sourceDocument.name === 'string' ? sourceDocument.name : inputProject.name;
         const conflict = conflicts.get(projectId);
         if (!conflict) {
           throw new Error('The project no longer has a conflict to resolve.');
@@ -2350,8 +2494,8 @@ export const createDurableSyncedWorkbenchPersistence = (
                 draft.documentJson,
               ].join('\u0000')
             );
-            const name = `${project.name} (copy)`;
-            const document = { ...serializeProjectDocumentV2(project), id: copyProjectId, name };
+            const name = `${sourceProjectName} (copy)`;
+            const document = { ...sourceDocument, id: copyProjectId, name };
             const documentJson = JSON.stringify(document);
             const documentByteSize = getUtf8ByteSize(documentJson);
             if (documentByteSize > PROJECT_DOCUMENT_MAX_BYTES) {
@@ -2367,7 +2511,7 @@ export const createDurableSyncedWorkbenchPersistence = (
                 getProjectCanvasSchemaRequirement(document)
               ),
               copyProjectName: name,
-              copySourceProjectName: project.name,
+              copySourceProjectName: sourceProjectName,
             };
           })());
         if (isCopyTargetOpen(proposedReservation.copyProjectId)) {
@@ -2527,12 +2671,21 @@ export const createDurableSyncedWorkbenchPersistence = (
           sourceProjectId: projectId,
           targetProjectId: copyProjectId,
         };
-      }).finally(() => {
-        copyCaptureProjectIds.delete(inputProject.id);
-        if (reservedTargetId) {
-          reservedCopyTargetIds.delete(reservedTargetId);
-        }
-      });
+      })
+        .then((result) => {
+          projectMutationLocks.set(inputProject.id, mutationLock);
+          handedOffMutationLock = true;
+          return result;
+        })
+        .finally(async () => {
+          copyCaptureProjectIds.delete(inputProject.id);
+          if (reservedTargetId) {
+            reservedCopyTargetIds.delete(reservedTargetId);
+          }
+          if (!handedOffMutationLock) {
+            await mutationLock.release();
+          }
+        });
     },
     resolveConflictUseServer: (projectId) => {
       projectResolutionFences.set(projectId, { kind: 'pending' });

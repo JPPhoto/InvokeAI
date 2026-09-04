@@ -208,24 +208,52 @@ export const isProjectSummaryCompatible = (summary: ProjectSummary): boolean =>
 /** Permanently remove a project from the server, its board with it. The only deletion path. */
 export const deleteLibraryProject = async (projectId: string): Promise<void> => {
   const owner = captureAccountScope();
-  const openProject = getOpenProject(projectId);
-
-  if (openProject) {
-    // Queueing ensures an in-flight save finishes before DELETE is sent.
-    await openProject.deleteOnServer();
-  } else {
-    await apiDeleteProject(projectId, owner.signal);
-  }
-
+  const [{ acquireProjectMutationLock }, { createAccountOwnedQueueRunJournal }] = await Promise.all([
+    import('./projectLifecycleLocks'),
+    import('@workbench/queue-integration/queueRunJournal'),
+  ]);
   assertAccountScopeCurrent(owner);
-  openProject?.close();
-  forgetProjectCover(projectId, owner);
-  store.patchSnapshot({ summaries: store.getSnapshot().summaries.filter((summary) => summary.id !== projectId) });
+  const openProject = getOpenProject(projectId);
+  const mutationLock = await acquireProjectMutationLock(owner.storageSuffix, projectId);
+  if (mutationLock.kind === 'contended') {
+    throw new Error('Wait for active queue runs to finish before deleting this project.');
+  }
+  if (mutationLock.kind === 'unavailable') {
+    throw new Error('Project deletion is unavailable because cross-tab coordination could not be established.');
+  }
+  let journal;
 
-  // The saved session outlives the editor, so a deleted project has to leave it here or the next
-  // boot tries to open something the server no longer has.
-  await pruneSessionProject(projectId, owner.signal);
-  await refreshOpenProjects();
+  try {
+    journal = await createAccountOwnedQueueRunJournal(owner);
+    const queueRuns = await journal.listForProject(projectId);
+    if (queueRuns.kind === 'unavailable') {
+      throw new Error('Project deletion is unavailable because active queue runs could not be verified.');
+    }
+    if (queueRuns.entries.length > 0) {
+      throw new Error('Wait for active queue runs to finish before deleting this project.');
+    }
+
+    if (openProject) {
+      // Queueing ensures an in-flight save finishes before DELETE is sent.
+      await openProject.deleteOnServer();
+    } else {
+      await apiDeleteProject(projectId, owner.signal);
+    }
+
+    assertAccountScopeCurrent(owner);
+    await journal.deleteForProject(projectId);
+    openProject?.close();
+    forgetProjectCover(projectId, owner);
+    store.patchSnapshot({ summaries: store.getSnapshot().summaries.filter((summary) => summary.id !== projectId) });
+
+    // The saved session outlives the editor, so a deleted project has to leave it here or the next
+    // boot tries to open something the server no longer has.
+    await pruneSessionProject(projectId, owner.signal);
+    await refreshOpenProjects();
+  } finally {
+    journal?.close();
+    await mutationLock.release();
+  }
 };
 
 /**

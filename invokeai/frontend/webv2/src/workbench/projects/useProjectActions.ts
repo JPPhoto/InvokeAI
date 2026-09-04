@@ -8,6 +8,7 @@ import {
 } from '@platform/state/accountLifecycle';
 import { getApiErrorMessage } from '@platform/transport/http';
 import { useNavigate } from '@tanstack/react-router';
+import { hasActiveQueueRuns } from '@workbench/queue-integration/activeQueueRuns';
 import { useNotify } from '@workbench/useNotify';
 import {
   useWorkbenchCommands,
@@ -56,6 +57,9 @@ export const useProjectActions = (): {
       persistenceService.releaseProjectSync(projectId);
       return;
     }
+    if (closeResult.reason === 'active-queue-runs') {
+      throw new Error(t('projects.activeRunsMustFinish'));
+    }
     if (closeResult.reason !== 'last-project') {
       throw new Error(t('projects.file.notSynced'));
     }
@@ -65,6 +69,9 @@ export const useProjectActions = (): {
     if (retry.ok || retry.reason === 'project-not-found') {
       persistenceService.releaseProjectSync(projectId);
       return;
+    }
+    if (retry.reason === 'active-queue-runs') {
+      throw new Error(t('projects.activeRunsMustFinish'));
     }
     if (retry.reason !== 'last-project') {
       throw new Error(t('projects.file.notSynced'));
@@ -122,6 +129,11 @@ export const useProjectActions = (): {
     const owner = captureAccountScope();
     flushGenerateDrafts();
 
+    if (hasActiveQueueRuns(queries.getProject(project.id) ?? project)) {
+      notify.error(t('projects.closeBlocked'), t('projects.activeRunsMustFinish'));
+      return;
+    }
+
     void (async () => {
       for (let attempt = 0; attempt < CLOSE_FLUSH_ATTEMPTS; attempt += 1) {
         const current = queries.getProject(project.id);
@@ -160,6 +172,11 @@ export const useProjectActions = (): {
 
   const deleteProject = async (project: Project): Promise<void> => {
     flushGenerateDrafts();
+
+    if (hasActiveQueueRuns(project)) {
+      notify.error(t('projects.deleteFailed'), t('projects.activeRunsMustFinish'));
+      return;
+    }
 
     const owner = captureAccountScope();
     try {

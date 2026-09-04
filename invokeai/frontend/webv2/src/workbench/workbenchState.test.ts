@@ -1825,6 +1825,112 @@ describe('workbench layout presets', () => {
 });
 
 describe('workbenchReducer Phase 5 generation flow', () => {
+  it('restores valid active journal items while live items win duplicate ids', () => {
+    const submittedState = submitGenerate(primeGenerate());
+    const liveItem = getActiveProject(submittedState).queue.items[0]!;
+    const restoredItem = {
+      ...liveItem,
+      id: 'restored-item',
+      snapshot: { ...liveItem.snapshot, submittedAt: '2026-09-04T00:00:00.000Z' },
+    };
+    const duplicate = { ...liveItem, status: 'running' as const };
+
+    const state = workbenchReducer(submittedState, {
+      items: [duplicate, restoredItem],
+      projectId: getActiveProject(submittedState).id,
+      type: 'restoreQueueItemsFromJournal',
+    });
+
+    expect(getActiveProject(state).queue.items.map((item) => item.id)).toEqual([liveItem.id, restoredItem.id]);
+    expect(getActiveProject(state).queue.items[0]).toEqual({ ...liveItem, localRecoveryState: 'durable' });
+    expect(getActiveProject(state).queue.items[0]).not.toBe(liveItem);
+    expect(getActiveProject(state).queue.items[1]).toEqual({ ...restoredItem, localRecoveryState: 'durable' });
+    expect(getActiveProject(state).queue.items[1]).not.toBe(restoredItem);
+  });
+
+  it('marks a newly submitted queue item as proven local-only', () => {
+    const state = submitGenerate(primeGenerate());
+
+    expect(getActiveProject(state).queue.items[0]?.localRecoveryState).toBe('local-only');
+  });
+
+  it('never downgrades durable local recovery provenance', () => {
+    let state = submitGenerate(primeGenerate());
+    const project = getActiveProject(state);
+    const queueItem = project.queue.items[0]!;
+    state = workbenchReducer(state, {
+      projectId: project.id,
+      queueItemId: queueItem.id,
+      state: 'durable',
+      type: 'setQueueItemLocalRecoveryState',
+    });
+    state = workbenchReducer(state, {
+      projectId: project.id,
+      queueItemId: queueItem.id,
+      state: 'local-only',
+      type: 'setQueueItemLocalRecoveryState',
+    });
+
+    expect(getActiveProject(state).queue.items[0]?.localRecoveryState).toBe('durable');
+  });
+
+  it('rejects malformed and terminal journal items at restoration', () => {
+    const submittedState = submitGenerate(primeGenerate());
+    const project = getActiveProject(submittedState);
+    const queueItem = project.queue.items[0]!;
+    const emptyState = {
+      ...submittedState,
+      projects: submittedState.projects.map((candidate) =>
+        candidate.id === project.id ? { ...candidate, queue: { items: [] } } : candidate
+      ),
+    };
+
+    const state = workbenchReducer(emptyState, {
+      items: [
+        { ...queueItem, status: 'completed' },
+        { ...queueItem, id: 'bad-canvas', snapshot: { ...queueItem.snapshot, canvas: { document: {} } } },
+        { ...queueItem, id: 'bad-backend-ids', backendItemIds: [1, Number.NaN] },
+        { ...queueItem, id: 'non-array-backend-ids', backendItemIds: 7 },
+        { ...queueItem, id: 'non-array-completed-ids', completedBackendItemIds: {} },
+        { ...queueItem, id: 'duplicate-backend-ids', backendItemIds: [1, 1] },
+      ],
+      projectId: project.id,
+      type: 'restoreQueueItemsFromJournal',
+    });
+
+    expect(getActiveProject(state).queue.items).toEqual([]);
+  });
+
+  it('restores an active run when optional recall data is malformed', () => {
+    const submittedState = submitGenerate(primeGenerate());
+    const project = getActiveProject(submittedState);
+    const queueItem = project.queue.items[0]!;
+    const emptyState = {
+      ...submittedState,
+      projects: submittedState.projects.map((candidate) =>
+        candidate.id === project.id ? { ...candidate, queue: { items: [] } } : candidate
+      ),
+    };
+
+    const state = workbenchReducer(emptyState, {
+      items: [
+        {
+          ...queueItem,
+          snapshot: { ...queueItem.snapshot, recall: { generateValues: { model: 'not-a-model-config' } } },
+        },
+      ],
+      projectId: project.id,
+      type: 'restoreQueueItemsFromJournal',
+    });
+
+    expect(getActiveProject(state).queue.items).toEqual([
+      expect.objectContaining({
+        id: queueItem.id,
+        snapshot: expect.not.objectContaining({ recall: expect.anything() }),
+      }),
+    ]);
+  });
+
   it('does not notify gallery total subscribers for unchanged or non-finite totals', () => {
     let state = createInitialWorkbenchState();
 
@@ -2421,7 +2527,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     });
     state = workbenchReducer(state, { queueItemId: queueItem.id, type: 'cancelQueueItem' });
 
-    expect(getActiveProject(state).queue.items[0]?.status).toBe('cancelled');
+    expect(getActiveProject(state).queue.items[0]).toMatchObject({ cancellationPending: true, status: 'cancelled' });
   });
 
   it('cancels queue items from inactive projects when a project id is provided', () => {
@@ -2448,9 +2554,13 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     state = submitGenerate(primeGenerate(state));
     state = workbenchReducer(state, { type: 'cancelAllQueueItems' });
 
-    expect(state.projects.flatMap((project) => project.queue.items.map((item) => item.status))).toEqual([
-      'cancelled',
-      'cancelled',
+    expect(
+      state.projects.flatMap((project) =>
+        project.queue.items.map((item) => ({ cancellationPending: item.cancellationPending, status: item.status }))
+      )
+    ).toEqual([
+      { cancellationPending: true, status: 'cancelled' },
+      { cancellationPending: true, status: 'cancelled' },
     ]);
   });
 
@@ -2464,9 +2574,15 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       type: 'cancelAllQueueItemsExceptCurrent',
     });
 
-    expect(getActiveProject(state).queue.items.map((item) => ({ id: item.id, status: item.status }))).toEqual([
-      { id: getActiveProject(state).queue.items[0].id, status: 'cancelled' },
-      { id: firstQueueItemId, status: 'pending' },
+    expect(
+      getActiveProject(state).queue.items.map((item) => ({
+        cancellationPending: item.cancellationPending,
+        id: item.id,
+        status: item.status,
+      }))
+    ).toEqual([
+      { cancellationPending: true, id: getActiveProject(state).queue.items[0].id, status: 'cancelled' },
+      { cancellationPending: undefined, id: firstQueueItemId, status: 'pending' },
     ]);
   });
 

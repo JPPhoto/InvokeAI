@@ -1,4 +1,5 @@
 import type { Project } from '@workbench/projectContracts';
+import type { ProjectCommandResult } from '@workbench/workbenchStore';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
@@ -9,8 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 
 const harness = vi.hoisted(() => ({
+  abortProjectResolution: vi.fn(),
   acknowledgeProjectResolution: vi.fn(),
-  closeProject: vi.fn<() => { ok: true } | { ok: false; reason: 'last-project' }>(() => ({ ok: true })),
+  closeProject: vi.fn<() => ProjectCommandResult>(() => ({ ok: true })),
   conflict: undefined as
     | { detectedAt: string; kind: 'deleted' }
     | { detectedAt: string; kind: 'revision'; serverRevision: number }
@@ -39,7 +41,7 @@ const harness = vi.hoisted(() => ({
   ),
   resolveConflictDiscard: vi.fn(() => Promise.resolve()),
   resolveConflictUseServer: vi.fn(),
-  retargetProject: vi.fn(() => ({ ok: true })),
+  retargetProject: vi.fn<() => ProjectCommandResult>(() => ({ ok: true })),
   reportError: vi.fn(),
 }));
 
@@ -74,6 +76,7 @@ vi.mock('@workbench/WorkbenchContext', () => ({
   }),
   useWorkbenchPersistenceService: () => ({
     acknowledgeProjectResolution: harness.acknowledgeProjectResolution,
+    abortProjectResolution: harness.abortProjectResolution,
     deleteRecoverableDraft: harness.deleteRecoverableDraft,
     getRecoverableDraftDocument: harness.getRecoverableDraftDocument,
     getProjectDraftDocument: vi.fn(),
@@ -101,6 +104,7 @@ beforeEach(() => {
   harness.retargetProject.mockClear();
   harness.retargetProject.mockReturnValue({ ok: true });
   harness.acknowledgeProjectResolution.mockClear();
+  harness.abortProjectResolution.mockClear();
   harness.closeProject.mockClear();
   harness.closeProject.mockReturnValue({ ok: true });
   harness.createProject.mockClear();
@@ -141,6 +145,22 @@ describe('ProjectConflictBanner', () => {
     expect(harness.retargetProject).toHaveBeenCalledWith(
       expect.objectContaining({ projectId: 'project-1', targetProjectId: 'copy' })
     );
+  });
+
+  it('releases the save-as-new fence when the reducer cannot retarget', async () => {
+    harness.conflict = { detectedAt: '2026-09-03T12:00:00.000Z', kind: 'revision', serverRevision: 2 };
+    harness.retargetProject.mockReturnValueOnce({ ok: false, reason: 'target-already-open' });
+    await renderBanner();
+    const button = Array.from(document.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent === 'shell.projectConflict.saveAsNew'
+    );
+
+    await act(() => userEvent.click(button!));
+    await act(() => userEvent.click(document.querySelector<HTMLButtonElement>('[data-testid="confirm-resolution"]')!));
+    await vi.waitFor(() => expect(harness.abortProjectResolution).toHaveBeenCalledWith('project-1'));
+
+    expect(harness.acknowledgeProjectResolution).not.toHaveBeenCalled();
+    expect(harness.reportError).toHaveBeenCalledOnce();
   });
 
   it('exports the live project including edits newer than the autosave draft', async () => {
@@ -215,6 +235,21 @@ describe('ProjectConflictBanner', () => {
     expect(harness.closeProject.mock.invocationCallOrder[1]).toBeLessThan(
       harness.acknowledgeProjectResolution.mock.invocationCallOrder[0]!
     );
+  });
+
+  it('releases the discard fence when the project cannot close', async () => {
+    harness.conflict = { detectedAt: '2026-09-03T12:00:00.000Z', kind: 'deleted' };
+    harness.closeProject.mockReturnValueOnce({ ok: false, reason: 'active-queue-runs' });
+    await renderBanner();
+    const discard = Array.from(document.querySelectorAll('button')).find(
+      (button) => button.textContent === 'shell.projectConflict.discard'
+    );
+
+    await act(() => userEvent.click(discard!));
+    await act(() => userEvent.click(document.querySelector<HTMLButtonElement>('[data-testid="confirm-resolution"]')!));
+    await vi.waitFor(() => expect(harness.abortProjectResolution).toHaveBeenCalledWith('project-1'));
+
+    expect(harness.acknowledgeProjectResolution).not.toHaveBeenCalled();
   });
 
   it('exports a newer-format draft without opening it in the editor', async () => {

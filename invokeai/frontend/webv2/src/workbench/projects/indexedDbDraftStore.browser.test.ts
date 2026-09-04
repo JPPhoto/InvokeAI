@@ -187,12 +187,13 @@ describe('IndexedDB project drafts', () => {
     stores.push(database);
 
     expect(database.name).toBe(getWorkbenchDatabaseName(suffix));
-    expect(database.version).toBe(3);
+    expect(database.version).toBe(4);
     expect([...database.objectStoreNames]).toEqual([
       'draftBodies',
       'draftWriters',
       'drafts',
       'metadata',
+      'queueReceiptAcks',
       'queueRuns',
       'recallBodies',
       'recallCache',
@@ -255,7 +256,7 @@ describe('IndexedDB project drafts', () => {
     const upgraded = await openWorkbenchDatabase(suffix);
     stores.push(upgraded);
 
-    expect(upgraded.version).toBe(3);
+    expect(upgraded.version).toBe(4);
     expect(await upgraded.count('recallCache')).toBe(0);
     expect([...upgraded.objectStoreNames]).toContain('recallBodies');
     expect([...upgraded.transaction('draftWriters').store.indexNames]).toEqual(['byRetarget']);

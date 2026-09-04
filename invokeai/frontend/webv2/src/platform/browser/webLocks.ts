@@ -1,8 +1,13 @@
-export type ExclusiveLockResult =
+export type BrowserLockResult =
   | { kind: 'acquired'; release(): Promise<void> }
-  | { kind: 'contended' | 'unavailable' };
+  | { kind: 'contended' }
+  | { kind: 'unavailable' };
 
-export const acquireExclusiveLock = (name: string, lockManager?: LockManager): Promise<ExclusiveLockResult> => {
+const acquireLock = (
+  name: string,
+  mode: 'exclusive' | 'shared',
+  lockManager?: LockManager
+): Promise<BrowserLockResult> => {
   let manager = lockManager;
   if (!manager) {
     try {
@@ -25,7 +30,7 @@ export const acquireExclusiveLock = (name: string, lockManager?: LockManager): P
     try {
       let request: Promise<void>;
       request = manager
-        .request(name, { ifAvailable: true, mode: 'exclusive' }, async (lock) => {
+        .request(name, { ifAvailable: true, mode }, async (lock) => {
           if (!lock) {
             didResolve = true;
             resolve({ kind: 'contended' });
@@ -57,3 +62,11 @@ export const acquireExclusiveLock = (name: string, lockManager?: LockManager): P
     }
   });
 };
+
+export type ExclusiveLockResult = BrowserLockResult;
+
+export const acquireExclusiveLock = (name: string, lockManager?: LockManager): Promise<BrowserLockResult> =>
+  acquireLock(name, 'exclusive', lockManager);
+
+export const acquireSharedLock = (name: string, lockManager?: LockManager): Promise<BrowserLockResult> =>
+  acquireLock(name, 'shared', lockManager);

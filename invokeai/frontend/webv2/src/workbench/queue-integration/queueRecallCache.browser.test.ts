@@ -236,9 +236,22 @@ describe('IndexedDB queue recall cache', () => {
       journal.record('project-1', {
         cancellable: true,
         id: 'queue-1',
-        snapshot: { backendSubmission: {}, sourceId: 'workflow', submittedAt: 'now' },
+        snapshot: {
+          backendSubmission: { batchCount: 1, graph: { edges: [], id: 'graph', nodes: {} }, kind: 'workflow' },
+          canvas: {
+            document: { bbox: { height: 512, width: 512, x: 0, y: 0 }, height: 512, width: 512 },
+            documentRevision: 1,
+          },
+          destination: 'gallery',
+          filterIntermediateResults: true,
+          galleryBoardId: null,
+          graph: { id: 'graph', label: 'Graph' },
+          presentation: { batchCount: 1, height: 512, width: 512 },
+          sourceId: 'workflow',
+          submittedAt: '2026-09-03T00:00:00.000Z',
+        },
         status: 'pending',
-      } as never)
+      })
     ).resolves.toEqual({ kind: 'unavailable' });
 
     await expect(cache.put(createSnapshot('queue-1'))).resolves.toEqual({ kind: 'stored' });

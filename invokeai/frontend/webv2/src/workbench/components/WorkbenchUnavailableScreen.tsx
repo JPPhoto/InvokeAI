@@ -3,6 +3,7 @@ import type { RecoverableProjectDraft, SyncedWorkbenchPersistence } from '@workb
 import { Alert, Box, Button, Flex, Heading, HStack, Spinner, Stack, Text } from '@chakra-ui/react';
 import { downloadText } from '@platform/browser/downloadBlob';
 import { useMountEffect } from '@platform/react/useMountEffect';
+import { QueueRecoveryNotice } from '@workbench/queue-integration/QueueRecoveryNotice';
 import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -149,6 +150,7 @@ export const WorkbenchUnavailableScreen = ({
               </Button>
             ) : null}
           </Stack>
+          <QueueRecoveryNotice />
         </Stack>
       </Box>
     </Flex>

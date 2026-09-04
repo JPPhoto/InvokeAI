@@ -82,8 +82,10 @@ export const ProjectConflictBanner = () => {
           targetProjectId: result.targetProjectId,
         });
         if (!retargeted.ok) {
+          persistence.abortProjectResolution(project.id);
           throw new Error(t('shell.projectConflict.copyOpenedDuringResolution'));
         }
+        persistence.acknowledgeProjectResolution(project.id);
       }),
     [persistence, persistenceAdapter, project, run, t]
   );
@@ -154,15 +156,20 @@ export const ProjectConflictBanner = () => {
     if (action === 'discard') {
       await run(action, async () => {
         await persistence.resolveConflictDiscard(projectId);
-        let closeResult = projects.close(projectId);
-        if (!closeResult.ok && closeResult.reason === 'last-project') {
-          projects.create();
-          closeResult = projects.close(projectId);
+        try {
+          let closeResult = projects.close(projectId);
+          if (!closeResult.ok && closeResult.reason === 'last-project') {
+            projects.create();
+            closeResult = projects.close(projectId);
+          }
+          if (!closeResult.ok) {
+            throw new Error(t('shell.projectConflict.actionFailed'));
+          }
+          persistence.acknowledgeProjectResolution(projectId);
+        } catch (error) {
+          persistence.abortProjectResolution(projectId);
+          throw error;
         }
-        if (!closeResult.ok) {
-          throw new Error(t('shell.projectConflict.actionFailed'));
-        }
-        persistence.acknowledgeProjectResolution(projectId);
       });
     }
   }, [persistence, persistenceAdapter, projectId, projects, recoverableDraft, resolutionAction, run, saveAsNew, t]);

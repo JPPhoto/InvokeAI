@@ -2,16 +2,19 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
 import type { ProjectDraftBody, ProjectDraftMetadata, ProjectDraftWriterClaim } from './draftStore';
 
-export const WORKBENCH_DATABASE_VERSION = 3;
+export const WORKBENCH_DATABASE_VERSION = 4;
 export const WORKBENCH_DRAFT_STORE = 'drafts';
 export const WORKBENCH_DRAFT_BODY_STORE = 'draftBodies';
 export const WORKBENCH_DRAFT_WRITER_STORE = 'draftWriters';
 export const WORKBENCH_QUEUE_RUN_STORE = 'queueRuns';
+export const WORKBENCH_QUEUE_RECEIPT_STORE = 'queueReceiptAcks';
 export const WORKBENCH_RECALL_CACHE_STORE = 'recallCache';
 export const WORKBENCH_RECALL_CACHE_BODY_STORE = 'recallBodies';
 export const WORKBENCH_DATABASE_METADATA_STORE = 'metadata';
 
 export interface QueueRunDatabaseRecord {
+  receiptAcknowledged?: boolean;
+  byteSize?: number;
   itemJson: string;
   key: string;
   schemaVersion: 1;
@@ -19,6 +22,12 @@ export interface QueueRunDatabaseRecord {
   projectId: string;
   queueItemId: string;
   updatedAt: number;
+}
+
+export interface QueueReceiptAcknowledgement {
+  key: string;
+  projectId: string;
+  queueItemId: string;
 }
 
 export interface RecallCacheDatabaseRecord {
@@ -58,6 +67,10 @@ export interface WorkbenchDatabaseSchema extends DBSchema {
     indexes: { byProject: string };
     key: string;
     value: QueueRunDatabaseRecord;
+  };
+  queueReceiptAcks: {
+    key: string;
+    value: QueueReceiptAcknowledgement;
   };
   recallCache: {
     indexes: { byLastAccessOrder: number };
@@ -141,6 +154,9 @@ export const openWorkbenchDatabase = (
         transaction
           .objectStore(WORKBENCH_DRAFT_WRITER_STORE)
           .createIndex('byRetarget', ['projectId', 'editorSessionId', 'retargetedToProjectId']);
+      }
+      if (oldVersion < 4) {
+        database.createObjectStore(WORKBENCH_QUEUE_RECEIPT_STORE, { keyPath: 'key' });
       }
     },
   });

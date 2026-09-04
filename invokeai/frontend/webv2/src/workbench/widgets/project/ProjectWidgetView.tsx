@@ -90,6 +90,15 @@ const DetailsSection = ({ project }: { project: ProjectPanelViewModel }) => {
   const lastSavedAt = useWorkbenchSelector((snapshot) => snapshot.autosave.lastSavedAt);
   const projectSync = useProjectSyncSelector((snapshot) => snapshot.projects[project.id]);
   const notify = useNotify();
+  let running = 0;
+  let queued = 0;
+  for (const item of project.queue.items) {
+    if (item.status === 'running' || item.cancellationPending) {
+      running += 1;
+    } else if (item.status === 'pending') {
+      queued += 1;
+    }
+  }
 
   const syncLabel =
     backendConnectionStatus !== 'connected'
@@ -135,7 +144,9 @@ const DetailsSection = ({ project }: { project: ProjectPanelViewModel }) => {
           {lastSavedAt ? formatTimestamp(lastSavedAt, t('common.unknownTime')) : t('common.notYet')}
         </DetailRow>
         <DetailRow label={t('widgets.project.graphNodes')}>{project.projectGraph.nodes.length}</DetailRow>
-        <DetailRow label={t('widgets.project.queueItems')}>{project.queue.items.length}</DetailRow>
+        <DetailRow label={t('widgets.project.activeRuns')}>
+          {t('widgets.project.activeRunCounts', { running, queued })}
+        </DetailRow>
         <DetailRow label={t('widgets.project.events')}>{project.events.length}</DetailRow>
       </Panel>
     </Stack>

@@ -89,6 +89,7 @@ import {
 import { createNewCanvasState, loadCanvasState } from './canvasMigration';
 import { applyCanvasProjectMutation, type CanvasProjectMutation } from './canvasProjectMutations';
 import { gateProjectCanvases } from './projectCanvasGate';
+import { normalizeRestoredQueueItem } from './queue-integration/queueRunRestoration';
 import { getProjectWidgetValues } from './widgetState';
 export { nextLayerName } from './canvasProjectMutations';
 import { compileGenerateGraph, resolveGenerateSeed } from '@features/generation/graph';
@@ -324,7 +325,15 @@ type WorkbenchReducerAction =
       images: GeneratedImageContract[];
     }
   | { type: 'markQueueItemBackendCancelled'; projectId: string; queueItemId: string; backendItemId: number }
+  | { type: 'setQueueItemCancellationPending'; projectId: string; queueItemId: string; pending: boolean }
+  | {
+      type: 'setQueueItemLocalRecoveryState';
+      projectId: string;
+      queueItemId: string;
+      state: NonNullable<QueueItem['localRecoveryState']>;
+    }
   | { type: 'routeQueueItemResults'; projectId: string; queueItemId: string; images: GeneratedImageContract[] }
+  | { type: 'restoreQueueItemsFromJournal'; projectId: string; items: unknown[] }
   | { type: 'appendCanvasStagingCandidate'; projectId: string; candidate: CanvasStagingCandidateContract }
   | {
       type: 'selectGalleryItem';
@@ -3146,6 +3155,7 @@ const enqueueCompiledSnapshot = (
   const queueItem: QueueItem = {
     cancellable: backendSupportsCancellation,
     id: queueItemId,
+    localRecoveryState: 'local-only',
     snapshot: {
       backendSubmission,
       canvas: {
@@ -4237,6 +4247,24 @@ export const __workbenchReducerInternal = (
         return clampCanvasStagingSelection(nextProject, previousSelectedSlot);
       });
     }
+    case 'setQueueItemCancellationPending': {
+      return updateProjectById(state, action.projectId, (project) =>
+        updateQueueItem(project, action.queueItemId, (item) =>
+          item.cancellationPending === action.pending
+            ? item
+            : { ...item, cancellationPending: action.pending || undefined }
+        )
+      );
+    }
+    case 'setQueueItemLocalRecoveryState': {
+      return updateProjectById(state, action.projectId, (project) =>
+        updateQueueItem(project, action.queueItemId, (item) =>
+          item.localRecoveryState === action.state || item.localRecoveryState === 'durable'
+            ? item
+            : { ...item, localRecoveryState: action.state }
+        )
+      );
+    }
     case 'routeQueueItemResults': {
       const project = state.projects.find((project) => project.id === action.projectId);
       const queueItem = project?.queue.items.find((item) => item.id === action.queueItemId);
@@ -4262,6 +4290,33 @@ export const __workbenchReducerInternal = (
           title: 'Invocation completed',
         })
       );
+    }
+    case 'restoreQueueItemsFromJournal': {
+      return updateProjectById(state, action.projectId, (project) => {
+        const restoredById = new Map<string, QueueItem>();
+
+        for (const candidate of action.items) {
+          const item = normalizeRestoredQueueItem(candidate);
+          if (item && !restoredById.has(item.id)) {
+            restoredById.set(item.id, { ...item, localRecoveryState: 'durable' });
+          }
+        }
+
+        const liveItems = project.queue.items.map((item) =>
+          restoredById.delete(item.id) && item.localRecoveryState !== 'durable'
+            ? { ...item, localRecoveryState: 'durable' as const }
+            : item
+        );
+        const restoredItems: QueueItem[] = [];
+
+        for (const item of restoredById.values()) {
+          restoredItems.push(item);
+        }
+
+        return restoredItems.length === 0 && liveItems.every((item, index) => item === project.queue.items[index])
+          ? project
+          : { ...project, queue: { items: [...liveItems, ...restoredItems] } };
+      });
     }
     case 'appendCanvasStagingCandidate': {
       return updateProjectById(state, action.projectId, (project) =>
@@ -4579,7 +4634,7 @@ export const __workbenchReducerInternal = (
                 return item;
               }
 
-              return { ...item, status: 'cancelled' };
+              return { ...item, cancellationPending: true, status: 'cancelled' };
             }),
           },
         };
@@ -4623,7 +4678,7 @@ export const __workbenchReducerInternal = (
             queue: {
               items: shouldApplyQueueBulkActionToProject(project, action.projectId)
                 ? project.queue.items.map((item) =>
-                    isCancellableQueueItem(item) ? { ...item, status: 'cancelled' } : item
+                    isCancellableQueueItem(item) ? { ...item, cancellationPending: true, status: 'cancelled' } : item
                   )
                 : project.queue.items,
             },
@@ -4668,7 +4723,7 @@ export const __workbenchReducerInternal = (
               items: shouldApplyQueueBulkActionToProject(project, action.projectId)
                 ? project.queue.items.map((item) =>
                     isCancellableQueueItem(item) && item.id !== action.currentQueueItemId
-                      ? { ...item, status: 'cancelled' }
+                      ? { ...item, cancellationPending: true, status: 'cancelled' }
                       : item
                   )
                 : project.queue.items,

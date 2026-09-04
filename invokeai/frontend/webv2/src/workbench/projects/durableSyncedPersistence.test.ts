@@ -3,6 +3,7 @@ import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
 import { accountLifecycle, captureAccountScope } from '@platform/state/accountLifecycle';
 import { ApiError } from '@platform/transport/http';
+import { createAccountOwnedQueueRunJournal } from '@workbench/queue-integration/queueRunJournal';
 import { createDraftProject, createInitialWorkbenchState } from '@workbench/workbenchState';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -20,7 +21,29 @@ import {
 } from './durableSyncedPersistence';
 import { createDeterministicProjectId } from './ids';
 import { serializeProjectDocumentV2 } from './projectDocument';
+import { acquireProjectMutationLock } from './projectLifecycleLocks';
 import { getProjectSyncSnapshot, registerOpenProject, unregisterOpenProject } from './syncStore';
+
+const listQueueRunProjectIds = vi.hoisted(() =>
+  vi.fn<() => Promise<{ kind: 'available'; projectIds: string[] } | { kind: 'unavailable' }>>(() =>
+    Promise.resolve({ kind: 'available', projectIds: [] })
+  )
+);
+
+vi.mock('./projectLifecycleLocks', () => ({
+  acquireProjectMutationLock: vi.fn(() =>
+    Promise.resolve({ kind: 'acquired' as const, release: () => Promise.resolve() })
+  ),
+}));
+vi.mock('@workbench/queue-integration/queueRunJournal', () => ({
+  createAccountOwnedQueueRunJournal: vi.fn(() =>
+    Promise.resolve({
+      close: vi.fn(),
+      listProjectIds: listQueueRunProjectIds,
+      listForProject: vi.fn(() => Promise.resolve({ entries: [], kind: 'available', removedCorrupt: 0 })),
+    })
+  ),
+}));
 
 const now = '2026-09-03T12:00:00.000Z';
 
@@ -127,9 +150,81 @@ const createService = (
 
 beforeEach(() => {
   accountLifecycle.activate('durable-sync-test');
+  vi.mocked(acquireProjectMutationLock).mockReset();
+  vi.mocked(acquireProjectMutationLock).mockResolvedValue({
+    kind: 'acquired',
+    release: () => Promise.resolve(),
+  });
+  vi.mocked(createAccountOwnedQueueRunJournal).mockReset();
+  vi.mocked(createAccountOwnedQueueRunJournal).mockResolvedValue({
+    availability: 'available',
+    acknowledgeReceipt: vi.fn(),
+    listPendingReceipts: vi.fn(),
+    close: vi.fn(),
+    deleteForProject: vi.fn(),
+    listAll: vi.fn(),
+    listProjectIds: listQueueRunProjectIds,
+    listForProject: vi.fn(() => Promise.resolve({ entries: [], kind: 'available' as const, removedCorrupt: 0 })),
+    record: vi.fn(),
+    settle: vi.fn(),
+  });
+  listQueueRunProjectIds.mockReset();
+  listQueueRunProjectIds.mockResolvedValue({ kind: 'available', projectIds: [] });
 });
 
 describe('durable project persistence', () => {
+  it('refuses to retarget a project while it has active queue runs', async () => {
+    const owner = captureAccountScope();
+    const api = createApi();
+    const project = createDraftProject([]);
+    project.queue.items = [{ status: 'running' } as Project['queue']['items'][number]];
+
+    await expect(createService(owner, api).resolveConflictSaveAsNew(project)).rejects.toThrow(
+      'Wait for active queue runs'
+    );
+    expect(api.createProject).not.toHaveBeenCalled();
+  });
+
+  it('refuses conflict resolution while another tab owns a project run', async () => {
+    const owner = captureAccountScope();
+    const api = createApi();
+    const project = createDraftProject([]);
+    vi.mocked(acquireProjectMutationLock).mockResolvedValueOnce({ kind: 'contended' });
+
+    await expect(createService(owner, api).resolveConflictSaveAsNew(project)).rejects.toThrow('active queue runs');
+
+    expect(api.createProject).not.toHaveBeenCalled();
+  });
+
+  it('refuses conflict resolution when a dormant queue journal row exists', async () => {
+    const owner = captureAccountScope();
+    const api = createApi();
+    const project = createDraftProject([]);
+    const release = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(acquireProjectMutationLock).mockResolvedValueOnce({ kind: 'acquired', release });
+    vi.mocked(createAccountOwnedQueueRunJournal).mockResolvedValueOnce({
+      availability: 'available',
+      acknowledgeReceipt: vi.fn(),
+      listPendingReceipts: vi.fn(),
+      close: vi.fn(),
+      deleteForProject: vi.fn(),
+      listAll: vi.fn(),
+      listProjectIds: vi.fn().mockResolvedValue({ kind: 'available', projectIds: [project.id] }),
+      listForProject: vi.fn().mockResolvedValue({
+        entries: [{ item: {}, projectId: project.id, queueItemId: 'run-1', submissionOrder: 1 }],
+        kind: 'available',
+        removedCorrupt: 0,
+      }),
+      record: vi.fn(),
+      settle: vi.fn(),
+    });
+
+    await expect(createService(owner, api).resolveConflictSaveAsNew(project)).rejects.toThrow('active queue runs');
+
+    expect(api.createProject).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it('deletes the legacy mirror keys before loading', async () => {
     const owner = captureAccountScope();
     const clearLegacyStorage = vi.fn();
@@ -211,6 +306,128 @@ describe('durable project persistence', () => {
     expect(loaded.state.activeProjectId).toBe(projects[1]!.id);
     expect(list).toHaveBeenCalledOnce();
     expect(listForProject).not.toHaveBeenCalled();
+  });
+
+  it('restores a server project with durable queue work after another tab empties the session', async () => {
+    const owner = captureAccountScope();
+    const api = createApi();
+    const project = createDraftProject([]);
+    api.records.set(project.id, toRecord(project));
+    vi.mocked(api.loadSession).mockResolvedValue({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: '',
+      openProjectIds: [],
+    });
+    listQueueRunProjectIds.mockResolvedValue({ kind: 'available', projectIds: [project.id] });
+
+    const loaded = await createService(owner, api).loadWorkbench();
+
+    expect(loaded.state.projects.map((candidate) => candidate.id)).toEqual([project.id]);
+    expect(loaded.state.activeProjectId).toBe(project.id);
+  });
+
+  it('bounds journal-driven auto-open deterministically and reports retained overflow', async () => {
+    const owner = captureAccountScope();
+    const api = createApi();
+    const projects = ['queue-c', 'queue-a', 'queue-b'].map((id) => ({ ...createDraftProject([]), id }));
+    for (const project of projects) {
+      api.records.set(project.id, toRecord(project));
+    }
+    vi.mocked(api.loadSession).mockResolvedValue({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: '',
+      openProjectIds: [],
+    });
+    listQueueRunProjectIds.mockResolvedValue({
+      kind: 'available',
+      projectIds: projects.map((project) => project.id),
+    });
+    const service = createDurableSyncedWorkbenchPersistence(owner, {
+      api,
+      autoOpenQueueRunProjectLimit: 1,
+      draftStore: Promise.resolve(createMemoryProjectDraftStore()),
+      editorSession: Promise.resolve({ id: 'editor-1', release: () => Promise.resolve() }),
+      now: () => now,
+      writerToken: 'writer-1',
+    });
+
+    const loaded = await service.loadWorkbench();
+
+    expect(loaded.state.projects.map((project) => project.id)).toEqual(['queue-a']);
+    expect(loaded.queueRecovery).toEqual({
+      projects: [
+        { projectId: 'queue-b', reason: 'open-limit' },
+        { projectId: 'queue-c', reason: 'open-limit' },
+      ],
+      status: 'available',
+    });
+  });
+
+  it('restores a draft-backed journal project after its server record was deleted', async () => {
+    const owner = captureAccountScope();
+    const api = createApi();
+    const draftStore = createMemoryProjectDraftStore();
+    const project = createDraftProject([]);
+    await draftStore.stage({
+      baseRevision: 1,
+      documentJson: JSON.stringify(serializeProjectDocumentV2(project)),
+      documentSchemaVersion: 2,
+      editorSessionId: 'older-editor',
+      generation: 1,
+      projectId: project.id,
+      updatedAt: 1,
+      writerToken: 'older-writer',
+    });
+    vi.mocked(api.loadSession).mockResolvedValue({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: '',
+      openProjectIds: [],
+    });
+    listQueueRunProjectIds.mockResolvedValue({ kind: 'available', projectIds: [project.id] });
+
+    const loaded = await createService(owner, api, draftStore).loadWorkbench();
+
+    expect(loaded.state.projects.map((candidate) => candidate.id)).toEqual([project.id]);
+    expect(loaded.conflicts).toEqual([expect.objectContaining({ kind: 'deleted', projectId: project.id })]);
+    expect(loaded.queueRecovery.projects).toEqual([]);
+  });
+
+  it('reports a journal project that has neither a server record nor a recoverable draft', async () => {
+    const owner = captureAccountScope();
+    const api = createApi();
+    vi.mocked(api.loadSession).mockResolvedValue({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: '',
+      openProjectIds: [],
+    });
+    listQueueRunProjectIds.mockResolvedValue({ kind: 'available', projectIds: ['orphan-project'] });
+
+    const loaded = await createService(owner, api).loadWorkbench();
+
+    expect(loaded.queueRecovery).toEqual({
+      projects: [{ projectId: 'orphan-project', reason: 'project-unavailable' }],
+      status: 'available',
+    });
+    expect(loaded.state.projects).toHaveLength(1);
+    expect(loaded.state.projects[0]!.id).not.toBe('orphan-project');
+  });
+
+  it('loads backend projects when queue recovery storage is unavailable', async () => {
+    const owner = captureAccountScope();
+    const api = createApi();
+    const project = createDraftProject([]);
+    api.records.set(project.id, toRecord(project));
+    vi.mocked(api.loadSession).mockResolvedValue({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+    listQueueRunProjectIds.mockResolvedValue({ kind: 'unavailable' });
+
+    const loaded = await createService(owner, api).loadWorkbench();
+
+    expect(loaded.state.projects.map((candidate) => candidate.id)).toEqual([project.id]);
+    expect(loaded.queueRecovery).toEqual({ projects: [], status: 'unavailable' });
   });
 
   it('bounds account-wide draft auto-open while keeping overflow drafts recoverable', async () => {
@@ -1778,8 +1995,8 @@ describe('durable project persistence', () => {
     releaseCreate();
     const [copy] = await Promise.all([resolving, saving]);
 
-    expect(copy.project.name).toBe(backgroundEdit.name);
-    expect(api.records.get(copy.targetProjectId)?.name).toBe(backgroundEdit.name);
+    expect(copy.project.name).toBe(`${backgroundEdit.name} (copy)`);
+    expect(api.records.get(copy.targetProjectId)?.name).toBe(`${backgroundEdit.name} (copy)`);
     await expect(draftStore.get(copy.targetProjectId, 'editor-1')).resolves.toMatchObject({ kind: 'empty' });
   });
 

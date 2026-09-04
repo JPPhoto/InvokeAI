@@ -27,6 +27,9 @@ const harness = vi.hoisted(() => ({
   ),
 }));
 vi.mock('@platform/browser/downloadBlob', () => ({ downloadText: harness.downloadText }));
+vi.mock('@workbench/queue-integration/QueueRecoveryNotice', () => ({
+  QueueRecoveryNotice: () => <div data-testid="queue-recovery-notice">queue recovery</div>,
+}));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
 import { WorkbenchUnavailableScreen } from './WorkbenchUnavailableScreen';
@@ -91,6 +94,7 @@ describe('WorkbenchUnavailableScreen', () => {
 
     expect(onRetry).toHaveBeenCalledOnce();
     expect(harness.downloadText).toHaveBeenCalledWith('{"id":"project-1"}', 'project-1.json', 'application/json');
+    expect(document.querySelector('[data-testid="queue-recovery-notice"]')).not.toBeNull();
   });
 
   it('does not misreport inaccessible recovery storage as an empty draft list', async () => {

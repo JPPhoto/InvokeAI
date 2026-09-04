@@ -1,7 +1,10 @@
 import type { LaunchpadIntentId } from '@workbench/launchpad/intents';
 import type { BuiltInLayoutPresetId } from '@workbench/layoutContracts';
 import type { AccountState, WorkbenchState } from '@workbench/projectContracts';
+import type { QueueRunJournal } from '@workbench/queue-integration/queueRunJournal';
 import type { WorkbenchPreferences } from '@workbench/settings/contracts';
+
+import type { ProjectDraftStore } from './draftStore';
 
 import { getClientStateValue, setClientStateValue } from './api';
 
@@ -101,6 +104,65 @@ export const fetchSessionBlob = async (signal?: AbortSignal): Promise<WorkbenchS
 export const fetchSessionBlobStrict = async (signal?: AbortSignal): Promise<WorkbenchSessionBlob | null> =>
   parseSessionBlob(await getClientStateValue(SESSION_STATE_KEY, signal));
 
+type DurableRecoveryProjectIdsResult = { kind: 'available'; projectIds: string[] } | { kind: 'unavailable' };
+
+const listDurableRecoveryProjectIds = async (): Promise<DurableRecoveryProjectIdsResult> => {
+  let draftStore: ProjectDraftStore;
+  let queueRunJournal: QueueRunJournal;
+  try {
+    const [{ captureAccountScope }, { createAccountOwnedProjectDraftStore }, { createAccountOwnedQueueRunJournal }] =
+      await Promise.all([
+        import('@platform/state/accountLifecycle'),
+        import('./indexedDbDraftStore'),
+        import('@workbench/queue-integration/queueRunJournal'),
+      ]);
+    const owner = captureAccountScope();
+    const [draftStoreResult, queueRunJournalResult] = await Promise.allSettled([
+      createAccountOwnedProjectDraftStore(owner),
+      createAccountOwnedQueueRunJournal(owner),
+    ]);
+    if (draftStoreResult.status === 'rejected' || queueRunJournalResult.status === 'rejected') {
+      if (draftStoreResult.status === 'fulfilled') {
+        draftStoreResult.value.close();
+      }
+      if (queueRunJournalResult.status === 'fulfilled') {
+        queueRunJournalResult.value.close();
+      }
+      return { kind: 'unavailable' };
+    }
+    draftStore = draftStoreResult.value;
+    queueRunJournal = queueRunJournalResult.value;
+  } catch {
+    return { kind: 'unavailable' };
+  }
+
+  try {
+    const [drafts, retargets, queueRuns] = await Promise.all([
+      draftStore.list({ limit: 1 }),
+      draftStore.listRetargets({ limit: 1 }),
+      queueRunJournal.listProjectIds(),
+    ]);
+    if (drafts.kind !== 'available' || retargets.kind !== 'available' || queueRuns.kind !== 'available') {
+      return { kind: 'unavailable' };
+    }
+    return {
+      kind: 'available',
+      projectIds: [
+        ...new Set([
+          ...queueRuns.projectIds,
+          ...drafts.items.map((draft) => draft.projectId),
+          ...retargets.items.map((handoff) => handoff.targetProjectId),
+        ]),
+      ],
+    };
+  } catch {
+    return { kind: 'unavailable' };
+  } finally {
+    draftStore.close();
+    queueRunJournal.close();
+  }
+};
+
 /**
  * Take a deleted project out of the saved session, which the `/app` guard and the Launchpad's
  * "open" grouping read. Best-effort and silent: the deletion has already happened, and failing to
@@ -141,8 +203,18 @@ export const pruneSessionProject = async (projectId: string, signal?: AbortSigna
  * backend is unreachable) — the guard must not redirect on null, only on a
  * definite empty session.
  */
-export const peekOpenProjectIds = async (): Promise<string[] | null> => {
+export const peekOpenProjectIds = async (
+  dependencies: {
+    listDurableRecoveryProjectIds?: () => Promise<DurableRecoveryProjectIdsResult>;
+  } = {}
+): Promise<string[] | null> => {
   const blob = await fetchSessionBlob();
 
-  return blob?.openProjectIds ?? null;
+  if (!blob?.openProjectIds || blob.openProjectIds.length > 0) {
+    return blob?.openProjectIds ?? null;
+  }
+
+  const recovery = await (dependencies.listDurableRecoveryProjectIds ?? listDurableRecoveryProjectIds)();
+
+  return recovery.kind === 'available' ? recovery.projectIds : null;
 };
