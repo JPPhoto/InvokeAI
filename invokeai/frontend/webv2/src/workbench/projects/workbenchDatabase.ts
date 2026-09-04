@@ -2,16 +2,20 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
 import type { ProjectDraftBody, ProjectDraftMetadata, ProjectDraftWriterClaim } from './draftStore';
 
-export const WORKBENCH_DATABASE_VERSION = 1;
+export const WORKBENCH_DATABASE_VERSION = 2;
 export const WORKBENCH_DRAFT_STORE = 'drafts';
 export const WORKBENCH_DRAFT_BODY_STORE = 'draftBodies';
 export const WORKBENCH_DRAFT_WRITER_STORE = 'draftWriters';
 export const WORKBENCH_QUEUE_RUN_STORE = 'queueRuns';
 export const WORKBENCH_RECALL_CACHE_STORE = 'recallCache';
+export const WORKBENCH_RECALL_CACHE_BODY_STORE = 'recallBodies';
+export const WORKBENCH_DATABASE_METADATA_STORE = 'metadata';
 
 export interface QueueRunDatabaseRecord {
   itemJson: string;
   key: string;
+  schemaVersion: 1;
+  submissionOrder: number;
   projectId: string;
   queueItemId: string;
   updatedAt: number;
@@ -19,10 +23,19 @@ export interface QueueRunDatabaseRecord {
 
 export interface RecallCacheDatabaseRecord {
   byteSize: number;
-  lastAccessAt: number;
-  payloadJson: string;
+  lastAccessOrder: number;
   projectId: string;
   queueItemId: string;
+}
+
+export interface RecallCacheBodyDatabaseRecord {
+  payloadJson: string;
+  queueItemId: string;
+}
+
+export interface WorkbenchDatabaseMetadataRecord {
+  key: string;
+  value: number;
 }
 
 export interface WorkbenchDatabaseSchema extends DBSchema {
@@ -46,9 +59,17 @@ export interface WorkbenchDatabaseSchema extends DBSchema {
     value: QueueRunDatabaseRecord;
   };
   recallCache: {
-    indexes: { byLastAccessAt: number };
+    indexes: { byLastAccessOrder: number };
     key: string;
     value: RecallCacheDatabaseRecord;
+  };
+  recallBodies: {
+    key: string;
+    value: RecallCacheBodyDatabaseRecord;
+  };
+  metadata: {
+    key: string;
+    value: WorkbenchDatabaseMetadataRecord;
   };
 }
 
@@ -84,28 +105,37 @@ export const openWorkbenchDatabase = (
         unavailableDatabases.add(connection);
       }
     },
-    upgrade(database) {
-      const drafts = database.createObjectStore(WORKBENCH_DRAFT_STORE, {
-        keyPath: ['projectId', 'editorSessionId'],
-      });
-      drafts.createIndex('byProject', 'projectId');
+    upgrade(database, oldVersion) {
+      if (oldVersion < 1) {
+        const drafts = database.createObjectStore(WORKBENCH_DRAFT_STORE, {
+          keyPath: ['projectId', 'editorSessionId'],
+        });
+        drafts.createIndex('byProject', 'projectId');
 
-      const draftBodies = database.createObjectStore(WORKBENCH_DRAFT_BODY_STORE, {
-        keyPath: ['projectId', 'editorSessionId'],
-      });
-      draftBodies.createIndex('byIntegrity', ['projectId', 'editorSessionId', 'generation', 'documentByteSize'], {
-        unique: true,
-      });
+        const draftBodies = database.createObjectStore(WORKBENCH_DRAFT_BODY_STORE, {
+          keyPath: ['projectId', 'editorSessionId'],
+        });
+        draftBodies.createIndex('byIntegrity', ['projectId', 'editorSessionId', 'generation', 'documentByteSize'], {
+          unique: true,
+        });
 
-      database.createObjectStore(WORKBENCH_DRAFT_WRITER_STORE, {
-        keyPath: ['projectId', 'editorSessionId'],
-      });
+        database.createObjectStore(WORKBENCH_DRAFT_WRITER_STORE, {
+          keyPath: ['projectId', 'editorSessionId'],
+        });
 
-      const queueRuns = database.createObjectStore(WORKBENCH_QUEUE_RUN_STORE, { keyPath: 'key' });
-      queueRuns.createIndex('byProject', 'projectId');
+        const queueRuns = database.createObjectStore(WORKBENCH_QUEUE_RUN_STORE, { keyPath: 'key' });
+        queueRuns.createIndex('byProject', 'projectId');
+      }
 
-      const recallCache = database.createObjectStore(WORKBENCH_RECALL_CACHE_STORE, { keyPath: 'queueItemId' });
-      recallCache.createIndex('byLastAccessAt', 'lastAccessAt');
+      if (oldVersion === 1) {
+        database.deleteObjectStore(WORKBENCH_RECALL_CACHE_STORE);
+      }
+      if (oldVersion < 2) {
+        const recallCache = database.createObjectStore(WORKBENCH_RECALL_CACHE_STORE, { keyPath: 'queueItemId' });
+        recallCache.createIndex('byLastAccessOrder', 'lastAccessOrder');
+        database.createObjectStore(WORKBENCH_RECALL_CACHE_BODY_STORE, { keyPath: 'queueItemId' });
+        database.createObjectStore(WORKBENCH_DATABASE_METADATA_STORE, { keyPath: 'key' });
+      }
     },
   });
   return new Promise((resolve, reject) => {

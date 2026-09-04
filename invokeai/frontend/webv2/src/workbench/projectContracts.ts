@@ -57,15 +57,29 @@ export interface Project {
 }
 
 /** A persisted project the canvas version gate refused. `raw` is the untouched document, kept for recovery. */
-export interface RefusedWorkbenchProject {
+export interface ProjectDocumentLoadRefusal {
+  raw: unknown;
+  scope: 'project-document';
+  status: 'unsupported-version';
+  version: number;
+}
+
+interface RefusedWorkbenchProjectBase {
   projectId: string;
   projectName: string;
   raw: unknown;
-  /** Which embedded canvas was refused: the live one, or a queue-history item's snapshot. */
-  source: 'canvas' | 'queue-item';
-  queueItem?: { index: number; itemId: string | null };
-  refusal: CanvasLoadRefusal;
 }
+
+export type RefusedWorkbenchProject = RefusedWorkbenchProjectBase &
+  (
+    | { refusal: CanvasLoadRefusal; source: 'canvas'; queueItem?: never }
+    | { refusal: ProjectDocumentLoadRefusal; source: 'project-document'; queueItem?: never }
+    | {
+        refusal: CanvasLoadRefusal;
+        source: 'queue-item';
+        queueItem: { index: number; itemId: string | null };
+      }
+  );
 
 export type ProjectLoadResult =
   | { status: 'loaded'; project: Project }

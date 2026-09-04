@@ -41,6 +41,7 @@ import {
   applyAuthoritativeProjectBoard,
   isProjectDocumentShape,
   normalizeLegacyProjectDocument,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   serializeProjectDocument,
 } from './projectDocument';
 import { fetchSessionBlob, serializeSessionBlob, SESSION_STATE_KEY } from './session';
@@ -235,7 +236,39 @@ const getSerializedProjectDocument = (
  * `projectBoardId` is a stale-able cache, so overwriting it here means every path that reads from
  * the server agrees on one answer. The saved destination is left alone — it is a deliberate choice.
  */
-const deserializeProjectRecord = (record: ProjectRecordDTO): ProjectLoadResult => {
+const toFutureProjectDocumentRefusal = (
+  data: Record<string, unknown>,
+  projectId = typeof data.id === 'string' ? data.id : '',
+  projectName = typeof data.name === 'string' ? data.name : ''
+): ProjectLoadResult | null => {
+  if (
+    !Number.isSafeInteger(data.documentSchemaVersion) ||
+    (data.documentSchemaVersion as number) <= PROJECT_DOCUMENT_SCHEMA_VERSION
+  ) {
+    return null;
+  }
+  return {
+    refused: {
+      projectId,
+      projectName,
+      raw: data,
+      refusal: {
+        raw: data,
+        scope: 'project-document',
+        status: 'unsupported-version',
+        version: data.documentSchemaVersion as number,
+      },
+      source: 'project-document',
+    },
+    status: 'refused',
+  };
+};
+
+export const deserializeProjectRecord = (record: ProjectRecordDTO): ProjectLoadResult => {
+  const futureDocument = toFutureProjectDocumentRefusal(record.data, record.project_id, record.name);
+  if (futureDocument) {
+    return futureDocument;
+  }
   const result = deserializeProjectDocument(
     applyAuthoritativeProjectBoard(record.data, record.board_id, { selectBoard: false })
   );
@@ -387,13 +420,18 @@ const ensureRefusedProjectsRetained = async (syncState: SyncedPersistenceState):
  * `./projectDocument`; Launchpad callers reach it through a dynamic import.
  */
 export const deserializeProjectDocument = (data: Record<string, unknown>): ProjectLoadResult => {
+  const futureDocument = toFutureProjectDocumentRefusal(data);
+  if (futureDocument) {
+    return futureDocument;
+  }
   const normalizedData = normalizeLegacyProjectDocument(data);
 
   if (!isProjectDocumentShape(normalizedData)) {
     return { status: 'unavailable' };
   }
 
-  const result = loadWorkbenchProject({ ...normalizedData, undoRedo: { future: [], past: [] } } as unknown as Project);
+  const { documentSchemaVersion: _documentSchemaVersion, ...projectDocument } = normalizedData;
+  const result = loadWorkbenchProject({ ...projectDocument, undoRedo: { future: [], past: [] } } as unknown as Project);
 
   return result.status === 'refused' ? { refused: { ...result.refused, raw: data }, status: 'refused' } : result;
 };
@@ -1715,30 +1753,30 @@ const loadFromBackend = async (
   }> = [];
   const unavailableProjectIds = new Set<string>();
   const deletedAfterListProjectIds = new Set<string>();
+  const locallyCachedFutureDocumentIds = new Set<string>();
   const refusedById = new Map((local?.refusedProjects ?? []).map((refused) => [refused.projectId, refused]));
   const localProjectById = new Map((local?.state.projects ?? []).map((project) => [project.id, project]));
 
   for (const load of recordLoads) {
     if (load.status === 'refused') {
-      if (load.refused.refusal.status === 'unsupported-version') {
+      if (load.refused.source !== 'project-document' && load.refused.refusal.status === 'unsupported-version') {
         syncState.schemaRefusals.set(load.refused.projectId, {
           maxCanvasSchemaVersion: MAX_SUPPORTED_CANVAS_SCHEMA_VERSION,
           minimumCanvasSchemaVersion: load.refused.refusal.version,
         });
       }
       const localProject = localProjectById.get(load.refused.projectId);
-      const refused = localProject
-        ? (() => {
-            const raw = serializeProjectDocument(localProject);
-
-            return {
-              ...load.refused,
-              projectName: localProject.name,
-              raw,
-              refusal: { ...load.refused.refusal, raw },
-            };
-          })()
-        : load.refused;
+      let refused = load.refused;
+      if (localProject && refused.source === 'project-document') {
+        locallyCachedFutureDocumentIds.add(refused.projectId);
+      }
+      if (localProject && refused.source !== 'project-document') {
+        const raw = serializeProjectDocument(localProject);
+        refused =
+          refused.source === 'canvas'
+            ? { ...refused, projectName: localProject.name, raw, refusal: { ...refused.refusal, raw } }
+            : { ...refused, projectName: localProject.name, raw, refusal: { ...refused.refusal, raw } };
+      }
 
       // The current cache is the newest local edit and wins over an older retained artifact. A
       // metadata-only server refusal may only fill an otherwise empty recovery slot.
@@ -1761,9 +1799,9 @@ const loadFromBackend = async (
 
     const { record } = load;
     const { pushedDoc: serverDocJson, result } = adoptRecordBaseline(record);
+    const localProject = localProjectById.get(record.project_id);
 
     if (result.status === 'loaded') {
-      const localProject = localProjectById.get(record.project_id);
       const hasPendingLocalEdit = localProject && syncState.pendingProjectIds.has(record.project_id);
       const serverEntry: SyncEntry = {
         minimumCanvasSchemaVersion: record.minimum_canvas_schema_version,
@@ -1844,6 +1882,9 @@ const loadFromBackend = async (
         serverProjects.push(result.project);
       }
     } else if (result.status === 'refused') {
+      if (localProject && result.refused.source === 'project-document') {
+        locallyCachedFutureDocumentIds.add(record.project_id);
+      }
       refusedById.set(result.refused.projectId, result.refused);
     }
   }
@@ -2030,13 +2071,12 @@ const loadFromBackend = async (
   const retainedRefusals = await syncState.localPersistence.retainRefusedProjects(refusedProjects);
   assertOwner(syncState);
 
-  if (!retainedRefusals && local) {
-    syncState.unretainedRefusedProjects = refusedProjects.filter(
-      (project) => project.raw !== null && project.raw !== undefined
-    );
-    // Do not replace the primary cache unless every project omitted for compatibility has a durable
-    // raw recovery copy. The prior snapshot remains the fallback and all refused ids are terminal
-    // in this sync lifetime, so a subsequent autosave cannot publish them through this client.
+  if (local && (!retainedRefusals || locallyCachedFutureDocumentIds.size > 0)) {
+    syncState.unretainedRefusedProjects = retainedRefusals
+      ? []
+      : refusedProjects.filter((project) => project.raw !== null && project.raw !== undefined);
+    // Keep the prior snapshot when a refused project lacks another durable copy, or when its local
+    // edits and the authoritative future document must remain independently recoverable.
     syncState.hasPending = true;
     reportProjectSync({
       hasPendingChanges: true,

@@ -130,12 +130,14 @@ describe('IndexedDB project drafts', () => {
     stores.push(database);
 
     expect(database.name).toBe(getWorkbenchDatabaseName(suffix));
-    expect(database.version).toBe(1);
+    expect(database.version).toBe(2);
     expect([...database.objectStoreNames]).toEqual([
       'draftBodies',
       'draftWriters',
       'drafts',
+      'metadata',
       'queueRuns',
+      'recallBodies',
       'recallCache',
     ]);
 
@@ -154,6 +156,50 @@ describe('IndexedDB project drafts', () => {
       projectId: 'project-1',
       recordType: 'draft-body',
     });
+  });
+
+  it('upgrades version-one storage without retaining legacy recall payloads', async () => {
+    const suffix = createSuffix();
+    const name = getWorkbenchDatabaseName(suffix);
+    const legacy = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(name, 1);
+      request.addEventListener('upgradeneeded', () => {
+        const database = request.result;
+        const drafts = database.createObjectStore('drafts', { keyPath: ['projectId', 'editorSessionId'] });
+        drafts.createIndex('byProject', 'projectId');
+        const bodies = database.createObjectStore('draftBodies', { keyPath: ['projectId', 'editorSessionId'] });
+        bodies.createIndex('byIntegrity', ['projectId', 'editorSessionId', 'generation', 'documentByteSize'], {
+          unique: true,
+        });
+        database.createObjectStore('draftWriters', { keyPath: ['projectId', 'editorSessionId'] });
+        const runs = database.createObjectStore('queueRuns', { keyPath: 'key' });
+        runs.createIndex('byProject', 'projectId');
+        const recall = database.createObjectStore('recallCache', { keyPath: 'queueItemId' });
+        recall.createIndex('byLastAccessAt', 'lastAccessAt');
+      });
+      request.addEventListener('error', () => reject(request.error));
+      request.addEventListener('success', () => resolve(request.result));
+    });
+    const write = legacy.transaction('recallCache', 'readwrite');
+    write.objectStore('recallCache').put({
+      byteSize: 2,
+      lastAccessAt: 1,
+      payloadJson: '{}',
+      projectId: 'project-1',
+      queueItemId: 'queue-1',
+    });
+    await new Promise<void>((resolve, reject) => {
+      write.addEventListener('complete', () => resolve());
+      write.addEventListener('error', () => reject(write.error));
+    });
+    legacy.close();
+
+    const upgraded = await openWorkbenchDatabase(suffix);
+    stores.push(upgraded);
+
+    expect(upgraded.version).toBe(2);
+    expect(await upgraded.count('recallCache')).toBe(0);
+    expect([...upgraded.objectStoreNames]).toContain('recallBodies');
   });
 
   it('adopts at most once across connections and fences the old writer', async () => {
@@ -569,7 +615,7 @@ describe('IndexedDB project drafts', () => {
     stores.push(store);
 
     const upgraded = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open(getWorkbenchDatabaseName(suffix), 2);
+      const request = indexedDB.open(getWorkbenchDatabaseName(suffix), 3);
       request.addEventListener('error', () => reject(request.error));
       request.addEventListener('success', () => resolve(request.result));
     });

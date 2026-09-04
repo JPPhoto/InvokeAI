@@ -1,10 +1,9 @@
 import type { HydratedWorkbenchSnapshot, PersistedWorkbenchSnapshotV1 } from '@workbench/persistenceContracts';
 import type { Project, RefusedWorkbenchProject, WorkbenchState } from '@workbench/projectContracts';
 
-import { stripInfiniteWindowAnchor, stripSessionScopedGallerySearch } from '@features/gallery/contracts';
-
 import { timeWorkbenchPerf } from './performanceMarks';
 import { gateProjectCanvases } from './projectCanvasGate';
+import { stripSessionScopedGalleryState } from './projects/projectDocument';
 import {
   createRefusedProjectStorage,
   isBrowserStorageAvailable,
@@ -54,34 +53,6 @@ const isBrowser = isBrowserStorageAvailable;
  * projects that never left this realm. The window anchor below is dropped here
  * only — telling a foreign document from a live one is what that would need.
  */
-const stripSessionScopedGalleryState = (project: Project): Project => {
-  let didChange = false;
-  const widgetInstances = Object.fromEntries(
-    Object.entries(project.widgetInstances).map(([instanceId, instance]) => {
-      const values = instance.state.values;
-
-      if (instance.typeId !== 'gallery') {
-        return [instanceId, instance];
-      }
-
-      const strippedValues = stripSessionScopedGallerySearch(values);
-      const strippedAnchorValues = stripInfiniteWindowAnchor(strippedValues ?? values);
-
-      if (strippedValues === null && strippedAnchorValues === null) {
-        return [instanceId, instance];
-      }
-
-      didChange = true;
-      return [
-        instanceId,
-        { ...instance, state: { ...instance.state, values: strippedAnchorValues ?? strippedValues ?? values } },
-      ];
-    })
-  );
-
-  return didChange ? { ...project, widgetInstances } : project;
-};
-
 export const stripTransientWorkbenchState = (state: WorkbenchState): WorkbenchState => {
   const { errorLog: _legacyErrorLog, ...nextState } = state as WorkbenchState & { errorLog?: string[] };
 

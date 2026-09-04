@@ -24,16 +24,18 @@ export const gateProjectCanvases = (raw: unknown): RefusedWorkbenchProject | nul
   }
   const refuse = (
     refusal: CanvasLoadRefusal,
-    source: RefusedWorkbenchProject['source'],
+    source: 'canvas' | 'queue-item',
     queueItem?: RefusedWorkbenchProject['queueItem']
-  ): RefusedWorkbenchProject => ({
-    projectId: asString(raw.id),
-    projectName: asString(raw.name),
-    raw,
-    refusal,
-    source,
-    ...(queueItem ? { queueItem } : {}),
-  });
+  ): RefusedWorkbenchProject => {
+    const base = { projectId: asString(raw.id), projectName: asString(raw.name), raw, refusal };
+    if (source === 'canvas') {
+      return { ...base, source };
+    }
+    if (!queueItem) {
+      throw new Error('A queue-item refusal requires queue item identity.');
+    }
+    return { ...base, queueItem, source };
+  };
 
   const canvas = loadCanvasState(raw.canvas);
   if (canvas.status !== 'loaded') {

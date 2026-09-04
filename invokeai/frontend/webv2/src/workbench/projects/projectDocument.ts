@@ -1,5 +1,7 @@
 import type { Project } from '@workbench/projectContracts';
 
+import { stripInfiniteWindowAnchor, stripSessionScopedGallerySearch } from '@features/gallery/contracts';
+
 /**
  * The project *document* codec: the wire and file shape of a project, and the
  * migrations that heal older ones. It deliberately knows nothing about the
@@ -13,13 +15,87 @@ import type { Project } from '@workbench/projectContracts';
  * `./syncedPersistence` for the rehydrating half.
  */
 
-/**
- * Undo/redo stacks are session-only (each entry is a full project snapshot,
- * far too heavy to autosave); everything else in the project document is the
- * project, verbatim.
- */
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 2;
+export const PROJECT_DOCUMENT_MAX_BYTES = 32 * 1024 * 1024;
+
+export type ProjectDocumentV2 = Omit<
+  Pick<
+    Project,
+    | 'canvas'
+    | 'floatingWidgets'
+    | 'id'
+    | 'invocation'
+    | 'layout'
+    | 'name'
+    | 'projectGraph'
+    | 'promptHistory'
+    | 'settings'
+    | 'widgetGraphs'
+    | 'widgetInstances'
+    | 'widgetRegions'
+  >,
+  'floatingWidgets'
+> & {
+  documentSchemaVersion: typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
+  floatingWidgets?: Project['floatingWidgets'];
+};
+
+export const stripSessionScopedGalleryState = (project: Project): Project => {
+  let didChange = false;
+  const widgetInstances = Object.fromEntries(
+    Object.entries(project.widgetInstances).map(([instanceId, instance]) => {
+      if (instance.typeId !== 'gallery') {
+        return [instanceId, instance];
+      }
+      const values = instance.state.values;
+      const strippedValues = stripSessionScopedGallerySearch(values);
+      const strippedAnchorValues = stripInfiniteWindowAnchor(strippedValues ?? values);
+      if (strippedValues === null && strippedAnchorValues === null) {
+        return [instanceId, instance];
+      }
+      didChange = true;
+      return [
+        instanceId,
+        { ...instance, state: { ...instance.state, values: strippedAnchorValues ?? strippedValues ?? values } },
+      ];
+    })
+  );
+
+  return didChange ? { ...project, widgetInstances } : project;
+};
+
+export const serializeProjectDocumentV2 = (project: Project): ProjectDocumentV2 => {
+  const persistent = stripSessionScopedGalleryState(project);
+  const document: ProjectDocumentV2 = {
+    canvas: persistent.canvas,
+    documentSchemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
+    ...(persistent.floatingWidgets ? { floatingWidgets: persistent.floatingWidgets } : {}),
+    id: persistent.id,
+    invocation: persistent.invocation,
+    layout: persistent.layout,
+    name: persistent.name,
+    projectGraph: persistent.projectGraph,
+    promptHistory: persistent.promptHistory,
+    settings: persistent.settings,
+    widgetGraphs: persistent.widgetGraphs,
+    widgetInstances: persistent.widgetInstances,
+    widgetRegions: persistent.widgetRegions,
+  };
+
+  return document;
+};
+
+export const serializeProjectDocumentV2Json = (
+  project: Project
+): { byteSize: number; document: ProjectDocumentV2; documentJson: string } => {
+  const document = serializeProjectDocumentV2(project);
+  const documentJson = JSON.stringify(document);
+
+  return { byteSize: new TextEncoder().encode(documentJson).byteLength, document, documentJson };
+};
+
 export const serializeProjectDocument = (project: Project): Record<string, unknown> => {
-  const { undoRedo: _undoRedo, ...document } = project;
+  const { undoRedo: _undoRedo, ...document } = stripSessionScopedGalleryState(project);
 
   return document;
 };
@@ -159,4 +235,5 @@ export const isProjectDocumentShape = (data: Record<string, unknown>): boolean =
   typeof data.id === 'string' &&
   typeof data.name === 'string' &&
   typeof data.layout === 'object' &&
-  data.layout !== null;
+  data.layout !== null &&
+  (data.documentSchemaVersion === undefined || data.documentSchemaVersion === PROJECT_DOCUMENT_SCHEMA_VERSION);

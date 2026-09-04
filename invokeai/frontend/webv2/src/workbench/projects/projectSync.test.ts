@@ -6,8 +6,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProjectRecoveredIdentity } from './projectFlush';
 
-import { applyAuthoritativeProjectBoard } from './projectDocument';
-import { createRecoveredDocument, deserializeProjectDocument, serializeProjectDocument } from './syncedPersistence';
+import {
+  applyAuthoritativeProjectBoard,
+  serializeProjectDocumentV2,
+  serializeProjectDocumentV2Json,
+} from './projectDocument';
+import {
+  createRecoveredDocument,
+  deserializeProjectDocument,
+  deserializeProjectRecord,
+  serializeProjectDocument,
+} from './syncedPersistence';
 
 const getProject = (overrides: Partial<Project> = {}): Project => {
   const state = createInitialWorkbenchState();
@@ -26,7 +35,7 @@ const loadDocument = (document: Record<string, unknown>): Project => {
 };
 
 describe('project document serialization', () => {
-  it('strips undo/redo history and restores it empty on deserialize', () => {
+  it('serializes only the V2 durable allowlist and restores session state empty', () => {
     const project = getProject();
 
     project.undoRedo.past.push({
@@ -42,16 +51,50 @@ describe('project document serialization', () => {
         widgetRegions: project.widgetRegions,
       },
     });
+    project.queue.items.push({} as never);
+    project.events.push({} as never);
+    project.graphHistory.push({} as never);
+    project.recoveryOf = 'old-project';
+    project.recoveredAt = '2026-01-01T00:00:00.000Z';
+    (project as Project & { futureField: string }).futureField = 'must-not-leak';
 
-    const document = serializeProjectDocument(project);
+    const document = serializeProjectDocumentV2(project);
 
-    expect('undoRedo' in document).toBe(false);
+    expect(Object.keys(document).sort()).toEqual(
+      [
+        'canvas',
+        'documentSchemaVersion',
+        'id',
+        'invocation',
+        'layout',
+        'name',
+        'projectGraph',
+        'promptHistory',
+        'settings',
+        'widgetGraphs',
+        'widgetInstances',
+        'widgetRegions',
+      ].sort()
+    );
+    expect(document.documentSchemaVersion).toBe(2);
 
     const roundTripped = loadDocument(document);
 
     expect(roundTripped.undoRedo).toEqual({ future: [], past: [] });
+    expect(roundTripped.queue).toEqual({ items: [] });
+    expect(roundTripped.events).toEqual([]);
+    expect(roundTripped.graphHistory).toEqual([]);
     expect(roundTripped.id).toBe(project.id);
     expect(roundTripped.widgetInstances).toEqual(project.widgetInstances);
+  });
+
+  it('measures the exact UTF-8 wire bytes once', () => {
+    const project = getProject({ name: '文書' });
+    const encoded = serializeProjectDocumentV2Json(project);
+
+    expect(encoded.document).toEqual(serializeProjectDocumentV2(project));
+    expect(encoded.documentJson).toBe(JSON.stringify(encoded.document));
+    expect(encoded.byteSize).toBe(new TextEncoder().encode(encoded.documentJson).byteLength);
   });
 
   it('rejects documents that do not look like projects', () => {
@@ -73,6 +116,60 @@ describe('project document serialization', () => {
         raw: future,
         refusal: { scope: 'state', status: 'unsupported-version', version: 4 },
         source: 'canvas',
+      },
+      status: 'refused',
+    });
+  });
+
+  it('refuses a newer project document schema while preserving its raw bytes for export', () => {
+    const project = getProject();
+    const future = { ...serializeProjectDocumentV2(project), documentSchemaVersion: 3 };
+
+    expect(deserializeProjectDocument(future)).toEqual({
+      refused: {
+        projectId: project.id,
+        projectName: project.name,
+        raw: future,
+        refusal: {
+          raw: future,
+          scope: 'project-document',
+          status: 'unsupported-version',
+          version: 3,
+        },
+        source: 'project-document',
+      },
+      status: 'refused',
+    });
+  });
+
+  it('uses authoritative server identity and untouched bytes for a future document refusal', () => {
+    const raw = {
+      documentSchemaVersion: 3,
+      id: 'untrusted-id',
+      name: 'Untrusted name',
+      widgetInstances: {
+        gallery: { state: { values: { boardId: 'stale-board' } }, typeId: 'gallery' },
+      },
+    };
+
+    expect(
+      deserializeProjectRecord({
+        board_id: 'authoritative-board',
+        created_at: '2026-09-03T00:00:00.000Z',
+        data: raw,
+        minimum_canvas_schema_version: 3,
+        name: 'Authoritative name',
+        project_id: 'authoritative-id',
+        revision: 4,
+        updated_at: '2026-09-03T00:00:00.000Z',
+      })
+    ).toEqual({
+      refused: {
+        projectId: 'authoritative-id',
+        projectName: 'Authoritative name',
+        raw,
+        refusal: { raw, scope: 'project-document', status: 'unsupported-version', version: 3 },
+        source: 'project-document',
       },
       status: 'refused',
     });

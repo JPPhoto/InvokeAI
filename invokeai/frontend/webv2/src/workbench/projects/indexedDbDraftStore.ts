@@ -1,9 +1,6 @@
-import {
-  assertAccountScopeCurrent,
-  registerAccountOwnedResource,
-  type AccountScope,
-} from '@platform/state/accountLifecycle';
+import type { AccountScope } from '@platform/state/accountLifecycle';
 
+import { acquireAccountOwnedWorkbenchDatabase } from './accountOwnedWorkbenchDatabase';
 import {
   clampProjectDraftLimit,
   combineProjectDraft,
@@ -41,9 +38,7 @@ import {
   type RetargetAcknowledgedCopyOptions,
 } from './draftStore';
 import {
-  deleteWorkbenchDatabase,
   isWorkbenchDatabaseAvailable,
-  openWorkbenchDatabase,
   WORKBENCH_DRAFT_BODY_STORE,
   WORKBENCH_DRAFT_STORE,
   WORKBENCH_DRAFT_WRITER_STORE,
@@ -73,7 +68,6 @@ export const createIndexedDbProjectDraftStore = (
 
   const markUnavailable = (): void => {
     isUnavailable = true;
-    database.close();
   };
   const canUseDatabase = (): boolean => !isClosed && !isUnavailable && isWorkbenchDatabaseAvailable(database);
   const mutate = async <T>(operation: () => Promise<T>, unavailable: T, quota = unavailable): Promise<T> => {
@@ -412,10 +406,7 @@ export const createIndexedDbProjectDraftStore = (
       );
     },
     close() {
-      if (!isClosed) {
-        isClosed = true;
-        database.close();
-      }
+      isClosed = true;
     },
     delete(projectId, editorSessionId, writerToken) {
       return mutate<ProjectDraftDeleteResult>(
@@ -1008,48 +999,16 @@ export const createIndexedDbProjectDraftStore = (
   };
 };
 
-interface AccountDraftStoreGroup {
-  readonly connections: Set<ProjectDraftStore>;
-  cleared: boolean;
-}
-
-const accountDraftStoreGroups = new WeakMap<AccountScope, AccountDraftStoreGroup>();
-
 export const createAccountOwnedProjectDraftStore = async (
   owner: AccountScope,
-  {
-    deleteDatabase = deleteWorkbenchDatabase,
-    openDatabase = openWorkbenchDatabase,
-  }: {
-    deleteDatabase?: typeof deleteWorkbenchDatabase;
-    openDatabase?: typeof openWorkbenchDatabase;
-  } = {}
+  dependencies: Parameters<typeof acquireAccountOwnedWorkbenchDatabase>[1] = {}
 ): Promise<ProjectDraftStore> => {
-  assertAccountScopeCurrent(owner);
-  if (owner.accountId === null) {
-    throw new Error('A project draft store requires an active account.');
+  const lease = await acquireAccountOwnedWorkbenchDatabase(owner, dependencies);
+  if (!lease) {
+    return createUnavailableProjectDraftStore();
   }
-  let group = accountDraftStoreGroups.get(owner);
-  if (!group) {
-    group = { cleared: false, connections: new Set() };
-    accountDraftStoreGroups.set(owner, group);
-    let unregister: () => void = () => undefined;
-    unregister = registerAccountOwnedResource({
-      clear: () => {
-        unregister();
-        unregister = () => undefined;
-        group!.cleared = true;
-        for (const connection of group!.connections) {
-          connection.close();
-        }
-        group!.connections.clear();
-        void deleteDatabase(owner.storageSuffix);
-      },
-      name: `project-draft-database:${owner.epoch}`,
-    });
-  }
-  const wrapStore = (ownedStore: ProjectDraftStore): ProjectDraftStore => {
-    group.connections.add(ownedStore);
+  const ownedStore = createIndexedDbProjectDraftStore(lease.database);
+  const wrapStore = (): ProjectDraftStore => {
     let isReleased = false;
     return {
       ...ownedStore,
@@ -1061,27 +1020,10 @@ export const createAccountOwnedProjectDraftStore = async (
           return;
         }
         isReleased = true;
-        group.connections.delete(ownedStore);
         ownedStore.close();
+        lease.release();
       },
     };
   };
-  let database: WorkbenchDatabase;
-  try {
-    database = await openDatabase(owner.storageSuffix);
-  } catch {
-    if (group.cleared) {
-      assertAccountScopeCurrent(owner);
-    }
-    return wrapStore(createUnavailableProjectDraftStore());
-  }
-  try {
-    assertAccountScopeCurrent(owner);
-  } catch (error) {
-    database.close();
-    void deleteDatabase(owner.storageSuffix);
-    throw error;
-  }
-
-  return wrapStore(createIndexedDbProjectDraftStore(database));
+  return wrapStore();
 };

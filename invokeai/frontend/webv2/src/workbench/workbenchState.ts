@@ -1891,6 +1891,7 @@ const assembleWorkbenchProject = (
   return {
     ...project,
     canvas,
+    events: Array.isArray(project.events) ? project.events : [],
     floatingWidgets: placement.floatingWidgets,
     graphHistory: normalizeGraphHistory((project as Partial<Project>).graphHistory),
     // Built-in preset ids were renamed for the three-preset model; a project

@@ -276,6 +276,48 @@ beforeEach(async () => {
 });
 
 describe('loadWorkbench session hydration', () => {
+  it('does not misclassify a future project-document refusal as a canvas schema refusal', async () => {
+    const project = seedServerProject('Future document');
+    const record = api.__records.get(project.id)!;
+    record.data = { ...record.data, documentSchemaVersion: 3 };
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+
+    await service.loadWorkbench();
+    record.data = persistence.serializeProjectDocument(project);
+
+    await expect(service.flushProjectToServer(project)).resolves.not.toMatchObject({ kind: 'schema-refused' });
+  });
+
+  it('retains cached local edits independently from an authoritative future document', async () => {
+    const project = seedServerProject('Server project');
+    const local = { ...project, name: 'Unsynced local edit' };
+    const serverRecord = api.__records.get(project.id)!;
+    const futureDocument = { ...serverRecord.data, documentSchemaVersion: 3, name: 'Future server project' };
+    serverRecord.data = futureDocument;
+    serverRecord.name = 'Future server project';
+    const cachedState = stateWithProjects([local]);
+    storage.set(
+      'invokeai:v7:webv2:workbench',
+      JSON.stringify({ savedAt: '2026-09-03T00:00:00.000Z', state: cachedState, version: 1 })
+    );
+    storage.set(
+      'invokeai:v7:webv2:workbench-sync',
+      JSON.stringify({ minimumCanvasSchemaVersions: { [project.id]: 3 }, revisions: { [project.id]: 1 } })
+    );
+    seedSessionBlob({ account: cachedState.account, activeProjectId: project.id, openProjectIds: [project.id] });
+    const loaded = await service.loadWorkbench();
+
+    expect(loaded?.state.projects).toMatchObject([{ id: project.id, name: 'Unsynced local edit' }]);
+    const persisted = JSON.parse(storage.get('invokeai:v7:webv2:workbench')!) as { state: WorkbenchState };
+    expect(persisted.state.projects).toMatchObject([{ id: project.id, name: 'Unsynced local edit' }]);
+    const refused = JSON.parse(storage.get('invokeai:v7:webv2:workbench:refused-projects')!) as Record<string, unknown>;
+    expect(refused[project.id]).toEqual(futureDocument);
+  });
+
   it('constructs isolated synchronization lifetimes instead of sharing pending state', async () => {
     const first = persistence.createSyncedWorkbenchPersistence();
     const second = persistence.createSyncedWorkbenchPersistence();
