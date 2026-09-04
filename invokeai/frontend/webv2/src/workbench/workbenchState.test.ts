@@ -30,14 +30,13 @@ import { createEmptyCanvasDocument } from './canvasMigration';
 import { getCanvasStagingCandidateFingerprint, getCanvasStagingSlots } from './canvasStagingView';
 import { layoutPresets } from './layoutPresets';
 import { resolveSavedLayoutPreset } from './layoutPresetSnapshots';
+import { PROJECT_EVENT_LIMIT } from './projectEvents';
 import { DEFAULT_PROJECT_SETTINGS } from './settings/store';
 import { getProjectWidgetValues } from './widgetState';
 import {
   clampPanelSize,
   createDraftProject,
   getPanelCollapseThreshold,
-  GRAPH_HISTORY_BYTE_BUDGET,
-  normalizeGraphHistory,
   shouldSnapPanelShut,
   normalizeWorkbenchAccount,
   normalizeWorkbenchProject,
@@ -862,6 +861,34 @@ describe('adopting a project from another realm', () => {
   const galleryValuesOf = (project: Project) =>
     Object.values(project.widgetInstances).find((instance) => instance.typeId === 'gallery')!.state.values;
 
+  it('drops legacy graph history and session events at ingestion', () => {
+    const project = createInitialWorkbenchState().projects[0]!;
+    const legacyProject = {
+      ...project,
+      events: [{ createdAt: 'now', id: 'legacy-event', summary: 'legacy', type: 'project-created' }],
+      graphHistory: [{ document: project.projectGraph, id: 'legacy-snapshot' }],
+    } as unknown as Project;
+
+    const normalized = normalizeWorkbenchProject(legacyProject);
+
+    expect(normalized.events).toEqual([]);
+    expect('graphHistory' in normalized).toBe(false);
+  });
+
+  it('preserves and caps session events during live normalization', () => {
+    const project = createInitialWorkbenchState().projects[0]!;
+    project.events = Array.from({ length: PROJECT_EVENT_LIMIT + 1 }, (_, index) => ({
+      createdAt: 'now',
+      id: `event-${index}`,
+      summary: `Event ${index}`,
+      type: 'project-created',
+    }));
+
+    const normalized = normalizeWorkbenchProject(project, { isArriving: false });
+
+    expect(normalized.events).toEqual(project.events.slice(0, PROJECT_EVENT_LIMIT));
+  });
+
   it('drops a session-scoped search and the rank pages set against it', () => {
     // A project opened from the server — the Open dialog, a deep link, or a
     // conflict fork — arrives in a realm that never ran the session its values
@@ -968,6 +995,7 @@ describe('adopting a project from another realm', () => {
 
     expect(fork.id).toBe(`${project.id}-copy`);
     expect(fork.name).toBe('Renamed while copying');
+    expect(fork.events).toEqual(project.events);
     expect(values.galleryPage).toBe(7);
     expect(values.semanticImageQuery).toEqual({ clusterId, kind: 'cluster', label: 'beaches' });
   });
@@ -2839,7 +2867,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(getActiveProject(state).invocation).toMatchObject({ destination: 'gallery', sourceId: 'workflow' });
   });
 
-  it('replaceProjectGraph snapshots the previous document into graph history', () => {
+  it('replaceProjectGraph preserves the previous document in session undo', () => {
     let state = createInitialWorkbenchState();
     const originalGraphId = getActiveProject(state).projectGraph.id;
 
@@ -2853,95 +2881,12 @@ describe('workbenchReducer Phase 5 generation flow', () => {
 
     expect(project.projectGraph.id).toBe('replacement-graph');
     expect(project.invocation).toMatchObject({ destination: 'gallery', sourceId: 'workflow' });
-    expect(project.graphHistory[0]?.document?.id).toBe(originalGraphId);
-    expect(project.graphHistory[0]?.retainedBytes).toBeGreaterThan(0);
-    expect(project.graphHistory[0]?.document).toBe(project.undoRedo.past.at(-1)?.project.projectGraph);
+    expect(project.undoRedo.past.at(-1)?.project.projectGraph.id).toBe(originalGraphId);
 
-    state = workbenchReducer(state, {
-      snapshotId: project.graphHistory[0]?.id ?? '',
-      type: 'restoreProjectGraphSnapshot',
-    });
+    state = workbenchReducer(state, { type: 'undoProjectChange' });
 
     expect(getActiveProject(state).projectGraph.id).toBe(originalGraphId);
     expect(getActiveProject(state).invocation).toMatchObject({ destination: 'gallery', sourceId: 'workflow' });
-  });
-
-  it('keeps the newest graph-history entries within the count limit and recomputes retained bytes', () => {
-    const entries = Array.from({ length: 50 }, (_, index) => ({
-      createdAt: `2026-07-19T00:00:${String(index).padStart(2, '0')}.000Z`,
-      document: { edges: [], nodes: [], version: 1 as const },
-      id: `snapshot-${index}`,
-      label: `Snapshot ${index}`,
-      retainedBytes: 0,
-    }));
-    const normalized = normalizeGraphHistory(entries);
-
-    expect(normalized).toHaveLength(40);
-    expect(normalized.map((entry) => entry.id)).toEqual(entries.slice(0, 40).map((entry) => entry.id));
-    expect(normalized.every((entry) => (entry.retainedBytes ?? 0) > 0)).toBe(true);
-  });
-
-  it('measures loaded graph-history entries instead of trusting forged retained-byte metadata', () => {
-    const encode = vi.spyOn(TextEncoder.prototype, 'encode').mockImplementation((input) => {
-      const byteLength = String(input).includes('"id":"oversized"') ? GRAPH_HISTORY_BYTE_BUDGET + 1 : 128;
-
-      return Object.defineProperty(new Uint8Array(0), 'byteLength', { value: byteLength });
-    });
-
-    try {
-      const normalized = normalizeGraphHistory([
-        {
-          createdAt: '2026-07-19T00:00:00.000Z',
-          document: { edges: [], nodes: [], version: 1 as const },
-          id: 'oversized',
-          label: 'Forged low byte count',
-          retainedBytes: 0,
-        },
-        {
-          createdAt: '2026-07-19T00:00:01.000Z',
-          document: { edges: [], nodes: [], version: 1 as const },
-          id: 'within-budget',
-          label: 'Forged high byte count',
-          retainedBytes: GRAPH_HISTORY_BYTE_BUDGET + 1,
-        },
-      ]);
-
-      expect(normalized).toHaveLength(1);
-      expect(normalized[0]).toMatchObject({ id: 'within-budget', retainedBytes: 128 });
-    } finally {
-      encode.mockRestore();
-    }
-  });
-
-  it('admits newest graph-history entries without exceeding the cumulative byte budget', () => {
-    const halfBudgetPlusOne = Math.floor(GRAPH_HISTORY_BYTE_BUDGET / 2) + 1;
-    const encode = vi.spyOn(TextEncoder.prototype, 'encode').mockImplementation((input) => {
-      const byteLength = String(input).includes('"id":"small"') ? 128 : halfBudgetPlusOne;
-
-      return Object.defineProperty(new Uint8Array(0), 'byteLength', { value: byteLength });
-    });
-
-    try {
-      const createEntry = (id: string) => ({
-        createdAt: '2026-07-19T00:00:00.000Z',
-        document: { edges: [], nodes: [], version: 1 as const },
-        id,
-        label: id,
-        retainedBytes: 0,
-      });
-      const normalized = normalizeGraphHistory([
-        createEntry('newest-large'),
-        createEntry('older-large'),
-        createEntry('small'),
-      ]);
-
-      expect(normalized.map((entry) => entry.id)).toEqual(['newest-large', 'small']);
-      expect(normalized.reduce((total, entry) => total + (entry.retainedBytes ?? 0), 0)).toBeLessThanOrEqual(
-        GRAPH_HISTORY_BYTE_BUDGET
-      );
-    } finally {
-      encode.mockRestore();
-    }
   });
 
   it('does not queue Upscale while its required settings are incomplete', () => {

@@ -19,7 +19,6 @@ export const ProjectWidgetView = () => {
   const activeProject = useActiveProjectSelector(
     (project) => ({
       events: project.events,
-      graphHistory: project.graphHistory,
       id: project.id,
       name: project.name,
       projectGraph: project.projectGraph,
@@ -36,7 +35,7 @@ export const ProjectWidgetView = () => {
   );
 };
 
-type ProjectPanelViewModel = Pick<Project, 'events' | 'graphHistory' | 'id' | 'name' | 'projectGraph' | 'queue'>;
+type ProjectPanelViewModel = Pick<Project, 'events' | 'id' | 'name' | 'projectGraph' | 'queue'>;
 
 const NameSection = ({ project }: { project: ProjectPanelViewModel }) => {
   const { t } = useTranslation();

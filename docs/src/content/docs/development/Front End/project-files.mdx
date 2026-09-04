@@ -100,7 +100,7 @@ Exclusion is two things, not one. The collector skips those keys so their pixels
 
 The skip is by key on purpose, because the members got there differently. `selectedImage` and the name keys were already missed — `GalleryItem` spells its name field `name`, which no collector key matches — but that is an accident of naming that a rename would have undone. `compareImage` is a `GeneratedImageContract` carrying `imageName`, so it was genuinely being bundled until the exclusion became explicit.
 
-**History is excluded.** The walker skips the `queue`, `graphHistory` and `events` roots, and the `snapshot`, `snapshots` and `recentImages` keys at any depth. Every queue entry embeds a full canvas snapshot and the gallery widget keeps up to sixty recent results, so bundling all of it would turn a working project into a multi-gigabyte archive. References into history survive in the document and resolve on any install that still has those images.
+**History is excluded.** The walker skips the `queue`, `graphHistory` and `events` roots, and the `snapshot`, `snapshots` and `recentImages` keys at any depth. The root skip list also recognizes legacy documents, which may still contain the removed graph-history field. New project files strip graph history and session events; historical references are compatibility input and are never bundled as live project assets.
 
 ## Loading
 

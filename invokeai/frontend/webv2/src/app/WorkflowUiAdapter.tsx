@@ -140,7 +140,6 @@ export const WorkflowUiAdapterProvider = ({ children }: { children: ReactNode })
         source: store,
         select: (snapshot) => ({
           galleryValues: getProjectWidgetValues(snapshot.activeProject, 'gallery'),
-          graphHistory: snapshot.activeProject.graphHistory,
           id: snapshot.activeProject.id,
           isWorkflowRunning: hasPendingWorkflowQueueItem(snapshot.activeProject.queue.items),
           projectGraph: snapshot.activeProject.projectGraph,
@@ -177,8 +176,6 @@ export const WorkflowUiAdapterProvider = ({ children }: { children: ReactNode })
         editGraph: commands.workflows.editGraph,
         redo: commands.workflows.redo,
         replace: commands.workflows.replace,
-        restoreSnapshot: commands.workflows.restoreSnapshot,
-        saveSnapshot: commands.workflows.saveSnapshot,
         undo: commands.workflows.undo,
       },
       getProjectGraph: () => queries.getSnapshot().activeProject.projectGraph,

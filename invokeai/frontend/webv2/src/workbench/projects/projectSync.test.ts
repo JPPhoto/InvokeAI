@@ -45,7 +45,6 @@ describe('project document serialization', () => {
     });
     project.queue.items.push({} as never);
     project.events.push({} as never);
-    project.graphHistory.push({} as never);
     Object.assign(project, {
       futureField: 'must-not-leak',
       recoveredAt: '2026-01-01T00:00:00.000Z',
@@ -77,7 +76,6 @@ describe('project document serialization', () => {
     expect(roundTripped.undoRedo).toEqual({ future: [], past: [] });
     expect(roundTripped.queue).toEqual({ items: [] });
     expect(roundTripped.events).toEqual([]);
-    expect(roundTripped.graphHistory).toEqual([]);
     expect(roundTripped.id).toBe(project.id);
     expect(roundTripped.widgetInstances).toEqual(project.widgetInstances);
   });
@@ -89,6 +87,16 @@ describe('project document serialization', () => {
     expect(encoded.document).toEqual(serializeProjectDocumentV2(project));
     expect(encoded.documentJson).toBe(JSON.stringify(encoded.document));
     expect(encoded.byteSize).toBe(new TextEncoder().encode(encoded.documentJson).byteLength);
+  });
+
+  it('excludes session events and legacy graph history from project files', () => {
+    const project = getProject();
+    Object.assign(project, { graphHistory: [{ id: 'legacy-snapshot' }] });
+
+    const document = serializeProjectDocument(project);
+
+    expect(document).not.toHaveProperty('events');
+    expect(document).not.toHaveProperty('graphHistory');
   });
 
   it('rejects documents that do not look like projects', () => {

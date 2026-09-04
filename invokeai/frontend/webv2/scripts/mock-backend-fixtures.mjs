@@ -633,8 +633,6 @@ const createProjectDocument = ({ index, layers = [], workflowNodes = [] }) => {
       },
       version: 3,
     },
-    events: [],
-    graphHistory: [],
     id,
     invocation: {
       destination: 'gallery',

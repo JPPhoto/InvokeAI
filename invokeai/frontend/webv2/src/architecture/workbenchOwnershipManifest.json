@@ -125,6 +125,7 @@
     "projectCanvasGate.ts": "workbench",
     "projectContracts.ts": "workbench",
     "projectEventContracts.ts": "workbench",
+    "projectEvents.ts": "workbench",
     "queueHistoryContracts.ts": "workbench",
     "queueHistoryNormalization.ts": "workbench",
     "useCanvasProjectMutationDispatch.ts": "workbench",

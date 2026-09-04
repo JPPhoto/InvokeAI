@@ -6,7 +6,6 @@ import { createContext, use, useCallback, useSyncExternalStore } from 'react';
 
 import type {
   WorkflowCommands,
-  WorkflowGraphHistoryEntry,
   WorkflowInvocationSourceId,
   WorkflowNodeExecutionState,
   WorkflowPerfSource,
@@ -24,7 +23,6 @@ export interface WorkflowPreferences {
 
 export interface WorkflowProjectSnapshot {
   galleryValues: Record<string, unknown>;
-  graphHistory: readonly WorkflowGraphHistoryEntry[];
   id: string;
   isWorkflowRunning: boolean;
   projectGraph: ProjectGraphState;

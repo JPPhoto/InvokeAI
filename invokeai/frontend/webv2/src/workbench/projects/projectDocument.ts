@@ -95,7 +95,12 @@ export const serializeProjectDocumentV2Json = (
 };
 
 export const serializeProjectDocument = (project: Project): Record<string, unknown> => {
-  const { undoRedo: _undoRedo, ...document } = stripSessionScopedGalleryState(project);
+  const {
+    events: _events,
+    graphHistory: _graphHistory,
+    undoRedo: _undoRedo,
+    ...document
+  } = stripSessionScopedGalleryState(project) as Project & { graphHistory?: unknown };
 
   return document;
 };

@@ -2583,7 +2583,6 @@
       "detailsWithEllipsis": "Workflow details…",
       "exportJson": "Export workflow JSON",
       "form": "Form",
-      "graphHistorySnapshots": "Graph History Snapshots",
       "importJsonWithEllipsis": "Import workflow JSON…",
       "inspectorTabs": {
         "data": "Data",
@@ -2611,7 +2610,6 @@
       "resizeNodeInspector": "Resize node inspector",
       "runOutputsNotRecorded": "Run outputs are not recorded per node yet; results currently route to the Gallery or Canvas. This tab will show the node's outputs from its most recent run once run records land.",
       "newWorkflowWithEllipsis": "New workflow…",
-      "saveGraphSnapshot": "Save graph snapshot",
       "saveToLibrary": "Save to library",
       "selectNodeToInspect": "Select a node in the Workflow editor to inspect it.",
       "selectedNodeInspector": "Selected node inspector",

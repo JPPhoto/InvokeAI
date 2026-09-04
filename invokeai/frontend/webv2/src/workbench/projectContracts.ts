@@ -42,7 +42,6 @@ export interface Project {
   floatingWidgets?: Record<WidgetInstanceId, FloatingWidgetState>;
   widgetGraphs: Partial<Record<WidgetTypeId, GraphContract>>;
   canvas: CanvasStateContractV3;
-  graphHistory: GraphHistorySnapshot[];
   promptHistory: PromptHistoryItem[];
   undoRedo: UndoRedoHistory;
   queue: WorkbenchQueueState;
@@ -113,21 +112,6 @@ export interface WorkbenchNotification {
   category?: WorkbenchNotificationCategory;
   /** Coalesced repeat count (see addNotification); absent = 1. */
   occurrenceCount?: number;
-}
-
-/**
- * One entry of the project's graph history. Queue submissions record the
- * compiled `graph`; workflow snapshots (manual save, pre-replacement) record
- * the editable `document`, which is what makes them restorable.
- */
-export interface GraphHistorySnapshot {
-  id: string;
-  createdAt: string;
-  label: string;
-  /** UTF-8 serialized bytes retained by this snapshot, populated during creation or hydration. */
-  retainedBytes?: number;
-  graph?: GraphContract;
-  document?: ProjectGraphState;
 }
 
 export interface PromptHistoryItem {

@@ -29,7 +29,6 @@ import type {
   WidgetRegionState,
 } from '@workbench/layoutContracts';
 import type {
-  GraphHistorySnapshot,
   Project,
   ProjectUndoSnapshot,
   PromptHistoryItem,
@@ -71,6 +70,7 @@ import {
   type GeneratedImageContract,
 } from '@features/gallery/contracts';
 import { WIDGET_REGIONS } from '@workbench/layoutContracts';
+import { prependProjectEvent, PROJECT_EVENT_LIMIT } from '@workbench/projectEvents';
 
 import type { WorkbenchQueueItem as QueueItem } from './queueHistoryContracts';
 
@@ -287,8 +287,6 @@ type WorkbenchReducerAction =
     }
   | { type: 'applyProjectGraphAction'; action: ProjectGraphAction }
   | { type: 'replaceProjectGraph'; document: ProjectGraphState; label: string }
-  | { type: 'saveProjectGraphSnapshot' }
-  | { type: 'restoreProjectGraphSnapshot'; snapshotId: string }
   | { type: 'setProjectGraphLibraryBinding'; libraryWorkflowId: string }
   | { type: 'submitInvocationSnapshot'; backendSupportsCancellation: boolean; models?: readonly ModelConfig[] }
   | {
@@ -419,7 +417,6 @@ type WorkbenchReducerAction =
   | { type: 'recordNotice'; kind: WorkbenchNotificationKind; title: string; message?: string };
 
 const HISTORY_LIMIT = 40;
-export const GRAPH_HISTORY_BYTE_BUDGET = 64 * 1024 * 1024;
 const NOTIFICATION_LIMIT = 100;
 // Side panels host real widget UIs (gallery grid, generate form); below
 // ~350px their toolbars and grids collapse into unusable slivers, so that is
@@ -1163,112 +1160,6 @@ const restoreUndoSnapshot = (project: Project, snapshot: ProjectUndoSnapshot): P
   widgetRegions: cloneWidgetRegions(snapshot.widgetRegions),
 });
 
-const UTF8_ENCODER = new TextEncoder();
-
-const getGraphHistorySnapshotBytes = (snapshot: GraphHistorySnapshot): number => {
-  const { retainedBytes: _retainedBytes, ...serialized } = snapshot;
-  let retainedBytes = 0;
-
-  // Include the metadata field itself in the serialized-size budget. Its digit
-  // count can change the answer, so converge on the stable JSON byte length.
-  for (;;) {
-    const nextRetainedBytes = UTF8_ENCODER.encode(JSON.stringify({ ...serialized, retainedBytes })).byteLength;
-    if (nextRetainedBytes === retainedBytes) {
-      return retainedBytes;
-    }
-    retainedBytes = nextRetainedBytes;
-  }
-};
-
-type MeasuredGraphHistorySnapshot = GraphHistorySnapshot & { retainedBytes: number };
-
-const withRetainedBytes = (snapshot: GraphHistorySnapshot): MeasuredGraphHistorySnapshot => ({
-  ...snapshot,
-  retainedBytes: getGraphHistorySnapshotBytes(snapshot),
-});
-
-/** Trims state-owned snapshots without reserializing retained history. */
-const trimMeasuredGraphHistory = (snapshots: readonly GraphHistorySnapshot[]): GraphHistorySnapshot[] => {
-  const history: GraphHistorySnapshot[] = [];
-  let retainedBytes = 0;
-
-  for (const snapshot of snapshots) {
-    if (history.length >= HISTORY_LIMIT) {
-      break;
-    }
-
-    const snapshotBytes = snapshot.retainedBytes;
-    if (typeof snapshotBytes !== 'number' || !Number.isFinite(snapshotBytes) || snapshotBytes < 0) {
-      continue;
-    }
-
-    if (snapshotBytes > GRAPH_HISTORY_BYTE_BUDGET || retainedBytes + snapshotBytes > GRAPH_HISTORY_BYTE_BUDGET) {
-      continue;
-    }
-
-    retainedBytes += snapshotBytes;
-    history.push(snapshot);
-  }
-
-  return history;
-};
-
-export const normalizeGraphHistory = (value: unknown): GraphHistorySnapshot[] => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  const measuredHistory: MeasuredGraphHistorySnapshot[] = [];
-
-  for (const item of value) {
-    if (!item || typeof item !== 'object') {
-      continue;
-    }
-
-    const snapshot = item as GraphHistorySnapshot;
-    if (
-      typeof snapshot.id !== 'string' ||
-      typeof snapshot.createdAt !== 'string' ||
-      typeof snapshot.label !== 'string'
-    ) {
-      continue;
-    }
-
-    // Persisted metadata is untrusted. Always derive the retained size from the
-    // actual snapshot so a forged low count cannot bypass the load-time budget
-    // and a stale high count cannot discard valid history.
-    measuredHistory.push(withRetainedBytes(snapshot));
-  }
-
-  return trimMeasuredGraphHistory(measuredHistory);
-};
-
-const prependGraphHistory = (
-  history: readonly GraphHistorySnapshot[],
-  snapshot: MeasuredGraphHistorySnapshot
-): GraphHistorySnapshot[] => trimMeasuredGraphHistory([snapshot, ...history]);
-
-const createGraphHistorySnapshot = (label: string, graph: GraphContract): MeasuredGraphHistorySnapshot =>
-  withRetainedBytes({
-    createdAt: now(),
-    graph: cloneGraph(graph),
-    id: createId('graph-history'),
-    label,
-  });
-
-/** A restorable history entry carrying the editable workflow document. */
-const createDocumentHistorySnapshot = (
-  label: string,
-  document: ProjectGraphState,
-  cloneDocument = true
-): MeasuredGraphHistorySnapshot =>
-  withRetainedBytes({
-    createdAt: now(),
-    document: cloneDocument ? cloneProjectGraph(document) : document,
-    id: createId('graph-history'),
-    label,
-  });
-
 const pushUndo = (project: Project, label: string, projectGraph?: ProjectGraphState): Project => ({
   ...project,
   undoRedo: {
@@ -1776,10 +1667,11 @@ const assembleWorkbenchProject = (
 ): Project => {
   const { isArriving = true } = options;
   const {
+    graphHistory: _graphHistory,
     recoveredAt: _recoveredAt,
     recoveryOf: _recoveryOf,
     ...persistentProject
-  } = project as Project & { recoveredAt?: unknown; recoveryOf?: unknown };
+  } = project as Project & { graphHistory?: unknown; recoveredAt?: unknown; recoveryOf?: unknown };
   const legacyWidgetRegions = project.widgetRegions as
     | Partial<Record<WidgetRegion | 'left-panel' | 'right-panel' | 'status-bar', WidgetRegionState>>
     | undefined;
@@ -1892,9 +1784,8 @@ const assembleWorkbenchProject = (
   return {
     ...persistentProject,
     canvas,
-    events: Array.isArray(project.events) ? project.events : [],
+    events: isArriving ? [] : project.events.slice(0, PROJECT_EVENT_LIMIT),
     floatingWidgets: placement.floatingWidgets,
-    graphHistory: normalizeGraphHistory((project as Partial<Project>).graphHistory),
     // Built-in preset ids were renamed for the three-preset model; a project
     // saved under an old id must still resolve to the arrangement it names,
     // otherwise every restored project reads as drifted from Compose.
@@ -1946,7 +1837,6 @@ const createProject = (index: number, id: string, preset: LayoutPreset): Project
           type: 'project-created',
         },
       ],
-      graphHistory: [],
       id,
       invocation: getInvocationAfterLayoutPreset(defaultInvocationRoute, preset),
       layout: { ...defaultLayoutPreset.snapshot.layout, panels: { ...defaultLayoutPreset.snapshot.layout.panels } },
@@ -2335,15 +2225,12 @@ const updateActiveLayout = (
 
     return {
       ...nextProject,
-      events: [
-        {
-          createdAt: now(),
-          id: createId('event'),
-          summary: 'Updated active layout',
-          type: 'layout-updated',
-        },
-        ...nextProject.events,
-      ],
+      events: prependProjectEvent(nextProject.events, {
+        createdAt: now(),
+        id: createId('event'),
+        summary: 'Updated active layout',
+        type: 'layout-updated',
+      }),
       layout: getLayout(project.layout),
     };
   });
@@ -2420,15 +2307,12 @@ const updateActiveProjectLayoutPreset = (
 
     return {
       ...nextLayoutProject,
-      events: [
-        {
-          createdAt: now(),
-          id: createId('event'),
-          summary: 'Updated active layout',
-          type: 'layout-updated',
-        },
-        ...nextProject.events,
-      ],
+      events: prependProjectEvent(nextProject.events, {
+        createdAt: now(),
+        id: createId('event'),
+        summary: 'Updated active layout',
+        type: 'layout-updated',
+      }),
       invocation: applyDefaultRoute
         ? getInvocationAfterLayoutPreset(nextProject.invocation, preset)
         : nextLayoutProject.invocation,
@@ -2444,15 +2328,12 @@ const updateActiveInvocation = (
 
     return {
       ...nextProject,
-      events: [
-        {
-          createdAt: now(),
-          id: createId('event'),
-          summary: 'Updated invocation source or destination',
-          type: 'invocation-updated',
-        },
-        ...nextProject.events,
-      ],
+      events: prependProjectEvent(nextProject.events, {
+        createdAt: now(),
+        id: createId('event'),
+        summary: 'Updated invocation source or destination',
+        type: 'invocation-updated',
+      }),
       invocation: getInvocation(project.invocation),
     };
   });
@@ -3184,7 +3065,6 @@ const enqueueCompiledSnapshot = (
       ([typeId, widgetState]) => [typeId, cloneQueueWidgetState(widgetState, typeId as WidgetTypeId)]
     )
   ) as WidgetStateMap;
-  const graphHistorySnapshot = createGraphHistorySnapshot(`Queue snapshot ${queueItemId}`, graph);
   const generateSettings =
     route.sourceId === 'generate' ? normalizeGenerateSettings(widgetStates.generate.values) : null;
   const upscaleSettings =
@@ -3318,17 +3198,13 @@ const enqueueCompiledSnapshot = (
 
   return {
     ...project,
-    events: [
-      {
-        createdAt: submittedAt,
-        id: createId('event'),
-        runId: queueItemId,
-        summary: `Submitted immutable ${route.sourceId} graph snapshot to ${route.destination}`,
-        type: 'queue-submitted',
-      },
-      ...project.events,
-    ],
-    graphHistory: prependGraphHistory(project.graphHistory, graphHistorySnapshot),
+    events: prependProjectEvent(project.events, {
+      createdAt: submittedAt,
+      id: createId('event'),
+      runId: queueItemId,
+      summary: `Submitted immutable ${route.sourceId} graph snapshot to ${route.destination}`,
+      type: 'queue-submitted',
+    }),
     promptHistory: generateSettings
       ? addPromptHistoryItem(project.promptHistory, getPromptHistoryItemFromGenerateSettings(generateSettings))
       : upscaleSettings
@@ -4222,28 +4098,19 @@ export const __workbenchReducerInternal = (
       });
     }
     case 'replaceProjectGraph': {
-      let didRetainOutgoingGraph = true;
       const nextState = updateActiveProject(state, (project) => {
-        // One immutable clone is shared by undo and graph history; neither
-        // snapshot path mutates the document.
         const routedProject = applyAutoRouteForEdit(project, 'workflow', context);
         const outgoingGraph = cloneProjectGraph(project.projectGraph);
         const nextProject = pushUndo(routedProject, 'Replace project graph', outgoingGraph);
-        const historySnapshot = createDocumentHistorySnapshot(`Before: ${action.label}`, outgoingGraph, false);
-        didRetainOutgoingGraph = (historySnapshot.retainedBytes ?? 0) <= GRAPH_HISTORY_BYTE_BUDGET;
 
         return {
           ...nextProject,
-          events: [
-            {
-              createdAt: now(),
-              id: createId('event'),
-              summary: `Replaced the project graph with "${action.document.name || 'Untitled Workflow'}" (${action.label})`,
-              type: 'graph-replaced',
-            },
-            ...nextProject.events,
-          ],
-          graphHistory: prependGraphHistory(nextProject.graphHistory, historySnapshot),
+          events: prependProjectEvent(nextProject.events, {
+            createdAt: now(),
+            id: createId('event'),
+            summary: `Replaced the project graph with "${action.document.name || 'Untitled Workflow'}" (${action.label})`,
+            type: 'graph-replaced',
+          }),
           projectGraph: cloneProjectGraph(action.document),
         };
       });
@@ -4253,55 +4120,12 @@ export const __workbenchReducerInternal = (
         nextState,
         createNotification({
           kind: 'info',
-          message: didRetainOutgoingGraph
-            ? 'The previous project graph was saved to graph history.'
-            : 'The previous project graph exceeded the 64 MiB history budget, so its graph-history snapshot was skipped. Undo remains available for this session.',
+          message:
+            'The previous graph is available through Undo for this session. Save workflows to the library for a permanent copy.',
           projectId: activeProject?.id,
           title: `Project graph replaced (${action.label})`,
         })
       );
-    }
-    case 'saveProjectGraphSnapshot': {
-      return updateActiveProject(state, (project) => ({
-        ...project,
-        events: [
-          {
-            createdAt: now(),
-            id: createId('event'),
-            summary: `Saved a graph history snapshot of "${project.projectGraph.name || 'Untitled Workflow'}"`,
-            type: 'graph-snapshot-saved',
-          },
-          ...project.events,
-        ],
-        graphHistory: prependGraphHistory(
-          project.graphHistory,
-          createDocumentHistorySnapshot(
-            `Manual save: ${project.projectGraph.name || 'Untitled Workflow'}`,
-            project.projectGraph
-          )
-        ),
-      }));
-    }
-    case 'restoreProjectGraphSnapshot': {
-      return updateActiveProject(state, (project) => {
-        const snapshot = project.graphHistory.find((entry) => entry.id === action.snapshotId);
-
-        if (!snapshot?.document) {
-          return project;
-        }
-
-        const routedProject = applyAutoRouteForEdit(project, 'workflow', context);
-        const nextProject = pushUndo(routedProject, 'Restore graph history snapshot');
-
-        return {
-          ...nextProject,
-          graphHistory: prependGraphHistory(
-            nextProject.graphHistory,
-            createDocumentHistorySnapshot('Before restore', project.projectGraph)
-          ),
-          projectGraph: cloneProjectGraph(normalizeProjectGraph(snapshot.document)),
-        };
-      });
     }
     case 'setProjectGraphLibraryBinding': {
       return updateActiveProject(state, (project) => ({
@@ -4900,7 +4724,6 @@ export const __workbenchReducerInternal = (
         return {
           ...restoredProject,
           events: project.events,
-          graphHistory: project.graphHistory,
           promptHistory: project.promptHistory,
           queue: project.queue,
           undoRedo: {
@@ -4931,7 +4754,6 @@ export const __workbenchReducerInternal = (
         return {
           ...restoredProject,
           events: project.events,
-          graphHistory: project.graphHistory,
           promptHistory: project.promptHistory,
           queue: project.queue,
           undoRedo: {

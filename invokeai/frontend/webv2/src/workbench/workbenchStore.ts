@@ -447,8 +447,6 @@ const createCommands = (
         (document: ActionPayload<'replaceProjectGraph'>['document'], label: string) => ({ document, label })
       ),
       redo: command('redoProjectChange'),
-      restoreSnapshot: command('restoreProjectGraphSnapshot', (snapshotId: string) => ({ snapshotId })),
-      saveSnapshot: command('saveProjectGraphSnapshot'),
       undo: command('undoProjectChange'),
     },
   };
