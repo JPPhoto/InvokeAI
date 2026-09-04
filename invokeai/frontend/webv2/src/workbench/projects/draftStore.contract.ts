@@ -3,6 +3,15 @@ import { expect, it } from 'vitest';
 import { getUtf8ByteSize, type ProjectDraft, type ProjectDraftInput, type ProjectDraftStore } from './draftStore';
 
 const DEFAULT_DOCUMENT = '{"id":"project-1","name":"Project"}';
+export const createCopyReservation = (copyProjectId: string) => ({
+  copyDocumentByteSize: `{"id":"${copyProjectId}"}`.length,
+  copyDocumentJson: `{"id":"${copyProjectId}"}`,
+  copyProjectGeneration: 1,
+  copyProjectId,
+  copyProjectMinimumCanvasSchemaVersion: 3,
+  copyProjectName: `Copy ${copyProjectId}`,
+  copySourceProjectName: 'Project',
+});
 
 export const createProjectDraftInput = (overrides: Partial<ProjectDraftInput> = {}): ProjectDraftInput => ({
   baseRevision: 3,
@@ -67,6 +76,17 @@ export const testProjectDraftStoreContract = (createStore: () => Promise<Project
     store.close();
   });
 
+  it('removes an older durable generation after a newer volatile generation is acknowledged', async () => {
+    const store = await createStore();
+    await store.stage(createProjectDraftInput());
+
+    await expect(store.settleAcknowledgement('project-1', 'session-a', 'writer-a', 2, 7)).resolves.toEqual({
+      kind: 'deleted',
+    });
+    await expect(store.get('project-1', 'session-a')).resolves.toMatchObject({ kind: 'empty' });
+    store.close();
+  });
+
   it('keeps conflict metadata sticky while newer edits replace only authored fields', async () => {
     const store = await createStore();
     await store.stage(createProjectDraftInput());
@@ -92,13 +112,37 @@ export const testProjectDraftStoreContract = (createStore: () => Promise<Project
   it('keeps schema refusal metadata sticky while newer edits are staged', async () => {
     const store = await createStore();
     await store.stage(createProjectDraftInput());
-    await store.settleSchemaRefusal('project-1', 'session-a', 'writer-a', 1, 4);
+    await store.settleSchemaRefusal('project-1', 'session-a', 'writer-a', 1, {
+      kind: 'canvas',
+      maxCanvasSchemaVersion: 3,
+      minimumCanvasSchemaVersion: 4,
+    });
 
     await store.stage(createProjectDraftInput({ generation: 2 }));
 
     await expect(store.get('project-1', 'session-a')).resolves.toMatchObject({
-      draft: { generation: 2, minimumCanvasSchemaVersion: 4, state: 'schema-refused' },
+      draft: {
+        generation: 2,
+        refusal: { kind: 'canvas', maxCanvasSchemaVersion: 3, minimumCanvasSchemaVersion: 4 },
+        state: 'schema-refused',
+      },
       kind: 'found',
+    });
+    store.close();
+  });
+
+  it('resumes a schema-refused lineage without changing its document', async () => {
+    const store = await createStore();
+    await store.stage(createProjectDraftInput());
+    await store.settleSchemaRefusal('project-1', 'session-a', 'writer-a', 1, {
+      kind: 'canvas',
+      maxCanvasSchemaVersion: 3,
+      minimumCanvasSchemaVersion: 4,
+    });
+
+    await expect(store.resumeSchemaRefused('project-1', 'session-a', 'writer-a', 1)).resolves.toMatchObject({
+      draft: { documentJson: DEFAULT_DOCUMENT, state: 'dirty' },
+      kind: 'marked',
     });
     store.close();
   });
@@ -107,23 +151,22 @@ export const testProjectDraftStoreContract = (createStore: () => Promise<Project
     const store = await createStore();
     await store.stage(createProjectDraftInput({ documentJson: '{"id":"project-1"}' }));
     await store.settleConflict('project-1', 'session-a', 'writer-a', 1, { kind: 'deleted' });
-    await expect(store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', 'copy-1')).resolves.toEqual({
-      copyProjectId: 'copy-1',
-      kind: 'reserved',
-    });
+    await expect(
+      store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', createCopyReservation('copy-1'))
+    ).resolves.toEqual({ ...createCopyReservation('copy-1'), kind: 'reserved' });
     await store.stage(createProjectDraftInput({ documentJson: '{"id":"project-1","edited":true}', generation: 2 }));
-    await expect(store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', 'copy-2')).resolves.toEqual({
-      copyProjectId: 'copy-1',
-      kind: 'reserved',
-    });
-    await expect(store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', 'copy-2', 'copy-1')).resolves.toEqual({
-      copyProjectId: 'copy-2',
-      kind: 'reserved',
-    });
-    await expect(store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', 'copy-3', 'copy-1')).resolves.toEqual({
+    await expect(
+      store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', createCopyReservation('copy-2'))
+    ).resolves.toEqual({ ...createCopyReservation('copy-1'), kind: 'reserved' });
+    await expect(
+      store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', createCopyReservation('copy-2'), 'copy-1')
+    ).resolves.toEqual({ ...createCopyReservation('copy-2'), kind: 'reserved' });
+    await expect(
+      store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', createCopyReservation('copy-3'), 'copy-1')
+    ).resolves.toEqual({
       kind: 'stale',
     });
-    await store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', 'copy-1', 'copy-2');
+    await store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', createCopyReservation('copy-1'), 'copy-2');
 
     await expect(
       store.retargetAcknowledgedCopy({
@@ -157,7 +200,7 @@ export const testProjectDraftStoreContract = (createStore: () => Promise<Project
   it('does not retain an exact-generation copy after the server acknowledges it', async () => {
     const store = await createStore();
     await store.stage(createProjectDraftInput({ documentJson: '{"id":"project-1"}' }));
-    await store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', 'copy-1');
+    await store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', createCopyReservation('copy-1'));
     const retarget = {
       acknowledgedRevision: 1,
       copyProjectId: 'copy-1',
@@ -202,10 +245,52 @@ export const testProjectDraftStoreContract = (createStore: () => Promise<Project
     store.close();
   });
 
+  it('pages and acknowledges durable retarget handoffs', async () => {
+    const store = await createStore();
+    for (const [projectId, copyProjectId] of [
+      ['project-1', 'copy-1'],
+      ['project-2', 'copy-2'],
+    ] as const) {
+      await store.stage(createProjectDraftInput({ projectId }));
+      await store.reserveCopyIdentity(projectId, 'session-a', 'writer-a', createCopyReservation(copyProjectId));
+      await store.retargetAcknowledgedCopy({
+        acknowledgedRevision: 1,
+        copyProjectId,
+        editorSessionId: 'session-a',
+        projectId,
+        retargetDocument: () => `{"id":"${copyProjectId}"}`,
+        sentGeneration: 1,
+        writerToken: 'writer-a',
+      });
+    }
+
+    const first = await store.listRetargets({ limit: 1 });
+    expect(first).toMatchObject({
+      items: [{ editorSessionId: 'session-a', projectId: 'project-1', targetProjectId: 'copy-1' }],
+      kind: 'available',
+      nextCursor: ['project-1', 'session-a', 'copy-1'],
+    });
+    if (first.kind !== 'available' || !first.nextCursor) {
+      throw new Error('Expected a second retarget page.');
+    }
+    await expect(store.listRetargets({ after: first.nextCursor, limit: 1 })).resolves.toMatchObject({
+      items: [{ projectId: 'project-2', targetProjectId: 'copy-2' }],
+      kind: 'available',
+      nextCursor: null,
+    });
+    await expect(store.acknowledgeRetarget('project-1', 'session-a', 'wrong-copy')).resolves.toEqual({ kind: 'stale' });
+    await expect(store.acknowledgeRetarget('project-1', 'session-a', 'copy-1')).resolves.toEqual({ kind: 'deleted' });
+    await expect(store.listRetargets()).resolves.toMatchObject({
+      items: [{ projectId: 'project-2' }],
+      kind: 'available',
+    });
+    store.close();
+  });
+
   it('fences a retarget replay after target ownership rotates', async () => {
     const store = await createStore();
     await store.stage(createProjectDraftInput());
-    await store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', 'copy-1');
+    await store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', createCopyReservation('copy-1'));
     const retarget = {
       acknowledgedRevision: 1,
       copyProjectId: 'copy-1',
@@ -226,7 +311,7 @@ export const testProjectDraftStoreContract = (createStore: () => Promise<Project
   it('reports a failed copy transform without mutating the source', async () => {
     const store = await createStore();
     await store.stage(createProjectDraftInput());
-    await store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', 'copy-1');
+    await store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', createCopyReservation('copy-1'));
     await store.stage(createProjectDraftInput({ generation: 2 }));
 
     await expect(
@@ -275,7 +360,9 @@ export const testProjectDraftStoreContract = (createStore: () => Promise<Project
         serverRevision: 8,
       })
     ).resolves.toEqual({ kind: 'fenced' });
-    await expect(store.reserveCopyIdentity('project-1', 'session-a', 'writer-a2', 'copy-1')).resolves.toEqual({
+    await expect(
+      store.reserveCopyIdentity('project-1', 'session-a', 'writer-a2', createCopyReservation('copy-1'))
+    ).resolves.toEqual({
       kind: 'fenced',
     });
     await expect(
@@ -416,6 +503,14 @@ export const testProjectDraftStoreContract = (createStore: () => Promise<Project
     if (page.kind === 'available' && projectRows.kind === 'available') {
       expect(page.items).toHaveLength(100);
       expect(projectRows.items).toHaveLength(32);
+      expect(projectRows.nextCursor).toBe('session-032');
+      await expect(
+        store.listForProject('project-1', { after: projectRows.nextCursor!, limit: Number.MAX_SAFE_INTEGER })
+      ).resolves.toMatchObject({
+        items: [{ editorSessionId: 'session-033' }],
+        kind: 'available',
+        nextCursor: null,
+      });
     }
     store.close();
   });

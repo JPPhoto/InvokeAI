@@ -9,7 +9,6 @@ import { createExternalStore } from '@platform/state/externalStore';
 import { createSingleFlight } from '@platform/state/singleFlight';
 import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
 import { DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION, isCanvasSchemaVersionSupported } from '@workbench/canvasSchemaVersion';
-import { createRefusedProjectStorage } from '@workbench/refusedProjectStorage';
 
 import type { ProjectTransferIssues } from './invk/transfer';
 
@@ -204,12 +203,7 @@ export const upsertProjectSummary = (
 export const isProjectSummaryCompatible = (summary: ProjectSummary): boolean =>
   isCanvasSchemaVersionSupported(summary.minimumCanvasSchemaVersion);
 
-/**
- * Every mutation below branches on one question: does the workbench hold this project? If so it
- * goes through {@link getOpenProject} — the sync engine — otherwise over HTTP. A library write
- * landing beside an open project's revision chain forks it into a conflict copy, and now that a
- * board renames with its project, would rename the board from outside the owning transaction.
- */
+/** Open projects mutate through their sync engine; closed projects use the HTTP API directly. */
 
 /** Permanently remove a project from the server, its board with it. The only deletion path. */
 export const deleteLibraryProject = async (projectId: string): Promise<void> => {
@@ -217,13 +211,7 @@ export const deleteLibraryProject = async (projectId: string): Promise<void> => 
   const openProject = getOpenProject(projectId);
 
   if (openProject) {
-    // Through the sync engine's queue, not beside it. Marking the project first stops a save that
-    // has not begun, but a PUT already on the wire is past every check the engine has: it comes
-    // back 404 once this DELETE commits, and the engine answers a 404 by forking the local document
-    // into a new server project — a copy of the thing just deleted, pointing at media the deletion
-    // removed. Queueing means the push finishes before the DELETE is sent. Marking and unmarking
-    // are the handle's business too, because a project left marked stops autosaving for the rest of
-    // the session, silently and with no way to notice.
+    // Queueing ensures an in-flight save finishes before DELETE is sent.
     await openProject.deleteOnServer();
   } else {
     await apiDeleteProject(projectId, owner.signal);
@@ -231,7 +219,6 @@ export const deleteLibraryProject = async (projectId: string): Promise<void> => 
 
   assertAccountScopeCurrent(owner);
   openProject?.close();
-  createRefusedProjectStorage(owner.storageSuffix).forget(projectId);
   forgetProjectCover(projectId, owner);
   store.patchSnapshot({ summaries: store.getSnapshot().summaries.filter((summary) => summary.id !== projectId) });
 

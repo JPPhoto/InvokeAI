@@ -577,10 +577,7 @@ describe('createWorkbenchStore', () => {
     expect(store.commands.projects.close(firstProjectId)).toEqual({ ok: true });
     expect(store.getSnapshot().activeProject.id).toBe(secondProject.id);
     expect(store.commands.projects.close(secondProject.id)).toEqual({ ok: false, reason: 'last-project' });
-    expect(store.getSnapshot().notifications[0]).toMatchObject({
-      kind: 'error',
-      title: 'Project close blocked',
-    });
+    expect(store.getSnapshot().notifications).toEqual([]);
   });
 
   it('applies Canvas and Workflow edits without exposing aggregate reducer actions', () => {

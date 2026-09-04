@@ -1,22 +1,14 @@
 import type { Project } from '@workbench/projectContracts';
 
-import { getProjectWidgetValues } from '@workbench/widgetState';
 import { createInitialWorkbenchState, workbenchReducer } from '@workbench/workbenchState.testing';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-
-import type { ProjectRecoveredIdentity } from './projectFlush';
+import { describe, expect, it } from 'vitest';
 
 import {
   applyAuthoritativeProjectBoard,
   serializeProjectDocumentV2,
   serializeProjectDocumentV2Json,
 } from './projectDocument';
-import {
-  createRecoveredDocument,
-  deserializeProjectDocument,
-  deserializeProjectRecord,
-  serializeProjectDocument,
-} from './syncedPersistence';
+import { deserializeProjectDocument, deserializeProjectRecord, serializeProjectDocument } from './syncedPersistence';
 
 const getProject = (overrides: Partial<Project> = {}): Project => {
   const state = createInitialWorkbenchState();
@@ -54,9 +46,11 @@ describe('project document serialization', () => {
     project.queue.items.push({} as never);
     project.events.push({} as never);
     project.graphHistory.push({} as never);
-    project.recoveryOf = 'old-project';
-    project.recoveredAt = '2026-01-01T00:00:00.000Z';
-    (project as Project & { futureField: string }).futureField = 'must-not-leak';
+    Object.assign(project, {
+      futureField: 'must-not-leak',
+      recoveredAt: '2026-01-01T00:00:00.000Z',
+      recoveryOf: 'old-project',
+    });
 
     const document = serializeProjectDocumentV2(project);
 
@@ -226,68 +220,6 @@ describe('project document serialization', () => {
   });
 });
 
-describe('createRecoveredDocument', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('keys the fork to the original and stamps the recovery time', () => {
-    const project = getProject({ name: 'My Project' });
-    const { recoveredDocument, recoveredIdentity } = createRecoveredDocument(
-      project,
-      serializeProjectDocument(project)
-    );
-
-    expect(recoveredDocument.recoveryOf).toBe(project.id);
-    expect(recoveredIdentity.id.startsWith('project-')).toBe(true);
-    expect(recoveredIdentity.name).toBe('My Project (recovered)');
-    expect(typeof recoveredDocument.recoveredAt).toBe('string');
-    // The identity is what the reducer re-labels the live project with, so it has to agree with the
-    // document the server was handed, field for field.
-    expect(recoveredDocument.id).toBe(recoveredIdentity.id);
-    expect(recoveredDocument.name).toBe(recoveredIdentity.name);
-    expect(recoveredDocument.recoveredAt).toBe(recoveredIdentity.recoveredAt);
-    expect(recoveredDocument.recoveryOf).toBe(recoveredIdentity.recoveryOf);
-  });
-
-  it('gives simultaneous recoveries distinct project ids', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
-    const project = getProject({ name: 'Concurrent recovery' });
-    const document = serializeProjectDocument(project);
-
-    const first = createRecoveredDocument(project, document);
-    const second = createRecoveredDocument(project, document);
-
-    expect(first.recoveredIdentity.id).not.toBe(second.recoveredIdentity.id);
-    expect(first.recoveredIdentity.recoveryOf).toBe(second.recoveredIdentity.recoveryOf);
-  });
-
-  it('collapses recovery chains to the root and never stacks name suffixes', () => {
-    const root = getProject({ name: 'My Project' });
-    const recovery = getProject({
-      id: `${root.id}-recovered-abc`,
-      name: 'My Project (recovered)',
-      recoveryOf: root.id,
-    });
-
-    const { recoveredDocument, recoveredIdentity } = createRecoveredDocument(
-      recovery,
-      serializeProjectDocument(recovery)
-    );
-
-    expect(recoveredDocument.recoveryOf).toBe(root.id);
-    expect(recoveredIdentity.name).toBe('My Project (recovered)');
-  });
-
-  it('cleans up legacy stacked suffixes', () => {
-    const project = getProject({ name: 'Project Name #1 (Recovered) (Recovered)' });
-    const { recoveredIdentity } = createRecoveredDocument(project, serializeProjectDocument(project));
-
-    expect(recoveredIdentity.name).toBe('Project Name #1 (recovered)');
-  });
-});
-
 describe('openProject', () => {
   it('appends the hydrated project and makes it active', () => {
     const state = createInitialWorkbenchState();
@@ -324,139 +256,6 @@ describe('renameProject', () => {
     const blank = workbenchReducer(renamed, { name: '   ', projectId: target.id, type: 'renameProject' });
 
     expect(blank.projects[0].name).toBe('New Name');
-  });
-});
-
-const recoveredIdentityFor = (projectId: string, name = 'Recovered'): ProjectRecoveredIdentity => ({
-  id: `${projectId}-recovered-abc`,
-  name,
-  recoveredAt: '2026-08-07T00:00:00.000Z',
-  recoveryOf: projectId,
-});
-
-describe('reconcileProjectConflict', () => {
-  it('adopts the server version and continues local work in the recovered fork', () => {
-    const state = createInitialWorkbenchState();
-    const original = state.projects[0];
-    const serverProject = getProject({ id: original.id, name: 'Server version' });
-    const recoveredIdentity = recoveredIdentityFor(original.id, 'Server version (recovered)');
-    const recoveredProject = getProject({ id: recoveredIdentity.id, name: recoveredIdentity.name });
-    const withActiveOriginal = { ...state, activeProjectId: original.id };
-
-    const next = workbenchReducer(withActiveOriginal, {
-      projectId: original.id,
-      recoveredIdentity,
-      recoveredProject,
-      serverProject,
-      type: 'reconcileProjectConflict',
-    });
-
-    const ids = next.projects.map((project) => project.id);
-
-    expect(ids).toContain(original.id);
-    expect(ids).toContain(recoveredIdentity.id);
-    expect(next.projects.find((project) => project.id === original.id)?.name).toBe('Server version');
-    // The user keeps looking at their own latest edits.
-    expect(next.activeProjectId).toBe(recoveredIdentity.id);
-    expect(next.notifications[0]?.title).toBe('Project recovered');
-  });
-
-  it('carries the edits made while the save was in flight, not the snapshot it was built from', () => {
-    // The fork's document is serialized when the push starts. Anything edited after that is newer,
-    // and is what the person is looking at — so adopting the snapshot would delete precisely the
-    // work the fork exists to rescue. Staleness is not an edge case here: a save is stale exactly
-    // when something landed mid-flight, which is when this reducer runs.
-    const state = createInitialWorkbenchState();
-    const original = state.projects[0];
-    const live = workbenchReducer(
-      { ...state, activeProjectId: original.id },
-      { boardId: 'edited-after-the-push-started', projectId: original.id, type: 'setGalleryProjectBoardId' }
-    );
-    const recoveredIdentity = recoveredIdentityFor(original.id, 'Snapshot (recovered)');
-
-    const next = workbenchReducer(live, {
-      projectId: original.id,
-      recoveredIdentity,
-      // What the push was carrying: the document as it was before that edit landed.
-      recoveredProject: getProject({ id: recoveredIdentity.id, name: 'Snapshot (recovered)' }),
-      serverProject: getProject({ id: original.id, name: 'Server version' }),
-      type: 'reconcileProjectConflict',
-    });
-
-    const fork = next.projects.find((project) => project.id === recoveredIdentity.id);
-
-    expect(fork).toBeDefined();
-    // The identity is the server's...
-    expect(fork?.name).toBe(recoveredIdentity.name);
-    expect(fork?.recoveryOf).toBe(original.id);
-    expect(fork?.recoveredAt).toBe(recoveredIdentity.recoveredAt);
-    // ...and the content is the live one's.
-    expect(getProjectWidgetValues(fork!, 'gallery').projectBoardId).toBe('edited-after-the-push-started');
-  });
-
-  it('falls back to the pushed snapshot when no live project is left to re-label', () => {
-    // A tab closed while the save was in flight. The snapshot is then the only local copy of the
-    // work, so it is the right answer rather than a stale one.
-    const state = createInitialWorkbenchState();
-    const closedId = 'project-already-closed';
-    const recoveredIdentity = recoveredIdentityFor(closedId, 'Closed (recovered)');
-
-    const next = workbenchReducer(state, {
-      projectId: closedId,
-      recoveredIdentity,
-      recoveredProject: getProject({ id: recoveredIdentity.id, name: 'Closed (recovered)' }),
-      serverProject: getProject({ id: closedId, name: 'Server version' }),
-      type: 'reconcileProjectConflict',
-    });
-
-    expect(next.projects.map((project) => project.id)).toContain(recoveredIdentity.id);
-    expect(next.projects.find((project) => project.id === recoveredIdentity.id)?.name).toBe('Closed (recovered)');
-  });
-
-  it('leaves the active project alone when the conflicted project is in the background', () => {
-    const state = createInitialWorkbenchState();
-    const first = state.projects[0];
-    const second = getProject({ id: 'project-background-test' });
-    const withActiveSecond = { ...state, activeProjectId: second.id, projects: [...state.projects, second] };
-
-    const next = workbenchReducer(withActiveSecond, {
-      projectId: first.id,
-      recoveredIdentity: recoveredIdentityFor(first.id),
-      recoveredProject: getProject({ id: `${first.id}-recovered-abc`, name: 'Recovered' }),
-      serverProject: getProject({ id: first.id, name: 'Server version' }),
-      type: 'reconcileProjectConflict',
-    });
-
-    expect(next.activeProjectId).toBe(second.id);
-  });
-});
-
-describe('reconcileDeletedProject', () => {
-  it('keeps the live content under the fork identity', () => {
-    const state = createInitialWorkbenchState();
-    const original = state.projects[0];
-    const live = workbenchReducer(
-      { ...state, activeProjectId: original.id },
-      { boardId: 'edited-after-the-push-started', projectId: original.id, type: 'setGalleryProjectBoardId' }
-    );
-    const recoveredIdentity = recoveredIdentityFor(original.id, 'Snapshot (recovered)');
-
-    const next = workbenchReducer(live, {
-      projectId: original.id,
-      recoveredIdentity,
-      recoveredProject: getProject({ id: recoveredIdentity.id, name: 'Snapshot (recovered)' }),
-      type: 'reconcileDeletedProject',
-    });
-
-    // The deletion stands: the original id is gone, replaced in place by the fork.
-    expect(next.projects.map((project) => project.id)).not.toContain(original.id);
-
-    const fork = next.projects.find((project) => project.id === recoveredIdentity.id);
-
-    expect(fork?.name).toBe(recoveredIdentity.name);
-    expect(fork?.recoveryOf).toBe(original.id);
-    expect(getProjectWidgetValues(fork!, 'gallery').projectBoardId).toBe('edited-after-the-push-started');
-    expect(next.activeProjectId).toBe(recoveredIdentity.id);
   });
 });
 

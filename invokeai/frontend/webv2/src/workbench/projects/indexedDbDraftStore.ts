@@ -5,9 +5,13 @@ import {
   clampProjectDraftLimit,
   combineProjectDraft,
   createUnavailableProjectDraftStore,
+  doProjectDraftPartsMatch,
   getProjectDraftSummary,
   getUtf8ByteSize,
+  getCopySourceProjectName,
+  isProjectDraft,
   isProjectDraftInput,
+  isProjectDraftBody,
   isProjectDraftMetadata,
   isProjectDraftWriterClaim,
   isSameProjectDraftGeneration,
@@ -30,6 +34,9 @@ import {
   type ProjectDraftListResult,
   type ProjectDraftMetadata,
   type ProjectDraftPageResult,
+  type ProjectDraftRetargetAcknowledgeResult,
+  type ProjectDraftRetargetHandoff,
+  type ProjectDraftRetargetListResult,
   type ProjectDraftSettlementResult,
   type ProjectDraftStageResult,
   type ProjectDraftStartWriterResult,
@@ -259,6 +266,28 @@ export const createIndexedDbProjectDraftStore = (
   return {
     get availability() {
       return canUseDatabase() ? 'available' : 'unavailable';
+    },
+    acknowledgeRetarget(projectId, editorSessionId, targetProjectId): Promise<ProjectDraftRetargetAcknowledgeResult> {
+      return mutate<ProjectDraftRetargetAcknowledgeResult>(
+        async () => {
+          const transaction = observeTransaction(database.transaction(WORKBENCH_DRAFT_WRITER_STORE, 'readwrite'));
+          const key: ProjectDraftKey = [projectId, editorSessionId];
+          const claim = await transaction.store.get(key);
+          if (
+            !isProjectDraftWriterClaim(claim) ||
+            claim.state !== 'fenced' ||
+            claim.retargetedToProjectId !== targetProjectId ||
+            claim.retargetedToRevision === undefined
+          ) {
+            await transaction.done;
+            return { kind: 'stale' };
+          }
+          await transaction.store.delete(key);
+          await transaction.done;
+          return { kind: 'deleted' };
+        },
+        { kind: 'unavailable' }
+      );
     },
     async adopt(projectId, fromEditorSessionId, toEditorSessionId, toWriterToken): Promise<ProjectDraftAdoptionResult> {
       const read = await readDraft(projectId, fromEditorSessionId);
@@ -546,30 +575,73 @@ export const createIndexedDbProjectDraftStore = (
         { kind: 'unavailable' }
       );
     },
-    listForProject(projectId, { limit: requestedLimit } = {}): Promise<ProjectDraftListResult> {
+    listForProject(projectId, { after, limit: requestedLimit } = {}): Promise<ProjectDraftListResult> {
       return mutate<ProjectDraftListResult>(
         async () => {
           const limit = clampProjectDraftLimit(requestedLimit, PROJECT_DRAFT_PROJECT_LIMIT);
           const transaction = observeTransaction(database.transaction(WORKBENCH_DRAFT_STORE, 'readonly'));
+          const lower: IDBValidKey[] = after ? [projectId, after] : [projectId];
+          const range = IDBKeyRange.bound(lower, [projectId, []], after !== undefined, false);
           const items: ProjectDraftSummary[] = [];
-          let cursor = await transaction.store.index('byProject').openCursor(projectId);
+          let cursor = await transaction.store.openCursor(range);
+          let nextCursor: string | null = null;
           while (cursor) {
-            items.push(getProjectDraftSummary(cursor.value, cursor.primaryKey));
-            items.sort(
-              (a, b) => (b.updatedAt ?? -1) - (a.updatedAt ?? -1) || a.editorSessionId.localeCompare(b.editorSessionId)
-            );
-            if (items.length > limit) {
-              items.pop();
+            if (items.length === limit) {
+              nextCursor = items.at(-1)?.editorSessionId ?? null;
+              break;
             }
+            items.push(getProjectDraftSummary(cursor.value, cursor.primaryKey));
             cursor = await cursor.continue();
           }
           await transaction.done;
-          return { items, kind: 'available' };
+          return { items, kind: 'available', nextCursor };
         },
         { kind: 'unavailable' }
       );
     },
-    reserveCopyIdentity(projectId, editorSessionId, writerToken, proposedCopyProjectId, replaceCopyProjectId) {
+    listRetargets({ after, limit: requestedLimit } = {}): Promise<ProjectDraftRetargetListResult> {
+      return mutate<ProjectDraftRetargetListResult>(
+        async () => {
+          const limit = clampProjectDraftLimit(requestedLimit, PROJECT_DRAFT_PAGE_LIMIT);
+          const transaction = observeTransaction(database.transaction(WORKBENCH_DRAFT_WRITER_STORE, 'readonly'));
+          const items: ProjectDraftRetargetHandoff[] = [];
+          let cursor = await transaction.store
+            .index('byRetarget')
+            .openCursor(after ? IDBKeyRange.lowerBound(after, true) : undefined);
+          while (cursor && items.length <= limit) {
+            const claim = cursor.value;
+            if (
+              isProjectDraftWriterClaim(claim) &&
+              claim.state === 'fenced' &&
+              claim.retargetedToProjectId !== undefined &&
+              claim.retargetedToRevision !== undefined
+            ) {
+              items.push({
+                editorSessionId: claim.editorSessionId,
+                projectId: claim.projectId,
+                revision: claim.retargetedToRevision,
+                targetProjectId: claim.retargetedToProjectId,
+                updatedAt: claim.updatedAt,
+              });
+            }
+            cursor = await cursor.continue();
+          }
+          await transaction.done;
+          const hasMore = items.length > limit;
+          if (hasMore) {
+            items.pop();
+          }
+          const last = items.at(-1);
+          return {
+            items,
+            kind: 'available',
+            nextCursor: hasMore && last ? [last.projectId, last.editorSessionId, last.targetProjectId] : null,
+          };
+        },
+        { kind: 'unavailable' }
+      );
+    },
+    reserveCopyIdentity(projectId, editorSessionId, writerToken, proposed, replaceCopyProjectId) {
       return mutate<ProjectDraftCopyReservationResult>(
         async () => {
           const transaction = observeTransaction(database.transaction(DRAFT_STORES, 'readwrite'));
@@ -588,10 +660,8 @@ export const createIndexedDbProjectDraftStore = (
             await transaction.done;
             return { kind: 'corrupt' };
           }
-          const bodyKey = await bodyStore
-            .index('byIntegrity')
-            .getKey([projectId, editorSessionId, metadata.generation, metadata.documentByteSize]);
-          if (bodyKey === undefined) {
+          const body = await bodyStore.get(key);
+          if (!isProjectDraftBody(body) || !doProjectDraftPartsMatch(metadata, body)) {
             await transaction.done;
             return { kind: 'corrupt' };
           }
@@ -607,26 +677,47 @@ export const createIndexedDbProjectDraftStore = (
             await transaction.done;
             return { kind: 'stale' };
           }
-          const copyProjectId =
-            replaceCopyProjectId === undefined
-              ? (metadata.copyProjectId ?? proposedCopyProjectId)
-              : proposedCopyProjectId;
+          const reservation =
+            replaceCopyProjectId === undefined && metadata.copyProjectId
+              ? {
+                  copyDocumentByteSize: metadata.copyDocumentByteSize!,
+                  copyDocumentJson: body.copyDocumentJson!,
+                  copyProjectGeneration: metadata.copyProjectGeneration!,
+                  copyProjectId: metadata.copyProjectId,
+                  copyProjectMinimumCanvasSchemaVersion: metadata.copyProjectMinimumCanvasSchemaVersion!,
+                  copyProjectName: metadata.copyProjectName!,
+                  copySourceProjectName:
+                    metadata.copySourceProjectName ?? getCopySourceProjectName(metadata.copyProjectName!),
+                }
+              : proposed;
+          const { copyDocumentJson, ...reservationMetadata } = reservation;
           const nextMetadataRevision = metadata.metadataRevision + 1;
           await metadataStore.put({
             ...metadata,
-            copyProjectId,
+            ...reservationMetadata,
             metadataRevision: nextMetadataRevision,
           });
+          await bodyStore.put({ ...body, copyDocumentJson });
           await transaction.objectStore(WORKBENCH_DRAFT_WRITER_STORE).put({
             ...claim,
             metadataRevision: nextMetadataRevision,
             updatedAt: Date.now(),
           });
           await transaction.done;
-          return { copyProjectId, kind: 'reserved' };
+          return { ...reservation, kind: 'reserved' };
         },
         { kind: 'unavailable' },
         { kind: 'quota' }
+      );
+    },
+    resumeSchemaRefused(projectId, editorSessionId, writerToken, generation) {
+      return settle(
+        projectId,
+        editorSessionId,
+        writerToken,
+        generation,
+        (draft) => toDirtyProjectDraft(draft, {}),
+        'marked'
       );
     },
     async retargetAcknowledgedCopy(options: RetargetAcknowledgedCopyOptions) {
@@ -713,7 +804,13 @@ export const createIndexedDbProjectDraftStore = (
                 ? null
                 : toDirtyProjectDraft(read.draft, {
                     baseRevision: options.acknowledgedRevision,
+                    copyDocumentByteSize: undefined,
+                    copyDocumentJson: undefined,
                     copyProjectId: undefined,
+                    copyProjectGeneration: undefined,
+                    copyProjectMinimumCanvasSchemaVersion: undefined,
+                    copyProjectName: undefined,
+                    copySourceProjectName: undefined,
                     ...retargeted,
                     projectId: options.copyProjectId,
                   });
@@ -756,7 +853,14 @@ export const createIndexedDbProjectDraftStore = (
       }
       return { kind: 'stale' };
     },
-    async settleAcknowledgement(projectId, editorSessionId, writerToken, sentGeneration, acknowledgedRevision) {
+    async settleAcknowledgement(
+      projectId,
+      editorSessionId,
+      writerToken,
+      sentGeneration,
+      acknowledgedRevision,
+      acknowledgedMinimumCanvasSchemaVersion
+    ) {
       const outcome = await mutate<ProjectDraftSettlementResult | { kind: 'read-rebased' }>(
         async () => {
           const transaction = observeTransaction(database.transaction(DRAFT_STORES, 'readwrite'));
@@ -788,11 +892,7 @@ export const createIndexedDbProjectDraftStore = (
             await transaction.done;
             return { kind: 'corrupt' };
           }
-          if (metadata.generation < sentGeneration) {
-            await transaction.done;
-            return { kind: 'stale' };
-          }
-          if (metadata.generation === sentGeneration) {
+          if (metadata.generation <= sentGeneration) {
             await writerStore.put({
               ...claim,
               metadataRevision: claim.metadataRevision + 1,
@@ -806,6 +906,8 @@ export const createIndexedDbProjectDraftStore = (
           const nextMetadataRevision = metadata.metadataRevision + 1;
           await metadataStore.put({
             ...metadata,
+            baseMinimumCanvasSchemaVersion:
+              acknowledgedMinimumCanvasSchemaVersion ?? metadata.baseMinimumCanvasSchemaVersion,
             baseRevision: acknowledgedRevision,
             metadataRevision: nextMetadataRevision,
           });
@@ -835,13 +937,13 @@ export const createIndexedDbProjectDraftStore = (
         'marked'
       );
     },
-    settleSchemaRefusal(projectId, editorSessionId, writerToken, sentGeneration, minimumCanvasSchemaVersion) {
+    settleSchemaRefusal(projectId, editorSessionId, writerToken, sentGeneration, refusal) {
       return settle(
         projectId,
         editorSessionId,
         writerToken,
         sentGeneration,
-        (draft) => toSchemaRefusedProjectDraft(draft, minimumCanvasSchemaVersion),
+        (draft) => toSchemaRefusedProjectDraft(draft, refusal),
         'marked'
       );
     },
@@ -862,11 +964,7 @@ export const createIndexedDbProjectDraftStore = (
         const bodyStore = transaction.objectStore(WORKBENCH_DRAFT_BODY_STORE);
         const writerStore = transaction.objectStore(WORKBENCH_DRAFT_WRITER_STORE);
         const key: ProjectDraftKey = [input.projectId, input.editorSessionId];
-        const [currentMetadata, bodyKey, claim] = await Promise.all([
-          metadataStore.get(key),
-          bodyStore.getKey(key),
-          writerStore.get(key),
-        ]);
+        const [currentMetadata, claim] = await Promise.all([metadataStore.get(key), writerStore.get(key)]);
         if (isProjectDraftWriterClaim(claim) && (claim.state === 'fenced' || claim.writerToken !== input.writerToken)) {
           await transaction.done;
           return { kind: 'fenced' };
@@ -874,7 +972,6 @@ export const createIndexedDbProjectDraftStore = (
         if (
           (claim !== undefined && !isProjectDraftWriterClaim(claim)) ||
           (currentMetadata !== undefined && !isProjectDraftMetadata(currentMetadata)) ||
-          (currentMetadata === undefined) !== (bodyKey === undefined) ||
           (currentMetadata !== undefined &&
             (claim === undefined ||
               currentMetadata.writerToken !== input.writerToken ||
@@ -883,45 +980,56 @@ export const createIndexedDbProjectDraftStore = (
           await transaction.done;
           return { kind: 'corrupt' };
         }
+        const currentBodyKey = currentMetadata
+          ? await bodyStore
+              .index('byIntegrity')
+              .getKey([
+                input.projectId,
+                input.editorSessionId,
+                currentMetadata.generation,
+                currentMetadata.documentByteSize,
+              ])
+          : await bodyStore.getKey(key);
+        if ((currentMetadata === undefined) !== (currentBodyKey === undefined)) {
+          await transaction.done;
+          return { kind: 'corrupt' };
+        }
         let draft: ProjectDraft;
-        if (isProjectDraftMetadata(currentMetadata)) {
-          const matchingBodyKey = await bodyStore
-            .index('byIntegrity')
-            .getKey([
-              input.projectId,
-              input.editorSessionId,
-              currentMetadata.generation,
-              currentMetadata.documentByteSize,
-            ]);
-          if (matchingBodyKey === undefined) {
-            await transaction.done;
-            return { kind: 'corrupt' };
-          }
+        if (currentMetadata) {
           if (currentMetadata.generation > input.generation) {
             await transaction.done;
             return { kind: 'stale' };
           }
+          const needsCurrentBody =
+            currentMetadata.generation === input.generation || currentMetadata.copyDocumentByteSize !== undefined;
+          const currentBody = needsCurrentBody ? await bodyStore.get(key) : undefined;
+          const currentDraft = needsCurrentBody ? combineProjectDraft(currentMetadata, currentBody) : null;
+          if (needsCurrentBody && !currentDraft) {
+            await transaction.done;
+            return { kind: 'corrupt' };
+          }
           if (currentMetadata.generation === input.generation) {
             await transaction.done;
-            const read = await readDraft(input.projectId, input.editorSessionId);
-            if (read.kind === 'corrupt' || read.kind === 'unavailable') {
-              return { kind: read.kind };
-            }
             return {
-              kind:
-                read.kind === 'found' && isSameProjectDraftGeneration(read.draft, input)
-                  ? 'replayed'
-                  : 'generation-conflict',
+              kind: isSameProjectDraftGeneration(currentDraft!, input) ? 'replayed' : 'generation-conflict',
             };
           }
+          const { metadataRevision: _metadataRevision, ...metadata } = currentMetadata;
           draft = {
-            ...currentMetadata,
+            ...metadata,
+            ...(currentDraft?.copyDocumentJson === undefined
+              ? {}
+              : { copyDocumentJson: currentDraft.copyDocumentJson }),
             documentByteSize,
             documentJson: input.documentJson,
             documentSchemaVersion: input.documentSchemaVersion,
             generation: input.generation,
             updatedAt: input.updatedAt,
-          };
+          } as ProjectDraft;
+          if (!isProjectDraft(draft)) {
+            await transaction.done;
+            return { kind: 'corrupt' };
+          }
         } else {
           draft = { ...input, documentByteSize, state: 'dirty' };
         }

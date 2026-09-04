@@ -50,6 +50,7 @@ import {
 } from './holdToDragSensor';
 import { WorkbenchNotificationToaster } from './notifications';
 import { LeftPanel, RightPanel } from './Panels';
+import { ProjectConflictBanner } from './ProjectConflictBanner';
 import { StatusBar } from './StatusBar';
 import { TopBar } from './topbar';
 
@@ -269,6 +270,7 @@ export const WorkbenchShell = () => {
           <WorkbenchNotificationToaster />
           <DocumentTitleProgress />
           <TopBar />
+          <ProjectConflictBanner />
 
           <Flex aria-labelledby="workbench-project-heading" as="main" flex="1" minH="0" overflow="hidden">
             <VisuallyHidden as="h1" id="workbench-project-heading">

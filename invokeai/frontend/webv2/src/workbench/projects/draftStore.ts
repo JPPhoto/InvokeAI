@@ -1,6 +1,9 @@
+import type { ProjectSchemaRefusal } from './projectFlush';
+
 export type ProjectDraftConflict = { kind: 'deleted' } | { kind: 'revision'; serverRevision: number };
 
 export interface ProjectDraftInput {
+  baseMinimumCanvasSchemaVersion?: number;
   baseRevision: number | null;
   documentJson: string;
   documentSchemaVersion: number;
@@ -12,20 +15,29 @@ export interface ProjectDraftInput {
 }
 
 interface ProjectDraftBase extends ProjectDraftInput {
+  copyDocumentByteSize?: number;
+  copyDocumentJson?: string;
   copyProjectId?: string;
+  copyProjectGeneration?: number;
+  copyProjectMinimumCanvasSchemaVersion?: number;
+  copyProjectName?: string;
+  copySourceProjectName?: string;
   documentByteSize: number;
 }
 
 export type ProjectDraft =
   | (ProjectDraftBase & { state: 'dirty' })
   | (ProjectDraftBase & { conflict: ProjectDraftConflict; state: 'conflict' })
-  | (ProjectDraftBase & { minimumCanvasSchemaVersion: number; state: 'schema-refused' });
+  | (ProjectDraftBase & { refusal: ProjectSchemaRefusal; state: 'schema-refused' });
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
-export type ProjectDraftMetadata = DistributiveOmit<ProjectDraft, 'documentJson'> & { metadataRevision: number };
+export type ProjectDraftMetadata = DistributiveOmit<ProjectDraft, 'copyDocumentJson' | 'documentJson'> & {
+  metadataRevision: number;
+};
 
 export interface ProjectDraftBody {
+  copyDocumentJson?: string;
   documentByteSize: number;
   documentJson: string;
   editorSessionId: string;
@@ -36,6 +48,7 @@ export interface ProjectDraftBody {
 
 export interface ProjectDraftSummary {
   documentByteSize: number | null;
+  documentSchemaVersion: number | null;
   editorSessionId: string;
   generation: number | null;
   projectId: string;
@@ -70,7 +83,9 @@ export type ProjectDraftWriterClaim =
 export type ProjectDraftPageResult =
   | { items: ProjectDraftSummary[]; kind: 'available'; nextCursor: ProjectDraftKey | null }
   | { kind: 'unavailable' };
-export type ProjectDraftListResult = { items: ProjectDraftSummary[]; kind: 'available' } | { kind: 'unavailable' };
+export type ProjectDraftListResult =
+  | { items: ProjectDraftSummary[]; kind: 'available'; nextCursor: string | null }
+  | { kind: 'unavailable' };
 export type ProjectDraftStageResult = {
   kind:
     | 'corrupt'
@@ -91,6 +106,18 @@ export type ProjectDraftAdoptionResult = {
   kind: 'adopted' | 'corrupt' | 'missing' | 'occupied' | 'quota' | 'unavailable';
 };
 export type ProjectDraftDeleteResult = { kind: 'corrupt' | 'deleted' | 'fenced' | 'unavailable' };
+export interface ProjectDraftRetargetHandoff {
+  editorSessionId: string;
+  projectId: string;
+  revision: number;
+  targetProjectId: string;
+  updatedAt: number;
+}
+export type ProjectDraftRetargetCursor = [projectId: string, editorSessionId: string, targetProjectId: string];
+export type ProjectDraftRetargetListResult =
+  | { items: ProjectDraftRetargetHandoff[]; kind: 'available'; nextCursor: ProjectDraftRetargetCursor | null }
+  | { kind: 'unavailable' };
+export type ProjectDraftRetargetAcknowledgeResult = { kind: 'deleted' | 'stale' | 'unavailable' };
 export type ProjectDraftCorruptDeleteResult = { kind: 'deleted' | 'not-corrupt' | 'unavailable' };
 export type ProjectDraftGetResult =
   | { draft: ProjectDraft; kind: 'found' }
@@ -103,8 +130,17 @@ export type ProjectDraftSettlementResult =
   | {
       kind: 'corrupt' | 'deleted' | 'fenced' | 'missing' | 'occupied' | 'quota' | 'stale' | 'too-large' | 'unavailable';
     };
+export interface ProjectDraftCopyReservation {
+  copyDocumentByteSize: number;
+  copyDocumentJson: string;
+  copyProjectGeneration: number;
+  copyProjectId: string;
+  copyProjectMinimumCanvasSchemaVersion: number;
+  copyProjectName: string;
+  copySourceProjectName: string;
+}
 export type ProjectDraftCopyReservationResult =
-  | { copyProjectId: string; kind: 'reserved' }
+  | (ProjectDraftCopyReservation & { kind: 'reserved' })
   | { kind: 'corrupt' | 'fenced' | 'missing' | 'quota' | 'stale' | 'unavailable' };
 
 export interface RetargetAcknowledgedCopyOptions {
@@ -125,6 +161,11 @@ export interface ProjectDraftStore {
     toEditorSessionId: string,
     toWriterToken: string
   ): Promise<ProjectDraftAdoptionResult>;
+  acknowledgeRetarget(
+    projectId: string,
+    editorSessionId: string,
+    targetProjectId: string
+  ): Promise<ProjectDraftRetargetAcknowledgeResult>;
   claimWriter(
     projectId: string,
     editorSessionId: string,
@@ -136,21 +177,32 @@ export interface ProjectDraftStore {
   deleteCorrupt(projectId: string, editorSessionId: string): Promise<ProjectDraftCorruptDeleteResult>;
   get(projectId: string, editorSessionId: string): Promise<ProjectDraftGetResult>;
   list(options?: { after?: ProjectDraftKey; limit?: number }): Promise<ProjectDraftPageResult>;
-  listForProject(projectId: string, options?: { limit?: number }): Promise<ProjectDraftListResult>;
+  listForProject(projectId: string, options?: { after?: string; limit?: number }): Promise<ProjectDraftListResult>;
+  listRetargets(options?: {
+    after?: ProjectDraftRetargetCursor;
+    limit?: number;
+  }): Promise<ProjectDraftRetargetListResult>;
   reserveCopyIdentity(
     projectId: string,
     editorSessionId: string,
     writerToken: string,
-    proposedCopyProjectId: string,
+    proposed: ProjectDraftCopyReservation,
     replaceCopyProjectId?: string
   ): Promise<ProjectDraftCopyReservationResult>;
+  resumeSchemaRefused(
+    projectId: string,
+    editorSessionId: string,
+    writerToken: string,
+    generation: number
+  ): Promise<ProjectDraftSettlementResult>;
   retargetAcknowledgedCopy(options: RetargetAcknowledgedCopyOptions): Promise<ProjectDraftSettlementResult>;
   settleAcknowledgement(
     projectId: string,
     editorSessionId: string,
     writerToken: string,
     sentGeneration: number,
-    acknowledgedRevision: number
+    acknowledgedRevision: number,
+    acknowledgedMinimumCanvasSchemaVersion?: number
   ): Promise<ProjectDraftSettlementResult>;
   settleConflict(
     projectId: string,
@@ -164,7 +216,7 @@ export interface ProjectDraftStore {
     editorSessionId: string,
     writerToken: string,
     sentGeneration: number,
-    minimumCanvasSchemaVersion: number
+    refusal: ProjectSchemaRefusal
   ): Promise<ProjectDraftSettlementResult>;
   stage(input: ProjectDraftInput): Promise<ProjectDraftStageResult>;
   startFreshWriter(
@@ -179,6 +231,9 @@ export const PROJECT_DRAFT_MAX_BYTES = 32 * 1024 * 1024;
 export const PROJECT_DRAFT_PAGE_LIMIT = 100;
 export const PROJECT_DRAFT_PROJECT_LIMIT = 32;
 
+export const getCopySourceProjectName = (copyProjectName: string): string =>
+  copyProjectName.endsWith(' (copy)') ? copyProjectName.slice(0, -' (copy)'.length) : copyProjectName;
+
 const states = new Set(['conflict', 'dirty', 'schema-refused']);
 const isPositiveInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
@@ -188,13 +243,22 @@ const isNonEmptyString = (value: unknown): value is string => typeof value === '
 
 type ProjectDraftCandidate = Partial<ProjectDraftBase> & {
   conflict?: { kind?: unknown; serverRevision?: unknown };
-  minimumCanvasSchemaVersion?: unknown;
+  refusal?: Partial<ProjectSchemaRefusal>;
   state?: unknown;
 };
 
 const isProjectDraftCandidate = (draft: ProjectDraftCandidate, requireDocument: boolean): boolean => {
+  const reservationMetadata = [
+    draft.copyDocumentByteSize,
+    draft.copyProjectId,
+    draft.copyProjectGeneration,
+    draft.copyProjectMinimumCanvasSchemaVersion,
+    draft.copyProjectName,
+  ];
+  const hasReservation = reservationMetadata.some((value) => value !== undefined);
   if (
     !(draft.baseRevision === null || isPositiveInteger(draft.baseRevision)) ||
+    (draft.baseMinimumCanvasSchemaVersion !== undefined && !isPositiveInteger(draft.baseMinimumCanvasSchemaVersion)) ||
     !isNonNegativeInteger(draft.documentByteSize) ||
     (requireDocument && typeof draft.documentJson !== 'string') ||
     !isPositiveInteger(draft.documentSchemaVersion) ||
@@ -207,21 +271,38 @@ const isProjectDraftCandidate = (draft: ProjectDraftCandidate, requireDocument: 
     !Number.isFinite(draft.updatedAt) ||
     draft.updatedAt < 0 ||
     !isNonEmptyString(draft.writerToken) ||
-    (draft.copyProjectId !== undefined && !isNonEmptyString(draft.copyProjectId))
+    (draft.copyProjectId !== undefined && !isNonEmptyString(draft.copyProjectId)) ||
+    (draft.copyDocumentByteSize !== undefined && !isNonNegativeInteger(draft.copyDocumentByteSize)) ||
+    (requireDocument && hasReservation !== isNonEmptyString(draft.copyDocumentJson)) ||
+    (draft.copyProjectGeneration !== undefined && !isNonNegativeInteger(draft.copyProjectGeneration)) ||
+    (draft.copyProjectMinimumCanvasSchemaVersion !== undefined &&
+      !isPositiveInteger(draft.copyProjectMinimumCanvasSchemaVersion)) ||
+    (draft.copyProjectName !== undefined && !isNonEmptyString(draft.copyProjectName)) ||
+    (draft.copySourceProjectName !== undefined && !isNonEmptyString(draft.copySourceProjectName)) ||
+    (hasReservation && reservationMetadata.some((value) => value === undefined))
   ) {
     return false;
   }
   if (draft.state === 'conflict') {
     return (
-      draft.minimumCanvasSchemaVersion === undefined &&
+      draft.refusal === undefined &&
       (draft.conflict?.kind === 'deleted' ||
         (draft.conflict?.kind === 'revision' && isPositiveInteger(draft.conflict.serverRevision)))
     );
   }
   if (draft.state === 'schema-refused') {
-    return draft.conflict === undefined && isPositiveInteger(draft.minimumCanvasSchemaVersion);
+    return (
+      draft.conflict === undefined &&
+      ((draft.refusal?.kind === 'canvas' &&
+        isPositiveInteger(draft.refusal.maxCanvasSchemaVersion) &&
+        isPositiveInteger(draft.refusal.minimumCanvasSchemaVersion)) ||
+        (draft.refusal?.kind === 'document' &&
+          isPositiveInteger(draft.refusal.maxDocumentSchemaVersion) &&
+          isPositiveInteger(draft.refusal.documentSchemaVersion)) ||
+        draft.refusal?.kind === 'invalid-server-document')
+    );
   }
-  return draft.conflict === undefined && draft.minimumCanvasSchemaVersion === undefined;
+  return draft.conflict === undefined && draft.refusal === undefined;
 };
 
 export const isProjectDraft = (value: unknown): value is ProjectDraft =>
@@ -234,6 +315,7 @@ export const isProjectDraftInput = (value: unknown): value is ProjectDraftInput 
   const input = value as Partial<ProjectDraftInput>;
   return (
     (input.baseRevision === null || isPositiveInteger(input.baseRevision)) &&
+    (input.baseMinimumCanvasSchemaVersion === undefined || isPositiveInteger(input.baseMinimumCanvasSchemaVersion)) &&
     typeof input.documentJson === 'string' &&
     isPositiveInteger(input.documentSchemaVersion) &&
     isNonEmptyString(input.editorSessionId) &&
@@ -261,6 +343,7 @@ export const isProjectDraftBody = (value: unknown): value is ProjectDraftBody =>
   const body = value as Partial<ProjectDraftBody>;
   return (
     body.recordType === 'draft-body' &&
+    (body.copyDocumentJson === undefined || isNonEmptyString(body.copyDocumentJson)) &&
     isNonNegativeInteger(body.documentByteSize) &&
     isNonEmptyString(body.projectId) &&
     isNonEmptyString(body.editorSessionId) &&
@@ -339,11 +422,12 @@ export const clampProjectDraftLimit = (value: number | undefined, maximum: numbe
   Number.isSafeInteger(value) && value !== undefined && value > 0 ? Math.min(value, maximum) : maximum;
 
 export const toProjectDraftMetadata = (draft: ProjectDraft, metadataRevision = 1): ProjectDraftMetadata => {
-  const { documentJson: _documentJson, ...metadata } = draft;
+  const { copyDocumentJson: _copyDocumentJson, documentJson: _documentJson, ...metadata } = draft;
   return { ...metadata, metadataRevision };
 };
 
 export const toProjectDraftBody = (draft: ProjectDraft): ProjectDraftBody => ({
+  ...(draft.copyDocumentJson === undefined ? {} : { copyDocumentJson: draft.copyDocumentJson }),
   documentByteSize: draft.documentByteSize,
   documentJson: draft.documentJson,
   editorSessionId: draft.editorSessionId,
@@ -356,7 +440,10 @@ export const doProjectDraftPartsMatch = (metadata: ProjectDraftMetadata, body: P
   metadata.projectId === body.projectId &&
   metadata.editorSessionId === body.editorSessionId &&
   metadata.generation === body.generation &&
-  metadata.documentByteSize === body.documentByteSize;
+  metadata.documentByteSize === body.documentByteSize &&
+  (metadata.copyDocumentByteSize === undefined
+    ? body.copyDocumentJson === undefined
+    : metadata.copyDocumentByteSize === getUtf8ByteSize(body.copyDocumentJson ?? ''));
 
 export const combineProjectDraft = (metadata: unknown, body: unknown): ProjectDraft | null => {
   if (!isProjectDraftMetadata(metadata) || !isProjectDraftBody(body)) {
@@ -369,7 +456,11 @@ export const combineProjectDraft = (metadata: unknown, body: unknown): ProjectDr
     return null;
   }
   const { metadataRevision: _metadataRevision, ...draftMetadata } = metadata;
-  const draft = { ...draftMetadata, documentJson: body.documentJson } as ProjectDraft;
+  const draft = {
+    ...draftMetadata,
+    ...(body.copyDocumentJson === undefined ? {} : { copyDocumentJson: body.copyDocumentJson }),
+    documentJson: body.documentJson,
+  } as ProjectDraft;
   return isProjectDraft(draft) ? draft : null;
 };
 
@@ -377,6 +468,7 @@ export const getProjectDraftSummary = (record: unknown, key: ProjectDraftKey): P
   if (isProjectDraftMetadata(record)) {
     return {
       documentByteSize: record.documentByteSize,
+      documentSchemaVersion: record.documentSchemaVersion,
       editorSessionId: record.editorSessionId,
       generation: record.generation,
       projectId: record.projectId,
@@ -386,6 +478,7 @@ export const getProjectDraftSummary = (record: unknown, key: ProjectDraftKey): P
   }
   return {
     documentByteSize: null,
+    documentSchemaVersion: null,
     editorSessionId: key[1],
     generation: null,
     projectId: key[0],
@@ -405,24 +498,25 @@ export const isSameProjectDraftGeneration = (draft: ProjectDraft, input: Project
 export const toDirtyProjectDraft = (draft: ProjectDraft, changes: Partial<ProjectDraftBase>): ProjectDraft => {
   const next: Record<string, unknown> = { ...draft, ...changes, state: 'dirty' };
   delete next.conflict;
-  delete next.minimumCanvasSchemaVersion;
+  delete next.refusal;
   return next as unknown as ProjectDraft;
 };
 
 export const toConflictProjectDraft = (draft: ProjectDraft, conflict: ProjectDraftConflict): ProjectDraft => {
   const next: Record<string, unknown> = { ...draft, conflict, state: 'conflict' };
-  delete next.minimumCanvasSchemaVersion;
+  delete next.refusal;
   return next as unknown as ProjectDraft;
 };
 
-export const toSchemaRefusedProjectDraft = (draft: ProjectDraft, minimumCanvasSchemaVersion: number): ProjectDraft => {
-  const next: Record<string, unknown> = { ...draft, minimumCanvasSchemaVersion, state: 'schema-refused' };
+export const toSchemaRefusedProjectDraft = (draft: ProjectDraft, refusal: ProjectSchemaRefusal): ProjectDraft => {
+  const next: Record<string, unknown> = { ...draft, refusal, state: 'schema-refused' };
   delete next.conflict;
   return next as unknown as ProjectDraft;
 };
 
 export const createUnavailableProjectDraftStore = (): ProjectDraftStore => ({
   availability: 'unavailable',
+  acknowledgeRetarget: () => Promise.resolve({ kind: 'unavailable' }),
   adopt: () => Promise.resolve({ kind: 'unavailable' }),
   claimWriter: () => Promise.resolve({ kind: 'unavailable' }),
   close: () => undefined,
@@ -431,7 +525,9 @@ export const createUnavailableProjectDraftStore = (): ProjectDraftStore => ({
   get: () => Promise.resolve({ kind: 'unavailable' }),
   list: () => Promise.resolve({ kind: 'unavailable' }),
   listForProject: () => Promise.resolve({ kind: 'unavailable' }),
+  listRetargets: () => Promise.resolve({ kind: 'unavailable' }),
   reserveCopyIdentity: () => Promise.resolve({ kind: 'unavailable' }),
+  resumeSchemaRefused: () => Promise.resolve({ kind: 'unavailable' }),
   retargetAcknowledgedCopy: () => Promise.resolve({ kind: 'unavailable' }),
   settleAcknowledgement: () => Promise.resolve({ kind: 'unavailable' }),
   settleConflict: () => Promise.resolve({ kind: 'unavailable' }),
@@ -442,6 +538,7 @@ export const createUnavailableProjectDraftStore = (): ProjectDraftStore => ({
 
 const cloneDraft = (draft: ProjectDraft): ProjectDraft => structuredClone(draft);
 const draftKey = (projectId: string, editorSessionId: string): string => `${projectId}\u0000${editorSessionId}`;
+const compareKeys = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 
 export const createMemoryProjectDraftStore = ({
   maxDraftBytes = PROJECT_DRAFT_MAX_BYTES,
@@ -497,6 +594,22 @@ export const createMemoryProjectDraftStore = ({
   return {
     get availability() {
       return isClosed ? 'unavailable' : 'available';
+    },
+    acknowledgeRetarget(projectId, editorSessionId, targetProjectId) {
+      if (isClosed) {
+        return Promise.resolve({ kind: 'unavailable' });
+      }
+      const key = draftKey(projectId, editorSessionId);
+      const claim = writerClaims.get(key);
+      if (
+        claim?.state !== 'fenced' ||
+        claim.retargetedToProjectId !== targetProjectId ||
+        claim.retargetedToRevision === undefined
+      ) {
+        return Promise.resolve({ kind: 'stale' });
+      }
+      writerClaims.delete(key);
+      return Promise.resolve({ kind: 'deleted' });
     },
     adopt(projectId, fromEditorSessionId, toEditorSessionId, toWriterToken) {
       if (isClosed) {
@@ -627,7 +740,7 @@ export const createMemoryProjectDraftStore = ({
         .map((record): ProjectDraftKey => [record.projectId, record.editorSessionId])
         .sort(
           ([aProject, aSession], [bProject, bSession]) =>
-            aProject.localeCompare(bProject) || aSession.localeCompare(bSession)
+            compareKeys(aProject, bProject) || compareKeys(aSession, bSession)
         );
       const foundStart = after
         ? keys.findIndex(
@@ -645,21 +758,74 @@ export const createMemoryProjectDraftStore = ({
         nextCursor: hasMore ? (pageKeys.at(-1) ?? null) : null,
       });
     },
-    listForProject(projectId, { limit: requestedLimit } = {}) {
+    listForProject(projectId, { after, limit: requestedLimit } = {}) {
       if (isClosed) {
         return Promise.resolve({ kind: 'unavailable' });
       }
       const limit = clampProjectDraftLimit(requestedLimit, PROJECT_DRAFT_PROJECT_LIMIT);
-      const items = [...records.values()]
+      const candidates = [...records.values()]
         .filter((record) => record.projectId === projectId)
         .map((record) =>
           getProjectDraftSummary(toProjectDraftMetadata(record), [record.projectId, record.editorSessionId])
         )
-        .sort((a, b) => (b.updatedAt ?? -1) - (a.updatedAt ?? -1) || a.editorSessionId.localeCompare(b.editorSessionId))
-        .slice(0, limit);
-      return Promise.resolve({ items, kind: 'available' });
+        .sort((a, b) => compareKeys(a.editorSessionId, b.editorSessionId));
+      const foundStart = after ? candidates.findIndex((candidate) => candidate.editorSessionId > after) : 0;
+      const start = foundStart === -1 ? candidates.length : foundStart;
+      const items = candidates.slice(start, start + limit);
+      const hasMore = start + items.length < candidates.length;
+      return Promise.resolve({
+        items,
+        kind: 'available',
+        nextCursor: hasMore ? (items.at(-1)?.editorSessionId ?? null) : null,
+      });
     },
-    reserveCopyIdentity(projectId, editorSessionId, writerToken, proposedCopyProjectId, replaceCopyProjectId) {
+    listRetargets({ after, limit: requestedLimit } = {}) {
+      if (isClosed) {
+        return Promise.resolve({ kind: 'unavailable' });
+      }
+      const limit = clampProjectDraftLimit(requestedLimit, PROJECT_DRAFT_PAGE_LIMIT);
+      const matching = [...writerClaims.values()]
+        .flatMap((claim): ProjectDraftRetargetHandoff[] =>
+          claim.state === 'fenced' &&
+          claim.retargetedToProjectId !== undefined &&
+          claim.retargetedToRevision !== undefined
+            ? [
+                {
+                  editorSessionId: claim.editorSessionId,
+                  projectId: claim.projectId,
+                  revision: claim.retargetedToRevision,
+                  targetProjectId: claim.retargetedToProjectId,
+                  updatedAt: claim.updatedAt,
+                },
+              ]
+            : []
+        )
+        .sort(
+          (a, b) =>
+            a.projectId.localeCompare(b.projectId) ||
+            a.editorSessionId.localeCompare(b.editorSessionId) ||
+            a.targetProjectId.localeCompare(b.targetProjectId)
+        );
+      const start = after
+        ? matching.findIndex(
+            (item) =>
+              item.projectId > after[0] ||
+              (item.projectId === after[0] &&
+                (item.editorSessionId > after[1] ||
+                  (item.editorSessionId === after[1] && item.targetProjectId > after[2])))
+          )
+        : 0;
+      const normalizedStart = start === -1 ? matching.length : start;
+      const items = matching.slice(normalizedStart, normalizedStart + limit);
+      const hasMore = normalizedStart + items.length < matching.length;
+      const last = items.at(-1);
+      return Promise.resolve({
+        items,
+        kind: 'available',
+        nextCursor: hasMore && last ? [last.projectId, last.editorSessionId, last.targetProjectId] : null,
+      });
+    },
+    reserveCopyIdentity(projectId, editorSessionId, writerToken, proposed, replaceCopyProjectId) {
       if (isClosed) {
         return Promise.resolve({ kind: 'unavailable' });
       }
@@ -673,11 +839,26 @@ export const createMemoryProjectDraftStore = ({
       if (replaceCopyProjectId !== undefined && record.copyProjectId !== replaceCopyProjectId) {
         return Promise.resolve({ kind: 'stale' });
       }
-      const copyProjectId =
-        replaceCopyProjectId === undefined ? (record.copyProjectId ?? proposedCopyProjectId) : proposedCopyProjectId;
-      writeDraft({ ...record, copyProjectId });
+      const reservation =
+        replaceCopyProjectId === undefined && record.copyProjectId
+          ? {
+              copyDocumentByteSize: record.copyDocumentByteSize!,
+              copyDocumentJson: record.copyDocumentJson!,
+              copyProjectGeneration: record.copyProjectGeneration!,
+              copyProjectId: record.copyProjectId,
+              copyProjectMinimumCanvasSchemaVersion: record.copyProjectMinimumCanvasSchemaVersion!,
+              copyProjectName: record.copyProjectName!,
+              copySourceProjectName: record.copySourceProjectName ?? getCopySourceProjectName(record.copyProjectName!),
+            }
+          : proposed;
+      writeDraft({ ...record, ...reservation });
       bumpWriterClaim(draftKey(projectId, editorSessionId));
-      return Promise.resolve({ copyProjectId, kind: 'reserved' });
+      return Promise.resolve({ ...reservation, kind: 'reserved' });
+    },
+    resumeSchemaRefused(projectId, editorSessionId, writerToken, generation) {
+      return Promise.resolve(
+        settle(projectId, editorSessionId, writerToken, generation, (draft) => toDirtyProjectDraft(draft, {}), 'marked')
+      );
     },
     retargetAcknowledgedCopy(options) {
       if (isClosed) {
@@ -748,7 +929,13 @@ export const createMemoryProjectDraftStore = ({
           ? null
           : toDirtyProjectDraft(record, {
               baseRevision: options.acknowledgedRevision,
+              copyDocumentByteSize: undefined,
+              copyDocumentJson: undefined,
               copyProjectId: undefined,
+              copyProjectGeneration: undefined,
+              copyProjectMinimumCanvasSchemaVersion: undefined,
+              copyProjectName: undefined,
+              copySourceProjectName: undefined,
               ...retargeted,
               projectId: options.copyProjectId,
             });
@@ -779,7 +966,14 @@ export const createMemoryProjectDraftStore = ({
       });
       return Promise.resolve({ draft: draft ? cloneDraft(draft) : null, kind: 'retargeted' });
     },
-    settleAcknowledgement(projectId, editorSessionId, writerToken, sentGeneration, acknowledgedRevision) {
+    settleAcknowledgement(
+      projectId,
+      editorSessionId,
+      writerToken,
+      sentGeneration,
+      acknowledgedRevision,
+      acknowledgedMinimumCanvasSchemaVersion
+    ) {
       if (isClosed) {
         return Promise.resolve({ kind: 'unavailable' });
       }
@@ -790,15 +984,16 @@ export const createMemoryProjectDraftStore = ({
       if (!ownsLineage(projectId, editorSessionId, writerToken) || record.writerToken !== writerToken) {
         return Promise.resolve({ kind: 'fenced' });
       }
-      if (record.generation < sentGeneration) {
-        return Promise.resolve({ kind: 'stale' });
-      }
-      if (record.generation === sentGeneration) {
+      if (record.generation <= sentGeneration) {
         records.delete(draftKey(projectId, editorSessionId));
         bumpWriterClaim(draftKey(projectId, editorSessionId));
         return Promise.resolve({ kind: 'deleted' });
       }
-      const draft = writeDraft({ ...record, baseRevision: acknowledgedRevision });
+      const draft = writeDraft({
+        ...record,
+        baseMinimumCanvasSchemaVersion: acknowledgedMinimumCanvasSchemaVersion ?? record.baseMinimumCanvasSchemaVersion,
+        baseRevision: acknowledgedRevision,
+      });
       bumpWriterClaim(draftKey(projectId, editorSessionId));
       return Promise.resolve({ draft, kind: 'rebased' });
     },
@@ -814,14 +1009,14 @@ export const createMemoryProjectDraftStore = ({
         )
       );
     },
-    settleSchemaRefusal(projectId, editorSessionId, writerToken, sentGeneration, minimumCanvasSchemaVersion) {
+    settleSchemaRefusal(projectId, editorSessionId, writerToken, sentGeneration, refusal) {
       return Promise.resolve(
         settle(
           projectId,
           editorSessionId,
           writerToken,
           sentGeneration,
-          (draft) => toSchemaRefusedProjectDraft(draft, minimumCanvasSchemaVersion),
+          (draft) => toSchemaRefusedProjectDraft(draft, refusal),
           'marked'
         )
       );

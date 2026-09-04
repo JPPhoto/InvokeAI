@@ -34,6 +34,7 @@ import { DEFAULT_PROJECT_SETTINGS } from './settings/store';
 import { getProjectWidgetValues } from './widgetState';
 import {
   clampPanelSize,
+  createDraftProject,
   getPanelCollapseThreshold,
   GRAPH_HISTORY_BYTE_BUDGET,
   normalizeGraphHistory,
@@ -931,14 +932,11 @@ describe('adopting a project from another realm', () => {
     expect(values.galleryPage).toBe(0);
   });
 
-  it('keeps the window anchor when a conflict fork rescues the live copy', () => {
-    // The fork keeps the user's edits AND their position: they were deep in
-    // a board when the conflict hit, and the recovered project is the one
-    // they keep working in.
+  it('retargets a project without disturbing its live session state', () => {
     const clusterId = registerImageCluster(['a.png', 'b.png'], 'beaches');
     let state = createInitialWorkbenchState();
     const project = getActiveProject(state);
-    const serverCopy = { ...project, name: 'Renamed elsewhere' };
+    const staleCopy = project;
 
     state = workbenchReducer(state, {
       projectId: project.id,
@@ -951,24 +949,51 @@ describe('adopting a project from another realm', () => {
       widgetId: 'gallery',
     });
     state = workbenchReducer(state, {
+      name: 'Renamed while copying',
       projectId: project.id,
-      recoveredIdentity: {
-        id: `${project.id}-recovered-1`,
-        name: `${project.name} (recovered)`,
-        recoveredAt: '2026-08-29T00:00:00.000Z',
-        recoveryOf: project.id,
-      },
-      recoveredProject: serverCopy,
-      serverProject: serverCopy,
-      type: 'reconcileProjectConflict',
+      type: 'renameProject',
+    });
+    state = workbenchReducer(state, {
+      boardId: 'board-copy',
+      name: `${project.name} (copy)`,
+      projectId: project.id,
+      project: { ...staleCopy, id: `${project.id}-copy`, name: `${project.name} (copy)` },
+      targetProjectId: `${project.id}-copy`,
+      sourceName: project.name,
+      type: 'retargetProject',
     });
 
     const fork = getActiveProject(state);
     const values = getProjectWidgetValues(fork, 'gallery');
 
-    expect(fork.id).toBe(`${project.id}-recovered-1`);
+    expect(fork.id).toBe(`${project.id}-copy`);
+    expect(fork.name).toBe('Renamed while copying');
     expect(values.galleryPage).toBe(7);
     expect(values.semanticImageQuery).toEqual({ clusterId, kind: 'cluster', label: 'beaches' });
+  });
+
+  it('preserves both projects when a retarget target is already open', () => {
+    const source = createDraftProject([]);
+    const target = {
+      ...createDraftProject([source]),
+      id: `${source.id}-copy`,
+      name: 'independently edited target',
+      settings: { ...source.settings, useCpuNoise: !source.settings.useCpuNoise },
+    };
+    const state = { ...createInitialWorkbenchState(), activeProjectId: source.id, projects: [source, target] };
+
+    const next = workbenchReducer(state, {
+      boardId: 'board-copy',
+      name: target.name,
+      project: target,
+      projectId: source.id,
+      sourceName: source.name,
+      targetProjectId: target.id,
+      type: 'retargetProject',
+    });
+
+    expect(next).toBe(state);
+    expect(next.projects).toEqual([source, target]);
   });
 
   it('keeps a search the new realm can rebuild, and the page it was read on', () => {

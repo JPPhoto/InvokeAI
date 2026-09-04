@@ -154,6 +154,19 @@ const serializeCreateProjectRequest = (request: ProjectCreateRequest): string =>
     minimum_canvas_schema_version: request.minimum_canvas_schema_version ?? DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
   });
 
+const projectRecordMatchesCreate = (record: ProjectRecordDTO, requestBody: string): boolean => {
+  const request = JSON.parse(requestBody) as ProjectCreateRequest;
+
+  return (
+    record.project_id === request.project_id &&
+    record.name === request.name &&
+    JSON.stringify(record.data) === JSON.stringify(request.data) &&
+    (request.board_id === undefined || record.board_id === request.board_id) &&
+    record.minimum_canvas_schema_version >=
+      (request.minimum_canvas_schema_version ?? DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION)
+  );
+};
+
 const createProjectFromBody = (
   body: string,
   signal: AbortSignal | undefined,
@@ -346,7 +359,13 @@ export const createProjectSettled = async (
     }
 
     try {
-      return await getProject(projectId, owner.signal);
+      const record = await getProject(projectId, owner.signal);
+
+      if (!projectRecordMatchesCreate(record, body)) {
+        throw conflict;
+      }
+
+      return record;
     } catch (readError) {
       assertAccountScopeCurrent(owner);
 

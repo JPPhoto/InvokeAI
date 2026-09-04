@@ -63,7 +63,13 @@ describe('createProjectSettled', () => {
     transport.apiFetchJson
       .mockRejectedValueOnce(new TypeError('network error'))
       .mockRejectedValueOnce(new ApiError('conflict', 409))
-      .mockResolvedValueOnce({ project_id: 'project-1', name: 'Imported' });
+      .mockResolvedValueOnce({
+        board_id: 'board-for-project-1',
+        data: {},
+        minimum_canvas_schema_version: 3,
+        name: 'Imported',
+        project_id: 'project-1',
+      });
 
     await expect(createProjectSettled(request, captureAccountScope())).resolves.toMatchObject({
       project_id: 'project-1',
@@ -75,6 +81,23 @@ describe('createProjectSettled', () => {
       '/api/v1/projects/project-1?max_canvas_schema_version=3',
       expect.anything()
     );
+  });
+
+  it('does not adopt a different project that occupies the requested id', async () => {
+    const conflict = new ApiError('conflict', 409);
+
+    transport.apiFetchJson
+      .mockRejectedValueOnce(new TypeError('network error'))
+      .mockRejectedValueOnce(conflict)
+      .mockResolvedValueOnce({
+        board_id: 'board-for-somebody-else',
+        data: { owner: 'somebody-else' },
+        minimum_canvas_schema_version: 3,
+        name: "Somebody else's project",
+        project_id: 'project-1',
+      });
+
+    await expect(createProjectSettled(request, captureAccountScope())).rejects.toBe(conflict);
   });
 
   it('creates the project when the first attempt never landed', async () => {

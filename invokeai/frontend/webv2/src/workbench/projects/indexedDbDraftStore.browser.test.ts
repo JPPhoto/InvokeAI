@@ -7,12 +7,18 @@ import {
   type ProjectDraftMetadata,
   type ProjectDraftStore,
 } from './draftStore';
-import { createProjectDraft, createProjectDraftInput, testProjectDraftStoreContract } from './draftStore.contract';
+import {
+  createCopyReservation,
+  createProjectDraft,
+  createProjectDraftInput,
+  testProjectDraftStoreContract,
+} from './draftStore.contract';
 import { createAccountOwnedProjectDraftStore, createIndexedDbProjectDraftStore } from './indexedDbDraftStore';
 import {
   deleteWorkbenchDatabase,
   getWorkbenchDatabaseName,
   openWorkbenchDatabase,
+  WORKBENCH_DATABASE_VERSION,
   type WorkbenchDatabase,
 } from './workbenchDatabase';
 
@@ -96,19 +102,70 @@ const abortFirstBodyWriteWithQuota = (database: WorkbenchDatabase): WorkbenchDat
 };
 
 const reserveCopyInRawTransaction = async (database: WorkbenchDatabase): Promise<void> => {
-  const transaction = database.transaction(['drafts', 'draftWriters'], 'readwrite');
+  const transaction = database.transaction(['drafts', 'draftBodies', 'draftWriters'], 'readwrite');
   const metadataStore = transaction.objectStore('drafts');
+  const bodyStore = transaction.objectStore('draftBodies');
   const writerStore = transaction.objectStore('draftWriters');
   const key: [string, string] = ['project-1', 'session-a'];
-  const [metadata, claim] = await Promise.all([metadataStore.get(key), writerStore.get(key)]);
-  if (!metadata || !claim) {
-    throw new Error('Expected draft metadata and writer claim.');
+  const [metadata, body, claim] = await Promise.all([metadataStore.get(key), bodyStore.get(key), writerStore.get(key)]);
+  if (!metadata || !body || !claim) {
+    throw new Error('Expected draft metadata, body and writer claim.');
   }
+  const { copyDocumentJson, ...reservationMetadata } = createCopyReservation('copy-1');
   const metadataRevision = metadata.metadataRevision + 1;
-  await metadataStore.put({ ...metadata, copyProjectId: 'copy-1', metadataRevision });
+  await metadataStore.put({ ...metadata, ...reservationMetadata, metadataRevision });
+  await bodyStore.put({ ...body, copyDocumentJson });
   await writerStore.put({ ...claim, metadataRevision });
   await transaction.done;
 };
+
+const createVersion2Database = (suffix: string, claims: unknown[]): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const request = indexedDB.open(getWorkbenchDatabaseName(suffix), 2);
+    request.addEventListener('upgradeneeded', () => {
+      const database = request.result;
+      const transaction = request.transaction!;
+      const drafts = database.createObjectStore('drafts', { keyPath: ['projectId', 'editorSessionId'] });
+      drafts.createIndex('byProject', 'projectId');
+      const bodies = database.createObjectStore('draftBodies', { keyPath: ['projectId', 'editorSessionId'] });
+      bodies.createIndex('byIntegrity', ['projectId', 'editorSessionId', 'generation', 'documentByteSize'], {
+        unique: true,
+      });
+      const writers = database.createObjectStore('draftWriters', {
+        keyPath: ['projectId', 'editorSessionId'],
+      });
+      const draft = createProjectDraft({
+        editorSessionId: 'session-live',
+        projectId: 'project-live',
+        writerToken: 'writer-live',
+      });
+      drafts.put(toProjectDraftMetadata(draft, 1));
+      bodies.put(toProjectDraftBody(draft));
+      writers.put({
+        editorSessionId: draft.editorSessionId,
+        metadataRevision: 1,
+        projectId: draft.projectId,
+        state: 'active',
+        updatedAt: draft.updatedAt,
+        writerToken: draft.writerToken,
+      });
+      for (const claim of claims) {
+        writers.put(claim);
+      }
+      const queueRuns = database.createObjectStore('queueRuns', { keyPath: 'key' });
+      queueRuns.createIndex('byProject', 'projectId');
+      const recallCache = database.createObjectStore('recallCache', { keyPath: 'queueItemId' });
+      recallCache.createIndex('byLastAccessOrder', 'lastAccessOrder');
+      database.createObjectStore('recallBodies', { keyPath: 'queueItemId' });
+      database.createObjectStore('metadata', { keyPath: 'key' });
+      transaction.addEventListener('abort', () => reject(transaction.error));
+    });
+    request.addEventListener('error', () => reject(request.error));
+    request.addEventListener('success', () => {
+      request.result.close();
+      resolve();
+    });
+  });
 
 afterEach(async () => {
   accountLifecycle.invalidate();
@@ -130,7 +187,7 @@ describe('IndexedDB project drafts', () => {
     stores.push(database);
 
     expect(database.name).toBe(getWorkbenchDatabaseName(suffix));
-    expect(database.version).toBe(2);
+    expect(database.version).toBe(3);
     expect([...database.objectStoreNames]).toEqual([
       'draftBodies',
       'draftWriters',
@@ -140,6 +197,7 @@ describe('IndexedDB project drafts', () => {
       'recallBodies',
       'recallCache',
     ]);
+    expect([...database.transaction('draftWriters').store.indexNames]).toEqual(['byRetarget']);
 
     const store = createIndexedDbProjectDraftStore(database);
     stores.push(store);
@@ -197,9 +255,10 @@ describe('IndexedDB project drafts', () => {
     const upgraded = await openWorkbenchDatabase(suffix);
     stores.push(upgraded);
 
-    expect(upgraded.version).toBe(2);
+    expect(upgraded.version).toBe(3);
     expect(await upgraded.count('recallCache')).toBe(0);
     expect([...upgraded.objectStoreNames]).toContain('recallBodies');
+    expect([...upgraded.transaction('draftWriters').store.indexNames]).toEqual(['byRetarget']);
   });
 
   it('adopts at most once across connections and fences the old writer', async () => {
@@ -315,6 +374,7 @@ describe('IndexedDB project drafts', () => {
       items: [
         {
           documentByteSize: null,
+          documentSchemaVersion: null,
           editorSessionId: 'session-a',
           generation: null,
           projectId: 'project-1',
@@ -378,7 +438,7 @@ describe('IndexedDB project drafts', () => {
     await expect(database.get('draftBodies', ['project-1', 'session-b'])).resolves.toEqual(orphan);
 
     await database.delete('draftBodies', ['project-1', 'session-b']);
-    await store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', 'copy-1');
+    await store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', createCopyReservation('copy-1'));
     const copyOrphan = { ...orphan, editorSessionId: 'session-a', projectId: 'copy-1' };
     await database.put('draftBodies', copyOrphan);
     await expect(
@@ -411,7 +471,9 @@ describe('IndexedDB project drafts', () => {
     await expect(store.claimWriter('project-1', 'session-a', 'writer-a', 'writer-a2')).resolves.toEqual({
       kind: 'corrupt',
     });
-    await expect(store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', 'copy-1')).resolves.toEqual({
+    await expect(
+      store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', createCopyReservation('copy-1'))
+    ).resolves.toEqual({
       kind: 'corrupt',
     });
     await expect(store.stage(createProjectDraftInput({ generation: 2 }))).resolves.toEqual({ kind: 'corrupt' });
@@ -419,6 +481,26 @@ describe('IndexedDB project drafts', () => {
       ...body,
       documentByteSize: body.documentByteSize + 1,
     });
+  });
+
+  it('rejects a copy reservation whose durable body no longer matches its byte binding', async () => {
+    const suffix = createSuffix();
+    const database = await openWorkbenchDatabase(suffix);
+    stores.push(database);
+    const store = createIndexedDbProjectDraftStore(database);
+    stores.push(store);
+    await store.stage(createProjectDraftInput());
+    await store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', createCopyReservation('copy-1'));
+    const body = await database.get('draftBodies', ['project-1', 'session-a']);
+    if (!body) {
+      throw new Error('Expected a staged draft body.');
+    }
+    await database.put('draftBodies', { ...body, copyDocumentJson: '{"id":"tampered"}' });
+
+    await expect(store.get('project-1', 'session-a')).resolves.toEqual({ kind: 'corrupt' });
+    await expect(
+      store.reserveCopyIdentity('project-1', 'session-a', 'writer-a', createCopyReservation('copy-2'))
+    ).resolves.toEqual({ kind: 'corrupt' });
   });
 
   it('does not delete a mismatched body while settling an acknowledgement', async () => {
@@ -441,12 +523,32 @@ describe('IndexedDB project drafts', () => {
     await expect(database.get('draftBodies', ['project-1', 'session-a'])).resolves.toEqual(newerBody);
   });
 
+  it('does not read the previous body when staging a normal newer generation', async () => {
+    const suffix = createSuffix();
+    const database = await openWorkbenchDatabase(suffix);
+    stores.push(database);
+    const store = createIndexedDbProjectDraftStore(database);
+    stores.push(store);
+    await store.stage(createProjectDraftInput());
+    const get = vi.spyOn(IDBObjectStore.prototype, 'get');
+
+    await expect(store.stage(createProjectDraftInput({ generation: 2 }))).resolves.toEqual({ kind: 'stored' });
+
+    expect(
+      get.mock.instances.filter(
+        (objectStore): objectStore is IDBObjectStore =>
+          objectStore instanceof IDBObjectStore && objectStore.name === 'draftBodies'
+      )
+    ).toHaveLength(0);
+    get.mockRestore();
+  });
+
   it('retries a retarget when a newer generation wins the transaction race', async () => {
     const suffix = createSuffix();
     const first = createIndexedDbProjectDraftStore(await openWorkbenchDatabase(suffix));
     stores.push(first);
     await first.stage(createProjectDraftInput());
-    await first.reserveCopyIdentity('project-1', 'session-a', 'writer-a', 'copy-1');
+    await first.reserveCopyIdentity('project-1', 'session-a', 'writer-a', createCopyReservation('copy-1'));
     await first.stage(createProjectDraftInput({ generation: 2 }));
     let concurrentStage: Promise<unknown> | null = null;
 
@@ -615,7 +717,7 @@ describe('IndexedDB project drafts', () => {
     stores.push(store);
 
     const upgraded = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open(getWorkbenchDatabaseName(suffix), 3);
+      const request = indexedDB.open(getWorkbenchDatabaseName(suffix), WORKBENCH_DATABASE_VERSION + 1);
       request.addEventListener('error', () => reject(request.error));
       request.addEventListener('success', () => resolve(request.result));
     });
@@ -623,5 +725,65 @@ describe('IndexedDB project drafts', () => {
 
     expect(store.availability).toBe('unavailable');
     await expect(store.list()).resolves.toEqual({ kind: 'unavailable' });
+  });
+
+  it('upgrades populated v2 writer claims and indexes only retarget handoffs', async () => {
+    const suffix = createSuffix();
+    const claim = (projectId: string, targetProjectId?: string) => ({
+      editorSessionId: 'session-a',
+      fenceReason: 'moved',
+      metadataRevision: 1,
+      projectId,
+      ...(targetProjectId
+        ? {
+            adoptedByEditorSessionId: 'session-a',
+            retargetedToProjectId: targetProjectId,
+            retargetedToRevision: 1,
+          }
+        : { adoptedByEditorSessionId: 'session-b' }),
+      state: 'fenced',
+      updatedAt: 1,
+      writerToken: 'writer-a',
+    });
+    const retargetClaims = Array.from({ length: 205 }, (_, index) => {
+      const suffix = index.toString().padStart(3, '0');
+      return claim(`project-${suffix}`, `copy-${suffix}`);
+    });
+    await createVersion2Database(suffix, [...retargetClaims, claim('project-no-retarget')]);
+    const database = await openWorkbenchDatabase(suffix);
+    stores.push(database);
+    const store = createIndexedDbProjectDraftStore(database);
+    stores.push(store);
+
+    await expect(store.get('project-live', 'session-live')).resolves.toMatchObject({
+      draft: { projectId: 'project-live', writerToken: 'writer-live' },
+      kind: 'found',
+    });
+    const first = await store.listRetargets({ limit: 100 });
+    expect(first).toMatchObject({
+      kind: 'available',
+      nextCursor: ['project-099', 'session-a', 'copy-099'],
+    });
+    expect(first.kind === 'available' ? first.items : []).toHaveLength(100);
+    if (first.kind !== 'available' || !first.nextCursor) {
+      throw new Error('Expected a second handoff page.');
+    }
+    const second = await store.listRetargets({ after: first.nextCursor, limit: 100 });
+    expect(second).toMatchObject({ kind: 'available', nextCursor: ['project-199', 'session-a', 'copy-199'] });
+    if (second.kind !== 'available' || !second.nextCursor) {
+      throw new Error('Expected a third handoff page.');
+    }
+    expect(second.items).toHaveLength(100);
+    await expect(store.listRetargets({ after: second.nextCursor, limit: 100 })).resolves.toMatchObject({
+      items: [
+        { projectId: 'project-200' },
+        { projectId: 'project-201' },
+        { projectId: 'project-202' },
+        { projectId: 'project-203' },
+        { projectId: 'project-204' },
+      ],
+      kind: 'available',
+      nextCursor: null,
+    });
   });
 });

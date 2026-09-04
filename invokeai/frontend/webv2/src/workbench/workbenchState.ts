@@ -39,7 +39,6 @@ import type {
   WorkbenchNotificationKind,
   WorkbenchState,
 } from '@workbench/projectContracts';
-import type { ProjectRecoveredIdentity } from '@workbench/projects/projectFlush';
 import type { ProjectSettings } from '@workbench/settings/contracts';
 import type {
   WidgetFailure,
@@ -390,20 +389,18 @@ type WorkbenchReducerAction =
   | { type: 'undoProjectChange' }
   | { type: 'redoProjectChange' }
   | { type: 'hydrateWorkbench'; state: WorkbenchState }
+  | { type: 'replaceProjectFromServer'; projectId: string; project: Project }
   | {
-      type: 'reconcileProjectConflict';
+      type: 'retargetProject';
+      boardId: string;
+      name: string;
+      project: Project;
       projectId: string;
-      serverProject: Project;
-      recoveredProject: Project;
-      recoveredIdentity: ProjectRecoveredIdentity;
-    }
-  | {
-      type: 'reconcileDeletedProject';
-      projectId: string;
-      recoveredProject: Project;
-      recoveredIdentity: ProjectRecoveredIdentity;
+      sourceName: string;
+      targetProjectId: string;
     }
   | { type: 'autosaveStarted' }
+  | { type: 'autosavePending'; error: string }
   | { type: 'autosaveSucceeded'; savedAt: string }
   | { type: 'autosaveFailed'; error: string }
   | { type: 'markAllNotificationsRead' }
@@ -1753,8 +1750,8 @@ export const normalizeWorkbenchProject = (
   options: {
     /**
      * Whether the document is arriving from another realm (a server record,
-     * an import) rather than being kept by this one (the conflict fork that
-     * rescues the live copy). An infinite window's mid-board anchor is a
+     * an import) rather than being kept by this one during a live retarget.
+     * An infinite window's mid-board anchor is a
      * "you are here" for the session that revealed it: it is dropped from a
      * document that arrives, and kept for one that stays.
      */
@@ -1778,6 +1775,11 @@ const assembleWorkbenchProject = (
   } = {}
 ): Project => {
   const { isArriving = true } = options;
+  const {
+    recoveredAt: _recoveredAt,
+    recoveryOf: _recoveryOf,
+    ...persistentProject
+  } = project as Project & { recoveredAt?: unknown; recoveryOf?: unknown };
   const legacyWidgetRegions = project.widgetRegions as
     | Partial<Record<WidgetRegion | 'left-panel' | 'right-panel' | 'status-bar', WidgetRegionState>>
     | undefined;
@@ -1831,8 +1833,7 @@ const assembleWorkbenchProject = (
     // values describe — the Open dialog, a deep link — where a search only
     // that session could resolve, and the rank pages set against it, would be
     // read as board positions. But this also runs on projects that never
-    // left: closing and reopening one, and the conflict fork that deliberately
-    // rescues the LIVE copy. So the test is whether the reference resolves
+    // left: closing, reopening, or retargeting one. So the test is whether the reference resolves
     // here, not what kind it is; the latter would delete the ranking the user
     // is looking at.
     // An infinite window's mid-board anchor goes the same way, for the same
@@ -1889,7 +1890,7 @@ const assembleWorkbenchProject = (
   );
 
   return {
-    ...project,
+    ...persistentProject,
     canvas,
     events: Array.isArray(project.events) ? project.events : [],
     floatingWidgets: placement.floatingWidgets,
@@ -1924,40 +1925,6 @@ export const withAuthoritativeProjectBoard = (project: Project, boardId: string)
   updateProjectWidgetValues(project, 'gallery', (values) =>
     values.projectBoardId === boardId ? values : { ...values, projectBoardId: boardId }
   );
-
-/**
- * The project a recovery fork should become, preferring live content over the snapshot.
- *
- * The fork is serialized when the save begins, so anything typed since is newer than it. Adopting
- * the snapshot would delete precisely the edits the fork exists to rescue, in the case the
- * mechanism most often fires: a save is stale exactly when a keystroke landed mid-flight.
- *
- * So the live project is re-labelled instead. The server-side fork already holds the older document
- * under this identity, so the next push sees a difference and sends the current content up its
- * revision chain — nothing lost, nothing to merge.
- *
- * The snapshot still wins when there is no live project (a tab closed mid-save), because then it is
- * the only local copy of that work.
- */
-const recoverProjectUnderNewIdentity = (
-  localProject: Project | undefined,
-  snapshotProject: Project,
-  identity: ProjectRecoveredIdentity
-): Project =>
-  // The fork rescues the LIVE copy, edits and position included; only a
-  // fallback to the snapshot is a document arriving from elsewhere.
-  localProject
-    ? normalizeWorkbenchProject(
-        {
-          ...localProject,
-          id: identity.id,
-          name: identity.name,
-          recoveredAt: identity.recoveredAt,
-          recoveryOf: identity.recoveryOf,
-        },
-        { isArriving: false }
-      )
-    : normalizeWorkbenchProject(snapshotProject);
 
 export const clampPanelSize = (region: WidgetRegion, sizePx: number): number => {
   const { max, min } = getPanelSizeBounds(region);
@@ -4985,25 +4952,10 @@ export const __workbenchReducerInternal = (
     case 'hydrateWorkbench': {
       return { ...normalizeWorkbenchState(action.state), backendConnection: state.backendConnection };
     }
-    case 'reconcileProjectConflict': {
-      // A save lost the revision race against another tab/device. The server
-      // version takes over the original project id, and the local edits
-      // continue in the recovered fork — which stays the active project when
-      // the user was looking at it.
-      const normalizedServerProject = normalizeWorkbenchProject(action.serverProject);
+    case 'replaceProjectFromServer': {
+      const normalizedServerProject = normalizeWorkbenchProject(action.project);
       const localProject = state.projects.find((project) => project.id === action.projectId);
-      const hasOriginal = localProject !== undefined;
-      const recoveredProject = recoverProjectUnderNewIdentity(
-        localProject,
-        action.recoveredProject,
-        action.recoveredIdentity
-      );
-      // The server document replaces the local one under the SAME project id, so a
-      // live engine mirroring that id may hold pixel history for the outgoing
-      // document. Bump the revision past both sides so the mirror treats the swap
-      // as a document replacement (clearing that history) even when dims/layer ids
-      // coincide. (The recovered fork gets a fresh project id → a fresh engine.)
-      const serverProject: Project = hasOriginal
+      const serverProject: Project = localProject
         ? {
             ...normalizedServerProject,
             canvas: {
@@ -5013,56 +4965,47 @@ export const __workbenchReducerInternal = (
             },
           }
         : normalizedServerProject;
-      const projects = hasOriginal
-        ? state.projects.flatMap((project) =>
-            project.id === action.projectId ? [serverProject, recoveredProject] : [project]
-          )
-        : [...state.projects, serverProject, recoveredProject];
-
-      return addNotification(
-        {
-          ...state,
-          activeProjectId: state.activeProjectId === action.projectId ? recoveredProject.id : state.activeProjectId,
-          projects,
-        },
-        createNotification({
-          kind: 'info',
-          message: `"${serverProject.name}" was changed elsewhere. Your local edits continue in "${recoveredProject.name}" — manage recoveries in the Project panel.`,
-          title: 'Project recovered',
-        })
-      );
+      return {
+        ...state,
+        projects: localProject
+          ? state.projects.map((project) => (project.id === action.projectId ? serverProject : project))
+          : [...state.projects, serverProject],
+      };
     }
-    case 'reconcileDeletedProject': {
-      // The project was deleted on another device while this one held unsaved edits. Unlike a
-      // revision conflict there is no server version to adopt — the deletion is the server's
-      // answer. Re-creating the id would undo it everywhere, so the local edits continue under a
-      // fresh identity and the original simply goes.
-      const localProject = state.projects.find((project) => project.id === action.projectId);
-      const hasOriginal = localProject !== undefined;
-      const recoveredProject = recoverProjectUnderNewIdentity(
-        localProject,
-        action.recoveredProject,
-        action.recoveredIdentity
+    case 'retargetProject': {
+      const liveProject = state.projects.find((candidate) => candidate.id === action.projectId);
+      const project = liveProject
+        ? withAuthoritativeProjectBoard(
+            normalizeWorkbenchProject(
+              {
+                ...liveProject,
+                id: action.targetProjectId,
+                name: liveProject.name === action.sourceName ? action.name : liveProject.name,
+              },
+              { isArriving: false }
+            ),
+            action.boardId
+          )
+        : normalizeWorkbenchProject(action.project);
+      const targetAlreadyOpen = state.projects.some(
+        (candidate) => candidate.id === action.targetProjectId && candidate.id !== action.projectId
       );
-      const projects = hasOriginal
-        ? state.projects.map((project) => (project.id === action.projectId ? recoveredProject : project))
-        : [...state.projects, recoveredProject];
-
-      return addNotification(
-        {
-          ...state,
-          activeProjectId: state.activeProjectId === action.projectId ? recoveredProject.id : state.activeProjectId,
-          projects,
-        },
-        createNotification({
-          kind: 'info',
-          message: `That project was deleted elsewhere. Your edits — including anything typed since — continue in "${recoveredProject.name}".`,
-          title: 'Project recovered',
-        })
-      );
+      if (targetAlreadyOpen) {
+        return state;
+      }
+      return {
+        ...state,
+        activeProjectId: state.activeProjectId === action.projectId ? project.id : state.activeProjectId,
+        projects: state.projects.some((candidate) => candidate.id === action.projectId)
+          ? state.projects.map((candidate) => (candidate.id === action.projectId ? project : candidate))
+          : [...state.projects, project],
+      };
     }
     case 'autosaveStarted': {
       return { ...state, autosave: { status: 'saving' } };
+    }
+    case 'autosavePending': {
+      return { ...state, autosave: { error: action.error, status: 'error' } };
     }
     case 'autosaveSucceeded': {
       return { ...state, autosave: { lastSavedAt: action.savedAt, status: 'saved' } };

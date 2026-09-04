@@ -36,6 +36,8 @@ export interface WorkbenchSessionBlob {
     preferences?: Partial<WorkbenchPreferences>;
   };
   activeProjectId: string;
+  draftEditorSessionIds?: Record<string, string>;
+  editorSessionId?: string;
   openProjectIds?: string[];
 }
 
@@ -54,6 +56,15 @@ export const parseSessionBlob = (raw: string | null): WorkbenchSessionBlob | nul
     return {
       account: parsed.account,
       activeProjectId: parsed.activeProjectId,
+      draftEditorSessionIds:
+        parsed.draftEditorSessionIds && typeof parsed.draftEditorSessionIds === 'object'
+          ? Object.fromEntries(
+              Object.entries(parsed.draftEditorSessionIds).filter(
+                (entry): entry is [string, string] => entry[0].length > 0 && typeof entry[1] === 'string'
+              )
+            )
+          : undefined,
+      editorSessionId: typeof parsed.editorSessionId === 'string' ? parsed.editorSessionId : undefined,
       openProjectIds: Array.isArray(parsed.openProjectIds)
         ? parsed.openProjectIds.filter((id): id is string => typeof id === 'string')
         : undefined,
@@ -64,10 +75,16 @@ export const parseSessionBlob = (raw: string | null): WorkbenchSessionBlob | nul
 };
 
 /** The open set is derived from workbench state: open tabs are the session. */
-export const serializeSessionBlob = (state: WorkbenchState): string =>
+export const serializeSessionBlob = (
+  state: WorkbenchState,
+  editorSessionId?: string,
+  draftEditorSessionIds?: Record<string, string>
+): string =>
   JSON.stringify({
     account: state.account,
     activeProjectId: state.activeProjectId,
+    ...(draftEditorSessionIds && Object.keys(draftEditorSessionIds).length > 0 ? { draftEditorSessionIds } : {}),
+    ...(editorSessionId ? { editorSessionId } : {}),
     openProjectIds: state.projects.map((project) => project.id),
   } satisfies WorkbenchSessionBlob);
 
@@ -80,6 +97,9 @@ export const fetchSessionBlob = async (signal?: AbortSignal): Promise<WorkbenchS
     return null;
   }
 };
+
+export const fetchSessionBlobStrict = async (signal?: AbortSignal): Promise<WorkbenchSessionBlob | null> =>
+  parseSessionBlob(await getClientStateValue(SESSION_STATE_KEY, signal));
 
 /**
  * Take a deleted project out of the saved session, which the `/app` guard and the Launchpad's
@@ -95,12 +115,17 @@ export const pruneSessionProject = async (projectId: string, signal?: AbortSigna
     }
 
     const openProjectIds = blob.openProjectIds.filter((id) => id !== projectId);
+    const draftEditorSessionIds = blob.draftEditorSessionIds
+      ? Object.fromEntries(Object.entries(blob.draftEditorSessionIds).filter(([id]) => id !== projectId))
+      : undefined;
 
     await setClientStateValue(
       SESSION_STATE_KEY,
       JSON.stringify({
         account: blob.account,
         activeProjectId: blob.activeProjectId === projectId ? (openProjectIds[0] ?? '') : blob.activeProjectId,
+        ...(draftEditorSessionIds && Object.keys(draftEditorSessionIds).length > 0 ? { draftEditorSessionIds } : {}),
+        ...(blob.editorSessionId ? { editorSessionId: blob.editorSessionId } : {}),
         openProjectIds,
       } satisfies WorkbenchSessionBlob),
       signal

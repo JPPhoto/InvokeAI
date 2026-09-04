@@ -2,7 +2,7 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
 import type { ProjectDraftBody, ProjectDraftMetadata, ProjectDraftWriterClaim } from './draftStore';
 
-export const WORKBENCH_DATABASE_VERSION = 2;
+export const WORKBENCH_DATABASE_VERSION = 3;
 export const WORKBENCH_DRAFT_STORE = 'drafts';
 export const WORKBENCH_DRAFT_BODY_STORE = 'draftBodies';
 export const WORKBENCH_DRAFT_WRITER_STORE = 'draftWriters';
@@ -50,6 +50,7 @@ export interface WorkbenchDatabaseSchema extends DBSchema {
     value: ProjectDraftBody;
   };
   draftWriters: {
+    indexes: { byRetarget: [string, string, string] };
     key: [string, string];
     value: ProjectDraftWriterClaim;
   };
@@ -105,7 +106,7 @@ export const openWorkbenchDatabase = (
         unavailableDatabases.add(connection);
       }
     },
-    upgrade(database, oldVersion) {
+    upgrade(database, oldVersion, _newVersion, transaction) {
       if (oldVersion < 1) {
         const drafts = database.createObjectStore(WORKBENCH_DRAFT_STORE, {
           keyPath: ['projectId', 'editorSessionId'],
@@ -135,6 +136,11 @@ export const openWorkbenchDatabase = (
         recallCache.createIndex('byLastAccessOrder', 'lastAccessOrder');
         database.createObjectStore(WORKBENCH_RECALL_CACHE_BODY_STORE, { keyPath: 'queueItemId' });
         database.createObjectStore(WORKBENCH_DATABASE_METADATA_STORE, { keyPath: 'key' });
+      }
+      if (oldVersion < 3) {
+        transaction
+          .objectStore(WORKBENCH_DRAFT_WRITER_STORE)
+          .createIndex('byRetarget', ['projectId', 'editorSessionId', 'retargetedToProjectId']);
       }
     },
   });
