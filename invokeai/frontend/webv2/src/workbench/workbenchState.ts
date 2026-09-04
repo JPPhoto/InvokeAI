@@ -173,10 +173,14 @@ import {
   createLayoutPresetSnapshot,
   resolveSavedLayoutPreset,
 } from './layoutPresetSnapshots';
-import { normalizeWorkbenchQueueHistory } from './queueHistoryNormalization';
 import { normalizeProjectSettings } from './settings/store';
 
-type QueueGenerateSnapshot = NonNullable<QueueItem['snapshot']['generate']>;
+interface QueueGenerateSnapshot {
+  negativePromptNodeId: string;
+  positivePromptNodeId: string;
+  seedNodeId: string;
+  values: GenerateWidgetValues;
+}
 
 export interface WorkbenchReducerContext {
   autoSwitchInvocationRoute: boolean;
@@ -622,13 +626,6 @@ const cloneGraph = (graph: GraphContract): GraphContract => ({
   nodes: graph.nodes.map((node) => ({ ...node, inputs: { ...node.inputs } })),
 });
 
-const cloneQueueGenerateSnapshot = (generate: QueueGenerateSnapshot): QueueGenerateSnapshot => ({
-  negativePromptNodeId: generate.negativePromptNodeId,
-  positivePromptNodeId: generate.positivePromptNodeId,
-  seedNodeId: generate.seedNodeId,
-  values: cloneGenerateWidgetValues(generate.values),
-});
-
 const applyQueueGenerateSnapshotToWidgetStates = (
   widgetStates: WidgetStateMap,
   generate: QueueGenerateSnapshot | undefined
@@ -1003,16 +1000,6 @@ const cloneWidgetInstance = (widgetInstance: WidgetInstanceContract): WidgetInst
   state: cloneWidgetState(widgetInstance.state),
 });
 
-const cloneQueueWidgetState = (widgetState: WidgetStateContract, typeId: WidgetTypeId): WidgetStateContract => {
-  const state = cloneWidgetState(widgetState);
-
-  if (typeId === 'gallery') {
-    delete state.values.recentImages;
-  }
-
-  return state;
-};
-
 const cloneWidgetInstances = (
   widgetInstances: Record<WidgetInstanceId, WidgetInstanceContract>
 ): Record<WidgetInstanceId, WidgetInstanceContract> =>
@@ -1023,24 +1010,11 @@ const cloneWidgetInstances = (
     ])
   );
 
-const cloneQueueWidgetInstances = (
-  widgetInstances: Record<WidgetInstanceId, WidgetInstanceContract>
-): Record<WidgetInstanceId, WidgetInstanceContract> =>
-  Object.fromEntries(
-    Object.entries({ ...createWidgetInstances(), ...widgetInstances }).map(([instanceId, widgetInstance]) => [
-      instanceId,
-      {
-        ...widgetInstance,
-        state: cloneQueueWidgetState(widgetInstance.state, widgetInstance.typeId),
-      },
-    ])
-  );
-
 const getWidgetStatesSnapshot = (widgetInstances: Record<WidgetInstanceId, WidgetInstanceContract>): WidgetStateMap => {
   const widgetStates: WidgetStateMap = {};
 
   for (const widgetInstance of Object.values(widgetInstances)) {
-    widgetStates[widgetInstance.typeId] ??= cloneQueueWidgetState(widgetInstance.state, widgetInstance.typeId);
+    widgetStates[widgetInstance.typeId] ??= cloneWidgetState(widgetInstance.state);
   }
 
   return widgetStates;
@@ -1792,7 +1766,7 @@ const assembleWorkbenchProject = (
     layout: { ...project.layout, presetId: resolveLayoutPresetId(project.layout.presetId) },
     projectGraph: normalizeProjectGraph(project.projectGraph),
     promptHistory: normalizePromptHistory((project as Partial<Project>).promptHistory),
-    queue: normalizeWorkbenchQueueHistory(project.queue, { canvas, widgetInstances }),
+    queue: isArriving ? { items: [] } : project.queue,
     settings: normalizeProjectSettings(project.settings),
     widgetRegions: placement.widgetRegions,
     widgetInstances,
@@ -3062,7 +3036,7 @@ const enqueueCompiledSnapshot = (
   const { generate, graph } = compiled;
   const widgetStates = Object.fromEntries(
     Object.entries(applyQueueGenerateSnapshotToWidgetStates(compiled.widgetStates, generate)).map(
-      ([typeId, widgetState]) => [typeId, cloneQueueWidgetState(widgetState, typeId as WidgetTypeId)]
+      ([typeId, widgetState]) => [typeId, cloneWidgetState(widgetState)]
     )
   ) as WidgetStateMap;
   const generateSettings =
@@ -3157,17 +3131,35 @@ const enqueueCompiledSnapshot = (
             height: generatePresentationSettings?.height ?? project.canvas.document.height,
             width: generatePresentationSettings?.width ?? project.canvas.document.width,
           };
+  const submittedCanvas = canvasSnapshot ?? project.canvas;
+  const generateRecallValues =
+    route.sourceId === 'canvas'
+      ? generate?.values
+      : route.sourceId === 'generate'
+        ? normalizeGenerateWidgetValues(widgetStates.generate?.values)
+        : null;
+  const recall = generateRecallValues
+    ? { generateValues: cloneGenerateWidgetValues(generateRecallValues) }
+    : videoSettings
+      ? { videoValues: cloneVideoWidgetValues(videoSettings) }
+      : undefined;
   const queueItem: QueueItem = {
     cancellable: backendSupportsCancellation,
     id: queueItemId,
     snapshot: {
       backendSubmission,
-      canvas: canvasSnapshot ? structuredClone(canvasSnapshot) : cloneCanvas(project.canvas),
+      canvas: {
+        document: {
+          bbox: { ...submittedCanvas.document.bbox },
+          height: submittedCanvas.document.height,
+          width: submittedCanvas.document.width,
+        },
+        documentRevision: submittedCanvas.documentRevision,
+      },
       destination: route.destination,
       filterIntermediateResults: route.sourceId === 'workflow',
       galleryBoardId: typeof selectedGalleryBoardId === 'string' ? selectedGalleryBoardId : null,
-      ...(generate ? { generate: cloneQueueGenerateSnapshot(generate) } : {}),
-      graph,
+      graph: { id: graph.id, label: graph.label },
       presentation: {
         // Placeholder sizing only: superseded by the backend's real item ids as
         // soon as the batch is accepted.
@@ -3190,8 +3182,7 @@ const enqueueCompiledSnapshot = (
             ? { resultNodeIds: ['video_output'] }
             : {}),
       submittedAt,
-      widgetInstances: cloneQueueWidgetInstances(project.widgetInstances),
-      widgetStates,
+      ...(recall ? { recall } : {}),
     },
     status: 'pending',
   };
@@ -4785,6 +4776,7 @@ export const __workbenchReducerInternal = (
               documentRevision:
                 Math.max(normalizedServerProject.canvas.documentRevision, localProject.canvas.documentRevision) + 1,
             },
+            queue: localProject.queue,
           }
         : normalizedServerProject;
       return {

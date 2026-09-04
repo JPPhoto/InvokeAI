@@ -48,9 +48,7 @@ export const useLocalGenerateValues = (origin?: string | null): GenerateWidgetVa
       return null;
     }
 
-    const generate = (localItem.snapshot.widgetStates as Record<string, { values?: unknown }>).generate;
-
-    return (generate?.values as GenerateWidgetValues | undefined) ?? null;
+    return localItem.snapshot.recall?.generateValues ?? null;
   });
 
 /**

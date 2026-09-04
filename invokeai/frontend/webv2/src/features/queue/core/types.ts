@@ -28,13 +28,8 @@ export interface QueueSubmissionPresentation {
 }
 
 export interface QueueGraphSnapshot {
-  backendGraph?: QueueBackendGraph;
-  edges?: unknown[];
   id: string;
   label: string;
-  nodes?: unknown[];
-  updatedAt?: string;
-  version?: number;
 }
 
 export interface QueueEnqueueWorkflowRequest {

@@ -66,11 +66,6 @@ export type RefusedWorkbenchProject = RefusedWorkbenchProjectBase &
   (
     | { refusal: CanvasLoadRefusal; source: 'canvas'; queueItem?: never }
     | { refusal: ProjectDocumentLoadRefusal; source: 'project-document'; queueItem?: never }
-    | {
-        refusal: CanvasLoadRefusal;
-        source: 'queue-item';
-        queueItem: { index: number; itemId: string | null };
-      }
   );
 
 export type ProjectLoadResult =

@@ -66,8 +66,8 @@ export const buildQueueRecallValues = (
       // metadata has no snapshot and carries the merged prompt outright, so
       // there the current template has to go or it would wrap it a second time.
       //
-      // Coalesced because queue history is persisted: a snapshot written before
-      // templates existed has no such field, and must not recall `undefined`.
+      // Older recall snapshots may predate prompt templates and must not recall
+      // `undefined` into the current settings.
       promptTemplate: snapshot ? (snapshot.promptTemplate ?? null) : null,
       ...(negativePrompt !== undefined
         ? { negativePrompt, negativePromptEnabled: snapshot?.negativePromptEnabled ?? negativePrompt.length > 0 }

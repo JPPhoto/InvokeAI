@@ -89,7 +89,21 @@ describe('project document serialization', () => {
     expect(encoded.byteSize).toBe(new TextEncoder().encode(encoded.documentJson).byteLength);
   });
 
-  it('excludes session events and legacy graph history from project files', () => {
+  it('keeps project document bytes constant as session queue history grows', () => {
+    const project = getProject();
+    const baseline = serializeProjectDocumentV2Json(project);
+    project.queue.items = Array.from({ length: 2_000 }, (_, index) => ({
+      id: `queue-${index}`,
+      snapshot: { oversizedContext: 'x'.repeat(100) },
+    })) as never;
+
+    const withQueueHistory = serializeProjectDocumentV2Json(project);
+
+    expect(withQueueHistory.byteSize).toBe(baseline.byteSize);
+    expect(withQueueHistory.documentJson).toBe(baseline.documentJson);
+  });
+
+  it('excludes session state and legacy history from project files', () => {
     const project = getProject();
     Object.assign(project, { graphHistory: [{ id: 'legacy-snapshot' }] });
 
@@ -97,6 +111,7 @@ describe('project document serialization', () => {
 
     expect(document).not.toHaveProperty('events');
     expect(document).not.toHaveProperty('graphHistory');
+    expect(document).not.toHaveProperty('queue');
   });
 
   it('rejects documents that do not look like projects', () => {
@@ -178,31 +193,8 @@ describe('project document serialization', () => {
   });
 
   it('normalizes legacy project-graph invocation sources to workflow', () => {
-    const base = getProject();
     const project = getProject({
       invocation: { destination: 'gallery', destinationLocked: false, sourceId: 'workflow', sourceLocked: false },
-      queue: {
-        items: [
-          {
-            cancellable: true,
-            id: 'legacy-queue-item',
-            snapshot: {
-              backendSubmission: { batchCount: 1, graph: { edges: [], id: 'graph', nodes: {} }, kind: 'workflow' },
-              canvas: base.canvas,
-              destination: 'gallery',
-              filterIntermediateResults: true,
-              galleryBoardId: null,
-              graph: { edges: [], id: 'graph', label: 'Graph', nodes: [], updatedAt: 'now', version: 1 },
-              presentation: { batchCount: 1, height: 1024, width: 1024 },
-              sourceId: 'workflow',
-              submittedAt: 'now',
-              widgetInstances: {},
-              widgetStates: {},
-            },
-            status: 'pending',
-          },
-        ],
-      },
     });
     const document = serializeProjectDocument(project);
 
@@ -212,19 +204,11 @@ describe('project document serialization', () => {
       sourceId: 'project-graph',
       sourceLocked: false,
     };
-    document.queue = {
-      items: [
-        {
-          ...(project.queue.items[0] as object),
-          snapshot: { ...project.queue.items[0]?.snapshot, sourceId: 'project-graph' },
-        },
-      ],
-    };
 
     const deserialized = loadDocument(document);
 
     expect(deserialized.invocation.sourceId).toBe('workflow');
-    expect(deserialized.queue.items[0]?.snapshot.sourceId).toBe('workflow');
+    expect(deserialized.queue.items).toEqual([]);
   });
 });
 

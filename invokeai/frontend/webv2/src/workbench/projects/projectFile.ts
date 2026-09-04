@@ -168,7 +168,14 @@ export const exportLibraryProject = async (
 
   assertAccountScopeCurrent(owner);
 
-  return exportProjectDocument(record.name, record.project_id, record.data, record.minimum_canvas_schema_version, {
+  const [{ deserializeProjectDocument }, { serializeProjectDocumentV2 }] = await Promise.all([
+    import('./projectHydration'),
+    import('./projectDocument'),
+  ]);
+  const loaded = deserializeProjectDocument(record.data);
+  const document = loaded.status === 'loaded' ? serializeProjectDocumentV2(loaded.project) : record.data;
+
+  return exportProjectDocument(record.name, record.project_id, document, record.minimum_canvas_schema_version, {
     ...options,
     owner,
   });
@@ -185,10 +192,8 @@ export const exportOpenProject = async (
 
   assertAccountScopeCurrent(owner);
 
-  // A source project can retain a higher compatibility floor than its current live canvas (for
-  // example because queue history still carries newer data). When an editor owns the project,
-  // flush and read that authoritative floor; direct/offline exports fall back to what their bytes
-  // demonstrably require.
+  // Preserve any higher compatibility floor already acknowledged by the server. Direct/offline
+  // exports fall back to what their live canvas demonstrably requires.
   const record = getOpenProject(project.id) ? await readAcknowledgedProject(project.id, owner) : null;
   const minimumCanvasSchemaVersion = Math.max(
     getProjectCanvasSchemaRequirement(document),

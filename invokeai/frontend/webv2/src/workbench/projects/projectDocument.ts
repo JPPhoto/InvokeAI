@@ -98,6 +98,7 @@ export const serializeProjectDocument = (project: Project): Record<string, unkno
   const {
     events: _events,
     graphHistory: _graphHistory,
+    queue: _queue,
     undoRedo: _undoRedo,
     ...document
   } = stripSessionScopedGalleryState(project) as Project & { graphHistory?: unknown };
@@ -119,38 +120,14 @@ const normalizeInvocationSourceId = (sourceId: unknown): unknown => {
 
 export const normalizeLegacyProjectDocument = (data: Record<string, unknown>): Record<string, unknown> => {
   const invocation = data.invocation;
-  const queue = data.queue;
+  const { events: _events, graphHistory: _graphHistory, queue: _queue, ...document } = data;
 
   return {
-    ...data,
+    ...document,
     invocation:
       invocation && typeof invocation === 'object'
         ? { ...invocation, sourceId: normalizeInvocationSourceId((invocation as { sourceId?: unknown }).sourceId) }
         : invocation,
-    queue:
-      queue && typeof queue === 'object' && Array.isArray((queue as { items?: unknown }).items)
-        ? {
-            ...queue,
-            items: (queue as { items: unknown[] }).items.map((item) => {
-              if (!item || typeof item !== 'object') {
-                return item;
-              }
-
-              const snapshot = (item as { snapshot?: unknown }).snapshot;
-
-              return {
-                ...item,
-                snapshot:
-                  snapshot && typeof snapshot === 'object'
-                    ? {
-                        ...snapshot,
-                        sourceId: normalizeInvocationSourceId((snapshot as { sourceId?: unknown }).sourceId),
-                      }
-                    : snapshot,
-              };
-            }),
-          }
-        : queue,
   };
 };
 

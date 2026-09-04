@@ -405,7 +405,8 @@ const submitGenerate = (state: WorkbenchState) =>
   workbenchReducer(state, { backendSupportsCancellation: true, type: 'submitInvocationSnapshot' });
 
 const getQueuedRandDevice = (state: WorkbenchState): unknown => {
-  const nodes = getActiveProject(state).queue.items[0]?.snapshot.graph.backendGraph?.nodes ?? {};
+  const submission = getActiveProject(state).queue.items[0]?.snapshot.backendSubmission;
+  const nodes = submission?.kind === 'invalid' ? {} : (submission?.graph.nodes ?? {});
   const metadata = Object.values(nodes).find((node) => node.type === 'core_metadata');
 
   return metadata?.rand_device;
@@ -867,12 +868,14 @@ describe('adopting a project from another realm', () => {
       ...project,
       events: [{ createdAt: 'now', id: 'legacy-event', summary: 'legacy', type: 'project-created' }],
       graphHistory: [{ document: project.projectGraph, id: 'legacy-snapshot' }],
+      queue: { items: [{}] },
     } as unknown as Project;
 
     const normalized = normalizeWorkbenchProject(legacyProject);
 
     expect(normalized.events).toEqual([]);
     expect('graphHistory' in normalized).toBe(false);
+    expect(normalized.queue.items).toEqual([]);
   });
 
   it('preserves and caps session events during live normalization', () => {
@@ -887,6 +890,50 @@ describe('adopting a project from another realm', () => {
     const normalized = normalizeWorkbenchProject(project, { isArriving: false });
 
     expect(normalized.events).toEqual(project.events.slice(0, PROJECT_EVENT_LIMIT));
+  });
+
+  it('preserves the live queue during same-session normalization', () => {
+    const project = getActiveProject(submitGenerate(primeGenerate()));
+
+    const normalized = normalizeWorkbenchProject(project, { isArriving: false });
+
+    expect(normalized.queue).toBe(project.queue);
+  });
+
+  it('preserves and routes live queue work when server content replaces a project', () => {
+    let state = submitGenerate(primeGenerate());
+    const liveProject = getActiveProject(state);
+    const queueItem = liveProject.queue.items[0]!;
+
+    state = workbenchReducer(state, {
+      backendItemIds: [42],
+      projectId: liveProject.id,
+      queueItemId: queueItem.id,
+      type: 'markQueueItemBackendSubmitted',
+    });
+    const liveQueue = getActiveProject(state).queue;
+
+    state = workbenchReducer(state, {
+      project: { ...liveProject, name: 'Server version', queue: { items: [] } },
+      projectId: liveProject.id,
+      type: 'replaceProjectFromServer',
+    });
+    expect(getActiveProject(state).queue).toBe(liveQueue);
+
+    state = workbenchReducer(state, {
+      images: [createImage('server-replaced-result.png', queueItem.id)],
+      projectId: liveProject.id,
+      queueItemId: queueItem.id,
+      type: 'routeQueueItemResults',
+    });
+
+    const replacedProject = getActiveProject(state);
+    expect(replacedProject.name).toBe('Server version');
+    expect(replacedProject.queue.items[0]?.status).toBe('completed');
+    expect(replacedProject.queue.items[0]?.resultImages?.map((image) => image.imageName)).toEqual([
+      'server-replaced-result.png',
+    ]);
+    expect(replacedProject.canvas.stagingArea.pendingImageIds).toEqual([]);
   });
 
   it('drops a session-scoped search and the rank pages set against it', () => {
@@ -1977,9 +2024,8 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     state = submitGenerate(state);
 
     const [secondQueueItem, unchangedFirstQueueItem] = getActiveProject(state).queue.items;
-    const firstValues = unchangedFirstQueueItem?.snapshot.widgetStates.generate
-      .values as unknown as GenerateWidgetValues;
-    const secondValues = secondQueueItem?.snapshot.widgetStates.generate.values as unknown as GenerateWidgetValues;
+    const firstValues = unchangedFirstQueueItem?.snapshot.recall?.generateValues as GenerateWidgetValues;
+    const secondValues = secondQueueItem?.snapshot.recall?.generateValues as GenerateWidgetValues;
 
     expect(firstValues.positivePrompt).toBe('first prompt');
     expect(firstValues.shouldRandomizeSeed).toBe(true);
@@ -3000,7 +3046,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
         negativePrompt: 'blurry, lowres',
         positivePrompt: 'a cat, cinematic',
       });
-      expect(queueItem?.snapshot.widgetStates.generate.values.positivePrompt).toBe('a cat');
+      expect(queueItem?.snapshot.recall?.generateValues?.positivePrompt).toBe('a cat');
     });
 
     // Switching the negative field off must not let a template put one back.
@@ -3173,7 +3219,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       type: 'submitInvocationSnapshot',
     });
 
-    const submission = getActiveProject(state).queue.items[0]?.snapshot.widgetStates.video.values;
+    const submission = getActiveProject(state).queue.items[0]?.snapshot.recall?.videoValues;
 
     expect(submission).toMatchObject({ negativePrompt: 'static camera', positivePrompt: 'a fox running' });
   });
@@ -3439,7 +3485,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(galleryValues.selectedImageNames).toEqual(['image:gallery-image-999.png']);
   });
 
-  it('omits transient recent images from immutable queue snapshots', () => {
+  it('omits widget state from immutable queue snapshots', () => {
     let state = primeGenerate();
     const recentImages = Array.from({ length: GALLERY_RECENT_IMAGE_LIMIT }, (_, index) =>
       createImage(`recent-${index}.png`, 'previous-queue-item')
@@ -3453,11 +3499,10 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
     state = submitGenerate(state);
 
-    const snapshot = getActiveProject(state).queue.items[0]!.snapshot;
-    const galleryInstance = Object.values(snapshot.widgetInstances).find((instance) => instance.typeId === 'gallery');
+    const snapshot = getActiveProject(state).queue.items[0]!.snapshot as unknown as Record<string, unknown>;
 
-    expect(snapshot.widgetStates.gallery?.values.recentImages).toBeUndefined();
-    expect(galleryInstance?.state.values.recentImages).toBeUndefined();
+    expect(snapshot).not.toHaveProperty('widgetStates');
+    expect(snapshot).not.toHaveProperty('widgetInstances');
   });
 
   it('validates, deduplicates, and truncates persisted recent images during hydration', () => {
@@ -3768,7 +3813,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
 
     const queueItem = getActiveProject(state).queue.items[0];
 
-    expect(queueItem.snapshot.widgetStates.gallery.values.selectedBoardId).toBe('backend-board-id');
+    expect(queueItem.snapshot.galleryBoardId).toBe('backend-board-id');
   });
 
   it('stores full selected gallery image data for Preview widget', () => {
@@ -5819,19 +5864,16 @@ describe('workbenchReducer canvas staging auto-switch + canvas submission', () =
 
     expect(queueItem?.snapshot.sourceId).toBe('canvas');
     expect(queueItem?.snapshot.destination).toBe('canvas');
-    expect(queueItem?.snapshot.graph.id).toBe('canvas-graph');
-    expect(queueItem?.snapshot.generate).toMatchObject({
-      negativePromptNodeId: 'negative_prompt',
-      positivePromptNodeId: 'positive_prompt',
-      seedNodeId: 'seed',
-      values: { negativePrompt: 'avoid blur', positivePrompt: 'inpaint prompt', seed: 42, shouldRandomizeSeed: false },
-    });
-    expect(queueItem?.snapshot.widgetStates.generate.values).toMatchObject({
+    expect(queueItem?.snapshot.graph).toEqual({ id: 'canvas-graph', label: 'Canvas' });
+    expect(queueItem?.snapshot.recall?.generateValues).toMatchObject({
       negativePrompt: 'avoid blur',
       positivePrompt: 'inpaint prompt',
       seed: 42,
       shouldRandomizeSeed: false,
     });
+    expect(queueItem?.snapshot).not.toHaveProperty('generate');
+    expect(queueItem?.snapshot).not.toHaveProperty('widgetStates');
+    expect(queueItem?.snapshot).not.toHaveProperty('widgetInstances');
     expect(queueItem?.snapshot.backendSubmission).toMatchObject({
       batchCount: 1,
       kind: 'generate',
@@ -5873,6 +5915,14 @@ describe('workbenchReducer canvas staging auto-switch + canvas submission', () =
 
     expect(getActiveProject(state).queue.items[0]?.snapshot.canvas.document.bbox).toEqual(frozenCanvas.document.bbox);
     expect(getActiveProject(state).queue.items[0]?.snapshot.canvas.document.bbox).not.toEqual(liveCanvas.document.bbox);
+    expect(getActiveProject(state).queue.items[0]?.snapshot.canvas).toEqual({
+      document: {
+        bbox: frozenCanvas.document.bbox,
+        height: frozenCanvas.document.height,
+        width: frozenCanvas.document.width,
+      },
+      documentRevision: frozenCanvas.documentRevision,
+    });
   });
 
   it('places generated candidates at the frozen queue bbox after the live bbox changes', () => {
