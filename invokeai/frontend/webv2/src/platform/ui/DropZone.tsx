@@ -8,6 +8,8 @@ const DROP_ZONE_TRANSITION =
   'background var(--wb-motion-duration-fast) ease, border-color var(--wb-motion-duration-fast) ease, opacity var(--wb-motion-duration-fast) ease, box-shadow var(--wb-motion-duration-fast) ease';
 
 export interface DropZoneProps extends BoxProps {
+  /** Native `disabled`, for zones rendered `as="button"`. */
+  disabled?: boolean;
   /** The zone cannot accept input right now; the hover preview stands down. */
   isDisabled?: boolean;
   /** A compatible drag is hovering the zone. */

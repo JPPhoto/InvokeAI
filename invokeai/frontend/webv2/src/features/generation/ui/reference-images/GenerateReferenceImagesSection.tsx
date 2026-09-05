@@ -1,3 +1,5 @@
+import type { GalleryItem } from '@features/gallery';
+import type { GalleryPickerSelection } from '@features/gallery/picker';
 import type { GenerationModelCatalogItem as ModelConfig } from '@features/generation/contracts';
 import type {
   GenerateModelConfig,
@@ -8,9 +10,10 @@ import type {
 import type { GenerateSettingsUpdate } from '@features/generation/ui/generateDebounce';
 import type { ChangeEvent } from 'react';
 
-import { HStack, Input, Stack, Text } from '@chakra-ui/react';
+import { HStack, Icon, Input, Stack, Text } from '@chakra-ui/react';
 import { useDndMonitor } from '@dnd-kit/core';
-import { galleryImages, galleryTransfers } from '@features/gallery';
+import { galleryImages, galleryTransfers, toGalleryItemKey } from '@features/gallery';
+import { GalleryPickerPopover } from '@features/gallery/picker';
 import { isGalleryImageDragData, useGalleryImageDroppable } from '@features/gallery/utility';
 import {
   createReferenceImageId,
@@ -28,13 +31,14 @@ import {
   isAccountScopeCurrent,
 } from '@platform/state/accountLifecycle';
 import { Button, DropTargetOverlay, DropZone } from '@platform/ui';
-import { UploadIcon } from 'lucide-react';
-import { useCallback, useRef } from 'react';
+import { ChevronDownIcon, ImagePlusIcon, UploadIcon } from 'lucide-react';
+import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { ReferenceImageCard } from './ReferenceImageCard';
 
 const UPLOAD_ZONE_HOVER_STYLES = { bg: 'bg.muted', color: 'fg' };
+const IMAGE_ONLY = ['image'] as const;
 
 interface GenerateReferenceImagesContentProps {
   models: readonly ModelConfig[];
@@ -117,6 +121,30 @@ export const GenerateReferenceImagesContent = ({
   );
 
   const clearReferenceImages = useCallback(() => onCommitImmediate({ referenceImages: [] }), [onCommitImmediate]);
+
+  const pickerSelection = useMemo<GalleryPickerSelection>(
+    () => ({
+      addedKeys: new Set(
+        referenceImages.flatMap(({ config }) =>
+          config.image ? [toGalleryItemKey({ kind: 'image', name: config.image.original.image.image_name })] : []
+        )
+      ),
+      mode: 'multiple',
+      remaining: { image: Math.max(0, maxReferenceImages - referenceImageCount) },
+    }),
+    [maxReferenceImages, referenceImageCount, referenceImages]
+  );
+
+  const handlePick = useCallback(
+    (item: GalleryItem) => {
+      if (item.kind === 'image') {
+        appendReferenceImages([
+          generatedImageToReferenceImage({ height: item.height, imageName: item.name, width: item.width }),
+        ]);
+      }
+    },
+    [appendReferenceImages]
+  );
 
   const applyReferenceImageSize = useCallback(
     (image: GenerateReferenceImageAsset) => {
@@ -236,28 +264,46 @@ export const GenerateReferenceImagesContent = ({
         isOver={isOver}
         label={t('widgets.generate.dropReferenceImages')}
       />
-      <HStack align="stretch" gap="2">
+      <GalleryPickerPopover
+        accept={IMAGE_ONLY}
+        label={t('widgets.generate.addReferenceImage')}
+        selection={pickerSelection}
+        onPick={handlePick}
+      >
         <DropZone
           as="button"
           alignItems="center"
           cursor={canAdd ? undefined : 'not-allowed'}
+          disabled={!canAdd}
           display="flex"
-          flex="1"
+          flexDirection="column"
           fontSize="2xs"
-          gap="2"
+          gap="1"
           isDisabled={!canAdd}
           isOver={isOver}
           justifyContent="center"
-          minH="12"
+          minH="14"
           minW="0"
           opacity={canAdd ? 1 : 0.6}
           px="3"
+          w="full"
           _hover={canAdd ? UPLOAD_ZONE_HOVER_STYLES : undefined}
-          onClick={handleUploadZoneClick}
         >
-          <UploadIcon size="14" />
-          {t('widgets.generate.referenceImagesHelp')}
+          <HStack as="span" color="fg" fontSize="xs" fontWeight="600" gap="1.5">
+            <Icon as={ImagePlusIcon} boxSize="4" />
+            {t('widgets.generate.addReferenceImage')}
+            <Icon as={ChevronDownIcon} boxSize="3" color="fg.subtle" />
+          </HStack>
+          <Text as="span" color="fg.subtle">
+            {t('widgets.gallery.picker.dropHint')}
+          </Text>
         </DropZone>
+      </GalleryPickerPopover>
+      <HStack justify="end">
+        <Button disabled={!canAdd} size="xs" variant="ghost" onClick={handleUploadZoneClick}>
+          <Icon as={UploadIcon} boxSize="3" />
+          {t('widgets.gallery.picker.upload')}
+        </Button>
       </HStack>
 
       {referenceImageCount > 0 ? (

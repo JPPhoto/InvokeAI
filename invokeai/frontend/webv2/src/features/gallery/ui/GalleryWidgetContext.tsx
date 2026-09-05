@@ -35,7 +35,8 @@ export interface GalleryActions {
   setView: (galleryView: GalleryView) => void;
   toggleItemInSelection: (item: GalleryItem, nextPrimaryItem: GalleryItem | null) => void;
   updateSettings: (settings: Partial<Omit<GallerySettings, 'starredFirst'>>) => void;
-  uploadFiles: (files: File[]) => Promise<void>;
+  /** Resolves with the confirmed uploads; empty when nothing landed. */
+  uploadFiles: (files: File[]) => Promise<GalleryItem[]>;
 }
 
 export interface GalleryWidgetContextValue {

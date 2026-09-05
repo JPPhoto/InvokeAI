@@ -1,4 +1,6 @@
 import type { DragEndEvent } from '@dnd-kit/core';
+import type { GalleryItem, GalleryVideoItem } from '@features/gallery';
+import type { GalleryPickerSelection } from '@features/gallery/picker';
 import type {
   VideoReferenceConditioning,
   VideoReferenceImageDetail,
@@ -6,9 +8,10 @@ import type {
 } from '@features/video/core/types';
 import type { ChangeEvent } from 'react';
 
-import { Badge, Box, createListCollection, HStack, Image, Input, Spinner, Stack, Text } from '@chakra-ui/react';
+import { Badge, Box, createListCollection, HStack, Icon, Image, Input, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
-import { galleryImages, galleryItems, galleryTransfers } from '@features/gallery';
+import { galleryItems, galleryTransfers, toGalleryItemKey } from '@features/gallery';
+import { GalleryPickerPopover } from '@features/gallery/picker';
 import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
 import { createVideoSourceClip } from '@features/video/core/settings';
 import {
@@ -23,7 +26,7 @@ import { Field } from '@platform/ui/Field';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Select } from '@platform/ui/Select';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
-import { ArrowDownIcon, ArrowUpIcon, FilmIcon, ImagePlusIcon, XIcon } from 'lucide-react';
+import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, FilmIcon, ImagePlusIcon, UploadIcon, XIcon } from 'lucide-react';
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -47,6 +50,7 @@ const DROP_ZONE_FOCUS_PROPS = {
 };
 const DROP_ZONE_DISABLED_PROPS = { cursor: 'not-allowed', opacity: 0.6 };
 const DROP_ZONE_BUSY_PROPS = { disabled: true };
+const ACCEPT_MEDIA = ['image', 'video'] as const;
 
 const getSingleGalleryDragItem = (data: unknown): { kind: 'image' | 'video'; name: string } | null => {
   if (!isGalleryItemDragData(data) || data.items.length !== 1) {
@@ -312,40 +316,48 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   const handlePickVideo = useCallback(() => videoInputRef.current?.click(), []);
 
   const addImageReference = useCallback(
-    async (imageName: string) => {
+    (image: { height: number; name: string; width: number }) => {
       setErrorMessage(null);
+
+      // Re-check the cap against the LIVE list: the render-time gate can be
+      // stale by the time a drop resolves or an upload lands, and another
+      // writer (a second drop, the Initial Video placing its anchor) can fill
+      // the slots meanwhile. An over-cap write would survive to normalization,
+      // whose overflow rule then has to delete SOMETHING the user placed.
+      let declined = false;
+
+      onChange((current) => {
+        if (current.filter((entry) => entry.kind === 'image').length >= maxImages) {
+          declined = true;
+
+          return current;
+        }
+
+        return [
+          ...current,
+          {
+            detail: 'max',
+            image: { height: image.height, image_name: image.name, width: image.width },
+            kind: 'image',
+          },
+        ];
+      });
+      if (declined) {
+        setErrorMessage(t('widgets.video.referenceImageCapRace', { max: maxImages }));
+      }
+    },
+    [maxImages, onChange, t]
+  );
+
+  const adoptImageByName = useCallback(
+    async (imageName: string) => {
       setIsLoading(true);
 
       try {
-        const [resolved] = await galleryImages.resolveMany([imageName]);
+        const item = await galleryItems.resolve({ kind: 'image', name: imageName });
 
-        if (resolved) {
-          // Re-check the cap against the LIVE list: the render-time gate was
-          // evaluated before the await, and another writer (a second drop, or
-          // the Initial Video placing its anchor) can fill the slots meanwhile.
-          // An over-cap write would survive to normalization, whose overflow
-          // rule then has to delete SOMETHING the user placed.
-          let declined = false;
-
-          onChange((current) => {
-            if (current.filter((entry) => entry.kind === 'image').length >= maxImages) {
-              declined = true;
-
-              return current;
-            }
-
-            return [
-              ...current,
-              {
-                detail: 'max',
-                image: { height: resolved.height, image_name: resolved.imageName, width: resolved.width },
-                kind: 'image',
-              },
-            ];
-          });
-          if (declined) {
-            setErrorMessage(t('widgets.video.referenceImageCapRace', { max: maxImages }));
-          }
+        if (item?.kind === 'image') {
+          addImageReference(item);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -355,7 +367,40 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         setIsLoading(false);
       }
     },
-    [maxImages, onChange, reportError, t]
+    [addImageReference, reportError]
+  );
+
+  const addVideoItem = useCallback(
+    (item: GalleryVideoItem) => {
+      const clip = createVideoSourceClip(item);
+      // Same live cap re-check as the image path -- the Initial Video's
+      // anchor is the writer that most easily fills the slots mid-await.
+      let declined = false;
+
+      setErrorMessage(null);
+      onChange((current) => {
+        if (current.filter((entry) => entry.kind === 'video').length >= maxVideos) {
+          declined = true;
+
+          return current;
+        }
+
+        return [
+          ...current,
+          {
+            // References are truncated to the generated duration, not joined: default to
+            // the whole clip rather than the extend-mode 2-frame-tail trim.
+            clip: { ...clip, endFrame: Math.max(0, clip.numFrames - 1), startFrame: 0 },
+            conditioning: 'video_audio',
+            kind: 'video',
+          },
+        ];
+      });
+      if (declined) {
+        setErrorMessage(t('widgets.video.referenceVideoCapRace', { max: maxVideos }));
+      }
+    },
+    [maxVideos, onChange, t]
   );
 
   const addVideoReference = useCallback(
@@ -367,39 +412,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         const item = await galleryItems.resolve({ kind: 'video', name: videoName });
 
         if (item?.kind === 'video') {
-          const clip = createVideoSourceClip({
-            durationSeconds: item.durationSeconds,
-            fps: item.fps,
-            height: item.height,
-            name: item.name,
-            width: item.width,
-          });
-
-          // Same live cap re-check as the image path -- the Initial Video's
-          // anchor is the writer that most easily fills the slots mid-await.
-          let declined = false;
-
-          onChange((current) => {
-            if (current.filter((entry) => entry.kind === 'video').length >= maxVideos) {
-              declined = true;
-
-              return current;
-            }
-
-            return [
-              ...current,
-              {
-                // References are truncated to the generated duration, not joined: default to
-                // the whole clip rather than the extend-mode 2-frame-tail trim.
-                clip: { ...clip, endFrame: Math.max(0, clip.numFrames - 1), startFrame: 0 },
-                conditioning: 'video_audio',
-                kind: 'video',
-              },
-            ];
-          });
-          if (declined) {
-            setErrorMessage(t('widgets.video.referenceVideoCapRace', { max: maxVideos }));
-          }
+          addVideoItem(item);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -409,7 +422,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         setIsLoading(false);
       }
     },
-    [maxVideos, onChange, reportError, t]
+    [addVideoItem, reportError]
   );
 
   const handleDragEnd = useCallback(
@@ -422,10 +435,10 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       if (item.kind === 'video' && canAddVideo) {
         void addVideoReference(item.name);
       } else if (item.kind === 'image' && canAddImage) {
-        void addImageReference(item.name);
+        void adoptImageByName(item.name);
       }
     },
-    [addImageReference, addVideoReference, canAddImage, canAddVideo, isInert]
+    [adoptImageByName, addVideoReference, canAddImage, canAddVideo, isInert]
   );
 
   useDndMonitor({ onDragEnd: handleDragEnd });
@@ -446,7 +459,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
           const uploaded = await galleryTransfers.upload(file, getUploadBoardId(), { signal: owner.signal });
 
           assertAccountScopeCurrent(owner);
-          await addImageReference(uploaded.imageName);
+          addImageReference({ height: uploaded.height, name: uploaded.imageName, width: uploaded.width });
         }
         touchGalleryImages();
       } catch (error) {
@@ -485,6 +498,31 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       event.currentTarget.value = '';
     },
     [uploadFile]
+  );
+
+  const pickerSelection = useMemo<GalleryPickerSelection>(
+    () => ({
+      addedKeys: new Set(
+        references.map((reference) =>
+          reference.kind === 'video'
+            ? toGalleryItemKey({ kind: 'video', name: reference.clip.video_name })
+            : toGalleryItemKey({ kind: 'image', name: reference.image.image_name })
+        )
+      ),
+      mode: 'multiple',
+      remaining: { image: Math.max(0, maxImages - imageCount), video: Math.max(0, maxVideos - videoCount) },
+    }),
+    [imageCount, maxImages, maxVideos, references, videoCount]
+  );
+  const handlePick = useCallback(
+    (item: GalleryItem) => {
+      if (item.kind === 'video') {
+        addVideoItem(item);
+      } else {
+        addImageReference(item);
+      }
+    },
+    [addImageReference, addVideoItem]
   );
 
   const updateReference = useCallback(
@@ -548,17 +586,30 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
           _focusVisible={DROP_ZONE_FOCUS_PROPS}
           position="relative"
         >
-          <HStack gap="2" justify="center" p="2">
-            {isLoading ? <Spinner size="xs" /> : null}
-            <Button disabled={isInert || !canAddImage} size="xs" variant="outline" onClick={handlePickImage}>
-              <ImagePlusIcon size={12} />
-              {t('widgets.video.addImageReference', { count: imageCount, max: maxImages })}
-            </Button>
-            <Button disabled={isInert || !canAddVideo} size="xs" variant="outline" onClick={handlePickVideo}>
-              <FilmIcon size={12} />
-              {t('widgets.video.addVideoReference', { count: videoCount, max: maxVideos })}
-            </Button>
-          </HStack>
+          <Stack gap="1.5" p="2">
+            <GalleryPickerPopover
+              accept={ACCEPT_MEDIA}
+              label={t('widgets.video.chooseReference')}
+              selection={pickerSelection}
+              onPick={handlePick}
+            >
+              <Button disabled={isInert || (!canAddImage && !canAddVideo)} size="xs" variant="outline" w="full">
+                {isLoading ? <Spinner size="xs" /> : <Icon as={ImagePlusIcon} boxSize="3.5" />}
+                {t('widgets.video.chooseReference')}
+                <Icon as={ChevronDownIcon} boxSize="3" color="fg.subtle" />
+              </Button>
+            </GalleryPickerPopover>
+            <HStack gap="1" justify="center">
+              <Button disabled={isInert || !canAddImage} size="xs" variant="ghost" onClick={handlePickImage}>
+                <UploadIcon size={12} />
+                {t('widgets.video.uploadImageReference')}
+              </Button>
+              <Button disabled={isInert || !canAddVideo} size="xs" variant="ghost" onClick={handlePickVideo}>
+                <UploadIcon size={12} />
+                {t('widgets.video.uploadVideoReference')}
+              </Button>
+            </HStack>
+          </Stack>
           <DropTargetOverlay isActive={acceptsActiveDrag} isOver={isOver} label={t('widgets.video.dropReference')} />
         </DropZone>
       </Field>

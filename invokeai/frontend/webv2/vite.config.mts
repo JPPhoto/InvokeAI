@@ -97,6 +97,25 @@ const ROUTE_SHARED_MODULES = [
 // both routes above, scoped here to the editor alone because none of this
 // is reachable from the Launchpad.
 const EDITOR_BOOT_SHARED_MODULES = [
+  // The gallery picker's trigger shell (every boot widget with an image slot
+  // mounts one) plus the Gallery widget UI its lazy view shares; the widget
+  // boots every editor route, so this moves bytes rather than adding requests.
+  '/features/gallery/picker.ts',
+  '/features/gallery/ui/GalleryBoardCover.tsx',
+  '/features/gallery/ui/GalleryBoardRowShell.tsx',
+  '/features/gallery/ui/GalleryItemSearch.tsx',
+  '/features/gallery/ui/GallerySearchField.tsx',
+  '/features/gallery/ui/GalleryTileFrame.tsx',
+  '/features/gallery/ui/GalleryUploadButton.tsx',
+  '/features/gallery/ui/GalleryViewTabs.tsx',
+  '/features/gallery/ui/GalleryWidgetContext.tsx',
+  '/features/gallery/ui/galleryBoardGroups.ts',
+  '/features/gallery/ui/galleryBoardLabels.ts',
+  '/features/gallery/ui/galleryGridLayout.ts',
+  '/features/gallery/ui/picker/GalleryPickerPopover.tsx',
+  '/features/gallery/ui/useGalleryData.ts',
+  '/features/gallery/ui/useGalleryUploadAction.ts',
+  '/features/gallery/ui/useGalleryUploadInput.ts',
   '/workbench/shell/topbar/LayoutPresetAdminDialogs.tsx',
   '/workbench/shell/topbar/LayoutPresetStrip.tsx',
   '/workbench/shell/topbar/ProjectSwitcher.tsx',

@@ -10,7 +10,8 @@ import type { ChangeEvent, CSSProperties } from 'react';
 
 import { Box, createListCollection, HStack, IconButton, Input, Stack, Text } from '@chakra-ui/react';
 import { useDndMonitor } from '@dnd-kit/core';
-import { galleryImages, galleryTransfers } from '@features/gallery';
+import { galleryImageItemToGalleryImage, galleryImages, galleryTransfers, type GalleryItem } from '@features/gallery';
+import { GalleryPickerPopover } from '@features/gallery/picker';
 import { invalidateGallery } from '@features/gallery/queries';
 import { isGalleryImageDragData, useGalleryImageDroppable } from '@features/gallery/utility';
 import { FluxReduxControls } from '@features/generation/components';
@@ -20,11 +21,11 @@ import {
   captureAccountScope,
   isAccountScopeCurrent,
 } from '@platform/state/accountLifecycle';
-import { DropZone, Field, Select, Slider } from '@platform/ui';
+import { Button, DropZone, Field, Select, Slider } from '@platform/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { type CanvasPreparedEngine, usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useWorkbenchCommands } from '@workbench/WorkbenchContext';
-import { ImageIcon, XIcon } from 'lucide-react';
+import { ImageIcon, UploadIcon, XIcon } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -49,6 +50,7 @@ const IP_ADAPTER_METHODS: readonly RegionalGuidanceIPAdapterMethod[] = [
 const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: true } as const;
 
 const COVER_IMG_STYLE: CSSProperties = { height: '100%', objectFit: 'cover', width: '100%' };
+const IMAGE_ONLY = ['image'] as const;
 
 const formatWeight = (value: number): string => value.toFixed(2);
 
@@ -265,6 +267,15 @@ const ReferenceImageEditor = ({
     [editing, referenceImage.id]
   );
 
+  const handlePick = useCallback(
+    (item: GalleryItem) => {
+      if (item.kind === 'image') {
+        editing.setReferenceImageAsset(referenceImage.id, galleryImageItemToGalleryImage(item));
+      }
+    },
+    [editing, referenceImage.id]
+  );
+
   const handleModel = useCallback(
     ({ value }: SelectValueChangeDetails) => {
       if (config.type !== 'ip_adapter' && config.type !== 'flux_redux') {
@@ -350,24 +361,29 @@ const ReferenceImageEditor = ({
           position="relative"
           w="16"
         >
-          <Box
-            as="button"
-            alignItems="center"
-            aria-label={t('widgets.layers.regionalGuidance.setReferenceImage')}
-            bg="bg.muted"
-            color="fg.muted"
-            display="flex"
-            h="full"
-            justifyContent="center"
-            w="full"
-            onClick={openUpload}
+          <GalleryPickerPopover
+            accept={IMAGE_ONLY}
+            label={t(image ? 'widgets.gallery.picker.replaceImage' : 'widgets.gallery.picker.chooseImage')}
+            onPick={handlePick}
           >
-            {image ? (
-              <img alt={image.imageName} draggable={false} src={image.thumbnailUrl} style={COVER_IMG_STYLE} />
-            ) : (
-              <ImageIcon size="20" />
-            )}
-          </Box>
+            <Box
+              as="button"
+              alignItems="center"
+              aria-label={t(image ? 'widgets.gallery.picker.replaceImage' : 'widgets.gallery.picker.chooseImage')}
+              bg="bg.muted"
+              color="fg.muted"
+              display="flex"
+              h="full"
+              justifyContent="center"
+              w="full"
+            >
+              {image ? (
+                <img alt={image.imageName} draggable={false} src={image.thumbnailUrl} style={COVER_IMG_STYLE} />
+              ) : (
+                <ImageIcon size="20" />
+              )}
+            </Box>
+          </GalleryPickerPopover>
           {image ? (
             <IconButton
               aria-label={t('widgets.layers.regionalGuidance.clearReferenceImage')}
@@ -383,9 +399,15 @@ const ReferenceImageEditor = ({
             </IconButton>
           ) : null}
         </DropZone>
-        <Text color="fg.muted" flex="1" fontSize="2xs" minW="0">
-          {t('widgets.layers.regionalGuidance.referenceImageHelp')}
-        </Text>
+        <Stack align="start" flex="1" gap="1" minW="0">
+          <Text color="fg.muted" fontSize="2xs">
+            {t('widgets.layers.regionalGuidance.referenceImageHelp')}
+          </Text>
+          <Button size="xs" variant="ghost" onClick={openUpload}>
+            <UploadIcon size="12" />
+            {t('widgets.gallery.picker.upload')}
+          </Button>
+        </Stack>
         <Input ref={fileInputRef} accept="image/*" display="none" type="file" onChange={handleFileChange} />
       </HStack>
 

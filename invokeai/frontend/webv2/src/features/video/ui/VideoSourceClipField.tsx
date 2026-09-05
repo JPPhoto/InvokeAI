@@ -2,9 +2,10 @@ import type { DragEndEvent } from '@dnd-kit/core';
 import type { VideoSourceClip } from '@features/video/core/types';
 import type { ChangeEvent } from 'react';
 
-import { Box, HStack, Input, Spinner, Stack, Text } from '@chakra-ui/react';
+import { Box, HStack, Icon, Input, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
-import { galleryItems, galleryTransfers } from '@features/gallery';
+import { galleryItems, galleryTransfers, type GalleryItem } from '@features/gallery';
+import { GalleryPickerPopover } from '@features/gallery/picker';
 import { galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
 import { createVideoSourceClip } from '@features/video/core/settings';
 import {
@@ -18,7 +19,7 @@ import { DropTargetOverlay } from '@platform/ui/DropTargetOverlay';
 import { DropZone } from '@platform/ui/DropZone';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
-import { FilmIcon, XIcon } from 'lucide-react';
+import { ChevronDownIcon, FilmIcon, UploadIcon, XIcon } from 'lucide-react';
 import { memo, useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -33,6 +34,7 @@ import { useVideoUiActions } from './VideoUiContext';
  */
 
 const DROP_ID = 'video-source-clip';
+const VIDEO_ONLY = ['video'] as const;
 const DROP_ZONE_FOCUS_PROPS = {
   outlineColor: 'accent.focusRing',
   outlineOffset: '2px',
@@ -40,7 +42,6 @@ const DROP_ZONE_FOCUS_PROPS = {
   outlineWidth: '2px',
 };
 const DROP_ZONE_DISABLED_PROPS = { cursor: 'not-allowed', opacity: 0.6 };
-const DROP_ZONE_BUSY_PROPS = { disabled: true };
 const DROP_ZONE_HOVER_PROPS = { bg: 'bg.muted', color: 'fg' };
 
 const getSingleVideoDragName = (data: unknown): string | null => {
@@ -189,6 +190,15 @@ export const VideoSourceClipField = memo(
       }
     }, [isInert]);
     const handleClear = useCallback(() => onChange(null), [onChange]);
+    const handlePick = useCallback(
+      (item: GalleryItem) => {
+        if (item.kind === 'video') {
+          setErrorMessage(null);
+          onChange(createVideoSourceClip(item));
+        }
+      },
+      [onChange]
+    );
 
     const maxFrameIndex = sourceVideo ? Math.max(0, sourceVideo.numFrames - 1) : 0;
     // The crossfade join needs a 2-frame tail from the trimmed source, so the
@@ -222,47 +232,74 @@ export const VideoSourceClipField = memo(
 
     return (
       <Stack gap="2">
-        <DropZone
-          ref={setNodeRef}
-          as="button"
-          aria-busy={isLoading}
-          aria-disabled={disabled}
-          aria-label={sourceVideo ? t('widgets.video.replaceClip') : t('widgets.video.uploadClip')}
-          cursor={disabled ? 'not-allowed' : undefined}
-          isDisabled={isInert}
-          isOver={isOver}
-          {...(isLoading ? DROP_ZONE_BUSY_PROPS : undefined)}
-          minH="24"
-          overflow="hidden"
-          position="relative"
-          _focusVisible={DROP_ZONE_FOCUS_PROPS}
-          _disabled={DROP_ZONE_DISABLED_PROPS}
-          _hover={isInert ? undefined : DROP_ZONE_HOVER_PROPS}
-          opacity={disabled ? 0.6 : undefined}
-          onClick={handlePickFile}
+        <GalleryPickerPopover
+          accept={VIDEO_ONLY}
+          label={t(sourceVideo ? 'widgets.gallery.picker.replaceVideo' : 'widgets.gallery.picker.chooseVideo')}
+          onPick={handlePick}
         >
-          {sourceVideo && previewSrc ? (
-            <HStack gap="2" minW="0" p="2">
-              <FilmIcon aria-hidden="true" size={14} />
-              <MiddleTruncate color="fg" flex="1" fontSize="xs" fontWeight="semibold" text={sourceVideo.video_name} />
-              <Text color="fg.muted" flexShrink="0" fontSize="2xs" fontVariantNumeric="tabular-nums">
-                {sourceVideo.width} × {sourceVideo.height} · {sourceVideo.fps} fps
-              </Text>
-            </HStack>
-          ) : (
-            <Stack align="center" color="fg.muted" gap="1.5" justify="center" minH="24" px="4">
-              {isLoading ? <Spinner size="sm" /> : <FilmIcon aria-hidden="true" size="18" />}
-              <Text fontSize="2xs" textAlign="center">
-                {disabled && disabledReason
-                  ? disabledReason
-                  : isLoading
-                    ? t('widgets.video.uploadingClip')
-                    : t('widgets.video.uploadOrDropClip')}
-              </Text>
-            </Stack>
-          )}
-          <DropTargetOverlay isActive={acceptsActiveDrag} isOver={isOver} label={t('widgets.video.dropInitialVideo')} />
-        </DropZone>
+          <DropZone
+            ref={setNodeRef}
+            as="button"
+            aria-busy={isLoading}
+            aria-disabled={disabled}
+            aria-label={t(sourceVideo ? 'widgets.gallery.picker.replaceVideo' : 'widgets.gallery.picker.chooseVideo')}
+            cursor={disabled ? 'not-allowed' : undefined}
+            disabled={isInert}
+            isDisabled={isInert}
+            isOver={isOver}
+            minH="24"
+            overflow="hidden"
+            position="relative"
+            textAlign="start"
+            w="full"
+            _focusVisible={DROP_ZONE_FOCUS_PROPS}
+            _disabled={DROP_ZONE_DISABLED_PROPS}
+            _hover={isInert ? undefined : DROP_ZONE_HOVER_PROPS}
+            opacity={disabled ? 0.6 : undefined}
+          >
+            {sourceVideo && previewSrc ? (
+              <HStack gap="2" minW="0" p="2">
+                <FilmIcon aria-hidden="true" size={14} />
+                <MiddleTruncate color="fg" flex="1" fontSize="xs" fontWeight="semibold" text={sourceVideo.video_name} />
+                <Text color="fg.muted" flexShrink="0" fontSize="2xs" fontVariantNumeric="tabular-nums">
+                  {sourceVideo.width} × {sourceVideo.height} · {sourceVideo.fps} fps
+                </Text>
+              </HStack>
+            ) : (
+              <Stack align="center" color="fg.muted" gap="1.5" justify="center" minH="24" px="4">
+                {isLoading ? (
+                  <Spinner size="sm" />
+                ) : (
+                  <HStack color="fg" fontSize="xs" fontWeight="600" gap="1.5">
+                    <Icon as={FilmIcon} boxSize="4" />
+                    {t('widgets.gallery.picker.chooseVideo')}
+                    <Icon as={ChevronDownIcon} boxSize="3" color="fg.subtle" />
+                  </HStack>
+                )}
+                <Text color="fg.subtle" fontSize="2xs" textAlign="center">
+                  {disabled && disabledReason
+                    ? disabledReason
+                    : isLoading
+                      ? t('widgets.video.uploadingClip')
+                      : t('widgets.gallery.picker.dropHint')}
+                </Text>
+              </Stack>
+            )}
+            <DropTargetOverlay
+              isActive={acceptsActiveDrag}
+              isOver={isOver}
+              label={t('widgets.video.dropInitialVideo')}
+            />
+          </DropZone>
+        </GalleryPickerPopover>
+        {disabled ? null : (
+          <HStack justify="end">
+            <Button disabled={isLoading} size="xs" variant="ghost" onClick={handlePickFile}>
+              <Icon as={UploadIcon} boxSize="3" />
+              {t('widgets.gallery.picker.upload')}
+            </Button>
+          </HStack>
+        )}
         {sourceVideo && previewSrc ? (
           <Stack gap="2">
             {/* The empty-state slot shows the reason when no clip is set; with
