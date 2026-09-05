@@ -353,6 +353,7 @@ export const GalleryPickerView = ({
           flex="1"
           justifyContent="flex-start"
           minW="0"
+          ps="1"
           size="xs"
           variant="ghost"
           onClick={togglePane}
