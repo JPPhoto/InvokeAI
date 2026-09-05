@@ -122,7 +122,7 @@ const adapter = {
   ImageContextMenu: () => null,
   account: { enableLiveFollow: vi.fn() },
   antialiasProgressImages: false,
-  widgets: { patchGalleryValues: vi.fn() },
+  widgets: { openGallery: vi.fn(() => true), patchGalleryValues: vi.fn() },
 } as unknown as GalleryUiAdapter;
 
 let host: HTMLDivElement | null = null;

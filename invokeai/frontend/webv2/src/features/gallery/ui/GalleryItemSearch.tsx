@@ -296,7 +296,7 @@ const GallerySemanticChip = ({ onClear, reference }: { onClear: () => void; refe
 };
 
 /** Documents the closed date-token grammar the search box accepts. */
-const GallerySearchHelp = () => {
+export const GallerySearchHelp = () => {
   const { t } = useTranslation();
 
   return (
