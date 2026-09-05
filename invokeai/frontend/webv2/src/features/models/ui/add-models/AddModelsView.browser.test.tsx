@@ -81,7 +81,7 @@ describe('AddModelsView search seed', () => {
     document.body.append(host);
 
     const store = await import('@features/models/ui/uiStore');
-    store.clearAddModelsSeed();
+    store.clearAddModelsSeeds();
   });
 
   afterEach(() => {

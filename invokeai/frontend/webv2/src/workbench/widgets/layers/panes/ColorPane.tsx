@@ -303,7 +303,6 @@ const TargetChip = ({
       aria-pressed={isActive}
       borderColor={isActive ? 'accent.solid' : 'border'}
       borderWidth="2px"
-      cursor="pointer"
       h="6"
       rounded="sm"
       style={style}
@@ -379,7 +378,6 @@ const ChannelFields = ({
       <chakra.button
         aria-label={t('widgets.layers.colorPane.format')}
         color="fg.muted"
-        cursor="pointer"
         flexShrink={0}
         fontSize="2xs"
         fontWeight="700"

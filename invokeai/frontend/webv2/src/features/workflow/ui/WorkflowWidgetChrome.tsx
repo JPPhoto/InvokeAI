@@ -160,7 +160,7 @@ export const WorkflowMenuItems = (_props: WorkflowWidgetViewProps) => {
       <Menu.Item value="copy" onClick={copyWorkflow}>
         {t('widgets.workflow.copyJson')}
       </Menu.Item>
-      <Menu.Item color="fg.error" value="new" onClick={createNewWorkflow}>
+      <Menu.Item data-danger="" value="new" onClick={createNewWorkflow}>
         {t('widgets.workflow.newWorkflowWithEllipsis')}
       </Menu.Item>
     </Menu.ItemGroup>

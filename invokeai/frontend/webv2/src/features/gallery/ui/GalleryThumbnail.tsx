@@ -52,7 +52,6 @@ const PREVIEW_IMAGE_STYLE = {
 const THUMBNAIL_BUTTON_STYLE = {
   background: 'transparent',
   border: 0,
-  cursor: 'pointer',
   display: 'block',
   height: '100%',
   inset: 0,

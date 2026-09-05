@@ -356,7 +356,6 @@ const ReferenceImageEditor = ({
             aria-label={t('widgets.layers.regionalGuidance.setReferenceImage')}
             bg="bg.muted"
             color="fg.muted"
-            cursor="pointer"
             display="flex"
             h="full"
             justifyContent="center"

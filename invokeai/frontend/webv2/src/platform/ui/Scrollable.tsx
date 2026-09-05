@@ -4,6 +4,8 @@ import { ScrollArea } from '@chakra-ui/react';
 import { usePreservedScrollOffset } from '@platform/react/usePreservedScrollOffset';
 import { useRef } from 'react';
 
+import { useScrollAreaPhantomHeal } from './useScrollAreaPhantomHeal';
+
 type ScrollAreaRootProps = ComponentProps<typeof ScrollArea.Root>;
 type ScrollAreaContentProps = ComponentProps<typeof ScrollArea.Content>;
 type ScrollAreaViewportProps = ComponentProps<typeof ScrollArea.Viewport>;
@@ -54,6 +56,8 @@ export const Scrollable = ({
   // The shell keeps widgets mounted across layout switches, and a scroll
   // container that stops being rendered loses its offset outright.
   usePreservedScrollOffset(resolvedViewportRef);
+
+  useScrollAreaPhantomHeal(resolvedViewportRef);
 
   return (
     <ScrollArea.Root size="xs" variant="hover" {...rootProps}>

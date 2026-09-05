@@ -430,13 +430,13 @@ describe('GraphPreviewDialog', () => {
   });
 
   const switchToMode = async (mode: 'graph' | 'list' | 'json') => {
-    const input = document.querySelector<HTMLInputElement>(`input[value="${mode}"]`);
-    expect(input).not.toBeNull();
-    const label = input?.closest('label');
-    expect(label).not.toBeNull();
+    const tab = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((candidate) =>
+      candidate.id.endsWith(`-tab-${mode}`)
+    );
+    expect(tab).not.toBeUndefined();
 
     await act(() => {
-      label?.click();
+      tab?.click();
     });
   };
 
@@ -560,14 +560,7 @@ describe('GraphPreviewDialog', () => {
 
     expect(document.querySelector('[data-flow-stub]')).not.toBeNull();
 
-    const jsonInput = document.querySelector<HTMLInputElement>('input[value="json"]');
-    expect(jsonInput).not.toBeNull();
-    const jsonLabel = jsonInput?.closest('label');
-    expect(jsonLabel).not.toBeNull();
-
-    await act(() => {
-      jsonLabel?.click();
-    });
+    await switchToMode('json');
 
     expect(document.querySelector('[data-flow-stub]')).toBeNull();
     expect(document.body.textContent ?? '').toContain('"denoise_latents"');
@@ -622,7 +615,10 @@ describe('GraphPreviewDialog', () => {
     await clickButtonWithText('denoise_latents');
 
     // List selection reveals the node in graph mode, not list mode.
-    expect(document.querySelector<HTMLInputElement>('input[value="graph"]')?.checked).toBe(true);
+    const graphTab = [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find((candidate) =>
+      candidate.id.endsWith('-tab-graph')
+    );
+    expect(graphTab?.getAttribute('aria-selected')).toBe('true');
     expect(document.querySelector('[data-flow-stub]')).not.toBeNull();
 
     const text = document.body.textContent ?? '';

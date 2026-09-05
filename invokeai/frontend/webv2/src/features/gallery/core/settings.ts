@@ -65,7 +65,7 @@ export const DEFAULT_GALLERY_SETTINGS: GallerySettings = {
   showArchivedBoards: false,
   showDateBoards: false,
   showImageDimensions: false,
-  showOtherProjectBoards: true,
+  showOtherProjectBoards: false,
   showPendingItems: true,
   starredFirst: isGalleryStarredFirst('infinite'),
   thumbnailFit: 'square',

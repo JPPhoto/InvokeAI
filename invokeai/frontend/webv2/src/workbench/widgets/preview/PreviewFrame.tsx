@@ -209,7 +209,6 @@ const PreviewImageFrame = ({
           aria-label={t('widgets.preview.resetZoom')}
           as="button"
           bottom="2"
-          cursor="pointer"
           position="absolute"
           right="2"
           size="xs"

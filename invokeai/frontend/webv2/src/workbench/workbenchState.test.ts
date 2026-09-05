@@ -476,7 +476,7 @@ describe('workbench widget region defaults', () => {
     const state = createInitialWorkbenchState();
     const project = getActiveProject(state);
 
-    expect(project.widgetRegions.left.instanceIds).toEqual(['generate', 'upscale', 'video']);
+    expect(project.widgetRegions.left.instanceIds).toEqual(['generate', 'upscale']);
     expect(project.widgetRegions.right.instanceIds).toEqual(['gallery', 'image-map', 'queue']);
     expect(project.widgetRegions.bottom.instanceIds).toEqual([
       'server-status',
@@ -612,12 +612,9 @@ describe('workbench widget region defaults', () => {
       type: 'hydrateWorkbench',
     });
 
-    expect(getActiveProject(migrated).widgetRegions.left.instanceIds).toEqual([
-      'generate',
-      'workflow',
-      'upscale',
-      'video',
-    ]);
+    // No Video adoption any more: the curated defaults exclude it, so the
+    // legacy splice adds Upscale alone.
+    expect(getActiveProject(migrated).widgetRegions.left.instanceIds).toEqual(['generate', 'workflow', 'upscale']);
     expect(getActiveProject(migrated).widgetInstances.upscale?.typeId).toBe('upscale');
     expect(getActiveProject(customized).widgetRegions.left.instanceIds).toEqual(['generate', 'gallery']);
   });
@@ -985,6 +982,59 @@ describe('adopting a project from another realm', () => {
   });
 });
 
+describe('workbench widget alignment', () => {
+  it('moves a bottom widget between the strip clusters and back', () => {
+    const initial = createInitialWorkbenchState();
+    const instanceId = getActiveProject(initial).widgetRegions.bottom.instanceIds[0]!;
+
+    const alignedEnd = workbenchReducer(initial, {
+      align: 'end',
+      instanceId,
+      region: 'bottom',
+      type: 'setWidgetInstanceAlignment',
+    });
+
+    expect(getActiveProject(alignedEnd).widgetRegions.bottom.alignEndInstanceIds).toEqual([
+      ...(getActiveProject(initial).widgetRegions.bottom.alignEndInstanceIds ?? []),
+      instanceId,
+    ]);
+    // Placement itself is untouched: alignment is a render split, not a move.
+    expect(getActiveProject(alignedEnd).widgetRegions.bottom.instanceIds).toEqual(
+      getActiveProject(initial).widgetRegions.bottom.instanceIds
+    );
+
+    const alignedStart = workbenchReducer(alignedEnd, {
+      align: 'start',
+      instanceId,
+      region: 'bottom',
+      type: 'setWidgetInstanceAlignment',
+    });
+
+    expect(getActiveProject(alignedStart).widgetRegions.bottom.alignEndInstanceIds).toEqual(
+      getActiveProject(initial).widgetRegions.bottom.alignEndInstanceIds ?? []
+    );
+  });
+
+  it('aligning an already-aligned widget is a no-op', () => {
+    const initial = createInitialWorkbenchState();
+    const instanceId = getActiveProject(initial).widgetRegions.bottom.instanceIds[0]!;
+    const once = workbenchReducer(initial, {
+      align: 'end',
+      instanceId,
+      region: 'bottom',
+      type: 'setWidgetInstanceAlignment',
+    });
+    const twice = workbenchReducer(once, {
+      align: 'end',
+      instanceId,
+      region: 'bottom',
+      type: 'setWidgetInstanceAlignment',
+    });
+
+    expect(twice).toBe(once);
+  });
+});
+
 describe('workbench widget state updates', () => {
   it('patches a missing undefined widget value key as a real state change', () => {
     const initial = createInitialWorkbenchState();
@@ -1268,7 +1318,7 @@ describe('workbench layout presets', () => {
     expect(project.layout.panels).toEqual({ isBottomOpen: false, isLeftOpen: true, isRightOpen: true });
     expect(project.widgetRegions.left).toMatchObject({
       activeInstanceId: 'generate',
-      instanceIds: ['generate', 'upscale', 'video'],
+      instanceIds: ['generate', 'upscale'],
       isCollapsed: false,
       sizePx: 450,
     });
@@ -3185,6 +3235,8 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     };
     let state = createInitialWorkbenchState();
 
+    // Video is no longer placed by the non-video defaults; add it first.
+    state = workbenchReducer(state, { region: 'left', type: 'toggleRegionWidget', widgetId: 'video' });
     state = workbenchReducer(state, {
       sourceId: 'generate',
       type: 'patchProjectPromptDraft',
@@ -3826,7 +3878,7 @@ describe('workbench account and project settings', () => {
     const initial = createInitialWorkbenchState();
     const legacy = {
       ...initial,
-      account: { activeLayoutPresetId: 'gallery', preferences: { themeId: 'forest' } },
+      account: { activeLayoutPresetId: 'gallery', preferences: { themeId: 'osakaJade' } },
     } as unknown as WorkbenchState;
 
     const state = workbenchReducer(initial, { state: legacy, type: 'hydrateWorkbench' });
@@ -3912,7 +3964,6 @@ describe('workbench account and project settings', () => {
 
     expect(getActiveProject(state).settings).toEqual({
       antialiasProgressImages: true,
-      showProgressDetails: false,
       showProgressImagesInViewer: true,
       useCpuNoise: false,
     });

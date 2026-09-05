@@ -15,7 +15,7 @@ import type {
 
 export interface WorkflowPreferences {
   reduceMotion: boolean;
-  themeId: 'classic' | 'light' | 'forest' | 'mono' | 'ultradark';
+  themeId: 'classic' | 'light' | 'osakaJade' | 'mono' | 'ultradark';
   workflowEdgeStyle: 'curved' | 'square';
   workflowShowMinimap: boolean;
   workflowSnapToGrid: boolean;
