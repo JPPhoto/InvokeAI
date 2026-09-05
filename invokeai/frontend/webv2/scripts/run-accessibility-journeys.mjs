@@ -193,6 +193,8 @@ const surfaces = [
       await waitForWorkbench(page);
       await selectLayoutPreset(page, 'Compose', 'Preview');
       await selectCenterView(page, 'Preview', 'Gallery');
+      // The default project board is empty; scan the populated fixture gallery.
+      await centerRegion(page).getByRole('button').filter({ hasText: 'Uncategorized' }).click();
       await centerRegion(page).getByRole('list', { exact: true, name: 'Gallery items' }).waitFor();
     },
   },
@@ -600,6 +602,7 @@ const runVideoPreviewJourney = async (browser) => {
     await selectLayoutPreset(page, 'Compose', 'Preview');
 
     const rightPanel = page.getByRole('complementary', { exact: true, name: 'right widget panel' });
+    await rightPanel.getByRole('button').filter({ hasText: 'Uncategorized' }).click();
     const gallery = rightPanel.getByRole('list', { exact: true, name: 'Gallery items' });
     const selectVideo = rightPanel.getByRole('button', {
       exact: true,
@@ -712,6 +715,7 @@ const runKeepAliveStateJourney = async (browser) => {
     await selectLayoutPreset(page, 'Compose', 'Preview');
 
     const rightPanel = page.getByRole('complementary', { exact: true, name: 'right widget panel' });
+    await rightPanel.getByRole('button').filter({ hasText: 'Uncategorized' }).click();
     const galleryItems = rightPanel.getByRole('list', { exact: true, name: 'Gallery items' });
     await galleryItems.waitFor();
 
