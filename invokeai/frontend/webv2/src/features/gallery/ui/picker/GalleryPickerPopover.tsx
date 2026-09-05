@@ -57,7 +57,6 @@ export const GalleryPickerPopover = ({
             display="flex"
             flexDirection="column"
             maxH="min(26rem, var(--available-height))"
-            overflow="hidden"
             p="0"
             w="clamp(18rem, var(--reference-width), 28rem)"
           >

@@ -340,8 +340,9 @@ export const GalleryPickerView = ({
       ? t('widgets.gallery.picker.findBoard')
       : t('widgets.gallery.picker.searchIn', { name: boardName });
 
+  // Clips here rather than on the popover content, whose arrow sits outside its box.
   return (
-    <Stack flex="1" gap="0" minH="0">
+    <Stack borderRadius="inherit" flex="1" gap="0" minH="0" overflow="hidden">
       <input {...uploadInputProps} />
       <HStack gap="1" minW="0" pt="2" px="2">
         <Button
