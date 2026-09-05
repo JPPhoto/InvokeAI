@@ -4,6 +4,7 @@ import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
 
 import { chunkSourceManifest } from './scripts/chunk-source-manifest.mjs';
+import { localeAssetsPlugin } from './scripts/locale-assets-plugin.mjs';
 import { serviceWorkerPlugin } from './scripts/service-worker-plugin.mjs';
 
 // Override with e.g. INVOKEAI_DEV_BACKEND=http://127.0.0.1:9091 when the
@@ -31,6 +32,13 @@ const ROUTE_SHARED_MODULES = [
   // the whole Launchpad chunk in after it — the same regression the
   // `launchpad/intents.ts` note below describes.
   '/platform/ui/BrandIcon.tsx',
+  // Settings share these controls across both routes and deferred editors.
+  // Keep those extra consumers from splitting already-eager controls into requests of their own.
+  '/platform/ui/Button.tsx',
+  '/platform/ui/Tooltip.tsx',
+  '/platform/ui/RetryBoundary.tsx',
+  '/platform/ui/PanelHeader.tsx',
+  '/platform/ui/settings/contracts.ts',
   '/platform/core/concurrency.ts',
   '/platform/query/client.ts',
   '/platform/time/serverTimestamp.ts',
@@ -49,6 +57,7 @@ const ROUTE_SHARED_MODULES = [
   '/platform/ui/theme/applyTheme.ts',
   '/workbench/components/WorkbenchSplashScreen.tsx',
   '/workbench/hotkeys/catalog.ts',
+  '/workbench/hotkeys/modalLayer.ts',
   '/workbench/launchpad/formatRelativeTime.ts',
   // The Launchpad writes `?intent=` and the editor's session controller reads
   // it. Without this the editor pulls the whole Launchpad chunk for a lookup
@@ -97,6 +106,8 @@ const ROUTE_SHARED_MODULES = [
 // both routes above, scoped here to the editor alone because none of this
 // is reachable from the Launchpad.
 const EDITOR_BOOT_SHARED_MODULES = [
+  // This adapter owns editor-lifetime Gallery state; its image-action bridge stays deferred.
+  '/app/GalleryUiAdapter.tsx',
   // The gallery picker's trigger shell (every boot widget with an image slot
   // mounts one) plus the Gallery widget UI its lazy view shares; the widget
   // boots every editor route, so this moves bytes rather than adding requests.
@@ -119,6 +130,42 @@ const EDITOR_BOOT_SHARED_MODULES = [
   '/workbench/shell/topbar/LayoutPresetAdminDialogs.tsx',
   '/workbench/shell/topbar/LayoutPresetStrip.tsx',
   '/workbench/shell/topbar/ProjectSwitcher.tsx',
+] as const;
+
+// The editor registry and deferred settings/palette share metadata, never widget views.
+// Keep it separate from editor boot UI so Launchpad settings cannot pull in the editor.
+const WIDGET_METADATA_MODULES = [
+  '/features/gallery/settingsContribution.ts',
+  '/features/queue/widget.ts',
+  '/features/workflow/widget.ts',
+  '/workbench/settings/applicationContributions.ts',
+  '/workbench/settings/catalog.ts',
+  '/workbench/widgets/canvas/canvasSettings.ts',
+  '/workbench/widgets/canvas/settingsContribution.ts',
+  '/workbench/widgets/image-map/settingsContribution.ts',
+  '/workbench/widgets/layers/panes/editorPaneLayout.ts',
+  '/workbench/widgets/manifests.ts',
+  '/workbench/widgets/preview/settingsContribution.ts',
+  '/workbench/widgets/preview/previewSettings.ts',
+] as const;
+
+// Gallery’s shared state projection and UI port travel together. Explicit sources
+// keep the UI port’s compiler runtime in the vendor chunk used by both routes.
+const GALLERY_STATE_MODULES = [
+  '/features/gallery/core/items.ts',
+  '/features/gallery/core/recentImages.ts',
+  '/features/gallery/core/selection.ts',
+  '/features/gallery/core/semanticImageQuery.ts',
+  '/features/gallery/core/settings.ts',
+  '/features/gallery/ui/GalleryUiContext.tsx',
+  '/features/gallery/ui/galleryStateView.ts',
+  '/features/queue/contracts.ts',
+  '/features/queue/core/generationMeta.ts',
+  '/features/queue/core/historySnapshot.ts',
+  '/features/queue/core/historySummary.ts',
+  '/features/queue/core/progressRail.ts',
+  '/features/queue/core/submissionRules.ts',
+  '/features/queue/data/events.ts',
 ] as const;
 
 // The singleton widget hosts the editor mounts once at boot: workflow's
@@ -160,10 +207,6 @@ const getLegacyChunkName = (id: string): string | null => {
     ])
   ) {
     return 'shell-shared';
-  }
-
-  if (matchesAnySuffix(id, ['/features/gallery/core/items.ts', '/features/gallery/ui/galleryStateView.ts'])) {
-    return 'gallery-state';
   }
 
   if (!id.includes('/node_modules/')) {
@@ -216,6 +259,12 @@ export default defineConfig({
           groups: [
             {
               includeDependenciesRecursively: false,
+              name: 'gallery-state',
+              priority: 30,
+              test: (id) => matchesAnySuffix(id, GALLERY_STATE_MODULES),
+            },
+            {
+              includeDependenciesRecursively: false,
               name: 'route-shared',
               priority: 30,
               test: (id) => matchesAnySuffix(id, ROUTE_SHARED_MODULES),
@@ -225,6 +274,13 @@ export default defineConfig({
               name: 'editor-boot-shared',
               priority: 30,
               test: (id) => matchesAnySuffix(id, EDITOR_BOOT_SHARED_MODULES),
+            },
+            {
+              includeDependenciesRecursively: false,
+              name: 'widget-metadata',
+              priority: 30,
+              test: (id) =>
+                matchesAnySuffix(id, WIDGET_METADATA_MODULES) || /\/workbench\/widgets\/[^/]+\/manifest\.ts$/.test(id),
             },
             {
               includeDependenciesRecursively: false,
@@ -254,6 +310,7 @@ export default defineConfig({
       presets: [reactCompilerPreset()],
     }),
     chunkSourceManifest({ projectRoot: PROJECT_ROOT }),
+    localeAssetsPlugin({ projectRoot: PROJECT_ROOT }),
     serviceWorkerPlugin({ projectRoot: PROJECT_ROOT }),
   ],
   resolve: {

@@ -1,4 +1,5 @@
 import type { WorkbenchLanguage } from '@platform/i18n/languages';
+import type { SettingsTarget } from '@platform/ui/settings/contracts';
 import type { WorkbenchThemeId } from '@theme/themes';
 import type { DeveloperLogLevel, DeveloperLogNamespace } from '@workbench/diagnostics/contracts';
 import type { ProjectSortId, ProjectsViewId } from '@workbench/launchpad/projects/projectLibraryView';
@@ -95,4 +96,11 @@ export interface WorkbenchPreferences {
   krea2RebalancePresets: StoredRebalancePreset[];
   /** User-saved Generate settings snapshots ("recipes"), in the order they were saved. */
   generatePresets: StoredGeneratePreset[];
+}
+
+export type SettingsSectionId = string;
+export interface SettingsDestination {
+  sectionId: SettingsSectionId;
+  entryId?: string;
+  target?: SettingsTarget;
 }

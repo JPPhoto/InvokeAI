@@ -1017,7 +1017,7 @@ export const themeCardRecipe = defineSlotRecipe({
       gap: '0.5',
     },
     name: { color: 'fg', fontSize: 'sm', fontWeight: '600' },
-    description: { color: 'fg.subtle', fontSize: '2xs', lineHeight: '1.3' },
+    description: { color: 'fg.muted', fontSize: '2xs', lineHeight: '1.3' },
     indicator: {
       alignItems: 'center',
       borderRadius: 'full',

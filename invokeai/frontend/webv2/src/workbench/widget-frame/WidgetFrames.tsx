@@ -2,6 +2,7 @@ import type { WidgetRegion } from '@workbench/layoutContracts';
 import type {
   WidgetInstanceId,
   WidgetInstanceRuntimeMeta,
+  WidgetHeaderActions,
   WidgetHeaderLabel,
   WidgetHeaderMenu,
   WidgetManifest,
@@ -14,9 +15,10 @@ import { Box, Flex, HStack, Icon, Stack, Text } from '@chakra-ui/react';
 import { flushWorkbenchDrafts } from '@platform/react/draftRegistry';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { IconButton } from '@platform/ui/Button';
+import { PanelHeader } from '@platform/ui/PanelHeader';
 import { Tooltip } from '@platform/ui/Tooltip';
 import { useFocusRegionProps } from '@workbench/focusRegions';
-import { openWorkbenchSettings } from '@workbench/settings/settingsDialogStore';
+import { WidgetSettingsButton } from '@workbench/settings/WidgetSettingsButton';
 import { resolveWidgetInstanceLabel } from '@workbench/widgetLabels';
 import { getEnabledCenterViewCount } from '@workbench/widgetPlacementCommands';
 import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from '@workbench/widgetPlacementMeta';
@@ -28,7 +30,7 @@ import {
   shouldSnapPanelShutAt,
 } from '@workbench/workbenchState';
 import { useWorkbenchWidgetRegistry } from '@workbench/WorkbenchWidgetRegistryContext';
-import { PictureInPicture2Icon, SettingsIcon } from 'lucide-react';
+import { PictureInPicture2Icon } from 'lucide-react';
 import {
   useCallback,
   useEffect,
@@ -357,6 +359,7 @@ export const WidgetFloatButton = ({
 export const WidgetHeaderActionsGroup = ({
   actions,
   HeaderMenu,
+  SettingsActions,
   instance,
   manifest,
   region,
@@ -364,33 +367,23 @@ export const WidgetHeaderActionsGroup = ({
 }: {
   actions?: ReactNode;
   HeaderMenu?: WidgetHeaderMenu;
+  SettingsActions?: WidgetHeaderActions;
   instance: WidgetInstanceRuntimeMeta;
   manifest: WidgetManifest;
   region: WorkbenchRegion;
   runtime: WidgetRuntimeApi;
 }) => {
-  const { t } = useTranslation();
-  const label = resolveWidgetInstanceLabel(instance, manifest, t);
-  const handleSettingsClick = useCallback(
-    () => openWorkbenchSettings(manifest.settingsSection),
-    [manifest.settingsSection]
-  );
-
   return (
     <HStack flexShrink={0} gap="0.5">
       {actions}
-      {manifest.settingsSection ? (
-        <Tooltip content={t('widgets.settingsLabel', { label })}>
-          <IconButton
-            aria-label={t('widgets.settingsLabel', { label })}
-            color="fg.muted"
-            size="2xs"
-            variant="ghost"
-            onClick={handleSettingsClick}
-          >
-            <Icon as={SettingsIcon} boxSize="3.5" />
-          </IconButton>
-        </Tooltip>
+      {manifest.settings ? (
+        <WidgetSettingsButton
+          SettingsActions={SettingsActions}
+          instance={instance}
+          manifest={manifest}
+          region={region}
+          runtime={runtime}
+        />
       ) : null}
       <WidgetFloatButton instanceId={instance.id} manifest={manifest} region={region} />
       <WidgetActionsMenu
@@ -408,6 +401,7 @@ export const WidgetHeader = ({
   actions,
   HeaderLabel,
   HeaderMenu,
+  SettingsActions,
   instance,
   manifest,
   region,
@@ -416,6 +410,7 @@ export const WidgetHeader = ({
   actions?: ReactNode;
   HeaderLabel?: WidgetHeaderLabel;
   HeaderMenu?: WidgetHeaderMenu;
+  SettingsActions?: WidgetHeaderActions;
   instance: WidgetInstanceRuntimeMeta;
   manifest: WidgetManifest;
   region: WorkbenchRegion;
@@ -427,7 +422,7 @@ export const WidgetHeader = ({
   const label = resolveWidgetInstanceLabel(instance, manifest, t);
 
   return (
-    <HStack justify="space-between" borderBottomWidth={1} h={10} ps="3" pe="2">
+    <PanelHeader>
       <HStack flex="1" gap="1.5" minW="0">
         <WidgetIdentityIcon icon={manifest.icon} />
         {HeaderLabel && !instance.title ? (
@@ -441,13 +436,14 @@ export const WidgetHeader = ({
       </HStack>
       <WidgetHeaderActionsGroup
         HeaderMenu={HeaderMenu}
+        SettingsActions={SettingsActions}
         actions={actions}
         instance={instance}
         manifest={manifest}
         region={region}
         runtime={runtime}
       />
-    </HStack>
+    </PanelHeader>
   );
 };
 
