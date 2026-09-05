@@ -44,6 +44,7 @@ import {
 import { insertNodesAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import { isOverlayStack, layerStackOf, reorderSiblings } from '@workbench/canvas-engine/document/layerStacks';
 import { repairSelectedLayerId } from '@workbench/canvas-engine/document/selectionRepair';
+import { prependProjectEvent } from '@workbench/projectEvents';
 
 import { normalizeCanvasDocumentContract } from './canvasMigration';
 import {
@@ -699,7 +700,7 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
             ? project.canvas.stagingArea
             : clearStagingArea(project.canvas.stagingArea),
         },
-        events: [mutation.event, ...project.events],
+        events: prependProjectEvent(project.events, mutation.event),
       };
     }
     case 'rollbackStagedImageCommit': {

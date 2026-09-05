@@ -55,6 +55,7 @@ import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from
 import { useTranslation } from 'react-i18next';
 
 import { AboutSettings } from './AboutSettings';
+import { clearWorkspaceData, rememberWorkspaceClearFailure } from './clearWorkspaceData';
 import { GenerationDevicesSettings } from './GenerationDevicesSettings';
 import { HotkeysSettingsSection } from './HotkeysSettingsSection';
 import { ImageMapVocabularySettings } from './ImageMapVocabularySettings';
@@ -727,12 +728,21 @@ const WorkspaceSection = () => {
   const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
 
   const clearSavedData = useCallback(async () => {
-    await Promise.all([
-      mountedPersistence ? mountedPersistence.clearWorkbench() : clearAllWorkbenchData(),
-      clearWorkbenchSettings(),
-    ]);
+    const failures = await clearWorkspaceData(
+      () => (mountedPersistence ? mountedPersistence.clearWorkbench() : clearAllWorkbenchData()),
+      clearWorkbenchSettings
+    );
+    if (failures.length === 0) {
+      window.location.reload();
+      return;
+    }
+    const message = failures.includes('projects')
+      ? 'Saved project data could not be fully cleared. Reloading to restore a consistent workspace.'
+      : 'Projects were cleared, but some local settings could not be. Reloading the workspace.';
+    rememberWorkspaceClearFailure(message, window.sessionStorage);
+    commands?.notifications.reportError({ area: 'workspace-clear', message, namespace: 'system' });
     window.location.reload();
-  }, [mountedPersistence]);
+  }, [commands, mountedPersistence]);
   const resetLayout = useCallback(() => commands?.layout.reset(), [commands]);
   const openClearConfirm = useCallback(() => setIsClearConfirmOpen(true), []);
   const closeClearConfirm = useCallback(() => setIsClearConfirmOpen(false), []);

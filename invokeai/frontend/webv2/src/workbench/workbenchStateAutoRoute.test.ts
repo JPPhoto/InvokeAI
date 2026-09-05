@@ -65,8 +65,6 @@ describe('auto invocation route switching with the preference off', () => {
       },
       preferenceOff
     );
-    state = workbenchReducer(state, { type: 'saveProjectGraphSnapshot' }, preferenceOff);
-    const snapshotId = state.projects.find((project) => project.id === state.activeProjectId)?.graphHistory[0]?.id;
     const projectGraph = state.projects.find((project) => project.id === state.activeProjectId)?.projectGraph;
 
     expect(projectGraph).toBeDefined();
@@ -78,11 +76,6 @@ describe('auto invocation route switching with the preference off', () => {
         label: 'Preference-off replacement',
         type: 'replaceProjectGraph',
       },
-      preferenceOff
-    );
-    state = workbenchReducer(
-      state,
-      { snapshotId: snapshotId ?? '', type: 'restoreProjectGraphSnapshot' },
       preferenceOff
     );
     state = workbenchReducer(

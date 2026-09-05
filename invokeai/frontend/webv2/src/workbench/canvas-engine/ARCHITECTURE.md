@@ -93,7 +93,7 @@ This creates a deliberate transaction boundary:
 
 Canvas invocation first crosses the paint-flush barrier, then captures the post-flush document, plans every raster/control/regional composite, and detaches exactly the contributing layers. Composite dedupe writes are staged in transaction-local maps. They are published to the persistent per-engine dedupe cache only after all frozen compositing, uploads, compilation, and queue dispatch complete; stale or failed captures leave no persistent dedupe entries.
 
-`submitCanvasInvocationSnapshot` carries the exact cloned canvas state used for compilation. `enqueueCompiledSnapshot` clones that supplied state rather than reading the live project canvas. Generated candidates are placed from `queueItem.snapshot.canvas.document.bbox`, so later bbox edits do not move the result. `documentRevision` still prevents results from a replaced canvas session from entering current staging.
+`submitCanvasInvocationSnapshot` carries the exact cloned canvas state used for compilation. `enqueueCompiledSnapshot` extracts its bounding box, dimensions, and document revision rather than reading the live project canvas. Generated candidates are placed from `queueItem.snapshot.canvas.document.bbox`, so later bbox edits do not move the result. `documentRevision` still prevents results from a replaced canvas session from entering current staging.
 
 ## Frame demand before allocation
 

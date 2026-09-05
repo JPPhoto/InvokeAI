@@ -313,7 +313,6 @@ const preferencesSnapshot = {
 // reason `preferencesSnapshot` above is hoisted rather than built inline.
 const createProjectSnapshot = () => ({
   galleryValues: {},
-  graphHistory: [],
   id: 'project-1',
   isWorkflowRunning: false,
   projectGraph: { edges: [], nodes: [], version: 1 as const },
@@ -330,8 +329,6 @@ const createWorkflowUiAdapter = (): WorkflowUiAdapter => {
       editGraph: vi.fn(),
       redo: vi.fn(),
       replace: vi.fn(),
-      restoreSnapshot: vi.fn(),
-      saveSnapshot: vi.fn(),
       undo: vi.fn(),
     },
     getProjectGraph: () => ({ edges: [], nodes: [], version: 1 as const }),

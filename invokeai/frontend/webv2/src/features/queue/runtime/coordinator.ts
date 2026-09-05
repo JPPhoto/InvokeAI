@@ -17,6 +17,7 @@ import {
 import {
   isTerminalBackendStatus,
   parseQueueItemOrigin,
+  parseQueueItemOriginProjectId,
   type InvocationCompleteEvent,
   type InvocationErrorEvent,
   type InvocationProgressEvent,
@@ -30,12 +31,14 @@ import {
   type ProgressImageTarget,
 } from '@features/queue/data/progressImageStore';
 import { queueItemProgressStore, type QueueItemProgressSink } from '@features/queue/data/progressStore';
+import { mapWithConcurrency } from '@platform/core/concurrency';
 import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { ApiError } from '@platform/transport/http';
 
 const GALLERY_REFRESH_COALESCE_MS = 400;
 const SAFETY_SWEEP_INTERVAL_MS = 30_000;
 const TERMINAL_EVENT_BUFFER_LIMIT = 256;
+const BACKEND_READ_CONCURRENCY = 16;
 
 /**
  * Queue's view of model-load activity derived from socket events. The
@@ -65,6 +68,7 @@ export type QueueCoordinatorBackendPort = Pick<
   | 'enqueueGenerate'
   | 'enqueueWorkflow'
   | 'getItem'
+  | 'getEnqueueReceipt'
   | 'getResultImages'
   | 'listItems'
   | 'on'
@@ -90,8 +94,17 @@ export class QueueItemCancelledError extends Error {
   }
 }
 
+/** Thrown when an enqueue response definitively reports zero accepted items. */
+export class QueueEnqueueNotAcceptedError extends Error {
+  constructor(workKind: 'generation' | 'workflow') {
+    super(`The backend queue did not accept this ${workKind}. The queue may be full.`);
+    this.name = 'QueueEnqueueNotAcceptedError';
+  }
+}
+
 export interface ReconcileInput {
   id: string;
+  projectId?: string;
   status: 'pending' | 'running';
   backendItemIds?: number[];
   backendBatchId?: string;
@@ -99,11 +112,11 @@ export interface ReconcileInput {
 
 export type ReconcileOutcome =
   /** A pending item the backend already accepted before the reload; do not re-enqueue. */
-  | { kind: 'adopted'; backendItemIds: number[]; backendBatchId?: string }
+  | { kind: 'adopted'; backendItemIds: number[]; backendBatchId?: string; missingBackendItemIds?: number[] }
   /** A running item whose backend items were found again; its results are awaitable. */
-  | { kind: 'resumed' }
+  | { kind: 'resumed'; backendItemIds?: number[]; missingBackendItemIds?: number[] }
   /** A running item whose backend items no longer exist (queue cleared or pruned). */
-  | { kind: 'missing' }
+  | { kind: 'missing'; backendItemIds?: number[]; backendBatchId?: string }
   /** A pending item the backend has never seen; submit it normally. */
   | { kind: 'enqueue' };
 
@@ -114,6 +127,7 @@ export interface CancelRunRequest {
 
 export interface QueueCoordinator {
   connect(): void;
+  detachRun(localQueueItemId: string): void;
   dispose(): void;
   /**
    * Match persisted pending/running queue items against the live backend queue
@@ -622,22 +636,32 @@ export const createQueueCoordinator = (
       return outcomes;
     }
 
-    const backendItems = items.every((item) => item.backendItemIds?.length)
+    const resolvedItems = await mapWithConcurrency(items, BACKEND_READ_CONCURRENCY, async (item) => {
+      if (item.backendItemIds?.length || !item.projectId || !backend.getEnqueueReceipt) {
+        return item;
+      }
+      const receipt = await backend.getEnqueueReceipt(item.projectId, item.id);
+      return receipt ? { ...item, backendBatchId: receipt.batchId, backendItemIds: receipt.itemIds } : item;
+    });
+    const canReadExactItems = resolvedItems.every(
+      (item) => item.backendItemIds?.length || (item.projectId && backend.getEnqueueReceipt)
+    );
+    const backendItems = canReadExactItems
       ? (
-          await Promise.all(
-            items
-              .flatMap((item) => item.backendItemIds ?? [])
-              .map(async (itemId) => {
-                try {
-                  return await backend.getItem(itemId);
-                } catch (error) {
-                  if (error instanceof ApiError && error.status === 404) {
-                    return undefined;
-                  }
-
-                  throw error;
+          await mapWithConcurrency(
+            [...new Set(resolvedItems.flatMap((item) => item.backendItemIds ?? []))],
+            BACKEND_READ_CONCURRENCY,
+            async (itemId) => {
+              try {
+                return await backend.getItem(itemId);
+              } catch (error) {
+                if (error instanceof ApiError && error.status === 404) {
+                  return undefined;
                 }
-              })
+
+                throw error;
+              }
+            }
           )
         ).filter((item) => item !== undefined)
       : await backend.listItems();
@@ -647,30 +671,34 @@ export const createQueueCoordinator = (
     }
 
     const backendItemsById = new Map(backendItems.map((item) => [item.id, item]));
-    const backendItemsByLocalId = new Map<string, QueueBackendItem[]>();
 
-    for (const backendItem of backendItems) {
-      const localQueueItemId = parseQueueItemOrigin(backendItem.origin);
-
-      if (localQueueItemId) {
-        backendItemsByLocalId.set(localQueueItemId, [
-          ...(backendItemsByLocalId.get(localQueueItemId) ?? []),
-          backendItem,
-        ]);
-      }
-    }
-
-    for (const item of items) {
+    for (const item of resolvedItems) {
+      const matchesIdentity = (backendItem: QueueBackendItem | undefined): backendItem is QueueBackendItem =>
+        backendItem !== undefined &&
+        parseQueueItemOrigin(backendItem.origin) === item.id &&
+        (item.projectId === undefined || parseQueueItemOriginProjectId(backendItem.origin) === item.projectId);
       const knownBackendItems = item.backendItemIds?.length
         ? item.backendItemIds.map((backendItemId) => backendItemsById.get(backendItemId))
-        : (backendItemsByLocalId.get(item.id) ?? []);
-      const foundBackendItems = knownBackendItems.filter((backendItem) => backendItem !== undefined);
+        : backendItems.filter(matchesIdentity);
+      const foundBackendItems = knownBackendItems.filter(matchesIdentity);
+      const missingBackendItemIds = item.backendItemIds?.filter(
+        (_backendItemId, index) => !matchesIdentity(knownBackendItems[index])
+      );
 
-      if (foundBackendItems.length !== knownBackendItems.length || foundBackendItems.length === 0) {
+      if (foundBackendItems.length === 0) {
         // A pending item with no backend trace was never accepted and is safe
         // to submit; a running item with (partially) vanished backend items is
         // unrecoverable.
-        outcomes.set(item.id, item.status === 'pending' ? { kind: 'enqueue' } : { kind: 'missing' });
+        outcomes.set(
+          item.id,
+          item.status === 'pending' && !item.backendItemIds?.length
+            ? { kind: 'enqueue' }
+            : {
+                ...(item.backendBatchId ? { backendBatchId: item.backendBatchId } : {}),
+                ...(item.backendItemIds?.length ? { backendItemIds: item.backendItemIds } : {}),
+                kind: 'missing',
+              }
+        );
         continue;
       }
 
@@ -685,25 +713,31 @@ export const createQueueCoordinator = (
 
       outcomes.set(
         item.id,
-        item.status === 'running' ? { kind: 'resumed' } : { backendBatchId, backendItemIds, kind: 'adopted' }
+        item.status === 'running'
+          ? {
+              kind: 'resumed',
+              ...(missingBackendItemIds?.length ? { backendItemIds, missingBackendItemIds } : {}),
+            }
+          : {
+              backendBatchId,
+              backendItemIds,
+              kind: 'adopted',
+              ...(missingBackendItemIds?.length ? { missingBackendItemIds } : {}),
+            }
       );
     }
 
     return outcomes;
   };
 
-  /** Reject partial acceptance and start tracking the accepted backend items. */
+  /** Start tracking the accepted backend items. */
   const adoptEnqueueResult = (
     localQueueItemId: string,
     result: QueueEnqueueResult,
     workKind: 'generation' | 'workflow'
   ): QueueEnqueueResult => {
     if (result.enqueued === 0) {
-      throw new Error(`The backend queue did not accept this ${workKind}. The queue may be full.`);
-    }
-
-    if (result.requested !== result.enqueued) {
-      throw new Error(`The backend queue accepted ${result.enqueued} of ${result.requested} requested items.`);
+      throw new QueueEnqueueNotAcceptedError(workKind);
     }
 
     beginRun(localQueueItemId, result.itemIds, result.batchId);
@@ -764,12 +798,13 @@ export const createQueueCoordinator = (
         throw new QueueItemCancelledError(localQueueItemId);
       }
 
-      const imagesPerItem = await Promise.all(
-        completedBackendItemIds.map((backendItemId) =>
+      const imagesPerItem = await mapWithConcurrency(
+        completedBackendItemIds,
+        BACKEND_READ_CONCURRENCY,
+        (backendItemId) =>
           options
             ? backend.getResultImages(backendItemId, localQueueItemId, queuedAt, options)
             : backend.getResultImages(backendItemId, localQueueItemId, queuedAt)
-        )
       );
 
       return imagesPerItem.flat();
@@ -784,13 +819,13 @@ export const createQueueCoordinator = (
 
   const cancelRun = async ({ backendBatchId, backendItemIds }: CancelRunRequest): Promise<void> => {
     try {
-      if (backendItemIds?.length) {
-        await backend.cancelQueueItems(backendItemIds);
+      if (backendBatchId) {
+        await backend.cancelQueueItemsByBatchIds([backendBatchId]);
         return;
       }
 
-      if (backendBatchId) {
-        await backend.cancelQueueItemsByBatchIds([backendBatchId]);
+      if (backendItemIds?.length) {
+        await backend.cancelQueueItems(backendItemIds);
       }
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
@@ -801,5 +836,24 @@ export const createQueueCoordinator = (
     }
   };
 
-  return { cancelRun, connect, dispose, reconcile, submitGenerate, submitWorkflow, waitForResults };
+  const detachRun = (localQueueItemId: string): void => {
+    const run = runs.get(localQueueItemId);
+    for (const backendItemId of run?.backendItemIds ?? []) {
+      const wait = waits.get(backendItemId);
+      if (wait?.localQueueItemId === localQueueItemId) {
+        waits.delete(backendItemId);
+        wait.settle({ status: 'canceled' });
+      }
+    }
+    runs.delete(localQueueItemId);
+    runProgress.delete(localQueueItemId);
+    for (let itemIndex = 1; itemIndex <= (run?.backendItemIds.length ?? 0); itemIndex += 1) {
+      const target = { itemIndex, queueItemId: localQueueItemId };
+      activeProgressTarget.clear(target);
+      progressImage.clear(target);
+    }
+    progress.clear(localQueueItemId);
+  };
+
+  return { cancelRun, connect, detachRun, dispose, reconcile, submitGenerate, submitWorkflow, waitForResults };
 };

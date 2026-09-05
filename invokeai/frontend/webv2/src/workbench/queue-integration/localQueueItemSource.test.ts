@@ -4,7 +4,7 @@ import { buildQueueItemOrigin } from '@features/queue/contracts';
 import { createInitialWorkbenchState, workbenchReducer } from '@workbench/workbenchState.testing';
 import { describe, expect, it, vi } from 'vitest';
 
-import { getLocalQueueItemSource } from './useLocalGenerateValues';
+import { getLocalQueueItemSource } from './useLocalRecallSnapshot';
 
 vi.mock('@features/queue/devices', async (importOriginal) => {
   const original = (await importOriginal()) as Record<string, unknown>;

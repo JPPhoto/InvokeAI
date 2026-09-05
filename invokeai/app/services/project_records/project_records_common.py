@@ -38,6 +38,26 @@ class ProjectRecordConflictError(Exception):
         )
 
 
+PROJECT_DOCUMENT_MAX_BYTES = 32 * 1024 * 1024
+"""Maximum compact UTF-8 JSON size accepted for a project document."""
+
+
+class ProjectDocumentTooLargeError(Exception):
+    """Raised before an oversized project document is written."""
+
+    def __init__(self, actual_bytes: int, max_bytes: int = PROJECT_DOCUMENT_MAX_BYTES) -> None:
+        self.actual_bytes = actual_bytes
+        self.max_bytes = max_bytes
+        super().__init__(f"Project document is {actual_bytes} bytes; the limit is {max_bytes} bytes")
+
+
+class ProjectDocumentInvalidError(Exception):
+    """Raised when a project document cannot be represented as standards-compliant UTF-8 JSON."""
+
+    def __init__(self) -> None:
+        super().__init__("Project document must contain valid UTF-8 JSON values")
+
+
 class ProjectCanvasSchemaUnsupportedError(Exception):
     """Raised before an incapable client may read or write a project document."""
 

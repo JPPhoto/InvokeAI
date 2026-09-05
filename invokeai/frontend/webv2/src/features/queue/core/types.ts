@@ -28,13 +28,8 @@ export interface QueueSubmissionPresentation {
 }
 
 export interface QueueGraphSnapshot {
-  backendGraph?: QueueBackendGraph;
-  edges?: unknown[];
   id: string;
   label: string;
-  nodes?: unknown[];
-  updatedAt?: string;
-  version?: number;
 }
 
 export interface QueueEnqueueWorkflowRequest {
@@ -268,6 +263,8 @@ export interface QueueFeatureCommands {
  * events so runtimes never assemble HTTP calls and socket subscriptions.
  */
 export interface QueueBackendPort extends QueueFeatureCommands {
+  acknowledgeEnqueue?(projectId: string, sourceQueueItemId: string): Promise<void>;
+  getEnqueueReceipt?(projectId: string, sourceQueueItemId: string): Promise<QueueEnqueueResult | null>;
   cancelQueueItems(itemIds: number[]): Promise<void>;
   cancelQueueItemsByBatchIds(batchIds: string[]): Promise<void>;
   enqueueGenerate(request: QueueEnqueueGenerateRequest): Promise<QueueEnqueueResult>;

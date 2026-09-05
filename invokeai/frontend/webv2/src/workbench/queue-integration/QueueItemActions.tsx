@@ -9,6 +9,7 @@ import { useMountEffect } from '@platform/react/useMountEffect';
 import { Button, CloseButton } from '@platform/ui/Button';
 import { JsonPreview } from '@platform/ui/JsonPreview';
 import {
+  EMPTY_IMAGE_RECALL_CAPABILITIES,
   getCurrentGenerateValues,
   getImageRecallTitle,
   RecallActionButtons,
@@ -21,8 +22,8 @@ import { FileTextIcon, WandSparklesIcon } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { getQueueRecallCapabilities, planQueueRecall } from './queueRecall';
-import { useLocalGenerateValues, useLocalQueueItemSource } from './useLocalGenerateValues';
+import { getQueueRecallCapabilities, getVideoQueueRecallCapabilities, planQueueRecall } from './queueRecall';
+import { useLocalRecallSnapshot } from './useLocalRecallSnapshot';
 
 const selectGenerateRecallValues = createGenerateFormValuesSelector();
 
@@ -38,18 +39,24 @@ export const QueueItemActions = ({ item }: { item: QueueItemReadModel }) => {
   const { generation, widgets } = useWorkbenchCommands();
   const openWidget = useOpenWorkbenchWidget();
   const notify = useNotify();
-  const localGenerateValues = useLocalGenerateValues(item.origin);
-  // A video item's prompt belongs to the Video panel, which owns its own prompt
-  // values. Only knowable for items this client submitted; see the hook's note.
-  const isVideoItem = useLocalQueueItemSource(item.origin) === 'video';
+  const recall = useLocalRecallSnapshot(item.origin);
+  const isRecallPending = recall === undefined;
+  const localGenerateValues = recall?.generateValues ?? null;
+  const videoSnapshot = recall?.videoValues ?? null;
+  const isVideoItem = recall?.sourceId === 'video';
   const [jsonOpen, setJsonOpen] = useState(false);
   const generateValues = useWidgetValuesSelector('generate', selectGenerateRecallValues);
   const models = useModelsSelector((snapshot) => snapshot.models);
   const supportedModels = useMemo(() => models.filter(isSupportedGenerateModel), [models]);
   const meta = useMemo(() => extractGenerationMeta(item), [item]);
   const capabilities = useMemo(
-    () => getQueueRecallCapabilities(localGenerateValues, meta),
-    [localGenerateValues, meta]
+    () =>
+      isRecallPending
+        ? EMPTY_IMAGE_RECALL_CAPABILITIES
+        : isVideoItem
+          ? getVideoQueueRecallCapabilities(videoSnapshot, meta)
+          : getQueueRecallCapabilities(localGenerateValues, meta),
+    [isRecallPending, isVideoItem, localGenerateValues, meta, videoSnapshot]
   );
 
   useMountEffect(() => {
@@ -58,8 +65,11 @@ export const QueueItemActions = ({ item }: { item: QueueItemReadModel }) => {
 
   const onRecall = useCallback(
     (kind: ImageRecallKind) => {
+      if (isRecallPending) {
+        return;
+      }
       const current = getCurrentGenerateValues({ generateValues, supportedModels });
-      const plan = planQueueRecall(kind, { current, isVideoItem, meta, snapshot: localGenerateValues });
+      const plan = planQueueRecall(kind, { current, isVideoItem, meta, snapshot: localGenerateValues, videoSnapshot });
 
       if (!plan) {
         notify.info(
@@ -90,6 +100,7 @@ export const QueueItemActions = ({ item }: { item: QueueItemReadModel }) => {
       generateValues,
       generation,
       isVideoItem,
+      isRecallPending,
       localGenerateValues,
       meta,
       notify,
@@ -97,6 +108,7 @@ export const QueueItemActions = ({ item }: { item: QueueItemReadModel }) => {
       supportedModels,
       t,
       widgets,
+      videoSnapshot,
     ]
   );
 

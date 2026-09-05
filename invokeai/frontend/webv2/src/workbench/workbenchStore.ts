@@ -8,6 +8,7 @@ import {
   type GeneratedImageContract,
 } from '@features/gallery/contracts';
 import { createExternalStore } from '@platform/state/externalStore';
+import { hasActiveQueueRuns, hasInFlightQueueRuns } from '@workbench/queue-integration/activeQueueRuns';
 
 import type { CanvasEditIntent } from './autoRoutePolicy';
 import type { CanvasProjectMutation } from './canvasProjectMutations';
@@ -59,7 +60,10 @@ const createCommandFactory = (dispatch: WorkbenchDispatch) => {
 
 export type ProjectCommandResult =
   | { ok: true }
-  | { ok: false; reason: 'invalid-name' | 'last-project' | 'project-not-found' };
+  | {
+      ok: false;
+      reason: 'active-queue-runs' | 'invalid-name' | 'last-project' | 'project-not-found' | 'target-already-open';
+    };
 
 const createCommands = (
   dispatch: WorkbenchDispatch,
@@ -332,12 +336,17 @@ const createCommands = (
     },
     projects: {
       close: (projectId: string): ProjectCommandResult => {
-        if (!getState().projects.some((project) => project.id === projectId)) {
+        const state = getState();
+        const project = state.projects.find((project) => project.id === projectId);
+        if (!project) {
           return { ok: false, reason: 'project-not-found' };
         }
 
-        if (getState().projects.length === 1) {
-          dispatch({ projectId, type: 'closeProject' });
+        if (hasActiveQueueRuns(project)) {
+          return { ok: false, reason: 'active-queue-runs' };
+        }
+
+        if (state.projects.length === 1) {
           return { ok: false, reason: 'last-project' };
         }
 
@@ -382,8 +391,11 @@ const createCommands = (
       clearCompleted: command('clearCompletedQueueItems'),
       markBackendCancelled: command('markQueueItemBackendCancelled'),
       markBackendSubmitted: command('markQueueItemBackendSubmitted'),
+      setCancellationPending: command('setQueueItemCancellationPending'),
+      setLocalRecoveryState: command('setQueueItemLocalRecoveryState'),
       routePartialResults: command('routeQueueItemPartialResults'),
       routeResults: command('routeQueueItemResults'),
+      restoreFromJournal: command('restoreQueueItemsFromJournal'),
       setConnectionStatus: command('setBackendConnectionStatus'),
       setStatus: command('setQueueItemStatus'),
     },
@@ -449,8 +461,6 @@ const createCommands = (
         (document: ActionPayload<'replaceProjectGraph'>['document'], label: string) => ({ document, label })
       ),
       redo: command('redoProjectChange'),
-      restoreSnapshot: command('restoreProjectGraphSnapshot', (snapshotId: string) => ({ snapshotId })),
-      saveSnapshot: command('saveProjectGraphSnapshot'),
       undo: command('undoProjectChange'),
     },
   };
@@ -476,9 +486,24 @@ const createPersistenceAdapter = (dispatch: WorkbenchDispatch, getState: () => W
     },
     getState,
     hydrate: command('hydrateWorkbench', (state: WorkbenchState) => ({ state })),
-    reconcileConflict: command('reconcileProjectConflict'),
-    reconcileDeletedProject: command('reconcileDeletedProject'),
+    replaceProjectFromServer: command('replaceProjectFromServer'),
+    retargetProject: (payload: ActionPayload<'retargetProject'>): ProjectCommandResult => {
+      const state = getState();
+      if (!state.projects.some((project) => project.id === payload.projectId)) {
+        return { ok: false, reason: 'project-not-found' };
+      }
+      const source = state.projects.find((project) => project.id === payload.projectId);
+      if (source && hasInFlightQueueRuns(source)) {
+        return { ok: false, reason: 'active-queue-runs' };
+      }
+      if (state.projects.some((project) => project.id === payload.targetProjectId)) {
+        return { ok: false, reason: 'target-already-open' };
+      }
+      dispatch({ ...payload, type: 'retargetProject' });
+      return { ok: true };
+    },
     saveFailed: command('autosaveFailed', (error: string) => ({ error })),
+    savePending: command('autosavePending', (error: string) => ({ error })),
     saveStarted: command('autosaveStarted'),
     saveSucceeded: command('autosaveSucceeded', (savedAt: string) => ({ savedAt })),
   };
