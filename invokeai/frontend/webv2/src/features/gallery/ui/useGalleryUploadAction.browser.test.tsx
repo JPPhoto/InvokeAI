@@ -386,6 +386,18 @@ describe('focused gallery upload action', () => {
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
   });
 
+  it('trusts a board id the loaded list does not name', async () => {
+    mocks.uploadGalleryImage.mockResolvedValue(imageUpload('photo.png', '2026-07-30T12:00:04.000Z', 'board-9'));
+
+    selectedBoardId = 'board-9';
+    await renderProbe();
+    await act(async () => {
+      await uploadFilesRef.current?.([new File(['image'], 'photo.png', { type: 'image/png' })]);
+    });
+
+    expect(mocks.uploadGalleryImage).toHaveBeenCalledExactlyOnceWith(expect.any(File), 'board-9', expect.anything());
+  });
+
   it('rejects unsupported files without a request and resolves empty', async () => {
     await act(async () => {
       await expect(

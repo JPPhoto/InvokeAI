@@ -5,7 +5,7 @@
  * To publish a new entry module, add it here and cover it in dependencyPolicy.test.ts.
  */
 export const FEATURE_PUBLIC_INTERFACES: Readonly<Record<string, readonly string[]>> = {
-  gallery: ['contracts', 'launchpad', 'paletteSearch', 'queries', 'react', 'utility', 'widget'],
+  gallery: ['contracts', 'launchpad', 'paletteSearch', 'picker', 'queries', 'react', 'utility', 'widget'],
   generation: [
     'canvasGraph',
     'components',
