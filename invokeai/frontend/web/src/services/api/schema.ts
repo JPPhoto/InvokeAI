@@ -2557,6 +2557,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/queue/{queue_id}/enqueue_batch/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Acknowledge Enqueue Batch */
+        post: operations["acknowledge_enqueue_batch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/queue/{queue_id}/enqueue_batch/receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Enqueue Batch Receipt */
+        get: operations["get_enqueue_batch_receipt"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/queue/{queue_id}/list_all": {
         parameters: {
             query?: never;
@@ -4947,6 +4981,16 @@ export type components = {
              */
             batch_id?: string;
             /**
+             * Idempotency Key
+             * @description A caller-owned retry key. Reusing it with a different payload is rejected.
+             */
+            idempotency_key?: string | null;
+            /**
+             * Project Id
+             * @description The authoritative project that owns this submission, when applicable.
+             */
+            project_id?: string | null;
+            /**
              * Origin
              * @description The origin of this queue item. This data is used by the frontend to determine how to handle results.
              */
@@ -5346,6 +5390,14 @@ export type components = {
          * @enum {string}
          */
         BoardVisibility: "private" | "shared" | "public";
+        /** Body_acknowledge_enqueue_batch */
+        Body_acknowledge_enqueue_batch: {
+            /**
+             * Idempotency Key
+             * @description The acknowledged enqueue retry key
+             */
+            idempotency_key: string;
+        };
         /** Body_add_image_to_board */
         Body_add_image_to_board: {
             /**
@@ -10811,6 +10863,29 @@ export type components = {
             models_cleared: number;
             /** Bytes Freed */
             bytes_freed: number;
+        };
+        /** EnqueueBatchReceipt */
+        EnqueueBatchReceipt: {
+            /**
+             * Batch Id
+             * @description The ID assigned to the accepted batch
+             */
+            batch_id: string;
+            /**
+             * Enqueued
+             * @description The total number of queue items enqueued
+             */
+            enqueued: number;
+            /**
+             * Requested
+             * @description The total number of queue items requested
+             */
+            requested: number;
+            /**
+             * Item Ids
+             * @description The IDs of the accepted queue items
+             */
+            item_ids: number[];
         };
         /** EnqueueBatchResult */
         EnqueueBatchResult: {
@@ -50900,6 +50975,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnqueueBatchResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    acknowledge_enqueue_batch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The queue id that accepted the batch */
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Body_acknowledge_enqueue_batch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_enqueue_batch_receipt: {
+        parameters: {
+            query: {
+                /** @description The enqueue retry key */
+                idempotency_key: string;
+            };
+            header?: never;
+            path: {
+                /** @description The queue id that accepted the batch */
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnqueueBatchReceipt"];
                 };
             };
             /** @description Validation Error */

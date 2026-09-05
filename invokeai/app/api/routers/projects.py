@@ -8,12 +8,15 @@ from invokeai.app.api.auth_dependencies import CurrentUserOrDefault
 from invokeai.app.api.dependencies import ApiDependencies
 from invokeai.app.services.project_records.project_records_common import (
     DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
+    PROJECT_DOCUMENT_MAX_BYTES,
     ProjectBoardNotFoundError,
     ProjectBoardSnapshotDTO,
     ProjectBoardTooLargeError,
     ProjectBoardUnavailableError,
     ProjectCanvasSchemaDowngradeError,
     ProjectCanvasSchemaUnsupportedError,
+    ProjectDocumentInvalidError,
+    ProjectDocumentTooLargeError,
     ProjectRecordConflictError,
     ProjectRecordDTO,
     ProjectRecordExistsError,
@@ -22,6 +25,12 @@ from invokeai.app.services.project_records.project_records_common import (
 )
 
 projects_router = APIRouter(prefix="/v1/projects", tags=["projects"])
+
+PROJECT_WRITE_REQUEST_MAX_BYTES = PROJECT_DOCUMENT_MAX_BYTES + 2 * 1024 * 1024
+MAX_CONCURRENT_PROJECT_WRITES = 2
+MAX_CONCURRENT_PROJECT_WRITES_PER_USER = 1
+PROJECT_WRITE_IDLE_TIMEOUT_SECONDS = 30.0
+PROJECT_WRITE_MAX_DURATION_SECONDS = 120.0
 
 
 class ProjectCreateRequest(BaseModel):
@@ -82,6 +91,25 @@ def _schema_precondition_failed(error: ProjectCanvasSchemaUnsupportedError) -> H
     )
 
 
+def _document_too_large(error: ProjectDocumentTooLargeError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        detail={
+            "code": "project_document_too_large",
+            "message": str(error),
+            "max_bytes": error.max_bytes,
+            "actual_bytes": error.actual_bytes,
+        },
+    )
+
+
+def _document_invalid(error: ProjectDocumentInvalidError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail={"code": "project_document_invalid", "message": str(error)},
+    )
+
+
 @projects_router.get("/", operation_id="list_projects", response_model=list[ProjectSummaryDTO])
 def list_projects(current_user: CurrentUserOrDefault) -> list[ProjectSummaryDTO]:
     """Lists the current user's projects as lightweight summaries (no documents)."""
@@ -112,6 +140,10 @@ def create_project(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except ProjectCanvasSchemaUnsupportedError as e:
         raise _schema_precondition_failed(e)
+    except ProjectDocumentTooLargeError as e:
+        raise _document_too_large(e)
+    except ProjectDocumentInvalidError as e:
+        raise _document_invalid(e)
 
 
 @projects_router.get("/{project_id}", operation_id="get_project", response_model=ProjectRecordDTO)
@@ -171,6 +203,10 @@ def update_project(
         )
     except ProjectCanvasSchemaUnsupportedError as e:
         raise _schema_precondition_failed(e)
+    except ProjectDocumentTooLargeError as e:
+        raise _document_too_large(e)
+    except ProjectDocumentInvalidError as e:
+        raise _document_invalid(e)
 
 
 @projects_router.get(

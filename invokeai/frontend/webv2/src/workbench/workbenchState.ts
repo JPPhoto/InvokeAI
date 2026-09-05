@@ -29,7 +29,6 @@ import type {
   WidgetRegionState,
 } from '@workbench/layoutContracts';
 import type {
-  GraphHistorySnapshot,
   Project,
   ProjectUndoSnapshot,
   PromptHistoryItem,
@@ -39,7 +38,6 @@ import type {
   WorkbenchNotificationKind,
   WorkbenchState,
 } from '@workbench/projectContracts';
-import type { ProjectRecoveredIdentity } from '@workbench/projects/projectFlush';
 import type { ProjectSettings } from '@workbench/settings/contracts';
 import type {
   WidgetFailure,
@@ -72,6 +70,7 @@ import {
   type GeneratedImageContract,
 } from '@features/gallery/contracts';
 import { WIDGET_REGIONS } from '@workbench/layoutContracts';
+import { prependProjectEvent, PROJECT_EVENT_LIMIT } from '@workbench/projectEvents';
 
 import type { WorkbenchQueueItem as QueueItem } from './queueHistoryContracts';
 
@@ -90,6 +89,7 @@ import {
 import { createNewCanvasState, loadCanvasState } from './canvasMigration';
 import { applyCanvasProjectMutation, type CanvasProjectMutation } from './canvasProjectMutations';
 import { gateProjectCanvases } from './projectCanvasGate';
+import { normalizeRestoredQueueItem } from './queue-integration/queueRunRestoration';
 import { getProjectWidgetValues } from './widgetState';
 export { nextLayerName } from './canvasProjectMutations';
 import { compileGenerateGraph, resolveGenerateSeed } from '@features/generation/graph';
@@ -174,10 +174,14 @@ import {
   createLayoutPresetSnapshot,
   resolveSavedLayoutPreset,
 } from './layoutPresetSnapshots';
-import { normalizeWorkbenchQueueHistory } from './queueHistoryNormalization';
 import { normalizeProjectSettings } from './settings/store';
 
-type QueueGenerateSnapshot = NonNullable<QueueItem['snapshot']['generate']>;
+interface QueueGenerateSnapshot {
+  negativePromptNodeId: string;
+  positivePromptNodeId: string;
+  seedNodeId: string;
+  values: GenerateWidgetValues;
+}
 
 export interface WorkbenchReducerContext {
   autoSwitchInvocationRoute: boolean;
@@ -235,6 +239,7 @@ type WorkbenchReducerAction =
       activeInstanceId?: WidgetInstanceId;
       instanceIds: WidgetInstanceId[];
     }
+  | { type: 'setWidgetInstanceAlignment'; region: WidgetRegion; instanceId: WidgetInstanceId; align: 'start' | 'end' }
   | { type: 'setRegionWidgetCollapsed'; region: WidgetRegion; isCollapsed: boolean }
   | { type: 'setRegionWidgetSize'; region: WidgetRegion; sizePx: number }
   | { type: 'floatWidget'; instanceId: WidgetInstanceId }
@@ -288,8 +293,6 @@ type WorkbenchReducerAction =
     }
   | { type: 'applyProjectGraphAction'; action: ProjectGraphAction }
   | { type: 'replaceProjectGraph'; document: ProjectGraphState; label: string }
-  | { type: 'saveProjectGraphSnapshot' }
-  | { type: 'restoreProjectGraphSnapshot'; snapshotId: string }
   | { type: 'setProjectGraphLibraryBinding'; libraryWorkflowId: string }
   | { type: 'submitInvocationSnapshot'; backendSupportsCancellation: boolean; models?: readonly ModelConfig[] }
   | {
@@ -323,7 +326,15 @@ type WorkbenchReducerAction =
       images: GeneratedImageContract[];
     }
   | { type: 'markQueueItemBackendCancelled'; projectId: string; queueItemId: string; backendItemId: number }
+  | { type: 'setQueueItemCancellationPending'; projectId: string; queueItemId: string; pending: boolean }
+  | {
+      type: 'setQueueItemLocalRecoveryState';
+      projectId: string;
+      queueItemId: string;
+      state: NonNullable<QueueItem['localRecoveryState']>;
+    }
   | { type: 'routeQueueItemResults'; projectId: string; queueItemId: string; images: GeneratedImageContract[] }
+  | { type: 'restoreQueueItemsFromJournal'; projectId: string; items: unknown[] }
   | { type: 'appendCanvasStagingCandidate'; projectId: string; candidate: CanvasStagingCandidateContract }
   | {
       type: 'selectGalleryItem';
@@ -390,20 +401,18 @@ type WorkbenchReducerAction =
   | { type: 'undoProjectChange' }
   | { type: 'redoProjectChange' }
   | { type: 'hydrateWorkbench'; state: WorkbenchState }
+  | { type: 'replaceProjectFromServer'; projectId: string; project: Project }
   | {
-      type: 'reconcileProjectConflict';
+      type: 'retargetProject';
+      boardId: string;
+      name: string;
+      project: Project;
       projectId: string;
-      serverProject: Project;
-      recoveredProject: Project;
-      recoveredIdentity: ProjectRecoveredIdentity;
-    }
-  | {
-      type: 'reconcileDeletedProject';
-      projectId: string;
-      recoveredProject: Project;
-      recoveredIdentity: ProjectRecoveredIdentity;
+      sourceName: string;
+      targetProjectId: string;
     }
   | { type: 'autosaveStarted' }
+  | { type: 'autosavePending'; error: string }
   | { type: 'autosaveSucceeded'; savedAt: string }
   | { type: 'autosaveFailed'; error: string }
   | { type: 'markAllNotificationsRead' }
@@ -422,7 +431,6 @@ type WorkbenchReducerAction =
   | { type: 'recordNotice'; kind: WorkbenchNotificationKind; title: string; message?: string };
 
 const HISTORY_LIMIT = 40;
-export const GRAPH_HISTORY_BYTE_BUDGET = 64 * 1024 * 1024;
 const NOTIFICATION_LIMIT = 100;
 // Side panels host real widget UIs (gallery grid, generate form); below
 // ~350px their toolbars and grids collapse into unusable slivers, so that is
@@ -627,13 +635,6 @@ const cloneGraph = (graph: GraphContract): GraphContract => ({
     : undefined,
   edges: graph.edges.map((edge) => ({ ...edge })),
   nodes: graph.nodes.map((node) => ({ ...node, inputs: { ...node.inputs } })),
-});
-
-const cloneQueueGenerateSnapshot = (generate: QueueGenerateSnapshot): QueueGenerateSnapshot => ({
-  negativePromptNodeId: generate.negativePromptNodeId,
-  positivePromptNodeId: generate.positivePromptNodeId,
-  seedNodeId: generate.seedNodeId,
-  values: cloneGenerateWidgetValues(generate.values),
 });
 
 const applyQueueGenerateSnapshotToWidgetStates = (
@@ -1010,16 +1011,6 @@ const cloneWidgetInstance = (widgetInstance: WidgetInstanceContract): WidgetInst
   state: cloneWidgetState(widgetInstance.state),
 });
 
-const cloneQueueWidgetState = (widgetState: WidgetStateContract, typeId: WidgetTypeId): WidgetStateContract => {
-  const state = cloneWidgetState(widgetState);
-
-  if (typeId === 'gallery') {
-    delete state.values.recentImages;
-  }
-
-  return state;
-};
-
 const cloneWidgetInstances = (
   widgetInstances: Record<WidgetInstanceId, WidgetInstanceContract>
 ): Record<WidgetInstanceId, WidgetInstanceContract> =>
@@ -1030,24 +1021,11 @@ const cloneWidgetInstances = (
     ])
   );
 
-const cloneQueueWidgetInstances = (
-  widgetInstances: Record<WidgetInstanceId, WidgetInstanceContract>
-): Record<WidgetInstanceId, WidgetInstanceContract> =>
-  Object.fromEntries(
-    Object.entries({ ...createWidgetInstances(), ...widgetInstances }).map(([instanceId, widgetInstance]) => [
-      instanceId,
-      {
-        ...widgetInstance,
-        state: cloneQueueWidgetState(widgetInstance.state, widgetInstance.typeId),
-      },
-    ])
-  );
-
 const getWidgetStatesSnapshot = (widgetInstances: Record<WidgetInstanceId, WidgetInstanceContract>): WidgetStateMap => {
   const widgetStates: WidgetStateMap = {};
 
   for (const widgetInstance of Object.values(widgetInstances)) {
-    widgetStates[widgetInstance.typeId] ??= cloneQueueWidgetState(widgetInstance.state, widgetInstance.typeId);
+    widgetStates[widgetInstance.typeId] ??= cloneWidgetState(widgetInstance.state);
   }
 
   return widgetStates;
@@ -1167,112 +1145,6 @@ const restoreUndoSnapshot = (project: Project, snapshot: ProjectUndoSnapshot): P
   widgetRegions: cloneWidgetRegions(snapshot.widgetRegions),
 });
 
-const UTF8_ENCODER = new TextEncoder();
-
-const getGraphHistorySnapshotBytes = (snapshot: GraphHistorySnapshot): number => {
-  const { retainedBytes: _retainedBytes, ...serialized } = snapshot;
-  let retainedBytes = 0;
-
-  // Include the metadata field itself in the serialized-size budget. Its digit
-  // count can change the answer, so converge on the stable JSON byte length.
-  for (;;) {
-    const nextRetainedBytes = UTF8_ENCODER.encode(JSON.stringify({ ...serialized, retainedBytes })).byteLength;
-    if (nextRetainedBytes === retainedBytes) {
-      return retainedBytes;
-    }
-    retainedBytes = nextRetainedBytes;
-  }
-};
-
-type MeasuredGraphHistorySnapshot = GraphHistorySnapshot & { retainedBytes: number };
-
-const withRetainedBytes = (snapshot: GraphHistorySnapshot): MeasuredGraphHistorySnapshot => ({
-  ...snapshot,
-  retainedBytes: getGraphHistorySnapshotBytes(snapshot),
-});
-
-/** Trims state-owned snapshots without reserializing retained history. */
-const trimMeasuredGraphHistory = (snapshots: readonly GraphHistorySnapshot[]): GraphHistorySnapshot[] => {
-  const history: GraphHistorySnapshot[] = [];
-  let retainedBytes = 0;
-
-  for (const snapshot of snapshots) {
-    if (history.length >= HISTORY_LIMIT) {
-      break;
-    }
-
-    const snapshotBytes = snapshot.retainedBytes;
-    if (typeof snapshotBytes !== 'number' || !Number.isFinite(snapshotBytes) || snapshotBytes < 0) {
-      continue;
-    }
-
-    if (snapshotBytes > GRAPH_HISTORY_BYTE_BUDGET || retainedBytes + snapshotBytes > GRAPH_HISTORY_BYTE_BUDGET) {
-      continue;
-    }
-
-    retainedBytes += snapshotBytes;
-    history.push(snapshot);
-  }
-
-  return history;
-};
-
-export const normalizeGraphHistory = (value: unknown): GraphHistorySnapshot[] => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  const measuredHistory: MeasuredGraphHistorySnapshot[] = [];
-
-  for (const item of value) {
-    if (!item || typeof item !== 'object') {
-      continue;
-    }
-
-    const snapshot = item as GraphHistorySnapshot;
-    if (
-      typeof snapshot.id !== 'string' ||
-      typeof snapshot.createdAt !== 'string' ||
-      typeof snapshot.label !== 'string'
-    ) {
-      continue;
-    }
-
-    // Persisted metadata is untrusted. Always derive the retained size from the
-    // actual snapshot so a forged low count cannot bypass the load-time budget
-    // and a stale high count cannot discard valid history.
-    measuredHistory.push(withRetainedBytes(snapshot));
-  }
-
-  return trimMeasuredGraphHistory(measuredHistory);
-};
-
-const prependGraphHistory = (
-  history: readonly GraphHistorySnapshot[],
-  snapshot: MeasuredGraphHistorySnapshot
-): GraphHistorySnapshot[] => trimMeasuredGraphHistory([snapshot, ...history]);
-
-const createGraphHistorySnapshot = (label: string, graph: GraphContract): MeasuredGraphHistorySnapshot =>
-  withRetainedBytes({
-    createdAt: now(),
-    graph: cloneGraph(graph),
-    id: createId('graph-history'),
-    label,
-  });
-
-/** A restorable history entry carrying the editable workflow document. */
-const createDocumentHistorySnapshot = (
-  label: string,
-  document: ProjectGraphState,
-  cloneDocument = true
-): MeasuredGraphHistorySnapshot =>
-  withRetainedBytes({
-    createdAt: now(),
-    document: cloneDocument ? cloneProjectGraph(document) : document,
-    id: createId('graph-history'),
-    label,
-  });
-
 const pushUndo = (project: Project, label: string, projectGraph?: ProjectGraphState): Project => ({
   ...project,
   undoRedo: {
@@ -1303,7 +1175,6 @@ const createWidgetStates = (): WidgetStateMap => ({
   queue: { id: 'queue', label: 'Queue', values: {}, version: 1 },
   'server-status': { id: 'server-status', label: 'Server Status', values: {}, version: 1 },
   users: { id: 'users', label: 'Users', values: {}, version: 1 },
-  'version-status': { id: 'version-status', label: 'Version', values: {}, version: 1 },
   workflow: { graphId: 'workflow-graph', id: 'workflow', label: 'Workflow', values: {}, version: 1 },
   upscale: { graphId: 'upscale-graph', id: 'upscale', label: 'Upscale', values: {}, version: 1 },
   video: { graphId: 'video-graph', id: 'video', label: 'Video', values: {}, version: 1 },
@@ -1348,7 +1219,6 @@ const defaultWidgetInstanceTypes: Record<WidgetInstanceId, WidgetTypeId> = {
   project: 'project',
   queue: 'queue',
   'server-status': 'server-status',
-  'version-status': 'version-status',
   workflow: 'workflow',
   'workflow:bottom': 'workflow',
   'workflow:center': 'workflow',
@@ -1370,15 +1240,6 @@ const LEGACY_DEFAULT_LEFT_REGION_WIDGET_IDS: readonly WidgetInstanceId[][] = [
   ['generate', 'workflow'],
   ['workflow', 'generate'],
   ['generate', 'workflow', 'gallery'],
-];
-
-// Every left rail shipped as a default between the Upscale and Video widgets
-// (including pre-upscale defaults after the splice above normalizes them).
-const PRE_VIDEO_DEFAULT_LEFT_REGION_WIDGET_IDS: readonly WidgetInstanceId[][] = [
-  ['generate', 'upscale'],
-  ['generate', 'workflow', 'upscale'],
-  ['workflow', 'generate', 'upscale'],
-  ['generate', 'workflow', 'upscale', 'gallery'],
 ];
 
 const ensureLeftRegion = (leftRegion: WidgetRegionState | undefined): WidgetRegionState => {
@@ -1403,21 +1264,9 @@ const ensureLeftRegion = (leftRegion: WidgetRegionState | undefined): WidgetRegi
     }
   }
 
-  // Same treatment for rails persisted before the Video widget shipped: only a
-  // rail that exactly matches a shipped default (after the upscale splice above)
-  // adopts it — a customized rail is left alone.
-  if (region.instanceIds.includes('upscale') && !region.instanceIds.includes('video')) {
-    const preVideoMatch = PRE_VIDEO_DEFAULT_LEFT_REGION_WIDGET_IDS.some(
-      (ids) => ids.length === region.instanceIds.length && ids.every((id, index) => region.instanceIds[index] === id)
-    );
-
-    if (preVideoMatch) {
-      const instanceIds = [...region.instanceIds];
-
-      instanceIds.splice(instanceIds.indexOf('upscale') + 1, 0, 'video');
-      region = { ...region, instanceIds };
-    }
-  }
+  // The Video widget is deliberately absent from the non-video defaults now,
+  // so nothing backfills it any more; it lives in the Video preset and stays
+  // addable everywhere.
 
   return region;
 };
@@ -1754,8 +1603,8 @@ export const normalizeWorkbenchProject = (
   options: {
     /**
      * Whether the document is arriving from another realm (a server record,
-     * an import) rather than being kept by this one (the conflict fork that
-     * rescues the live copy). An infinite window's mid-board anchor is a
+     * an import) rather than being kept by this one during a live retarget.
+     * An infinite window's mid-board anchor is a
      * "you are here" for the session that revealed it: it is dropped from a
      * document that arrives, and kept for one that stays.
      */
@@ -1779,6 +1628,12 @@ const assembleWorkbenchProject = (
   } = {}
 ): Project => {
   const { isArriving = true } = options;
+  const {
+    graphHistory: _graphHistory,
+    recoveredAt: _recoveredAt,
+    recoveryOf: _recoveryOf,
+    ...persistentProject
+  } = project as Project & { graphHistory?: unknown; recoveredAt?: unknown; recoveryOf?: unknown };
   const legacyWidgetRegions = project.widgetRegions as
     | Partial<Record<WidgetRegion | 'left-panel' | 'right-panel' | 'status-bar', WidgetRegionState>>
     | undefined;
@@ -1832,8 +1687,7 @@ const assembleWorkbenchProject = (
     // values describe — the Open dialog, a deep link — where a search only
     // that session could resolve, and the rank pages set against it, would be
     // read as board positions. But this also runs on projects that never
-    // left: closing and reopening one, and the conflict fork that deliberately
-    // rescues the LIVE copy. So the test is whether the reference resolves
+    // left: closing, reopening, or retargeting one. So the test is whether the reference resolves
     // here, not what kind it is; the latter would delete the ranking the user
     // is looking at.
     // An infinite window's mid-board anchor goes the same way, for the same
@@ -1890,17 +1744,17 @@ const assembleWorkbenchProject = (
   );
 
   return {
-    ...project,
+    ...persistentProject,
     canvas,
+    events: isArriving ? [] : project.events.slice(0, PROJECT_EVENT_LIMIT),
     floatingWidgets: placement.floatingWidgets,
-    graphHistory: normalizeGraphHistory((project as Partial<Project>).graphHistory),
     // Built-in preset ids were renamed for the three-preset model; a project
     // saved under an old id must still resolve to the arrangement it names,
     // otherwise every restored project reads as drifted from Compose.
     layout: { ...project.layout, presetId: resolveLayoutPresetId(project.layout.presetId) },
     projectGraph: normalizeProjectGraph(project.projectGraph),
     promptHistory: normalizePromptHistory((project as Partial<Project>).promptHistory),
-    queue: normalizeWorkbenchQueueHistory(project.queue, { canvas, widgetInstances }),
+    queue: isArriving ? { items: [] } : project.queue,
     settings: normalizeProjectSettings(project.settings),
     widgetRegions: placement.widgetRegions,
     widgetInstances,
@@ -1925,40 +1779,6 @@ export const withAuthoritativeProjectBoard = (project: Project, boardId: string)
     values.projectBoardId === boardId ? values : { ...values, projectBoardId: boardId }
   );
 
-/**
- * The project a recovery fork should become, preferring live content over the snapshot.
- *
- * The fork is serialized when the save begins, so anything typed since is newer than it. Adopting
- * the snapshot would delete precisely the edits the fork exists to rescue, in the case the
- * mechanism most often fires: a save is stale exactly when a keystroke landed mid-flight.
- *
- * So the live project is re-labelled instead. The server-side fork already holds the older document
- * under this identity, so the next push sees a difference and sends the current content up its
- * revision chain — nothing lost, nothing to merge.
- *
- * The snapshot still wins when there is no live project (a tab closed mid-save), because then it is
- * the only local copy of that work.
- */
-const recoverProjectUnderNewIdentity = (
-  localProject: Project | undefined,
-  snapshotProject: Project,
-  identity: ProjectRecoveredIdentity
-): Project =>
-  // The fork rescues the LIVE copy, edits and position included; only a
-  // fallback to the snapshot is a document arriving from elsewhere.
-  localProject
-    ? normalizeWorkbenchProject(
-        {
-          ...localProject,
-          id: identity.id,
-          name: identity.name,
-          recoveredAt: identity.recoveredAt,
-          recoveryOf: identity.recoveryOf,
-        },
-        { isArriving: false }
-      )
-    : normalizeWorkbenchProject(snapshotProject);
-
 export const clampPanelSize = (region: WidgetRegion, sizePx: number): number => {
   const { max, min } = getPanelSizeBounds(region);
 
@@ -1979,7 +1799,6 @@ const createProject = (index: number, id: string, preset: LayoutPreset): Project
           type: 'project-created',
         },
       ],
-      graphHistory: [],
       id,
       invocation: getInvocationAfterLayoutPreset(defaultInvocationRoute, preset),
       layout: { ...defaultLayoutPreset.snapshot.layout, panels: { ...defaultLayoutPreset.snapshot.layout.panels } },
@@ -2169,6 +1988,9 @@ const isWidgetRegionState = (
       (record.activeInstanceId.length > 0 &&
         record.activeInstanceId in widgetInstances &&
         (instanceIds.length === 0 || instanceIds.includes(record.activeInstanceId)))) &&
+    (record.alignEndInstanceIds === undefined ||
+      (Array.isArray(record.alignEndInstanceIds) &&
+        record.alignEndInstanceIds.every((instanceId) => typeof instanceId === 'string'))) &&
     typeof record.isCollapsed === 'boolean' &&
     typeof record.sizePx === 'number' &&
     Number.isFinite(record.sizePx) &&
@@ -2368,15 +2190,12 @@ const updateActiveLayout = (
 
     return {
       ...nextProject,
-      events: [
-        {
-          createdAt: now(),
-          id: createId('event'),
-          summary: 'Updated active layout',
-          type: 'layout-updated',
-        },
-        ...nextProject.events,
-      ],
+      events: prependProjectEvent(nextProject.events, {
+        createdAt: now(),
+        id: createId('event'),
+        summary: 'Updated active layout',
+        type: 'layout-updated',
+      }),
       layout: getLayout(project.layout),
     };
   });
@@ -2453,15 +2272,12 @@ const updateActiveProjectLayoutPreset = (
 
     return {
       ...nextLayoutProject,
-      events: [
-        {
-          createdAt: now(),
-          id: createId('event'),
-          summary: 'Updated active layout',
-          type: 'layout-updated',
-        },
-        ...nextProject.events,
-      ],
+      events: prependProjectEvent(nextProject.events, {
+        createdAt: now(),
+        id: createId('event'),
+        summary: 'Updated active layout',
+        type: 'layout-updated',
+      }),
       invocation: applyDefaultRoute
         ? getInvocationAfterLayoutPreset(nextProject.invocation, preset)
         : nextLayoutProject.invocation,
@@ -2477,15 +2293,12 @@ const updateActiveInvocation = (
 
     return {
       ...nextProject,
-      events: [
-        {
-          createdAt: now(),
-          id: createId('event'),
-          summary: 'Updated invocation source or destination',
-          type: 'invocation-updated',
-        },
-        ...nextProject.events,
-      ],
+      events: prependProjectEvent(nextProject.events, {
+        createdAt: now(),
+        id: createId('event'),
+        summary: 'Updated invocation source or destination',
+        type: 'invocation-updated',
+      }),
       invocation: getInvocation(project.invocation),
     };
   });
@@ -3214,10 +3027,9 @@ const enqueueCompiledSnapshot = (
   const { generate, graph } = compiled;
   const widgetStates = Object.fromEntries(
     Object.entries(applyQueueGenerateSnapshotToWidgetStates(compiled.widgetStates, generate)).map(
-      ([typeId, widgetState]) => [typeId, cloneQueueWidgetState(widgetState, typeId as WidgetTypeId)]
+      ([typeId, widgetState]) => [typeId, cloneWidgetState(widgetState)]
     )
   ) as WidgetStateMap;
-  const graphHistorySnapshot = createGraphHistorySnapshot(`Queue snapshot ${queueItemId}`, graph);
   const generateSettings =
     route.sourceId === 'generate' ? normalizeGenerateSettings(widgetStates.generate.values) : null;
   const upscaleSettings =
@@ -3310,17 +3122,36 @@ const enqueueCompiledSnapshot = (
             height: generatePresentationSettings?.height ?? project.canvas.document.height,
             width: generatePresentationSettings?.width ?? project.canvas.document.width,
           };
+  const submittedCanvas = canvasSnapshot ?? project.canvas;
+  const generateRecallValues =
+    route.sourceId === 'canvas'
+      ? generate?.values
+      : route.sourceId === 'generate'
+        ? normalizeGenerateWidgetValues(widgetStates.generate?.values)
+        : null;
+  const recall = generateRecallValues
+    ? { generateValues: cloneGenerateWidgetValues(generateRecallValues) }
+    : videoSettings
+      ? { videoValues: cloneVideoWidgetValues(videoSettings) }
+      : undefined;
   const queueItem: QueueItem = {
     cancellable: backendSupportsCancellation,
     id: queueItemId,
+    localRecoveryState: 'local-only',
     snapshot: {
       backendSubmission,
-      canvas: canvasSnapshot ? structuredClone(canvasSnapshot) : cloneCanvas(project.canvas),
+      canvas: {
+        document: {
+          bbox: { ...submittedCanvas.document.bbox },
+          height: submittedCanvas.document.height,
+          width: submittedCanvas.document.width,
+        },
+        documentRevision: submittedCanvas.documentRevision,
+      },
       destination: route.destination,
       filterIntermediateResults: route.sourceId === 'workflow',
       galleryBoardId: typeof selectedGalleryBoardId === 'string' ? selectedGalleryBoardId : null,
-      ...(generate ? { generate: cloneQueueGenerateSnapshot(generate) } : {}),
-      graph,
+      graph: { id: graph.id, label: graph.label },
       presentation: {
         // Placeholder sizing only: superseded by the backend's real item ids as
         // soon as the batch is accepted.
@@ -3343,25 +3174,20 @@ const enqueueCompiledSnapshot = (
             ? { resultNodeIds: ['video_output'] }
             : {}),
       submittedAt,
-      widgetInstances: cloneQueueWidgetInstances(project.widgetInstances),
-      widgetStates,
+      ...(recall ? { recall } : {}),
     },
     status: 'pending',
   };
 
   return {
     ...project,
-    events: [
-      {
-        createdAt: submittedAt,
-        id: createId('event'),
-        runId: queueItemId,
-        summary: `Submitted immutable ${route.sourceId} graph snapshot to ${route.destination}`,
-        type: 'queue-submitted',
-      },
-      ...project.events,
-    ],
-    graphHistory: prependGraphHistory(project.graphHistory, graphHistorySnapshot),
+    events: prependProjectEvent(project.events, {
+      createdAt: submittedAt,
+      id: createId('event'),
+      runId: queueItemId,
+      summary: `Submitted immutable ${route.sourceId} graph snapshot to ${route.destination}`,
+      type: 'queue-submitted',
+    }),
     promptHistory: generateSettings
       ? addPromptHistoryItem(project.promptHistory, getPromptHistoryItemFromGenerateSettings(generateSettings))
       : upscaleSettings
@@ -4113,6 +3939,25 @@ export const __workbenchReducerInternal = (
         return applyAutoRouteForRegionFront(nextProject, previousRegion, action.region, context);
       });
     }
+    case 'setWidgetInstanceAlignment': {
+      return updateActiveProject(state, (project) =>
+        updateProjectWidgetRegion(project, action.region, (region) => {
+          const current = region.alignEndInstanceIds ?? [];
+          const isAlignedEnd = current.includes(action.instanceId);
+
+          if (action.align === 'end' ? isAlignedEnd : !isAlignedEnd) {
+            return region;
+          }
+
+          const next =
+            action.align === 'end'
+              ? [...current, action.instanceId]
+              : current.filter((instanceId) => instanceId !== action.instanceId);
+
+          return { ...region, alignEndInstanceIds: next };
+        })
+      );
+    }
     case 'setRegionWidgetCollapsed': {
       if (action.region === 'center') {
         return state;
@@ -4255,28 +4100,19 @@ export const __workbenchReducerInternal = (
       });
     }
     case 'replaceProjectGraph': {
-      let didRetainOutgoingGraph = true;
       const nextState = updateActiveProject(state, (project) => {
-        // One immutable clone is shared by undo and graph history; neither
-        // snapshot path mutates the document.
         const routedProject = applyAutoRouteForEdit(project, 'workflow', context);
         const outgoingGraph = cloneProjectGraph(project.projectGraph);
         const nextProject = pushUndo(routedProject, 'Replace project graph', outgoingGraph);
-        const historySnapshot = createDocumentHistorySnapshot(`Before: ${action.label}`, outgoingGraph, false);
-        didRetainOutgoingGraph = (historySnapshot.retainedBytes ?? 0) <= GRAPH_HISTORY_BYTE_BUDGET;
 
         return {
           ...nextProject,
-          events: [
-            {
-              createdAt: now(),
-              id: createId('event'),
-              summary: `Replaced the project graph with "${action.document.name || 'Untitled Workflow'}" (${action.label})`,
-              type: 'graph-replaced',
-            },
-            ...nextProject.events,
-          ],
-          graphHistory: prependGraphHistory(nextProject.graphHistory, historySnapshot),
+          events: prependProjectEvent(nextProject.events, {
+            createdAt: now(),
+            id: createId('event'),
+            summary: `Replaced the project graph with "${action.document.name || 'Untitled Workflow'}" (${action.label})`,
+            type: 'graph-replaced',
+          }),
           projectGraph: cloneProjectGraph(action.document),
         };
       });
@@ -4286,55 +4122,12 @@ export const __workbenchReducerInternal = (
         nextState,
         createNotification({
           kind: 'info',
-          message: didRetainOutgoingGraph
-            ? 'The previous project graph was saved to graph history.'
-            : 'The previous project graph exceeded the 64 MiB history budget, so its graph-history snapshot was skipped. Undo remains available for this session.',
+          message:
+            'The previous graph is available through Undo for this session. Save workflows to the library for a permanent copy.',
           projectId: activeProject?.id,
           title: `Project graph replaced (${action.label})`,
         })
       );
-    }
-    case 'saveProjectGraphSnapshot': {
-      return updateActiveProject(state, (project) => ({
-        ...project,
-        events: [
-          {
-            createdAt: now(),
-            id: createId('event'),
-            summary: `Saved a graph history snapshot of "${project.projectGraph.name || 'Untitled Workflow'}"`,
-            type: 'graph-snapshot-saved',
-          },
-          ...project.events,
-        ],
-        graphHistory: prependGraphHistory(
-          project.graphHistory,
-          createDocumentHistorySnapshot(
-            `Manual save: ${project.projectGraph.name || 'Untitled Workflow'}`,
-            project.projectGraph
-          )
-        ),
-      }));
-    }
-    case 'restoreProjectGraphSnapshot': {
-      return updateActiveProject(state, (project) => {
-        const snapshot = project.graphHistory.find((entry) => entry.id === action.snapshotId);
-
-        if (!snapshot?.document) {
-          return project;
-        }
-
-        const routedProject = applyAutoRouteForEdit(project, 'workflow', context);
-        const nextProject = pushUndo(routedProject, 'Restore graph history snapshot');
-
-        return {
-          ...nextProject,
-          graphHistory: prependGraphHistory(
-            nextProject.graphHistory,
-            createDocumentHistorySnapshot('Before restore', project.projectGraph)
-          ),
-          projectGraph: cloneProjectGraph(normalizeProjectGraph(snapshot.document)),
-        };
-      });
     }
     case 'setProjectGraphLibraryBinding': {
       return updateActiveProject(state, (project) => ({
@@ -4455,6 +4248,24 @@ export const __workbenchReducerInternal = (
         return clampCanvasStagingSelection(nextProject, previousSelectedSlot);
       });
     }
+    case 'setQueueItemCancellationPending': {
+      return updateProjectById(state, action.projectId, (project) =>
+        updateQueueItem(project, action.queueItemId, (item) =>
+          item.cancellationPending === action.pending
+            ? item
+            : { ...item, cancellationPending: action.pending || undefined }
+        )
+      );
+    }
+    case 'setQueueItemLocalRecoveryState': {
+      return updateProjectById(state, action.projectId, (project) =>
+        updateQueueItem(project, action.queueItemId, (item) =>
+          item.localRecoveryState === action.state || item.localRecoveryState === 'durable'
+            ? item
+            : { ...item, localRecoveryState: action.state }
+        )
+      );
+    }
     case 'routeQueueItemResults': {
       const project = state.projects.find((project) => project.id === action.projectId);
       const queueItem = project?.queue.items.find((item) => item.id === action.queueItemId);
@@ -4480,6 +4291,33 @@ export const __workbenchReducerInternal = (
           title: 'Invocation completed',
         })
       );
+    }
+    case 'restoreQueueItemsFromJournal': {
+      return updateProjectById(state, action.projectId, (project) => {
+        const restoredById = new Map<string, QueueItem>();
+
+        for (const candidate of action.items) {
+          const item = normalizeRestoredQueueItem(candidate);
+          if (item && !restoredById.has(item.id)) {
+            restoredById.set(item.id, { ...item, localRecoveryState: 'durable' });
+          }
+        }
+
+        const liveItems = project.queue.items.map((item) =>
+          restoredById.delete(item.id) && item.localRecoveryState !== 'durable'
+            ? { ...item, localRecoveryState: 'durable' as const }
+            : item
+        );
+        const restoredItems: QueueItem[] = [];
+
+        for (const item of restoredById.values()) {
+          restoredItems.push(item);
+        }
+
+        return restoredItems.length === 0 && liveItems.every((item, index) => item === project.queue.items[index])
+          ? project
+          : { ...project, queue: { items: [...liveItems, ...restoredItems] } };
+      });
     }
     case 'appendCanvasStagingCandidate': {
       return updateProjectById(state, action.projectId, (project) =>
@@ -4797,7 +4635,7 @@ export const __workbenchReducerInternal = (
                 return item;
               }
 
-              return { ...item, status: 'cancelled' };
+              return { ...item, cancellationPending: true, status: 'cancelled' };
             }),
           },
         };
@@ -4841,7 +4679,7 @@ export const __workbenchReducerInternal = (
             queue: {
               items: shouldApplyQueueBulkActionToProject(project, action.projectId)
                 ? project.queue.items.map((item) =>
-                    isCancellableQueueItem(item) ? { ...item, status: 'cancelled' } : item
+                    isCancellableQueueItem(item) ? { ...item, cancellationPending: true, status: 'cancelled' } : item
                   )
                 : project.queue.items,
             },
@@ -4886,7 +4724,7 @@ export const __workbenchReducerInternal = (
               items: shouldApplyQueueBulkActionToProject(project, action.projectId)
                 ? project.queue.items.map((item) =>
                     isCancellableQueueItem(item) && item.id !== action.currentQueueItemId
-                      ? { ...item, status: 'cancelled' }
+                      ? { ...item, cancellationPending: true, status: 'cancelled' }
                       : item
                   )
                 : project.queue.items,
@@ -4933,7 +4771,6 @@ export const __workbenchReducerInternal = (
         return {
           ...restoredProject,
           events: project.events,
-          graphHistory: project.graphHistory,
           promptHistory: project.promptHistory,
           queue: project.queue,
           undoRedo: {
@@ -4964,7 +4801,6 @@ export const __workbenchReducerInternal = (
         return {
           ...restoredProject,
           events: project.events,
-          graphHistory: project.graphHistory,
           promptHistory: project.promptHistory,
           queue: project.queue,
           undoRedo: {
@@ -4985,25 +4821,10 @@ export const __workbenchReducerInternal = (
     case 'hydrateWorkbench': {
       return { ...normalizeWorkbenchState(action.state), backendConnection: state.backendConnection };
     }
-    case 'reconcileProjectConflict': {
-      // A save lost the revision race against another tab/device. The server
-      // version takes over the original project id, and the local edits
-      // continue in the recovered fork — which stays the active project when
-      // the user was looking at it.
-      const normalizedServerProject = normalizeWorkbenchProject(action.serverProject);
+    case 'replaceProjectFromServer': {
+      const normalizedServerProject = normalizeWorkbenchProject(action.project);
       const localProject = state.projects.find((project) => project.id === action.projectId);
-      const hasOriginal = localProject !== undefined;
-      const recoveredProject = recoverProjectUnderNewIdentity(
-        localProject,
-        action.recoveredProject,
-        action.recoveredIdentity
-      );
-      // The server document replaces the local one under the SAME project id, so a
-      // live engine mirroring that id may hold pixel history for the outgoing
-      // document. Bump the revision past both sides so the mirror treats the swap
-      // as a document replacement (clearing that history) even when dims/layer ids
-      // coincide. (The recovered fork gets a fresh project id → a fresh engine.)
-      const serverProject: Project = hasOriginal
+      const serverProject: Project = localProject
         ? {
             ...normalizedServerProject,
             canvas: {
@@ -5011,58 +4832,50 @@ export const __workbenchReducerInternal = (
               documentRevision:
                 Math.max(normalizedServerProject.canvas.documentRevision, localProject.canvas.documentRevision) + 1,
             },
+            queue: localProject.queue,
           }
         : normalizedServerProject;
-      const projects = hasOriginal
-        ? state.projects.flatMap((project) =>
-            project.id === action.projectId ? [serverProject, recoveredProject] : [project]
-          )
-        : [...state.projects, serverProject, recoveredProject];
-
-      return addNotification(
-        {
-          ...state,
-          activeProjectId: state.activeProjectId === action.projectId ? recoveredProject.id : state.activeProjectId,
-          projects,
-        },
-        createNotification({
-          kind: 'info',
-          message: `"${serverProject.name}" was changed elsewhere. Your local edits continue in "${recoveredProject.name}" — manage recoveries in the Project panel.`,
-          title: 'Project recovered',
-        })
-      );
+      return {
+        ...state,
+        projects: localProject
+          ? state.projects.map((project) => (project.id === action.projectId ? serverProject : project))
+          : [...state.projects, serverProject],
+      };
     }
-    case 'reconcileDeletedProject': {
-      // The project was deleted on another device while this one held unsaved edits. Unlike a
-      // revision conflict there is no server version to adopt — the deletion is the server's
-      // answer. Re-creating the id would undo it everywhere, so the local edits continue under a
-      // fresh identity and the original simply goes.
-      const localProject = state.projects.find((project) => project.id === action.projectId);
-      const hasOriginal = localProject !== undefined;
-      const recoveredProject = recoverProjectUnderNewIdentity(
-        localProject,
-        action.recoveredProject,
-        action.recoveredIdentity
+    case 'retargetProject': {
+      const liveProject = state.projects.find((candidate) => candidate.id === action.projectId);
+      const project = liveProject
+        ? withAuthoritativeProjectBoard(
+            normalizeWorkbenchProject(
+              {
+                ...liveProject,
+                id: action.targetProjectId,
+                name: liveProject.name === action.sourceName ? action.name : liveProject.name,
+              },
+              { isArriving: false }
+            ),
+            action.boardId
+          )
+        : normalizeWorkbenchProject(action.project);
+      const targetAlreadyOpen = state.projects.some(
+        (candidate) => candidate.id === action.targetProjectId && candidate.id !== action.projectId
       );
-      const projects = hasOriginal
-        ? state.projects.map((project) => (project.id === action.projectId ? recoveredProject : project))
-        : [...state.projects, recoveredProject];
-
-      return addNotification(
-        {
-          ...state,
-          activeProjectId: state.activeProjectId === action.projectId ? recoveredProject.id : state.activeProjectId,
-          projects,
-        },
-        createNotification({
-          kind: 'info',
-          message: `That project was deleted elsewhere. Your edits — including anything typed since — continue in "${recoveredProject.name}".`,
-          title: 'Project recovered',
-        })
-      );
+      if (targetAlreadyOpen) {
+        return state;
+      }
+      return {
+        ...state,
+        activeProjectId: state.activeProjectId === action.projectId ? project.id : state.activeProjectId,
+        projects: state.projects.some((candidate) => candidate.id === action.projectId)
+          ? state.projects.map((candidate) => (candidate.id === action.projectId ? project : candidate))
+          : [...state.projects, project],
+      };
     }
     case 'autosaveStarted': {
       return { ...state, autosave: { status: 'saving' } };
+    }
+    case 'autosavePending': {
+      return { ...state, autosave: { error: action.error, status: 'error' } };
     }
     case 'autosaveSucceeded': {
       return { ...state, autosave: { lastSavedAt: action.savedAt, status: 'saved' } };

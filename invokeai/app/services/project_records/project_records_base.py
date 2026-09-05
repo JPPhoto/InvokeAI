@@ -53,6 +53,8 @@ class ProjectRecordsStorageBase(ABC):
             ProjectBoardNotFoundError: `board_id` is missing or belongs to another user.
             ProjectBoardUnavailableError: The board is public, shared, or already claimed.
             ProjectCanvasSchemaUnsupportedError: The caller cannot safely edit the requested schema.
+            ProjectDocumentInvalidError: The document is not standards-compliant UTF-8 JSON.
+            ProjectDocumentTooLargeError: The project document exceeds the storage limit.
         """
         pass
 
@@ -96,6 +98,8 @@ class ProjectRecordsStorageBase(ABC):
             ProjectRecordConflictError: The stored revision differs from expected_revision.
             ProjectCanvasSchemaUnsupportedError: The caller cannot safely edit the stored or requested schema.
             ProjectCanvasSchemaDowngradeError: The save tries to lower the stored compatibility floor.
+            ProjectDocumentInvalidError: The document is not standards-compliant UTF-8 JSON.
+            ProjectDocumentTooLargeError: The project document exceeds the storage limit.
         """
         pass
 

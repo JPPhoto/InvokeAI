@@ -6,7 +6,6 @@ import { createContext, use, useCallback, useSyncExternalStore } from 'react';
 
 import type {
   WorkflowCommands,
-  WorkflowGraphHistoryEntry,
   WorkflowInvocationSourceId,
   WorkflowNodeExecutionState,
   WorkflowPerfSource,
@@ -15,7 +14,7 @@ import type {
 
 export interface WorkflowPreferences {
   reduceMotion: boolean;
-  themeId: 'classic' | 'light' | 'forest' | 'mono' | 'ultradark';
+  themeId: 'classic' | 'light' | 'osakaJade' | 'mono' | 'ultradark';
   workflowEdgeStyle: 'curved' | 'square';
   workflowShowMinimap: boolean;
   workflowSnapToGrid: boolean;
@@ -24,7 +23,6 @@ export interface WorkflowPreferences {
 
 export interface WorkflowProjectSnapshot {
   galleryValues: Record<string, unknown>;
-  graphHistory: readonly WorkflowGraphHistoryEntry[];
   id: string;
   isWorkflowRunning: boolean;
   projectGraph: ProjectGraphState;

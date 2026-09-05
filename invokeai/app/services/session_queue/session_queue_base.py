@@ -12,6 +12,7 @@ from invokeai.app.services.session_queue.session_queue_common import (
     ClearResult,
     DeleteAllExceptCurrentResult,
     DeleteByDestinationResult,
+    EnqueueBatchReceipt,
     EnqueueBatchResult,
     IsEmptyResult,
     IsFullResult,
@@ -47,6 +48,18 @@ class SessionQueueBase(ABC):
         self, queue_id: str, batch: Batch, prepend: bool, user_id: str = "system"
     ) -> Coroutine[Any, Any, EnqueueBatchResult]:
         """Enqueues all permutations of a batch for execution for a specific user."""
+        pass
+
+    @abstractmethod
+    def acknowledge_enqueue(self, queue_id: str, idempotency_key: str, user_id: str = "system") -> None:
+        """Acknowledge that the caller recorded an enqueue result durably."""
+        pass
+
+    @abstractmethod
+    def get_enqueue_receipt(
+        self, queue_id: str, idempotency_key: str, user_id: str = "system"
+    ) -> Optional[EnqueueBatchReceipt]:
+        """Get an idempotent enqueue result owned by the user, if it exists."""
         pass
 
     @abstractmethod

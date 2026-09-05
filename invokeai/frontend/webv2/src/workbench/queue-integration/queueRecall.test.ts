@@ -1,11 +1,13 @@
 import type { GenerateWidgetValues } from '@features/generation/contracts';
 
+import { createDefaultVideoWidgetValues } from '@features/video';
 import { describe, expect, it } from 'vitest';
 
 import {
   buildQueueRecallValues,
   buildVideoQueueRecallPatch,
   getQueueRecallCapabilities,
+  getVideoQueueRecallCapabilities,
   planQueueRecall,
 } from './queueRecall';
 
@@ -163,6 +165,32 @@ describe('buildQueueRecallValues', () => {
 });
 
 describe('buildVideoQueueRecallPatch', () => {
+  it('recalls exact video settings or a randomized remix without crossing into Generate', () => {
+    const snapshot = {
+      ...createDefaultVideoWidgetValues(),
+      positivePrompt: 'snapshot prompt',
+      seed: 123,
+      shouldRandomizeSeed: false,
+    };
+    expect(getVideoQueueRecallCapabilities(snapshot, {})).toEqual({
+      all: true,
+      remix: true,
+      prompts: true,
+      seed: true,
+      dimensions: false,
+      clipSkip: false,
+    });
+    expect(
+      planQueueRecall('all', { current: null, isVideoItem: true, meta: {}, snapshot: null, videoSnapshot: snapshot })
+    ).toEqual({ target: 'video', patch: snapshot });
+    expect(buildVideoQueueRecallPatch('remix', {}, snapshot)).toEqual({ ...snapshot, shouldRandomizeSeed: true });
+    expect(snapshot.shouldRandomizeSeed).toBe(false);
+    expect(buildVideoQueueRecallPatch('seed', { seed: 456 }, snapshot)).toEqual({
+      seed: 456,
+      shouldRandomizeSeed: false,
+    });
+  });
+
   it('patches only the prompt keys, so the rest of the Video panel is untouched', () => {
     expect(
       buildVideoQueueRecallPatch('prompts', { negativePrompt: 'blurry', positivePrompt: 'a fox running' })

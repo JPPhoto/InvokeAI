@@ -162,7 +162,6 @@ const NodeResultRow = ({
     w="full"
     onClick={row.onAdd}
     onMouseEnter={onActive}
-    cursor="pointer"
   >
     <HStack gap="2" justify="space-between" alignItems="start">
       <Stack gap="0" minW="0">
@@ -215,7 +214,6 @@ const CategoryHeaderRow = ({
       role="treeitem"
       tabIndex={-1}
       _hover={ROW_HOVER_PROPS}
-      cursor="pointer"
       ps="1"
       pe="2"
       py="1"
@@ -275,7 +273,6 @@ export const AddNodeDialog = ({
     <Dialog.Root
       lazyMount
       open={isOpen}
-      placement="center"
       scrollBehavior="inside"
       size="md"
       unmountOnExit

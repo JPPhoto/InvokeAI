@@ -120,7 +120,6 @@ const FilmstripThumb = ({
       borderWidth="2px"
       boxSize={size}
       css={isDragging ? FILMSTRIP_THUMB_DRAG_CSS : FILMSTRIP_THUMB_ARMED_CSS}
-      cursor="pointer"
       flexShrink={0}
       opacity={isDragging ? 0.4 : undefined}
       overflow="hidden"

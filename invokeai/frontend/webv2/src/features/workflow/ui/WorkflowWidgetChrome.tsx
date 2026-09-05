@@ -1,6 +1,6 @@
 import type { InvocationTemplate, XYPosition } from '@features/workflow/contracts';
 
-import { Box, HStack, Icon, Menu, Portal, Stack, Text } from '@chakra-ui/react';
+import { Box, HStack, Icon, Menu, Text } from '@chakra-ui/react';
 import { updateLibraryWorkflow } from '@features/workflow/queries';
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
 import {
@@ -27,16 +27,8 @@ import {
 } from '@platform/state/accountLifecycle';
 import { Button, IconButton, ConfirmDialog, Tooltip } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
-import {
-  CloudAlertIcon,
-  CloudCheckIcon,
-  CloudUploadIcon,
-  HistoryIcon,
-  LibraryIcon,
-  PlusIcon,
-  RefreshCwIcon,
-} from 'lucide-react';
-import { useCallback, useEffect, useId, useMemo, useRef, type ChangeEvent } from 'react';
+import { CloudAlertIcon, CloudCheckIcon, CloudUploadIcon, LibraryIcon, PlusIcon, RefreshCwIcon } from 'lucide-react';
+import { useCallback, useEffect, useRef, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { WorkflowWidgetLabelProps, WorkflowWidgetViewProps } from './contracts';
@@ -67,7 +59,7 @@ import {
 /**
  * The workflow widget's frame chrome. The label renders the `Workflow / [name]`
  * title, where the name is the library trigger; quick actions (add node,
- * library, history) are header icon buttons; everything else contributes to the
+ * library, save status) are header icon buttons; everything else contributes to the
  * shared widget actions menu via the manifest's `headerMenu`. Dialogs live here
  * (always mounted) and are driven through `workflowUiStore`.
  */
@@ -128,7 +120,6 @@ export const WorkflowMenuItems = (_props: WorkflowWidgetViewProps) => {
   const { t } = useTranslation();
   const { getProjectGraph } = useWorkflowUi();
   const { widgets } = useWorkflowHostCommands();
-  const { saveSnapshot } = useProjectGraphCommands();
   const notify = useWorkflowNotifications();
 
   const openDetailsPanel = useCallback(() => {
@@ -148,9 +139,6 @@ export const WorkflowMenuItems = (_props: WorkflowWidgetViewProps) => {
       <Menu.ItemGroupLabel color="fg.subtle" fontSize="2xs" textTransform="uppercase">
         {t('widgets.labels.workflow')}
       </Menu.ItemGroupLabel>
-      <Menu.Item value="snapshot" onClick={saveSnapshot}>
-        {t('widgets.workflow.saveGraphSnapshot')}
-      </Menu.Item>
       <Menu.Item value="details" onClick={openDetailsPanel}>
         {t('widgets.workflow.detailsWithEllipsis')}
       </Menu.Item>
@@ -163,7 +151,7 @@ export const WorkflowMenuItems = (_props: WorkflowWidgetViewProps) => {
       <Menu.Item value="copy" onClick={copyWorkflow}>
         {t('widgets.workflow.copyJson')}
       </Menu.Item>
-      <Menu.Item color="fg.error" value="new" onClick={createNewWorkflow}>
+      <Menu.Item data-danger="" value="new" onClick={createNewWorkflow}>
         {t('widgets.workflow.newWorkflowWithEllipsis')}
       </Menu.Item>
     </Menu.ItemGroup>
@@ -172,22 +160,12 @@ export const WorkflowMenuItems = (_props: WorkflowWidgetViewProps) => {
 
 export const WorkflowHeaderActions = ({ region }: WorkflowWidgetViewProps) => {
   const { t } = useTranslation();
-  const graphHistory = useWorkflowProjectSelector((project) => project.graphHistory);
   const libraryWorkflowId = useWorkflowProjectSelector((project) => project.projectGraph.libraryWorkflowId);
   const syncStatus = workflowLibrarySyncStore.useSelector((snapshot) => snapshot.status);
-  const { restoreSnapshot } = useProjectGraphCommands();
   const { saveToLibrary } = useSaveWorkflowToLibrary();
-  const restorableHistory = graphHistory.filter((entry) => entry.document);
-  const historyTriggerId = useId();
   const openAddNode = useCallback(() => setAddNodeOpen(true), []);
   const openWorkflowLibrary = useCallback(() => setWorkflowLibraryOpen(true), []);
   const handleSaveToLibrary = useCallback(() => void saveToLibrary(), [saveToLibrary]);
-  const historyIds = useMemo(() => ({ trigger: historyTriggerId }), [historyTriggerId]);
-  const historyPositioning = useMemo(() => ({ placement: 'bottom-end' as const }), []);
-  const restoreHistoryEntry = useCallback(
-    (details: { value: string }) => restoreSnapshot(details.value),
-    [restoreSnapshot]
-  );
 
   return (
     <HStack gap="0.5">
@@ -260,44 +238,6 @@ export const WorkflowHeaderActions = ({ region }: WorkflowWidgetViewProps) => {
           </IconButton>
         </Tooltip>
       )}
-      <Menu.Root ids={historyIds} positioning={historyPositioning} onSelect={restoreHistoryEntry}>
-        <Tooltip content={t('widgets.workflow.graphHistorySnapshots')} ids={historyIds}>
-          <Menu.Trigger asChild>
-            <IconButton
-              aria-label={t('widgets.workflow.graphHistorySnapshots')}
-              color="fg.muted"
-              disabled={restorableHistory.length === 0}
-              size="2xs"
-              variant="ghost"
-            >
-              <Icon as={HistoryIcon} boxSize="3.5" />
-            </IconButton>
-          </Menu.Trigger>
-        </Tooltip>
-        <Portal>
-          <Menu.Positioner>
-            <Menu.Content maxH="18rem" minW="16rem" overflowY="auto">
-              <Menu.ItemGroup>
-                <Menu.ItemGroupLabel color="fg.subtle" fontSize="2xs" textTransform="uppercase">
-                  {t('widgets.workflow.graphHistorySnapshots')}
-                </Menu.ItemGroupLabel>
-                {restorableHistory.map((entry) => (
-                  <Menu.Item key={entry.id} value={entry.id}>
-                    <Stack gap="0" minW="0">
-                      <Menu.ItemText fontSize="xs">
-                        <MiddleTruncate as="span" text={entry.label} />
-                      </Menu.ItemText>
-                      <Text color="fg.subtle" fontSize="2xs">
-                        {new Date(entry.createdAt).toLocaleString()}
-                      </Text>
-                    </Stack>
-                  </Menu.Item>
-                ))}
-              </Menu.ItemGroup>
-            </Menu.Content>
-          </Menu.Positioner>
-        </Portal>
-      </Menu.Root>
     </HStack>
   );
 };
@@ -598,7 +538,7 @@ export const WorkflowDialogHost = () => {
       <WorkflowLibraryDialog isOpen={isLibraryOpen} onOpenChange={setWorkflowLibraryOpen} />
       <PendingLibraryWorkflowLoader />
       <ConfirmDialog
-        body="Replace the project graph with an empty workflow? The current graph is saved to graph history first."
+        body="Replace the project graph with an empty workflow? You can undo this change during this session. Save the current workflow to the library first if you need a permanent copy."
         confirmLabel="New workflow"
         isOpen={isNewWorkflowConfirmOpen}
         title="New workflow"

@@ -57,7 +57,7 @@ describe('ramp + mapping structure', () => {
 
   it('uses pure black/white low-opacity image outlines by color mode', () => {
     expect(resolveToken(sys, 'light', 'border.image')).toBe('oklch(0 0 0 / 0.1)');
-    for (const theme of ['classic', 'forest', 'mono', 'ultradark']) {
+    for (const theme of ['classic', 'osakaJade', 'mono', 'ultradark']) {
       expect(resolveToken(sys, theme, 'border.image')).toBe('oklch(1 0 0 / 0.1)');
     }
   });

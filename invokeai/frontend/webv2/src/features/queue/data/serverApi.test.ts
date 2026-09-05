@@ -7,7 +7,13 @@ const transport = vi.hoisted(() => ({
 
 vi.mock('@platform/transport/http', () => transport);
 
-import { cancelCurrentQueueItem, cancelScopedQueueItems, clearFailedQueueItems, clearScopedQueue } from './serverApi';
+import {
+  cancelCurrentQueueItem,
+  cancelQueueItems,
+  cancelScopedQueueItems,
+  clearFailedQueueItems,
+  clearScopedQueue,
+} from './serverApi';
 
 describe('queue command account ownership', () => {
   beforeEach(() => {
@@ -55,5 +61,23 @@ describe('queue command account ownership', () => {
     await expect(oldCommand).rejects.toThrow('no longer active');
     expect(signal?.aborted).toBe(true);
     expect(transport.apiFetchJson).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds fallback item cancellation concurrency', async () => {
+    let active = 0;
+    let maximum = 0;
+    transport.apiFetchJson.mockImplementation(async () => {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1);
+      });
+      active -= 1;
+    });
+
+    await cancelQueueItems(Array.from({ length: 40 }, (_, index) => index + 1));
+
+    expect(transport.apiFetchJson).toHaveBeenCalledTimes(40);
+    expect(maximum).toBeLessThanOrEqual(8);
   });
 });

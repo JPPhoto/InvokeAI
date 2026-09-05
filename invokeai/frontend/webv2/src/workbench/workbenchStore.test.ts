@@ -72,6 +72,98 @@ describe('createWorkbenchStore', () => {
     expect(snapshot.projects).toHaveLength(1);
   });
 
+  it('blocks persistence retargets only for queue work that has reached the backend', () => {
+    const runningState = createInitialWorkbenchState();
+    const source = runningState.projects[0]!;
+    runningState.projects[0] = {
+      ...source,
+      queue: {
+        items: [{ backendItemIds: [11], id: 'run-1', status: 'running' } as (typeof source.queue.items)[number]],
+      },
+    };
+    const runningStore = createWorkbenchStore(runningState);
+    const payload = {
+      boardId: 'copy-board',
+      name: `${source.name} (copy)`,
+      project: { ...source, id: 'copy-id' },
+      projectId: source.id,
+      sourceName: source.name,
+      targetProjectId: 'copy-id',
+    };
+
+    expect(runningStore.internal.persistence.retargetProject(payload)).toEqual({
+      ok: false,
+      reason: 'active-queue-runs',
+    });
+
+    for (const status of ['completed', 'failed', 'cancelled'] as const) {
+      const terminalStore = createWorkbenchStore({
+        ...runningState,
+        projects: [
+          {
+            ...runningState.projects[0]!,
+            queue: {
+              items: [
+                {
+                  backendItemIds: [11],
+                  id: 'run-1',
+                  status,
+                } as (typeof source.queue.items)[number],
+              ],
+            },
+          },
+        ],
+      });
+      expect(terminalStore.internal.persistence.retargetProject(payload)).toEqual({ ok: true });
+    }
+
+    const pendingState = createInitialWorkbenchState();
+    pendingState.projects[0] = {
+      ...pendingState.projects[0]!,
+      queue: { items: [{ id: 'pending-1', status: 'pending' } as (typeof source.queue.items)[number]] },
+    };
+    const pendingStore = createWorkbenchStore(pendingState);
+    const pendingSource = pendingState.projects[0]!;
+    expect(
+      pendingStore.internal.persistence.retargetProject({
+        ...payload,
+        project: { ...pendingSource, id: 'copy-id' },
+        projectId: pendingSource.id,
+        sourceName: pendingSource.name,
+      })
+    ).toEqual({ ok: true });
+  });
+
+  it('blocks persistence retargets while durable cancellation is pending', () => {
+    const state = createInitialWorkbenchState();
+    const source = state.projects[0]!;
+    state.projects[0] = {
+      ...source,
+      queue: {
+        items: [
+          {
+            backendItemIds: [11],
+            cancellationPending: true,
+            id: 'run-1',
+            status: 'cancelled',
+          } as (typeof source.queue.items)[number],
+        ],
+      },
+    };
+    const store = createWorkbenchStore(state);
+
+    expect(
+      store.internal.persistence.retargetProject({
+        boardId: 'copy-board',
+        name: `${source.name} (copy)`,
+        project: { ...source, id: 'copy-id' },
+        projectId: source.id,
+        sourceName: source.name,
+        targetProjectId: 'copy-id',
+      })
+    ).toEqual({ ok: false, reason: 'active-queue-runs' });
+  });
+
   it("keeps each project's transient layer multi-selection across project switches", () => {
     const store = createWorkbenchStore();
     const firstProjectId = store.getSnapshot().activeProject.id;
@@ -577,10 +669,37 @@ describe('createWorkbenchStore', () => {
     expect(store.commands.projects.close(firstProjectId)).toEqual({ ok: true });
     expect(store.getSnapshot().activeProject.id).toBe(secondProject.id);
     expect(store.commands.projects.close(secondProject.id)).toEqual({ ok: false, reason: 'last-project' });
-    expect(store.getSnapshot().notifications[0]).toMatchObject({
-      kind: 'error',
-      title: 'Project close blocked',
-    });
+    expect(store.getSnapshot().notifications).toEqual([]);
+  });
+
+  it.each([
+    { cancellationPending: undefined, status: 'pending' as const },
+    { cancellationPending: undefined, status: 'running' as const },
+    { cancellationPending: true, status: 'cancelled' as const },
+  ])('keeps a project open while queue work is active ($status)', ({ cancellationPending, status }) => {
+    const state = createInitialWorkbenchState();
+    const project = state.projects[0]!;
+    state.projects[0] = {
+      ...project,
+      queue: {
+        items: [
+          {
+            cancellable: true,
+            ...(cancellationPending === undefined ? {} : { cancellationPending }),
+            id: 'active-run',
+            snapshot: {} as (typeof project.queue.items)[number]['snapshot'],
+            status,
+          },
+        ],
+      },
+    };
+    const store = createWorkbenchStore(state);
+
+    expect(store.commands.projects.close(project.id)).toEqual({ ok: false, reason: 'active-queue-runs' });
+    store.commands.projects.create();
+
+    expect(store.commands.projects.close(project.id)).toEqual({ ok: false, reason: 'active-queue-runs' });
+    expect(store.getSnapshot().projects.some((candidate) => candidate.id === project.id)).toBe(true);
   });
 
   it('applies Canvas and Workflow edits without exposing aggregate reducer actions', () => {

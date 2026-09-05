@@ -102,7 +102,7 @@ export const NodeContextMenu = ({
                   </Menu.Item>
                 ) : null}
                 <Menu.Separator borderColor="border.subtle" />
-                <Menu.Item color="fg.error" value="delete" onClick={onDelete}>
+                <Menu.Item data-danger="" value="delete" onClick={onDelete}>
                   <Icon as={Trash2Icon} boxSize="3.5" />
                   <Menu.ItemText>Delete</Menu.ItemText>
                   <Menu.ItemCommand>Del</Menu.ItemCommand>

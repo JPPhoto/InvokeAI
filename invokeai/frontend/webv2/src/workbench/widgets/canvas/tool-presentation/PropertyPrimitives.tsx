@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 
-import { Badge, chakra, Flex, Grid, Icon, SegmentGroup, Stack, Switch, Text } from '@chakra-ui/react';
+import { Badge, chakra, Flex, Grid, Icon, Stack, Switch, Text } from '@chakra-ui/react';
+import { SegmentedControl } from '@platform/ui/SegmentedControl';
 import { ChevronDownIcon } from 'lucide-react';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -87,7 +88,6 @@ export const PropertyGroup = ({
           alignItems="center"
           aria-expanded={open}
           color="fg.muted"
-          cursor="pointer"
           display="flex"
           gap="1"
           rounded="xs"
@@ -132,8 +132,8 @@ export const PropertySegmentedRow = <Value extends string>({
   value: Value;
 }) => {
   const handleChange = useCallback(
-    ({ value: next }: SegmentGroup.ValueChangeDetails) => {
-      if (next !== null && next !== value) {
+    (next: string) => {
+      if (next !== value) {
         onValueChange(next as Value);
       }
     },
@@ -141,23 +141,14 @@ export const PropertySegmentedRow = <Value extends string>({
   );
   return (
     <PropertyControlRow label={label}>
-      <SegmentGroup.Root
-        aria-label={label}
+      <SegmentedControl
+        ariaLabel={label}
         disabled={disabled}
         gridColumn="2 / -1"
-        size="xs"
+        options={options}
         value={value}
-        w="full"
-        onValueChange={handleChange}
-      >
-        <SegmentGroup.Indicator />
-        {options.map((option) => (
-          <SegmentGroup.Item key={option.value} flex="1" justifyContent="center" value={option.value}>
-            <SegmentGroup.ItemText fontSize="2xs">{option.label}</SegmentGroup.ItemText>
-            <SegmentGroup.ItemHiddenInput />
-          </SegmentGroup.Item>
-        ))}
-      </SegmentGroup.Root>
+        onChange={handleChange}
+      />
     </PropertyControlRow>
   );
 };

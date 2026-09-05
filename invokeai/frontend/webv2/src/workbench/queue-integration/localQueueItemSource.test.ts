@@ -4,7 +4,7 @@ import { buildQueueItemOrigin } from '@features/queue/contracts';
 import { createInitialWorkbenchState, workbenchReducer } from '@workbench/workbenchState.testing';
 import { describe, expect, it, vi } from 'vitest';
 
-import { getLocalQueueItemSource } from './useLocalGenerateValues';
+import { getLocalQueueItemSource } from './useLocalRecallSnapshot';
 
 vi.mock('@features/queue/devices', async (importOriginal) => {
   const original = (await importOriginal()) as Record<string, unknown>;
@@ -33,6 +33,8 @@ const wanModel: ModelConfig = {
 const submitVideo = () => {
   let state = createInitialWorkbenchState();
 
+  // Video is no longer placed by the non-video defaults; add it first.
+  state = workbenchReducer(state, { region: 'left', type: 'toggleRegionWidget', widgetId: 'video' });
   state = workbenchReducer(state, {
     type: 'patchWidgetValues',
     values: { model: wanModel, positivePrompt: 'a fox running' },
