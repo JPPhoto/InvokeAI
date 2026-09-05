@@ -203,6 +203,15 @@ export const GalleryPickerView = ({
   const visibleBoardCount = boardGroups.reduce((count, group) => count + group.boards.length, 0);
 
   const focusSearch = useCallback(() => searchInputRef.current?.focus(), [searchInputRef]);
+  // The view is lazy-loaded, so it arrives after the popover's own initial
+  // focus pass; the field takes focus itself as it mounts.
+  const attachSearchInput = useCallback(
+    (node: HTMLInputElement | null) => {
+      searchInputRef.current = node;
+      node?.focus();
+    },
+    [searchInputRef]
+  );
   // The clicked row unmounts with the pane; without this, focus falls to the
   // body and the next keystrokes reach the workbench hotkeys.
   const handleSelectBoard = useCallback(
@@ -389,7 +398,7 @@ export const GalleryPickerView = ({
       </HStack>
       <Box pt="1.5" px="2">
         <GallerySearchField
-          ref={searchInputRef}
+          ref={attachSearchInput}
           ariaLabel={searchLabel}
           endElement={searchEndElement}
           inputProps={searchInputProps}

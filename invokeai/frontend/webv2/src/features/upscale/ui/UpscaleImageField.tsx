@@ -1,8 +1,8 @@
 import type { GalleryItem } from '@features/gallery';
-import type { GalleryMediaSlotValue } from '@features/gallery/picker';
+import type { GalleryMediaSlotValue } from '@features/gallery/mediaSlot';
 import type { UpscaleWidgetValues } from '@features/upscale/core/types';
 
-import { GalleryMediaSlot } from '@features/gallery/picker';
+import { GalleryMediaSlot } from '@features/gallery/mediaSlot';
 import { memo, useCallback, useMemo } from 'react';
 
 import { areInputImagesEquivalent } from './upscaleComparators';

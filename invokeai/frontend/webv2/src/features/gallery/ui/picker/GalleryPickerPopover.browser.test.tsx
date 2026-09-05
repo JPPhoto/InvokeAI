@@ -195,6 +195,10 @@ const openPicker = async (picker?: React.ReactElement) => {
     throw new Error('picker did not open');
   }
 
+  // The view is lazy-loaded on first open.
+  await vi.waitFor(() => expect(dialog.querySelector('input:not([type="file"])')).not.toBeNull(), { timeout: 10_000 });
+  await settle();
+
   return { dialog, trigger };
 };
 

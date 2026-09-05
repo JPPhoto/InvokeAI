@@ -235,6 +235,9 @@ describe('GalleryMediaSlot', () => {
     const dialog = document.querySelector<HTMLElement>('[role="dialog"][data-state="open"]');
 
     expect(dialog?.getAttribute('aria-label')).toBe('widgets.gallery.picker.chooseImage');
+    await vi.waitFor(() => expect(dialog?.querySelector('input:not([type="file"])')).not.toBeNull(), {
+      timeout: 10_000,
+    });
     await vi.waitFor(() => expect(dialog?.querySelector('[data-item-key="image:a.png"]')).not.toBeNull());
     await interact(() => dialog?.querySelector<HTMLElement>('[data-item-key="image:a.png"]')?.click());
 

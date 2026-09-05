@@ -1,15 +1,28 @@
 import type { GalleryItem } from '@features/gallery/core/items';
 import type { ReactElement } from 'react';
 
-import { Popover, Portal } from '@chakra-ui/react';
+import { Popover, Portal, Skeleton, Stack } from '@chakra-ui/react';
 import { PopoverContent } from '@platform/ui/Popover';
-import { useCallback, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useRef, useState } from 'react';
 
 import type { GalleryPickerAccept, GalleryPickerSelection } from './galleryPicker';
 
-import { GalleryPickerView } from './GalleryPickerView';
+// Loaded on first open: every widget with an image slot mounts a trigger at
+// boot, and the view is most of the picker's weight.
+const GalleryPickerView = lazy(() =>
+  import('./GalleryPickerView').then((module) => ({ default: module.GalleryPickerView }))
+);
 
 const POSITIONING = { placement: 'bottom-start' } as const;
+
+/** Same header and search footprint as the view, so the popover does not jump when it lands. */
+const PICKER_FALLBACK = (
+  <Stack aria-busy="true" gap="2" p="2">
+    <Skeleton h="7" rounded="control" />
+    <Skeleton h="7" rounded="control" />
+    <Skeleton h="10rem" rounded="md" />
+  </Stack>
+);
 const SINGLE_SELECTION: GalleryPickerSelection = { mode: 'single' };
 
 export interface GalleryPickerPopoverProps {
@@ -38,6 +51,7 @@ export const GalleryPickerPopover = ({
 
   const handleOpenChange = useCallback(({ open }: { open: boolean }) => setIsOpen(open), []);
   const close = useCallback(() => setIsOpen(false), []);
+  // Null until the lazy view has mounted; the view then focuses the field itself.
   const getInitialFocusEl = useCallback(() => searchInputRef.current, []);
 
   return (
@@ -60,13 +74,15 @@ export const GalleryPickerPopover = ({
             p="0"
             w="clamp(18rem, var(--reference-width), 28rem)"
           >
-            <GalleryPickerView
-              accept={accept}
-              searchInputRef={searchInputRef}
-              selection={selection}
-              onClose={close}
-              onPick={onPick}
-            />
+            <Suspense fallback={PICKER_FALLBACK}>
+              <GalleryPickerView
+                accept={accept}
+                searchInputRef={searchInputRef}
+                selection={selection}
+                onClose={close}
+                onPick={onPick}
+              />
+            </Suspense>
           </PopoverContent>
         </Popover.Positioner>
       </Portal>

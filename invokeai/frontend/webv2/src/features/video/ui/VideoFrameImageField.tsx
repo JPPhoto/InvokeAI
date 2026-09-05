@@ -1,8 +1,8 @@
 import type { GalleryItem } from '@features/gallery';
-import type { GalleryMediaSlotLabels, GalleryMediaSlotValue } from '@features/gallery/picker';
+import type { GalleryMediaSlotLabels, GalleryMediaSlotValue } from '@features/gallery/mediaSlot';
 import type { ImageWithDims } from '@features/generation/contracts';
 
-import { GalleryMediaSlot } from '@features/gallery/picker';
+import { GalleryMediaSlot } from '@features/gallery/mediaSlot';
 import { memo, useCallback, useMemo } from 'react';
 
 import { useVideoUiActions } from './VideoUiContext';
