@@ -1,6 +1,9 @@
+import json
+from pathlib import Path
+
 import pytest
 
-from invokeai.app.services.shared.graph import Graph
+from invokeai.app.services.shared.graph import Graph, InvalidEdgeError
 from invokeai.app.services.shared.workflow_graph_builder import (
     InvalidWorkflowInputError,
     UnsupportedWorkflowNodeError,
@@ -102,6 +105,31 @@ def _build_named_return_edges(source: str, source_handle: str):
             "targetHandle": "values",
         },
     ]
+
+
+FOR_LOOP_FIXTURE_DIR = (
+    Path(__file__).parents[3]
+    / "invokeai"
+    / "frontend"
+    / "webv2"
+    / "src"
+    / "features"
+    / "workflow"
+    / "core"
+    / "fixtures"
+)
+
+
+@pytest.mark.parametrize("fixture_path", sorted(FOR_LOOP_FIXTURE_DIR.glob("for-loop-*.json")))
+def test_for_loop_fixtures_have_matching_backend_validation(fixture_path: Path):
+    fixture = json.loads(fixture_path.read_text())
+    graph = build_graph_from_workflow(fixture)
+
+    if fixture["fixture"] == "valid":
+        graph.validate_self()
+    else:
+        with pytest.raises(InvalidEdgeError):
+            graph.validate_self()
 
 
 def test_build_graph_from_workflow_converts_invocation_nodes():
@@ -333,7 +361,7 @@ def test_build_graph_from_workflow_rejects_connector_loop_linkage_duplicate_owne
         ],
     )
 
-    with pytest.raises(InvalidWorkflowInputError, match="loop_linkage connector path"):
+    with pytest.raises(InvalidWorkflowInputError, match="already has a loop linkage"):
         build_graph_from_workflow(workflow)
 
 

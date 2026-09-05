@@ -15755,11 +15755,6 @@ export type components = {
                 [key: string]: string[];
             };
             /**
-             * Finalized Loop Nodes
-             * @description Legacy set of top-level loop source nodes whose final outputs have been materialized
-             */
-            finalized_loop_nodes: string[];
-            /**
              * Finalized Loop Contexts
              * @description The finalized loop source and parent iteration contexts
              */

@@ -76,11 +76,15 @@ port for effects-only bodies.
 The `item`, `index`, `total`, and `state` outputs belong inside the loop body. The `output_collection` and `final_state`
 outputs become available after the loop finishes. `loop_linkage` is only for pairing the two boundary nodes.
 
+Collection Cartesian products are limited to 100,000 item pairs. A product larger than 100,000 pairs fails with an
+error instead of expanding without bound.
+
 ## Returning Results
 
 `ForReturn` closes the loop body. It has four useful inputs:
 
 - **Output** adds one value to `For.output_collection` for the current iteration.
+  Null (`None`) values are retained, so collection positions continue to match iteration order.
 - **State** supplies the state for the next iteration.
 - **Continue Condition** controls whether another item should be processed. It continues by default; connecting `False`
   stops after the current iteration.

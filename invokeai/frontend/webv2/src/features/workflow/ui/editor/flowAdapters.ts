@@ -15,6 +15,7 @@ import type { Edge as FlowEdge, Node as FlowNode } from '@xyflow/react';
 import type { CSSProperties } from 'react';
 
 import { isExecutableInvocationType } from '@features/workflow/graph';
+import { LOOP_LINKAGE_STROKE } from '@features/workflow/ui/loopLinkage';
 import {
   CONNECTOR_INPUT_HANDLE,
   CONNECTOR_OUTPUT_HANDLE,
@@ -347,19 +348,22 @@ export const getWorkflowEdgeData = (
   templates?: InvocationTemplates,
   index: WorkflowGraphIndex = createWorkflowGraphIndex(document.nodes, document.edges)
 ): WorkflowEdgeData => {
+  if (edge.type === 'loop_linkage') {
+    return {
+      fieldTypeLabel: 'Loop linkage',
+      isLoopLinkage: true,
+      pathType,
+      stroke: LOOP_LINKAGE_STROKE,
+      strokeDasharray: '6 4',
+      strokeWidth: 2,
+      tooltip: 'Loop linkage',
+    };
+  }
+
   const fieldType = getWorkflowEdgeFieldType(document, templates, edge, index);
 
   if (!fieldType) {
-    return edge.type === 'loop_linkage'
-      ? {
-          ...UNKNOWN_EDGE_DATA(pathType),
-          fieldTypeLabel: 'Loop linkage',
-          isLoopLinkage: true,
-          stroke: '#22c55e',
-          strokeDasharray: '6 4',
-          tooltip: 'Loop linkage',
-        }
-      : UNKNOWN_EDGE_DATA(pathType);
+    return UNKNOWN_EDGE_DATA(pathType);
   }
 
   const fieldTypeLabel = getFieldTypeLabel(fieldType);
@@ -370,18 +374,6 @@ export const getWorkflowEdgeData = (
       : fieldType.cardinality === 'SINGLE_OR_COLLECTION'
         ? '8 3 2 3'
         : undefined;
-
-  if (edge.type === 'loop_linkage') {
-    return {
-      fieldTypeLabel: 'Loop linkage',
-      isLoopLinkage: true,
-      pathType,
-      stroke: '#22c55e',
-      strokeDasharray: '6 4',
-      strokeWidth: 2,
-      tooltip: 'Loop linkage',
-    };
-  }
 
   return {
     fieldTypeLabel,

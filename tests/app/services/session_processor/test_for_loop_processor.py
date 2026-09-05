@@ -84,6 +84,7 @@ class _Events:
     def __init__(self) -> None:
         self.started: list[str] = []
         self.completed: list[str] = []
+        self.completed_outputs: list[tuple[str, BaseInvocationOutput]] = []
         self.errors: list[tuple[str, str, str]] = []
 
     def emit_invocation_started(self, queue_item, invocation) -> None:
@@ -91,6 +92,7 @@ class _Events:
 
     def emit_invocation_complete(self, invocation, queue_item, output) -> None:
         self.completed.append(invocation.id)
+        self.completed_outputs.append((invocation.id, output.model_copy(deep=True)))
 
     def emit_invocation_error(self, queue_item, invocation, error_type, error_message, error_traceback) -> None:
         self.errors.append((invocation.id, error_type, error_message))
@@ -294,10 +296,18 @@ def test_processor_completes_for_loop_in_worker_thread(monkeypatch: pytest.Monke
     assert not queue.failed_item_ids
     assert item.session.is_complete()
     completed_source_ids = _completed_source_ids(item, events)
-    assert completed_source_ids.count("for") == 3
+    assert completed_source_ids.count("for") == 4
     assert completed_source_ids.count("body") == 3
     assert completed_source_ids.count("return") == 3
     assert completed_source_ids[-1] == "after"
+
+    final_for_outputs = [
+        output
+        for exec_id, output in events.completed_outputs
+        if item.session.prepared_source_mapping[exec_id] == "for"
+        and getattr(output, "output_collection", None) == [1, 2, 3]
+    ]
+    assert final_for_outputs
 
 
 def test_processor_cancellation_event_stops_for_loop_without_final_output(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -328,7 +338,7 @@ def test_processor_cancellation_event_stops_for_loop_without_final_output(monkey
     assert completed_source_ids.count("return") == 1
     assert "after" not in completed_source_ids
     assert "after" not in item.session.source_prepared_mapping
-    assert not item.session.finalized_loop_nodes
+    assert not item.session.finalized_loop_contexts
 
 
 def test_processor_body_exception_fails_for_item_without_after_loop_execution(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -354,4 +364,4 @@ def test_processor_body_exception_fails_for_item_without_after_loop_execution(mo
     assert completed_source_ids.count("return") == 1
     assert "after" not in completed_source_ids
     assert "after" not in item.session.source_prepared_mapping
-    assert not item.session.finalized_loop_nodes
+    assert not item.session.finalized_loop_contexts

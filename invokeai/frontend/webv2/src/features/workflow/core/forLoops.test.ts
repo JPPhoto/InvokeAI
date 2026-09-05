@@ -3,9 +3,12 @@ import { describe, expect, it } from 'vitest';
 import type { WorkflowEdge, WorkflowInvocationNode } from './types';
 
 import { createProjectGraph } from './document';
+import invalidFixture from './fixtures/for-loop-invalid.json';
+import validFixture from './fixtures/for-loop-valid.json';
 import {
   getCanonicalWorkflowEdges,
   getForLoopBodyBoundaries,
+  createForLoopValidationReason,
   localizeForLoopValidationReason,
   shouldAddForReturnLoopLinkage,
   validateForLoopGraph,
@@ -55,7 +58,14 @@ const linkedGraph = () => {
 };
 
 describe('For/ForReturn graph contracts', () => {
-  it('localizes scheduler validation reasons without changing unrelated messages', () => {
+  it.each([
+    [validFixture, null],
+    [invalidFixture, 'nodes.forLoopLinkageDuplicate'],
+  ] as const)('matches the shared backend validation fixture: %s', (fixture, expectedError) => {
+    expect(validateForLoopGraph(fixture as never)).toBe(expectedError);
+  });
+
+  it('localizes structured scheduler validation reasons without changing unrelated messages', () => {
     const translate = (key: string) =>
       ({
         'nodes.forLoopFinalOutputInBody': 'Final outputs cannot feed the loop body',
@@ -63,7 +73,7 @@ describe('For/ForReturn graph contracts', () => {
       })[key] ?? key;
 
     expect(
-      localizeForLoopValidationReason('For loop validation failed: nodes.forLoopFinalOutputInBody.', translate)
+      localizeForLoopValidationReason(createForLoopValidationReason('nodes.forLoopFinalOutputInBody'), translate)
     ).toBe('For loop validation failed: Final outputs cannot feed the loop body.');
     expect(localizeForLoopValidationReason('The graph contains a cycle.', translate)).toBe(
       'The graph contains a cycle.'

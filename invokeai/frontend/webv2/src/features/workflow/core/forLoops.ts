@@ -5,24 +5,7 @@ import { createWorkflowGraphIndex } from './graphIndex';
 import { isInvocationNode } from './types';
 import { LOOP_LINKAGE_FIELD } from './validation';
 
-export type ForLoopGraphError =
-  | 'nodes.forLoopMissingIterationOutput'
-  | 'nodes.forLoopReturnCount'
-  | 'nodes.forLoopUnterminatedBody'
-  | 'nodes.forLoopNestedUnsupported'
-  | 'nodes.forLoopIterateUnsupported'
-  | 'nodes.forLoopIteratorInputUnsupported'
-  | 'nodes.forLoopFinalOutputInBody'
-  | 'nodes.forLoopBodyEscape'
-  | 'nodes.forLoopInputCount'
-  | 'nodes.forReturnInputCount'
-  | 'nodes.forLoopLinkageMissing'
-  | 'nodes.forLoopLinkageInvalid'
-  | 'nodes.forLoopLinkageDuplicate'
-  | 'nodes.forReturnOwnership';
-
-const FOR_LOOP_VALIDATION_PREFIX = 'For loop validation failed: ';
-const FOR_LOOP_GRAPH_ERRORS: ReadonlySet<string> = new Set([
+const FOR_LOOP_GRAPH_ERROR_CODES = [
   'nodes.forLoopMissingIterationOutput',
   'nodes.forLoopReturnCount',
   'nodes.forLoopUnterminatedBody',
@@ -37,19 +20,35 @@ const FOR_LOOP_GRAPH_ERRORS: ReadonlySet<string> = new Set([
   'nodes.forLoopLinkageInvalid',
   'nodes.forLoopLinkageDuplicate',
   'nodes.forReturnOwnership',
-]);
+] as const;
 
-export const localizeForLoopValidationReason = (reason: string, translate: (key: string) => string): string => {
-  if (!reason.startsWith(FOR_LOOP_VALIDATION_PREFIX) || !reason.endsWith('.')) {
+export type ForLoopGraphError = (typeof FOR_LOOP_GRAPH_ERROR_CODES)[number];
+
+export interface ForLoopValidationReason {
+  key: ForLoopGraphError;
+}
+
+export const createForLoopValidationReason = (key: ForLoopGraphError): ForLoopValidationReason => ({ key });
+
+export class ForLoopGraphValidationError extends Error {
+  readonly reason: ForLoopValidationReason;
+
+  constructor(key: ForLoopGraphError) {
+    super(`For loop validation failed: ${key}.`);
+    this.name = 'ForLoopGraphValidationError';
+    this.reason = createForLoopValidationReason(key);
+  }
+}
+
+export const localizeForLoopValidationReason = (
+  reason: string | ForLoopValidationReason,
+  translate: (key: string) => string
+): string => {
+  if (typeof reason === 'string') {
     return reason;
   }
 
-  const error = reason.slice(FOR_LOOP_VALIDATION_PREFIX.length, -1);
-  if (!FOR_LOOP_GRAPH_ERRORS.has(error)) {
-    return reason;
-  }
-
-  return `${translate('nodes.forLoopValidationFailed')}: ${translate(error)}.`;
+  return `${translate('nodes.forLoopValidationFailed')}: ${translate(reason.key)}.`;
 };
 
 export type LoopBodyBoundaryStatus =

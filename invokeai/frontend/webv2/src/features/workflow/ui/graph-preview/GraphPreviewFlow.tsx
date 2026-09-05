@@ -14,6 +14,7 @@ import { isInvocationNode, type ProjectGraphState, type XYPosition } from '@feat
 import { getCanonicalWorkflowEdges } from '@features/workflow/core/forLoops';
 import { getLayeredPositions } from '@features/workflow/core/graphLayout';
 import '@xyflow/react/dist/style.css';
+import { LOOP_LINKAGE_STROKE } from '@features/workflow/ui/loopLinkage';
 import { useWorkflowPreferencesSelector } from '@features/workflow/ui/WorkflowUiContext';
 import { Background, BackgroundVariant, Handle, Position, ReactFlow } from '@xyflow/react';
 import { useCallback, useId, useMemo } from 'react';
@@ -141,7 +142,9 @@ const toPreviewEdges = (graph: WorkflowPreviewGraph): FlowEdge[] =>
     source: edge.sourceNodeId,
     target: edge.targetNodeId,
     type: 'default',
-    ...(edge.type === 'loop_linkage' ? { style: { stroke: '#22c55e', strokeDasharray: '6 4', strokeWidth: 2 } } : {}),
+    ...(edge.type === 'loop_linkage'
+      ? { style: { stroke: LOOP_LINKAGE_STROKE, strokeDasharray: '6 4', strokeWidth: 2 } }
+      : {}),
   }));
 
 export const GraphPreviewFlow = ({

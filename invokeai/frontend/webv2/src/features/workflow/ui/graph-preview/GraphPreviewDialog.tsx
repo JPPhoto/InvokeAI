@@ -236,7 +236,7 @@ export const GraphPreviewDialog = ({
               {hasInvalidReasons ? (
                 <InvalidBanner>
                   <Text>
-                    {t('graphPreview.invalidTitle')} {source.invalidReasons[0]}
+                    {t('graphPreview.invalidTitle')} {localizeForLoopValidationReason(source.invalidReasons[0], t)}
                   </Text>
                 </InvalidBanner>
               ) : null}

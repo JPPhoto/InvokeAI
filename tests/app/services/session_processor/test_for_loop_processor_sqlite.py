@@ -250,7 +250,7 @@ def test_processor_sqlite_queue_nested_iterate_for_cleanup(
             assert returns_seen == 2
         else:
             assert "after" not in queue_item.session.source_prepared_mapping
-            assert not queue_item.session.finalized_loop_nodes
+            assert ("for", ()) not in queue_item.session.finalized_loop_contexts
             if outcome == "canceled":
                 assert returns_seen == 1
                 assert status_handler_called.wait(timeout=5)
@@ -344,7 +344,7 @@ def test_processor_sqlite_queue_nested_for_cleanup(
             assert inner_returns_seen == 4
         else:
             assert "after" not in queue_item.session.source_prepared_mapping
-            assert not queue_item.session.finalized_loop_nodes
+            assert ("outer_for", ()) not in queue_item.session.finalized_loop_contexts
             assert not any(
                 getattr(queue_item.session.results.get(exec_id), "output_collection", [])
                 for exec_id in queue_item.session.source_prepared_mapping.get("outer_for", [])

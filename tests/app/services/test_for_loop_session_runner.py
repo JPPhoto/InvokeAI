@@ -187,7 +187,8 @@ def _build_queue_item(session: GraphExecutionState) -> SimpleNamespace:
 
 
 def _completed_source_ids(events: _DummyEvents, session: GraphExecutionState) -> list[str]:
-    return [session.prepared_source_mapping[invocation.id] for invocation, _queue_item, _output in events.completed]
+    # Final For output updates reuse the execution ID; count executions separately from output updates.
+    return [session.prepared_source_mapping[exec_id] for exec_id in dict.fromkeys(i.id for i, _, _ in events.completed)]
 
 
 def test_session_runner_completes_for_loop_and_persists_final_outputs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -248,7 +249,7 @@ def test_session_runner_cancellation_stops_for_loop_without_releasing_final_outp
     assert completed_source_ids.count("body") == 1
     assert completed_source_ids.count("return") == 1
     assert "after" not in session.source_prepared_mapping
-    assert "for" not in session.finalized_loop_nodes
+    assert ("for", ()) not in session.finalized_loop_contexts
     assert len(session.source_prepared_mapping["for"]) == 2
     assert sum(exec_id in session.results for exec_id in session.source_prepared_mapping["for"]) == 1
     assert not any(
@@ -282,7 +283,7 @@ def test_session_runner_body_exception_fails_and_cleans_up_for_loop(monkeypatch:
     assert completed_source_ids.count("body") == 1
     assert completed_source_ids.count("return") == 1
     assert "after" not in session.source_prepared_mapping
-    assert "for" not in session.finalized_loop_nodes
+    assert ("for", ()) not in session.finalized_loop_contexts
     assert len(session.source_prepared_mapping["for"]) == 2
     assert session.next() is None
     assert not any(
@@ -317,7 +318,7 @@ def test_session_runner_nested_iterate_cancellation_stops_outer_loop(monkeypatch
     assert completed_source_ids.count("collect") == 1
     assert completed_source_ids.count("return") == 1
     assert "after" not in session.source_prepared_mapping
-    assert not session.finalized_loop_nodes
+    assert not session.finalized_loop_contexts
 
 
 def test_session_runner_nested_for_cancellation_stops_outer_loop_without_final_outputs(
@@ -352,7 +353,7 @@ def test_session_runner_nested_for_cancellation_stops_outer_loop_without_final_o
     assert completed_source_ids.count("inner_return") == 1
     assert "outer_return" not in completed_source_ids
     assert "after" not in session.source_prepared_mapping
-    assert not session.finalized_loop_nodes
+    assert not session.finalized_loop_contexts
     assert len(session.source_prepared_mapping["inner_for"]) == 2
     assert sum(exec_id in session.results for exec_id in session.source_prepared_mapping["inner_for"]) == 1
     assert len(session.source_prepared_mapping["inner_body"]) == 2
@@ -383,7 +384,7 @@ def test_session_runner_nested_iterate_body_exception_fails_outer_loop(monkeypat
     assert completed_source_ids.count("iterate") == 2
     assert completed_source_ids.count("body") == 1
     assert "after" not in session.source_prepared_mapping
-    assert not session.finalized_loop_nodes
+    assert not session.finalized_loop_contexts
 
 
 def test_session_runner_completes_nested_for_and_releases_outer_final_outputs(
@@ -521,4 +522,4 @@ def test_session_runner_nested_for_body_exception_fails_without_outer_final_outp
     assert completed_source_ids.count("inner_body") == 2
     assert completed_source_ids.count("inner_return") == 2
     assert "after" not in session.source_prepared_mapping
-    assert not session.finalized_loop_nodes
+    assert ("outer_for", ()) not in session.finalized_loop_contexts

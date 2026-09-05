@@ -550,7 +550,7 @@ describe('compileProjectGraph', () => {
 
     expect(getProjectGraphReadiness(document, { error: null, status: 'loaded', templates: loopTemplates })).toEqual({
       canInvoke: false,
-      reasons: ['For loop validation failed: nodes.forLoopLinkageInvalid.'],
+      reasons: [{ key: 'nodes.forLoopLinkageInvalid' }],
     });
   });
 });

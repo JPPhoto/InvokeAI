@@ -1079,7 +1079,7 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
           size={1.5}
           variant={BackgroundVariant.Dots}
         />
-        <LoopBodyBoundaryOverlay edges={projectGraph.edges} />
+        <LoopBodyBoundaryOverlay edges={projectGraph.edges} nodes={projectGraph.nodes} />
         <EditorToolbar
           nodeOpacity={nodeOpacity}
           tool={tool}

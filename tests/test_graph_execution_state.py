@@ -2108,7 +2108,7 @@ def test_graph_for_empty_collection_with_indirect_body_completes_without_body_ex
     assert state.is_complete()
 
 
-def test_graph_for_return_omitted_output_is_not_collected():
+def test_graph_for_return_none_output_is_collected():
     graph = Graph()
     graph.add_node(ForInvocation(id="for", collection=["alpha", "beta"]))
     graph.add_node(ForReturnInvocation(id="return"))
@@ -2124,7 +2124,7 @@ def test_graph_for_return_omitted_output_is_not_collected():
         if source_node_id == "after"
     )
 
-    assert state.results[after_exec_id].value == []
+    assert state.results[after_exec_id].value == [None, None]
 
 
 def test_graph_for_multiple_final_edges_to_same_node_do_not_crash():

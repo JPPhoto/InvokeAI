@@ -146,6 +146,7 @@ class CollectionCartesianInvocation(BaseInvocation):
     second: list[Any] = InputField(default=[], description="The second collection", ui_type=UIType._Collection)
 
     def invoke(self, context: InvocationContext) -> CollectionCartesianInvocationOutput:
+        # Divide before multiplying so the comparison cannot overflow for very large input collections.
         if self.first and self.second and len(self.first) > MAX_CARTESIAN_PRODUCT_SIZE // len(self.second):
             raise ValueError(f"Cartesian product exceeds the maximum size of {MAX_CARTESIAN_PRODUCT_SIZE} pairs")
         return CollectionCartesianInvocationOutput(

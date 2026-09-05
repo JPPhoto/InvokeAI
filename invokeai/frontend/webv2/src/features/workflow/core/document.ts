@@ -285,7 +285,7 @@ const removeNodeFieldElements = (form: WorkflowForm, removedNodeIds: Set<string>
 
 export type ProjectGraphAction =
   | { type: 'addNode'; node: WorkflowNode }
-  | { type: 'addNodeAndEdge'; node: WorkflowNode; edge: WorkflowEdge }
+  | { type: 'addNodeAndEdge'; node: WorkflowNode; edge: WorkflowEdge | WorkflowEdge[] }
   | { type: 'addGraphElements'; nodes: WorkflowNode[]; edges: WorkflowEdge[] }
   | { type: 'removeNodes'; nodeIds: string[] }
   | { type: 'setNodePosition'; nodeId: string; position: XYPosition }
@@ -395,7 +395,8 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
         return document;
       }
 
-      return addEdgeToDocument({ ...document, nodes: [...document.nodes, action.node] }, action.edge);
+      const documentWithNode = { ...document, nodes: [...document.nodes, action.node] };
+      return (Array.isArray(action.edge) ? action.edge : [action.edge]).reduce(addEdgeToDocument, documentWithNode);
     }
     case 'addGraphElements': {
       if (action.nodes.length === 0 && action.edges.length === 0) {

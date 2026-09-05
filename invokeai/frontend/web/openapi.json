@@ -36199,7 +36199,7 @@
         "required": ["type", "id"],
         "title": "ForInvocation",
         "type": "object",
-        "version": "1.3.0",
+        "version": "1.3.1",
         "output": {
           "$ref": "#/components/schemas/ForInvocationOutput"
         }
@@ -39148,15 +39148,6 @@
             "title": "Source Prepared Mapping",
             "description": "The map of original graph nodes to prepared nodes"
           },
-          "finalized_loop_nodes": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "uniqueItems": true,
-            "title": "Finalized Loop Nodes",
-            "description": "Legacy set of top-level loop source nodes whose final outputs have been materialized"
-          },
           "finalized_loop_contexts": {
             "items": {
               "prefixItems": [
@@ -39218,8 +39209,7 @@
           "workflow_call_stack",
           "workflow_call_history",
           "prepared_source_mapping",
-          "source_prepared_mapping",
-          "finalized_loop_nodes"
+          "source_prepared_mapping"
         ],
         "title": "GraphExecutionState",
         "description": "Tracks source-graph expansion, execution progress, and runtime results."

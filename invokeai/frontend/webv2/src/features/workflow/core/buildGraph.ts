@@ -9,7 +9,13 @@ import type {
 
 import { createWorkflowId } from './document';
 import { getWorkflowFieldInvalidReason } from './fields';
-import { getCanonicalWorkflowEdges, validateForLoopGraph } from './forLoops';
+import {
+  createForLoopValidationReason,
+  ForLoopGraphValidationError,
+  getCanonicalWorkflowEdges,
+  validateForLoopGraph,
+  type ForLoopValidationReason,
+} from './forLoops';
 import { isInvocationNode } from './types';
 import { hasAnyCycle } from './validation';
 
@@ -57,7 +63,7 @@ const toBoardGraphValue = (value: unknown): unknown => {
 
 export interface ProjectGraphReadiness {
   canInvoke: boolean;
-  reasons: string[];
+  reasons: Array<string | ForLoopValidationReason>;
 }
 
 export interface ProjectGraphReadinessOptions {
@@ -86,7 +92,7 @@ export const getProjectGraphReadiness = (
     return { canInvoke: false, reasons: ['The project graph has no nodes. Add nodes in the Workflow view.'] };
   }
 
-  const reasons: string[] = [];
+  const reasons: Array<string | ForLoopValidationReason> = [];
   const connectedInputs = new Set(
     canonicalEdges
       .filter((edge) => executableNodes.some((node) => node.id === edge.destination.node_id))
@@ -153,7 +159,7 @@ export const getProjectGraphReadiness = (
   const forLoopError = validateForLoopGraph(document);
 
   if (forLoopError) {
-    reasons.push(`For loop validation failed: ${forLoopError}.`);
+    reasons.push(createForLoopValidationReason(forLoopError));
   }
 
   return { canInvoke: reasons.length === 0, reasons };
@@ -175,7 +181,7 @@ export const compileProjectGraph = (
   const forLoopError = validateForLoopGraph(document);
 
   if (forLoopError) {
-    throw new Error(`For loop validation failed: ${forLoopError}.`);
+    throw new ForLoopGraphValidationError(forLoopError);
   }
 
   const executableNodes = getExecutableNodes(document).filter((node) => templates[node.data.type] !== undefined);

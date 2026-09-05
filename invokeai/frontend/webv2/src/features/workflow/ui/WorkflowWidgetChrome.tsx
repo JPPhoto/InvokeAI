@@ -377,12 +377,6 @@ export const WorkflowDialogHost = () => {
               : ('default' as const),
         };
 
-        editGraph({
-          edge,
-          node,
-          type: 'addNodeAndEdge',
-        });
-
         const currentGraph = projectStore.getSnapshot().projectGraph;
         const sourceNode = currentGraph.nodes.find((candidate) => candidate.id === addNodeConnection.sourceNodeId);
         const resolvedSource =
@@ -399,19 +393,19 @@ export const WorkflowDialogHost = () => {
           currentGraph.edges
         );
 
+        const edges = [edge];
         if (shouldAddLoopLinkage && resolvedSourceNode?.type === 'invocation') {
-          editGraph({
-            edge: {
-              id: createWorkflowId('edge'),
-              source: resolvedSourceNode.id,
-              sourceHandle: LOOP_LINKAGE_FIELD,
-              target: node.id,
-              targetHandle: LOOP_LINKAGE_FIELD,
-              type: 'loop_linkage',
-            },
-            type: 'addEdge',
+          edges.push({
+            id: createWorkflowId('edge'),
+            source: resolvedSourceNode.id,
+            sourceHandle: LOOP_LINKAGE_FIELD,
+            target: node.id,
+            targetHandle: LOOP_LINKAGE_FIELD,
+            type: 'loop_linkage',
           });
         }
+
+        editGraph({ edge: edges, node, type: 'addNodeAndEdge' });
         return;
       }
 

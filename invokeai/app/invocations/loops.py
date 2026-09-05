@@ -9,6 +9,8 @@ from invokeai.app.services.shared.invocation_context import InvocationContext
 
 T = TypeVar("T")
 
+LOOP_LINKAGE_FIELD = "loop_linkage"
+
 
 def _copy_value(value: T) -> T:
     if isinstance(value, BaseModel):
@@ -137,7 +139,7 @@ class ForInvocationOutput(BaseInvocationOutput):
     )
 
 
-@invocation("for", version="1.3.0")
+@invocation("for", version="1.3.1")
 class ForInvocation(BaseInvocation):
     collection: list[Any] = InputField(
         description="The list of items to iterate over",
@@ -157,11 +159,11 @@ class ForInvocation(BaseInvocation):
 
     def invoke(self, context: InvocationContext) -> ForInvocationOutput:
         if self.index < 0:
-            raise NotImplementedError("ForInvocation is scheduler-special and cannot be invoked directly")
+            raise NotImplementedError("For loop nodes must be executed as part of a workflow graph")
 
         state = self.state or LoopState()
         return ForInvocationOutput(
-            loop_linkage="loop_linkage",
+            loop_linkage=LOOP_LINKAGE_FIELD,
             item=self.collection[self.index],
             index=self.index,
             total=len(self.collection),

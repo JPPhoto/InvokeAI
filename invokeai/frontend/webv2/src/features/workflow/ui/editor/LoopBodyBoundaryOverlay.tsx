@@ -2,7 +2,7 @@ import type { WorkflowEdge, WorkflowNode } from '@features/workflow/contracts';
 
 import { Box, Text } from '@chakra-ui/react';
 import { getForLoopBodyBoundaries, type LoopBodyBoundaryStatus } from '@features/workflow/utility';
-import { useNodes, useReactFlow, ViewportPortal } from '@xyflow/react';
+import { useReactFlow, ViewportPortal } from '@xyflow/react';
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -11,13 +11,13 @@ import type { WorkflowFlowEdge, WorkflowFlowNode } from './flowAdapters';
 const BOUNDARY_PADDING = 24;
 
 const getStatusColor = (status: LoopBodyBoundaryStatus) =>
-  status === 'complete' ? { border: 'green.400', text: 'green.200' } : { border: 'orange.400', text: 'orange.200' };
+  status === 'complete'
+    ? { border: 'border.success', text: 'fg.success' }
+    : { border: 'border.warning', text: 'fg.warning' };
 
-export const LoopBodyBoundaryOverlay = ({ edges }: { edges: WorkflowEdge[] }) => {
+export const LoopBodyBoundaryOverlay = ({ nodes, edges }: { nodes: WorkflowNode[]; edges: WorkflowEdge[] }) => {
   const { t } = useTranslation();
-  const flowNodes = useNodes<WorkflowFlowNode>();
   const { getNodesBounds } = useReactFlow<WorkflowFlowNode, WorkflowFlowEdge>();
-  const nodes = useMemo<WorkflowNode[]>(() => flowNodes.map((node) => node.data.documentNode), [flowNodes]);
   const boundaries = useMemo(() => getForLoopBodyBoundaries(nodes, edges), [edges, nodes]);
 
   return (

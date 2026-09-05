@@ -12,6 +12,7 @@ import {
 } from '@features/generation/settings';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { useInvocationTemplatesSelector } from '@features/workflow/react';
+import { localizeForLoopValidationReason } from '@features/workflow/utility';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { submitActiveInvocation } from '@workbench/activeInvocationSubmission';
 import { useIsCanvasInvocationPreparing } from '@workbench/canvasInvocationPreparation';
@@ -31,33 +32,6 @@ import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const selectInvocationRouteInput = createInvocationRouteInputSelector();
-const FOR_LOOP_VALIDATION_PREFIX = 'For loop validation failed: ';
-const FOR_LOOP_GRAPH_ERRORS: ReadonlySet<string> = new Set([
-  'nodes.forLoopMissingIterationOutput',
-  'nodes.forLoopReturnCount',
-  'nodes.forLoopUnterminatedBody',
-  'nodes.forLoopNestedUnsupported',
-  'nodes.forLoopIterateUnsupported',
-  'nodes.forLoopIteratorInputUnsupported',
-  'nodes.forLoopFinalOutputInBody',
-  'nodes.forLoopBodyEscape',
-  'nodes.forLoopInputCount',
-  'nodes.forReturnInputCount',
-  'nodes.forLoopLinkageMissing',
-  'nodes.forLoopLinkageInvalid',
-  'nodes.forLoopLinkageDuplicate',
-  'nodes.forReturnOwnership',
-]);
-const localizeForLoopValidationReason = (reason: string, translate: (key: string) => string): string => {
-  if (!reason.startsWith(FOR_LOOP_VALIDATION_PREFIX) || !reason.endsWith('.')) {
-    return reason;
-  }
-
-  const error = reason.slice(FOR_LOOP_VALIDATION_PREFIX.length, -1);
-  return FOR_LOOP_GRAPH_ERRORS.has(error)
-    ? `${translate('nodes.forLoopValidationFailed')}: ${translate(error)}.`
-    : reason;
-};
 const areTypeIdSetsEqual = (left: ReadonlySet<WidgetTypeId>, right: ReadonlySet<WidgetTypeId>): boolean =>
   left.size === right.size && [...left].every((typeId) => right.has(typeId));
 

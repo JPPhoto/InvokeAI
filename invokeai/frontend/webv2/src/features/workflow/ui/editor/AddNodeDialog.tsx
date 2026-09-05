@@ -1,5 +1,5 @@
 import type { InvocationTemplate, InvocationTemplates } from '@features/workflow/contracts';
-import type { WorkflowNode } from '@features/workflow/core/types';
+import type { WorkflowEdge, WorkflowNode } from '@features/workflow/core/types';
 import type { AddNodeConnectionFilter } from '@features/workflow/ui/workflowUiStore';
 
 import { Badge, Box, Dialog, HStack, Icon, Input, Portal, ScrollArea, Stack, Text } from '@chakra-ui/react';
@@ -79,7 +79,7 @@ const isCompatibleConnectionTemplate = (
 const isForIterationOutputConnection = (
   connectionFilter: AddNodeConnectionFilter | null,
   nodes: WorkflowNode[],
-  edges: Parameters<typeof resolveConnectorSource>[2],
+  edges: WorkflowEdge[],
   templates: InvocationTemplates
 ): boolean => {
   if (!connectionFilter || connectionFilter.kind !== 'source') {
