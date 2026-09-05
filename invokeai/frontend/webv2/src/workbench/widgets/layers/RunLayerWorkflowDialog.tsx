@@ -437,11 +437,11 @@ export const RunLayerWorkflowDialog = ({
   const canRun = engine !== null && !isRunning && readinessMessage === null;
 
   return (
-    <Dialog.Root lazyMount open={isOpen} placement="center" size="sm" unmountOnExit onOpenChange={handleOpenChange}>
+    <Dialog.Root lazyMount open={isOpen} size="sm" unmountOnExit onOpenChange={handleOpenChange}>
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
-          <Dialog.Content ref={contentRef} bg="bg.subtle" borderColor="border.subtle" borderWidth="1px" color="fg">
+          <Dialog.Content ref={contentRef}>
             <chakra.form onSubmit={handleSubmit}>
               <Dialog.Header>
                 <Dialog.Title>{t('widgets.layers.runWorkflow.title')}</Dialog.Title>
@@ -498,7 +498,7 @@ export const RunLayerWorkflowDialog = ({
                   ) : null}
                 </Stack>
               </Dialog.Body>
-              <Dialog.Footer gap="2">
+              <Dialog.Footer>
                 <Button size="xs" type="button" variant="ghost" onClick={close}>
                   {t('widgets.layers.runWorkflow.cancel')}
                 </Button>
@@ -508,7 +508,7 @@ export const RunLayerWorkflowDialog = ({
               </Dialog.Footer>
             </chakra.form>
             <Dialog.CloseTrigger asChild>
-              <CloseButton aria-label={t('widgets.layers.runWorkflow.cancel')} color="fg.muted" size="sm" />
+              <CloseButton aria-label={t('widgets.layers.runWorkflow.cancel')} />
             </Dialog.CloseTrigger>
           </Dialog.Content>
         </Dialog.Positioner>

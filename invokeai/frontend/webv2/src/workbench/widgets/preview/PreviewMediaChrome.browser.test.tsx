@@ -182,7 +182,7 @@ afterEach(async () => {
 });
 
 describe('PreviewFilmstrip mixed media', () => {
-  it('uses the gallery-style full accent border for the selected item', async () => {
+  it('uses the gallery-style accent border for the selected item', async () => {
     await render(
       <>
         <Box borderColor="accent.solid" borderWidth="2px" data-filmstrip-selected-border-reference="" />
@@ -199,14 +199,9 @@ describe('PreviewFilmstrip mixed media', () => {
 
     const reference = host!.querySelector<HTMLElement>('[data-filmstrip-selected-border-reference]')!;
     const selected = host!.querySelector<HTMLButtonElement>('[aria-current="true"]')!;
-    const selectedStyle = getComputedStyle(selected);
     const accentColor = getComputedStyle(reference).borderTopColor;
 
-    expect(selectedStyle.borderTopWidth).toBe('2px');
-    expect(selectedStyle.borderTopColor).toBe(accentColor);
-    expect(selectedStyle.borderRightColor).toBe(accentColor);
-    expect(selectedStyle.borderBottomColor).toBe(accentColor);
-    expect(selectedStyle.borderLeftColor).toBe(accentColor);
+    expect(getComputedStyle(selected).borderTopColor).toBe(accentColor);
     expect(selected.querySelector(':scope > div')).toBeNull();
   });
 

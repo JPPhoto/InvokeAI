@@ -240,11 +240,12 @@ export const GenerateReferenceImagesContent = ({
         <DropZone
           as="button"
           alignItems="center"
-          cursor={canAdd ? 'pointer' : 'not-allowed'}
+          cursor={canAdd ? undefined : 'not-allowed'}
           display="flex"
           flex="1"
           fontSize="2xs"
           gap="2"
+          isDisabled={!canAdd}
           isOver={isOver}
           justifyContent="center"
           minH="12"

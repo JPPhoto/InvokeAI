@@ -239,6 +239,7 @@ type WorkbenchReducerAction =
       activeInstanceId?: WidgetInstanceId;
       instanceIds: WidgetInstanceId[];
     }
+  | { type: 'setWidgetInstanceAlignment'; region: WidgetRegion; instanceId: WidgetInstanceId; align: 'start' | 'end' }
   | { type: 'setRegionWidgetCollapsed'; region: WidgetRegion; isCollapsed: boolean }
   | { type: 'setRegionWidgetSize'; region: WidgetRegion; sizePx: number }
   | { type: 'floatWidget'; instanceId: WidgetInstanceId }
@@ -1173,7 +1174,6 @@ const createWidgetStates = (): WidgetStateMap => ({
   queue: { id: 'queue', label: 'Queue', values: {}, version: 1 },
   'server-status': { id: 'server-status', label: 'Server Status', values: {}, version: 1 },
   users: { id: 'users', label: 'Users', values: {}, version: 1 },
-  'version-status': { id: 'version-status', label: 'Version', values: {}, version: 1 },
   workflow: { graphId: 'workflow-graph', id: 'workflow', label: 'Workflow', values: {}, version: 1 },
   upscale: { graphId: 'upscale-graph', id: 'upscale', label: 'Upscale', values: {}, version: 1 },
   video: { graphId: 'video-graph', id: 'video', label: 'Video', values: {}, version: 1 },
@@ -1218,7 +1218,6 @@ const defaultWidgetInstanceTypes: Record<WidgetInstanceId, WidgetTypeId> = {
   project: 'project',
   queue: 'queue',
   'server-status': 'server-status',
-  'version-status': 'version-status',
   workflow: 'workflow',
   'workflow:bottom': 'workflow',
   'workflow:center': 'workflow',
@@ -1240,15 +1239,6 @@ const LEGACY_DEFAULT_LEFT_REGION_WIDGET_IDS: readonly WidgetInstanceId[][] = [
   ['generate', 'workflow'],
   ['workflow', 'generate'],
   ['generate', 'workflow', 'gallery'],
-];
-
-// Every left rail shipped as a default between the Upscale and Video widgets
-// (including pre-upscale defaults after the splice above normalizes them).
-const PRE_VIDEO_DEFAULT_LEFT_REGION_WIDGET_IDS: readonly WidgetInstanceId[][] = [
-  ['generate', 'upscale'],
-  ['generate', 'workflow', 'upscale'],
-  ['workflow', 'generate', 'upscale'],
-  ['generate', 'workflow', 'upscale', 'gallery'],
 ];
 
 const ensureLeftRegion = (leftRegion: WidgetRegionState | undefined): WidgetRegionState => {
@@ -1273,21 +1263,9 @@ const ensureLeftRegion = (leftRegion: WidgetRegionState | undefined): WidgetRegi
     }
   }
 
-  // Same treatment for rails persisted before the Video widget shipped: only a
-  // rail that exactly matches a shipped default (after the upscale splice above)
-  // adopts it — a customized rail is left alone.
-  if (region.instanceIds.includes('upscale') && !region.instanceIds.includes('video')) {
-    const preVideoMatch = PRE_VIDEO_DEFAULT_LEFT_REGION_WIDGET_IDS.some(
-      (ids) => ids.length === region.instanceIds.length && ids.every((id, index) => region.instanceIds[index] === id)
-    );
-
-    if (preVideoMatch) {
-      const instanceIds = [...region.instanceIds];
-
-      instanceIds.splice(instanceIds.indexOf('upscale') + 1, 0, 'video');
-      region = { ...region, instanceIds };
-    }
-  }
+  // The Video widget is deliberately absent from the non-video defaults now,
+  // so nothing backfills it any more; it lives in the Video preset and stays
+  // addable everywhere.
 
   return region;
 };
@@ -2009,6 +1987,9 @@ const isWidgetRegionState = (
       (record.activeInstanceId.length > 0 &&
         record.activeInstanceId in widgetInstances &&
         (instanceIds.length === 0 || instanceIds.includes(record.activeInstanceId)))) &&
+    (record.alignEndInstanceIds === undefined ||
+      (Array.isArray(record.alignEndInstanceIds) &&
+        record.alignEndInstanceIds.every((instanceId) => typeof instanceId === 'string'))) &&
     typeof record.isCollapsed === 'boolean' &&
     typeof record.sizePx === 'number' &&
     Number.isFinite(record.sizePx) &&
@@ -3956,6 +3937,25 @@ export const __workbenchReducerInternal = (
         // a pure reorder leaves the same panel in front and must not re-route.
         return applyAutoRouteForRegionFront(nextProject, previousRegion, action.region, context);
       });
+    }
+    case 'setWidgetInstanceAlignment': {
+      return updateActiveProject(state, (project) =>
+        updateProjectWidgetRegion(project, action.region, (region) => {
+          const current = region.alignEndInstanceIds ?? [];
+          const isAlignedEnd = current.includes(action.instanceId);
+
+          if (action.align === 'end' ? isAlignedEnd : !isAlignedEnd) {
+            return region;
+          }
+
+          const next =
+            action.align === 'end'
+              ? [...current, action.instanceId]
+              : current.filter((instanceId) => instanceId !== action.instanceId);
+
+          return { ...region, alignEndInstanceIds: next };
+        })
+      );
     }
     case 'setRegionWidgetCollapsed': {
       if (action.region === 'center') {

@@ -137,11 +137,11 @@ export const QueueItemActions = ({ item }: { item: QueueItemReadModel }) => {
         </Button>
       </RecallActionButtons>
 
-      <Dialog.Root open={jsonOpen} placement="center" scrollBehavior="inside" size="lg" onOpenChange={closeJson}>
+      <Dialog.Root open={jsonOpen} scrollBehavior="inside" size="lg" onOpenChange={closeJson}>
         <Portal>
           <Dialog.Backdrop />
           <Dialog.Positioner>
-            <Dialog.Content bg="bg.subtle" borderColor="border.subtle" borderWidth="1px" color="fg">
+            <Dialog.Content>
               <Dialog.Header>
                 <Dialog.Title>{t('widgets.queue.itemTitle', { id: item.id })}</Dialog.Title>
               </Dialog.Header>
@@ -149,7 +149,7 @@ export const QueueItemActions = ({ item }: { item: QueueItemReadModel }) => {
                 <JsonPreview label={t('widgets.queue.itemJsonLabel', { id: item.id })} maxH="60vh" value={item} />
               </Dialog.Body>
               <Dialog.CloseTrigger asChild>
-                <CloseButton color="fg.muted" size="sm" />
+                <CloseButton />
               </Dialog.CloseTrigger>
             </Dialog.Content>
           </Dialog.Positioner>

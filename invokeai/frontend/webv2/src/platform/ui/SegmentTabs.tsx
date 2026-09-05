@@ -3,14 +3,19 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { Box, chakra, HStack, Text } from '@chakra-ui/react';
 import { Fragment, useCallback } from 'react';
 
-const TAB_HOVER_PROPS = { bg: 'bg.muted', color: 'fg' };
+// Accent-tinted translucent fills, so the strip reads the same on the layer
+// panels and on popover/dialog surfaces that share the solid fills' color,
+// and sits in the menus' cool-tinted interaction family.
+const TAB_HOVER_PROPS = { bg: 'gray.hoverTint/8', color: 'fg' };
+const TAB_SHOWN_BG = 'gray.hoverTint/15';
 
 /** The strip's fixed height; collapsed blocks and drag snaps size against it. */
 export const SEGMENT_TABS_HEIGHT_PX = 40;
 
 export interface SegmentTab<T extends string = string> {
   id: T;
-  label: string;
+  /** Usually a string; gallery tabs carry a dimmed count span. */
+  label: ReactNode;
 }
 
 /** Roving focus for a horizontal tablist: arrows cycle, Home/End jump. */
@@ -48,6 +53,7 @@ export const SegmentTabs = <T extends string>({
   activeId,
   ariaLabel,
   idBase,
+  isCompact = false,
   onSelect,
   showActivePanel = true,
   tabs,
@@ -56,12 +62,21 @@ export const SegmentTabs = <T extends string>({
   activeId: T;
   ariaLabel: string;
   idBase: string;
+  /** Embedded strips (popovers, dialog headers) drop the panel-strip height and outer padding. */
+  isCompact?: boolean;
   onSelect: (id: T) => void;
   showActivePanel?: boolean;
   tabs: readonly SegmentTab<T>[];
   trailing?: ReactNode;
 }) => (
-  <HStack align="center" flexShrink={0} gap="0.5" h={`${SEGMENT_TABS_HEIGHT_PX}px`} minW="0" px="1.5">
+  <HStack
+    align="center"
+    flexShrink={0}
+    gap="0.5"
+    h={isCompact ? '8' : `${SEGMENT_TABS_HEIGHT_PX}px`}
+    minW="0"
+    px={isCompact ? '0' : '1.5'}
+  >
     <HStack
       aria-label={ariaLabel}
       aria-orientation="horizontal"
@@ -117,7 +132,7 @@ const SegmentTabButton = <T extends string>({
   isSelected: boolean;
   /** Selected AND its panel is visible; a collapsed block keeps selection without the shown look. */
   isShown: boolean;
-  label: string;
+  label: ReactNode;
   onSelect: (id: T) => void;
 }) => {
   const select = useCallback(() => onSelect(id), [id, onSelect]);
@@ -126,19 +141,19 @@ const SegmentTabButton = <T extends string>({
     <chakra.button
       aria-controls={isShown ? segmentTabsPanelId(idBase) : undefined}
       aria-selected={isSelected}
-      bg={isShown ? 'bg.emphasized' : 'transparent'}
+      bg={isShown ? TAB_SHOWN_BG : 'transparent'}
       color={isShown ? 'fg' : 'fg.muted'}
-      cursor="pointer"
       fontSize="xs"
-      fontWeight="600"
+      fontWeight="medium"
       h="7"
       id={segmentTabsTabId(idBase, id)}
       minW="10"
       overflow="hidden"
       px="2.5"
       role="tab"
-      rounded="md"
+      rounded="control"
       tabIndex={isSelected ? 0 : -1}
+      transition="background var(--wb-motion-duration-fast), color var(--wb-motion-duration-fast)"
       type="button"
       _hover={isShown ? undefined : TAB_HOVER_PROPS}
       onClick={select}

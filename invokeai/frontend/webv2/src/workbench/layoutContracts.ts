@@ -50,6 +50,9 @@ export interface FloatingWidgetState {
 export interface WidgetRegionState {
   activeInstanceId: WidgetInstanceId;
   instanceIds: WidgetInstanceId[];
+  /** Instances rendered in the strip's trailing cluster (bottom region only).
+   * Ids not currently placed are inert — a widget re-enabled later keeps its side. */
+  alignEndInstanceIds?: WidgetInstanceId[];
   isCollapsed: boolean;
   sizePx: number;
 }

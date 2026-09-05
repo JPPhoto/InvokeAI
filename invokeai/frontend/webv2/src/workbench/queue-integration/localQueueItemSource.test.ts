@@ -33,6 +33,8 @@ const wanModel: ModelConfig = {
 const submitVideo = () => {
   let state = createInitialWorkbenchState();
 
+  // Video is no longer placed by the non-video defaults; add it first.
+  state = workbenchReducer(state, { region: 'left', type: 'toggleRegionWidget', widgetId: 'video' });
   state = workbenchReducer(state, {
     type: 'patchWidgetValues',
     values: { model: wanModel, positivePrompt: 'a fox running' },

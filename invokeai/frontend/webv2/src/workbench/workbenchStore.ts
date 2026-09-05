@@ -428,6 +428,7 @@ const createCommands = (
         })
       ),
       reorder: command('reorderWidgetInstances'),
+      setAlignment: command('setWidgetInstanceAlignment'),
       select: command('selectRegionWidget'),
       setFloatingGeometry: command(
         'setFloatingWidgetGeometry',

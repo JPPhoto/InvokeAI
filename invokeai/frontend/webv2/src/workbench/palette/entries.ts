@@ -305,8 +305,10 @@ const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSectionId; title: string }>
   { id: 'project', title: 'Project' },
   { id: 'queue', title: 'Queue' },
   { id: 'workflow', title: 'Workflow' },
+  { id: 'imageMap', title: 'Image Map' },
   { id: 'developer', title: 'Developer' },
   { id: 'workspace', title: 'Workspace' },
+  { id: 'about', title: 'About' },
 ];
 
 export interface SettingsEntryDeps {

@@ -46,8 +46,10 @@ export const getGalleryBoardGroups = ({
   const matchesSearch = (name: string) => !normalizedSearchTerm || name.toLowerCase().includes(normalizedSearchTerm);
 
   const uncategorizedBoard = boards.find((board) => board.kind === 'uncategorized') ?? null;
-  const projectBoard = projectBoardId ? (boards.find((board) => board.id === projectBoardId) ?? null) : null;
-  const projectRowName = projectBoard?.name ?? projectName;
+  const fetchedProjectBoard = projectBoardId ? (boards.find((board) => board.id === projectBoardId) ?? null) : null;
+  // The board renames with its project server-side, but the fetched list can lag
+  // a rename — the live project name is authoritative for the open project's row.
+  const projectBoard = fetchedProjectBoard ? { ...fetchedProjectBoard, name: projectName } : null;
 
   const matchesBoardSearch = (board: GalleryBoard) => matchesSearch(getGalleryBoardLabel(board, t));
   // The open project's own board is never "another project's", whatever the
@@ -75,7 +77,7 @@ export const getGalleryBoardGroups = ({
   const hasAnyMatch = yourBoards.length > 0 || dateBoards.length > 0 || archivedBoards.length > 0;
   const hasExactMatch =
     boards.some((board) => getGalleryBoardLabel(board, t).toLowerCase() === normalizedSearchTerm) ||
-    projectRowName.toLowerCase() === normalizedSearchTerm;
+    projectName.toLowerCase() === normalizedSearchTerm;
 
   return {
     archivedBoards,

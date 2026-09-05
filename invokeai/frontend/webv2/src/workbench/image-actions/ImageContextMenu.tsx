@@ -483,7 +483,7 @@ const SingleItemMenuItems = ({
       <ChangeBoardSubMenu boards={boards} currentBoardId={item.boardId} onMove={handleMove} />
       <Menu.Separator borderColor="border.subtle" />
       <ContextMenuItem
-        color="fg.error"
+        isDanger
         icon={Trash2Icon}
         label={item.kind === 'video' ? 'Delete Video' : 'Delete Item'}
         value="delete-item"
@@ -562,7 +562,7 @@ const BulkItemMenuItems = ({
       <ChangeBoardSubMenu boards={boards} currentBoardId={null} onMove={handleMove} />
       <Menu.Separator borderColor="border.subtle" />
       <ContextMenuItem
-        color="fg.error"
+        isDanger
         icon={Trash2Icon}
         label="Delete Selection"
         value="delete-selection"
@@ -831,13 +831,7 @@ const SingleImageMenuItems = ({
       <NewFromImageSubMenu actions={actions} images={images} isBulk={false} />
       <ChangeBoardSubMenu boards={boards} currentBoardId={image.boardId} onMove={handleMove} />
       <Menu.Separator borderColor="border.subtle" />
-      <ContextMenuItem
-        color="fg.error"
-        icon={Trash2Icon}
-        label="Delete Image"
-        value="delete-image"
-        onClick={handleDelete}
-      />
+      <ContextMenuItem isDanger icon={Trash2Icon} label="Delete Image" value="delete-image" onClick={handleDelete} />
     </>
   );
 };
@@ -944,7 +938,7 @@ const BulkMenuItems = ({
       <ChangeBoardSubMenu boards={boards} currentBoardId={null} onMove={handleMove} />
       <Menu.Separator borderColor="border.subtle" />
       <ContextMenuItem
-        color="fg.error"
+        isDanger
         icon={Trash2Icon}
         label="Delete Selection"
         value="delete-selection"
@@ -1120,26 +1114,26 @@ const QuickMenuItem = ({
 );
 
 const ContextMenuItem = ({
-  color,
   disabled,
   icon,
   iconFill,
+  isDanger,
   label,
   value,
   onClick,
 }: {
-  color?: string;
   disabled?: boolean;
   icon: LucideIcon;
   /** Lucide icons are stroke-only, so `'currentColor'` is how an on state reads. */
   iconFill?: string;
+  isDanger?: boolean;
   label: string;
   value: string;
   onClick?: () => void;
 }) => (
-  <Menu.Item color={color} disabled={disabled} value={value} onClick={onClick}>
+  <Menu.Item data-danger={isDanger ? '' : undefined} disabled={disabled} value={value} onClick={onClick}>
     <HStack gap="2" minW="0" w="full">
-      <Icon as={icon} boxSize="3.5" color={color ?? 'fg.subtle'} fill={iconFill} flexShrink={0} />
+      <Icon as={icon} boxSize="3.5" color={isDanger ? undefined : 'fg.subtle'} fill={iconFill} flexShrink={0} />
       <Text flex="1" fontSize="xs">
         {label}
       </Text>

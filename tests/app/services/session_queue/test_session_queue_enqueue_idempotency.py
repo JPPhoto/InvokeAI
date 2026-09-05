@@ -314,9 +314,7 @@ def test_unacknowledged_receipt_count_limit_is_per_user_across_queues(
 
     retry = asyncio.run(session_queue.enqueue_batch("queue-1", first_batch, False, "user-1"))
     assert retry.enqueued == 2
-    other_user = asyncio.run(
-        session_queue.enqueue_batch("queue-2", _batch(idempotency_key="second"), False, "user-2")
-    )
+    other_user = asyncio.run(session_queue.enqueue_batch("queue-2", _batch(idempotency_key="second"), False, "user-2"))
     assert other_user.enqueued == 2
 
 
