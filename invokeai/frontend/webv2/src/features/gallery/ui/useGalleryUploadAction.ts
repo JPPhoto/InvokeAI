@@ -49,7 +49,7 @@ export const useGalleryUploadAction = ({
           message: t('widgets.gallery.uploadDateBoardUnavailable'),
           namespace: 'gallery',
         });
-        return;
+        return [];
       }
 
       const accepted = files.flatMap((file) => {
@@ -64,7 +64,7 @@ export const useGalleryUploadAction = ({
           message: t('widgets.gallery.uploadUnsupported'),
           namespace: 'gallery',
         });
-        return;
+        return [];
       }
 
       const getBoard = (boardId: string) => boards.find((board) => board.id === boardId);
@@ -125,7 +125,7 @@ export const useGalleryUploadAction = ({
             message: firstFailure ? getApiErrorMessage(firstFailure.reason, fallback) : fallback,
             namespace: 'gallery',
           });
-          return;
+          return [];
         }
 
         const currentGalleryLocation = getCurrentGalleryLocation();
@@ -163,12 +163,14 @@ export const useGalleryUploadAction = ({
             failedCount > 0 ? { succeeded: uploadedItems.length, total: files.length } : { count: uploadedItems.length }
           ),
         });
+
+        return uploadedItems;
       } catch (error: unknown) {
-        if (!isAccountScopeCurrent(owner)) {
-          return;
+        if (isAccountScopeCurrent(owner)) {
+          recordError(error);
         }
 
-        recordError(error);
+        return [];
       }
     },
     [boards, gallery, getCurrentGalleryLocation, notifications, queryClient, selectedBoardId, t]

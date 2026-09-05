@@ -4,7 +4,7 @@ export const ACCEPTED_UPLOAD_EXTENSIONS = 'image/png,image/jpeg,image/webp,video
 export const UPLOAD_INPUT_STYLE = { display: 'none' } as const;
 
 /** The hidden-input picker every gallery upload trigger shares: change extracts files, resets the input (so re-picking the same file fires), and forwards. */
-export const useGalleryUploadInput = (onUploadFiles: (files: File[]) => Promise<void> | void) => {
+export const useGalleryUploadInput = (onUploadFiles: (files: File[]) => Promise<unknown> | void) => {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const onChange = useCallback(

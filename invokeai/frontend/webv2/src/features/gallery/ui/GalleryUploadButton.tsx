@@ -17,7 +17,7 @@ export const GalleryUploadButton = ({
 }: {
   boards: GalleryBoard[];
   selectedBoardId: string;
-  onUploadFiles: (files: File[]) => Promise<void>;
+  onUploadFiles: (files: File[]) => Promise<unknown>;
 }) => {
   const { t } = useTranslation();
   const selectedBoard = boards.find((board) => board.id === selectedBoardId);
