@@ -43,21 +43,11 @@ export interface WorkflowWidgetLabelProps {
   presentation?: 'compact' | 'expanded' | 'tooltip';
 }
 
-export interface WorkflowGraphHistoryEntry {
-  id: string;
-  createdAt: string;
-  label: string;
-  retainedBytes?: number;
-  document?: ProjectGraphState;
-}
-
 export interface WorkflowCommands {
   bindLibraryWorkflow(libraryWorkflowId: string): void;
   editGraph(action: ProjectGraphAction): void;
   replace(document: ProjectGraphState, label: string): void;
   redo(): void;
-  restoreSnapshot(snapshotId: string): void;
-  saveSnapshot(): void;
   undo(): void;
 }
 

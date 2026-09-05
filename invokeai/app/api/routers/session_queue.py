@@ -20,7 +20,11 @@ from invokeai.app.services.session_queue.session_queue_common import (
     ClearResult,
     DeleteAllExceptCurrentResult,
     DeleteByDestinationResult,
+    EnqueueBatchReceipt,
     EnqueueBatchResult,
+    EnqueueIdempotencyConflictError,
+    EnqueueProjectNotFoundError,
+    EnqueueReceiptLimitError,
     ItemIdsResult,
     PruneResult,
     RetryItemsResult,
@@ -230,8 +234,53 @@ async def enqueue_batch(
         return await ApiDependencies.invoker.services.session_queue.enqueue_batch(
             queue_id=queue_id, batch=batch, prepend=prepend, user_id=current_user.user_id
         )
+    except EnqueueIdempotencyConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except EnqueueProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except EnqueueReceiptLimitError as e:
+        raise HTTPException(status_code=429, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error while enqueuing batch: {e}")
+
+
+@session_queue_router.post(
+    "/{queue_id}/enqueue_batch/acknowledge",
+    operation_id="acknowledge_enqueue_batch",
+    status_code=204,
+)
+def acknowledge_enqueue_batch(
+    current_user: CurrentUserOrDefault,
+    queue_id: str = Path(description="The queue id that accepted the batch"),
+    idempotency_key: str = Body(
+        description="The acknowledged enqueue retry key", embed=True, min_length=1, max_length=255
+    ),
+) -> None:
+    ApiDependencies.invoker.services.session_queue.acknowledge_enqueue(
+        queue_id=queue_id,
+        idempotency_key=idempotency_key,
+        user_id=current_user.user_id,
+    )
+
+
+@session_queue_router.get(
+    "/{queue_id}/enqueue_batch/receipt",
+    operation_id="get_enqueue_batch_receipt",
+    response_model=EnqueueBatchReceipt,
+)
+def get_enqueue_batch_receipt(
+    current_user: CurrentUserOrDefault,
+    queue_id: str = Path(description="The queue id that accepted the batch"),
+    idempotency_key: str = Query(description="The enqueue retry key", min_length=1, max_length=255),
+) -> EnqueueBatchReceipt:
+    receipt = ApiDependencies.invoker.services.session_queue.get_enqueue_receipt(
+        queue_id=queue_id,
+        idempotency_key=idempotency_key,
+        user_id=current_user.user_id,
+    )
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="Enqueue receipt not found")
+    return receipt
 
 
 @session_queue_router.get(

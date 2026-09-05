@@ -10217,6 +10217,116 @@
         }
       }
     },
+    "/api/v1/queue/{queue_id}/enqueue_batch/acknowledge": {
+      "post": {
+        "tags": ["queue"],
+        "summary": "Acknowledge Enqueue Batch",
+        "operationId": "acknowledge_enqueue_batch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "queue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The queue id that accepted the batch",
+              "title": "Queue Id"
+            },
+            "description": "The queue id that accepted the batch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_acknowledge_enqueue_batch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/queue/{queue_id}/enqueue_batch/receipt": {
+      "get": {
+        "tags": ["queue"],
+        "summary": "Get Enqueue Batch Receipt",
+        "operationId": "get_enqueue_batch_receipt",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "queue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The queue id that accepted the batch",
+              "title": "Queue Id"
+            },
+            "description": "The queue id that accepted the batch"
+          },
+          {
+            "name": "idempotency_key",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "description": "The enqueue retry key",
+              "title": "Idempotency Key"
+            },
+            "description": "The enqueue retry key"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnqueueBatchReceipt"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/queue/{queue_id}/list_all": {
       "get": {
         "tags": ["queue"],
@@ -16881,6 +16991,34 @@
             "title": "Batch Id",
             "description": "The ID of the batch"
           },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key",
+            "description": "A caller-owned retry key. Reusing it with a different payload is rejected."
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id",
+            "description": "The authoritative project that owns this submission, when applicable."
+          },
           "origin": {
             "anyOf": [
               {
@@ -17627,6 +17765,20 @@
         "enum": ["private", "shared", "public"],
         "title": "BoardVisibility",
         "description": "The visibility options for a board."
+      },
+      "Body_acknowledge_enqueue_batch": {
+        "properties": {
+          "idempotency_key": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "description": "The acknowledged enqueue retry key"
+          }
+        },
+        "type": "object",
+        "required": ["idempotency_key"],
+        "title": "Body_acknowledge_enqueue_batch"
       },
       "Body_add_image_to_board": {
         "properties": {
@@ -27790,6 +27942,40 @@
         "type": "object",
         "required": ["models_cleared", "bytes_freed"],
         "title": "EmptyModelCacheResponse"
+      },
+      "EnqueueBatchReceipt": {
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Batch Id",
+            "description": "The ID assigned to the accepted batch"
+          },
+          "enqueued": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Enqueued",
+            "description": "The total number of queue items enqueued"
+          },
+          "requested": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Requested",
+            "description": "The total number of queue items requested"
+          },
+          "item_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Item Ids",
+            "description": "The IDs of the accepted queue items"
+          }
+        },
+        "type": "object",
+        "required": ["batch_id", "enqueued", "requested", "item_ids"],
+        "title": "EnqueueBatchReceipt"
       },
       "EnqueueBatchResult": {
         "properties": {

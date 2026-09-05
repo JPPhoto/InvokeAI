@@ -1329,14 +1329,14 @@ const LayerMenuIconItem = ({
   >
     <Menu.Item
       aria-label={label}
-      color={tone === 'danger' ? 'fg.error' : undefined}
+      data-danger={tone === 'danger' ? '' : undefined}
       disabled={disabled}
       flex="1"
       justifyContent="center"
       value={value}
       onSelect={onSelect}
     >
-      <Icon as={icon} boxSize="4" color={tone === 'danger' ? 'fg.error' : 'fg'} />
+      <Icon as={icon} boxSize="4" color={tone === 'danger' ? undefined : 'fg'} />
     </Menu.Item>
   </Tooltip>
 );
