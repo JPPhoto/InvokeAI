@@ -12,7 +12,7 @@ import { getEffectiveReferenceImage } from '@features/generation/core/referenceI
 import { getReferenceImageUrls } from '@features/generation/data/referenceImageUrls';
 import { GenerationModelSelect as ModelSelect } from '@features/generation/ui/GenerationUiContext';
 import { IconButton, ToggleDot, Tooltip } from '@platform/ui';
-import { ChevronDownIcon, CropIcon, ImageIcon, RulerIcon, Trash2Icon } from 'lucide-react';
+import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, CropIcon, ImageIcon, RulerIcon, Trash2Icon } from 'lucide-react';
 import { memo, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -44,16 +44,22 @@ const OVERLAY_GRADIENT_STYLE: CSSProperties = {
 };
 
 interface ReferenceImageCardProps {
+  canMoveDown: boolean;
+  canMoveUp: boolean;
   index: number;
   referenceImage: GenerateReferenceImage;
   selectedModel: GenerateModelConfig | undefined;
+  onMove: (id: string, direction: -1 | 1) => void;
   onPatch: (id: string, patch: Partial<GenerateReferenceImage>) => void;
   onRemove: (id: string) => void;
   onUseSize: (image: GenerateReferenceImageAsset) => void;
 }
 
 const ReferenceImageCardBase = ({
+  canMoveDown,
+  canMoveUp,
   index,
+  onMove,
   onPatch,
   onRemove,
   onUseSize,
@@ -81,6 +87,10 @@ const ReferenceImageCardBase = ({
   );
 
   const handleRemove = useCallback(() => onRemove(referenceImage.id), [onRemove, referenceImage.id]);
+
+  const handleMoveUp = useCallback(() => onMove(referenceImage.id, -1), [onMove, referenceImage.id]);
+
+  const handleMoveDown = useCallback(() => onMove(referenceImage.id, 1), [onMove, referenceImage.id]);
 
   const handleCrop = useCallback(
     (image: GenerateReferenceImageAsset) => changeConfig({ ...config, image }),
@@ -129,6 +139,32 @@ const ReferenceImageCardBase = ({
         )}
 
         <HStack gap="0.5">
+          {/* Card order is conditioning order, so the stack is reordered in
+              place — the same arrow pair the video panel's references use. */}
+          <Tooltip content={t('widgets.generate.moveReferenceImageUp')}>
+            <IconButton
+              aria-label={t('widgets.generate.moveReferenceImageUp')}
+              color="fg.muted"
+              disabled={!canMoveUp}
+              size="2xs"
+              variant="ghost"
+              onClick={handleMoveUp}
+            >
+              <Icon as={ArrowUpIcon} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip content={t('widgets.generate.moveReferenceImageDown')}>
+            <IconButton
+              aria-label={t('widgets.generate.moveReferenceImageDown')}
+              color="fg.muted"
+              disabled={!canMoveDown}
+              size="2xs"
+              variant="ghost"
+              onClick={handleMoveDown}
+            >
+              <Icon as={ArrowDownIcon} />
+            </IconButton>
+          </Tooltip>
           <IconButton
             aria-label={
               isCollapsed ? t('widgets.generate.expandReferenceImage') : t('widgets.generate.collapseReferenceImage')

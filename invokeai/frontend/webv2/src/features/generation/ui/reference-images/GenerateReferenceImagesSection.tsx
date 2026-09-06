@@ -23,7 +23,7 @@ import {
   isReferenceImageSupported,
 } from '@features/generation/core/baseGenerationPolicies';
 import { generatedImageToReferenceImage, getEffectiveReferenceImage } from '@features/generation/core/referenceImage';
-import { clampDimension, deriveAspectRatioId } from '@features/generation/core/settings';
+import { clampDimension, deriveAspectRatioId, moveReferenceImage } from '@features/generation/core/settings';
 import { useGenerationUi } from '@features/generation/ui/GenerationUiContext';
 import {
   assertAccountScopeCurrent,
@@ -116,6 +116,22 @@ export const GenerateReferenceImagesContent = ({
         ...currentSettings,
         referenceImages: currentSettings.referenceImages.filter((referenceImage) => referenceImage.id !== id),
       }));
+    },
+    [onCommit]
+  );
+
+  // Card order is conditioning order, so a move is just a reorder of the
+  // settings array — the same gesture the video panel's reference stack uses.
+  // The updater form keeps it correct against a concurrent debounced commit.
+  const handleMoveReferenceImage = useCallback(
+    (id: string, direction: -1 | 1) => {
+      onCommit((currentSettings) => {
+        const referenceImages = moveReferenceImage(currentSettings.referenceImages, id, direction);
+
+        return referenceImages === currentSettings.referenceImages
+          ? currentSettings
+          : { ...currentSettings, referenceImages: [...referenceImages] };
+      });
     },
     [onCommit]
   );
@@ -311,9 +327,12 @@ export const GenerateReferenceImagesContent = ({
           {referenceImages.map((referenceImage, index) => (
             <ReferenceImageCard
               key={referenceImage.id}
+              canMoveDown={index < referenceImageCount - 1}
+              canMoveUp={index > 0}
               index={index}
               referenceImage={referenceImage}
               selectedModel={selectedModel}
+              onMove={handleMoveReferenceImage}
               onPatch={patchReferenceImage}
               onRemove={removeReferenceImage}
               onUseSize={applyReferenceImageSize}
