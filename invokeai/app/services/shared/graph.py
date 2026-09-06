@@ -2535,6 +2535,64 @@ class AnyInvocationOutput(BaseInvocationOutput):
         return {"oneOf": oneOf}
 
 
+class ExecutionFrame(BaseModel):
+    """Stable execution location for a prepared node."""
+
+    frame_id: str = Field(default="", description="Stable frame identifier")
+    state_id: str = Field(default="", description="Owning graph execution state id")
+    iteration_path: tuple[int, ...] = Field(default_factory=tuple, description="Loop iteration coordinates")
+    workflow_call_depth: int = Field(default=0, ge=0, description="Nested workflow-call depth")
+
+    model_config = ConfigDict(extra="allow")
+
+
+class ExecutionReference(BaseModel):
+    """Stable, frame-aware reference to one prepared execution node.
+
+    This intentionally stays independent from invocation-context/effect models. The execution engine can reconcile
+    this small compatibility type with a richer protocol later without changing persisted graph state.
+    """
+
+    reference_id: str = Field(default="", description="Stable reference identifier")
+    state_id: str = Field(default="", description="Owning graph execution state id")
+    exec_node_id: str = Field(default="", description="Prepared execution node id")
+    source_node_id: str = Field(default="", description="Authoring graph node id")
+    frame: ExecutionFrame = Field(default_factory=ExecutionFrame, description="Execution frame")
+    effect_count: Optional[int] = Field(default=None, ge=0, description="Expected effect count, if declared")
+
+    model_config = ConfigDict(extra="allow")
+
+    @property
+    def id(self) -> str:
+        return self.reference_id
+
+    @property
+    def node_id(self) -> str:
+        return self.exec_node_id
+
+
+class ExecutionToken(BaseModel):
+    """Data token owned by one prepared output port.
+
+    Tokens contain no graph edge or association metadata. In particular, loop-linkage edges never become data
+    tokens.
+    """
+
+    token_id: str = Field(description="Stable token identifier")
+    reference_id: str = Field(description="Owning execution reference id")
+    owner_node_id: str = Field(description="Prepared node that produced the token")
+    port: str = Field(description="Output port name")
+    frame: ExecutionFrame = Field(description="Frame that produced the token")
+    value: Any = Field(description="Output port value")
+
+    model_config = ConfigDict(extra="allow")
+
+
+# Compatibility aliases for workers that use shorter protocol names.
+ExecutionRef = ExecutionReference
+PreparedExecutionRef = ExecutionReference
+
+
 _EdgeListMutationParams = ParamSpec("_EdgeListMutationParams")
 _EdgeListMutationResult = TypeVar("_EdgeListMutationResult")
 
@@ -3937,6 +3995,18 @@ class GraphExecutionState(BaseModel):
         description="The iteration coordinates of each prepared execution node",
         default_factory=dict,
     )
+    execution_refs: dict[str, ExecutionReference] = Field(
+        default_factory=dict,
+        description="Stable frame-aware references for prepared execution nodes",
+    )
+    execution_tokens: dict[str, ExecutionToken] = Field(
+        default_factory=dict,
+        description="Data tokens produced by prepared execution output ports",
+    )
+    execution_effects: dict[str, list[Any]] = Field(
+        default_factory=dict,
+        description="Effects accepted for each execution reference",
+    )
     # Ready queues grouped by node class name (internal only)
     _ready_queues: dict[str, Deque[str]] = PrivateAttr(default_factory=dict)
     _ready_node_ids: set[str] = PrivateAttr(default_factory=set)
@@ -4073,6 +4143,349 @@ class GraphExecutionState(BaseModel):
             and self._prepared_registry().get_iteration_path(exec_node_id) is not None
         ):
             self._update_prepared_for_index(exec_node_id)
+
+    @property
+    def prepared_execution_refs(self) -> dict[str, ExecutionReference]:
+        """Compatibility view using the protocol's prepared-reference terminology."""
+
+        return self.execution_refs
+
+    def _get_execution_frame(self, exec_node_id: str) -> ExecutionFrame:
+        iteration_path = self.prepared_iteration_paths.get(exec_node_id, ())
+        frame_id = f"{self.id}:{len(self.workflow_call_stack)}:{','.join(str(i) for i in iteration_path)}"
+        return ExecutionFrame(
+            frame_id=frame_id,
+            state_id=self.id,
+            iteration_path=iteration_path,
+            workflow_call_depth=len(self.workflow_call_stack),
+        )
+
+    def _expected_execution_ref(self, exec_node_id: str, effect_count: Optional[int] = None) -> ExecutionReference:
+        if exec_node_id not in self.execution_graph.nodes:
+            raise NodeNotFoundError(f"Node {exec_node_id} not found in execution graph")
+        source_node_id = self.prepared_source_mapping.get(exec_node_id)
+        if source_node_id is None:
+            raise ValueError(f"Node {exec_node_id} is not a prepared execution node")
+        return ExecutionReference(
+            reference_id=f"{self.id}:{exec_node_id}",
+            state_id=self.id,
+            exec_node_id=exec_node_id,
+            source_node_id=source_node_id,
+            frame=self._get_execution_frame(exec_node_id),
+            effect_count=effect_count,
+        )
+
+    def get_execution_ref(self, exec_node_id: str, *, effect_count: Optional[int] = None) -> ExecutionReference:
+        """Return stable reference for prepared execution node."""
+
+        expected = self._expected_execution_ref(exec_node_id, effect_count=effect_count)
+        existing = self.execution_refs.get(exec_node_id)
+        if existing is not None:
+            if (
+                existing.reference_id not in ("", expected.reference_id)
+                or existing.state_id not in ("", expected.state_id)
+                or existing.exec_node_id not in ("", expected.exec_node_id)
+                or existing.source_node_id not in ("", expected.source_node_id)
+            ):
+                raise ValueError(f"Execution reference for {exec_node_id} does not belong to this state")
+            if existing.effect_count is not None and effect_count is None:
+                expected.effect_count = existing.effect_count
+        self.execution_refs[exec_node_id] = expected
+        return expected.model_copy(deep=True)
+
+    get_execution_reference = get_execution_ref
+
+    def _coerce_execution_ref(self, execution_ref: ExecutionReference | str | Any) -> ExecutionReference:
+        if isinstance(execution_ref, str):
+            return self._expected_execution_ref(execution_ref)
+        if isinstance(execution_ref, ExecutionReference):
+            return execution_ref.model_copy(deep=True)
+
+        if isinstance(execution_ref, BaseModel):
+            values = execution_ref.model_dump(mode="python", warnings=False)
+        elif isinstance(execution_ref, dict):
+            values = dict(execution_ref)
+        else:
+            values = {
+                name: getattr(execution_ref, name)
+                for name in (
+                    "reference_id",
+                    "id",
+                    "state_id",
+                    "session_id",
+                    "exec_node_id",
+                    "node_id",
+                    "prepared_node_id",
+                    "source_node_id",
+                    "frame",
+                    "effect_count",
+                    "expected_effect_count",
+                )
+                if hasattr(execution_ref, name)
+            }
+
+        if "reference_id" not in values and "id" in values:
+            values["reference_id"] = values["id"]
+        if "state_id" not in values and "session_id" in values:
+            values["state_id"] = values["session_id"]
+        if "exec_node_id" not in values:
+            values["exec_node_id"] = values.get("node_id") or values.get("prepared_node_id", "")
+        if "effect_count" not in values and "expected_effect_count" in values:
+            values["effect_count"] = values["expected_effect_count"]
+        token = values.get("token")
+        if "exec_node_id" not in values or not values["exec_node_id"]:
+            token_node_id = self._value_from_object(
+                token, "exec_node_id", "prepared_node_id", "node_id", "invocation_id"
+            )
+            if token_node_id is not None:
+                values["exec_node_id"] = token_node_id
+        if "source_node_id" not in values:
+            values["source_node_id"] = ""
+        frame = values.get("frame")
+        if frame is None:
+            frame = self._value_from_object(token, "frame", "iteration_path", "frame_path")
+        if isinstance(frame, (tuple, list)):
+            frame = {"iteration_path": tuple(frame)}
+        if isinstance(frame, str):
+            values["frame"] = {"frame_id": frame}
+        elif frame is not None:
+            values["frame"] = frame
+        return ExecutionReference.model_validate(values, strict=False)
+
+    @staticmethod
+    def _value_from_object(value: Any, *names: str) -> Any:
+        if isinstance(value, dict):
+            for name in names:
+                if name in value:
+                    return value[name]
+            return None
+        for name in names:
+            if hasattr(value, name):
+                return getattr(value, name)
+        return None
+
+    @staticmethod
+    def _same_execution_owner(owner: Any, execution_ref: ExecutionReference) -> bool:
+        if isinstance(owner, (ExecutionReference, str)):
+            return owner in {
+                execution_ref.reference_id,
+                execution_ref.exec_node_id,
+            }
+        if isinstance(owner, BaseModel):
+            owner = owner.model_dump(mode="python", warnings=False)
+        if isinstance(owner, dict):
+            token = owner.get("token")
+            if token is not None:
+                return GraphExecutionState._same_execution_owner(token, execution_ref)
+            owner_id = owner.get("reference_id") or owner.get("id") or owner.get("exec_node_id") or owner.get("node_id")
+            owner_state_id = owner.get("state_id") or owner.get("session_id")
+            return owner_id in {execution_ref.reference_id, execution_ref.exec_node_id} and owner_state_id in {
+                None,
+                execution_ref.state_id,
+            }
+        owner_id = GraphExecutionState._value_from_object(
+            owner, "reference_id", "exec_node_id", "prepared_node_id", "node_id", "invocation_id"
+        )
+        return owner_id in {execution_ref.reference_id, execution_ref.exec_node_id}
+
+    def _validate_execution_ref(self, execution_ref: ExecutionReference | str | Any) -> ExecutionReference:
+        ref = self._coerce_execution_ref(execution_ref)
+        expected = self._expected_execution_ref(ref.exec_node_id)
+        if ref.state_id not in ("", expected.state_id):
+            raise ValueError("Execution reference belongs to another graph execution state")
+        if ref.reference_id not in ("", expected.reference_id):
+            raise ValueError("Execution reference id is stale")
+        if ref.source_node_id not in ("", expected.source_node_id):
+            raise ValueError("Execution reference source node does not match prepared node")
+        if ref.frame.state_id not in ("", expected.frame.state_id):
+            raise ValueError("Execution reference frame belongs to another state")
+        if ref.frame.frame_id not in ("", expected.frame.frame_id):
+            raise ValueError("Execution reference frame is stale")
+        if ref.frame.iteration_path and ref.frame.iteration_path != expected.frame.iteration_path:
+            raise ValueError("Execution reference iteration frame does not match prepared node")
+        if ref.frame.workflow_call_depth not in (0, expected.frame.workflow_call_depth):
+            raise ValueError("Execution reference workflow frame does not match prepared node")
+        ref.reference_id = expected.reference_id
+        ref.state_id = expected.state_id
+        ref.source_node_id = expected.source_node_id
+        ref.frame = expected.frame
+        return ref
+
+    def _validate_output_owner(self, execution_ref: ExecutionReference, output: Any) -> BaseInvocationOutput:
+        wrapper = output
+        if not isinstance(output, BaseInvocationOutput) and isinstance(output, dict):
+            wrapper = output.get("output", output.get("result", output))
+        owner = self._value_from_object(output, "execution_ref", "execution_reference", "owner_ref", "owner")
+        if owner is not None and not self._same_execution_owner(owner, execution_ref):
+            raise ValueError("Invocation output is owned by another execution")
+        output_node_id = self._value_from_object(output, "exec_node_id", "prepared_node_id", "node_id")
+        if output_node_id is not None and output_node_id != execution_ref.exec_node_id:
+            raise ValueError("Invocation output node does not match execution reference")
+        if not isinstance(wrapper, BaseInvocationOutput):
+            raise TypeError("GraphExecutionState.apply() requires a BaseInvocationOutput")
+
+        node = self.execution_graph.get_node(execution_ref.exec_node_id)
+        expected_output_type = type(node).get_output_annotation()
+        if not isinstance(wrapper, expected_output_type):
+            raise TypeError(
+                f"Output type {type(wrapper).__name__} does not belong to execution node "
+                f"{execution_ref.exec_node_id} ({expected_output_type.__name__})"
+            )
+
+        source_node_id = self.prepared_source_mapping[execution_ref.exec_node_id]
+        if isinstance(node, ForInvocation):
+            linkage_edges = self.graph._get_loop_linkage_edges(source_node_id)
+            if len(linkage_edges) != 1 or linkage_edges[0].source.field != LOOP_LINKAGE_FIELD:
+                raise ValueError("For execution is missing loop-linkage metadata")
+            if getattr(wrapper, LOOP_LINKAGE_FIELD, None) != LOOP_LINKAGE_FIELD:
+                raise ValueError("For output is missing loop-linkage metadata")
+        elif isinstance(node, ForReturnInvocation):
+            linkage_edges = self.graph._get_loop_linkage_edges(source_node_id)
+            if len(linkage_edges) != 1 or linkage_edges[0].destination.field != LOOP_LINKAGE_FIELD:
+                raise ValueError("ForReturn execution is missing loop-linkage metadata")
+        return wrapper
+
+    def _validate_effects(
+        self, execution_ref: ExecutionReference, effects: list[Any], effect_count: Optional[int]
+    ) -> None:
+        expected_count = effect_count if effect_count is not None else execution_ref.effect_count
+        if expected_count is not None and len(effects) != expected_count:
+            raise ValueError(f"Effect count mismatch: expected {expected_count}, got {len(effects)}")
+
+        node = self.execution_graph.get_node(execution_ref.exec_node_id)
+        output_fields = type(node).get_output_annotation().model_fields
+        for effect in effects:
+            effect_kind = self._value_from_object(effect, "kind", "effect_type", "type")
+            owner = self._value_from_object(
+                effect,
+                "execution_ref",
+                "execution_reference",
+                "owner_ref",
+                "owner_node_id",
+                "source_node_id",
+                "node_id",
+            )
+            if owner is None:
+                owner = self._value_from_object(effect, "target", "source", "token")
+            if owner is None or not self._same_execution_owner(owner, execution_ref):
+                raise ValueError("Execution effect is not owned by execution reference")
+
+            effect_state_id = self._value_from_object(effect, "state_id", "session_id")
+            if effect_state_id is not None and effect_state_id != execution_ref.state_id:
+                raise ValueError("Execution effect belongs to another graph execution state")
+            effect_frame = self._value_from_object(effect, "frame")
+            if effect_frame is not None:
+                frame_id = self._value_from_object(effect_frame, "frame_id", "id")
+                if frame_id not in (None, "", execution_ref.frame.frame_id):
+                    raise ValueError("Execution effect belongs to another execution frame")
+
+            source_ref = self._value_from_object(effect, "source", "target", "token")
+            destination_ref = self._value_from_object(effect, "destination")
+            source_port = self._value_from_object(effect, "source_port", "output_port", "source_field", "port")
+            if source_port is None:
+                source_port = self._value_from_object(source_ref, "field", "port", "output", "output_name")
+            destination_port = self._value_from_object(effect, "destination_port", "input_port", "destination_field")
+            if destination_port is None:
+                destination_port = self._value_from_object(destination_ref, "field", "port", "input", "input_name")
+            effect_type = self._value_from_object(effect, "edge_type", "connection_type", "kind")
+            is_loop_linkage = effect_type == "loop_linkage" or source_port == LOOP_LINKAGE_FIELD
+            if source_port is not None:
+                if source_port not in output_fields:
+                    raise ValueError(f"Execution effect references unknown output port '{source_port}'")
+                if is_loop_linkage:
+                    if source_port != LOOP_LINKAGE_FIELD or destination_port != LOOP_LINKAGE_FIELD:
+                        raise ValueError("Loop-linkage effect must use loop_linkage ports")
+                elif source_port == LOOP_LINKAGE_FIELD:
+                    raise ValueError("Association edge cannot be stored as data effect")
+            if destination_port is not None:
+                destination_node_id = self._value_from_object(
+                    effect, "destination_node_id", "target_node_id", "consumer_node_id"
+                )
+                if destination_node_id is None:
+                    destination_node_id = self._value_from_object(
+                        destination_ref, "exec_node_id", "prepared_node_id", "node_id", "invocation_id"
+                    )
+                if destination_node_id is None:
+                    raise ValueError("Execution effect destination port has no destination node")
+                destination_node = self.execution_graph.nodes.get(destination_node_id)
+                if destination_node is None:
+                    raise ValueError("Execution effect destination node is not prepared")
+                if destination_port not in type(destination_node).model_fields:
+                    raise ValueError(f"Execution effect references unknown input port '{destination_port}'")
+                if is_loop_linkage:
+                    source_source_id = self.prepared_source_mapping[execution_ref.exec_node_id]
+                    destination_source_id = self.prepared_source_mapping.get(destination_node_id)
+                    linkage_edges = self.graph._get_loop_linkage_edges(source_source_id)
+                    if not any(
+                        edge.destination.node_id == destination_source_id
+                        and edge.source.field == LOOP_LINKAGE_FIELD
+                        and edge.destination.field == LOOP_LINKAGE_FIELD
+                        for edge in linkage_edges
+                    ):
+                        raise ValueError("Execution effect loop linkage does not match graph metadata")
+                elif effect_kind not in {"add_edge", "remove_edge"}:
+                    if not any(
+                        edge.source.node_id == execution_ref.exec_node_id
+                        and edge.source.field == source_port
+                        and edge.destination.node_id == destination_node_id
+                        and edge.destination.field == destination_port
+                        for edge in self.execution_graph.edges
+                        if edge.type == "default"
+                    ):
+                        raise ValueError("Execution effect ports do not match prepared graph edge")
+
+    def _build_execution_tokens(
+        self, execution_ref: ExecutionReference, output: BaseInvocationOutput
+    ) -> dict[str, ExecutionToken]:
+        tokens: dict[str, ExecutionToken] = {}
+        output_fields = type(output).model_fields
+        for port in output_fields:
+            if port in {"type", "output_meta", LOOP_LINKAGE_FIELD}:
+                continue
+            token_id = f"{execution_ref.reference_id}:{port}"
+            tokens[token_id] = ExecutionToken(
+                token_id=token_id,
+                reference_id=execution_ref.reference_id,
+                owner_node_id=execution_ref.exec_node_id,
+                port=port,
+                frame=execution_ref.frame,
+                value=copydeep(getattr(output, port)),
+            )
+        return tokens
+
+    def apply(
+        self,
+        execution_ref: ExecutionReference | str | Any,
+        output: BaseInvocationOutput | Any = None,
+        effects: Optional[Iterable[Any]] = None,
+        *,
+        effect_count: Optional[int] = None,
+    ) -> list[tuple[BaseInvocation, BaseInvocationOutput]]:
+        """Apply output/effects through current scheduler while retaining old ``complete()`` behavior."""
+
+        ref = self._validate_execution_ref(execution_ref)
+        result_effects = self._value_from_object(output, "effects", "effect_batch")
+        result_output = self._value_from_object(output, "output", "invocation_output", "result")
+        if result_output is not None:
+            output = result_output
+            if effects is None:
+                effects = result_effects
+        output_value = self._validate_output_owner(ref, output)
+        if effects is None:
+            effect_values = []
+        else:
+            batch_values = self._value_from_object(effects, "effects")
+            effect_values = list(batch_values if batch_values is not None else effects)
+        self._validate_effects(ref, effect_values, effect_count)
+        tokens = self._build_execution_tokens(ref, output_value)
+
+        # All validation above is side-effect free. Preserve complete() as the scheduler compatibility boundary.
+        finalized_outputs = self.complete(ref.exec_node_id, output_value)
+        ref.effect_count = effect_count if effect_count is not None else ref.effect_count
+        self.execution_refs[ref.exec_node_id] = ref
+        self.execution_tokens.update(tokens)
+        self.execution_effects[ref.reference_id] = copydeep(effect_values)
+        return finalized_outputs
 
     def _invalidate_loop_caches_for_source(self, source_node_id: str) -> None:
         self._all_for_contexts_finalized_cache.pop(source_node_id, None)
@@ -4314,6 +4727,12 @@ class GraphExecutionState(BaseModel):
 
             self._resolved_if_exec_branches[exec_node_id] = "true_input" if node.condition else "false_input"
 
+    def _rehydrate_execution_refs(self) -> None:
+        for exec_node_id in self.prepared_source_mapping:
+            existing = self.execution_refs.get(exec_node_id)
+            effect_count = existing.effect_count if existing is not None else None
+            self.execution_refs[exec_node_id] = self._expected_execution_ref(exec_node_id, effect_count=effect_count)
+
     def _rehydrate_ready_queues(self) -> None:
         if self.has_error():
             return
@@ -4333,6 +4752,7 @@ class GraphExecutionState(BaseModel):
         self._rehydrate_ready_queues()
 
     def model_post_init(self, __context: Any) -> None:
+        self._rehydrate_execution_refs()
         self._rehydrate_runtime_state()
 
     model_config = ConfigDict(

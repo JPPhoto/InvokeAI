@@ -44,6 +44,7 @@ from invokeai.app.services.shared.graph import (
     Graph,
     GraphExecutionState,
     IterateInvocation,
+    NodeNotFoundError,
     WorkflowCallFrame,
 )
 
@@ -226,6 +227,97 @@ def execute_all_nodes(g: GraphExecutionState) -> list[str]:
         executed_source_ids.append(g.prepared_source_mapping[invocation.id])
 
     return executed_source_ids
+
+
+def test_graph_state_apply_stores_stable_frame_tokens_and_effects():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+
+    ref = state.get_execution_ref(node.id, effect_count=1)
+    output = node.invoke(Mock(InvocationContext))
+    state.apply(
+        ref,
+        output,
+        effects=[{"owner_node_id": node.id, "source_port": "value"}],
+    )
+
+    assert state.execution_refs[node.id] == ref
+    assert state.execution_effects[ref.reference_id] == [{"owner_node_id": node.id, "source_port": "value"}]
+    assert state.execution_tokens[f"{ref.reference_id}:value"].value == 3
+
+    restored = TypeAdapter(GraphExecutionState).validate_python(
+        state.model_dump(mode="json", warnings=False), strict=False
+    )
+    assert restored.get_execution_ref(node.id).reference_id == ref.reference_id
+    assert restored.execution_tokens[f"{ref.reference_id}:value"].frame == ref.frame
+
+
+def test_graph_state_apply_rejects_invalid_input_before_mutation():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+
+    with pytest.raises(ValueError, match="Effect count mismatch"):
+        state.apply(ref, output, effects=[])
+    assert not state.executed
+    assert not state.results
+    assert not state.execution_tokens
+
+    with pytest.raises(ValueError, match="not owned"):
+        state.apply(ref, output, effects=[{"owner_node_id": "other"}])
+    assert not state.executed
+    assert not state.results
+
+    with pytest.raises(TypeError, match="does not belong"):
+        state.apply(ref, BooleanOutput(value=True), effects=[{"owner_node_id": node.id}])
+    assert not state.executed
+    assert not state.results
+
+    stale_ref = ref.model_copy(update={"exec_node_id": "missing"})
+    with pytest.raises(NodeNotFoundError):
+        state.apply(stale_ref, output)
+
+
+def test_graph_state_rehydrates_execution_refs_for_legacy_state():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    legacy_payload = state.model_dump(mode="json", warnings=False)
+    legacy_payload.pop("execution_refs")
+    legacy_payload.pop("execution_tokens")
+    legacy_payload.pop("execution_effects")
+
+    restored = TypeAdapter(GraphExecutionState).validate_python(legacy_payload, strict=False)
+
+    ref = restored.get_execution_ref(node.id)
+    assert ref.state_id == restored.id
+    assert ref.exec_node_id == node.id
+    assert ref.source_node_id == "add"
+
+
+def test_graph_state_apply_keeps_loop_linkage_out_of_data_tokens():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["item"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(create_edge("for", "item", "return", "output"))
+    graph.add_edge(create_loop_linkage("for", "return"))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert isinstance(node, ForInvocation)
+
+    ref = state.get_execution_ref(node.id)
+    state.apply(ref, node.invoke(Mock(InvocationContext)))
+
+    assert all(token.port != "loop_linkage" for token in state.execution_tokens.values())
 
 
 def test_graph_state_executes_in_order(simple_graph: Graph):
