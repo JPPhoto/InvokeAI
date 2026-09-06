@@ -29,6 +29,7 @@ import {
   buildGalleryGridRows,
   GALLERY_GRID_GAP_PX,
   GALLERY_STARRED_HEADER_HEIGHT_PX,
+  GALLERY_STARRED_SEPARATOR_HEIGHT_PX,
   getGalleryCellSizePx,
   getGalleryColumnCount,
   getGalleryGridRowHeightPx,
@@ -49,6 +50,9 @@ import { useGalleryUploadInput } from './useGalleryUploadInput';
  */
 const viewportWidthCache = new Map<string, number>();
 const STARRED_TRIGGER_HOVER_STYLES = { color: 'fg' } as const;
+
+// Module-scoped so a grid remount cannot replay an already-followed reveal.
+let lastPageFollowedRevealToken = 0;
 
 const dragEventContainsFiles = (event: DragEvent): boolean => Array.from(event.dataTransfer.types).includes('Files');
 
@@ -83,7 +87,6 @@ const GalleryStarredSectionHeader = ({
         aria-label={t(isOpen ? 'widgets.gallery.collapseStarredItems' : 'widgets.gallery.expandStarredItems')}
         alignItems="center"
         color="fg.muted"
-        cursor="pointer"
         display="flex"
         flex="1"
         gap="1"
@@ -135,7 +138,8 @@ export const GalleryImageGrid = () => {
   const [viewportWidth, setViewportWidth] = useState(() => viewportWidthCache.get(region) ?? 0);
   const dragDepthRef = useRef(0);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const { imageDensityPercent, imageOrderDir, paginationMode, showImageDimensions, thumbnailFit } = gallery.settings;
+  const { imageDensityPercent, imageOrderDir, paginationMode, showImageDimensions, starredFirst, thumbnailFit } =
+    gallery.settings;
 
   const {
     actionSelectionRefs,
@@ -150,11 +154,7 @@ export const GalleryImageGrid = () => {
 
   const columnCount = getGalleryColumnCount({ imageDensityPercent, widthPx: viewportWidth });
   const isFollowingLive = gallery.currentItem?.kind === 'placeholder';
-  const isComparisonActive =
-    gallery.selectedItemKey?.startsWith('image:') === true &&
-    gallery.compareImageKey !== null &&
-    gallery.selectedItemKey !== null &&
-    gallery.compareImageKey !== gallery.selectedItemKey;
+  const isComparisonActive = gallery.isComparisonActive;
   const selectedBoard = gallery.boards.find((board) => board.id === gallery.selectedBoardId);
   const selectedBoardName = selectedBoard
     ? getGalleryBoardLabel(selectedBoard, t)
@@ -171,8 +171,9 @@ export const GalleryImageGrid = () => {
         isStarredOpen,
         items: gallery.items,
         pendingPlaceholders: gallery.pendingPlaceholders,
+        starredFirst,
       }),
-    [columnCount, gallery.items, gallery.pendingPlaceholders, imageOrderDir, isStarredOpen]
+    [columnCount, gallery.items, gallery.pendingPlaceholders, imageOrderDir, isStarredOpen, starredFirst]
   );
 
   const rowCount = rows.length;
@@ -243,10 +244,12 @@ export const GalleryImageGrid = () => {
       return;
     }
 
-    // A different selection landing after the reveal (the user clicked
-    // something else) retires it — a late page load must not scroll away
-    // from what they chose.
-    if (gallery.selectedItemKey !== null && gallery.selectedItemKey !== pending.itemKey) {
+    // Another selection retires the reveal; the persisted set catches
+    // off-page selections whose visible key is null.
+    if (
+      (gallery.selectedItemKey !== null && gallery.selectedItemKey !== pending.itemKey) ||
+      (gallery.selectedItemKeys.length > 0 && !gallery.selectedItemKeys.includes(pending.itemKey))
+    ) {
       pendingRevealRef.current = null;
 
       return;
@@ -260,6 +263,20 @@ export const GalleryImageGrid = () => {
     // instead of honoring it when the section is expanded again.
     if (itemIndex >= 0 && scrollToItemIndex(itemIndex)) {
       pendingRevealRef.current = null;
+
+      return;
+    }
+
+    // The item may live on another paginated page: follow once per reveal, so
+    // a reveal whose item never materializes cannot keep pulling the user back.
+    if (
+      itemIndex < 0 &&
+      gallery.revealTargetPage !== null &&
+      gallery.revealTargetPage !== gallery.page &&
+      lastPageFollowedRevealToken !== pending.token
+    ) {
+      lastPageFollowedRevealToken = pending.token;
+      galleryCommands.setPage(gallery.revealTargetPage);
     }
   });
 
@@ -432,7 +449,6 @@ export const GalleryImageGrid = () => {
             <input {...uploadInputProps} />
             <DropZone
               alignItems="center"
-              cursor="pointer"
               display="flex"
               flex="1"
               fontSize="xs"
@@ -458,14 +474,37 @@ export const GalleryImageGrid = () => {
                 {virtualRows.map((virtualRow) => {
                   const row = rows[virtualRow.index];
 
-                  return row?.kind === 'starred-header' ? (
-                    <GalleryStarredSectionHeader
+                  if (row?.kind === 'starred-header') {
+                    return (
+                      <GalleryStarredSectionHeader
+                        key={virtualRow.key}
+                        isOpen={isStarredOpen}
+                        itemCount={row.itemCount}
+                        offsetPx={virtualRow.start}
+                        onToggle={handleToggleStarredSection}
+                      />
+                    );
+                  }
+
+                  return row?.kind === 'starred-gap' && row.withSeparator ? (
+                    <Flex
                       key={virtualRow.key}
-                      isOpen={isStarredOpen}
-                      itemCount={row.itemCount}
-                      offsetPx={virtualRow.start}
-                      onToggle={handleToggleStarredSection}
-                    />
+                      aria-hidden="true"
+                      data-gallery-starred-separator
+                      align="center"
+                      h={`${GALLERY_STARRED_SEPARATOR_HEIGHT_PX}px`}
+                      left="0"
+                      // The starred row above already carries its trailing grid
+                      // gap; centering over the remaining height keeps the rule
+                      // equidistant from both thumbnail edges.
+                      pb={`${GALLERY_GRID_GAP_PX}px`}
+                      position="absolute"
+                      top="0"
+                      transform={`translateY(${virtualRow.start}px)`}
+                      w="full"
+                    >
+                      <Box bg="border.subtle" h="1px" w="full" />
+                    </Flex>
                   ) : null;
                 })}
                 <Box

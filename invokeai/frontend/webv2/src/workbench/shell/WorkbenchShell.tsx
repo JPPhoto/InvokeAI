@@ -15,7 +15,7 @@ import { useMountEffect } from '@platform/react/useMountEffect';
 import { FocusRegionProvider } from '@workbench/focusRegions';
 import { WidgetIcon } from '@workbench/iconResolver';
 import { PROJECT_CONTENT_PANEL_ID } from '@workbench/projects/projectTabsA11y';
-import { WidgetBar } from '@workbench/widget-frame';
+import { WidgetBar, type WidgetBarGroup } from '@workbench/widget-frame';
 import { FloatingWidgetLayer } from '@workbench/widget-frame/FloatingWidgetLayer';
 import {
   getRegionDropState,
@@ -50,6 +50,8 @@ import {
 } from './holdToDragSensor';
 import { WorkbenchNotificationToaster } from './notifications';
 import { LeftPanel, RightPanel } from './Panels';
+import { ProjectConflictBanner } from './ProjectConflictBanner';
+import { QueueRecoveryBanner } from './QueueRecoveryBanner';
 import { StatusBar } from './StatusBar';
 import { TopBar } from './topbar';
 
@@ -190,12 +192,9 @@ export const WorkbenchShell = () => {
     [placementProject, widgets]
   );
   const handleDragCancel = useCallback(() => setActiveDrag(null), []);
-  const handleSelectLeft = useCallback(
-    (instanceId: string) => revealWidgetPlacement({ instanceId, project: placementProject, region: 'left', widgets }),
-    [placementProject, widgets]
-  );
-  const handleSelectRight = useCallback(
-    (instanceId: string) => revealWidgetPlacement({ instanceId, project: placementProject, region: 'right', widgets }),
+  const handleSelect = useCallback(
+    (region: WidgetBarGroup['region'], instanceId: string) =>
+      revealWidgetPlacement({ instanceId, project: placementProject, region, widgets }),
     [placementProject, widgets]
   );
   const handleToggleLeft = useCallback(
@@ -234,6 +233,28 @@ export const WorkbenchShell = () => {
           }),
     [placementProject, widgets]
   );
+  const leftRailGroups = useMemo(
+    () => [
+      {
+        activeId: panels.isLeftOpen && !leftRegion.isCollapsed ? leftRegion.activeInstanceId : null,
+        dropState: leftDropState,
+        railItems: leftRailItems,
+        region: 'left' as const,
+      },
+    ],
+    [leftDropState, leftRailItems, leftRegion.activeInstanceId, leftRegion.isCollapsed, panels.isLeftOpen]
+  );
+  const rightRailGroups = useMemo(
+    () => [
+      {
+        activeId: panels.isRightOpen && !rightRegion.isCollapsed ? rightRegion.activeInstanceId : null,
+        dropState: rightDropState,
+        railItems: rightRailItems,
+        region: 'right' as const,
+      },
+    ],
+    [panels.isRightOpen, rightDropState, rightRailItems, rightRegion.activeInstanceId, rightRegion.isCollapsed]
+  );
 
   return (
     <FocusRegionProvider>
@@ -250,6 +271,8 @@ export const WorkbenchShell = () => {
           <WorkbenchNotificationToaster />
           <DocumentTitleProgress />
           <TopBar />
+          <ProjectConflictBanner />
+          <QueueRecoveryBanner />
 
           <Flex aria-labelledby="workbench-project-heading" as="main" flex="1" minH="0" overflow="hidden">
             <VisuallyHidden as="h1" id="workbench-project-heading">
@@ -267,13 +290,10 @@ export const WorkbenchShell = () => {
               role="region"
             >
               <WidgetBar
-                activeId={panels.isLeftOpen && !leftRegion.isCollapsed ? leftRegion.activeInstanceId : null}
-                dropState={leftDropState}
+                groups={leftRailGroups}
                 menuItems={leftMenuItems}
-                railItems={leftRailItems}
-                region="left"
                 side="left"
-                onSelect={handleSelectLeft}
+                onSelect={handleSelect}
                 onToggle={handleToggleLeft}
               />
               {panels.isLeftOpen && !leftRegion.isCollapsed && canShowLeftPanel ? (
@@ -284,13 +304,10 @@ export const WorkbenchShell = () => {
                 <RightPanel instanceId={rightRegion.activeInstanceId} />
               ) : null}
               <WidgetBar
-                activeId={panels.isRightOpen && !rightRegion.isCollapsed ? rightRegion.activeInstanceId : null}
-                dropState={rightDropState}
+                groups={rightRailGroups}
                 menuItems={rightMenuItems}
-                railItems={rightRailItems}
-                region="right"
                 side="right"
-                onSelect={handleSelectRight}
+                onSelect={handleSelect}
                 onToggle={handleToggleRight}
               />
             </Flex>

@@ -1,5 +1,6 @@
 import type {
   QueueBackendItem,
+  QueueEnqueueResult,
   QueueEnqueueGenerateRequest,
   QueueItemProgress,
   QueueResultImage,
@@ -19,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createQueueCoordinator,
+  QueueEnqueueNotAcceptedError,
   QueueItemCancelledError,
   type QueueCoordinator,
   type QueueCoordinatorBackendPort,
@@ -154,8 +156,11 @@ const generateRequest: QueueEnqueueGenerateRequest = {
 interface Harness {
   activeProgressTarget: { clear: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> };
   api: {
-    [Key in Exclude<keyof QueueCoordinatorBackendPort, 'emit' | 'on' | 'onConnectionChange'>]: ReturnType<typeof vi.fn>;
-  };
+    [Key in Exclude<
+      keyof QueueCoordinatorBackendPort,
+      'emit' | 'on' | 'onConnectionChange' | 'getEnqueueReceipt'
+    >]: ReturnType<typeof vi.fn>;
+  } & { getEnqueueReceipt?: ReturnType<typeof vi.fn> };
   callbacks: { [Key in keyof QueueCoordinatorCallbacks]: ReturnType<typeof vi.fn> };
   coordinator: QueueCoordinator;
   hub: ReturnType<typeof createSocketHub>;
@@ -181,6 +186,9 @@ const createHarness = (options: { galleryRefreshCoalesceMs?: number } = {}): Har
     },
   };
   const api = {
+    getEnqueueReceipt: undefined as
+      | ReturnType<typeof vi.fn<(projectId: string, queueItemId: string) => Promise<QueueEnqueueResult | null>>>
+      | undefined,
     cancelQueueItems: vi.fn(() => Promise.resolve()),
     cancelQueueItemsByBatchIds: vi.fn(() => Promise.resolve()),
     enqueueGenerate: vi.fn(() => Promise.resolve({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 })),
@@ -216,6 +224,9 @@ const createHarness = (options: { galleryRefreshCoalesceMs?: number } = {}): Har
   const coordinator = createQueueCoordinator(callbacks, {
     backend: {
       ...api,
+      get getEnqueueReceipt() {
+        return api.getEnqueueReceipt;
+      },
       emit: hub.emit,
       on: hub.on,
       onConnectionChange: hub.onConnectionChange,
@@ -435,17 +446,20 @@ describe('queueCoordinator', () => {
   it('rejects runs when the backend queue accepts no items', async () => {
     harness.api.enqueueGenerate.mockResolvedValue({ batchId: 'batch-1', enqueued: 0, itemIds: [], requested: 1 });
 
-    await expect(harness.coordinator.submitGenerate('local-1', generateRequest)).rejects.toThrow(
-      'The backend queue did not accept this generation.'
+    await expect(harness.coordinator.submitGenerate('local-1', generateRequest)).rejects.toBeInstanceOf(
+      QueueEnqueueNotAcceptedError
     );
   });
 
-  it('rejects runs when the backend queue accepts only part of the batch', async () => {
+  it('tracks every item when the backend queue accepts only part of the batch', async () => {
     harness.api.enqueueGenerate.mockResolvedValue({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 2 });
 
-    await expect(harness.coordinator.submitGenerate('local-1', generateRequest)).rejects.toThrow(
-      'The backend queue accepted 1 of 2 requested items.'
-    );
+    await expect(harness.coordinator.submitGenerate('local-1', generateRequest)).resolves.toEqual({
+      batchId: 'batch-1',
+      enqueued: 1,
+      itemIds: [1],
+      requested: 2,
+    });
   });
 
   it('coalesces gallery refreshes across a burst of completions', async () => {
@@ -521,6 +535,26 @@ describe('queueCoordinator', () => {
     expect(harness.progressEntries.has('local-1')).toBe(false);
     expect(harness.activeProgressTarget.clear).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: 'local-1' });
     expect(harness.progressImage.clear).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: 'local-1' });
+  });
+
+  it('detaches one local run without disturbing another', async () => {
+    harness.coordinator.connect();
+    harness.api.enqueueGenerate
+      .mockResolvedValueOnce({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 })
+      .mockResolvedValueOnce({ batchId: 'batch-2', enqueued: 1, itemIds: [2], requested: 1 });
+    await harness.coordinator.submitGenerate('local-1', generateRequest);
+    await harness.coordinator.submitGenerate('local-2', { ...generateRequest, sourceQueueItemId: 'local-2' });
+    const detachedResults = harness.coordinator.waitForResults('local-1', '2026-06-10T00:00:00Z');
+    const survivingResults = harness.coordinator.waitForResults('local-2', '2026-06-10T00:00:00Z');
+
+    harness.coordinator.detachRun('local-1');
+
+    await expect(detachedResults).rejects.toBeInstanceOf(QueueItemCancelledError);
+    expect(harness.progressImage.clear).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: 'local-1' });
+    expect(harness.progressImage.clear).not.toHaveBeenCalledWith();
+
+    harness.socket.fire('queue_item_status_changed', createStatusEvent({ item_id: 2, status: 'completed' }));
+    await expect(survivingResults).resolves.toEqual([expect.objectContaining({ imageName: 'image-2.png' })]);
   });
 
   it('publishes the active target before a progress image is available', async () => {
@@ -802,6 +836,46 @@ describe('queueCoordinator', () => {
   });
 
   describe('reconcile', () => {
+    it('looks up the exact receipt for pending runs without downloading queue history', async () => {
+      harness.api.getEnqueueReceipt = vi.fn().mockResolvedValue({
+        batchId: 'batch-9',
+        enqueued: 1,
+        itemIds: [7],
+        requested: 1,
+      });
+      harness.api.getItem.mockResolvedValue(
+        createQueueBackendItem({ batchId: 'batch-9', id: 7, origin: buildQueueItemOrigin('local-1', 'project-1') })
+      );
+
+      const outcomes = await harness.coordinator.reconcile([
+        { id: 'local-1', projectId: 'project-1', status: 'pending' },
+      ]);
+
+      expect(harness.api.getEnqueueReceipt).toHaveBeenCalledWith('project-1', 'local-1');
+      expect(harness.api.listItems).not.toHaveBeenCalled();
+      expect(outcomes.get('local-1')).toEqual({ backendBatchId: 'batch-9', backendItemIds: [7], kind: 'adopted' });
+    });
+
+    it('does not resubmit an accepted run whose backend items were cleared', async () => {
+      harness.api.getEnqueueReceipt = vi.fn().mockResolvedValue({
+        batchId: 'batch-9',
+        enqueued: 1,
+        itemIds: [7],
+        requested: 1,
+      });
+      harness.api.getItem.mockRejectedValue(new ApiError('not found', 404));
+
+      const outcomes = await harness.coordinator.reconcile([
+        { id: 'local-1', projectId: 'project-1', status: 'pending' },
+      ]);
+
+      expect(outcomes.get('local-1')).toEqual({
+        backendBatchId: 'batch-9',
+        backendItemIds: [7],
+        kind: 'missing',
+      });
+      expect(harness.api.listItems).not.toHaveBeenCalled();
+    });
     it('adopts pending items the backend already accepted, by origin', async () => {
       harness.api.listItems.mockResolvedValue([
         createQueueBackendItem({ batchId: 'batch-9', id: 7, origin: buildQueueItemOrigin('local-1') }),
@@ -814,7 +888,9 @@ describe('queueCoordinator', () => {
     });
 
     it('resumes running items and settles them from their listed terminal status', async () => {
-      harness.api.getItem.mockResolvedValue(createQueueBackendItem({ id: 7, status: 'completed' }));
+      harness.api.getItem.mockResolvedValue(
+        createQueueBackendItem({ id: 7, origin: buildQueueItemOrigin('local-1'), status: 'completed' })
+      );
 
       const outcomes = await harness.coordinator.reconcile([{ backendItemIds: [7], id: 'local-1', status: 'running' }]);
 
@@ -826,13 +902,91 @@ describe('queueCoordinator', () => {
       expect(images.map((image) => image.imageName)).toEqual(['image-7.png']);
     });
 
+    it('bounds backend reads while reconciling and collecting a large run', async () => {
+      const backendItemIds = Array.from({ length: 64 }, (_, index) => index + 1);
+      let activeItemReads = 0;
+      let maxItemReads = 0;
+      let activeResultReads = 0;
+      let maxResultReads = 0;
+      harness.api.getItem.mockImplementation(async (itemId: number) => {
+        activeItemReads += 1;
+        maxItemReads = Math.max(maxItemReads, activeItemReads);
+        await new Promise((resolve) => {
+          setTimeout(resolve, 1);
+        });
+        activeItemReads -= 1;
+        return createQueueBackendItem({
+          id: itemId,
+          origin: buildQueueItemOrigin('local-1', 'project-1'),
+          status: 'completed',
+        });
+      });
+      harness.api.getResultImages.mockImplementation(async (itemId: number, sourceQueueItemId: string) => {
+        activeResultReads += 1;
+        maxResultReads = Math.max(maxResultReads, activeResultReads);
+        await new Promise((resolve) => {
+          setTimeout(resolve, 1);
+        });
+        activeResultReads -= 1;
+        return [createImage(`image-${itemId}.png`, sourceQueueItemId)];
+      });
+
+      await harness.coordinator.reconcile([
+        { backendItemIds, id: 'local-1', projectId: 'project-1', status: 'running' },
+      ]);
+      const images = await harness.coordinator.waitForResults('local-1', '2026-06-10T00:00:00Z');
+
+      expect(images).toHaveLength(64);
+      expect(maxItemReads).toBeLessThanOrEqual(16);
+      expect(maxResultReads).toBeLessThanOrEqual(16);
+    });
+
+    it('never adopts persisted backend ids from another project or local run', async () => {
+      harness.api.getItem.mockResolvedValue(
+        createQueueBackendItem({ id: 7, origin: buildQueueItemOrigin('other-local', 'other-project') })
+      );
+
+      const outcomes = await harness.coordinator.reconcile([
+        { backendItemIds: [7], id: 'local-1', projectId: 'project-1', status: 'running' },
+      ]);
+
+      expect(outcomes.get('local-1')).toEqual({ backendItemIds: [7], kind: 'missing' });
+    });
+
     it('marks running items missing when their backend items vanished', async () => {
       harness.api.getItem.mockRejectedValue(new ApiError('not found', 404));
 
       const outcomes = await harness.coordinator.reconcile([{ backendItemIds: [7], id: 'local-1', status: 'running' }]);
 
-      expect(outcomes.get('local-1')).toEqual({ kind: 'missing' });
+      expect(outcomes.get('local-1')).toEqual({ backendItemIds: [7], kind: 'missing' });
       expect(harness.api.listItems).not.toHaveBeenCalled();
+    });
+
+    it('resumes the surviving items when part of an accepted batch was pruned', async () => {
+      harness.api.getItem.mockImplementation((itemId: number) =>
+        itemId === 7
+          ? Promise.reject(new ApiError('not found', 404))
+          : Promise.resolve(
+              createQueueBackendItem({
+                id: itemId,
+                origin: buildQueueItemOrigin('local-1', 'project-1'),
+                status: 'completed',
+              })
+            )
+      );
+
+      const outcomes = await harness.coordinator.reconcile([
+        { backendItemIds: [7, 8], id: 'local-1', projectId: 'project-1', status: 'running' },
+      ]);
+
+      expect(outcomes.get('local-1')).toEqual({
+        backendItemIds: [8],
+        kind: 'resumed',
+        missingBackendItemIds: [7],
+      });
+      await expect(harness.coordinator.waitForResults('local-1', '2026-06-10T00:00:00Z')).resolves.toEqual([
+        expect.objectContaining({ imageName: 'image-8.png' }),
+      ]);
     });
 
     it('asks for a fresh enqueue when a pending item left no backend trace', async () => {
@@ -908,15 +1062,15 @@ describe('queueCoordinator', () => {
     await expect(resultsPromise).rejects.toThrow('no longer on the backend queue');
   });
 
-  it('prefers precise item ids for cancellation, falling back to batch id', async () => {
+  it('prefers one batch cancellation request, falling back to item ids', async () => {
     await harness.coordinator.cancelRun({ backendBatchId: 'batch-1', backendItemIds: [1, 2] });
 
+    expect(harness.api.cancelQueueItemsByBatchIds).toHaveBeenCalledWith(['batch-1']);
+    expect(harness.api.cancelQueueItems).not.toHaveBeenCalled();
+
+    await harness.coordinator.cancelRun({ backendItemIds: [1, 2] });
+
     expect(harness.api.cancelQueueItems).toHaveBeenCalledWith([1, 2]);
-    expect(harness.api.cancelQueueItemsByBatchIds).not.toHaveBeenCalled();
-
-    await harness.coordinator.cancelRun({ backendBatchId: 'batch-2' });
-
-    expect(harness.api.cancelQueueItemsByBatchIds).toHaveBeenCalledWith(['batch-2']);
   });
 
   it('treats stale missing backend items as already cancelled', async () => {

@@ -42,7 +42,6 @@ const createMutablePort = <Snapshot,>(initialSnapshot: Snapshot) => {
 
 const projectState = (id = 'project-1') => ({
   galleryValues: {},
-  graphHistory: [],
   id,
   isWorkflowRunning: false,
   projectGraph: { edges: [], nodes: [], version: 1 as const },
