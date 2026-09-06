@@ -184,9 +184,10 @@ describe('GalleryBoardsPanel', () => {
 
     await renderPanel({ ...createGallery(), boards: ownedBoards, projectBoardId: 'cats' } as GalleryStateView);
 
-    const catsRow = getBoardRows().find((row) => row.textContent?.includes('Cats'));
+    // The hoisted row shows the live project name, not the stored board name.
+    const projectRow = getBoardRows().find((row) => row.textContent?.includes('Project'));
 
-    expect(catsRow?.textContent).toContain('common.project');
+    expect(projectRow?.textContent).toContain('common.project');
   });
 
   it('shows media and asset counts together, so the row does not change meaning with the tab', async () => {
@@ -277,17 +278,17 @@ describe('GalleryBoardsPanel', () => {
     expect(actions.updateSettings).toHaveBeenCalledWith({ collapsedBoardSections: ['boards'] });
   });
 
-  it('toggles every board group from the visibility menu', async () => {
+  it('toggles every board group and the sort order from the one options menu', async () => {
     await renderPanel();
 
     const openMenu = async () => {
-      const trigger = host?.querySelector<HTMLElement>('button[aria-label="widgets.gallery.boardVisibility"]');
+      const trigger = host?.querySelector<HTMLElement>('button[aria-label="widgets.gallery.filterAndSortBoards"]');
 
       await click(trigger!);
     };
 
     // Each row stays a checkbox rather than closing the menu, so the three
-    // groups can be set in one visit.
+    // groups and the sort can be set in one visit.
     await openMenu();
 
     const row = (value: string) => document.querySelector<HTMLElement>(`[data-scope="menu"] [data-value="${value}"]`);
@@ -298,7 +299,15 @@ describe('GalleryBoardsPanel', () => {
     await click(row('archived-boards')!);
     expect(actions.updateSettings).toHaveBeenCalledWith({ showArchivedBoards: false });
 
+    // The fixture leaves other-project boards on the hidden-by-default setting,
+    // so the toggle turns them on.
     await click(row('other-project-boards')!);
-    expect(actions.updateSettings).toHaveBeenCalledWith({ showOtherProjectBoards: false });
+    expect(actions.updateSettings).toHaveBeenCalledWith({ showOtherProjectBoards: true });
+
+    await click(row('board_name')!);
+    expect(actions.updateSettings).toHaveBeenCalledWith({ boardOrderBy: 'board_name' });
+
+    await click(row('ASC')!);
+    expect(actions.updateSettings).toHaveBeenCalledWith({ boardOrderDir: 'ASC' });
   });
 });

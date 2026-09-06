@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 import type { ProjectPushOutcome } from './projects/projectFlush';
 
 import { WorkbenchSplashScreen } from './components/WorkbenchSplashScreen';
+import { WorkbenchUnavailableScreen } from './components/WorkbenchUnavailableScreen';
 import { createExtensionRegistry, type ExtensionRegistry } from './extensions/extensionRegistry';
 import { clearLayerPanelStates } from './layerPanelState';
 import { createWorkbenchPersistenceRuntime } from './persistenceRuntime';
@@ -22,6 +23,7 @@ import {
   type SyncedWorkbenchPersistence,
   type WorkbenchLoadOptions,
 } from './projects/syncedPersistence';
+import { consumeWorkspaceClearFailure } from './settings/clearWorkspaceData';
 import { getProjectWidgetValues } from './widgetState';
 import { createWorkbenchStore, type WorkbenchSnapshot, type WorkbenchInternalStore } from './workbenchStore';
 
@@ -59,11 +61,13 @@ export const WorkbenchProvider = ({
   const { t } = useTranslation();
   const [persistence] = useState(() => createSyncedWorkbenchPersistence(owner));
   const [extensions] = useState(createExtensionRegistry);
+  const [loadUnavailable, setLoadUnavailable] = useState<{ message: string; retry(): void } | null>(null);
   const hasHydrated = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot).hasHydrated;
 
   // The runtime is created inside the effect: disposal is terminal, so each
   // mount (including a StrictMode remount) must get its own instance.
   useMountEffect(() => {
+    const releasePersistence = persistence.retain();
     const persistenceRuntime = createWorkbenchPersistenceRuntime({
       aggregate: {
         ...store.internal.persistence,
@@ -74,8 +78,21 @@ export const WorkbenchProvider = ({
             message: 'The linked project does not exist on this account — it may have been deleted.',
             title: 'Project not found',
           }),
+        reportLoadAvailable: () => {
+          setLoadUnavailable(null);
+          const clearFailure = consumeWorkspaceClearFailure(window.sessionStorage);
+          if (clearFailure) {
+            store.commands.notifications.reportError({
+              area: 'workspace-clear',
+              message: clearFailure,
+              namespace: 'system',
+            });
+          }
+        },
         reportLoadError: (message) =>
           store.commands.notifications.reportError({ area: 'persistence-load', message, namespace: 'system' }),
+        reportLoadUnavailable: (message) =>
+          setLoadUnavailable({ message, retry: () => persistenceRuntime.retryLoad() }),
         reportRefusedProjects: (refused) => {
           const notice = describeRefusedProjects(refused, t);
 
@@ -131,6 +148,7 @@ export const WorkbenchProvider = ({
       clearLayerPanelStates();
       openProjectBroker.dispose();
       persistenceRuntime.dispose();
+      releasePersistence();
     };
   });
 
@@ -138,7 +156,17 @@ export const WorkbenchProvider = ({
     <WorkbenchPersistenceContext value={persistence}>
       <WorkbenchExtensionsContext value={extensions}>
         <WorkbenchStoreContext value={store}>
-          {hasHydrated ? children : <WorkbenchSplashScreen messageKey="splash.openingProject" />}
+          {loadUnavailable ? (
+            <WorkbenchUnavailableScreen
+              message={loadUnavailable.message}
+              onRetry={loadUnavailable.retry}
+              persistence={persistence}
+            />
+          ) : hasHydrated ? (
+            children
+          ) : (
+            <WorkbenchSplashScreen messageKey="splash.openingProject" />
+          )}
         </WorkbenchStoreContext>
       </WorkbenchExtensionsContext>
     </WorkbenchPersistenceContext>

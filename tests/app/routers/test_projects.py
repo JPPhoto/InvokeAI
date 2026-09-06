@@ -12,6 +12,7 @@ from fastapi import status
 from fastapi.testclient import TestClient
 
 from invokeai.app.services.invoker import Invoker
+from invokeai.app.services.project_records import project_records_sqlite
 from tests.app.routers.conftest import _auth, _create_board
 
 
@@ -30,6 +31,50 @@ def test_creating_a_project_creates_and_returns_its_board(client: TestClient, us
     assert board.status_code == status.HTTP_200_OK
     assert board.json()["board_name"] == "Fresh"
     assert board.json()["board_visibility"] == "private"
+
+
+def test_oversized_project_documents_return_a_structured_413(
+    client: TestClient, user1_token: str, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(project_records_sqlite, "PROJECT_DOCUMENT_MAX_BYTES", 16)
+
+    response = _create_project(client, user1_token, data={"value": "x" * 32})
+
+    assert response.status_code == status.HTTP_413_CONTENT_TOO_LARGE
+    assert response.json()["detail"] == {
+        "actual_bytes": 44,
+        "code": "project_document_too_large",
+        "max_bytes": 16,
+        "message": "Project document is 44 bytes; the limit is 16 bytes",
+    }
+
+
+def test_oversized_project_updates_return_a_structured_413(
+    client: TestClient, user1_token: str, monkeypatch: pytest.MonkeyPatch
+):
+    created = _create_project(client, user1_token).json()
+    monkeypatch.setattr(project_records_sqlite, "PROJECT_DOCUMENT_MAX_BYTES", 16)
+
+    response = client.put(
+        f"/api/v1/projects/{created['project_id']}",
+        json={"data": {"value": "x" * 32}, "expected_revision": created["revision"], "name": "Too large"},
+        headers=_auth(user1_token),
+    )
+
+    assert response.status_code == status.HTTP_413_CONTENT_TOO_LARGE
+    assert response.json()["detail"]["code"] == "project_document_too_large"
+    assert response.json()["detail"]["actual_bytes"] == 44
+
+
+def test_non_finite_project_values_return_a_structured_422(client: TestClient, user1_token: str) -> None:
+    response = client.post(
+        "/api/v1/projects/",
+        content=b'{"name":"Invalid","data":{"value":NaN}}',
+        headers={**_auth(user1_token), "Content-Type": "application/json"},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["detail"]["code"] == "project_document_invalid"
 
 
 def test_project_canvas_schema_negotiation_defaults_legacy_clients_to_v2(client: TestClient, user1_token: str):

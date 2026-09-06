@@ -9,7 +9,6 @@ import { createExternalStore } from '@platform/state/externalStore';
 import { createSingleFlight } from '@platform/state/singleFlight';
 import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
 import { DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION, isCanvasSchemaVersionSupported } from '@workbench/canvasSchemaVersion';
-import { createRefusedProjectStorage } from '@workbench/refusedProjectStorage';
 
 import type { ProjectTransferIssues } from './invk/transfer';
 
@@ -204,41 +203,57 @@ export const upsertProjectSummary = (
 export const isProjectSummaryCompatible = (summary: ProjectSummary): boolean =>
   isCanvasSchemaVersionSupported(summary.minimumCanvasSchemaVersion);
 
-/**
- * Every mutation below branches on one question: does the workbench hold this project? If so it
- * goes through {@link getOpenProject} — the sync engine — otherwise over HTTP. A library write
- * landing beside an open project's revision chain forks it into a conflict copy, and now that a
- * board renames with its project, would rename the board from outside the owning transaction.
- */
+/** Open projects mutate through their sync engine; closed projects use the HTTP API directly. */
 
 /** Permanently remove a project from the server, its board with it. The only deletion path. */
 export const deleteLibraryProject = async (projectId: string): Promise<void> => {
   const owner = captureAccountScope();
-  const openProject = getOpenProject(projectId);
-
-  if (openProject) {
-    // Through the sync engine's queue, not beside it. Marking the project first stops a save that
-    // has not begun, but a PUT already on the wire is past every check the engine has: it comes
-    // back 404 once this DELETE commits, and the engine answers a 404 by forking the local document
-    // into a new server project — a copy of the thing just deleted, pointing at media the deletion
-    // removed. Queueing means the push finishes before the DELETE is sent. Marking and unmarking
-    // are the handle's business too, because a project left marked stops autosaving for the rest of
-    // the session, silently and with no way to notice.
-    await openProject.deleteOnServer();
-  } else {
-    await apiDeleteProject(projectId, owner.signal);
-  }
-
+  const [{ acquireProjectMutationLock }, { createAccountOwnedQueueRunJournal }] = await Promise.all([
+    import('./projectLifecycleLocks'),
+    import('@workbench/queue-integration/queueRunJournal'),
+  ]);
   assertAccountScopeCurrent(owner);
-  openProject?.close();
-  createRefusedProjectStorage(owner.storageSuffix).forget(projectId);
-  forgetProjectCover(projectId, owner);
-  store.patchSnapshot({ summaries: store.getSnapshot().summaries.filter((summary) => summary.id !== projectId) });
+  const openProject = getOpenProject(projectId);
+  const mutationLock = await acquireProjectMutationLock(owner.storageSuffix, projectId);
+  if (mutationLock.kind === 'contended') {
+    throw new Error('Wait for active queue runs to finish before deleting this project.');
+  }
+  if (mutationLock.kind === 'unavailable') {
+    throw new Error('Project deletion is unavailable because cross-tab coordination could not be established.');
+  }
+  let journal;
 
-  // The saved session outlives the editor, so a deleted project has to leave it here or the next
-  // boot tries to open something the server no longer has.
-  await pruneSessionProject(projectId, owner.signal);
-  await refreshOpenProjects();
+  try {
+    journal = await createAccountOwnedQueueRunJournal(owner);
+    const queueRuns = await journal.listForProject(projectId);
+    if (queueRuns.kind === 'unavailable') {
+      throw new Error('Project deletion is unavailable because active queue runs could not be verified.');
+    }
+    if (queueRuns.entries.length > 0) {
+      throw new Error('Wait for active queue runs to finish before deleting this project.');
+    }
+
+    if (openProject) {
+      // Queueing ensures an in-flight save finishes before DELETE is sent.
+      await openProject.deleteOnServer();
+    } else {
+      await apiDeleteProject(projectId, owner.signal);
+    }
+
+    assertAccountScopeCurrent(owner);
+    await journal.deleteForProject(projectId);
+    openProject?.close();
+    forgetProjectCover(projectId, owner);
+    store.patchSnapshot({ summaries: store.getSnapshot().summaries.filter((summary) => summary.id !== projectId) });
+
+    // The saved session outlives the editor, so a deleted project has to leave it here or the next
+    // boot tries to open something the server no longer has.
+    await pruneSessionProject(projectId, owner.signal);
+    await refreshOpenProjects();
+  } finally {
+    journal?.close();
+    await mutationLock.release();
+  }
 };
 
 /**
