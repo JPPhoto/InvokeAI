@@ -41,6 +41,7 @@ from invokeai.app.invocations.fields import (
     migrate_model_ui_type,
 )
 from invokeai.app.services.config.config_default import get_config
+from invokeai.app.services.shared.execution_effects import InvocationRunResult
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.metaenum import MetaEnum
 from invokeai.app.util.misc import uuid_string
@@ -211,11 +212,7 @@ class BaseInvocation(ABC, BaseModel):
         """Returns the invocation representation included in execution events."""
         return self
 
-    def invoke_internal(self, context: InvocationContext, services: "InvocationServices") -> BaseInvocationOutput:
-        """
-        Internal invoke method, calls `invoke()` after some prep.
-        Handles optional fields that are required to call `invoke()` and invocation cache.
-        """
+    def _validate_invoke_fields(self) -> None:
         for field_name, field in type(self).model_fields.items():
             if not field.json_schema_extra or callable(field.json_schema_extra):
                 # something has gone terribly awry, we should always have this and it should be a dict
@@ -234,6 +231,13 @@ class BaseInvocation(ABC, BaseModel):
                     raise RequiredConnectionException(type(self).model_fields["type"].default, field_name)
                 elif input_ == Input.Any:
                     raise MissingInputException(type(self).model_fields["type"].default, field_name)
+
+    def invoke_internal(self, context: InvocationContext, services: "InvocationServices") -> BaseInvocationOutput:
+        """
+        Internal invoke method, calls `invoke()` after some prep.
+        Handles optional fields that are required to call `invoke()` and invocation cache.
+        """
+        self._validate_invoke_fields()
 
         # skip node cache codepath if it's disabled
         if services.configuration.node_cache_size == 0:
@@ -254,6 +258,23 @@ class BaseInvocation(ABC, BaseModel):
         else:
             services.logger.debug(f'Skipping invocation cache for "{self.get_type()}": {self.id}')
             return self.invoke(context)
+
+    def invoke_internal_with_effects(
+        self, context: InvocationContext, services: "InvocationServices"
+    ) -> InvocationRunResult:
+        """Invoke while returning effects recorded by the invocation context.
+
+        This additive path intentionally bypasses the ordinary invocation cache.
+        Cache entries contain outputs only, so using one here could suppress a
+        newly recorded effect batch without notice. Existing ``invoke_internal``
+        callers retain their current cache behavior.
+        """
+        self._validate_invoke_fields()
+        context.execution_effects.clear()
+        if self.use_cache and services.configuration.node_cache_size != 0:
+            services.logger.debug(f'Skipping invocation cache for effect recording for "{self.get_type()}": {self.id}')
+        output = self.invoke(context)
+        return InvocationRunResult(output=output, effects=context.execution_effects.snapshot())
 
     id: str = Field(
         default_factory=uuid_string,

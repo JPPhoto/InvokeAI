@@ -18,6 +18,7 @@ from invokeai.app.services.images.images_common import ImageDTO
 from invokeai.app.services.invocation_services import InvocationServices
 from invokeai.app.services.model_records.model_records_base import UnknownModelException
 from invokeai.app.services.session_processor.session_processor_common import ProgressImage
+from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.services.videos.videos_common import VideoDTO
 from invokeai.app.services.wildcard_records.wildcard_records_common import build_wildcard_manager
@@ -934,6 +935,7 @@ class InvocationContext:
         wildcards: WildcardsInterface,
         data: InvocationContextData,
         services: InvocationServices,
+        execution_effects: Optional[ExecutionEffectsRecorder] = None,
     ) -> None:
         self.images = images
         """Methods to save, get and update images and their metadata."""
@@ -959,12 +961,17 @@ class InvocationContext:
         """An internal API providing access to data about the current queue item and invocation. You probably shouldn't use this. It may change without warning."""
         self._services = services
         """An internal API providing access to all application services. You probably shouldn't use this. It may change without warning."""
+        self.execution_effects = execution_effects or ExecutionEffectsRecorder()
+        """Effects recorded during the current invocation run."""
+        self.effects = self.execution_effects
+        """Alias for :attr:`execution_effects`."""
 
 
 def build_invocation_context(
     services: InvocationServices,
     data: InvocationContextData,
     is_canceled: Callable[[], bool],
+    execution_effects: Optional[ExecutionEffectsRecorder] = None,
 ) -> InvocationContext:
     """Builds the invocation context for a specific invocation execution.
 
@@ -1000,6 +1007,7 @@ def build_invocation_context(
         services=services,
         boards=boards,
         wildcards=wildcards,
+        execution_effects=execution_effects,
     )
 
     return ctx
