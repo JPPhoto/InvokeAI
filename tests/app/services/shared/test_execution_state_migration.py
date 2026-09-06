@@ -81,7 +81,7 @@ def test_rejects_future_execution_state_versions() -> None:
 
 def test_round_trips_nullable_execution_token_value() -> None:
     state = _make_state()
-    state.execution_tokens["token-id"] = ExecutionToken(
+    token = ExecutionToken(
         token_id="token-id",
         reference_id="state-id:exec-node",
         owner_node_id="exec-node",
@@ -89,9 +89,32 @@ def test_round_trips_nullable_execution_token_value() -> None:
         frame=ExecutionFrame(),
         value=None,
     )
+    state.execution_tokens["token-id"] = token
 
     snapshot = dump_execution_state(state)
     assert snapshot["execution_tokens"]["token-id"]["value"] is None
     restored = load_execution_state(snapshot)
 
     assert restored.execution_tokens["token-id"].value is None
+
+
+def test_round_trips_nullable_execution_token_value_in_child_state() -> None:
+    state = _make_state()
+    child = _make_state()
+    child.execution_tokens["token-id"] = ExecutionToken(
+        token_id="token-id",
+        reference_id="state-id:exec-node",
+        owner_node_id="exec-node",
+        port="value",
+        frame=ExecutionFrame(),
+        value=None,
+    )
+    state.waiting_workflow_call_child_session = child
+
+    snapshot = dump_execution_state(state)
+    child_snapshot = snapshot["waiting_workflow_call_child_session"]
+    assert child_snapshot["execution_tokens"]["token-id"]["value"] is None
+    restored = load_execution_state(snapshot)
+
+    assert restored.waiting_workflow_call_child_session is not None
+    assert restored.waiting_workflow_call_child_session.execution_tokens["token-id"].value is None
