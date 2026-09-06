@@ -341,7 +341,7 @@ const createAdapter = (): GalleryUiAdapter =>
     projectId: 'project-1',
     projectName: 'Project',
     queueItems: [],
-    widgets: { patchGalleryValues: noop },
+    widgets: { openGallery: () => true, patchGalleryValues: noop },
   }) as unknown as GalleryUiAdapter;
 
 let host: HTMLDivElement | null = null;

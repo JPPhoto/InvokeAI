@@ -1,44 +1,26 @@
 import type { GalleryItem, GalleryItemRef } from '@features/gallery/core/items';
 import type { GalleryThumbnailFit } from '@features/gallery/core/settings';
 
-import { Badge, Box } from '@chakra-ui/react';
+import { Badge } from '@chakra-ui/react';
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { formatGalleryVideoDuration, toGalleryItemRef } from '@features/gallery/core/items';
 import { IconButton } from '@platform/ui/Button';
-import { PlayIcon, StarIcon } from 'lucide-react';
+import { StarIcon } from 'lucide-react';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
 import { getGalleryItemDragData, getGalleryItemDragId } from './galleryDnd';
-
-const THUMBNAIL_HOVER_CSS = {
-  '&:focus-within': { outline: '2px solid {colors.accent.solid}', outlineOffset: '-2px' },
-  '&:hover .gallery-thumb-overlay, &:focus-within .gallery-thumb-overlay': { opacity: 1 },
-} as const;
+import { GalleryTileFrame } from './GalleryTileFrame';
 
 /**
- * The tile while its image is being dragged: desaturated, the visible half of
- * the touch drag cue. The other half is the portalled drag preview, which
- * carries the same desaturation so the change is visible under a finger that
- * has not moved yet — the moment the drag hold completes.
+ * Desaturation is the touch drag cue: the tile while dragged, or while a
+ * sustained hold has armed the drag gate (`data-drag-armed`, set by the
+ * hold-to-drag sensor). The portalled preview carries the same filter.
  */
-const THUMBNAIL_DRAG_CSS = {
-  ...THUMBNAIL_HOVER_CSS,
-  filter: 'saturate(0)',
-} as const;
-
-/**
- * The tile while a touch hold has armed the drag gate (before movement starts
- * the drag): the same desaturation, easing in as the hold completes so the
- * user can see the gesture flip from scroll to drag. Set as
- * `data-drag-armed` by the hold-to-drag sensor.
- */
-const THUMBNAIL_ARMED_CSS = {
-  ...THUMBNAIL_HOVER_CSS,
-  '&[data-drag-armed=true]': { filter: 'saturate(0)' },
-} as const;
+const THUMBNAIL_DRAG_CSS = { filter: 'saturate(0)' } as const;
+const THUMBNAIL_ARMED_CSS = { '&[data-drag-armed=true]': { filter: 'saturate(0)' } } as const;
 
 const PREVIEW_IMAGE_STYLE = {
   borderRadius: '0.375rem',
@@ -182,28 +164,22 @@ const GalleryThumbnail = ({
   );
 
   return (
-    <Box
+    <GalleryTileFrame
       ref={setTileRef}
       {...listeners}
-      aspectRatio={1}
-      bg="bg"
-      borderColor={isSelected || isCompared ? 'accent.solid' : 'border.subtle'}
-      borderWidth="2px"
+      alwaysShowDimensions={alwaysShowDimensions}
       boxShadow={isCompared ? 'inset 0 0 0 1px {colors.accent.solid}' : undefined}
       css={isDragging ? THUMBNAIL_DRAG_CSS : THUMBNAIL_ARMED_CSS}
-      minW="0"
+      isSelected={isSelected || isCompared}
+      item={item}
       opacity={isDragging ? 0.4 : undefined}
-      overflow="hidden"
-      position="relative"
       role="listitem"
-      rounded="md"
       // Pan, don't drag: `none` would hand every touch-drag to the drag
       // sensor before the browser could scroll the grid. Allowing the pan
       // lets a moving finger scroll (the hold-to-drag sensor releases the
       // gesture when the browser claims it); dragging still works after a
       // sustained hold.
       touchAction="pan-y"
-      w="full"
       onContextMenu={handleContextMenu}
     >
       <button
@@ -260,41 +236,6 @@ const GalleryThumbnail = ({
       >
         <StarIcon fill={item.starred ? 'currentColor' : 'none'} />
       </IconButton>
-      {item.kind === 'image' && item.width > 0 && item.height > 0 && (
-        <Badge
-          bottom="1"
-          className="gallery-thumb-overlay"
-          insetInlineStart="1"
-          opacity={alwaysShowDimensions ? 1 : 0}
-          pointerEvents="none"
-          position="absolute"
-          size="xs"
-          transition="opacity var(--wb-motion-duration-medium) ease"
-          variant="solid"
-          zIndex="1"
-        >
-          {item.width}x{item.height}
-        </Badge>
-      )}
-      {duration !== null && (
-        <Badge
-          bottom="1"
-          display="flex"
-          fontVariantNumeric="tabular-nums"
-          gap="1"
-          insetInlineStart="1"
-          opacity={1}
-          pointerEvents="none"
-          position="absolute"
-          size="xs"
-          transition="opacity var(--wb-motion-duration-medium) ease"
-          variant="solid"
-          zIndex="1"
-        >
-          <PlayIcon aria-hidden="true" fill="currentColor" />
-          {duration}
-        </Badge>
-      )}
       {previewStyle
         ? createPortal(
             <div aria-hidden="true" style={previewStyle}>
@@ -303,7 +244,7 @@ const GalleryThumbnail = ({
             document.body
           )
         : null}
-    </Box>
+    </GalleryTileFrame>
   );
 };
 

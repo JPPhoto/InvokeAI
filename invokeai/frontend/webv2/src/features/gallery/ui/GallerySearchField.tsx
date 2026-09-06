@@ -4,7 +4,7 @@ import { Box, Icon, Input } from '@chakra-ui/react';
 import { parseDateTokens } from '@platform/search/dateTokens';
 import { InputShell } from '@platform/ui/InputShell';
 import { SearchIcon } from 'lucide-react';
-import { useCallback, useMemo, useRef, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, type KeyboardEvent, type ReactNode, type Ref } from 'react';
 
 /** `key:value` runs the date grammar recognizes, matched against the raw value. */
 const TOKEN_PATTERN = /(?:^|\s)(?:from|to|date):\S*/gi;
@@ -71,18 +71,25 @@ export const GallerySearchField = ({
   ariaLabel,
   describedById,
   endElement,
+  inputProps,
   isInvalid,
   placeholder,
+  ref,
   value,
   onChange,
+  onKeyDown,
 }: {
   ariaLabel: string;
   describedById?: string;
   endElement?: ReactNode;
+  /** Listbox wiring (`aria-controls`, `aria-activedescendant`) for hosts that drive a list from the field. */
+  inputProps?: Pick<React.ComponentProps<typeof Input>, 'aria-activedescendant' | 'aria-controls' | 'role'>;
   isInvalid?: boolean;
   placeholder: string;
+  ref?: Ref<HTMLInputElement>;
   value: string;
   onChange: (value: string) => void;
+  onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void;
 }) => {
   const mirrorRef = useRef<HTMLDivElement>(null);
   const segments = useMemo(() => getGallerySearchSegments(value, parseDateTokens(value)), [value]);
@@ -140,6 +147,8 @@ export const GallerySearchField = ({
         )}
       </Box>
       <Input
+        ref={ref}
+        {...inputProps}
         aria-describedby={describedById}
         aria-invalid={isInvalid || undefined}
         aria-label={ariaLabel}
@@ -158,6 +167,7 @@ export const GallerySearchField = ({
         w="full"
         value={value}
         onChange={handleChange}
+        onKeyDown={onKeyDown}
         onScroll={handleScroll}
       />
     </InputShell>

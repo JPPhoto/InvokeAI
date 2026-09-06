@@ -11,6 +11,7 @@ import {
   GALLERY_STARRED_SEPARATOR_HEIGHT_PX,
   getGalleryCellSizePx,
   getGalleryColumnCount,
+  getGalleryColumnCountForCell,
   getGalleryGridRowHeightPx,
   getGalleryGridRowIndexForItem,
 } from './galleryGridLayout';
@@ -49,6 +50,20 @@ const buildRows = (overrides: Partial<Parameters<typeof buildGalleryGridRows>[0]
     starredFirst: true,
     ...overrides,
   });
+
+describe('getGalleryColumnCountForCell', () => {
+  it('rounds to the nearest whole cell and clamps to the caller bounds', () => {
+    const bounds = { max: 8, min: 3, targetCellPx: 72 };
+
+    expect(getGalleryColumnCountForCell({ ...bounds, widthPx: 320 })).toBe(4);
+    expect(getGalleryColumnCountForCell({ ...bounds, widthPx: 120 })).toBe(3);
+    expect(getGalleryColumnCountForCell({ ...bounds, widthPx: 2000 })).toBe(8);
+  });
+
+  it('falls back to the minimum before the width is measured', () => {
+    expect(getGalleryColumnCountForCell({ max: 8, min: 3, targetCellPx: 72, widthPx: 0 })).toBe(3);
+  });
+});
 
 describe('getGalleryColumnCount', () => {
   it('gives the same answer at the same width regardless of placement', () => {
