@@ -484,6 +484,8 @@ class ExecutionEffectBatch:
 class ExecutionEffectsRecorder:
     """Collects effects for one invocation run."""
 
+    _SUPPORTED_EFFECT_KINDS = frozenset({"emit", "close_stream"})
+
     def __init__(self, source_node_id: str = "context", frame_path: tuple[int | str, ...] = ()) -> None:
         self._effects: list[ExecutionEffect] = []
         self.source_node_id = source_node_id
@@ -492,7 +494,7 @@ class ExecutionEffectsRecorder:
     def record(self, effect: ExecutionEffect) -> None:
         if not isinstance(effect, ExecutionEffect):
             raise TypeError(f"Expected ExecutionEffect, got {type(effect).__name__}")
-        if effect.kind in {"spawn_execution", "await", "fail"}:
+        if effect.kind not in self._SUPPORTED_EFFECT_KINDS:
             raise UnsupportedExecutionEffectError(f"Execution effect kind '{effect.kind}' is not supported")
         try:
             effect.model_dump(mode="json", warnings="error")

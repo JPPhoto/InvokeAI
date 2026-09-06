@@ -22,6 +22,7 @@ from invokeai.app.services.shared.execution_effects import (
     ExecutionRef,
     ExecutionToken,
     FailEffect,
+    RemoveEdgeEffect,
     SetValueEffect,
     SpawnExecutionEffect,
     UnsupportedExecutionEffectError,
@@ -45,8 +46,8 @@ class ExecutionEffectsTestInvocation(BaseInvocation):
     def invoke(self, context: InvocationContext) -> ExecutionEffectsTestOutput:
         type(self).calls += 1
         context.effects.record(
-            SetValueEffect(
-                target=ExecutionRef(node_id=self.id, field="value"),
+            EmitEffect(
+                token=ExecutionToken(node_id=self.id, field="value", value=self.value),
                 value=self.value,
             )
         )
@@ -62,8 +63,8 @@ class ExecutionEffectsOverrideInvocation(BaseInvocation):
     def invoke(self, context: InvocationContext) -> ExecutionEffectsTestOutput:
         type(self).calls += 1
         context.effects.record(
-            SetValueEffect(
-                target=ExecutionRef(node_id=self.id, field="value"),
+            EmitEffect(
+                token=ExecutionToken(node_id=self.id, field="value", value=self.value),
                 value=self.value,
             )
         )
@@ -158,6 +159,29 @@ def test_execution_interface_spawn_is_guarded() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "effect",
+    [
+        SetValueEffect(target=ExecutionRef(node_id="node", field="value"), value=3),
+        AddEdgeEffect(
+            source=ExecutionRef(node_id="source", field="value"),
+            destination=ExecutionRef(node_id="destination", field="input"),
+        ),
+        RemoveEdgeEffect(
+            source=ExecutionRef(node_id="source", field="value"),
+            destination=ExecutionRef(node_id="destination", field="input"),
+        ),
+    ],
+)
+def test_recorder_rejects_effects_without_graph_dispatch(effect: object) -> None:
+    recorder = ExecutionEffectsRecorder(source_node_id="node")
+
+    with pytest.raises(UnsupportedExecutionEffectError, match="not supported"):
+        recorder.record(effect)  # type: ignore[arg-type]
+
+    assert recorder.snapshot() == ()
+
+
 def test_execution_interface_preserves_explicit_empty_frame() -> None:
     recorder = ExecutionEffectsRecorder(source_node_id="node", frame_path=(2,))
     execution = ExecutionInterface(recorder)
@@ -205,7 +229,7 @@ def test_spawn_rejects_invalid_inputs(graph: object, inputs: object) -> None:
 
 def test_recorder_drain_returns_and_clears_effects() -> None:
     recorder = ExecutionEffectsRecorder()
-    effect = SetValueEffect(target=ExecutionRef(node_id="node", field="value"), value=3)
+    effect = EmitEffect(token=ExecutionToken(node_id="node", field="value", value=3), value=3)
     recorder.record(effect)
 
     assert recorder.drain() == (effect,)
@@ -319,7 +343,10 @@ def test_effect_models_validate_typed_refs() -> None:
 
 def test_recorder_rejects_untyped_values_and_returns_copy() -> None:
     recorder = ExecutionEffectsRecorder()
-    effect = SetValueEffect(target=ExecutionRef(node_id="node", field="value"), value=3)
+    effect = EmitEffect(
+        token=ExecutionToken(node_id="node", field="value", value=3),
+        value=3,
+    )
 
     recorder.record(effect)
     effects = recorder.snapshot()
@@ -351,7 +378,7 @@ def test_effectful_invoke_bypasses_output_only_cache() -> None:
 
     assert result.output == ExecutionEffectsTestOutput(value=7)
     assert len(result.effects) == 1
-    assert result.effects[0].kind == "set_value"
+    assert result.effects[0].kind == "emit"
     assert ExecutionEffectsTestInvocation.calls == 1
     services.invocation_cache.get.assert_not_called()
     services.invocation_cache.save.assert_not_called()
@@ -359,10 +386,10 @@ def test_effectful_invoke_bypasses_output_only_cache() -> None:
 
 def test_effectful_invoke_clears_stale_effects() -> None:
     context = _context()
-    context.effects.record(SetValueEffect(target=ExecutionRef(node_id="stale", field="value"), value=0))
+    context.effects.record(EmitEffect(token=ExecutionToken(node_id="stale", field="value", value=0), value=0))
     result = ExecutionEffectsTestInvocation(id="node", value=2).invoke_internal_with_effects(context, _services())
 
-    assert [effect.value for effect in result.effects if isinstance(effect, SetValueEffect)] == [2]
+    assert [effect.value for effect in result.effects if isinstance(effect, EmitEffect)] == [2]
 
 
 def test_effectful_invoke_disables_cache_in_invoke_internal_override() -> None:
