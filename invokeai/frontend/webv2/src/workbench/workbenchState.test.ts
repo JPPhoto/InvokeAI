@@ -3971,6 +3971,57 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(getActiveProject(state).settings.showProgressImagesInViewer).toBe(false);
   });
 
+  it('resets the page and stamps the selection query when the starred-only filter changes', () => {
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, { page: 4, type: 'setGalleryPage' });
+    state = workbenchReducer(state, { starredOnly: true, type: 'setGalleryStarredOnly' });
+
+    let values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+    expect(values.starredOnly).toBe(true);
+    expect(values.galleryPage).toBe(0);
+
+    state = workbenchReducer(state, { item: createGalleryImageItem('starred.png'), type: 'selectGalleryItem' });
+    values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+    expect(values.selectedImageQuery).toMatchObject({ starredOnly: true });
+
+    // Releasing the filter is a listing change too: the page resets, and a
+    // later selection is stamped against the unfiltered listing.
+    state = workbenchReducer(state, { page: 2, type: 'setGalleryPage' });
+    state = workbenchReducer(state, { starredOnly: false, type: 'setGalleryStarredOnly' });
+    state = workbenchReducer(state, {
+      itemKeys: ['image:a.png', 'image:b.png'],
+      primaryItem: createGalleryImageItem('b.png'),
+      type: 'setGalleryMultiSelection',
+    });
+    values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+    expect(values.galleryPage).toBe(0);
+    expect(values.selectedImageQuery).toMatchObject({ starredOnly: false });
+  });
+
+  it('stamps a landing generation against the unfiltered listing', () => {
+    // A fresh result is never starred, so following it means leaving the
+    // starred-only listing — the stamp says so, exactly as it clears the search.
+    let state = primeGenerate();
+    state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
+    state = workbenchReducer(state, { starredOnly: true, type: 'setGalleryStarredOnly' });
+    state = submitGenerate(state);
+
+    const project = getActiveProject(state);
+    const queueItem = project.queue.items[0];
+    state = workbenchReducer(state, {
+      images: [createImage('completed.png', queueItem.id)],
+      projectId: project.id,
+      queueItemId: queueItem.id,
+      type: 'routeQueueItemResults',
+    });
+
+    expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImageQuery).toMatchObject({
+      searchTerm: '',
+      starredOnly: false,
+    });
+  });
+
   it('stores selected backend board id for gallery submissions', () => {
     let state = createInitialWorkbenchState();
 

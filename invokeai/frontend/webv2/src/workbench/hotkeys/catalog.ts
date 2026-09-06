@@ -92,6 +92,7 @@ const implemented = new Set([
   'gallery.remix',
   'gallery.selectAllOnPage',
   'gallery.starImage',
+  'gallery.toggleStarredOnly',
   'viewer.nextComparisonMode',
   'viewer.deleteImage',
   'viewer.recallAll',
@@ -282,4 +283,5 @@ export const firstPartyHotkeyCatalog: HotkeyDefinition[] = [
   hotkey('gallery', 'deleteSelection', ['delete', 'backspace']),
   hotkey('gallery', 'remix', ['r']),
   hotkey('gallery', 'starImage', ['.']),
+  hotkey('gallery', 'toggleStarredOnly', []),
 ];

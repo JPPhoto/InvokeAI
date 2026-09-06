@@ -572,7 +572,6 @@ const listPaletteDateBoardImageNames = async ({
   orderDir,
   searchTerm,
   signal,
-  starredFirst,
 }: {
   boardId: string;
   createdFrom?: string;
@@ -581,7 +580,6 @@ const listPaletteDateBoardImageNames = async ({
   orderDir: GalleryOrderDir;
   searchTerm: string;
   signal?: AbortSignal;
-  starredFirst: boolean;
 }): Promise<PaletteDateBoardImageNames> => {
   // Palette results remain intentionally image-only, but derive from the
   // polymorphic item_names endpoint so no webv2 path regresses to image_names.
@@ -593,7 +591,6 @@ const listPaletteDateBoardImageNames = async ({
     orderDir,
     searchTerm,
     signal,
-    starredFirst,
   });
   const imageNames = result.items.filter((ref) => ref.kind === 'image').map((ref) => ref.name);
 
@@ -605,7 +602,6 @@ const listPaletteDateBoardImageNames = async ({
 
 export interface GalleryItemNames {
   items: GalleryItemRef[];
-  starredCount: number;
   total: number;
 }
 
@@ -617,16 +613,12 @@ interface GalleryItemNamesRequest {
   orderDir: GalleryOrderDir;
   searchTerm: string;
   signal?: AbortSignal;
-  starredFirst: boolean;
+  /** true = only starred items, false = only unstarred; absent = all. */
+  starred?: boolean;
 }
 
-const mapGalleryItemNames = (body: {
-  items: GalleryItemRef[];
-  starred_count: number;
-  total_count: number;
-}): GalleryItemNames => ({
+const mapGalleryItemNames = (body: { items: GalleryItemRef[]; total_count: number }): GalleryItemNames => ({
   items: body.items,
-  starredCount: normalizeTotal(body.starred_count, 0),
   total: normalizeTotal(body.total_count, body.items.length),
 });
 
@@ -638,7 +630,7 @@ export const listGalleryItemNames = async ({
   orderDir,
   searchTerm,
   signal,
-  starredFirst,
+  starred,
 }: GalleryItemNamesRequest): Promise<GalleryItemNames> => {
   const query = toSearchParams({
     board_id: boardId,
@@ -648,13 +640,15 @@ export const listGalleryItemNames = async ({
     is_intermediate: false,
     order_dir: orderDir,
     search_term: searchTerm.trim() || undefined,
-    starred_first: starredFirst,
+    starred,
+    // The backend defaults to starred-first; the grid orders chronologically
+    // and carries starred items in its own strip.
+    starred_first: false,
   });
-  const body = await apiFetchJson<{
-    items: GalleryItemRef[];
-    starred_count: number;
-    total_count: number;
-  }>(`/api/v1/gallery/items/names?${query}`, { signal });
+  const body = await apiFetchJson<{ items: GalleryItemRef[]; total_count: number }>(
+    `/api/v1/gallery/items/names?${query}`,
+    { signal }
+  );
 
   return mapGalleryItemNames(body);
 };
@@ -667,28 +661,26 @@ export const listGalleryDateBoardItemNames = async ({
   orderDir,
   searchTerm,
   signal,
-  starredFirst,
+  starred,
 }: GalleryItemNamesRequest): Promise<GalleryItemNames> => {
   if (
     (createdFrom !== undefined || createdTo !== undefined) &&
     !isTimestampInRange(getDateFromBoardId(boardId), { from: createdFrom, to: createdTo })
   ) {
-    return { items: [], starredCount: 0, total: 0 };
+    return { items: [], total: 0 };
   }
 
   const query = toSearchParams({
     categories: galleryView === 'assets' ? assetCategories : imageCategories,
     order_dir: orderDir,
     search_term: searchTerm.trim() || undefined,
-    starred_first: starredFirst,
+    starred,
+    starred_first: false,
   });
-  const body = await apiFetchJson<{
-    items: GalleryItemRef[];
-    starred_count: number;
-    total_count: number;
-  }>(`/api/v1/virtual_boards/by_date/${encodeURIComponent(getDateFromBoardId(boardId))}/item_names?${query}`, {
-    signal,
-  });
+  const body = await apiFetchJson<{ items: GalleryItemRef[]; total_count: number }>(
+    `/api/v1/virtual_boards/by_date/${encodeURIComponent(getDateFromBoardId(boardId))}/item_names?${query}`,
+    { signal }
+  );
 
   return mapGalleryItemNames(body);
 };
@@ -777,7 +769,8 @@ interface GalleryListRequest {
   orderDir?: GalleryOrderDir;
   searchTerm: string;
   signal?: AbortSignal;
-  starredFirst?: boolean;
+  /** true = only starred items, false = only unstarred; absent = all. */
+  starred?: boolean;
 }
 
 interface GalleryItemsRequest extends GalleryListRequest {
@@ -795,7 +788,7 @@ export const listGalleryItems = async ({
   orderDir = 'DESC',
   searchTerm,
   signal,
-  starredFirst = false,
+  starred,
 }: GalleryItemsRequest): Promise<GalleryItemsPage> => {
   const query = toSearchParams({
     board_id: boardId,
@@ -807,7 +800,8 @@ export const listGalleryItems = async ({
     offset,
     order_dir: orderDir,
     search_term: searchTerm.trim() || undefined,
-    starred_first: starredFirst,
+    starred,
+    starred_first: false,
   });
   const body = await apiFetchJson<{
     items: BackendGalleryItemDTO[];
@@ -888,7 +882,7 @@ export const searchGallerySemantic = async (
  * The ranked result set as item refs, in relevance order. Pages hydrate
  * slices of this list (`hydrateGalleryDateBoardItemPage`), and range
  * selection / deletion neighbors read it directly. Semantic results are
- * image-only and carry no starred information.
+ * image-only.
  */
 export const listSemanticGalleryItemNames = async ({
   query,
@@ -905,7 +899,6 @@ export const listSemanticGalleryItemNames = async ({
 
     return {
       items: imageNames.map((name) => ({ kind: 'image', name })),
-      starredCount: 0,
       total: imageNames.length,
     };
   }
@@ -914,7 +907,6 @@ export const listSemanticGalleryItemNames = async ({
 
   return {
     items: results.map((result) => ({ kind: 'image', name: result.imageName })),
-    starredCount: 0,
     total: results.length,
   };
 };
@@ -929,7 +921,6 @@ export const listPaletteImages = async ({
   orderDir = 'DESC',
   searchTerm,
   signal,
-  starredFirst = false,
 }: GalleryListRequest): Promise<GalleryImagesPage> => {
   if (isDateBoardId(boardId)) {
     const names = await listPaletteDateBoardImageNames({
@@ -940,7 +931,6 @@ export const listPaletteImages = async ({
       orderDir,
       searchTerm,
       signal,
-      starredFirst,
     });
 
     return hydratePaletteDateBoardImagePage({ ...names, limit, offset, signal });
@@ -956,7 +946,7 @@ export const listPaletteImages = async ({
     offset,
     order_dir: orderDir,
     search_term: searchTerm.trim() || undefined,
-    starred_first: starredFirst,
+    starred_first: false,
   });
   const body = await apiFetchJson<ListImagesResponse | BackendImageDTO[]>(`/api/v1/images/?${query}`, { signal });
   const items = Array.isArray(body) ? body : (body.items ?? []);

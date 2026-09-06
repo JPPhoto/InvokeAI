@@ -411,11 +411,13 @@ describe('partial image mutation outcomes', () => {
       starred: true,
     });
 
-    // Only the rejected ref flips back once the backend answers.
+    // The rejected ref must reappear where it was: the cache snapshot comes
+    // back and only the confirmed ref is re-applied; the store flips it back.
+    expect(mocks.patchGalleryItemCaches.mock.results[0]?.value).toHaveBeenCalledOnce();
     expect(mocks.patchGalleryItemCaches).toHaveBeenNthCalledWith(2, expect.anything(), {
       kind: 'star',
-      result: { failed: [], succeeded: [{ kind: 'image', name: 'locked.png' }] },
-      starred: false,
+      result: { failed: [], succeeded: [{ kind: 'image', name: 'starred.png' }] },
+      starred: true,
     });
     expect(mocks.galleryPatchItems).toHaveBeenNthCalledWith(2, ['image:locked.png'], { starred: false });
   });
@@ -540,10 +542,11 @@ describe('mixed item mutation outcomes', () => {
     });
 
     expect(mocks.galleryPatchItems).toHaveBeenNthCalledWith(1, ['image:shared', 'video:shared'], { starred: true });
+    expect(mocks.patchGalleryItemCaches.mock.results[0]?.value).toHaveBeenCalledOnce();
     expect(mocks.patchGalleryItemCaches).toHaveBeenNthCalledWith(2, expect.anything(), {
       kind: 'star',
-      result: { failed: [], succeeded: [refs[0]] },
-      starred: false,
+      result: { failed: [], succeeded: [refs[1]] },
+      starred: true,
     });
     expect(mocks.galleryPatchItems).toHaveBeenNthCalledWith(2, ['image:shared'], { starred: false });
     expect(mocks.galleryRemoveItems).not.toHaveBeenCalled();
@@ -824,14 +827,12 @@ describe('total transport failure rollback', () => {
       starred: true,
     });
 
-    // Each item reverts to its own prior flag, not a single blanket value.
+    // Each store item reverts to its own prior flag, not a single blanket
+    // value; the cache restores the snapshot the optimistic patch returned.
     expect(mocks.galleryPatchItems).toHaveBeenCalledWith(['image:was-starred.png'], { starred: true });
     expect(mocks.galleryPatchItems).toHaveBeenCalledWith(['image:was-unstarred.png'], { starred: false });
-    expect(mocks.patchGalleryItemCaches).toHaveBeenCalledWith(expect.anything(), {
-      kind: 'star',
-      result: { failed: [], succeeded: [refs[1]] },
-      starred: false,
-    });
+    expect(mocks.patchGalleryItemCaches).toHaveBeenCalledOnce();
+    expect(mocks.patchGalleryItemCaches.mock.results[0]?.value).toHaveBeenCalledOnce();
 
     expect(mocks.reportError).toHaveBeenCalledOnce();
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
@@ -862,12 +863,13 @@ describe('total transport failure rollback', () => {
       await getItemActions().setItemsStarred(refs, true);
     });
 
-    // Neither the cache nor the store restore ran: the rollback's read of
-    // current state never matched what this batch painted (`true`), so it
-    // correctly assumed something else had already written a newer value
-    // and left it alone instead of forcing it back to the prior flag.
+    // The store restore never ran: the rollback's read of current state
+    // never matched what this batch painted (`true`), so it correctly assumed
+    // something else had already written a newer value and left it alone. The
+    // cache side hands the same decision to the snapshot's own CAS rollback.
     expect(mocks.galleryPatchItems).toHaveBeenCalledOnce();
     expect(mocks.patchGalleryItemCaches).toHaveBeenCalledOnce();
+    expect(mocks.patchGalleryItemCaches.mock.results[0]?.value).toHaveBeenCalledOnce();
   });
 });
 

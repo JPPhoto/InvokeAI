@@ -192,6 +192,10 @@ const createCommands = (
         projectId,
         searchTerm,
       })),
+      setStarredOnly: command('setGalleryStarredOnly', (starredOnly: boolean, projectId?: string) => ({
+        projectId,
+        starredOnly,
+      })),
       setView: command(
         'setGalleryView',
         (galleryView: ActionPayload<'setGalleryView'>['galleryView'], projectId?: string) => ({

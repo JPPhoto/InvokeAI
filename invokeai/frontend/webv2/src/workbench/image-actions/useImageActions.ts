@@ -541,25 +541,6 @@ export const useImageActions = ({
         },
       });
     };
-    const patchItemsStarred = (refs: GalleryItemRef[], starred: boolean): void => {
-      if (refs.length === 0) {
-        return;
-      }
-
-      patchGalleryItemCaches(queryClient, { kind: 'star', result: { failed: [], succeeded: refs }, starred });
-      gallery.patchItems(refs.map(toGalleryItemKey), { starred });
-    };
-    // Split cache/store writers used only by the CAS-guarded rollback below,
-    // where the two sides can pass or fail the "still current" check
-    // independently (e.g. a trailing invalidation already reconciled the
-    // cache but the store overlay wasn't touched).
-    const patchStarredCacheOnly = (refs: GalleryItemRef[], starred: boolean): void => {
-      if (refs.length === 0) {
-        return;
-      }
-
-      patchGalleryItemCaches(queryClient, { kind: 'star', result: { failed: [], succeeded: refs }, starred });
-    };
     const patchStarredStoreOnly = (keys: GalleryItemKey[], starred: boolean): void => {
       if (keys.length === 0) {
         return;
@@ -568,10 +549,13 @@ export const useImageActions = ({
       gallery.patchItems(keys, { starred });
     };
     const setItemsStarred = (items: GalleryItemRef[], starred: boolean): Promise<void> => {
-      // Optimistic: paint the whole selection and flip back only what the
-      // backend refuses. A total failure cannot lean on the trailing
-      // invalidation, so capture each item's actual prior flag up front — a
-      // blanket invert would wrongly flip items that already matched.
+      // Optimistic: paint the whole selection and put back only what the
+      // backend refuses. The listing and the starred strip partition on the
+      // flag, so a star moves items between cache windows; the cache side is
+      // therefore a snapshot/restore pair with its own CAS, like delete and
+      // move. The store overlay is a value flip, so it captures each item's
+      // actual prior flag up front — a blanket invert would wrongly flip
+      // items that already matched.
       const previousStarred = new Map<GalleryItemKey, boolean>(
         [...collectGalleryStoreKnownItemFields(queries.getSnapshot().projects, items)].map(([key, fields]) => [
           key,
@@ -583,52 +567,66 @@ export const useImageActions = ({
         previousStarred.set(key, cachedStarred);
       }
 
-      patchItemsStarred(items, starred);
+      let rollbackCaches: (() => void) | null = patchGalleryItemCaches(queryClient, {
+        kind: 'star',
+        result: { failed: [], succeeded: items },
+        starred,
+      });
+      const rollbackCachesOnce = () => {
+        rollbackCaches?.();
+        rollbackCaches = null;
+      };
+
+      patchStarredStoreOnly(items.map(toGalleryItemKey), starred);
 
       return runItemMutation({
         action: starred ? 'star' : 'unstar',
-        applyConfirmed: (result) => patchItemsStarred(result.failed, !starred),
+        // Rejected refs must reappear where they were, so restore the
+        // snapshot and re-apply only the confirmed ones.
+        applyConfirmed: (result) => {
+          if (result.failed.length === 0) {
+            return;
+          }
+
+          rollbackCachesOnce();
+          patchGalleryItemCaches(queryClient, {
+            kind: 'star',
+            result: { failed: [], succeeded: result.succeeded },
+            starred,
+          });
+          patchStarredStoreOnly(result.failed.map(toGalleryItemKey), !starred);
+        },
         mutate: (signal) => galleryItemOrganization.setStarred(items, starred, signal),
         requested: items,
-        // Total failure: restore each item's actual prior flag, leaving items
-        // with no known prior as painted. Star's optimistic apply is a value
-        // flip rather than a snapshot/restore pair, so unlike delete/move the
-        // patch carries no CAS of its own — both the cache and store writes
-        // need their own "still painted" check.
+        // Total failure: the cache restores its snapshot; the store restores
+        // each item's actual prior flag, leaving items with no known prior as
+        // painted, and only where the painted value is still what is there.
         rollback: () => {
+          rollbackCachesOnce();
+
           const requestedKeys = items.map(toGalleryItemKey);
-          const currentCacheStarred = getGalleryItemStarredFromCaches(queryClient, items);
           const currentStoreFields = collectGalleryStoreKnownItemFields(queries.getSnapshot().projects, items);
-          const safeCacheKeys = new Set(
-            selectItemKeysUnchangedSince(requestedKeys, starred, (key) => currentCacheStarred.get(key))
-          );
           const safeStoreKeys = new Set(
             selectItemKeysUnchangedSince(requestedKeys, starred, (key) => currentStoreFields.get(key)?.starred)
           );
-          const restoreGroups = new Map<boolean, GalleryItemRef[]>();
+          const restoreGroups = new Map<boolean, GalleryItemKey[]>();
 
           for (const item of items) {
-            const priorStarred = previousStarred.get(toGalleryItemKey(item));
+            const key = toGalleryItemKey(item);
+            const priorStarred = previousStarred.get(key);
 
-            if (priorStarred === undefined) {
+            if (priorStarred === undefined || !safeStoreKeys.has(key)) {
               continue;
             }
 
             const group = restoreGroups.get(priorStarred) ?? [];
 
-            group.push(item);
+            group.push(key);
             restoreGroups.set(priorStarred, group);
           }
 
-          for (const [priorStarred, refs] of restoreGroups) {
-            patchStarredCacheOnly(
-              refs.filter((ref) => safeCacheKeys.has(toGalleryItemKey(ref))),
-              priorStarred
-            );
-            patchStarredStoreOnly(
-              refs.filter((ref) => safeStoreKeys.has(toGalleryItemKey(ref))).map(toGalleryItemKey),
-              priorStarred
-            );
+          for (const [priorStarred, keys] of restoreGroups) {
+            patchStarredStoreOnly(keys, priorStarred);
           }
         },
       });
