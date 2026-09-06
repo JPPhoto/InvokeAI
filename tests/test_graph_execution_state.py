@@ -4,7 +4,7 @@ from typing import Any, Optional
 from unittest.mock import Mock
 
 import pytest
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from invokeai.app.invocations.baseinvocation import (
     BaseInvocation,
@@ -39,6 +39,15 @@ from invokeai.app.invocations.primitives import (
     IntegerCollectionInvocation,
 )
 from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
+from invokeai.app.services.shared.execution_effects import (
+    EmitEffect,
+)
+from invokeai.app.services.shared.execution_effects import (
+    ExecutionRef as ProtocolExecutionRef,
+)
+from invokeai.app.services.shared.execution_effects import (
+    ExecutionToken as ProtocolExecutionToken,
+)
 from invokeai.app.services.shared.graph import (
     CollectInvocation,
     Graph,
@@ -255,6 +264,21 @@ def test_graph_state_apply_stores_stable_frame_tokens_and_effects():
     assert restored.execution_tokens[f"{ref.reference_id}:value"].frame == ref.frame
 
 
+def test_graph_state_apply_accepts_protocol_ref_without_token():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+
+    protocol_ref = ProtocolExecutionRef(execution_node_id=node.id)
+    state.apply(protocol_ref, output)
+
+    assert node.id in state.executed
+    assert state.results[node.id] == output
+
+
 def test_graph_state_apply_rejects_invalid_input_before_mutation():
     graph = Graph()
     graph.add_node(AddInvocation(id="add", a=1, b=2))
@@ -355,6 +379,49 @@ def test_graph_state_apply_accepts_close_stream_effect():
 
     token = state.execution_tokens[f"{ref.reference_id}:value:stream_end:effect"]
     assert token.token_kind == "stream_end"
+
+
+@pytest.mark.parametrize("port", ["type", "output_meta", "loop_linkage"])
+@pytest.mark.parametrize("effect_kind, token_kind", [("emit", "data"), ("close_stream", "stream_end")])
+def test_graph_state_apply_rejects_reserved_effect_ports(port: str, effect_kind: str, token_kind: str):
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+
+    with pytest.raises(ValueError, match="reserved output port"):
+        state.apply(
+            ref,
+            output,
+            effects=[
+                {
+                    "kind": effect_kind,
+                    "owner_node_id": node.id,
+                    "source_port": port,
+                    "token": {"node_id": node.id, "field": port, "token_kind": token_kind},
+                }
+            ],
+        )
+
+
+def test_graph_state_apply_rejects_emit_stream_end_token():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+    effect = EmitEffect(
+        token=ProtocolExecutionToken(node_id=node.id, field="value", token_kind="stream_end"),
+        value=3,
+    )
+
+    with pytest.raises(ValueError, match="stream_end"):
+        state.apply(ref, output, effects=[effect])
 
 
 @pytest.mark.parametrize(
@@ -480,6 +547,28 @@ def test_graph_state_apply_rejects_effect_from_another_state_before_mutation():
     assert not state.execution_effects
 
 
+def test_graph_state_apply_rejects_non_json_effect_mapping_before_mutation():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+
+    with pytest.raises(ValueError, match="JSON-serializable"):
+        state.apply(
+            ref,
+            output,
+            effects=[{"owner_node_id": node.id, "source_port": "value", "metadata": object()}],
+        )
+
+    assert node.id not in state.executed
+    assert node.id not in state.results
+    assert not state.execution_tokens
+    assert not state.execution_effects
+
+
 @pytest.mark.parametrize(
     "token_frame",
     [
@@ -516,7 +605,9 @@ def test_graph_state_apply_rejects_emit_token_from_another_frame(token_frame: di
 
 
 def test_graph_state_apply_does_not_complete_when_effect_persistence_preparation_fails():
-    class Uncopyable:
+    class Uncopyable(BaseModel):
+        value: int = 1
+
         def __deepcopy__(self, memo):
             raise RuntimeError("cannot copy effect")
 
@@ -582,6 +673,31 @@ def test_graph_state_apply_rolls_back_scheduler_mutation_on_completion_failure()
     assert not state.execution_effects
 
 
+def test_graph_state_apply_does_not_deepcopy_full_scheduler_state(monkeypatch):
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id)
+
+    import invokeai.app.services.shared.graph as graph_module
+
+    original_deepcopy = graph_module.copy.deepcopy
+    copied_full_state = []
+
+    def tracking_deepcopy(value, memo=None):
+        if value is state.execution_graph or value is state.results:
+            copied_full_state.append(value)
+        return original_deepcopy(value, memo)
+
+    monkeypatch.setattr(graph_module.copy, "deepcopy", tracking_deepcopy)
+    state.apply(ref, output)
+
+    assert not copied_full_state
+
+
 def test_graph_state_apply_rejects_duplicate_execution_reference():
     graph = Graph()
     graph.add_node(AddInvocation(id="add", a=1, b=2))
@@ -593,7 +709,9 @@ def test_graph_state_apply_rejects_duplicate_execution_reference():
     effects = [{"owner_node_id": node.id, "source_port": "value"}]
 
     state.apply(ref, output, effects=effects)
-    tokens_before = {key: value.model_dump(mode="json", warnings=False) for key, value in state.execution_tokens.items()}
+    tokens_before = {
+        key: value.model_dump(mode="json", warnings=False) for key, value in state.execution_tokens.items()
+    }
     effects_before = state.execution_effects.copy()
     results_before = state.results.copy()
 

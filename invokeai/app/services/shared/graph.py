@@ -29,12 +29,13 @@ from pydantic import (
     GetCoreSchemaHandler,
     GetJsonSchemaHandler,
     PrivateAttr,
+    TypeAdapter,
     ValidationError,
     field_validator,
 )
 from pydantic.fields import Field
 from pydantic.json_schema import JsonSchemaValue
-from pydantic_core import core_schema
+from pydantic_core import PydanticSerializationError, core_schema
 
 # Importing * is bad karma but needed here for node detection
 from invokeai.app.invocations import *  # noqa: F401 F403
@@ -86,9 +87,12 @@ else:
 # in 3.10 this would be "from types import NoneType"
 NoneType = type(None)
 
+_JSON_SERIALIZER = TypeAdapter(Any)
+
 # Port name constants
 ITEM_FIELD = "item"
 COLLECTION_FIELD = "collection"
+_RESERVED_EFFECT_PORTS = frozenset({"type", "output_meta", LOOP_LINKAGE_FIELD})
 
 
 @dataclass(frozen=True)
@@ -200,6 +204,27 @@ class _PreparedExecNodeMetadata:
     state: PreparedExecState = "pending"
 
 
+class _ApplyTransaction:
+    """Small undo journal for scheduler mutations made by GraphExecutionState.apply()."""
+
+    def __init__(self) -> None:
+        self._undo: list[Callable[[], None]] = []
+        self._recorded: set[tuple[Any, ...]] = set()
+
+    def record_once(self, key: tuple[Any, ...], undo: Callable[[], None]) -> None:
+        if key in self._recorded:
+            return
+        self._recorded.add(key)
+        self._undo.append(undo)
+
+    def record(self, undo: Callable[[], None]) -> None:
+        self._undo.append(undo)
+
+    def rollback(self) -> None:
+        for undo in reversed(self._undo):
+            undo()
+
+
 class _PreparedExecRegistry:
     """Tracks prepared execution nodes and their relationship to source graph nodes."""
 
@@ -210,26 +235,49 @@ class _PreparedExecRegistry:
         prepared_iteration_paths: dict[str, tuple[int, ...]],
         metadata: dict[str, _PreparedExecNodeMetadata],
         on_iteration_path_change: Callable[[str], None] | None = None,
+        state: Optional["GraphExecutionState"] = None,
     ) -> None:
         self._prepared_source_mapping = prepared_source_mapping
         self._source_prepared_mapping = source_prepared_mapping
         self._prepared_iteration_paths = prepared_iteration_paths
         self._metadata = metadata
         self._on_iteration_path_change = on_iteration_path_change
+        self._state = state
+
+    def _set_mapping(self, mapping: dict[Any, Any], key: Any, value: Any) -> None:
+        if self._state is not None:
+            self._state._tx_set_mapping(mapping, key, value)
+        else:
+            mapping[key] = value
+
+    def _pop_mapping(self, mapping: dict[Any, Any], key: Any) -> None:
+        if self._state is not None:
+            self._state._tx_pop_mapping(mapping, key)
+        else:
+            mapping.pop(key, None)
+
+    def _set_attr(self, obj: Any, name: str, value: Any) -> None:
+        if self._state is not None:
+            self._state._tx_set_attr(obj, name, value)
+        else:
+            setattr(obj, name, value)
 
     def register(self, exec_node_id: str, source_node_id: str) -> None:
-        self._prepared_source_mapping[exec_node_id] = source_node_id
-        self._prepared_iteration_paths.pop(exec_node_id, None)
-        self._metadata[exec_node_id] = _PreparedExecNodeMetadata(source_node_id=source_node_id)
+        self._set_mapping(self._prepared_source_mapping, exec_node_id, source_node_id)
+        self._pop_mapping(self._prepared_iteration_paths, exec_node_id)
+        self._set_mapping(self._metadata, exec_node_id, _PreparedExecNodeMetadata(source_node_id=source_node_id))
         if source_node_id not in self._source_prepared_mapping:
-            self._source_prepared_mapping[source_node_id] = set()
-        self._source_prepared_mapping[source_node_id].add(exec_node_id)
+            self._set_mapping(self._source_prepared_mapping, source_node_id, set())
+        if self._state is not None:
+            self._state._tx_add_set(self._source_prepared_mapping[source_node_id], exec_node_id)
+        else:
+            self._source_prepared_mapping[source_node_id].add(exec_node_id)
 
     def get_metadata(self, exec_node_id: str) -> _PreparedExecNodeMetadata:
         metadata = self._metadata.get(exec_node_id)
         if metadata is None:
             metadata = _PreparedExecNodeMetadata(source_node_id=self._prepared_source_mapping[exec_node_id])
-            self._metadata[exec_node_id] = metadata
+            self._set_mapping(self._metadata, exec_node_id, metadata)
         return metadata
 
     def get_source_node_id(self, exec_node_id: str) -> str:
@@ -242,7 +290,7 @@ class _PreparedExecRegistry:
         return self._source_prepared_mapping.get(source_node_id, set())
 
     def set_state(self, exec_node_id: str, state: PreparedExecState) -> None:
-        self.get_metadata(exec_node_id).state = state
+        self._set_attr(self.get_metadata(exec_node_id), "state", state)
 
     def get_iteration_path(self, exec_node_id: str) -> Optional[tuple[int, ...]]:
         metadata = self._metadata.get(exec_node_id)
@@ -250,12 +298,12 @@ class _PreparedExecRegistry:
             return metadata.iteration_path
         iteration_path = self._prepared_iteration_paths.get(exec_node_id)
         if iteration_path is not None:
-            self.get_metadata(exec_node_id).iteration_path = iteration_path
+            self._set_attr(self.get_metadata(exec_node_id), "iteration_path", iteration_path)
         return iteration_path
 
     def set_iteration_path(self, exec_node_id: str, iteration_path: tuple[int, ...]) -> None:
-        self._prepared_iteration_paths[exec_node_id] = iteration_path
-        self.get_metadata(exec_node_id).iteration_path = iteration_path
+        self._set_mapping(self._prepared_iteration_paths, exec_node_id, iteration_path)
+        self._set_attr(self.get_metadata(exec_node_id), "iteration_path", iteration_path)
         if self._on_iteration_path_change is not None:
             self._on_iteration_path_change(exec_node_id)
 
@@ -323,8 +371,8 @@ class _IfBranchScheduler:
             if edge.source.node_id not in self._state.executed:
                 if self._state.indegree[exec_node_id] == 0:
                     raise RuntimeError(f"indegree underflow for {exec_node_id} when pruning {unselected_field}")
-                self._state.indegree[exec_node_id] -= 1
-            self._state.execution_graph.delete_edge(edge)
+                self._state._tx_set_mapping(self._state.indegree, exec_node_id, self._state.indegree[exec_node_id] - 1)
+            self._state._tx_delete_execution_edge(edge)
             self._state._invalidate_execution_graph_flat()
 
     def _apply_branch_resolution(
@@ -360,7 +408,7 @@ class _IfBranchScheduler:
                 if_node_id, branch_field, candidate_nodes
             )
 
-        self._state._if_branch_exclusive_sources[if_node_id] = branch_sources
+        self._state._tx_set_mapping(self._state._if_branch_exclusive_sources, if_node_id, branch_sources)
         return branch_sources
 
     def is_deferred_by_unresolved_if(self, exec_node_id: str) -> bool:
@@ -386,7 +434,7 @@ class _IfBranchScheduler:
 
         self._state._remove_from_ready_queues(exec_node_id)
         self._state._set_prepared_exec_state(exec_node_id, "skipped")
-        self._state.executed.add(exec_node_id)
+        self._state._tx_add_set(self._state.executed, exec_node_id)
 
         registry = self._state._prepared_registry()
         source_node_id = registry.get_source_node_id(exec_node_id)
@@ -406,7 +454,7 @@ class _IfBranchScheduler:
             return
 
         selected_field, unselected_field = self._get_selected_branch_fields(node)
-        self._state._resolved_if_exec_branches[exec_node_id] = selected_field
+        self._state._tx_set_mapping(self._state._resolved_if_exec_branches, exec_node_id, selected_field)
 
         source_if_node_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
         exclusive_sources = self.get_branch_exclusive_sources(source_if_node_id)
@@ -564,7 +612,7 @@ class _ExecutionMaterializer:
         if iteration_index >= 0 or isinstance(new_node, CollectInvocation):
             new_node.use_cache = False
 
-        self._state.execution_graph.add_node(new_node)
+        self._state._tx_add_execution_node(new_node)
         self._state._add_execution_graph_node(new_node.id)
         self._state._register_prepared_exec_node(new_node.id, node_id)
         return new_node
@@ -585,19 +633,23 @@ class _ExecutionMaterializer:
         self._state._runtime().prepare_inputs(new_node)
 
         initial_state = copydeep(new_node.state or LoopState())
-        new_node.collection = []
-        new_node.state = initial_state
+        self._state._tx_set_attr(new_node, "collection", [])
+        self._state._tx_set_attr(new_node, "state", initial_state)
 
-        self._state.results[new_node.id] = ForInvocationOutput(
-            loop_linkage=LOOP_LINKAGE_FIELD,
-            item=None,
-            index=-1,
-            total=0,
-            state=initial_state,
-            output_collection=[],
-            final_state=initial_state,
+        self._state._tx_set_mapping(
+            self._state.results,
+            new_node.id,
+            ForInvocationOutput(
+                loop_linkage=LOOP_LINKAGE_FIELD,
+                item=None,
+                index=-1,
+                total=0,
+                state=initial_state,
+                output_collection=[],
+                final_state=initial_state,
+            ),
         )
-        self._state.executed.add(new_node.id)
+        self._state._tx_add_set(self._state.executed, new_node.id)
         self._state._set_prepared_exec_state(new_node.id, "executed")
 
         return new_node.id
@@ -629,8 +681,8 @@ class _ExecutionMaterializer:
 
         new_node = self._create_execution_node_copy(node, source_for_id, iteration_index, deep_copy=False)
         assert isinstance(new_node, ForInvocation)
-        new_node.collection = copydeep(collection)
-        new_node.state = copydeep(state)
+        self._state._tx_set_attr(new_node, "collection", copydeep(collection))
+        self._state._tx_set_attr(new_node, "state", copydeep(state))
         self._state._prepared_registry().set_iteration_path(new_node.id, iteration_path)
         self._initialize_execution_node(new_node.id)
         return new_node.id
@@ -1148,14 +1200,14 @@ class _ExecutionMaterializer:
             )
             for edge in new_edges
         ]
-        self._state.execution_graph._extend_edges_unchecked(attached_edges)
+        self._state._tx_add_execution_edges(attached_edges)
         self._state._add_execution_graph_edges(attached_edges)
         return attached_edges
 
     def _initialize_execution_node(self, exec_node_id: str, input_edges: Optional[list[Edge]] = None) -> None:
         inputs = input_edges if input_edges is not None else self._state.execution_graph._get_input_edges(exec_node_id)
         unmet = sum(1 for edge in inputs if edge.source.node_id not in self._state.executed)
-        self._state.indegree[exec_node_id] = unmet
+        self._state._tx_set_mapping(self._state.indegree, exec_node_id, unmet)
         self._state._try_resolve_if_node(exec_node_id)
         self._state._enqueue_if_ready(exec_node_id)
 
@@ -1375,7 +1427,7 @@ class _ExecutionMaterializer:
         return mappings
 
     def _mark_source_node_empty(self, source_node_id: str) -> None:
-        self._state.source_prepared_mapping[source_node_id] = set()
+        self._state._tx_set_mapping(self._state.source_prepared_mapping, source_node_id, set())
         self._state._mark_source_executed(source_node_id)
 
     def _index_prepared_nodes_by_iteration_path(
@@ -1723,21 +1775,21 @@ class _ExecutionScheduler:
     def _insert_ready_node(self, queue: Deque[str], exec_node_id: str) -> None:
         exec_node_path = self._state._get_iteration_path(exec_node_id)
         if not queue or self._state._get_iteration_path(queue[-1]) <= exec_node_path:
-            queue.append(exec_node_id)
+            self._state._tx_queue_append(queue, exec_node_id)
             return
         for i, existing in enumerate(queue):
             if self._state._get_iteration_path(existing) > exec_node_path:
-                queue.insert(i, exec_node_id)
+                self._state._tx_queue_insert(queue, i, exec_node_id)
                 return
-        queue.append(exec_node_id)
+        self._state._tx_queue_append(queue, exec_node_id)
 
     def _record_completed_node(self, exec_node_id: str, output: BaseInvocationOutput) -> None:
         self._state._set_prepared_exec_state(exec_node_id, "executed")
-        self._state.executed.add(exec_node_id)
-        self._state.results[exec_node_id] = output
+        self._state._tx_add_set(self._state.executed, exec_node_id)
+        self._state._tx_set_mapping(self._state.results, exec_node_id, output)
         node = self._state.execution_graph.nodes[exec_node_id]
         if isinstance(node, (IterateInvocation, CollectInvocation)):
-            node.collection = []
+            self._state._tx_set_attr(node, "collection", [])
 
     def _mark_source_node_complete(self, exec_node_id: str) -> None:
         registry = self._state._prepared_registry()
@@ -1819,8 +1871,12 @@ class _ExecutionScheduler:
             return
 
         return_outputs = self._get_ordered_for_return_outputs(for_exec_node_id, source_return_id)
-        for_output.output_collection = [output.output for output in return_outputs]
-        for_output.final_state = self._get_loop_state_for_next_iteration(for_exec_node_id, return_output)
+        self._state._tx_set_attr(for_output, "output_collection", [output.output for output in return_outputs])
+        self._state._tx_set_attr(
+            for_output,
+            "final_state",
+            self._get_loop_state_for_next_iteration(for_exec_node_id, return_output),
+        )
         self._state._mark_loop_context_finalized(source_for_id, for_exec_node_id)
 
     def _try_schedule_next_for_iteration(self, exec_node_id: str, output: BaseInvocationOutput) -> Optional[str]:
@@ -1850,7 +1906,7 @@ class _ExecutionScheduler:
                 inner_for_id=source_for_id,
                 prepared_inner_for_id=for_exec_node_id,
             )
-            for_node.collection = []
+            self._state._tx_set_attr(for_node, "collection", [])
             return for_exec_node_id
 
         next_state = self._get_loop_state_for_next_iteration(for_exec_node_id, output)
@@ -1865,7 +1921,7 @@ class _ExecutionScheduler:
         )
         self._state._discard_source_executed(source_for_id)
         self._state._materializer().create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=next_for_id)
-        for_node.collection = []
+        self._state._tx_set_attr(for_node, "collection", [])
         return None
 
     def _try_materialize_deferred_nested_for_body(self, exec_node_id: str) -> None:
@@ -1931,7 +1987,9 @@ class _ExecutionScheduler:
             raise KeyError(f"indegree missing for exec node {child_exec_node_id}")
         if self._state.indegree[child_exec_node_id] == 0:
             raise RuntimeError(f"indegree underflow for {child_exec_node_id} from parent {parent_exec_node_id}")
-        self._state.indegree[child_exec_node_id] -= 1
+        self._state._tx_set_mapping(
+            self._state.indegree, child_exec_node_id, self._state.indegree[child_exec_node_id] - 1
+        )
 
     def _release_downstream_nodes(self, exec_node_id: str) -> None:
         for edge in self._state.execution_graph._get_output_edges(exec_node_id):
@@ -1945,16 +2003,16 @@ class _ExecutionScheduler:
         q = self._state._ready_queues.get(cls_name)
         if q is None:
             q = deque()
-            self._state._ready_queues[cls_name] = q
+            self._state._tx_set_mapping(self._state._ready_queues, cls_name, q)
         return q
 
     def remove_from_ready_queues(self, exec_node_id: str) -> None:
         for q in self._state._ready_queues.values():
             try:
-                q.remove(exec_node_id)
+                self._state._tx_queue_remove(q, exec_node_id)
             except ValueError:
                 continue
-        self._state._ready_node_ids.discard(exec_node_id)
+        self._state._tx_discard_set(self._state._ready_node_ids, exec_node_id)
 
     def enqueue_if_ready(self, exec_node_id: str) -> None:
         """Push exec_node_id to its class queue if unmet inputs == 0."""
@@ -1966,7 +2024,7 @@ class _ExecutionScheduler:
             return
         self._state._set_prepared_exec_state(exec_node_id, "ready")
         self._insert_ready_node(queue, exec_node_id)
-        self._state._ready_node_ids.add(exec_node_id)
+        self._state._tx_add_set(self._state._ready_node_ids, exec_node_id)
 
     def get_next_node(self) -> Optional[BaseInvocation]:
         """Gets the next ready node: FIFO within class, drain class before switching."""
@@ -4036,6 +4094,111 @@ class GraphExecutionState(BaseModel):
     _execution_graph_flat: Any | None = PrivateAttr(default=None)
     _completed_source_ids_cache: Optional[set[str]] = PrivateAttr(default=None)
     _for_source_by_return_id: Optional[dict[str, str]] = PrivateAttr(default=None)
+    _apply_transaction: Optional[_ApplyTransaction] = PrivateAttr(default=None)
+
+    def _tx_record_once(self, key: tuple[Any, ...], undo: Callable[[], None]) -> None:
+        if self._apply_transaction is not None:
+            self._apply_transaction.record_once(key, undo)
+
+    def _tx_record(self, undo: Callable[[], None]) -> None:
+        if self._apply_transaction is not None:
+            self._apply_transaction.record(undo)
+
+    def _tx_set_mapping(self, mapping: dict[Any, Any], key: Any, value: Any) -> None:
+        if self._apply_transaction is not None:
+            marker = ("mapping", id(mapping), key)
+            if key in mapping:
+                old_value = mapping[key]
+                self._tx_record_once(marker, lambda: mapping.__setitem__(key, old_value))
+            else:
+                self._tx_record_once(marker, lambda: mapping.pop(key, None))
+        mapping[key] = value
+
+    def _tx_pop_mapping(self, mapping: dict[Any, Any], key: Any) -> None:
+        if key not in mapping:
+            return
+        old_value = mapping[key]
+        if self._apply_transaction is not None:
+            self._tx_record_once(("mapping", id(mapping), key), lambda: mapping.__setitem__(key, old_value))
+        mapping.pop(key, None)
+
+    def _tx_set_attr(self, obj: Any, name: str, value: Any) -> None:
+        if self._apply_transaction is not None:
+            old_value = getattr(obj, name)
+            self._tx_record_once(("attr", id(obj), name), lambda: setattr(obj, name, old_value))
+        setattr(obj, name, value)
+
+    def _tx_add_set(self, values: set[Any], value: Any) -> None:
+        if self._apply_transaction is not None:
+            existed = value in values
+            self._tx_record_once(
+                ("set", id(values), value),
+                lambda: None if existed else values.discard(value),
+            )
+        values.add(value)
+
+    def _tx_discard_set(self, values: set[Any], value: Any) -> None:
+        if self._apply_transaction is not None:
+            existed = value in values
+            self._tx_record_once(
+                ("set", id(values), value),
+                lambda: values.add(value) if existed else None,
+            )
+        values.discard(value)
+
+    def _tx_append_list(self, values: list[Any], value: Any) -> None:
+        self._tx_record(lambda: values.pop())
+        values.append(value)
+
+    def _tx_add_execution_node(self, node: BaseInvocation) -> None:
+        def undo() -> None:
+            self.execution_graph.nodes.pop(node.id, None)
+            self.execution_graph._invalidate_edge_indexes()
+
+        self._tx_record(undo)
+        self.execution_graph.add_node(node)
+
+    def _tx_add_execution_edges(self, edges: list[Edge]) -> None:
+        for edge in edges:
+            self._tx_record(lambda edge=edge: self.execution_graph.delete_edge(edge))
+        self.execution_graph._extend_edges_unchecked(edges)
+
+    def _tx_delete_execution_edge(self, edge: Edge) -> None:
+        if edge not in self.execution_graph.edges:
+            return
+        edge_index = self.execution_graph.edges.index(edge)
+        self._tx_record(lambda: self.execution_graph.edges.insert(edge_index, edge))
+        self.execution_graph.delete_edge(edge)
+
+    def _tx_queue_append(self, queue: Deque[str], value: str) -> None:
+        self._tx_record(lambda: queue.pop())
+        queue.append(value)
+
+    def _tx_queue_insert(self, queue: Deque[str], index: int, value: str) -> None:
+        self._tx_record(lambda: queue.remove(value))
+        queue.insert(index, value)
+
+    def _tx_queue_remove(self, queue: Deque[str], value: str) -> None:
+        index = queue.index(value)
+        self._tx_record(lambda: queue.insert(index, value))
+        queue.remove(value)
+
+    def _reset_apply_derived_caches(self) -> None:
+        object.__setattr__(self, "_prepared_exec_registry", None)
+        object.__setattr__(self, "_if_branch_scheduler", None)
+        object.__setattr__(self, "_execution_materializer", None)
+        object.__setattr__(self, "_execution_scheduler", None)
+        object.__setattr__(self, "_execution_runtime", None)
+        object.__setattr__(self, "_if_branch_exclusive_sources", {})
+        object.__setattr__(self, "_source_graph_flat", None)
+        object.__setattr__(self, "_execution_graph_flat", None)
+        object.__setattr__(self, "_completed_source_ids_cache", None)
+        object.__setattr__(self, "_for_source_by_return_id", None)
+        object.__setattr__(self, "_for_parent_iteration_paths_cache", {})
+        object.__setattr__(self, "_all_for_contexts_finalized_cache", {})
+        object.__setattr__(self, "_prepared_for_index", None)
+        object.__setattr__(self, "_final_prepared_for_index", None)
+        object.__setattr__(self, "_prepared_for_index_by_exec", {})
 
     def _type_key(self, node_obj: BaseInvocation) -> str:
         return node_obj.__class__.__name__
@@ -4048,6 +4211,7 @@ class GraphExecutionState(BaseModel):
                 prepared_iteration_paths=self.prepared_iteration_paths,
                 metadata=self._prepared_exec_metadata,
                 on_iteration_path_change=self._invalidate_loop_caches_for_exec_node,
+                state=self,
             )
         return self._prepared_exec_registry
 
@@ -4080,13 +4244,13 @@ class GraphExecutionState(BaseModel):
         self._execution_graph_flat = None
 
     def _mark_source_executed(self, source_node_id: str) -> None:
-        self.executed.add(source_node_id)
-        self._get_completed_source_ids_cache().add(source_node_id)
+        self._tx_add_set(self.executed, source_node_id)
+        self._tx_add_set(self._get_completed_source_ids_cache(), source_node_id)
         if source_node_id not in self.executed_history:
-            self.executed_history.append(source_node_id)
+            self._tx_append_list(self.executed_history, source_node_id)
 
     def _discard_source_executed(self, source_node_id: str) -> None:
-        self.executed.discard(source_node_id)
+        self._tx_discard_set(self.executed, source_node_id)
         # A source can be discarded while its already-prepared executions are still complete. New executions
         # invalidate the derived completion cache when they are registered.
 
@@ -4136,9 +4300,9 @@ class GraphExecutionState(BaseModel):
 
     def _register_prepared_exec_node(self, exec_node_id: str, source_node_id: str) -> None:
         self._prepared_registry().register(exec_node_id, source_node_id)
-        self.executed.discard(source_node_id)
+        self._tx_discard_set(self.executed, source_node_id)
         if self._completed_source_ids_cache is not None:
-            self._completed_source_ids_cache.discard(source_node_id)
+            self._tx_discard_set(self._completed_source_ids_cache, source_node_id)
         self._invalidate_loop_caches_for_source(source_node_id)
         if (
             self._prepared_for_index is not None
@@ -4216,10 +4380,12 @@ class GraphExecutionState(BaseModel):
                     "state_id",
                     "session_id",
                     "exec_node_id",
+                    "execution_node_id",
                     "node_id",
                     "prepared_node_id",
                     "source_node_id",
                     "frame",
+                    "frame_path",
                     "effect_count",
                     "expected_effect_count",
                 )
@@ -4230,8 +4396,10 @@ class GraphExecutionState(BaseModel):
             values["reference_id"] = values["id"]
         if "state_id" not in values and "session_id" in values:
             values["state_id"] = values["session_id"]
-        if "exec_node_id" not in values:
-            values["exec_node_id"] = values.get("node_id") or values.get("prepared_node_id", "")
+        if "exec_node_id" not in values or not values["exec_node_id"]:
+            values["exec_node_id"] = (
+                values.get("execution_node_id") or values.get("node_id") or values.get("prepared_node_id", "")
+            )
         if "effect_count" not in values and "expected_effect_count" in values:
             values["effect_count"] = values["expected_effect_count"]
         token = values.get("token")
@@ -4244,6 +4412,8 @@ class GraphExecutionState(BaseModel):
         if "source_node_id" not in values:
             values["source_node_id"] = ""
         frame = values.get("frame")
+        if frame is None:
+            frame = values.get("frame_path")
         if frame is None:
             frame = self._value_from_object(token, "frame", "iteration_path", "frame_path")
         if isinstance(frame, (tuple, list)):
@@ -4415,15 +4585,26 @@ class GraphExecutionState(BaseModel):
         node = self.execution_graph.get_node(execution_ref.exec_node_id)
         output_fields = type(node).get_output_annotation().model_fields
         for effect in effects:
+            try:
+                _JSON_SERIALIZER.dump_python(effect, mode="json", warnings="error")
+            except (PydanticSerializationError, TypeError, ValueError) as exc:
+                raise ValueError("Execution effect must be JSON-serializable") from exc
             effect_kind = self._value_from_object(effect, "kind", "effect_type", "type")
             token = self._value_from_object(effect, "token")
+            token_port = self._value_from_object(token, "field", "port", "output", "output_name")
+            preliminary_port = self._value_from_object(effect, "source_port", "output_port", "source_field", "port")
+            if preliminary_port is None:
+                preliminary_port = token_port
+            if isinstance(preliminary_port, str) and preliminary_port in _RESERVED_EFFECT_PORTS:
+                raise ValueError(f"Execution effect references reserved output port '{preliminary_port}'")
             if effect_kind == "close_stream":
                 token_kind = self._value_from_object(token, "token_kind")
-                token_port = self._value_from_object(token, "field", "port", "output", "output_name")
                 if token is None or token_port in (None, LOOP_LINKAGE_FIELD):
                     raise ValueError("Close-stream effect requires a data output token")
                 if token_kind != "stream_end":
                     raise ValueError("Close-stream effect requires a stream_end token")
+            elif effect_kind == "emit" and self._value_from_object(token, "token_kind") == "stream_end":
+                raise ValueError("Emit effect cannot use a stream_end token")
 
             owner = self._value_from_object(
                 effect,
@@ -4441,7 +4622,9 @@ class GraphExecutionState(BaseModel):
                 owner = self._value_from_object(effect, "target", "source", "token")
             if owner is None or not self._same_execution_owner(owner, execution_ref):
                 raise ValueError("Execution effect is not owned by execution reference")
-            if effect_kind is not None and effect_kind not in {"emit", "close_stream"}:
+            if effect_kind is not None and (
+                not isinstance(effect_kind, str) or effect_kind not in {"emit", "close_stream"}
+            ):
                 raise ValueError(f"Unsupported execution effect kind: {effect_kind}")
 
             effect_state_id = self._value_from_object(effect, "state_id", "session_id")
@@ -4462,6 +4645,10 @@ class GraphExecutionState(BaseModel):
             effect_type = self._value_from_object(effect, "edge_type", "connection_type", "kind")
             is_loop_linkage = effect_type == "loop_linkage" or source_port == LOOP_LINKAGE_FIELD
             if source_port is not None:
+                if not isinstance(source_port, str):
+                    raise ValueError("Execution effect output port must be a string")
+                if source_port in _RESERVED_EFFECT_PORTS:
+                    raise ValueError(f"Execution effect references reserved output port '{source_port}'")
                 if source_port not in output_fields:
                     raise ValueError(f"Execution effect references unknown output port '{source_port}'")
                 if is_loop_linkage:
@@ -4482,6 +4669,8 @@ class GraphExecutionState(BaseModel):
                 destination_node = self.execution_graph.nodes.get(destination_node_id)
                 if destination_node is None:
                     raise ValueError("Execution effect destination node is not prepared")
+                if not isinstance(destination_port, str):
+                    raise ValueError("Execution effect input port must be a string")
                 if destination_port not in type(destination_node).model_fields:
                     raise ValueError(f"Execution effect references unknown input port '{destination_port}'")
                 if is_loop_linkage:
@@ -4529,8 +4718,12 @@ class GraphExecutionState(BaseModel):
                 continue
             token = self._value_from_object(effect, "token")
             port = self._value_from_object(token, "field", "port", "output", "output_name")
-            if port in (None, LOOP_LINKAGE_FIELD):
+            if port is None:
                 continue
+            if not isinstance(port, str):
+                raise ValueError("Execution effect output port must be a string")
+            if port in _RESERVED_EFFECT_PORTS:
+                raise ValueError(f"Execution effect references reserved output port '{port}'")
             token_node_id = self._value_from_object(token, "node_id", "invocation_id", "source_node_id")
             if token_node_id != execution_ref.exec_node_id:
                 raise ValueError("Execution token is not owned by execution reference")
@@ -4541,8 +4734,7 @@ class GraphExecutionState(BaseModel):
             sequence = self._value_from_object(token, "sequence")
             if effect_kind == "close_stream":
                 token_id_base = (
-                    f"{execution_ref.reference_id}:{port}:stream_end:"
-                    f"{sequence if sequence is not None else 'effect'}"
+                    f"{execution_ref.reference_id}:{port}:stream_end:{sequence if sequence is not None else 'effect'}"
                 )
             else:
                 token_id_base = f"{execution_ref.reference_id}:{port}:{sequence if sequence is not None else 'effect'}"
@@ -4562,56 +4754,6 @@ class GraphExecutionState(BaseModel):
                 sequence=sequence,
             )
         return tokens
-
-    def _snapshot_apply_state(self) -> dict[str, dict[str, Any]]:
-        public_fields = (
-            "execution_graph",
-            "executed",
-            "executed_history",
-            "results",
-            "prepared_source_mapping",
-            "source_prepared_mapping",
-            "finalized_loop_contexts",
-            "prepared_iteration_paths",
-            "execution_refs",
-            "execution_tokens",
-            "execution_effects",
-            "indegree",
-        )
-        private_fields = (
-            "_ready_queues",
-            "_ready_node_ids",
-            "_active_class",
-            "_if_branch_exclusive_sources",
-            "_resolved_if_exec_branches",
-            "_prepared_exec_metadata",
-            "_for_parent_iteration_paths_cache",
-            "_all_for_contexts_finalized_cache",
-            "_prepared_for_index",
-            "_final_prepared_for_index",
-            "_prepared_for_index_by_exec",
-            "_completed_source_ids_cache",
-        )
-        return {
-            "public": {name: copy.deepcopy(getattr(self, name)) for name in public_fields},
-            "private": {name: copy.deepcopy(getattr(self, name)) for name in private_fields},
-        }
-
-    def _restore_apply_state(self, snapshot: dict[str, dict[str, Any]]) -> None:
-        for field_name, value in snapshot["public"].items():
-            object.__setattr__(self, field_name, value)
-        for field_name, value in snapshot["private"].items():
-            object.__setattr__(self, field_name, value)
-
-        # Helpers and derived graph indexes must not retain references to the failed transaction.
-        object.__setattr__(self, "_prepared_exec_registry", None)
-        object.__setattr__(self, "_if_branch_scheduler", None)
-        object.__setattr__(self, "_execution_materializer", None)
-        object.__setattr__(self, "_execution_scheduler", None)
-        object.__setattr__(self, "_execution_runtime", None)
-        object.__setattr__(self, "_source_graph_flat", None)
-        object.__setattr__(self, "_execution_graph_flat", None)
-        object.__setattr__(self, "_for_source_by_return_id", None)
 
     def apply(
         self,
@@ -4643,18 +4785,26 @@ class GraphExecutionState(BaseModel):
         persisted_effects = copydeep(effect_values)
 
         # All validation above is side-effect free. Preserve complete() as the scheduler compatibility boundary,
-        # but make the scheduler transition and ledger update one atomic operation.
-        state_snapshot = self._snapshot_apply_state()
+        # but make the scheduler transition and ledger update one atomic operation. The journal records only
+        # containers and object attributes touched by the scheduler, avoiding a full-state deep copy per apply.
+        transaction = _ApplyTransaction()
+        object.__setattr__(self, "_apply_transaction", transaction)
         try:
             finalized_outputs = self.complete(ref.exec_node_id, output_value)
             ref.effect_count = effect_count if effect_count is not None else ref.effect_count
-            self.execution_refs[ref.exec_node_id] = ref
-            self.execution_tokens.update(tokens)
-            self.execution_effects[ref.reference_id] = persisted_effects
+            self._tx_set_mapping(self.execution_refs, ref.exec_node_id, ref)
+            for token_id, token in tokens.items():
+                self._tx_set_mapping(self.execution_tokens, token_id, token)
+            self._tx_set_mapping(self.execution_effects, ref.reference_id, persisted_effects)
             return finalized_outputs
         except Exception:
-            self._restore_apply_state(state_snapshot)
+            try:
+                transaction.rollback()
+            finally:
+                self._reset_apply_derived_caches()
             raise
+        finally:
+            object.__setattr__(self, "_apply_transaction", None)
 
     def _invalidate_loop_caches_for_source(self, source_node_id: str) -> None:
         self._all_for_contexts_finalized_cache.pop(source_node_id, None)
@@ -4757,7 +4907,7 @@ class GraphExecutionState(BaseModel):
 
     def _mark_loop_context_finalized(self, source_for_id: str, prepared_for_id: str) -> None:
         parent_iteration_path = self._get_for_parent_iteration_path(prepared_for_id)
-        self.finalized_loop_contexts.add((source_for_id, parent_iteration_path))
+        self._tx_add_set(self.finalized_loop_contexts, (source_for_id, parent_iteration_path))
         self._all_for_contexts_finalized_cache.pop(source_for_id, None)
 
     def _mark_for_source_complete(self, source_for_id: str) -> None:
@@ -4879,7 +5029,7 @@ class GraphExecutionState(BaseModel):
             return False
 
         for edge in condition_edges:
-            setattr(
+            self._tx_set_attr(
                 node,
                 edge.destination.field,
                 copydeep(getattr(self.results[edge.source.node_id], edge.source.field)),
@@ -4980,9 +5130,9 @@ class GraphExecutionState(BaseModel):
         finalized_outputs = self._scheduler().complete(node_id, output)
         if self._mark_completed_sources():
             self.execution_graph._invalidate_edge_indexes()
-            self._ready_queues = {}
-            self._ready_node_ids = set()
-            self._active_class = None
+            self._tx_set_attr(self, "_ready_queues", {})
+            self._tx_set_attr(self, "_ready_node_ids", set())
+            self._tx_set_attr(self, "_active_class", None)
         return finalized_outputs
 
     def set_node_error(self, node_id: str, error: str):
