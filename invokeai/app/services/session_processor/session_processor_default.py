@@ -413,6 +413,9 @@ class DefaultSessionRunner(SessionRunnerBase):
             f"On after run session: queue item {queue_item.item_id}, session {queue_item.session_id}"
         )
 
+        # The item's preview frame is disposable: whatever the outcome, nothing may replay it now.
+        self._services.progress_previews.clear(queue_item.item_id)
+
         # If we are profiling, stop the profiler and dump the profile & stats
         if self._profiler is not None:
             profile_path = self._profiler.stop()
@@ -473,6 +476,9 @@ class DefaultSessionRunner(SessionRunnerBase):
             f"On after run node: queue item {queue_item.item_id}, session {queue_item.session_id}, node {invocation.id} ({invocation.get_type()})"
         )
 
+        # The node's denoise is over: its last frame must not be replayed as if still running.
+        self._services.progress_previews.clear_node(queue_item.item_id, invocation.id)
+
         # Send complete event on successful runs
         self._services.events.emit_invocation_complete(invocation=invocation, queue_item=queue_item, output=output)
 
@@ -495,6 +501,7 @@ class DefaultSessionRunner(SessionRunnerBase):
         - Emits an invocation error event.
         - Run any callbacks registered for this event.
         """
+        self._services.progress_previews.clear_node(queue_item.item_id, invocation.id)
 
         self._services.logger.debug(
             f"On node error: queue item {queue_item.item_id}, session {queue_item.session_id}, node {invocation.id} ({invocation.get_type()})"
@@ -1068,6 +1075,8 @@ class DefaultSessionProcessor(SessionProcessorBase):
         self._invoker.services.logger.error(error_traceback)
 
         if queue_item is not None:
+            # This path bypasses the runner's after-session hook; the item's frame must not outlive it.
+            self._invoker.services.progress_previews.clear(queue_item.item_id)
             try:
                 queue_item = self._invoker.services.session_queue.set_queue_item_session(
                     queue_item.item_id, queue_item.session
