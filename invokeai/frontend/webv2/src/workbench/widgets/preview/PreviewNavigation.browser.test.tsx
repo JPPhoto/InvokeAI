@@ -120,6 +120,9 @@ const mocks = vi.hoisted(() => {
       onImagesDeleted?: (imageNames: string[]) => void;
     },
     recentImages,
+    bridgeProgressImage: null as unknown,
+    runningProgressTargets: undefined as unknown[] | undefined,
+    slotProgressImage: undefined as unknown,
     useActiveProgressTarget: vi.fn(() => null as unknown),
     useProgressImage: vi.fn(() => null as unknown),
   };
@@ -135,10 +138,29 @@ vi.mock('@workbench/WorkbenchContext', () => ({
     selector({ backendConnection: { status: 'connected' } }),
 }));
 
+const mockProgressTargets = () => {
+  const target = mocks.useActiveProgressTarget();
+
+  return target ? [target] : [];
+};
+
 vi.mock('@features/queue/react', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   useActiveProgressTarget: () => mocks.useActiveProgressTarget(),
+  useActiveProgressTargets: () => mocks.runningProgressTargets ?? mockProgressTargets(),
+  useFollowedProgressTargets: () => mockProgressTargets(),
   useProgressImage: () => mocks.useProgressImage(),
+  useQueueItemBridgeProgressImage: () => mocks.bridgeProgressImage,
+  // The slot's own frame: derived from the "latest" mock by target unless a test overrides it.
+  useQueueItemProgressImage: (queueItemId: string, itemIndex: number) => {
+    if (mocks.slotProgressImage !== undefined) {
+      return mocks.slotProgressImage;
+    }
+
+    const latest = mocks.useProgressImage() as { target?: { itemIndex: number; queueItemId: string } } | null;
+
+    return latest?.target?.queueItemId === queueItemId && latest.target.itemIndex === itemIndex ? latest : null;
+  },
 }));
 
 vi.mock('@features/gallery/queries', () => ({
@@ -461,6 +483,9 @@ beforeEach(() => {
   ];
   mocks.useActiveProgressTarget.mockReturnValue(null);
   mocks.useProgressImage.mockReturnValue(null);
+  mocks.bridgeProgressImage = null;
+  mocks.runningProgressTargets = undefined;
+  mocks.slotProgressImage = undefined;
 });
 
 afterEach(async () => {
@@ -1407,6 +1432,85 @@ describe('preview keyboard navigation boundary', () => {
       expect.any(Number),
       true
     );
+  });
+
+  it('keeps following a completed slot while its result is still routing', async () => {
+    // Completed on the backend, image not in the gallery yet: the slot is
+    // followed (settling) but no longer running. Preview must keep the live
+    // frame up in the single-frame branch rather than fall back onto the
+    // previous selection — and must not tile it.
+    mocks.project.queue.items = [queueItem];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 1, queueItemId: 'queue-item-live' });
+    mocks.runningProgressTargets = [];
+    mocks.useProgressImage.mockReturnValue({
+      dataUrl: 'data:image/png;base64,',
+      height: 64,
+      target: { itemIndex: 1, queueItemId: 'queue-item-live' },
+      width: 64,
+    });
+
+    await render();
+
+    expect(host?.querySelectorAll<HTMLImageElement>('img[src^="data:image/png"]')).toHaveLength(1);
+    expect(host?.textContent).toContain('64 × 64');
+  });
+
+  it("shows the followed slot's own frame even when the store-wide latest frame is gone", async () => {
+    // A quick image batch finished next to a long video render while the tab was
+    // hidden: releasing the batch's slot cleared the latest frame. The video slot
+    // still has its frame and must not render an empty card until its next step.
+    mocks.project.queue.items = [queueItem];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 1, queueItemId: 'queue-item-live' });
+    mocks.useProgressImage.mockReturnValue(null);
+    mocks.slotProgressImage = { dataUrl: 'data:image/png;base64,video-step', height: 64, width: 64 };
+
+    await render();
+
+    expect(host?.querySelector<HTMLImageElement>('img[src="data:image/png;base64,video-step"]')).not.toBeNull();
+  });
+
+  it('follows a running slot over a settling one so a concurrent session is never hidden', async () => {
+    // Multi-GPU: slot 1 completed and is settling, slot 2 is still streaming.
+    // The single-frame preview must show slot 2 live, not slot 1's static frame.
+    mocks.project.queue.items = [{ ...queueItem, backendItemIds: [1, 2] }];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 1, queueItemId: 'queue-item-live' });
+    mocks.runningProgressTargets = [{ itemIndex: 2, queueItemId: 'queue-item-live' }];
+    mocks.useProgressImage.mockReturnValue({
+      dataUrl: 'data:image/png;base64,slot-two',
+      height: 64,
+      target: { itemIndex: 2, queueItemId: 'queue-item-live' },
+      width: 64,
+    });
+    mocks.bridgeProgressImage = { dataUrl: 'data:image/png;base64,slot-one', height: 64, width: 64 };
+
+    await render();
+
+    expect(host?.querySelector<HTMLImageElement>('img[src="data:image/png;base64,slot-two"]')).not.toBeNull();
+    expect(host?.querySelector<HTMLImageElement>('img[src="data:image/png;base64,slot-one"]')).toBeNull();
+  });
+
+  it("bridges to the next slot of a batch with the previous slot's last frame", async () => {
+    // Slot 2 is live but has produced no frame yet (model load, text encoding);
+    // the latest frame still belongs to slot 1. Without the bridge this was an
+    // empty card between every two items of a batch.
+    mocks.project.queue.items = [{ ...queueItem, backendItemIds: [1, 2], completedBackendItemIds: [1] }];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 2, queueItemId: 'queue-item-live' });
+    mocks.useProgressImage.mockReturnValue({
+      dataUrl: 'data:image/png;base64,slot-one',
+      height: 64,
+      target: { itemIndex: 1, queueItemId: 'queue-item-live' },
+      width: 64,
+    });
+    mocks.bridgeProgressImage = { dataUrl: 'data:image/png;base64,bridge', height: 64, width: 64 };
+
+    await render();
+
+    expect(host?.querySelector<HTMLImageElement>('img[src="data:image/png;base64,bridge"]')).not.toBeNull();
+    expect(host?.querySelector<HTMLImageElement>('img[src="data:image/png;base64,slot-one"]')).toBeNull();
   });
 
   it('orders local images oldest-first when the gallery is ascending', async () => {

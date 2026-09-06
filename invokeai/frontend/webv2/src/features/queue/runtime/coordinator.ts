@@ -73,6 +73,7 @@ export type QueueCoordinatorBackendPort = Pick<
   | 'listItems'
   | 'on'
   | 'onConnectionChange'
+  | 'readProgressPreviews'
 >;
 
 export interface QueueCoordinatorCallbacks {
@@ -223,6 +224,12 @@ export const createQueueCoordinator = (
    */
   const recentTerminalOutcomes = new Map<number, TerminalOutcome>();
   const latestStatusSequences = new Map<number, number>();
+  /**
+   * Per backend item, the session and revision of the last accepted preview
+   * frame. Socket delivery is ordered, so this only bites when a second source
+   * — the reconnect snapshot the backend is to grow — races the live stream.
+   */
+  const latestFrameGates = new Map<number, { revision: number | null; sessionId: string }>();
 
   const detachers: Array<() => void> = [];
   let isAttached = false;
@@ -230,6 +237,7 @@ export const createQueueCoordinator = (
   let galleryRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let sweepTimer: ReturnType<typeof setInterval> | null = null;
   let isSweeping = false;
+  let isSweepRequested = false;
   const isActive = (): boolean => !isDisposed && isAccountScopeCurrent(owner);
 
   const scheduleGalleryRefresh = (): void => {
@@ -313,13 +321,14 @@ export const createQueueCoordinator = (
     }
 
     waits.delete(backendItemId);
+    latestFrameGates.delete(backendItemId);
     const progressTarget = getProgressImageTarget(wait.localQueueItemId, backendItemId);
-    const clearProgressImage = (): void => {
+    const releaseProgressSlot = (): void => {
       if (isActive()) {
+        activeProgressTarget.clear(progressTarget);
         progressImage.clear(progressTarget);
       }
     };
-    activeProgressTarget.clear(progressTarget);
     const state = runProgress.get(wait.localQueueItemId);
 
     if (state) {
@@ -338,24 +347,30 @@ export const createQueueCoordinator = (
     }
 
     if (outcome.status === 'completed') {
+      // Held before routing starts: the finished image swaps in over this frame
+      // once the browser has decoded it, and the batch's next slot shows it
+      // until a frame of its own arrives.
+      progressImage.hold(progressTarget);
       const routingPromise = callbacks.onBackendItemComplete?.(wait.localQueueItemId, backendItemId);
 
       if (routingPromise) {
+        // The slot stays followed until routing lands. Released on the terminal
+        // event, Preview fell out of live-follow two HTTP round trips before the
+        // finished image could be selected, and showed the previous selection
+        // in between.
+        activeProgressTarget.settle(progressTarget);
         void Promise.resolve(routingPromise)
-          .finally(clearProgressImage)
+          .finally(releaseProgressSlot)
           .catch(() => undefined);
       } else {
-        clearProgressImage();
+        releaseProgressSlot();
       }
+    } else {
+      releaseProgressSlot();
     }
 
     if (outcome.status === 'canceled') {
-      clearProgressImage();
       callbacks.onBackendItemCancelled?.(wait.localQueueItemId, backendItemId);
-    }
-
-    if (outcome.status === 'failed') {
-      clearProgressImage();
     }
 
     wait.settle(outcome);
@@ -404,9 +419,20 @@ export const createQueueCoordinator = (
     publishRunProgress(localQueueItemId);
   };
 
-  /** Slow safety net for events lost to disconnects; runs on reconnect and on a long interval. */
+  /**
+   * Slow safety net for events lost to disconnects; runs on reconnect, on the
+   * tab becoming visible, and on a long interval. A request made while one is in
+   * flight runs again afterwards rather than being dropped: the visibility sweep
+   * often fires while the network is still coming back and the reconnect sweep
+   * a second later is the one that can actually reach the backend.
+   */
   const sweep = async (): Promise<void> => {
-    if (!isActive() || isSweeping || waits.size === 0) {
+    if (!isActive() || waits.size === 0) {
+      return;
+    }
+
+    if (isSweeping) {
+      isSweepRequested = true;
       return;
     }
 
@@ -433,6 +459,42 @@ export const createQueueCoordinator = (
       );
     } finally {
       isSweeping = false;
+
+      if (isSweepRequested) {
+        isSweepRequested = false;
+        void sweep();
+      }
+    }
+  };
+
+  /**
+   * Ask the backend for the latest preview frame of every running item and feed
+   * each through the socket handler, where the revision gate drops anything the
+   * live stream already delivered. Covers the frames lost while a hidden tab's
+   * socket was down, and the frames a reloaded page never saw. Best effort: the
+   * backend also replays them on `subscribe_queue`, and a failure here only means
+   * waiting for the next step.
+   */
+  const refreshProgressPreviews = async (): Promise<void> => {
+    if (!isActive() || waits.size === 0 || !backend.readProgressPreviews) {
+      return;
+    }
+
+    let previews: Awaited<ReturnType<NonNullable<typeof backend.readProgressPreviews>>>;
+
+    try {
+      previews = await backend.readProgressPreviews();
+    } catch {
+      return;
+    }
+
+    if (!isActive()) {
+      return;
+    }
+
+    for (const preview of previews) {
+      // Structurally the socket payload; the port cannot name the event type.
+      handleProgress(preview as unknown as InvocationProgressEvent);
     }
   };
 
@@ -451,6 +513,13 @@ export const createQueueCoordinator = (
     }
 
     if (!isTerminalBackendStatus(event.status)) {
+      // Back to the queue (a workflow-call parent waiting on its child, a retry):
+      // whatever frames follow belong to a new leg, and after a backend restart
+      // their revisions start over.
+      if (event.status === 'pending' || event.status === 'waiting') {
+        latestFrameGates.delete(event.item_id);
+      }
+
       return;
     }
 
@@ -479,6 +548,30 @@ export const createQueueCoordinator = (
     }
   };
 
+  /**
+   * Whether a frame is older than one already shown for its backend item;
+   * records it as the newest when it is not. A new session on the same item
+   * starts over.
+   */
+  const isStaleFrame = (event: InvocationProgressEvent): boolean => {
+    const revision = event.revision ?? null;
+    const gate = latestFrameGates.get(event.item_id);
+
+    if (
+      gate &&
+      gate.sessionId === event.session_id &&
+      revision !== null &&
+      gate.revision !== null &&
+      revision <= gate.revision
+    ) {
+      return true;
+    }
+
+    latestFrameGates.set(event.item_id, { revision, sessionId: event.session_id });
+
+    return false;
+  };
+
   const handleProgress = (event: InvocationProgressEvent): void => {
     if (!isActive()) {
       return;
@@ -487,6 +580,10 @@ export const createQueueCoordinator = (
     const wait = waits.get(event.item_id);
 
     if (!wait) {
+      return;
+    }
+
+    if (event.image?.dataURL && isStaleFrame(event)) {
       return;
     }
 
@@ -513,18 +610,20 @@ export const createQueueCoordinator = (
 
   /**
    * React to the shared socket's connection lifecycle. The Platform hub owns
-   * transport mechanics only; this Queue coordinator clears its domain stores
-   * and, on (re)connect, schedules a gallery refresh and missed-event sweep.
+   * transport mechanics only; this Queue coordinator clears its transient
+   * per-node and model-load state and, on (re)connect, schedules a gallery
+   * refresh and missed-event sweep.
+   *
+   * The followed slot and its last frame deliberately survive a drop: the run
+   * continues on the backend and the sweep reconciles its durable outcome, so
+   * wiping them only ever produced a blank card — until the next event if the
+   * run was still going, or for good if it finished while disconnected.
    */
   const handleConnectionChange = (status: BackendConnectionStatus): void => {
     if (!isActive()) {
       return;
     }
 
-    if (status !== 'connected') {
-      activeProgressTarget.clear();
-      progressImage.clear();
-    }
     progress.clearAll?.();
     nodeExecution.clearAll();
     modelLoads.reset();
@@ -584,6 +683,23 @@ export const createQueueCoordinator = (
     // has already connected still triggers the initial clear + sweep.
     detachers.push(backend.onConnectionChange(handleConnectionChange));
 
+    // A hidden tab's socket is often dropped by the server (its pings are
+    // timer-throttled) and socket.io reconnects on its own backoff once the tab
+    // is back. The outcome is on the backend already, so sweep on the
+    // visibility edge itself rather than waiting for the reconnect edge.
+    if (typeof document !== 'undefined') {
+      const visibilityDocument = document;
+      const handleVisibilityChange = (): void => {
+        if (visibilityDocument.visibilityState === 'visible') {
+          void sweep();
+          void refreshProgressPreviews();
+        }
+      };
+
+      visibilityDocument.addEventListener('visibilitychange', handleVisibilityChange);
+      detachers.push(() => visibilityDocument.removeEventListener('visibilitychange', handleVisibilityChange));
+    }
+
     sweepTimer = setInterval(() => {
       void sweep();
     }, sweepIntervalMs);
@@ -627,6 +743,7 @@ export const createQueueCoordinator = (
     runProgress.clear();
     recentTerminalOutcomes.clear();
     latestStatusSequences.clear();
+    latestFrameGates.clear();
   };
 
   const reconcile = async (items: ReconcileInput[]): Promise<Map<string, ReconcileOutcome>> => {
@@ -726,6 +843,10 @@ export const createQueueCoordinator = (
             }
       );
     }
+
+    // A reloaded page has no frame for a run it just re-adopted; the socket only
+    // brings the next step's.
+    void refreshProgressPreviews();
 
     return outcomes;
   };
@@ -842,6 +963,7 @@ export const createQueueCoordinator = (
       const wait = waits.get(backendItemId);
       if (wait?.localQueueItemId === localQueueItemId) {
         waits.delete(backendItemId);
+        latestFrameGates.delete(backendItemId);
         wait.settle({ status: 'canceled' });
       }
     }
@@ -852,6 +974,7 @@ export const createQueueCoordinator = (
       activeProgressTarget.clear(target);
       progressImage.clear(target);
     }
+    progressImage.clearHeld(localQueueItemId);
     progress.clear(localQueueItemId);
   };
 
