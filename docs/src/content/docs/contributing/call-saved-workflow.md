@@ -19,6 +19,11 @@ The long-term feature goal is:
 This document records the current state, the target architecture, and the execution contract needed to continue
 development later.
 
+The execution-engine refactoring does not change the callable node, saved-workflow, or queue interaction contract.
+Generated API schemas may be regenerated when backend runtime metadata becomes visible in a response, but existing
+fields, requiredness, statuses, events, and client behavior remain compatible. Frontend application behavior is outside
+this execution-engine slice.
+
 ## Implementation Priority
 
 Favor the architecturally correct design over the fastest implementation path.
@@ -49,6 +54,14 @@ Implemented already in the branch:
   compatible types.
 - Incompatible or no-longer-exposed inbound edges are removed in the editor.
 - Backend validation exists for `workflow_id` existence and access rights.
+
+The branch also contains the first additive execution-effects seam:
+
+- the runner invokes `invoke_internal_with_effects()` and applies its result through `GraphExecutionState.apply()`;
+- stable execution references, frames, output tokens, and accepted effects are persisted with the runtime state;
+- `emit` and `close_stream` are the only currently dispatchable effect kinds;
+- `spawn`, `await`, and `fail` remain unsupported, so workflow calls continue through
+  `WorkflowCallCoordinator` and `WorkflowCallQueueLifecycle` rather than a generic child-execution effect.
 
 Implemented runtime scaffolding:
 
@@ -273,7 +286,8 @@ Desired semantics:
 - child workflow finishes or fails
 - parent resumes only if child execution succeeds
 
-This implies the queue/session/runtime layer needs an explicit parent-child execution relationship.
+The queue/session/runtime layer now implements an explicit parent-child execution relationship through runtime state,
+durable queue metadata, and queue-visible child rows.
 
 Current limitation:
 
@@ -284,8 +298,8 @@ Current limitation:
   generator node
 - connected batch child inputs produced by ordinary non-generator upstream nodes are still not supported and should fail
   early with a clear unsupported-feature error
-- the current queue-visible child execution path still relies on `WorkflowCallCoordinator` to resume or fail parents
-  directly rather than a more general queue scheduler abstraction
+- the current queue-visible child execution path still relies on `WorkflowCallCoordinator` and
+  `WorkflowCallQueueLifecycle` to resume or fail parents rather than a more general queue scheduler abstraction
 - the current implementation is still an intermediate architecture step, but it is now materially closer to the intended
   durable parent/child model than the earlier inline-runner path
 

@@ -22,7 +22,7 @@ provided initial state or an empty state.
 
 ## Durable loop linkage
 
-Every `For` and `ForReturn` pair is associated by a serialized, direct `loop_linkage` edge:
+Every `For` and `ForReturn` pair has one canonical runtime `loop_linkage` edge:
 
 ```text
 For.loop_linkage - - - - - - - - - - - - - - - - - > ForReturn.loop_linkage
@@ -34,15 +34,16 @@ and scheduling. The backend requires exactly one outgoing linkage for every `For
 `ForReturn`, and the exact `For.loop_linkage` to `ForReturn.loop_linkage` endpoints. Default edges using the reserved
 `loop_linkage` field are invalid.
 
-The editor may represent the association temporarily as a one-to-one connector alias:
+Authoring workflow JSON may represent the association through a one-to-one connector alias:
 
 ```text
 For.loop_linkage -> connector.in -> connector.out -> ForReturn.loop_linkage
 ```
 
 Every connector on that path must have exactly one input and one output. The path cannot branch, be reused as ordinary
-data flow, or terminate at a different node. Graph construction canonicalizes a complete alias to one direct runtime
-`loop_linkage` edge. No loop identity or body metadata is inferred or migrated.
+data flow, or terminate at a different node. Graph construction canonicalizes a complete valid alias to one direct
+runtime `loop_linkage` edge. No loop identity or body metadata is inferred from arbitrary topology or migrated from
+unrelated fields.
 
 ## Body and output scopes
 
@@ -80,6 +81,12 @@ Prepared execution nodes, source/prepared mappings, iteration paths, results, in
 are persisted through `GraphExecutionState`. Runtime-only queues and metadata are rebuilt when state is rehydrated.
 Finalization is keyed by the loop source and its parent iteration path so nested or repeated contexts cannot mix output
 collections or state.
+
+The current execution-effects migration seam is additive to this loop contract. The session runner applies each result
+through `GraphExecutionState.apply()` using a stable execution reference and records frame-aware output tokens and
+accepted effects. Only `emit` and `close_stream` effects are currently dispatchable; `For`, `ForReturn`, `Iterate`, and
+`Collect` still use the existing materializer and indegree scheduler. `loop_linkage` remains association metadata and
+never becomes a data token.
 
 The frontend and backend validate the same boundary rules. Saved workflows preserve node types, field handles, and the
 direct linkage edge. The current invocation templates provide output-scope metadata when a workflow is loaded. The

@@ -6,8 +6,10 @@ High-level design for the graph module. Focuses on responsibilities, data flow, 
 
 Provide a typed, acyclic workflow model (**Graph**) plus a runtime scheduler (**GraphExecutionState**) that expands
 iterator patterns, tracks readiness via indegree (the number of incoming edges to a node in the directed graph), and
-executes nodes in class-grouped batches. In normal execution, runtime expansion happens in a separate execution graph
-instead of mutating the source graph.
+executes nodes from class-grouped ready queues. In normal execution, runtime expansion happens in a separate execution graph
+instead of mutating the source graph. The runtime also exposes an additive execution-effects seam: invocations return
+their existing typed output plus recorded effects, while the current materializer and scheduler remain the execution
+authority.
 
 ## 2) Major Data Types
 
@@ -41,8 +43,8 @@ A container for declared nodes and edges. Does **not** perform iteration expansi
 
 - `nodes: dict[str, AnyInvocation]` - key must equal `node.id`.
 - `edges: list[Edge]` - zero or more.
-- Utility: `_get_input_edges(node_id, field?)`, `_get_output_edges(node_id, field?)` These scan `self.edges` (no
-  adjacency indices in the current code).
+- Utility: `_get_input_edges(node_id, field?)`, `_get_output_edges(node_id, field?)` These use cached per-node
+  adjacency indexes rebuilt when the edge list changes.
 
 ### 3.2 Validation (`validate_self`)
 
@@ -130,6 +132,10 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
   - source node id
   - iteration path
   - runtime state such as pending, ready, executed, or skipped
+- `execution_refs: dict[str, ExecutionReference]` - stable references for prepared execution nodes, including their
+  source node and execution frame.
+- `execution_tokens: dict[str, ExecutionToken]` - output tokens produced by applied execution results.
+- `execution_effects: dict[str, list[Any]]` - JSON-safe effects accepted for each execution reference.
 - **Ready queues grouped by class** (private attrs): `_ready_queues: dict[class_name, deque[str]]`,
   `_active_class: Optional[str]`. Optional `ready_order: list[str]` to prioritize classes. Queues are rebuilt from
   persisted execution state when a session is deserialized.
@@ -141,6 +147,27 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
   work. Before returning a node, the runtime helper deep-copies inbound values into the node fields.
 - `complete(node_id, output)` Records the result, marks the exec node executed, marks the source node executed once all
   of its prepared exec copies are done, then decrements downstream indegrees and enqueues newly ready nodes.
+- `apply(execution_ref, output, effects)` validates a result against its prepared node and frame, then applies the
+  result through the existing scheduler while recording references, output/effect tokens, and JSON-safe effects. The
+  transition and ledger update are atomic. `complete()` remains the compatibility boundary used by the scheduler.
+
+#### Current execution-effects seam
+
+`InvocationContext` exposes a restricted `execution` facade and the underlying `execution_effects` recorder. The
+existing invocation output contract remains unchanged. The session runner calls
+`invoke_internal_with_effects()` and passes its `InvocationRunResult` to `GraphExecutionState.apply()`.
+
+The current recorder accepts only `emit` and `close_stream`. `spawn`, `await_dependency`, and `fail`, along with
+mutation and child-execution effect models, are deliberately rejected until the corresponding dispatcher and queue
+semantics exist. `ExecutionInterface.authorize_workflow()` is only usable when the runner supplies an authorization
+capability. A cache hit never suppresses effects: effect-enabled invocations bypass the ordinary output cache for that
+dispatch.
+
+`ExecutionFrame` identifies the owning state, loop iteration path, and workflow-call depth. `ExecutionReference`
+identifies one prepared execution node and its frame. `ExecutionToken` records an output port, value, frame, token
+kind, and optional sequence. `loop_linkage` remains association metadata and never becomes a data token. This ledger is
+currently additive; readiness still comes from materialized execution-graph indegrees and the type-specific control
+paths described below. A future migration may make tokens authoritative only after compatibility is proven.
 
 Workflow-call note:
 
@@ -183,7 +210,7 @@ Workflow-call note:
   ready work. It owns iterator expansion, collector grouping, prepared-parent selection, and creation of execution-graph
   edges. When matching prepared parents for a downstream exec node, skipped prepared exec nodes are ignored and cannot
   be selected as live inputs.
-- `_ExecutionScheduler` Owns indegree transitions, ready queues, class batching, and downstream release on completion.
+- `_ExecutionScheduler` Owns indegree transitions, class-grouped ready queues, and downstream release on completion.
 - `_ExecutionRuntime` Owns iteration-path lookup, collect input ordering, and input hydration for prepared exec nodes.
 - `_IfBranchScheduler` Applies lazy `If` semantics by deferring branch-local work until the condition is known, then
   releasing the selected branch and skipping the unselected branch.
@@ -191,7 +218,9 @@ Workflow-call note:
 `GraphExecutionState.model_post_init()` rehydrates private runtime helpers and caches after normal construction or a
 JSON/model round trip. Rehydration reconstructs prepared exec metadata, cached iteration paths, resolved `If` branch
 state when the condition is already available, and ready queues from `execution_graph`, `indegree`, `executed`, and
-`results`. This keeps persisted sessions resumable without persisting private helper objects.
+`results`. Persisted execution references, tokens, and effects remain part of the serialized state; private helper
+objects do not. Queue snapshots carry an additive execution-state version marker and use the version-aware loader;
+legacy unmarked snapshots are treated as version 0, while unreadable snapshots are quarantined by the queue service.
 
 ### 4.4 Preparation (`_prepare()`)
 
@@ -223,14 +252,14 @@ state when the condition is already available, and ready queues from `execution_
   - Try to resolve any `If`-specific scheduling state.
   - If the node is ready and not deferred by an unresolved `If`, enqueue it into its class queue.
 
-### 4.5 Readiness and batching
+### 4.5 Readiness and class ordering
 
 - `_enqueue_if_ready(nid)` enqueues by class name only when `indegree == 0`, the node has not already executed, and the
   node is not deferred by an unresolved `If`.
-- `_get_next_node()` drains the `_active_class` queue; when empty, selects the next nonempty class queue (by
-  `ready_order` if set, else alphabetical), and continues. Within each class queue, ready exec nodes are ordered by
-  iteration path so expanded iterator work runs in a stable outer-to-inner order. Optional fairness knobs can limit
-  batch size per class; default is drain fully.
+- `_get_next_node()` returns one node from the `_active_class` queue; when empty, it selects the next nonempty class queue
+  (by `ready_order` if set, else alphabetical). Within each class queue, ready exec nodes are ordered by iteration path
+  so expanded iterator work runs in a stable outer-to-inner order. No batch-size or fairness cap is currently
+  implemented.
 
 #### 4.5.1 Indegree (what it is and how it's used)
 
@@ -238,7 +267,8 @@ state when the condition is already available, and ready queues from `execution_
 
 - For every materialized exec node, `indegree[node]` equals the count of its prerequisite parents that have **not**
   finished yet.
-- A node is "ready" exactly when `indegree[node] == 0`; only then is it enqueued.
+- A node is eligible for enqueue when `indegree[node] == 0`, it has not executed, and it is not deferred by an
+  unresolved `If`.
 - When a node completes, the scheduler decrements `indegree[child]` for each outgoing edge. Any child that reaches 0 is
   enqueued.
 
@@ -284,8 +314,8 @@ This behavior is implemented in the runtime scheduler, not in the invocation bod
 1. Loop:
 
    - `node = state.next()` -> may trigger `_prepare()` expansion.
-   - Execute node externally -> `output`.
-   - `state.complete(node.id, output)` -> updates indegrees, `If` state, and ready queues.
+   - Execute node externally -> `run_result`.
+   - `state.apply(execution_ref, run_result)` -> updates indegrees, `If` state, ready queues, and the execution ledger.
 
 1. Finish when `next()` returns `None` and the execution state is not paused waiting on a workflow call boundary.
 
@@ -297,6 +327,9 @@ In normal execution, all runtime expansion occurs in `execution_graph` with trac
 - `execution_graph` remains a DAG.
 - Nodes are enqueued only when `indegree == 0` and they are not deferred by an unresolved `If`.
 - `results` and `errors` are keyed by **exec node id**.
+- Applied execution references are unique to one prepared node and frame; their output/effect records are JSON-safe.
+- Output and `emit` effects produce frame-aware tokens. `close_stream` produces a `stream_end` token. Association fields
+  such as `loop_linkage` are never stored as data tokens.
 - Collectors aggregate `item` inputs and may also merge incoming `collection` inputs during runtime hydration.
   Collectors nested under iterators preserve enclosing iteration paths, so downstream consumers materialize per enclosing
   iteration instead of receiving a mixed collection from unrelated outer iterations.
@@ -306,10 +339,11 @@ In normal execution, all runtime expansion occurs in `execution_graph` with trac
 
 - **New node types**: implement as Pydantic models with typed fields and outputs. Register per your invocation system;
   this file accepts them as `AnyInvocation`.
-- **Scheduling policy**: adjust `ready_order` to batch by class; add a batch cap for fairness without changing
-  complexity.
-- **Dynamic behaviors** (future): can be added in `GraphExecutionState` by creating exec nodes and edges at `complete()`
-  time, as long as the DAG invariant holds.
+- **Scheduling policy**: adjust `ready_order` to prioritize class queues. A batch-size or fairness cap is not currently
+  implemented.
+- **Dynamic behaviors** (future): can be lowered to execution effects and frame/token primitives once their validation,
+  authorization, persistence, and queue semantics are implemented. Current `apply()` accepts only output, `emit`, and
+  `close_stream` behavior.
 - **Workflow call boundaries**: `GraphExecutionState` can suspend a parent execution state on a workflow call, attach a
   child execution state, and later resume the parent without mutating the source graph.
 
@@ -352,6 +386,6 @@ Messages favor short, precise diagnostics (node id, field, and failing condition
 ## 9) Rationale
 
 - **Two-graph approach** isolates authoring from execution expansion and keeps validation simple.
-- **Indegree + queues** gives O(1) scheduling decisions with clear batching semantics.
+- **Indegree + queues** gives O(1) readiness decisions with clear class-ordering semantics.
 - **Iterator/collector separation** keeps fan-out/fan-in explicit and testable.
 - **Deep-copy hydration** avoids incidental aliasing bugs between nodes.
