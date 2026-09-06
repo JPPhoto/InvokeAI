@@ -54,6 +54,8 @@ interface SwapFrame {
 }
 
 const snapshotsByTarget = createKeyedTransientStore<string, ProgressImageSnapshot>();
+/** Insertion order is recency: `set` re-inserts, so the last entry is the most recently updated slot. */
+const targetsByKey = new Map<string, ProgressImageTarget>();
 const bridgeFrames = createKeyedTransientStore<string, ProgressImageSnapshot>();
 const swapFrames = createKeyedTransientStore<string, SwapFrame>();
 const swapExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -116,6 +118,7 @@ export const progressImageStore = {
     if (!target) {
       latestSnapshotStore.patchSnapshot({ latestSnapshot: null });
       snapshotsByTarget.clear();
+      targetsByKey.clear();
       bridgeFrames.clear();
 
       for (const timer of swapExpiryTimers.values()) {
@@ -132,9 +135,14 @@ export const progressImageStore = {
     const didClearLatest = isLatestTarget(target);
 
     snapshotsByTarget.delete(targetKey);
+    targetsByKey.delete(targetKey);
 
     if (didClearLatest) {
-      latestSnapshotStore.patchSnapshot({ latestSnapshot: null });
+      // Another slot may still be live: a video rendering for minutes next to a
+      // quick image batch. Falling to null here left the single-frame preview
+      // blank until the video's next step, while the gallery cell — which reads
+      // its own slot — kept showing the frame.
+      latestSnapshotStore.patchSnapshot({ latestSnapshot: getMostRecentSnapshot() });
     }
   },
   /** Routing landed: these are the images the held swap frame may be painted over. */
@@ -169,10 +177,26 @@ export const progressImageStore = {
     latestSnapshotStore.patchSnapshot({ latestSnapshot: target ? { ...image, target } : image });
 
     if (target) {
-      snapshotsByTarget.set(getTargetKey(target), image);
+      const targetKey = getTargetKey(target);
+
+      snapshotsByTarget.set(targetKey, image);
+      targetsByKey.delete(targetKey);
+      targetsByKey.set(targetKey, target);
     }
   },
 };
+
+function getMostRecentSnapshot(): LatestProgressImageSnapshot | null {
+  for (const [targetKey, target] of [...targetsByKey.entries()].reverse()) {
+    const image = snapshotsByTarget.get(targetKey);
+
+    if (image) {
+      return { ...image, target };
+    }
+  }
+
+  return null;
+}
 
 registerAccountOwnedResource({
   clear: () => progressImageStore.clear(),
@@ -185,6 +209,9 @@ export type ProgressImageSink = typeof progressImageStore;
 export const consumeQueueItemSwapProgressImage = (queueItemId: string): void => {
   dropSwap(queueItemId);
 };
+
+export const getLatestProgressImage = (): LatestProgressImageSnapshot | null =>
+  latestSnapshotStore.getSnapshot().latestSnapshot;
 
 export const getQueueItemBridgeProgressImage = (queueItemId: string): ProgressImageSnapshot | null =>
   bridgeFrames.get(queueItemId) ?? null;

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   consumeQueueItemSwapProgressImage,
+  getLatestProgressImage,
   getQueueItemBridgeProgressImage,
   getQueueItemSwapProgressImage,
   progressImageStore,
@@ -131,5 +132,35 @@ describe('progressImageStore held frames', () => {
     expect(getQueueItemBridgeProgressImage('queue-2')).toBeNull();
     expect(getQueueItemSwapProgressImage('queue-2', 'two.png')).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('progressImageStore latest frame', () => {
+  beforeEach(() => {
+    progressImageStore.clear();
+  });
+
+  it('falls back to the most recently updated live slot when the latest slot is released', () => {
+    progressImageStore.set(frame('video-1'), target('video'));
+    progressImageStore.set(frame('anima-1'), target('anima'));
+    progressImageStore.set(frame('video-2'), target('video'));
+    progressImageStore.set(frame('anima-2'), target('anima'));
+
+    progressImageStore.clear(target('anima'));
+
+    expect(getLatestProgressImage()).toEqual({ ...frame('video-2'), target: target('video') });
+
+    progressImageStore.clear(target('video'));
+
+    expect(getLatestProgressImage()).toBeNull();
+  });
+
+  it('keeps the latest frame when a slot that is not the latest is released', () => {
+    progressImageStore.set(frame('anima-1'), target('anima'));
+    progressImageStore.set(frame('video-1'), target('video'));
+
+    progressImageStore.clear(target('anima'));
+
+    expect(getLatestProgressImage()).toEqual({ ...frame('video-1'), target: target('video') });
   });
 });
