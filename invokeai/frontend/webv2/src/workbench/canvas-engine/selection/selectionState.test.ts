@@ -155,6 +155,47 @@ describe('selectionState: selectAll / invert / clear', () => {
   });
 });
 
+describe('selectionState: snapshot / restore', () => {
+  it('restores a captured selection exactly, and an empty capture deselects', () => {
+    const { selection, onChange } = createHarness();
+    const path = fakePath('a');
+    selection.commit({ bounds: rectBounds(10, 10, 20, 20), op: 'replace', path });
+    const captured = selection.snapshot();
+    selection.clear();
+    const empty = selection.snapshot();
+    onChange.mockClear();
+
+    selection.restore(captured);
+
+    expect(selection.hasSelection()).toBe(true);
+    expect(selection.bounds()).toEqual(rectBounds(10, 10, 20, 20));
+    expect(selection.mask()?.rect).toEqual(rectBounds(10, 10, 20, 20));
+    expect(selection.antsPaths()).toEqual([path]);
+    const put = maskLog(selection)
+      .filter((entry) => entry.op === 'putImageData')
+      .at(-1);
+    const pixels = put?.args[0] as ImageData;
+    expect(pixels.width).toBe(20);
+    expect(pixels.data.filter((_, index) => index % 4 === 3)).toEqual(captured.alpha);
+    expect(onChange).toHaveBeenCalledOnce();
+
+    selection.restore(empty);
+
+    expect(selection.hasSelection()).toBe(false);
+    expect(selection.mask()).toBeNull();
+    expect(selection.antsPaths()).toEqual([]);
+  });
+
+  it('captures are detached from later mutations', () => {
+    const { selection } = createHarness();
+    selection.commit({ bounds: rectBounds(10, 10, 20, 20), op: 'replace', path: fakePath('a') });
+    const captured = selection.snapshot();
+    selection.commit({ bounds: rectBounds(40, 40, 10, 10), op: 'add', path: fakePath('b') });
+    expect(captured.commits).toHaveLength(1);
+    expect(captured.bounds).toEqual(rectBounds(10, 10, 20, 20));
+  });
+});
+
 describe('selectionState: replaceMask', () => {
   it('replaces prior pixels with an isolated, pixel-exact alpha mask at its world rect', () => {
     const { selection, onChange } = createHarness();

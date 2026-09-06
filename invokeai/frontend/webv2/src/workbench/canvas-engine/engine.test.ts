@@ -7311,6 +7311,8 @@ describe('mergeVisibleRasterLayers', () => {
     engine.history.undo();
     const restored = await engine.exports.exportLayerPixels(result.duplicateIds[0]!);
     expect(restored.status).toBe('ok');
+    // Past the selection's own step, then the duplicate itself.
+    engine.history.undo();
     engine.history.undo();
     engine.history.redo();
     const redone = await engine.exports.exportLayerPixels(result.duplicateIds[0]!);
@@ -9614,10 +9616,11 @@ describe('commitRasterFilterResult', () => {
       await drainUntil(() => uploadImage.mock.calls.length === 1);
       expect(uploadImage).toHaveBeenCalledOnce();
 
-      // Undo the paint edit, then undo the copy itself. Redo reuses the exact
-      // layer id while the pre-undo upload is still unresolved.
+      // Undo the paint edit and the selection, then undo the copy itself. Redo
+      // reuses the exact layer id while the pre-undo upload is still unresolved.
       harness.engine.history.undo();
       await harness.refreshPlacement(copied.layerId);
+      harness.engine.history.undo();
       harness.engine.history.undo();
       expect((await harness.engine.exports.exportLayerPixels(copied.layerId)).status).toBe('missing');
       harness.engine.history.redo();
@@ -15583,9 +15586,46 @@ describe('engine selection: select all / deselect / invert + hasSelection store'
     expect(engine.stores.hasSelection.get()).toBe(true);
     engine.lifecycle.dispose();
   });
+
+  it('selection changes are their own history steps, undone and redone through the engine', () => {
+    vi.stubGlobal(
+      'Path2D',
+      class FakePath2D {
+        closePath() {}
+        lineTo() {}
+        moveTo() {}
+        quadraticCurveTo() {}
+      }
+    );
+    const { store } = createFakeStore(paintDoc());
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      bitmapStore: createSpyBitmapStore(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId: 'p1',
+      store,
+    });
+    engine.selection.selectAll();
+    engine.selection.deselect();
+    expect(engine.history.getEntries().past).toEqual(['Select all', 'Deselect']);
+
+    engine.history.undo();
+    expect(engine.stores.hasSelection.get()).toBe(true);
+    engine.history.undo();
+    expect(engine.stores.hasSelection.get()).toBe(false);
+    engine.history.redo();
+    expect(engine.stores.hasSelection.get()).toBe(true);
+    expect(engine.history.getEntries()).toEqual({ future: ['Deselect'], past: ['Select all'] });
+    engine.lifecycle.dispose();
+  });
 });
 
 describe('engine selection: fill / erase', () => {
+  // The selection's own history steps are not pixel edits; a fill/erase that
+  // changed nothing must leave only those behind.
+  const SELECTION_STEPS = new Set(['Select', 'Select all']);
+  const editSteps = (engine: CanvasEngine): string[] =>
+    engine.history.getEntries().past.filter((label) => !SELECTION_STEPS.has(label));
   const makeEngine = (doc: CanvasDocumentContractV3) => {
     vi.stubGlobal(
       'Path2D',
@@ -15668,7 +15708,7 @@ describe('engine selection: fill / erase', () => {
     h.overlay.fire('pointerup', pointerAt(0, 0, { buttons: 0 }));
     h.engine.selection.eraseSelection();
     expect(h.engine.document.getDocument()).toEqual(before);
-    expect(h.engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(h.engine)).toEqual([]);
     expect(h.bitmapStore.suspendLayer).not.toHaveBeenCalled();
     h.engine.lifecycle.dispose();
   });
@@ -15682,7 +15722,7 @@ describe('engine selection: fill / erase', () => {
     h.engine.selection.selectAll();
     h.engine.selection.fillSelection();
     expect(h.engine.document.getDocument()).toEqual(before);
-    expect(h.engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(h.engine)).toEqual([]);
     expect(h.bitmapStore.markLayerDirty).not.toHaveBeenCalled();
     h.engine.lifecycle.dispose();
   });
@@ -15695,7 +15735,7 @@ describe('engine selection: fill / erase', () => {
     h.engine.selection.selectAll();
     h.engine.selection.fillSelection();
     expect(h.engine.document.getDocument()).toEqual(before);
-    expect(h.engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(h.engine)).toEqual([]);
     expect(h.bitmapStore.markLayerDirty).not.toHaveBeenCalled();
     h.engine.lifecycle.dispose();
   });
@@ -15723,7 +15763,7 @@ describe('engine selection: fill / erase', () => {
     }
 
     expect(h.engine.document.getDocument()).toEqual(beforeDocument);
-    expect(h.engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(h.engine)).toEqual([]);
     expect(h.bitmapStore.markLayerDirty).not.toHaveBeenCalled();
     expect(h.bitmapStore.suspendLayer).toHaveBeenCalledOnce();
     expect(h.bitmapStore.releaseSuspendedLayer).toHaveBeenCalledOnce();
@@ -15757,7 +15797,7 @@ describe('engine selection: fill / erase', () => {
     h.engine.selection.fillSelection();
 
     expect(h.engine.document.getDocument()).toEqual(beforeDocument);
-    expect(h.engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(h.engine)).toEqual([]);
     expect(h.bitmapStore.markLayerDirty).not.toHaveBeenCalled();
     expect(h.bitmapStore.suspendLayer).toHaveBeenCalledOnce();
     expect(h.bitmapStore.releaseSuspendedLayer).toHaveBeenCalledOnce();
@@ -15786,7 +15826,7 @@ describe('engine selection: fill / erase', () => {
     h.engine.selection.fillSelection();
 
     expect(h.engine.document.getDocument()).toEqual(beforeDocument);
-    expect(h.engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(h.engine)).toEqual([]);
     expect(h.bitmapStore.markLayerDirty).not.toHaveBeenCalled();
     expect(h.bitmapStore.suspendLayer).toHaveBeenCalledOnce();
     expect(h.bitmapStore.releaseSuspendedLayer).toHaveBeenCalledOnce();
@@ -15837,7 +15877,7 @@ describe('engine selection: fill / erase', () => {
 
     expect(didThrow).toBe(true);
     expect(h.engine.document.getDocument()).toEqual(beforeDocument);
-    expect(h.engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(h.engine)).toEqual([]);
     expect(h.bitmapStore.markLayerDirty).not.toHaveBeenCalled();
     expect(h.bitmapStore.suspendLayer).toHaveBeenCalledOnce();
     expect(h.bitmapStore.releaseSuspendedLayer).toHaveBeenCalledOnce();
@@ -15898,7 +15938,7 @@ describe('engine selection: fill / erase', () => {
     expect(() => h.engine.selection.fillSelection()).toThrow('selection compositing failed');
 
     expect(h.engine.document.getDocument()).toEqual(beforeDocument);
-    expect(h.engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(h.engine)).toEqual([]);
     expect(h.bitmapStore.markLayerDirty).not.toHaveBeenCalled();
     expect(capturedReads[0]).toMatchObject({ height: 10, width: 10 });
     expect(capturedReads.at(-1)).toMatchObject({ height: 5, width: 5 });
@@ -15947,7 +15987,7 @@ describe('engine selection: fill / erase', () => {
     expect(() => h.engine.selection.eraseSelection()).toThrow('selection compositing failed');
 
     expect(h.engine.document.getDocument()).toEqual(beforeDocument);
-    expect(h.engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(h.engine)).toEqual([]);
     expect(h.bitmapStore.markLayerDirty).not.toHaveBeenCalled();
     expect(h.bitmapStore.releaseSuspendedLayer).toHaveBeenCalledOnce();
     const restored = await h.engine.exports.exportLayerPixels('control', { includeDisabled: true });
@@ -15978,7 +16018,7 @@ describe('engine selection: fill / erase', () => {
     expect(() => h.engine.selection.fillSelection()).toThrow('layer snapshot preparation failed');
 
     expect(h.engine.document.getDocument()).toEqual(beforeDocument);
-    expect(h.engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(h.engine)).toEqual([]);
     expect(h.bitmapStore.markLayerDirty).not.toHaveBeenCalled();
     expect(h.bitmapStore.releaseSuspendedLayer).toHaveBeenCalledOnce();
     const restored = await h.engine.exports.exportLayerPixels('control', { includeDisabled: true });
@@ -15994,9 +16034,9 @@ describe('engine selection: fill / erase', () => {
   it('fillSelection on the selected paint layer records one undoable edit + persists', () => {
     const { bitmapStore, engine } = makeEngine(paintDoc());
     engine.selection.selectAll();
-    expect(engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(engine)).toEqual([]);
     engine.selection.fillSelection();
-    expect(engine.stores.canUndo.get()).toBe(true);
+    expect(editSteps(engine)).toEqual(['Fill selection']);
     expect(bitmapStore.markLayerDirty).toHaveBeenCalledWith('paint1');
     // Undo restores (canRedo becomes available).
     engine.history.undo();
@@ -16067,14 +16107,14 @@ describe('engine selection: fill / erase', () => {
     const { engine } = makeEngine(paintDoc());
     engine.selection.selectAll();
     engine.selection.eraseSelection();
-    expect(engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(engine)).toEqual([]);
     engine.lifecycle.dispose();
   });
 
   it('fillSelection is a no-op with no selection', () => {
     const { engine } = makeEngine(paintDoc());
     engine.selection.fillSelection();
-    expect(engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(engine)).toEqual([]);
     engine.lifecycle.dispose();
   });
 
@@ -16082,7 +16122,7 @@ describe('engine selection: fill / erase', () => {
     const { engine } = makeEngine(imageSelectedDoc());
     engine.selection.selectAll();
     engine.selection.fillSelection();
-    expect(engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(engine)).toEqual([]);
     engine.lifecycle.dispose();
   });
 
@@ -16097,7 +16137,7 @@ describe('engine selection: fill / erase', () => {
     engine.selection.fillSelection();
     // The layer has no existing pixels, so a transparency-locked (source-atop) fill
     // lands nothing — no undoable edit.
-    expect(engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(engine)).toEqual([]);
     engine.lifecycle.dispose();
   });
 
@@ -16105,7 +16145,7 @@ describe('engine selection: fill / erase', () => {
     const { engine } = makeEngine(lockedPaintDoc());
     engine.selection.selectAll();
     engine.selection.fillSelection();
-    expect(engine.stores.canUndo.get()).toBe(false);
+    expect(editSteps(engine)).toEqual([]);
     engine.lifecycle.dispose();
   });
 

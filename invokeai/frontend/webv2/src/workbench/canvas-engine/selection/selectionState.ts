@@ -2,7 +2,9 @@
  * Engine-transient pixel selection.
  *
  * Per the plan's state-tier table, a selection is *interaction* state: it lives
- * on the engine, never in the reducer contract, and is not undoable. The source
+ * on the engine, never in the reducer contract. It is undoable only through the
+ * engine's own history, which {@link SelectionState.snapshot} / `restore` serve
+ * (see `selectionHistory.ts`); persistence never sees it. The source
  * of truth is the set of closed `Path2D` polygons the lasso tool commits; the
  * derived artifact is a bounded **mask surface** (alpha 255 inside the
  * selection), sized to the selection extent and placed in document space (a
@@ -52,6 +54,19 @@ export interface SelectionCommit {
   op: SelectionOp;
 }
 
+/**
+ * A restorable capture of the selection: the mask's alpha plane over `rect`
+ * plus the bookkeeping the mask alone cannot recover. Alpha-only keeps a
+ * full-document capture at one byte per pixel; the mask is white by contract.
+ */
+export interface SelectionSnapshot {
+  readonly alpha: Uint8ClampedArray<ArrayBuffer> | null;
+  readonly rect: Rect | null;
+  readonly commits: readonly SelectionCommit[];
+  readonly bounds: Rect | null;
+  readonly selected: boolean;
+}
+
 /** The engine-facing selection handle. */
 export interface SelectionState {
   /** Whether a selection currently exists (drives clip/fill/ants gating). */
@@ -83,6 +98,10 @@ export interface SelectionState {
   invert(domain: Rect): void;
   /** Clears the selection (deselect). */
   clear(): void;
+  /** Captures the selection for a later {@link restore}; the capture is immutable and detached. */
+  snapshot(): SelectionSnapshot;
+  /** Reinstates a captured selection exactly, notifying like any other mutation. */
+  restore(snapshot: SelectionSnapshot): void;
   /** Releases the mask surface reference. */
   dispose(): void;
 }
@@ -98,6 +117,29 @@ export interface SelectionStateDeps {
 }
 
 const MASK_FILL = '#ffffff';
+
+/** `ImageData` is absent on the node raster stub; a structural stand-in carries the same fields. */
+const createImageData = (data: Uint8ClampedArray<ArrayBuffer>, width: number, height: number): ImageData =>
+  typeof ImageData === 'undefined'
+    ? ({ colorSpace: 'srgb', data, height, width } as ImageData)
+    : new ImageData(data, width, height);
+
+const alphaOf = (pixels: ImageData): Uint8ClampedArray<ArrayBuffer> => {
+  const alpha = new Uint8ClampedArray(pixels.width * pixels.height);
+  for (let index = 0; index < alpha.length; index += 1) {
+    alpha[index] = pixels.data[index * 4 + 3] ?? 0;
+  }
+  return alpha;
+};
+
+/** Expands an alpha plane back into the mask's white-with-coverage pixels. */
+const pixelsOf = (alpha: Uint8ClampedArray<ArrayBuffer>, width: number, height: number): ImageData => {
+  const data = new Uint8ClampedArray(alpha.length * 4).fill(255);
+  for (let index = 0; index < alpha.length; index += 1) {
+    data[index * 4 + 3] = alpha[index] ?? 0;
+  }
+  return createImageData(data, width, height);
+};
 
 /** Builds a closed rectangle `Path2D` (document space) via the injected factory. */
 const rectPath = (createPath2D: CreatePath2D, r: Rect): Path2D => createPath2D(rectPathData(r));
@@ -127,6 +169,14 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
   let commits: SelectionCommit[] = [];
   let selectionBounds: Rect | null = null;
   let selected = false;
+  // The last capture stays valid until the next mutation, so a change recorded
+  // as before/after reads the mask back once, not twice.
+  let cachedSnapshot: SelectionSnapshot | null = null;
+
+  const changed = (): void => {
+    cachedSnapshot = null;
+    onChange();
+  };
 
   /**
    * Ensures the mask surface exists and covers `rect` (integer bounds),
@@ -206,7 +256,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     if (mask) {
       clearSurface(mask);
     }
-    onChange();
+    changed();
   };
 
   const replaceMask = (next: PlacedSurface): void => {
@@ -221,7 +271,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
       commits = [];
       selectionBounds = null;
       selected = false;
-      onChange();
+      changed();
     };
     if (isEmpty(rect) || next.surface.width <= 0 || next.surface.height <= 0) {
       publishEmptyReplacement();
@@ -242,10 +292,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     }
 
     const copiedData = new Uint8ClampedArray(source.data);
-    const copied =
-      typeof ImageData === 'undefined'
-        ? ({ colorSpace: source.colorSpace, data: copiedData, height: source.height, width: source.width } as ImageData)
-        : new ImageData(copiedData, source.width, source.height);
+    const copied = createImageData(copiedData, source.width, source.height);
     // Prepare every fallible replacement artifact before publishing any state.
     // If allocation, pixel upload, or Path2D construction fails, the exact prior
     // selection remains authoritative and the engine may safely report failure.
@@ -264,7 +311,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     commits = [{ bounds: rect, op: 'replace', path: nextPath }];
     selectionBounds = rect;
     selected = true;
-    onChange();
+    changed();
   };
 
   const commit = (next: SelectionCommit): void => {
@@ -284,7 +331,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
       commits = [next];
       selectionBounds = bounds;
       selected = true;
-      onChange();
+      changed();
       return;
     }
 
@@ -317,7 +364,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
         selected = selectionBounds !== null;
         break;
     }
-    onChange();
+    changed();
   };
 
   const selectAll = (domain: Rect): void => {
@@ -334,7 +381,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     commits = [{ bounds: rect, op: 'replace', path: rectPath(createPath2D, rect) }];
     selectionBounds = rect;
     selected = !isEmpty(rect);
-    onChange();
+    changed();
   };
 
   const invert = (domain: Rect): void => {
@@ -369,6 +416,35 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     commits = [{ bounds: rect, op: 'replace', path: rectPath(createPath2D, rect) }, ...commits];
     selectionBounds = rect;
     selected = true;
+    changed();
+  };
+
+  const snapshot = (): SelectionSnapshot => {
+    if (cachedSnapshot) {
+      return cachedSnapshot;
+    }
+    const captured = selected && mask && maskRect && !isEmpty(maskRect) ? maskRect : null;
+    cachedSnapshot = {
+      alpha: captured ? alphaOf(mask!.ctx.getImageData(0, 0, captured.width, captured.height)) : null,
+      bounds: selectionBounds,
+      commits: [...commits],
+      rect: captured,
+      selected,
+    };
+    return cachedSnapshot;
+  };
+
+  const restore = (next: SelectionSnapshot): void => {
+    if (next.alpha && next.rect) {
+      const surface = resetMask(next.rect);
+      surface.ctx.putImageData(pixelsOf(next.alpha, next.rect.width, next.rect.height), 0, 0);
+    } else if (mask) {
+      clearSurface(mask);
+    }
+    commits = [...next.commits];
+    selectionBounds = next.bounds;
+    selected = next.selected;
+    cachedSnapshot = next;
     onChange();
   };
 
@@ -392,6 +468,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     commit,
     containsPoint,
     dispose: () => {
+      cachedSnapshot = null;
       mask = null;
       maskRect = null;
       commits = [];
@@ -402,6 +479,8 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     invert,
     mask: () => (selected && mask && maskRect ? { rect: maskRect, surface: mask } : null),
     replaceMask,
+    restore,
     selectAll,
+    snapshot,
   };
 };
