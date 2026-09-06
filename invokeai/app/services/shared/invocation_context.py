@@ -66,6 +66,8 @@ class InvocationContextData:
     """The invocation that is being executed."""
     source_invocation_id: str
     """The ID of the invocation from which the currently executing invocation was prepared."""
+    execution_frame: tuple[int, ...] = ()
+    """The active prepared execution node's loop iteration path."""
 
 
 class InvocationContextInterface:
@@ -967,6 +969,7 @@ class InvocationContext:
         """Alias for :attr:`execution_effects`."""
         self.execution = ExecutionInterface(self.execution_effects)
         """Restricted execution-effect recorder facade."""
+        self._skip_invocation_cache = False
 
 
 def build_invocation_context(
@@ -997,7 +1000,10 @@ def build_invocation_context(
     wildcards = WildcardsInterface(services=services, data=data)
 
     if execution_effects is None:
-        execution_effects = ExecutionEffectsRecorder(source_node_id=data.invocation.id)
+        execution_effects = ExecutionEffectsRecorder(
+            source_node_id=data.invocation.id,
+            frame_path=data.execution_frame,
+        )
 
     ctx = InvocationContext(
         images=images,

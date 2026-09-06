@@ -239,8 +239,10 @@ class BaseInvocation(ABC, BaseModel):
         """
         self._validate_invoke_fields()
 
-        # skip node cache codepath if it's disabled
-        if services.configuration.node_cache_size == 0:
+        # Effect recording marks the context as cache-ineligible before dispatching here. This
+        # keeps supported invoke_internal() overrides in the call path while preventing a
+        # super().invoke_internal() implementation from returning an output-only cache entry.
+        if services.configuration.node_cache_size == 0 or getattr(context, "_skip_invocation_cache", False):
             return self.invoke(context)
 
         output: BaseInvocationOutput
@@ -274,9 +276,12 @@ class BaseInvocation(ABC, BaseModel):
 
         self._validate_invoke_fields()
         context.execution_effects.clear()
-        if self.use_cache and services.configuration.node_cache_size != 0:
-            services.logger.debug(f'Skipping invocation cache for effect recording for "{self.get_type()}": {self.id}')
-        output = self.invoke(context)
+        previous_skip_cache = getattr(context, "_skip_invocation_cache", False)
+        context._skip_invocation_cache = True
+        try:
+            output = self.invoke_internal(context, services)
+        finally:
+            context._skip_invocation_cache = previous_skip_cache
         return InvocationRunResult(output=output, effects=context.execution_effects.snapshot())
 
     id: str = Field(

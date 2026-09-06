@@ -257,10 +257,12 @@ class DefaultSessionRunner(SessionRunnerBase):
             with self._services.performance_statistics.collect_stats(invocation, queue_item.session_id):
                 self._on_before_run_node(invocation, queue_item)
 
+                execution_ref = queue_item.session.get_execution_ref(invocation.id)
                 data = InvocationContextData(
                     invocation=invocation,
                     source_invocation_id=queue_item.session.prepared_source_mapping[invocation.id],
                     queue_item=queue_item,
+                    execution_frame=execution_ref.frame.iteration_path,
                 )
                 context = build_invocation_context(
                     data=data,
