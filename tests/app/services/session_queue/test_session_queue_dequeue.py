@@ -14,6 +14,7 @@ from invokeai.app.services.session_queue.session_queue_sqlite import (
     ROUND_ROBIN_DEQUEUE_QUERY,
     SqliteSessionQueue,
 )
+from invokeai.app.services.shared.execution_state_migration import CURRENT_EXECUTION_STATE_VERSION
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState
 
 _EMPTY_SESSION_JSON = json.dumps(to_jsonable_python(GraphExecutionState(graph=Graph()).model_dump()))
@@ -124,6 +125,34 @@ def test_fifo_priority_respected(session_queue_fifo: SqliteSessionQueue) -> None
 def test_fifo_returns_none_when_empty(session_queue_fifo: SqliteSessionQueue) -> None:
     """FIFO: dequeue returns None when the queue is empty."""
     assert session_queue_fifo.dequeue() is None
+
+
+def test_fifo_quarantines_future_snapshot_and_dequeues_later_work(
+    session_queue_fifo: SqliteSessionQueue,
+) -> None:
+    future_session = json.loads(_EMPTY_SESSION_JSON)
+    future_session["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION + 1
+    future_item_id = _insert_queue_item(
+        session_queue_fifo,
+        "default",
+        "future-user",
+        session_json=json.dumps(future_session),
+    )
+    valid_item_id = _insert_queue_item(session_queue_fifo, "default", "valid-user")
+
+    dequeued = session_queue_fifo.dequeue()
+
+    assert dequeued is not None
+    assert dequeued.item_id == valid_item_id
+    with session_queue_fifo._db.transaction() as cursor:
+        cursor.execute(
+            "SELECT status, error_type, error_message FROM session_queue WHERE item_id = ?",
+            (future_item_id,),
+        )
+        status, error_type, error_message = cursor.fetchone()
+    assert status == "failed"
+    assert error_type == "UnsupportedExecutionStateVersionError"
+    assert "newer than supported" in error_message
 
 
 # ---------------------------------------------------------------------------

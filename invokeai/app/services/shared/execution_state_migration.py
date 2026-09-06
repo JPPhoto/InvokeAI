@@ -1,11 +1,12 @@
 """Compatibility helpers for persisted internal execution-state snapshots."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Final
 
 from invokeai.app.services.shared.graph import GraphExecutionState
 
 CURRENT_EXECUTION_STATE_VERSION: Final[int] = 1
+LEGACY_EXECUTION_STATE_VERSION: Final[int] = 0
 
 
 class UnsupportedExecutionStateVersionError(ValueError):
@@ -25,15 +26,35 @@ def dump_execution_state(state: GraphExecutionState) -> dict[str, Any]:
     return snapshot
 
 
+def _migrate_legacy_snapshot(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Convert the original unmarked raw snapshot into the current payload shape."""
+
+    return dict(payload)
+
+
+def _migrate_v1_snapshot(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the v1 payload boundary before a future migration is added."""
+
+    return dict(payload)
+
+
+# Each key is the source version. A future version bump must add its v1 -> v2
+# converter here before changing CURRENT_EXECUTION_STATE_VERSION.
+_SNAPSHOT_MIGRATIONS: dict[int, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
+    LEGACY_EXECUTION_STATE_VERSION: _migrate_legacy_snapshot,
+    CURRENT_EXECUTION_STATE_VERSION: _migrate_v1_snapshot,
+}
+
+
 def load_execution_state(snapshot: Mapping[str, Any]) -> GraphExecutionState:
     """Load a versioned snapshot or a legacy unwrapped execution state."""
     if not isinstance(snapshot, Mapping):
         raise TypeError("Execution state snapshot must be a mapping")
 
     if "version" not in snapshot and "execution_state_version" not in snapshot:
-        return GraphExecutionState.model_validate(snapshot, strict=False)
-
-    if "version" in snapshot:
+        version = LEGACY_EXECUTION_STATE_VERSION
+        payload = snapshot
+    elif "version" in snapshot:
         version = snapshot["version"]
         payload = snapshot.get("state")
         if not isinstance(payload, Mapping):
@@ -50,10 +71,21 @@ def load_execution_state(snapshot: Mapping[str, Any]) -> GraphExecutionState:
             f"Execution state snapshot version {version} is newer than supported version "
             f"{CURRENT_EXECUTION_STATE_VERSION}"
         )
-    if version != CURRENT_EXECUTION_STATE_VERSION:
+    migrated_payload = payload
+    while version < CURRENT_EXECUTION_STATE_VERSION:
+        migrate = _SNAPSHOT_MIGRATIONS.get(version)
+        if migrate is None:
+            raise UnsupportedExecutionStateVersionError(
+                f"Execution state snapshot version {version} has no migration to "
+                f"{CURRENT_EXECUTION_STATE_VERSION}"
+            )
+        migrated_payload = migrate(migrated_payload)
+        version += 1
+
+    migrate = _SNAPSHOT_MIGRATIONS.get(version)
+    if migrate is None:
         raise UnsupportedExecutionStateVersionError(
             f"Execution state snapshot version {version} is unsupported; current version is "
             f"{CURRENT_EXECUTION_STATE_VERSION}"
         )
-
-    return GraphExecutionState.model_validate(payload, strict=False)
+    return GraphExecutionState.model_validate(migrate(migrated_payload), strict=False)

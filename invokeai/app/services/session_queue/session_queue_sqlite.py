@@ -44,8 +44,11 @@ from invokeai.app.services.session_queue.session_queue_common import (
     prepare_values_to_insert,
     uuid_string,
 )
-from invokeai.app.services.shared.execution_state_migration import dump_execution_state
-from invokeai.app.services.shared.graph import GraphExecutionState
+from invokeai.app.services.shared.execution_state_migration import (
+    UnsupportedExecutionStateVersionError,
+    dump_execution_state,
+)
+from invokeai.app.services.shared.graph import Graph, GraphExecutionState
 from invokeai.app.services.shared.pagination import CursorPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
@@ -578,20 +581,48 @@ class SqliteSessionQueue(SessionQueueBase):
         # if the item was concurrently moved to a terminal state (e.g. canceled), so we only need
         # to guard against two dequeues racing for the same pending row.
         with self._dequeue_lock:
-            with self._db.transaction() as cursor:
-                cursor.execute(query)
-                result = cast(Union[sqlite3.Row, None], cursor.fetchone())
-            if result is None:
-                return None
-            queue_item = SessionQueueItem.queue_item_from_dict(dict(result))
-            queue_item = self._apply_device_affinity(queue_item, resident_model_keys)
-            # Record the claiming worker's device so the UI can label the item by GPU. Passing the
-            # item we already materialized lets _set_queue_item_status patch it in place instead of
-            # re-reading (and re-parsing the session graph of) the row we just read.
-            queue_item = self._set_queue_item_status(
-                item_id=queue_item.item_id, status="in_progress", device=device, queue_item=queue_item
-            )
-        return queue_item
+            while True:
+                with self._db.transaction() as cursor:
+                    cursor.execute(query)
+                    result = cast(Union[sqlite3.Row, None], cursor.fetchone())
+                if result is None:
+                    return None
+                raw_result = dict(result)
+                try:
+                    queue_item = SessionQueueItem.queue_item_from_dict(raw_result)
+                except UnsupportedExecutionStateVersionError as exc:
+                    self._quarantine_unreadable_queue_item(raw_result, exc)
+                    continue
+                queue_item = self._apply_device_affinity(queue_item, resident_model_keys)
+                # Record the claiming worker's device so the UI can label the item by GPU. Passing the
+                # item we already materialized lets _set_queue_item_status patch it in place instead of
+                # re-reading (and re-parsing the session graph of) the row we just read.
+                queue_item = self._set_queue_item_status(
+                    item_id=queue_item.item_id, status="in_progress", device=device, queue_item=queue_item
+                )
+                return queue_item
+
+    def _quarantine_unreadable_queue_item(self, raw_queue_item: dict[str, Any], error: Exception) -> None:
+        """Fail a pending row whose runtime snapshot is newer than this worker can read.
+
+        The real session cannot be hydrated, so use a minimal in-memory placeholder only for the
+        status transition/event. The persisted session remains untouched for postmortem recovery.
+        """
+
+        placeholder = SessionQueueItem.model_construct(**raw_queue_item)
+        placeholder.status = "pending"
+        placeholder.session = GraphExecutionState(graph=Graph())
+        placeholder.workflow = None
+        placeholder.field_values = None
+        message = f"Unable to load execution state: {error}"
+        self._set_queue_item_status(
+            item_id=placeholder.item_id,
+            status="failed",
+            error_type=type(error).__name__,
+            error_message=message,
+            error_traceback=message,
+            queue_item=placeholder,
+        )
 
     def _apply_device_affinity(self, candidate: SessionQueueItem, resident_keys: set[str]) -> SessionQueueItem:
         """Swap the fairness-chosen candidate for a nearby same-user, same-priority pending item

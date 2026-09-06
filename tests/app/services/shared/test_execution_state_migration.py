@@ -62,6 +62,15 @@ def test_loads_temporary_versioned_envelope() -> None:
     assert restored.id == state.id
 
 
+def test_migrates_explicit_legacy_version() -> None:
+    state = _make_state()
+    raw = state.model_dump(mode="json", warnings=False, exclude_none=True)
+
+    restored = load_execution_state({"version": 0, "state": raw})
+
+    assert restored.model_dump(mode="json", warnings=False, exclude_none=True) == raw
+
+
 def test_rejects_future_execution_state_versions() -> None:
     snapshot = dump_execution_state(_make_state())
     snapshot["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION + 1
