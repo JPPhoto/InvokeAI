@@ -154,7 +154,11 @@ const generateRequest: QueueEnqueueGenerateRequest = {
 };
 
 interface Harness {
-  activeProgressTarget: { clear: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> };
+  activeProgressTarget: {
+    clear: ReturnType<typeof vi.fn>;
+    set: ReturnType<typeof vi.fn>;
+    settle: ReturnType<typeof vi.fn>;
+  };
   api: {
     [Key in Exclude<
       keyof QueueCoordinatorBackendPort,
@@ -166,7 +170,13 @@ interface Harness {
   hub: ReturnType<typeof createSocketHub>;
   modelLoads: { [Key in keyof QueueModelLoadPort]: ReturnType<typeof vi.fn> };
   nodeExecution: { [Key in keyof QueueNodeExecutionPort]: ReturnType<typeof vi.fn> };
-  progressImage: { clear: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> };
+  progressImage: {
+    bindSwapImages: ReturnType<typeof vi.fn>;
+    clear: ReturnType<typeof vi.fn>;
+    clearHeld: ReturnType<typeof vi.fn>;
+    hold: ReturnType<typeof vi.fn>;
+    set: ReturnType<typeof vi.fn>;
+  };
   progressEntries: Map<string, QueueItemProgress>;
   socket: FakeSocket;
 }
@@ -215,8 +225,8 @@ const createHarness = (options: { galleryRefreshCoalesceMs?: number } = {}): Har
     settleRunning: vi.fn(),
     started: vi.fn(),
   };
-  const progressImage = { clear: vi.fn(), set: vi.fn() };
-  const activeProgressTarget = { clear: vi.fn(), set: vi.fn() } satisfies ActiveProgressTargetSink;
+  const progressImage = { bindSwapImages: vi.fn(), clear: vi.fn(), clearHeld: vi.fn(), hold: vi.fn(), set: vi.fn() };
+  const activeProgressTarget = { clear: vi.fn(), set: vi.fn(), settle: vi.fn() } satisfies ActiveProgressTargetSink;
   const hub = createSocketHub({ createSocket: () => socket });
 
   hub.connect();
@@ -571,14 +581,104 @@ describe('queueCoordinator', () => {
     expect(harness.progressImage.set).not.toHaveBeenCalled();
   });
 
-  it('clears active target and image state when the connection drops', async () => {
+  it('keeps the followed slot and its last frame across a connection drop', async () => {
+    // The run continues on the backend; the sweep reconciles its outcome. Wiping
+    // the frame here only ever produced a blank card until the next event.
     harness.coordinator.connect();
     await harness.coordinator.submitGenerate('local-1', generateRequest);
+    harness.socket.fire('invocation_progress', {
+      ...createStatusEvent({ item_id: 1 }),
+      image: { dataURL: 'data:image/png;base64,frame', height: 32, width: 64 },
+      message: 'Denoising',
+      percentage: 0.5,
+    });
 
     harness.hub.disconnect();
 
-    expect(harness.activeProgressTarget.clear).toHaveBeenCalledWith();
-    expect(harness.progressImage.clear).toHaveBeenCalledWith();
+    expect(harness.activeProgressTarget.clear).not.toHaveBeenCalled();
+    expect(harness.progressImage.clear).not.toHaveBeenCalled();
+  });
+
+  it('sweeps outstanding items when the tab becomes visible again', async () => {
+    // A hidden tab's socket is dropped by the server and socket.io reconnects on
+    // its own backoff; the visibility edge itself reconciles the outcome first.
+    const listeners = new Map<string, () => void>();
+
+    vi.stubGlobal('document', {
+      addEventListener: (type: string, listener: () => void) => listeners.set(type, listener),
+      removeEventListener: (type: string) => listeners.delete(type),
+      visibilityState: 'visible',
+    });
+
+    try {
+      harness.coordinator.connect();
+      await harness.coordinator.submitGenerate('local-1', generateRequest);
+      harness.api.getItem.mockClear();
+      harness.api.getItem.mockResolvedValueOnce(createQueueBackendItem({ id: 1, status: 'completed' }));
+      const resultsPromise = harness.coordinator.waitForResults('local-1', '2026-06-10T00:00:00Z');
+
+      listeners.get('visibilitychange')?.();
+
+      await expect(resultsPromise).resolves.toEqual([expect.objectContaining({ imageName: 'image-1.png' })]);
+      expect(harness.api.getItem).toHaveBeenCalledWith(1);
+
+      harness.coordinator.dispose();
+
+      expect(listeners.has('visibilitychange')).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('runs a sweep requested while one is in flight, instead of dropping it', async () => {
+    // The visibility sweep often fires while the network is still coming back;
+    // the reconnect sweep a second later is the one that can reach the backend.
+    const firstRead = deferred<QueueBackendItem>();
+
+    harness.coordinator.connect();
+    await harness.coordinator.submitGenerate('local-1', generateRequest);
+    harness.api.getItem.mockClear();
+    harness.api.getItem
+      .mockReturnValueOnce(firstRead.promise)
+      .mockResolvedValueOnce(createQueueBackendItem({ id: 1, status: 'completed' }));
+    const resultsPromise = harness.coordinator.waitForResults('local-1', '2026-06-10T00:00:00Z');
+
+    harness.hub.disconnect();
+    harness.hub.connect();
+    await Promise.resolve();
+    expect(harness.api.getItem).toHaveBeenCalledTimes(1);
+
+    harness.hub.disconnect();
+    harness.hub.connect();
+    firstRead.resolve(createQueueBackendItem({ id: 1, status: 'in_progress' }));
+
+    await expect(resultsPromise).resolves.toEqual([expect.objectContaining({ imageName: 'image-1.png' })]);
+    expect(harness.api.getItem).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a preview frame whose revision is not newer than the one already shown', async () => {
+    harness.coordinator.connect();
+    await harness.coordinator.submitGenerate('local-1', generateRequest);
+    const frame = (revision: number, dataURL: string) => ({
+      ...createStatusEvent({ item_id: 1 }),
+      image: { dataURL, height: 32, width: 64 },
+      invocation_source_id: 'denoise',
+      message: 'Denoising',
+      percentage: 0.5,
+      revision,
+    });
+
+    harness.socket.fire('invocation_progress', frame(2, 'data:image/png;base64,second'));
+    harness.socket.fire('invocation_progress', frame(1, 'data:image/png;base64,first'));
+    harness.socket.fire('invocation_progress', frame(3, 'data:image/png;base64,third'));
+    // A new session on the same item starts over.
+    harness.socket.fire('invocation_progress', { ...frame(1, 'data:image/png;base64,retry'), session_id: 'session-2' });
+
+    expect(harness.progressImage.set.mock.calls.map(([image]) => (image as { dataUrl: string }).dataUrl)).toEqual([
+      'data:image/png;base64,second',
+      'data:image/png;base64,third',
+      'data:image/png;base64,retry',
+    ]);
   });
 
   it('keeps the completed progress image until backend item result routing finishes', async () => {
@@ -605,12 +705,19 @@ describe('queueCoordinator', () => {
     await resultsPromise;
 
     expect(harness.callbacks.onBackendItemComplete).toHaveBeenCalledWith('local-1', 1);
+    // Held before routing started, so the finished image can swap in over it.
+    expect(harness.progressImage.hold).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: 'local-1' });
+    // The slot stays followed (settling) rather than dropping Preview back onto
+    // the previous selection while the finished image is still two round trips away.
+    expect(harness.activeProgressTarget.settle).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: 'local-1' });
+    expect(harness.activeProgressTarget.clear).not.toHaveBeenCalled();
     expect(harness.progressImage.clear).not.toHaveBeenCalled();
 
     finishRouting();
     await routingPromise;
     await Promise.resolve();
 
+    expect(harness.activeProgressTarget.clear).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: 'local-1' });
     expect(harness.progressImage.clear).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: 'local-1' });
   });
 

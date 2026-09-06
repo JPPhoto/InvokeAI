@@ -3926,6 +3926,74 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImageName).toBe('image:selected.png');
   });
 
+  it('selects a result whose generation was submitted after the manual selection', () => {
+    vi.useFakeTimers({ now: new Date('2026-06-10T00:00:00.000Z') });
+
+    try {
+      let state = primeGenerate();
+      state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
+      state = submitGenerate(state);
+      const earlierItem = getActiveProject(state).queue.items[0];
+
+      vi.setSystemTime(new Date('2026-06-10T00:00:01.000Z'));
+      state = workbenchReducer(state, { item: createGalleryImageItem('selected.png'), type: 'selectGalleryItem' });
+      expect(getActiveProject(state).settings.showProgressImagesInViewer).toBe(false);
+
+      // Invoking again is the counter-signal: the user wants to see what they just asked for.
+      vi.setSystemTime(new Date('2026-06-10T00:00:02.000Z'));
+      state = submitGenerate(state);
+      const laterItem = getActiveProject(state).queue.items[0];
+      expect(laterItem.id).not.toBe(earlierItem.id);
+      expect(getActiveProject(state).settings.showProgressImagesInViewer).toBe(true);
+
+      // The batch already running when the user picked stays out of the way…
+      state = workbenchReducer(state, {
+        images: [createImage('earlier.png', earlierItem.id)],
+        projectId: getActiveProject(state).id,
+        queueItemId: earlierItem.id,
+        type: 'routeQueueItemResults',
+      });
+      expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImageName).toBe('image:selected.png');
+
+      // …while the one submitted after the pick takes the preview when it lands.
+      state = workbenchReducer(state, {
+        images: [createImage('later.png', laterItem.id)],
+        projectId: getActiveProject(state).id,
+        queueItemId: laterItem.id,
+        type: 'routeQueueItemResults',
+      });
+      expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImageName).toBe('image:later.png');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves an explicit live-follow opt-out alone when submitting', () => {
+    let state = primeGenerate();
+    state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
+    state = workbenchReducer(state, {
+      settings: { showProgressImagesInViewer: false },
+      type: 'setActiveProjectSettings',
+    });
+
+    state = submitGenerate(state);
+
+    expect(getActiveProject(state).settings.showProgressImagesInViewer).toBe(false);
+  });
+
+  it('lifts the selection pause when live-follow is toggled explicitly', () => {
+    let state = createInitialWorkbenchState();
+    state = workbenchReducer(state, { item: createGalleryImageItem('selected.png'), type: 'selectGalleryItem' });
+    expect(typeof getProjectWidgetValues(getActiveProject(state), 'gallery').liveFollowPausedAt).toBe('string');
+
+    state = workbenchReducer(state, {
+      settings: { showProgressImagesInViewer: true },
+      type: 'setActiveProjectSettings',
+    });
+
+    expect(getProjectWidgetValues(getActiveProject(state), 'gallery').liveFollowPausedAt).toBeUndefined();
+  });
+
   it('stamps an explicit page into the navigation query already on a multi-selection', () => {
     // A host navigating its own window passes the page that keeps the primary
     // item in that window — the same contract as selectGalleryItem with

@@ -2803,6 +2803,13 @@ const reconcileDeletedGalleryBoard = (
   return didChangeQueue ? { ...withBoardReferencesCleared, projects } : withBoardReferencesCleared;
 };
 
+/**
+ * A deliberate selection pauses live-follow. It is also stamped, so that a
+ * generation submitted AFTER the pick can still take the preview when it lands
+ * while one that was already running when the user picked cannot; submitting
+ * resumes live-follow (`shouldResumeLiveFollowOnSubmit`). An explicit toggle of
+ * the setting speaks for every generation and lifts the stamp.
+ */
 const updateGalleryValuesAndPauseLiveFollow = (
   state: WorkbenchState,
   getValues: (values: Record<string, unknown>) => Record<string, unknown>,
@@ -2815,9 +2822,40 @@ const updateGalleryValuesAndPauseLiveFollow = (
         settings: { ...project.settings, showProgressImagesInViewer: false },
       },
       'gallery',
-      getValues
+      (values) => ({ ...getValues(values), liveFollowPausedAt: now() })
     )
   );
+
+const getLiveFollowPausedAt = (project: Project): string | null => {
+  const pausedAt = getWidgetValues(project, 'gallery').liveFollowPausedAt;
+
+  return typeof pausedAt === 'string' ? pausedAt : null;
+};
+
+/**
+ * Submitting new work is the counter-signal to a selection pause: the user
+ * wants to watch what they just asked for. An explicit opt-out of live-follow
+ * carries no pause stamp and is left alone.
+ */
+const shouldResumeLiveFollowOnSubmit = (project: Project): boolean =>
+  !project.settings.showProgressImagesInViewer && getLiveFollowPausedAt(project) !== null;
+
+/**
+ * Whether a result may take the selection given the user's last deliberate
+ * pick: only if its generation was submitted after that pick. The batch that
+ * was running when the user picked stays out of the way.
+ */
+const isSubmittedAfterLiveFollowPause = (project: Project, image: GalleryImage | undefined): boolean => {
+  const pausedAt = getLiveFollowPausedAt(project);
+
+  if (pausedAt === null || !image) {
+    return true;
+  }
+
+  const submittedAt = project.queue.items.find((item) => item.id === image.sourceQueueItemId)?.snapshot.submittedAt;
+
+  return submittedAt !== undefined && submittedAt > pausedAt;
+};
 
 const updateQueueItem = (project: Project, queueItemId: string, getItem: (item: QueueItem) => QueueItem): Project => {
   let didChange = false;
@@ -2896,7 +2934,8 @@ const updateGalleryWithResultImages = (project: Project, images: GeneratedImageC
     .filter((image) => !previousImageNames.has(image.imageName))
     .map((image) => normalizeGalleryImage(image, queueBoardIds.get(image.sourceQueueItemId)));
   const shouldSelectIncomingImage =
-    project.settings.showProgressImagesInViewer || typeof galleryValues.selectedImageName !== 'string';
+    typeof galleryValues.selectedImageName !== 'string' ||
+    (project.settings.showProgressImagesInViewer && isSubmittedAfterLiveFollowPause(project, newImages[0]));
   const nextSelectedImage = shouldSelectIncomingImage ? newImages[0] : undefined;
   const nextSelectedItem = nextSelectedImage ? legacyGeneratedImageToGalleryItem(nextSelectedImage) : undefined;
   const nextSelectedItemKey = nextSelectedItem ? toGalleryItemKey(nextSelectedItem) : undefined;
@@ -3217,6 +3256,9 @@ const enqueueCompiledSnapshot = (
       sourceId: route.sourceId,
     },
     queue: { items: [queueItem, ...project.queue.items] },
+    ...(shouldResumeLiveFollowOnSubmit(project)
+      ? { settings: { ...project.settings, showProgressImagesInViewer: true } }
+      : {}),
     widgetGraphs:
       route.sourceId === 'generate' || route.sourceId === 'upscale' || route.sourceId === 'video'
         ? { ...project.widgetGraphs, [route.sourceId]: cloneGraph(graph) }
@@ -4978,6 +5020,12 @@ export const __workbenchReducerInternal = (
     case 'setActiveProjectSettings': {
       return updateActiveProject(state, (project) => {
         const settings = normalizeProjectSettings({ ...project.settings, ...action.settings });
+        // An explicit live-follow choice speaks for every generation, so it also
+        // lifts the pause a deliberate selection stamped.
+        const withoutPause =
+          action.settings.showProgressImagesInViewer !== undefined && getLiveFollowPausedAt(project) !== null
+            ? updateProjectWidgetValues(project, 'gallery', ({ liveFollowPausedAt: _pausedAt, ...values }) => values)
+            : project;
 
         return Object.entries(settings).every(([key, value]) => {
           const settingKey = key as keyof ProjectSettings;
@@ -4987,8 +5035,8 @@ export const __workbenchReducerInternal = (
             value as ProjectSettings[typeof settingKey]
           );
         })
-          ? project
-          : { ...project, settings };
+          ? withoutPause
+          : { ...withoutPause, settings };
       });
     }
   }
