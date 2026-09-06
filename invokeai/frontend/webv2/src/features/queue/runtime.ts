@@ -12,6 +12,7 @@ import type { BackendConnectionStatus } from '@platform/transport/types';
 import { collectGraphInputMediaNames } from '@features/queue/core/graphInputMedia';
 import { isQueuePromptSeedBehaviour, MAX_QUEUE_BATCH_ITEMS } from '@features/queue/core/promptBatch';
 import { shouldSubmitPendingQueueItem } from '@features/queue/core/submissionRules';
+import { progressImageStore } from '@features/queue/data/progressImageStore';
 import {
   createQueueCoordinator,
   QueueEnqueueNotAcceptedError,
@@ -965,6 +966,12 @@ export const createQueueRuntime = ({
         return;
       }
 
+      // The held denoise frame may be painted over exactly these images while
+      // they decode — not over an earlier image of the same batch.
+      progressImageStore.bindSwapImages(
+        queueItem.id,
+        visibleImages.map((image) => image.imageName)
+      );
       commands.routePartialResults({
         backendItemId,
         images: visibleImages,
@@ -986,10 +993,16 @@ export const createQueueRuntime = ({
     }
   };
 
-  const pendingResultRoutes = new Map<
-    string,
-    { attempt: RunAttempt; backendItemId: number; projectId: string; queueItem: QueueItem }
-  >();
+  interface PendingResultRoute {
+    attempt: RunAttempt;
+    backendItemId: number;
+    projectId: string;
+    queueItem: QueueItem;
+    /** Resolves when THIS route has run (or will never run), not when the shared flush drains. */
+    settled: Promise<void>;
+    settle: () => void;
+  }
+  const pendingResultRoutes = new Map<string, PendingResultRoute>();
   let resultRoutingFlush: Promise<void> | undefined;
   const scheduleResultRoute = (
     projectId: string,
@@ -998,25 +1011,44 @@ export const createQueueRuntime = ({
     attempt: RunAttempt
   ): Promise<void> => {
     const key = JSON.stringify([attempt.generation, projectId, queueItem.id, backendItemId]);
-    pendingResultRoutes.set(key, { attempt, backendItemId, projectId, queueItem });
+    const existing = pendingResultRoutes.get(key);
+    let settle: () => void = () => undefined;
+    const settled =
+      existing?.settled ??
+      new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+    pendingResultRoutes.set(key, {
+      attempt,
+      backendItemId,
+      projectId,
+      queueItem,
+      settle: existing?.settle ?? settle,
+      settled,
+    });
     if (!resultRoutingFlush) {
       const flush = Promise.resolve().then(async () => {
         while (isActive() && pendingResultRoutes.size > 0) {
           const batch = [...pendingResultRoutes.values()];
           pendingResultRoutes.clear();
-          await mapWithConcurrency(
-            batch,
-            QUEUE_RUNTIME_CONCURRENCY,
-            ({ attempt, backendItemId, projectId, queueItem }) =>
-              routeBackendItemResults(projectId, queueItem, backendItemId, attempt)
+          await mapWithConcurrency(batch, QUEUE_RUNTIME_CONCURRENCY, (route) =>
+            routeBackendItemResults(route.projectId, route.queueItem, route.backendItemId, route.attempt).finally(
+              route.settle
+            )
           );
         }
+        // Inactive: whatever is left will never run. Release its awaiters — a
+        // followed slot must not hang on a route that is never coming.
+        for (const route of pendingResultRoutes.values()) {
+          route.settle();
+        }
+        pendingResultRoutes.clear();
       });
       resultRoutingFlush = flush.finally(() => {
         resultRoutingFlush = undefined;
       });
     }
-    return resultRoutingFlush;
+    return settled;
   };
 
   const coordinatorBackend: QueueBackendPort = {

@@ -11146,6 +11146,58 @@
         }
       }
     },
+    "/api/v1/queue/{queue_id}/previews": {
+      "get": {
+        "tags": ["queue"],
+        "summary": "Get Progress Previews",
+        "description": "The latest denoising preview frame of each of the caller's running queue items: the same\npayloads as the `invocation_progress` socket events, with their revisions. A client whose socket\nwas dropped, or whose tab was hidden, reconciles from this instead of waiting for the next step.\nOwner-scoped: progress is personal UI, so even admins see only their own.",
+        "operationId": "get_progress_previews",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "queue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The queue id to perform this operation on",
+              "title": "Queue Id"
+            },
+            "description": "The queue id to perform this operation on"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProgressPreviewDTO"
+                  },
+                  "title": "Response 200 Get Progress Previews"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/queue/{queue_id}/next": {
       "get": {
         "tags": ["queue"],
@@ -51856,6 +51908,19 @@
             "default": null,
             "description": "The device processing this session, e.g. 'cuda:1' (set only when running on a GPU)",
             "title": "Device"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Monotonic per queue item and session, set on image-bearing frames. A frame at or below a revision already shown is stale: the same frame may reach a client twice (live stream and reconnect replay) and must never move the preview backwards.",
+            "title": "Revision"
           }
         },
         "required": [
@@ -51872,7 +51937,8 @@
           "message",
           "percentage",
           "image",
-          "device"
+          "device",
+          "revision"
         ],
         "title": "InvocationProgressEvent",
         "type": "object"
@@ -79821,29 +79887,106 @@
         "title": "PresetType"
       },
       "ProgressImage": {
-        "description": "The progress image sent intermittently during processing",
         "properties": {
           "width": {
-            "description": "The effective width of the image in pixels",
-            "minimum": 1,
+            "type": "integer",
+            "minimum": 1.0,
             "title": "Width",
-            "type": "integer"
+            "description": "The effective width of the image in pixels"
           },
           "height": {
-            "description": "The effective height of the image in pixels",
-            "minimum": 1,
+            "type": "integer",
+            "minimum": 1.0,
             "title": "Height",
-            "type": "integer"
+            "description": "The effective height of the image in pixels"
           },
           "dataURL": {
-            "description": "The image data as a b64 data URL",
+            "type": "string",
             "title": "Dataurl",
-            "type": "string"
+            "description": "The image data as a b64 data URL"
           }
         },
+        "type": "object",
         "required": ["width", "height", "dataURL"],
         "title": "ProgressImage",
-        "type": "object"
+        "description": "The progress image sent intermittently during processing"
+      },
+      "ProgressPreviewDTO": {
+        "properties": {
+          "queue_id": {
+            "type": "string",
+            "title": "Queue Id",
+            "description": "The ID of the queue"
+          },
+          "item_id": {
+            "type": "integer",
+            "title": "Item Id",
+            "description": "The ID of the queue item"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "description": "The ID of the session (aka graph execution state)"
+          },
+          "invocation_source_id": {
+            "type": "string",
+            "title": "Invocation Source Id",
+            "description": "The ID of the prepared invocation's source node"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision",
+            "description": "Monotonic per queue item and session; see InvocationProgressEvent"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "A message to display"
+          },
+          "percentage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percentage",
+            "description": "The percentage of the progress, or null if indeterminate"
+          },
+          "image": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProgressImage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The latest denoising preview"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queue_id",
+          "item_id",
+          "session_id",
+          "invocation_source_id",
+          "revision",
+          "message",
+          "percentage",
+          "image"
+        ],
+        "title": "ProgressPreviewDTO",
+        "description": "The latest preview frame of a running queue item, as served by `GET /queue/{queue_id}/previews`.\n\nThe fields of the `invocation_progress` socket event a preview consumer reads, without the\nserialized invocation. A separate model rather than the event itself: exposing the event as a\nresponse model would give it a second OpenAPI schema variant and change the generated client\ntypes for every socket consumer."
       },
       "ProjectBoardItemDTO": {
         "properties": {
