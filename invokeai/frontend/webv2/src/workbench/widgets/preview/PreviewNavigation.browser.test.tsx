@@ -122,6 +122,7 @@ const mocks = vi.hoisted(() => {
     recentImages,
     bridgeProgressImage: null as unknown,
     runningProgressTargets: undefined as unknown[] | undefined,
+    slotProgressImage: undefined as unknown,
     useActiveProgressTarget: vi.fn(() => null as unknown),
     useProgressImage: vi.fn(() => null as unknown),
   };
@@ -150,6 +151,16 @@ vi.mock('@features/queue/react', async (importOriginal) => ({
   useFollowedProgressTargets: () => mockProgressTargets(),
   useProgressImage: () => mocks.useProgressImage(),
   useQueueItemBridgeProgressImage: () => mocks.bridgeProgressImage,
+  // The slot's own frame: derived from the "latest" mock by target unless a test overrides it.
+  useQueueItemProgressImage: (queueItemId: string, itemIndex: number) => {
+    if (mocks.slotProgressImage !== undefined) {
+      return mocks.slotProgressImage;
+    }
+
+    const latest = mocks.useProgressImage() as { target?: { itemIndex: number; queueItemId: string } } | null;
+
+    return latest?.target?.queueItemId === queueItemId && latest.target.itemIndex === itemIndex ? latest : null;
+  },
 }));
 
 vi.mock('@features/gallery/queries', () => ({
@@ -474,6 +485,7 @@ beforeEach(() => {
   mocks.useProgressImage.mockReturnValue(null);
   mocks.bridgeProgressImage = null;
   mocks.runningProgressTargets = undefined;
+  mocks.slotProgressImage = undefined;
 });
 
 afterEach(async () => {
@@ -1442,6 +1454,21 @@ describe('preview keyboard navigation boundary', () => {
 
     expect(host?.querySelectorAll<HTMLImageElement>('img[src^="data:image/png"]')).toHaveLength(1);
     expect(host?.textContent).toContain('64 × 64');
+  });
+
+  it("shows the followed slot's own frame even when the store-wide latest frame is gone", async () => {
+    // A quick image batch finished next to a long video render while the tab was
+    // hidden: releasing the batch's slot cleared the latest frame. The video slot
+    // still has its frame and must not render an empty card until its next step.
+    mocks.project.queue.items = [queueItem];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 1, queueItemId: 'queue-item-live' });
+    mocks.useProgressImage.mockReturnValue(null);
+    mocks.slotProgressImage = { dataUrl: 'data:image/png;base64,video-step', height: 64, width: 64 };
+
+    await render();
+
+    expect(host?.querySelector<HTMLImageElement>('img[src="data:image/png;base64,video-step"]')).not.toBeNull();
   });
 
   it('follows a running slot over a settling one so a concurrent session is never hidden', async () => {

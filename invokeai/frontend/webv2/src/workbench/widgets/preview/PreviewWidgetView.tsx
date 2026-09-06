@@ -41,11 +41,9 @@ import {
   useActiveProgressTargets,
   useFollowedProgressTargets,
   useItemProgress,
-  useProgressImage,
   useQueueItemBridgeProgressImage,
   useQueueItemProgressImage,
   useQueueItemSwapProgressImage,
-  type LatestProgressImageSnapshot,
 } from '@features/queue/react';
 import {
   imageUrlToStreamingSource,
@@ -156,22 +154,6 @@ const getBoardName = (
 ): string =>
   boardId === 'none' ? uncategorizedLabel : (boards.find((board) => board.id === boardId)?.name ?? unknownBoardLabel);
 
-export const getMatchingProgressImage = (
-  progressImage: LatestProgressImageSnapshot | null,
-  placeholder: GalleryQueuePlaceholder | null
-): LatestProgressImageSnapshot | null => {
-  if (
-    !progressImage?.target ||
-    !placeholder ||
-    progressImage.target.queueItemId !== placeholder.queueItemId ||
-    progressImage.target.itemIndex !== placeholder.itemIndex
-  ) {
-    return null;
-  }
-
-  return progressImage;
-};
-
 const selectGenerateRecallValues = createGenerateFormValuesSelector();
 
 /**
@@ -212,7 +194,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const { antialiasProgressImages, showProgressImagesInViewer } = useActiveProjectSelector(
     (project) => project.settings
   );
-  const progressImage = useProgressImage();
   const runningProgressTargets = useActiveProgressTargets();
   const followedProgressTargets = useFollowedProgressTargets();
   const { account, gallery, notifications, widgets } = useWorkbenchCommands();
@@ -265,7 +246,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
       null,
     [followedProgressTargets, generationSequence.chronologicalSlots, liveGalleryPlaceholders]
   );
-  const matchingProgressImage = getMatchingProgressImage(progressImage, activeGalleryPlaceholder);
   // Not while a similarity search is active: the grid hides pending items
   // there entirely, so following the generation would put Preview on a tile
   // the grid is not showing and, worse, hand the arrows the board listing
@@ -654,7 +634,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
             filmstripItems={isFilmstripVisible && density !== 'minimal' ? boardItems : null}
             isLoadingBoard={isLoadingBoard}
             placeholder={activeGalleryPlaceholder}
-            progressImage={matchingProgressImage}
             selectedIndex={navigationCursor}
             shouldAntialiasProgressImage={antialiasProgressImages}
             onNext={selectNextItem}
@@ -950,7 +929,6 @@ const LivePreview = ({
   filmstripItems,
   isLoadingBoard,
   placeholder,
-  progressImage,
   selectedIndex,
   shouldAntialiasProgressImage,
   onNext,
@@ -962,13 +940,16 @@ const LivePreview = ({
   filmstripItems: GalleryItem[] | null;
   isLoadingBoard: boolean;
   placeholder: GalleryQueuePlaceholder;
-  progressImage: LatestProgressImageSnapshot | null;
   selectedIndex: number;
   shouldAntialiasProgressImage: boolean;
   onNext: () => void;
   onPrevious: () => void;
   onSelectItem: (item: GalleryItem) => void;
 }) => {
+  // The followed slot's own frame, not the store-wide latest: with two slots
+  // live (a long video next to a quick image batch) the latest belongs to
+  // whichever stepped last, and releasing that slot must not blank this one.
+  const progressImage = useQueueItemProgressImage(placeholder.queueItemId, placeholder.itemIndex);
   // The previous slot's last frame stands in until this slot produces one of
   // its own (model load, text encoding) — otherwise a sequential batch drops
   // to an empty card between items.
