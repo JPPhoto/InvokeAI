@@ -35,6 +35,7 @@ vi.mock('react-i18next', () => ({
 const board: GalleryBoard = {
   archived: false,
   assetCount: 3,
+  assetVideoCount: 0,
   id: 'dogs',
   imageCount: 50,
   kind: 'board',
@@ -121,7 +122,7 @@ const adapter = {
   ImageContextMenu: () => null,
   account: { enableLiveFollow: vi.fn() },
   antialiasProgressImages: false,
-  widgets: { patchGalleryValues: vi.fn() },
+  widgets: { openGallery: vi.fn(() => true), patchGalleryValues: vi.fn() },
 } as unknown as GalleryUiAdapter;
 
 let host: HTMLDivElement | null = null;

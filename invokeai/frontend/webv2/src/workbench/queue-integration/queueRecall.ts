@@ -3,6 +3,8 @@ import type { QueueGenerationMeta } from '@features/queue/contracts';
 import type { VideoWidgetValues } from '@features/video';
 import type { ImageRecallCapabilities, ImageRecallKind } from '@workbench/image-actions';
 
+import { cloneVideoWidgetValues } from '@features/video';
+
 /**
  * Snapshot/session-based recall for queue items, mirroring the image-metadata
  * recall semantics: partial kinds merge the recalled fields into the CURRENT
@@ -18,6 +20,18 @@ export const getQueueRecallCapabilities = (
   all: snapshot !== null,
   clipSkip: snapshot !== null,
   dimensions: snapshot !== null,
+  prompts: snapshot !== null || meta.positivePrompt !== undefined,
+  remix: snapshot !== null,
+  seed: meta.seed !== undefined || (snapshot !== null && !snapshot.shouldRandomizeSeed),
+});
+
+export const getVideoQueueRecallCapabilities = (
+  snapshot: VideoWidgetValues | null,
+  meta: QueueGenerationMeta
+): ImageRecallCapabilities => ({
+  all: snapshot !== null,
+  clipSkip: false,
+  dimensions: false,
   prompts: snapshot !== null || meta.positivePrompt !== undefined,
   remix: snapshot !== null,
   seed: meta.seed !== undefined || (snapshot !== null && !snapshot.shouldRandomizeSeed),
@@ -66,8 +80,8 @@ export const buildQueueRecallValues = (
       // metadata has no snapshot and carries the merged prompt outright, so
       // there the current template has to go or it would wrap it a second time.
       //
-      // Coalesced because queue history is persisted: a snapshot written before
-      // templates existed has no such field, and must not recall `undefined`.
+      // Older recall snapshots may predate prompt templates and must not recall
+      // `undefined` into the current settings.
       promptTemplate: snapshot ? (snapshot.promptTemplate ?? null) : null,
       ...(negativePrompt !== undefined
         ? { negativePrompt, negativePromptEnabled: snapshot?.negativePromptEnabled ?? negativePrompt.length > 0 }
@@ -99,27 +113,26 @@ export const buildQueueRecallValues = (
   return snapshot ? { ...current, clipSkip: snapshot.clipSkip } : null;
 };
 
-/**
- * The Video-panel equivalent of {@link buildQueueRecallValues}, for a queue item
- * this client submitted from Video. Video's prompt is its own widget value, so a
- * video item's prompt must not be recalled into Generate's — the two panels hold
- * independent text.
- *
- * Only the verbs a video item can actually offer are handled. Its `snapshot` in
- * {@link getQueueRecallCapabilities} is always null (that lookup is Generate-
- * shaped), so `all`/`remix`/`dimensions`/`clipSkip` are disabled for video items
- * and never reach here; prompts and seed come from the session meta, which is
- * recorded identically for video and image batches.
- *
- * Returns a PATCH, not a whole values object: the panel's other settings belong
- * to whatever the user has configured now, and a wholesale write would drag a
- * model-family transition along with it.
- */
 export const buildVideoQueueRecallPatch = (
   kind: ImageRecallKind,
-  meta: QueueGenerationMeta
+  meta: QueueGenerationMeta,
+  snapshot: VideoWidgetValues | null = null
 ): Partial<VideoWidgetValues> | null => {
+  if (kind === 'all' || kind === 'remix') {
+    if (!snapshot) {
+      return null;
+    }
+    const values = cloneVideoWidgetValues(snapshot);
+    return kind === 'remix' ? { ...values, shouldRandomizeSeed: true } : values;
+  }
   if (kind === 'prompts') {
+    if (snapshot) {
+      return {
+        positivePrompt: snapshot.positivePrompt,
+        negativePrompt: snapshot.negativePrompt,
+        negativePromptEnabled: snapshot.negativePromptEnabled,
+      };
+    }
     if (meta.positivePrompt === undefined) {
       return null;
     }
@@ -141,7 +154,8 @@ export const buildVideoQueueRecallPatch = (
   }
 
   if (kind === 'seed') {
-    return meta.seed === undefined ? null : { seed: meta.seed, shouldRandomizeSeed: false };
+    const seed = meta.seed ?? (snapshot && !snapshot.shouldRandomizeSeed ? snapshot.seed : undefined);
+    return seed === undefined ? null : { seed, shouldRandomizeSeed: false };
   }
 
   return null;
@@ -165,6 +179,7 @@ export const planQueueRecall = (
     isVideoItem,
     meta,
     snapshot,
+    videoSnapshot = null,
   }: {
     current: GenerateWidgetValues | null;
     /**
@@ -175,10 +190,11 @@ export const planQueueRecall = (
     isVideoItem: boolean;
     meta: QueueGenerationMeta;
     snapshot: GenerateWidgetValues | null;
+    videoSnapshot?: VideoWidgetValues | null;
   }
 ): QueueRecallPlan | null => {
   if (isVideoItem) {
-    const patch = buildVideoQueueRecallPatch(kind, meta);
+    const patch = buildVideoQueueRecallPatch(kind, meta, videoSnapshot);
 
     return patch ? { patch, target: 'video' } : null;
   }

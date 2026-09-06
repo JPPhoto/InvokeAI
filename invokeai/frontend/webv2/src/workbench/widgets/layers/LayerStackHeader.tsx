@@ -142,7 +142,6 @@ const LayerStackHeaderComponent = ({
           </IconButton>
           <Text
             color="fg.muted"
-            cursor="pointer"
             flex="1"
             fontSize="2xs"
             fontWeight="700"

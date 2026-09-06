@@ -29,8 +29,8 @@ interface FormNumberFieldProps {
 }
 
 const AFFIX_PROPS = { color: 'fg.muted', fontSize: '2xs', lineHeight: '1' } as const;
-// InputGroup pads the input by `--input-height` (32px at size xs) minus the offset; the text must clear the affix.
-const INPUT_HEIGHT_PX = 32;
+// InputGroup pads the input by `--input-height` (28px at size xs) minus the offset; the text must clear the affix.
+const INPUT_HEIGHT_PX = 28;
 const AFFIX_CHAR_PX = 6;
 const AFFIX_GUTTER_PX = 8;
 const affixOffset = (chars: number): string => `${INPUT_HEIGHT_PX - AFFIX_GUTTER_PX - chars * AFFIX_CHAR_PX}px`;

@@ -5,6 +5,7 @@ import { GalleryUiProvider } from '@features/gallery/react';
 import { useActiveProgressTarget } from '@features/queue/react';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { useExportLibraryProject } from '@workbench/projects/useProjectFileActions';
+import { useOpenWorkbenchWidget } from '@workbench/useOpenWorkbenchWidget';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import {
   useActiveProjectId,
@@ -39,6 +40,7 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
   const liveProgressTarget = useActiveProgressTarget();
   const { account, gallery, notifications, widgets } = useWorkbenchCommands();
   const exportProject = useExportLibraryProject();
+  const openWorkbenchWidget = useOpenWorkbenchWidget();
   // These are `lazy()` children of an adapter that only ever mounts in the
   // editor, and the gallery widget needs them as soon as it renders a row.
   // Left to Suspense they were fetched at ~476ms — a full round trip after the
@@ -64,7 +66,10 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       projectId,
       projectName,
       queueItems,
-      widgets: { patchGalleryValues: (values) => widgets.patchValues('gallery', values) },
+      widgets: {
+        openGallery: () => openWorkbenchWidget('gallery').ok,
+        patchGalleryValues: (values) => widgets.patchValues('gallery', values),
+      },
     }),
     [
       account,
@@ -76,6 +81,7 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       liveFollowEnabled,
       liveProgressTarget,
       notifications,
+      openWorkbenchWidget,
       projectId,
       projectName,
       queueItems,

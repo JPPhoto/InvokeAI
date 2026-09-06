@@ -37,13 +37,13 @@ export const MenuActionItem = ({
   tone,
   value,
 }: MenuActionItemProps) => (
-  <Menu.Item color={tone === 'danger' ? 'fg.error' : undefined} disabled={disabled} value={value} onSelect={onSelect}>
+  <Menu.Item data-danger={tone === 'danger' ? '' : undefined} disabled={disabled} value={value} onSelect={onSelect}>
     <HStack gap="2" minW="0" w="full">
       {icon ? (
         <Icon
           as={icon}
           boxSize="3.5"
-          color={tone === 'danger' ? 'fg.error' : (iconColor ?? 'fg.subtle')}
+          color={tone === 'danger' ? undefined : (iconColor ?? 'fg.subtle')}
           fill={iconColor ?? 'none'}
           flexShrink={0}
         />
