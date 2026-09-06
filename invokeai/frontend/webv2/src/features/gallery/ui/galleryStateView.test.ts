@@ -271,6 +271,14 @@ describe('gallery state view', () => {
     expect(pageOf({ searchTerm: 'cats' })).toBeNull();
     expect(pageOf({ starredOnly: true })).toBeNull();
     expect(pageOf({ starredOnly: true }, { starredOnly: true })).toBe(2);
+    // A starred selection sits in the strip, so no page of the unstarred grid holds it.
+    expect(pageOf({ selectedImage: { ...createImageItem('starred.png'), starred: true } })).toBeNull();
+    expect(
+      pageOf(
+        { selectedImage: { ...createImageItem('starred.png'), starred: true }, starredOnly: true },
+        { starredOnly: true }
+      )
+    ).toBe(2);
     expect(pageOf({ semanticImageQuery: { imageName: 'ref.png', kind: 'image' } })).toBeNull();
   });
 

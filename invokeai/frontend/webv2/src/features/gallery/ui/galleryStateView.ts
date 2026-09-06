@@ -465,7 +465,10 @@ export const getGalleryStateView = (
     selectedImageQuery.galleryView === galleryView &&
     selectedImageQuery.imageOrderDir === settings.imageOrderDir &&
     selectedImageQuery.searchTerm === searchTerm &&
-    selectedImageQuery.starredOnly === starredOnly
+    selectedImageQuery.starredOnly === starredOnly &&
+    // A starred item lives in the strip, never on a page of the unstarred
+    // listing; Preview stamps its starred-list page, which the grid must not follow.
+    (starredOnly || selectedItem?.starred !== true)
       ? selectedImageQuery.page
       : null;
 
