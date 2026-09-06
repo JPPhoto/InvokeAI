@@ -28996,6 +28996,145 @@
           "$ref": "#/components/schemas/ImageOutput"
         }
       },
+      "ExecutionFrame": {
+        "properties": {
+          "frame_id": {
+            "type": "string",
+            "title": "Frame Id",
+            "description": "Stable frame identifier",
+            "default": ""
+          },
+          "state_id": {
+            "type": "string",
+            "title": "State Id",
+            "description": "Owning graph execution state id",
+            "default": ""
+          },
+          "iteration_path": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Iteration Path",
+            "description": "Loop iteration coordinates"
+          },
+          "workflow_call_depth": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Workflow Call Depth",
+            "description": "Nested workflow-call depth",
+            "default": 0
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "ExecutionFrame",
+        "description": "Stable execution location for a prepared node."
+      },
+      "ExecutionReference": {
+        "properties": {
+          "reference_id": {
+            "type": "string",
+            "title": "Reference Id",
+            "description": "Stable reference identifier",
+            "default": ""
+          },
+          "state_id": {
+            "type": "string",
+            "title": "State Id",
+            "description": "Owning graph execution state id",
+            "default": ""
+          },
+          "exec_node_id": {
+            "type": "string",
+            "title": "Exec Node Id",
+            "description": "Prepared execution node id",
+            "default": ""
+          },
+          "source_node_id": {
+            "type": "string",
+            "title": "Source Node Id",
+            "description": "Authoring graph node id",
+            "default": ""
+          },
+          "frame": {
+            "$ref": "#/components/schemas/ExecutionFrame",
+            "description": "Execution frame"
+          },
+          "effect_count": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effect Count",
+            "description": "Expected effect count, if declared"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "ExecutionReference",
+        "description": "Stable, frame-aware reference to one prepared execution node.\n\nThis intentionally stays independent from invocation-context/effect models. The execution engine can reconcile\nthis small compatibility type with a richer protocol later without changing persisted graph state."
+      },
+      "ExecutionToken": {
+        "properties": {
+          "token_id": {
+            "type": "string",
+            "title": "Token Id",
+            "description": "Stable token identifier"
+          },
+          "reference_id": {
+            "type": "string",
+            "title": "Reference Id",
+            "description": "Owning execution reference id"
+          },
+          "owner_node_id": {
+            "type": "string",
+            "title": "Owner Node Id",
+            "description": "Prepared node that produced the token"
+          },
+          "port": {
+            "type": "string",
+            "title": "Port",
+            "description": "Output port name"
+          },
+          "frame": {
+            "$ref": "#/components/schemas/ExecutionFrame",
+            "description": "Frame that produced the token"
+          },
+          "value": {
+            "title": "Value",
+            "description": "Output port value"
+          },
+          "token_kind": {
+            "type": "string",
+            "enum": ["data", "activation", "stream_end"],
+            "title": "Token Kind",
+            "default": "data"
+          },
+          "sequence": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sequence"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": ["token_id", "reference_id", "owner_node_id", "port", "frame", "value"],
+        "title": "ExecutionToken",
+        "description": "Data token owned by one prepared output port.\n\nTokens contain no graph edge or association metadata. In particular, loop-linkage edges never become data\ntokens."
+      },
       "ExpandMaskWithFadeInvocation": {
         "category": "mask",
         "class": "invocation",
@@ -39180,6 +39319,31 @@
             "type": "object",
             "title": "Prepared Iteration Paths",
             "description": "The iteration coordinates of each prepared execution node"
+          },
+          "execution_refs": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ExecutionReference"
+            },
+            "type": "object",
+            "title": "Execution Refs",
+            "description": "Stable frame-aware references for prepared execution nodes"
+          },
+          "execution_tokens": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ExecutionToken"
+            },
+            "type": "object",
+            "title": "Execution Tokens",
+            "description": "Data tokens produced by prepared execution output ports"
+          },
+          "execution_effects": {
+            "additionalProperties": {
+              "items": {},
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Execution Effects",
+            "description": "Effects accepted for each execution reference"
           },
           "ready_order": {
             "items": {
