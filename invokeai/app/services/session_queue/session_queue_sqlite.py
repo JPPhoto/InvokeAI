@@ -44,6 +44,7 @@ from invokeai.app.services.session_queue.session_queue_common import (
     prepare_values_to_insert,
     uuid_string,
 )
+from invokeai.app.services.shared.execution_state_migration import dump_execution_state
 from invokeai.app.services.shared.graph import GraphExecutionState
 from invokeai.app.services.shared.pagination import CursorPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
@@ -1407,7 +1408,7 @@ class SqliteSessionQueue(SessionQueueBase):
         with self._db.transaction() as cursor:
             # Use exclude_none so we don't end up with a bunch of nulls in the graph - this can cause validation errors
             # when the graph is loaded. Persisted sessions are used to resume execution across queue boundaries.
-            session_json = session.model_dump_json(warnings=False, exclude_none=True)
+            session_json = json.dumps(dump_execution_state(session), default=to_jsonable_python)
             cursor.execute(
                 """--sql
                 UPDATE session_queue
@@ -1433,7 +1434,7 @@ class SqliteSessionQueue(SessionQueueBase):
         if workflow_call_execution is None:
             raise ValueError("Parent queue item is missing active workflow call execution metadata.")
 
-        session_json = child_session.model_dump_json(warnings=False, exclude_none=True)
+        session_json = json.dumps(dump_execution_state(child_session), default=to_jsonable_python)
         field_values_json = json.dumps(field_values, default=to_jsonable_python) if field_values is not None else None
         root_item_id = parent_queue_item.root_item_id or parent_queue_item.item_id
 
@@ -1920,7 +1921,7 @@ class SqliteSessionQueue(SessionQueueBase):
                     else None
                 )
                 cloned_session = GraphExecutionState(graph=root_queue_item.session.graph)
-                cloned_session_json = cloned_session.model_dump_json(warnings=False, exclude_none=True)
+                cloned_session_json = json.dumps(dump_execution_state(cloned_session), default=to_jsonable_python)
 
                 retried_from_item_id = (
                     root_queue_item.retried_from_item_id

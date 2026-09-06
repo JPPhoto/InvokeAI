@@ -275,12 +275,14 @@ class DefaultSessionRunner(SessionRunnerBase):
 
                 # Invoke the node, optionally on a borrowed idle GPU (text encoders only).
                 with self._maybe_offload_to_idle_gpu(invocation):
-                    output = invocation.invoke_internal(context=context, services=self._services)
+                    run_result = invocation.invoke_internal_with_effects(context=context, services=self._services)
+                output = run_result.output
                 control_collection = None
                 if self._on_after_run_node_callbacks and isinstance(invocation, (IterateInvocation, CollectInvocation)):
                     control_collection = invocation.collection
                 # Save output and history
-                finalized_outputs = queue_item.session.complete(invocation.id, output)
+                execution_ref = queue_item.session.get_execution_ref(invocation.id, effect_count=len(run_result.effects))
+                finalized_outputs = queue_item.session.apply(execution_ref, run_result)
 
                 if control_collection is not None:
                     invocation.collection = control_collection

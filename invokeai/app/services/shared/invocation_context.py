@@ -18,7 +18,7 @@ from invokeai.app.services.images.images_common import ImageDTO
 from invokeai.app.services.invocation_services import InvocationServices
 from invokeai.app.services.model_records.model_records_base import UnknownModelException
 from invokeai.app.services.session_processor.session_processor_common import ProgressImage
-from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder
+from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder, ExecutionInterface
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.services.videos.videos_common import VideoDTO
 from invokeai.app.services.wildcard_records.wildcard_records_common import build_wildcard_manager
@@ -961,10 +961,12 @@ class InvocationContext:
         """An internal API providing access to data about the current queue item and invocation. You probably shouldn't use this. It may change without warning."""
         self._services = services
         """An internal API providing access to all application services. You probably shouldn't use this. It may change without warning."""
-        self.execution_effects = execution_effects or ExecutionEffectsRecorder()
+        self.execution_effects = execution_effects or ExecutionEffectsRecorder(source_node_id=data.invocation.id)
         """Effects recorded during the current invocation run."""
         self.effects = self.execution_effects
         """Alias for :attr:`execution_effects`."""
+        self.execution = ExecutionInterface(self.execution_effects)
+        """Restricted execution-effect recorder facade."""
 
 
 def build_invocation_context(
@@ -993,6 +995,9 @@ def build_invocation_context(
     videos = VideosInterface(services=services, data=data, util=util)
     boards = BoardsInterface(services=services, data=data)
     wildcards = WildcardsInterface(services=services, data=data)
+
+    if execution_effects is None:
+        execution_effects = ExecutionEffectsRecorder(source_node_id=data.invocation.id)
 
     ctx = InvocationContext(
         images=images,

@@ -2584,6 +2584,8 @@ class ExecutionToken(BaseModel):
     port: str = Field(description="Output port name")
     frame: ExecutionFrame = Field(description="Frame that produced the token")
     value: Any = Field(description="Output port value")
+    token_kind: Literal["data", "activation", "stream_end"] = Field(default="data")
+    sequence: int | None = Field(default=None, ge=0)
 
     model_config = ConfigDict(extra="allow")
 
@@ -4435,7 +4437,7 @@ class GraphExecutionState(BaseModel):
                         raise ValueError("Execution effect ports do not match prepared graph edge")
 
     def _build_execution_tokens(
-        self, execution_ref: ExecutionReference, output: BaseInvocationOutput
+        self, execution_ref: ExecutionReference, output: BaseInvocationOutput, effects: Iterable[Any] = ()
     ) -> dict[str, ExecutionToken]:
         tokens: dict[str, ExecutionToken] = {}
         output_fields = type(output).model_fields
@@ -4450,6 +4452,32 @@ class GraphExecutionState(BaseModel):
                 port=port,
                 frame=execution_ref.frame,
                 value=copydeep(getattr(output, port)),
+            )
+        for effect in effects:
+            if self._value_from_object(effect, "kind", "effect_type", "type") != "emit":
+                continue
+            token = self._value_from_object(effect, "token")
+            port = self._value_from_object(token, "field", "port", "output", "output_name")
+            if port in (None, LOOP_LINKAGE_FIELD):
+                continue
+            token_node_id = self._value_from_object(token, "node_id", "invocation_id", "source_node_id")
+            if token_node_id != execution_ref.exec_node_id:
+                raise ValueError("Execution token is not owned by execution reference")
+            token_value = self._value_from_object(effect, "value")
+            if token_value is None:
+                token_value = self._value_from_object(token, "value")
+            token_kind = self._value_from_object(token, "token_kind") or "data"
+            sequence = self._value_from_object(token, "sequence")
+            token_id = f"{execution_ref.reference_id}:{port}:{sequence if sequence is not None else 'effect'}"
+            tokens[token_id] = ExecutionToken(
+                token_id=token_id,
+                reference_id=execution_ref.reference_id,
+                owner_node_id=execution_ref.exec_node_id,
+                port=port,
+                frame=execution_ref.frame,
+                value=copydeep(token_value),
+                token_kind=token_kind,
+                sequence=sequence,
             )
         return tokens
 
@@ -4477,7 +4505,7 @@ class GraphExecutionState(BaseModel):
             batch_values = self._value_from_object(effects, "effects")
             effect_values = list(batch_values if batch_values is not None else effects)
         self._validate_effects(ref, effect_values, effect_count)
-        tokens = self._build_execution_tokens(ref, output_value)
+        tokens = self._build_execution_tokens(ref, output_value, effect_values)
 
         # All validation above is side-effect free. Preserve complete() as the scheduler compatibility boundary.
         finalized_outputs = self.complete(ref.exec_node_id, output_value)

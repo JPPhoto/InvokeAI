@@ -28,6 +28,7 @@ class ExecutionEffectsTestOutput(BaseInvocationOutput):
 
 @invocation("execution_effects_test", version="1.0.0")
 class ExecutionEffectsTestInvocation(BaseInvocation):
+    execution_effects_enabled = True
     value: int = InputField(default=1)
     calls: ClassVar[int] = 0
 

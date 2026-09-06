@@ -1,5 +1,6 @@
 import pytest
 
+from invokeai.app.invocations.math import AddInvocation
 from invokeai.app.services.shared.execution_state_migration import (
     CURRENT_EXECUTION_STATE_VERSION,
     UnsupportedExecutionStateVersionError,
@@ -10,9 +11,14 @@ from invokeai.app.services.shared.graph import Graph, GraphExecutionState
 
 
 def _make_state() -> GraphExecutionState:
+    graph = Graph()
+    graph.add_node(AddInvocation(id="node-id", a=1, b=2))
+    execution_graph = Graph()
+    execution_graph.add_node(AddInvocation(id="exec-node", a=1, b=2))
     return GraphExecutionState(
         id="state-id",
-        graph=Graph(),
+        graph=graph,
+        execution_graph=execution_graph,
         executed={"node-id"},
         executed_history=["node-id"],
         errors={"node-id": "failure"},
@@ -40,14 +46,25 @@ def test_dumps_and_loads_versioned_execution_state_envelope() -> None:
     snapshot = dump_execution_state(state)
     restored = load_execution_state(snapshot)
 
-    assert snapshot["version"] == CURRENT_EXECUTION_STATE_VERSION
-    assert set(snapshot) == {"version", "state"}
-    assert restored.model_dump(mode="json", warnings=False, exclude_none=True) == snapshot["state"]
+    assert snapshot["execution_state_version"] == CURRENT_EXECUTION_STATE_VERSION
+    assert "state" not in snapshot
+    expected = dict(snapshot)
+    expected.pop("execution_state_version")
+    assert restored.model_dump(mode="json", warnings=False, exclude_none=True) == expected
+
+
+def test_loads_temporary_versioned_envelope() -> None:
+    state = _make_state()
+    raw = state.model_dump(mode="json", warnings=False, exclude_none=True)
+
+    restored = load_execution_state({"version": CURRENT_EXECUTION_STATE_VERSION, "state": raw})
+
+    assert restored.id == state.id
 
 
 def test_rejects_future_execution_state_versions() -> None:
     snapshot = dump_execution_state(_make_state())
-    snapshot["version"] = CURRENT_EXECUTION_STATE_VERSION + 1
+    snapshot["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION + 1
 
     with pytest.raises(UnsupportedExecutionStateVersionError, match="newer than supported"):
         load_execution_state(snapshot)

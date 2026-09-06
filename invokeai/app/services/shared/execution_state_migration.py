@@ -13,11 +13,16 @@ class UnsupportedExecutionStateVersionError(ValueError):
 
 
 def dump_execution_state(state: GraphExecutionState) -> dict[str, Any]:
-    """Dump an internal execution state in its versioned snapshot envelope."""
-    return {
-        "version": CURRENT_EXECUTION_STATE_VERSION,
-        "state": state.model_dump(mode="json", warnings=False, exclude_none=True),
-    }
+    """Dump an internal execution state with an additive version marker.
+
+    The marker stays alongside the existing state fields so rolling deployments
+    and diagnostic tools that still deserialize the legacy raw shape continue
+    to work. The loader also accepts the temporary envelope form used by early
+    migration experiments.
+    """
+    snapshot = state.model_dump(mode="json", warnings=False, exclude_none=True)
+    snapshot["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION
+    return snapshot
 
 
 def load_execution_state(snapshot: Mapping[str, Any]) -> GraphExecutionState:
@@ -25,10 +30,19 @@ def load_execution_state(snapshot: Mapping[str, Any]) -> GraphExecutionState:
     if not isinstance(snapshot, Mapping):
         raise TypeError("Execution state snapshot must be a mapping")
 
-    if "version" not in snapshot:
+    if "version" not in snapshot and "execution_state_version" not in snapshot:
         return GraphExecutionState.model_validate(snapshot, strict=False)
 
-    version = snapshot["version"]
+    if "version" in snapshot:
+        version = snapshot["version"]
+        payload = snapshot.get("state")
+        if not isinstance(payload, Mapping):
+            raise ValueError("Versioned execution state snapshot must contain a mapping in 'state'")
+    else:
+        version = snapshot["execution_state_version"]
+        payload = dict(snapshot)
+        payload.pop("execution_state_version", None)
+
     if isinstance(version, bool) or not isinstance(version, int):
         raise ValueError("Execution state snapshot version must be an integer")
     if version > CURRENT_EXECUTION_STATE_VERSION:
@@ -42,7 +56,4 @@ def load_execution_state(snapshot: Mapping[str, Any]) -> GraphExecutionState:
             f"{CURRENT_EXECUTION_STATE_VERSION}"
         )
 
-    state = snapshot.get("state")
-    if not isinstance(state, Mapping):
-        raise ValueError("Versioned execution state snapshot must contain a mapping in 'state'")
-    return GraphExecutionState.model_validate(state, strict=False)
+    return GraphExecutionState.model_validate(payload, strict=False)

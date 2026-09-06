@@ -264,11 +264,14 @@ class BaseInvocation(ABC, BaseModel):
     ) -> InvocationRunResult:
         """Invoke while returning effects recorded by the invocation context.
 
-        This additive path intentionally bypasses the ordinary invocation cache.
-        Cache entries contain outputs only, so using one here could suppress a
-        newly recorded effect batch without notice. Existing ``invoke_internal``
-        callers retain their current cache behavior.
+        Ordinary invocations retain the existing output-only cache. Invocations
+        that declare ``execution_effects_enabled`` bypass that cache because a
+        cache hit cannot safely replay activation, stream, child, or failure
+        effects.
         """
+        if not self.execution_effects_enabled:
+            return InvocationRunResult(output=self.invoke_internal(context, services), effects=())
+
         self._validate_invoke_fields()
         context.execution_effects.clear()
         if self.use_cache and services.configuration.node_cache_size != 0:
@@ -295,6 +298,8 @@ class BaseInvocation(ABC, BaseModel):
     )
 
     bottleneck: ClassVar[Bottleneck]
+
+    execution_effects_enabled: ClassVar[bool] = False
 
     idle_gpu_offloadable: ClassVar[bool] = False
     """Whether this node's entire execution may be temporarily re-pinned to an idle GPU when

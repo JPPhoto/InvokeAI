@@ -8,7 +8,7 @@ engine migration.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import TYPE_CHECKING, Any, Callable, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
@@ -44,7 +44,12 @@ class ExecutionToken(_ExecutionModel):
 
     node_id: str = Field(min_length=1, description="The execution node id.")
     field: str = Field(min_length=1, description="The output field name.")
-    frame: tuple[int, ...] = Field(default=(), description="The enclosing loop iteration path.")
+    value: Any | None = Field(default=None, description="The typed value carried by this token.")
+    frame: tuple[int | str, ...] = Field(default=(), description="The enclosing execution frame path.")
+    token_kind: Literal["data", "activation", "stream_end"] = Field(
+        default="data", description="The semantic kind of this token."
+    )
+    sequence: int | None = Field(default=None, ge=0, description="Stable order within a stream or frame.")
 
     @model_validator(mode="before")
     @classmethod
@@ -67,9 +72,11 @@ class ExecutionToken(_ExecutionModel):
 
     @field_validator("frame")
     @classmethod
-    def _reject_negative_frame_parts(cls, value: tuple[int, ...]) -> tuple[int, ...]:
-        if any(part < 0 for part in value):
+    def _reject_invalid_frame_parts(cls, value: tuple[int | str, ...]) -> tuple[int | str, ...]:
+        if any(isinstance(part, int) and part < 0 for part in value):
             raise ValueError("frame values must be non-negative")
+        if any(isinstance(part, str) and not part.strip() for part in value):
+            raise ValueError("frame values must not be blank")
         return value
 
     @property
@@ -85,14 +92,29 @@ class ExecutionToken(_ExecutionModel):
         return self.field
 
     @property
-    def iteration_path(self) -> tuple[int, ...]:
+    def iteration_path(self) -> tuple[int | str, ...]:
+        return self.frame
+
+    @property
+    def source_node_id(self) -> str:
+        return self.node_id
+
+    @property
+    def source_field(self) -> str:
+        return self.field
+
+    @property
+    def frame_path(self) -> tuple[int | str, ...]:
         return self.frame
 
 
 class ExecutionRef(_ExecutionModel):
     """Frame-aware reference to an execution token."""
 
-    token: ExecutionToken
+    token: ExecutionToken | None = None
+    template_node_id: str | None = Field(default=None, min_length=1)
+    execution_node_id: str | None = Field(default=None, min_length=1)
+    frame_path: tuple[int | str, ...] = ()
     scope: Literal["iteration", "final"] = "final"
 
     @model_validator(mode="before")
@@ -101,9 +123,7 @@ class ExecutionRef(_ExecutionModel):
         if not isinstance(value, dict):
             return value
         data = dict(value)
-        if "token" not in data and any(
-            name in data for name in ("node_id", "invocation_id", "field", "port", "output", "output_name")
-        ):
+        if "token" not in data and any(name in data for name in ("node_id", "invocation_id", "field", "port", "output", "output_name")):
             token_fields = {
                 name: data.pop(name)
                 for name in (
@@ -120,19 +140,39 @@ class ExecutionRef(_ExecutionModel):
                 if name in data
             }
             data["token"] = token_fields
+        if "execution_node_id" not in data:
+            if "node_id" in data:
+                data["execution_node_id"] = data["node_id"]
+            elif isinstance(data.get("token"), dict):
+                token_data = data["token"]
+                data["execution_node_id"] = token_data.get("node_id", token_data.get("invocation_id"))
+        if "frame_path" not in data and isinstance(data.get("token"), dict):
+            token_data = data["token"]
+            data["frame_path"] = token_data.get("frame", token_data.get("iteration_path", ()))
+        for alias in ("node_id", "invocation_id", "field", "port", "output", "output_name", "frame", "iteration_path"):
+            data.pop(alias, None)
         return data
+
+    @model_validator(mode="after")
+    def _require_execution_identity(self) -> "ExecutionRef":
+        if self.token is None and self.execution_node_id is None:
+            raise ValueError("execution reference requires a token or execution_node_id")
+        return self
 
     @property
     def node_id(self) -> str:
+        if self.execution_node_id is not None:
+            return self.execution_node_id
+        assert self.token is not None
         return self.token.node_id
 
     @property
     def field(self) -> str:
-        return self.token.field
+        return self.token.field if self.token is not None else ""
 
     @property
-    def frame(self) -> tuple[int, ...]:
-        return self.token.frame
+    def frame(self) -> tuple[int | str, ...]:
+        return self.frame_path or (self.token.frame if self.token is not None else ())
 
     @property
     def invocation_id(self) -> str:
@@ -143,8 +183,8 @@ class ExecutionRef(_ExecutionModel):
         return self.token.field
 
     @property
-    def iteration_path(self) -> tuple[int, ...]:
-        return self.token.frame
+    def iteration_path(self) -> tuple[int | str, ...]:
+        return self.frame
 
 
 class ExecutionEffect(_ExecutionModel):
@@ -181,16 +221,114 @@ class RemoveEdgeEffect(ExecutionEffect):
 class EmitEffect(ExecutionEffect):
     kind: Literal["emit"] = "emit"
     token: ExecutionToken
-    value: JsonValue | None = None
+    value: Any | None = None
 
 
-ExecutionEffectModel = Union[SetValueEffect, AddEdgeEffect, RemoveEdgeEffect, EmitEffect]
+class CloseStreamEffect(ExecutionEffect):
+    kind: Literal["close_stream"] = "close_stream"
+    token: ExecutionToken
+
+
+class SpawnExecutionEffect(ExecutionEffect):
+    kind: Literal["spawn_execution"] = "spawn_execution"
+    parent: ExecutionRef
+    graph: Any
+    inputs: dict[str, Any] = Field(default_factory=dict)
+
+
+class AwaitEffect(ExecutionEffect):
+    kind: Literal["await"] = "await"
+    dependency: ExecutionRef
+
+
+class FailEffect(ExecutionEffect):
+    kind: Literal["fail"] = "fail"
+    message: str = Field(min_length=1)
+
+
+ExecutionEffectModel = Union[
+    SetValueEffect,
+    AddEdgeEffect,
+    RemoveEdgeEffect,
+    EmitEffect,
+    CloseStreamEffect,
+    SpawnExecutionEffect,
+    AwaitEffect,
+    FailEffect,
+]
 
 # Descriptive aliases keep call sites free to use execution-specific names.
 SetExecutionValueEffect = SetValueEffect
 AddExecutionEdgeEffect = AddEdgeEffect
 RemoveExecutionEdgeEffect = RemoveEdgeEffect
 EmitExecutionEffect = EmitEffect
+
+
+class ExecutionInterface:
+    """Restricted recorder facade exposed to invocation code."""
+
+    def __init__(
+        self,
+        recorder: "ExecutionEffectsRecorder",
+        authorize_workflow: Callable[[str], Any] | None = None,
+    ) -> None:
+        self._recorder = recorder
+        self._authorize_workflow = authorize_workflow
+
+    def emit(
+        self,
+        field: str,
+        value: Any,
+        *,
+        frame: tuple[int | str, ...] | None = None,
+        sequence: int | None = None,
+        token_kind: Literal["data", "activation"] = "data",
+    ) -> None:
+        self._recorder.record(
+            EmitEffect(
+                token=ExecutionToken(
+                    node_id=self._recorder.source_node_id,
+                    field=field,
+                    value=value,
+                    frame=frame or self._recorder.frame_path,
+                    token_kind=token_kind,
+                    sequence=sequence,
+                ),
+                value=value,
+            )
+        )
+
+    def close_stream(self, field: str, *, frame: tuple[int | str, ...] | None = None) -> None:
+        self._recorder.record(
+            CloseStreamEffect(
+                token=ExecutionToken(
+                    node_id=self._recorder.source_node_id,
+                    field=field,
+                    frame=frame or self._recorder.frame_path,
+                    token_kind="stream_end",
+                )
+            )
+        )
+
+    def spawn(self, graph: Any, inputs: dict[str, Any]) -> None:
+        self._recorder.record(
+            SpawnExecutionEffect(
+                parent=ExecutionRef(execution_node_id=self._recorder.source_node_id, frame_path=self._recorder.frame_path),
+                graph=graph,
+                inputs=inputs,
+            )
+        )
+
+    def await_dependency(self, dependency: ExecutionRef) -> None:
+        self._recorder.record(AwaitEffect(dependency=dependency))
+
+    def fail(self, message: str) -> None:
+        self._recorder.record(FailEffect(message=message))
+
+    def authorize_workflow(self, workflow_id: str) -> Any:
+        if self._authorize_workflow is None:
+            raise PermissionError("workflow authorization is unavailable in this execution context")
+        return self._authorize_workflow(workflow_id)
 
 
 @dataclass(frozen=True)
@@ -210,8 +348,10 @@ class ExecutionEffectBatch:
 class ExecutionEffectsRecorder:
     """Collects effects for one invocation run."""
 
-    def __init__(self) -> None:
+    def __init__(self, source_node_id: str = "context", frame_path: tuple[int | str, ...] = ()) -> None:
         self._effects: list[ExecutionEffect] = []
+        self.source_node_id = source_node_id
+        self.frame_path = frame_path
 
     def record(self, effect: ExecutionEffect) -> None:
         if not isinstance(effect, ExecutionEffect):
