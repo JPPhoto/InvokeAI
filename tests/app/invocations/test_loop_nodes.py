@@ -34,7 +34,7 @@ def test_for_invocation_outputs_have_iteration_and_final_scopes() -> None:
 def test_for_invocation_is_not_directly_executable() -> None:
     node = ForInvocation(id="for")
 
-    with pytest.raises(NotImplementedError, match="scheduler-special"):
+    with pytest.raises(NotImplementedError, match="must be executed as part of a workflow graph"):
         node.invoke(None)  # type: ignore[arg-type]
 
 
