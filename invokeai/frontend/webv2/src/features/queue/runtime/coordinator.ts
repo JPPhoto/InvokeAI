@@ -73,6 +73,7 @@ export type QueueCoordinatorBackendPort = Pick<
   | 'listItems'
   | 'on'
   | 'onConnectionChange'
+  | 'readProgressPreviews'
 >;
 
 export interface QueueCoordinatorCallbacks {
@@ -466,6 +467,37 @@ export const createQueueCoordinator = (
     }
   };
 
+  /**
+   * Ask the backend for the latest preview frame of every running item and feed
+   * each through the socket handler, where the revision gate drops anything the
+   * live stream already delivered. Covers the frames lost while a hidden tab's
+   * socket was down, and the frames a reloaded page never saw. Best effort: the
+   * backend also replays them on `subscribe_queue`, and a failure here only means
+   * waiting for the next step.
+   */
+  const refreshProgressPreviews = async (): Promise<void> => {
+    if (!isActive() || waits.size === 0 || !backend.readProgressPreviews) {
+      return;
+    }
+
+    let previews: Awaited<ReturnType<NonNullable<typeof backend.readProgressPreviews>>>;
+
+    try {
+      previews = await backend.readProgressPreviews();
+    } catch {
+      return;
+    }
+
+    if (!isActive()) {
+      return;
+    }
+
+    for (const preview of previews) {
+      // Structurally the socket payload; the port cannot name the event type.
+      handleProgress(preview as unknown as InvocationProgressEvent);
+    }
+  };
+
   const handleStatusChanged = (event: QueueItemStatusChangedEvent): void => {
     if (!isActive()) {
       return;
@@ -481,6 +513,13 @@ export const createQueueCoordinator = (
     }
 
     if (!isTerminalBackendStatus(event.status)) {
+      // Back to the queue (a workflow-call parent waiting on its child, a retry):
+      // whatever frames follow belong to a new leg, and after a backend restart
+      // their revisions start over.
+      if (event.status === 'pending' || event.status === 'waiting') {
+        latestFrameGates.delete(event.item_id);
+      }
+
       return;
     }
 
@@ -649,14 +688,16 @@ export const createQueueCoordinator = (
     // is back. The outcome is on the backend already, so sweep on the
     // visibility edge itself rather than waiting for the reconnect edge.
     if (typeof document !== 'undefined') {
+      const visibilityDocument = document;
       const handleVisibilityChange = (): void => {
-        if (document.visibilityState === 'visible') {
+        if (visibilityDocument.visibilityState === 'visible') {
           void sweep();
+          void refreshProgressPreviews();
         }
       };
 
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-      detachers.push(() => document.removeEventListener('visibilitychange', handleVisibilityChange));
+      visibilityDocument.addEventListener('visibilitychange', handleVisibilityChange);
+      detachers.push(() => visibilityDocument.removeEventListener('visibilitychange', handleVisibilityChange));
     }
 
     sweepTimer = setInterval(() => {
@@ -802,6 +843,10 @@ export const createQueueCoordinator = (
             }
       );
     }
+
+    // A reloaded page has no frame for a run it just re-adopted; the socket only
+    // brings the next step's.
+    void refreshProgressPreviews();
 
     return outcomes;
   };

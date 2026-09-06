@@ -9,7 +9,7 @@ from invokeai.app.invocations.baseinvocation import (
 )
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.image import ImageField
-from invokeai.app.services.events.events_common import EventBase
+from invokeai.app.services.events.events_common import EventBase, InvocationProgressEvent
 from invokeai.app.services.session_processor.session_processor_common import ProgressImage
 from invokeai.app.services.session_queue.session_queue_common import SessionQueueItem
 from invokeai.app.services.shared.invocation_context import InvocationContext
@@ -164,8 +164,13 @@ class TestEventService(EventServiceBase):
         message: str,
         percentage: float | None = None,
         image: "ProgressImage | None" = None,
-    ) -> None:
-        pass
+        revision: int | None = None,
+    ) -> InvocationProgressEvent:
+        if invocation is None:
+            # Model-load tests signal imageless progress outside any invocation; nothing retains
+            # the (unbuildable) event in that case.
+            return None  # type: ignore[return-value]
+        return super().emit_invocation_progress(queue_item, invocation, message, percentage, image, revision)
 
 
 def wait_until(condition: Callable[[], bool], timeout: int = 10, interval: float = 0.1) -> None:

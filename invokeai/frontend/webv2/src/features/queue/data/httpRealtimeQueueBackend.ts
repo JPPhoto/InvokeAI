@@ -13,6 +13,7 @@ import {
   clearScopedQueue,
   getCurrentQueueItem,
   getNextQueueItem,
+  getProgressPreviews,
   getQueueItem,
   getQueueItemIds,
   getQueueItemsByIds,
@@ -65,6 +66,7 @@ export const queueBackend: QueueBackendPort = {
   },
   readItemIds: async (order, scope, signal) => mapQueueItemIdsDTO(await getQueueItemIds(order, scope, signal)),
   readItemsById: async (itemIds, signal) => (await getQueueItemsByIds(itemIds, signal)).map(mapQueueItemDTO),
+  readProgressPreviews: getProgressPreviews,
   readNext: async (scope, signal) => {
     const item = await getNextQueueItem(scope, signal);
 
