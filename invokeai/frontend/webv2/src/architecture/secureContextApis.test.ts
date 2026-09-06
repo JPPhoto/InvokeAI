@@ -2,11 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * `crypto.randomUUID` and `crypto.subtle` are undefined outside secure contexts,
- * and the app is routinely opened over plain HTTP from another device on the
- * LAN. Every id mint goes through `@platform/browser/randomUuid` and every
- * digest through `@platform/browser/sha256`, which carry fallbacks; a direct
- * call anywhere else reintroduces a crash that only shows up on a phone or
- * tablet.
+ * so filter these calls out when running over plain HTTP.
  */
 const sources = import.meta.glob('../**/*.{ts,tsx}', {
   eager: true,

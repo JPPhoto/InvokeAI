@@ -1,17 +1,8 @@
 /**
  * Generate an RFC 4122 version 4 UUID.
  *
- * `crypto.randomUUID` is exposed only in secure contexts — HTTPS, or `localhost`
- * over plain HTTP. The app is routinely opened from another device on the LAN
- * (an iPad pointed at a workstation, say), and there the property is simply
- * undefined, so a bare `crypto.randomUUID()` throws. The durable persistence
- * layer mints a writer token during startup, which turned that into a crash
- * before first paint.
- *
- * `crypto.getRandomValues` carries no secure-context restriction, so when the
- * native generator is missing the UUID is assembled from sixteen random bytes
- * with the version and variant bits set by hand. Every call site that needs a
- * fresh id goes through here; `crypto.randomUUID` must not be called directly.
+ * `crypto.randomUUID` is applied in secure contexts (HTTPS or `localhost`).
+ * `crypto.getRandomValues` is applied in non-secure contexts.
  */
 
 /** The subset of `Crypto` the generator relies on, so tests can swap it. */

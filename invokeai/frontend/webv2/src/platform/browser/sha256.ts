@@ -1,16 +1,8 @@
 /**
  * SHA-256, with a pure-JavaScript fallback for insecure contexts.
  *
- * `crypto.subtle` is exposed only in secure contexts, exactly like
- * `crypto.randomUUID` (see `randomUuid.ts`). Opened over plain HTTP from another
- * device on the LAN, `crypto.subtle` is undefined and every content hash — paint
- * cache flushes, composites for generation, deterministic project ids — throws.
- * The fallback produces byte-identical digests, so ids derived from a hash stay
- * stable regardless of which path computed them.
- *
- * The fallback is slower than the native digest by a wide margin, so it is only
- * taken when the native API is absent. All hashing goes through here;
- * `crypto.subtle` must not be called directly elsewhere.
+ * `crypto.subtle` is exposed only in secure contexts, otherwise a slower fallback
+ * that produces identical digests is applied.
  */
 
 const ROUND_CONSTANTS = new Uint32Array([
