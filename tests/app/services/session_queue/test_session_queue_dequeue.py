@@ -8,6 +8,7 @@ import pytest
 from pydantic_core import to_jsonable_python
 
 from invokeai.app.services.config.config_default import InvokeAIAppConfig
+from invokeai.app.services.events.events_common import QueueItemsRetriedEvent
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.session_queue.session_queue_sqlite import (
     AFFINITY_MAX_LOOKAHEAD,
@@ -16,6 +17,7 @@ from invokeai.app.services.session_queue.session_queue_sqlite import (
 )
 from invokeai.app.services.shared.execution_state_migration import CURRENT_EXECUTION_STATE_VERSION
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState
+from tests.test_nodes import TestEventService
 
 _EMPTY_SESSION_JSON = json.dumps(to_jsonable_python(GraphExecutionState(graph=Graph()).model_dump()))
 
@@ -43,6 +45,12 @@ def session_queue_round_robin(mock_invoker: Invoker) -> SqliteSessionQueue:
     queue = SqliteSessionQueue(db=db)
     queue.start(mock_invoker)
     return queue
+
+
+@pytest.fixture
+def event_bus(mock_invoker: Invoker) -> TestEventService:
+    assert isinstance(mock_invoker.services.events, TestEventService)
+    return mock_invoker.services.events
 
 
 def _insert_queue_item(
@@ -230,6 +238,55 @@ def test_unreadable_snapshot_is_safe_for_detail_list_and_retry(
     assert detail.session.graph.nodes == {}
     assert listed.status == "failed"
     assert retry_result.retried_item_ids == []
+
+
+def test_unreadable_field_values_are_safe_for_summary(
+    session_queue_fifo: SqliteSessionQueue,
+) -> None:
+    item_id = _insert_queue_item(session_queue_fifo, "default", "summary-user")
+    with session_queue_fifo._db.transaction() as cursor:
+        cursor.execute(
+            "UPDATE session_queue SET field_values = ? WHERE item_id = ?",
+            ("{not valid json", item_id),
+        )
+
+    summaries = session_queue_fifo.get_queue_item_summaries_by_ids("default", [item_id])
+
+    assert len(summaries) == 1
+    assert summaries[0].item_id == item_id
+    assert summaries[0].user_id == "summary-user"
+    assert summaries[0].field_values is None
+
+
+def test_unreadable_child_retries_readable_root(
+    session_queue_fifo: SqliteSessionQueue, event_bus: TestEventService
+) -> None:
+    root_id = _insert_queue_item(session_queue_fifo, "default", "workflow-user")
+    future_session = json.loads(_EMPTY_SESSION_JSON)
+    future_session["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION + 1
+    child_id = _insert_queue_item(
+        session_queue_fifo,
+        "default",
+        "workflow-user",
+        session_json=json.dumps(future_session),
+    )
+    with session_queue_fifo._db.transaction() as cursor:
+        cursor.execute(
+            "UPDATE session_queue SET status = 'failed' WHERE item_id = ?",
+            (root_id,),
+        )
+        cursor.execute(
+            "UPDATE session_queue SET status = 'failed', root_item_id = ? WHERE item_id = ?",
+            (root_id, child_id),
+        )
+
+    retry_result = session_queue_fifo.retry_items_by_id("default", [child_id])
+
+    assert retry_result.retried_item_ids == [root_id]
+    retry_events = [event for event in event_bus.events if isinstance(event, QueueItemsRetriedEvent)]
+    assert len(retry_events) == 1
+    assert retry_events[0].retried_item_ids == [root_id]
+    assert retry_events[0].user_ids == ["workflow-user"]
 
 
 # ---------------------------------------------------------------------------

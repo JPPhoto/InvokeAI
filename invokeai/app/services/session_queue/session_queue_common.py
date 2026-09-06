@@ -369,7 +369,12 @@ class SessionQueueItemSummary(BaseModel):
 
     @classmethod
     def queue_item_summary_from_dict(cls, queue_item_dict: dict) -> "SessionQueueItemSummary":
-        queue_item_dict["field_values"] = get_field_values(queue_item_dict)
+        try:
+            queue_item_dict["field_values"] = get_field_values(queue_item_dict)
+        except (TypeError, ValueError):
+            # Summaries intentionally omit the runtime session and must remain usable when a
+            # queue row contains an unreadable optional field-values payload.
+            queue_item_dict["field_values"] = None
         return cls(**queue_item_dict)
 
 

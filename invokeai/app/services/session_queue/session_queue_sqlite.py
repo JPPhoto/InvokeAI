@@ -1948,8 +1948,6 @@ class SqliteSessionQueue(SessionQueueBase):
                     queue_item = self.get_queue_item(item_id)
                 except SessionQueueItemNotFoundError:
                     continue
-                if not queue_item._snapshot_readable:
-                    continue
                 if queue_item.queue_id != queue_id:
                     continue
 
