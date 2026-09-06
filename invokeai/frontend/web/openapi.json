@@ -8117,6 +8117,24 @@
             "description": "Whether to sort by starred items first"
           },
           {
+            "name": "starred",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both.",
+              "title": "Starred"
+            },
+            "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both."
+          },
+          {
             "name": "search_term",
             "in": "query",
             "required": false,
@@ -8364,6 +8382,24 @@
             "description": "Whether to sort by starred items first"
           },
           {
+            "name": "starred",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both.",
+              "title": "Starred"
+            },
+            "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both."
+          },
+          {
             "name": "search_term",
             "in": "query",
             "required": false,
@@ -8516,6 +8552,24 @@
               "title": "Starred First"
             },
             "description": "Whether to sort by starred items first"
+          },
+          {
+            "name": "starred",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both.",
+              "title": "Starred"
+            },
+            "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both."
           },
           {
             "name": "search_term",
@@ -9395,6 +9449,24 @@
               "title": "Starred First"
             },
             "description": "Whether to sort starred items first"
+          },
+          {
+            "name": "starred",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both.",
+              "title": "Starred"
+            },
+            "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both."
           },
           {
             "name": "order_dir",

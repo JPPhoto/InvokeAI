@@ -330,6 +330,34 @@ test('date-board item names preserve the mixed gallery ordering and filter contr
   });
 });
 
+test('starred filter narrows gallery items, names, and date boards consistently', async () => {
+  await withRepresentativeBackend(async (backend) => {
+    const query = 'categories=general&is_intermediate=false&limit=1000&offset=0';
+    const all = await getJson(backend, `/api/v1/gallery/items/?${query}`);
+    const starredOnly = await getJson(backend, `/api/v1/gallery/items/?${query}&starred=true`);
+    const unstarred = await getJson(backend, `/api/v1/gallery/items/?${query}&starred=false`);
+
+    assert.ok(starredOnly.items.every((item) => item.starred === true));
+    assert.ok(starredOnly.items.some((item) => item.kind === 'video'));
+    assert.ok(unstarred.items.every((item) => item.starred === false));
+    assert.equal(starredOnly.total, all.items.filter((item) => item.starred).length);
+    assert.equal(starredOnly.total + unstarred.total, all.total);
+
+    const names = await getJson(
+      backend,
+      '/api/v1/gallery/items/names?categories=general&is_intermediate=false&starred_first=true&starred=false'
+    );
+    assert.equal(names.starred_count, 0);
+    assert.equal(names.total_count, unstarred.total);
+
+    const dateQuery = '/api/v1/virtual_boards/by_date/2026-01-15/item_names?categories=general&is_intermediate=false';
+    const dated = await getJson(backend, dateQuery);
+    const datedStarred = await getJson(backend, `${dateQuery}&starred=true`);
+    assert.equal(datedStarred.total_count, dated.starred_count);
+    assert.ok(datedStarred.total_count > 0);
+  });
+});
+
 test('video DTO, Details, poster, full media, HEAD, and Range routes use the checked-in assets', async () => {
   await withRepresentativeBackend(async (backend) => {
     const name = 'fixture-video-001.mp4';

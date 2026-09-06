@@ -281,6 +281,7 @@ const filterGalleryItems = (state, url, { createdDate } = {}) => {
   const createdFrom = url.searchParams.get('created_from');
   const createdTo = url.searchParams.get('created_to');
   const intermediate = getOptionalBoolean(url, 'is_intermediate');
+  const starred = getOptionalBoolean(url, 'starred');
   const searchTerm = url.searchParams.get('search_term')?.trim().toLocaleLowerCase() ?? '';
 
   return getGalleryCandidates(state)
@@ -292,6 +293,9 @@ const filterGalleryItems = (state, url, { createdDate } = {}) => {
         return false;
       }
       if (intermediate !== undefined && item.is_intermediate !== intermediate) {
+        return false;
+      }
+      if (starred !== undefined && Boolean(item.starred) !== starred) {
         return false;
       }
       if (createdDate && item.created_at.slice(0, 10) !== createdDate) {

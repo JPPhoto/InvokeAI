@@ -49237,6 +49237,8 @@ export interface operations {
                 order_dir?: components["schemas"]["SQLiteDirection"];
                 /** @description Whether to sort by starred items first */
                 starred_first?: boolean;
+                /** @description Filter by starred state: true for starred items only, false for unstarred only. Omit to include both. */
+                starred?: boolean | null;
                 /** @description The term to search for */
                 search_term?: string | null;
                 /** @description Inclusive start date (YYYY-MM-DD) to filter by created_at. */
@@ -49291,6 +49293,8 @@ export interface operations {
                 order_dir?: components["schemas"]["SQLiteDirection"];
                 /** @description Whether to sort by starred items first */
                 starred_first?: boolean;
+                /** @description Filter by starred state: true for starred items only, false for unstarred only. Omit to include both. */
+                starred?: boolean | null;
                 /** @description The term to search for */
                 search_term?: string | null;
             };
@@ -49335,6 +49339,8 @@ export interface operations {
                 order_dir?: components["schemas"]["SQLiteDirection"];
                 /** @description Whether to sort by starred items first */
                 starred_first?: boolean;
+                /** @description Filter by starred state: true for starred items only, false for unstarred only. Omit to include both. */
+                starred?: boolean | null;
                 /** @description The term to search for */
                 search_term?: string | null;
                 /** @description Inclusive start date (YYYY-MM-DD) to filter by created_at. */
@@ -49780,6 +49786,8 @@ export interface operations {
             query?: {
                 /** @description Whether to sort starred items first */
                 starred_first?: boolean;
+                /** @description Filter by starred state: true for starred items only, false for unstarred only. Omit to include both. */
+                starred?: boolean | null;
                 /** @description The sort direction */
                 order_dir?: components["schemas"]["SQLiteDirection"];
                 /** @description The categories of items to include */
