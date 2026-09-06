@@ -283,7 +283,9 @@ class DefaultSessionRunner(SessionRunnerBase):
                 if self._on_after_run_node_callbacks and isinstance(invocation, (IterateInvocation, CollectInvocation)):
                     control_collection = invocation.collection
                 # Save output and history
-                execution_ref = queue_item.session.get_execution_ref(invocation.id, effect_count=len(run_result.effects))
+                execution_ref = queue_item.session.get_execution_ref(
+                    invocation.id, effect_count=len(run_result.effects)
+                )
                 finalized_outputs = queue_item.session.apply(execution_ref, run_result)
 
                 if control_collection is not None:

@@ -76,8 +76,7 @@ def load_execution_state(snapshot: Mapping[str, Any]) -> GraphExecutionState:
         migrate = _SNAPSHOT_MIGRATIONS.get(version)
         if migrate is None:
             raise UnsupportedExecutionStateVersionError(
-                f"Execution state snapshot version {version} has no migration to "
-                f"{CURRENT_EXECUTION_STATE_VERSION}"
+                f"Execution state snapshot version {version} has no migration to {CURRENT_EXECUTION_STATE_VERSION}"
             )
         migrated_payload = migrate(migrated_payload)
         version += 1
