@@ -15,8 +15,8 @@ from invokeai.app.services.shared.execution_effects import (
     AddEdgeEffect,
     AwaitEffect,
     ChildExecutionHandle,
-    ExecutionInterface,
     ExecutionEffectsRecorder,
+    ExecutionInterface,
     ExecutionRef,
     ExecutionToken,
     FailEffect,
@@ -71,6 +71,11 @@ def test_execution_token_and_ref_are_frame_aware() -> None:
     assert ref.invocation_id == "node"
     assert ref.iteration_path == (2, 4)
 
+    with pytest.raises(ValidationError, match="conflicts"):
+        ExecutionRef(token=token, execution_node_id="other")
+    with pytest.raises(ValidationError, match="conflicts"):
+        ExecutionRef(token=token, frame_path=(9,))
+
 
 def test_execution_ref_identity_aliases_are_safe_without_token() -> None:
     ref = ExecutionRef(execution_node_id="node")
@@ -97,6 +102,8 @@ def test_spawn_returns_validated_child_handle_and_records_owner() -> None:
     effect = recorder.snapshot()[0]
     assert isinstance(effect, SpawnExecutionEffect)
     assert effect.parent == effect.execution_ref
+    assert effect.child_execution_id == handle.child_execution_id
+    assert effect.authorization_context == handle.authorization_context
 
 
 @pytest.mark.parametrize(

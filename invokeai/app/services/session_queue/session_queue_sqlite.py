@@ -45,7 +45,6 @@ from invokeai.app.services.session_queue.session_queue_common import (
     uuid_string,
 )
 from invokeai.app.services.shared.execution_state_migration import (
-    UnsupportedExecutionStateVersionError,
     dump_execution_state,
 )
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState
@@ -590,7 +589,7 @@ class SqliteSessionQueue(SessionQueueBase):
                 raw_result = dict(result)
                 try:
                     queue_item = SessionQueueItem.queue_item_from_dict(raw_result)
-                except UnsupportedExecutionStateVersionError as exc:
+                except (TypeError, ValueError) as exc:
                     self._quarantine_unreadable_queue_item(raw_result, exc)
                     continue
                 queue_item = self._apply_device_affinity(queue_item, resident_model_keys)

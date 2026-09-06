@@ -4397,6 +4397,15 @@ class GraphExecutionState(BaseModel):
                 frame_id = self._value_from_object(effect_frame, "frame_id", "id")
                 if frame_id not in (None, "", execution_ref.frame.frame_id):
                     raise ValueError("Execution effect belongs to another execution frame")
+                frame_state_id = self._value_from_object(effect_frame, "state_id", "session_id")
+                if frame_state_id not in (None, "", execution_ref.frame.state_id):
+                    raise ValueError("Execution effect belongs to another graph execution state")
+                frame_path = self._value_from_object(effect_frame, "iteration_path", "frame_path")
+                if frame_path is not None and tuple(frame_path) != execution_ref.frame.iteration_path:
+                    raise ValueError("Execution effect belongs to another execution frame")
+                frame_depth = self._value_from_object(effect_frame, "workflow_call_depth", "call_depth")
+                if frame_depth not in (None, execution_ref.frame.workflow_call_depth):
+                    raise ValueError("Execution effect belongs to another workflow-call depth")
 
             source_ref = self._value_from_object(effect, "source", "target", "token")
             destination_ref = self._value_from_object(effect, "destination")
@@ -4485,7 +4494,12 @@ class GraphExecutionState(BaseModel):
                 token_value = self._value_from_object(token, "value")
             token_kind = self._value_from_object(token, "token_kind") or "data"
             sequence = self._value_from_object(token, "sequence")
-            token_id = f"{execution_ref.reference_id}:{port}:{sequence if sequence is not None else 'effect'}"
+            token_id_base = f"{execution_ref.reference_id}:{port}:{sequence if sequence is not None else 'effect'}"
+            token_id = token_id_base
+            duplicate_index = 1
+            while token_id in tokens:
+                token_id = f"{token_id_base}:{duplicate_index}"
+                duplicate_index += 1
             tokens[token_id] = ExecutionToken(
                 token_id=token_id,
                 reference_id=execution_ref.reference_id,

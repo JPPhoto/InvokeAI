@@ -155,6 +155,32 @@ def test_fifo_quarantines_future_snapshot_and_dequeues_later_work(
     assert "newer than supported" in error_message
 
 
+@pytest.mark.parametrize(
+    "session_json",
+    [
+        "{not valid json",
+        json.dumps({"execution_state_version": "invalid", "graph": {}}),
+        json.dumps({"execution_state_version": CURRENT_EXECUTION_STATE_VERSION, "graph": "invalid"}),
+    ],
+)
+def test_fifo_quarantines_unreadable_snapshot_and_dequeues_later_work(
+    session_queue_fifo: SqliteSessionQueue,
+    session_json: str,
+) -> None:
+    bad_item_id = _insert_queue_item(session_queue_fifo, "default", "bad-user", session_json=session_json)
+    valid_item_id = _insert_queue_item(session_queue_fifo, "default", "valid-user")
+
+    dequeued = session_queue_fifo.dequeue()
+
+    assert dequeued is not None
+    assert dequeued.item_id == valid_item_id
+    with session_queue_fifo._db.transaction() as cursor:
+        cursor.execute("SELECT status, error_message FROM session_queue WHERE item_id = ?", (bad_item_id,))
+        status, error_message = cursor.fetchone()
+    assert status == "failed"
+    assert "Unable to load execution state" in error_message
+
+
 # ---------------------------------------------------------------------------
 # Round-robin tests
 # ---------------------------------------------------------------------------

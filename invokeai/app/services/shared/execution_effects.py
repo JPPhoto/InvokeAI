@@ -159,6 +159,14 @@ class ExecutionRef(_ExecutionModel):
     def _require_execution_identity(self) -> "ExecutionRef":
         if self.token is None and self.execution_node_id is None:
             raise ValueError("execution reference requires a token or execution_node_id")
+        if self.token is not None:
+            if "execution_node_id" in self.model_fields_set and self.execution_node_id not in (
+                None,
+                self.token.node_id,
+            ):
+                raise ValueError("execution_node_id conflicts with token node_id")
+            if "frame_path" in self.model_fields_set and self.frame_path != self.token.frame:
+                raise ValueError("frame_path conflicts with token frame")
         return self
 
     @property
@@ -239,6 +247,8 @@ class SpawnExecutionEffect(ExecutionEffect):
     parent: ExecutionRef
     graph: Any
     inputs: dict[str, Any] = Field(default_factory=dict)
+    child_execution_id: str = Field(min_length=1)
+    authorization_context: dict[str, Any] | None = None
 
     @field_validator("graph")
     @classmethod
@@ -349,6 +359,8 @@ class ExecutionInterface:
                 parent=owner,
                 graph=graph,
                 inputs=inputs,
+                child_execution_id=handle.child_execution_id,
+                authorization_context=handle.authorization_context,
             )
         )
         return handle

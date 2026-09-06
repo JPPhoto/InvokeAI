@@ -353,6 +353,52 @@ def test_graph_state_apply_accepts_emit_effect():
     assert state.execution_effects[ref.reference_id] == [emit_effect]
 
 
+def test_graph_state_apply_keeps_repeated_emits_without_sequence():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=2)
+    effects = [
+        {"kind": "emit", "token": {"node_id": node.id, "field": "value", "value": value}, "value": value}
+        for value in (3, 4)
+    ]
+
+    state.apply(ref, output, effects=effects)
+
+    assert state.execution_tokens[f"{ref.reference_id}:value:effect"].value == 3
+    assert state.execution_tokens[f"{ref.reference_id}:value:effect:1"].value == 4
+
+
+def test_graph_state_apply_rejects_decomposed_frame_mismatch():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+
+    with pytest.raises(ValueError, match="another execution frame"):
+        state.apply(
+            ref,
+            output,
+            effects=[
+                {
+                    "kind": "emit",
+                    "frame": {"iteration_path": [99]},
+                    "token": {"node_id": node.id, "field": "value", "value": 3},
+                }
+            ],
+        )
+
+    assert not state.executed
+    assert not state.results
+    assert not state.execution_tokens
+
+
 def test_graph_state_apply_rejects_effect_from_another_state_before_mutation():
     graph = Graph()
     graph.add_node(AddInvocation(id="add", a=1, b=2))
