@@ -1278,6 +1278,7 @@
     "useSupportedImage": "Use a PNG, JPEG, or WebP image.",
     "variant": "Variant",
     "variantHelp": "Architecture variant, e.g. inpaint or dev.",
+    "viewModel": "View model",
     "viewQueue": "View queue",
     "waitingForDownload": "Waiting for download"
   },
