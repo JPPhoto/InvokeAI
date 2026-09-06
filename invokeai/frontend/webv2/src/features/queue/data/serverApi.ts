@@ -1,4 +1,4 @@
-import type { QueueQueryScope } from '@features/queue/core/types';
+import type { QueueProgressPreviewPayload, QueueQueryScope } from '@features/queue/core/types';
 import type {
   QueueAndProcessorStatusDTO,
   QueueItemIdsResultDTO,
@@ -48,6 +48,10 @@ export const getQueueStatus = (
     buildQueueUrl(`status${buildQueryString({ origin_prefix: scope.originPrefix })}`),
     { signal }
   );
+
+/** The latest `invocation_progress` payload of each running item the user owns, with revisions. */
+export const getProgressPreviews = (signal?: AbortSignal): Promise<QueueProgressPreviewPayload[]> =>
+  apiFetchJson<QueueProgressPreviewPayload[]>(buildQueueUrl('previews'), { signal });
 
 export const getCurrentQueueItem = (
   scope: QueueQueryScope = {},
