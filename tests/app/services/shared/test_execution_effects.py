@@ -112,6 +112,26 @@ def test_execution_ref_identity_aliases_are_safe_without_token() -> None:
     assert ref.output_name == ""
 
 
+@pytest.mark.parametrize(
+    "alias, value",
+    [
+        ("node_id", "other"),
+        ("invocation_id", "other"),
+        ("field", "other"),
+        ("port", "other"),
+        ("output", "other"),
+        ("output_name", "other"),
+        ("frame", (9,)),
+        ("iteration_path", (9,)),
+    ],
+)
+def test_execution_ref_rejects_conflicting_legacy_alias_with_token(alias: str, value: object) -> None:
+    token = ExecutionToken(node_id="node", field="value", frame=(2,))
+
+    with pytest.raises(ValidationError, match="conflicts"):
+        ExecutionRef(token=token, **{alias: value})
+
+
 def test_execution_interface_rejects_unsupported_lifecycle_effects() -> None:
     recorder = ExecutionEffectsRecorder(source_node_id="parent")
     execution = ExecutionInterface(recorder)
@@ -239,17 +259,37 @@ def test_set_value_effect_requires_a_value() -> None:
 
 
 def test_lifecycle_effect_models_validate_owner_refs() -> None:
-    recorder = ExecutionEffectsRecorder(source_node_id="parent")
     await_effect = AwaitEffect(
         execution_ref=ExecutionRef(execution_node_id="parent"),
         dependency=ExecutionRef(execution_node_id="child"),
     )
     fail_effect = FailEffect(execution_ref=ExecutionRef(execution_node_id="parent"), message="failed")
-    recorder.record(await_effect)
-    recorder.record(fail_effect)
     assert isinstance(await_effect, AwaitEffect)
     assert isinstance(fail_effect, FailEffect)
-    assert recorder.snapshot() == (await_effect, fail_effect)
+
+
+@pytest.mark.parametrize(
+    "effect",
+    [
+        SpawnExecutionEffect(
+            parent=ExecutionRef(execution_node_id="parent"),
+            graph={},
+            child_execution_id="child",
+        ),
+        AwaitEffect(
+            execution_ref=ExecutionRef(execution_node_id="parent"),
+            dependency=ExecutionRef(execution_node_id="child"),
+        ),
+        FailEffect(execution_ref=ExecutionRef(execution_node_id="parent"), message="failed"),
+    ],
+)
+def test_recorder_rejects_unsupported_lifecycle_effects(effect: object) -> None:
+    recorder = ExecutionEffectsRecorder(source_node_id="parent")
+
+    with pytest.raises(UnsupportedExecutionEffectError, match="not supported"):
+        recorder.record(effect)  # type: ignore[arg-type]
+
+    assert recorder.snapshot() == ()
 
 
 @pytest.mark.parametrize(

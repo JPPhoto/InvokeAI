@@ -141,6 +141,37 @@ class ExecutionRef(_ExecutionModel):
         if not isinstance(value, dict):
             return value
         data = dict(value)
+        if "token" in data and data["token"] is not None:
+            token = data["token"]
+            if isinstance(token, BaseModel):
+                token_data = token.model_dump(mode="python", warnings=False)
+            else:
+                token_data = token
+
+            def _token_value(names: tuple[str, ...]) -> tuple[bool, Any]:
+                if isinstance(token_data, dict):
+                    for name in names:
+                        if name in token_data:
+                            return True, token_data[name]
+                return False, None
+
+            def _values_match(left: Any, right: Any) -> bool:
+                if isinstance(left, (tuple, list)) and isinstance(right, (tuple, list)):
+                    return tuple(left) == tuple(right)
+                return left == right
+
+            for aliases, token_names, label in (
+                (("node_id", "invocation_id"), ("node_id", "invocation_id"), "node_id"),
+                (("field", "port", "output", "output_name"), ("field", "port", "output", "output_name"), "field"),
+                (("frame", "iteration_path"), ("frame", "iteration_path", "frame_path"), "frame"),
+            ):
+                token_present, token_value = _token_value(token_names)
+                if not token_present:
+                    continue
+                for alias in aliases:
+                    if alias in data and not _values_match(data[alias], token_value):
+                        raise ValueError(f"Token {label} conflicts with legacy alias {alias}")
+
         if "token" not in data and any(
             name in data for name in ("node_id", "invocation_id", "field", "port", "output", "output_name")
         ):
@@ -168,7 +199,9 @@ class ExecutionRef(_ExecutionModel):
                 data["execution_node_id"] = token_data.get("node_id", token_data.get("invocation_id"))
         if "frame_path" not in data and isinstance(data.get("token"), dict):
             token_data = data["token"]
-            data["frame_path"] = token_data.get("frame", token_data.get("iteration_path", ()))
+            data["frame_path"] = token_data.get(
+                "frame", token_data.get("iteration_path", token_data.get("frame_path", ()))
+            )
         for alias in ("node_id", "invocation_id", "field", "port", "output", "output_name", "frame", "iteration_path"):
             data.pop(alias, None)
         return data
@@ -459,6 +492,8 @@ class ExecutionEffectsRecorder:
     def record(self, effect: ExecutionEffect) -> None:
         if not isinstance(effect, ExecutionEffect):
             raise TypeError(f"Expected ExecutionEffect, got {type(effect).__name__}")
+        if effect.kind in {"spawn_execution", "await", "fail"}:
+            raise UnsupportedExecutionEffectError(f"Execution effect kind '{effect.kind}' is not supported")
         try:
             effect.model_dump(mode="json", warnings="error")
         except (PydanticSerializationError, TypeError, ValueError) as exc:
