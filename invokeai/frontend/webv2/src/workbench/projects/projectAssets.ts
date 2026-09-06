@@ -14,11 +14,11 @@
  *
  * ### Collection skips history, remapping does not
  *
- * Queue entries embed whole canvas snapshots and the gallery keeps sixty recents, so bundling
- * everything turns a working project into a multi-gigabyte archive; {@link collectLiveAssetRefs}
- * walks only what the project needs to open. {@link remapAssetRefs} walks everything, because a
- * renamed asset's references must all follow — including the history we chose not to bundle, which
- * would otherwise point at the pre-import name forever.
+ * Legacy queue entries embedded whole canvas snapshots and the gallery keeps sixty recents, so
+ * bundling everything could turn a working project into a multi-gigabyte archive;
+ * {@link collectLiveAssetRefs} walks only what the project needs to open. {@link remapAssetRefs}
+ * walks everything, because imported legacy documents may still contain history while their asset
+ * references are being rewritten before canonical serialization removes it.
  */
 
 /** Keys whose string values name an image. */

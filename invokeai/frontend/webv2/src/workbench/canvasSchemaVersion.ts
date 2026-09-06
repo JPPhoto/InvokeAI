@@ -23,25 +23,6 @@ const requireDeclaredCanvasVersion = (canvas: unknown): number => {
   return canvas.version as number;
 };
 
-/**
- * The compatibility floor implied by every canvas embedded in a canonical project document.
- *
- * Call this only after the project-ingestion gate has validated the live canvas and queue
- * snapshots. Throwing on malformed input is deliberate: silently defaulting here could publish a
- * document under a floor that an older client cannot actually read.
- */
-export const getProjectCanvasSchemaRequirement = (document: Record<string, unknown>): number => {
-  let requirement = requireDeclaredCanvasVersion(document.canvas);
-  const queue = isRecord(document.queue) ? document.queue : null;
-  const items = queue && Array.isArray(queue.items) ? queue.items : [];
-
-  for (const item of items) {
-    if (!isRecord(item) || !isRecord(item.snapshot)) {
-      throw new Error('A validated project document must contain valid queue snapshots.');
-    }
-
-    requirement = Math.max(requirement, requireDeclaredCanvasVersion(item.snapshot.canvas));
-  }
-
-  return requirement;
-};
+/** Compatibility floor implied by the canonical project's live canvas. */
+export const getProjectCanvasSchemaRequirement = (document: Record<string, unknown>): number =>
+  requireDeclaredCanvasVersion(document.canvas);

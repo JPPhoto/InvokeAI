@@ -105,7 +105,7 @@ const ReferenceImageCardBase = ({
         <ToggleDot checked={isEnabled} label={toggleLabel} onCheckedChange={handleToggle} />
 
         {isCollapsed ? (
-          <HStack as="button" cursor="pointer" flex="1" gap="2" minW="0" textAlign="left" onClick={expand}>
+          <HStack as="button" flex="1" gap="2" minW="0" textAlign="left" onClick={expand}>
             <MiniThumbnail image={config.image} />
             <Text color="fg.muted" fontSize="xs" minW="0" truncate>
               <Text as="span" color={isEnabled ? 'fg' : 'fg.muted'} fontWeight="medium">

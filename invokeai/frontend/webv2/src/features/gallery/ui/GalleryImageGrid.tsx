@@ -29,6 +29,7 @@ import {
   buildGalleryGridRows,
   GALLERY_GRID_GAP_PX,
   GALLERY_STARRED_HEADER_HEIGHT_PX,
+  GALLERY_STARRED_SEPARATOR_HEIGHT_PX,
   getGalleryCellSizePx,
   getGalleryColumnCount,
   getGalleryGridRowHeightPx,
@@ -86,7 +87,6 @@ const GalleryStarredSectionHeader = ({
         aria-label={t(isOpen ? 'widgets.gallery.collapseStarredItems' : 'widgets.gallery.expandStarredItems')}
         alignItems="center"
         color="fg.muted"
-        cursor="pointer"
         display="flex"
         flex="1"
         gap="1"
@@ -449,7 +449,6 @@ export const GalleryImageGrid = () => {
             <input {...uploadInputProps} />
             <DropZone
               alignItems="center"
-              cursor="pointer"
               display="flex"
               flex="1"
               fontSize="xs"
@@ -475,14 +474,37 @@ export const GalleryImageGrid = () => {
                 {virtualRows.map((virtualRow) => {
                   const row = rows[virtualRow.index];
 
-                  return row?.kind === 'starred-header' ? (
-                    <GalleryStarredSectionHeader
+                  if (row?.kind === 'starred-header') {
+                    return (
+                      <GalleryStarredSectionHeader
+                        key={virtualRow.key}
+                        isOpen={isStarredOpen}
+                        itemCount={row.itemCount}
+                        offsetPx={virtualRow.start}
+                        onToggle={handleToggleStarredSection}
+                      />
+                    );
+                  }
+
+                  return row?.kind === 'starred-gap' && row.withSeparator ? (
+                    <Flex
                       key={virtualRow.key}
-                      isOpen={isStarredOpen}
-                      itemCount={row.itemCount}
-                      offsetPx={virtualRow.start}
-                      onToggle={handleToggleStarredSection}
-                    />
+                      aria-hidden="true"
+                      data-gallery-starred-separator
+                      align="center"
+                      h={`${GALLERY_STARRED_SEPARATOR_HEIGHT_PX}px`}
+                      left="0"
+                      // The starred row above already carries its trailing grid
+                      // gap; centering over the remaining height keeps the rule
+                      // equidistant from both thumbnail edges.
+                      pb={`${GALLERY_GRID_GAP_PX}px`}
+                      position="absolute"
+                      top="0"
+                      transform={`translateY(${virtualRow.start}px)`}
+                      w="full"
+                    >
+                      <Box bg="border.subtle" h="1px" w="full" />
+                    </Flex>
                   ) : null;
                 })}
                 <Box
