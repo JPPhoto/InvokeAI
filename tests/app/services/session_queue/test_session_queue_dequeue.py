@@ -181,6 +181,57 @@ def test_fifo_quarantines_unreadable_snapshot_and_dequeues_later_work(
     assert "Unable to load execution state" in error_message
 
 
+def test_affinity_quarantines_unreadable_snapshot_and_dequeues_valid_work(
+    session_queue_round_robin: SqliteSessionQueue,
+) -> None:
+    _install_fake_cache(session_queue_round_robin._SqliteSessionQueue__invoker, "cuda:0", {_WARM_MODEL_KEY})
+    cold_id = _insert_queue_item(session_queue_round_robin, "default", "user_a")
+    future_session = json.loads(_session_with_model_key(_WARM_MODEL_KEY))
+    future_session["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION + 1
+    future_id = _insert_queue_item(
+        session_queue_round_robin,
+        "default",
+        "user_a",
+        session_json=json.dumps(future_session),
+    )
+
+    dequeued = session_queue_round_robin.dequeue(device="cuda:0")
+
+    assert dequeued is not None
+    assert dequeued.item_id == cold_id
+    with session_queue_round_robin._db.transaction() as cursor:
+        cursor.execute("SELECT status FROM session_queue WHERE item_id = ?", (future_id,))
+        assert cursor.fetchone()[0] == "failed"
+
+
+def test_unreadable_snapshot_is_safe_for_detail_list_and_retry(
+    session_queue_fifo: SqliteSessionQueue,
+) -> None:
+    future_session = json.loads(_EMPTY_SESSION_JSON)
+    future_session["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION + 1
+    bad_id = _insert_queue_item(
+        session_queue_fifo,
+        "default",
+        "bad-user",
+        session_json=json.dumps(future_session),
+    )
+    valid_id = _insert_queue_item(session_queue_fifo, "default", "valid-user")
+
+    dequeued = session_queue_fifo.dequeue()
+    assert dequeued is not None
+    assert dequeued.item_id == valid_id
+
+    detail = session_queue_fifo.get_queue_item(bad_id)
+    listed = next(item for item in session_queue_fifo.list_all_queue_items("default") if item.item_id == bad_id)
+    retry_result = session_queue_fifo.retry_items_by_id("default", [bad_id])
+
+    assert detail.status == "failed"
+    assert detail.error_type == "UnsupportedExecutionStateVersionError"
+    assert detail.session.graph.nodes == {}
+    assert listed.status == "failed"
+    assert retry_result.retried_item_ids == []
+
+
 # ---------------------------------------------------------------------------
 # Round-robin tests
 # ---------------------------------------------------------------------------

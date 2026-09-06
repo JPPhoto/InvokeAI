@@ -8,6 +8,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     StrictStr,
     TypeAdapter,
     field_validator,
@@ -245,6 +246,8 @@ class FieldIdentifier(BaseModel):
 
 class SessionQueueItem(BaseModel):
     """Session queue item without the full graph. Used for serialization."""
+
+    _snapshot_readable: bool = PrivateAttr(default=True)
 
     item_id: int = Field(description="The identifier of the session queue item")
     status: QUEUE_ITEM_STATUS = Field(default="pending", description="The status of this queue item")
