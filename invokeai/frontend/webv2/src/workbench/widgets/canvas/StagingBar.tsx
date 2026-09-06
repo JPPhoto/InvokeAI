@@ -20,6 +20,7 @@ import { useQueueItemProgress, useQueueItemProgressImage } from '@features/queue
 import { Button, Group, IconButton, MenuContent, toaster, Tooltip } from '@platform/ui';
 import { StreamingImageFrame } from '@platform/ui/streaming-image/StreamingImageFrame';
 import { progressImageToStreamingSource } from '@platform/ui/streaming-image/streamingImageSource';
+import { wheelScrollsHorizontally } from '@platform/ui/wheelScrollsHorizontally';
 import { getCancelableCanvasStagingQueueItemId } from '@workbench/canvasStagingView';
 import { CanvasOptionsBar } from '@workbench/widgets/canvas/tool-options/CanvasOptionsBar';
 import {
@@ -145,7 +146,7 @@ export const StagingBar = ({
           variant="hover"
           w="full"
         >
-          <ScrollArea.Viewport h="full" scrollPaddingInline="2" w="full">
+          <ScrollArea.Viewport ref={wheelScrollsHorizontally} h="full" scrollPaddingInline="2" w="full">
             {/*
              * Leave the content slot's width alone: its inline `min-width:
              * fit-content` grows it to hold every thumbnail, so `justify` only
