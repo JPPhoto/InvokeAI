@@ -32,7 +32,7 @@ import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Select } from '@platform/ui/Select';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
 import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, FilmIcon, ImagePlusIcon, UploadIcon, XIcon } from 'lucide-react';
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { TrimBoundThumb } from './TrimBoundThumb';
@@ -94,6 +94,8 @@ const ReferenceCard = memo(function ReferenceCard({
   reference: VideoReferenceItem;
 }) {
   const { t } = useTranslation();
+  const moveUpRef = useRef<HTMLButtonElement>(null);
+  const moveDownRef = useRef<HTMLButtonElement>(null);
   const name = reference.kind === 'video' ? reference.clip.video_name : reference.image.image_name;
   const selectValue = useMemo(
     () => [reference.kind === 'video' ? reference.conditioning : reference.detail],
@@ -149,8 +151,52 @@ const ReferenceCard = memo(function ReferenceCard({
     reference.kind === 'video' && Number.isFinite(reference.clip.fps) && reference.clip.fps > 0
       ? (sampleFrames / reference.clip.fps).toFixed(1)
       : null;
-  const handleMoveUp = useCallback(() => onMove(index, -1), [index, onMove]);
-  const handleMoveDown = useCallback(() => onMove(index, 1), [index, onMove]);
+  // A move that lands on an end -- the top of the stack, or the slot above the
+  // pinned continuity anchor -- disables the very button that was just pressed,
+  // and a disabled element cannot hold focus, so a keyboard user is dropped to
+  // <body> mid-gesture. Which button that is depends on the anchor rule, so the
+  // handoff reacts to what actually came back disabled rather than predicting
+  // it. It is armed only when the arrow ALREADY holds focus, because pressing a
+  // button does not focus it in every browser (Safari, Firefox on macOS): a
+  // pointer press there runs this handler with the caret still in the prompt,
+  // and moving focus would haul the user out of what they were typing.
+  const pendingFocusRef = useRef<'down' | 'up' | null>(null);
+  const handleMoveUp = useCallback(() => {
+    const arrow = moveUpRef.current;
+
+    pendingFocusRef.current = arrow !== null && document.activeElement === arrow ? 'up' : null;
+    onMove(index, -1);
+  }, [index, onMove]);
+  const handleMoveDown = useCallback(() => {
+    const arrow = moveDownRef.current;
+
+    pendingFocusRef.current = arrow !== null && document.activeElement === arrow ? 'down' : null;
+    onMove(index, 1);
+  }, [index, onMove]);
+
+  useLayoutEffect(() => {
+    const pending = pendingFocusRef.current;
+
+    if (pending === null) {
+      return;
+    }
+    pendingFocusRef.current = null;
+
+    const pressed = pending === 'up' ? moveUpRef.current : moveDownRef.current;
+    const sibling = pending === 'up' ? moveDownRef.current : moveUpRef.current;
+    // Hand off only the focus this card is responsible for losing. Disabling a
+    // focused button blurs it to <body>, so that -- or focus still sitting on
+    // the arrow -- is the whole set of states worth repairing. Anywhere else and
+    // the user has moved on since, which happens whenever the write did not land
+    // in this commit: `setReferences` drops writes from a panel that is no
+    // longer live, and `memo` then keeps this card from rendering at all, so the
+    // arm survives to a later render that has nothing to do with the gesture.
+    const isOursToRestore = document.activeElement === document.body || document.activeElement === pressed;
+
+    if (isOursToRestore && pressed?.disabled === true && sibling !== null && !sibling.disabled) {
+      sibling.focus();
+    }
+  });
   const handleRemove = useCallback(() => onRemove(index), [index, onRemove]);
 
   return (
@@ -246,6 +292,7 @@ const ReferenceCard = memo(function ReferenceCard({
         </Stack>
         <Stack gap="0">
           <IconButton
+            ref={moveUpRef}
             aria-label={t('widgets.video.moveReferenceUp')}
             disabled={disabled || !canMoveUp}
             size="2xs"
@@ -255,6 +302,7 @@ const ReferenceCard = memo(function ReferenceCard({
             <ArrowUpIcon size={12} />
           </IconButton>
           <IconButton
+            ref={moveDownRef}
             aria-label={t('widgets.video.moveReferenceDown')}
             disabled={disabled || !canMoveDown}
             size="2xs"
@@ -578,6 +626,35 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
     },
     [onChange]
   );
+  // Identity for the list, and it must NOT contain the index: an index-bearing key
+  // changes for every card a reorder touches, so React unmounts and remounts them --
+  // reloading a video reference's seeking trim thumbnails and throwing away keyboard
+  // focus on the arrow just pressed. Media can legitimately appear twice (the same
+  // clip sampled over two different windows), so a bare name is not unique either; it
+  // is disambiguated by how many entries of the same kind and name precede it.
+  //
+  // That makes a card stable against every move EXCEPT a swap with its own twin,
+  // where the two occurrence numbers trade places and React swaps the props between
+  // the instances instead of moving one. Rendering stays correct; the cards simply do
+  // not travel. Giving twins independent identity needs a per-entry uid minted on add
+  // and carried through normalization, which the persisted reference shape has no
+  // room for today.
+  const referenceKeys = useMemo(() => {
+    const seen = new Map<string, number>();
+
+    return references.map((reference) => {
+      const name = reference.kind === 'video' ? reference.clip.video_name : reference.image.image_name;
+      // Kind is part of the identity, matching `toGalleryItemKey`: an image and a
+      // video are different references even where a backend gives them one name.
+      const identity = `${reference.kind}:${name}`;
+      const occurrence = seen.get(identity) ?? 0;
+
+      seen.set(identity, occurrence + 1);
+
+      return `${identity}-${occurrence}`;
+    });
+  }, [references]);
+
   const moveReference = useCallback(
     (index: number, direction: -1 | 1) => {
       onChange((current) => {
@@ -604,7 +681,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
     <Stack gap="2">
       {references.map((reference, index) => (
         <ReferenceCard
-          key={`${reference.kind === 'video' ? reference.clip.video_name : reference.image.image_name}-${index}`}
+          key={referenceKeys[index]}
           collections={collections}
           disabled={isInert}
           index={index}
