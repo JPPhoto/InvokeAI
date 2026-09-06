@@ -9,6 +9,8 @@ import { getGalleryPlaceholderInsertionIndex } from './galleryStateView';
 
 export const GALLERY_GRID_GAP_PX = 4;
 export const GALLERY_STARRED_HEADER_HEIGHT_PX = 24;
+/** The gap row grows to hold a hairline rule while the starred section is open. */
+export const GALLERY_STARRED_SEPARATOR_HEIGHT_PX = 13;
 
 const GALLERY_MIN_COLUMN_COUNT = 2;
 const GALLERY_MAX_COLUMN_COUNT = 12;
@@ -33,21 +35,32 @@ export const getGalleryTargetCellPx = (imageDensityPercent: number): number => {
   return GALLERY_MAX_CELL_PX - ((GALLERY_MAX_CELL_PX - GALLERY_MIN_CELL_PX) * percent) / 100;
 };
 
+/** How many `targetCellPx` cells fit in `widthPx`, clamped; an unmeasured width yields `min`. */
+export const getGalleryColumnCountForCell = ({
+  max,
+  min,
+  targetCellPx,
+  widthPx,
+}: {
+  max: number;
+  min: number;
+  targetCellPx: number;
+  widthPx: number;
+}): number => (widthPx <= 0 ? min : Math.min(max, Math.max(min, Math.round(widthPx / targetCellPx))));
+
 export const getGalleryColumnCount = ({
   imageDensityPercent,
   widthPx,
 }: {
   imageDensityPercent: number;
   widthPx: number;
-}): number => {
-  if (widthPx <= 0) {
-    return GALLERY_MIN_COLUMN_COUNT;
-  }
-
-  const columnCount = Math.round(widthPx / getGalleryTargetCellPx(imageDensityPercent));
-
-  return Math.min(GALLERY_MAX_COLUMN_COUNT, Math.max(GALLERY_MIN_COLUMN_COUNT, columnCount));
-};
+}): number =>
+  getGalleryColumnCountForCell({
+    max: GALLERY_MAX_COLUMN_COUNT,
+    min: GALLERY_MIN_COLUMN_COUNT,
+    targetCellPx: getGalleryTargetCellPx(imageDensityPercent),
+    widthPx,
+  });
 
 /** Falls back to a plausible square before the viewport has been measured. */
 export const getGalleryCellSizePx = ({ columnCount, widthPx }: { columnCount: number; widthPx: number }): number =>
@@ -61,7 +74,7 @@ export type GalleryGridSection = 'regular' | 'starred';
 
 export type GalleryGridRow =
   | { cells: GalleryGridCell[]; key: string; kind: 'cells'; section: GalleryGridSection }
-  | { key: string; kind: 'starred-gap' }
+  | { key: string; kind: 'starred-gap'; withSeparator: boolean }
   | { itemCount: number; key: string; kind: 'starred-header' };
 
 const getGalleryGridCellKey = (cell: GalleryGridCell): string =>
@@ -149,7 +162,9 @@ export const buildGalleryGridRows = ({
     }
 
     if (regularCells.length > 0) {
-      rows.push({ key: 'starred-gap', kind: 'starred-gap' });
+      // A visible rule only while the starred cells are showing; collapsed, the
+      // header already separates the sections.
+      rows.push({ key: 'starred-gap', kind: 'starred-gap', withSeparator: isStarredOpen });
     }
   }
 
@@ -165,7 +180,7 @@ export const getGalleryGridRowHeightPx = (row: GalleryGridRow, cellRowHeightPx: 
   }
 
   if (row.kind === 'starred-gap') {
-    return GALLERY_GRID_GAP_PX;
+    return row.withSeparator ? GALLERY_STARRED_SEPARATOR_HEIGHT_PX : GALLERY_GRID_GAP_PX;
   }
 
   return cellRowHeightPx;

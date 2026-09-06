@@ -107,7 +107,7 @@ describe('built-in layout preset descriptors', () => {
         // "Compose with the center view swapped", so the swap has to remain
         // available.
         center: ['preview', 'gallery:center'],
-        left: ['generate', 'upscale', 'video'],
+        left: ['generate', 'upscale'],
         panels: { isBottomOpen: false, isLeftOpen: true, isRightOpen: true },
         right: ['gallery', 'image-map', 'queue'],
       },
@@ -120,10 +120,11 @@ describe('built-in layout preset descriptors', () => {
         },
         bottom: ['server-status', 'queue-status', 'gallery:bottom', 'notifications', 'autosave-status'],
         center: ['canvas', 'preview'],
-        left: ['generate', 'upscale', 'video'],
+        left: ['generate', 'upscale'],
         panels: { isBottomOpen: false, isLeftOpen: true, isRightOpen: true },
-        // The Edit rail is the Layers panel alone; its editors are panes inside it.
-        right: ['layers'],
+        // The editors are panes inside the Layers panel; the preview docks
+        // behind Layers so its float/dock surface stays reachable by default.
+        right: ['layers', 'preview'],
       },
       video: {
         active: { bottom: 'gallery:bottom', center: 'preview', left: 'video', right: 'gallery' },

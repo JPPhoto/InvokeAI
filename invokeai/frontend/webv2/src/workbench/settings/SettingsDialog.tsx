@@ -39,6 +39,7 @@ import {
   Code2Icon,
   DatabaseIcon,
   FolderIcon,
+  InfoIcon,
   KeyboardIcon,
   ListOrderedIcon,
   MapIcon,
@@ -53,6 +54,8 @@ import {
 import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { AboutSettings } from './AboutSettings';
+import { clearWorkspaceData, rememberWorkspaceClearFailure } from './clearWorkspaceData';
 import { GenerationDevicesSettings } from './GenerationDevicesSettings';
 import { HotkeysSettingsSection } from './HotkeysSettingsSection';
 import { ImageMapVocabularySettings } from './ImageMapVocabularySettings';
@@ -111,7 +114,6 @@ export const SettingsDialog = ({ isOpen, onClose }: { isOpen: boolean; onClose: 
       closeOnInteractOutside={false}
       lazyMount
       open={isOpen}
-      placement="center"
       scrollBehavior="inside"
       size="xl"
       unmountOnExit
@@ -161,7 +163,7 @@ const SettingsDialogContent = ({ onClose }: { onClose: () => void }) => {
             <SettingsTabs />
           </Dialog.Body>
           <Dialog.CloseTrigger asChild>
-            <CloseButton size="sm" />
+            <CloseButton />
           </Dialog.CloseTrigger>
         </Dialog.Content>
       </Dialog.Positioner>
@@ -228,6 +230,12 @@ const SettingsTabs = () => {
         icon: DatabaseIcon,
         label: t('settings.tabs.workspace'),
         value: 'workspace',
+      },
+      {
+        children: <AboutSection />,
+        icon: InfoIcon,
+        label: t('settings.tabs.about'),
+        value: 'about',
       },
     ],
     [hasWorkbench, t]
@@ -456,8 +464,8 @@ const BehaviorSection = () => {
       />
       <SettingToggle
         checked={showPromptSyntaxHighlighting}
-        description="Experimental. Color prompt syntax in prompt fields without changing the prompt text or validation behavior."
-        label="Highlight prompt syntax (experimental)"
+        description="Color prompt syntax in prompt fields without changing the prompt text or validation behavior."
+        label="Highlight prompt syntax"
         onChange={updateShowPromptSyntaxHighlighting}
       />
     </SettingsSection>
@@ -480,12 +488,6 @@ const ProjectSection = () => {
   const updateUseCpuNoise = useCallback(
     (checked: boolean) => {
       updateProjectSettings({ useCpuNoise: checked });
-    },
-    [updateProjectSettings]
-  );
-  const updateShowProgressDetails = useCallback(
-    (checked: boolean) => {
-      updateProjectSettings({ showProgressDetails: checked });
     },
     [updateProjectSettings]
   );
@@ -512,13 +514,6 @@ const ProjectSection = () => {
         description="Use CPU noise generation for deterministic legacy-compatible outputs."
         label="Use CPU noise"
         onChange={updateUseCpuNoise}
-      />
-      <SettingToggle
-        checked={settings.showProgressDetails}
-        comingSoon
-        description="Show detailed invocation progress when the backend reports it."
-        label="Show progress details"
-        onChange={updateShowProgressDetails}
       />
       <SettingToggle
         checked={settings.antialiasProgressImages}
@@ -599,6 +594,18 @@ const QueueSection = () => {
         title="Generation Devices"
       >
         <GenerationDevicesSettings />
+      </SettingsSection>
+    </Stack>
+  );
+};
+
+const AboutSection = () => {
+  const { t } = useTranslation();
+
+  return (
+    <Stack gap="6">
+      <SettingsSection description={t('settings.about.description')} title={t('settings.about.title')}>
+        <AboutSettings />
       </SettingsSection>
     </Stack>
   );
@@ -721,12 +728,21 @@ const WorkspaceSection = () => {
   const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
 
   const clearSavedData = useCallback(async () => {
-    await Promise.all([
-      mountedPersistence ? mountedPersistence.clearWorkbench() : clearAllWorkbenchData(),
-      clearWorkbenchSettings(),
-    ]);
+    const failures = await clearWorkspaceData(
+      () => (mountedPersistence ? mountedPersistence.clearWorkbench() : clearAllWorkbenchData()),
+      clearWorkbenchSettings
+    );
+    if (failures.length === 0) {
+      window.location.reload();
+      return;
+    }
+    const message = failures.includes('projects')
+      ? 'Saved project data could not be fully cleared. Reloading to restore a consistent workspace.'
+      : 'Projects were cleared, but some local settings could not be. Reloading the workspace.';
+    rememberWorkspaceClearFailure(message, window.sessionStorage);
+    commands?.notifications.reportError({ area: 'workspace-clear', message, namespace: 'system' });
     window.location.reload();
-  }, [mountedPersistence]);
+  }, [commands, mountedPersistence]);
   const resetLayout = useCallback(() => commands?.layout.reset(), [commands]);
   const openClearConfirm = useCallback(() => setIsClearConfirmOpen(true), []);
   const closeClearConfirm = useCallback(() => setIsClearConfirmOpen(false), []);
@@ -773,13 +789,11 @@ const WorkspaceSection = () => {
 
 const SettingToggle = ({
   checked,
-  comingSoon,
   description,
   label,
   onChange,
 }: {
   checked: boolean;
-  comingSoon?: boolean;
   description?: string;
   label: string;
   onChange: (checked: boolean) => void;
@@ -794,7 +808,6 @@ const SettingToggle = ({
     <Switch.Root
       alignItems="center"
       checked={checked}
-      disabled={comingSoon}
       display="flex"
       gap="4"
       justifyContent="space-between"
@@ -820,14 +833,12 @@ const SettingToggle = ({
 };
 
 const SettingSelect = ({
-  comingSoon,
   description,
   label,
   onChange,
   options,
   value,
 }: {
-  comingSoon?: boolean;
   description?: string;
   label: string;
   onChange: (value: string) => void;
@@ -850,7 +861,6 @@ const SettingSelect = ({
   return (
     <Field.Root
       alignItems={FIELD_ALIGN_ITEMS}
-      disabled={comingSoon}
       display="flex"
       flexDirection={FIELD_FLEX_DIRECTION}
       gap="3"
@@ -868,7 +878,6 @@ const SettingSelect = ({
       </Stack>
       <Select
         collection={collection}
-        disabled={comingSoon}
         flexShrink={0}
         maxW={SELECT_MAX_WIDTH}
         size="sm"

@@ -8,8 +8,10 @@ import {
   buildGalleryGridRows,
   GALLERY_GRID_GAP_PX,
   GALLERY_STARRED_HEADER_HEIGHT_PX,
+  GALLERY_STARRED_SEPARATOR_HEIGHT_PX,
   getGalleryCellSizePx,
   getGalleryColumnCount,
+  getGalleryColumnCountForCell,
   getGalleryGridRowHeightPx,
   getGalleryGridRowIndexForItem,
 } from './galleryGridLayout';
@@ -48,6 +50,20 @@ const buildRows = (overrides: Partial<Parameters<typeof buildGalleryGridRows>[0]
     starredFirst: true,
     ...overrides,
   });
+
+describe('getGalleryColumnCountForCell', () => {
+  it('rounds to the nearest whole cell and clamps to the caller bounds', () => {
+    const bounds = { max: 8, min: 3, targetCellPx: 72 };
+
+    expect(getGalleryColumnCountForCell({ ...bounds, widthPx: 320 })).toBe(4);
+    expect(getGalleryColumnCountForCell({ ...bounds, widthPx: 120 })).toBe(3);
+    expect(getGalleryColumnCountForCell({ ...bounds, widthPx: 2000 })).toBe(8);
+  });
+
+  it('falls back to the minimum before the width is measured', () => {
+    expect(getGalleryColumnCountForCell({ max: 8, min: 3, targetCellPx: 72, widthPx: 0 })).toBe(3);
+  });
+});
 
 describe('getGalleryColumnCount', () => {
   it('gives the same answer at the same width regardless of placement', () => {
@@ -124,14 +140,16 @@ describe('buildGalleryGridRows', () => {
     expect(rows.map((row) => row.kind)).toEqual(['starred-header', 'cells', 'starred-gap', 'cells']);
     expect(rows[0]?.kind === 'starred-header' && rows[0].itemCount).toBe(1);
     expect(rows[1]?.kind === 'cells' && rows[1].section).toBe('starred');
+    expect(rows[2]?.kind === 'starred-gap' && rows[2].withSeparator).toBe(true);
     expect(rows[3]?.kind === 'cells' && rows[3].section).toBe('regular');
   });
 
-  it('keeps the header but drops the starred rows while collapsed', () => {
+  it('keeps the header but drops the starred rows and the separator while collapsed', () => {
     const items = [createImageItem('starred-1', true), createImageItem('regular-1')];
     const rows = buildRows({ isStarredOpen: false, items });
 
     expect(rows.map((row) => row.kind)).toEqual(['starred-header', 'starred-gap', 'cells']);
+    expect(rows[1]?.kind === 'starred-gap' && rows[1].withSeparator).toBe(false);
   });
 
   it('keeps regular row keys stable across a starred collapse so their cells are not recreated', () => {
@@ -198,11 +216,16 @@ describe('buildGalleryGridRows', () => {
 
 describe('getGalleryGridRowHeightPx', () => {
   it('sizes chrome rows by their own constants and cell rows by the shared row height', () => {
-    const rows = buildRows({ items: [createImageItem('starred-1', true), createImageItem('regular-1')] });
+    const items = [createImageItem('starred-1', true), createImageItem('regular-1')];
 
-    expect(rows.map((row) => getGalleryGridRowHeightPx(row, 100))).toEqual([
+    expect(buildRows({ items }).map((row) => getGalleryGridRowHeightPx(row, 100))).toEqual([
       GALLERY_STARRED_HEADER_HEIGHT_PX,
       100,
+      GALLERY_STARRED_SEPARATOR_HEIGHT_PX,
+      100,
+    ]);
+    expect(buildRows({ isStarredOpen: false, items }).map((row) => getGalleryGridRowHeightPx(row, 100))).toEqual([
+      GALLERY_STARRED_HEADER_HEIGHT_PX,
       GALLERY_GRID_GAP_PX,
       100,
     ]);
