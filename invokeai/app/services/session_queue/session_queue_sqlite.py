@@ -615,9 +615,7 @@ class SqliteSessionQueue(SessionQueueBase):
         placeholder.error_traceback = message
         return placeholder
 
-    def _hydrate_queue_item(
-        self, raw_queue_item: dict[str, Any], *, quarantine: bool
-    ) -> tuple[SessionQueueItem, bool]:
+    def _hydrate_queue_item(self, raw_queue_item: dict[str, Any], *, quarantine: bool) -> tuple[SessionQueueItem, bool]:
         """Hydrate one queue row without letting an unreadable snapshot break queue access."""
         try:
             return SessionQueueItem.queue_item_from_dict(raw_queue_item), True
@@ -626,9 +624,7 @@ class SqliteSessionQueue(SessionQueueBase):
                 return self._quarantine_unreadable_queue_item(raw_queue_item, exc), False
             return self._make_unreadable_queue_item(raw_queue_item, exc), False
 
-    def _quarantine_unreadable_queue_item(
-        self, raw_queue_item: dict[str, Any], error: Exception
-    ) -> SessionQueueItem:
+    def _quarantine_unreadable_queue_item(self, raw_queue_item: dict[str, Any], error: Exception) -> SessionQueueItem:
         """Fail a pending row whose runtime snapshot is newer than this worker can read.
 
         The real session cannot be hydrated, so use a minimal in-memory placeholder only for the
