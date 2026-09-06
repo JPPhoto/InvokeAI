@@ -10788,6 +10788,24 @@
               "title": "Queue Id"
             },
             "description": "The queue id to perform this operation on"
+          },
+          {
+            "name": "origin_prefix",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only cancel queue items whose origin starts with this prefix",
+              "title": "Origin Prefix"
+            },
+            "description": "Only cancel queue items whose origin starts with this prefix"
           }
         ],
         "responses": {
@@ -10797,6 +10815,72 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CancelAllExceptCurrentResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/queue/{queue_id}/cancel_all": {
+      "put": {
+        "tags": ["queue"],
+        "summary": "Cancel All",
+        "description": "Immediately cancels all queue items, in-progress items included. Non-admin users can only cancel their own items.",
+        "operationId": "cancel_all",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "queue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The queue id to perform this operation on",
+              "title": "Queue Id"
+            },
+            "description": "The queue id to perform this operation on"
+          },
+          {
+            "name": "origin_prefix",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only cancel queue items whose origin starts with this prefix",
+              "title": "Origin Prefix"
+            },
+            "description": "Only cancel queue items whose origin starts with this prefix"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelByQueueIDResult"
                 }
               }
             }
@@ -20166,6 +20250,19 @@
         "required": ["canceled"],
         "title": "CancelByDestinationResult",
         "description": "Result of canceling by a destination"
+      },
+      "CancelByQueueIDResult": {
+        "properties": {
+          "canceled": {
+            "type": "integer",
+            "title": "Canceled",
+            "description": "Number of queue items canceled"
+          }
+        },
+        "type": "object",
+        "required": ["canceled"],
+        "title": "CancelByQueueIDResult",
+        "description": "Result of canceling by queue id"
       },
       "CannyEdgeDetectionInvocation": {
         "category": "controlnet_preprocessors",

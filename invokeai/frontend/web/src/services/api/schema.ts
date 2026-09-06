@@ -2743,6 +2743,26 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/queue/{queue_id}/cancel_all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Cancel All
+         * @description Immediately cancels all queue items, in-progress items included. Non-admin users can only cancel their own items.
+         */
+        put: operations["cancel_all"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/queue/{queue_id}/delete_all_except_current": {
         parameters: {
             query?: never;
@@ -6787,6 +6807,17 @@ export type components = {
          * @description Result of canceling by a destination
          */
         CancelByDestinationResult: {
+            /**
+             * Canceled
+             * @description Number of queue items canceled
+             */
+            canceled: number;
+        };
+        /**
+         * CancelByQueueIDResult
+         * @description Result of canceling by queue id
+         */
+        CancelByQueueIDResult: {
             /**
              * Canceled
              * @description Number of queue items canceled
@@ -50717,7 +50748,10 @@ export interface operations {
     };
     cancel_all_except_current: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only cancel queue items whose origin starts with this prefix */
+                origin_prefix?: string | null;
+            };
             header?: never;
             path: {
                 /** @description The queue id to perform this operation on */
@@ -50734,6 +50768,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CancelAllExceptCurrentResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_all: {
+        parameters: {
+            query?: {
+                /** @description Only cancel queue items whose origin starts with this prefix */
+                origin_prefix?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description The queue id to perform this operation on */
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelByQueueIDResult"];
                 };
             };
             /** @description Validation Error */
