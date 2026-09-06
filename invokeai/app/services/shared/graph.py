@@ -4009,16 +4009,14 @@ class GraphExecutionState(BaseModel):
 
     def _mark_source_executed(self, source_node_id: str) -> None:
         self.executed.add(source_node_id)
-        if self._completed_source_ids_cache is None:
-            self._completed_source_ids_cache = set()
-        self._completed_source_ids_cache.add(source_node_id)
+        self._get_completed_source_ids_cache().add(source_node_id)
         if source_node_id not in self.executed_history:
             self.executed_history.append(source_node_id)
 
     def _discard_source_executed(self, source_node_id: str) -> None:
         self.executed.discard(source_node_id)
-        if self._completed_source_ids_cache is not None:
-            self._completed_source_ids_cache.discard(source_node_id)
+        # A source can be discarded while its already-prepared executions are still complete. New executions
+        # invalidate the derived completion cache when they are registered.
 
     def _get_completed_source_ids_cache(self) -> set[str]:
         if self._completed_source_ids_cache is None:
@@ -4066,6 +4064,9 @@ class GraphExecutionState(BaseModel):
 
     def _register_prepared_exec_node(self, exec_node_id: str, source_node_id: str) -> None:
         self._prepared_registry().register(exec_node_id, source_node_id)
+        self.executed.discard(source_node_id)
+        if self._completed_source_ids_cache is not None:
+            self._completed_source_ids_cache.discard(source_node_id)
         self._invalidate_loop_caches_for_source(source_node_id)
         if (
             self._prepared_for_index is not None

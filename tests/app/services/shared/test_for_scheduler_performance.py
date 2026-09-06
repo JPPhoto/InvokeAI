@@ -70,3 +70,21 @@ def test_completion_predicate_preserves_durable_state() -> None:
     restored_state = GraphExecutionState.model_validate_json(before)
     assert restored_state.is_complete()
     assert restored_state.model_dump_json() == before
+
+
+def test_completion_cache_preserves_completed_sources_after_restore() -> None:
+    graph = Graph()
+    graph.add_node(AnyTypeTestInvocation(id="first", value=1))
+    graph.add_node(AnyTypeTestInvocation(id="second", value=2))
+    state = GraphExecutionState(graph=graph)
+
+    first = state.next()
+    assert first is not None
+    state.complete(first.id, first.invoke(Mock()))
+
+    restored_state = GraphExecutionState.model_validate_json(state.model_dump_json())
+    second = restored_state.next()
+    assert second is not None
+    restored_state.complete(second.id, second.invoke(Mock()))
+
+    assert restored_state.is_complete()
