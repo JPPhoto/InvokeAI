@@ -863,13 +863,28 @@ def _build_workflow_runner(monkeypatch: pytest.MonkeyPatch, session_queue=None):
 
 
 def _build_queue_item(invocation: BaseInvocation):
+    class Session:
+        prepared_source_mapping = {invocation.id: invocation.id}
+
+        @staticmethod
+        def get_execution_ref(node_id: str, *, effect_count: int | None = None):
+            return SimpleNamespace(frame=SimpleNamespace(iteration_path=()))
+
+        @staticmethod
+        def apply(execution_ref, output, effects=None, *, effect_count: int | None = None):
+            return []
+
+        @staticmethod
+        def set_node_error(node_id: str, error: str) -> None:
+            pass
+
     return type(
         "QueueItem",
         (),
         {
             "item_id": 1,
             "session_id": "test-session",
-            "session": type("Session", (), {"prepared_source_mapping": {invocation.id: invocation.id}})(),
+            "session": Session(),
         },
     )()
 
@@ -1160,6 +1175,7 @@ def test_run_node_does_not_swallow_sigint_in_subprocess() -> None:
         import time
         from contextlib import contextmanager
         from threading import Event
+        from types import SimpleNamespace
 
         import invokeai.app.services.session_processor.session_processor_default as session_processor_default
         from invokeai.app.invocations.baseinvocation import (
@@ -1226,13 +1242,29 @@ def test_run_node_does_not_swallow_sigint_in_subprocess() -> None:
         )
 
         invocation = SigIntDuringNodeInvocation(id="node")
+
+        class Session:
+            prepared_source_mapping = {invocation.id: invocation.id}
+
+            @staticmethod
+            def get_execution_ref(node_id: str, *, effect_count: int | None = None):
+                return SimpleNamespace(frame=SimpleNamespace(iteration_path=()))
+
+            @staticmethod
+            def apply(execution_ref, output, effects=None, *, effect_count: int | None = None):
+                return []
+
+            @staticmethod
+            def set_node_error(node_id: str, error: str) -> None:
+                pass
+
         queue_item = type(
             "QueueItem",
             (),
             {
                 "item_id": 1,
                 "session_id": "test-session",
-                "session": type("Session", (), {"prepared_source_mapping": {invocation.id: invocation.id}})(),
+                "session": Session(),
             },
         )()
 
