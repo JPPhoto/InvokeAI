@@ -13,10 +13,15 @@ from invokeai.app.invocations.baseinvocation import (
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.services.shared.execution_effects import (
     AddEdgeEffect,
+    AwaitEffect,
+    ChildExecutionHandle,
+    ExecutionInterface,
     ExecutionEffectsRecorder,
     ExecutionRef,
     ExecutionToken,
+    FailEffect,
     SetValueEffect,
+    SpawnExecutionEffect,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContext
 
@@ -65,6 +70,98 @@ def test_execution_token_and_ref_are_frame_aware() -> None:
     assert token.frame == (2, 4)
     assert ref.invocation_id == "node"
     assert ref.iteration_path == (2, 4)
+
+
+def test_execution_ref_identity_aliases_are_safe_without_token() -> None:
+    ref = ExecutionRef(execution_node_id="node")
+
+    assert ref.invocation_id == "node"
+    assert ref.output_name == ""
+
+
+def test_spawn_returns_validated_child_handle_and_records_owner() -> None:
+    recorder = ExecutionEffectsRecorder(source_node_id="parent")
+    execution = ExecutionInterface(recorder)
+
+    handle = execution.spawn(
+        graph={"nodes": {}},
+        inputs={"value": {"items": [1, True, None]}},
+        authorization_context={"user_id": "user"},
+    )
+
+    assert isinstance(handle, ChildExecutionHandle)
+    assert handle.child_execution_id
+    assert handle.parent_execution_id == "parent"
+    assert handle.authorization_context == {"user_id": "user"}
+    assert isinstance(recorder.snapshot()[0], SpawnExecutionEffect)
+    effect = recorder.snapshot()[0]
+    assert isinstance(effect, SpawnExecutionEffect)
+    assert effect.parent == effect.execution_ref
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"child_execution_id": "", "parent_execution_id": "parent"},
+        {"child_execution_id": "child", "parent_execution_id": ""},
+        {"child_execution_id": "child", "parent_execution_id": "parent", "authorization_context": ""},
+    ],
+)
+def test_child_execution_handle_rejects_invalid_identity_or_authorization(value: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        ChildExecutionHandle.model_validate(value)
+
+
+@pytest.mark.parametrize(
+    "graph, inputs",
+    [
+        (None, {}),
+        ({"nodes": {}}, []),
+        ({"nodes": {}}, {"": 1}),
+    ],
+)
+def test_spawn_rejects_invalid_inputs(graph: object, inputs: object) -> None:
+    execution = ExecutionInterface(ExecutionEffectsRecorder(source_node_id="parent"))
+
+    with pytest.raises((TypeError, ValidationError)):
+        execution.spawn(graph, inputs)  # type: ignore[arg-type]
+
+
+def test_recorder_drain_returns_and_clears_effects() -> None:
+    recorder = ExecutionEffectsRecorder()
+    effect = SetValueEffect(target=ExecutionRef(node_id="node", field="value"), value=3)
+    recorder.record(effect)
+
+    assert recorder.drain() == (effect,)
+    assert recorder.snapshot() == ()
+
+
+def test_set_value_effect_accepts_nested_and_runtime_values() -> None:
+    target = ExecutionRef(node_id="node", field="value")
+    nested_value = {"items": [1, True, None, {"name": "value"}]}
+
+    assert SetValueEffect(target=target, value=nested_value).value == nested_value
+    runtime_value = object()
+    assert SetValueEffect(target=target, value=runtime_value).value is runtime_value
+
+
+def test_set_value_effect_requires_a_value() -> None:
+    with pytest.raises(ValidationError):
+        SetValueEffect(target=ExecutionRef(node_id="node", field="value"))
+
+
+def test_recorder_created_control_effects_carry_owner_refs() -> None:
+    recorder = ExecutionEffectsRecorder(source_node_id="parent")
+    execution = ExecutionInterface(recorder)
+
+    execution.await_dependency(ExecutionRef(execution_node_id="child"))
+    execution.fail("failed")
+
+    await_effect, fail_effect = recorder.snapshot()
+    assert isinstance(await_effect, AwaitEffect)
+    assert isinstance(fail_effect, FailEffect)
+    assert await_effect.execution_ref == ExecutionRef(execution_node_id="parent")
+    assert fail_effect.execution_ref == ExecutionRef(execution_node_id="parent")
 
 
 @pytest.mark.parametrize(

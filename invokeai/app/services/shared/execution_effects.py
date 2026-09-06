@@ -10,7 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from invokeai.app.util.misc import uuid_string
 
 if TYPE_CHECKING:
     from invokeai.app.invocations.baseinvocation import BaseInvocationOutput
@@ -176,11 +178,11 @@ class ExecutionRef(_ExecutionModel):
 
     @property
     def invocation_id(self) -> str:
-        return self.token.node_id
+        return self.node_id
 
     @property
     def output_name(self) -> str:
-        return self.token.field
+        return self.field
 
     @property
     def iteration_path(self) -> tuple[int | str, ...]:
@@ -191,6 +193,9 @@ class ExecutionEffect(_ExecutionModel):
     """Base type for a recorded execution effect."""
 
     kind: str = Field(min_length=1)
+    execution_ref: ExecutionRef | None = Field(
+        default=None, description="The execution reference that owns this effect, when available."
+    )
 
     @field_validator("kind")
     @classmethod
@@ -203,7 +208,7 @@ class ExecutionEffect(_ExecutionModel):
 class SetValueEffect(ExecutionEffect):
     kind: Literal["set_value"] = "set_value"
     target: ExecutionRef
-    value: JsonValue
+    value: Any
 
 
 class AddEdgeEffect(ExecutionEffect):
@@ -234,6 +239,20 @@ class SpawnExecutionEffect(ExecutionEffect):
     parent: ExecutionRef
     graph: Any
     inputs: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("graph")
+    @classmethod
+    def _reject_missing_graph(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("spawn graph must not be None")
+        return value
+
+    @field_validator("inputs")
+    @classmethod
+    def _validate_input_names(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if any(not name.strip() for name in value):
+            raise ValueError("spawn input names must not be blank")
+        return value
 
 
 class AwaitEffect(ExecutionEffect):
@@ -310,25 +329,85 @@ class ExecutionInterface:
             )
         )
 
-    def spawn(self, graph: Any, inputs: dict[str, Any]) -> None:
+    def spawn(
+        self,
+        graph: Any,
+        inputs: dict[str, Any],
+        *,
+        child_execution_id: str | None = None,
+        authorization_context: dict[str, Any] | None = None,
+    ) -> "ChildExecutionHandle":
+        owner = ExecutionRef(execution_node_id=self._recorder.source_node_id, frame_path=self._recorder.frame_path)
+        handle = ChildExecutionHandle(
+            child_execution_id=child_execution_id or uuid_string(),
+            parent_execution_id=self._recorder.source_node_id,
+            authorization_context=authorization_context,
+        )
         self._recorder.record(
             SpawnExecutionEffect(
-                parent=ExecutionRef(execution_node_id=self._recorder.source_node_id, frame_path=self._recorder.frame_path),
+                execution_ref=owner,
+                parent=owner,
                 graph=graph,
                 inputs=inputs,
             )
         )
+        return handle
 
     def await_dependency(self, dependency: ExecutionRef) -> None:
-        self._recorder.record(AwaitEffect(dependency=dependency))
+        owner = ExecutionRef(execution_node_id=self._recorder.source_node_id, frame_path=self._recorder.frame_path)
+        self._recorder.record(AwaitEffect(execution_ref=owner, dependency=dependency))
 
     def fail(self, message: str) -> None:
-        self._recorder.record(FailEffect(message=message))
+        owner = ExecutionRef(execution_node_id=self._recorder.source_node_id, frame_path=self._recorder.frame_path)
+        self._recorder.record(FailEffect(execution_ref=owner, message=message))
 
     def authorize_workflow(self, workflow_id: str) -> Any:
         if self._authorize_workflow is None:
             raise PermissionError("workflow authorization is unavailable in this execution context")
         return self._authorize_workflow(workflow_id)
+
+
+class ChildExecutionHandle(_ExecutionModel):
+    """Validated identity and authorization metadata for a spawned child."""
+
+    child_execution_id: str = Field(min_length=1)
+    parent_execution_id: str = Field(min_length=1)
+    authorization_context: dict[str, Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_compatibility_names(cls, value: Any) -> Any:
+        return _normalize_aliases(
+            value,
+            {
+                "child_execution_id": ("child_id", "execution_id"),
+                "parent_execution_id": ("parent_id",),
+                "authorization_context": ("authorization", "auth_context"),
+            },
+        )
+
+    @field_validator("child_execution_id", "parent_execution_id")
+    @classmethod
+    def _reject_blank_ids(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @property
+    def child_id(self) -> str:
+        return self.child_execution_id
+
+    @property
+    def execution_id(self) -> str:
+        return self.child_execution_id
+
+    @property
+    def parent_id(self) -> str:
+        return self.parent_execution_id
+
+    @property
+    def authorization(self) -> dict[str, Any] | None:
+        return self.authorization_context
 
 
 @dataclass(frozen=True)
@@ -362,6 +441,12 @@ class ExecutionEffectsRecorder:
 
     def snapshot(self) -> tuple[ExecutionEffect, ...]:
         return tuple(self._effects)
+
+    def drain(self) -> tuple[ExecutionEffect, ...]:
+        """Return all recorded effects and reset the recorder."""
+        effects = self.snapshot()
+        self.clear()
+        return effects
 
     def batch(self) -> ExecutionEffectBatch:
         return ExecutionEffectBatch(effects=self.snapshot())
