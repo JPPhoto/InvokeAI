@@ -37,16 +37,20 @@ import { createGenerateFormValuesSelector } from '@features/generation/react';
 import { getDeterminateProgressPercent } from '@features/queue/contracts';
 import { useDeviceLabel } from '@features/queue/devices';
 import {
-  useActiveProgressTarget,
+  consumeQueueItemSwapProgressImage,
   useActiveProgressTargets,
+  useFollowedProgressTargets,
   useItemProgress,
   useProgressImage,
+  useQueueItemBridgeProgressImage,
   useQueueItemProgressImage,
+  useQueueItemSwapProgressImage,
   type LatestProgressImageSnapshot,
 } from '@features/queue/react';
 import {
   imageUrlToStreamingSource,
   progressImageToStreamingSource,
+  type StreamingImageSource,
 } from '@platform/ui/streaming-image/streamingImageSource';
 import { useStreamingImageSource } from '@platform/ui/streaming-image/useStreamingImageSource';
 import { useQuery } from '@tanstack/react-query';
@@ -209,8 +213,8 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     (project) => project.settings
   );
   const progressImage = useProgressImage();
-  const activeProgressTarget = useActiveProgressTarget();
-  const activeProgressTargets = useActiveProgressTargets();
+  const runningProgressTargets = useActiveProgressTargets();
+  const followedProgressTargets = useFollowedProgressTargets();
   const { account, gallery, notifications, widgets } = useWorkbenchCommands();
   const queries = useWorkbenchQueries();
   const { density, rootRef } = usePreviewDensity(region);
@@ -237,16 +241,29 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     selectedItem?.kind === 'image' &&
     compareImage !== null &&
     toGalleryItemKey({ kind: 'image', name: compareImage.imageName }) !== selectedItemKey;
-  const generationSequence = useMemo(
-    () => getGalleryGenerationSequence(queueItems, activeProgressTarget),
-    [activeProgressTarget, queueItems]
-  );
-  const activeGalleryPlaceholder = generationSequence.liveSlot;
+  const generationSequence = useMemo(() => getGalleryGenerationSequence(queueItems, null), [queueItems]);
   // Multi-GPU runs one session per GPU, so several slots can be live at once. One
   // live slot keeps the existing single-frame preview; two or more are tiled.
+  // Running slots only: a slot settling after completion must not turn a
+  // single-GPU batch into a two-tile grid at every item boundary.
   const liveGalleryPlaceholders = useMemo(
-    () => getGalleryLiveSlots(generationSequence.chronologicalSlots, activeProgressTargets),
-    [activeProgressTargets, generationSequence.chronologicalSlots]
+    () => getGalleryLiveSlots(generationSequence.chronologicalSlots, runningProgressTargets),
+    [generationSequence.chronologicalSlots, runningProgressTargets]
+  );
+  // The slot to follow: the oldest running one, else the oldest settling one. A
+  // completed slot stays followed until its result routing lands, and routing
+  // removes its placeholder first — so the followed set is filtered against the
+  // placeholders that exist rather than trusting a single target that may have
+  // just vanished. That routing window is where Preview used to fall back onto
+  // the previous selection before the finished image was selected. A running
+  // slot wins over a settling one so a concurrent session's live stream is
+  // never hidden behind a static frame.
+  const activeGalleryPlaceholder = useMemo(
+    () =>
+      liveGalleryPlaceholders[0] ??
+      getGalleryLiveSlots(generationSequence.chronologicalSlots, followedProgressTargets)[0] ??
+      null,
+    [followedProgressTargets, generationSequence.chronologicalSlots, liveGalleryPlaceholders]
   );
   const matchingProgressImage = getMatchingProgressImage(progressImage, activeGalleryPlaceholder);
   // Not while a similarity search is active: the grid hides pending items
@@ -669,6 +686,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
                 item={selectedItem}
                 loupeControlsRef={loupeControlsRef}
                 selectedIndex={navigationCursor}
+                shouldAntialiasProgressImage={antialiasProgressImages}
                 onContextMenu={openItemContextMenu}
                 onNext={selectNextItem}
                 onPrevious={selectPreviousItem}
@@ -713,7 +731,11 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   );
 };
 
-const SelectedImagePreview = ({ item, ...props }: SelectedMediaPreviewProps & { item: GalleryImageItem }) => {
+const SelectedImagePreview = ({
+  item,
+  shouldAntialiasProgressImage,
+  ...props
+}: SelectedMediaPreviewProps & { item: GalleryImageItem; shouldAntialiasProgressImage: boolean }) => {
   const previewImage = useStreamingImageSource({
     fallbackImage: imageUrlToStreamingSource({
       alt: item.name,
@@ -727,6 +749,20 @@ const SelectedImagePreview = ({ item, ...props }: SelectedMediaPreviewProps & { 
     () => (previewImage ? { itemKey: toGalleryItemKey(item), kind: 'image', source: previewImage } : null),
     [item, previewImage]
   );
+  // The last denoise frame of the run that produced this image, when it finished
+  // moments ago: painted over the finished image until that has decoded, so the
+  // denoise→done boundary changes only the pixels inside the frame.
+  const swapProgressImage = useQueueItemSwapProgressImage(item.sourceQueueItemId, item.name);
+  const holdSource = useMemo(
+    () => progressImageToStreamingSource(swapProgressImage, item.name),
+    [item.name, swapProgressImage]
+  );
+  const sourceQueueItemId = item.sourceQueueItemId;
+  const handleSourceLoaded = useCallback(() => {
+    if (sourceQueueItemId) {
+      consumeQueueItemSwapProgressImage(sourceQueueItemId);
+    }
+  }, [sourceQueueItemId]);
 
   return (
     <SelectedMediaPreview
@@ -734,8 +770,11 @@ const SelectedImagePreview = ({ item, ...props }: SelectedMediaPreviewProps & { 
       dragItem={toGalleryItemRef(item)}
       frameHeight={previewImage?.height ?? item.height}
       frameWidth={previewImage?.width ?? item.width}
+      holdSource={holdSource}
       item={item}
+      shouldAntialiasHoldImage={shouldAntialiasProgressImage}
       source={source}
+      onSourceLoaded={handleSourceLoaded}
     />
   );
 };
@@ -823,13 +862,16 @@ const SelectedMediaPreview = ({
   filmstripItems,
   frameHeight,
   frameWidth,
+  holdSource,
   isItemCurrent,
   isLoadingBoard,
   isMetadataOpen,
   item,
   loupeControlsRef,
   onCopyAvailabilityChange,
+  onSourceLoaded,
   selectedIndex,
+  shouldAntialiasHoldImage,
   source,
   onContextMenu,
   onNext,
@@ -841,6 +883,9 @@ const SelectedMediaPreview = ({
   dragItem?: GalleryItemRef;
   frameHeight: number;
   frameWidth: number;
+  holdSource?: StreamingImageSource | null;
+  onSourceLoaded?: (src: string) => void;
+  shouldAntialiasHoldImage?: boolean;
   source: Parameters<typeof PreviewFrame>[0]['source'];
 }) => {
   const media = useMemo<PreviewFooterMedia>(
@@ -854,13 +899,15 @@ const SelectedMediaPreview = ({
         dragItem={dragItem}
         frameHeight={frameHeight}
         frameWidth={frameWidth}
+        holdSource={holdSource}
         isItemCurrent={isItemCurrent}
         isLive={false}
         loupeControlsRef={loupeControlsRef}
+        onSourceLoaded={onSourceLoaded}
         onVideoCopyAvailabilityChange={onCopyAvailabilityChange}
         padding={getMediaStagePadding(density)}
         paddingBottom={PREVIEW_OVERLAY_RESERVE}
-        shouldAntialiasLiveImage
+        shouldAntialiasLiveImage={shouldAntialiasHoldImage ?? true}
         source={source}
         variant="framed"
         videoControllerRef={videoControllerRef}
@@ -922,7 +969,12 @@ const LivePreview = ({
   onPrevious: () => void;
   onSelectItem: (item: GalleryItem) => void;
 }) => {
+  // The previous slot's last frame stands in until this slot produces one of
+  // its own (model load, text encoding) — otherwise a sequential batch drops
+  // to an empty card between items.
+  const bridgeProgressImage = useQueueItemBridgeProgressImage(placeholder.queueItemId);
   const previewImage = useStreamingImageSource({
+    heldLiveImage: progressImageToStreamingSource(bridgeProgressImage),
     liveImage: progressImageToStreamingSource(progressImage),
   });
   const source = useMemo<PreviewMediaSource | null>(
