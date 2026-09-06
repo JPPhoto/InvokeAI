@@ -345,7 +345,8 @@ export const cloneReferenceImages = (
  * conditioning order — the graph builders chain `reference_images` in it — so
  * this is the whole of what reordering means. Returns the same array identity
  * when the move is a no-op (unknown id, or already at the end it is moving
- * toward) so callers can skip the write.
+ * toward), so an updater built on it leaves the settings untouched and the
+ * committed patch comes out empty.
  */
 export const moveReferenceImage = (
   referenceImages: readonly GenerateReferenceImage[],

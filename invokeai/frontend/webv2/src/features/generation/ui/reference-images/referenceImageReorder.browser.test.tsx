@@ -71,8 +71,7 @@ const Stack = ({ ids }: { ids: string[] }) => {
       {referenceImages.map((referenceImage, index) => (
         <ReferenceImageCard
           key={referenceImage.id}
-          canMoveDown={index < referenceImages.length - 1}
-          canMoveUp={index > 0}
+          count={referenceImages.length}
           index={index}
           referenceImage={referenceImage}
           selectedModel={undefined}
@@ -141,6 +140,31 @@ describe('reference image reorder arrows', () => {
     });
 
     expect(renderedOrder()).toEqual(['second.png', 'third.png', 'first.png']);
+  });
+
+  it('hands focus to the arrow that stays live when a move lands on an end', async () => {
+    await renderStack(['first', 'second', 'third']);
+
+    // Walking the middle card to the top disables the button being activated,
+    // so without the handoff a keyboard user is dropped to <body>.
+    const up = buttons('Move reference image up')[1];
+
+    await act(() => up?.focus());
+    await act(() => up?.click());
+
+    expect(renderedOrder()).toEqual(['second.png', 'first.png', 'third.png']);
+    expect(document.activeElement).toBe(buttons('Move reference image down')[0]);
+    expect((document.activeElement as HTMLButtonElement).disabled).toBe(false);
+
+    // Same at the far end: the down arrow of the card that lands last.
+    const down = buttons('Move reference image down')[1];
+
+    await act(() => down?.focus());
+    await act(() => down?.click());
+
+    expect(renderedOrder()).toEqual(['second.png', 'third.png', 'first.png']);
+    expect(document.activeElement).toBe(buttons('Move reference image up')[2]);
+    expect((document.activeElement as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('leaves a lone reference image with both arrows disabled', async () => {

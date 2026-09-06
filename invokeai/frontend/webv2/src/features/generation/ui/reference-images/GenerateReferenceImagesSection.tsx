@@ -75,6 +75,14 @@ export const GenerateReferenceImagesContent = ({
 
   const appendReferenceImages = useCallback(
     (images: GenerateReferenceImageAsset[]) => {
+      // Ids are minted HERE rather than inside the updater. A pending updater
+      // is applied twice — once against the draft the user sees, then again
+      // against the freshly committed settings when the debounce flushes — so
+      // an id created inside it differs between the two. Any later edit keyed
+      // to the id the card renders under (a reorder, a patch) would then find
+      // nothing at flush and be silently dropped.
+      const ids = images.map(() => createReferenceImageId());
+
       onCommit((currentSettings) => {
         const remaining = getMaxReferenceImages(selectedModel) - currentSettings.referenceImages.length;
 
@@ -86,9 +94,9 @@ export const GenerateReferenceImagesContent = ({
           ...currentSettings,
           referenceImages: [
             ...currentSettings.referenceImages,
-            ...images.slice(0, remaining).map((image) => ({
+            ...images.slice(0, remaining).map((image, index) => ({
               config: getDefaultReferenceImageConfig(selectedModel, models, image),
-              id: createReferenceImageId(),
+              id: ids[index] ?? createReferenceImageId(),
               isEnabled: true,
             })),
           ],
@@ -327,8 +335,7 @@ export const GenerateReferenceImagesContent = ({
           {referenceImages.map((referenceImage, index) => (
             <ReferenceImageCard
               key={referenceImage.id}
-              canMoveDown={index < referenceImageCount - 1}
-              canMoveUp={index > 0}
+              count={referenceImageCount}
               index={index}
               referenceImage={referenceImage}
               selectedModel={selectedModel}

@@ -13,7 +13,7 @@ import { getReferenceImageUrls } from '@features/generation/data/referenceImageU
 import { GenerationModelSelect as ModelSelect } from '@features/generation/ui/GenerationUiContext';
 import { IconButton, ToggleDot, Tooltip } from '@platform/ui';
 import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, CropIcon, ImageIcon, RulerIcon, Trash2Icon } from 'lucide-react';
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { formatWeight, getModeLabelKey } from './referenceImageConfig';
@@ -44,8 +44,7 @@ const OVERLAY_GRADIENT_STYLE: CSSProperties = {
 };
 
 interface ReferenceImageCardProps {
-  canMoveDown: boolean;
-  canMoveUp: boolean;
+  count: number;
   index: number;
   referenceImage: GenerateReferenceImage;
   selectedModel: GenerateModelConfig | undefined;
@@ -56,8 +55,7 @@ interface ReferenceImageCardProps {
 }
 
 const ReferenceImageCardBase = ({
-  canMoveDown,
-  canMoveUp,
+  count,
   index,
   onMove,
   onPatch,
@@ -68,6 +66,10 @@ const ReferenceImageCardBase = ({
 }: ReferenceImageCardProps) => {
   const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const moveUpRef = useRef<HTMLButtonElement>(null);
+  const moveDownRef = useRef<HTMLButtonElement>(null);
+  const canMoveUp = index > 0;
+  const canMoveDown = index < count - 1;
   const config = referenceImage.config;
   const isEnabled = referenceImage.isEnabled;
   const selectedBase = selectedModel?.base;
@@ -88,9 +90,26 @@ const ReferenceImageCardBase = ({
 
   const handleRemove = useCallback(() => onRemove(referenceImage.id), [onRemove, referenceImage.id]);
 
-  const handleMoveUp = useCallback(() => onMove(referenceImage.id, -1), [onMove, referenceImage.id]);
+  // A move that lands on either end disables the very button that was just
+  // activated, and a disabled element cannot hold focus — a keyboard user
+  // would be dropped to <body> on the last step of walking a card to the top.
+  // The card's DOM nodes survive the reorder (the list is keyed by id), so
+  // handing focus to the arrow that stays live keeps their place in the stack.
+  const handleMoveUp = useCallback(() => {
+    onMove(referenceImage.id, -1);
 
-  const handleMoveDown = useCallback(() => onMove(referenceImage.id, 1), [onMove, referenceImage.id]);
+    if (index - 1 === 0) {
+      moveDownRef.current?.focus();
+    }
+  }, [index, onMove, referenceImage.id]);
+
+  const handleMoveDown = useCallback(() => {
+    onMove(referenceImage.id, 1);
+
+    if (index + 1 === count - 1) {
+      moveUpRef.current?.focus();
+    }
+  }, [count, index, onMove, referenceImage.id]);
 
   const handleCrop = useCallback(
     (image: GenerateReferenceImageAsset) => changeConfig({ ...config, image }),
@@ -143,6 +162,7 @@ const ReferenceImageCardBase = ({
               place — the same arrow pair the video panel's references use. */}
           <Tooltip content={t('widgets.generate.moveReferenceImageUp')}>
             <IconButton
+              ref={moveUpRef}
               aria-label={t('widgets.generate.moveReferenceImageUp')}
               color="fg.muted"
               disabled={!canMoveUp}
@@ -155,6 +175,7 @@ const ReferenceImageCardBase = ({
           </Tooltip>
           <Tooltip content={t('widgets.generate.moveReferenceImageDown')}>
             <IconButton
+              ref={moveDownRef}
               aria-label={t('widgets.generate.moveReferenceImageDown')}
               color="fg.muted"
               disabled={!canMoveDown}
