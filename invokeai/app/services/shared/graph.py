@@ -4302,6 +4302,52 @@ class GraphExecutionState(BaseModel):
         )
         return owner_id in {execution_ref.reference_id, execution_ref.exec_node_id}
 
+    def _validate_execution_frame(
+        self, frame: Any, execution_ref: ExecutionReference, owner_name: str = "Execution effect"
+    ) -> None:
+        if frame is None:
+            return
+        if isinstance(frame, str):
+            if frame not in ("", execution_ref.frame.frame_id):
+                raise ValueError(f"{owner_name} belongs to another execution frame")
+            return
+        if isinstance(frame, (tuple, list)):
+            if tuple(frame) != execution_ref.frame.iteration_path:
+                raise ValueError(f"{owner_name} belongs to another execution frame")
+            return
+
+        frame_id = self._value_from_object(frame, "frame_id", "id")
+        if frame_id not in (None, "", execution_ref.frame.frame_id):
+            raise ValueError(f"{owner_name} belongs to another execution frame")
+        frame_state_id = self._value_from_object(frame, "state_id", "session_id")
+        if frame_state_id not in (None, "", execution_ref.frame.state_id):
+            raise ValueError(f"{owner_name} belongs to another graph execution state")
+        frame_path = self._value_from_object(frame, "iteration_path", "frame_path")
+        if frame_path is not None and tuple(frame_path) != execution_ref.frame.iteration_path:
+            raise ValueError(f"{owner_name} belongs to another execution frame")
+        frame_depth = self._value_from_object(frame, "workflow_call_depth", "call_depth")
+        if frame_depth not in (None, execution_ref.frame.workflow_call_depth):
+            raise ValueError(f"{owner_name} belongs to another workflow-call depth")
+
+    def _validate_execution_token(self, token: Any, execution_ref: ExecutionReference) -> None:
+        token_reference_id = self._value_from_object(token, "reference_id", "execution_ref_id")
+        if token_reference_id not in (None, "", execution_ref.reference_id):
+            raise ValueError("Execution token belongs to another execution reference")
+        token_state_id = self._value_from_object(token, "state_id", "session_id")
+        if token_state_id not in (None, "", execution_ref.state_id):
+            raise ValueError("Execution token belongs to another graph execution state")
+
+        self._validate_execution_frame(self._value_from_object(token, "frame"), execution_ref, "Execution token")
+        token_frame_id = self._value_from_object(token, "frame_id")
+        if token_frame_id not in (None, "", execution_ref.frame.frame_id):
+            raise ValueError("Execution token belongs to another execution frame")
+        token_path = self._value_from_object(token, "iteration_path", "frame_path")
+        if token_path is not None and tuple(token_path) != execution_ref.frame.iteration_path:
+            raise ValueError("Execution token belongs to another execution frame")
+        token_depth = self._value_from_object(token, "workflow_call_depth", "call_depth")
+        if token_depth not in (None, execution_ref.frame.workflow_call_depth):
+            raise ValueError("Execution token belongs to another workflow-call depth")
+
     def _validate_execution_ref(self, execution_ref: ExecutionReference | str | Any) -> ExecutionReference:
         ref = self._coerce_execution_ref(execution_ref)
         expected = self._expected_execution_ref(ref.exec_node_id)
@@ -4370,6 +4416,15 @@ class GraphExecutionState(BaseModel):
         output_fields = type(node).get_output_annotation().model_fields
         for effect in effects:
             effect_kind = self._value_from_object(effect, "kind", "effect_type", "type")
+            token = self._value_from_object(effect, "token")
+            if effect_kind == "close_stream":
+                token_kind = self._value_from_object(token, "token_kind")
+                token_port = self._value_from_object(token, "field", "port", "output", "output_name")
+                if token is None or token_port in (None, LOOP_LINKAGE_FIELD):
+                    raise ValueError("Close-stream effect requires a data output token")
+                if token_kind != "stream_end":
+                    raise ValueError("Close-stream effect requires a stream_end token")
+
             owner = self._value_from_object(
                 effect,
                 "execution_ref",
@@ -4386,28 +4441,17 @@ class GraphExecutionState(BaseModel):
                 owner = self._value_from_object(effect, "target", "source", "token")
             if owner is None or not self._same_execution_owner(owner, execution_ref):
                 raise ValueError("Execution effect is not owned by execution reference")
-            if effect_kind is not None and effect_kind != "emit":
+            if effect_kind is not None and effect_kind not in {"emit", "close_stream"}:
                 raise ValueError(f"Unsupported execution effect kind: {effect_kind}")
 
             effect_state_id = self._value_from_object(effect, "state_id", "session_id")
             if effect_state_id is not None and effect_state_id != execution_ref.state_id:
                 raise ValueError("Execution effect belongs to another graph execution state")
-            effect_frame = self._value_from_object(effect, "frame")
-            if effect_frame is not None:
-                frame_id = self._value_from_object(effect_frame, "frame_id", "id")
-                if frame_id not in (None, "", execution_ref.frame.frame_id):
-                    raise ValueError("Execution effect belongs to another execution frame")
-                frame_state_id = self._value_from_object(effect_frame, "state_id", "session_id")
-                if frame_state_id not in (None, "", execution_ref.frame.state_id):
-                    raise ValueError("Execution effect belongs to another graph execution state")
-                frame_path = self._value_from_object(effect_frame, "iteration_path", "frame_path")
-                if frame_path is not None and tuple(frame_path) != execution_ref.frame.iteration_path:
-                    raise ValueError("Execution effect belongs to another execution frame")
-                frame_depth = self._value_from_object(effect_frame, "workflow_call_depth", "call_depth")
-                if frame_depth not in (None, execution_ref.frame.workflow_call_depth):
-                    raise ValueError("Execution effect belongs to another workflow-call depth")
+            self._validate_execution_frame(self._value_from_object(effect, "frame"), execution_ref)
 
             source_ref = self._value_from_object(effect, "source", "target", "token")
+            if token is not None:
+                self._validate_execution_token(token, execution_ref)
             destination_ref = self._value_from_object(effect, "destination")
             source_port = self._value_from_object(effect, "source_port", "output_port", "source_field", "port")
             if source_port is None:
@@ -4480,7 +4524,8 @@ class GraphExecutionState(BaseModel):
                 value=copydeep(getattr(output, port)),
             )
         for effect in effects:
-            if self._value_from_object(effect, "kind", "effect_type", "type") != "emit":
+            effect_kind = self._value_from_object(effect, "kind", "effect_type", "type")
+            if effect_kind not in {"emit", "close_stream"}:
                 continue
             token = self._value_from_object(effect, "token")
             port = self._value_from_object(token, "field", "port", "output", "output_name")
@@ -4494,7 +4539,13 @@ class GraphExecutionState(BaseModel):
                 token_value = self._value_from_object(token, "value")
             token_kind = self._value_from_object(token, "token_kind") or "data"
             sequence = self._value_from_object(token, "sequence")
-            token_id_base = f"{execution_ref.reference_id}:{port}:{sequence if sequence is not None else 'effect'}"
+            if effect_kind == "close_stream":
+                token_id_base = (
+                    f"{execution_ref.reference_id}:{port}:stream_end:"
+                    f"{sequence if sequence is not None else 'effect'}"
+                )
+            else:
+                token_id_base = f"{execution_ref.reference_id}:{port}:{sequence if sequence is not None else 'effect'}"
             token_id = token_id_base
             duplicate_index = 1
             while token_id in tokens:
@@ -4507,10 +4558,60 @@ class GraphExecutionState(BaseModel):
                 port=port,
                 frame=execution_ref.frame,
                 value=copydeep(token_value),
-                token_kind=token_kind,
+                token_kind="stream_end" if effect_kind == "close_stream" else token_kind,
                 sequence=sequence,
             )
         return tokens
+
+    def _snapshot_apply_state(self) -> dict[str, dict[str, Any]]:
+        public_fields = (
+            "execution_graph",
+            "executed",
+            "executed_history",
+            "results",
+            "prepared_source_mapping",
+            "source_prepared_mapping",
+            "finalized_loop_contexts",
+            "prepared_iteration_paths",
+            "execution_refs",
+            "execution_tokens",
+            "execution_effects",
+            "indegree",
+        )
+        private_fields = (
+            "_ready_queues",
+            "_ready_node_ids",
+            "_active_class",
+            "_if_branch_exclusive_sources",
+            "_resolved_if_exec_branches",
+            "_prepared_exec_metadata",
+            "_for_parent_iteration_paths_cache",
+            "_all_for_contexts_finalized_cache",
+            "_prepared_for_index",
+            "_final_prepared_for_index",
+            "_prepared_for_index_by_exec",
+            "_completed_source_ids_cache",
+        )
+        return {
+            "public": {name: copy.deepcopy(getattr(self, name)) for name in public_fields},
+            "private": {name: copy.deepcopy(getattr(self, name)) for name in private_fields},
+        }
+
+    def _restore_apply_state(self, snapshot: dict[str, dict[str, Any]]) -> None:
+        for field_name, value in snapshot["public"].items():
+            object.__setattr__(self, field_name, value)
+        for field_name, value in snapshot["private"].items():
+            object.__setattr__(self, field_name, value)
+
+        # Helpers and derived graph indexes must not retain references to the failed transaction.
+        object.__setattr__(self, "_prepared_exec_registry", None)
+        object.__setattr__(self, "_if_branch_scheduler", None)
+        object.__setattr__(self, "_execution_materializer", None)
+        object.__setattr__(self, "_execution_scheduler", None)
+        object.__setattr__(self, "_execution_runtime", None)
+        object.__setattr__(self, "_source_graph_flat", None)
+        object.__setattr__(self, "_execution_graph_flat", None)
+        object.__setattr__(self, "_for_source_by_return_id", None)
 
     def apply(
         self,
@@ -4523,6 +4624,8 @@ class GraphExecutionState(BaseModel):
         """Apply output/effects through current scheduler while retaining old ``complete()`` behavior."""
 
         ref = self._validate_execution_ref(execution_ref)
+        if ref.exec_node_id in self.executed or ref.reference_id in self.execution_effects:
+            raise ValueError(f"Execution reference {ref.reference_id} has already been applied")
         result_effects = self._value_from_object(output, "effects", "effect_batch")
         result_output = self._value_from_object(output, "output", "invocation_output", "result")
         if result_output is not None:
@@ -4539,13 +4642,19 @@ class GraphExecutionState(BaseModel):
         tokens = self._build_execution_tokens(ref, output_value, effect_values)
         persisted_effects = copydeep(effect_values)
 
-        # All validation above is side-effect free. Preserve complete() as the scheduler compatibility boundary.
-        finalized_outputs = self.complete(ref.exec_node_id, output_value)
-        ref.effect_count = effect_count if effect_count is not None else ref.effect_count
-        self.execution_refs[ref.exec_node_id] = ref
-        self.execution_tokens.update(tokens)
-        self.execution_effects[ref.reference_id] = persisted_effects
-        return finalized_outputs
+        # All validation above is side-effect free. Preserve complete() as the scheduler compatibility boundary,
+        # but make the scheduler transition and ledger update one atomic operation.
+        state_snapshot = self._snapshot_apply_state()
+        try:
+            finalized_outputs = self.complete(ref.exec_node_id, output_value)
+            ref.effect_count = effect_count if effect_count is not None else ref.effect_count
+            self.execution_refs[ref.exec_node_id] = ref
+            self.execution_tokens.update(tokens)
+            self.execution_effects[ref.reference_id] = persisted_effects
+            return finalized_outputs
+        except Exception:
+            self._restore_apply_state(state_snapshot)
+            raise
 
     def _invalidate_loop_caches_for_source(self, source_node_id: str) -> None:
         self._all_for_contexts_finalized_cache.pop(source_node_id, None)

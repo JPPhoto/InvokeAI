@@ -287,7 +287,7 @@ def test_graph_state_apply_rejects_invalid_input_before_mutation():
 
 @pytest.mark.parametrize(
     "effect_kind",
-    ["set_value", "add_edge", "remove_edge", "spawn_execution", "await", "fail", "close_stream", "unknown"],
+    ["set_value", "add_edge", "remove_edge", "spawn_execution", "await", "fail", "unknown"],
 )
 def test_graph_state_apply_rejects_unsupported_effect_kinds(effect_kind: str):
     graph = Graph()
@@ -325,6 +325,59 @@ def test_graph_state_apply_rejects_owned_unsupported_lifecycle_effects(effect_ki
             ref,
             output,
             effects=[{"kind": effect_kind, owner_field: {"execution_node_id": node.id}}],
+        )
+
+    assert not state.executed
+    assert not state.results
+    assert not state.execution_tokens
+    assert not state.execution_effects
+
+
+def test_graph_state_apply_accepts_close_stream_effect():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+
+    state.apply(
+        ref,
+        output,
+        effects=[
+            {
+                "kind": "close_stream",
+                "token": {"node_id": node.id, "field": "value", "token_kind": "stream_end"},
+            }
+        ],
+    )
+
+    token = state.execution_tokens[f"{ref.reference_id}:value:stream_end:effect"]
+    assert token.token_kind == "stream_end"
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        {"node_id": "add", "field": "value", "token_kind": "data"},
+        {"node_id": "add", "token_kind": "stream_end"},
+    ],
+)
+def test_graph_state_apply_rejects_malformed_close_stream_token(token: dict[str, object]):
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+
+    with pytest.raises(ValueError, match="Close-stream effect"):
+        state.apply(
+            ref,
+            output,
+            effects=[{"kind": "close_stream", "owner_node_id": node.id, "token": token}],
         )
 
     assert not state.executed
@@ -427,6 +480,41 @@ def test_graph_state_apply_rejects_effect_from_another_state_before_mutation():
     assert not state.execution_effects
 
 
+@pytest.mark.parametrize(
+    "token_frame",
+    [
+        {"state_id": "other-state"},
+        {"iteration_path": [99]},
+        {"workflow_call_depth": 1},
+    ],
+)
+def test_graph_state_apply_rejects_emit_token_from_another_frame(token_frame: dict[str, object]):
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+
+    with pytest.raises(ValueError, match="another"):
+        state.apply(
+            ref,
+            output,
+            effects=[
+                {
+                    "kind": "emit",
+                    "token": {"node_id": node.id, "field": "value", "value": 3, "frame": token_frame},
+                }
+            ],
+        )
+
+    assert not state.executed
+    assert not state.results
+    assert not state.execution_tokens
+    assert not state.execution_effects
+
+
 def test_graph_state_apply_does_not_complete_when_effect_persistence_preparation_fails():
     class Uncopyable:
         def __deepcopy__(self, memo):
@@ -455,6 +543,68 @@ def test_graph_state_apply_does_not_complete_when_effect_persistence_preparation
     assert not state.execution_tokens
     assert not state.execution_effects
     assert state.execution_refs == refs_before_apply
+
+
+def test_graph_state_apply_rolls_back_scheduler_mutation_on_completion_failure():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="first", a=1, b=2))
+    graph.add_node(AddInvocation(id="second", a=0, b=4))
+    graph.add_edge(create_edge("first", "value", "second", "a"))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id)
+    state.indegree.pop(next(exec_id for exec_id in state.execution_graph.nodes if exec_id != node.id))
+    state_before = {
+        "execution_graph": state.execution_graph.model_dump(mode="json", warnings=False),
+        "executed": state.executed.copy(),
+        "executed_history": state.executed_history.copy(),
+        "results": state.results.copy(),
+        "prepared_source_mapping": state.prepared_source_mapping.copy(),
+        "source_prepared_mapping": {key: value.copy() for key, value in state.source_prepared_mapping.items()},
+        "prepared_iteration_paths": state.prepared_iteration_paths.copy(),
+        "indegree": state.indegree.copy(),
+    }
+
+    with pytest.raises(KeyError, match="indegree missing"):
+        state.apply(ref, output)
+
+    assert state.execution_graph.model_dump(mode="json", warnings=False) == state_before["execution_graph"]
+    assert state.executed == state_before["executed"]
+    assert state.executed_history == state_before["executed_history"]
+    assert state.results == state_before["results"]
+    assert state.prepared_source_mapping == state_before["prepared_source_mapping"]
+    assert state.source_prepared_mapping == state_before["source_prepared_mapping"]
+    assert state.prepared_iteration_paths == state_before["prepared_iteration_paths"]
+    assert state.indegree == state_before["indegree"]
+    assert not state.execution_tokens
+    assert not state.execution_effects
+
+
+def test_graph_state_apply_rejects_duplicate_execution_reference():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+    effects = [{"owner_node_id": node.id, "source_port": "value"}]
+
+    state.apply(ref, output, effects=effects)
+    tokens_before = {key: value.model_dump(mode="json", warnings=False) for key, value in state.execution_tokens.items()}
+    effects_before = state.execution_effects.copy()
+    results_before = state.results.copy()
+
+    with pytest.raises(ValueError, match="already been applied"):
+        state.apply(ref, output, effects=effects)
+
+    assert {
+        key: value.model_dump(mode="json", warnings=False) for key, value in state.execution_tokens.items()
+    } == tokens_before
+    assert state.execution_effects == effects_before
+    assert state.results == results_before
 
 
 def test_graph_state_rehydrates_execution_refs_for_legacy_state():
