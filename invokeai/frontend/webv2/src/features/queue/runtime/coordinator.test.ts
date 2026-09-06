@@ -3,6 +3,7 @@ import type {
   QueueEnqueueResult,
   QueueEnqueueGenerateRequest,
   QueueItemProgress,
+  QueueProgressPreviewPayload,
   QueueResultImage,
 } from '@features/queue/core/types';
 import type { ActiveProgressTargetSink } from '@features/queue/data/activeProgressTargetStore';
@@ -121,6 +122,27 @@ const createStatusEvent = (overrides: Partial<QueueItemStatusChangedEvent>): Que
   ...overrides,
 });
 
+/** The REST snapshot carries the socket event's consumer-facing fields only. */
+const toPreviewPayload = (event: {
+  queue_id: string;
+  item_id: number;
+  session_id: string;
+  invocation_source_id: string;
+  revision: number;
+  message: string;
+  percentage: number | null;
+  image: { width: number; height: number; dataURL: string };
+}): QueueProgressPreviewPayload => ({
+  image: event.image,
+  invocation_source_id: event.invocation_source_id,
+  item_id: event.item_id,
+  message: event.message,
+  percentage: event.percentage,
+  queue_id: event.queue_id,
+  revision: event.revision,
+  session_id: event.session_id,
+});
+
 const createQueueBackendItem = (overrides: Partial<QueueBackendItem>): QueueBackendItem => ({
   id: 1,
   status: 'in_progress',
@@ -162,9 +184,12 @@ interface Harness {
   api: {
     [Key in Exclude<
       keyof QueueCoordinatorBackendPort,
-      'emit' | 'on' | 'onConnectionChange' | 'getEnqueueReceipt'
+      'emit' | 'on' | 'onConnectionChange' | 'getEnqueueReceipt' | 'readProgressPreviews'
     >]: ReturnType<typeof vi.fn>;
-  } & { getEnqueueReceipt?: ReturnType<typeof vi.fn> };
+  } & {
+    getEnqueueReceipt?: ReturnType<typeof vi.fn>;
+    readProgressPreviews?: ReturnType<typeof vi.fn<() => Promise<QueueProgressPreviewPayload[]>>>;
+  };
   callbacks: { [Key in keyof QueueCoordinatorCallbacks]: ReturnType<typeof vi.fn> };
   coordinator: QueueCoordinator;
   hub: ReturnType<typeof createSocketHub>;
@@ -208,6 +233,9 @@ const createHarness = (options: { galleryRefreshCoalesceMs?: number } = {}): Har
       Promise.resolve([createImage(`image-${itemId}.png`, sourceQueueItemId)])
     ),
     listItems: vi.fn((): Promise<QueueBackendItem[]> => Promise.resolve([])),
+    readProgressPreviews: undefined as
+      | ReturnType<typeof vi.fn<() => Promise<QueueProgressPreviewPayload[]>>>
+      | undefined,
   };
   const callbacks = {
     onGalleryRefresh: vi.fn(),
@@ -236,6 +264,9 @@ const createHarness = (options: { galleryRefreshCoalesceMs?: number } = {}): Har
       ...api,
       get getEnqueueReceipt() {
         return api.getEnqueueReceipt;
+      },
+      get readProgressPreviews() {
+        return api.readProgressPreviews;
       },
       emit: hub.emit,
       on: hub.on,
@@ -654,6 +685,108 @@ describe('queueCoordinator', () => {
 
     await expect(resultsPromise).resolves.toEqual([expect.objectContaining({ imageName: 'image-1.png' })]);
     expect(harness.api.getItem).toHaveBeenCalledTimes(2);
+  });
+
+  it('applies the preview snapshot on visibility and lets the revision gate drop replays', async () => {
+    const listeners = new Map<string, () => void>();
+    const frame = (revision: number, dataURL: string) => ({
+      ...createStatusEvent({ item_id: 1 }),
+      image: { dataURL, height: 32, width: 64 },
+      invocation_source_id: 'denoise',
+      message: 'Denoising',
+      percentage: 0.5,
+      revision,
+    });
+
+    vi.stubGlobal('document', {
+      addEventListener: (type: string, listener: () => void) => listeners.set(type, listener),
+      removeEventListener: (type: string) => listeners.delete(type),
+      visibilityState: 'visible',
+    });
+
+    try {
+      harness.api.readProgressPreviews = vi.fn(() =>
+        Promise.resolve([toPreviewPayload(frame(2, 'data:image/png;base64,snapshot'))])
+      );
+      harness.coordinator.connect();
+      await harness.coordinator.submitGenerate('local-1', generateRequest);
+      harness.socket.fire('invocation_progress', frame(1, 'data:image/png;base64,live-1'));
+
+      listeners.get('visibilitychange')?.();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // The snapshot is newer than the last live frame: applied.
+      expect(harness.progressImage.set.mock.calls.map(([image]) => (image as { dataUrl: string }).dataUrl)).toEqual([
+        'data:image/png;base64,live-1',
+        'data:image/png;base64,snapshot',
+      ]);
+
+      // The live stream has moved on; a second snapshot at the same revision is a replay.
+      harness.socket.fire('invocation_progress', frame(3, 'data:image/png;base64,live-3'));
+      listeners.get('visibilitychange')?.();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(harness.progressImage.set).toHaveBeenCalledTimes(3);
+      expect(harness.api.readProgressPreviews).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('fetches the preview snapshot after re-adopting runs on reload', async () => {
+    harness.api.readProgressPreviews = vi.fn(() =>
+      Promise.resolve([
+        toPreviewPayload({
+          ...createStatusEvent({ item_id: 1 }),
+          image: { dataURL: 'data:image/png;base64,snapshot', height: 32, width: 64 },
+          invocation_source_id: 'denoise',
+          message: 'Denoising',
+          percentage: 0.5,
+          revision: 4,
+        }),
+      ])
+    );
+    harness.api.getItem.mockResolvedValue(
+      createQueueBackendItem({ id: 1, origin: buildQueueItemOrigin('local-1', 'project-1'), status: 'in_progress' })
+    );
+    harness.coordinator.connect();
+
+    const outcomes = await harness.coordinator.reconcile([
+      { backendItemIds: [1], id: 'local-1', projectId: 'project-1', status: 'running' },
+    ]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(outcomes.get('local-1')?.kind).toBe('resumed');
+    expect(harness.progressImage.set).toHaveBeenCalledWith(
+      { dataUrl: 'data:image/png;base64,snapshot', height: 32, width: 64 },
+      { itemIndex: 1, queueItemId: 'local-1' }
+    );
+  });
+
+  it('reopens the revision gate when an item goes back to waiting', async () => {
+    harness.coordinator.connect();
+    await harness.coordinator.submitGenerate('local-1', generateRequest);
+    const frame = (revision: number, dataURL: string) => ({
+      ...createStatusEvent({ item_id: 1 }),
+      image: { dataURL, height: 32, width: 64 },
+      invocation_source_id: 'denoise',
+      message: 'Denoising',
+      percentage: 0.5,
+      revision,
+    });
+
+    harness.socket.fire('invocation_progress', frame(5, 'data:image/png;base64,first-leg'));
+    harness.socket.fire('queue_item_status_changed', createStatusEvent({ item_id: 1, status: 'waiting' }));
+    harness.socket.fire('queue_item_status_changed', createStatusEvent({ item_id: 1, status: 'in_progress' }));
+    harness.socket.fire('invocation_progress', frame(1, 'data:image/png;base64,second-leg'));
+
+    expect(harness.progressImage.set.mock.calls.map(([image]) => (image as { dataUrl: string }).dataUrl)).toEqual([
+      'data:image/png;base64,first-leg',
+      'data:image/png;base64,second-leg',
+    ]);
   });
 
   it('drops a preview frame whose revision is not newer than the one already shown', async () => {
