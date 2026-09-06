@@ -158,6 +158,13 @@ class WorkflowCallQueueLifecycle:
 
         return output
 
+    @staticmethod
+    def _apply_workflow_call_output(
+        queue_item: SessionQueueItem, invocation: CallSavedWorkflowInvocation, output: WorkflowReturnOutput
+    ) -> None:
+        execution_ref = queue_item.session.get_execution_ref(invocation.id)
+        queue_item.session.apply(execution_ref, output)
+
     def resume_waiting_workflow_call(self, queue_item: SessionQueueItem) -> None:
         invocation = self.get_waiting_workflow_call_invocation(queue_item)
         child_session = queue_item.session.waiting_workflow_call_child_session
@@ -165,7 +172,7 @@ class WorkflowCallQueueLifecycle:
             raise ValueError("Execution state is waiting on a workflow call but has no attached child session.")
         output = self.get_child_workflow_return_output(child_session)
         queue_item.session.end_waiting_on_workflow_call(status="completed")
-        queue_item.session.complete(invocation.id, output)
+        self._apply_workflow_call_output(queue_item, invocation, output)
         self._session_runner._on_after_run_node(invocation, queue_item, output)
 
     def fail_waiting_workflow_call(self, queue_item: SessionQueueItem, error_message: str) -> None:
@@ -226,7 +233,7 @@ class WorkflowCallQueueLifecycle:
         waiting_invocation = self.get_waiting_workflow_call_invocation(parent_queue_item)
         parent_queue_item.session.end_waiting_on_workflow_call(status="completed")
         parent_output = WorkflowReturnOutput(values=aggregated_values)
-        parent_queue_item.session.complete(waiting_invocation.id, parent_output)
+        self._apply_workflow_call_output(parent_queue_item, waiting_invocation, parent_output)
         self._session_runner._on_after_run_node(waiting_invocation, parent_queue_item, parent_output)
         self._session_runner._services.session_queue.save_queue_item_session(
             parent_queue_item.item_id, parent_queue_item.session

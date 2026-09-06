@@ -1133,6 +1133,9 @@ class _WorkflowCallBoundarySession:
     def complete(self, node_id: str, output) -> None:
         self.completed.append((node_id, output))
 
+    def get_execution_ref(self, node_id: str, *, effect_count: int | None = None):
+        return SimpleNamespace(frame=SimpleNamespace(iteration_path=()))
+
     def is_waiting_on_workflow_call(self) -> bool:
         return self.waiting is not None
 
@@ -1538,6 +1541,53 @@ def test_workflow_call_queue_lifecycle_resumes_parent_from_completed_child(
     ]
     assert len(parent_outputs) == 1
     assert parent_outputs[0].values == {"result": [3]}
+    prepared_call_node_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in session.prepared_source_mapping.items()
+        if source_node_id == "call-node"
+    )
+    parent_ref = session.execution_refs[prepared_call_node_id]
+    assert session.execution_tokens[f"{parent_ref.reference_id}:values"].value == {"result": [3]}
+    assert session.execution_effects[parent_ref.reference_id] == []
+
+
+def test_resume_waiting_workflow_call_applies_parent_output_to_execution_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, events, _workflow_records = _build_workflow_runner(monkeypatch)
+    lifecycle = WorkflowCallQueueLifecycle(runner)
+
+    parent_graph = Graph()
+    parent_graph.add_node(CallSavedWorkflowInvocation(id="call-node", workflow_id="workflow-a"))
+    parent_session = GraphExecutionState(graph=parent_graph)
+    parent_invocation = parent_session.next()
+    assert isinstance(parent_invocation, CallSavedWorkflowInvocation)
+    parent_session.begin_waiting_on_workflow_call(
+        parent_session.build_workflow_call_frame(parent_invocation.id, "workflow-a")
+    )
+
+    child_graph = Graph()
+    child_graph.add_node(WorkflowReturnInvocation(id="return"))
+    child_session = GraphExecutionState(graph=child_graph)
+    return_invocation = child_session.next()
+    assert isinstance(return_invocation, WorkflowReturnInvocation)
+    child_output = WorkflowReturnOutput(values={"result": 3})
+    child_session.complete(return_invocation.id, child_output)
+    parent_session.attach_waiting_workflow_call_child_session(child_session)
+
+    queue_item = SimpleNamespace(
+        item_id=1,
+        session=parent_session,
+        session_id=parent_session.id,
+    )
+    lifecycle.resume_waiting_workflow_call(queue_item)
+
+    assert not parent_session.is_waiting_on_workflow_call()
+    assert parent_session.results[parent_invocation.id] == child_output
+    parent_ref = parent_session.execution_refs[parent_invocation.id]
+    assert parent_session.execution_tokens[f"{parent_ref.reference_id}:values"].value == {"result": 3}
+    assert parent_session.execution_effects[parent_ref.reference_id] == []
+    assert [invocation.get_type() for invocation, _queue_item, _output in events.completed] == ["call_saved_workflow"]
 
 
 def test_run_queue_item_tolerates_queue_item_deleted_mid_run(monkeypatch: pytest.MonkeyPatch) -> None:
