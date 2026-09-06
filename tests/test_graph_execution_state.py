@@ -285,6 +285,132 @@ def test_graph_state_apply_rejects_invalid_input_before_mutation():
         state.apply(stale_ref, output)
 
 
+@pytest.mark.parametrize(
+    "effect_kind",
+    ["set_value", "add_edge", "remove_edge", "spawn_execution", "await", "fail", "close_stream", "unknown"],
+)
+def test_graph_state_apply_rejects_unsupported_effect_kinds(effect_kind: str):
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+
+    with pytest.raises(ValueError, match=f"Unsupported execution effect kind: {effect_kind}"):
+        state.apply(ref, output, effects=[{"kind": effect_kind, "owner_node_id": node.id}])
+
+    assert not state.executed
+    assert not state.results
+    assert not state.execution_tokens
+    assert not state.execution_effects
+
+
+@pytest.mark.parametrize(
+    "effect_kind, owner_field",
+    [("spawn_execution", "parent"), ("await", "dependency"), ("fail", "owner")],
+)
+def test_graph_state_apply_rejects_owned_unsupported_lifecycle_effects(effect_kind: str, owner_field: str):
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+
+    with pytest.raises(ValueError, match=f"Unsupported execution effect kind: {effect_kind}"):
+        state.apply(
+            ref,
+            output,
+            effects=[{"kind": effect_kind, owner_field: {"execution_node_id": node.id}}],
+        )
+
+    assert not state.executed
+    assert not state.results
+    assert not state.execution_tokens
+    assert not state.execution_effects
+
+
+def test_graph_state_apply_accepts_emit_effect():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+    emit_effect = {
+        "kind": "emit",
+        "token": {"node_id": node.id, "field": "value", "value": 3},
+        "value": 3,
+    }
+
+    state.apply(ref, output, effects=[emit_effect])
+
+    assert state.execution_tokens[f"{ref.reference_id}:value:effect"].value == 3
+    assert state.execution_effects[ref.reference_id] == [emit_effect]
+
+
+def test_graph_state_apply_rejects_effect_from_another_state_before_mutation():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+
+    with pytest.raises(ValueError, match="another graph execution state"):
+        state.apply(
+            ref,
+            output,
+            effects=[
+                {
+                    "kind": "emit",
+                    "state_id": "other-state",
+                    "token": {"node_id": node.id, "field": "value", "value": 3},
+                }
+            ],
+        )
+
+    assert not state.executed
+    assert not state.results
+    assert not state.execution_tokens
+    assert not state.execution_effects
+
+
+def test_graph_state_apply_does_not_complete_when_effect_persistence_preparation_fails():
+    class Uncopyable:
+        def __deepcopy__(self, memo):
+            raise RuntimeError("cannot copy effect")
+
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+    refs_before_apply = {
+        node_id: stored_ref.model_copy(deep=True) for node_id, stored_ref in state.execution_refs.items()
+    }
+
+    with pytest.raises(RuntimeError, match="cannot copy effect"):
+        state.apply(
+            ref,
+            output,
+            effects=[{"owner_node_id": node.id, "source_port": "value", "metadata": Uncopyable()}],
+        )
+
+    assert not state.executed
+    assert not state.results
+    assert not state.execution_tokens
+    assert not state.execution_effects
+    assert state.execution_refs == refs_before_apply
+
+
 def test_graph_state_rehydrates_execution_refs_for_legacy_state():
     graph = Graph()
     graph.add_node(AddInvocation(id="add", a=1, b=2))

@@ -4279,14 +4279,26 @@ class GraphExecutionState(BaseModel):
             token = owner.get("token")
             if token is not None:
                 return GraphExecutionState._same_execution_owner(token, execution_ref)
-            owner_id = owner.get("reference_id") or owner.get("id") or owner.get("exec_node_id") or owner.get("node_id")
+            owner_id = (
+                owner.get("reference_id")
+                or owner.get("id")
+                or owner.get("exec_node_id")
+                or owner.get("execution_node_id")
+                or owner.get("node_id")
+            )
             owner_state_id = owner.get("state_id") or owner.get("session_id")
             return owner_id in {execution_ref.reference_id, execution_ref.exec_node_id} and owner_state_id in {
                 None,
                 execution_ref.state_id,
             }
         owner_id = GraphExecutionState._value_from_object(
-            owner, "reference_id", "exec_node_id", "prepared_node_id", "node_id", "invocation_id"
+            owner,
+            "reference_id",
+            "exec_node_id",
+            "execution_node_id",
+            "prepared_node_id",
+            "node_id",
+            "invocation_id",
         )
         return owner_id in {execution_ref.reference_id, execution_ref.exec_node_id}
 
@@ -4363,6 +4375,9 @@ class GraphExecutionState(BaseModel):
                 "execution_ref",
                 "execution_reference",
                 "owner_ref",
+                "owner",
+                "parent",
+                "dependency",
                 "owner_node_id",
                 "source_node_id",
                 "node_id",
@@ -4371,6 +4386,8 @@ class GraphExecutionState(BaseModel):
                 owner = self._value_from_object(effect, "target", "source", "token")
             if owner is None or not self._same_execution_owner(owner, execution_ref):
                 raise ValueError("Execution effect is not owned by execution reference")
+            if effect_kind is not None and effect_kind != "emit":
+                raise ValueError(f"Unsupported execution effect kind: {effect_kind}")
 
             effect_state_id = self._value_from_object(effect, "state_id", "session_id")
             if effect_state_id is not None and effect_state_id != execution_ref.state_id:
@@ -4506,13 +4523,14 @@ class GraphExecutionState(BaseModel):
             effect_values = list(batch_values if batch_values is not None else effects)
         self._validate_effects(ref, effect_values, effect_count)
         tokens = self._build_execution_tokens(ref, output_value, effect_values)
+        persisted_effects = copydeep(effect_values)
 
         # All validation above is side-effect free. Preserve complete() as the scheduler compatibility boundary.
         finalized_outputs = self.complete(ref.exec_node_id, output_value)
         ref.effect_count = effect_count if effect_count is not None else ref.effect_count
         self.execution_refs[ref.exec_node_id] = ref
         self.execution_tokens.update(tokens)
-        self.execution_effects[ref.reference_id] = copydeep(effect_values)
+        self.execution_effects[ref.reference_id] = persisted_effects
         return finalized_outputs
 
     def _invalidate_loop_caches_for_source(self, source_node_id: str) -> None:
