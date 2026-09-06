@@ -113,7 +113,11 @@ export interface GalleryUiAdapter {
   queueItems: QueueItem[];
   liveFollowEnabled: boolean;
   liveProgressTarget: GalleryLiveTarget | null;
-  widgets: { patchGalleryValues(values: Record<string, unknown>): void };
+  widgets: {
+    /** Open (or reveal) the Gallery widget; false when no region can host it. */
+    openGallery(): boolean;
+    patchGalleryValues(values: Record<string, unknown>): void;
+  };
 }
 
 const GalleryUiContext = createContext<GalleryUiAdapter | null>(null);

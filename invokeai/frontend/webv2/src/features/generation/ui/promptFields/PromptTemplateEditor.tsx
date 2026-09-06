@@ -306,7 +306,6 @@ export const PromptTemplateEditor = ({
           <DropZone
             alignItems="center"
             as="button"
-            cursor="pointer"
             display="flex"
             flex="1"
             gap="1.5"

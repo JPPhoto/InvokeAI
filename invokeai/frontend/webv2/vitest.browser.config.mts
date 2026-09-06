@@ -21,6 +21,7 @@ export default mergeConfig(
         '@dnd-kit/core',
         '@tanstack/react-query',
         '@tanstack/react-virtual',
+        'idb',
         'i18next-http-backend',
         'react-hook-tanstack-virtual',
         'tinykeys',

@@ -151,7 +151,7 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
   const startImport = useCallback(() => void handleImport(), [handleImport]);
 
   return (
-    <Dialog.Root lazyMount open={isOpen} placement="center" size="sm" unmountOnExit onOpenChange={handleOpenChange}>
+    <Dialog.Root lazyMount open={isOpen} size="sm" unmountOnExit onOpenChange={handleOpenChange}>
       {isOpen ? <ProjectLibraryRefresh /> : null}
       <Portal>
         <Dialog.Backdrop />
@@ -180,7 +180,7 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
                 </Stack>
               </Scrollable>
             </Dialog.Body>
-            <Dialog.Footer gap="2" justifyContent="space-between">
+            <Dialog.Footer justifyContent="space-between">
               <Button size="xs" variant="outline" onClick={startImport}>
                 <FileUpIcon />
                 {t('projects.importWithEllipsis')}
@@ -190,7 +190,7 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
               </Button>
             </Dialog.Footer>
             <Dialog.CloseTrigger asChild>
-              <CloseButton color="fg.muted" size="sm" />
+              <CloseButton />
             </Dialog.CloseTrigger>
           </Dialog.Content>
         </Dialog.Positioner>

@@ -170,8 +170,8 @@ const RailGroup = ({
 };
 
 /**
- * Rail states, quietest to loudest: idle icon dimmed, hover one neutral step
- * up, active a further step with the icon in the brand hue.
+ * Rail states: idle icon dimmed, hover and active share the same fill, and
+ * only the active icon takes the brand hue.
  *
  * The brand lives in the icon rather than the fill because it cannot live in
  * the fill: the seed is a 92%-lightness lime, so every brand tint of the light
@@ -191,7 +191,7 @@ export const WIDGET_ITEM_SX: SystemStyleObject = {
   w: 9,
   color: 'fg.muted',
   '&[aria-pressed="false"]:hover': {
-    bg: 'bg.muted',
+    bg: 'bg.emphasized',
     color: 'fg',
   },
   '&[aria-pressed="true"]': {

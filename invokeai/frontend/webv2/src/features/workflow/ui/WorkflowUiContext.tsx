@@ -1,3 +1,4 @@
+import type { ForLoopValidationReason } from '@features/workflow/core/forLoops';
 import type { ProjectGraphState } from '@features/workflow/core/types';
 import type { ReactNode } from 'react';
 
@@ -6,7 +7,6 @@ import { createContext, use, useCallback, useSyncExternalStore } from 'react';
 
 import type {
   WorkflowCommands,
-  WorkflowGraphHistoryEntry,
   WorkflowInvocationSourceId,
   WorkflowNodeExecutionState,
   WorkflowPerfSource,
@@ -15,7 +15,7 @@ import type {
 
 export interface WorkflowPreferences {
   reduceMotion: boolean;
-  themeId: 'classic' | 'light' | 'forest' | 'mono' | 'ultradark';
+  themeId: 'classic' | 'light' | 'osakaJade' | 'mono' | 'ultradark';
   workflowEdgeStyle: 'curved' | 'square';
   workflowShowMinimap: boolean;
   workflowSnapToGrid: boolean;
@@ -24,7 +24,6 @@ export interface WorkflowPreferences {
 
 export interface WorkflowProjectSnapshot {
   galleryValues: Record<string, unknown>;
-  graphHistory: readonly WorkflowGraphHistoryEntry[];
   id: string;
   isWorkflowRunning: boolean;
   projectGraph: ProjectGraphState;
@@ -43,7 +42,7 @@ export interface WorkflowReadPort<Snapshot> {
 export interface WorkflowGraphPreviewPort {
   getRoute(
     sourceId?: WorkflowInvocationSourceId
-  ): { canInvoke: boolean; label: string; validationMessage?: string } | null;
+  ): { canInvoke: boolean; label: string; validationMessage?: string | ForLoopValidationReason } | null;
   invoke(sourceId?: WorkflowInvocationSourceId): Promise<boolean>;
   focusSource(sourceId?: WorkflowInvocationSourceId): void; // reveal the source's widget (provenance links)
   openWorkflowEditor(): void; // reveal the workflow editor widget
