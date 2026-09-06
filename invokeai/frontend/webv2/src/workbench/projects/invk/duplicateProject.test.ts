@@ -178,6 +178,20 @@ describe('duplicateProjectRecord', () => {
     expect(result.boardItemIssues).toEqual([]);
   });
 
+  it('uses a caller-reserved identity for retry-safe conflict copies', async () => {
+    await duplicateProject.duplicateProjectRecord({
+      boardItems: [],
+      identity: { id: 'reserved-copy', name: 'Source (copy)' },
+      owner,
+      record: sourceRecord(),
+    });
+
+    expect(api.createProjectSettled.mock.calls[0]![0]).toMatchObject({
+      name: 'Source (copy)',
+      project_id: 'reserved-copy',
+    });
+  });
+
   /** The whole reason duplication needs its own copies rather than a second reference. */
   it('points the copy at its own media, never the original name', async () => {
     await duplicateProject.duplicateProjectRecord({

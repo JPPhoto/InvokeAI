@@ -15,6 +15,7 @@ import {
   extractGenerationMeta,
   getResultImageName,
 } from '@features/queue/contracts';
+import { createUuid } from '@platform/browser/randomUuid';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -159,9 +160,25 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
       // Hash navigation, matching the app.selectModelsTab command. Going through
       // useNavigate or the models UI store would pull either the router hooks or
       // the store into the editor/launchpad initial bundles (architecture budget).
-      // The manager opens on Add Models by default, which is where this link wants to land.
-      openManager: () => {
-        window.location.hash = `#/models?project=${encodeURIComponent(project.activeProjectId)}`;
+      // The manager opens on Add Models by default, which is where this link
+      // wants to land; a model type seeds its catalog filter through the same
+      // dynamic-import seam `WorkflowUiAdapter.openAddModels` uses, before the
+      // navigation, so the first paint is already filtered.
+      openManager: (options) => {
+        const navigateToManager = () => {
+          window.location.hash = `#/models?project=${encodeURIComponent(project.activeProjectId)}`;
+        };
+        const modelType = options?.modelType;
+
+        if (modelType === undefined) {
+          navigateToManager();
+          return;
+        }
+
+        void import('@features/models/launchpad').then(({ requestAddModelsTypeFilter }) => {
+          requestAddModelsTypeFilter(modelType);
+          navigateToManager();
+        });
       },
       status: modelsStatus,
     }),
@@ -217,7 +234,7 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
         });
       },
       save: (label, weights, multiplier) => {
-        const preset = { id: crypto.randomUUID(), label, multiplier, weights };
+        const preset = { id: createUuid(), label, multiplier, weights };
 
         void patchWorkbenchPreferences({
           krea2RebalancePresets: [...getWorkbenchPreferences().krea2RebalancePresets, preset],
@@ -247,7 +264,7 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
         });
       },
       save: (label, values) => {
-        const preset = { id: crypto.randomUUID(), label, values };
+        const preset = { id: createUuid(), label, values };
 
         void patchWorkbenchPreferences({
           generatePresets: [...getWorkbenchPreferences().generatePresets, preset],

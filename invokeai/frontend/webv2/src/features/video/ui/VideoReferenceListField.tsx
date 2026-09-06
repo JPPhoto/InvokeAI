@@ -1,4 +1,6 @@
 import type { DragEndEvent } from '@dnd-kit/core';
+import type { GalleryItem, GalleryVideoItem } from '@features/gallery';
+import type { GalleryPickerSelection } from '@features/gallery/picker';
 import type {
   VideoReferenceConditioning,
   VideoReferenceImageDetail,
@@ -6,11 +8,17 @@ import type {
 } from '@features/video/core/types';
 import type { ChangeEvent } from 'react';
 
-import { Badge, Box, createListCollection, HStack, Image, Input, Spinner, Stack, Text } from '@chakra-ui/react';
+import { Badge, Box, createListCollection, HStack, Icon, Image, Input, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
-import { galleryImages, galleryItems, galleryTransfers } from '@features/gallery';
+import { galleryItems, galleryTransfers, toGalleryItemKey } from '@features/gallery';
+import { GalleryPickerPopover } from '@features/gallery/picker';
 import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
-import { createVideoSourceClip } from '@features/video/core/settings';
+import {
+  createVideoSourceClip,
+  DEFAULT_REFERENCE_SAMPLE_FRAMES,
+  resizeReferenceSampleWindow,
+  slideReferenceSampleWindow,
+} from '@features/video/core/settings';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -19,11 +27,11 @@ import {
 import { Button, IconButton } from '@platform/ui/Button';
 import { DropTargetOverlay } from '@platform/ui/DropTargetOverlay';
 import { DropZone } from '@platform/ui/DropZone';
-import { Field } from '@platform/ui/Field';
+import { Field, FieldLabel } from '@platform/ui/Field';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Select } from '@platform/ui/Select';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
-import { ArrowDownIcon, ArrowUpIcon, FilmIcon, ImagePlusIcon, XIcon } from 'lucide-react';
+import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, FilmIcon, ImagePlusIcon, UploadIcon, XIcon } from 'lucide-react';
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -47,7 +55,7 @@ const DROP_ZONE_FOCUS_PROPS = {
 };
 const DROP_ZONE_DISABLED_PROPS = { cursor: 'not-allowed', opacity: 0.6 };
 const DROP_ZONE_BUSY_PROPS = { disabled: true };
-const DROP_ZONE_HOVER_PROPS = { bg: 'bg.muted', color: 'fg' };
+const ACCEPT_MEDIA = ['image', 'video'] as const;
 
 const getSingleGalleryDragItem = (data: unknown): { kind: 'image' | 'video'; name: string } | null => {
   if (!isGalleryItemDragData(data) || data.items.length !== 1) {
@@ -106,28 +114,41 @@ const ReferenceCard = memo(function ReferenceCard({
     },
     [index, onUpdate, reference]
   );
+  // The trim is presented as a sliding sample window — start frame plus length — because
+  // what the user is choosing is "how much" (every reference frame costs denoise VRAM) and
+  // "from where". Storage stays startFrame/endFrame (the request contract); the window
+  // math (constant-length slide that stops at the clip's end, and the extend anchor's
+  // pinned-to-the-cutpoint end) lives in core/settings.
   const handleStartFrame = useCallback(
-    (startFrame: number) => {
+    (rawStart: number) => {
       if (reference.kind === 'video') {
         onUpdate(index, {
           ...reference,
-          clip: { ...reference.clip, endFrame: Math.max(startFrame, reference.clip.endFrame), startFrame },
+          clip: slideReferenceSampleWindow(reference.clip, rawStart, reference.fromSourceVideo === true),
         });
       }
     },
     [index, onUpdate, reference]
   );
-  const handleEndFrame = useCallback(
-    (endFrame: number) => {
+  const handleSampleFrames = useCallback(
+    (rawSampleFrames: number) => {
       if (reference.kind === 'video') {
         onUpdate(index, {
           ...reference,
-          clip: { ...reference.clip, endFrame, startFrame: Math.min(reference.clip.startFrame, endFrame) },
+          clip: resizeReferenceSampleWindow(reference.clip, rawSampleFrames, reference.fromSourceVideo === true),
         });
       }
     },
     [index, onUpdate, reference]
   );
+  // The window's length, and the seconds it represents — the label carries the seconds
+  // because the control is how a user hits a target sample duration (reference frames cost
+  // denoise VRAM every step), while its unit has to stay frames to match the trim contract.
+  const sampleFrames = reference.kind === 'video' ? reference.clip.endFrame - reference.clip.startFrame + 1 : 0;
+  const sampleSeconds =
+    reference.kind === 'video' && Number.isFinite(reference.clip.fps) && reference.clip.fps > 0
+      ? (sampleFrames / reference.clip.fps).toFixed(1)
+      : null;
   const handleMoveUp = useCallback(() => onMove(index, -1), [index, onMove]);
   const handleMoveDown = useCallback(() => onMove(index, 1), [index, onMove]);
   const handleRemove = useCallback(() => onRemove(index), [index, onRemove]);
@@ -160,9 +181,12 @@ const ReferenceCard = memo(function ReferenceCard({
             value={selectValue}
             onValueChange={handleSelect}
           />
-          {/* One row per trim bound: the bound's live frame at left, its slider at
-              right. The seeking thumbs replace the static gallery poster for video
-              references — the start-frame thumb is the card's visual identity. */}
+          {/* One row per window edge: the live frame at left, its control at right. The
+              seeking thumbs replace the static gallery poster for video references — the
+              start-frame thumb is the card's visual identity. The second row's SLIDER is
+              the sample length (the quantity that costs VRAM); its THUMB still shows the
+              resulting end frame, badged with that frame number since the number field
+              beside it shows the length, not the frame. */}
           {reference.kind === 'video' ? (
             <Stack gap="1">
               <HStack gap="2">
@@ -172,36 +196,50 @@ const ReferenceCard = memo(function ReferenceCard({
                   label={t('widgets.video.trimStartShort')}
                   src={galleryVideoUrls.full(name)}
                 />
-                <Box flex="1" minW="0">
+                <Stack flex="1" gap="0.5" minW="0">
+                  <FieldLabel>{t('widgets.video.trimStart')}</FieldLabel>
                   <SliderNumberField
                     ariaLabel={t('widgets.video.trimStart')}
                     disabled={disabled}
                     max={Math.max(0, reference.clip.numFrames - 1)}
                     min={0}
+                    showStepper
                     step={1}
                     value={reference.clip.startFrame}
                     onChange={handleStartFrame}
                   />
-                </Box>
+                </Stack>
               </HStack>
               <HStack gap="2">
                 <TrimBoundThumb
                   fps={reference.clip.fps}
                   frame={reference.clip.endFrame}
-                  label={t('widgets.video.trimEndShort')}
+                  label={`${t('widgets.video.trimEndShort')} · ${reference.clip.endFrame}`}
                   src={galleryVideoUrls.full(name)}
                 />
-                <Box flex="1" minW="0">
+                <Stack flex="1" gap="0.5" minW="0">
+                  <FieldLabel>
+                    {sampleSeconds === null
+                      ? t('widgets.video.sampleLength')
+                      : t('widgets.video.sampleLengthWithSeconds', { seconds: sampleSeconds })}
+                  </FieldLabel>
                   <SliderNumberField
-                    ariaLabel={t('widgets.video.trimEnd')}
+                    ariaLabel={t('widgets.video.sampleLength')}
                     disabled={disabled}
-                    max={Math.max(0, reference.clip.numFrames - 1)}
-                    min={0}
+                    // The anchor grows backward from its pinned end, so its ceiling is the
+                    // available lead-in; ordinary windows grow forward from their start.
+                    max={
+                      reference.fromSourceVideo === true
+                        ? Math.max(1, reference.clip.endFrame + 1)
+                        : Math.max(1, reference.clip.numFrames - reference.clip.startFrame)
+                    }
+                    min={1}
+                    showStepper
                     step={1}
-                    value={reference.clip.endFrame}
-                    onChange={handleEndFrame}
+                    value={sampleFrames}
+                    onChange={handleSampleFrames}
                   />
-                </Box>
+                </Stack>
               </HStack>
             </Stack>
           ) : null}
@@ -313,40 +351,48 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   const handlePickVideo = useCallback(() => videoInputRef.current?.click(), []);
 
   const addImageReference = useCallback(
-    async (imageName: string) => {
+    (image: { height: number; name: string; width: number }) => {
       setErrorMessage(null);
+
+      // Re-check the cap against the LIVE list: the render-time gate can be
+      // stale by the time a drop resolves or an upload lands, and another
+      // writer (a second drop, the Initial Video placing its anchor) can fill
+      // the slots meanwhile. An over-cap write would survive to normalization,
+      // whose overflow rule then has to delete SOMETHING the user placed.
+      let declined = false;
+
+      onChange((current) => {
+        if (current.filter((entry) => entry.kind === 'image').length >= maxImages) {
+          declined = true;
+
+          return current;
+        }
+
+        return [
+          ...current,
+          {
+            detail: 'max',
+            image: { height: image.height, image_name: image.name, width: image.width },
+            kind: 'image',
+          },
+        ];
+      });
+      if (declined) {
+        setErrorMessage(t('widgets.video.referenceImageCapRace', { max: maxImages }));
+      }
+    },
+    [maxImages, onChange, t]
+  );
+
+  const adoptImageByName = useCallback(
+    async (imageName: string) => {
       setIsLoading(true);
 
       try {
-        const [resolved] = await galleryImages.resolveMany([imageName]);
+        const item = await galleryItems.resolve({ kind: 'image', name: imageName });
 
-        if (resolved) {
-          // Re-check the cap against the LIVE list: the render-time gate was
-          // evaluated before the await, and another writer (a second drop, or
-          // the Initial Video placing its anchor) can fill the slots meanwhile.
-          // An over-cap write would survive to normalization, whose overflow
-          // rule then has to delete SOMETHING the user placed.
-          let declined = false;
-
-          onChange((current) => {
-            if (current.filter((entry) => entry.kind === 'image').length >= maxImages) {
-              declined = true;
-
-              return current;
-            }
-
-            return [
-              ...current,
-              {
-                detail: 'max',
-                image: { height: resolved.height, image_name: resolved.imageName, width: resolved.width },
-                kind: 'image',
-              },
-            ];
-          });
-          if (declined) {
-            setErrorMessage(t('widgets.video.referenceImageCapRace', { max: maxImages }));
-          }
+        if (item?.kind === 'image') {
+          addImageReference(item);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -356,7 +402,46 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         setIsLoading(false);
       }
     },
-    [maxImages, onChange, reportError, t]
+    [addImageReference, reportError]
+  );
+
+  const addVideoItem = useCallback(
+    (item: GalleryVideoItem) => {
+      const clip = createVideoSourceClip(item);
+      // Same live cap re-check as the image path -- the Initial Video's
+      // anchor is the writer that most easily fills the slots mid-await.
+      let declined = false;
+
+      setErrorMessage(null);
+      onChange((current) => {
+        if (current.filter((entry) => entry.kind === 'video').length >= maxVideos) {
+          declined = true;
+
+          return current;
+        }
+
+        return [
+          ...current,
+          {
+            // Default to a short sample window from the clip's start, not the whole
+            // clip: reference frames cost denoise VRAM every step, and a few seconds
+            // captures the wanted features. (Not the extend-mode 2-frame-tail trim
+            // either -- references are truncated to the generated duration, not joined.)
+            clip: {
+              ...clip,
+              endFrame: Math.max(0, Math.min(DEFAULT_REFERENCE_SAMPLE_FRAMES, clip.numFrames) - 1),
+              startFrame: 0,
+            },
+            conditioning: 'video_audio',
+            kind: 'video',
+          },
+        ];
+      });
+      if (declined) {
+        setErrorMessage(t('widgets.video.referenceVideoCapRace', { max: maxVideos }));
+      }
+    },
+    [maxVideos, onChange, t]
   );
 
   const addVideoReference = useCallback(
@@ -368,39 +453,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         const item = await galleryItems.resolve({ kind: 'video', name: videoName });
 
         if (item?.kind === 'video') {
-          const clip = createVideoSourceClip({
-            durationSeconds: item.durationSeconds,
-            fps: item.fps,
-            height: item.height,
-            name: item.name,
-            width: item.width,
-          });
-
-          // Same live cap re-check as the image path -- the Initial Video's
-          // anchor is the writer that most easily fills the slots mid-await.
-          let declined = false;
-
-          onChange((current) => {
-            if (current.filter((entry) => entry.kind === 'video').length >= maxVideos) {
-              declined = true;
-
-              return current;
-            }
-
-            return [
-              ...current,
-              {
-                // References are truncated to the generated duration, not joined: default to
-                // the whole clip rather than the extend-mode 2-frame-tail trim.
-                clip: { ...clip, endFrame: Math.max(0, clip.numFrames - 1), startFrame: 0 },
-                conditioning: 'video_audio',
-                kind: 'video',
-              },
-            ];
-          });
-          if (declined) {
-            setErrorMessage(t('widgets.video.referenceVideoCapRace', { max: maxVideos }));
-          }
+          addVideoItem(item);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -410,7 +463,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         setIsLoading(false);
       }
     },
-    [maxVideos, onChange, reportError, t]
+    [addVideoItem, reportError]
   );
 
   const handleDragEnd = useCallback(
@@ -423,10 +476,10 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       if (item.kind === 'video' && canAddVideo) {
         void addVideoReference(item.name);
       } else if (item.kind === 'image' && canAddImage) {
-        void addImageReference(item.name);
+        void adoptImageByName(item.name);
       }
     },
-    [addImageReference, addVideoReference, canAddImage, canAddVideo, isInert]
+    [adoptImageByName, addVideoReference, canAddImage, canAddVideo, isInert]
   );
 
   useDndMonitor({ onDragEnd: handleDragEnd });
@@ -447,7 +500,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
           const uploaded = await galleryTransfers.upload(file, getUploadBoardId(), { signal: owner.signal });
 
           assertAccountScopeCurrent(owner);
-          await addImageReference(uploaded.imageName);
+          addImageReference({ height: uploaded.height, name: uploaded.imageName, width: uploaded.width });
         }
         touchGalleryImages();
       } catch (error) {
@@ -486,6 +539,31 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       event.currentTarget.value = '';
     },
     [uploadFile]
+  );
+
+  const pickerSelection = useMemo<GalleryPickerSelection>(
+    () => ({
+      addedKeys: new Set(
+        references.map((reference) =>
+          reference.kind === 'video'
+            ? toGalleryItemKey({ kind: 'video', name: reference.clip.video_name })
+            : toGalleryItemKey({ kind: 'image', name: reference.image.image_name })
+        )
+      ),
+      mode: 'multiple',
+      remaining: { image: Math.max(0, maxImages - imageCount), video: Math.max(0, maxVideos - videoCount) },
+    }),
+    [imageCount, maxImages, maxVideos, references, videoCount]
+  );
+  const handlePick = useCallback(
+    (item: GalleryItem) => {
+      if (item.kind === 'video') {
+        addVideoItem(item);
+      } else {
+        addImageReference(item);
+      }
+    },
+    [addImageReference, addVideoItem]
   );
 
   const updateReference = useCallback(
@@ -544,21 +622,35 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
           ref={setNodeRef}
           {...(isInert ? DROP_ZONE_DISABLED_PROPS : {})}
           {...(isLoading ? DROP_ZONE_BUSY_PROPS : {})}
-          {...(isOver && acceptsActiveDrag ? DROP_ZONE_HOVER_PROPS : {})}
+          isDisabled={isInert}
+          isOver={isOver && acceptsActiveDrag}
           _focusVisible={DROP_ZONE_FOCUS_PROPS}
           position="relative"
         >
-          <HStack gap="2" justify="center" p="2">
-            {isLoading ? <Spinner size="xs" /> : null}
-            <Button disabled={isInert || !canAddImage} size="xs" variant="outline" onClick={handlePickImage}>
-              <ImagePlusIcon size={12} />
-              {t('widgets.video.addImageReference', { count: imageCount, max: maxImages })}
-            </Button>
-            <Button disabled={isInert || !canAddVideo} size="xs" variant="outline" onClick={handlePickVideo}>
-              <FilmIcon size={12} />
-              {t('widgets.video.addVideoReference', { count: videoCount, max: maxVideos })}
-            </Button>
-          </HStack>
+          <Stack gap="1.5" p="2">
+            <GalleryPickerPopover
+              accept={ACCEPT_MEDIA}
+              label={t('widgets.video.chooseReference')}
+              selection={pickerSelection}
+              onPick={handlePick}
+            >
+              <Button disabled={isInert || (!canAddImage && !canAddVideo)} size="xs" variant="outline" w="full">
+                {isLoading ? <Spinner size="xs" /> : <Icon as={ImagePlusIcon} boxSize="3.5" />}
+                {t('widgets.video.chooseReference')}
+                <Icon as={ChevronDownIcon} boxSize="3" color="fg.subtle" />
+              </Button>
+            </GalleryPickerPopover>
+            <HStack gap="1" justify="center">
+              <Button disabled={isInert || !canAddImage} size="xs" variant="ghost" onClick={handlePickImage}>
+                <UploadIcon size={12} />
+                {t('widgets.video.uploadImageReference')}
+              </Button>
+              <Button disabled={isInert || !canAddVideo} size="xs" variant="ghost" onClick={handlePickVideo}>
+                <UploadIcon size={12} />
+                {t('widgets.video.uploadVideoReference')}
+              </Button>
+            </HStack>
+          </Stack>
           <DropTargetOverlay isActive={acceptsActiveDrag} isOver={isOver} label={t('widgets.video.dropReference')} />
         </DropZone>
       </Field>

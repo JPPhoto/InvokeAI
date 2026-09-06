@@ -26,13 +26,6 @@ export type { ProjectEvent, ProjectEventType } from './projectEventContracts';
 export interface Project {
   id: string;
   name: string;
-  /**
-   * Set on recovery forks created when a save loses a revision race: the id
-   * of the root project this recovered from (chains collapse to the root, so
-   * a recovery of a recovery still points at the original).
-   */
-  recoveryOf?: string;
-  recoveredAt?: string;
   settings: ProjectSettings;
   layout: ProjectLayoutState;
   invocation: InvocationControllerState;
@@ -49,7 +42,6 @@ export interface Project {
   floatingWidgets?: Record<WidgetInstanceId, FloatingWidgetState>;
   widgetGraphs: Partial<Record<WidgetTypeId, GraphContract>>;
   canvas: CanvasStateContractV3;
-  graphHistory: GraphHistorySnapshot[];
   promptHistory: PromptHistoryItem[];
   undoRedo: UndoRedoHistory;
   queue: WorkbenchQueueState;
@@ -57,15 +49,24 @@ export interface Project {
 }
 
 /** A persisted project the canvas version gate refused. `raw` is the untouched document, kept for recovery. */
-export interface RefusedWorkbenchProject {
+export interface ProjectDocumentLoadRefusal {
+  raw: unknown;
+  scope: 'project-document';
+  status: 'unsupported-version';
+  version: number;
+}
+
+interface RefusedWorkbenchProjectBase {
   projectId: string;
   projectName: string;
   raw: unknown;
-  /** Which embedded canvas was refused: the live one, or a queue-history item's snapshot. */
-  source: 'canvas' | 'queue-item';
-  queueItem?: { index: number; itemId: string | null };
-  refusal: CanvasLoadRefusal;
 }
+
+export type RefusedWorkbenchProject = RefusedWorkbenchProjectBase &
+  (
+    | { refusal: CanvasLoadRefusal; source: 'canvas'; queueItem?: never }
+    | { refusal: ProjectDocumentLoadRefusal; source: 'project-document'; queueItem?: never }
+  );
 
 export type ProjectLoadResult =
   | { status: 'loaded'; project: Project }
@@ -106,21 +107,6 @@ export interface WorkbenchNotification {
   category?: WorkbenchNotificationCategory;
   /** Coalesced repeat count (see addNotification); absent = 1. */
   occurrenceCount?: number;
-}
-
-/**
- * One entry of the project's graph history. Queue submissions record the
- * compiled `graph`; workflow snapshots (manual save, pre-replacement) record
- * the editable `document`, which is what makes them restorable.
- */
-export interface GraphHistorySnapshot {
-  id: string;
-  createdAt: string;
-  label: string;
-  /** UTF-8 serialized bytes retained by this snapshot, populated during creation or hydration. */
-  retainedBytes?: number;
-  graph?: GraphContract;
-  document?: ProjectGraphState;
 }
 
 export interface PromptHistoryItem {

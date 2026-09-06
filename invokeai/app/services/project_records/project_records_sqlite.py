@@ -10,6 +10,7 @@ from invokeai.app.services.project_records.project_records_base import ProjectRe
 from invokeai.app.services.project_records.project_records_common import (
     DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
     PROJECT_BOARD_SNAPSHOT_MAX_ITEMS,
+    PROJECT_DOCUMENT_MAX_BYTES,
     ProjectBoardItemDTO,
     ProjectBoardNotFoundError,
     ProjectBoardSnapshotDTO,
@@ -17,6 +18,8 @@ from invokeai.app.services.project_records.project_records_common import (
     ProjectBoardUnavailableError,
     ProjectCanvasSchemaDowngradeError,
     ProjectCanvasSchemaUnsupportedError,
+    ProjectDocumentInvalidError,
+    ProjectDocumentTooLargeError,
     ProjectRecordConflictError,
     ProjectRecordDTO,
     ProjectRecordExistsError,
@@ -32,6 +35,19 @@ from invokeai.app.util.misc import uuid_string
 # snapshot must not carry it, and that reasoning belongs with the constants that encode it.
 _VISIBLE_BOARD_CATEGORIES = tuple(category.value for category in (*IMAGE_CATEGORIES, *ASSETS_CATEGORIES))
 _VISIBLE_CATEGORY_PLACEHOLDERS = ", ".join("?" for _ in _VISIBLE_BOARD_CATEGORIES)
+
+
+def _serialize_project_document(data: dict[str, Any]) -> tuple[str, int]:
+    try:
+        document_json = json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        return document_json, len(document_json.encode("utf-8"))
+    except (TypeError, ValueError, UnicodeEncodeError) as error:
+        raise ProjectDocumentInvalidError from error
+
+
+def _require_project_document_size(actual_bytes: int) -> None:
+    if actual_bytes > PROJECT_DOCUMENT_MAX_BYTES:
+        raise ProjectDocumentTooLargeError(actual_bytes=actual_bytes, max_bytes=PROJECT_DOCUMENT_MAX_BYTES)
 
 
 class ProjectRecordsSqlite(ProjectRecordsStorageBase):
@@ -69,6 +85,8 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
             minimum_version=minimum_canvas_schema_version,
             client_maximum_version=max_canvas_schema_version,
         )
+        document_json, document_bytes = _serialize_project_document(data)
+        _require_project_document_size(document_bytes)
 
         try:
             with self._db.transaction() as cursor:
@@ -89,7 +107,7 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
                         project_id,
                         user_id,
                         name,
-                        json.dumps(data),
+                        document_json,
                         resolved_board_id,
                         minimum_canvas_schema_version,
                     ),
@@ -168,6 +186,8 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
         minimum_canvas_schema_version: int | None = None,
         max_canvas_schema_version: int = DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
     ) -> ProjectRecordDTO:
+        document_json, document_bytes = _serialize_project_document(data)
+
         with self._db.transaction() as cursor:
             cursor.execute(
                 """--sql
@@ -208,6 +228,7 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
                 minimum_version=next_minimum_version,
                 client_maximum_version=max_canvas_schema_version,
             )
+            _require_project_document_size(document_bytes)
 
             cursor.execute(
                 """--sql
@@ -217,7 +238,7 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
                 """,
                 (
                     name,
-                    json.dumps(data),
+                    document_json,
                     next_minimum_version,
                     user_id,
                     project_id,

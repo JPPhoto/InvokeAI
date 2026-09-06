@@ -47,6 +47,8 @@ export interface DuplicateProjectInput {
   owner: AccountScope;
   /** The acknowledged source record — for an open project, flushed first. */
   record: ProjectRecordDTO;
+  /** Stable identity reserved before the operation, used by retry-safe conflict copies. */
+  identity?: { id: string; name: string };
 }
 
 export interface DuplicateProjectDeps {
@@ -121,8 +123,8 @@ export const duplicateProjectRecord = async (
   deps: DuplicateProjectDeps = {}
 ): Promise<DuplicateProjectResult> => {
   const { owner } = input;
-  const id = createProjectId();
-  const name = `${input.record.name} copy`;
+  const id = input.identity?.id ?? createProjectId();
+  const name = input.identity?.name ?? `${input.record.name} copy`;
 
   assertAccountScopeCurrent(owner);
 
@@ -144,9 +146,9 @@ export const duplicateProjectRecord = async (
 
   const project = loaded.project;
 
-  const { applyAuthoritativeProjectBoard, serializeProjectDocument } =
+  const { applyAuthoritativeProjectBoard, serializeProjectDocument, serializeProjectDocumentV2 } =
     await import('@workbench/projects/projectDocument');
-  const canonicalDocument = serializeProjectDocument(project);
+  const canonicalDocument = input.identity ? serializeProjectDocumentV2(project) : serializeProjectDocument(project);
   const boardItems = input.boardItems as readonly InvkBoardItem[];
   const stagingBoardId = boardItems.length === 0 ? null : await createStagingBoard(name, owner.signal);
   const ledger = createRestoredMediaLedger(stagingBoardId);

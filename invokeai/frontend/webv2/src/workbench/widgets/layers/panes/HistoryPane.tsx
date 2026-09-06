@@ -134,7 +134,6 @@ const HistoryStep = ({
         // WCAG contrast at this size, so color stays at fg.muted for both.
         color={isCurrent ? 'fg' : 'fg.muted'}
         fontStyle={isFuture ? 'italic' : undefined}
-        cursor="pointer"
         flex="1"
         fontSize="xs"
         minH="6"

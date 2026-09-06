@@ -25,7 +25,6 @@ export type FirstPartyWidgetTypeId =
   | 'upscale'
   | 'video'
   | 'users'
-  | 'version-status'
   | 'workflow';
 
 export type WidgetTypeId = FirstPartyWidgetTypeId | (string & {});
@@ -284,7 +283,8 @@ export type SettingsSectionId =
   | 'workflow'
   | 'imageMap'
   | 'developer'
-  | 'workspace';
+  | 'workspace'
+  | 'about';
 
 export interface WidgetManifest {
   /** Widget runtime API contract version. Defaults to 1 during registry normalization. */
@@ -296,7 +296,8 @@ export interface WidgetManifest {
   allowedRegions: WidgetRegion[];
   allowMultiple: boolean;
   icon: WidgetIconComponent;
-  bottomPanel?: 'expandable' | 'tooltip';
+  /** `popover`: the compact chip opens a dismissable popover instead of claiming the bottom panel. */
+  bottomPanel?: 'expandable' | 'tooltip' | 'popover';
   centerPlacement?: 'toolbar' | 'view';
   /** Opt-in: the widget can be detached into a movable floating window. */
   allowFloating?: boolean;
