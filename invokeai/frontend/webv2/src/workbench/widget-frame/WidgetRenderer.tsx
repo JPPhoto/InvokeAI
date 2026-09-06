@@ -13,6 +13,7 @@ import { Box, Flex, Text } from '@chakra-ui/react';
 import { getWidgetReadyMark, markSemanticReady } from '@platform/performance/semanticReady';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { Scrollable } from '@platform/ui/Scrollable';
+import { WidgetOverlayOwnerContext } from '@platform/ui/widgetOverlays';
 import { WidgetSettingsButton } from '@workbench/settings/WidgetSettingsButton';
 import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from '@workbench/widgetPlacementMeta';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
@@ -233,16 +234,18 @@ const LoadedWidgetRenderer = ({ instance, presentation, region, widget }: Widget
   );
 
   return (
-    <WidgetShellFrame
-      implementation={implementation}
-      instance={instanceMeta}
-      presentation={presentation}
-      region={region}
-      runtime={runtime}
-      widget={widget}
-    >
-      {content}
-    </WidgetShellFrame>
+    <WidgetOverlayOwnerContext value>
+      <WidgetShellFrame
+        implementation={implementation}
+        instance={instanceMeta}
+        presentation={presentation}
+        region={region}
+        runtime={runtime}
+        widget={widget}
+      >
+        {content}
+      </WidgetShellFrame>
+    </WidgetOverlayOwnerContext>
   );
 };
 
