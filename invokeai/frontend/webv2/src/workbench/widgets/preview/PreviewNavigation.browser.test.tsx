@@ -499,6 +499,34 @@ describe('preview keyboard navigation boundary', () => {
     expect(mocks.galleryItemFilters.every((query) => query.starred === true)).toBe(true);
   });
 
+  it('anchors a strip selection at the top of the starred listing, not at the grid page it was stamped with', async () => {
+    // Paginated mode, grid on page 2: the stamp says page 2 of the unstarred
+    // listing, but the clicked strip item sits at the top of the starred one.
+    const starredItem = { ...createImageItem('starred-top', '2026-07-23T00:00:00.000Z'), starred: true };
+    const starredNext = { ...createImageItem('starred-next', '2026-07-22T00:00:00.000Z'), starred: true };
+
+    setGalleryValues({
+      galleryPage: 2,
+      paginationMode: 'paginated',
+      recentImages: [],
+      selectedImage: { ...legacyImage('starred-top', '2026-07-23T00:00:00.000Z'), starred: true },
+      selectedImageName: 'starred-top',
+      selectedImageQuery: { ...deepQuery, page: 2, paginationMode: 'paginated' },
+    });
+    mocks.galleryItemPages = [{ items: [starredItem, starredNext], total: 2 }];
+
+    await render();
+    await pressArrow('ArrowRight');
+
+    expect(mocks.galleryItemWindowOffsets.every((offset) => offset === 0)).toBe(true);
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'starred-next' }),
+      undefined,
+      expect.any(Number),
+      true
+    );
+  });
+
   it('handles one arrow press as exactly one selection and stops propagation', async () => {
     const documentKeydown = vi.fn();
     document.addEventListener('keydown', documentKeydown);

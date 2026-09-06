@@ -234,8 +234,12 @@ export const usePreviewNavigation = ({
   // Held sticky, the anchor outlived every one of them: a click on the newest
   // image at the top of the board left Preview walking rows 1800+ for a
   // selection at row 0.
-  const navigationAnchorPage =
-    selectedImageQuery.paginationMode === 'paginated'
+  // A strip selection is stamped with the grid's page, which indexes the
+  // unstarred listing; the strip is the top of the starred one.
+  const isStripSelection = navigationStarredOnly && !selectedImageQuery.starredOnly;
+  const navigationAnchorPage = isStripSelection
+    ? 0
+    : selectedImageQuery.paginationMode === 'paginated'
       ? hasStaleNavigationAnchor
         ? selectedImageQuery.page
         : navigationAnchor.page
