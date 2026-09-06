@@ -68,8 +68,11 @@ def test_completion_predicate_preserves_durable_state() -> None:
     assert state.is_complete()
     assert state.model_dump_json() == before
     restored_state = GraphExecutionState.model_validate_json(before)
+    # Legacy complete() snapshots intentionally gain their derived execution references on restore.
+    restored_before = restored_state.model_dump_json()
+    assert restored_state.execution_refs
     assert restored_state.is_complete()
-    assert restored_state.model_dump_json() == before
+    assert restored_state.model_dump_json() == restored_before
 
 
 def test_completion_cache_preserves_completed_sources_after_restore() -> None:

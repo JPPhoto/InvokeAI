@@ -7,7 +7,7 @@ from invokeai.app.services.shared.execution_state_migration import (
     dump_execution_state,
     load_execution_state,
 )
-from invokeai.app.services.shared.graph import Graph, GraphExecutionState
+from invokeai.app.services.shared.graph import ExecutionFrame, ExecutionToken, Graph, GraphExecutionState
 
 
 def _make_state() -> GraphExecutionState:
@@ -77,3 +77,21 @@ def test_rejects_future_execution_state_versions() -> None:
 
     with pytest.raises(UnsupportedExecutionStateVersionError, match="newer than supported"):
         load_execution_state(snapshot)
+
+
+def test_round_trips_nullable_execution_token_value() -> None:
+    state = _make_state()
+    state.execution_tokens["token-id"] = ExecutionToken(
+        token_id="token-id",
+        reference_id="state-id:exec-node",
+        owner_node_id="exec-node",
+        port="value",
+        frame=ExecutionFrame(),
+        value=None,
+    )
+
+    snapshot = dump_execution_state(state)
+    assert snapshot["execution_tokens"]["token-id"]["value"] is None
+    restored = load_execution_state(snapshot)
+
+    assert restored.execution_tokens["token-id"].value is None

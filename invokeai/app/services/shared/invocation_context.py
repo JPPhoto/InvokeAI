@@ -983,7 +983,8 @@ class InvocationContext:
         """An internal API providing access to data about the current queue item and invocation. You probably shouldn't use this. It may change without warning."""
         self._services = services
         """An internal API providing access to all application services. You probably shouldn't use this. It may change without warning."""
-        self.execution_effects = execution_effects or ExecutionEffectsRecorder(source_node_id=data.invocation.id)
+        source_node_id = getattr(data.invocation, "id", None) or data.source_invocation_id or "context"
+        self.execution_effects = execution_effects or ExecutionEffectsRecorder(source_node_id=source_node_id)
         """Effects recorded during the current invocation run."""
         self.effects = self.execution_effects
         """Alias for :attr:`execution_effects`."""
@@ -1021,7 +1022,7 @@ def build_invocation_context(
 
     if execution_effects is None:
         execution_effects = ExecutionEffectsRecorder(
-            source_node_id=data.invocation.id,
+            source_node_id=getattr(data.invocation, "id", None) or data.source_invocation_id or "context",
             frame_path=data.execution_frame,
         )
 

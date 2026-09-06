@@ -22,6 +22,11 @@ def dump_execution_state(state: GraphExecutionState) -> dict[str, Any]:
     migration experiments.
     """
     snapshot = state.model_dump(mode="json", warnings=False, exclude_none=True)
+    # Persist nullable output tokens explicitly. `ExecutionToken.value` remains required in the
+    # public model/schema, but an output port may legitimately carry None and the general
+    # exclude_none policy would otherwise make the snapshot impossible to hydrate.
+    for token in snapshot.get("execution_tokens", {}).values():
+        token.setdefault("value", None)
     snapshot["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION
     return snapshot
 
