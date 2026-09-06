@@ -10,12 +10,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-from invokeai.app.util.misc import uuid_string
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+from pydantic_core import PydanticSerializationError
 
 if TYPE_CHECKING:
     from invokeai.app.invocations.baseinvocation import BaseInvocationOutput
+
+
+_JSON_SERIALIZER = TypeAdapter(Any)
+
+
+def _validate_json_serializable(value: Any) -> Any:
+    """Reject values that cannot survive GraphExecutionState JSON persistence."""
+    try:
+        _JSON_SERIALIZER.dump_python(value, mode="json", warnings="error")
+    except (PydanticSerializationError, TypeError, ValueError) as exc:
+        raise ValueError("must be JSON-serializable") from exc
+    return value
 
 
 def _normalize_aliases(value: Any, aliases: dict[str, tuple[str, ...]]) -> Any:
@@ -46,7 +57,7 @@ class ExecutionToken(_ExecutionModel):
 
     node_id: str = Field(min_length=1, description="The execution node id.")
     field: str = Field(min_length=1, description="The output field name.")
-    value: Any | None = Field(default=None, description="The typed value carried by this token.")
+    value: Any | None = Field(default=None, description="The JSON-serializable value carried by this token.")
     frame: tuple[int | str, ...] = Field(default=(), description="The enclosing execution frame path.")
     token_kind: Literal["data", "activation", "stream_end"] = Field(
         default="data", description="The semantic kind of this token."
@@ -80,6 +91,11 @@ class ExecutionToken(_ExecutionModel):
         if any(isinstance(part, str) and not part.strip() for part in value):
             raise ValueError("frame values must not be blank")
         return value
+
+    @field_validator("value")
+    @classmethod
+    def _reject_unserializable_value(cls, value: Any | None) -> Any | None:
+        return _validate_json_serializable(value)
 
     @property
     def invocation_id(self) -> str:
@@ -125,7 +141,9 @@ class ExecutionRef(_ExecutionModel):
         if not isinstance(value, dict):
             return value
         data = dict(value)
-        if "token" not in data and any(name in data for name in ("node_id", "invocation_id", "field", "port", "output", "output_name")):
+        if "token" not in data and any(
+            name in data for name in ("node_id", "invocation_id", "field", "port", "output", "output_name")
+        ):
             token_fields = {
                 name: data.pop(name)
                 for name in (
@@ -218,6 +236,8 @@ class SetValueEffect(ExecutionEffect):
     target: ExecutionRef
     value: Any
 
+    _validate_value = field_validator("value")(_validate_json_serializable)
+
 
 class AddEdgeEffect(ExecutionEffect):
     kind: Literal["add_edge"] = "add_edge"
@@ -235,6 +255,8 @@ class EmitEffect(ExecutionEffect):
     kind: Literal["emit"] = "emit"
     token: ExecutionToken
     value: Any | None = None
+
+    _validate_value = field_validator("value")(_validate_json_serializable)
 
 
 class CloseStreamEffect(ExecutionEffect):
@@ -255,14 +277,16 @@ class SpawnExecutionEffect(ExecutionEffect):
     def _reject_missing_graph(cls, value: Any) -> Any:
         if value is None:
             raise ValueError("spawn graph must not be None")
-        return value
+        return _validate_json_serializable(value)
 
     @field_validator("inputs")
     @classmethod
     def _validate_input_names(cls, value: dict[str, Any]) -> dict[str, Any]:
         if any(not name.strip() for name in value):
             raise ValueError("spawn input names must not be blank")
-        return value
+        return _validate_json_serializable(value)
+
+    _validate_authorization_context = field_validator("authorization_context")(_validate_json_serializable)
 
 
 class AwaitEffect(ExecutionEffect):
@@ -293,6 +317,10 @@ RemoveExecutionEdgeEffect = RemoveEdgeEffect
 EmitExecutionEffect = EmitEffect
 
 
+class UnsupportedExecutionEffectError(RuntimeError):
+    """Raised when the current graph dispatcher cannot apply an effect kind."""
+
+
 class ExecutionInterface:
     """Restricted recorder facade exposed to invocation code."""
 
@@ -319,7 +347,7 @@ class ExecutionInterface:
                     node_id=self._recorder.source_node_id,
                     field=field,
                     value=value,
-                    frame=frame or self._recorder.frame_path,
+                    frame=frame if frame is not None else self._recorder.frame_path,
                     token_kind=token_kind,
                     sequence=sequence,
                 ),
@@ -333,7 +361,7 @@ class ExecutionInterface:
                 token=ExecutionToken(
                     node_id=self._recorder.source_node_id,
                     field=field,
-                    frame=frame or self._recorder.frame_path,
+                    frame=frame if frame is not None else self._recorder.frame_path,
                     token_kind="stream_end",
                 )
             )
@@ -347,31 +375,13 @@ class ExecutionInterface:
         child_execution_id: str | None = None,
         authorization_context: dict[str, Any] | None = None,
     ) -> "ChildExecutionHandle":
-        owner = ExecutionRef(execution_node_id=self._recorder.source_node_id, frame_path=self._recorder.frame_path)
-        handle = ChildExecutionHandle(
-            child_execution_id=child_execution_id or uuid_string(),
-            parent_execution_id=self._recorder.source_node_id,
-            authorization_context=authorization_context,
-        )
-        self._recorder.record(
-            SpawnExecutionEffect(
-                execution_ref=owner,
-                parent=owner,
-                graph=graph,
-                inputs=inputs,
-                child_execution_id=handle.child_execution_id,
-                authorization_context=handle.authorization_context,
-            )
-        )
-        return handle
+        raise UnsupportedExecutionEffectError("Execution effect kind 'spawn_execution' is not supported")
 
     def await_dependency(self, dependency: ExecutionRef) -> None:
-        owner = ExecutionRef(execution_node_id=self._recorder.source_node_id, frame_path=self._recorder.frame_path)
-        self._recorder.record(AwaitEffect(execution_ref=owner, dependency=dependency))
+        raise UnsupportedExecutionEffectError("Execution effect kind 'await' is not supported")
 
     def fail(self, message: str) -> None:
-        owner = ExecutionRef(execution_node_id=self._recorder.source_node_id, frame_path=self._recorder.frame_path)
-        self._recorder.record(FailEffect(execution_ref=owner, message=message))
+        raise UnsupportedExecutionEffectError("Execution effect kind 'fail' is not supported")
 
     def authorize_workflow(self, workflow_id: str) -> Any:
         if self._authorize_workflow is None:
@@ -385,6 +395,8 @@ class ChildExecutionHandle(_ExecutionModel):
     child_execution_id: str = Field(min_length=1)
     parent_execution_id: str = Field(min_length=1)
     authorization_context: dict[str, Any] | None = None
+
+    _validate_authorization_context = field_validator("authorization_context")(_validate_json_serializable)
 
     @model_validator(mode="before")
     @classmethod
@@ -447,6 +459,10 @@ class ExecutionEffectsRecorder:
     def record(self, effect: ExecutionEffect) -> None:
         if not isinstance(effect, ExecutionEffect):
             raise TypeError(f"Expected ExecutionEffect, got {type(effect).__name__}")
+        try:
+            effect.model_dump(mode="json", warnings="error")
+        except (PydanticSerializationError, TypeError, ValueError) as exc:
+            raise ValueError("Execution effect must be JSON-serializable") from exc
         self._effects.append(effect)
 
     record_effect = record

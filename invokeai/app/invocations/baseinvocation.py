@@ -9,6 +9,7 @@ import types
 import typing
 import warnings
 from abc import ABC, abstractmethod
+from copy import copy
 from enum import Enum
 from functools import lru_cache
 from inspect import signature
@@ -51,6 +52,29 @@ if TYPE_CHECKING:
     from invokeai.app.services.invocation_services import InvocationServices
 
 logger = InvokeAILogger.get_logger()
+
+
+class _InvocationCacheBypass:
+    """Cache facade that makes every lookup miss and suppresses writes."""
+
+    def __init__(self, cache: Any) -> None:
+        self._cache = cache
+
+    def get(self, key: int | str) -> None:
+        return None
+
+    def save(self, key: int | str, invocation_output: BaseInvocationOutput) -> None:
+        return None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._cache, name)
+
+
+def _services_with_invocation_cache_bypassed(services: "InvocationServices") -> "InvocationServices":
+    """Copy services for one effectful dispatch with cache reads and writes disabled."""
+    effect_services = copy(services)
+    effect_services.invocation_cache = _InvocationCacheBypass(services.invocation_cache)
+    return effect_services
 
 
 class InvalidVersionError(ValueError):
@@ -269,7 +293,9 @@ class BaseInvocation(ABC, BaseModel):
         Ordinary invocations retain the existing output-only cache. Invocations
         that declare ``execution_effects_enabled`` bypass that cache because a
         cache hit cannot safely replay activation, stream, child, or failure
-        effects.
+        effects. The overridable ``invoke_internal()`` still runs, but receives
+        a per-dispatch cache facade that always misses and suppresses writes.
+        Overrides must access the cache through the supplied services object.
         """
         if not self.execution_effects_enabled:
             return InvocationRunResult(output=self.invoke_internal(context, services), effects=())
@@ -279,7 +305,7 @@ class BaseInvocation(ABC, BaseModel):
         previous_skip_cache = getattr(context, "_skip_invocation_cache", False)
         context._skip_invocation_cache = True
         try:
-            output = self.invoke_internal(context, services)
+            output = self.invoke_internal(context, _services_with_invocation_cache_bypassed(services))
         finally:
             context._skip_invocation_cache = previous_skip_cache
         return InvocationRunResult(output=output, effects=context.execution_effects.snapshot())

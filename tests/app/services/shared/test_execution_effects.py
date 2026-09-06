@@ -15,6 +15,8 @@ from invokeai.app.services.shared.execution_effects import (
     AddEdgeEffect,
     AwaitEffect,
     ChildExecutionHandle,
+    CloseStreamEffect,
+    EmitEffect,
     ExecutionEffectsRecorder,
     ExecutionInterface,
     ExecutionRef,
@@ -22,7 +24,10 @@ from invokeai.app.services.shared.execution_effects import (
     FailEffect,
     SetValueEffect,
     SpawnExecutionEffect,
+    UnsupportedExecutionEffectError,
 )
+from invokeai.app.services.shared.execution_state_migration import dump_execution_state
+from invokeai.app.services.shared.graph import Graph, GraphExecutionState
 from invokeai.app.services.shared.invocation_context import InvocationContext
 
 
@@ -46,6 +51,29 @@ class ExecutionEffectsTestInvocation(BaseInvocation):
             )
         )
         return ExecutionEffectsTestOutput(value=self.value)
+
+
+@invocation("execution_effects_override_test", version="1.0.0")
+class ExecutionEffectsOverrideInvocation(BaseInvocation):
+    execution_effects_enabled = True
+    value: int = InputField(default=1)
+    calls: ClassVar[int] = 0
+
+    def invoke(self, context: InvocationContext) -> ExecutionEffectsTestOutput:
+        type(self).calls += 1
+        context.effects.record(
+            SetValueEffect(
+                target=ExecutionRef(node_id=self.id, field="value"),
+                value=self.value,
+            )
+        )
+        return ExecutionEffectsTestOutput(value=self.value)
+
+    def invoke_internal(self, context: InvocationContext, services: MagicMock) -> ExecutionEffectsTestOutput:
+        cached_value = services.invocation_cache.get("override-cache-key")
+        if cached_value is not None:
+            return cached_value
+        return self.invoke(context)
 
 
 def _context() -> InvocationContext:
@@ -84,26 +112,44 @@ def test_execution_ref_identity_aliases_are_safe_without_token() -> None:
     assert ref.output_name == ""
 
 
-def test_spawn_returns_validated_child_handle_and_records_owner() -> None:
+def test_execution_interface_rejects_unsupported_lifecycle_effects() -> None:
     recorder = ExecutionEffectsRecorder(source_node_id="parent")
     execution = ExecutionInterface(recorder)
 
-    handle = execution.spawn(
-        graph={"nodes": {}},
-        inputs={"value": {"items": [1, True, None]}},
-        authorization_context={"user_id": "user"},
-    )
+    with pytest.raises(UnsupportedExecutionEffectError, match="not supported"):
+        execution.spawn(graph={"nodes": {}}, inputs={})
+    with pytest.raises(UnsupportedExecutionEffectError, match="not supported"):
+        execution.await_dependency(ExecutionRef(execution_node_id="child"))
+    with pytest.raises(UnsupportedExecutionEffectError, match="not supported"):
+        execution.fail("failed")
 
-    assert isinstance(handle, ChildExecutionHandle)
-    assert handle.child_execution_id
-    assert handle.parent_execution_id == "parent"
-    assert handle.authorization_context == {"user_id": "user"}
-    assert isinstance(recorder.snapshot()[0], SpawnExecutionEffect)
-    effect = recorder.snapshot()[0]
-    assert isinstance(effect, SpawnExecutionEffect)
-    assert effect.parent == effect.execution_ref
-    assert effect.child_execution_id == handle.child_execution_id
-    assert effect.authorization_context == handle.authorization_context
+    assert recorder.snapshot() == ()
+
+
+def test_execution_interface_spawn_is_guarded() -> None:
+    recorder = ExecutionEffectsRecorder(source_node_id="parent")
+    execution = ExecutionInterface(recorder)
+
+    with pytest.raises(UnsupportedExecutionEffectError):
+        execution.spawn(
+            graph={"nodes": {}},
+            inputs={"value": {"items": [1, True, None]}},
+            authorization_context={"user_id": "user"},
+        )
+
+
+def test_execution_interface_preserves_explicit_empty_frame() -> None:
+    recorder = ExecutionEffectsRecorder(source_node_id="node", frame_path=(2,))
+    execution = ExecutionInterface(recorder)
+
+    execution.emit("value", 1, frame=())
+    execution.close_stream("value", frame=())
+
+    emit_effect, close_effect = recorder.snapshot()
+    assert isinstance(emit_effect, EmitEffect)
+    assert isinstance(close_effect, CloseStreamEffect)
+    assert emit_effect.token.frame == ()
+    assert close_effect.token.frame == ()
 
 
 @pytest.mark.parametrize(
@@ -128,10 +174,13 @@ def test_child_execution_handle_rejects_invalid_identity_or_authorization(value:
     ],
 )
 def test_spawn_rejects_invalid_inputs(graph: object, inputs: object) -> None:
-    execution = ExecutionInterface(ExecutionEffectsRecorder(source_node_id="parent"))
-
     with pytest.raises((TypeError, ValidationError)):
-        execution.spawn(graph, inputs)  # type: ignore[arg-type]
+        SpawnExecutionEffect(
+            parent=ExecutionRef(execution_node_id="parent"),
+            graph=graph,
+            inputs=inputs,  # type: ignore[arg-type]
+            child_execution_id="child",
+        )
 
 
 def test_recorder_drain_returns_and_clears_effects() -> None:
@@ -143,13 +192,45 @@ def test_recorder_drain_returns_and_clears_effects() -> None:
     assert recorder.snapshot() == ()
 
 
-def test_set_value_effect_accepts_nested_and_runtime_values() -> None:
+def test_effect_values_accept_json_serializable_values_and_reject_runtime_values() -> None:
     target = ExecutionRef(node_id="node", field="value")
     nested_value = {"items": [1, True, None, {"name": "value"}]}
 
     assert SetValueEffect(target=target, value=nested_value).value == nested_value
-    runtime_value = object()
-    assert SetValueEffect(target=target, value=runtime_value).value is runtime_value
+    with pytest.raises(ValidationError, match="JSON-serializable"):
+        SetValueEffect(target=target, value=object())
+    with pytest.raises(ValidationError, match="JSON-serializable"):
+        EmitEffect(token=ExecutionToken(node_id="node", field="value"), value=object())
+    with pytest.raises(ValidationError, match="JSON-serializable"):
+        ExecutionToken(node_id="node", field="value", value=object())
+    with pytest.raises(ValidationError, match="JSON-serializable"):
+        SpawnExecutionEffect(parent=ExecutionRef(execution_node_id="node"), graph=object(), child_execution_id="child")
+    with pytest.raises(ValidationError, match="JSON-serializable"):
+        SpawnExecutionEffect(
+            parent=ExecutionRef(execution_node_id="node"),
+            graph={},
+            inputs={"value": object()},
+            child_execution_id="child",
+        )
+    with pytest.raises(ValidationError, match="JSON-serializable"):
+        SpawnExecutionEffect(
+            parent=ExecutionRef(execution_node_id="node"),
+            graph={},
+            authorization_context={"user": object()},
+            child_execution_id="child",
+        )
+
+
+def test_effect_values_survive_execution_state_json_dump() -> None:
+    effect = SetValueEffect(
+        target=ExecutionRef(node_id="node", field="value"),
+        value={"items": [1, True, None, {"name": "value"}]},
+    )
+    state = GraphExecutionState(graph=Graph(), execution_effects={"reference": [effect]})
+
+    snapshot = dump_execution_state(state)
+
+    assert snapshot["execution_effects"]["reference"][0]["value"] == effect.value
 
 
 def test_set_value_effect_requires_a_value() -> None:
@@ -157,18 +238,18 @@ def test_set_value_effect_requires_a_value() -> None:
         SetValueEffect(target=ExecutionRef(node_id="node", field="value"))
 
 
-def test_recorder_created_control_effects_carry_owner_refs() -> None:
+def test_lifecycle_effect_models_validate_owner_refs() -> None:
     recorder = ExecutionEffectsRecorder(source_node_id="parent")
-    execution = ExecutionInterface(recorder)
-
-    execution.await_dependency(ExecutionRef(execution_node_id="child"))
-    execution.fail("failed")
-
-    await_effect, fail_effect = recorder.snapshot()
+    await_effect = AwaitEffect(
+        execution_ref=ExecutionRef(execution_node_id="parent"),
+        dependency=ExecutionRef(execution_node_id="child"),
+    )
+    fail_effect = FailEffect(execution_ref=ExecutionRef(execution_node_id="parent"), message="failed")
+    recorder.record(await_effect)
+    recorder.record(fail_effect)
     assert isinstance(await_effect, AwaitEffect)
     assert isinstance(fail_effect, FailEffect)
-    assert await_effect.execution_ref == ExecutionRef(execution_node_id="parent")
-    assert fail_effect.execution_ref == ExecutionRef(execution_node_id="parent")
+    assert recorder.snapshot() == (await_effect, fail_effect)
 
 
 @pytest.mark.parametrize(
@@ -207,6 +288,11 @@ def test_recorder_rejects_untyped_values_and_returns_copy() -> None:
     with pytest.raises(TypeError, match="Expected ExecutionEffect"):
         recorder.record("not an effect")  # type: ignore[arg-type]
 
+    invalid_effect = effect.model_copy(update={"value": object()})
+    with pytest.raises(ValueError, match="JSON-serializable"):
+        recorder.record(invalid_effect)
+    assert recorder.snapshot() == (effect,)
+
 
 def test_effectful_invoke_bypasses_output_only_cache() -> None:
     ExecutionEffectsTestInvocation.calls = 0
@@ -237,3 +323,18 @@ def test_effectful_invoke_clears_stale_effects() -> None:
     result = ExecutionEffectsTestInvocation(id="node", value=2).invoke_internal_with_effects(context, _services())
 
     assert [effect.value for effect in result.effects if isinstance(effect, SetValueEffect)] == [2]
+
+
+def test_effectful_invoke_disables_cache_in_invoke_internal_override() -> None:
+    ExecutionEffectsOverrideInvocation.calls = 0
+    services = _services()
+    services.invocation_cache.get.return_value = ExecutionEffectsTestOutput(value=99)
+    invocation_instance = ExecutionEffectsOverrideInvocation(id="node", value=7, use_cache=True)
+
+    result = invocation_instance.invoke_internal_with_effects(_context(), services)
+
+    assert result.output == ExecutionEffectsTestOutput(value=7)
+    assert len(result.effects) == 1
+    assert ExecutionEffectsOverrideInvocation.calls == 1
+    assert invocation_instance.use_cache is True
+    services.invocation_cache.get.assert_not_called()
