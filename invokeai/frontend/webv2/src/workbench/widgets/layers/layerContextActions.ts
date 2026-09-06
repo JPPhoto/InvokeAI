@@ -52,7 +52,7 @@ import {
 } from 'lucide-react';
 
 import { COLOR_LABEL_ITEMS } from './colorLabels';
-import { canConvertRasterControl, canMergeLayerDown } from './layerOps';
+import { canAddRegionalReferenceImage, canConvertRasterControl, canMergeLayerDown } from './layerOps';
 
 export type LayerContextActionId =
   | 'add-reference-image'
@@ -546,7 +546,7 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     icon: ImagePlusIcon,
     id: 'add-reference-image',
     isEnabled: isLayerMutable,
-    isVisible: (context) => context.modelBase !== 'flux2',
+    isVisible: (context) => canAddRegionalReferenceImage(context.modelBase),
     labelKey: 'widgets.layers.regionalGuidance.addReferenceImage',
     order: 55,
     section: 'primary',

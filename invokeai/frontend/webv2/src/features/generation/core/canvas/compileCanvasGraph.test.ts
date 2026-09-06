@@ -904,9 +904,40 @@ describe('compileCanvasGraph — regional guidance', () => {
     expect(backendGraph.nodes.rg_pos_cond_inverted_r1).toBeDefined();
   });
 
-  it('is a no-op for an unsupported base (sd-2)', () => {
-    const { backendGraph } = compile(sd2Model, 'txt2img', { regionalGuidance: [region('r1')] });
+  it('grafts SD2 regional conditioning through compel like SD1', () => {
+    const { backendGraph } = compile(sd2Model, 'txt2img', {
+      regionalGuidance: [region('r1', { negativePrompt: 'blurry' })],
+    });
+    expect(backendGraph.nodes.rg_pos_cond_r1).toMatchObject({ prompt: 'a cat', type: 'compel' });
+    expect(backendGraph.nodes.rg_neg_cond_r1).toMatchObject({ prompt: 'blurry', type: 'compel' });
+    expect(getEdge(backendGraph, 'rg_pos_cond_r1', 'clip')?.source.node_id).toBe(
+      getEdge(backendGraph, 'pos_cond', 'clip')?.source.node_id
+    );
+  });
+
+  it('is a no-op for a base with no regional path (sd-3)', () => {
+    const { backendGraph } = compile(sd3Model, 'txt2img', { regionalGuidance: [region('r1')] });
     expect(backendGraph.nodes.rg_mask_to_tensor_r1).toBeUndefined();
+  });
+
+  it.each([
+    ['Z-Image', zImageModel, 'z_image_text_encoder'],
+    ['Anima', animaModel, 'anima_text_encoder'],
+  ] as const)('grafts %s regions through the shared Qwen3 encoder', (_label, model, encoderType) => {
+    const { backendGraph } = compile(model, 'txt2img', {
+      regionalGuidance: [region('r1'), region('r2', { positivePrompt: 'a dog' })],
+      settings: { cfgScale: 4 },
+    });
+
+    expect(backendGraph.nodes.rg_pos_cond_r1).toMatchObject({ prompt: 'a cat', type: encoderType });
+    expect(backendGraph.nodes.rg_pos_cond_r2).toMatchObject({ prompt: 'a dog', type: encoderType });
+    expect(getEdge(backendGraph, 'rg_pos_cond_r1', 'qwen3_encoder')?.source.node_id).toBe('model_loader');
+    expect(getEdge(backendGraph, 'rg_pos_cond_r1', 'mask')?.source.node_id).toBe('rg_mask_to_tensor_r1');
+    const collected = backendGraph.edges
+      .filter((edge) => edge.destination.node_id === 'pos_cond_collect')
+      .map((edge) => edge.source.node_id);
+    expect(collected).toEqual(['pos_cond', 'rg_pos_cond_r1', 'rg_pos_cond_r2']);
+    expect(getEdge(backendGraph, 'neg_cond_collect', 'item')?.source.node_id).toBe('neg_cond');
   });
 
   it('coexists with control layers in one graph', () => {

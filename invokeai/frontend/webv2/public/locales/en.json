@@ -3230,7 +3230,6 @@
         "addReferenceImage": "Add reference image",
         "autoNegative": "Auto-Negative",
         "clearReferenceImage": "Clear reference image",
-        "flux2PositiveOnly": "FLUX.2 regional guidance supports positive prompts only. Negative prompts, Auto-Negative, and reference images must be removed before generation.",
         "method": "Method",
         "methods": {
           "composition": "Composition",
@@ -3251,6 +3250,7 @@
         "referenceImages": "Reference images",
         "removeReferenceImage": "Remove reference image",
         "selectModel": "Select a model",
+        "unsupportedModel": "The selected model does not support regional guidance. This layer is skipped during generation.",
         "weight": "Weight"
       },
       "types": {

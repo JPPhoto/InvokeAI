@@ -530,11 +530,19 @@ describe('getLayerContextActions', () => {
     expect(effects.setColorLabel).toHaveBeenLastCalledWith(null);
   });
 
-  it('offers add-reference-image on regional layers unless the model base is flux2', () => {
+  it('offers add-reference-image on regional layers unless the model base has no regional image path', () => {
     const regional = makeLayer('regional_guidance');
     expect(byId(getLayerContextActions(makeState(regional)), 'add-reference-image').isDisabled).toBe(false);
-    const flux2Actions = getLayerContextActions(makeState(regional, { modelBase: 'flux2' }));
-    expect(flux2Actions.some((action) => action.id === 'add-reference-image')).toBe(false);
+    expect(
+      byId(getLayerContextActions(makeState(regional, { modelBase: 'flux' })), 'add-reference-image')
+    ).toBeDefined();
+    for (const modelBase of ['flux2', 'anima', 'z-image']) {
+      const actions = getLayerContextActions(makeState(regional, { modelBase }));
+      expect(
+        actions.some((action) => action.id === 'add-reference-image'),
+        modelBase
+      ).toBe(false);
+    }
     const rasterActions = getLayerContextActions(makeState(makeLayer('raster')));
     expect(rasterActions.some((action) => action.id === 'add-reference-image')).toBe(false);
   });

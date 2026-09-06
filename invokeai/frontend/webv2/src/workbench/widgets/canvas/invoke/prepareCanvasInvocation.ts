@@ -49,7 +49,7 @@ import {
   getControlValidationReason,
   getControlValidationReasonMessage,
   getRegionalGuidanceRejectionReason,
-  isRegionalGuidanceSupportedForBase,
+  getRegionalGuidanceSupport,
   type ControlLayerGraphInput,
   type ControlValidationReason,
   type RegionalGuidanceInput,
@@ -216,12 +216,13 @@ export const resolveRegionalReferenceImages = (
   base: string
 ): RegionalReferenceImageInput[] => {
   const inputs: RegionalReferenceImageInput[] = [];
+  const kind = getRegionalGuidanceSupport(base)?.referenceImages ?? null;
   for (const ref of region.referenceImages) {
     if (!ref.isEnabled) {
       continue;
     }
     const { config } = ref;
-    if (config.type === 'ip_adapter' && (base === 'sd-1' || base === 'sdxl')) {
+    if (config.type === 'ip_adapter' && kind === 'ip_adapter') {
       if (!config.image || !config.model || config.model.base !== base) {
         continue;
       }
@@ -241,7 +242,7 @@ export const resolveRegionalReferenceImages = (
         type: 'ip_adapter',
         weight: config.weight,
       });
-    } else if (config.type === 'flux_redux' && base === 'flux') {
+    } else if (config.type === 'flux_redux' && kind === 'flux_redux') {
       if (!config.image || !config.model || config.model.base !== base) {
         continue;
       }
@@ -266,8 +267,8 @@ export const resolveRegionalReferenceImages = (
 /**
  * Regional-guidance policy + metadata side-channel for the composite operation.
  * `shouldComposite` resolves each region's reference images and rejects regions
- * invalid for the base (unsupported base, FLUX + negative/autoNegative, all
- * prompts + references empty) with a SILENT skip, mirroring legacy.
+ * that cannot contribute for the base (no regional support, or nothing the
+ * base's support matrix honours) with a SILENT skip, mirroring legacy.
  * `toGraphInputs` joins the composited mask image names back with the recorded
  * prompt/reference metadata.
  */
@@ -281,18 +282,14 @@ const createRegionalGuidanceCollector = (
 
   return {
     shouldComposite: (layer) => {
-      if (!isRegionalGuidanceSupportedForBase(model.base)) {
-        return false;
-      }
       const referenceImages = resolveRegionalReferenceImages(layer, model.base);
       const rejection = getRegionalGuidanceRejectionReason({
-        autoNegative: layer.autoNegative,
         hasContent: true,
         layerName: layer.name,
         mainBase: model.base,
         negativePrompt: layer.negativePrompt,
         positivePrompt: layer.positivePrompt,
-        referenceImageCount: layer.referenceImages.length,
+        referenceImageCount: referenceImages.length,
       });
       if (rejection) {
         return false;

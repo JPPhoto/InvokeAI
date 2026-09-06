@@ -744,7 +744,7 @@ export const compileCanvasGraph = (input: CompileCanvasGraphInput): CompiledCanv
 
   // Regional guidance applies in every mode too. The executor already composited
   // + uploaded each region's mask and resolved its reference-image models; it
-  // passes only valid regions for a supported base (SD1 / SDXL / FLUX / FLUX.2 / Krea-2).
+  // passes only regions valid for the base's regional-guidance support matrix.
   if (input.regionalGuidance && input.regionalGuidance.length > 0 && isRegionalGuidanceSupportedForBase(model.base)) {
     addRegionalGuidance(backendGraph, {
       base: model.base,
