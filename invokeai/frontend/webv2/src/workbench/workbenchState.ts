@@ -2797,7 +2797,9 @@ const reconcileDeletedGalleryBoard = (
 
     return {
       ...values,
-      ...(selectedBoardWasDeleted ? { galleryPage: 0, selectedBoardId: 'none' } : {}),
+      // Same rule as `selectGalleryBoard`: the view is moving to another
+      // board, so a ranking shown against the old one goes with it.
+      ...(selectedBoardWasDeleted ? { galleryPage: 0, selectedBoardId: 'none', semanticImageQuery: null } : {}),
       ...(projectBoardWasDeleted ? { projectBoardId: null } : {}),
     };
   });
@@ -4581,6 +4583,20 @@ export const __workbenchReducerInternal = (
           galleryPage: 0,
           selectedBoardId: action.boardId,
           selectedImageNames: [],
+          // A similarity ranking answers with images from wherever they live,
+          // so it is not a view OF any board: moving to one asks for that
+          // board's listing, and leaving the ranking up would answer with the
+          // same results under a new board name. Dismissed exactly as the
+          // chip's own clear does it — the query alone. The positions on the
+          // selection are NOT rewritten here: a selection made before the
+          // search carries a real board page that the search never touched,
+          // and zeroing it would cost Preview the cursor it still has.
+          //
+          // Only on an actual move. Re-picking the board already shown is not
+          // a change of view, and a text or image reference survives a reload,
+          // so treating that click as a dismissal would erase persisted state
+          // (and autosave the loss) on what reads as a no-op.
+          ...(values.selectedBoardId !== action.boardId ? { semanticImageQuery: null } : {}),
         }),
         action.projectId
       );
@@ -4600,6 +4616,15 @@ export const __workbenchReducerInternal = (
           galleryPage: 0,
           galleryView: action.galleryView,
           selectedImageNames: [],
+          // Same rule as `selectGalleryBoard`, and for the same reason: the
+          // Images/Assets tabs are two listings, and a ranking is a view of
+          // neither, so switching tabs asks for the listing rather than the
+          // same results relabelled. Only on an actual switch — an absent
+          // `galleryView` reads as Images, so re-clicking the tab already
+          // shown must stay the no-op it is today.
+          ...((values.galleryView === 'assets' ? 'assets' : 'images') !== action.galleryView
+            ? { semanticImageQuery: null }
+            : {}),
         }),
         action.projectId
       );
