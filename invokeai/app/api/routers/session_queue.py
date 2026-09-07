@@ -10,6 +10,7 @@ from invokeai.app.api.auth_dependencies import AdminUserOrDefault, CurrentUserOr
 from invokeai.app.api.dependencies import ApiDependencies
 from invokeai.app.api.routers.image_move_maintenance import assert_image_move_maintenance_inactive
 from invokeai.app.invocations.fields import ImageField, VideoField
+from invokeai.app.services.progress_previews.progress_previews_common import ProgressPreviewDTO
 from invokeai.app.services.session_processor.session_processor_common import SessionProcessorStatus
 from invokeai.app.services.session_queue.session_queue_common import (
     Batch,
@@ -660,6 +661,28 @@ def get_current_queue_item(
         return item
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error while getting current queue item: {e}")
+
+
+@session_queue_router.get(
+    "/{queue_id}/previews",
+    operation_id="get_progress_previews",
+    responses={
+        200: {"model": list[ProgressPreviewDTO]},
+    },
+)
+def get_progress_previews(
+    current_user: CurrentUserOrDefault,
+    queue_id: str = Path(description="The queue id to perform this operation on"),
+) -> list[ProgressPreviewDTO]:
+    """The latest denoising preview frame of each of the caller's running queue items: the same
+    payloads as the `invocation_progress` socket events, with their revisions. A client whose socket
+    was dropped, or whose tab was hidden, reconciles from this instead of waiting for the next step.
+    Owner-scoped: progress is personal UI, so even admins see only their own."""
+    try:
+        previews = ApiDependencies.invoker.services.progress_previews.list_for_user(current_user.user_id, queue_id)
+        return [ProgressPreviewDTO.from_event(event) for event in previews]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error while getting progress previews: {e}")
 
 
 @session_queue_router.get(

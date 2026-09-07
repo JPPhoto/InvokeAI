@@ -17,6 +17,7 @@ help:
 	@echo "frontendv2-build         Build the webv2 frontend for localhost:9090"
 	@echo "frontend-test            Run the frontend test suite once"
 	@echo "frontend-dev             Run the frontend in developer mode on localhost:5173"
+	@echo "frontendv2-dev           Run the webv2 frontend in developer mode on localhost:5173"
 	@echo "frontend-openapi         Generate the OpenAPI schema"
 	@echo "frontend-typegen         Generate types for the frontend from the OpenAPI schema"
 	@echo "frontend-lint            Run frontend checks and fixable lint/format steps"
@@ -75,6 +76,10 @@ frontend-test:
 # Run the frontend in dev mode
 frontend-dev:
 	cd invokeai/frontend/web && pnpm dev
+
+# Run the webv2 frontend in dev mode
+frontendv2-dev:
+	cd invokeai/frontend/webv2 && pnpm run dev
 
 # Generate the OpenAPI Schema for the app
 frontend-openapi:

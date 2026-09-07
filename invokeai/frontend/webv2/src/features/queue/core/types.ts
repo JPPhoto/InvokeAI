@@ -262,9 +262,28 @@ export interface QueueFeatureCommands {
  * The queue feature's backend seam. It owns both command transport and realtime
  * events so runtimes never assemble HTTP calls and socket subscriptions.
  */
+/**
+ * The backend's preview snapshot (`ProgressPreviewDTO`): the fields of an
+ * `invocation_progress` socket event a preview consumer reads. The coordinator
+ * feeds it through the same handler as the socket event, where the revision
+ * gate drops anything the live stream already delivered.
+ */
+export interface QueueProgressPreviewPayload {
+  queue_id: string;
+  item_id: number;
+  session_id: string;
+  invocation_source_id: string;
+  revision: number | null;
+  message: string;
+  percentage: number | null;
+  image: { width: number; height: number; dataURL: string } | null;
+}
+
 export interface QueueBackendPort extends QueueFeatureCommands {
   acknowledgeEnqueue?(projectId: string, sourceQueueItemId: string): Promise<void>;
   getEnqueueReceipt?(projectId: string, sourceQueueItemId: string): Promise<QueueEnqueueResult | null>;
+  /** The latest preview frame of each of the user's running items (`GET queue/{id}/previews`). */
+  readProgressPreviews?(signal?: AbortSignal): Promise<QueueProgressPreviewPayload[]>;
   cancelQueueItems(itemIds: number[]): Promise<void>;
   cancelQueueItemsByBatchIds(batchIds: string[]): Promise<void>;
   enqueueGenerate(request: QueueEnqueueGenerateRequest): Promise<QueueEnqueueResult>;

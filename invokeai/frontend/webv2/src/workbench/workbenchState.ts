@@ -242,7 +242,12 @@ type WorkbenchReducerAction =
   | { type: 'setWidgetInstanceAlignment'; region: WidgetRegion; instanceId: WidgetInstanceId; align: 'start' | 'end' }
   | { type: 'setRegionWidgetCollapsed'; region: WidgetRegion; isCollapsed: boolean }
   | { type: 'setRegionWidgetSize'; region: WidgetRegion; sizePx: number }
-  | { type: 'floatWidget'; instanceId: WidgetInstanceId }
+  | {
+      type: 'floatWidget';
+      instanceId: WidgetInstanceId;
+      /** The chrome the float was asked from; docking returns the window there. */
+      region?: WidgetRegion;
+    }
   | { type: 'dockFloatingWidget'; instanceId: WidgetInstanceId }
   | {
       type: 'setFloatingWidgetGeometry';
@@ -629,6 +634,7 @@ const cloneGraph = (graph: GraphContract): GraphContract => ({
         edges: graph.backendGraph.edges.map((edge) => ({
           destination: { ...edge.destination },
           source: { ...edge.source },
+          ...(edge.type ? { type: edge.type } : {}),
         })),
         nodes: Object.fromEntries(Object.entries(graph.backendGraph.nodes).map(([id, node]) => [id, { ...node }])),
       }
@@ -1306,15 +1312,16 @@ const ensureRightRegion = (rightRegion: WidgetRegionState | undefined): WidgetRe
 };
 
 /**
- * Every Edit rail this app shipped as a default while the canvas editors were
- * separate widgets: the tabbed rail, and one unreleased build's variant
- * without Image Map. Those editors are panes of the Layers panel now, so an
- * untouched rail of either shape adopts the shipped Layers-only rail; a
+ * Every Edit rail this app shipped as a default: the tabbed rail from while
+ * the canvas editors were separate widgets, one unreleased build's variant
+ * without Image Map, and the brief Layers-only rail that dropped the preview.
+ * An untouched rail of any of those shapes adopts the shipped rail; a
  * customized rail stays the user's.
  */
 const LEGACY_EDIT_RIGHT_REGION_WIDGET_IDS: ReadonlyArray<readonly WidgetInstanceId[]> = [
   ['layers', 'preview', 'gallery', 'image-map', 'queue'],
   ['layers', 'preview', 'gallery', 'queue'],
+  ['layers'],
 ];
 
 const sameInstanceIds = (region: WidgetRegionState, ids: readonly WidgetInstanceId[]): boolean =>
@@ -1406,9 +1413,18 @@ const ensureCenterRegion = (
   fallbackCenterViewId: CenterViewId
 ): WidgetRegionState => {
   const defaultCenterRegion = createWidgetRegions().center;
+  // A center with no region data at all adopts the default arrangement, but an
+  // explicitly emptied one is authoritative: the last view may be floating in a
+  // window (the surface falls back until its dock control returns it), and
+  // refilling it would inject views the project never placed.
+  const instanceIds = centerRegion ? centerRegion.instanceIds : defaultCenterRegion.instanceIds;
   const activeInstanceId = centerRegion?.activeInstanceId ?? getCenterWidgetIdFromViewId(fallbackCenterViewId);
-  const instanceIds = centerRegion?.instanceIds.length ? centerRegion.instanceIds : defaultCenterRegion.instanceIds;
-  const normalizedActiveInstanceId = instanceIds.includes(activeInstanceId) ? activeInstanceId : instanceIds[0];
+  // A pointer that names none of the members is clamped — but an emptied
+  // center keeps its pointer, which names the instance now floating in a
+  // window; the boot preload reads it to have that window's chunk ready.
+  const normalizedActiveInstanceId = instanceIds.includes(activeInstanceId)
+    ? activeInstanceId
+    : (instanceIds[0] ?? activeInstanceId);
 
   return {
     ...defaultCenterRegion,
@@ -1518,9 +1534,10 @@ const normalizeFloatingWidgets = (
  * reload they hand back a widget the person had floated. Floating wins: it is
  * the deliberate act, while the region entry is the migration's guess.
  *
- * The center region is the exception, because it must always hold a view. If
- * honouring the floating entries would empty it, they lose and the widget
- * stays docked.
+ * That holds for the center too, even when its last view is the one floating:
+ * the surface falls back to the center's fallback view, and the window's dock
+ * control is one click from restoring it. Only the destructive placements
+ * (`toggleRegionWidget`, `closeWidgetPlacement`) still refuse to empty it.
  */
 const reconcileFloatingWidgets = (
   widgetRegions: Record<WidgetRegion, WidgetRegionState>,
@@ -1541,13 +1558,6 @@ const reconcileFloatingWidgets = (
     const instanceIds = region.instanceIds.filter((instanceId) => !remainingFloating[instanceId]);
 
     if (instanceIds.length === region.instanceIds.length) {
-      continue;
-    }
-
-    if (regionId === 'center' && instanceIds.length === 0) {
-      remainingFloating = Object.fromEntries(
-        Object.entries(remainingFloating).filter(([instanceId]) => !region.instanceIds.includes(instanceId))
-      );
       continue;
     }
 
@@ -2171,15 +2181,36 @@ export const normalizeWorkbenchAccount = (value: unknown): WorkbenchState['accou
   };
 };
 
-const normalizeWorkbenchState = (state: WorkbenchState): WorkbenchState => ({
-  ...state,
-  backendConnection: { status: 'connecting' },
+const normalizeWorkbenchState = (state: WorkbenchState): WorkbenchState => {
   // Built explicitly: legacy snapshots carried preferences inside the account
   // (they live in the settings store now) and must not resurface here.
-  account: normalizeWorkbenchAccount(state.account),
-  notifications: [],
-  projects: state.projects.map((project) => normalizeWorkbenchProject(project)),
-});
+  const account = normalizeWorkbenchAccount(state.account);
+  const restored = state.projects.map((project) => normalizeWorkbenchProject(project));
+  // An editor always holds a project: `closeProject` refuses the last tab, and a
+  // session with none is the Home screen, whose cache the load paths are meant to
+  // replace with a fresh draft before handing the state over. One path does not --
+  // when a project the canvas gate refused cannot be retained, the cached snapshot
+  // is returned verbatim, and that cache is projectless whenever the last tab was
+  // closed before the reload. Hydrating it leaves the store's active project
+  // undefined, and the first consumer to read it dereferences undefined rather than
+  // finding an empty editor: the boot widget hint, whose first access happens to be
+  // `widgetRegions`, before the shell renders anything. Seed the draft here, at the
+  // one point every load path passes through, so no snapshot can hydrate without a
+  // project regardless of which path produced it.
+  const projects = restored.length > 0 ? restored : [createDraftProject([], account)];
+  const activeProjectId = projects.some((project) => project.id === state.activeProjectId)
+    ? state.activeProjectId
+    : projects[0]!.id;
+
+  return {
+    ...state,
+    account,
+    activeProjectId,
+    backendConnection: { status: 'connecting' },
+    notifications: [],
+    projects,
+  };
+};
 
 const updateActiveLayout = (
   state: WorkbenchState,
@@ -2767,7 +2798,9 @@ const reconcileDeletedGalleryBoard = (
 
     return {
       ...values,
-      ...(selectedBoardWasDeleted ? { galleryPage: 0, selectedBoardId: 'none' } : {}),
+      // Same rule as `selectGalleryBoard`: the view is moving to another
+      // board, so a ranking shown against the old one goes with it.
+      ...(selectedBoardWasDeleted ? { galleryPage: 0, selectedBoardId: 'none', semanticImageQuery: null } : {}),
       ...(projectBoardWasDeleted ? { projectBoardId: null } : {}),
     };
   });
@@ -2794,6 +2827,13 @@ const reconcileDeletedGalleryBoard = (
   return didChangeQueue ? { ...withBoardReferencesCleared, projects } : withBoardReferencesCleared;
 };
 
+/**
+ * A deliberate selection pauses live-follow. It is also stamped, so that a
+ * generation submitted AFTER the pick can still take the preview when it lands
+ * while one that was already running when the user picked cannot; submitting
+ * resumes live-follow (`shouldResumeLiveFollowOnSubmit`). An explicit toggle of
+ * the setting speaks for every generation and lifts the stamp.
+ */
 const updateGalleryValuesAndPauseLiveFollow = (
   state: WorkbenchState,
   getValues: (values: Record<string, unknown>) => Record<string, unknown>,
@@ -2806,9 +2846,40 @@ const updateGalleryValuesAndPauseLiveFollow = (
         settings: { ...project.settings, showProgressImagesInViewer: false },
       },
       'gallery',
-      getValues
+      (values) => ({ ...getValues(values), liveFollowPausedAt: now() })
     )
   );
+
+const getLiveFollowPausedAt = (project: Project): string | null => {
+  const pausedAt = getWidgetValues(project, 'gallery').liveFollowPausedAt;
+
+  return typeof pausedAt === 'string' ? pausedAt : null;
+};
+
+/**
+ * Submitting new work is the counter-signal to a selection pause: the user
+ * wants to watch what they just asked for. An explicit opt-out of live-follow
+ * carries no pause stamp and is left alone.
+ */
+const shouldResumeLiveFollowOnSubmit = (project: Project): boolean =>
+  !project.settings.showProgressImagesInViewer && getLiveFollowPausedAt(project) !== null;
+
+/**
+ * Whether a result may take the selection given the user's last deliberate
+ * pick: only if its generation was submitted after that pick. The batch that
+ * was running when the user picked stays out of the way.
+ */
+const isSubmittedAfterLiveFollowPause = (project: Project, image: GalleryImage | undefined): boolean => {
+  const pausedAt = getLiveFollowPausedAt(project);
+
+  if (pausedAt === null || !image) {
+    return true;
+  }
+
+  const submittedAt = project.queue.items.find((item) => item.id === image.sourceQueueItemId)?.snapshot.submittedAt;
+
+  return submittedAt !== undefined && submittedAt > pausedAt;
+};
 
 const updateQueueItem = (project: Project, queueItemId: string, getItem: (item: QueueItem) => QueueItem): Project => {
   let didChange = false;
@@ -2887,7 +2958,8 @@ const updateGalleryWithResultImages = (project: Project, images: GeneratedImageC
     .filter((image) => !previousImageNames.has(image.imageName))
     .map((image) => normalizeGalleryImage(image, queueBoardIds.get(image.sourceQueueItemId)));
   const shouldSelectIncomingImage =
-    project.settings.showProgressImagesInViewer || typeof galleryValues.selectedImageName !== 'string';
+    typeof galleryValues.selectedImageName !== 'string' ||
+    (project.settings.showProgressImagesInViewer && isSubmittedAfterLiveFollowPause(project, newImages[0]));
   const nextSelectedImage = shouldSelectIncomingImage ? newImages[0] : undefined;
   const nextSelectedItem = nextSelectedImage ? legacyGeneratedImageToGalleryItem(nextSelectedImage) : undefined;
   const nextSelectedItemKey = nextSelectedItem ? toGalleryItemKey(nextSelectedItem) : undefined;
@@ -3209,6 +3281,9 @@ const enqueueCompiledSnapshot = (
       sourceId: route.sourceId,
     },
     queue: { items: [queueItem, ...project.queue.items] },
+    ...(shouldResumeLiveFollowOnSubmit(project)
+      ? { settings: { ...project.settings, showProgressImagesInViewer: true } }
+      : {}),
     widgetGraphs:
       route.sourceId === 'generate' || route.sourceId === 'upscale' || route.sourceId === 'video'
         ? { ...project.widgetGraphs, [route.sourceId]: cloneGraph(graph) }
@@ -3629,10 +3704,16 @@ export const __workbenchReducerInternal = (
       return updateProjectById(state, action.projectId ?? state.activeProjectId, (project) => {
         const region = project.widgetRegions[action.region];
 
+        // Selecting a slot names the instance as the region's shown surface, so
+        // it docks: an instance must never render in a panel and a floating
+        // window at once — the same rule `openRegionWidget` enforces.
+        const { [action.widgetId]: _floated, ...floatingWidgets } = project.floatingWidgets ?? {};
+
         if (action.region === 'center') {
           return applyAutoRouteForRevealedInstance(
             {
               ...project,
+              floatingWidgets,
               widgetRegions: {
                 ...project.widgetRegions,
                 center: { ...region, activeInstanceId: action.widgetId, isCollapsed: false },
@@ -3650,6 +3731,7 @@ export const __workbenchReducerInternal = (
         if (region.activeInstanceId === action.widgetId) {
           const disclosed = {
             ...project,
+            floatingWidgets,
             layout: openPanelForRegion(project.layout, action.region),
             widgetRegions: {
               ...project.widgetRegions,
@@ -3665,6 +3747,7 @@ export const __workbenchReducerInternal = (
         return applyAutoRouteForRevealedInstance(
           {
             ...project,
+            floatingWidgets,
             layout: openPanelForRegion(project.layout, action.region),
             widgetRegions: {
               ...project.widgetRegions,
@@ -3720,23 +3803,32 @@ export const __workbenchReducerInternal = (
           return project;
         }
 
-        const hostEntry = (Object.entries(project.widgetRegions) as [WidgetRegion, WidgetRegionState][]).find(
-          ([, region]) => region.instanceIds.includes(action.instanceId)
-        );
+        // One instance may be a member of several regions (the preview is
+        // placed in the center and a rail by default), so the region the float
+        // was asked from — the chrome whose button was clicked — decides where
+        // the window docks back to. The unhinted fallback takes the first
+        // member region in the region map's order, which persisted projects
+        // do not agree on.
+        const findHost = (match: (regionId: WidgetRegion, region: WidgetRegionState) => boolean) =>
+          (Object.entries(project.widgetRegions) as [WidgetRegion, WidgetRegionState][]).find(([regionId, region]) =>
+            match(regionId, region)
+          );
+        const hostEntry = action.region
+          ? findHost((regionId, region) => regionId === action.region && region.instanceIds.includes(action.instanceId))
+          : undefined;
+        const resolvedHostEntry = hostEntry ?? findHost((_, region) => region.instanceIds.includes(action.instanceId));
 
-        if (!hostEntry || !project.widgetInstances[action.instanceId]) {
+        if (!resolvedHostEntry || !project.widgetInstances[action.instanceId]) {
           return project;
         }
 
-        const [hostRegionId, hostRegion] = hostEntry;
+        const [hostRegionId, hostRegion] = resolvedHostEntry;
 
-        // The work surface must keep a view. `toggleRegionWidget` and
-        // `closeWidgetPlacement` refuse the same removal; floating it out is
-        // the same removal with a window attached.
-        if (hostRegionId === 'center' && hostRegion.instanceIds.length === 1) {
-          return project;
-        }
-
+        // Floating may empty the center, unlike `toggleRegionWidget` and
+        // `closeWidgetPlacement`, which still refuse the same removal: those
+        // discard the view outright, while a float keeps it one dock click
+        // away, and the emptied surface falls back to the center's fallback
+        // view rather than standing blank.
         const instanceIds = hostRegion.instanceIds.filter((instanceId) => instanceId !== action.instanceId);
         const fallbackInstanceId = getNextInstanceId(hostRegion, action.instanceId);
         const floating: FloatingWidgetState = {
@@ -3762,8 +3854,9 @@ export const __workbenchReducerInternal = (
                 instanceIds,
                 // Floating the last widget out of a rail leaves nothing to show,
                 // so the rail collapses rather than standing open and empty —
-                // the same repair `toggleRegionWidget` makes.
-                isCollapsed: instanceIds.length === 0 ? true : hostRegion.isCollapsed,
+                // the same repair `toggleRegionWidget` makes. The center has no
+                // collapsed state; its fallback view carries the empty surface.
+                isCollapsed: instanceIds.length === 0 && hostRegionId !== 'center' ? true : hostRegion.isCollapsed,
               },
             },
           },
@@ -4495,6 +4588,20 @@ export const __workbenchReducerInternal = (
           galleryPage: 0,
           selectedBoardId: action.boardId,
           selectedImageNames: [],
+          // A similarity ranking answers with images from wherever they live,
+          // so it is not a view OF any board: moving to one asks for that
+          // board's listing, and leaving the ranking up would answer with the
+          // same results under a new board name. Dismissed exactly as the
+          // chip's own clear does it — the query alone. The positions on the
+          // selection are NOT rewritten here: a selection made before the
+          // search carries a real board page that the search never touched,
+          // and zeroing it would cost Preview the cursor it still has.
+          //
+          // Only on an actual move. Re-picking the board already shown is not
+          // a change of view, and a text or image reference survives a reload,
+          // so treating that click as a dismissal would erase persisted state
+          // (and autosave the loss) on what reads as a no-op.
+          ...(values.selectedBoardId !== action.boardId ? { semanticImageQuery: null } : {}),
         }),
         action.projectId
       );
@@ -4514,6 +4621,15 @@ export const __workbenchReducerInternal = (
           galleryPage: 0,
           galleryView: action.galleryView,
           selectedImageNames: [],
+          // Same rule as `selectGalleryBoard`, and for the same reason: the
+          // Images/Assets tabs are two listings, and a ranking is a view of
+          // neither, so switching tabs asks for the listing rather than the
+          // same results relabelled. Only on an actual switch — an absent
+          // `galleryView` reads as Images, so re-clicking the tab already
+          // shown must stay the no-op it is today.
+          ...((values.galleryView === 'assets' ? 'assets' : 'images') !== action.galleryView
+            ? { semanticImageQuery: null }
+            : {}),
         }),
         action.projectId
       );
@@ -4966,6 +5082,12 @@ export const __workbenchReducerInternal = (
     case 'setActiveProjectSettings': {
       return updateActiveProject(state, (project) => {
         const settings = normalizeProjectSettings({ ...project.settings, ...action.settings });
+        // An explicit live-follow choice speaks for every generation, so it also
+        // lifts the pause a deliberate selection stamped.
+        const withoutPause =
+          action.settings.showProgressImagesInViewer !== undefined && getLiveFollowPausedAt(project) !== null
+            ? updateProjectWidgetValues(project, 'gallery', ({ liveFollowPausedAt: _pausedAt, ...values }) => values)
+            : project;
 
         return Object.entries(settings).every(([key, value]) => {
           const settingKey = key as keyof ProjectSettings;
@@ -4975,8 +5097,8 @@ export const __workbenchReducerInternal = (
             value as ProjectSettings[typeof settingKey]
           );
         })
-          ? project
-          : { ...project, settings };
+          ? withoutPause
+          : { ...withoutPause, settings };
       });
     }
   }

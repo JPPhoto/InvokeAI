@@ -18,6 +18,8 @@ import type {
   MiniMaxH3TargetResolution,
   VideoAspectRatioId,
   VideoGenerationMode,
+  VideoReferenceConditioning,
+  VideoReferenceImageDetail,
   VideoReferenceItem,
   VideoSettings,
   VideoSourceClip,
@@ -78,6 +80,73 @@ export const isVideoSourceClip = (value: unknown): value is VideoSourceClip =>
 /** Upstream Ref2VA's reference caps (mirrored by the backend's validate_reference_kinds). */
 export const VIDEO_REFERENCE_MAX_VIDEOS = 3;
 export const VIDEO_REFERENCE_MAX_IMAGES = 9;
+
+/**
+ * Default sample length (in frames) for a newly added video reference. Reference rows cost
+ * VRAM in every denoise step — the packed sequence grows with reference length — so the
+ * useful sample is a short window that captures the wanted visual/audio features, not the
+ * whole clip. 200 frames ≈ 8s at the models' native 24 fps.
+ */
+export const DEFAULT_REFERENCE_SAMPLE_FRAMES = 200;
+
+/**
+ * Move a reference clip's sample window to a new start frame.
+ *
+ * Ordinary references slide at CONSTANT length, stopping at the clip's end rather than
+ * shrinking — a transient overshoot during a drag must not ratchet the sample down. The
+ * reference-extend anchor (`pinEnd`) instead keeps its end frame pinned to the Initial
+ * Video cutpoint (seam continuity depends on the frames adjacent to it; see
+ * deriveReferenceExtendClip), so moving its start only adjusts the lead-in length.
+ *
+ * Self-healing by construction: the returned window always satisfies
+ * 0 <= start <= end <= numFrames - 1, even from a corrupt persisted trim.
+ */
+export const slideReferenceSampleWindow = (
+  clip: VideoSourceClip,
+  rawStart: number,
+  pinEnd: boolean
+): VideoSourceClip => {
+  const maxFrame = Math.max(0, clip.numFrames - 1);
+
+  if (pinEnd) {
+    const endFrame = Math.min(Math.max(0, clip.endFrame), maxFrame);
+    const startFrame = Math.min(Math.max(0, Math.round(rawStart)), endFrame);
+
+    return { ...clip, endFrame, startFrame };
+  }
+
+  const sampleFrames = Math.min(Math.max(1, clip.endFrame - clip.startFrame + 1), maxFrame + 1);
+  const startFrame = Math.min(Math.max(0, Math.round(rawStart)), maxFrame - (sampleFrames - 1));
+
+  return { ...clip, endFrame: startFrame + sampleFrames - 1, startFrame };
+};
+
+/**
+ * Resize a reference clip's sample window to a new length in frames.
+ *
+ * Ordinary references grow from the start frame (the end moves, clamped to the clip); the
+ * reference-extend anchor (`pinEnd`) grows backward from its pinned end (the start moves),
+ * since its end must stay on the Initial Video cutpoint. Same self-healing bounds as
+ * slideReferenceSampleWindow.
+ */
+export const resizeReferenceSampleWindow = (
+  clip: VideoSourceClip,
+  rawSampleFrames: number,
+  pinEnd: boolean
+): VideoSourceClip => {
+  const maxFrame = Math.max(0, clip.numFrames - 1);
+  const sampleFrames = Math.min(Math.max(1, Math.round(rawSampleFrames)), maxFrame + 1);
+
+  if (pinEnd) {
+    const endFrame = Math.min(Math.max(0, clip.endFrame), maxFrame);
+
+    return { ...clip, endFrame, startFrame: Math.max(0, endFrame - (sampleFrames - 1)) };
+  }
+
+  const startFrame = Math.min(Math.max(0, clip.startFrame), maxFrame);
+
+  return { ...clip, endFrame: Math.min(startFrame + sampleFrames - 1, maxFrame), startFrame };
+};
 
 const VIDEO_REFERENCE_CONDITIONINGS = ['video_audio', 'video', 'audio'] as const;
 const VIDEO_REFERENCE_IMAGE_DETAILS = ['max', 'match'] as const;
@@ -469,6 +538,36 @@ export const createVideoSourceClip = (item: {
     width: item.width,
   };
 };
+
+/**
+ * The conditioning a video reference starts on when it is added from the gallery or an
+ * upload.
+ *
+ * Audio uploads are stored as videos: the server wraps an uploaded audio file into a
+ * rendered-waveform clip at ingest and stamps `media_origin: audio_upload` on it. Those
+ * frames are a picture of the sound rather than footage anyone means to condition on, so
+ * such a reference defaults to its soundtrack alone. Everything else keeps video + audio.
+ * This is only the starting value — the card's selector still offers all three.
+ */
+export const getDefaultReferenceConditioning = (
+  metadata: Record<string, unknown> | null | undefined
+): VideoReferenceConditioning => (metadata?.media_origin === 'audio_upload' ? 'audio' : 'video_audio');
+
+/**
+ * The detail a newly added image reference starts on.
+ *
+ * The FIRST image reference keeps upstream's rule, a 2048px short edge: it is usually the
+ * subject the generation is about, and that is where the extra detail earns its cost.
+ * Later ones match the generation size instead. Reference rows are re-attended at every
+ * denoising step and attention is quadratic in the sequence, so a second and third 2048px
+ * reference are what turn a modest surcharge into a doubling — while the marginal value of
+ * conditioning a supporting reference at seven times the output's pixel density is small.
+ *
+ * Only the starting value: every card's selector still offers both, and the card shows the
+ * size and row count each choice produces.
+ */
+export const getDefaultReferenceImageDetail = (references: VideoReferenceItem[]): VideoReferenceImageDetail =>
+  references.some((entry) => entry.kind === 'image') ? 'match' : 'max';
 
 /** The minimum frames a trim must keep — video_concat's crossfade consumes a 2-frame tail. */
 export const MIN_VIDEO_TRIM_FRAMES = 2;
