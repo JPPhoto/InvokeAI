@@ -13,10 +13,12 @@ import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
 import { galleryItems, galleryTransfers, galleryVideos, toGalleryItemKey } from '@features/gallery';
 import { GalleryPickerPopover } from '@features/gallery/picker';
 import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
+import { resolveMiniMaxH3ReferenceImage } from '@features/video/core/dimensions';
 import {
   createVideoSourceClip,
   DEFAULT_REFERENCE_SAMPLE_FRAMES,
   getDefaultReferenceConditioning,
+  getDefaultReferenceImageDetail,
   resizeReferenceSampleWindow,
   slideReferenceSampleWindow,
 } from '@features/video/core/settings';
@@ -114,6 +116,7 @@ const ReferenceCard = memo(function ReferenceCard({
   onRemove,
   onUpdate,
   reference,
+  targetArea,
 }: {
   collections: ReferenceCollections;
   disabled: boolean;
@@ -124,6 +127,8 @@ const ReferenceCard = memo(function ReferenceCard({
   onRemove: (index: number) => void;
   onUpdate: (index: number, reference: VideoReferenceItem) => void;
   reference: VideoReferenceItem;
+  /** The generation's pixel area, which is what 'match' detail scales an image to. */
+  targetArea: number | null;
 }) {
   const { t } = useTranslation();
   const name = reference.kind === 'video' ? reference.clip.video_name : reference.image.image_name;
@@ -173,6 +178,16 @@ const ReferenceCard = memo(function ReferenceCard({
     },
     [index, onUpdate, reference]
   );
+  // What this reference will actually cost, at the size the graph will encode it: the two
+  // detail settings differ by an order of magnitude in rows, and nothing else in the panel
+  // says so before the generation is queued.
+  const imageCost = useMemo(
+    () =>
+      reference.kind === 'image'
+        ? resolveMiniMaxH3ReferenceImage(reference.image.width, reference.image.height, reference.detail, targetArea)
+        : null,
+    [reference, targetArea]
+  );
   // The window's length, and the seconds it represents — the label carries the seconds
   // because the control is how a user hits a target sample duration (reference frames cost
   // denoise VRAM every step), while its unit has to stay frames to match the trim contract.
@@ -213,6 +228,15 @@ const ReferenceCard = memo(function ReferenceCard({
             value={selectValue}
             onValueChange={handleSelect}
           />
+          {imageCost ? (
+            <Text color="fg.muted" fontSize="2xs" fontVariantNumeric="tabular-nums">
+              {t('widgets.video.referenceImageCost', {
+                height: imageCost.dimensions.height,
+                rows: imageCost.rows.toLocaleString(),
+                width: imageCost.dimensions.width,
+              })}
+            </Text>
+          ) : null}
           {/* One row per window edge: the live frame at left, its control at right. The
               seeking thumbs replace the static gallery poster for video references — the
               start-frame thumb is the card's visual identity. The second row's SLIDER is
@@ -316,6 +340,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   maxVideos,
   onChange,
   references,
+  targetArea,
 }: {
   disabled?: boolean;
   maxImages: number;
@@ -328,6 +353,8 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
    */
   onChange: (update: (current: VideoReferenceItem[]) => VideoReferenceItem[]) => void;
   references: VideoReferenceItem[];
+  /** The generation's pixel area, which sizes a 'match'-detail image reference. */
+  targetArea: number | null;
 }) {
   const { t } = useTranslation();
   const { getUploadBoardId, reportError, touchGalleryImages } = useVideoUiActions();
@@ -403,7 +430,10 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         return [
           ...current,
           {
-            detail: 'max',
+            // Read off the LIVE list, beside the cap re-check: which default applies
+            // depends on whether an image reference is already placed, and another
+            // writer can have placed one while this add was in flight.
+            detail: getDefaultReferenceImageDetail(current),
             image: { height: image.height, image_name: image.name, width: image.width },
             kind: 'image',
           },
@@ -691,6 +721,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
           canMoveDown={index < references.length - 1 && index + 1 !== anchorIndex}
           canMoveUp={index > 0 && index !== anchorIndex}
           reference={reference}
+          targetArea={targetArea}
           onMove={moveReference}
           onRemove={removeReference}
           onUpdate={updateReference}
