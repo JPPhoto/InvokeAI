@@ -2069,6 +2069,8 @@
       "modeStyle": "Style",
       "model": "Model",
       "modelDefault": "Model default",
+      "moveReferenceImageDown": "Move reference image down",
+      "moveReferenceImageUp": "Move reference image up",
       "moreRatios": "More aspect ratios",
       "nativePx": "{{size}} px native",
       "negativePrompt": "Negative prompt",
