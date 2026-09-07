@@ -5,6 +5,8 @@ from unittest.mock import Mock
 import pytest
 
 from invokeai.app.invocations.math import AddInvocation, MultiplyInvocation
+from invokeai.app.invocations.logic import IfInvocation
+from invokeai.app.invocations.primitives import BooleanInvocation
 from invokeai.app.services.shared.execution_engine.scheduler import (
     ExecutionPlan,
     ExecutionScheduler,
@@ -264,6 +266,43 @@ def test_graph_state_static_dag_delegates_readiness_to_generic_scheduler() -> No
     assert type(state._scheduler()).__name__ == "_GenericGraphSchedulerAdapter"
     state.complete(node.id, node.invoke(Mock()))
     assert state.is_complete()
+
+
+def test_graph_state_if_uses_generic_activation_routing() -> None:
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=True))
+    graph.add_node(AddInvocation(id="true_value", a=2, b=2))
+    graph.add_node(AddInvocation(id="false_value", a=3, b=3))
+    graph.add_node(IfInvocation(id="if", condition=True))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="condition", field="value"),
+            destination=EdgeConnection(node_id="if", field="condition"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="true_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="true_input"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="false_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="false_input"),
+        )
+    )
+
+    state = GraphExecutionState(graph=graph)
+    while (node := state.next()) is not None:
+        state.complete(node.id, node.invoke(Mock()))
+
+    assert type(state._scheduler()).__name__ == "_GenericGraphSchedulerAdapter"
+    assert {state.prepared_source_mapping[node_id] for node_id in state.executed} == {
+        "condition",
+        "true_value",
+        "if",
+    }
 
 
 def test_graph_state_static_dag_rehydrates_generic_scheduler_after_partial_run() -> None:
