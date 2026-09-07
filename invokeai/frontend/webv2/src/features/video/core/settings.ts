@@ -18,6 +18,7 @@ import type {
   MiniMaxH3TargetResolution,
   VideoAspectRatioId,
   VideoGenerationMode,
+  VideoReferenceConditioning,
   VideoReferenceImageDetail,
   VideoReferenceItem,
   VideoSettings,
@@ -537,6 +538,20 @@ export const createVideoSourceClip = (item: {
     width: item.width,
   };
 };
+
+/**
+ * The conditioning a video reference starts on when it is added from the gallery or an
+ * upload.
+ *
+ * Audio uploads are stored as videos: the server wraps an uploaded audio file into a
+ * rendered-waveform clip at ingest and stamps `media_origin: audio_upload` on it. Those
+ * frames are a picture of the sound rather than footage anyone means to condition on, so
+ * such a reference defaults to its soundtrack alone. Everything else keeps video + audio.
+ * This is only the starting value — the card's selector still offers all three.
+ */
+export const getDefaultReferenceConditioning = (
+  metadata: Record<string, unknown> | null | undefined
+): VideoReferenceConditioning => (metadata?.media_origin === 'audio_upload' ? 'audio' : 'video_audio');
 
 /**
  * The detail a newly added image reference starts on.
