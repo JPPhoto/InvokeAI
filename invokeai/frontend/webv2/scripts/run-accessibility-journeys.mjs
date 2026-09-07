@@ -310,20 +310,21 @@ const runKeyboardJourney = async (browser) => {
     await previewTrigger.focus();
     await previewTrigger.press('Enter');
 
+    // Compose keeps Preview and Gallery as its center views; Canvas lives under "Add to center".
     const previewItem = page.getByRole('menuitemradio', { exact: true, name: 'Preview' });
-    const canvasItem = page.getByRole('menuitemradio', { exact: true, name: 'Canvas' });
+    const galleryItem = page.getByRole('menuitemradio', { exact: true, name: 'Gallery' });
     const centerViewMenu = page.getByRole('menu');
 
-    await canvasItem.waitFor();
+    await galleryItem.waitFor();
     assert.equal(await previewItem.getAttribute('aria-checked'), 'true');
     await expectFocused(centerViewMenu, 'Opening the center view menu should focus its composite.');
     assert.equal(await centerViewMenu.getAttribute('aria-activedescendant'), await previewItem.getAttribute('id'));
     await centerViewMenu.press('ArrowDown');
-    assert.equal(await centerViewMenu.getAttribute('aria-activedescendant'), await canvasItem.getAttribute('id'));
+    assert.equal(await centerViewMenu.getAttribute('aria-activedescendant'), await galleryItem.getAttribute('id'));
     await centerViewMenu.press('Enter');
-    const canvasTrigger = centerViewTrigger(page, 'Canvas');
-    await canvasTrigger.waitFor();
-    await expectFocused(canvasTrigger, 'Selecting a center view should restore focus to the view selector.');
+    const galleryTrigger = centerViewTrigger(page, 'Gallery');
+    await galleryTrigger.waitFor();
+    await expectFocused(galleryTrigger, 'Selecting a center view should restore focus to the view selector.');
 
     if (pageErrors.length > 0) {
       throw new AggregateError(pageErrors, 'keyboard-critical-journey raised uncaught browser errors.');
