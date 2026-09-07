@@ -236,7 +236,9 @@ branch selection, nested branch isolation, partial checkpoints, versioned
 rehydration, in-flight claim replay, activation-token persistence, and injected
 failure. The `If` comparison includes strict source-level results, executed
 history, errors, terminal state, and normalized indegrees; compatibility skip
-propagation must not leave stale downstream indegrees. It intentionally does
+propagation must not leave stale downstream indegrees. Both scheduler adapters
+expose the same skip transition; the legacy path releases downstream indegrees
+without trying to hydrate inputs from the skipped node. It intentionally does
 not claim durable persistence of the generic scheduler's private claim set, nor
 does it cover loop or workflow-call ownership migration.
 
