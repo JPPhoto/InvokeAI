@@ -104,13 +104,16 @@ describe('ramp + mapping structure', () => {
 });
 
 describe('high contrast conditions', () => {
-  it('emits a per-theme high-contrast block that lifts muted text toward the foreground', () => {
+  it('emits dark and light high-contrast blocks that lift muted text toward the foreground', () => {
     const layer = sys.getTokenCss()['@layer tokens']!;
-    for (const theme of THEMES) {
-      const block = layer[`&:root[data-theme=${theme}][data-high-contrast=true]`];
-      expect(block, theme).toBeDefined();
-      const step = theme === 'light' ? 800 : 200;
-      const varOf = (name: string) => sys.tokens.getByName(`colors.${name}`)!.extensions.cssVar.var;
+    const varOf = (name: string) => sys.tokens.getByName(`colors.${name}`)!.extensions.cssVar.var;
+    const cases: [string, number][] = [
+      ['&:root[data-high-contrast=true]:not([data-theme=light])', 200],
+      ['&:root[data-high-contrast=true]:is([data-theme=light])', 800],
+    ];
+    for (const [selector, step] of cases) {
+      const block = layer[selector];
+      expect(block, selector).toBeDefined();
       expect(block![varOf('fg.muted')]).toBe(`var(${varOf(`neutral.${step}`)})`);
       expect(block![varOf('border')]).toBeDefined();
       expect(block![varOf('gray.border')]).toBeDefined();

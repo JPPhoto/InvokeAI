@@ -93,21 +93,14 @@ const stepRef = (darkStep: NeutralStep, lightStep: NeutralStep): TokenValue =>
   colorToken((theme) => ref(theme.colorScheme === 'light' ? lightStep : darkStep));
 
 /**
- * `classic` -> `highContrastClassic`: one condition per theme, since the boost
- * differs by color scheme. Unrelated to Chakra's built-in `_highContrast`
- * (`forced-colors`); these key off the app preference.
+ * The high-contrast boost only differs by color scheme, so two conditions
+ * cover every theme: ramp-step references resolve per theme on their own.
+ * Unrelated to Chakra's built-in `_highContrast` (`forced-colors`); these key
+ * off the app preference.
  */
-const highContrastConditionName = (id: string): string => `highContrast${id.charAt(0).toUpperCase()}${id.slice(1)}`;
-
-/**
- * Adds the high-contrast value of a token for every theme. The per-theme
- * attribute pair outranks the plain `[data-theme]` condition, so the boost
- * wins wherever `<html data-high-contrast>` is set.
- */
-const withHighContrast = (token: TokenValue, compute: Compute): TokenValue => {
-  for (const theme of THEMES) {
-    token.value[`_${highContrastConditionName(theme.id)}`] = compute(theme);
-  }
+const withHighContrast = (token: TokenValue, darkStep: NeutralStep, lightStep: NeutralStep): TokenValue => {
+  token.value._highContrastDark = ref(darkStep);
+  token.value._highContrastLight = ref(lightStep);
   return token;
 };
 
@@ -117,10 +110,7 @@ const contrastStepRef = (
   lightStep: NeutralStep,
   highDarkStep: NeutralStep,
   highLightStep: NeutralStep
-): TokenValue =>
-  withHighContrast(stepRef(darkStep, lightStep), (theme) =>
-    ref(theme.colorScheme === 'light' ? highLightStep : highDarkStep)
-  );
+): TokenValue => withHighContrast(stepRef(darkStep, lightStep), highDarkStep, highLightStep);
 
 const STEPS: NeutralStep[] = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950];
 
@@ -215,13 +205,15 @@ const semanticColors = {
     muted: grayToken((theme) => theme.colors.control),
     emphasized: withHighContrast(
       grayToken((theme) => (theme.colorScheme === 'light' ? theme.colors.neutral[400] : theme.colors.neutral[500])),
-      (theme) => (theme.colorScheme === 'light' ? theme.colors.neutral[600] : theme.colors.neutral[300])
+      300,
+      600
     ),
     solid: grayToken((theme) => (theme.colorScheme === 'light' ? theme.colors.neutral[950] : theme.colors.neutral[50])),
     focusRing: grayToken(accentSolid),
     border: withHighContrast(
       grayToken((theme) => (theme.colorScheme === 'light' ? theme.colors.neutral[400] : theme.colors.neutral[500])),
-      (theme) => (theme.colorScheme === 'light' ? theme.colors.neutral[600] : theme.colors.neutral[300])
+      300,
+      600
     ),
     /**
      * Interaction-fill base for the default palette: fg pulled toward the
@@ -277,9 +269,15 @@ const semanticColors = {
 const themeConditions = Object.fromEntries(
   NON_DEFAULT_THEMES.map((theme) => [conditionName(theme.id), `:root[data-theme=${theme.id}]`])
 );
-const highContrastConditions = Object.fromEntries(
-  THEMES.map((theme) => [highContrastConditionName(theme.id), `:root[data-theme=${theme.id}][data-high-contrast=true]`])
-);
+// The attribute pair outranks the plain `[data-theme]` conditions; light
+// themes are enumerated so a future light theme cannot fall into the dark arm.
+const lightThemeSelectors = THEMES.filter((theme) => theme.colorScheme === 'light')
+  .map((theme) => `[data-theme=${theme.id}]`)
+  .join(', ');
+const highContrastConditions = {
+  highContrastDark: `:root[data-high-contrast=true]:not(${lightThemeSelectors})`,
+  highContrastLight: `:root[data-high-contrast=true]:is(${lightThemeSelectors})`,
+};
 
 const motionDurationToken = (base: string): TokenValue => ({ value: { base, _reduceMotion: '1ms' } });
 const motionAnimationToken = (base: string): TokenValue => ({ value: { base, _reduceMotion: 'none' } });
