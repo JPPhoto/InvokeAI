@@ -228,6 +228,14 @@ canceled, and retried sessions. The frontend boundary remains frozen: this
 refactoring does not modify `invokeai/frontend/...` or existing web/webv2
 interactions.
 
+The test-only differential harness at
+`tests/app/services/shared/test_execution_engine_differential.py` compares
+generic and forced-compatibility scheduling for a static DAG. Its fixture
+corpus covers fresh completion, partial checkpoints, versioned rehydration,
+in-flight claim replay, and injected failure. It intentionally does not claim
+durable persistence of the generic scheduler's private claim set, nor does it
+cover loop or workflow-call ownership migration.
+
 Workflow-call note:
 
 - `GraphExecutionState` can represent a paused parent execution plus an attached child execution state, but it does not
