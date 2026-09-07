@@ -10,12 +10,15 @@ import type { ChangeEvent } from 'react';
 
 import { Badge, Box, createListCollection, HStack, Icon, Image, Input, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
-import { galleryItems, galleryTransfers, toGalleryItemKey } from '@features/gallery';
+import { galleryItems, galleryTransfers, galleryVideos, toGalleryItemKey } from '@features/gallery';
 import { GalleryPickerPopover } from '@features/gallery/picker';
 import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
+import { resolveMiniMaxH3ReferenceImage } from '@features/video/core/dimensions';
 import {
   createVideoSourceClip,
   DEFAULT_REFERENCE_SAMPLE_FRAMES,
+  getDefaultReferenceConditioning,
+  getDefaultReferenceImageDetail,
   resizeReferenceSampleWindow,
   slideReferenceSampleWindow,
 } from '@features/video/core/settings';
@@ -47,6 +50,37 @@ import { useVideoUiActions } from './VideoUiContext';
 
 const DROP_ID = 'video-reference-list';
 const IMAGE_UPLOAD_ACCEPT = 'image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp';
+// One upload button for both media kinds: an uploaded audio file becomes a waveform video,
+// so it occupies a VIDEO reference slot and shares that cap -- a separate audio button would
+// grey out with this one. The wildcards cover the ordinary case; the explicit extensions
+// (mirroring the upload route's accepted lists) are what match a file whose type the OS
+// could not map, which the browser then offers as octet-stream.
+const MEDIA_UPLOAD_ACCEPT = [
+  'video/*',
+  'audio/*',
+  '.mp4',
+  '.mov',
+  '.m4v',
+  '.webm',
+  '.mkv',
+  '.avi',
+  '.mpg',
+  '.mpeg',
+  '.3gp',
+  '.wmv',
+  '.asf',
+  '.mp3',
+  '.m4a',
+  '.aac',
+  '.wav',
+  '.flac',
+  '.ogg',
+  '.oga',
+  '.opus',
+  '.aiff',
+  '.aif',
+  '.wma',
+].join(',');
 const DROP_ZONE_FOCUS_PROPS = {
   outlineColor: 'accent.focusRing',
   outlineOffset: '2px',
@@ -82,6 +116,7 @@ const ReferenceCard = memo(function ReferenceCard({
   onRemove,
   onUpdate,
   reference,
+  targetArea,
 }: {
   collections: ReferenceCollections;
   disabled: boolean;
@@ -92,6 +127,8 @@ const ReferenceCard = memo(function ReferenceCard({
   onRemove: (index: number) => void;
   onUpdate: (index: number, reference: VideoReferenceItem) => void;
   reference: VideoReferenceItem;
+  /** The generation's pixel area, which is what 'match' detail scales an image to. */
+  targetArea: number | null;
 }) {
   const { t } = useTranslation();
   const name = reference.kind === 'video' ? reference.clip.video_name : reference.image.image_name;
@@ -141,6 +178,16 @@ const ReferenceCard = memo(function ReferenceCard({
     },
     [index, onUpdate, reference]
   );
+  // What this reference will actually cost, at the size the graph will encode it: the two
+  // detail settings differ by an order of magnitude in rows, and nothing else in the panel
+  // says so before the generation is queued.
+  const imageCost = useMemo(
+    () =>
+      reference.kind === 'image'
+        ? resolveMiniMaxH3ReferenceImage(reference.image.width, reference.image.height, reference.detail, targetArea)
+        : null,
+    [reference, targetArea]
+  );
   // The window's length, and the seconds it represents — the label carries the seconds
   // because the control is how a user hits a target sample duration (reference frames cost
   // denoise VRAM every step), while its unit has to stay frames to match the trim contract.
@@ -181,6 +228,15 @@ const ReferenceCard = memo(function ReferenceCard({
             value={selectValue}
             onValueChange={handleSelect}
           />
+          {imageCost ? (
+            <Text color="fg.muted" fontSize="2xs" fontVariantNumeric="tabular-nums">
+              {t('widgets.video.referenceImageCost', {
+                height: imageCost.dimensions.height,
+                rows: imageCost.rows.toLocaleString(),
+                width: imageCost.dimensions.width,
+              })}
+            </Text>
+          ) : null}
           {/* One row per window edge: the live frame at left, its control at right. The
               seeking thumbs replace the static gallery poster for video references — the
               start-frame thumb is the card's visual identity. The second row's SLIDER is
@@ -284,6 +340,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   maxVideos,
   onChange,
   references,
+  targetArea,
 }: {
   disabled?: boolean;
   maxImages: number;
@@ -296,6 +353,8 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
    */
   onChange: (update: (current: VideoReferenceItem[]) => VideoReferenceItem[]) => void;
   references: VideoReferenceItem[];
+  /** The generation's pixel area, which sizes a 'match'-detail image reference. */
+  targetArea: number | null;
 }) {
   const { t } = useTranslation();
   const { getUploadBoardId, reportError, touchGalleryImages } = useVideoUiActions();
@@ -371,7 +430,10 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         return [
           ...current,
           {
-            detail: 'max',
+            // Read off the LIVE list, beside the cap re-check: which default applies
+            // depends on whether an image reference is already placed, and another
+            // writer can have placed one while this add was in flight.
+            detail: getDefaultReferenceImageDetail(current),
             image: { height: image.height, image_name: image.name, width: image.width },
             kind: 'image',
           },
@@ -406,40 +468,47 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   );
 
   const addVideoItem = useCallback(
-    (item: GalleryVideoItem) => {
+    // The conditioning is passed in rather than derived here: only a caller holding the
+    // clip's metadata can tell a wrapped audio upload from footage. Callers without it get
+    // the ordinary video default -- and the entry back, so a late answer can correct it.
+    (item: GalleryVideoItem, conditioning: VideoReferenceConditioning = 'video_audio') => {
       const clip = createVideoSourceClip(item);
+      // Built outside the updater so the caller holds the same object the list does: it is
+      // the only durable handle on this entry once reordering moves it.
+      const entry: Extract<VideoReferenceItem, { kind: 'video' }> = {
+        // Default to a short sample window from the clip's start, not the whole
+        // clip: reference frames cost denoise VRAM every step, and a few seconds
+        // captures the wanted features. (Not the extend-mode 2-frame-tail trim
+        // either -- references are truncated to the generated duration, not joined.)
+        clip: {
+          ...clip,
+          endFrame: Math.max(0, Math.min(DEFAULT_REFERENCE_SAMPLE_FRAMES, clip.numFrames) - 1),
+          startFrame: 0,
+        },
+        conditioning,
+        kind: 'video',
+      };
       // Same live cap re-check as the image path -- the Initial Video's
       // anchor is the writer that most easily fills the slots mid-await.
       let declined = false;
 
       setErrorMessage(null);
       onChange((current) => {
-        if (current.filter((entry) => entry.kind === 'video').length >= maxVideos) {
+        if (current.filter((existing) => existing.kind === 'video').length >= maxVideos) {
           declined = true;
 
           return current;
         }
 
-        return [
-          ...current,
-          {
-            // Default to a short sample window from the clip's start, not the whole
-            // clip: reference frames cost denoise VRAM every step, and a few seconds
-            // captures the wanted features. (Not the extend-mode 2-frame-tail trim
-            // either -- references are truncated to the generated duration, not joined.)
-            clip: {
-              ...clip,
-              endFrame: Math.max(0, Math.min(DEFAULT_REFERENCE_SAMPLE_FRAMES, clip.numFrames) - 1),
-              startFrame: 0,
-            },
-            conditioning: 'video_audio',
-            kind: 'video',
-          },
-        ];
+        return [...current, entry];
       });
       if (declined) {
         setErrorMessage(t('widgets.video.referenceVideoCapRace', { max: maxVideos }));
+
+        return null;
       }
+
+      return entry;
     },
     [maxVideos, onChange, t]
   );
@@ -450,10 +519,17 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       setIsLoading(true);
 
       try {
-        const item = await galleryItems.resolve({ kind: 'video', name: videoName });
+        // Fetched alongside the resolve, not after it: the metadata only picks the
+        // card's starting conditioning, and it must not add a round trip to the add.
+        // A missing or unreadable record is not a failure -- it just means the
+        // ordinary video default.
+        const [item, metadata] = await Promise.all([
+          galleryItems.resolve({ kind: 'video', name: videoName }),
+          galleryVideos.metadata(videoName).catch(() => null),
+        ]);
 
         if (item?.kind === 'video') {
-          addVideoItem(item);
+          addVideoItem(item, getDefaultReferenceConditioning(metadata));
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -555,15 +631,49 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
     }),
     [imageCount, maxImages, maxVideos, references, videoCount]
   );
+  const addPickedVideo = useCallback(
+    (item: GalleryVideoItem) => {
+      // The card goes in SYNCHRONOUSLY and is corrected afterwards, rather than waiting on
+      // the metadata the way the drop and upload paths do. The picker stays open and judges
+      // each click against the reference list as it stands -- an add that had not landed yet
+      // would leave the tile pickable (a second click would duplicate it), leave the
+      // remaining count stale, and let two picks land in whichever order their fetches
+      // finished, which for references is a different generation.
+      const entry = addVideoItem(item);
+
+      if (!entry) {
+        return;
+      }
+
+      // The metadata is the only thing that tells a wrapped audio upload from footage. An
+      // unreadable record is not a failure -- the ordinary video default just stands.
+      void galleryVideos
+        .metadata(item.name)
+        .then((metadata) => {
+          const conditioning = getDefaultReferenceConditioning(metadata);
+
+          if (conditioning === entry.conditioning) {
+            return;
+          }
+          // Matched by identity, not index: a card the user has since edited is a different
+          // object and keeps their choice, and a removed one is simply no longer there.
+          onChange((current) =>
+            current.map((existing) => (existing === entry ? { ...entry, conditioning } : existing))
+          );
+        })
+        .catch(() => undefined);
+    },
+    [addVideoItem, onChange]
+  );
   const handlePick = useCallback(
     (item: GalleryItem) => {
       if (item.kind === 'video') {
-        addVideoItem(item);
+        addPickedVideo(item);
       } else {
         addImageReference(item);
       }
     },
-    [addImageReference, addVideoItem]
+    [addImageReference, addPickedVideo]
   );
 
   const updateReference = useCallback(
@@ -611,6 +721,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
           canMoveDown={index < references.length - 1 && index + 1 !== anchorIndex}
           canMoveUp={index > 0 && index !== anchorIndex}
           reference={reference}
+          targetArea={targetArea}
           onMove={moveReference}
           onRemove={removeReference}
           onUpdate={updateReference}
@@ -662,7 +773,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       <Input accept={IMAGE_UPLOAD_ACCEPT} hidden ref={imageInputRef} type="file" onChange={handleImageFileChange} />
       {/* Audio files upload too: the server wraps them into waveform videos, which is
           how audio-only reference clips enter the pipeline. */}
-      <Input accept="video/*,audio/*" hidden ref={videoInputRef} type="file" onChange={handleVideoFileChange} />
+      <Input accept={MEDIA_UPLOAD_ACCEPT} hidden ref={videoInputRef} type="file" onChange={handleVideoFileChange} />
     </Stack>
   );
 });
