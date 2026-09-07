@@ -294,7 +294,7 @@ export const GenerateReferenceImagesContent = ({
             {t('widgets.generate.addReferenceImage')}
             <Icon as={ChevronDownIcon} boxSize="3" color="fg.subtle" />
           </HStack>
-          <Text as="span" color="fg.subtle">
+          <Text as="span" color="fg.muted">
             {t('widgets.gallery.picker.dropHint')}
           </Text>
         </DropZone>

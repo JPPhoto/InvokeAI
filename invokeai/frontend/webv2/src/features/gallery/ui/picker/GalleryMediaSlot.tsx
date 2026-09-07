@@ -270,7 +270,7 @@ export const GalleryMediaSlot = ({
                       {value.width} × {value.height}
                     </Text>
                   ) : null}
-                  <HStack color="fg.subtle" gap="1">
+                  <HStack color="fg.muted" gap="1">
                     {isBusy ? <Spinner size="xs" /> : <Icon as={RefreshCwIcon} boxSize="2.5" />}
                     <Text fontSize="2xs">
                       {disabled && disabledReason
@@ -293,7 +293,7 @@ export const GalleryMediaSlot = ({
                     <Icon as={ChevronDownIcon} boxSize="3" color="fg.subtle" />
                   </HStack>
                 )}
-                <Text color="fg.subtle" fontSize="2xs" textAlign="center">
+                <Text color="fg.muted" fontSize="2xs" textAlign="center">
                   {disabled && disabledReason
                     ? disabledReason
                     : isBusy

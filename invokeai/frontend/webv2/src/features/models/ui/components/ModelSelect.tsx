@@ -257,7 +257,7 @@ export const ModelSelect = ({
               {selectedModel ? (
                 <ModelButtonContent model={selectedModel} />
               ) : (
-                <Text as="span" color="fg.subtle" fontSize="xs" minW="0" truncate>
+                <Text as="span" color="fg.muted" fontSize="xs" minW="0" truncate>
                   {placeholder ?? t('models.scopeSelect', { scope: scopeLabel })}
                 </Text>
               )}
