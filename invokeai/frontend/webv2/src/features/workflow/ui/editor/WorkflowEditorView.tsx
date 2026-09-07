@@ -113,7 +113,9 @@ const SNAP_GRID: [number, number] = [24, 24];
 const DELETE_KEY_CODES = ['Backspace', 'Delete'];
 
 const DEFAULT_EDGE_OPTIONS = { style: { strokeWidth: 2 } };
-const DEFAULT_VIEWPORT = { x: 0, y: 0, zoom: 1 } as const;
+// A fresh graph starts clear of the floating toolbar in the left gutter, so
+// its first column's node controls are not covered before the user pans.
+const DEFAULT_VIEWPORT = { x: 56, y: 0, zoom: 1 } as const;
 
 interface WorkflowFlowModel {
   edges: WorkflowFlowEdge[];
