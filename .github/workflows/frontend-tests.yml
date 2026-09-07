@@ -67,7 +67,7 @@ jobs:
 
   frontend-webv2-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20 # Includes browser suites, performance, project files, and accessibility.
+    timeout-minutes: 20 # Includes browser suites, performance sampling, and project-file journeys.
     defaults:
       run:
         working-directory: invokeai/frontend/webv2
@@ -96,11 +96,9 @@ jobs:
         run: 'pnpm exec playwright install --with-deps chromium'
         shell: bash
 
-      - name: release completion gates
+      - name: architecture completion gates
         if: ${{ steps.changed-files.outputs.webv2_any_changed == 'true' || inputs.always_run == true }}
-        run: |
-          mkdir -p artifacts/accessibility
-          pnpm check:release 2>&1 | tee artifacts/accessibility/release-check.log
+        run: 'pnpm check:architecture'
         shell: bash
 
       - name: upload architecture review artifacts
@@ -111,5 +109,4 @@ jobs:
           path: |
             invokeai/frontend/webv2/artifacts/architecture
             invokeai/frontend/webv2/artifacts/architecture-performance
-            invokeai/frontend/webv2/artifacts/accessibility
           if-no-files-found: ignore

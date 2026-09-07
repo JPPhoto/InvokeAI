@@ -395,7 +395,7 @@ const runTopbarMenuJourney = async (browser) => {
   try {
     await waitForWorkbench(page);
 
-    const leftWidgetRail = page.getByRole('navigation', { exact: true, name: 'Left widget visibility' });
+    const leftWidgetRail = page.getByRole('navigation', { exact: true, name: 'Create widget visibility' });
     const upscaleWidget = leftWidgetRail.getByRole('button', { exact: true, name: 'Upscale' });
     await upscaleWidget.click({ button: 'right' });
     await page.getByRole('menuitem', { exact: true, name: 'Remove Upscale' }).click();
