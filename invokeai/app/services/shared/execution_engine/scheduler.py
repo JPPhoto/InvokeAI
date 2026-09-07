@@ -7,7 +7,6 @@ frame values. Graph and invocation semantics belong to adapters above it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from heapq import heapify, heappop, heappush
 from typing import Any, Iterable, Mapping
 
 NodeId = str
@@ -148,8 +147,11 @@ class ExecutionScheduler:
         self.executed: set[NodeId] = set(executed)
         self._claimed: set[NodeId] = set()
         self.indegree: dict[NodeId, int] = {}
-        self._ready: list[tuple[tuple[Any, ...], NodeId]] = []
+        self._ready: set[NodeId] = set()
         self._enqueued: set[NodeId] = set()
+        self._arrival_order: dict[NodeId, int] = {}
+        self._next_arrival = 0
+        self._active_class: str | None = None
         self.rebuild_ready()
 
     def _priority(self, class_name: str) -> int:
@@ -157,14 +159,6 @@ class ExecutionScheduler:
             return self.ready_order.index(class_name)
         except ValueError:
             return len(self.ready_order)
-
-    def _sort_key(self, node_id: NodeId) -> tuple[Any, ...]:
-        node = self.plan.nodes[node_id]
-        if self.ready_order:
-            class_key = (self._priority(node.class_name), node.class_name)
-        else:
-            class_key = (0, node.class_name)
-        return (*class_key, _frame_key(node.frame), node.order)
 
     def enqueue(self, node_id: NodeId) -> None:
         """Queue a currently-ready node; repeated enqueue is harmless."""
@@ -181,15 +175,39 @@ class ExecutionScheduler:
         if self.indegree[node_id] != 0:
             raise ValueError(f"node is not ready: {node_id}")
         if node_id not in self._enqueued:
-            heappush(self._ready, (self._sort_key(node_id), node_id))
+            self._ready.add(node_id)
             self._enqueued.add(node_id)
+            self._arrival_order[node_id] = self._next_arrival
+            self._next_arrival += 1
+
+    def _next_class(self) -> str | None:
+        classes = {self.plan.nodes[node_id].class_name for node_id in self._enqueued}
+        for class_name in self.ready_order:
+            if class_name in classes:
+                return class_name
+        return min(classes) if classes else None
+
+    def _next_id_for_class(self, class_name: str) -> NodeId:
+        return min(
+            (node_id for node_id in self._enqueued if self.plan.nodes[node_id].class_name == class_name),
+            key=lambda node_id: (
+                _frame_key(self.plan.nodes[node_id].frame),
+                self._arrival_order[node_id],
+            ),
+        )
 
     def pop_next(self) -> NodeId | None:
         """Remove and return the next ready node ID, or ``None`` when empty."""
 
-        if not self._ready:
+        if not self._enqueued:
             return None
-        _, node_id = heappop(self._ready)
+        if self._active_class not in {
+            self.plan.nodes[node_id].class_name for node_id in self._enqueued
+        }:
+            self._active_class = self._next_class()
+        assert self._active_class is not None
+        node_id = self._next_id_for_class(self._active_class)
+        self._ready.remove(node_id)
         self._enqueued.remove(node_id)
         self._claimed.add(node_id)
         return node_id
@@ -198,7 +216,23 @@ class ExecutionScheduler:
     def ready_ids(self) -> tuple[NodeId, ...]:
         """Return queued IDs in the order they will be popped."""
 
-        return tuple(node_id for _, node_id in sorted(self._ready))
+        classes = {self.plan.nodes[node_id].class_name for node_id in self._enqueued}
+        ordered_classes: list[str] = []
+        if self._active_class in classes:
+            ordered_classes.append(self._active_class)
+        ordered_classes.extend(class_name for class_name in self.ready_order if class_name in classes)
+        ordered_classes.extend(sorted(classes.difference(ordered_classes)))
+        return tuple(
+            node_id
+            for class_name in ordered_classes
+            for node_id in sorted(
+                (node_id for node_id in self._enqueued if self.plan.nodes[node_id].class_name == class_name),
+                key=lambda node_id: (
+                    _frame_key(self.plan.nodes[node_id].frame),
+                    self._arrival_order[node_id],
+                ),
+            )
+        )
 
     def add_node(self, node: PlanNode) -> None:
         """Add a plan node without disturbing already-claimed work."""
@@ -214,15 +248,13 @@ class ExecutionScheduler:
 
         self._enqueued.discard(node_id)
         self._claimed.discard(node_id)
-        self._ready = [(key, queued) for key, queued in self._ready if queued != node_id]
-        heapify(self._ready)
+        self._ready.discard(node_id)
+        self._arrival_order.pop(node_id, None)
 
     def set_ready_order(self, ready_order: Iterable[str]) -> None:
         """Change class priorities while retaining queued and claimed work."""
 
         self.ready_order = tuple(ready_order)
-        self._ready = [(self._sort_key(node_id), node_id) for node_id in self._enqueued]
-        heapify(self._ready)
 
     def complete(self, node_id: NodeId) -> tuple[NodeId, ...]:
         """Mark node complete; return dependents newly made ready."""
@@ -244,11 +276,8 @@ class ExecutionScheduler:
         self.executed.add(node_id)
         self._enqueued.discard(node_id)
         self._claimed.discard(node_id)
-        self._ready = [(key, queued) for key, queued in self._ready if queued != node_id]
-        # ``complete()`` may be called for a node that was queued but not popped
-        # (for example when a persisted queue is cancelled).  Re-establish the
-        # heap invariant after removing it.
-        heapify(self._ready)
+        self._ready.discard(node_id)
+        self._arrival_order.pop(node_id, None)
         newly_ready: list[NodeId] = []
         for dependent in dependents:
             self.indegree[dependent] -= 1
@@ -273,12 +302,20 @@ class ExecutionScheduler:
             node_id: sum(dependency not in self.executed for dependency in node.dependencies)
             for node_id, node in self.plan.nodes.items()
         }
-        self._ready = []
+        previous_arrival = self._arrival_order
+        self._ready = set()
         self._enqueued = set()
+        self._arrival_order = {}
+        self._next_arrival = max(previous_arrival.values(), default=-1) + 1
         for node_id in self.plan.nodes:
             if node_id not in self.executed and node_id not in self._claimed and self.indegree[node_id] == 0:
-                heappush(self._ready, (self._sort_key(node_id), node_id))
+                self._ready.add(node_id)
                 self._enqueued.add(node_id)
+                arrival = previous_arrival.get(node_id)
+                if arrival is None:
+                    arrival = self._next_arrival
+                    self._next_arrival += 1
+                self._arrival_order[node_id] = arrival
 
 
 __all__ = ["ExecutionPlan", "ExecutionScheduler", "PlanNode"]

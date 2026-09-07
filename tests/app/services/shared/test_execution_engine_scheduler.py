@@ -36,7 +36,7 @@ def test_generic_scheduler_routes_fanout_and_fanin_without_invocation_types() ->
     assert scheduler.complete("join") == ()
 
 
-def test_generic_scheduler_preserves_ready_class_and_frame_order() -> None:
+def test_generic_scheduler_preserves_legacy_class_drain_and_fifo_order() -> None:
     plan = ExecutionPlan()
     plan.add_node("late", "ZNode", frame=(1,))
     plan.add_node("early", "ZNode", frame=(0,))
@@ -47,6 +47,51 @@ def test_generic_scheduler_preserves_ready_class_and_frame_order() -> None:
         scheduler.enqueue(node_id)
 
     assert [scheduler.pop_next(), scheduler.pop_next(), scheduler.pop_next()] == ["early", "late", "other"]
+
+
+def test_generic_scheduler_drains_active_class_before_switching() -> None:
+    plan = ExecutionPlan()
+    plan.add_node("first", "Priority")
+    plan.add_node("other", "Other")
+    plan.add_node("released", "Priority", dependencies=("first",))
+    scheduler = ExecutionScheduler(plan, ready_order=("Priority", "Other"))
+
+    assert scheduler.pop_next() == "first"
+    assert scheduler.complete("first") == ("released",)
+    assert scheduler.pop_next() == "released"
+    assert scheduler.pop_next() == "other"
+
+
+def test_generic_scheduler_uses_ready_arrival_after_frame_order() -> None:
+    plan = ExecutionPlan()
+    plan.add_node("q", "Priority")
+    plan.add_node("p", "Priority")
+    plan.add_node("a", "Work", frame=(0,), dependencies=("p",))
+    plan.add_node("b", "Work", frame=(0,), dependencies=("q",))
+    scheduler = ExecutionScheduler(plan, ready_order=("Priority", "Work"))
+
+    assert scheduler.pop_next() == "q"
+    assert scheduler.complete("q") == ("b",)
+    assert scheduler.pop_next() == "p"
+    assert scheduler.complete("p") == ("a",)
+    assert [scheduler.pop_next(), scheduler.pop_next()] == ["b", "a"]
+
+
+def test_generic_scheduler_rebuild_preserves_ready_arrival_order() -> None:
+    plan = ExecutionPlan()
+    plan.add_node("q", "Priority")
+    plan.add_node("p", "Priority")
+    plan.add_node("a", "Work", frame=(0,), dependencies=("p",))
+    plan.add_node("b", "Work", frame=(0,), dependencies=("q",))
+    scheduler = ExecutionScheduler(plan, ready_order=("Priority", "Work"))
+
+    assert scheduler.pop_next() == "q"
+    scheduler.complete("q")
+    assert scheduler.pop_next() == "p"
+    scheduler.complete("p")
+    scheduler.rebuild_ready()
+
+    assert [scheduler.pop_next(), scheduler.pop_next()] == ["b", "a"]
 
 
 def test_generic_scheduler_sorts_unlisted_ready_classes_by_name() -> None:
@@ -173,6 +218,33 @@ def test_graph_state_static_dag_matches_generic_scheduler_trace() -> None:
     assert state.is_complete()
 
 
+def test_graph_state_static_dag_preserves_legacy_fifo_for_released_nodes() -> None:
+    graph = Graph()
+    for node_id in ("q", "p", "a", "b"):
+        graph.add_node(AddInvocation(id=node_id, a=1, b=2))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="q", field="value"),
+            destination=EdgeConnection(node_id="b", field="a"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="p", field="value"),
+            destination=EdgeConnection(node_id="a", field="a"),
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+
+    trace: list[str] = []
+    while (node := state.next()) is not None:
+        trace.append(state.prepared_source_mapping[node.id])
+        state.complete(node.id, node.invoke(Mock()))
+
+    assert trace == ["q", "p", "b", "a"]
+    assert state.is_complete()
+
+
 def test_graph_state_static_dag_delegates_readiness_to_generic_scheduler() -> None:
     graph = Graph()
     graph.add_node(AddInvocation(id="add", a=1, b=2))
@@ -206,3 +278,25 @@ def test_graph_state_static_dag_rehydrates_generic_scheduler_after_partial_run()
     second = restored.next()
     assert second is not None
     assert restored.prepared_source_mapping[second.id] == "second"
+
+
+def test_graph_state_apply_rolls_back_generic_scheduler_transition() -> None:
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    execution_ref = state.get_execution_ref(node.id)
+    original_record_effect_streams = state._record_effect_streams
+
+    def fail_after_completion(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("effect recording failed")
+
+    state._record_effect_streams = fail_after_completion  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RuntimeError, match="effect recording failed"):
+            state.apply(execution_ref, node.invoke(Mock()))
+    finally:
+        state._record_effect_streams = original_record_effect_streams  # type: ignore[method-assign]
+
+    assert state.executed == set()
