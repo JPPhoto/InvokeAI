@@ -135,6 +135,28 @@ describe('renderOverlay', () => {
     expect(moveTos).toHaveLength(4);
   });
 
+  it.each([
+    ['radial', 1],
+    ['linear', 0],
+  ] as const)('previews a %s gradient drag as its vector plus %s screen-space circle', (kind, circles) => {
+    const backend = createTestStubRasterBackend();
+    const target = backend.createSurface(200, 200);
+    renderOverlay(
+      target,
+      baseState({
+        gradientPreview: { end: { x: 13, y: 14 }, kind, start: { x: 10, y: 10 } },
+        showBbox: false,
+        view: { a: 2, b: 0, c: 0, d: 2, e: 0, f: 0 },
+      })
+    );
+    // The endpoint dots are 3px arcs; the radius circle spans the screen-space drag.
+    const arcs = target.callLog.filter((e) => e.op === 'arc').map((e) => e.args);
+    expect(arcs.filter((args) => args[2] !== 3)).toHaveLength(circles);
+    if (circles > 0) {
+      expect(arcs.find((args) => args[2] !== 3)?.slice(0, 3)).toEqual([20, 20, 10]);
+    }
+  });
+
   it('draws the dedicated SAM mask preview before its bbox, handles, and colored points', () => {
     const backend = createTestStubRasterBackend();
     const target = backend.createSurface(200, 200);

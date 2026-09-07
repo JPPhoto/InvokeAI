@@ -68,8 +68,10 @@ const zLayerSource = z.discriminatedUnion('type', [
   }),
   z.object({
     angle: zFiniteNumber,
+    center: zCoordinate.optional(),
     height: zFiniteNumber.positive().optional(),
     kind: z.enum(['linear', 'radial']),
+    span: zFiniteNumber.positive().optional(),
     stops: z.array(z.object({ color: z.string(), offset: zFiniteNumber })),
     type: z.literal('gradient'),
     width: zFiniteNumber.positive().optional(),

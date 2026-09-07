@@ -116,10 +116,10 @@ export interface OverlayState {
    */
   marqueePreview?: RectShapePreview | null;
   /**
-   * The in-progress gradient-tool drag vector (document-space start/end),
-   * drawn as a direction indicator. Absent/`null` when idle.
+   * The in-progress gradient-tool drag (document-space start/end): a linear
+   * ramp's vector, or a radial one's center and radius. Absent/`null` when idle.
    */
-  gradientPreview?: { start: Vec2; end: Vec2 } | null;
+  gradientPreview?: { kind: 'linear' | 'radial'; start: Vec2; end: Vec2 } | null;
   /** Dedicated Select Object mask preview, already colorized by the engine. */
   samPreview?: {
     surface: RasterSurface;
@@ -366,7 +366,10 @@ const drawRectShapePreview = (ctx: Ctx, state: OverlayState, preview: RectShapeP
   ctx.restore();
 };
 
-/** Draws the gradient-tool drag vector (a line with endpoint dots) in screen space. */
+/**
+ * Draws the gradient-tool drag in screen space: the vector with endpoint dots,
+ * plus the circle a radial gradient will fill.
+ */
 const drawGradientPreview = (ctx: Ctx, state: OverlayState): void => {
   const preview = state.gradientPreview;
   if (!preview) {
@@ -383,6 +386,13 @@ const drawGradientPreview = (ctx: Ctx, state: OverlayState): void => {
   ctx.moveTo(start.x, start.y);
   ctx.lineTo(end.x, end.y);
   ctx.stroke();
+  if (preview.kind === 'radial') {
+    ctx.setLineDash([...BBOX_DASH]);
+    ctx.beginPath();
+    ctx.arc(start.x, start.y, Math.hypot(end.x - start.x, end.y - start.y), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
   for (const point of [start, end]) {
     ctx.beginPath();
     ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);

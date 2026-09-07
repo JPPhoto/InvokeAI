@@ -152,6 +152,16 @@ export type CanvasLayerSourceContract =
        */
       width?: number;
       height?: number;
+      /**
+       * Where the gradient sits in the extent (layer-local px): the midpoint of
+       * a linear ramp, or the radial center. Absent = the extent center.
+       */
+      center?: { x: number; y: number };
+      /**
+       * Linear: the distance between the 0 and 1 stops; radial: the radius.
+       * Absent = a ramp fitted to the extent (the legacy, fixed-center look).
+       */
+      span?: number;
     };
 
 /** Photoshop's layer-color palette; also the PSD `layerColor` vocabulary. */

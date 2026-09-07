@@ -130,6 +130,13 @@ export interface GradientToolOptions {
   stops: GradientStop[];
 }
 
+/** The gradient tool's in-flight drag: start → end in document space. */
+export interface GradientPreview {
+  kind: 'linear' | 'radial';
+  start: Vec2;
+  end: Vec2;
+}
+
 /** Sensible starting gradient options: the FG→BG preset, horizontal linear. */
 export const DEFAULT_GRADIENT_OPTIONS: GradientToolOptions = {
   angle: 0,
@@ -477,11 +484,10 @@ export interface EngineStores {
   shapePreview: ScalarStore<{ rect: Rect; kind: ParametricShapeKind } | null>;
   /**
    * The live gradient-tool drag preview: the drag vector's start/end points in
-   * document space, drawn on the overlay as a direction indicator (a gradient
-   * necessarily fills the document, so only its ANGLE is previewed, not a
-   * bounding box). `null` when idle; cleared on commit/cancel.
+   * document space. The overlay draws a linear ramp as the vector and a radial
+   * one as the circle it will fill. `null` when idle; cleared on commit/cancel.
    */
-  gradientPreview: ScalarStore<{ start: Vec2; end: Vec2 } | null>;
+  gradientPreview: ScalarStore<GradientPreview | null>;
   /**
    * Whether a pixel selection currently exists. React reads it to enable the
    * fill/erase/invert/deselect controls and the engine gates selection hotkeys
@@ -643,11 +649,17 @@ const rectShapePreviewEqual = (
   );
 };
 
-const gradientPreviewEqual = (a: { start: Vec2; end: Vec2 } | null, b: { start: Vec2; end: Vec2 } | null): boolean => {
+const gradientPreviewEqual = (a: GradientPreview | null, b: GradientPreview | null): boolean => {
   if (a === null || b === null) {
     return a === b;
   }
-  return a.start.x === b.start.x && a.start.y === b.start.y && a.end.x === b.end.x && a.end.y === b.end.y;
+  return (
+    a.kind === b.kind &&
+    a.start.x === b.start.x &&
+    a.start.y === b.start.y &&
+    a.end.x === b.end.x &&
+    a.end.y === b.end.y
+  );
 };
 
 const bboxPreviewEqual = (a: Rect | null, b: Rect | null): boolean => {
@@ -726,7 +738,7 @@ export const createEngineStores = (initialTool: ToolId = 'view'): EngineStores =
     { ...DEFAULT_GRADIENT_OPTIONS, stops: DEFAULT_GRADIENT_OPTIONS.stops.map((s) => ({ ...s })) },
     gradientOptionsEqual
   ),
-  gradientPreview: createScalarStore<{ start: Vec2; end: Vec2 } | null>(null, gradientPreviewEqual),
+  gradientPreview: createScalarStore<GradientPreview | null>(null, gradientPreviewEqual),
   lassoOptions: createScalarStore<LassoToolOptions>({ ...DEFAULT_LASSO_OPTIONS }, lassoOptionsEqual),
   lassoPreview: createScalarStore<readonly Vec2[] | null>(null),
   marqueeOptions: createScalarStore<MarqueeToolOptions>({ ...DEFAULT_MARQUEE_OPTIONS }, marqueeOptionsEqual),

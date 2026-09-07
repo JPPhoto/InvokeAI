@@ -8,6 +8,7 @@ import type {
 import { Box } from '@chakra-ui/react';
 import { Toolbar, ToolbarButton } from '@platform/ui/Toolbar';
 import {
+  BlendIcon,
   BrushIcon,
   CircleIcon,
   EraserIcon,
@@ -15,7 +16,6 @@ import {
   HandIcon,
   LassoIcon,
   MoveIcon,
-  PaintBucketIcon,
   Rotate3dIcon,
   SquareDashedIcon,
   SquareIcon,
@@ -225,7 +225,7 @@ const ToolStripRoot = ({
         <ShapeFamilyButton engine={engine} isInteractionLocked={isInteractionLocked} />
         <ToolStripButton
           engine={engine}
-          icon={PaintBucketIcon}
+          icon={BlendIcon}
           isInteractionLocked={isInteractionLocked}
           label={t('widgets.canvas.tools.gradient')}
           toolId="gradient"
