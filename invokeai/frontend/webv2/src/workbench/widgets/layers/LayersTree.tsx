@@ -9,6 +9,7 @@ import { Box, Text } from '@chakra-ui/react';
 import { DndContext, DragOverlay, pointerWithin, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { useMountEffect } from '@platform/react/useMountEffect';
+import { toaster } from '@platform/ui';
 import { Scrollable } from '@platform/ui/Scrollable';
 import { getDocumentIndex, getDocumentNode, lookupDocumentNodeState } from '@workbench/canvas-engine/api';
 import {
@@ -40,6 +41,7 @@ import {
   type ProjectedChildRow,
 } from './layerChildRows';
 import { clearLayerChildSelection, selectLayerChild, useLayerChildSelection } from './layerChildSelection';
+import { copyLayerToClipboard } from './layerExportActions';
 import { createAdjustmentId } from './layerOps';
 import {
   flattenPanelRows,
@@ -307,6 +309,7 @@ export const LayersTree = ({
     dispatch,
     document,
     editingLocked,
+    engine,
     onRevealProperties,
     panel,
     panelRows,
@@ -323,6 +326,7 @@ export const LayersTree = ({
       dispatch,
       document,
       editingLocked,
+      engine,
       onRevealProperties,
       panel,
       panelRows,
@@ -397,6 +401,23 @@ export const LayersTree = ({
                   ? { anchor, kind: 'stack-menu', stack: stackOfHeaderKey(key) }
                   : { anchor, id: key, kind: 'menu' }
             );
+          }
+          return;
+        }
+        if (
+          !childRow &&
+          !isHeaderKey(key) &&
+          (event.ctrlKey || event.metaKey) &&
+          !event.shiftKey &&
+          !event.altKey &&
+          event.key.toLowerCase() === 'c'
+        ) {
+          event.preventDefault();
+          const { engine: currentEngine } = latest.current;
+          if (currentEngine) {
+            void copyLayerToClipboard(key, { exportLayer: currentEngine.exports.exportBakedLayerBlob })
+              .then((status) => status === 'ok' || Promise.reject(new Error(status)))
+              .catch(() => toaster.create({ title: t('widgets.layers.actions.copyFailed'), type: 'warning' }));
           }
           return;
         }
