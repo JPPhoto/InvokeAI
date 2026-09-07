@@ -92,6 +92,7 @@ def _state_projection(state: GraphExecutionState) -> tuple[Any, ...]:
         prepared_sources,
         executed_prepared_sources,
         completed_sources,
+        tuple(state.executed_history),
         results,
         indegree,
         errors,
