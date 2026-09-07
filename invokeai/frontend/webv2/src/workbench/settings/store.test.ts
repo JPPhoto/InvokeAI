@@ -381,6 +381,16 @@ describe('normalizeWorkbenchPreferences prompt editing', () => {
   });
 });
 
+describe('normalizeWorkbenchPreferences workflow editor', () => {
+  it('keeps connections above nodes unless the preference is explicitly on', () => {
+    expect(store.normalizeWorkbenchPreferences({}).workflowEdgesBehindNodes).toBe(false);
+    expect(
+      store.normalizeWorkbenchPreferences({ workflowEdgesBehindNodes: 'yes' as never }).workflowEdgesBehindNodes
+    ).toBe(false);
+    expect(store.normalizeWorkbenchPreferences({ workflowEdgesBehindNodes: true }).workflowEdgesBehindNodes).toBe(true);
+  });
+});
+
 describe('normalizeWorkbenchPreferences diagnostics', () => {
   it('heals invalid diagnostics preferences to defaults', () => {
     expect(

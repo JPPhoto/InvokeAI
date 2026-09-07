@@ -82,6 +82,8 @@ export interface WorkbenchPreferences {
   workflowValidateConnections: boolean;
   /** Connection line rendering in the workflow editor. */
   workflowEdgeStyle: 'curved' | 'square';
+  /** Keep connections of a selected node beneath nodes instead of raising them over node controls. */
+  workflowEdgesBehindNodes: boolean;
   /** Account-bound overrides keyed by hotkey id (`app.invoke`, `gallery.galleryNavLeft`, etc.). */
   customHotkeys: Record<string, string[]>;
   /** Generate panel section open/closed overrides keyed by section id; absent = section default. */

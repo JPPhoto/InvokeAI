@@ -227,6 +227,7 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
     reduceMotion,
     themeId,
     workflowEdgeStyle,
+    workflowEdgesBehindNodes,
     workflowShowMinimap,
     workflowSnapToGrid,
     workflowValidateConnections,
@@ -235,6 +236,7 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
       reduceMotion: preferences.reduceMotion,
       themeId: preferences.themeId,
       workflowEdgeStyle: preferences.workflowEdgeStyle,
+      workflowEdgesBehindNodes: preferences.workflowEdgesBehindNodes,
       workflowShowMinimap: preferences.workflowShowMinimap,
       workflowSnapToGrid: preferences.workflowSnapToGrid,
       workflowValidateConnections: preferences.workflowValidateConnections,
@@ -972,12 +974,15 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
         animation: 'dashdraw var(--wb-motion-duration-slow) linear var(--wb-motion-animation-iteration-count)',
         strokeDasharray: '5',
       },
+      // The edge layer is a stacking context of its own, so sinking it keeps
+      // every edge (including ones xyflow elevates for a selection) under nodes.
+      ...(workflowEdgesBehindNodes ? { '& .react-flow__edges': { zIndex: -1 } } : {}),
       ...(tool === 'eraser'
         ? { '& .react-flow__edge, & .react-flow__node, & .react-flow__pane': { cursor: 'crosshair' } }
         : {}),
       ...(tool === 'lasso' ? { '& .react-flow__pane': { cursor: 'crosshair' } } : {}),
     }),
-    [nodeOpacity, tool]
+    [nodeOpacity, tool, workflowEdgesBehindNodes]
   );
   const panOnDrag = useMemo(() => (tool === 'pan' ? true : [1, 2]), [tool]);
   const proOptions = useMemo(() => ({ hideAttribution: true }), []);
@@ -1035,7 +1040,7 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
         defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
         defaultViewport={defaultViewport}
         deleteKeyCode={DELETE_KEY_CODES}
-        elevateEdgesOnSelect
+        elevateEdgesOnSelect={!workflowEdgesBehindNodes}
         edges={renderedFlowEdges}
         edgeTypes={edgeTypes}
         isValidConnection={isValidConnection}

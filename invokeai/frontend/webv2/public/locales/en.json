@@ -1544,6 +1544,10 @@
         "label": "Always snap to grid",
         "description": "Snap nodes to the grid while dragging. When off, hold Ctrl to snap temporarily."
       },
+      "workflowEdgesBehindNodes": {
+        "label": "Keep highlighted connections behind nodes",
+        "description": "Connections to a selected node normally rise above other nodes. Keep them beneath so they never cover node controls."
+      },
       "workflowShowMinimap": {
         "label": "Show minimap",
         "description": "Show an overview in the corner of the workflow editor."

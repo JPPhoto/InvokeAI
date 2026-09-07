@@ -77,6 +77,7 @@ export const DEFAULT_PREFERENCES: WorkbenchPreferences = {
   showFocusRegionHighlight: true,
   themeId: DEFAULT_THEME_ID,
   workflowEdgeStyle: 'curved',
+  workflowEdgesBehindNodes: false,
   workflowShowMinimap: true,
   workflowSnapToGrid: false,
   workflowValidateConnections: true,
@@ -358,6 +359,10 @@ export const normalizeWorkbenchPreferences = (preferences?: WorkbenchPreferences
       : preferences?.workflowEdgeStyle === 'curved'
         ? preferences.workflowEdgeStyle
         : DEFAULT_PREFERENCES.workflowEdgeStyle,
+  workflowEdgesBehindNodes:
+    typeof preferences?.workflowEdgesBehindNodes === 'boolean'
+      ? preferences.workflowEdgesBehindNodes
+      : DEFAULT_PREFERENCES.workflowEdgesBehindNodes,
   workflowShowMinimap:
     typeof preferences?.workflowShowMinimap === 'boolean'
       ? preferences.workflowShowMinimap

@@ -76,6 +76,11 @@ export const workflowSettings = section('workflow', 'Workflow', [
       { value: 'square', label: text('options.square', 'Square') },
     ],
   },
+  preference(
+    'workflowEdgesBehindNodes',
+    'Keep highlighted connections behind nodes',
+    'workflow edges wires links z-order'
+  ),
   preference('workflowSnapToGrid', 'Always snap to grid', 'workflow nodes'),
   preference('workflowShowMinimap', 'Show minimap'),
   preference('workflowValidateConnections', 'Validate connections', 'workflow edges'),
