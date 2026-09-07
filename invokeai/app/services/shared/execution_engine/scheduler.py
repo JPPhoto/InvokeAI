@@ -7,11 +7,17 @@ frame values. Graph and invocation semantics belong to adapters above it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
-
+from heapq import heapify, heappop, heappush
+from typing import Any, Iterable, Mapping
 
 NodeId = str
 Frame = tuple[object, ...]
+
+
+def _frame_key(frame: Frame) -> tuple[tuple[str, str], ...]:
+    """Return a stable ordering key for mixed integer/string frame parts."""
+
+    return tuple((type(part).__name__, repr(part)) for part in frame)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,11 +48,15 @@ class ExecutionPlan:
     ) -> PlanNode:
         """Add one node, rejecting duplicate IDs and unknown prerequisites."""
 
+        if not node_id.strip():
+            raise ValueError("node id must not be blank")
+        if not class_name.strip():
+            raise ValueError("class name must not be blank")
         if node_id in self.nodes:
             raise ValueError(f"node already exists: {node_id}")
+        # Repeated dependencies represent repeated execution-graph edges and
+        # must remain distinct for indegree accounting.
         dependency_ids = tuple(dependencies)
-        if len(set(dependency_ids)) != len(dependency_ids):
-            raise ValueError(f"duplicate dependencies for node: {node_id}")
         missing = [dependency for dependency in dependency_ids if dependency not in self.nodes]
         if missing:
             raise KeyError(f"unknown dependency for {node_id}: {missing[0]}")
@@ -65,16 +75,78 @@ class ExecutionPlan:
             raise KeyError(f"unknown node: {node_id}")
         return tuple(self._dependents[node_id])
 
+    def snapshot(self) -> dict[str, Any]:
+        """Return a JSON-safe durable projection of this internal plan."""
+
+        return {
+            "nodes": {
+                node_id: {
+                    "node_id": node.node_id,
+                    "class_name": node.class_name,
+                    "frame": list(node.frame),
+                    "dependencies": list(node.dependencies),
+                    "order": node.order,
+                }
+                for node_id, node in self.nodes.items()
+            },
+            "next_order": self._next_order,
+        }
+
+    @classmethod
+    def from_snapshot(cls, snapshot: Mapping[str, Any]) -> "ExecutionPlan":
+        """Restore a plan using its insertion order and dependency list."""
+
+        plan = cls()
+        raw_nodes = snapshot.get("nodes")
+        if not isinstance(raw_nodes, Mapping):
+            raise ValueError("execution plan snapshot must contain nodes")
+        entries: list[tuple[int, Mapping[str, Any]]] = []
+        for node_key, raw in raw_nodes.items():
+            if not isinstance(raw, Mapping):
+                raise ValueError("execution plan node must be a mapping")
+            if raw.get("node_id") != node_key:
+                raise ValueError("execution plan node key does not match node id")
+            if not isinstance(raw.get("node_id"), str) or not isinstance(raw.get("class_name"), str):
+                raise ValueError("execution plan node id and class name must be strings")
+            order = raw.get("order")
+            if not isinstance(order, int) or order < 0:
+                raise ValueError("execution plan node order is invalid")
+            frame = raw.get("frame", ())
+            dependencies = raw.get("dependencies", ())
+            if not isinstance(frame, (list, tuple)) or not isinstance(dependencies, (list, tuple)):
+                raise ValueError("execution plan frame and dependencies must be sequences")
+            if not all(isinstance(dependency, str) for dependency in dependencies):
+                raise ValueError("execution plan dependencies must be node ids")
+            entries.append((order, raw))
+        for _, raw in sorted(entries, key=lambda entry: entry[0]):
+            plan.add_node(
+                raw["node_id"],
+                raw["class_name"],
+                tuple(raw.get("frame", ())),
+                tuple(raw.get("dependencies", ())),
+            )
+        next_order = snapshot.get("next_order", plan._next_order)
+        if not isinstance(next_order, int) or next_order < plan._next_order:
+            raise ValueError("execution plan next order is invalid")
+        plan._next_order = next_order
+        return plan
+
 
 class ExecutionScheduler:
     """Deterministic scheduler for an :class:`ExecutionPlan`."""
 
-    def __init__(self, plan: ExecutionPlan, ready_order: Iterable[str] = ()) -> None:
+    def __init__(
+        self,
+        plan: ExecutionPlan,
+        ready_order: Iterable[str] = (),
+        executed: Iterable[NodeId] = (),
+    ) -> None:
         self.plan = plan
         self.ready_order = tuple(ready_order)
-        self.executed: set[NodeId] = set()
+        self.executed: set[NodeId] = set(executed)
+        self._claimed: set[NodeId] = set()
         self.indegree: dict[NodeId, int] = {}
-        self._ready: list[NodeId] = []
+        self._ready: list[tuple[tuple[Any, ...], NodeId]] = []
         self._enqueued: set[NodeId] = set()
         self.rebuild_ready()
 
@@ -84,9 +156,13 @@ class ExecutionScheduler:
         except ValueError:
             return len(self.ready_order)
 
-    def _sort_key(self, node_id: NodeId) -> tuple[int, Frame, int]:
+    def _sort_key(self, node_id: NodeId) -> tuple[Any, ...]:
         node = self.plan.nodes[node_id]
-        return (self._priority(node.class_name), node.frame, node.order)
+        if self.ready_order:
+            class_key = (self._priority(node.class_name), "")
+        else:
+            class_key = (0, node.class_name)
+        return (*class_key, _frame_key(node.frame), node.order)
 
     def enqueue(self, node_id: NodeId) -> None:
         """Queue a currently-ready node; repeated enqueue is harmless."""
@@ -96,40 +172,88 @@ class ExecutionScheduler:
             raise KeyError(f"unknown node: {node_id}")
         if node_id in self.executed:
             raise ValueError(f"node already completed: {node_id}")
-        if self.indegree.get(node_id, 0) != 0:
+        if node_id in self._claimed:
+            return
+        if node_id not in self.indegree:
+            raise KeyError(f"indegree missing for node: {node_id}")
+        if self.indegree[node_id] != 0:
             raise ValueError(f"node is not ready: {node_id}")
         if node_id not in self._enqueued:
-            self._ready.append(node_id)
+            heappush(self._ready, (self._sort_key(node_id), node_id))
             self._enqueued.add(node_id)
-            self._ready.sort(key=self._sort_key)
 
     def pop_next(self) -> NodeId | None:
         """Remove and return the next ready node ID, or ``None`` when empty."""
 
         if not self._ready:
             return None
-        node_id = self._ready.pop(0)
+        _, node_id = heappop(self._ready)
         self._enqueued.remove(node_id)
+        self._claimed.add(node_id)
         return node_id
 
-    def complete(self, node_id: NodeId) -> None:
-        """Mark a node complete and release dependents that become ready."""
+    @property
+    def ready_ids(self) -> tuple[NodeId, ...]:
+        """Return queued IDs in the order they will be popped."""
+
+        return tuple(node_id for _, node_id in sorted(self._ready))
+
+    def add_node(self, node: PlanNode) -> None:
+        """Add a plan node without disturbing already-claimed work."""
+
+        if node.node_id not in self.plan.nodes:
+            self.plan.add_node(node.node_id, node.class_name, node.frame, node.dependencies)
+        self.indegree[node.node_id] = sum(dependency not in self.executed for dependency in node.dependencies)
+        if self.indegree[node.node_id] == 0 and node.node_id not in self.executed and node.node_id not in self._claimed:
+            self.enqueue(node.node_id)
+
+    def discard(self, node_id: NodeId) -> None:
+        """Remove a node from queued or claimed work without completing it."""
+
+        self._enqueued.discard(node_id)
+        self._claimed.discard(node_id)
+        self._ready = [(key, queued) for key, queued in self._ready if queued != node_id]
+        heapify(self._ready)
+
+    def set_ready_order(self, ready_order: Iterable[str]) -> None:
+        """Change class priorities while retaining queued and claimed work."""
+
+        self.ready_order = tuple(ready_order)
+        self._ready = [(self._sort_key(node_id), node_id) for node_id in self._enqueued]
+        heapify(self._ready)
+
+    def complete(self, node_id: NodeId) -> tuple[NodeId, ...]:
+        """Mark node complete; return dependents newly made ready."""
 
         if node_id not in self.plan.nodes:
             raise KeyError(f"unknown node: {node_id}")
         if node_id in self.executed:
             raise ValueError(f"node already completed: {node_id}")
-        if self.indegree.get(node_id, 0) != 0:
+        if node_id not in self.indegree:
+            raise KeyError(f"indegree missing for node: {node_id}")
+        if self.indegree[node_id] != 0:
             raise ValueError(f"node is not ready: {node_id}")
-        self.executed.add(node_id)
-        self._enqueued.discard(node_id)
-        self._ready = [queued for queued in self._ready if queued != node_id]
-        for dependent in self.plan.dependents(node_id):
+        dependents = self.plan.dependents(node_id)
+        for dependent in dependents:
+            if dependent not in self.indegree:
+                raise KeyError(f"indegree missing for node: {dependent}")
             if self.indegree[dependent] <= 0:
                 raise ValueError(f"dependency underflow for node: {dependent}")
+        self.executed.add(node_id)
+        self._enqueued.discard(node_id)
+        self._claimed.discard(node_id)
+        self._ready = [(key, queued) for key, queued in self._ready if queued != node_id]
+        # ``complete()`` may be called for a node that was queued but not popped
+        # (for example when a persisted queue is cancelled).  Re-establish the
+        # heap invariant after removing it.
+        heapify(self._ready)
+        newly_ready: list[NodeId] = []
+        for dependent in dependents:
             self.indegree[dependent] -= 1
             if self.indegree[dependent] == 0 and dependent not in self.executed:
                 self.enqueue(dependent)
+                newly_ready.append(dependent)
+        return tuple(newly_ready)
 
     def rebuild_ready(self) -> None:
         """Recompute indegrees and ready queue from plan and executed IDs."""
@@ -143,11 +267,11 @@ class ExecutionScheduler:
         }
         self._ready = []
         self._enqueued = set()
+        self._claimed = set()
         for node_id in self.plan.nodes:
             if node_id not in self.executed and self.indegree[node_id] == 0:
-                self._ready.append(node_id)
+                heappush(self._ready, (self._sort_key(node_id), node_id))
                 self._enqueued.add(node_id)
-        self._ready.sort(key=self._sort_key)
 
 
 __all__ = ["ExecutionPlan", "ExecutionScheduler", "PlanNode"]

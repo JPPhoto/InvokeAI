@@ -89,9 +89,11 @@ effects. Legacy `For`/`ForReturn` continuation scheduling is mirrored by a typed
 explicit empty close. `Collect` consumes that buffer when available and retains the materializer/indegree path as its
 compatibility adapter. `loop_linkage` remains association metadata and never becomes a data token.
 
-The engine still owns runtime node materialization and queue readiness for existing snapshots. This is intentional:
-the generic records preserve the tested loop semantics first, while the old execution graph remains the fallback for
-legacy snapshots and unsupported mixed loop shapes. No activation or stream ports are added to author-time graph JSON.
+The engine still owns runtime node materialization and queue readiness for loop-containing graphs and existing snapshots.
+Ordinary static DAGs now use the generic opaque plan/scheduler through a compatibility projection. This is intentional:
+the generic records preserve tested loop semantics first, while the old execution graph remains the fallback for control
+lowerings, legacy snapshots, and unsupported mixed loop shapes. No activation or stream ports are added to author-time
+graph JSON.
 This migration does not modify code under `invokeai/frontend/...`; the existing frontend/backend external interface
 remains frozen.
 

@@ -75,6 +75,7 @@ from invokeai.app.services.shared.execution_engine.primitives import (
     ExecutionFrame as EngineExecutionFrame,
 )
 from invokeai.app.services.shared.execution_engine.runtime import ExecutionEngineRuntime
+from invokeai.app.services.shared.execution_engine.scheduler import ExecutionPlan, ExecutionScheduler
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.misc import uuid_string
 
@@ -1241,6 +1242,9 @@ class _ExecutionMaterializer:
         inputs = input_edges if input_edges is not None else self._state.execution_graph._get_input_edges(exec_node_id)
         unmet = sum(1 for edge in inputs if edge.source.node_id not in self._state.executed)
         self._state._tx_set_mapping(self._state.indegree, exec_node_id, unmet)
+        scheduler = self._state._scheduler()
+        if isinstance(scheduler, _GenericGraphSchedulerAdapter):
+            scheduler.register_node(exec_node_id)
         self._state._try_resolve_if_node(exec_node_id)
         self._state._enqueue_if_ready(exec_node_id)
 
@@ -2151,6 +2155,152 @@ class _ExecutionScheduler:
         ):
             return []
         return [(finalized_for_node, finalized_for_output)]
+
+
+class _GenericGraphSchedulerAdapter:
+    """Projects the generic scheduler into GraphExecutionState's legacy queues."""
+
+    def __init__(self, state: "GraphExecutionState") -> None:
+        self._state = state
+        prepared_ids = set(state.prepared_source_mapping).intersection(state.executed)
+        self._scheduler = ExecutionScheduler(ExecutionPlan(), state.ready_order, executed=prepared_ids)
+        self._register_existing_nodes()
+        self._sync_indegree()
+        self._project_ready_nodes()
+
+    def _register_existing_nodes(self) -> None:
+        execution_graph = self._state._get_execution_graph_flat()
+        for exec_node_id in nx.topological_sort(execution_graph):
+            self.register_node(exec_node_id)
+
+    def register_node(self, exec_node_id: str) -> None:
+        if exec_node_id in self._scheduler.plan.nodes:
+            return
+        node = self._state.execution_graph.nodes.get(exec_node_id)
+        if node is None:
+            raise KeyError(f"exec node {exec_node_id} missing from execution_graph")
+        dependencies = tuple(edge.source.node_id for edge in self._state.execution_graph._get_input_edges(exec_node_id))
+        for dependency in dependencies:
+            if dependency not in self._scheduler.plan.nodes:
+                self.register_node(dependency)
+        self._scheduler.add_node(
+            self._scheduler.plan.add_node(
+                exec_node_id,
+                type(node).__name__,
+                self._state._get_iteration_path(exec_node_id),
+                dependencies,
+            )
+        )
+        self._state._tx_set_mapping(self._state.indegree, exec_node_id, self._scheduler.indegree[exec_node_id])
+        self._project_ready_node(exec_node_id)
+
+    def _sync_indegree(self) -> None:
+        for exec_node_id, degree in self._scheduler.indegree.items():
+            self._state._tx_set_mapping(self._state.indegree, exec_node_id, degree)
+
+    def _project_ready_node(self, exec_node_id: str) -> None:
+        if exec_node_id not in self._scheduler.ready_ids or exec_node_id in self._state._ready_node_ids:
+            return
+        node = self._state.execution_graph.nodes[exec_node_id]
+        cls_name = self._state._type_key(node)
+        queue = self._state._ready_queues.get(cls_name)
+        if queue is None:
+            queue = deque()
+            self._state._tx_set_mapping(self._state._ready_queues, cls_name, queue)
+        iteration_path = self._state._get_iteration_path(exec_node_id)
+        insert_at = next(
+            (
+                index
+                for index, queued_id in enumerate(queue)
+                if self._state._get_iteration_path(queued_id) > iteration_path
+            ),
+            len(queue),
+        )
+        if insert_at == len(queue):
+            self._state._tx_queue_append(queue, exec_node_id)
+        else:
+            self._state._tx_queue_insert(queue, insert_at, exec_node_id)
+        self._state._set_prepared_exec_state(exec_node_id, "ready")
+        self._state._tx_add_set(self._state._ready_node_ids, exec_node_id)
+
+    def _project_ready_nodes(self) -> None:
+        for exec_node_id in self._scheduler.ready_ids:
+            self._project_ready_node(exec_node_id)
+
+    def _remove_projected(self, exec_node_id: str) -> None:
+        for queue in self._state._ready_queues.values():
+            try:
+                self._state._tx_queue_remove(queue, exec_node_id)
+            except ValueError:
+                continue
+        self._state._tx_discard_set(self._state._ready_node_ids, exec_node_id)
+
+    def queue_for(self, cls_name: str) -> Deque[str]:
+        queue = self._state._ready_queues.get(cls_name)
+        if queue is None:
+            queue = deque()
+            self._state._tx_set_mapping(self._state._ready_queues, cls_name, queue)
+        return queue
+
+    def remove_from_ready_queues(self, exec_node_id: str) -> None:
+        self._scheduler.discard(exec_node_id)
+        self._remove_projected(exec_node_id)
+
+    def enqueue_if_ready(self, exec_node_id: str) -> None:
+        self.register_node(exec_node_id)
+        if self._state.indegree.get(exec_node_id) != 0 or exec_node_id in self._state.executed:
+            return
+        self._scheduler.enqueue(exec_node_id)
+        self._project_ready_node(exec_node_id)
+
+    def get_next_node(self) -> Optional[BaseInvocation]:
+        exec_node_id = self._scheduler.pop_next()
+        if exec_node_id is None:
+            return None
+        self._remove_projected(exec_node_id)
+        if exec_node_id in self._state.executed:
+            return self.get_next_node()
+        return self._state.execution_graph.nodes[exec_node_id]
+
+    def _record_completed_node(self, exec_node_id: str, output: BaseInvocationOutput) -> None:
+        self._state._set_prepared_exec_state(exec_node_id, "executed")
+        self._state._tx_add_set(self._state.executed, exec_node_id)
+        self._state._tx_set_mapping(self._state.results, exec_node_id, output)
+
+    def _mark_source_node_complete(self, exec_node_id: str) -> None:
+        registry = self._state._prepared_registry()
+        source_node_id = registry.get_source_node_id(exec_node_id)
+        prepared_nodes = registry.get_prepared_ids(source_node_id)
+        if (
+            all(node_id in self._state.executed for node_id in prepared_nodes)
+            and source_node_id not in self._state.executed
+        ):
+            self._state._mark_source_executed(source_node_id)
+
+    def complete(
+        self, exec_node_id: str, output: BaseInvocationOutput
+    ) -> list[tuple[BaseInvocation, BaseInvocationOutput]]:
+        if exec_node_id not in self._state.execution_graph.nodes:
+            return []
+        if exec_node_id not in self._state.indegree:
+            raise KeyError(f"indegree missing for exec node {exec_node_id}")
+        dependents = self._scheduler.plan.dependents(exec_node_id)
+        for dependent in dependents:
+            if dependent not in self._state.indegree:
+                raise KeyError(f"indegree missing for exec node {dependent}")
+        self._remove_projected(exec_node_id)
+        newly_ready = self._scheduler.complete(exec_node_id)
+        self._record_completed_node(exec_node_id, output)
+        self._mark_source_node_complete(exec_node_id)
+        for dependent in set(dependents):
+            self._state._tx_set_mapping(self._state.indegree, dependent, self._scheduler.indegree[dependent])
+        for ready_node_id in newly_ready:
+            self._project_ready_node(ready_node_id)
+        return []
+
+    def set_ready_order(self, ready_order: Iterable[str]) -> None:
+        self._scheduler.set_ready_order(ready_order)
+        self._project_ready_nodes()
 
 
 class _ExecutionRuntime:
@@ -4159,7 +4309,7 @@ class GraphExecutionState(BaseModel):
     _prepared_exec_registry: Optional[_PreparedExecRegistry] = PrivateAttr(default=None)
     _if_branch_scheduler: Optional[_IfBranchScheduler] = PrivateAttr(default=None)
     _execution_materializer: Optional[_ExecutionMaterializer] = PrivateAttr(default=None)
-    _execution_scheduler: Optional[_ExecutionScheduler] = PrivateAttr(default=None)
+    _execution_scheduler: Optional[_ExecutionScheduler | _GenericGraphSchedulerAdapter] = PrivateAttr(default=None)
     _execution_runtime: Optional[_ExecutionRuntime] = PrivateAttr(default=None)
     _for_parent_iteration_paths_cache: dict[str, set[tuple[int, ...]]] = PrivateAttr(default_factory=dict)
     _all_for_contexts_finalized_cache: dict[str, bool] = PrivateAttr(default_factory=dict)
@@ -4174,6 +4324,7 @@ class GraphExecutionState(BaseModel):
     _for_source_by_return_id: Optional[dict[str, str]] = PrivateAttr(default=None)
     _apply_transaction: Optional[_ApplyTransaction] = PrivateAttr(default=None)
     _generic_execution_runtime: Optional[ExecutionEngineRuntime] = PrivateAttr(default=None)
+    _generic_graph_scheduler: Optional[_GenericGraphSchedulerAdapter] = PrivateAttr(default=None)
     _generic_child_dependencies: dict[str, ChildDependencyRecord] = PrivateAttr(default_factory=dict)
 
     def _tx_record_once(self, key: tuple[Any, ...], undo: Callable[[], None]) -> None:
@@ -4268,6 +4419,7 @@ class GraphExecutionState(BaseModel):
         object.__setattr__(self, "_if_branch_scheduler", None)
         object.__setattr__(self, "_execution_materializer", None)
         object.__setattr__(self, "_execution_scheduler", None)
+        object.__setattr__(self, "_generic_graph_scheduler", None)
         object.__setattr__(self, "_execution_runtime", None)
         object.__setattr__(self, "_if_branch_exclusive_sources", {})
         object.__setattr__(self, "_source_graph_flat", None)
@@ -4368,9 +4520,21 @@ class GraphExecutionState(BaseModel):
             self._execution_materializer = _ExecutionMaterializer(self)
         return self._execution_materializer
 
-    def _scheduler(self) -> _ExecutionScheduler:
+    def _can_use_generic_scheduler(self) -> bool:
+        """Use generic readiness only for graphs without control-flow lowering."""
+
+        control_nodes = (IfInvocation, IterateInvocation, CollectInvocation, ForInvocation, ForReturnInvocation)
+        return not any(isinstance(node, control_nodes) for node in self.graph.nodes.values()) and not any(
+            isinstance(node, CallSavedWorkflowInvocation) for node in self.graph.nodes.values()
+        )
+
+    def _scheduler(self) -> _ExecutionScheduler | _GenericGraphSchedulerAdapter:
         if self._execution_scheduler is None:
-            self._execution_scheduler = _ExecutionScheduler(self)
+            if self._can_use_generic_scheduler():
+                self._generic_graph_scheduler = _GenericGraphSchedulerAdapter(self)
+                self._execution_scheduler = self._generic_graph_scheduler
+            else:
+                self._execution_scheduler = _ExecutionScheduler(self)
         return self._execution_scheduler
 
     def _runtime(self) -> _ExecutionRuntime:
@@ -5278,6 +5442,8 @@ class GraphExecutionState(BaseModel):
         for x in order:
             names.append(x.__name__ if hasattr(x, "__name__") else str(x))
         self.ready_order = names
+        if self._generic_graph_scheduler is not None:
+            self._generic_graph_scheduler.set_ready_order(names)
 
     def _enqueue_if_ready(self, nid: str) -> None:
         self._scheduler().enqueue_if_ready(nid)
@@ -5305,6 +5471,7 @@ class GraphExecutionState(BaseModel):
         self._if_branch_scheduler = None
         self._execution_materializer = None
         self._execution_scheduler = None
+        self._generic_graph_scheduler = None
         self._execution_runtime = None
         self._source_graph_flat = None
         self._execution_graph_flat = None

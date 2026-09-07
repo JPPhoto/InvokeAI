@@ -7,8 +7,10 @@ High-level design for the graph module. Focuses on responsibilities, data flow, 
 Provide a typed, acyclic workflow model (**Graph**) plus a runtime scheduler (**GraphExecutionState**) that expands
 iterator patterns, tracks readiness via indegree (the number of incoming edges to a node in the directed graph), and
 executes nodes from class-grouped ready queues. In normal execution, runtime expansion happens in a separate execution graph
-instead of mutating the source graph. The runtime also exposes an additive execution-engine seam: frame-scoped gates,
-ordered streams, continuations, and authorized child-dependency records are stored in
+instead of mutating the source graph. Ordinary static DAGs use the opaque `ExecutionPlan` and deterministic
+`ExecutionScheduler` in `execution_engine/scheduler.py`; control-flow lowering remains behind the legacy graph adapter.
+The runtime also exposes an additive execution-engine seam: frame-scoped gates, ordered streams, continuations, and
+authorized child-dependency records are stored in
 `invokeai.app.services.shared.execution_engine`; legacy graph and queue behavior is retained behind adapters while
 those records become authoritative one behavior at a time.
 
@@ -46,6 +48,9 @@ external interface remains frozen; generated schemas may change only for additiv
   results, tokens, and workflow-call state after rehydration.
 - `ChildExecutionCapability`, `ChildExecutionRecord`, and `ChildDependencyRecord` validate authorized parent/child
   relationships, resource limits, ordered all-of aggregation, failure, cancellation, and idempotent completion.
+- `ExecutionPlan` stores opaque execution-node IDs, class names, prerequisite IDs, frame values, and stable insertion
+  order. `ExecutionScheduler` owns generic readiness, deterministic ordering, completion, and durable plan rehydration.
+  It does not import invocation classes and cannot alter author-time graph or frontend contracts.
 - `ExecutionEngineRuntime` owns these records for one graph state. It is private runtime machinery; it is not a new
   frontend node, input handle, or public workflow contract.
 
@@ -117,7 +122,9 @@ Checks a single prospective edge before insertion:
 
 Holds the state for a single run. Keeps the source graph intact and materializes a separate execution graph.
 `GraphExecutionState` is still the public runtime entry point, but most execution behavior is now delegated to a small
-set of internal helper classes.
+set of internal helper classes. For ordinary static DAGs, readiness and completion are projected through the generic
+`ExecutionPlan`/`ExecutionScheduler` adapter. `If`, `Iterate`, `Collect`, `For`, `ForReturn`, and saved-workflow call
+lowering continue to use the legacy compatibility scheduler until their differential coverage is complete.
 
 The source graph is treated as stable during normal execution, but the runtime object still exposes guarded graph
 mutation helpers. Those helpers reject changes once the affected nodes have already been prepared or executed.
@@ -150,8 +157,9 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
   source node and execution frame.
 - `execution_tokens: dict[str, ExecutionToken]` - output tokens produced by applied execution results.
 - `execution_effects: dict[str, list[Any]]` - JSON-safe effects accepted for each execution reference.
-- **Ready queues grouped by class** (private attrs): `_ready_queues: dict[class_name, deque[str]]`,
-  `_active_class: Optional[str]`. Optional `ready_order: list[str]` to prioritize classes. Queues are rebuilt from
+- **Ready queues grouped by class** (private projection): `_ready_queues: dict[class_name, deque[str]]` and
+  `_active_class: Optional[str]`. Ordinary static DAGs derive readiness from the generic scheduler; control-flow
+  graphs retain the legacy scheduler. Optional `ready_order: list[str]` prioritizes classes. Queues are rebuilt from
   persisted execution state when a session is deserialized.
 
 ### 4.2 Core methods
@@ -180,8 +188,9 @@ suppresses effects: effect-enabled invocations bypass the ordinary output cache 
 `ExecutionFrame` identifies the owning state, loop iteration path, and workflow-call depth. `ExecutionReference`
 identifies one prepared execution node and its frame. `ExecutionToken` records an output port, value, frame, token
 kind, and optional sequence. `loop_linkage` remains association metadata and never becomes a data token. This ledger is
-currently additive; readiness still comes from materialized execution-graph indegrees and the type-specific control
-paths described below. A future migration may make tokens authoritative only after compatibility is proven.
+currently additive. Ordinary static-DAG readiness comes from the generic scheduler through a compatibility projection;
+materialization and type-specific control paths remain authoritative for loop, branch, and workflow-call graphs. A
+future migration may make tokens authoritative only after compatibility is proven.
 
 Workflow-call note:
 
@@ -226,7 +235,11 @@ Workflow-call note:
   ready work. It owns iterator expansion, collector grouping, prepared-parent selection, and creation of execution-graph
   edges. When matching prepared parents for a downstream exec node, skipped prepared exec nodes are ignored and cannot
   be selected as live inputs.
-- `_ExecutionScheduler` Owns indegree transitions, class-grouped ready queues, and downstream release on completion.
+- `_GenericGraphSchedulerAdapter` Projects the generic `ExecutionPlan`/`ExecutionScheduler` into the existing state
+  fields for ordinary static DAGs; the generic scheduler owns readiness, indegree transitions, deterministic ordering,
+  claimed work, and completion.
+- `_ExecutionScheduler` Owns materialized-graph indegree transitions, class-grouped ready queues, downstream release,
+  and control-flow continuation scheduling for graphs that still require lowering.
 - `_ExecutionRuntime` Owns iteration-path lookup, collect input ordering, and input hydration for prepared exec nodes.
 - `_IfBranchScheduler` Applies lazy `If` semantics by deferring branch-local work until the condition is known, then
   lowering the decision to a frame-scoped `ActivationGate` and persisted internal activation token, releasing the
@@ -267,18 +280,18 @@ are treated as version 0, while unreadable snapshots are quarantined by the queu
   - Deep-copy the source node; assign a fresh ID (and `index` for iterators).
   - Cache the preserved iteration path when the materializer has one, such as for grouped collectors.
   - Wire edges from chosen prepared parents.
-  - Set `indegree = number of unmet inputs` (i.e., parents not yet executed).
+  - Set `indegree = number of unmet inputs` (i.e., parents not yet executed). The generic scheduler mirrors this into
+    its opaque plan for ordinary static DAGs.
   - Try to resolve any `If`-specific scheduling state.
   - If the node is ready and not deferred by an unresolved `If`, enqueue it into its class queue.
 
 ### 4.5 Readiness and class ordering
 
-- `_enqueue_if_ready(nid)` enqueues by class name only when `indegree == 0`, the node has not already executed, and the
-  node is not deferred by an unresolved `If`.
-- `_get_next_node()` returns one node from the `_active_class` queue; when empty, it selects the next nonempty class queue
-  (by `ready_order` if set, else alphabetical). Within each class queue, ready exec nodes are ordered by iteration path
-  so expanded iterator work runs in a stable outer-to-inner order. No batch-size or fairness cap is currently
-  implemented.
+- `_enqueue_if_ready(nid)` applies the same readiness predicate to both adapters. The generic scheduler additionally
+  tracks claimed (returned-but-not-completed) work so re-registration cannot duplicate a node.
+- `_get_next_node()` uses the generic scheduler for ordinary static DAGs and projects its deterministic class/frame
+  order into the compatibility queues. Control-flow graphs use `_active_class` and the legacy class queues. No
+  batch-size or fairness cap is currently implemented.
 
 #### 4.5.1 Indegree (what it is and how it's used)
 
@@ -288,8 +301,9 @@ are treated as version 0, while unreadable snapshots are quarantined by the queu
   finished yet.
 - A node is eligible for enqueue when `indegree[node] == 0`, it has not executed, and it is not deferred by an
   unresolved `If`.
-- When a node completes, the scheduler decrements `indegree[child]` for each outgoing edge. Any child that reaches 0 is
-  enqueued.
+- When a node completes, the active scheduler decrements `indegree[child]` for each outgoing edge. Any child that
+  reaches 0 is enqueued. The generic plan preserves repeated edges as repeated prerequisites, matching execution-graph
+  indegree semantics.
 
 Example: edges `A->C`, `B->C`, `C->D`. Start: `A:0, B:0, C:2, D:1`. Run `A` -> `C:1`. Run `B` -> `C:0` -> enqueue `C`.
 Run `C` -> `D:0` -> enqueue `D`. Run `D` -> done.

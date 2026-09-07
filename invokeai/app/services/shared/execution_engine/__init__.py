@@ -26,6 +26,7 @@ from invokeai.app.services.shared.execution_engine.primitives import (
     StreamEvent,
 )
 from invokeai.app.services.shared.execution_engine.runtime import ExecutionEngineRuntime
+from invokeai.app.services.shared.execution_engine.scheduler import ExecutionPlan, ExecutionScheduler, PlanNode
 
 __all__ = [
     "ChildCompletion",
@@ -50,4 +51,7 @@ __all__ = [
     "StreamEnd",
     "StreamEvent",
     "ExecutionEngineRuntime",
+    "ExecutionPlan",
+    "ExecutionScheduler",
+    "PlanNode",
 ]
