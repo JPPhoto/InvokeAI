@@ -7,10 +7,11 @@ frame values. Graph and invocation semantics belong to adapters above it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 NodeId = str
 Frame = tuple[object, ...]
+ReadyPredicate = Callable[[NodeId], bool]
 
 
 def _frame_key(frame: Frame) -> tuple[tuple[str, str], ...]:
@@ -141,10 +142,12 @@ class ExecutionScheduler:
         plan: ExecutionPlan,
         ready_order: Iterable[str] = (),
         executed: Iterable[NodeId] = (),
+        ready_predicate: ReadyPredicate | None = None,
     ) -> None:
         self.plan = plan
         self.ready_order = tuple(ready_order)
         self.executed: set[NodeId] = set(executed)
+        self._ready_predicate = ready_predicate
         self._claimed: set[NodeId] = set()
         self.indegree: dict[NodeId, int] = {}
         self._ready: set[NodeId] = set()
@@ -160,25 +163,34 @@ class ExecutionScheduler:
         except ValueError:
             return len(self.ready_order)
 
-    def enqueue(self, node_id: NodeId) -> None:
-        """Queue a currently-ready node; repeated enqueue is harmless."""
+    def _passes_ready_predicate(self, node_id: NodeId) -> bool:
+        return self._ready_predicate is None or self._ready_predicate(node_id)
 
+    def _enqueue_if_ready(self, node_id: NodeId) -> bool:
         node = self.plan.nodes.get(node_id)
         if node is None:
             raise KeyError(f"unknown node: {node_id}")
         if node_id in self.executed:
             raise ValueError(f"node already completed: {node_id}")
         if node_id in self._claimed:
-            return
+            return False
         if node_id not in self.indegree:
             raise KeyError(f"indegree missing for node: {node_id}")
         if self.indegree[node_id] != 0:
             raise ValueError(f"node is not ready: {node_id}")
+        if not self._passes_ready_predicate(node_id):
+            return False
         if node_id not in self._enqueued:
             self._ready.add(node_id)
             self._enqueued.add(node_id)
             self._arrival_order[node_id] = self._next_arrival
             self._next_arrival += 1
+        return True
+
+    def enqueue(self, node_id: NodeId) -> None:
+        """Queue a currently-ready node when its opaque predicate permits it."""
+
+        self._enqueue_if_ready(node_id)
 
     def _next_class(self) -> str | None:
         classes = {self.plan.nodes[node_id].class_name for node_id in self._enqueued}
@@ -280,8 +292,8 @@ class ExecutionScheduler:
         for dependent in dependents:
             self.indegree[dependent] -= 1
             if self.indegree[dependent] == 0 and dependent not in self.executed:
-                self.enqueue(dependent)
-                newly_ready.append(dependent)
+                if self._enqueue_if_ready(dependent):
+                    newly_ready.append(dependent)
         return tuple(newly_ready)
 
     def rebuild_ready(self) -> None:
@@ -306,7 +318,12 @@ class ExecutionScheduler:
         self._arrival_order = {}
         self._next_arrival = max(previous_arrival.values(), default=-1) + 1
         for node_id in self.plan.nodes:
-            if node_id not in self.executed and node_id not in self._claimed and self.indegree[node_id] == 0:
+            if (
+                node_id not in self.executed
+                and node_id not in self._claimed
+                and self.indegree[node_id] == 0
+                and self._passes_ready_predicate(node_id)
+            ):
                 self._ready.add(node_id)
                 self._enqueued.add(node_id)
                 arrival = previous_arrival.get(node_id)

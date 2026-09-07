@@ -38,6 +38,29 @@ def test_generic_scheduler_routes_fanout_and_fanin_without_invocation_types() ->
     assert scheduler.complete("join") == ()
 
 
+def test_generic_scheduler_honors_opaque_readiness_predicate() -> None:
+    plan = ExecutionPlan()
+    plan.add_node("source", "Source")
+    plan.add_node("blocked", "Work", dependencies=("source",))
+    plan.add_node("other", "Work")
+    allow_blocked = False
+    scheduler = ExecutionScheduler(
+        plan,
+        ready_order=("Source", "Work"),
+        ready_predicate=lambda node_id: node_id != "blocked" or allow_blocked,
+    )
+
+    assert scheduler.pop_next() == "source"
+    assert scheduler.complete("source") == ()
+    assert scheduler.ready_ids == ("other",)
+    assert scheduler.pop_next() == "other"
+    assert scheduler.pop_next() is None
+
+    allow_blocked = True
+    scheduler.rebuild_ready()
+    assert scheduler.pop_next() == "blocked"
+
+
 def test_generic_scheduler_preserves_legacy_class_drain_and_fifo_order() -> None:
     plan = ExecutionPlan()
     plan.add_node("late", "ZNode", frame=(1,))
