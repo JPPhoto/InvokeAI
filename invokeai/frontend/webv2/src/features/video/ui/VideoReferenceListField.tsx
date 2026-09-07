@@ -102,6 +102,8 @@ const getSingleGalleryDragItem = (data: unknown): { kind: 'image' | 'video'; nam
 };
 
 type ReferenceCollections = {
+  /** The anchor's options: 'Audio only' is absent, see `anchorReferenceConditioning`. */
+  anchorConditioning: ReturnType<typeof createListCollection<{ label: string; value: string }>>;
   conditioning: ReturnType<typeof createListCollection<{ label: string; value: string }>>;
   detail: ReturnType<typeof createListCollection<{ label: string; value: string }>>;
 };
@@ -136,6 +138,15 @@ const ReferenceCard = memo(function ReferenceCard({
     () => [reference.kind === 'video' ? reference.conditioning : reference.detail],
     [reference]
   );
+  const selectCollection = useMemo(() => {
+    if (reference.kind !== 'video') {
+      return collections.detail;
+    }
+
+    // The anchor is not offered 'Audio only': it is the reference the extension continues
+    // FROM, and an audio-only one contributes no visual rows to continue from.
+    return reference.fromSourceVideo === true ? collections.anchorConditioning : collections.conditioning;
+  }, [collections, reference]);
   const handleSelect = useCallback(
     (details: { value: string[] }) => {
       const value = details.value[0];
@@ -222,7 +233,7 @@ const ReferenceCard = memo(function ReferenceCard({
             ) : null}
           </HStack>
           <Select
-            collection={reference.kind === 'video' ? collections.conditioning : collections.detail}
+            collection={selectCollection}
             disabled={disabled}
             size="xs"
             value={selectValue}
@@ -381,16 +392,18 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
     !isInert && activeDragItem !== null && (activeDragItem.kind === 'video' ? canAddVideo : canAddImage);
   const { isOver, setNodeRef } = useDroppable({ disabled: !acceptsActiveDrag, id: DROP_ID });
 
-  const conditioningCollection = useMemo(
-    () =>
-      createListCollection({
-        items: [
-          { label: t('widgets.video.referenceConditioningVideoAudio'), value: 'video_audio' },
-          { label: t('widgets.video.referenceConditioningVideo'), value: 'video' },
-          { label: t('widgets.video.referenceConditioningAudio'), value: 'audio' },
-        ],
-      }),
+  const conditioningItems = useMemo(
+    () => [
+      { label: t('widgets.video.referenceConditioningVideoAudio'), value: 'video_audio' },
+      { label: t('widgets.video.referenceConditioningVideo'), value: 'video' },
+      { label: t('widgets.video.referenceConditioningAudio'), value: 'audio' },
+    ],
     [t]
+  );
+  const conditioningCollection = useMemo(() => createListCollection({ items: conditioningItems }), [conditioningItems]);
+  const anchorConditioningCollection = useMemo(
+    () => createListCollection({ items: conditioningItems.filter((item) => item.value !== 'audio') }),
+    [conditioningItems]
   );
   const detailCollection = useMemo(
     () =>
@@ -403,8 +416,12 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
     [t]
   );
   const collections = useMemo(
-    () => ({ conditioning: conditioningCollection, detail: detailCollection }),
-    [conditioningCollection, detailCollection]
+    () => ({
+      anchorConditioning: anchorConditioningCollection,
+      conditioning: conditioningCollection,
+      detail: detailCollection,
+    }),
+    [anchorConditioningCollection, conditioningCollection, detailCollection]
   );
   const handlePickImage = useCallback(() => imageInputRef.current?.click(), []);
   const handlePickVideo = useCallback(() => videoInputRef.current?.click(), []);
