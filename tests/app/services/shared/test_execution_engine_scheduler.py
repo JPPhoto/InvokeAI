@@ -454,11 +454,26 @@ def test_graph_state_if_rehydrates_discarded_unselected_branch() -> None:
     assert state.prepared_source_mapping[condition.id] == "condition"
     state.complete(condition.id, condition.invoke(Mock()))
 
-    restored = GraphExecutionState.model_validate(state.model_dump(mode="python"), strict=False)
-    next_node = restored.next()
+    selected_branch = state.next()
+    assert selected_branch is not None
+    selected_branch_exec_id = selected_branch.id
+    assert state.prepared_source_mapping[selected_branch_exec_id] == "false_value"
+    skipped_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+        if source_node_id == "true_value"
+    )
+    assert state._get_prepared_exec_metadata(skipped_exec_id).state == "skipped"
 
+    restored = GraphExecutionState.model_validate(state.model_dump(mode="python"), strict=False)
+    restored_scheduler = restored._scheduler()
+    assert skipped_exec_id in restored_scheduler._scheduler.discarded
+
+    next_node = restored.next()
     assert next_node is not None
+    assert next_node.id == selected_branch_exec_id
     assert restored.prepared_source_mapping[next_node.id] == "false_value"
+    assert restored.next() is None
 
 
 def test_graph_state_static_dag_rehydrates_generic_scheduler_after_partial_run() -> None:
