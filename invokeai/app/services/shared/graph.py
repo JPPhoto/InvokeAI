@@ -5798,7 +5798,39 @@ class GraphExecutionState(BaseModel):
             )
         return True
 
+    def _validate_persisted_activation_tokens(self) -> None:
+        for token_key, token in self.execution_tokens.items():
+            if token.token_kind != "activation":
+                continue
+
+            if token.owner_node_id not in self.prepared_source_mapping:
+                raise ValueError("Activation token has an unknown execution owner")
+            expected_ref = self._expected_execution_ref(token.owner_node_id)
+            owner = self.execution_graph.get_node(token.owner_node_id)
+
+            if token.reference_id != expected_ref.reference_id:
+                raise ValueError("Activation token belongs to another execution reference")
+            if (
+                token.frame.state_id != expected_ref.frame.state_id
+                or token.frame.frame_id != expected_ref.frame.frame_id
+                or token.frame.iteration_path != expected_ref.frame.iteration_path
+                or token.frame.workflow_call_depth != expected_ref.frame.workflow_call_depth
+            ):
+                raise ValueError("Activation token belongs to another execution frame")
+            if token_key != token.token_id:
+                raise ValueError("Activation token mapping key does not match token id")
+            if not isinstance(owner, IfInvocation):
+                activation_fields = getattr(type(owner), "execution_activation_fields", frozenset())
+                if token.port not in activation_fields:
+                    raise ValueError(f"Activation token references unknown activation port '{token.port}'")
+                if token.value != token.port:
+                    raise ValueError(f"Activation token value '{token.value}' does not match port '{token.port}'")
+                expected_token_id = f"{expected_ref.reference_id}:activation:{token.port}"
+                if token.token_id != expected_token_id:
+                    raise ValueError("Activation token has a stale token id")
+
     def _rehydrate_resolved_if_exec_branches(self) -> None:
+        self._validate_persisted_activation_tokens()
         for exec_node_id, node in self.execution_graph.nodes.items():
             if not isinstance(node, IfInvocation):
                 continue
@@ -5826,6 +5858,9 @@ class GraphExecutionState(BaseModel):
                 if len(selected_fields) != 1:
                     raise ValueError(f"If execution node {exec_node_id} has conflicting activation tokens")
                 selected_field = next(iter(selected_fields))
+                expected_token_id = f"{expected_ref.reference_id}:activation:{selected_field}"
+                if any(token.token_id != expected_token_id for token in activation_tokens):
+                    raise ValueError(f"Activation token for If execution node {exec_node_id} has a stale token id")
                 self._resolve_activation_gate(exec_node_id, selected_field)
                 self._resolved_if_exec_branches[exec_node_id] = selected_field
                 continue
@@ -5840,6 +5875,7 @@ class GraphExecutionState(BaseModel):
 
     def _rehydrate_execution_refs(self) -> None:
         for exec_node_id in self.prepared_source_mapping:
+            self._get_iteration_path(exec_node_id)
             existing = self.execution_refs.get(exec_node_id)
             effect_count = existing.effect_count if existing is not None else None
             self.execution_refs[exec_node_id] = self._expected_execution_ref(exec_node_id, effect_count=effect_count)

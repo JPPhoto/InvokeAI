@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import Mock
 
 import pytest
+from pydantic import ValidationError
 
 from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.invocations.math import AddInvocation
@@ -42,7 +43,7 @@ def _run(
     fail_source_id: str | None = None,
 ) -> tuple[list[str], GraphExecutionState]:
     if force_compatibility_scheduler:
-        object.__setattr__(state, "_execution_scheduler", _ExecutionScheduler(state))
+        state._execution_scheduler = _ExecutionScheduler(state)
 
     trace: list[str] = []
     while (node := state.next()) is not None:
@@ -55,6 +56,14 @@ def _run(
         if stop_after is not None and len(trace) == stop_after:
             break
     return trace, state
+
+
+def _restore_compatibility_scheduler(state: GraphExecutionState) -> None:
+    state._ready_queues = {}
+    state._ready_node_ids = set()
+    state._active_class = None
+    state._execution_scheduler = _ExecutionScheduler(state)
+    state._rehydrate_ready_queues()
 
 
 def _nested_if_graph() -> Graph:
@@ -96,7 +105,7 @@ def _run_graph(
 ) -> tuple[list[str], GraphExecutionState]:
     """Run a constructed graph through either scheduler path."""
     if force_compatibility_scheduler:
-        object.__setattr__(state, "_execution_scheduler", _ExecutionScheduler(state))
+        state._execution_scheduler = _ExecutionScheduler(state)
 
     trace: list[str] = []
     while (node := state.next()) is not None:
@@ -107,6 +116,26 @@ def _run_graph(
             break
         state.complete(node.id, node.invoke(Mock()))
         if stop_after is not None and len(trace) == stop_after:
+            break
+    return trace, state
+
+
+def _run_until_source(
+    state: GraphExecutionState,
+    source_id_to_stop: str,
+    *,
+    force_compatibility_scheduler: bool = False,
+) -> tuple[list[str], GraphExecutionState]:
+    """Run through one source node, modeling a queue cancellation boundary."""
+    if force_compatibility_scheduler:
+        state._execution_scheduler = _ExecutionScheduler(state)
+
+    trace: list[str] = []
+    while (node := state.next()) is not None:
+        source_id = state.prepared_source_mapping[node.id]
+        trace.append(source_id)
+        state.complete(node.id, node.invoke(Mock()))
+        if source_id == source_id_to_stop:
             break
     return trace, state
 
@@ -178,6 +207,89 @@ def _activation_projection(state: GraphExecutionState) -> tuple[tuple[str, str, 
             if token.token_kind == "activation"
         )
     )
+
+
+def _execution_identity_projection(state: GraphExecutionState) -> tuple[Any, ...]:
+    references = tuple(
+        sorted(
+            (
+                state.prepared_source_mapping.get(exec_node_id, exec_node_id),
+                reference.source_node_id,
+                tuple(reference.frame.iteration_path),
+                reference.frame.workflow_call_depth,
+                reference.effect_count,
+            )
+            for exec_node_id, reference in state.execution_refs.items()
+            if exec_node_id in state.prepared_source_mapping
+        )
+    )
+    tokens = tuple(
+        sorted(
+            (
+                state.prepared_source_mapping.get(token.owner_node_id, token.owner_node_id),
+                token.port,
+                json.dumps(token.value, sort_keys=True),
+                token.token_kind,
+                token.sequence,
+                tuple(token.frame.iteration_path),
+                token.frame.workflow_call_depth,
+            )
+            for token in state.execution_tokens.values()
+        )
+    )
+    effects = tuple(
+        sorted(
+            (
+                state.prepared_source_mapping.get(
+                    next(
+                        (
+                            execution_id
+                            for execution_id, reference in state.execution_refs.items()
+                            if reference.reference_id == reference_id
+                        ),
+                        reference_id,
+                    ),
+                    reference_id,
+                ),
+                json.dumps(
+                    [
+                        effect.model_dump(mode="json", warnings=False) if hasattr(effect, "model_dump") else effect
+                        for effect in effect_values
+                    ],
+                    sort_keys=True,
+                ),
+            )
+            for reference_id, effect_values in state.execution_effects.items()
+        )
+    )
+    return references, tokens, effects
+
+
+def _assert_execution_identity_consistent(state: GraphExecutionState) -> None:
+    for exec_node_id, reference in state.execution_refs.items():
+        if exec_node_id not in state.prepared_source_mapping:
+            continue
+        expected = state._expected_execution_ref(exec_node_id, effect_count=reference.effect_count)
+        assert reference.reference_id == expected.reference_id
+        assert reference.state_id == expected.state_id
+        assert reference.exec_node_id == expected.exec_node_id
+        assert reference.source_node_id == expected.source_node_id
+        assert reference.frame == expected.frame
+    for token_key, token in state.execution_tokens.items():
+        expected = state.execution_refs.get(token.owner_node_id) or state._expected_execution_ref(token.owner_node_id)
+        assert token_key == token.token_id
+        assert token.reference_id == expected.reference_id
+        assert token.owner_node_id == expected.exec_node_id
+        assert token.frame.state_id == expected.frame.state_id
+        assert token.frame.frame_id == expected.frame.frame_id
+        assert token.frame.iteration_path == expected.frame.iteration_path
+        assert token.frame.workflow_call_depth == expected.frame.workflow_call_depth
+        if token.token_kind == "activation":
+            owner = state.execution_graph.nodes[token.owner_node_id]
+            activation_fields = getattr(type(owner), "execution_activation_fields", frozenset())
+            assert token.port in activation_fields
+            assert token.token_id == f"{expected.reference_id}:activation:{token.port}"
+            assert token.value == token.port
 
 
 def test_static_dag_fresh_execution_has_matching_source_trace() -> None:
@@ -282,7 +394,7 @@ def test_nested_if_checkpoint_restore_matches_compatibility_scheduler() -> None:
         )
         restored = load_execution_state(dump_execution_state(checkpoint_state))
         if force_compatibility_scheduler:
-            object.__setattr__(restored, "_execution_scheduler", _ExecutionScheduler(restored))
+            _restore_compatibility_scheduler(restored)
         remaining_trace, restored_state = _run_graph(
             restored,
             force_compatibility_scheduler=force_compatibility_scheduler,
@@ -324,7 +436,7 @@ def test_nested_if_failure_round_trip_matches_compatibility_scheduler() -> None:
 
     restored_generic = load_execution_state(dump_execution_state(generic_state))
     restored_compatibility = load_execution_state(dump_execution_state(compatibility_state))
-    object.__setattr__(restored_compatibility, "_execution_scheduler", _ExecutionScheduler(restored_compatibility))
+    _restore_compatibility_scheduler(restored_compatibility)
     assert restored_generic.next() is None
     assert restored_compatibility.next() is None
     assert _state_projection(restored_generic) == _state_projection(restored_compatibility)
@@ -384,7 +496,7 @@ def test_injected_failure_round_trip_preserves_both_scheduler_terminal_state() -
     generic, compatibility = _run_both(fail_source_id="right")
     restored_generic = load_execution_state(dump_execution_state(generic[1]))
     restored_compatibility = load_execution_state(dump_execution_state(compatibility[1]))
-    object.__setattr__(restored_compatibility, "_execution_scheduler", _ExecutionScheduler(restored_compatibility))
+    _restore_compatibility_scheduler(restored_compatibility)
 
     assert restored_generic.next() is None
     assert restored_compatibility.next() is None
@@ -408,12 +520,12 @@ def test_durable_snapshot_corpus_round_trips_without_losing_terminal_state(fixtu
         for force_compatibility_scheduler in (False, True):
             candidate = load_execution_state(dump_execution_state(state))
             if force_compatibility_scheduler:
-                object.__setattr__(candidate, "_execution_scheduler", _ExecutionScheduler(candidate))
+                _restore_compatibility_scheduler(candidate)
             assert candidate.next() is None
             assert candidate.is_complete()
         generic = load_execution_state(dump_execution_state(state))
         compatibility = load_execution_state(dump_execution_state(state))
-        object.__setattr__(compatibility, "_execution_scheduler", _ExecutionScheduler(compatibility))
+        _restore_compatibility_scheduler(compatibility)
         assert _state_projection(generic) == _state_projection(compatibility)
     else:
         generic_trace, generic_state = _run(restored)
@@ -466,3 +578,220 @@ def test_generic_legacy_shaped_if_does_not_prune_or_skip_during_resolution(
     assert state.results[sink_id].value == 7
     assert state.is_complete()
     assert deleted_edges == []
+
+
+@pytest.mark.parametrize("stop_after_source", ["outer_if", "inner_false"])
+def test_if_partial_state_round_trip_rebuilds_fresh_runtime_and_matches_both_scheduler_paths(
+    stop_after_source: str,
+) -> None:
+    """A partial If state round-trips and a fresh runtime matches both scheduler paths."""
+    partial_projections: list[tuple[Any, ...]] = []
+    projections: list[tuple[list[str], GraphExecutionState]] = []
+
+    for force_compatibility_scheduler in (False, True):
+        partial_trace, canceled_state = _run_until_source(
+            GraphExecutionState(graph=_nested_if_graph()),
+            stop_after_source,
+            force_compatibility_scheduler=force_compatibility_scheduler,
+        )
+        expected_partial_trace = ["outer_condition", "inner_condition"]
+        if stop_after_source == "inner_false":
+            expected_partial_trace.append("inner_false")
+        else:
+            expected_partial_trace.extend(["inner_false", "inner_if", "outer_if"])
+        assert partial_trace == expected_partial_trace
+        assert "inner_true" not in {
+            canceled_state.prepared_source_mapping[execution_id] for execution_id in canceled_state.results
+        }
+        assert "outer_false" not in {
+            canceled_state.prepared_source_mapping[execution_id] for execution_id in canceled_state.results
+        }
+        assert not canceled_state.is_complete()
+        assert _activation_projection(canceled_state) == (
+            ("inner_if", "false_input", "false_input", ()),
+            ("outer_if", "true_input", "true_input", ()),
+        )
+        partial_snapshot = dump_execution_state(canceled_state)
+        restored_canceled = load_execution_state(partial_snapshot)
+        restored_expected = load_execution_state(partial_snapshot)
+        if force_compatibility_scheduler:
+            _restore_compatibility_scheduler(restored_canceled)
+        assert _state_projection(restored_canceled) == _state_projection(canceled_state)
+        assert _activation_projection(restored_canceled) == _activation_projection(canceled_state)
+        assert dump_execution_state(restored_canceled)["execution_tokens"] == partial_snapshot["execution_tokens"]
+        assert dump_execution_state(restored_canceled)["execution_effects"] == partial_snapshot["execution_effects"]
+        assert _execution_identity_projection(restored_canceled) == _execution_identity_projection(restored_expected)
+        _assert_execution_identity_consistent(restored_canceled)
+        partial_projections.append(
+            (_state_projection(restored_canceled), _execution_identity_projection(restored_canceled))
+        )
+
+        retried_state = GraphExecutionState(graph=canceled_state.graph.model_copy(deep=True))
+        assert retried_state.id != canceled_state.id
+        assert retried_state.results == {}
+        assert retried_state.execution_refs == {}
+        assert retried_state.execution_tokens == {}
+
+        retried_trace, retried_state = _run_graph(
+            retried_state,
+            force_compatibility_scheduler=force_compatibility_scheduler,
+        )
+        projections.append((retried_trace, retried_state))
+
+    assert partial_projections[0] == partial_projections[1]
+    assert (
+        projections[0][0]
+        == projections[1][0]
+        == [
+            "outer_condition",
+            "inner_condition",
+            "inner_false",
+            "inner_if",
+            "outer_if",
+            "sink",
+        ]
+    )
+    assert _state_projection(projections[0][1]) == _state_projection(projections[1][1])
+    assert _activation_projection(projections[0][1]) == _activation_projection(projections[1][1])
+    assert _execution_identity_projection(projections[0][1]) == _execution_identity_projection(projections[1][1])
+    _assert_execution_identity_consistent(projections[0][1])
+    _assert_execution_identity_consistent(projections[1][1])
+    assert projections[0][1].results[next(iter(projections[0][1].source_prepared_mapping["sink"]))].value == 7
+
+
+@pytest.mark.parametrize(
+    "tampered_field",
+    [
+        "token_id",
+        "owner_node_id",
+        "reference_id",
+        "frame_id",
+        "state_id",
+        "iteration_path",
+        "workflow_call_depth",
+        "blank_owner_node_id",
+        "blank_frame_id",
+        "blank_state_id",
+        "mapping_key",
+        "both_ids",
+    ],
+)
+def test_rehydrated_if_rejects_tampered_activation_identity(tampered_field: str) -> None:
+    """A persisted activation token with stale identity or frame data is rejected."""
+    _, partial_state = _run_until_source(GraphExecutionState(graph=_nested_if_graph()), "outer_if")
+    snapshot = dump_execution_state(partial_state)
+    token_id, token = next(
+        (token_id, token)
+        for token_id, token in snapshot["execution_tokens"].items()
+        if token["token_kind"] == "activation"
+    )
+    source_if_id = partial_state.prepared_source_mapping[token["owner_node_id"]]
+
+    valid_restored = load_execution_state(snapshot)
+    valid_plan = valid_restored._scheduler()._scheduler.plan
+    dependency = next(
+        dependency
+        for plan_node in valid_plan.nodes.values()
+        for dependency in plan_node.activation_dependencies
+        if dependency.owner_id == source_if_id
+    )
+    assert valid_restored._is_activation_dependency_satisfied(dependency)
+    restored_token = valid_restored.execution_tokens[token_id]
+    expected_ref = valid_restored.execution_refs[restored_token.owner_node_id]
+    assert restored_token.token_id == token_id == f"{expected_ref.reference_id}:activation:{restored_token.port}"
+    assert restored_token.reference_id == expected_ref.reference_id
+    assert restored_token.owner_node_id == expected_ref.exec_node_id
+    assert restored_token.frame == expected_ref.frame
+
+    stale_snapshot = json.loads(json.dumps(snapshot))
+    stale_token = stale_snapshot["execution_tokens"][token_id]
+    if tampered_field == "token_id":
+        stale_token["token_id"] = "stale-token"
+    elif tampered_field == "owner_node_id":
+        stale_token["owner_node_id"] = "stale-owner"
+    elif tampered_field == "reference_id":
+        stale_token["reference_id"] = "stale-reference"
+    elif tampered_field == "frame_id":
+        stale_token["frame"]["frame_id"] = "stale-frame"
+    elif tampered_field == "state_id":
+        stale_token["frame"]["state_id"] = "stale-state"
+    elif tampered_field == "iteration_path":
+        stale_token["frame"]["iteration_path"] = [1]
+    elif tampered_field == "workflow_call_depth":
+        stale_token["frame"]["workflow_call_depth"] = 1
+    elif tampered_field == "blank_owner_node_id":
+        stale_token["owner_node_id"] = ""
+    elif tampered_field == "blank_frame_id":
+        stale_token["frame"]["frame_id"] = ""
+    elif tampered_field == "blank_state_id":
+        stale_token["frame"]["state_id"] = ""
+    elif tampered_field == "mapping_key":
+        stale_snapshot["execution_tokens"]["stale-key"] = stale_snapshot["execution_tokens"].pop(token_id)
+    else:
+        stale_snapshot["execution_tokens"]["stale-key"] = stale_snapshot["execution_tokens"].pop(token_id)
+        stale_snapshot["execution_tokens"]["stale-key"]["token_id"] = "stale-key"
+    with pytest.raises(ValidationError, match="Activation token|Execution token"):
+        load_execution_state(stale_snapshot)
+
+
+def test_rehydrated_if_rejects_activation_token_with_ghost_owner_and_reference() -> None:
+    _, partial_state = _run_until_source(GraphExecutionState(graph=_nested_if_graph()), "outer_if")
+    snapshot = dump_execution_state(partial_state)
+    token_id, token = next(
+        (token_id, token)
+        for token_id, token in snapshot["execution_tokens"].items()
+        if token["token_kind"] == "activation"
+    )
+    expected_ref = partial_state._expected_execution_ref(token["owner_node_id"]).model_dump(mode="json")
+    ghost_ref = {**expected_ref, "exec_node_id": "ghost", "reference_id": f"{snapshot['id']}:ghost"}
+    snapshot["execution_refs"]["ghost"] = ghost_ref
+    ghost_token_id = f"{ghost_ref['reference_id']}:activation:{token['port']}"
+    ghost_token = {
+        **token,
+        "token_id": ghost_token_id,
+        "reference_id": ghost_ref["reference_id"],
+        "owner_node_id": "ghost",
+    }
+    snapshot["execution_tokens"].pop(token_id)
+    snapshot["execution_tokens"][ghost_token_id] = ghost_token
+
+    with pytest.raises(ValidationError, match="Activation token|Execution token"):
+        load_execution_state(snapshot)
+
+
+def test_rehydrated_if_rejects_activation_token_on_invocation_without_declared_field() -> None:
+    _, partial_state = _run_until_source(GraphExecutionState(graph=_nested_if_graph()), "outer_if")
+    snapshot = dump_execution_state(partial_state)
+    ordinary_exec_id = next(
+        execution_id
+        for execution_id, source_id in partial_state.prepared_source_mapping.items()
+        if source_id == "inner_false"
+    )
+    reference = partial_state._expected_execution_ref(ordinary_exec_id).model_dump(mode="json")
+    token_id = f"{reference['reference_id']}:activation:value"
+    snapshot["execution_tokens"][token_id] = {
+        "token_id": token_id,
+        "reference_id": reference["reference_id"],
+        "owner_node_id": ordinary_exec_id,
+        "port": "value",
+        "frame": reference["frame"],
+        "value": "value",
+        "token_kind": "activation",
+    }
+
+    with pytest.raises(ValidationError, match="Activation token|Execution token"):
+        load_execution_state(snapshot)
+
+
+def test_rehydrated_activation_token_allows_unknown_frame_metadata() -> None:
+    _, partial_state = _run_until_source(GraphExecutionState(graph=_nested_if_graph()), "outer_if")
+    snapshot = dump_execution_state(partial_state)
+    token_id, token = next(
+        (token_id, token)
+        for token_id, token in snapshot["execution_tokens"].items()
+        if token["token_kind"] == "activation"
+    )
+    snapshot["execution_tokens"][token_id]["frame"]["future_frame_metadata"] = "preserved"
+
+    restored = load_execution_state(snapshot)
+    assert restored.execution_tokens[token_id].frame.model_extra["future_frame_metadata"] == "preserved"

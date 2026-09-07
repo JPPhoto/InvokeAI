@@ -3685,6 +3685,54 @@ def test_graph_state_round_trip_rebuilds_iteration_paths_for_legacy_session():
     assert execute_all_nodes(resumed)
 
 
+def test_graph_state_rehydrates_legacy_for_if_snapshot_without_iteration_paths():
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[True, False]))
+    graph.add_node(IfInvocation(id="if", true_input="true branch", false_input="false branch"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "if", "condition"))
+    graph.add_edge(create_edge("if", "value", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "value"))
+
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
+    for _ in range(2):
+        invocation, output = invoke_next(state)
+        assert invocation is not None
+        assert output is not None
+
+    if_exec_id = next(iter(state.source_prepared_mapping["if"]))
+    activation_token = next(
+        token
+        for token in state.execution_tokens.values()
+        if token.owner_node_id == if_exec_id and token.token_kind == "activation"
+    )
+
+    legacy_payload = state.model_dump(mode="json", warnings=False, exclude_none=True)
+    legacy_payload.pop("prepared_iteration_paths")
+
+    restored = load_execution_state(legacy_payload)
+
+    restored_if_exec_id = next(iter(restored.source_prepared_mapping["if"]))
+    restored_activation_token = next(
+        token
+        for token in restored.execution_tokens.values()
+        if token.owner_node_id == restored_if_exec_id and token.token_kind == "activation"
+    )
+    assert restored_if_exec_id == if_exec_id
+    assert restored._get_iteration_path(restored_if_exec_id) == (0,)
+    assert restored_activation_token.port == "true_input"
+    assert restored_activation_token.frame == restored.get_execution_ref(restored_if_exec_id).frame
+    assert restored_activation_token.frame == activation_token.frame
+    assert restored._activation_gate(restored_if_exec_id).selected_branch == "true_input"
+
+    execute_all_nodes(restored)
+
+    after_exec_id = next(iter(restored.source_prepared_mapping["after"]))
+    assert restored.results[after_exec_id].value == ["true branch", "false branch"]
+    assert restored.is_complete()
+
+
 def test_if_graph_state_resumes_resolved_branch_after_json_round_trip():
     graph = Graph()
     graph.add_node(BooleanInvocation(id="condition", value=True))

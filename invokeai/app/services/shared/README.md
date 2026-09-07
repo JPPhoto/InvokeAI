@@ -195,7 +195,10 @@ suppresses effects: effect-enabled invocations bypass the ordinary output cache 
 
 `IfInvocation` is the first control-flow invocation to declare an activation-effect contract. It emits one
 frame-scoped activation token for the selected `true_input` or `false_input` port; `GraphExecutionState` validates that
-port against the producing invocation's declared activation fields and persists it without creating a data stream.
+port against the producing invocation's declared activation fields and persists it without creating a data stream. On
+rehydration, every activation token is bound to a currently prepared owner and its derived execution reference; its
+declared port, value, canonical token id, mapping key, and known frame fields must match. Unknown extra frame metadata
+remains forward-compatible.
 The generic plan stores opaque, frame-local activation-dependency records for `If` branch-local nodes. Its readiness
 callback accepts a node only when the required private `ActivationGate` runtime state is resolved and a matching
 persisted activation token is present for its frame; the activation token is therefore authoritative for generic
@@ -252,7 +255,12 @@ propagation must not leave stale downstream indegrees. Both scheduler adapters
 expose the same skip transition; the legacy path releases downstream indegrees
 without trying to hydrate inputs from the skipped node. It intentionally does
 not claim durable persistence of the generic scheduler's private claim set, nor
-does it cover loop or workflow-call ownership migration.
+does it cover loop or workflow-call ownership migration. Real queue/processor
+coverage in `tests/app/services/session_processor/test_if_processor_sqlite.py`
+also exercises true and false `If` selection, cancellation before and after
+resolution, retry from a canceled SQLite item, fresh execution identities, and
+selected-only completion. Stale identity and legacy loop-frame rehydration are
+covered separately by the differential and graph-state tests.
 
 Workflow-call note:
 
@@ -318,10 +326,12 @@ JSON/model round trip. Rehydration reconstructs prepared exec metadata, cached i
 gate state from condition results or persisted activation tokens, closed iteration streams from durable Iterate results
 or completed empty-source state, For continuation identity, and ready queues from `execution_graph`, `indegree`,
 `executed`, and `results`. Activation tokens persist; private `ActivationGate` runtime state does not and is
-reconstructed from condition results or persisted activation tokens. Persisted execution references, tokens, and effects
-remain part of serialized state; private helper objects do not. Queue snapshots carry an additive execution-state version
-marker and use version-aware loader; legacy unmarked snapshots are treated as version 0, while unreadable snapshots are
-quarantined by queue service.
+reconstructed from condition results or persisted activation tokens. Before token validation, missing legacy iteration-path
+metadata is rebuilt from the prepared execution graph. Persisted activation identity is then validated fail-closed
+against prepared owners, derived references, declared activation fields, canonical ids, and known frame fields; extra
+frame metadata is retained. Persisted execution references, tokens, and effects remain part of serialized state; private
+helper objects do not. Queue snapshots carry an additive execution-state version marker and use version-aware loader;
+legacy unmarked snapshots are treated as version 0, while unreadable snapshots are quarantined by queue service.
 
 ### 4.4 Preparation (`_prepare()`)
 
@@ -405,6 +415,9 @@ Run `C` -> `D:0` -> enqueue `D`. Run `D` -> done.
 - In forced compatibility `_ExecutionScheduler` scheduling, `_IfBranchScheduler` retains legacy behavior: selected work
   is released, unselected work is marked skipped, unselected input edges on the prepared `If` exec node are pruned, and
   branch-exclusive ancestors of the unselected branch are never executed.
+- The SQLite queue/processor path has evidence for cancellation before and after `If` resolution and retry from each
+  boundary for both condition polarities. A canceled attempt keeps its activation ledger and cannot resume; retry starts
+  a fresh state and must emit a fresh matching activation token before selected-only completion.
 - Retired or skipped branch-local exec nodes may still be treated as executed for scheduling purposes, but they do not
   create entries in `results`.
 - Shared ancestors still execute if they are required by the selected branch or by any other live path in the graph.
