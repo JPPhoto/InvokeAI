@@ -192,6 +192,12 @@ currently additive. Ordinary static-DAG readiness comes from the generic schedul
 materialization and type-specific control paths remain authoritative for loop, branch, and workflow-call graphs. A
 future migration may make tokens authoritative only after compatibility is proven.
 
+The generic scheduler is an in-memory graph-state component only. It does not
+create, update, retry, cancel, delete, or recover `SessionQueueItem` rows and
+does not own queue statuses or events. A graph containing a saved-workflow call
+therefore stays on the legacy scheduler and the dedicated workflow-call queue
+adapters.
+
 Workflow-call note:
 
 - `GraphExecutionState` can represent a paused parent execution plus an attached child execution state, but it does not

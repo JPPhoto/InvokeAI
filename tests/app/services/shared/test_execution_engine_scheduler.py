@@ -9,7 +9,7 @@ from invokeai.app.services.shared.execution_engine.scheduler import (
     ExecutionPlan,
     ExecutionScheduler,
 )
-from invokeai.app.services.shared.graph import Edge, EdgeConnection, Graph, GraphExecutionState
+from invokeai.app.services.shared.graph import Edge, EdgeConnection, Graph, GraphExecutionState, _ExecutionScheduler
 
 
 def _plan() -> ExecutionPlan:
@@ -234,15 +234,23 @@ def test_graph_state_static_dag_preserves_legacy_fifo_for_released_nodes() -> No
             destination=EdgeConnection(node_id="a", field="a"),
         )
     )
-    state = GraphExecutionState(graph=graph)
 
-    trace: list[str] = []
-    while (node := state.next()) is not None:
-        trace.append(state.prepared_source_mapping[node.id])
-        state.complete(node.id, node.invoke(Mock()))
+    def run(use_legacy_scheduler: bool) -> tuple[list[str], GraphExecutionState]:
+        state = GraphExecutionState(graph=graph.model_copy(deep=True))
+        if use_legacy_scheduler:
+            object.__setattr__(state, "_execution_scheduler", _ExecutionScheduler(state))
+        trace: list[str] = []
+        while (node := state.next()) is not None:
+            trace.append(state.prepared_source_mapping[node.id])
+            state.complete(node.id, node.invoke(Mock()))
+        return trace, state
 
-    assert trace == ["q", "p", "b", "a"]
-    assert state.is_complete()
+    legacy_trace, legacy_state = run(use_legacy_scheduler=True)
+    generic_trace, generic_state = run(use_legacy_scheduler=False)
+
+    assert legacy_trace == generic_trace == ["q", "p", "b", "a"]
+    assert legacy_state.is_complete()
+    assert generic_state.is_complete()
 
 
 def test_graph_state_static_dag_delegates_readiness_to_generic_scheduler() -> None:
@@ -278,6 +286,48 @@ def test_graph_state_static_dag_rehydrates_generic_scheduler_after_partial_run()
     second = restored.next()
     assert second is not None
     assert restored.prepared_source_mapping[second.id] == "second"
+
+
+@pytest.mark.parametrize("use_legacy_scheduler", [False, True])
+def test_graph_state_static_dag_apply_and_rollback_match_scheduler_paths(use_legacy_scheduler: bool) -> None:
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    if use_legacy_scheduler:
+        object.__setattr__(state, "_execution_scheduler", _ExecutionScheduler(state))
+
+    node = state.next()
+    assert node is not None
+    execution_ref = state.get_execution_ref(node.id)
+    output = node.invoke(Mock())
+    state.apply(execution_ref, output)
+    assert {
+        state.prepared_source_mapping[node_id] for node_id in state.executed if node_id in state.prepared_source_mapping
+    } == {"add"}
+
+    rollback_state = GraphExecutionState(graph=graph.model_copy(deep=True))
+    if use_legacy_scheduler:
+        object.__setattr__(rollback_state, "_execution_scheduler", _ExecutionScheduler(rollback_state))
+    rollback_node = rollback_state.next()
+    assert rollback_node is not None
+    rollback_ref = rollback_state.get_execution_ref(rollback_node.id)
+    original_record_effect_streams = rollback_state._record_effect_streams
+
+    def fail_after_completion(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("effect recording failed")
+
+    rollback_state._record_effect_streams = fail_after_completion  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RuntimeError, match="effect recording failed"):
+            rollback_state.apply(rollback_ref, rollback_node.invoke(Mock()))
+    finally:
+        rollback_state._record_effect_streams = original_record_effect_streams  # type: ignore[method-assign]
+
+    assert rollback_state.executed == set()
+    assert rollback_state.results == {}
+    retried_node = rollback_state.next()
+    assert retried_node is not None
+    assert rollback_state.prepared_source_mapping[retried_node.id] == "add"
 
 
 def test_graph_state_apply_rolls_back_generic_scheduler_transition() -> None:

@@ -4420,22 +4420,22 @@ class GraphExecutionState(BaseModel):
         queue.remove(value)
 
     def _reset_apply_derived_caches(self) -> None:
-        object.__setattr__(self, "_prepared_exec_registry", None)
-        object.__setattr__(self, "_if_branch_scheduler", None)
-        object.__setattr__(self, "_execution_materializer", None)
-        object.__setattr__(self, "_execution_scheduler", None)
-        object.__setattr__(self, "_generic_graph_scheduler", None)
-        object.__setattr__(self, "_execution_runtime", None)
-        object.__setattr__(self, "_if_branch_exclusive_sources", {})
-        object.__setattr__(self, "_source_graph_flat", None)
-        object.__setattr__(self, "_execution_graph_flat", None)
-        object.__setattr__(self, "_completed_source_ids_cache", None)
-        object.__setattr__(self, "_for_source_by_return_id", None)
-        object.__setattr__(self, "_for_parent_iteration_paths_cache", {})
-        object.__setattr__(self, "_all_for_contexts_finalized_cache", {})
-        object.__setattr__(self, "_prepared_for_index", None)
-        object.__setattr__(self, "_final_prepared_for_index", None)
-        object.__setattr__(self, "_prepared_for_index_by_exec", {})
+        self._prepared_exec_registry = None
+        self._if_branch_scheduler = None
+        self._execution_materializer = None
+        self._execution_scheduler = None
+        self._generic_graph_scheduler = None
+        self._execution_runtime = None
+        self._if_branch_exclusive_sources = {}
+        self._source_graph_flat = None
+        self._execution_graph_flat = None
+        self._completed_source_ids_cache = None
+        self._for_source_by_return_id = None
+        self._for_parent_iteration_paths_cache = {}
+        self._all_for_contexts_finalized_cache = {}
+        self._prepared_for_index = None
+        self._final_prepared_for_index = None
+        self._prepared_for_index_by_exec = {}
 
     def _type_key(self, node_obj: BaseInvocation) -> str:
         return node_obj.__class__.__name__
@@ -5279,6 +5279,7 @@ class GraphExecutionState(BaseModel):
                 transaction.rollback()
             finally:
                 self._reset_apply_derived_caches()
+                self._rehydrate_ready_queues()
             raise
         finally:
             object.__setattr__(self, "_apply_transaction", None)

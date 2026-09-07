@@ -201,9 +201,7 @@ class ExecutionScheduler:
 
         if not self._enqueued:
             return None
-        if self._active_class not in {
-            self.plan.nodes[node_id].class_name for node_id in self._enqueued
-        }:
+        if self._active_class not in {self.plan.nodes[node_id].class_name for node_id in self._enqueued}:
             self._active_class = self._next_class()
         assert self._active_class is not None
         node_id = self._next_id_for_class(self._active_class)
