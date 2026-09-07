@@ -298,7 +298,10 @@ def test_graph_state_if_uses_generic_activation_routing() -> None:
         state.complete(node.id, node.invoke(Mock()))
 
     assert type(state._scheduler()).__name__ == "_GenericGraphSchedulerAdapter"
-    assert {state.prepared_source_mapping[node_id] for node_id in state.executed} == {
+    executed_sources = {
+        source_id for exec_node_id, source_id in state.prepared_source_mapping.items() if exec_node_id in state.executed
+    }
+    assert executed_sources == {
         "condition",
         "true_value",
         "if",

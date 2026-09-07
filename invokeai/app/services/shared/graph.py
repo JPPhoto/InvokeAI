@@ -451,6 +451,9 @@ class _IfBranchScheduler:
         self._state._remove_from_ready_queues(exec_node_id)
         self._state._set_prepared_exec_state(exec_node_id, "skipped")
         self._state._tx_add_set(self._state.executed, exec_node_id)
+        scheduler = self._state._execution_scheduler
+        if isinstance(scheduler, _GenericGraphSchedulerAdapter):
+            scheduler.mark_skipped(exec_node_id)
 
         registry = self._state._prepared_registry()
         source_node_id = registry.get_source_node_id(exec_node_id)
@@ -1243,9 +1246,15 @@ class _ExecutionMaterializer:
         unmet = sum(1 for edge in inputs if edge.source.node_id not in self._state.executed)
         self._state._tx_set_mapping(self._state.indegree, exec_node_id, unmet)
         scheduler = self._state._scheduler()
+        # Resolve a known conditional before registering its generic plan node so
+        # the compatibility edge pruning is reflected in its initial dependencies.
+        # Unresolved conditionals remain registered with all input dependencies;
+        # their activation resolution later synchronizes skipped work.
         if isinstance(scheduler, _GenericGraphSchedulerAdapter):
+            self._state._try_resolve_if_node(exec_node_id)
             scheduler.register_node(exec_node_id)
-        self._state._try_resolve_if_node(exec_node_id)
+        else:
+            self._state._try_resolve_if_node(exec_node_id)
         self._state._enqueue_if_ready(exec_node_id)
 
     def _get_collect_iteration_group_key(self, edge: Edge, sibling_depth: Optional[int] = None) -> tuple[int, ...]:
@@ -2163,7 +2172,11 @@ class _GenericGraphSchedulerAdapter:
     def __init__(self, state: "GraphExecutionState") -> None:
         self._state = state
         self._initializing = True
-        self._scheduler = ExecutionScheduler(ExecutionPlan(), state.ready_order)
+        self._scheduler = ExecutionScheduler(
+            ExecutionPlan(),
+            state.ready_order,
+            ready_predicate=self._is_node_activation_ready,
+        )
         self._register_existing_nodes()
         prepared_ids = set(state.prepared_source_mapping).intersection(state.executed)
         self._scheduler.executed = prepared_ids
@@ -2171,6 +2184,21 @@ class _GenericGraphSchedulerAdapter:
         self._initializing = False
         self._sync_indegree()
         self._project_ready_nodes()
+
+    def _is_node_activation_ready(self, exec_node_id: str) -> bool:
+        """Keep legacy branch gates as an opaque readiness predicate for the scheduler."""
+
+        return not self._state._is_deferred_by_unresolved_if(exec_node_id)
+
+    def _sync_executed_state(self, excluded: Iterable[str] = ()) -> None:
+        excluded_ids = set(excluded)
+        self._scheduler.executed.update(
+            exec_node_id
+            for exec_node_id in self._state.executed
+            if exec_node_id not in excluded_ids and exec_node_id in self._scheduler.plan.nodes
+        )
+        self._scheduler.rebuild_ready()
+        self._sync_indegree()
 
     def _register_existing_nodes(self) -> None:
         execution_graph = self._state._get_execution_graph_flat()
@@ -2251,6 +2279,15 @@ class _GenericGraphSchedulerAdapter:
         self._scheduler.discard(exec_node_id)
         self._remove_projected(exec_node_id)
 
+    def mark_skipped(self, exec_node_id: str) -> None:
+        """Mirror a compatibility skip in the opaque scheduler projection."""
+
+        self._scheduler.discard(exec_node_id)
+        self._scheduler.executed.add(exec_node_id)
+        self._scheduler.rebuild_ready()
+        self._sync_indegree()
+        self._project_ready_nodes()
+
     def enqueue_if_ready(self, exec_node_id: str) -> None:
         self.register_node(exec_node_id)
         if self._state.indegree.get(exec_node_id) != 0 or exec_node_id in self._state.executed:
@@ -2294,9 +2331,15 @@ class _GenericGraphSchedulerAdapter:
             if dependent not in self._state.indegree:
                 raise KeyError(f"indegree missing for exec node {dependent}")
         self._remove_projected(exec_node_id)
-        newly_ready = self._scheduler.complete(exec_node_id)
         self._record_completed_node(exec_node_id, output)
         self._mark_source_node_complete(exec_node_id)
+        # A condition may become resolvable when this node completes. Resolve it
+        # while the state has the completed result, before recalculating generic
+        # indegrees and readiness.
+        for dependent in dependents:
+            self._state._try_resolve_if_node(dependent)
+        self._sync_executed_state(excluded=(exec_node_id,))
+        newly_ready = self._scheduler.complete(exec_node_id)
         for dependent in set(dependents):
             self._state._tx_set_mapping(self._state.indegree, dependent, self._scheduler.indegree[dependent])
         for ready_node_id in newly_ready:
@@ -4528,7 +4571,7 @@ class GraphExecutionState(BaseModel):
     def _can_use_generic_scheduler(self) -> bool:
         """Use generic readiness only for graphs without control-flow lowering."""
 
-        control_nodes = (IfInvocation, IterateInvocation, CollectInvocation, ForInvocation, ForReturnInvocation)
+        control_nodes = (IterateInvocation, CollectInvocation, ForInvocation, ForReturnInvocation)
         return not any(isinstance(node, control_nodes) for node in self.graph.nodes.values()) and not any(
             isinstance(node, CallSavedWorkflowInvocation) for node in self.graph.nodes.values()
         )
