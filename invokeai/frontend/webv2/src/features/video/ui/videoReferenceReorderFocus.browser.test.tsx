@@ -73,7 +73,13 @@ const Harness = ({ names }: { names: string[] }) => {
   return (
     <>
       <input aria-label="Prompt" />
-      <VideoReferenceListField maxImages={9} maxVideos={3} references={references} onChange={handleChange} />
+      <VideoReferenceListField
+        maxImages={9}
+        maxVideos={3}
+        references={references}
+        targetArea={null}
+        onChange={handleChange}
+      />
     </>
   );
 };
@@ -191,7 +197,13 @@ describe('video reference reorder focus', () => {
       return (
         <>
           <input aria-label="Prompt" />
-          <VideoReferenceListField maxImages={9} maxVideos={3} references={references} onChange={handleChange} />
+          <VideoReferenceListField
+            maxImages={9}
+            maxVideos={3}
+            references={references}
+            targetArea={null}
+            onChange={handleChange}
+          />
         </>
       );
     };
