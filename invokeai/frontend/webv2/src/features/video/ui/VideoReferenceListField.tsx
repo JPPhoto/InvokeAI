@@ -15,10 +15,12 @@ import { GalleryPickerPopover } from '@features/gallery/picker';
 import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
 import { resolveMiniMaxH3ReferenceImage } from '@features/video/core/dimensions';
 import {
+  clampReferenceSampleFrames,
   createVideoSourceClip,
   DEFAULT_REFERENCE_SAMPLE_FRAMES,
   getDefaultReferenceConditioning,
   getDefaultReferenceImageDetail,
+  referenceSampleFrames,
   resizeReferenceSampleWindow,
   slideReferenceSampleWindow,
 } from '@features/video/core/settings';
@@ -164,9 +166,15 @@ const ReferenceCard = memo(function ReferenceCard({
   const handleStartFrame = useCallback(
     (rawStart: number) => {
       if (reference.kind === 'video') {
+        // Recording the length here as well as reading it is what makes a drag
+        // reversible: the first pointer step of the drag captures the pre-drag window's
+        // length, and every step after it slides that same length.
+        const sampleFrames = referenceSampleFrames(reference);
+
         onUpdate(index, {
           ...reference,
-          clip: slideReferenceSampleWindow(reference.clip, rawStart),
+          clip: slideReferenceSampleWindow(reference.clip, rawStart, sampleFrames),
+          sampleFrames,
           ...(reference.fromSourceVideo === true ? { trimOverridden: true } : {}),
         });
       }
@@ -179,6 +187,7 @@ const ReferenceCard = memo(function ReferenceCard({
         onUpdate(index, {
           ...reference,
           clip: resizeReferenceSampleWindow(reference.clip, rawSampleFrames),
+          sampleFrames: clampReferenceSampleFrames(reference.clip, rawSampleFrames),
           ...(reference.fromSourceVideo === true ? { trimOverridden: true } : {}),
         });
       }

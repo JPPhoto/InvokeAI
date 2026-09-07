@@ -4,6 +4,8 @@ import type { VideoReferenceItem, VideoSettings } from './types';
 
 import { MINIMAX_H3_NUM_FRAMES_CHOICES } from './dimensions';
 import {
+  clampReferenceSampleFrames,
+  referenceSampleFrames,
   resizeReferenceSampleWindow,
   slideReferenceSampleWindow,
   applyReferenceExtendSourceVideo,
@@ -796,6 +798,31 @@ describe('reference-extend linkage', () => {
     expect(deriveReferenceExtendClip({ ...highRate, fps: 1e17 }, 141)).toMatchObject({ startFrame: 49860 });
   });
 
+  it('a demoted anchor loses its override, so re-setting the clip re-derives', () => {
+    // The corrupt-record shape the flag canonicalization exists to heal: two
+    // flagged entries for the same clip. The demoted one kept `trimOverridden`,
+    // and adopt-by-name then honoured that stale window on the next Initial
+    // Video set -- the help text's "clear and re-set to get the default back"
+    // silently did nothing.
+    const overriddenNamed = (video_name: string) => ({
+      ...VIDEO_REFERENCE,
+      clip: { ...VIDEO_REFERENCE.clip, endFrame: 60, startFrame: 40, video_name },
+      fromSourceVideo: true,
+      trimOverridden: true,
+    });
+    const healed = normalizeVideoSettings(
+      createSettings({ references: [overriddenNamed('long.mp4'), overriddenNamed('b.mp4')] })
+    );
+
+    expect(healed?.references[0]).toMatchObject({ fromSourceVideo: false, trimOverridden: false });
+
+    // Setting that clip as the Initial Video adopts the demoted entry by name
+    // and must derive the default window, not resurrect the stale one.
+    const adopted = applyReferenceExtendSourceVideo(healed!.references.slice(0, 1), source24, 3, FRAMES);
+
+    expect(adopted[0]).toMatchObject({ clip: { endFrame: 400, startFrame: 260 }, fromSourceVideo: true });
+  });
+
   it('adopts an unflagged reference for the same clip instead of duplicating it (recall shape)', () => {
     const recalled = { ...VIDEO_REFERENCE, clip: { ...VIDEO_REFERENCE.clip, video_name: 'long.mp4' } };
     const result = applyReferenceExtendSourceVideo([IMAGE_REFERENCE, recalled], source24, 3, FRAMES);
@@ -1009,6 +1036,61 @@ describe('reference sample window', () => {
     it('handles a single-frame clip', () => {
       const next = slideReferenceSampleWindow(clip(0, 0, 1), 5);
       expect([next.startFrame, next.endFrame]).toEqual([0, 0]);
+    });
+
+    it('a drag past the clip end comes back with its length intact', () => {
+      // A slider commits a value per pointer step, so the round trip is the
+      // test: without the recorded request each step would take its length from
+      // the already-clamped window it was handed, and one overshoot-and-back
+      // would leave a 200-frame sample at 1 frame.
+      let reference: Extract<VideoReferenceItem, { kind: 'video' }> = {
+        clip: clip(0, 199),
+        conditioning: 'video_audio',
+        kind: 'video',
+      };
+      const drag = (rawStart: number) => {
+        const sampleFrames = referenceSampleFrames(reference);
+
+        reference = {
+          ...reference,
+          clip: slideReferenceSampleWindow(reference.clip, rawStart, sampleFrames),
+          sampleFrames,
+        };
+
+        return [reference.clip.startFrame, reference.clip.endFrame];
+      };
+
+      expect([40, 140, 240, 299, 240, 0].map(drag)).toEqual([
+        [40, 239],
+        // Pinned at the clip's end on the way out ...
+        [140, 299],
+        [240, 299],
+        [299, 299],
+        // ... and restored on the way back.
+        [240, 299],
+        [0, 199],
+      ]);
+    });
+
+    it('the length control replaces the recorded request', () => {
+      // Shortening the sample WHILE clamped is a deliberate choice, so sliding
+      // back must restore that length and not the one it replaced.
+      const shortened = resizeReferenceSampleWindow(clip(250, 299), 30);
+      expect([shortened.startFrame, shortened.endFrame]).toEqual([250, 279]);
+      expect(clampReferenceSampleFrames(shortened, 30)).toBe(30);
+      expect(slideReferenceSampleWindow(shortened, 0, 30)).toMatchObject({ endFrame: 29, startFrame: 0 });
+    });
+
+    it('referenceSampleFrames falls back to the window until a control is touched', () => {
+      const untouched: Extract<VideoReferenceItem, { kind: 'video' }> = {
+        clip: clip(10, 29),
+        conditioning: 'video_audio',
+        kind: 'video',
+      };
+      expect(referenceSampleFrames(untouched)).toBe(20);
+      expect(referenceSampleFrames({ ...untouched, sampleFrames: 200 })).toBe(200);
+      // A recorded request larger than the clip could ever hold still clamps.
+      expect(referenceSampleFrames({ ...untouched, sampleFrames: 9999 })).toBe(300);
     });
   });
 

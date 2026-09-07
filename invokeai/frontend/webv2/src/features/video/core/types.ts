@@ -66,6 +66,15 @@ export type VideoReferenceItem =
        * never in metadata; meaningless without `fromSourceVideo`.
        */
       trimOverridden?: boolean;
+      /**
+       * The sample length the user last asked for, in frames. The window stored in
+       * `clip` is this clamped to the frames the clip has left from its start frame —
+       * keeping the request separate is what lets a start-frame drag run into the end
+       * of the clip and come back with the length intact. Absent until a control is
+       * touched, where the window's own length is the request. Panel state only, never
+       * in metadata; read it through `referenceSampleFrames`.
+       */
+      sampleFrames?: number;
     }
   | { kind: 'image'; image: ImageWithDims; detail: VideoReferenceImageDetail };
 

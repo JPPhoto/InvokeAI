@@ -89,14 +89,37 @@ export const VIDEO_REFERENCE_MAX_IMAGES = 9;
  */
 export const DEFAULT_REFERENCE_SAMPLE_FRAMES = 200;
 
+/** A sample length clamped to what the clip could ever hold, whatever a control emitted. */
+export const clampReferenceSampleFrames = (clip: VideoSourceClip, rawSampleFrames: number): number =>
+  Math.min(Math.max(1, Math.round(rawSampleFrames)), Math.max(0, clip.numFrames - 1) + 1);
+
+/**
+ * The sample length a reference is asking for: its recorded intent, else its own window.
+ *
+ * The intent is what makes the two controls independent under a DRAG. A slider emits a
+ * value per pointer step, and each one is committed, so a window that took its length
+ * from the state it was handed would shrink at the clip's end and stay short on the way
+ * back — one overshoot and back would leave a 200-frame sample at 1 frame. The requested
+ * length is therefore carried on the reference (`sampleFrames`) and only the EFFECTIVE
+ * window is clamped.
+ */
+export const referenceSampleFrames = (reference: Extract<VideoReferenceItem, { kind: 'video' }>): number =>
+  clampReferenceSampleFrames(
+    reference.clip,
+    reference.sampleFrames ?? reference.clip.endFrame - reference.clip.startFrame + 1
+  );
+
 /**
  * Move a reference clip's sample window to a new start frame.
  *
  * The two controls are independent: the start frame reaches every frame of the clip, and
- * the sample length is what gives way — it keeps its value while there is clip left to
- * fill it and is pinned to the remaining frames past that, so `start + length` never runs
- * beyond the last frame. (The length slider's ceiling in the panel is the same
- * `numFrames - startFrame`, so the control tracks what the window can actually hold.)
+ * the sample length is what gives way — the window keeps the requested length while there
+ * is clip left to fill it and is pinned to the remaining frames past that, so
+ * `start + length` never runs beyond the last frame. (The length slider's ceiling in the
+ * panel is the same `numFrames - startFrame`, so the control tracks what the window can
+ * actually hold.) Pass `requestedSampleFrames` — `referenceSampleFrames` of the reference
+ * BEFORE the drag — to keep a clamped window recoverable; it defaults to the window's own
+ * length, which is the identity only while the window still fits.
  *
  * Every video reference trims this way, the reference-extend anchor included: Ref2VA has
  * no frame-exact seam to protect (see deriveReferenceExtendClip), so the anchor's window
@@ -105,9 +128,13 @@ export const DEFAULT_REFERENCE_SAMPLE_FRAMES = 200;
  * Self-healing by construction: the returned window always satisfies
  * 0 <= start <= end <= numFrames - 1, even from a corrupt persisted trim.
  */
-export const slideReferenceSampleWindow = (clip: VideoSourceClip, rawStart: number): VideoSourceClip => {
+export const slideReferenceSampleWindow = (
+  clip: VideoSourceClip,
+  rawStart: number,
+  requestedSampleFrames?: number
+): VideoSourceClip => {
   const maxFrame = Math.max(0, clip.numFrames - 1);
-  const sampleFrames = Math.min(Math.max(1, clip.endFrame - clip.startFrame + 1), maxFrame + 1);
+  const sampleFrames = clampReferenceSampleFrames(clip, requestedSampleFrames ?? clip.endFrame - clip.startFrame + 1);
   const startFrame = Math.min(Math.max(0, Math.round(rawStart)), maxFrame);
 
   return { ...clip, endFrame: Math.min(startFrame + sampleFrames - 1, maxFrame), startFrame };
@@ -117,11 +144,12 @@ export const slideReferenceSampleWindow = (clip: VideoSourceClip, rawStart: numb
  * Resize a reference clip's sample window to a new length in frames.
  *
  * The window grows forward from its start frame, with the end clamped to the clip. Same
- * self-healing bounds as slideReferenceSampleWindow.
+ * self-healing bounds as slideReferenceSampleWindow. The caller records the requested
+ * length on the reference as `sampleFrames`; this returns only the window it produces.
  */
 export const resizeReferenceSampleWindow = (clip: VideoSourceClip, rawSampleFrames: number): VideoSourceClip => {
   const maxFrame = Math.max(0, clip.numFrames - 1);
-  const sampleFrames = Math.min(Math.max(1, Math.round(rawSampleFrames)), maxFrame + 1);
+  const sampleFrames = clampReferenceSampleFrames(clip, rawSampleFrames);
   const startFrame = Math.min(Math.max(0, clip.startFrame), maxFrame);
 
   return { ...clip, endFrame: Math.min(startFrame + sampleFrames - 1, maxFrame), startFrame };
@@ -188,7 +216,13 @@ const sanitizeVideoReferences = (value: unknown, sourceVideoName?: string): Vide
   }
   valid = valid.map((entry, index) =>
     index !== flagged && entry.kind === 'video' && entry.fromSourceVideo === true
-      ? { ...entry, fromSourceVideo: false }
+      ? // `trimOverridden` goes with the flag: it only ever means "this ANCHOR's window
+        // is the user's". Left behind on a demoted entry it would be honoured again the
+        // next time adopt-by-name picked that entry up as the anchor, and the clip's
+        // default window would never be derived. The recorded sample length goes with
+        // it — a request kept beside a window it did not produce would spring the window
+        // back to it on the next drag.
+        { ...entry, fromSourceVideo: false, sampleFrames: undefined, trimOverridden: false }
       : entry
   );
 
@@ -711,7 +745,8 @@ export const applyReferenceExtendNumFrames = (
     }
     changed = true;
 
-    return { ...entry, clip: { ...entry.clip, startFrame } };
+    // Re-derived, so the user's recorded sample length no longer describes it.
+    return { ...entry, clip: { ...entry.clip, startFrame }, sampleFrames: undefined };
   });
 
   return changed ? next : references;
@@ -831,7 +866,14 @@ export const applyReferenceExtendSourceVideo = (
         if (index !== linkedIndex || entry.kind !== 'video') {
           return entry;
         }
-        if (entry.trimOverridden !== true || entry.clip.video_name !== sourceVideo.video_name) {
+        // `fromSourceVideo` is required, not implied by `linkedIndex`: the adopt-by-name
+        // fallback below reaches UNFLAGGED entries (recall restores the pair without the
+        // flag), and those have never been an anchor, so they get the derived default.
+        if (
+          entry.fromSourceVideo !== true ||
+          entry.trimOverridden !== true ||
+          entry.clip.video_name !== sourceVideo.video_name
+        ) {
           return { ...linked, conditioning: entry.conditioning };
         }
 
@@ -845,6 +887,7 @@ export const applyReferenceExtendSourceVideo = (
             entry.clip.startFrame
           ),
           conditioning: entry.conditioning,
+          sampleFrames: entry.sampleFrames,
           trimOverridden: true,
         };
       })
