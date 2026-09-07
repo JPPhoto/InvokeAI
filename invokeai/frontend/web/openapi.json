@@ -8117,6 +8117,24 @@
             "description": "Whether to sort by starred items first"
           },
           {
+            "name": "starred",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both.",
+              "title": "Starred"
+            },
+            "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both."
+          },
+          {
             "name": "search_term",
             "in": "query",
             "required": false,
@@ -8364,6 +8382,24 @@
             "description": "Whether to sort by starred items first"
           },
           {
+            "name": "starred",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both.",
+              "title": "Starred"
+            },
+            "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both."
+          },
+          {
             "name": "search_term",
             "in": "query",
             "required": false,
@@ -8516,6 +8552,24 @@
               "title": "Starred First"
             },
             "description": "Whether to sort by starred items first"
+          },
+          {
+            "name": "starred",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both.",
+              "title": "Starred"
+            },
+            "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both."
           },
           {
             "name": "search_term",
@@ -9397,6 +9451,24 @@
             "description": "Whether to sort starred items first"
           },
           {
+            "name": "starred",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both.",
+              "title": "Starred"
+            },
+            "description": "Filter by starred state: true for starred items only, false for unstarred only. Omit to include both."
+          },
+          {
             "name": "order_dir",
             "in": "query",
             "required": false,
@@ -10217,6 +10289,116 @@
         }
       }
     },
+    "/api/v1/queue/{queue_id}/enqueue_batch/acknowledge": {
+      "post": {
+        "tags": ["queue"],
+        "summary": "Acknowledge Enqueue Batch",
+        "operationId": "acknowledge_enqueue_batch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "queue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The queue id that accepted the batch",
+              "title": "Queue Id"
+            },
+            "description": "The queue id that accepted the batch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_acknowledge_enqueue_batch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/queue/{queue_id}/enqueue_batch/receipt": {
+      "get": {
+        "tags": ["queue"],
+        "summary": "Get Enqueue Batch Receipt",
+        "operationId": "get_enqueue_batch_receipt",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "queue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The queue id that accepted the batch",
+              "title": "Queue Id"
+            },
+            "description": "The queue id that accepted the batch"
+          },
+          {
+            "name": "idempotency_key",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "description": "The enqueue retry key",
+              "title": "Idempotency Key"
+            },
+            "description": "The enqueue retry key"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnqueueBatchReceipt"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/queue/{queue_id}/list_all": {
       "get": {
         "tags": ["queue"],
@@ -10606,6 +10788,24 @@
               "title": "Queue Id"
             },
             "description": "The queue id to perform this operation on"
+          },
+          {
+            "name": "origin_prefix",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only cancel queue items whose origin starts with this prefix",
+              "title": "Origin Prefix"
+            },
+            "description": "Only cancel queue items whose origin starts with this prefix"
           }
         ],
         "responses": {
@@ -10615,6 +10815,72 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CancelAllExceptCurrentResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/queue/{queue_id}/cancel_all": {
+      "put": {
+        "tags": ["queue"],
+        "summary": "Cancel All",
+        "description": "Immediately cancels all queue items, in-progress items included. Non-admin users can only cancel their own items.",
+        "operationId": "cancel_all",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "queue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The queue id to perform this operation on",
+              "title": "Queue Id"
+            },
+            "description": "The queue id to perform this operation on"
+          },
+          {
+            "name": "origin_prefix",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only cancel queue items whose origin starts with this prefix",
+              "title": "Origin Prefix"
+            },
+            "description": "Only cancel queue items whose origin starts with this prefix"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelByQueueIDResult"
                 }
               }
             }
@@ -11019,6 +11285,58 @@
                     }
                   ],
                   "title": "Response 200 Get Current Queue Item"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/queue/{queue_id}/previews": {
+      "get": {
+        "tags": ["queue"],
+        "summary": "Get Progress Previews",
+        "description": "The latest denoising preview frame of each of the caller's running queue items: the same\npayloads as the `invocation_progress` socket events, with their revisions. A client whose socket\nwas dropped, or whose tab was hidden, reconciles from this instead of waiting for the next step.\nOwner-scoped: progress is personal UI, so even admins see only their own.",
+        "operationId": "get_progress_previews",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "queue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The queue id to perform this operation on",
+              "title": "Queue Id"
+            },
+            "description": "The queue id to perform this operation on"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProgressPreviewDTO"
+                  },
+                  "title": "Response 200 Get Progress Previews"
                 }
               }
             }
@@ -13626,6 +13944,19 @@
               "title": "Project Id"
             },
             "description": "The id of the project to get"
+          },
+          {
+            "name": "max_canvas_schema_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Newest canvas schema understood by this client",
+              "default": 2,
+              "title": "Max Canvas Schema Version"
+            },
+            "description": "Newest canvas schema understood by this client"
           }
         ],
         "responses": {
@@ -16868,6 +17199,34 @@
             "title": "Batch Id",
             "description": "The ID of the batch"
           },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key",
+            "description": "A caller-owned retry key. Reusing it with a different payload is rejected."
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id",
+            "description": "The authoritative project that owns this submission, when applicable."
+          },
           "origin": {
             "anyOf": [
               {
@@ -17544,6 +17903,12 @@
             "title": "Asset Count",
             "description": "The number of assets in the board."
           },
+          "asset_video_count": {
+            "type": "integer",
+            "title": "Asset Video Count",
+            "description": "The number of asset-category (non-'general') videos in the board.",
+            "default": 0
+          },
           "owner_username": {
             "anyOf": [
               {
@@ -17608,6 +17973,20 @@
         "enum": ["private", "shared", "public"],
         "title": "BoardVisibility",
         "description": "The visibility options for a board."
+      },
+      "Body_acknowledge_enqueue_batch": {
+        "properties": {
+          "idempotency_key": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "description": "The acknowledged enqueue retry key"
+          }
+        },
+        "type": "object",
+        "required": ["idempotency_key"],
+        "title": "Body_acknowledge_enqueue_batch"
       },
       "Body_add_image_to_board": {
         "properties": {
@@ -19924,6 +20303,19 @@
         "title": "CancelByDestinationResult",
         "description": "Result of canceling by a destination"
       },
+      "CancelByQueueIDResult": {
+        "properties": {
+          "canceled": {
+            "type": "integer",
+            "title": "Canceled",
+            "description": "Number of queue items canceled"
+          }
+        },
+        "type": "object",
+        "required": ["canceled"],
+        "title": "CancelByQueueIDResult",
+        "description": "Result of canceling by queue id"
+      },
       "CannyEdgeDetectionInvocation": {
         "category": "controlnet_preprocessors",
         "class": "invocation",
@@ -21294,6 +21686,294 @@
         },
         "required": ["output_meta", "collection", "type", "type"],
         "title": "CollectInvocationOutput",
+        "type": "object"
+      },
+      "CollectionCartesianInvocation": {
+        "category": "batch",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Emits every pair formed by one item from each collection, up to 100,000 pairs.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "first": {
+            "default": [],
+            "description": "The first collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "First",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "second": {
+            "default": [],
+            "description": "The second collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "Second",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_cartesian",
+            "default": "collection_cartesian",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["collection", "cartesian", "product"],
+        "title": "Cartesian Product of Collections",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/CollectionCartesianInvocationOutput"
+        }
+      },
+      "CollectionCartesianInvocationOutput": {
+        "class": "output",
+        "properties": {
+          "collection": {
+            "description": "The Cartesian product pairs",
+            "field_kind": "output",
+            "items": {},
+            "title": "Collection",
+            "type": "array",
+            "ui_hidden": false,
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_cartesian_output",
+            "default": "collection_cartesian_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "collection", "type", "type"],
+        "title": "CollectionCartesianInvocationOutput",
+        "type": "object"
+      },
+      "CollectionConcatInvocation": {
+        "category": "batch",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Concatenates two collections in left-to-right order.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "first": {
+            "default": [],
+            "description": "The first collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "First",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "second": {
+            "default": [],
+            "description": "The second collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "Second",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_concat",
+            "default": "collection_concat",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["collection", "concat", "sequential"],
+        "title": "Concatenate Collections",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
+        }
+      },
+      "CollectionConcatInvocationOutput": {
+        "class": "output",
+        "properties": {
+          "collection": {
+            "description": "The concatenated collection",
+            "field_kind": "output",
+            "items": {},
+            "title": "Collection",
+            "type": "array",
+            "ui_hidden": false,
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_concat_output",
+            "default": "collection_concat_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "collection", "type", "type"],
+        "title": "CollectionConcatInvocationOutput",
+        "type": "object"
+      },
+      "CollectionZipInvocation": {
+        "category": "batch",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Pairs items at matching positions from two equally sized collections.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "first": {
+            "default": [],
+            "description": "The first collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "First",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "second": {
+            "default": [],
+            "description": "The second collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "Second",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_zip",
+            "default": "collection_zip",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["collection", "zip", "pair"],
+        "title": "Zip Collections",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/CollectionZipInvocationOutput"
+        }
+      },
+      "CollectionZipInvocationOutput": {
+        "class": "output",
+        "properties": {
+          "collection": {
+            "description": "The positional pairs",
+            "field_kind": "output",
+            "items": {},
+            "title": "Collection",
+            "type": "array",
+            "ui_hidden": false,
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_zip_output",
+            "default": "collection_zip_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "collection", "type", "type"],
+        "title": "CollectionZipInvocationOutput",
         "type": "object"
       },
       "ColorCollectionOutput": {
@@ -24277,6 +24957,7 @@
                   "minimax_h3_lf2v",
                   "minimax_h3_flf2v",
                   "minimax_h3_extend_video",
+                  "minimax_h3_ref2v",
                   "minimax_h3_txt2img"
                 ],
                 "type": "string"
@@ -24806,6 +25487,26 @@
             "orig_default": null,
             "orig_required": false
           },
+          "minimax_h3_references": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MiniMaxH3ReferenceMetadataField"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The ordered Ref2VA references this generation was conditioned on (names and options only; the media is re-resolved from the gallery at recall time)",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Minimax H3 References"
+          },
           "hrf_enabled": {
             "anyOf": [
               {
@@ -25021,7 +25722,7 @@
         "tags": ["metadata"],
         "title": "Core Metadata",
         "type": "object",
-        "version": "2.4.0",
+        "version": "2.5.0",
         "output": {
           "$ref": "#/components/schemas/MetadataOutput"
         }
@@ -27706,6 +28407,13 @@
       },
       "Edge": {
         "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["default", "loop_linkage"],
+            "title": "Type",
+            "description": "The kind of relationship represented by this edge",
+            "default": "default"
+          },
           "source": {
             "$ref": "#/components/schemas/EdgeConnection",
             "description": "The connection for the edge's from node and field"
@@ -27750,6 +28458,40 @@
         "type": "object",
         "required": ["models_cleared", "bytes_freed"],
         "title": "EmptyModelCacheResponse"
+      },
+      "EnqueueBatchReceipt": {
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Batch Id",
+            "description": "The ID assigned to the accepted batch"
+          },
+          "enqueued": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Enqueued",
+            "description": "The total number of queue items enqueued"
+          },
+          "requested": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Requested",
+            "description": "The total number of queue items requested"
+          },
+          "item_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Item Ids",
+            "description": "The IDs of the accepted queue items"
+          }
+        },
+        "type": "object",
+        "required": ["batch_id", "enqueued", "requested", "item_ids"],
+        "title": "EnqueueBatchReceipt"
       },
       "EnqueueBatchResult": {
         "properties": {
@@ -35599,6 +36341,334 @@
         "title": "FluxVariantType",
         "description": "FLUX.1 model variants."
       },
+      "ForInvocation": {
+        "class": "invocation",
+        "classification": "stable",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "collection": {
+            "default": [],
+            "description": "The list of items to iterate over",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "Collection",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional initial loop state",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "index": {
+            "default": -1,
+            "description": "The internal iteration index for a prepared For execution node",
+            "field_kind": "input",
+            "input": "direct",
+            "orig_default": -1,
+            "orig_required": false,
+            "title": "Index",
+            "type": "integer",
+            "ui_hidden": true
+          },
+          "type": {
+            "const": "for",
+            "default": "for",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "title": "ForInvocation",
+        "type": "object",
+        "version": "1.3.1",
+        "output": {
+          "$ref": "#/components/schemas/ForInvocationOutput"
+        }
+      },
+      "ForInvocationOutput": {
+        "class": "output",
+        "properties": {
+          "loop_linkage": {
+            "description": "The loop linkage to the matching ForReturn",
+            "field_kind": "output",
+            "title": "Loop Linkage",
+            "ui_hidden": false,
+            "ui_type": "AnyField"
+          },
+          "item": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The item for the current loop iteration, or None when the collection is empty",
+            "field_kind": "output",
+            "output_scope": "iteration",
+            "title": "Collection Item",
+            "ui_hidden": false,
+            "ui_type": "CollectionItemField"
+          },
+          "index": {
+            "description": "The index for the current loop iteration",
+            "field_kind": "output",
+            "output_scope": "iteration",
+            "title": "Index",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "total": {
+            "description": "The total number of items in the loop collection",
+            "field_kind": "output",
+            "output_scope": "iteration",
+            "title": "Total",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "state": {
+            "$ref": "#/components/schemas/LoopState",
+            "description": "The state for the current loop iteration",
+            "field_kind": "output",
+            "output_scope": "iteration",
+            "title": "State",
+            "ui_hidden": false
+          },
+          "output_collection": {
+            "description": "The collected loop body outputs",
+            "field_kind": "output",
+            "items": {},
+            "output_scope": "final",
+            "title": "Output Collection",
+            "type": "array",
+            "ui_hidden": false,
+            "ui_type": "CollectionField"
+          },
+          "final_state": {
+            "$ref": "#/components/schemas/LoopState",
+            "description": "The final loop state",
+            "field_kind": "output",
+            "output_scope": "final",
+            "title": "Final State",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "for_output",
+            "default": "for_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "output_meta",
+          "loop_linkage",
+          "item",
+          "index",
+          "total",
+          "state",
+          "output_collection",
+          "final_state",
+          "type",
+          "type"
+        ],
+        "title": "ForInvocationOutput",
+        "type": "object"
+      },
+      "ForReturnInvocation": {
+        "class": "invocation",
+        "classification": "stable",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "loop_linkage": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The loop linkage from the matching For",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Loop Linkage",
+            "ui_type": "AnyField"
+          },
+          "output": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The output item to append to the loop output collection",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Output",
+            "ui_type": "CollectionItemField"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The state to pass to the next loop iteration",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "continue_condition": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": true,
+            "description": "Whether to schedule the next loop iteration; false finalizes the loop",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": true,
+            "orig_required": false,
+            "title": "Continue Condition"
+          },
+          "type": {
+            "const": "for_return",
+            "default": "for_return",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "title": "ForReturnInvocation",
+        "type": "object",
+        "version": "1.3.2",
+        "output": {
+          "$ref": "#/components/schemas/ForReturnInvocationOutput"
+        }
+      },
+      "ForReturnInvocationOutput": {
+        "class": "output",
+        "properties": {
+          "output": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The output item to append to the loop output collection",
+            "field_kind": "output",
+            "title": "Output",
+            "ui_hidden": true,
+            "ui_type": "CollectionItemField"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The state to pass to the next loop iteration",
+            "field_kind": "output",
+            "title": "State",
+            "ui_hidden": true
+          },
+          "type": {
+            "const": "for_return_output",
+            "default": "for_return_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "output", "state", "type", "type"],
+        "title": "ForReturnInvocationOutput",
+        "type": "object"
+      },
       "FoundModel": {
         "properties": {
           "path": {
@@ -36888,6 +37958,15 @@
                   "$ref": "#/components/schemas/CollectInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/CollectionCartesianInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/CollectionConcatInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/CollectionZipInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/ColorCorrectInvocation"
                 },
                 {
@@ -37087,6 +38166,12 @@
                 },
                 {
                   "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/ForInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/ForReturnInvocation"
                 },
                 {
                   "$ref": "#/components/schemas/FreeUInvocation"
@@ -37413,6 +38498,9 @@
                   "$ref": "#/components/schemas/MiniMaxH3IdealDimensionsInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/MiniMaxH3ImageReferenceInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/MiniMaxH3LatentsToImageInvocation"
                 },
                 {
@@ -37428,7 +38516,13 @@
                   "$ref": "#/components/schemas/MiniMaxH3ModelLoaderInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/MiniMaxH3ReferenceConditioningInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/MiniMaxH3TextEncoderInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/MiniMaxH3VideoReferenceInvocation"
                 },
                 {
                   "$ref": "#/components/schemas/ModelIdentifierInvocation"
@@ -37591,6 +38685,18 @@
                 },
                 {
                   "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/StateEmptyInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/StateGetInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/StateMergeInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/StateSetInvocation"
                 },
                 {
                   "$ref": "#/components/schemas/StringBatchInvocation"
@@ -37827,6 +38933,15 @@
                   "$ref": "#/components/schemas/CollectInvocationOutput"
                 },
                 {
+                  "$ref": "#/components/schemas/CollectionCartesianInvocationOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/CollectionZipInvocationOutput"
+                },
+                {
                   "$ref": "#/components/schemas/ColorCollectionOutput"
                 },
                 {
@@ -37908,6 +39023,12 @@
                   "$ref": "#/components/schemas/FluxReduxOutput"
                 },
                 {
+                  "$ref": "#/components/schemas/ForInvocationOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/ForReturnInvocationOutput"
+                },
+                {
                   "$ref": "#/components/schemas/Gemma2EncoderOutput"
                 },
                 {
@@ -37977,6 +39098,12 @@
                   "$ref": "#/components/schemas/LoRASelectorOutput"
                 },
                 {
+                  "$ref": "#/components/schemas/LoopStateOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/LoopStateValueOutput"
+                },
+                {
                   "$ref": "#/components/schemas/MDControlListOutput"
                 },
                 {
@@ -38020,6 +39147,12 @@
                 },
                 {
                   "$ref": "#/components/schemas/MiniMaxH3ModelLoaderOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/MiniMaxH3ReferenceConditioningOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/MiniMaxH3ReferenceMediaOutput"
                 },
                 {
                   "$ref": "#/components/schemas/ModelIdentifierOutput"
@@ -38235,6 +39368,28 @@
             "type": "object",
             "title": "Source Prepared Mapping",
             "description": "The map of original graph nodes to prepared nodes"
+          },
+          "finalized_loop_contexts": {
+            "items": {
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                }
+              ],
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "type": "array",
+            "uniqueItems": true,
+            "title": "Finalized Loop Contexts",
+            "description": "The finalized loop source and parent iteration contexts"
           },
           "prepared_iteration_paths": {
             "additionalProperties": {
@@ -45954,6 +47109,15 @@
                 "$ref": "#/components/schemas/CollectInvocation"
               },
               {
+                "$ref": "#/components/schemas/CollectionCartesianInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionConcatInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionZipInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/ColorCorrectInvocation"
               },
               {
@@ -46153,6 +47317,12 @@
               },
               {
                 "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocation"
               },
               {
                 "$ref": "#/components/schemas/FreeUInvocation"
@@ -46479,6 +47649,9 @@
                 "$ref": "#/components/schemas/MiniMaxH3IdealDimensionsInvocation"
               },
               {
+                "$ref": "#/components/schemas/MiniMaxH3ImageReferenceInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/MiniMaxH3LatentsToImageInvocation"
               },
               {
@@ -46494,7 +47667,13 @@
                 "$ref": "#/components/schemas/MiniMaxH3ModelLoaderInvocation"
               },
               {
+                "$ref": "#/components/schemas/MiniMaxH3ReferenceConditioningInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/MiniMaxH3TextEncoderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/MiniMaxH3VideoReferenceInvocation"
               },
               {
                 "$ref": "#/components/schemas/ModelIdentifierInvocation"
@@ -46657,6 +47836,18 @@
               },
               {
                 "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateEmptyInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateGetInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateMergeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateSetInvocation"
               },
               {
                 "$ref": "#/components/schemas/StringBatchInvocation"
@@ -46850,6 +48041,15 @@
                 "$ref": "#/components/schemas/CollectInvocationOutput"
               },
               {
+                "$ref": "#/components/schemas/CollectionCartesianInvocationOutput"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionZipInvocationOutput"
+              },
+              {
                 "$ref": "#/components/schemas/ColorCollectionOutput"
               },
               {
@@ -46931,6 +48131,12 @@
                 "$ref": "#/components/schemas/FluxReduxOutput"
               },
               {
+                "$ref": "#/components/schemas/ForInvocationOutput"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocationOutput"
+              },
+              {
                 "$ref": "#/components/schemas/Gemma2EncoderOutput"
               },
               {
@@ -47000,6 +48206,12 @@
                 "$ref": "#/components/schemas/LoRASelectorOutput"
               },
               {
+                "$ref": "#/components/schemas/LoopStateOutput"
+              },
+              {
+                "$ref": "#/components/schemas/LoopStateValueOutput"
+              },
+              {
                 "$ref": "#/components/schemas/MDControlListOutput"
               },
               {
@@ -47043,6 +48255,12 @@
               },
               {
                 "$ref": "#/components/schemas/MiniMaxH3ModelLoaderOutput"
+              },
+              {
+                "$ref": "#/components/schemas/MiniMaxH3ReferenceConditioningOutput"
+              },
+              {
+                "$ref": "#/components/schemas/MiniMaxH3ReferenceMediaOutput"
               },
               {
                 "$ref": "#/components/schemas/ModelIdentifierOutput"
@@ -47350,6 +48568,15 @@
                 "$ref": "#/components/schemas/CollectInvocation"
               },
               {
+                "$ref": "#/components/schemas/CollectionCartesianInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionConcatInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionZipInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/ColorCorrectInvocation"
               },
               {
@@ -47549,6 +48776,12 @@
               },
               {
                 "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocation"
               },
               {
                 "$ref": "#/components/schemas/FreeUInvocation"
@@ -47875,6 +49108,9 @@
                 "$ref": "#/components/schemas/MiniMaxH3IdealDimensionsInvocation"
               },
               {
+                "$ref": "#/components/schemas/MiniMaxH3ImageReferenceInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/MiniMaxH3LatentsToImageInvocation"
               },
               {
@@ -47890,7 +49126,13 @@
                 "$ref": "#/components/schemas/MiniMaxH3ModelLoaderInvocation"
               },
               {
+                "$ref": "#/components/schemas/MiniMaxH3ReferenceConditioningInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/MiniMaxH3TextEncoderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/MiniMaxH3VideoReferenceInvocation"
               },
               {
                 "$ref": "#/components/schemas/ModelIdentifierInvocation"
@@ -48053,6 +49295,18 @@
               },
               {
                 "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateEmptyInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateGetInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateMergeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateSetInvocation"
               },
               {
                 "$ref": "#/components/schemas/StringBatchInvocation"
@@ -48336,6 +49590,15 @@
           "collect": {
             "$ref": "#/components/schemas/CollectInvocationOutput"
           },
+          "collection_cartesian": {
+            "$ref": "#/components/schemas/CollectionCartesianInvocationOutput"
+          },
+          "collection_concat": {
+            "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
+          },
+          "collection_zip": {
+            "$ref": "#/components/schemas/CollectionZipInvocationOutput"
+          },
           "color": {
             "$ref": "#/components/schemas/ColorOutput"
           },
@@ -48536,6 +49799,12 @@
           },
           "flux_vae_encode": {
             "$ref": "#/components/schemas/LatentsOutput"
+          },
+          "for": {
+            "$ref": "#/components/schemas/ForInvocationOutput"
+          },
+          "for_return": {
+            "$ref": "#/components/schemas/ForReturnInvocationOutput"
           },
           "freeu": {
             "$ref": "#/components/schemas/UNetOutput"
@@ -48870,6 +50139,9 @@
           "minimax_h3_ideal_dimensions": {
             "$ref": "#/components/schemas/IdealSizeOutput"
           },
+          "minimax_h3_image_reference": {
+            "$ref": "#/components/schemas/MiniMaxH3ReferenceMediaOutput"
+          },
           "minimax_h3_latents_to_image": {
             "$ref": "#/components/schemas/ImageOutput"
           },
@@ -48885,8 +50157,14 @@
           "minimax_h3_model_loader": {
             "$ref": "#/components/schemas/MiniMaxH3ModelLoaderOutput"
           },
+          "minimax_h3_reference_conditioning": {
+            "$ref": "#/components/schemas/MiniMaxH3ReferenceConditioningOutput"
+          },
           "minimax_h3_text_encoder": {
             "$ref": "#/components/schemas/MiniMaxH3ConditioningOutput"
+          },
+          "minimax_h3_video_reference": {
+            "$ref": "#/components/schemas/MiniMaxH3ReferenceMediaOutput"
           },
           "mlsd_detection": {
             "$ref": "#/components/schemas/ImageOutput"
@@ -49040,6 +50318,18 @@
           },
           "spandrel_image_to_image_autoscale": {
             "$ref": "#/components/schemas/ImageOutput"
+          },
+          "state_empty": {
+            "$ref": "#/components/schemas/LoopStateOutput"
+          },
+          "state_get": {
+            "$ref": "#/components/schemas/LoopStateValueOutput"
+          },
+          "state_merge": {
+            "$ref": "#/components/schemas/LoopStateOutput"
+          },
+          "state_set": {
+            "$ref": "#/components/schemas/LoopStateOutput"
           },
           "string": {
             "$ref": "#/components/schemas/StringOutput"
@@ -49223,6 +50513,9 @@
           "cogview4_model_loader",
           "cogview4_text_encoder",
           "collect",
+          "collection_cartesian",
+          "collection_concat",
+          "collection_zip",
           "color",
           "color_correct",
           "color_map",
@@ -49290,6 +50583,8 @@
           "flux_text_encoder",
           "flux_vae_decode",
           "flux_vae_encode",
+          "for",
+          "for_return",
           "freeu",
           "gemini_image_generation",
           "gemma2_encoder_loader",
@@ -49401,12 +50696,15 @@
           "minimax_h3_denoise",
           "minimax_h3_frame_conditioning",
           "minimax_h3_ideal_dimensions",
+          "minimax_h3_image_reference",
           "minimax_h3_latents_to_image",
           "minimax_h3_latents_to_video",
           "minimax_h3_lora_collection_loader",
           "minimax_h3_lora_loader",
           "minimax_h3_model_loader",
+          "minimax_h3_reference_conditioning",
           "minimax_h3_text_encoder",
+          "minimax_h3_video_reference",
           "mlsd_detection",
           "model_identifier",
           "mul",
@@ -49458,6 +50756,10 @@
           "show_image",
           "spandrel_image_to_image",
           "spandrel_image_to_image_autoscale",
+          "state_empty",
+          "state_get",
+          "state_merge",
+          "state_set",
           "string",
           "string_batch",
           "string_collection",
@@ -49681,6 +50983,15 @@
                 "$ref": "#/components/schemas/CollectInvocation"
               },
               {
+                "$ref": "#/components/schemas/CollectionCartesianInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionConcatInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionZipInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/ColorCorrectInvocation"
               },
               {
@@ -49880,6 +51191,12 @@
               },
               {
                 "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocation"
               },
               {
                 "$ref": "#/components/schemas/FreeUInvocation"
@@ -50206,6 +51523,9 @@
                 "$ref": "#/components/schemas/MiniMaxH3IdealDimensionsInvocation"
               },
               {
+                "$ref": "#/components/schemas/MiniMaxH3ImageReferenceInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/MiniMaxH3LatentsToImageInvocation"
               },
               {
@@ -50221,7 +51541,13 @@
                 "$ref": "#/components/schemas/MiniMaxH3ModelLoaderInvocation"
               },
               {
+                "$ref": "#/components/schemas/MiniMaxH3ReferenceConditioningInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/MiniMaxH3TextEncoderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/MiniMaxH3VideoReferenceInvocation"
               },
               {
                 "$ref": "#/components/schemas/ModelIdentifierInvocation"
@@ -50384,6 +51710,18 @@
               },
               {
                 "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateEmptyInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateGetInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateMergeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateSetInvocation"
               },
               {
                 "$ref": "#/components/schemas/StringBatchInvocation"
@@ -50575,6 +51913,19 @@
             "default": null,
             "description": "The device processing this session, e.g. 'cuda:1' (set only when running on a GPU)",
             "title": "Device"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Monotonic per queue item and session, set on image-bearing frames. A frame at or below a revision already shown is stale: the same frame may reach a client twice (live stream and reconnect replay) and must never move the preview backwards.",
+            "title": "Revision"
           }
         },
         "required": [
@@ -50591,7 +51942,8 @@
           "message",
           "percentage",
           "image",
-          "device"
+          "device",
+          "revision"
         ],
         "title": "InvocationProgressEvent",
         "type": "object"
@@ -50766,6 +52118,15 @@
               },
               {
                 "$ref": "#/components/schemas/CollectInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionCartesianInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionConcatInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionZipInvocation"
               },
               {
                 "$ref": "#/components/schemas/ColorCorrectInvocation"
@@ -50967,6 +52328,12 @@
               },
               {
                 "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocation"
               },
               {
                 "$ref": "#/components/schemas/FreeUInvocation"
@@ -51293,6 +52660,9 @@
                 "$ref": "#/components/schemas/MiniMaxH3IdealDimensionsInvocation"
               },
               {
+                "$ref": "#/components/schemas/MiniMaxH3ImageReferenceInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/MiniMaxH3LatentsToImageInvocation"
               },
               {
@@ -51308,7 +52678,13 @@
                 "$ref": "#/components/schemas/MiniMaxH3ModelLoaderInvocation"
               },
               {
+                "$ref": "#/components/schemas/MiniMaxH3ReferenceConditioningInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/MiniMaxH3TextEncoderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/MiniMaxH3VideoReferenceInvocation"
               },
               {
                 "$ref": "#/components/schemas/ModelIdentifierInvocation"
@@ -51471,6 +52847,18 @@
               },
               {
                 "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateEmptyInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateGetInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateMergeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateSetInvocation"
               },
               {
                 "$ref": "#/components/schemas/StringBatchInvocation"
@@ -59151,6 +60539,67 @@
         "title": "LogoutResponse",
         "description": "Response from logout."
       },
+      "LoopState": {
+        "properties": {
+          "values": {
+            "additionalProperties": true,
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "title": "LoopState",
+        "type": "object"
+      },
+      "LoopStateOutput": {
+        "class": "output",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/LoopState",
+            "description": "The loop state",
+            "field_kind": "output",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "loop_state_output",
+            "default": "loop_state_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "state", "type", "type"],
+        "title": "LoopStateOutput",
+        "type": "object"
+      },
+      "LoopStateValueOutput": {
+        "class": "output",
+        "properties": {
+          "value": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The value read from the loop state, or the configured default when the key is missing",
+            "field_kind": "output",
+            "title": "Value",
+            "ui_hidden": false,
+            "ui_type": "AnyField"
+          },
+          "type": {
+            "const": "loop_state_value_output",
+            "default": "loop_state_value_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "value", "type", "type"],
+        "title": "LoopStateValueOutput",
+        "type": "object"
+      },
       "LoraModelDefaultSettings": {
         "properties": {
           "weight": {
@@ -60677,7 +62126,7 @@
           "pruned"
         ],
         "title": "Main_Checkpoint_MiniMaxH3_Config",
-        "description": "Model config for MiniMax H3 single-file transformer checkpoints (safetensors).\n\nCovers MiniMax's single-file FL2VA transformer repacks (Comfy-Org and mirrors): bf16 or\nComfy ``int8_tensorwise``(+convrot) quantized, full or AdaLN-pruned (\"adaln curves\"). The\nfile holds ONLY the transformer - the text encoder, VAEs, tokenizer and processor must come\nfrom an installed H3 diffusers-layout folder.\n\nA Ref2VA transformer single file is key-for-key indistinguishable from FL2VA, so Ref2VA is\nexcluded only by filename; a renamed Ref2VA file would load and run but produce degraded\noutput (it expects reference conditioning rows this integration never packs)."
+        "description": "Model config for MiniMax H3 single-file transformer checkpoints (safetensors).\n\nCovers MiniMax's single-file FL2VA transformer repacks (Comfy-Org and mirrors): bf16 or\nComfy ``int8_tensorwise``(+convrot) quantized, full or AdaLN-pruned (\"adaln curves\"). The\nfile holds ONLY the transformer - the text encoder, VAEs, tokenizer and processor must come\nfrom an installed H3 diffusers-layout folder.\n\nThe FL2VA and Ref2VA task transformers are key-for-key (and, except the non-pruned\nint8_convrot repacks, byte-size) indistinguishable, so the FILENAME is the variant\nclassifier and ``variant`` is the user-correctable override for renamed files (e.g.\nre-uploads). A misclassified variant loads and runs but produces degraded output - FL2VA\nexpects no reference conditioning rows, Ref2VA expects them - which is why the override\nexists rather than any attempt at content sniffing."
       },
       "Main_Checkpoint_QwenImage_Config": {
         "properties": {
@@ -70050,6 +71499,23 @@
             "orig_required": false,
             "title": "Frame Conditioning"
           },
+          "reference_conditioning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MiniMaxH3ReferenceConditioningField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Ordered, VAE-encoded Ref2VA reference conditioning for MiniMax H3",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Reference Conditioning"
+          },
           "width": {
             "default": 1344,
             "description": "Width of the generated video. H3's native canvas has a 768px short edge (max 768x1344).",
@@ -70155,7 +71621,7 @@
         "tags": ["latents", "video", "audio", "minimax"],
         "title": "Denoise - MiniMax H3",
         "type": "object",
-        "version": "1.3.0",
+        "version": "1.4.0",
         "output": {
           "$ref": "#/components/schemas/MiniMaxH3DenoiseOutput"
         }
@@ -70207,6 +71673,85 @@
         },
         "required": ["output_meta", "video_latents", "audio_latents", "width", "height", "num_frames", "type", "type"],
         "title": "MiniMaxH3DenoiseOutput",
+        "type": "object"
+      },
+      "MiniMaxH3EncodedReferenceField": {
+        "description": "One VAE-encoded Ref2VA reference, in packed order.",
+        "properties": {
+          "kind": {
+            "description": "The reference's packed-block kind.",
+            "enum": ["image", "video", "audio"],
+            "title": "Kind",
+            "type": "string"
+          },
+          "video_rows_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Name of the saved clean (N, 96) visual rows tensor. None for 'audio'.",
+            "title": "Video Rows Name"
+          },
+          "latent_frames": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Latent frame count of the visual rows.",
+            "title": "Latent Frames"
+          },
+          "latent_height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Latent height of the visual rows.",
+            "title": "Latent Height"
+          },
+          "latent_width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Latent width of the visual rows.",
+            "title": "Latent Width"
+          },
+          "audio_rows_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Name of the saved clean (A, 32) soundtrack rows tensor, when the reference has one.",
+            "title": "Audio Rows Name"
+          }
+        },
+        "required": ["kind"],
+        "title": "MiniMaxH3EncodedReferenceField",
         "type": "object"
       },
       "MiniMaxH3FrameConditioningField": {
@@ -70355,7 +71900,7 @@
         "tags": ["conditioning", "minimax", "video", "i2v"],
         "title": "Frame Conditioning - MiniMax H3",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "output": {
           "$ref": "#/components/schemas/MiniMaxH3FrameConditioningOutput"
         }
@@ -70465,6 +72010,84 @@
         "version": "1.1.0",
         "output": {
           "$ref": "#/components/schemas/IdealSizeOutput"
+        }
+      },
+      "MiniMaxH3ImageReferenceInvocation": {
+        "category": "conditioning",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Describes one image reference for MiniMax H3 Ref2VA.\n\nCollect references in the order they should condition in \u2014 order is part of the request \u2014\nand wire the collection to both Reference Conditioning - MiniMax H3 and Prompt - MiniMax H3.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "image": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The reference image.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_required": true
+          },
+          "detail": {
+            "default": "max",
+            "description": "'max' conditions at a 2048px short edge (highest fidelity; a 2048px square reference adds ~4096 rows to every denoising step). 'match' scales the reference to the generation's pixel area \u2014 several times faster.",
+            "enum": ["max", "match"],
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": "max",
+            "orig_required": false,
+            "title": "Detail",
+            "type": "string",
+            "ui_choice_labels": {
+              "match": "Match generation size",
+              "max": "Max (2048px, slower)"
+            }
+          },
+          "type": {
+            "const": "minimax_h3_image_reference",
+            "default": "minimax_h3_image_reference",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["conditioning", "reference", "minimax", "video"],
+        "title": "Image Reference - MiniMax H3",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/MiniMaxH3ReferenceMediaOutput"
         }
       },
       "MiniMaxH3LatentsToImageInvocation": {
@@ -70999,7 +72622,7 @@
         "category": "model",
         "class": "invocation",
         "classification": "prototype",
-        "description": "Loads a MiniMax H3 (FL2VA) model, outputting its submodels.\n\nAll six submodels (transformer, text encoder, tokenizer, processor, video VAE, audio VAE)\ncome from the one diffusers-layout install. Optionally, a single-file transformer checkpoint\n(e.g. the pruned int8 repack) replaces the folder's transformer, and/or a single-file\ntruncated Qwen3-VL encoder (e.g. the int8 repack) replaces the folder's text encoder, while\neverything else keeps coming from the folder install.",
+        "description": "Loads a MiniMax H3 model, outputting its submodels.\n\nAll six submodels (transformer, text encoder, tokenizer, processor, video VAE, audio VAE)\ncome from the one diffusers-layout install. Optionally, a single-file transformer checkpoint\n(e.g. the pruned int8 repack) replaces the folder's transformer, and/or a single-file\ntruncated Qwen3-VL encoder (e.g. the int8 repack) replaces the folder's text encoder, while\neverything else keeps coming from the folder install.\n\nA Ref2VA diffusers folder's ``transformer_ref/`` weights are NOT folder-loadable (the\nsubmodel map has no entry for that folder), so Ref2VA generation always selects a\nsingle-file Ref2VA transformer here; identification marks such folders components-only so\nthe UI requires it up front.",
         "node_pack": "invokeai",
         "properties": {
           "id": {
@@ -71089,7 +72712,7 @@
         "tags": ["model", "minimax", "video"],
         "title": "Main Model - MiniMax H3",
         "type": "object",
-        "version": "1.3.0",
+        "version": "1.4.0",
         "output": {
           "$ref": "#/components/schemas/MiniMaxH3ModelLoaderOutput"
         }
@@ -71100,7 +72723,7 @@
         "properties": {
           "transformer": {
             "$ref": "#/components/schemas/MiniMaxH3TransformerField",
-            "description": "MiniMax H3 FL2VA transformer",
+            "description": "MiniMax H3 task transformer (FL2VA or Ref2VA)",
             "field_kind": "output",
             "title": "Transformer",
             "ui_hidden": false
@@ -71186,6 +72809,377 @@
         "title": "MiniMaxH3ModelLoaderOutput",
         "type": "object"
       },
+      "MiniMaxH3ReferenceConditioningField": {
+        "description": "Ordered, VAE-encoded Ref2VA reference conditioning for MiniMax H3.\n\nRows are CLEAN: the denoise node noise-augments the visual rows to t=0.999 with the\nrequest seed's leading draws; audio rows are never noised. ``signature`` is the ordered\nper-reference fingerprint the denoise node compares against the prompt conditioning's,\nso the two sides cannot silently disagree about what was encoded.",
+        "properties": {
+          "references": {
+            "description": "The encoded references, in packed order.",
+            "items": {
+              "$ref": "#/components/schemas/MiniMaxH3EncodedReferenceField"
+            },
+            "title": "References",
+            "type": "array"
+          },
+          "num_frames": {
+            "description": "The generated frame count the references were truncated for.",
+            "title": "Num Frames",
+            "type": "integer"
+          },
+          "signature": {
+            "description": "Ordered structural fingerprint, one entry per reference.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Signature",
+            "type": "array"
+          },
+          "width": {
+            "default": 1344,
+            "description": "Target canvas width the references were prepared for.",
+            "title": "Width",
+            "type": "integer"
+          },
+          "height": {
+            "default": 768,
+            "description": "Target canvas height the references were prepared for.",
+            "title": "Height",
+            "type": "integer"
+          }
+        },
+        "required": ["references", "num_frames", "signature"],
+        "title": "MiniMaxH3ReferenceConditioningField",
+        "type": "object"
+      },
+      "MiniMaxH3ReferenceConditioningInvocation": {
+        "category": "conditioning",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "VAE-encodes an ordered list of Ref2VA references into conditioning rows.\n\nThe rows are clean (the denoise node noise-augments the visual rows with the request\nseed; soundtrack rows stay clean). The same references, in the same order, must also be\nwired to Prompt - MiniMax H3: they are part of both the packed sequence and the text\nconditioning, and the denoise node rejects a mismatch.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "references": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MiniMaxH3ReferenceMediaField"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MiniMaxH3ReferenceMediaField"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The references, in conditioning order (order is part of the request).",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "References"
+          },
+          "vae": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VAEField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "VAE",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Video VAE"
+          },
+          "audio_vae": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VAEField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Audio VAE (stereo, 32 kHz) for MiniMax H3",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Audio VAE"
+          },
+          "num_frames": {
+            "default": 124,
+            "description": "The frame count the generation will run at (17n+5). References are truncated to this duration; it must match the Denoise node's Number of Frames.",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": 124,
+            "orig_required": false,
+            "title": "Num Frames",
+            "type": "integer"
+          },
+          "width": {
+            "default": 1344,
+            "description": "Target canvas width (used only to size 'match'-detail image references).",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "multipleOf": 32,
+            "orig_default": 1344,
+            "orig_required": false,
+            "title": "Width",
+            "type": "integer"
+          },
+          "height": {
+            "default": 768,
+            "description": "Target canvas height (used only to size 'match'-detail image references).",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "multipleOf": 32,
+            "orig_default": 768,
+            "orig_required": false,
+            "title": "Height",
+            "type": "integer"
+          },
+          "type": {
+            "const": "minimax_h3_reference_conditioning",
+            "default": "minimax_h3_reference_conditioning",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["conditioning", "reference", "minimax", "video", "audio"],
+        "title": "Reference Conditioning - MiniMax H3",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/MiniMaxH3ReferenceConditioningOutput"
+        }
+      },
+      "MiniMaxH3ReferenceConditioningOutput": {
+        "class": "output",
+        "description": "Output of the MiniMax H3 reference VAE-encoder.",
+        "properties": {
+          "reference_conditioning": {
+            "$ref": "#/components/schemas/MiniMaxH3ReferenceConditioningField",
+            "description": "Ordered, VAE-encoded Ref2VA reference conditioning for MiniMax H3",
+            "field_kind": "output",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "minimax_h3_reference_conditioning_output",
+            "default": "minimax_h3_reference_conditioning_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "reference_conditioning", "type", "type"],
+        "title": "MiniMaxH3ReferenceConditioningOutput",
+        "type": "object"
+      },
+      "MiniMaxH3ReferenceMediaField": {
+        "description": "One ordered Ref2VA reference for MiniMax H3: the raw media plus its conditioning options.\n\nCarries no tensors \u2014 both the Prompt node and the Reference Conditioning node normalize\nthe same media independently (the FL2VA keyframe precedent), and the denoise node\ncross-checks the two sides via the signature embedded in each side's output. Exactly one\nof ``image`` / ``video`` is set; ``video_conditioning`` selects which streams a video\nreference conditions (\"audio\" maps to upstream's standalone audio-reference kind, sourced\nfrom the video's soundtrack).",
+        "properties": {
+          "image": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The reference image, for an image reference."
+          },
+          "video": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VideoField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The reference video, for a video/audio reference."
+          },
+          "video_conditioning": {
+            "default": "video_audio",
+            "description": "Which streams a video reference conditions: video + soundtrack, video only, or soundtrack only.",
+            "enum": ["video_audio", "video", "audio"],
+            "title": "Video Conditioning",
+            "type": "string"
+          },
+          "image_detail": {
+            "default": "max",
+            "description": "Image reference sizing: 'max' (2048 px short edge, highest fidelity) or 'match' (scaled to the generation's pixel area, several times faster).",
+            "enum": ["max", "match"],
+            "title": "Image Detail",
+            "type": "string"
+          },
+          "start_frame": {
+            "default": 0,
+            "description": "First source frame of a video reference (inclusive, 0-based; negative from the end).",
+            "title": "Start Frame",
+            "type": "integer"
+          },
+          "end_frame": {
+            "default": -1,
+            "description": "Last source frame of a video reference (inclusive; negative from the end).",
+            "title": "End Frame",
+            "type": "integer"
+          }
+        },
+        "title": "MiniMaxH3ReferenceMediaField",
+        "type": "object"
+      },
+      "MiniMaxH3ReferenceMediaOutput": {
+        "class": "output",
+        "description": "One ordered Ref2VA reference descriptor.",
+        "properties": {
+          "reference": {
+            "$ref": "#/components/schemas/MiniMaxH3ReferenceMediaField",
+            "description": "One ordered Ref2VA reference (image or video) for MiniMax H3",
+            "field_kind": "output",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "minimax_h3_reference_media_output",
+            "default": "minimax_h3_reference_media_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "reference", "type", "type"],
+        "title": "MiniMaxH3ReferenceMediaOutput",
+        "type": "object"
+      },
+      "MiniMaxH3ReferenceMetadataField": {
+        "description": "One recorded Ref2VA reference: names and options only, in conditioning order.",
+        "properties": {
+          "kind": {
+            "description": "Whether the reference was an image or a video.",
+            "enum": ["image", "video"],
+            "title": "Kind",
+            "type": "string"
+          },
+          "image_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The reference image's name.",
+            "title": "Image Name"
+          },
+          "video_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The reference video's name.",
+            "title": "Video Name"
+          },
+          "conditioning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A video reference's conditioning choice (video_audio / video / audio).",
+            "title": "Conditioning"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "An image reference's sizing choice (max / match).",
+            "title": "Detail"
+          },
+          "start_frame": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A video reference's trim start (inclusive).",
+            "title": "Start Frame"
+          },
+          "end_frame": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A video reference's trim end (inclusive).",
+            "title": "End Frame"
+          }
+        },
+        "required": ["kind"],
+        "title": "MiniMaxH3ReferenceMetadataField",
+        "type": "object"
+      },
       "MiniMaxH3TextEncoderField": {
         "description": "Field for the Qwen3-VL-32B conditioner used by MiniMax H3 models.\n\nUnlike :class:`Qwen3VLEncoderField`, H3 also needs the Qwen3VLProcessor \u2014 even for\ntext-only prompts (its multimodal token-type ids drive Qwen3-VL's 3D rotary layout), and\nfor feeding first/last keyframes to the conditioner as vision context.",
         "properties": {
@@ -71210,7 +73204,7 @@
         "category": "conditioning",
         "class": "invocation",
         "classification": "prototype",
-        "description": "Encodes a prompt (and optional first/last keyframes) for MiniMax H3.\n\nThe conditioning is Qwen3-VL-32B's *unnormalized* layer-50 hidden state. H3 is\nguidance-distilled: there is no negative prompt. For first/last-frame video, the keyframes\nare ALSO part of the text conditioning (a \"<Picture i>: \" label plus a vision block per\nkeyframe), so the same images must be wired here and to the Frame Conditioning node, with\nthe same width/height as the denoise node.",
+        "description": "Encodes a prompt (and optional first/last keyframes, or Ref2VA references) for MiniMax H3.\n\nThe conditioning is Qwen3-VL-32B's *unnormalized* layer-50 hidden state. H3 is\nguidance-distilled: there is no negative prompt. For first/last-frame video, the keyframes\nare ALSO part of the text conditioning (a \"<Picture i>: \" label plus a vision block per\nkeyframe), so the same images must be wired here and to the Frame Conditioning node, with\nthe same width/height as the denoise node. For reference-to-video (Ref2VA), the same\nordered references must be wired here and to the Reference Conditioning node, with the\nsame Number of Frames \u2014 the references appear in the conditioning as per-modality labels\nand vision blocks (a reference video is read at 2 fps).",
         "node_pack": "invokeai",
         "properties": {
           "id": {
@@ -71302,6 +73296,47 @@
             "orig_default": null,
             "orig_required": false
           },
+          "references": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MiniMaxH3ReferenceMediaField"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MiniMaxH3ReferenceMediaField"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Ref2VA references, in conditioning order (must match Reference Conditioning - MiniMax H3). Mutually exclusive with keyframes.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "References"
+          },
+          "num_frames": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The generation's frame count. Required with references (they are truncated to it); must match the Denoise and Reference Conditioning nodes.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Num Frames"
+          },
           "width": {
             "default": 1344,
             "description": "Target canvas width.",
@@ -71338,13 +73373,13 @@
         "tags": ["prompt", "conditioning", "minimax", "video"],
         "title": "Prompt - MiniMax H3",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "output": {
           "$ref": "#/components/schemas/MiniMaxH3ConditioningOutput"
         }
       },
       "MiniMaxH3TransformerField": {
-        "description": "Transformer field for MiniMax H3 models (FL2VA).",
+        "description": "Transformer field for MiniMax H3 models (FL2VA or Ref2VA).",
         "properties": {
           "transformer": {
             "$ref": "#/components/schemas/ModelIdentifierField",
@@ -71357,6 +73392,19 @@
             },
             "title": "Loras",
             "type": "array"
+          },
+          "variant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The task variant of the loaded transformer ('fl2va' / 'ref2va'), stamped by the model loader so the denoise node can reject a task/conditioning mismatch.",
+            "title": "Variant"
           }
         },
         "required": ["transformer"],
@@ -71365,9 +73413,110 @@
       },
       "MiniMaxH3VariantType": {
         "type": "string",
-        "enum": ["fl2va"],
+        "enum": ["fl2va", "ref2va"],
         "title": "MiniMaxH3VariantType",
         "description": "MiniMax H3 model variants (task-specific transformer checkpoints sharing every other component)."
+      },
+      "MiniMaxH3VideoReferenceInvocation": {
+        "category": "conditioning",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Describes one video reference for MiniMax H3 Ref2VA.\n\n'Audio only' conditions on the video's soundtrack alone (the standalone audio-reference\nkind). At least one reference of the request must contribute visuals, and a conditioning\nchoice that includes audio requires the video to actually carry a soundtrack.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "video": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VideoField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The reference video.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_required": true
+          },
+          "conditioning": {
+            "default": "video_audio",
+            "description": "Which streams this reference conditions: video + soundtrack, video only, or soundtrack only.",
+            "enum": ["video_audio", "video", "audio"],
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": "video_audio",
+            "orig_required": false,
+            "title": "Conditioning",
+            "type": "string",
+            "ui_choice_labels": {
+              "audio": "Audio only",
+              "video": "Video only",
+              "video_audio": "Video + audio"
+            }
+          },
+          "start_frame": {
+            "default": 0,
+            "description": "First source frame of the reference range (inclusive, 0-based; negative counts from the end).",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": 0,
+            "orig_required": false,
+            "title": "Start Frame",
+            "type": "integer",
+            "ui_component": "video-frame-index"
+          },
+          "end_frame": {
+            "default": -1,
+            "description": "Last source frame of the reference range (inclusive; negative counts from the end).",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": -1,
+            "orig_required": false,
+            "title": "End Frame",
+            "type": "integer",
+            "ui_component": "video-frame-index"
+          },
+          "type": {
+            "const": "minimax_h3_video_reference",
+            "default": "minimax_h3_video_reference",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["conditioning", "reference", "minimax", "video", "audio"],
+        "title": "Video Reference - MiniMax H3",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/MiniMaxH3ReferenceMediaOutput"
+        }
       },
       "Mistral3EncoderField": {
         "description": "Field for Mistral3 text encoder used by ERNIE-Image models.",
@@ -76185,11 +78334,28 @@
               }
             ],
             "default": null
+          },
+          "output_scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputScope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
-        "required": ["field_kind", "ui_hidden", "ui_order", "ui_type"],
+        "required": ["field_kind", "ui_hidden", "ui_order", "ui_type", "output_scope"],
         "title": "OutputFieldJSONSchemaExtra",
         "type": "object"
+      },
+      "OutputScope": {
+        "description": "The execution scope for an output field.\n- `Iteration`: The field emits values for a loop body's current iteration.\n- `Final`: The field emits values after a loop boundary completes.",
+        "enum": ["iteration", "final"],
+        "title": "OutputScope",
+        "type": "string"
       },
       "PBRMapsInvocation": {
         "category": "controlnet_preprocessors",
@@ -77726,29 +79892,106 @@
         "title": "PresetType"
       },
       "ProgressImage": {
-        "description": "The progress image sent intermittently during processing",
         "properties": {
           "width": {
-            "description": "The effective width of the image in pixels",
-            "minimum": 1,
+            "type": "integer",
+            "minimum": 1.0,
             "title": "Width",
-            "type": "integer"
+            "description": "The effective width of the image in pixels"
           },
           "height": {
-            "description": "The effective height of the image in pixels",
-            "minimum": 1,
+            "type": "integer",
+            "minimum": 1.0,
             "title": "Height",
-            "type": "integer"
+            "description": "The effective height of the image in pixels"
           },
           "dataURL": {
-            "description": "The image data as a b64 data URL",
+            "type": "string",
             "title": "Dataurl",
-            "type": "string"
+            "description": "The image data as a b64 data URL"
           }
         },
+        "type": "object",
         "required": ["width", "height", "dataURL"],
         "title": "ProgressImage",
-        "type": "object"
+        "description": "The progress image sent intermittently during processing"
+      },
+      "ProgressPreviewDTO": {
+        "properties": {
+          "queue_id": {
+            "type": "string",
+            "title": "Queue Id",
+            "description": "The ID of the queue"
+          },
+          "item_id": {
+            "type": "integer",
+            "title": "Item Id",
+            "description": "The ID of the queue item"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "description": "The ID of the session (aka graph execution state)"
+          },
+          "invocation_source_id": {
+            "type": "string",
+            "title": "Invocation Source Id",
+            "description": "The ID of the prepared invocation's source node"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision",
+            "description": "Monotonic per queue item and session; see InvocationProgressEvent"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "A message to display"
+          },
+          "percentage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percentage",
+            "description": "The percentage of the progress, or null if indeterminate"
+          },
+          "image": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProgressImage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The latest denoising preview"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queue_id",
+          "item_id",
+          "session_id",
+          "invocation_source_id",
+          "revision",
+          "message",
+          "percentage",
+          "image"
+        ],
+        "title": "ProgressPreviewDTO",
+        "description": "The latest preview frame of a running queue item, as served by `GET /queue/{queue_id}/previews`.\n\nThe fields of the `invocation_progress` socket event a preview consumer reads, without the\nserialized invocation. A separate model rather than the event itself: exposing the event as a\nresponse model would give it a second OpenAPI schema variant and change the generated client\ntypes for every socket consumer."
       },
       "ProjectBoardItemDTO": {
         "properties": {
@@ -77832,6 +80075,20 @@
             "type": "object",
             "title": "Data",
             "description": "The opaque client-owned project document"
+          },
+          "minimum_canvas_schema_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Minimum Canvas Schema Version",
+            "description": "Oldest canvas schema that can safely edit this document",
+            "default": 2
+          },
+          "max_canvas_schema_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Max Canvas Schema Version",
+            "description": "Newest canvas schema understood by this client",
+            "default": 2
           }
         },
         "type": "object",
@@ -77861,6 +80118,12 @@
             "title": "Revision",
             "description": "Monotonic revision, incremented on every save"
           },
+          "minimum_canvas_schema_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Minimum Canvas Schema Version",
+            "description": "Oldest canvas schema a client must support before it may read or write this project"
+          },
           "created_at": {
             "type": "string",
             "title": "Created At",
@@ -77879,7 +80142,16 @@
           }
         },
         "type": "object",
-        "required": ["project_id", "board_id", "name", "revision", "created_at", "updated_at", "data"],
+        "required": [
+          "project_id",
+          "board_id",
+          "name",
+          "revision",
+          "minimum_canvas_schema_version",
+          "created_at",
+          "updated_at",
+          "data"
+        ],
         "title": "ProjectRecordDTO",
         "description": "Full project record including the client-owned document."
       },
@@ -77905,6 +80177,12 @@
             "title": "Revision",
             "description": "Monotonic revision, incremented on every save"
           },
+          "minimum_canvas_schema_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Minimum Canvas Schema Version",
+            "description": "Oldest canvas schema a client must support before it may read or write this project"
+          },
           "created_at": {
             "type": "string",
             "title": "Created At",
@@ -77917,7 +80195,15 @@
           }
         },
         "type": "object",
-        "required": ["project_id", "board_id", "name", "revision", "created_at", "updated_at"],
+        "required": [
+          "project_id",
+          "board_id",
+          "name",
+          "revision",
+          "minimum_canvas_schema_version",
+          "created_at",
+          "updated_at"
+        ],
         "title": "ProjectSummaryDTO",
         "description": "Lightweight project listing entry; the document payload is omitted."
       },
@@ -77938,6 +80224,26 @@
             "type": "integer",
             "title": "Expected Revision",
             "description": "The revision this save is based on; mismatch returns 409"
+          },
+          "minimum_canvas_schema_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum Canvas Schema Version",
+            "description": "New compatibility floor to store atomically with this document; omitted to keep the current floor"
+          },
+          "max_canvas_schema_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Max Canvas Schema Version",
+            "description": "Newest canvas schema understood by this client",
+            "default": 2
           }
         },
         "type": "object",
@@ -87375,6 +89681,309 @@
         "required": ["description", "source", "name", "base", "type"],
         "title": "StarterModelWithoutDependencies"
       },
+      "StateEmptyInvocation": {
+        "category": "workflow",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Creates an empty loop state.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "type": {
+            "const": "state_empty",
+            "default": "state_empty",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["loop", "state"],
+        "title": "Empty Loop State",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LoopStateOutput"
+        }
+      },
+      "StateGetInvocation": {
+        "category": "workflow",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Reads a value from loop state.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The loop state to read",
+            "field_kind": "input",
+            "input": "any",
+            "orig_required": true
+          },
+          "key": {
+            "default": "",
+            "description": "The state key to read",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": "",
+            "orig_required": false,
+            "title": "Key",
+            "type": "string"
+          },
+          "default": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The value to return when the key is missing",
+            "input": "any",
+            "field_kind": "input",
+            "orig_required": false,
+            "orig_default": null,
+            "ui_type": "AnyField",
+            "title": "Default"
+          },
+          "type": {
+            "const": "state_get",
+            "default": "state_get",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["loop", "state"],
+        "title": "Get Loop State Value",
+        "type": "object",
+        "version": "1.0.3",
+        "output": {
+          "$ref": "#/components/schemas/LoopStateValueOutput"
+        }
+      },
+      "StateMergeInvocation": {
+        "category": "workflow",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Returns loop state with multiple values merged.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The loop state to update",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "values": {
+            "additionalProperties": true,
+            "default": {},
+            "description": "The values to merge into the loop state. Connect an output to this input.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": {},
+            "orig_required": false,
+            "title": "Values",
+            "type": "object",
+            "ui_type": "AnyField"
+          },
+          "type": {
+            "const": "state_merge",
+            "default": "state_merge",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["loop", "state"],
+        "title": "Merge Loop State Values",
+        "type": "object",
+        "version": "1.0.1",
+        "output": {
+          "$ref": "#/components/schemas/LoopStateOutput"
+        }
+      },
+      "StateSetInvocation": {
+        "category": "workflow",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Returns loop state with one value set.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The loop state to update",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "key": {
+            "default": "",
+            "description": "The state key to set",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": "",
+            "orig_required": false,
+            "title": "Key",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The value to set. Connect an output to this input.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Value",
+            "ui_type": "AnyField"
+          },
+          "type": {
+            "const": "state_set",
+            "default": "state_set",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["loop", "state"],
+        "title": "Set Loop State Value",
+        "type": "object",
+        "version": "1.0.1",
+        "output": {
+          "$ref": "#/components/schemas/LoopStateOutput"
+        }
+      },
       "String2Output": {
         "class": "output",
         "description": "Base class for invocations that output two strings",
@@ -91327,7 +93936,7 @@
         "type": "object"
       },
       "UIType": {
-        "description": "Type hints for the UI for situations in which the field type is not enough to infer the correct UI type.\n\n- Model Fields\nThe most common node-author-facing use will be for model fields. Internally, there is no difference\nbetween SD-1, SD-2 and SDXL model fields - they all use the class `MainModelField`. To ensure the\nbase-model-specific UI is rendered, use e.g. `ui_type=UIType.SDXLMainModelField` to indicate that\nthe field is an SDXL main model field.\n\n- Any Field\nWe cannot infer the usage of `typing.Any` via schema parsing, so you *must* use `ui_type=UIType.Any` to\nindicate that the field accepts any type. Use with caution. This cannot be used on outputs.\n\n- Scheduler Field\nSpecial handling in the UI is needed for this field, which otherwise would be parsed as a plain enum field.\n\n- Internal Fields\nSimilar to the Any Field, the `collect` and `iterate` nodes make use of `typing.Any`. To facilitate\nhandling these types in the client, we use `UIType._Collection` and `UIType._CollectionItem`. These\nshould not be used by node authors.\n\n- DEPRECATED Fields\nThese types are deprecated and should not be used by node authors. A warning will be logged if one is\nused, and the type will be ignored. They are included here for backwards compatibility.",
+        "description": "Type hints for the UI for situations in which the field type is not enough to infer the correct UI type.\n\n- Model Fields\nThe most common node-author-facing use will be for model fields. Internally, there is no difference\nbetween SD-1, SD-2 and SDXL model fields - they all use the class `MainModelField`. To ensure the\nbase-model-specific UI is rendered, use e.g. `ui_type=UIType.SDXLMainModelField` to indicate that\nthe field is an SDXL main model field.\n\n- Any Field\nWe cannot infer the usage of `typing.Any` via schema parsing, so you *must* use `ui_type=UIType.Any` to\nindicate that the field accepts any type. Use with caution. On inputs, this renders as a connection-only field.\n\n- Scheduler Field\nSpecial handling in the UI is needed for this field, which otherwise would be parsed as a plain enum field.\n\n- Internal Fields\nSimilar to the Any Field, the `collect` and `iterate` nodes make use of `typing.Any`. To facilitate\nhandling these types in the client, we use `UIType._Collection` and `UIType._CollectionItem`. These\nshould not be used by node authors.\n\n- DEPRECATED Fields\nThese types are deprecated and should not be used by node authors. A warning will be logged if one is\nused, and the type will be ignored. They are included here for backwards compatibility.",
         "enum": [
           "SchedulerField",
           "AnyField",
@@ -94633,6 +97242,12 @@
             "type": "integer",
             "title": "Video Count",
             "description": "The number of videos for this date.",
+            "default": 0
+          },
+          "asset_video_count": {
+            "type": "integer",
+            "title": "Asset Video Count",
+            "description": "The number of asset-category (non-'general') videos for this date.",
             "default": 0
           },
           "cover_image_name": {

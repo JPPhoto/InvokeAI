@@ -3,36 +3,8 @@ import type { GalleryItem } from '@features/gallery';
 import { GALLERY_MAX_ROWS } from '@features/gallery/queries';
 import { describe, expect, it } from 'vitest';
 
-import { getMatchingProgressImage, getVideoFrameCopyNotice } from './PreviewWidgetView';
+import { getVideoFrameCopyNotice } from './PreviewWidgetView';
 import { mergePreviewBoardItems } from './usePreviewNavigation';
-
-describe('getMatchingProgressImage', () => {
-  const placeholder = {
-    backendItemId: null,
-    boardId: 'none',
-    height: 768,
-    id: 'queue-1:1',
-    itemIndex: 2,
-    queueItemId: 'queue-1',
-    width: 512,
-  };
-  const progressImage = {
-    dataUrl: 'data:image/png;base64,abc',
-    height: 768,
-    target: { itemIndex: 2, queueItemId: 'queue-1' },
-    width: 512,
-  };
-
-  it('returns progress only when it belongs to the current placeholder', () => {
-    expect(getMatchingProgressImage(progressImage, placeholder)).toBe(progressImage);
-    expect(
-      getMatchingProgressImage({ ...progressImage, target: { itemIndex: 1, queueItemId: 'queue-1' } }, placeholder)
-    ).toBeNull();
-    expect(
-      getMatchingProgressImage({ ...progressImage, target: { itemIndex: 2, queueItemId: 'queue-2' } }, placeholder)
-    ).toBeNull();
-  });
-});
 
 describe('mergePreviewBoardItems', () => {
   const item = (kind: GalleryItem['kind'], name: string, createdAt: string, starred = false): GalleryItem => {
@@ -76,12 +48,12 @@ describe('mergePreviewBoardItems', () => {
       second,
       third,
     ]);
-    // Without the flag the same input is re-sorted (starred first, then
-    // newest) and the optimistic item is spliced in, so the ranked path really
-    // is what preserves the list.
+    // Without the flag the same input is re-sorted newest-first and the
+    // optimistic item is spliced in, so the ranked path really is what
+    // preserves the list.
     expect(mergePreviewBoardItems([first, second, third], [optimistic], 'DESC')).toEqual([
-      second,
       optimistic,
+      second,
       third,
       first,
     ]);
@@ -100,12 +72,14 @@ describe('mergePreviewBoardItems', () => {
     expect(mergePreviewBoardItems([ranked], [ranked], 'DESC', { isRanked: true })).toEqual([ranked]);
   });
 
-  it('keeps starred backend items ahead of optimistic unstarred items', () => {
+  it('merges chronologically past starred items', () => {
+    // The listing is flat: navigation must walk the same order the grid
+    // shows, not lift starred items to the front.
     const starred = item('video', 'starred', '2026-07-21T00:00:01.000Z', true);
     const optimistic = item('image', 'optimistic', '2026-07-21T00:00:03.000Z');
     const existing = item('video', 'existing', '2026-07-21T00:00:02.000Z');
 
-    expect(mergePreviewBoardItems([starred, existing], [optimistic], 'DESC')).toEqual([starred, optimistic, existing]);
+    expect(mergePreviewBoardItems([starred, existing], [optimistic], 'DESC')).toEqual([optimistic, existing, starred]);
   });
 
   it('uses the server kind/name tie-breakers for equal timestamps in both directions', () => {

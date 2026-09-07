@@ -51,8 +51,7 @@ const getOrderedPreviewItems = (
   items
     .map((item, index) => ({ index, item }))
     .sort((a, b) => {
-      // Starred-first is pinned in gallery/core/settings.ts.
-      const canonicalOrder = compareGalleryItems(a.item, b.item, { orderDir: imageOrderDir, starredFirst: true });
+      const canonicalOrder = compareGalleryItems(a.item, b.item, { orderDir: imageOrderDir });
 
       if (canonicalOrder !== 0) {
         return canonicalOrder;
@@ -180,6 +179,12 @@ export const usePreviewNavigation = ({
     shouldFollowLive && activePlaceholder ? activePlaceholder.boardId : selectedImageQuery.boardId;
   const navigationGalleryView = shouldFollowLive ? 'images' : selectedImageQuery.galleryView;
   const navigationOrderDir = shouldFollowLive ? imageOrderDir : selectedImageQuery.imageOrderDir;
+  // The grid partitions starred items into its strip, so Preview walks the
+  // list the selected item belongs to: the starred one for a starred item or
+  // under the starred filter, the unstarred listing otherwise. Following live
+  // means watching the board a (never starred) result lands in, so the
+  // filter is dropped for that mode as the search is.
+  const navigationStarredOnly = !shouldFollowLive && (selectedImageQuery.starredOnly || selectedItem?.starred === true);
   // Read from the gallery's CURRENT search, not from a copy stamped onto the
   // selection: the chip is a view mode, and Preview has to follow it the
   // moment it is set or cleared or it walks a list that is no longer on
@@ -189,8 +194,8 @@ export const usePreviewNavigation = ({
   const navigationSemanticQuery = shouldFollowLive ? null : semanticQuery;
   const navigationSemanticKey = gallerySemanticReferenceKey(navigationSemanticQuery);
   const hasNavigationContext = shouldFollowLive || hasSelectedItem;
-  const navigationContextKey = `${shouldFollowLive}:${selectedItemKey ?? ''}:${navigationBoardId}:${navigationGalleryView}:${navigationOrderDir}:${selectedImageQuery.paginationMode}:${selectedImageQuery.page}:${selectedImageQuery.searchTerm}:${navigationSemanticKey}`;
-  const navigationQueryKey = `${shouldFollowLive}:${navigationBoardId}:${navigationGalleryView}:${navigationOrderDir}:${selectedImageQuery.paginationMode}:${selectedImageQuery.searchTerm}:${navigationSemanticKey}`;
+  const navigationContextKey = `${shouldFollowLive}:${selectedItemKey ?? ''}:${navigationBoardId}:${navigationGalleryView}:${navigationOrderDir}:${selectedImageQuery.paginationMode}:${selectedImageQuery.page}:${selectedImageQuery.searchTerm}:${navigationStarredOnly}:${navigationSemanticKey}`;
+  const navigationQueryKey = `${shouldFollowLive}:${navigationBoardId}:${navigationGalleryView}:${navigationOrderDir}:${selectedImageQuery.paginationMode}:${selectedImageQuery.searchTerm}:${navigationStarredOnly}:${navigationSemanticKey}`;
 
   // Lets a boundary fetch that resolves after the user has moved on compare the
   // context it started in against the one now on screen, and drop its stale
@@ -229,8 +234,12 @@ export const usePreviewNavigation = ({
   // Held sticky, the anchor outlived every one of them: a click on the newest
   // image at the top of the board left Preview walking rows 1800+ for a
   // selection at row 0.
-  const navigationAnchorPage =
-    selectedImageQuery.paginationMode === 'paginated'
+  // A strip selection is stamped with the grid's page, which indexes the
+  // unstarred listing; the strip is the top of the starred one.
+  const isStripSelection = navigationStarredOnly && !selectedImageQuery.starredOnly;
+  const navigationAnchorPage = isStripSelection
+    ? 0
+    : selectedImageQuery.paginationMode === 'paginated'
       ? hasStaleNavigationAnchor
         ? selectedImageQuery.page
         : navigationAnchor.page
@@ -289,8 +298,9 @@ export const usePreviewNavigation = ({
         orderDir: navigationOrderDir,
         searchTerm: shouldFollowLive ? '' : selectedImageSearch.text,
         ...(navigationSemanticQuery ? { semanticQuery: navigationSemanticQuery } : {}),
-        // Starred-first is pinned in gallery/core/settings.ts.
-        starredFirst: true,
+        // The grid partitions: the listing is unstarred-only unless the
+        // selection was made under the starred filter.
+        starred: navigationStarredOnly,
       },
       navigationWindow
     ),
@@ -362,14 +372,15 @@ export const usePreviewNavigation = ({
     // row"; dropping a completed batch during that window made arrow keys skip
     // the images just generated. So local items stay unconditionally, except
     // where the backend window is a *subset* of the board and dedupe cannot
-    // help: an active search (backend-filtered, local items are not), and any
-    // window anchored mid-board — paginated, or the infinite window a deep
+    // help: an active search or starred filter (backend-filtered, local items
+    // are not), and any window anchored mid-board — paginated, or the infinite window a deep
     // reveal anchors — where settled recents would splice in permanently.
     // Recents belong at the TOP of the listing, so a window nowhere near the
     // top is not theirs to join; the grid draws the same line for its own
     // window. There, only in-flight work and the selection merge.
     const hasActiveSearch =
-      !shouldFollowLive && (selectedImageSearch.text.trim() !== '' || selectedImageSearch.range !== undefined);
+      navigationStarredOnly ||
+      (!shouldFollowLive && (selectedImageSearch.text.trim() !== '' || selectedImageSearch.range !== undefined));
 
     if (!hasActiveSearch && !isPaginatedWindow && deepAnchorOffset === 0) {
       return localItems;
@@ -390,6 +401,7 @@ export const usePreviewNavigation = ({
     isFetchingBoardItems,
     isPaginatedWindow,
     localItems,
+    navigationStarredOnly,
     optimisticQueueItemIds,
     selectedImageSearch,
     selectedItem,

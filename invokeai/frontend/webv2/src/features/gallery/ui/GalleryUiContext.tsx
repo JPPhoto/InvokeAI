@@ -54,6 +54,7 @@ export interface GalleryItemContextMenuProps {
 }
 
 export interface GalleryCommandsPort {
+  clearSelection(): void;
   reconcileDeletedBoardOutcome(outcome: GalleryBoardDeletionResult): void;
   selectBoard(boardId: string): void;
   selectItem(item: GalleryItem): void;
@@ -64,6 +65,7 @@ export interface GalleryCommandsPort {
   setPage(page: number): void;
   setPageInfo(totalImages: number): void;
   setSearchTerm(searchTerm: string): void;
+  setStarredOnly(starredOnly: boolean): void;
   setView(view: GalleryView): void;
   toggleItemSelection(item: GalleryItem, nextPrimaryItem: GalleryItem | null): void;
   updateSettings(settings: Partial<GallerySettings>): void;
@@ -112,7 +114,11 @@ export interface GalleryUiAdapter {
   queueItems: QueueItem[];
   liveFollowEnabled: boolean;
   liveProgressTarget: GalleryLiveTarget | null;
-  widgets: { patchGalleryValues(values: Record<string, unknown>): void };
+  widgets: {
+    /** Open (or reveal) the Gallery widget; false when no region can host it. */
+    openGallery(): boolean;
+    patchGalleryValues(values: Record<string, unknown>): void;
+  };
 }
 
 const GalleryUiContext = createContext<GalleryUiAdapter | null>(null);

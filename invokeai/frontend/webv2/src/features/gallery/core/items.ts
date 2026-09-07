@@ -95,16 +95,12 @@ const compareSqliteBinaryText = (a: string, b: string): number => (a === b ? 0 :
 const compareCreatedAt = (a: string, b: string): number =>
   compareSqliteBinaryText(normalizeServerTimestamp(a), normalizeServerTimestamp(b));
 
-/** Mirrors the backend's starred/time/kind/name order for mixed gallery items. */
+/** Mirrors the backend's time/kind/name order for mixed gallery items. */
 export const compareGalleryItems = (
   a: GalleryItem,
   b: GalleryItem,
-  { orderDir = 'DESC', starredFirst = false }: { orderDir?: GalleryOrderDir; starredFirst?: boolean }
+  { orderDir = 'DESC' }: { orderDir?: GalleryOrderDir } = {}
 ): number => {
-  if (starredFirst && a.starred !== b.starred) {
-    return a.starred ? -1 : 1;
-  }
-
   const direction = orderDir === 'ASC' ? 1 : -1;
   const chronologicalOrder = compareCreatedAt(a.createdAt, b.createdAt);
 
@@ -126,7 +122,7 @@ type LegacyGalleryImage = GeneratedImageContract & Partial<Pick<GalleryImage, 'b
 export const legacyGeneratedImageToGalleryItem = (image: LegacyGalleryImage): GalleryImageItem => ({
   boardId: image.boardId ?? 'none',
   category: image.imageCategory ?? 'general',
-  createdAt: image.queuedAt,
+  createdAt: image.createdAt ?? image.queuedAt,
   fullUrl: image.imageUrl,
   height: image.height,
   isIntermediate: false,
@@ -140,6 +136,7 @@ export const legacyGeneratedImageToGalleryItem = (image: LegacyGalleryImage): Ga
 
 export const galleryImageItemToGalleryImage = (item: GalleryImageItem): GalleryImage => ({
   boardId: item.boardId,
+  createdAt: item.createdAt,
   height: item.height,
   imageCategory: item.category,
   imageName: item.name,
