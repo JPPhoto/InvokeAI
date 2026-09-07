@@ -40,6 +40,7 @@ const image = (imageName: string): GalleryImage => ({
 const createActions = (deleteItems: ImageActions['deleteItems']): ImageActions => ({
   canUseAsReferenceImage: false,
   copyImage: vi.fn(() => Promise.resolve()),
+  createCanvasFromImages: vi.fn(() => Promise.resolve()),
   deleteItems,
   deleteImages: vi.fn(() => Promise.resolve()),
   deriveImageRecallCapabilities: vi.fn(() => EMPTY_IMAGE_RECALL_CAPABILITIES),
@@ -233,6 +234,31 @@ describe('ImageContextMenu starred state', () => {
   });
 });
 
+describe('ImageContextMenu new canvas from image', () => {
+  it.each([1, 3])('opens a new canvas from the %s targeted image(s)', async (count) => {
+    const actions = createActions(vi.fn());
+    const images = Array.from({ length: count }, (_, index) => image(`image-${index}.png`));
+    await renderMenu(actions, images);
+
+    // A nested menu opens from a mouse hover on its trigger item, after zag's open delay.
+    const trigger = getMenuItem('widgets.canvas.import.newFromImage');
+    await interact(() =>
+      trigger.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }))
+    );
+    await act(
+      () =>
+        new Promise<void>((resolve) => {
+          globalThis.setTimeout(resolve, 300);
+        })
+    );
+    await interact(() => getMenuItem('widgets.canvas.import.newCanvasFromImage').click());
+
+    const calls = vi.mocked(actions.createCanvasFromImages).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[0].map((entry) => entry.imageName)).toEqual(images.map((entry) => entry.imageName));
+  });
+});
+
 describe('ImageContextMenu mixed-media action visibility', () => {
   it('shows common actions for a single video and hides every image-only action', async () => {
     const video = item('video', 'clip.mp4');
@@ -255,7 +281,7 @@ describe('ImageContextMenu mixed-media action visibility', () => {
     expect(document.body.textContent).toContain('Recall Metadata');
     expect(document.body.textContent).not.toContain('Send to Upscale');
     expect(document.body.textContent).not.toContain('Select for Compare');
-    expect(document.body.textContent).not.toContain('New from Image');
+    expect(document.body.textContent).not.toContain('widgets.canvas.import.newFromImage');
   });
 
   it('shows frame copy and Details only when a Preview host opts a single video into them', async () => {
@@ -333,7 +359,7 @@ describe('ImageContextMenu mixed-media action visibility', () => {
     expect(document.body.textContent).not.toContain('Copy to clipboard');
     expect(document.body.textContent).not.toContain('Recall Metadata');
     expect(document.body.textContent).not.toContain('Select for Compare');
-    expect(document.body.textContent).not.toContain('New from Images');
+    expect(document.body.textContent).not.toContain('widgets.canvas.import.newFromImage');
   });
 
   it('keeps complete mixed refs for common bulk actions and hides image-only bulk actions when a ref is unresolved', async () => {
@@ -355,7 +381,7 @@ describe('ImageContextMenu mixed-media action visibility', () => {
     expect(document.body.textContent).toContain('Download Selection');
     expect(document.body.textContent).toContain('Change Board');
     expect(document.body.textContent).toContain('Delete Selection');
-    expect(document.body.textContent).not.toContain('New from Images');
+    expect(document.body.textContent).not.toContain('widgets.canvas.import.newFromImage');
     const openInNewTab = document.querySelector<HTMLButtonElement>('[aria-label="Open in new tab"]');
     const openInPreview = document.querySelector<HTMLButtonElement>('[aria-label="Open in preview"]');
     expect(openInNewTab).not.toBeNull();

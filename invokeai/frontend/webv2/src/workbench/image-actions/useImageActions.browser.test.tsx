@@ -1,4 +1,5 @@
 import type { GalleryImage, GalleryItem, GalleryItemKey, GalleryItemRef } from '@features/gallery';
+import type { CreateCanvasFromImagesResult } from '@workbench/canvas-operations/api';
 
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -12,6 +13,10 @@ import { useImageActions } from './useImageActions';
 
 const mocks = vi.hoisted(() => ({
   addToBoard: vi.fn(),
+  createCanvasFromImages: vi.fn((..._args: unknown[]): Promise<CreateCanvasFromImagesResult> =>
+    Promise.resolve({ projectId: null, status: 'empty' })
+  ),
+  createProject: vi.fn(),
   deleteImages: vi.fn(),
   downloadArchive: vi.fn(),
   downloadBlob: vi.fn(),
@@ -113,11 +118,16 @@ vi.mock('@platform/browser/downloadBlob', () => ({
   downloadBlob: (...args: unknown[]) => mocks.downloadBlob(...args),
 }));
 
-vi.mock('@workbench/canvas-operations/api', () => ({
-  getCanvasEngine: vi.fn(),
-  getCanvasImportNotice: vi.fn(),
-  importGalleryImagesToCanvas: vi.fn(),
-}));
+vi.mock('@workbench/canvas-operations/api', async () => {
+  // The notice mapper is pure; the rest of the canvas-operations surface stays doubled.
+  const { getCanvasImportNotice } = await import('@workbench/canvas-operations/canvasImportNotice');
+  return {
+    createCanvasFromImages: (...args: unknown[]) => mocks.createCanvasFromImages(...args),
+    getCanvasEngine: vi.fn(),
+    getCanvasImportNotice,
+    importGalleryImagesToCanvas: vi.fn(),
+  };
+});
 
 vi.mock('@workbench/WorkbenchContext', () => ({
   useWorkbenchCommands: () => ({
@@ -131,6 +141,7 @@ vi.mock('@workbench/WorkbenchContext', () => ({
       setCompareImage: vi.fn(),
     },
     generation: { patchSettings: vi.fn() },
+    projects: { create: (...args: unknown[]) => mocks.createProject(...args) },
     notifications: {
       add: (...args: unknown[]) => mocks.notificationsAdd(...args),
       reportError: (...args: unknown[]) => mocks.reportError(...args),
@@ -257,6 +268,53 @@ afterEach(async () => {
   host?.remove();
   host = null;
   root = null;
+});
+
+describe('new canvas from images', () => {
+  const galleryImage = (imageName: string): GalleryImage => ({
+    boardId: 'none',
+    height: 512,
+    imageCategory: 'general',
+    imageName,
+    imageUrl: `/${imageName}`,
+    queuedAt: '2026-06-15T00:00:00Z',
+    sourceQueueItemId: 'queue-item',
+    starred: false,
+    thumbnailUrl: `/thumb-${imageName}`,
+    width: 512,
+  });
+
+  it('reports the new canvas and opens it in the center once the images land', async () => {
+    mocks.createCanvasFromImages.mockResolvedValueOnce({
+      failedImageNames: [],
+      layerIds: ['layer-1', 'layer-2'],
+      projectId: 'project-2',
+      status: 'imported',
+    });
+
+    await act(() => actionsRef.current!.createCanvasFromImages([galleryImage('a.png'), galleryImage('b.png')]));
+
+    expect(mocks.notificationsAdd).toHaveBeenCalledWith({
+      kind: 'success',
+      title: 'widgets.canvas.import.newCanvasSuccess',
+    });
+    expect(mocks.openWorkbenchWidget).toHaveBeenCalledWith('canvas', {
+      preferredRegions: ['center'],
+      requireCenterView: true,
+    });
+  });
+
+  it('surfaces the import notice and leaves the layout alone when the images could not land', async () => {
+    mocks.createCanvasFromImages.mockResolvedValueOnce({ projectId: 'project-2', status: 'stale-project' });
+
+    await act(() => actionsRef.current!.createCanvasFromImages([galleryImage('a.png')]));
+
+    expect(mocks.notificationsAdd).toHaveBeenCalledWith({
+      kind: 'error',
+      title: 'widgets.canvas.import.staleProject',
+    });
+    expect(mocks.openWorkbenchWidget).not.toHaveBeenCalled();
+  });
 });
 
 describe('image recall capability cancellation', () => {

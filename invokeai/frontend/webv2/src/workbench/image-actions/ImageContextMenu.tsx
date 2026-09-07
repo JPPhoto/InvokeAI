@@ -956,12 +956,21 @@ const NewFromImageSubMenu = ({
   actions: ImageActions;
   images: GalleryImage[];
   isBulk: boolean;
-}) => (
-  <ContextSubMenu icon={FileImageIcon} label={isBulk ? 'New from Images' : 'New from Image'}>
-    <ContextMenuItem disabled icon={FileImageIcon} label="New Canvas from Image" value="new-canvas-from-image" />
-    <GalleryCanvasImportSubMenu actions={actions} images={images} isBulk={isBulk} />
-  </ContextSubMenu>
-);
+}) => {
+  const { t } = useTranslation();
+  const handleNewCanvas = useCallback(() => void actions.createCanvasFromImages(images), [actions, images]);
+  return (
+    <ContextSubMenu icon={FileImageIcon} label={t('widgets.canvas.import.newFromImage', { count: images.length })}>
+      <ContextMenuItem
+        icon={FileImageIcon}
+        label={t('widgets.canvas.import.newCanvasFromImage', { count: images.length })}
+        value="new-canvas-from-image"
+        onClick={handleNewCanvas}
+      />
+      <GalleryCanvasImportSubMenu actions={actions} images={images} isBulk={isBulk} />
+    </ContextSubMenu>
+  );
+};
 
 const GalleryCanvasImportSubMenu = ({
   actions,
@@ -976,7 +985,7 @@ const GalleryCanvasImportSubMenu = ({
   const items = getGalleryCanvasImportMenuItems(isBulk);
 
   return (
-    <ContextSubMenu icon={LayersIcon} label={t('widgets.canvas.import.newLayerFromImage')}>
+    <ContextSubMenu icon={LayersIcon} label={t('widgets.canvas.import.newLayerFromImage', { count: images.length })}>
       {items.map((item) => (
         <GalleryCanvasImportDestinationMenuItem key={item.destination} actions={actions} images={images} item={item} />
       ))}

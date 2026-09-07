@@ -25,7 +25,7 @@ import {
   invalidateGallery,
   patchGalleryItemCaches,
 } from '@features/gallery/queries';
-import { setPendingPromptTemplateDraft } from '@features/generation/react';
+import { flushGenerateDrafts, setPendingPromptTemplateDraft } from '@features/generation/react';
 import { getMaxReferenceImages, isVaeModelConfig, isSupportedGenerateModel } from '@features/generation/settings';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { downloadBlob } from '@platform/browser/downloadBlob';
@@ -37,6 +37,7 @@ import {
 } from '@platform/state/accountLifecycle';
 import { useQueryClient } from '@tanstack/react-query';
 import {
+  createCanvasFromImages,
   getCanvasImportNotice,
   getCanvasEngine,
   importGalleryImagesToCanvas,
@@ -86,6 +87,8 @@ export interface ImageActions extends GalleryItemActions {
   /** Whether the generate widget's current model can accept another reference image. */
   canUseAsReferenceImage: boolean;
   copyImage: (image: GalleryImage) => Promise<void>;
+  /** Opens a new project whose canvas holds these images as raster layers. */
+  createCanvasFromImages: (images: readonly GalleryImage[]) => Promise<void>;
   deleteImages: (imageNames: string[]) => Promise<void>;
   /** Derives recall availability from already-fetched metadata and the current generate/model state. */
   deriveImageRecallCapabilities: (
@@ -911,6 +914,43 @@ export const useImageActions = ({
       },
       selectForCompare: (image) => {
         gallery.setCompareImage(image, projectId);
+      },
+      createCanvasFromImages: async (images) => {
+        const owner = captureAccountScope();
+        flushGenerateDrafts();
+        try {
+          const result = await createCanvasFromImages({
+            applyCanvasMutation: commands.canvas.apply,
+            createProject: commands.projects.create,
+            getProject: queries.getProject,
+            images,
+            isActiveProject: queries.isActiveProject,
+          });
+
+          assertAccountScopeCurrent(owner);
+          if (result.status === 'imported' && result.failedImageNames.length === 0) {
+            notifications.add({
+              kind: 'success',
+              title: t('widgets.canvas.import.newCanvasSuccess', { count: result.layerIds.length }),
+            });
+          } else {
+            const notice = getCanvasImportNotice(result);
+            notifications.add({ kind: notice.kind, title: t(notice.titleKey, notice.options ?? {}) });
+          }
+          if (result.status === 'imported' && result.projectId !== null && queries.isActiveProject(result.projectId)) {
+            openWorkbenchWidget('canvas', { preferredRegions: ['center'], requireCenterView: true });
+          }
+        } catch (error: unknown) {
+          if (!isAccountScopeCurrent(owner)) {
+            return;
+          }
+          recordCanvasImportError({
+            error,
+            localizedMessage: t('widgets.canvas.import.failed'),
+            notifications,
+            projectId,
+          });
+        }
       },
       sendToCanvas: async (images, destination) => {
         const owner = captureAccountScope();
