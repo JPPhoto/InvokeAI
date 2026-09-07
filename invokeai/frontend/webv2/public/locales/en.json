@@ -3757,7 +3757,7 @@
       "referenceDetailMax": "Max detail (2048px, slower)",
       "referenceExtendCapFull": "Initial video not set",
       "referenceExtendCapFullDescription": "All 3 video reference slots are in use, so there is no room for the continuity reference this clip needs. Remove a video reference, then drop the clip again.",
-      "referenceExtendHelp": "The generated video is appended to this clip at its End Frame. A linked video reference samples up to the last ~5 seconds before that cutpoint for continuity — never more than the generated clip's own length, since the model discards the overrun at the seam. Its trim re-derives whenever the cutpoints or the frame count change.",
+      "referenceExtendHelp": "The generated video is appended to this clip at its End Frame. A linked video reference samples up to the last ~5 seconds before that cutpoint for continuity — never more than the generated clip's own length, since the model discards the overrun at the end of the window. That trim is only a default: it re-derives whenever the cutpoints or the frame count change, until you move the reference's own Start Frame or Sample Length, after which it is left alone. Clear and re-set this clip to get the default back.",
       "referenceImageCapRace": "All {{max}} image reference slots filled while this one was loading, so it was not added.",
       "referenceImageCost": "{{width}}×{{height}} · {{rows}} rows per step",
       "referenceVideoCapRace": "All {{max}} video or audio reference slots filled while this one was loading, so it was not added.",
