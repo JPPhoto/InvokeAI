@@ -16,7 +16,7 @@ import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@feat
 import { resolveMiniMaxH3ReferenceImage } from '@features/video/core/dimensions';
 import {
   createVideoSourceClip,
-  DEFAULT_REFERENCE_SAMPLE_FRAMES,
+  getDefaultReferenceClip,
   getDefaultReferenceConditioning,
   getDefaultReferenceImageDetail,
   resizeReferenceSampleWindow,
@@ -102,6 +102,8 @@ const getSingleGalleryDragItem = (data: unknown): { kind: 'image' | 'video'; nam
 };
 
 type ReferenceCollections = {
+  /** The anchor's options: 'Audio only' is absent, see `anchorReferenceConditioning`. */
+  anchorConditioning: ReturnType<typeof createListCollection<{ label: string; value: string }>>;
   conditioning: ReturnType<typeof createListCollection<{ label: string; value: string }>>;
   detail: ReturnType<typeof createListCollection<{ label: string; value: string }>>;
 };
@@ -136,6 +138,15 @@ const ReferenceCard = memo(function ReferenceCard({
     () => [reference.kind === 'video' ? reference.conditioning : reference.detail],
     [reference]
   );
+  const selectCollection = useMemo(() => {
+    if (reference.kind !== 'video') {
+      return collections.detail;
+    }
+
+    // The anchor is not offered 'Audio only': it is the reference the extension continues
+    // FROM, and an audio-only one contributes no visual rows to continue from.
+    return reference.fromSourceVideo === true ? collections.anchorConditioning : collections.conditioning;
+  }, [collections, reference]);
   const handleSelect = useCallback(
     (details: { value: string[] }) => {
       const value = details.value[0];
@@ -222,7 +233,7 @@ const ReferenceCard = memo(function ReferenceCard({
             ) : null}
           </HStack>
           <Select
-            collection={reference.kind === 'video' ? collections.conditioning : collections.detail}
+            collection={selectCollection}
             disabled={disabled}
             size="xs"
             value={selectValue}
@@ -381,16 +392,18 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
     !isInert && activeDragItem !== null && (activeDragItem.kind === 'video' ? canAddVideo : canAddImage);
   const { isOver, setNodeRef } = useDroppable({ disabled: !acceptsActiveDrag, id: DROP_ID });
 
-  const conditioningCollection = useMemo(
-    () =>
-      createListCollection({
-        items: [
-          { label: t('widgets.video.referenceConditioningVideoAudio'), value: 'video_audio' },
-          { label: t('widgets.video.referenceConditioningVideo'), value: 'video' },
-          { label: t('widgets.video.referenceConditioningAudio'), value: 'audio' },
-        ],
-      }),
+  const conditioningItems = useMemo(
+    () => [
+      { label: t('widgets.video.referenceConditioningVideoAudio'), value: 'video_audio' },
+      { label: t('widgets.video.referenceConditioningVideo'), value: 'video' },
+      { label: t('widgets.video.referenceConditioningAudio'), value: 'audio' },
+    ],
     [t]
+  );
+  const conditioningCollection = useMemo(() => createListCollection({ items: conditioningItems }), [conditioningItems]);
+  const anchorConditioningCollection = useMemo(
+    () => createListCollection({ items: conditioningItems.filter((item) => item.value !== 'audio') }),
+    [conditioningItems]
   );
   const detailCollection = useMemo(
     () =>
@@ -403,8 +416,12 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
     [t]
   );
   const collections = useMemo(
-    () => ({ conditioning: conditioningCollection, detail: detailCollection }),
-    [conditioningCollection, detailCollection]
+    () => ({
+      anchorConditioning: anchorConditioningCollection,
+      conditioning: conditioningCollection,
+      detail: detailCollection,
+    }),
+    [anchorConditioningCollection, conditioningCollection, detailCollection]
   );
   const handlePickImage = useCallback(() => imageInputRef.current?.click(), []);
   const handlePickVideo = useCallback(() => videoInputRef.current?.click(), []);
@@ -476,15 +493,10 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       // Built outside the updater so the caller holds the same object the list does: it is
       // the only durable handle on this entry once reordering moves it.
       const entry: Extract<VideoReferenceItem, { kind: 'video' }> = {
-        // Default to a short sample window from the clip's start, not the whole
-        // clip: reference frames cost denoise VRAM every step, and a few seconds
-        // captures the wanted features. (Not the extend-mode 2-frame-tail trim
-        // either -- references are truncated to the generated duration, not joined.)
-        clip: {
-          ...clip,
-          endFrame: Math.max(0, Math.min(DEFAULT_REFERENCE_SAMPLE_FRAMES, clip.numFrames) - 1),
-          startFrame: 0,
-        },
+        // The window depends on the conditioning -- a short sample of footage, the whole
+        // clip of a soundtrack. (Neither is the extend-mode 2-frame-tail trim: references
+        // are truncated to the generated duration, not joined.)
+        clip: getDefaultReferenceClip(clip, conditioning),
         conditioning,
         kind: 'video',
       };
@@ -655,10 +667,20 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
           if (conditioning === entry.conditioning) {
             return;
           }
+          // The window is re-derived with the conditioning, not carried over: this path adds
+          // BEFORE it knows the answer, so the card is holding the footage default, and
+          // leaving it would give a picked soundtrack a shorter window than the same clip
+          // dropped or uploaded. Safe to recompute -- the identity match below already
+          // establishes that the window is still the one this code chose.
+          //
           // Matched by identity, not index: a card the user has since edited is a different
           // object and keeps their choice, and a removed one is simply no longer there.
           onChange((current) =>
-            current.map((existing) => (existing === entry ? { ...entry, conditioning } : existing))
+            current.map((existing) =>
+              existing === entry
+                ? { ...entry, clip: getDefaultReferenceClip(entry.clip, conditioning), conditioning }
+                : existing
+            )
           );
         })
         .catch(() => undefined);
