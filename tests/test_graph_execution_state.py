@@ -792,7 +792,13 @@ def test_graph_state_apply_rolls_back_scheduler_mutation_on_completion_failure()
     assert node is not None
     output = node.invoke(Mock(InvocationContext))
     ref = state.get_execution_ref(node.id)
-    state.indegree.pop(next(exec_id for exec_id in state.execution_graph.nodes if exec_id != node.id))
+    scheduler = state._scheduler()
+    original_record_completed_node = scheduler._record_completed_node
+
+    def fail_after_scheduler_completion(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("completion recording failed")
+
+    scheduler._record_completed_node = fail_after_scheduler_completion  # type: ignore[method-assign]
     state_before = {
         "execution_graph": state.execution_graph.model_dump(mode="json", warnings=False),
         "executed": state.executed.copy(),
@@ -804,8 +810,11 @@ def test_graph_state_apply_rolls_back_scheduler_mutation_on_completion_failure()
         "indegree": state.indegree.copy(),
     }
 
-    with pytest.raises(KeyError, match="indegree missing"):
-        state.apply(ref, output)
+    try:
+        with pytest.raises(RuntimeError, match="completion recording failed"):
+            state.apply(ref, output)
+    finally:
+        scheduler._record_completed_node = original_record_completed_node  # type: ignore[method-assign]
 
     assert state.execution_graph.model_dump(mode="json", warnings=False) == state_before["execution_graph"]
     assert state.executed == state_before["executed"]
