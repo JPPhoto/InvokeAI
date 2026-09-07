@@ -2162,9 +2162,13 @@ class _GenericGraphSchedulerAdapter:
 
     def __init__(self, state: "GraphExecutionState") -> None:
         self._state = state
-        prepared_ids = set(state.prepared_source_mapping).intersection(state.executed)
-        self._scheduler = ExecutionScheduler(ExecutionPlan(), state.ready_order, executed=prepared_ids)
+        self._initializing = True
+        self._scheduler = ExecutionScheduler(ExecutionPlan(), state.ready_order)
         self._register_existing_nodes()
+        prepared_ids = set(state.prepared_source_mapping).intersection(state.executed)
+        self._scheduler.executed = prepared_ids
+        self._scheduler.rebuild_ready()
+        self._initializing = False
         self._sync_indegree()
         self._project_ready_nodes()
 
@@ -2192,7 +2196,8 @@ class _GenericGraphSchedulerAdapter:
             )
         )
         self._state._tx_set_mapping(self._state.indegree, exec_node_id, self._scheduler.indegree[exec_node_id])
-        self._project_ready_node(exec_node_id)
+        if not self._initializing:
+            self._project_ready_node(exec_node_id)
 
     def _sync_indegree(self) -> None:
         for exec_node_id, degree in self._scheduler.indegree.items():

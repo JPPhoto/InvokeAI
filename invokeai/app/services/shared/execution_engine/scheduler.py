@@ -161,7 +161,7 @@ class ExecutionScheduler:
     def _sort_key(self, node_id: NodeId) -> tuple[Any, ...]:
         node = self.plan.nodes[node_id]
         if self.ready_order:
-            class_key = (self._priority(node.class_name), "")
+            class_key = (self._priority(node.class_name), node.class_name)
         else:
             class_key = (0, node.class_name)
         return (*class_key, _frame_key(node.frame), node.order)
@@ -263,15 +263,20 @@ class ExecutionScheduler:
         unknown = self.executed.difference(self.plan.nodes)
         if unknown:
             raise KeyError(f"unknown executed node: {next(iter(unknown))}")
+        for node_id in self.executed:
+            missing = [
+                dependency for dependency in self.plan.nodes[node_id].dependencies if dependency not in self.executed
+            ]
+            if missing:
+                raise ValueError(f"executed node {node_id} is missing prerequisite: {missing[0]}")
         self.indegree = {
             node_id: sum(dependency not in self.executed for dependency in node.dependencies)
             for node_id, node in self.plan.nodes.items()
         }
         self._ready = []
         self._enqueued = set()
-        self._claimed = set()
         for node_id in self.plan.nodes:
-            if node_id not in self.executed and self.indegree[node_id] == 0:
+            if node_id not in self.executed and node_id not in self._claimed and self.indegree[node_id] == 0:
                 heappush(self._ready, (self._sort_key(node_id), node_id))
                 self._enqueued.add(node_id)
 

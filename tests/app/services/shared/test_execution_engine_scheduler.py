@@ -49,6 +49,33 @@ def test_generic_scheduler_preserves_ready_class_and_frame_order() -> None:
     assert [scheduler.pop_next(), scheduler.pop_next(), scheduler.pop_next()] == ["early", "late", "other"]
 
 
+def test_generic_scheduler_sorts_unlisted_ready_classes_by_name() -> None:
+    plan = ExecutionPlan()
+    plan.add_node("z", "ZNode")
+    plan.add_node("a", "ANode")
+    scheduler = ExecutionScheduler(plan, ready_order=("PriorityNode",))
+
+    assert [scheduler.pop_next(), scheduler.pop_next()] == ["a", "z"]
+
+
+def test_generic_scheduler_rejects_non_closed_executed_projection() -> None:
+    plan = ExecutionPlan()
+    plan.add_node("parent", "Parent")
+    plan.add_node("child", "Child", dependencies=("parent",))
+
+    with pytest.raises(ValueError, match="missing prerequisite"):
+        ExecutionScheduler(plan, executed=("child",))
+
+
+def test_generic_scheduler_does_not_requeue_claimed_work_on_rebuild() -> None:
+    scheduler = ExecutionScheduler(_plan())
+    assert scheduler.pop_next() == "left"
+
+    scheduler.rebuild_ready()
+
+    assert scheduler.pop_next() == "right"
+
+
 def test_generic_scheduler_rejects_invalid_completion_without_mutation() -> None:
     plan = _plan()
     scheduler = ExecutionScheduler(plan)
@@ -87,7 +114,7 @@ def test_generic_scheduler_rehydrates_repeated_dependencies() -> None:
 
 def test_generic_scheduler_rejects_malformed_snapshot() -> None:
     with pytest.raises(ValueError, match="node order"):
-        ExecutionPlan.from_snapshot({"nodes": {"node": {"node_id": "node", "order": "first"}}})
+        ExecutionPlan.from_snapshot({"nodes": {"node": {"node_id": "node", "class_name": "Node", "order": "first"}}})
 
 
 def test_generic_scheduler_rehydrates_from_durable_projection() -> None:
@@ -157,3 +184,25 @@ def test_graph_state_static_dag_delegates_readiness_to_generic_scheduler() -> No
     assert type(state._scheduler()).__name__ == "_GenericGraphSchedulerAdapter"
     state.complete(node.id, node.invoke(Mock()))
     assert state.is_complete()
+
+
+def test_graph_state_static_dag_rehydrates_generic_scheduler_after_partial_run() -> None:
+    graph = Graph()
+    graph.add_node(AddInvocation(id="first", a=1, b=2))
+    graph.add_node(AddInvocation(id="second", b=4))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="first", field="value"),
+            destination=EdgeConnection(node_id="second", field="a"),
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+    first = state.next()
+    assert first is not None
+    state.complete(first.id, first.invoke(Mock()))
+
+    restored = GraphExecutionState.model_validate(state.model_dump(mode="python"), strict=False)
+
+    second = restored.next()
+    assert second is not None
+    assert restored.prepared_source_mapping[second.id] == "second"
