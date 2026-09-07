@@ -1492,6 +1492,10 @@
         "label": "Theme",
         "description": "Choose the workbench colors."
       },
+      "highContrast": {
+        "label": "High contrast",
+        "description": "Strengthen text and border contrast on every theme."
+      },
       "reduceMotion": {
         "label": "Reduce motion",
         "description": "Disable transitions and animations across the workbench."

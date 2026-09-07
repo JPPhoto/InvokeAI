@@ -38,6 +38,7 @@ export const appearanceSettings = section('appearance', 'Appearance', [
     options: WORKBENCH_LANGUAGE_OPTIONS,
   },
   preference('reduceMotion', 'Reduce motion', 'animation'),
+  preference('highContrast', 'High contrast', 'accessibility a11y readability'),
   preference('showFocusRegionHighlight', 'Highlight focused regions', 'panel outline'),
 ]);
 export const behaviorSettings = section('behavior', 'Behavior', [

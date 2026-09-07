@@ -64,6 +64,7 @@ export const DEFAULT_PREFERENCES: WorkbenchPreferences = {
   enableModelDescriptions: true,
   generatePresets: [],
   generateSectionsOpen: {},
+  highContrast: false,
   krea2RebalancePresets: [],
   language: 'en',
   launchpadPinnedProjectIds: [],
@@ -342,6 +343,8 @@ export const normalizeWorkbenchPreferences = (preferences?: WorkbenchPreferences
       : preferences?.queueJobsScope === 'active-project' || preferences?.queueJobsScope === 'all'
         ? preferences.queueJobsScope
         : DEFAULT_PREFERENCES.queueJobsScope,
+  highContrast:
+    typeof preferences?.highContrast === 'boolean' ? preferences.highContrast : DEFAULT_PREFERENCES.highContrast,
   reduceMotion:
     typeof preferences?.reduceMotion === 'boolean' ? preferences.reduceMotion : DEFAULT_PREFERENCES.reduceMotion,
   showFocusRegionHighlight:

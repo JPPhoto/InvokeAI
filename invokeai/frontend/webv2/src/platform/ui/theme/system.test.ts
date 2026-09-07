@@ -103,6 +103,21 @@ describe('ramp + mapping structure', () => {
   });
 });
 
+describe('high contrast conditions', () => {
+  it('emits a per-theme high-contrast block that lifts muted text toward the foreground', () => {
+    const layer = sys.getTokenCss()['@layer tokens']!;
+    for (const theme of THEMES) {
+      const block = layer[`&:root[data-theme=${theme}][data-high-contrast=true]`];
+      expect(block, theme).toBeDefined();
+      const step = theme === 'light' ? 800 : 200;
+      const varOf = (name: string) => sys.tokens.getByName(`colors.${name}`)!.extensions.cssVar.var;
+      expect(block![varOf('fg.muted')]).toBe(`var(${varOf(`neutral.${step}`)})`);
+      expect(block![varOf('border')]).toBeDefined();
+      expect(block![varOf('gray.border')]).toBeDefined();
+    }
+  });
+});
+
 describe('native Chakra integration', () => {
   it('adds an icon-sized progress circle variant', () => {
     expect(progressCircleSlotRecipe.variants?.size?.['2xs']).toMatchObject({

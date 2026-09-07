@@ -381,6 +381,14 @@ describe('normalizeWorkbenchPreferences prompt editing', () => {
   });
 });
 
+describe('normalizeWorkbenchPreferences appearance', () => {
+  it('keeps high contrast off unless explicitly enabled', () => {
+    expect(store.normalizeWorkbenchPreferences({}).highContrast).toBe(false);
+    expect(store.normalizeWorkbenchPreferences({ highContrast: 1 as never }).highContrast).toBe(false);
+    expect(store.normalizeWorkbenchPreferences({ highContrast: true }).highContrast).toBe(true);
+  });
+});
+
 describe('normalizeWorkbenchPreferences workflow editor', () => {
   it('keeps connections above nodes unless the preference is explicitly on', () => {
     expect(store.normalizeWorkbenchPreferences({}).workflowEdgesBehindNodes).toBe(false);
