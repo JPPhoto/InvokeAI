@@ -16,7 +16,9 @@ const createHarness = () => {
   const onChange = vi.fn();
   const selection = withSelectionHistory(
     createSelectionState({
-      backend: createTestStubRasterBackend(),
+      // No readable pixels: boolean ops fall back to path bookkeeping, so the
+      // history is exercised through what it records rather than a traced mask.
+      backend: createTestStubRasterBackend({ readbackAlpha: 0 }),
       createPath2D: (d) => ({ d }) as unknown as Path2D,
       getDocumentSize: () => DOC,
       onChange,

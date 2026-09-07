@@ -31,8 +31,8 @@ const placedMask = (alphas: readonly number[]): { placed: PlacedSurface; pixels:
   return { pixels, placed: { rect: rectBounds(7, -3, 2, 2), surface } };
 };
 
-const createHarness = (docSize: { width: number; height: number } | null = DOC) => {
-  const backend = createTestStubRasterBackend();
+const createHarness = (docSize: { width: number; height: number } | null = DOC, readbackAlpha?: number) => {
+  const backend = createTestStubRasterBackend(readbackAlpha === undefined ? undefined : { readbackAlpha });
   const onChange = vi.fn();
   const selection: SelectionState = createSelectionState({
     backend,
@@ -79,23 +79,43 @@ describe('selectionState: mask building from a path', () => {
 });
 
 describe('selectionState: boolean ops', () => {
-  it('add unions bounds with source-over and keeps both ant paths', () => {
+  it('add unions bounds with source-over and re-traces the ants from the mask', () => {
     const { selection } = createHarness();
     selection.commit({ bounds: rectBounds(10, 10, 10, 10), op: 'replace', path: fakePath('a') });
     selection.commit({ bounds: rectBounds(40, 40, 10, 10), op: 'add', path: fakePath('b') });
 
     expect(selection.hasSelection()).toBe(true);
     expect(selection.bounds()).toEqual(rectBounds(10, 10, 40, 40));
-    expect(selection.antsPaths()).toHaveLength(2);
+    // One traced outline replaces the two source paths (the stub reads back solid pixels).
+    expect(selection.antsPaths()).toHaveLength(1);
+    expect(selection.antsPaths()[0]).not.toEqual(fakePath('b'));
     expect(compositeOpsFor(maskLog(selection))).toContain('source-over');
   });
 
-  it('subtract composites destination-out', () => {
+  it('add keeps stroking the source paths when the mask cannot be read back', () => {
+    const { selection } = createHarness(DOC, 0);
+    selection.commit({ bounds: rectBounds(10, 10, 10, 10), op: 'replace', path: fakePath('a') });
+    selection.commit({ bounds: rectBounds(40, 40, 10, 10), op: 'add', path: fakePath('b') });
+
+    expect(selection.hasSelection()).toBe(true);
+    expect(selection.antsPaths()).toEqual([fakePath('a'), fakePath('b')]);
+  });
+
+  it('subtract composites destination-out and re-traces the ants', () => {
     const { selection } = createHarness();
     selection.commit({ bounds: rectBounds(0, 0, 50, 50), op: 'replace', path: fakePath('a') });
     selection.commit({ bounds: rectBounds(10, 10, 10, 10), op: 'subtract', path: fakePath('b') });
     expect(selection.hasSelection()).toBe(true);
+    expect(selection.antsPaths()).toHaveLength(1);
     expect(compositeOpsFor(maskLog(selection))).toContain('destination-out');
+  });
+
+  it('subtracting everything deselects instead of leaving a phantom selection', () => {
+    const { selection } = createHarness(DOC, 0);
+    selection.commit({ bounds: rectBounds(0, 0, 50, 50), op: 'replace', path: fakePath('a') });
+    selection.commit({ bounds: rectBounds(0, 0, 50, 50), op: 'subtract', path: fakePath('b') });
+    expect(selection.hasSelection()).toBe(false);
+    expect(selection.bounds()).toBeNull();
   });
 
   it('intersect composites destination-in and intersects the bounds', () => {
@@ -105,6 +125,14 @@ describe('selectionState: boolean ops', () => {
     expect(selection.hasSelection()).toBe(true);
     expect(selection.bounds()).toEqual(rectBounds(30, 30, 20, 20));
     expect(compositeOpsFor(maskLog(selection))).toContain('destination-in');
+  });
+
+  it('an intersect that leaves nothing deselects', () => {
+    const { selection } = createHarness(DOC, 0);
+    selection.commit({ bounds: rectBounds(0, 0, 50, 50), op: 'replace', path: fakePath('a') });
+    selection.commit({ bounds: rectBounds(10, 10, 10, 10), op: 'intersect', path: fakePath('b') });
+    expect(selection.hasSelection()).toBe(false);
+    expect(selection.antsPaths()).toEqual([]);
   });
 
   it('intersect against no existing selection clears to nothing', () => {

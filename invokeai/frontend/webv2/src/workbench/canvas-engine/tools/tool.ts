@@ -279,4 +279,9 @@ export interface Tool {
   onWheel?(ctx: ToolContext, deltaY: number, screenAnchor: { x: number; y: number }, modifiers: PointerModifiers): void;
   /** The CSS cursor to show while this tool is active. */
   cursor?(ctx: ToolContext): string;
+  /**
+   * Alt is one of this tool's gesture modifiers (selection ops), so the pointer
+   * pipeline must not turn an alt-hold into the temporary color picker.
+   */
+  readonly usesAltKey?: boolean;
 }

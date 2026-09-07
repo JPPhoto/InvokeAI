@@ -14,26 +14,21 @@
  * kept only for {@link marchingAnts} rendering (stroking the outlines), not for
  * re-deriving the mask.
  *
- * ## Marching-ants approximation
+ * ## Marching ants
  *
- * Ants are stroked from the committed path LIST (each path drawn dashed), not by
- * tracing the mask's true edge. This matches the mask exactly for `replace` and
- * `add`, and reads correctly for `subtract` (the cut-out path's outline shows as
- * a hole) and `selectAll`/`invert` (a document-border path is included). It is an
- * approximation for `intersect` and for heavily overlapping compositions, where
- * the true selection outline is the boolean result rather than the union of the
- * source outlines — the ants may show interior source edges that the mask does
- * not. The exception is {@link SelectionState.replaceMask} (pixel-mask
- * replacement, e.g. a Select Object result), whose ants ARE traced from the
- * mask's true edge via {@link traceMaskOutlinePath}. The mask itself is always
- * exact.
+ * A `replace` strokes its own path. Every boolean op (`add` / `subtract` /
+ * `intersect`) re-traces the mask's true edge via {@link traceMaskOutlinePath},
+ * the same way {@link SelectionState.replaceMask} does, so the ants show the
+ * boolean result rather than the union of the source outlines. `selectAll` /
+ * `invert` keep their document-border path. When a trace yields nothing after
+ * an `add` (a raster stub with no readable pixels), the source paths are
+ * stroked instead; after `subtract` / `intersect` an empty trace means the mask
+ * is empty, and the selection is dropped.
  *
  * ## Emptiness
  *
- * `hasSelection` is tracked structurally, not by scanning pixels (a scan is
- * unavailable on the node raster stub and costly on the DOM). Consequently,
- * `subtract`ing away the entire selection leaves `hasSelection` true until an
- * explicit deselect — a known, documented limitation of this phase.
+ * `hasSelection` is structural for `replace` / `add` (they cannot empty the
+ * mask) and pixel-derived for `subtract` / `intersect` through the same trace.
  *
  * Zero React, zero import-time side effects.
  */
@@ -348,7 +343,6 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
         ? ensureMask(bounds)
         : ensureMask(selectionBounds ?? bounds ?? { height: 0, width: 0, x: 0, y: 0 });
     fillPath(surface, { x: maskRect!.x, y: maskRect!.y }, next.path, compositeForOp(next.op));
-    commits.push(next);
 
     switch (next.op) {
       case 'add':
@@ -356,15 +350,47 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
         selected = selected || bounds !== null;
         break;
       case 'subtract':
-        // Bounds can only shrink; without a pixel scan we keep the (over-approx)
-        // prior bounds. `selected` stays true — see module docs.
+        // Bounds only shrink; they stay the prior over-approximation, and the
+        // trace below decides whether anything is left.
         break;
       case 'intersect':
         selectionBounds = selectionBounds && bounds ? intersect(selectionBounds, bounds) : null;
         selected = selectionBounds !== null;
         break;
     }
+
+    const outline = selected ? traceCurrentOutline() : null;
+    if (outline) {
+      commits = [{ bounds: selectionBounds ?? roundOut(next.bounds), op: 'replace', path: createPath2D(outline) }];
+    } else if (next.op === 'add') {
+      commits.push(next);
+    } else {
+      clear();
+      return;
+    }
     changed();
+  };
+
+  /** The mask's true edge as path data, or null when it holds no pixels. */
+  const traceCurrentOutline = (): string | null => {
+    if (!mask || !maskRect || isEmpty(maskRect)) {
+      return null;
+    }
+    const pixels = mask.ctx.getImageData(0, 0, maskRect.width, maskRect.height);
+    // A subtract that emptied the mask is the common way to get here: one alpha
+    // scan settles it without paying for two full traces.
+    let hasAlpha = false;
+    for (let index = 3; index < pixels.data.length; index += 4) {
+      if (pixels.data[index] !== 0) {
+        hasAlpha = true;
+        break;
+      }
+    }
+    if (!hasAlpha) {
+      return null;
+    }
+    const source = { data: pixels.data, height: maskRect.height, width: maskRect.width };
+    return traceMaskOutlinePath(source, maskRect) || traceMaskOutlinePath(source, maskRect, 1) || null;
   };
 
   const selectAll = (domain: Rect): void => {

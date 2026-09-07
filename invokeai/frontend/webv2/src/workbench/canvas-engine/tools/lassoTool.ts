@@ -66,6 +66,8 @@ interface PolygonSession {
   points: Vec2[];
   /** The rubber-band endpoint (the last cursor position), or `null` before any move. */
   cursor: Vec2 | null;
+  /** Whether the cursor sits on the first vertex, where a click closes the polygon. */
+  closeArmed: boolean;
   /** Screen position and time of the previous press, for double-click detection. */
   lastPressScreen: Vec2;
   lastPressAt: number;
@@ -89,20 +91,21 @@ export const createLassoTool = (): Tool => {
     }
   };
 
-  /**
-   * Publishes the in-progress outline. For a polygon the rubber-band endpoint is
-   * appended, so the overlay (which closes the loop) shows both the segment to
-   * the cursor and the implied closing edge.
-   */
+  /** Publishes the in-progress outline for the overlay. */
   const publishPreview = (ctx: ToolContext): void => {
-    if (!session) {
+    if (!session || session.points.length === 0) {
       ctx.stores.lassoPreview.set(null);
-      ctx.invalidate({ overlay: true });
-      return;
+    } else if (session.kind === 'polygon') {
+      ctx.stores.lassoPreview.set({
+        closeArmed: session.closeArmed,
+        closeRadiusPx: session.points.length >= MIN_POLYGON_POINTS ? POLYGON_CLOSE_HIT_PX : null,
+        cursor: session.cursor,
+        kind: 'polygon',
+        points: session.points.slice(),
+      });
+    } else {
+      ctx.stores.lassoPreview.set({ kind: 'freehand', points: session.points.slice() });
     }
-    const points =
-      session.kind === 'polygon' && session.cursor ? [...session.points, session.cursor] : session.points.slice();
-    ctx.stores.lassoPreview.set(points.length > 0 ? points : null);
     ctx.invalidate({ overlay: true });
   };
 
@@ -113,11 +116,15 @@ export const createLassoTool = (): Tool => {
 
   /** Commits `polygon` as a selection under the modifiers held at close time. */
   const commit = (ctx: ToolContext, polygon: readonly Vec2[], modifiers: { shift: boolean; alt: boolean }): void => {
-    if (polygon.length < MIN_POLYGON_POINTS || !ctx.commitSelection) {
+    const bounds = polygonBounds(polygon);
+    // A double-click's second press lands on the previous vertex, so count
+    // distinct points; and a flat polygon would select a line of nothing.
+    const distinct = polygon.filter((point, index) => index === 0 || distance(point, polygon[index - 1]!) >= 1);
+    if (distinct.length < MIN_POLYGON_POINTS || bounds.width < 1 || bounds.height < 1 || !ctx.commitSelection) {
       return;
     }
     ctx.commitSelection({
-      bounds: polygonBounds(polygon),
+      bounds,
       op: selectionOpFor(modifiers, ctx.stores.lassoOptions.get().mode),
       path: ctx.createPath2D(polygonToSvgPath(polygon)),
     });
@@ -146,8 +153,9 @@ export const createLassoTool = (): Tool => {
   };
 
   return {
-    cursor: () => 'crosshair',
+    cursor: () => (session?.kind === 'polygon' && session.closeArmed ? 'pointer' : 'crosshair'),
     id: 'lasso',
+    usesAltKey: true,
     onDeactivate: (ctx, opts) => {
       if (opts?.temporary) {
         // A modifier-hold switch (space → view to pan mid-polygon) must not
@@ -194,6 +202,7 @@ export const createLassoTool = (): Tool => {
 
       if (!session) {
         session = {
+          closeArmed: false,
           cursor: null,
           kind: 'polygon',
           lastPressAt: input.timeStamp,
@@ -227,6 +236,11 @@ export const createLassoTool = (): Tool => {
       }
       if (session.kind === 'polygon') {
         session.cursor = { x: input.documentPoint.x, y: input.documentPoint.y };
+        const closeArmed = isOnFirstVertex(ctx, session, input.screenPoint);
+        if (closeArmed !== session.closeArmed) {
+          session.closeArmed = closeArmed;
+          ctx.updateCursor();
+        }
       } else {
         for (const sample of batch) {
           pushDecimated(session.points, sample.documentPoint);

@@ -157,6 +157,56 @@ describe('renderOverlay', () => {
     }
   });
 
+  it("marks a polygon lasso's vertices and fills the first-vertex ring once a click there would close it", () => {
+    const points = [
+      { x: 10, y: 10 },
+      { x: 50, y: 10 },
+      { x: 50, y: 50 },
+    ];
+    const render = (closeArmed: boolean) => {
+      const backend = createTestStubRasterBackend();
+      const target = backend.createSurface(200, 200);
+      renderOverlay(
+        target,
+        baseState({
+          lassoPreview: { closeArmed, closeRadiusPx: 8, cursor: { x: 12, y: 12 }, kind: 'polygon', points },
+          showBbox: false,
+        })
+      );
+      return target.callLog;
+    };
+    const idle = render(false);
+    // The ring is the close hit radius itself, so it never disagrees with the click.
+    expect(idle.filter((e) => e.op === 'arc').map((e) => e.args.slice(0, 3))).toEqual([[10, 10, 8]]);
+    expect(idle.filter((e) => e.op === 'fillRect')).toHaveLength(2);
+    expect(idle.filter((e) => e.op === 'fill')).toHaveLength(0);
+
+    const armed = render(true);
+    expect(armed.filter((e) => e.op === 'fill')).toHaveLength(1);
+  });
+
+  it('draws no close ring while the polygon cannot close yet', () => {
+    const backend = createTestStubRasterBackend();
+    const target = backend.createSurface(200, 200);
+    renderOverlay(
+      target,
+      baseState({
+        lassoPreview: {
+          closeArmed: false,
+          closeRadiusPx: null,
+          cursor: { x: 30, y: 30 },
+          kind: 'polygon',
+          points: [
+            { x: 10, y: 10 },
+            { x: 50, y: 10 },
+          ],
+        },
+        showBbox: false,
+      })
+    );
+    expect(target.callLog.filter((e) => e.op === 'arc')).toHaveLength(0);
+  });
+
   it('draws the dedicated SAM mask preview before its bbox, handles, and colored points', () => {
     const backend = createTestStubRasterBackend();
     const target = backend.createSurface(200, 200);

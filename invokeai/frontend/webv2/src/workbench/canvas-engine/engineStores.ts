@@ -130,6 +130,18 @@ export interface GradientToolOptions {
   stops: GradientStop[];
 }
 
+/** The lasso tool's in-flight outline: a freehand drag, or a polygon being placed vertex by vertex. */
+export type LassoPreview =
+  | { kind: 'freehand'; points: readonly Vec2[] }
+  | {
+      kind: 'polygon';
+      points: readonly Vec2[];
+      cursor: Vec2 | null;
+      /** Once the polygon can close, a press this many screen px from the first vertex closes it; the overlay rings that radius. */
+      closeRadiusPx: number | null;
+      closeArmed: boolean;
+    };
+
 /** The gradient tool's in-flight drag: start → end in document space. */
 export interface GradientPreview {
   kind: 'linear' | 'radial';
@@ -504,12 +516,13 @@ export interface EngineStores {
   /** Core-only visual SAM interaction state; application session status remains outside the engine. */
   samInteraction: ScalarStore<SamInteractionState | null>;
   /**
-   * The in-progress lasso polygon (document-space points) during a lasso drag,
-   * or `null` when idle. The overlay renders it as a live dashed preview in
-   * place of a committed selection; cleared on commit/cancel. Like `bboxPreview`,
-   * it is a transient channel — no dispatch, no React subscriber.
+   * The in-progress lasso outline (document space), or `null` when idle. The
+   * overlay draws a freehand drag as a dashed outline; a polygon session also
+   * shows its placed vertices, the rubber band to the cursor, and whether the
+   * cursor sits on the first vertex (a click there closes). Cleared on
+   * commit/cancel. Like `bboxPreview`, a transient channel — no dispatch.
    */
-  lassoPreview: ScalarStore<readonly Vec2[] | null>;
+  lassoPreview: ScalarStore<LassoPreview | null>;
   /**
    * The live marquee-tool drag outline (document-space rect + shape), or `null`
    * when idle. Like `lassoPreview`, a transient overlay-only channel: the mask
@@ -740,7 +753,7 @@ export const createEngineStores = (initialTool: ToolId = 'view'): EngineStores =
   ),
   gradientPreview: createScalarStore<GradientPreview | null>(null, gradientPreviewEqual),
   lassoOptions: createScalarStore<LassoToolOptions>({ ...DEFAULT_LASSO_OPTIONS }, lassoOptionsEqual),
-  lassoPreview: createScalarStore<readonly Vec2[] | null>(null),
+  lassoPreview: createScalarStore<LassoPreview | null>(null),
   marqueeOptions: createScalarStore<MarqueeToolOptions>({ ...DEFAULT_MARQUEE_OPTIONS }, marqueeOptionsEqual),
   marqueePreview: createScalarStore<{ rect: Rect; kind: 'rect' | 'ellipse' } | null>(null, rectShapePreviewEqual),
   rasterContentEpoch: createScalarStore<number>(0),
