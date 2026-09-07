@@ -8,8 +8,9 @@ describe('firstPartyHotkeyCatalog', () => {
     // no default keys — Task 46) + `app.openCommandPalette` (webv2-only, mod+k)
     // + the seven top-bar redesign commands (alt+mod+enter, mod+p, an unbound
     // save, and alt+1..4) + `app.openSettings` (mod+,) + `gallery.toggleStarredOnly`
-    // (webv2 starred-only listing filter, unbound).
-    expect(firstPartyHotkeyCatalog).toHaveLength(102);
+    // (webv2 starred-only listing filter, unbound) + the two unbound canvas
+    // gallery saves (`canvas.saveToGallery`, `canvas.saveBboxToGallery`).
+    expect(firstPartyHotkeyCatalog).toHaveLength(104);
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.invoke');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.openCommandPalette');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('canvas.mergeDown');
