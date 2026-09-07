@@ -92,32 +92,21 @@ export const DEFAULT_REFERENCE_SAMPLE_FRAMES = 200;
 /**
  * Move a reference clip's sample window to a new start frame.
  *
- * The two controls are independent: an ordinary reference's start frame reaches every
- * frame of the clip, and the sample length is what gives way — it keeps its value while
- * there is clip left to fill it and is pinned to the remaining frames past that, so
- * `start + length` never runs beyond the last frame. (The length slider's ceiling in the
- * panel is the same `numFrames - startFrame`, so the control tracks what the window can
- * actually hold.) The reference-extend anchor (`pinEnd`) instead keeps its end frame
- * pinned to the Initial Video cutpoint (seam continuity depends on the frames adjacent to
- * it; see deriveReferenceExtendClip), so moving its start only adjusts the lead-in length.
+ * The two controls are independent: the start frame reaches every frame of the clip, and
+ * the sample length is what gives way — it keeps its value while there is clip left to
+ * fill it and is pinned to the remaining frames past that, so `start + length` never runs
+ * beyond the last frame. (The length slider's ceiling in the panel is the same
+ * `numFrames - startFrame`, so the control tracks what the window can actually hold.)
+ *
+ * Every video reference trims this way, the reference-extend anchor included: Ref2VA has
+ * no frame-exact seam to protect (see deriveReferenceExtendClip), so the anchor's window
+ * is a default the user may move off the cutpoint like any other.
  *
  * Self-healing by construction: the returned window always satisfies
  * 0 <= start <= end <= numFrames - 1, even from a corrupt persisted trim.
  */
-export const slideReferenceSampleWindow = (
-  clip: VideoSourceClip,
-  rawStart: number,
-  pinEnd: boolean
-): VideoSourceClip => {
+export const slideReferenceSampleWindow = (clip: VideoSourceClip, rawStart: number): VideoSourceClip => {
   const maxFrame = Math.max(0, clip.numFrames - 1);
-
-  if (pinEnd) {
-    const endFrame = Math.min(Math.max(0, clip.endFrame), maxFrame);
-    const startFrame = Math.min(Math.max(0, Math.round(rawStart)), endFrame);
-
-    return { ...clip, endFrame, startFrame };
-  }
-
   const sampleFrames = Math.min(Math.max(1, clip.endFrame - clip.startFrame + 1), maxFrame + 1);
   const startFrame = Math.min(Math.max(0, Math.round(rawStart)), maxFrame);
 
@@ -127,25 +116,12 @@ export const slideReferenceSampleWindow = (
 /**
  * Resize a reference clip's sample window to a new length in frames.
  *
- * Ordinary references grow from the start frame (the end moves, clamped to the clip); the
- * reference-extend anchor (`pinEnd`) grows backward from its pinned end (the start moves),
- * since its end must stay on the Initial Video cutpoint. Same self-healing bounds as
- * slideReferenceSampleWindow.
+ * The window grows forward from its start frame, with the end clamped to the clip. Same
+ * self-healing bounds as slideReferenceSampleWindow.
  */
-export const resizeReferenceSampleWindow = (
-  clip: VideoSourceClip,
-  rawSampleFrames: number,
-  pinEnd: boolean
-): VideoSourceClip => {
+export const resizeReferenceSampleWindow = (clip: VideoSourceClip, rawSampleFrames: number): VideoSourceClip => {
   const maxFrame = Math.max(0, clip.numFrames - 1);
   const sampleFrames = Math.min(Math.max(1, Math.round(rawSampleFrames)), maxFrame + 1);
-
-  if (pinEnd) {
-    const endFrame = Math.min(Math.max(0, clip.endFrame), maxFrame);
-
-    return { ...clip, endFrame, startFrame: Math.max(0, endFrame - (sampleFrames - 1)) };
-  }
-
   const startFrame = Math.min(Math.max(0, clip.startFrame), maxFrame);
 
   return { ...clip, endFrame: Math.min(startFrame + sampleFrames - 1, maxFrame), startFrame };
@@ -589,12 +565,19 @@ export const MIN_VIDEO_TRIM_FRAMES = 2;
 export const VIDEO_REFERENCE_EXTEND_TAIL_FRAMES = 141;
 
 /**
- * The tail reference's default trim: the frames right before the cutpoint,
+ * The tail reference's DEFAULT trim: the frames right before the cutpoint,
  * sized so the backend keeps ALL of them.
  *
+ * A default, not a constraint. Ref2VA conditions on reference CONTENT — there
+ * is no frame-exact seam here the way FL2VA extend has one — so which frames
+ * the anchor samples is an editorial choice, and the cutpoint is only the
+ * likeliest one. A clip that fades to black at the cutpoint wants the fade
+ * concatenated and NOT conditioned on, so the user can move the window off the
+ * cutpoint (`trimOverridden`) and the panel then leaves it alone.
+ *
  * Three backend rules bound the window, and every one of them discards from
- * the END — the frames adjacent to the cutpoint, the only ones continuity
- * depends on. `normalize_reference_video_frames` resamples onto H3's fixed
+ * the END of it — where this default puts the frames nearest the cutpoint.
+ * `normalize_reference_video_frames` resamples onto H3's fixed
  * 24 fps and truncates to the GENERATED frame count keeping the FRONT
  * (`frames[:num_frames]`); `encode_reference_video` then snaps what survives
  * DOWN to the `17n + 5` grid the video VAE encodes without padding.
@@ -707,10 +690,10 @@ const tailSourceFrames = (budget: number, fps: number): number => {
  * `numFrames`, so the values a keystroke or a drag passes through leave no
  * trace.
  *
- * The cost is that a hand-tuned linked trim resets on a frame-count change as
- * well as on a cutpoint change — the same bargain the section's help text
- * already describes, and the backend leaves no alternative: a window that does
- * not fit the budget loses its seam end.
+ * A window the user has moved by hand (`trimOverridden`) is exempt. The budget
+ * still binds it — the backend discards the overrun from the window's end —
+ * but that is equally true of every ordinary video reference, and silently
+ * rewriting a deliberate editorial choice is the worse failure of the two.
  */
 export const applyReferenceExtendNumFrames = (
   references: VideoReferenceItem[],
@@ -718,7 +701,7 @@ export const applyReferenceExtendNumFrames = (
 ): VideoReferenceItem[] => {
   let changed = false;
   const next = references.map((entry) => {
-    if (entry.kind !== 'video' || entry.fromSourceVideo !== true) {
+    if (entry.kind !== 'video' || entry.fromSourceVideo !== true || entry.trimOverridden === true) {
       return entry;
     }
     const startFrame = referenceExtendStartFrame(entry.clip, numFrames);
@@ -795,9 +778,11 @@ export const canPlaceReferenceExtendAnchor = (
  *
  * - clearing the Initial Video removes its linked reference;
  * - setting or re-trimming it re-derives the linked reference's default trim
- *   (the tail window ending on the cutpoint) — a manually tuned trim
- *   therefore holds only until the next cutpoint change, which the section's
- *   help text says;
+ *   (the tail window ending on the cutpoint), UNLESS the user has moved that
+ *   window by hand and the clip is the same one — an override is a deliberate
+ *   editorial choice about which frames condition the generation, and a
+ *   cutpoint move is not a reason to discard it. Switching to a different clip
+ *   does discard it: the bounds index frames that are no longer there;
  * - with no linked entry yet, an existing video reference for the same clip
  *   is adopted (recall restores the pair without the linkage flag; adopting
  *   avoids a duplicate), else a new one is APPENDED — unless the video cap is
@@ -842,9 +827,27 @@ export const applyReferenceExtendSourceVideo = (
 
   if (linkedIndex >= 0) {
     return pinReferenceExtendAnchor(
-      references.map((entry, index) =>
-        index === linkedIndex && entry.kind === 'video' ? { ...linked, conditioning: entry.conditioning } : entry
-      )
+      references.map((entry, index) => {
+        if (index !== linkedIndex || entry.kind !== 'video') {
+          return entry;
+        }
+        if (entry.trimOverridden !== true || entry.clip.video_name !== sourceVideo.video_name) {
+          return { ...linked, conditioning: entry.conditioning };
+        }
+
+        return {
+          ...linked,
+          // Re-probed dimensions and frame rate come from the source record;
+          // the trim is the user's. Sliding the window to its own start re-
+          // clamps it against a frame count that may have moved with the probe.
+          clip: slideReferenceSampleWindow(
+            { ...sourceVideo, endFrame: entry.clip.endFrame, startFrame: entry.clip.startFrame },
+            entry.clip.startFrame
+          ),
+          conditioning: entry.conditioning,
+          trimOverridden: true,
+        };
+      })
     );
   }
 

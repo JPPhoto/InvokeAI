@@ -127,7 +127,9 @@ const addReferenceNode = (
  * `tail - 1` frames before the cutpoint — so it rides the same negative anchor
  * and the window keeps its length whatever the real count turns out to be.
  *
- * Two cases stay absolute. A cutpoint far enough from the end leaves both
+ * Three cases stay absolute. A window the user moved off the derived default
+ * (`trimOverridden`) is a hand-picked trim like any other, so it takes the
+ * hand-picked treatment. A cutpoint far enough from the end leaves both
  * bounds on the estimate already. And a start within `TAIL_INDEX_SLOP` of the
  * clip's own beginning stays absolute because the relative form resolves to
  * `startFrame + (real - estimate)`, which goes NEGATIVE once the estimate
@@ -149,7 +151,12 @@ const addReferenceNode = (
 const toReferenceStartIndex = (reference: Extract<VideoReferenceItem, { kind: 'video' }>, endIndex: number): number => {
   const { clip } = reference;
 
-  if (reference.fromSourceVideo !== true || endIndex >= 0 || clip.startFrame <= TAIL_INDEX_SLOP) {
+  if (
+    reference.fromSourceVideo !== true ||
+    reference.trimOverridden === true ||
+    endIndex >= 0 ||
+    clip.startFrame <= TAIL_INDEX_SLOP
+  ) {
     return toTailAwareIndex(clip.startFrame, clip.numFrames);
   }
 

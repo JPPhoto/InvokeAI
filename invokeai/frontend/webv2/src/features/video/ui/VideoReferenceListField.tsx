@@ -154,14 +154,20 @@ const ReferenceCard = memo(function ReferenceCard({
   // The trim is presented as a sliding sample window — start frame plus length — because
   // what the user is choosing is "how much" (every reference frame costs denoise VRAM) and
   // "from where". Storage stays startFrame/endFrame (the request contract); the window
-  // math (constant-length slide that stops at the clip's end, and the extend anchor's
-  // pinned-to-the-cutpoint end) lives in core/settings.
+  // math (a start that reaches every frame, with the length pinned to what the clip can
+  // still supply) lives in core/settings.
+  //
+  // Touching either control on the extend anchor marks its window overridden, which stops
+  // the panel re-deriving it from the Initial Video's cutpoint and frame count. The
+  // derived window is only a default: Ref2VA has no frame-exact seam to protect, so where
+  // the anchor samples is the user's editorial call.
   const handleStartFrame = useCallback(
     (rawStart: number) => {
       if (reference.kind === 'video') {
         onUpdate(index, {
           ...reference,
-          clip: slideReferenceSampleWindow(reference.clip, rawStart, reference.fromSourceVideo === true),
+          clip: slideReferenceSampleWindow(reference.clip, rawStart),
+          ...(reference.fromSourceVideo === true ? { trimOverridden: true } : {}),
         });
       }
     },
@@ -172,7 +178,8 @@ const ReferenceCard = memo(function ReferenceCard({
       if (reference.kind === 'video') {
         onUpdate(index, {
           ...reference,
-          clip: resizeReferenceSampleWindow(reference.clip, rawSampleFrames, reference.fromSourceVideo === true),
+          clip: resizeReferenceSampleWindow(reference.clip, rawSampleFrames),
+          ...(reference.fromSourceVideo === true ? { trimOverridden: true } : {}),
         });
       }
     },
@@ -282,13 +289,9 @@ const ReferenceCard = memo(function ReferenceCard({
                   <SliderNumberField
                     ariaLabel={t('widgets.video.sampleLength')}
                     disabled={disabled}
-                    // The anchor grows backward from its pinned end, so its ceiling is the
-                    // available lead-in; ordinary windows grow forward from their start.
-                    max={
-                      reference.fromSourceVideo === true
-                        ? Math.max(1, reference.clip.endFrame + 1)
-                        : Math.max(1, reference.clip.numFrames - reference.clip.startFrame)
-                    }
+                    // The window grows forward from its start, so the ceiling is what the
+                    // clip has left from there — it falls as the start frame climbs.
+                    max={Math.max(1, reference.clip.numFrames - reference.clip.startFrame)}
                     min={1}
                     showStepper
                     step={1}

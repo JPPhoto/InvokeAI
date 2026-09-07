@@ -628,6 +628,50 @@ describe('reference-extend linkage', () => {
     expect(retrimmed[0]).toBe(added[0]);
   });
 
+  it('leaves an overridden anchor window alone across cutpoint and frame-count changes', () => {
+    // The fade-to-black case: the cutpoint keeps the fade in the Initial Video
+    // that gets concatenated, while the reference samples earlier material.
+    // Ref2VA has no frame-exact seam, so that choice is the user's to make.
+    const linked = applyReferenceExtendSourceVideo([IMAGE_REFERENCE], source24, 3, FRAMES);
+    const overridden = linked.map((entry, index) =>
+      index === 1 && entry.kind === 'video'
+        ? {
+            ...entry,
+            clip: resizeReferenceSampleWindow(slideReferenceSampleWindow(entry.clip, 100), 120),
+            trimOverridden: true,
+          }
+        : entry
+    );
+
+    expect(overridden[1]).toMatchObject({ clip: { endFrame: 219, startFrame: 100 } });
+
+    // Moving the cutpoint on the SAME clip no longer drags the window with it.
+    const retrimmed = applyReferenceExtendSourceVideo(overridden, { ...source24, endFrame: 300 }, 3, FRAMES);
+
+    expect(retrimmed[1]).toMatchObject({
+      clip: { endFrame: 219, startFrame: 100, video_name: 'long.mp4' },
+      fromSourceVideo: true,
+      trimOverridden: true,
+    });
+    // Nor does a frame-count change re-budget it (identity-preserving).
+    expect(applyReferenceExtendNumFrames(retrimmed, 124)).toBe(retrimmed);
+  });
+
+  it('drops an overridden anchor window when the initial video changes clip', () => {
+    // The bounds index frames of a clip that is no longer there.
+    const linked = applyReferenceExtendSourceVideo([], source24, 3, FRAMES);
+    const overridden = linked.map((entry) =>
+      entry.kind === 'video'
+        ? { ...entry, clip: slideReferenceSampleWindow(entry.clip, 100), trimOverridden: true }
+        : entry
+    );
+    const other = { ...source24, endFrame: 200, numFrames: 202, video_name: 'other.mp4' };
+    const reset = applyReferenceExtendSourceVideo(overridden, other, 3, FRAMES);
+
+    expect(reset[0]).toMatchObject({ clip: { endFrame: 200, startFrame: 60, video_name: 'other.mp4' } });
+    expect(reset[0]).not.toHaveProperty('trimOverridden');
+  });
+
   it('clearing the initial video removes only the linked reference (identity-preserving when none)', () => {
     const list = applyReferenceExtendSourceVideo([VIDEO_REFERENCE, IMAGE_REFERENCE], source24, 3, FRAMES);
 
@@ -926,76 +970,66 @@ describe('reference sample window', () => {
   });
 
   describe('slideReferenceSampleWindow', () => {
-    it('slides an ordinary window at constant length', () => {
-      const next = slideReferenceSampleWindow(clip(0, 199), 50, false);
+    it('slides a window at constant length', () => {
+      const next = slideReferenceSampleWindow(clip(0, 199), 50);
       expect([next.startFrame, next.endFrame]).toEqual([50, 249]);
     });
 
     it('keeps the length while the clip can still supply it', () => {
-      const next = slideReferenceSampleWindow(clip(0, 199), 100, false);
+      const next = slideReferenceSampleWindow(clip(0, 199), 100);
       expect([next.startFrame, next.endFrame]).toEqual([100, 299]);
     });
 
     it('pins the length to the frames left instead of blocking the start', () => {
       // The start reaches the frame the user picked; the sample is what gives way.
-      const shortened = slideReferenceSampleWindow(clip(0, 199), 250, false);
+      const shortened = slideReferenceSampleWindow(clip(0, 199), 250);
       expect([shortened.startFrame, shortened.endFrame]).toEqual([250, 299]);
-      const lastFrame = slideReferenceSampleWindow(clip(0, 199), 299, false);
+      const lastFrame = slideReferenceSampleWindow(clip(0, 199), 299);
       expect([lastFrame.startFrame, lastFrame.endFrame]).toEqual([299, 299]);
     });
 
-    it('keeps the extend anchor end pinned to the cutpoint', () => {
-      // The anchor's seam continuity depends on frames adjacent to its end frame.
-      const next = slideReferenceSampleWindow(clip(180, 298), 200, true);
-      expect([next.startFrame, next.endFrame]).toEqual([200, 298]);
-      const backAndForth = slideReferenceSampleWindow(slideReferenceSampleWindow(next, 250, true), 200, true);
-      expect([backAndForth.startFrame, backAndForth.endFrame]).toEqual([200, 298]);
-    });
-
-    it('clamps the anchor start to its pinned end', () => {
-      const next = slideReferenceSampleWindow(clip(180, 298), 500, true);
-      expect([next.startFrame, next.endFrame]).toEqual([298, 298]);
+    it('moves an extend-anchor window off the cutpoint like any other', () => {
+      // Ref2VA has no frame-exact seam to hold, so the anchor's end is the
+      // user's to move -- a clip that fades to black at the cutpoint wants the
+      // fade concatenated but not conditioned on.
+      const next = slideReferenceSampleWindow(clip(180, 298), 100);
+      expect([next.startFrame, next.endFrame]).toEqual([100, 218]);
     });
 
     it('self-heals a corrupt persisted trim into bounds', () => {
       // end < start and end beyond the clip must both come back as a valid window.
-      const inverted = slideReferenceSampleWindow(clip(10, 5, 20), 0, false);
+      const inverted = slideReferenceSampleWindow(clip(10, 5, 20), 0);
       expect(inverted.startFrame).toBeGreaterThanOrEqual(0);
       expect(inverted.endFrame).toBeGreaterThanOrEqual(inverted.startFrame);
       expect(inverted.endFrame).toBeLessThanOrEqual(19);
-      const oversized = slideReferenceSampleWindow(clip(0, 999, 20), 5, false);
+      const oversized = slideReferenceSampleWindow(clip(0, 999, 20), 5);
       expect([oversized.startFrame, oversized.endFrame]).toEqual([5, 19]);
     });
 
     it('handles a single-frame clip', () => {
-      const next = slideReferenceSampleWindow(clip(0, 0, 1), 5, false);
+      const next = slideReferenceSampleWindow(clip(0, 0, 1), 5);
       expect([next.startFrame, next.endFrame]).toEqual([0, 0]);
     });
   });
 
   describe('resizeReferenceSampleWindow', () => {
-    it('grows an ordinary window forward from its start', () => {
-      const next = resizeReferenceSampleWindow(clip(50, 60), 100, false);
+    it('grows a window forward from its start', () => {
+      const next = resizeReferenceSampleWindow(clip(50, 60), 100);
       expect([next.startFrame, next.endFrame]).toEqual([50, 149]);
     });
 
     it('clamps the length to the clip end', () => {
-      const next = resizeReferenceSampleWindow(clip(250, 260), 100, false);
+      const next = resizeReferenceSampleWindow(clip(250, 260), 100);
       expect([next.startFrame, next.endFrame]).toEqual([250, 299]);
     });
 
-    it('grows the extend anchor backward from its pinned end', () => {
-      const next = resizeReferenceSampleWindow(clip(280, 298), 100, true);
-      expect([next.startFrame, next.endFrame]).toEqual([199, 298]);
-    });
-
-    it('clamps the anchor lead-in at the clip start', () => {
-      const next = resizeReferenceSampleWindow(clip(280, 298), 1000, true);
-      expect([next.startFrame, next.endFrame]).toEqual([0, 298]);
+    it('shortens an extend-anchor window away from the cutpoint', () => {
+      const next = resizeReferenceSampleWindow(clip(180, 298), 20);
+      expect([next.startFrame, next.endFrame]).toEqual([180, 199]);
     });
 
     it('never produces a window shorter than one frame', () => {
-      const next = resizeReferenceSampleWindow(clip(50, 199), -5, false);
+      const next = resizeReferenceSampleWindow(clip(50, 199), -5);
       expect([next.startFrame, next.endFrame]).toEqual([50, 50]);
     });
   });
