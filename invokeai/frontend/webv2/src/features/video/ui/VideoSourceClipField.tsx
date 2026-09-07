@@ -324,6 +324,7 @@ export const VideoSourceClipField = memo(
                       disabled={disabled}
                       max={maxFrameIndex}
                       min={0}
+                      showStepper
                       step={1}
                       value={sourceVideo.startFrame}
                       onChange={setStartFrame}
@@ -343,6 +344,7 @@ export const VideoSourceClipField = memo(
                       disabled={disabled}
                       max={maxFrameIndex}
                       min={0}
+                      showStepper
                       step={1}
                       value={sourceVideo.endFrame}
                       onChange={setEndFrame}

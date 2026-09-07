@@ -2884,6 +2884,29 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/queue/{queue_id}/previews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Progress Previews
+         * @description The latest denoising preview frame of each of the caller's running queue items: the same
+         *     payloads as the `invocation_progress` socket events, with their revisions. A client whose socket
+         *     was dropped, or whose tab was hidden, reconciles from this instead of waiting for the next step.
+         *     Owner-scoped: progress is personal UI, so even admins see only their own.
+         */
+        get: operations["get_progress_previews"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/queue/{queue_id}/next": {
         parameters: {
             query?: never;
@@ -20363,6 +20386,12 @@ export type components = {
              * @default null
              */
             device: string | null;
+            /**
+             * Revision
+             * @description Monotonic per queue item and session, set on image-bearing frames. A frame at or below a revision already shown is stale: the same frame may reach a client twice (live stream and reconnect replay) and must never move the preview backwards.
+             * @default null
+             */
+            revision: number | null;
         };
         /**
          * InvocationStartedEvent
@@ -33765,6 +33794,54 @@ export type components = {
              * @description The image data as a b64 data URL
              */
             dataURL: string;
+        };
+        /**
+         * ProgressPreviewDTO
+         * @description The latest preview frame of a running queue item, as served by `GET /queue/{queue_id}/previews`.
+         *
+         *     The fields of the `invocation_progress` socket event a preview consumer reads, without the
+         *     serialized invocation. A separate model rather than the event itself: exposing the event as a
+         *     response model would give it a second OpenAPI schema variant and change the generated client
+         *     types for every socket consumer.
+         */
+        ProgressPreviewDTO: {
+            /**
+             * Queue Id
+             * @description The ID of the queue
+             */
+            queue_id: string;
+            /**
+             * Item Id
+             * @description The ID of the queue item
+             */
+            item_id: number;
+            /**
+             * Session Id
+             * @description The ID of the session (aka graph execution state)
+             */
+            session_id: string;
+            /**
+             * Invocation Source Id
+             * @description The ID of the prepared invocation's source node
+             */
+            invocation_source_id: string;
+            /**
+             * Revision
+             * @description Monotonic per queue item and session; see InvocationProgressEvent
+             */
+            revision: number | null;
+            /**
+             * Message
+             * @description A message to display
+             */
+            message: string;
+            /**
+             * Percentage
+             * @description The percentage of the progress, or null if indeterminate
+             */
+            percentage: number | null;
+            /** @description The latest denoising preview */
+            image: components["schemas"]["ProgressImage"] | null;
         };
         /**
          * ProjectBoardItemDTO
@@ -51517,6 +51594,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionQueueItem"] | null | components["schemas"]["SessionQueueItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_progress_previews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The queue id to perform this operation on */
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgressPreviewDTO"][];
                 };
             };
             /** @description Validation Error */

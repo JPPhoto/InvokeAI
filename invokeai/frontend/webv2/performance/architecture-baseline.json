@@ -2,17 +2,17 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 848456,
+        "brotliBytes": 849936,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 847584,
+        "gzipBytes": 849109,
         "imageRawBytes": 156376,
-        "initialRawBytes": 1982279,
+        "initialRawBytes": 1984850,
         "largestAssetRawBytes": 746121,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 73893,
-        "requestCount": 42,
-        "scriptRequestCount": 26,
+        "ownedRawBytes": 73967,
+        "requestCount": 44,
+        "scriptRequestCount": 28,
         "sourceOwners": [
           "package:@ark-ui/react",
           "package:@chakra-ui/react",
@@ -173,6 +173,8 @@
           "source:src/features/nodes/ui/NodesPage.tsx",
           "source:src/platform/browser/downloadBlob.ts",
           "source:src/platform/browser/knownBrowserIssues.ts",
+          "source:src/platform/browser/randomUuid.ts",
+          "source:src/platform/browser/sha256.ts",
           "source:src/platform/core/concurrency.ts",
           "source:src/platform/i18n/client.ts",
           "source:src/platform/i18n/languages.ts",
@@ -296,17 +298,17 @@
         ]
       },
       "limits": {
-        "brotliBytes": 856941,
+        "brotliBytes": 858436,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 856060,
+        "gzipBytes": 857601,
         "imageRawBytes": 157940,
-        "initialRawBytes": 2002102,
+        "initialRawBytes": 2004699,
         "largestAssetRawBytes": 753583,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 73893,
-        "requestCount": 42,
-        "scriptRequestCount": 26
+        "ownedRawBytes": 73967,
+        "requestCount": 44,
+        "scriptRequestCount": 28
       },
       "owner": "app",
       "remediationTicket": "set-performance-budgets",
@@ -314,17 +316,17 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1162033,
+        "brotliBytes": 1163632,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1156449,
+        "gzipBytes": 1157960,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2935412,
+        "initialRawBytes": 2937602,
         "largestAssetRawBytes": 746121,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 132730,
-        "requestCount": 104,
-        "scriptRequestCount": 88,
+        "ownedRawBytes": 132886,
+        "requestCount": 106,
+        "scriptRequestCount": 90,
         "sourceOwners": [
           "package:@ark-ui/react",
           "package:@chakra-ui/react",
@@ -657,6 +659,8 @@
           "source:src/features/workflow/widget.ts",
           "source:src/platform/browser/downloadBlob.ts",
           "source:src/platform/browser/knownBrowserIssues.ts",
+          "source:src/platform/browser/randomUuid.ts",
+          "source:src/platform/browser/sha256.ts",
           "source:src/platform/browser/webLocks.ts",
           "source:src/platform/core/concurrency.ts",
           "source:src/platform/core/json.ts",
@@ -985,24 +989,24 @@
         ]
       },
       "limits": {
-        "brotliBytes": 1173654,
+        "brotliBytes": 1175269,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 1168014,
+        "gzipBytes": 1169540,
         "imageRawBytes": 157940,
-        "initialRawBytes": 2964767,
+        "initialRawBytes": 2966979,
         "largestAssetRawBytes": 753583,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 132730,
-        "requestCount": 104,
-        "scriptRequestCount": 88
+        "ownedRawBytes": 132886,
+        "requestCount": 106,
+        "scriptRequestCount": 90
       },
       "owner": "workbench",
       "remediationTicket": "deepen-widget-registry-loading",
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-05",
+  "capturedAt": "2026-09-06",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",
