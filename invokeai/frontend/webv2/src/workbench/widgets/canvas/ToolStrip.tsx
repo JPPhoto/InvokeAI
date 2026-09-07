@@ -1,7 +1,7 @@
 import type {
   CanvasCoreStoreCapability,
   CanvasToolCapability,
-  ParametricShapeKind,
+  ShapeToolKind,
   ToolId,
 } from '@workbench/canvas-engine/api';
 
@@ -16,6 +16,8 @@ import {
   HandIcon,
   LassoIcon,
   MoveIcon,
+  PenLineIcon,
+  PentagonIcon,
   Rotate3dIcon,
   SquareDashedIcon,
   SquareIcon,
@@ -52,15 +54,19 @@ const ToolStripButton = ({ engine, icon, isInteractionLocked, label, toolId }: T
   );
 };
 
-const SHAPE_KIND_ICONS: Record<ParametricShapeKind, React.ElementType> = {
+const SHAPE_KIND_ICONS: Record<ShapeToolKind, React.ElementType> = {
   ellipse: CircleIcon,
+  freehand: PenLineIcon,
+  polygon: PentagonIcon,
   rect: SquareIcon,
   star: StarIcon,
   triangle: TriangleIcon,
 };
-const SHAPE_KIND_ORDER: readonly ParametricShapeKind[] = ['rect', 'ellipse', 'triangle', 'star'];
-const SHAPE_KIND_LABEL_KEYS: Record<ParametricShapeKind, string> = {
+const SHAPE_KIND_ORDER: readonly ShapeToolKind[] = ['rect', 'ellipse', 'triangle', 'star', 'polygon', 'freehand'];
+const SHAPE_KIND_LABEL_KEYS: Record<ShapeToolKind, string> = {
   ellipse: 'widgets.canvas.toolOptions.shapeEllipse',
+  freehand: 'widgets.canvas.toolOptions.shapeFreehand',
+  polygon: 'widgets.canvas.toolOptions.shapePolygon',
   rect: 'widgets.canvas.toolOptions.shapeRect',
   star: 'widgets.canvas.toolOptions.shapeStar',
   triangle: 'widgets.canvas.toolOptions.shapeTriangle',
@@ -89,7 +95,7 @@ const ShapeFamilyButton = ({
   const onActivate = useCallback(() => engine.tools.setTool('shape'), [engine]);
   const onSelectSubtool = useCallback(
     (id: string) => {
-      engine.interaction.set('shapeOptions', { ...options, kind: id as ParametricShapeKind });
+      engine.interaction.set('shapeOptions', { ...options, kind: id as ShapeToolKind });
       engine.tools.setTool('shape');
     },
     [engine, options]

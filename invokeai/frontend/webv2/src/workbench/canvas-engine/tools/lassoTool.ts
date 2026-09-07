@@ -13,7 +13,7 @@
  * - **polygon** (`shape: 'polygon'`) — a click-to-place-vertex SESSION spanning
  *   many clicks. Each press appends a vertex; a rubber-band segment tracks the
  *   cursor. The session closes and commits on a double-click, on Enter, or on a
- *   click landing within {@link POLYGON_CLOSE_HIT_PX} screen pixels of the first
+ *   click landing within the shared polyline close radius of the first
  *   vertex. Escape drops it.
  *
  * A live dashed preview of the in-progress path is published to the engine's
@@ -34,23 +34,20 @@ import { selectionOpFor } from '@workbench/canvas-engine/selection/selectionOpMo
 
 import type { Tool, ToolContext } from './tool';
 
+import {
+  MIN_POLYLINE_POINTS,
+  movePolyline,
+  polylinePreview,
+  pressPolyline,
+  startPolyline,
+  type PolylineSession,
+} from './polylineSession';
+
 /** Bit for the primary (usually left) mouse button in `PointerEvent.buttons`. */
 const PRIMARY_BUTTON = 1;
 
 /** Minimum document-space gap between stored polygon points (input decimation). */
 export const LASSO_MIN_POINT_DISTANCE = 2;
-
-/** Fewest distinct points that make a fillable selection polygon. */
-const MIN_POLYGON_POINTS = 3;
-
-/** Screen-pixel radius around the first vertex where a click closes the polygon. */
-export const POLYGON_CLOSE_HIT_PX = 8;
-
-/** Longest gap (ms) between two presses that still reads as a double-click. */
-export const POLYGON_DOUBLE_CLICK_MS = 350;
-
-/** Screen-pixel radius within which two presses count as the same spot. */
-const POLYGON_DOUBLE_CLICK_PX = 4;
 
 const distance = (a: Vec2, b: Vec2): number => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -61,16 +58,8 @@ interface FreehandSession {
 }
 
 /** A polygon vertex-placing session spanning multiple clicks. */
-interface PolygonSession {
+interface PolygonSession extends PolylineSession {
   kind: 'polygon';
-  points: Vec2[];
-  /** The rubber-band endpoint (the last cursor position), or `null` before any move. */
-  cursor: Vec2 | null;
-  /** Whether the cursor sits on the first vertex, where a click closes the polygon. */
-  closeArmed: boolean;
-  /** Screen position and time of the previous press, for double-click detection. */
-  lastPressScreen: Vec2;
-  lastPressAt: number;
 }
 
 type Session = FreehandSession | PolygonSession;
@@ -96,13 +85,7 @@ export const createLassoTool = (): Tool => {
     if (!session || session.points.length === 0) {
       ctx.stores.lassoPreview.set(null);
     } else if (session.kind === 'polygon') {
-      ctx.stores.lassoPreview.set({
-        closeArmed: session.closeArmed,
-        closeRadiusPx: session.points.length >= MIN_POLYGON_POINTS ? POLYGON_CLOSE_HIT_PX : null,
-        cursor: session.cursor,
-        kind: 'polygon',
-        points: session.points.slice(),
-      });
+      ctx.stores.lassoPreview.set(polylinePreview(session));
     } else {
       ctx.stores.lassoPreview.set({ kind: 'freehand', points: session.points.slice() });
     }
@@ -120,7 +103,7 @@ export const createLassoTool = (): Tool => {
     // A double-click's second press lands on the previous vertex, so count
     // distinct points; and a flat polygon would select a line of nothing.
     const distinct = polygon.filter((point, index) => index === 0 || distance(point, polygon[index - 1]!) >= 1);
-    if (distinct.length < MIN_POLYGON_POINTS || bounds.width < 1 || bounds.height < 1 || !ctx.commitSelection) {
+    if (distinct.length < MIN_POLYLINE_POINTS || bounds.width < 1 || bounds.height < 1 || !ctx.commitSelection) {
       return;
     }
     ctx.commitSelection({
@@ -128,17 +111,6 @@ export const createLassoTool = (): Tool => {
       op: selectionOpFor(modifiers, ctx.stores.lassoOptions.get().mode),
       path: ctx.createPath2D(polygonToSvgPath(polygon)),
     });
-  };
-
-  /** True when a press at `screenPoint` lands on the polygon's first vertex. */
-  const isOnFirstVertex = (ctx: ToolContext, polygon: PolygonSession, screenPoint: Vec2): boolean => {
-    const first = polygon.points[0];
-    if (!first || polygon.points.length < MIN_POLYGON_POINTS) {
-      return false;
-    }
-    // Project through the viewport rather than caching the vertex's screen
-    // position: the user may pan (space-hold) between vertices.
-    return distance(ctx.viewport.documentToScreen(first), screenPoint) <= POLYGON_CLOSE_HIT_PX;
   };
 
   const closePolygon = (
@@ -201,14 +173,7 @@ export const createLassoTool = (): Tool => {
       }
 
       if (!session) {
-        session = {
-          closeArmed: false,
-          cursor: null,
-          kind: 'polygon',
-          lastPressAt: input.timeStamp,
-          lastPressScreen: input.screenPoint,
-          points: [{ x: input.documentPoint.x, y: input.documentPoint.y }],
-        };
+        session = { ...startPolyline(input), kind: 'polygon' };
         publishPreview(ctx);
         return;
       }
@@ -217,17 +182,10 @@ export const createLassoTool = (): Tool => {
         return;
       }
 
-      const isDoubleClick =
-        input.timeStamp - session.lastPressAt <= POLYGON_DOUBLE_CLICK_MS &&
-        distance(session.lastPressScreen, input.screenPoint) <= POLYGON_DOUBLE_CLICK_PX;
-      if (isDoubleClick || isOnFirstVertex(ctx, session, input.screenPoint)) {
+      if (pressPolyline(ctx, session, input) === 'close') {
         closePolygon(ctx, session, input.modifiers);
         return;
       }
-
-      session.points.push({ x: input.documentPoint.x, y: input.documentPoint.y });
-      session.lastPressAt = input.timeStamp;
-      session.lastPressScreen = input.screenPoint;
       publishPreview(ctx);
     },
     onPointerMove: (ctx, input, batch) => {
@@ -235,10 +193,7 @@ export const createLassoTool = (): Tool => {
         return;
       }
       if (session.kind === 'polygon') {
-        session.cursor = { x: input.documentPoint.x, y: input.documentPoint.y };
-        const closeArmed = isOnFirstVertex(ctx, session, input.screenPoint);
-        if (closeArmed !== session.closeArmed) {
-          session.closeArmed = closeArmed;
+        if (movePolyline(ctx, session, input)) {
           ctx.updateCursor();
         }
       } else {

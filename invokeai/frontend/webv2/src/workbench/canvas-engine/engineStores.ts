@@ -97,19 +97,28 @@ export interface GradientStop {
  * foreground/background pair at gesture start — there is no second global
  * shape color; a selected shape's explicit fill/stroke is document state.
  */
+export type ShapeToolKind = ParametricShapeKind | 'polygon' | 'freehand';
+
+/** Where a drawn shape lands: pixels on the selected paint layer, or its own shape layer. */
+export type ShapeToolTarget = 'selected' | 'new';
+
 export interface ShapeToolOptions {
-  kind: ParametricShapeKind;
+  /** The box-parametric kinds drag out a rect; `polygon` places vertices, `freehand` traces a drag. */
+  kind: ShapeToolKind;
+  /** Falls back to a new shape layer whenever the selected layer cannot take pixels. */
+  target: ShapeToolTarget;
   fillEnabled: boolean;
   strokeEnabled: boolean;
   strokeWidth: number;
 }
 
-/** Sensible starting shape options: a filled rect, no stroke. */
+/** Sensible starting shape options: a filled rect, no stroke, drawn onto the selected paint layer. */
 export const DEFAULT_SHAPE_OPTIONS: ShapeToolOptions = {
   fillEnabled: true,
   kind: 'rect',
   strokeEnabled: false,
   strokeWidth: 8,
+  target: 'selected',
 };
 
 /** Largest shape stroke width (document px) the options bar clamps to. */
@@ -632,6 +641,7 @@ const marqueeOptionsEqual = (a: MarqueeToolOptions, b: MarqueeToolOptions): bool
 
 const shapeOptionsEqual = (a: ShapeToolOptions, b: ShapeToolOptions): boolean =>
   a.kind === b.kind &&
+  a.target === b.target &&
   a.fillEnabled === b.fillEnabled &&
   a.strokeEnabled === b.strokeEnabled &&
   a.strokeWidth === b.strokeWidth;

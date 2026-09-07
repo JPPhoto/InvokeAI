@@ -2147,15 +2147,12 @@ describe('createCanvasEngine', () => {
   });
 
   it('cropLayerToBbox reports missing, locked, unsupported, and not-ready layers explicitly', async () => {
+    // A polygon without enough points to fill has no raster to crop.
     const polygon: CanvasLayerSourceContract = {
       fill: '#000',
       height: 10,
       kind: 'polygon',
-      points: [
-        { x: 0, y: 0 },
-        { x: 10, y: 0 },
-        { x: 5, y: 10 },
-      ],
+      points: [],
       stroke: null,
       strokeWidth: 0,
       type: 'shape',
@@ -14273,16 +14270,13 @@ describe('hasExportableLayerContent', () => {
     engine.lifecycle.dispose();
   });
 
-  it('returns false for empty paint, unsupported polygon, and missing ids', () => {
+  it('returns false for empty paint, pointless polygon, and missing ids', () => {
+    // A polygon without enough points to fill has no raster to export.
     const polygon: CanvasLayerSourceContract = {
       fill: '#000',
       height: 20,
       kind: 'polygon',
-      points: [
-        { x: 0, y: 0 },
-        { x: 20, y: 0 },
-        { x: 10, y: 20 },
-      ],
+      points: [],
       stroke: null,
       strokeWidth: 0,
       type: 'shape',

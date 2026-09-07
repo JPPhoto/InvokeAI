@@ -11,6 +11,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   getDocumentIndex,
   getSourceContentRect,
+  isEmptyPolygonShape,
   isHideableLayer,
   isNodeHidden,
   isPixelBackedLayer,
@@ -276,7 +277,7 @@ const isParametricRasterizable = (layer: CanvasLayerContract): boolean =>
   layer.type === 'raster' &&
   (layer.source.type === 'gradient' ||
     layer.source.type === 'text' ||
-    (layer.source.type === 'shape' && layer.source.kind !== 'polygon'));
+    (layer.source.type === 'shape' && !isEmptyPolygonShape(layer.source)));
 
 const hasFilterableLayerContent = (context: LayerContextActionState): boolean => {
   if (!context.hasSupportedContent || (context.layer.type !== 'raster' && context.layer.type !== 'control')) {
@@ -291,7 +292,9 @@ const hasFilterableLayerContent = (context: LayerContextActionState): boolean =>
   if (context.layer.type !== 'raster') {
     return false;
   }
-  return source.type === 'text' || source.type === 'gradient' || (source.type === 'shape' && source.kind !== 'polygon');
+  return (
+    source.type === 'text' || source.type === 'gradient' || (source.type === 'shape' && !isEmptyPolygonShape(source))
+  );
 };
 
 /** Where the layer sits among its siblings (index 0 = top), or null when absent. */

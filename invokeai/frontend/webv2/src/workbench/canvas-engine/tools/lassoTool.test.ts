@@ -231,7 +231,7 @@ describe('lassoTool: polygon mode', () => {
     click(tool, ctx, 0, 0, 0);
     click(tool, ctx, 40, 0, 1000);
     click(tool, ctx, 40, 40, 2000);
-    // Within POLYGON_CLOSE_HIT_PX of the first vertex (identity viewport).
+    // Within the polyline close radius of the first vertex (identity viewport).
     click(tool, ctx, 3, 2, 3000);
 
     expect(commits).toHaveLength(1);
