@@ -230,11 +230,15 @@ interactions.
 
 The test-only differential harness at
 `tests/app/services/shared/test_execution_engine_differential.py` compares
-generic and forced-compatibility scheduling for a static DAG. Its fixture
-corpus covers fresh completion, partial checkpoints, versioned rehydration,
-in-flight claim replay, and injected failure. It intentionally does not claim
-durable persistence of the generic scheduler's private claim set, nor does it
-cover loop or workflow-call ownership migration.
+generic and forced-compatibility scheduling for static DAGs and a constructed
+mixed/nested `If` graph. Its fixture corpus covers fresh completion, true/false
+branch selection, nested branch isolation, partial checkpoints, versioned
+rehydration, in-flight claim replay, activation-token persistence, and injected
+failure. The `If` comparison includes strict source-level results, executed
+history, errors, terminal state, and normalized indegrees; compatibility skip
+propagation must not leave stale downstream indegrees. It intentionally does
+not claim durable persistence of the generic scheduler's private claim set, nor
+does it cover loop or workflow-call ownership migration.
 
 Workflow-call note:
 

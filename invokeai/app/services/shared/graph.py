@@ -452,7 +452,7 @@ class _IfBranchScheduler:
         self._state._set_prepared_exec_state(exec_node_id, "skipped")
         self._state._tx_add_set(self._state.executed, exec_node_id)
         scheduler = self._state._execution_scheduler
-        if isinstance(scheduler, _GenericGraphSchedulerAdapter):
+        if scheduler is not None:
             scheduler.mark_skipped(exec_node_id)
 
         registry = self._state._prepared_registry()
@@ -2072,6 +2072,15 @@ class _ExecutionScheduler:
             except ValueError:
                 continue
         self._state._tx_discard_set(self._state._ready_node_ids, exec_node_id)
+
+    def mark_skipped(self, exec_node_id: str) -> None:
+        """Satisfy downstream indegrees without resolving inputs from a skipped node."""
+        self._validate_exec_node_ready_state(exec_node_id)
+        for edge in self._state.execution_graph._get_output_edges(exec_node_id):
+            child = edge.destination.node_id
+            self._decrement_child_indegree(child, exec_node_id)
+            if self._state.indegree[child] == 0:
+                self.enqueue_if_ready(child)
 
     def enqueue_if_ready(self, exec_node_id: str) -> None:
         """Push exec_node_id to its class queue if unmet inputs == 0."""
