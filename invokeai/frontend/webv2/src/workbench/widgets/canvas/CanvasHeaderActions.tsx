@@ -258,7 +258,7 @@ const CanvasHeaderActionsInner = ({
       <HeaderDivider />
 
       <Menu.Root positioning={MENU_POSITIONING}>
-        <Group attached>
+        <Group attached css={SPLIT_GROUP_CSS}>
           <Tooltip content={t('widgets.canvas.contextMenu.saveCanvasToGallery')}>
             <IconButton
               aria-label={t('widgets.canvas.contextMenu.saveCanvasToGallery')}
@@ -279,7 +279,7 @@ const CanvasHeaderActionsInner = ({
               minW="0"
               size="2xs"
               variant="ghost"
-              w="5"
+              w="6"
             >
               <ChevronDownIcon size={12} />
             </IconButton>
@@ -338,6 +338,10 @@ const CanvasHeaderActionsInner = ({
 };
 
 /** A thin vertical rule separating header-action groups (matching legacy's dividers). */
+// Ghost buttons have no border to collapse, and the attached overlap would
+// leave the save button under 24px of unobscured target.
+const SPLIT_GROUP_CSS = { '& > *:not(:last-child)': { marginEnd: 0 } } as const;
+
 const HeaderDivider = () => <Box bg="border.subtle" flexShrink={0} h="4" mx="1" w="1px" />;
 
 /** Diagnostics use an existing engine; opening settings must never acquire a canvas engine lease. */
