@@ -4,7 +4,7 @@ import { ChakraProvider } from '@chakra-ui/react';
 import { DndContext } from '@dnd-kit/core';
 import { system } from '@theme/system';
 import i18next from 'i18next';
-import { act, useCallback, useMemo, useState } from 'react';
+import { act, useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -76,15 +76,6 @@ const Harness = ({ names }: { names: string[] }) => {
       <VideoReferenceListField maxImages={9} maxVideos={3} references={references} onChange={handleChange} />
     </>
   );
-};
-
-/** Mirrors a panel whose write is dropped: the arrows fire, the list never changes. */
-const InertHarness = () => {
-  const [, forceRender] = useState(0);
-  const references = useMemo(() => ['a.png', 'b.png', 'c.png'].map(imageReference), []);
-  const handleChange = useCallback(() => forceRender((tick) => tick + 1), []);
-
-  return <VideoReferenceListField maxImages={9} maxVideos={3} references={references} onChange={handleChange} />;
 };
 
 const render = async (names: string[]) => {
@@ -179,7 +170,11 @@ describe('video reference reorder focus', () => {
     const StaleHarness = () => {
       const [names, setNames] = useState(['a.png', 'b.png', 'c.png']);
 
-      mutate = setNames;
+      // Handing the setter out is a side effect, so it happens in an effect --
+      // `act` has flushed it by the time the test reaches for `mutate`.
+      useEffect(() => {
+        mutate = setNames;
+      }, []);
 
       const references = useMemo(() => names.map(imageReference), [names]);
       const handleChange = useCallback((update: (current: VideoReferenceItem[]) => VideoReferenceItem[]) => {
