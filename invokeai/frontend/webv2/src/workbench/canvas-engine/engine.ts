@@ -920,6 +920,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       onChange: () => stores.hasFloatingSelection.set(floatingSelection.has()),
     },
     getDocument: () => mirror.getDocument(),
+    history,
     selection: {
       backend,
       createPath2D: createPath2DImpl,
@@ -1560,7 +1561,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       // A float belongs to the outgoing document's layer. Cancel (not commit):
       // the layer it would bake into is about to be replaced.
       cleanup.run(() => floatingSelection.cancel());
-      cleanup.run(() => selection.clear());
+      cleanup.run(() => editingController.discardSelection());
       cleanup.run(() => stores.lassoPreview.set(null));
       cleanup.run(() => stores.marqueePreview.set(null));
       const doc = mirror.getDocument();

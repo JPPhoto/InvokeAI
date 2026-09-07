@@ -367,7 +367,8 @@ type WorkbenchReducerAction =
   | { type: 'clearGallerySelection'; projectId?: string }
   | { type: 'setGalleryView'; galleryView: 'images' | 'assets'; projectId?: string }
   | { type: 'setGallerySearchTerm'; searchTerm: string; projectId?: string }
-  | { type: 'updateGallerySettings'; settings: Partial<Omit<GallerySettings, 'starredFirst'>>; projectId?: string }
+  | { type: 'setGalleryStarredOnly'; starredOnly: boolean; projectId?: string }
+  | { type: 'updateGallerySettings'; settings: Partial<GallerySettings>; projectId?: string }
   | { type: 'setGalleryPage'; page: number; projectId?: string }
   | { type: 'setGalleryPageInfo'; totalImages: number; projectId?: string }
   | {
@@ -2995,6 +2996,7 @@ const updateGalleryWithResultImages = (project: Project, images: GeneratedImageC
             page: 0,
             paginationMode: gallerySettings.paginationMode,
             searchTerm: '',
+            starredOnly: false,
           },
         }
       : {}),
@@ -4441,6 +4443,7 @@ export const __workbenchReducerInternal = (
                   page: selectedImagePage,
                   paginationMode: settings.paginationMode,
                   searchTerm: typeof values.searchTerm === 'string' ? values.searchTerm : '',
+                  starredOnly: values.starredOnly === true,
                 };
           const itemKey = toGalleryItemKey(action.item);
 
@@ -4485,6 +4488,7 @@ export const __workbenchReducerInternal = (
                 page: selectedImagePage,
                 paginationMode: settings.paginationMode,
                 searchTerm: typeof values.searchTerm === 'string' ? values.searchTerm : '',
+                starredOnly: values.starredOnly === true,
               },
             };
           }
@@ -4562,6 +4566,7 @@ export const __workbenchReducerInternal = (
                     page: selectedImagePage,
                     paginationMode: settings.paginationMode,
                     searchTerm: typeof values.searchTerm === 'string' ? values.searchTerm : '',
+                    starredOnly: values.starredOnly === true,
                   },
           };
         },
@@ -4636,6 +4641,17 @@ export const __workbenchReducerInternal = (
           ...values,
           galleryPage: 0,
           searchTerm: action.searchTerm,
+        }),
+        action.projectId
+      );
+    }
+    case 'setGalleryStarredOnly': {
+      return updateGalleryValues(
+        state,
+        (values) => ({
+          ...values,
+          galleryPage: 0,
+          starredOnly: action.starredOnly,
         }),
         action.projectId
       );

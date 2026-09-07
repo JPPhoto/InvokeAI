@@ -439,7 +439,7 @@ describe('listGalleryItems', () => {
       orderDir: 'ASC',
       searchTerm: '  summer clip  ',
       signal: controller.signal,
-      starredFirst: true,
+      starred: true,
     });
 
     const [url, init] = mocks.apiFetchJson.mock.calls[0] as [string, RequestInit];
@@ -454,7 +454,9 @@ describe('listGalleryItems', () => {
     expect(params.get('limit')).toBe('17');
     expect(params.get('offset')).toBe('34');
     expect(params.get('order_dir')).toBe('ASC');
-    expect(params.get('starred_first')).toBe('true');
+    expect(params.get('starred')).toBe('true');
+    // The backend defaults to starred-first; the grid must pin it off.
+    expect(params.get('starred_first')).toBe('false');
     expect(params.get('search_term')).toBe('summer clip');
     expect(init.signal).toBe(controller.signal);
   });

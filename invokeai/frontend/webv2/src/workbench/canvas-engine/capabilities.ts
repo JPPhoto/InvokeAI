@@ -593,7 +593,9 @@ export type {
   LassoToolOptions,
   LayerThumbnailStatus,
   MarqueeToolOptions,
+  ShapeToolKind,
   ShapeToolOptions,
+  ShapeToolTarget,
   TextEditSession,
   TextToolOptions,
   TransformSession,
@@ -619,7 +621,13 @@ export {
   type CompositeEntry,
   type CompositeLayerRef,
 } from './render/rasterComposite';
-export { getSourceBounds, getSourceContentRect, isRenderableLayer, renderableSourceOf } from './document/sources';
+export {
+  getSourceBounds,
+  getSourceContentRect,
+  isEmptyPolygonShape,
+  isRenderableLayer,
+  renderableSourceOf,
+} from './document/sources';
 export {
   areSelectedRasterLayersContiguous,
   canMergeSelectedRasters,

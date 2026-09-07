@@ -12,6 +12,8 @@
 import type { CanvasLayerSourceContract } from '@workbench/canvas-engine/contracts';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 
+import { isEmptyPolygonShape } from '@workbench/canvas-engine/document/sources';
+
 import type { RasterizeDeps, RasterizeResult } from './types';
 
 import { rasterizeGradientSource } from './gradientRasterizer';
@@ -42,8 +44,8 @@ export const rasterizeSource = (
     case 'paint':
       return rasterizePaintSource(source, deps, target);
     case 'shape':
-      if (source.kind === 'polygon') {
-        throw new Error("rasterizeSource: 'polygon' shapes are not implemented yet (deferred)");
+      if (isEmptyPolygonShape(source)) {
+        throw new Error('rasterizeSource: a polygon shape needs at least three points');
       }
       return rasterizeShapeSource(source, deps, target);
     case 'gradient':
