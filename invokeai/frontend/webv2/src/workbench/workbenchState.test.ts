@@ -472,6 +472,68 @@ describe('generation-device orchestration metadata', () => {
   });
 });
 
+describe('workbench hydration invariants', () => {
+  it('seeds a draft when a projectless session hydrates', () => {
+    const initial = createInitialWorkbenchState();
+    // What `persistEmptySession` caches after the last tab is closed. A load path
+    // that hands this over verbatim used to leave the store with no active project,
+    // which the first consumer to read one dereferences.
+    const emptySession: WorkbenchState = { ...initial, activeProjectId: '', projects: [] };
+
+    const hydrated = workbenchReducer(initial, { state: emptySession, type: 'hydrateWorkbench' });
+
+    expect(hydrated.projects).toHaveLength(1);
+    expect(hydrated.activeProjectId).toBe(hydrated.projects[0]?.id);
+    expect(getActiveProject(hydrated).widgetRegions.left.instanceIds.length).toBeGreaterThan(0);
+  });
+
+  it('builds that draft from the cached account, not the shipped defaults', () => {
+    const initial = createInitialWorkbenchState();
+    const project = getActiveProject(initial);
+    // The account's saved override of the default preset is what an empty cache
+    // still owns; the seeded draft has to inherit it the way the offline load path's
+    // replacement draft does.
+    const customizedDefault = {
+      ...resolveSavedLayoutPreset(initial.account, initial.account.activeLayoutPresetId).snapshot,
+      widgetRegions: {
+        ...project.widgetRegions,
+        left: { ...project.widgetRegions.left, instanceIds: ['generate'] },
+      },
+    };
+    const emptySession: WorkbenchState = {
+      ...initial,
+      account: {
+        ...initial.account,
+        layoutPresetOverrides: { [initial.account.activeLayoutPresetId]: customizedDefault },
+      },
+      activeProjectId: '',
+      projects: [],
+    };
+
+    const hydrated = workbenchReducer(initial, { state: emptySession, type: 'hydrateWorkbench' });
+
+    expect(getActiveProject(hydrated).widgetRegions.left.instanceIds).toEqual(['generate']);
+  });
+
+  it('repairs an active project id that names no hydrated project', () => {
+    const initial = createInitialWorkbenchState();
+    const danglingActiveId: WorkbenchState = { ...initial, activeProjectId: 'project-that-was-refused' };
+
+    const hydrated = workbenchReducer(initial, { state: danglingActiveId, type: 'hydrateWorkbench' });
+
+    expect(hydrated.activeProjectId).toBe(hydrated.projects[0]?.id);
+  });
+
+  it('leaves a populated session alone', () => {
+    const initial = createInitialWorkbenchState();
+
+    const hydrated = workbenchReducer(initial, { state: initial, type: 'hydrateWorkbench' });
+
+    expect(hydrated.projects.map((project) => project.id)).toEqual(initial.projects.map((project) => project.id));
+    expect(hydrated.activeProjectId).toBe(initial.activeProjectId);
+  });
+});
+
 describe('workbench widget region defaults', () => {
   it('starts new projects from the curated Compose widget defaults', () => {
     const state = createInitialWorkbenchState();
@@ -3924,6 +3986,74 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     });
 
     expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImageName).toBe('image:selected.png');
+  });
+
+  it('selects a result whose generation was submitted after the manual selection', () => {
+    vi.useFakeTimers({ now: new Date('2026-06-10T00:00:00.000Z') });
+
+    try {
+      let state = primeGenerate();
+      state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
+      state = submitGenerate(state);
+      const earlierItem = getActiveProject(state).queue.items[0];
+
+      vi.setSystemTime(new Date('2026-06-10T00:00:01.000Z'));
+      state = workbenchReducer(state, { item: createGalleryImageItem('selected.png'), type: 'selectGalleryItem' });
+      expect(getActiveProject(state).settings.showProgressImagesInViewer).toBe(false);
+
+      // Invoking again is the counter-signal: the user wants to see what they just asked for.
+      vi.setSystemTime(new Date('2026-06-10T00:00:02.000Z'));
+      state = submitGenerate(state);
+      const laterItem = getActiveProject(state).queue.items[0];
+      expect(laterItem.id).not.toBe(earlierItem.id);
+      expect(getActiveProject(state).settings.showProgressImagesInViewer).toBe(true);
+
+      // The batch already running when the user picked stays out of the way…
+      state = workbenchReducer(state, {
+        images: [createImage('earlier.png', earlierItem.id)],
+        projectId: getActiveProject(state).id,
+        queueItemId: earlierItem.id,
+        type: 'routeQueueItemResults',
+      });
+      expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImageName).toBe('image:selected.png');
+
+      // …while the one submitted after the pick takes the preview when it lands.
+      state = workbenchReducer(state, {
+        images: [createImage('later.png', laterItem.id)],
+        projectId: getActiveProject(state).id,
+        queueItemId: laterItem.id,
+        type: 'routeQueueItemResults',
+      });
+      expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImageName).toBe('image:later.png');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves an explicit live-follow opt-out alone when submitting', () => {
+    let state = primeGenerate();
+    state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
+    state = workbenchReducer(state, {
+      settings: { showProgressImagesInViewer: false },
+      type: 'setActiveProjectSettings',
+    });
+
+    state = submitGenerate(state);
+
+    expect(getActiveProject(state).settings.showProgressImagesInViewer).toBe(false);
+  });
+
+  it('lifts the selection pause when live-follow is toggled explicitly', () => {
+    let state = createInitialWorkbenchState();
+    state = workbenchReducer(state, { item: createGalleryImageItem('selected.png'), type: 'selectGalleryItem' });
+    expect(typeof getProjectWidgetValues(getActiveProject(state), 'gallery').liveFollowPausedAt).toBe('string');
+
+    state = workbenchReducer(state, {
+      settings: { showProgressImagesInViewer: true },
+      type: 'setActiveProjectSettings',
+    });
+
+    expect(getProjectWidgetValues(getActiveProject(state), 'gallery').liveFollowPausedAt).toBeUndefined();
   });
 
   it('stamps an explicit page into the navigation query already on a multi-selection', () => {

@@ -3,11 +3,10 @@ import type { WidgetViewProps } from '@workbench/widgetContracts';
 import { Box, HStack, Icon } from '@chakra-ui/react';
 import { useProgressImage } from '@features/queue/react';
 import { IconButton, ToggleIconButton, Tooltip } from '@platform/ui';
-import { InvokeMarkIcon } from '@platform/ui/InvokeMark';
 import { useInvocationState } from '@workbench/shell/topbar/useInvocationState';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
-import { GalleryThumbnailsIcon, HourglassIcon } from 'lucide-react';
+import { GalleryThumbnailsIcon, HourglassIcon, SparklesIcon } from 'lucide-react';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -116,14 +115,14 @@ const FloatingInvokeButton = ({ runtime }: Pick<WidgetViewProps, 'runtime'>) => 
       <IconButton
         aria-disabled={!canInvoke}
         aria-label={label}
-        color="brand.fg"
+        color="yellow.fg"
         cursor={canInvoke ? undefined : 'not-allowed'}
         opacity={canInvoke ? undefined : 0.55}
         size="2xs"
         variant="ghost"
         onClick={canInvoke ? invoke : undefined}
       >
-        <Icon as={InvokeMarkIcon} boxSize="3.5" />
+        <Icon as={SparklesIcon} boxSize="3.5" />
       </IconButton>
     </Tooltip>
   );

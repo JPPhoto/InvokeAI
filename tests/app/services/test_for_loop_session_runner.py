@@ -8,6 +8,7 @@ from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocati
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.loops import ForInvocation, ForInvocationOutput, ForReturnInvocation, LoopState
 from invokeai.app.invocations.primitives import BooleanOutput
+from invokeai.app.services.progress_previews.progress_previews_default import MemoryProgressPreviews
 from invokeai.app.services.session_processor.session_processor_default import DefaultSessionRunner
 from invokeai.app.services.shared.graph import CollectInvocation, Graph, GraphExecutionState, IterateInvocation
 from invokeai.app.services.shared.invocation_context import InvocationContext
@@ -167,6 +168,7 @@ def _build_runner(
     runner.start(
         services=SimpleNamespace(
             performance_statistics=_DummyStats(),
+            progress_previews=MemoryProgressPreviews(),
             events=events,
             logger=_DummyLogger(),
             configuration=_DummyConfig(),

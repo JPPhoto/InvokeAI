@@ -10,6 +10,7 @@ from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocati
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation
 from invokeai.app.services.events.events_common import QueueItemStatusChangedEvent
+from invokeai.app.services.progress_previews.progress_previews_default import MemoryProgressPreviews
 from invokeai.app.services.session_processor.session_processor_default import (
     DefaultSessionProcessor,
     DefaultSessionRunner,
@@ -251,6 +252,7 @@ def _build_processor(
         events=events,
         logger=_Logger(),
         performance_statistics=_Stats(),
+        progress_previews=MemoryProgressPreviews(),
         session_queue=queue,
         image_moves=None,
     )
