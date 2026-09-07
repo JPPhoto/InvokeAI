@@ -519,6 +519,46 @@ def test_graph_state_apply_rejects_decomposed_frame_mismatch():
     assert not state.execution_tokens
 
 
+@pytest.mark.parametrize(
+    "frame_component, replacement, error_message",
+    [
+        ("frame_id", "other-frame", "another execution frame"),
+        ("state_id", "other-state", "another graph execution state"),
+        ("workflow_call_depth", 1, "another workflow-call depth"),
+    ],
+)
+def test_graph_state_apply_rejects_effect_frame_identity_mismatch(
+    frame_component: str, replacement: Any, error_message: str
+):
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+    frame = ref.frame.model_dump(mode="python")
+    frame[frame_component] = replacement
+
+    with pytest.raises(ValueError, match=error_message):
+        state.apply(
+            ref,
+            output,
+            effects=[
+                {
+                    "kind": "emit",
+                    "frame": frame,
+                    "token": {"node_id": node.id, "field": "value", "value": 3},
+                }
+            ],
+        )
+
+    assert not state.executed
+    assert not state.results
+    assert not state.execution_tokens
+    assert not state.execution_effects
+
+
 def test_graph_state_apply_rejects_effect_from_another_state_before_mutation():
     graph = Graph()
     graph.add_node(AddInvocation(id="add", a=1, b=2))
