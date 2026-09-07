@@ -931,12 +931,17 @@ describe('reference sample window', () => {
       expect([next.startFrame, next.endFrame]).toEqual([50, 249]);
     });
 
-    it('stops at the clip end instead of shrinking (no overshoot ratchet)', () => {
-      // Drag far past the wall, then back to 0: the length must survive the round trip.
-      const overshot = slideReferenceSampleWindow(clip(0, 199), 299, false);
-      expect([overshot.startFrame, overshot.endFrame]).toEqual([100, 299]);
-      const back = slideReferenceSampleWindow(overshot, 0, false);
-      expect([back.startFrame, back.endFrame]).toEqual([0, 199]);
+    it('keeps the length while the clip can still supply it', () => {
+      const next = slideReferenceSampleWindow(clip(0, 199), 100, false);
+      expect([next.startFrame, next.endFrame]).toEqual([100, 299]);
+    });
+
+    it('pins the length to the frames left instead of blocking the start', () => {
+      // The start reaches the frame the user picked; the sample is what gives way.
+      const shortened = slideReferenceSampleWindow(clip(0, 199), 250, false);
+      expect([shortened.startFrame, shortened.endFrame]).toEqual([250, 299]);
+      const lastFrame = slideReferenceSampleWindow(clip(0, 199), 299, false);
+      expect([lastFrame.startFrame, lastFrame.endFrame]).toEqual([299, 299]);
     });
 
     it('keeps the extend anchor end pinned to the cutpoint', () => {
@@ -959,7 +964,7 @@ describe('reference sample window', () => {
       expect(inverted.endFrame).toBeGreaterThanOrEqual(inverted.startFrame);
       expect(inverted.endFrame).toBeLessThanOrEqual(19);
       const oversized = slideReferenceSampleWindow(clip(0, 999, 20), 5, false);
-      expect([oversized.startFrame, oversized.endFrame]).toEqual([0, 19]);
+      expect([oversized.startFrame, oversized.endFrame]).toEqual([5, 19]);
     });
 
     it('handles a single-frame clip', () => {

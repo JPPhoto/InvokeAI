@@ -131,9 +131,10 @@ const addReferenceNode = (
  * bounds on the estimate already. And a start within `TAIL_INDEX_SLOP` of the
  * clip's own beginning stays absolute because the relative form resolves to
  * `startFrame + (real - estimate)`, which goes NEGATIVE once the estimate
- * overshoots by more than `startFrame` — and `_ResolvedVideoRange.resolve`
- * rejects an out-of-range index outright rather than clamping, failing the
- * whole generation. That can only arise when the window fills nearly the entire
+ * overshoots by more than `startFrame` — and `_ResolvedVideoRange` rejects an
+ * out-of-range START index outright rather than clamping, failing the whole
+ * generation. (Only the END bound is clamped there, pinning the sample length
+ * to the frames the clip can supply.) That can only arise when the window fills nearly the entire
  * clip, where its length cannot be honoured anyway; below the slop the absolute
  * form is always in range, and the drift it costs is the estimate error itself,
  * a frame or two.

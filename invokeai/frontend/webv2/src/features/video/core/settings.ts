@@ -92,11 +92,14 @@ export const DEFAULT_REFERENCE_SAMPLE_FRAMES = 200;
 /**
  * Move a reference clip's sample window to a new start frame.
  *
- * Ordinary references slide at CONSTANT length, stopping at the clip's end rather than
- * shrinking — a transient overshoot during a drag must not ratchet the sample down. The
- * reference-extend anchor (`pinEnd`) instead keeps its end frame pinned to the Initial
- * Video cutpoint (seam continuity depends on the frames adjacent to it; see
- * deriveReferenceExtendClip), so moving its start only adjusts the lead-in length.
+ * The two controls are independent: an ordinary reference's start frame reaches every
+ * frame of the clip, and the sample length is what gives way — it keeps its value while
+ * there is clip left to fill it and is pinned to the remaining frames past that, so
+ * `start + length` never runs beyond the last frame. (The length slider's ceiling in the
+ * panel is the same `numFrames - startFrame`, so the control tracks what the window can
+ * actually hold.) The reference-extend anchor (`pinEnd`) instead keeps its end frame
+ * pinned to the Initial Video cutpoint (seam continuity depends on the frames adjacent to
+ * it; see deriveReferenceExtendClip), so moving its start only adjusts the lead-in length.
  *
  * Self-healing by construction: the returned window always satisfies
  * 0 <= start <= end <= numFrames - 1, even from a corrupt persisted trim.
@@ -116,9 +119,9 @@ export const slideReferenceSampleWindow = (
   }
 
   const sampleFrames = Math.min(Math.max(1, clip.endFrame - clip.startFrame + 1), maxFrame + 1);
-  const startFrame = Math.min(Math.max(0, Math.round(rawStart)), maxFrame - (sampleFrames - 1));
+  const startFrame = Math.min(Math.max(0, Math.round(rawStart)), maxFrame);
 
-  return { ...clip, endFrame: startFrame + sampleFrames - 1, startFrame };
+  return { ...clip, endFrame: Math.min(startFrame + sampleFrames - 1, maxFrame), startFrame };
 };
 
 /**
