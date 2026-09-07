@@ -18,6 +18,8 @@ import type {
   MiniMaxH3TargetResolution,
   VideoAspectRatioId,
   VideoGenerationMode,
+  VideoReferenceConditioning,
+  VideoReferenceImageDetail,
   VideoReferenceItem,
   VideoSettings,
   VideoSourceClip,
@@ -536,6 +538,36 @@ export const createVideoSourceClip = (item: {
     width: item.width,
   };
 };
+
+/**
+ * The conditioning a video reference starts on when it is added from the gallery or an
+ * upload.
+ *
+ * Audio uploads are stored as videos: the server wraps an uploaded audio file into a
+ * rendered-waveform clip at ingest and stamps `media_origin: audio_upload` on it. Those
+ * frames are a picture of the sound rather than footage anyone means to condition on, so
+ * such a reference defaults to its soundtrack alone. Everything else keeps video + audio.
+ * This is only the starting value — the card's selector still offers all three.
+ */
+export const getDefaultReferenceConditioning = (
+  metadata: Record<string, unknown> | null | undefined
+): VideoReferenceConditioning => (metadata?.media_origin === 'audio_upload' ? 'audio' : 'video_audio');
+
+/**
+ * The detail a newly added image reference starts on.
+ *
+ * The FIRST image reference keeps upstream's rule, a 2048px short edge: it is usually the
+ * subject the generation is about, and that is where the extra detail earns its cost.
+ * Later ones match the generation size instead. Reference rows are re-attended at every
+ * denoising step and attention is quadratic in the sequence, so a second and third 2048px
+ * reference are what turn a modest surcharge into a doubling — while the marginal value of
+ * conditioning a supporting reference at seven times the output's pixel density is small.
+ *
+ * Only the starting value: every card's selector still offers both, and the card shows the
+ * size and row count each choice produces.
+ */
+export const getDefaultReferenceImageDetail = (references: VideoReferenceItem[]): VideoReferenceImageDetail =>
+  references.some((entry) => entry.kind === 'image') ? 'match' : 'max';
 
 /** The minimum frames a trim must keep — video_concat's crossfade consumes a 2-frame tail. */
 export const MIN_VIDEO_TRIM_FRAMES = 2;

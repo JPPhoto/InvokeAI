@@ -14,6 +14,8 @@ import {
   cloneVideoWidgetValues,
   createVideoSourceClip,
   deriveReferenceExtendClip,
+  getDefaultReferenceConditioning,
+  getDefaultReferenceImageDetail,
   isVideoSettings,
   isVideoSourceClip,
   normalizeVideoSettings,
@@ -259,6 +261,46 @@ describe('createVideoSourceClip', () => {
     expect(clip.numFrames).toBeGreaterThanOrEqual(1);
     expect(clip.endFrame).toBeGreaterThanOrEqual(0);
     expect(clip.startFrame).toBe(0);
+  });
+});
+
+describe('getDefaultReferenceConditioning', () => {
+  it('starts a wrapped audio upload on its soundtrack alone', () => {
+    expect(getDefaultReferenceConditioning({ media_origin: 'audio_upload' })).toBe('audio');
+  });
+
+  it('keeps video + audio for ordinary videos', () => {
+    expect(getDefaultReferenceConditioning({ generation_mode: 'minimax_h3_ref2v' })).toBe('video_audio');
+    expect(getDefaultReferenceConditioning({ media_origin: 'something_else' })).toBe('video_audio');
+  });
+
+  it('keeps video + audio when there is no metadata to read', () => {
+    expect(getDefaultReferenceConditioning(null)).toBe('video_audio');
+    expect(getDefaultReferenceConditioning(undefined)).toBe('video_audio');
+    expect(getDefaultReferenceConditioning({})).toBe('video_audio');
+  });
+});
+
+describe('getDefaultReferenceImageDetail', () => {
+  const imageReference = {
+    detail: 'max',
+    image: { height: 1080, image_name: 'ref.png', width: 1920 },
+    kind: 'image',
+  } as const;
+  const videoReference = {
+    clip: SOURCE_VIDEO,
+    conditioning: 'video_audio',
+    kind: 'video',
+  } as const;
+
+  it('starts the first image reference at maximum detail', () => {
+    expect(getDefaultReferenceImageDetail([])).toBe('max');
+    expect(getDefaultReferenceImageDetail([videoReference])).toBe('max');
+  });
+
+  it('matches the generation size once an image reference is placed', () => {
+    expect(getDefaultReferenceImageDetail([imageReference])).toBe('match');
+    expect(getDefaultReferenceImageDetail([videoReference, imageReference])).toBe('match');
   });
 });
 
