@@ -4,6 +4,7 @@ import type { VideoReferenceItem, VideoSettings } from './types';
 
 import { MINIMAX_H3_NUM_FRAMES_CHOICES } from './dimensions';
 import {
+  DEFAULT_REFERENCE_SAMPLE_FRAMES,
   resizeReferenceSampleWindow,
   slideReferenceSampleWindow,
   anchorReferenceConditioning,
@@ -15,6 +16,7 @@ import {
   cloneVideoWidgetValues,
   createVideoSourceClip,
   deriveReferenceExtendClip,
+  getDefaultReferenceClip,
   getDefaultReferenceConditioning,
   getDefaultReferenceImageDetail,
   isVideoSettings,
@@ -279,6 +281,89 @@ describe('getDefaultReferenceConditioning', () => {
     expect(getDefaultReferenceConditioning(null)).toBe('video_audio');
     expect(getDefaultReferenceConditioning(undefined)).toBe('video_audio');
     expect(getDefaultReferenceConditioning({})).toBe('video_audio');
+  });
+});
+
+describe('getDefaultReferenceClip', () => {
+  // A wrapped audio upload: the server renders it at AUDIO_WRAP_FPS (24), so
+  // DEFAULT_REFERENCE_SAMPLE_FRAMES lands at a little over 8 seconds of the track.
+  // Deliberately handed in with a narrow, offset window: were the helper to pass its clip
+  // through unchanged, the audio expectation below would still be satisfied by a fixture
+  // that already held the whole clip.
+  const wrappedAudio = {
+    endFrame: 199,
+    fps: 24,
+    height: 512,
+    numFrames: 4320,
+    startFrame: 120,
+    video_name: 'song.mp4',
+    width: 512,
+  };
+
+  // Long enough that the sample window actually bites: SOURCE_VIDEO's 81 frames are
+  // shorter than DEFAULT_REFERENCE_SAMPLE_FRAMES, so it can only exercise the clamp.
+  const footage = { ...SOURCE_VIDEO, endFrame: 599, numFrames: 600 };
+
+  it('samples footage from the head of the clip', () => {
+    expect(getDefaultReferenceClip(footage, 'video_audio')).toEqual({
+      ...footage,
+      endFrame: DEFAULT_REFERENCE_SAMPLE_FRAMES - 1,
+      startFrame: 0,
+    });
+    expect(getDefaultReferenceClip(footage, 'video')).toEqual({
+      ...footage,
+      endFrame: DEFAULT_REFERENCE_SAMPLE_FRAMES - 1,
+      startFrame: 0,
+    });
+  });
+
+  it('gives the same long clip its whole length once it is audio-only', () => {
+    expect(getDefaultReferenceClip(footage, 'audio').endFrame).toBe(599);
+  });
+
+  it('gives an audio-only reference the whole clip', () => {
+    // 3 minutes of audio, not the first 8 seconds of it: an audio reference is encoded as
+    // a soundtrack and no visual rows, and the window is what the generation gets to hear.
+    expect(getDefaultReferenceClip(wrappedAudio, 'audio')).toEqual({
+      ...wrappedAudio,
+      endFrame: 4319,
+      startFrame: 0,
+    });
+  });
+
+  it('still samples the head of that same clip when it carries video', () => {
+    expect(getDefaultReferenceClip(wrappedAudio, 'video_audio')).toEqual({
+      ...wrappedAudio,
+      endFrame: DEFAULT_REFERENCE_SAMPLE_FRAMES - 1,
+      startFrame: 0,
+    });
+  });
+
+  it('never samples past the end of a clip shorter than the window', () => {
+    // SOURCE_VIDEO is 81 frames; both conditionings collapse to the whole clip.
+    expect(getDefaultReferenceClip(SOURCE_VIDEO, 'video_audio').endFrame).toBe(80);
+    expect(getDefaultReferenceClip(SOURCE_VIDEO, 'audio').endFrame).toBe(80);
+
+    const short = { ...SOURCE_VIDEO, endFrame: 11, numFrames: 12 };
+
+    expect(getDefaultReferenceClip(short, 'video_audio').endFrame).toBe(11);
+    expect(getDefaultReferenceClip(short, 'audio').endFrame).toBe(11);
+  });
+
+  it('keeps the shortest real clip on its single frame', () => {
+    // createVideoSourceClip floors numFrames at 1, so this is the smallest clip either
+    // branch can be handed; both must land on frame 0, not on -1.
+    const single = { ...SOURCE_VIDEO, endFrame: 0, numFrames: 1 };
+
+    expect(getDefaultReferenceClip(single, 'video_audio').endFrame).toBe(0);
+    expect(getDefaultReferenceClip(single, 'audio').endFrame).toBe(0);
+  });
+
+  it('resets the start frame, so a trimmed source clip does not carry its trim in', () => {
+    const trimmed = { ...SOURCE_VIDEO, endFrame: 70, startFrame: 40 };
+
+    expect(getDefaultReferenceClip(trimmed, 'video_audio').startFrame).toBe(0);
+    expect(getDefaultReferenceClip(trimmed, 'audio').startFrame).toBe(0);
   });
 });
 
