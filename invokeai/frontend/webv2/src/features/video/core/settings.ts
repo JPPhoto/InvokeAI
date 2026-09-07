@@ -245,7 +245,7 @@ const sanitizeVideoReferences = (value: unknown, sourceVideoName?: string): Vide
     for (let index = valid.length - 1; index >= 0; index -= 1) {
       const entry = valid[index]!;
 
-      if (entry.kind === 'video' && entry.clip.video_name === sourceVideoName) {
+      if (entry.kind === 'video' && entry.clip.video_name === sourceVideoName && canAnchorReferenceExtend(entry)) {
         valid = valid.map((candidate, candidateIndex) =>
           candidateIndex === index && candidate.kind === 'video' ? { ...candidate, fromSourceVideo: true } : candidate
         );
@@ -567,6 +567,73 @@ export const getDefaultReferenceConditioning = (
 ): VideoReferenceConditioning => (metadata?.media_origin === 'audio_upload' ? 'audio' : 'video_audio');
 
 /**
+ * Whether a video reference can serve as the reference-extend ANCHOR.
+ *
+ * The anchor carries the tail of the Initial Video across the seam, and that is what the
+ * generated frames continue from. An 'audio' reference contributes soundtrack rows and no
+ * visual rows at all — the backend decodes a reference's frames only when its packed kind
+ * is `video` (`reference_kind`) — so it has nothing to offer the seam. Nor does it fail
+ * loudly: the all-audio validation reason needs EVERY reference to be audio-only, so one
+ * image reference alongside is enough to let a silently discontinuous seam queue.
+ *
+ * So an audio-only reference is never CHOSEN as the anchor. Adoption and the recall
+ * re-derive both skip it, and the anchor is appended fresh instead — which keeps the
+ * soundtrack the user actually asked for rather than overwriting it with a role it cannot
+ * fill. Only an entry already claiming the flag is converted, by
+ * {@link anchorReferenceConditioning}.
+ */
+const canAnchorReferenceExtend = (entry: VideoReferenceItem): boolean =>
+  entry.kind === 'video' && entry.conditioning !== 'audio';
+
+/**
+ * The conditioning an entry keeps once it IS the reference-extend anchor.
+ *
+ * Only reached for an entry already carrying the flag: a record written before
+ * {@link canAnchorReferenceExtend} existed, or a hand-edited one. Promoting keeps the
+ * soundtrack the choice asked for and restores the visuals the role requires; 'video' and
+ * 'video_audio' are the user's own answer and pass through.
+ *
+ * Deliberately applied only in `applyReferenceExtendSourceVideo`, where the window is
+ * either re-derived alongside it or is one the user picked for THIS anchor
+ * (`trimOverridden`). Promoting in normalization instead would turn an entry that was
+ * merely inert into one emitting visual rows from whatever window it happens to hold —
+ * for a mis-flagged entry, the opening of the clip rather than the tail, which is a worse
+ * seam than no anchor at all.
+ */
+export const anchorReferenceConditioning = (conditioning: VideoReferenceConditioning): VideoReferenceConditioning =>
+  conditioning === 'audio' ? 'video_audio' : conditioning;
+
+/**
+ * The sample window a newly added video reference starts on.
+ *
+ * Footage starts on {@link DEFAULT_REFERENCE_SAMPLE_FRAMES} from the clip's head, because
+ * every reference frame is VAE-encoded into rows the denoiser re-attends at every step.
+ *
+ * An AUDIO-ONLY reference starts on the whole clip. It pays none of that cost: the backend
+ * decodes a reference's frames only when its packed kind is `video` (`reference_kind`), so
+ * an 'audio' reference contributes soundtrack rows and no visual rows at all — and those
+ * rows are bounded by the GENERATED duration, not by how long the window is. What the
+ * window decides is which audio the model hears: the track is sliced to the window and only
+ * THEN truncated to the generated duration, so a window shorter than the generation cuts
+ * the soundtrack off early. At 8s that is every frame count above 200 — over half of the
+ * ones the panel offers.
+ *
+ * Only the starting value — the card's sample-length control still trims either kind, and
+ * changing a card's conditioning afterwards leaves the window the user can see alone.
+ */
+export const getDefaultReferenceClip = (
+  clip: VideoSourceClip,
+  conditioning: VideoReferenceConditioning
+): VideoSourceClip => ({
+  ...clip,
+  endFrame:
+    conditioning === 'audio'
+      ? Math.max(0, clip.numFrames - 1)
+      : Math.max(0, Math.min(DEFAULT_REFERENCE_SAMPLE_FRAMES, clip.numFrames) - 1),
+  startFrame: 0,
+});
+
+/**
  * The detail a newly added image reference starts on.
  *
  * The FIRST image reference keeps upstream's rule, a 2048px short edge: it is usually the
@@ -858,7 +925,15 @@ export const applyReferenceExtendSourceVideo = (
   const linkedIndex =
     flaggedIndex >= 0
       ? flaggedIndex
-      : references.findIndex((entry) => entry.kind === 'video' && entry.clip.video_name === sourceVideo.video_name);
+      : references.findIndex(
+          (entry) =>
+            entry.kind === 'video' &&
+            entry.clip.video_name === sourceVideo.video_name &&
+            // An audio-only reference to this clip is the user's soundtrack, not a
+            // continuity anchor: adopting it would replace their window with the tail and
+            // still leave the seam with no visuals. Fall through and append instead.
+            canAnchorReferenceExtend(entry)
+        );
 
   if (linkedIndex >= 0) {
     return pinReferenceExtendAnchor(
@@ -866,15 +941,20 @@ export const applyReferenceExtendSourceVideo = (
         if (index !== linkedIndex || entry.kind !== 'video') {
           return entry;
         }
+        // Safe to convert an audio-only entry here: it is the flagged anchor, or one just
+        // adopted into the role, and the role needs visual rows. See
+        // `anchorReferenceConditioning`.
+        const conditioning = anchorReferenceConditioning(entry.conditioning);
+
         // `fromSourceVideo` is required, not implied by `linkedIndex`: the adopt-by-name
-        // fallback below reaches UNFLAGGED entries (recall restores the pair without the
+        // fallback above reaches UNFLAGGED entries (recall restores the pair without the
         // flag), and those have never been an anchor, so they get the derived default.
         if (
           entry.fromSourceVideo !== true ||
           entry.trimOverridden !== true ||
           entry.clip.video_name !== sourceVideo.video_name
         ) {
-          return { ...linked, conditioning: entry.conditioning };
+          return { ...linked, conditioning };
         }
 
         return {
@@ -886,7 +966,7 @@ export const applyReferenceExtendSourceVideo = (
             { ...sourceVideo, endFrame: entry.clip.endFrame, startFrame: entry.clip.startFrame },
             entry.clip.startFrame
           ),
-          conditioning: entry.conditioning,
+          conditioning,
           sampleFrames: entry.sampleFrames,
           trimOverridden: true,
         };

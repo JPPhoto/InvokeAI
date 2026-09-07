@@ -249,7 +249,8 @@
     "unknownTime": "Unknown time",
     "view": "View",
     "viewJson": "View JSON",
-    "widgetViewUnavailable": "Widget view unavailable."
+    "widgetViewUnavailable": "Widget view unavailable.",
+    "loading": "Loading…"
   },
   "app": {
     "name": "Invoke AI",
@@ -1277,6 +1278,7 @@
     "useSupportedImage": "Use a PNG, JPEG, or WebP image.",
     "variant": "Variant",
     "variantHelp": "Architecture variant, e.g. inpaint or dev.",
+    "viewModel": "View model",
     "viewQueue": "View queue",
     "waitingForDownload": "Waiting for download"
   },
@@ -1510,6 +1512,149 @@
       "indexOff": "The image index is not running. Terms are saved and will apply when it is next enabled.",
       "saveFailed": "Could not save the vocabulary.",
       "loadFailed": "Could not load the vocabulary."
+    },
+    "catalog": {
+      "themeId": {
+        "label": "Theme",
+        "description": "Choose the workbench colors."
+      },
+      "highContrast": {
+        "label": "High contrast",
+        "description": "Strengthen text and border contrast on every theme."
+      },
+      "reduceMotion": {
+        "label": "Reduce motion",
+        "description": "Disable transitions and animations across the workbench."
+      },
+      "showFocusRegionHighlight": {
+        "label": "Highlight focused regions",
+        "description": "Highlight the region receiving keyboard shortcuts."
+      },
+      "autoSwitchInvocationRoute": {
+        "label": "Auto-switch Invoke route",
+        "description": "Match the Invoke source and destination to the surface you are editing. Locked routes are never changed."
+      },
+      "enableInformationalPopovers": {
+        "label": "Enable informational popovers",
+        "description": "Show educational popovers on controls that have extra guidance."
+      },
+      "enableModelDescriptions": {
+        "label": "Show model descriptions",
+        "description": "Include model descriptions in model dropdowns where available."
+      },
+      "notifyOnEnqueue": {
+        "label": "Notify when queued",
+        "description": "Show a toast for each successful enqueue. Enqueues are always recorded in the notification center."
+      },
+      "preferNumericAttentionStyle": {
+        "label": "Prefer numeric attention style",
+        "description": "Use numeric prompt attention syntax when inserting attention weights."
+      },
+      "showPromptSyntaxHighlighting": {
+        "label": "Highlight prompt syntax",
+        "description": "Color syntax in prompt fields without changing their text or validation."
+      },
+      "hotkeys": {
+        "label": "Keyboard shortcuts",
+        "description": "Find and customize keyboard shortcuts."
+      },
+      "useCpuNoise": {
+        "label": "Use CPU noise",
+        "description": "Use CPU noise generation for deterministic legacy-compatible outputs."
+      },
+      "confirmImageDeletion": {
+        "label": "Confirm image deletion",
+        "description": "Ask for confirmation before permanently deleting images."
+      },
+      "antialiasProgressImages": {
+        "label": "Antialias progress images",
+        "description": "Smooth progress previews instead of rendering them pixelated."
+      },
+      "workflowSnapToGrid": {
+        "label": "Always snap to grid",
+        "description": "Snap nodes to the grid while dragging. When off, hold Ctrl to snap temporarily."
+      },
+      "workflowEdgesBehindNodes": {
+        "label": "Keep highlighted connections behind nodes",
+        "description": "Connections to a selected node normally rise above other nodes. Keep them beneath so they never cover node controls."
+      },
+      "workflowShowMinimap": {
+        "label": "Show minimap",
+        "description": "Show an overview in the corner of the workflow editor."
+      },
+      "workflowValidateConnections": {
+        "label": "Validate connections",
+        "description": "Reject incompatible field connections. Disabling validation allows connections that may fail during a run."
+      },
+      "imageMapVocabulary": {
+        "label": "Vocabulary",
+        "description": "Manage the vocabulary used to organize the Image Map."
+      },
+      "developerLogEnabled": {
+        "label": "Record diagnostic logs",
+        "description": "Record selected diagnostic events in the Diagnostics widget."
+      },
+      "developerPerformanceTimingsEnabled": {
+        "label": "Collect performance timings",
+        "description": "Record workflow editing and project serialization measurements."
+      },
+      "developerLogNamespaces": {
+        "label": "Log namespaces",
+        "description": "Choose which diagnostic sources to record."
+      },
+      "generationDevices": {
+        "label": "Generation devices",
+        "description": "Server-wide accelerator selection. Changes require a server restart."
+      },
+      "workspaceActions": {
+        "label": "Data & workspace",
+        "description": "Reset the layout or permanently delete saved projects and settings."
+      },
+      "about": {
+        "label": "About InvokeAI",
+        "description": "Version, build, and server information."
+      },
+      "language": {
+        "label": "Language"
+      },
+      "workflowEdgeStyle": {
+        "label": "Connection style",
+        "description": "How connections between nodes are drawn."
+      },
+      "options": {
+        "curved": "Curved",
+        "square": "Square",
+        "activeProject": "Active project",
+        "all": "All projects",
+        "trace": "Trace",
+        "debug": "Debug",
+        "info": "Info",
+        "warn": "Warn",
+        "error": "Error",
+        "fatal": "Fatal"
+      },
+      "queueJobsScope": {
+        "label": "Show jobs from",
+        "description": "Choose which jobs the Queue widget includes in counts and lists."
+      },
+      "developerLogLevel": {
+        "label": "Log level"
+      },
+      "sections": {
+        "appearance": "Appearance",
+        "behavior": "Behavior",
+        "hotkeys": "Keyboard shortcuts",
+        "project": "Project",
+        "gallery": "Gallery",
+        "preview": "Preview",
+        "workflow": "Workflow",
+        "queue": "Queue",
+        "imageMap": "Image Map",
+        "developer": "Developer",
+        "server": "Server",
+        "workspace": "Data & workspace",
+        "about": "About"
+      }
     }
   },
   "shell": {
@@ -1924,6 +2069,8 @@
       "modeStyle": "Style",
       "model": "Model",
       "modelDefault": "Model default",
+      "moveReferenceImageDown": "Move reference image down",
+      "moveReferenceImageUp": "Move reference image up",
       "moreRatios": "More aspect ratios",
       "nativePx": "{{size}} px native",
       "negativePrompt": "Negative prompt",
@@ -1957,6 +2104,19 @@
       "resetToModelDefault": "Reset to model default",
       "savePresetAction": "Save",
       "savePresetTitle": "Save preset",
+      "scaleBeforeProcessing": "Scale before processing",
+      "scalingOptions": {
+        "height": "Height",
+        "method": "Scale method",
+        "methods": {
+          "auto": "Auto",
+          "manual": "Manual",
+          "none": "Off"
+        },
+        "processingAtFrame": "Generates at the generation size; nothing to resize.",
+        "processingSize": "Generates at {{width}}x{{height}}, then resizes back to the generation size.",
+        "width": "Width"
+      },
       "searchPresets": "Search presets",
       "secondsPerRun": "~{{value}}s/run",
       "sizePreviewHandle": "Drag to resize the generation size",
@@ -2010,6 +2170,7 @@
         "addImage": "Add an image",
         "replaceImage": "Replace image",
         "removeImage": "Remove image",
+        "couldNotLoadImage": "Could not load that image",
         "import": "Import",
         "importHelp": "Import templates from a CSV or JSON file with name, prompt and negative_prompt.",
         "export": "Export",
@@ -2436,6 +2597,7 @@
         "fitBboxToLayers": "Fit frame to layers",
         "fitBboxToMasks": "Fit frame to masks",
         "fitToView": "Fit to view",
+        "moreSaveOptions": "More save options",
         "newCanvas": "New canvas",
         "newCanvasConfirm": "Clear all layers and start a fresh canvas? This cannot be undone.",
         "newSession": "New session",
@@ -2454,7 +2616,14 @@
         "empty": "No gallery images were available to add.",
         "failed": "Couldn't add images to canvas",
         "inpaintMask": "Inpaint Mask",
-        "newLayerFromImage": "New Layer from Image",
+        "newCanvasFromImage_one": "New Canvas from Image",
+        "newCanvasFromImage_other": "New Canvas from Images",
+        "newCanvasSuccess_one": "Created a new canvas from the image",
+        "newCanvasSuccess_other": "Created a new canvas from {{count}} images",
+        "newFromImage_one": "New from Image",
+        "newFromImage_other": "New from Images",
+        "newLayerFromImage_one": "New Layer from Image",
+        "newLayerFromImage_other": "New Layers from Images",
         "partial_one": "Added {{successCount}} image; {{failedCount}} could not be prepared.",
         "partial_other": "Added {{successCount}} images; {{failedCount}} could not be prepared.",
         "raster": "Raster Layer",
@@ -2500,6 +2669,7 @@
         "autoSwitchProgress": "In progress",
         "generating": "Generating…",
         "moreAcceptOptions": "More accept options",
+        "recall": "Recall settings",
         "saveAsDisabledLayer": "Save & Continue",
         "saveError": "Couldn't save to gallery",
         "saveToGallery": "Save to gallery",
@@ -2553,7 +2723,7 @@
         "lassoPolygonHint": "Click to place points. Double-click, Enter, or click the first point to close.",
         "lassoShape": "Lasso mode",
         "liftSelectionToLayer": "New layer",
-        "marqueeHint": "Drag to select a region. Shift constrains, Alt draws from centre.",
+        "marqueeHint": "Drag to select a region. Shift adds, Alt subtracts; press them mid-drag to constrain or draw from center.",
         "marqueeKind": "Marquee shape",
         "movePosition": "Move layer",
         "opacity": "Opacity",
@@ -2564,19 +2734,29 @@
         "rotation": "Rotation",
         "scaleHeight": "H %",
         "scaleWidth": "W %",
+        "selectAll": "Select all",
         "selectionActions": "Actions",
         "selectionAdd": "Add",
         "selectionIntersect": "Intersect",
         "selectionMode": "Selection mode",
+        "selectionNeedsPaintLayer": "Select an unlocked, visible paint layer first",
+        "selectionNeedsSelection": "Make a selection first",
         "selectionReplace": "Replace",
         "selectionSubtract": "Subtract",
         "setFrame": "Set generation frame",
         "shapeEdit": "Edit shape",
         "shapeEllipse": "Ellipse",
         "shapeFill": "Fill",
+        "shapeFreehand": "Freehand",
+        "shapeFreehandHint": "Drag to draw a freeform shape.",
         "shapeHint": "Drag to draw a shape.",
+        "shapePolygon": "Polygon",
+        "shapePolygonHint": "Click to place points. Double-click, Enter, or click the first point to close.",
         "shapeRect": "Rectangle",
         "shapeStar": "Star",
+        "shapeTarget": "Place on",
+        "shapeTargetNew": "New layer",
+        "shapeTargetSelected": "Selected layer",
         "shapeTriangle": "Triangle",
         "shapeStroke": "Stroke",
         "shapeStrokeWidth": "Stroke width",
@@ -3119,7 +3299,6 @@
         "addReferenceImage": "Add reference image",
         "autoNegative": "Auto-Negative",
         "clearReferenceImage": "Clear reference image",
-        "flux2PositiveOnly": "FLUX.2 regional guidance supports positive prompts only. Negative prompts, Auto-Negative, and reference images must be removed before generation.",
         "method": "Method",
         "methods": {
           "composition": "Composition",
@@ -3140,6 +3319,7 @@
         "referenceImages": "Reference images",
         "removeReferenceImage": "Remove reference image",
         "selectModel": "Select a model",
+        "unsupportedModel": "The selected model does not support regional guidance. This layer is skipped during generation.",
         "weight": "Weight"
       },
       "types": {
@@ -3267,7 +3447,8 @@
         "navigationRight": "Gallery navigation right",
         "navigationUp": "Gallery navigation up",
         "selectAllOnPage": "Select all gallery images on page",
-        "toggleStarImage": "Toggle gallery image star"
+        "toggleStarImage": "Toggle gallery image star",
+        "toggleStarredOnly": "Toggle gallery starred-only filter"
       },
       "clearClusterSearch": "Clear cluster filter",
       "clearImageSearch": "Clear image similarity search",
@@ -3358,6 +3539,7 @@
       "newest": "Newest",
       "noBoardsMatchSearch": "No boards match this search.",
       "noImagesMatch": "No items match this board, tab, or search.",
+      "noStarredItemsMatch": "No starred items match this board, tab, or search.",
       "oldest": "Oldest",
       "otherProjectBoards": "Other projects' boards",
       "pagination": "Pagination",
@@ -3432,7 +3614,12 @@
       "sortBoardsDescending": "Sort boards descending",
       "sortBy": "Sort by",
       "starImage": "Star {{name}}",
+      "showAllStarred": "Show all",
+      "showAllStarredItems": "Show all starred items",
       "starredItems": "Starred",
+      "starredOnly": "Starred only",
+      "starredOnlyTooltip": "Show only starred items",
+      "starredOnlyUnavailable": "The starred filter does not apply to similarity results",
       "starSelection": "Star selection",
       "statusChip_one": "Gallery: {{count}} item",
       "statusChip_other": "Gallery: {{count}} items",
@@ -3459,7 +3646,8 @@
       "windowAnchored": "Showing this board from item {{index}}.",
       "backToBoardTop": "Back to top",
       "windowLimit": "Showing the first {{count}} items. Narrow the search or switch to Pages to reach the rest.",
-      "windowLimitFrom": "Showing {{count}} items from item {{index}}. Narrow the search or switch to Pages to reach the rest."
+      "windowLimitFrom": "Showing {{count}} items from item {{index}}. Narrow the search or switch to Pages to reach the rest.",
+      "boardOrder": "Board order"
     },
     "queueStatus": {
       "idle": "Queue idle",
@@ -3634,5 +3822,41 @@
     "title": "Workflows",
     "untitled": "Untitled Workflow",
     "yours": "Yours"
+  },
+  "settingsDialog": {
+    "search": "Search settings…",
+    "clearSearch": "Clear search",
+    "section": "Settings section",
+    "allResults": "All results",
+    "results": "Search results",
+    "resultCount_one": "{{count}} setting found",
+    "resultCount_other": "{{count}} settings found",
+    "noResults": "No settings match your search.",
+    "openEditor": "Open editor",
+    "showInSection": "Show in section",
+    "allWidgetSettings": "All {{widget}} settings…",
+    "loadFailed": "These settings could not be loaded. Try again.",
+    "instanceUnavailable": "Open a project containing this widget to edit its settings.",
+    "projectUnavailable": "Open a project to edit these settings.",
+    "groups": {
+      "application": "Application",
+      "project": "Project",
+      "widgets": "Widgets",
+      "system": "System"
+    },
+    "scope": {
+      "preference": "Saved in your preferences",
+      "project": "Saved with this project",
+      "instance": "Saved with this widget in this project",
+      "server": "Applies to the whole server",
+      "install": "Saved for this install"
+    },
+    "fields": {
+      "comparisonMode": "Comparison mode",
+      "showClusterLabels": "Show cluster labels",
+      "clickSelectsCluster": "Select clusters on click"
+    },
+    "changedFromDefault": "Changed from default",
+    "changedSetting": "{{setting}}: changed from default"
   }
 }

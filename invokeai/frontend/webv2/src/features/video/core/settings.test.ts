@@ -5,9 +5,11 @@ import type { VideoReferenceItem, VideoSettings } from './types';
 import { MINIMAX_H3_NUM_FRAMES_CHOICES } from './dimensions';
 import {
   clampReferenceSampleFrames,
+  DEFAULT_REFERENCE_SAMPLE_FRAMES,
   referenceSampleFrames,
   resizeReferenceSampleWindow,
   slideReferenceSampleWindow,
+  anchorReferenceConditioning,
   applyReferenceExtendSourceVideo,
   applyReferenceExtendNumFrames,
   canPlaceReferenceExtendAnchor,
@@ -16,6 +18,7 @@ import {
   cloneVideoWidgetValues,
   createVideoSourceClip,
   deriveReferenceExtendClip,
+  getDefaultReferenceClip,
   getDefaultReferenceConditioning,
   getDefaultReferenceImageDetail,
   isVideoSettings,
@@ -283,6 +286,89 @@ describe('getDefaultReferenceConditioning', () => {
   });
 });
 
+describe('getDefaultReferenceClip', () => {
+  // A wrapped audio upload: the server renders it at AUDIO_WRAP_FPS (24), so
+  // DEFAULT_REFERENCE_SAMPLE_FRAMES lands at a little over 8 seconds of the track.
+  // Deliberately handed in with a narrow, offset window: were the helper to pass its clip
+  // through unchanged, the audio expectation below would still be satisfied by a fixture
+  // that already held the whole clip.
+  const wrappedAudio = {
+    endFrame: 199,
+    fps: 24,
+    height: 512,
+    numFrames: 4320,
+    startFrame: 120,
+    video_name: 'song.mp4',
+    width: 512,
+  };
+
+  // Long enough that the sample window actually bites: SOURCE_VIDEO's 81 frames are
+  // shorter than DEFAULT_REFERENCE_SAMPLE_FRAMES, so it can only exercise the clamp.
+  const footage = { ...SOURCE_VIDEO, endFrame: 599, numFrames: 600 };
+
+  it('samples footage from the head of the clip', () => {
+    expect(getDefaultReferenceClip(footage, 'video_audio')).toEqual({
+      ...footage,
+      endFrame: DEFAULT_REFERENCE_SAMPLE_FRAMES - 1,
+      startFrame: 0,
+    });
+    expect(getDefaultReferenceClip(footage, 'video')).toEqual({
+      ...footage,
+      endFrame: DEFAULT_REFERENCE_SAMPLE_FRAMES - 1,
+      startFrame: 0,
+    });
+  });
+
+  it('gives the same long clip its whole length once it is audio-only', () => {
+    expect(getDefaultReferenceClip(footage, 'audio').endFrame).toBe(599);
+  });
+
+  it('gives an audio-only reference the whole clip', () => {
+    // 3 minutes of audio, not the first 8 seconds of it: an audio reference is encoded as
+    // a soundtrack and no visual rows, and the window is what the generation gets to hear.
+    expect(getDefaultReferenceClip(wrappedAudio, 'audio')).toEqual({
+      ...wrappedAudio,
+      endFrame: 4319,
+      startFrame: 0,
+    });
+  });
+
+  it('still samples the head of that same clip when it carries video', () => {
+    expect(getDefaultReferenceClip(wrappedAudio, 'video_audio')).toEqual({
+      ...wrappedAudio,
+      endFrame: DEFAULT_REFERENCE_SAMPLE_FRAMES - 1,
+      startFrame: 0,
+    });
+  });
+
+  it('never samples past the end of a clip shorter than the window', () => {
+    // SOURCE_VIDEO is 81 frames; both conditionings collapse to the whole clip.
+    expect(getDefaultReferenceClip(SOURCE_VIDEO, 'video_audio').endFrame).toBe(80);
+    expect(getDefaultReferenceClip(SOURCE_VIDEO, 'audio').endFrame).toBe(80);
+
+    const short = { ...SOURCE_VIDEO, endFrame: 11, numFrames: 12 };
+
+    expect(getDefaultReferenceClip(short, 'video_audio').endFrame).toBe(11);
+    expect(getDefaultReferenceClip(short, 'audio').endFrame).toBe(11);
+  });
+
+  it('keeps the shortest real clip on its single frame', () => {
+    // createVideoSourceClip floors numFrames at 1, so this is the smallest clip either
+    // branch can be handed; both must land on frame 0, not on -1.
+    const single = { ...SOURCE_VIDEO, endFrame: 0, numFrames: 1 };
+
+    expect(getDefaultReferenceClip(single, 'video_audio').endFrame).toBe(0);
+    expect(getDefaultReferenceClip(single, 'audio').endFrame).toBe(0);
+  });
+
+  it('resets the start frame, so a trimmed source clip does not carry its trim in', () => {
+    const trimmed = { ...SOURCE_VIDEO, endFrame: 70, startFrame: 40 };
+
+    expect(getDefaultReferenceClip(trimmed, 'video_audio').startFrame).toBe(0);
+    expect(getDefaultReferenceClip(trimmed, 'audio').startFrame).toBe(0);
+  });
+});
+
 describe('getDefaultReferenceImageDetail', () => {
   const imageReference = {
     detail: 'max',
@@ -503,6 +589,144 @@ describe('references', () => {
     const sweptVideo = clearDeletedVideoMedia(values, new Set(), new Set(['ref.mp4']));
 
     expect(sweptVideo.references).toEqual([IMAGE_REFERENCE]);
+  });
+});
+
+describe('anchorReferenceConditioning', () => {
+  it('converts an audio-only choice, which cannot carry a seam', () => {
+    expect(anchorReferenceConditioning('audio')).toBe('video_audio');
+  });
+
+  it("leaves the user's own visual answers alone", () => {
+    expect(anchorReferenceConditioning('video')).toBe('video');
+    expect(anchorReferenceConditioning('video_audio')).toBe('video_audio');
+  });
+});
+
+describe('reference-extend anchor: audio-only references', () => {
+  const longSource = { ...SOURCE_VIDEO, endFrame: 400, numFrames: 402, video_name: 'long.mp4' };
+  const source24 = { ...longSource, fps: 24 };
+  const FRAMES = 141;
+  // The user's own soundtrack reference to the clip they are extending: whole clip, audio.
+  const userAudio = {
+    clip: { ...SOURCE_VIDEO, endFrame: 401, numFrames: 402, startFrame: 0, video_name: 'long.mp4' },
+    conditioning: 'audio',
+    kind: 'video',
+  } as const;
+
+  it('appends a real anchor beside an audio-only reference rather than consuming it', () => {
+    // Upload a soundtrack as a reference (it defaults to 'audio'), then extend that same
+    // clip. Adopting the audio entry would replace the user's window with the tail AND
+    // leave the seam with no visuals at all, since an 'audio' reference contributes no
+    // visual rows. Both references have a job; both survive.
+    const linked = applyReferenceExtendSourceVideo([userAudio], source24, 3, FRAMES);
+
+    expect(linked).toHaveLength(2);
+    expect(linked[0]).toBe(userAudio);
+    expect(linked[1]).toMatchObject({
+      clip: { endFrame: 400, startFrame: 260 },
+      conditioning: 'video_audio',
+      fromSourceVideo: true,
+    });
+  });
+
+  it('adopts a same-clip reference that CAN carry the seam, in preference to the audio one', () => {
+    const userVideo = {
+      ...userAudio,
+      clip: { ...userAudio.clip, endFrame: 172, startFrame: 100 },
+      conditioning: 'video',
+    } as const;
+    const linked = applyReferenceExtendSourceVideo([userAudio, userVideo], source24, 3, FRAMES);
+
+    // The audio entry is untouched, by identity; the video one becomes the anchor and
+    // keeps its deliberate 'video' choice.
+    expect(linked).toHaveLength(2);
+    expect(linked.find((entry) => entry === userAudio)).toBe(userAudio);
+    expect(linked[linked.length - 1]).toMatchObject({
+      clip: { endFrame: 400, startFrame: 260 },
+      conditioning: 'video',
+      fromSourceVideo: true,
+    });
+  });
+
+  it('converts an already-flagged audio anchor, re-deriving its window in the same pass', () => {
+    // A record written before this rule can carry one. It is healed WHOLE: the conditioning
+    // becomes usable and the window becomes the tail, which is why the conversion lives
+    // here and not in normalization.
+    const stale = {
+      ...userAudio,
+      clip: { ...userAudio.clip, endFrame: 72, startFrame: 0 },
+      fromSourceVideo: true,
+    } as const;
+    const linked = applyReferenceExtendSourceVideo([stale], source24, 3, FRAMES);
+
+    expect(linked[0]).toMatchObject({
+      clip: { endFrame: 400, startFrame: 260 },
+      conditioning: 'video_audio',
+      fromSourceVideo: true,
+    });
+  });
+
+  it('converts an overridden audio anchor without disturbing the window the user picked', () => {
+    // Where the two rules meet. The ROLE still needs visual rows, so the conditioning is
+    // promoted — but the window is one the user chose FOR this anchor, not the arbitrary
+    // one a mis-flagged entry carries, so a cutpoint change leaves it intact.
+    const overridden = {
+      ...userAudio,
+      clip: { ...userAudio.clip, endFrame: 219, startFrame: 100 },
+      fromSourceVideo: true,
+      trimOverridden: true,
+    } as const;
+    const linked = applyReferenceExtendSourceVideo([overridden], { ...source24, endFrame: 300 }, 3, FRAMES);
+
+    expect(linked[0]).toMatchObject({
+      clip: { endFrame: 219, startFrame: 100 },
+      conditioning: 'video_audio',
+      fromSourceVideo: true,
+      trimOverridden: true,
+    });
+  });
+
+  it('normalization never flags an audio-only reference as the anchor', () => {
+    // The recall re-derive picks the anchor by clip name. Landing on an audio-only entry
+    // would flag a reference whose window is NOT the tail -- once its conditioning implied
+    // visuals, the generation would continue from the opening of the clip. It is left as
+    // the plain reference it is, and no anchor is claimed.
+    const normalized = normalizeVideoSettings(
+      createSettings({ references: [IMAGE_REFERENCE, userAudio], sourceVideo: source24 })
+    );
+
+    expect(normalized?.references).toHaveLength(2);
+    expect(normalized?.references.some((entry) => entry.kind === 'video' && entry.fromSourceVideo === true)).toBe(
+      false
+    );
+    expect(normalized?.references.find((entry) => entry.kind === 'video')).toMatchObject({
+      clip: { endFrame: 401, startFrame: 0 },
+      conditioning: 'audio',
+    });
+  });
+
+  it('still re-derives the flag onto a same-clip reference that can carry the seam', () => {
+    // The recall re-derive itself is intact -- this is the case it exists for.
+    const recalled = { ...userAudio, conditioning: 'video_audio' as const };
+    const normalized = normalizeVideoSettings(
+      createSettings({ references: [IMAGE_REFERENCE, recalled], sourceVideo: source24 })
+    );
+
+    expect(normalized?.references[1]).toMatchObject({ conditioning: 'video_audio', fromSourceVideo: true });
+  });
+
+  it('leaves an audio-only reference beside a real anchor completely alone', () => {
+    // The rule is about the anchor's ROLE, not about audio references. With a flagged
+    // anchor present the re-derive does not run at all, and the user's soundtrack keeps
+    // its conditioning, its window and its object identity across normalization.
+    const realAnchor = { ...userAudio, conditioning: 'video_audio' as const, fromSourceVideo: true } as const;
+    const normalized = normalizeVideoSettings(
+      createSettings({ references: [userAudio, realAnchor], sourceVideo: source24 })
+    );
+
+    expect(normalized?.references[0]).toMatchObject({ conditioning: 'audio', clip: { endFrame: 401, startFrame: 0 } });
+    expect(normalized?.references[0]).not.toHaveProperty('fromSourceVideo', true);
   });
 });
 
