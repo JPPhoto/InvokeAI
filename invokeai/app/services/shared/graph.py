@@ -2179,13 +2179,13 @@ class _GenericGraphSchedulerAdapter:
         )
         self._register_existing_nodes()
         prepared_ids = set(state.prepared_source_mapping).intersection(state.results)
-        skipped_ids = {
+        discarded_ids = {
             exec_node_id
             for exec_node_id in state.prepared_source_mapping
             if state._get_prepared_exec_metadata(exec_node_id).state == "skipped"
         }
         self._scheduler.executed = prepared_ids
-        self._scheduler.skipped = skipped_ids
+        self._scheduler.discarded = discarded_ids
         self._scheduler.rebuild_ready()
         self._initializing = False
         self._sync_indegree()
@@ -2288,7 +2288,7 @@ class _GenericGraphSchedulerAdapter:
     def mark_skipped(self, exec_node_id: str) -> None:
         """Mirror a compatibility skip in the opaque scheduler projection."""
 
-        self._scheduler.skip(exec_node_id)
+        self._scheduler.discard(exec_node_id)
         self._sync_indegree()
         self._project_ready_nodes()
 

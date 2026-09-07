@@ -303,7 +303,7 @@ are treated as version 0, while unreadable snapshots are quarantined by the queu
   - Cache the preserved iteration path when the materializer has one, such as for grouped collectors.
   - Wire edges from chosen prepared parents.
   - Set `indegree = number of unmet inputs` (i.e., parents not yet executed). The generic scheduler mirrors this into
-    its opaque plan for ordinary static DAGs.
+    its opaque plan for ordinary static DAGs and legacy-shaped `If` graphs.
   - Try to resolve any `If`-specific scheduling state.
   - If the node is ready and not deferred by an unresolved `If`, enqueue it into its class queue.
 
@@ -311,9 +311,9 @@ are treated as version 0, while unreadable snapshots are quarantined by the queu
 
 - `_enqueue_if_ready(nid)` applies the same readiness predicate to both adapters. The generic scheduler additionally
   tracks claimed (returned-but-not-completed) work so re-registration cannot duplicate a node.
-- `_get_next_node()` uses the generic scheduler for ordinary static DAGs and projects its deterministic class/frame
-  order into the compatibility queues. Control-flow graphs use `_active_class` and the legacy class queues. No
-  batch-size or fairness cap is currently implemented.
+- `_get_next_node()` uses the generic scheduler for ordinary static DAGs and legacy-shaped `If` graphs, projecting its
+  deterministic class/frame order into the compatibility queues. Loop and saved-workflow control-flow graphs use
+  `_active_class` and the legacy class queues. No batch-size or fairness cap is currently implemented.
 
 #### 4.5.1 Indegree (what it is and how it's used)
 

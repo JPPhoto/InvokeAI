@@ -358,8 +358,7 @@ class ExecutionScheduler:
                 raise ValueError(f"executed node {node_id} is missing prerequisite: {missing[0]}")
         self.indegree = {
             node_id: sum(
-                dependency not in self.executed and dependency not in self.discarded
-                for dependency in node.dependencies
+                dependency not in self.executed and dependency not in self.discarded for dependency in node.dependencies
             )
             for node_id, node in self.plan.nodes.items()
         }

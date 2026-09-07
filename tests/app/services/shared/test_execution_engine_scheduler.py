@@ -4,8 +4,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from invokeai.app.invocations.math import AddInvocation, MultiplyInvocation
 from invokeai.app.invocations.logic import IfInvocation
+from invokeai.app.invocations.math import AddInvocation, MultiplyInvocation
 from invokeai.app.invocations.primitives import BooleanInvocation
 from invokeai.app.services.shared.execution_engine.scheduler import (
     ExecutionPlan,
@@ -410,7 +410,9 @@ def test_graph_state_if_generic_and_legacy_paths_have_matching_completion() -> N
             trace.append(state.prepared_source_mapping[node.id])
             state.complete(node.id, node.invoke(Mock()))
         completed_sources = {
-            source_id for exec_node_id, source_id in state.prepared_source_mapping.items() if exec_node_id in state.results
+            source_id
+            for exec_node_id, source_id in state.prepared_source_mapping.items()
+            if exec_node_id in state.results
         }
         return trace, completed_sources
 
@@ -419,6 +421,44 @@ def test_graph_state_if_generic_and_legacy_paths_have_matching_completion() -> N
 
     assert generic_trace == legacy_trace
     assert generic_completed == legacy_completed == {"condition", "false_value", "if"}
+
+
+def test_graph_state_if_rehydrates_discarded_unselected_branch() -> None:
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=False))
+    graph.add_node(AddInvocation(id="true_value", a=2, b=2))
+    graph.add_node(AddInvocation(id="false_value", a=3, b=3))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="condition", field="value"),
+            destination=EdgeConnection(node_id="if", field="condition"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="true_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="true_input"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="false_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="false_input"),
+        )
+    )
+
+    state = GraphExecutionState(graph=graph)
+    condition = state.next()
+    assert condition is not None
+    assert state.prepared_source_mapping[condition.id] == "condition"
+    state.complete(condition.id, condition.invoke(Mock()))
+
+    restored = GraphExecutionState.model_validate(state.model_dump(mode="python"), strict=False)
+    next_node = restored.next()
+
+    assert next_node is not None
+    assert restored.prepared_source_mapping[next_node.id] == "false_value"
 
 
 def test_graph_state_static_dag_rehydrates_generic_scheduler_after_partial_run() -> None:
