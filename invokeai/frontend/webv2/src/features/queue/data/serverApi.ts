@@ -1,4 +1,4 @@
-import type { QueueQueryScope } from '@features/queue/core/types';
+import type { QueueProgressPreviewPayload, QueueQueryScope } from '@features/queue/core/types';
 import type {
   QueueAndProcessorStatusDTO,
   QueueItemIdsResultDTO,
@@ -9,6 +9,7 @@ import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/
 import { apiFetchJson } from '@platform/transport/http';
 
 const QUEUE_ID = 'default';
+const QUEUE_MUTATION_CONCURRENCY = 8;
 const buildQueueUrl = (path = ''): string => `/api/v1/queue/${QUEUE_ID}/${path}`;
 
 const buildQueryString = (params: Record<string, string | undefined>): string => {
@@ -25,6 +26,20 @@ const buildQueryString = (params: Record<string, string | undefined>): string =>
   return queryString ? `?${queryString}` : '';
 };
 
+const runConcurrent = async <T>(items: readonly T[], visit: (item: T) => Promise<unknown>): Promise<void> => {
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex];
+      nextIndex += 1;
+      if (item !== undefined) {
+        await visit(item);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(QUEUE_MUTATION_CONCURRENCY, items.length) }, worker));
+};
+
 export const getQueueStatus = (
   scope: QueueQueryScope = {},
   signal?: AbortSignal
@@ -33,6 +48,10 @@ export const getQueueStatus = (
     buildQueueUrl(`status${buildQueryString({ origin_prefix: scope.originPrefix })}`),
     { signal }
   );
+
+/** The latest `invocation_progress` payload of each running item the user owns, with revisions. */
+export const getProgressPreviews = (signal?: AbortSignal): Promise<QueueProgressPreviewPayload[]> =>
+  apiFetchJson<QueueProgressPreviewPayload[]>(buildQueueUrl('previews'), { signal });
 
 export const getCurrentQueueItem = (
   scope: QueueQueryScope = {},
@@ -92,11 +111,11 @@ export const deleteQueueItem = (itemId: number, signal?: AbortSignal): Promise<u
   apiFetchJson(buildQueueUrl(`i/${itemId}`), { method: 'DELETE', signal });
 
 export const deleteQueueItems = async (itemIds: number[], signal?: AbortSignal): Promise<void> => {
-  await Promise.all(itemIds.map((itemId) => deleteQueueItem(itemId, signal)));
+  await runConcurrent(itemIds, (itemId) => deleteQueueItem(itemId, signal));
 };
 
 export const cancelQueueItems = async (itemIds: number[], signal?: AbortSignal): Promise<void> => {
-  await Promise.all(itemIds.map((itemId) => cancelQueueItem(itemId, signal)));
+  await runConcurrent(itemIds, (itemId) => cancelQueueItem(itemId, signal));
 };
 
 export const clearFailedQueueItems = async (scope: QueueQueryScope = {}): Promise<void> => {

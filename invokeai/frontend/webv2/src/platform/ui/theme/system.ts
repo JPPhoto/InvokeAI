@@ -10,9 +10,12 @@ import {
   inputRecipe,
   menuSlotRecipe,
   numberInputSlotRecipe,
+  popoverSlotRecipe,
   progressCircleSlotRecipe,
+  scrollAreaSlotRecipe,
   segmentGroupSlotRecipe,
   selectSlotRecipe,
+  skeletonRecipe,
   sliderSlotRecipe,
   tabsSlotRecipe,
   textareaRecipe,
@@ -187,7 +190,23 @@ const semanticColors = {
     border: grayToken((theme) =>
       theme.colorScheme === 'light' ? theme.colors.neutral[400] : theme.colors.neutral[500]
     ),
+    /**
+     * Interaction-fill base for the default palette: fg pulled toward the
+     * accent, so translucent hovers read in the menus' cool-tinted family
+     * instead of a flat gray. Used at low alpha (`gray.hoverTint/10`).
+     */
+    hoverTint: grayToken(
+      (theme) =>
+        `color-mix(in oklab, ${theme.colors.accent.solid} 40%, ${
+          theme.colorScheme === 'light' ? theme.colors.neutral[950] : theme.colors.neutral[50]
+        })`
+    ),
   },
+  // Palette-tinted interaction fills for the non-default palettes buttons use.
+  red: { hoverTint: { value: '{colors.red.fg}' } },
+  orange: { hoverTint: { value: '{colors.orange.fg}' } },
+  green: { hoverTint: { value: '{colors.green.fg}' } },
+  blue: { hoverTint: { value: '{colors.blue.fg}' } },
   /**
    * Invoke identity palette (lime). Authored from two seeds (`solid` + `contrast`),
    * like `accent`; the rest derive. `brand.fg` is the seed on the dark themes and a
@@ -204,6 +223,7 @@ const semanticColors = {
     emphasized: mix(brandSolid, 36, surface),
     focusRing: colorToken(accentSolid),
     border: colorToken(brandSolid),
+    hoverTint: colorToken(brandFg),
   },
   /** Selection / focus palette (blue). Use via `accent.solid` or `colorPalette="accent"`. */
   accent: {
@@ -215,6 +235,7 @@ const semanticColors = {
     emphasized: mix(accentSolid, 36, surface),
     focusRing: colorToken(accentSolid),
     border: colorToken(accentSolid),
+    hoverTint: colorToken(accentSolid),
   },
 };
 
@@ -240,6 +261,16 @@ const config = defineConfig({
       margin: 0,
       overflow: 'hidden',
     },
+    // Interactive elements keep the default arrow even over their text —
+    // without this, non-button rows (picker options, menu items) compute
+    // `auto` and show the I-beam. Recipes still override (e.g. not-allowed).
+    // Attribute values stay unquoted: serialized markup assertions (SamOptions)
+    // grep for the quoted forms. No `[role=combobox]` — zag puts that role on
+    // type-able inputs, which must keep the I-beam.
+    'button, [role=button], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=option], [role=tab], [role=radio], [role=checkbox], [role=switch]':
+      {
+        cursor: 'default',
+      },
     // While a gallery-item drag is in flight (body flag set by
     // GalleryDragCursor) the closed-hand cursor applies everywhere: without
     // the descendant rule, every element that sets its own cursor (buttons,
@@ -262,8 +293,11 @@ const config = defineConfig({
       '--wb-motion-animation-iteration-count': '1',
       scrollBehavior: 'auto !important',
     },
+    // `backgroundImage` too: the shine gradient frozen mid-sweep reads as a
+    // smudge, so reduce-motion falls back to the flat fill.
     ':root[data-reduce-motion="true"] .chakra-skeleton': {
       animation: 'none !important',
+      backgroundImage: 'none !important',
     },
     // A loading spinner is essential status, not decoration — frozen, its arc
     // reads as a broken icon. It slows to a crawl instead of stopping; WCAG
@@ -276,6 +310,17 @@ const config = defineConfig({
   },
   theme: {
     tokens: {
+      // Pro-app convention: controls keep the default arrow cursor; pointer is
+      // reserved for links. Overrides Chakra's `button`/`switch` pointer tokens.
+      cursor: {
+        button: { value: 'default' },
+        switch: { value: 'default' },
+      },
+      radii: {
+        // The shared corner for interactive controls — buttons and the
+        // segment-tab pills meet between Chakra's l2 (4px) and md (6px).
+        control: { value: '0.3125rem' },
+      },
       fonts: {
         body: {
           value: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -308,6 +353,7 @@ const config = defineConfig({
     recipes: {
       button: buttonRecipe,
       input: inputRecipe,
+      skeleton: skeletonRecipe,
       textarea: textareaRecipe,
     },
     slotRecipes: {
@@ -318,7 +364,9 @@ const config = defineConfig({
       hoverCard: hoverCardSlotRecipe,
       menu: menuSlotRecipe,
       numberInput: numberInputSlotRecipe,
+      popover: popoverSlotRecipe,
       progressCircle: progressCircleSlotRecipe,
+      scrollArea: scrollAreaSlotRecipe,
       segmentGroup: segmentGroupSlotRecipe,
       select: selectSlotRecipe,
       slider: sliderSlotRecipe,

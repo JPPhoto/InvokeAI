@@ -19,7 +19,7 @@ import {
 } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 import { createSingleFlight } from '@platform/state/singleFlight';
-import { DEFAULT_THEME_ID, isWorkbenchThemeId } from '@theme/themes';
+import { DEFAULT_THEME_ID, resolveWorkbenchThemeId } from '@theme/themes';
 import { deleteClientStateValue, getClientStateValue, setClientStateValue } from '@workbench/projects/api';
 import { fetchSessionBlob } from '@workbench/projects/session';
 
@@ -48,7 +48,6 @@ export const DEVELOPER_LOG_NAMESPACES: DeveloperLogNamespace[] = [
 
 export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
   antialiasProgressImages: false,
-  showProgressDetails: false,
   showProgressImagesInViewer: true,
   useCpuNoise: true,
 };
@@ -74,7 +73,7 @@ export const DEFAULT_PREFERENCES: WorkbenchPreferences = {
   preferNumericAttentionStyle: false,
   queueJobsScope: 'all',
   reduceMotion: false,
-  showPromptSyntaxHighlighting: false,
+  showPromptSyntaxHighlighting: true,
   showFocusRegionHighlight: true,
   themeId: DEFAULT_THEME_ID,
   workflowEdgeStyle: 'curved',
@@ -270,10 +269,6 @@ export const normalizeProjectSettings = (settings?: Partial<ProjectSettings>): P
     typeof settings?.antialiasProgressImages === 'boolean'
       ? settings.antialiasProgressImages
       : DEFAULT_PROJECT_SETTINGS.antialiasProgressImages,
-  showProgressDetails:
-    typeof settings?.showProgressDetails === 'boolean'
-      ? settings.showProgressDetails
-      : DEFAULT_PROJECT_SETTINGS.showProgressDetails,
   showProgressImagesInViewer:
     typeof settings?.showProgressImagesInViewer === 'boolean'
       ? settings.showProgressImagesInViewer
@@ -356,7 +351,7 @@ export const normalizeWorkbenchPreferences = (preferences?: WorkbenchPreferences
     typeof preferences?.showPromptSyntaxHighlighting === 'boolean'
       ? preferences.showPromptSyntaxHighlighting
       : DEFAULT_PREFERENCES.showPromptSyntaxHighlighting,
-  themeId: isWorkbenchThemeId(preferences?.themeId) ? preferences.themeId : DEFAULT_PREFERENCES.themeId,
+  themeId: resolveWorkbenchThemeId(preferences?.themeId) ?? DEFAULT_PREFERENCES.themeId,
   workflowEdgeStyle:
     preferences?.workflowEdgeStyle === 'square' || preferences?.workflowEdgeStyle === 'straight'
       ? 'square'

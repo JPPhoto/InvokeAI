@@ -9,6 +9,8 @@ import { getGalleryPlaceholderInsertionIndex } from './galleryStateView';
 
 export const GALLERY_GRID_GAP_PX = 4;
 export const GALLERY_STARRED_HEADER_HEIGHT_PX = 24;
+/** The gap row grows to hold a hairline rule while the starred section is open. */
+export const GALLERY_STARRED_SEPARATOR_HEIGHT_PX = 13;
 
 const GALLERY_MIN_COLUMN_COUNT = 2;
 const GALLERY_MAX_COLUMN_COUNT = 12;
@@ -33,21 +35,32 @@ export const getGalleryTargetCellPx = (imageDensityPercent: number): number => {
   return GALLERY_MAX_CELL_PX - ((GALLERY_MAX_CELL_PX - GALLERY_MIN_CELL_PX) * percent) / 100;
 };
 
+/** How many `targetCellPx` cells fit in `widthPx`, clamped; an unmeasured width yields `min`. */
+export const getGalleryColumnCountForCell = ({
+  max,
+  min,
+  targetCellPx,
+  widthPx,
+}: {
+  max: number;
+  min: number;
+  targetCellPx: number;
+  widthPx: number;
+}): number => (widthPx <= 0 ? min : Math.min(max, Math.max(min, Math.round(widthPx / targetCellPx))));
+
 export const getGalleryColumnCount = ({
   imageDensityPercent,
   widthPx,
 }: {
   imageDensityPercent: number;
   widthPx: number;
-}): number => {
-  if (widthPx <= 0) {
-    return GALLERY_MIN_COLUMN_COUNT;
-  }
-
-  const columnCount = Math.round(widthPx / getGalleryTargetCellPx(imageDensityPercent));
-
-  return Math.min(GALLERY_MAX_COLUMN_COUNT, Math.max(GALLERY_MIN_COLUMN_COUNT, columnCount));
-};
+}): number =>
+  getGalleryColumnCountForCell({
+    max: GALLERY_MAX_COLUMN_COUNT,
+    min: GALLERY_MIN_COLUMN_COUNT,
+    targetCellPx: getGalleryTargetCellPx(imageDensityPercent),
+    widthPx,
+  });
 
 /** Falls back to a plausible square before the viewport has been measured. */
 export const getGalleryCellSizePx = ({ columnCount, widthPx }: { columnCount: number; widthPx: number }): number =>
@@ -61,7 +74,7 @@ export type GalleryGridSection = 'regular' | 'starred';
 
 export type GalleryGridRow =
   | { cells: GalleryGridCell[]; key: string; kind: 'cells'; section: GalleryGridSection }
-  | { key: string; kind: 'starred-gap' }
+  | { key: string; kind: 'starred-gap'; withSeparator: boolean }
   | { itemCount: number; key: string; kind: 'starred-header' };
 
 const getGalleryGridCellKey = (cell: GalleryGridCell): string =>
@@ -95,9 +108,9 @@ const chunkGalleryCellsIntoRows = (
 };
 
 /**
- * The grid's whole row model in one pure pass: starred items become a
- * disclosure section above the regular items, and pending queue placeholders
- * slot into the regular section at the position their images will land.
+ * The grid's row model in one pure pass: a starred-first listing gets a
+ * disclosure section, a flat one chunks in order, and placeholders slot in
+ * where their images will land.
  */
 export const buildGalleryGridRows = ({
   columnCount,
@@ -105,12 +118,14 @@ export const buildGalleryGridRows = ({
   isStarredOpen,
   items,
   pendingPlaceholders,
+  starredFirst,
 }: {
   columnCount: number;
   imageOrderDir: GalleryOrderDir;
   isStarredOpen: boolean;
   items: GalleryItem[];
   pendingPlaceholders: GalleryQueuePlaceholder[];
+  starredFirst: boolean;
 }): GalleryGridRow[] => {
   const regularItemCells: GalleryGridCell[] = [];
   const regularItems: GalleryItem[] = [];
@@ -119,7 +134,7 @@ export const buildGalleryGridRows = ({
   items.forEach((item, itemIndex) => {
     const cell: GalleryGridCell = { item, itemIndex, kind: 'item' };
 
-    if (item.starred) {
+    if (starredFirst && item.starred) {
       starredItemCells.push(cell);
     } else {
       regularItemCells.push(cell);
@@ -131,7 +146,7 @@ export const buildGalleryGridRows = ({
     kind: 'placeholder',
     placeholder,
   }));
-  const placeholderInsertionIndex = getGalleryPlaceholderInsertionIndex(regularItems, imageOrderDir);
+  const placeholderInsertionIndex = getGalleryPlaceholderInsertionIndex(regularItems, imageOrderDir, starredFirst);
   const regularCells = [
     ...regularItemCells.slice(0, placeholderInsertionIndex),
     ...placeholderCells,
@@ -147,7 +162,9 @@ export const buildGalleryGridRows = ({
     }
 
     if (regularCells.length > 0) {
-      rows.push({ key: 'starred-gap', kind: 'starred-gap' });
+      // A visible rule only while the starred cells are showing; collapsed, the
+      // header already separates the sections.
+      rows.push({ key: 'starred-gap', kind: 'starred-gap', withSeparator: isStarredOpen });
     }
   }
 
@@ -163,7 +180,7 @@ export const getGalleryGridRowHeightPx = (row: GalleryGridRow, cellRowHeightPx: 
   }
 
   if (row.kind === 'starred-gap') {
-    return GALLERY_GRID_GAP_PX;
+    return row.withSeparator ? GALLERY_STARRED_SEPARATOR_HEIGHT_PX : GALLERY_GRID_GAP_PX;
   }
 
   return cellRowHeightPx;

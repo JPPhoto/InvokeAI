@@ -15,7 +15,6 @@ export type { WorkbenchLanguage } from '@platform/i18n/languages';
  */
 export interface ProjectSettings {
   useCpuNoise: boolean;
-  showProgressDetails: boolean;
   antialiasProgressImages: boolean;
   /**
    * Not surfaced in the Settings dialog: the Preview widget's header owns this
@@ -68,7 +67,7 @@ export interface WorkbenchPreferences {
   notifyOnEnqueue: boolean;
   /** Write numeric attention weights (`(word)1.1`) when the attention hotkeys insert them. */
   preferNumericAttentionStyle: boolean;
-  /** Experimental. Color prompt syntax in prompt fields; changes rendering only. */
+  /** Color prompt syntax in prompt fields; changes rendering only. */
   showPromptSyntaxHighlighting: boolean;
   developerLogEnabled: boolean;
   developerLogLevel: DeveloperLogLevel;
