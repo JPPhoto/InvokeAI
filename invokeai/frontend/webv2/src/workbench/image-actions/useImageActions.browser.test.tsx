@@ -1,4 +1,5 @@
 import type { GalleryImage, GalleryItem, GalleryItemKey, GalleryItemRef } from '@features/gallery';
+import type { CreateCanvasFromImagesResult } from '@workbench/canvas-operations/api';
 
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -12,6 +13,10 @@ import { useImageActions } from './useImageActions';
 
 const mocks = vi.hoisted(() => ({
   addToBoard: vi.fn(),
+  createCanvasFromImages: vi.fn((..._args: unknown[]): Promise<CreateCanvasFromImagesResult> =>
+    Promise.resolve({ projectId: null, status: 'empty' })
+  ),
+  createProject: vi.fn(),
   deleteImages: vi.fn(),
   downloadArchive: vi.fn(),
   downloadBlob: vi.fn(),
@@ -113,11 +118,16 @@ vi.mock('@platform/browser/downloadBlob', () => ({
   downloadBlob: (...args: unknown[]) => mocks.downloadBlob(...args),
 }));
 
-vi.mock('@workbench/canvas-operations/api', () => ({
-  getCanvasEngine: vi.fn(),
-  getCanvasImportNotice: vi.fn(),
-  importGalleryImagesToCanvas: vi.fn(),
-}));
+vi.mock('@workbench/canvas-operations/api', async () => {
+  // The notice mapper is pure; the rest of the canvas-operations surface stays doubled.
+  const { getCanvasImportNotice } = await import('@workbench/canvas-operations/canvasImportNotice');
+  return {
+    createCanvasFromImages: (...args: unknown[]) => mocks.createCanvasFromImages(...args),
+    getCanvasEngine: vi.fn(),
+    getCanvasImportNotice,
+    importGalleryImagesToCanvas: vi.fn(),
+  };
+});
 
 vi.mock('@workbench/WorkbenchContext', () => ({
   useWorkbenchCommands: () => ({
@@ -131,6 +141,7 @@ vi.mock('@workbench/WorkbenchContext', () => ({
       setCompareImage: vi.fn(),
     },
     generation: { patchSettings: vi.fn() },
+    projects: { create: (...args: unknown[]) => mocks.createProject(...args) },
     notifications: {
       add: (...args: unknown[]) => mocks.notificationsAdd(...args),
       reportError: (...args: unknown[]) => mocks.reportError(...args),
@@ -204,6 +215,7 @@ const Probe = ({ modelKey = 'sd-1-model', ref }: { modelKey?: string; ref: Ref<I
       {
         archived: false,
         assetCount: 0,
+        assetVideoCount: 0,
         id: 'none',
         imageCount: 0,
         kind: 'uncategorized',
@@ -256,6 +268,53 @@ afterEach(async () => {
   host?.remove();
   host = null;
   root = null;
+});
+
+describe('new canvas from images', () => {
+  const galleryImage = (imageName: string): GalleryImage => ({
+    boardId: 'none',
+    height: 512,
+    imageCategory: 'general',
+    imageName,
+    imageUrl: `/${imageName}`,
+    queuedAt: '2026-06-15T00:00:00Z',
+    sourceQueueItemId: 'queue-item',
+    starred: false,
+    thumbnailUrl: `/thumb-${imageName}`,
+    width: 512,
+  });
+
+  it('reports the new canvas and opens it in the center once the images land', async () => {
+    mocks.createCanvasFromImages.mockResolvedValueOnce({
+      failedImageNames: [],
+      layerIds: ['layer-1', 'layer-2'],
+      projectId: 'project-2',
+      status: 'imported',
+    });
+
+    await act(() => actionsRef.current!.createCanvasFromImages([galleryImage('a.png'), galleryImage('b.png')]));
+
+    expect(mocks.notificationsAdd).toHaveBeenCalledWith({
+      kind: 'success',
+      title: 'widgets.canvas.import.newCanvasSuccess',
+    });
+    expect(mocks.openWorkbenchWidget).toHaveBeenCalledWith('canvas', {
+      preferredRegions: ['center'],
+      requireCenterView: true,
+    });
+  });
+
+  it('surfaces the import notice and leaves the layout alone when the images could not land', async () => {
+    mocks.createCanvasFromImages.mockResolvedValueOnce({ projectId: 'project-2', status: 'stale-project' });
+
+    await act(() => actionsRef.current!.createCanvasFromImages([galleryImage('a.png')]));
+
+    expect(mocks.notificationsAdd).toHaveBeenCalledWith({
+      kind: 'error',
+      title: 'widgets.canvas.import.staleProject',
+    });
+    expect(mocks.openWorkbenchWidget).not.toHaveBeenCalled();
+  });
 });
 
 describe('image recall capability cancellation', () => {
@@ -410,11 +469,13 @@ describe('partial image mutation outcomes', () => {
       starred: true,
     });
 
-    // Only the rejected ref flips back once the backend answers.
+    // The rejected ref must reappear where it was: the cache snapshot comes
+    // back and only the confirmed ref is re-applied; the store flips it back.
+    expect(mocks.patchGalleryItemCaches.mock.results[0]?.value).toHaveBeenCalledOnce();
     expect(mocks.patchGalleryItemCaches).toHaveBeenNthCalledWith(2, expect.anything(), {
       kind: 'star',
-      result: { failed: [], succeeded: [{ kind: 'image', name: 'locked.png' }] },
-      starred: false,
+      result: { failed: [], succeeded: [{ kind: 'image', name: 'starred.png' }] },
+      starred: true,
     });
     expect(mocks.galleryPatchItems).toHaveBeenNthCalledWith(2, ['image:locked.png'], { starred: false });
   });
@@ -539,10 +600,11 @@ describe('mixed item mutation outcomes', () => {
     });
 
     expect(mocks.galleryPatchItems).toHaveBeenNthCalledWith(1, ['image:shared', 'video:shared'], { starred: true });
+    expect(mocks.patchGalleryItemCaches.mock.results[0]?.value).toHaveBeenCalledOnce();
     expect(mocks.patchGalleryItemCaches).toHaveBeenNthCalledWith(2, expect.anything(), {
       kind: 'star',
-      result: { failed: [], succeeded: [refs[0]] },
-      starred: false,
+      result: { failed: [], succeeded: [refs[1]] },
+      starred: true,
     });
     expect(mocks.galleryPatchItems).toHaveBeenNthCalledWith(2, ['image:shared'], { starred: false });
     expect(mocks.galleryRemoveItems).not.toHaveBeenCalled();
@@ -823,14 +885,12 @@ describe('total transport failure rollback', () => {
       starred: true,
     });
 
-    // Each item reverts to its own prior flag, not a single blanket value.
+    // Each store item reverts to its own prior flag, not a single blanket
+    // value; the cache restores the snapshot the optimistic patch returned.
     expect(mocks.galleryPatchItems).toHaveBeenCalledWith(['image:was-starred.png'], { starred: true });
     expect(mocks.galleryPatchItems).toHaveBeenCalledWith(['image:was-unstarred.png'], { starred: false });
-    expect(mocks.patchGalleryItemCaches).toHaveBeenCalledWith(expect.anything(), {
-      kind: 'star',
-      result: { failed: [], succeeded: [refs[1]] },
-      starred: false,
-    });
+    expect(mocks.patchGalleryItemCaches).toHaveBeenCalledOnce();
+    expect(mocks.patchGalleryItemCaches.mock.results[0]?.value).toHaveBeenCalledOnce();
 
     expect(mocks.reportError).toHaveBeenCalledOnce();
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
@@ -861,12 +921,13 @@ describe('total transport failure rollback', () => {
       await getItemActions().setItemsStarred(refs, true);
     });
 
-    // Neither the cache nor the store restore ran: the rollback's read of
-    // current state never matched what this batch painted (`true`), so it
-    // correctly assumed something else had already written a newer value
-    // and left it alone instead of forcing it back to the prior flag.
+    // The store restore never ran: the rollback's read of current state
+    // never matched what this batch painted (`true`), so it correctly assumed
+    // something else had already written a newer value and left it alone. The
+    // cache side hands the same decision to the snapshot's own CAS rollback.
     expect(mocks.galleryPatchItems).toHaveBeenCalledOnce();
     expect(mocks.patchGalleryItemCaches).toHaveBeenCalledOnce();
+    expect(mocks.patchGalleryItemCaches.mock.results[0]?.value).toHaveBeenCalledOnce();
   });
 });
 
@@ -888,7 +949,9 @@ const galleryItem = (kind: GalleryItem['kind'], name: string): GalleryItem => {
 };
 
 describe('primary successor after confirmed deletion', () => {
-  it('selects the nearest surviving predecessor from ordered names before a successor', async () => {
+  it('selects the next surviving item in display order — the one that takes the deleted slot', async () => {
+    // Also what keeps deletion out of the leading starred block. Pinned at the
+    // unit level in core/selection.test.ts.
     const before = galleryItem('video', 'before.mp4');
     const primary = galleryItem('image', 'primary.png');
     const after = galleryItem('image', 'after.png');
@@ -909,21 +972,21 @@ describe('primary successor after confirmed deletion', () => {
       await getItemActions().deleteItems([{ kind: 'image', name: 'primary.png' }]);
     });
 
-    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(before, 'project-1');
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(after, 'project-1');
   });
 
-  it('resolves an unloaded predecessor by qualified ref', async () => {
+  it('resolves an unloaded successor by qualified ref', async () => {
     const primary = galleryItem('image', 'primary.png');
-    const after = galleryItem('image', 'after.png');
+    const before = galleryItem('image', 'before.png');
     const unloaded = galleryItem('video', 'unloaded.mp4');
     currentItemActionContext = {
       filterIdentity: 'filter-a',
-      items: [primary, after],
+      items: [before, primary],
       loadOrderedRefs: () =>
         Promise.resolve([
+          { kind: 'image' as const, name: before.name },
           { kind: 'video' as const, name: unloaded.name },
           { kind: 'image' as const, name: primary.name },
-          { kind: 'image' as const, name: after.name },
         ]),
       selectedItemKey: 'image:primary.png',
     };
@@ -1040,7 +1103,7 @@ describe('primary successor after confirmed deletion', () => {
       await getItemActions().deleteItems([{ kind: 'image', name: 'primary.png' }]);
     });
 
-    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(before, 'project-1', 30, true);
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(after, 'project-1', 30, true);
   });
 
   it('opens an item in Preview at the page the host navigates from', () => {
