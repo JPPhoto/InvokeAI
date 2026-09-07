@@ -77,6 +77,14 @@ const interact = (action: () => void): Promise<void> =>
     });
   });
 
+/** Quick icon items select through zag, which needs the item highlighted by a hover before the click. */
+const pickQuickItem = async (label: string): Promise<void> => {
+  const target = document.querySelector<HTMLElement>(`[aria-label="${label}"]`);
+  expect(target).not.toBeNull();
+  await interact(() => target!.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' })));
+  await interact(() => target!.click());
+};
+
 const getMenuItem = (label: string): HTMLElement => {
   const item = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
     (candidate) => candidate.textContent?.trim() === label
@@ -344,15 +352,21 @@ describe('ImageContextMenu mixed-media action visibility', () => {
       y: 20,
     });
 
-    const openInNewTab = document.querySelector<HTMLButtonElement>('[aria-label="Open in new tab"]');
-    const openInPreview = document.querySelector<HTMLButtonElement>('[aria-label="Open in preview"]');
-    expect(openInNewTab).not.toBeNull();
-    expect(openInPreview).not.toBeNull();
-
-    await interact(() => {
-      openInNewTab?.click();
-      openInPreview?.click();
-    });
+    const target = {
+      itemRefs: [
+        { kind: 'video' as const, name: primaryVideo.name },
+        { kind: 'video' as const, name: secondaryVideo.name },
+      ],
+      items: [primaryVideo, secondaryVideo],
+      x: 20,
+      y: 20,
+    };
+    // Selecting closes the menu, so each quick item gets its own open.
+    await pickQuickItem('Open in new tab');
+    await interact(() => root?.unmount());
+    host?.remove();
+    await renderItemMenu(actions, target);
+    await pickQuickItem('Open in preview');
 
     expect(actions.openItemInNewTab).toHaveBeenCalledWith(primaryVideo);
     expect(actions.openItemInPreview).toHaveBeenCalledWith(primaryVideo);
@@ -382,15 +396,11 @@ describe('ImageContextMenu mixed-media action visibility', () => {
     expect(document.body.textContent).toContain('Change Board');
     expect(document.body.textContent).toContain('Delete Selection');
     expect(document.body.textContent).not.toContain('widgets.canvas.import.newFromImage');
-    const openInNewTab = document.querySelector<HTMLButtonElement>('[aria-label="Open in new tab"]');
-    const openInPreview = document.querySelector<HTMLButtonElement>('[aria-label="Open in preview"]');
-    expect(openInNewTab).not.toBeNull();
-    expect(openInPreview).not.toBeNull();
-
-    await interact(() => {
-      openInNewTab?.click();
-      openInPreview?.click();
-    });
+    await pickQuickItem('Open in new tab');
+    await interact(() => root?.unmount());
+    host?.remove();
+    await renderItemMenu(actions, { itemRefs: refs, items: [loadedImage], x: 20, y: 20 });
+    await pickQuickItem('Open in preview');
     expect(actions.openItemInNewTab).toHaveBeenCalledWith(loadedImage);
     expect(actions.openItemInPreview).toHaveBeenCalledWith(loadedImage);
 
