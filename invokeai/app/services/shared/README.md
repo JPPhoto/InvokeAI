@@ -7,8 +7,9 @@ High-level design for the graph module. Focuses on responsibilities, data flow, 
 Provide a typed, acyclic workflow model (**Graph**) plus a runtime scheduler (**GraphExecutionState**) that expands
 iterator patterns, tracks readiness via indegree (the number of incoming edges to a node in the directed graph), and
 executes nodes from class-grouped ready queues. In normal execution, runtime expansion happens in a separate execution graph
-instead of mutating the source graph. Ordinary static DAGs use the opaque `ExecutionPlan` and deterministic
-`ExecutionScheduler` in `execution_engine/scheduler.py`; control-flow lowering remains behind the legacy graph adapter.
+instead of mutating the source graph. Ordinary static DAGs and legacy-shaped `If` graphs use the opaque `ExecutionPlan`
+and deterministic `ExecutionScheduler` in `execution_engine/scheduler.py`; a private graph adapter supplies the `If`
+activation predicate and projects compatibility skips. Control-flow topology lowering remains behind the legacy graph adapter.
 The runtime also exposes an additive execution-engine seam: frame-scoped gates, ordered streams, continuations, and
 authorized child-dependency records are stored in
 `invokeai.app.services.shared.execution_engine`; legacy graph and queue behavior is retained behind adapters while
@@ -49,8 +50,9 @@ external interface remains frozen; generated schemas may change only for additiv
 - `ChildExecutionCapability`, `ChildExecutionRecord`, and `ChildDependencyRecord` validate authorized parent/child
   relationships, resource limits, ordered all-of aggregation, failure, cancellation, and idempotent completion.
 - `ExecutionPlan` stores opaque execution-node IDs, class names, prerequisite IDs, frame values, and stable insertion
-  order. `ExecutionScheduler` owns generic readiness, deterministic ordering, completion, and durable plan rehydration.
-  It does not import invocation classes and cannot alter author-time graph or frontend contracts.
+  order. `ExecutionScheduler` owns generic readiness, opaque readiness predicates, intentional skips, deterministic
+  ordering, completion, and durable plan rehydration. It does not import invocation classes and cannot alter author-time
+  graph or frontend contracts.
 - `ExecutionEngineRuntime` owns these records for one graph state. It is private runtime machinery; it is not a new
   frontend node, input handle, or public workflow contract.
 
@@ -122,9 +124,10 @@ Checks a single prospective edge before insertion:
 
 Holds the state for a single run. Keeps the source graph intact and materializes a separate execution graph.
 `GraphExecutionState` is still the public runtime entry point, but most execution behavior is now delegated to a small
-set of internal helper classes. For ordinary static DAGs, readiness and completion are projected through the generic
-`ExecutionPlan`/`ExecutionScheduler` adapter. `If`, `Iterate`, `Collect`, `For`, `ForReturn`, and saved-workflow call
-lowering continue to use the legacy compatibility scheduler until their differential coverage is complete.
+set of internal helper classes. For ordinary static DAGs and legacy-shaped `If` graphs, readiness and completion are
+projected through the generic `ExecutionPlan`/`ExecutionScheduler` adapter. `Iterate`, `Collect`, `For`, `ForReturn`,
+and saved-workflow call lowering continue to use the legacy compatibility scheduler until their differential coverage
+is complete.
 
 The source graph is treated as stable during normal execution, but the runtime object still exposes guarded graph
 mutation helpers. Those helpers reject changes once the affected nodes have already been prepared or executed.
@@ -158,9 +161,9 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
 - `execution_tokens: dict[str, ExecutionToken]` - output tokens produced by applied execution results.
 - `execution_effects: dict[str, list[Any]]` - JSON-safe effects accepted for each execution reference.
 - **Ready queues grouped by class** (private projection): `_ready_queues: dict[class_name, deque[str]]` and
-  `_active_class: Optional[str]`. Ordinary static DAGs derive readiness from the generic scheduler; control-flow
-  graphs retain the legacy scheduler. Optional `ready_order: list[str]` prioritizes classes. Queues are rebuilt from
-  persisted execution state when a session is deserialized.
+  `_active_class: Optional[str]`. Ordinary static DAGs and legacy-shaped `If` graphs derive readiness from the generic
+  scheduler; loop and saved-workflow graphs retain the legacy scheduler. Optional `ready_order: list[str]` prioritizes
+  classes. Queues are rebuilt from persisted execution state when a session is deserialized.
 
 ### 4.2 Core methods
 
@@ -188,18 +191,20 @@ suppresses effects: effect-enabled invocations bypass the ordinary output cache 
 `IfInvocation` is the first control-flow invocation to declare an activation-effect contract. It emits one
 frame-scoped activation token for the selected `true_input` or `false_input` port; `GraphExecutionState` validates that
 port against the producing invocation's declared activation fields and persists it without creating a data stream.
-The legacy `_IfBranchScheduler` still resolves readiness and writes a compatibility token before invocation; `apply()`
-validates and persists the invocation-emitted effect afterward, replacing that token by stable identity. Activation
-effects are excluded from data-stream handling. This is an additive effect declaration, not yet the generic
-successor-routing migration. Other control-flow invocations remain on their legacy paths until differential coverage
-proves each replacement.
+The generic scheduler receives an opaque readiness predicate for `If` branch-local nodes and an explicit skip projection
+for the unselected branch. The private `_IfBranchScheduler` still computes legacy branch topology, resolves the gate,
+prunes the unselected input edge, and records compatibility skip metadata. `apply()` validates and persists the
+invocation-emitted effect afterward, replacing the compatibility token by stable identity. Activation effects are
+excluded from data-stream handling. This is a routing seam, not yet the token-authoritative downstream topology
+migration: no author-time activation ports or literal successor IDs are introduced, and other control-flow
+invocations remain on their legacy paths until differential coverage proves each replacement.
 
 `ExecutionFrame` identifies the owning state, loop iteration path, and workflow-call depth. `ExecutionReference`
 identifies one prepared execution node and its frame. `ExecutionToken` records an output port, value, frame, token
 kind, and optional sequence. `loop_linkage` remains association metadata and never becomes a data token. This ledger is
-currently additive. Ordinary static-DAG readiness comes from the generic scheduler through a compatibility projection;
-materialization and type-specific control paths remain authoritative for loop, branch, and workflow-call graphs. A
-future migration may make tokens authoritative only after compatibility is proven.
+currently additive. Ordinary static-DAG and legacy-shaped `If` readiness comes from the generic scheduler through a
+compatibility projection; materialization and type-specific control paths remain authoritative for branch topology,
+loops, and workflow-call graphs. A future migration may make tokens authoritative only after compatibility is proven.
 
 The generic scheduler is an in-memory graph-state component only. It does not
 create, update, retry, cancel, delete, or recover `SessionQueueItem` rows and
@@ -251,14 +256,16 @@ Workflow-call note:
   edges. When matching prepared parents for a downstream exec node, skipped prepared exec nodes are ignored and cannot
   be selected as live inputs.
 - `_GenericGraphSchedulerAdapter` Projects the generic `ExecutionPlan`/`ExecutionScheduler` into the existing state
-  fields for ordinary static DAGs; the generic scheduler owns readiness, indegree transitions, deterministic ordering,
-  claimed work, and completion.
+  fields for ordinary static DAGs and legacy-shaped `If` graphs; the generic scheduler owns opaque readiness,
+  intentional skips, indegree transitions, deterministic ordering, claimed work, and completion. The adapter supplies
+  the private activation predicate and maps legacy branch skips into the generic projection.
 - `_ExecutionScheduler` Owns materialized-graph indegree transitions, class-grouped ready queues, downstream release,
   and control-flow continuation scheduling for graphs that still require lowering.
 - `_ExecutionRuntime` Owns iteration-path lookup, collect input ordering, and input hydration for prepared exec nodes.
-- `_IfBranchScheduler` Applies lazy `If` semantics by deferring branch-local work until the condition is known, then
-  lowering the decision to a frame-scoped `ActivationGate` and persisted internal activation token, releasing the
-  selected branch, and skipping the unselected branch. Its topology analysis remains a compatibility adapter.
+- `_IfBranchScheduler` Computes legacy `If` topology, defers branch-local work until the condition is known, then
+  lowers the decision to a frame-scoped `ActivationGate` and persisted internal activation token, releases the
+  selected branch, and maps the unselected branch to generic scheduler skips. Its topology analysis remains a
+  compatibility adapter; the opaque scheduler has no `If`-specific branch.
 - `ExecutionEngineRuntime` Owns the typed gate, stream, and continuation records used by compatibility adapters.
 
 `GraphExecutionState.model_post_init()` rehydrates private runtime helpers and caches after normal construction or a

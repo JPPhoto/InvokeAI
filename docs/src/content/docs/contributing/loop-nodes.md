@@ -90,13 +90,17 @@ explicit empty close. `Collect` consumes that buffer when available and retains 
 compatibility adapter. `loop_linkage` remains association metadata and never becomes a data token.
 
 `IfInvocation` now declares the same seam for branch activation: it emits one frame-scoped activation token for the
-selected branch, and the graph state validates and persists it after invocation. The legacy branch scheduler still
-resolves `If` readiness and writes a compatibility token before invocation; `apply()` replaces that token by stable
-identity, and activation effects are excluded from stream handling. Loop and saved-workflow control flow remain on
-their compatibility paths until differential coverage proves their generic replacements.
+selected branch, and the graph state validates and persists it after invocation. The generic opaque scheduler receives
+an activation readiness predicate and skip projection for `If`; the private branch adapter still computes legacy
+topology, resolves the gate, prunes the unselected edge, and writes the compatibility token before invocation.
+`apply()` replaces that token by stable identity, and activation effects are excluded from stream handling. This is a
+partial routing migration: author-time activation ports and literal successor IDs remain absent, while loop and
+saved-workflow control flow remain on their compatibility paths until differential coverage proves their generic
+replacements.
 
 The engine still owns runtime node materialization and queue readiness for loop-containing graphs and existing snapshots.
-Ordinary static DAGs now use the generic opaque plan/scheduler through a compatibility projection. This is intentional:
+Ordinary static DAGs and legacy-shaped `If` graphs now use the generic opaque plan/scheduler through a compatibility
+projection. This is intentional:
 the generic records preserve tested loop semantics first, while the old execution graph remains the fallback for control
 lowerings, legacy snapshots, and unsupported mixed loop shapes. No activation or stream ports are added to author-time
 graph JSON.

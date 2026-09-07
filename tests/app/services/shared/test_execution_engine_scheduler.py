@@ -61,6 +61,22 @@ def test_generic_scheduler_honors_opaque_readiness_predicate() -> None:
     assert scheduler.pop_next() == "blocked"
 
 
+def test_generic_scheduler_tracks_skipped_nodes_without_prerequisites() -> None:
+    plan = ExecutionPlan()
+    plan.add_node("dependency", "Dependency")
+    plan.add_node("skipped", "Work", dependencies=("dependency",))
+    plan.add_node("after", "After", dependencies=("skipped",))
+    scheduler = ExecutionScheduler(plan)
+
+    scheduler.skip("skipped")
+
+    assert scheduler.pop_next() == "after"
+    scheduler.complete("after")
+    assert scheduler.pop_next() == "dependency"
+    with pytest.raises(ValueError, match="skipped"):
+        scheduler.complete("skipped")
+
+
 def test_generic_scheduler_preserves_legacy_class_drain_and_fifo_order() -> None:
     plan = ExecutionPlan()
     plan.add_node("late", "ZNode", frame=(1,))
@@ -321,14 +337,59 @@ def test_graph_state_if_uses_generic_activation_routing() -> None:
         state.complete(node.id, node.invoke(Mock()))
 
     assert type(state._scheduler()).__name__ == "_GenericGraphSchedulerAdapter"
-    executed_sources = {
-        source_id for exec_node_id, source_id in state.prepared_source_mapping.items() if exec_node_id in state.executed
+    completed_sources = {
+        source_id for exec_node_id, source_id in state.prepared_source_mapping.items() if exec_node_id in state.results
     }
-    assert executed_sources == {
+    assert completed_sources == {
         "condition",
         "true_value",
         "if",
     }
+
+
+def test_graph_state_if_generic_and_legacy_paths_have_matching_completion() -> None:
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=False))
+    graph.add_node(AddInvocation(id="true_value", a=2, b=2))
+    graph.add_node(AddInvocation(id="false_value", a=3, b=3))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="condition", field="value"),
+            destination=EdgeConnection(node_id="if", field="condition"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="true_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="true_input"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="false_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="false_input"),
+        )
+    )
+
+    def run(force_legacy: bool) -> tuple[list[str], set[str]]:
+        state = GraphExecutionState(graph=graph.model_copy(deep=True))
+        if force_legacy:
+            object.__setattr__(state, "_execution_scheduler", _ExecutionScheduler(state))
+        trace: list[str] = []
+        while (node := state.next()) is not None:
+            trace.append(state.prepared_source_mapping[node.id])
+            state.complete(node.id, node.invoke(Mock()))
+        completed_sources = {
+            source_id for exec_node_id, source_id in state.prepared_source_mapping.items() if exec_node_id in state.results
+        }
+        return trace, completed_sources
+
+    legacy_trace, legacy_completed = run(force_legacy=True)
+    generic_trace, generic_completed = run(force_legacy=False)
+
+    assert generic_trace == legacy_trace
+    assert generic_completed == legacy_completed == {"condition", "false_value", "if"}
 
 
 def test_graph_state_static_dag_rehydrates_generic_scheduler_after_partial_run() -> None:
