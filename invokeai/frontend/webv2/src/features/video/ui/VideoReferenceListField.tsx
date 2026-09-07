@@ -16,7 +16,7 @@ import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@feat
 import { resolveMiniMaxH3ReferenceImage } from '@features/video/core/dimensions';
 import {
   createVideoSourceClip,
-  DEFAULT_REFERENCE_SAMPLE_FRAMES,
+  getDefaultReferenceClip,
   getDefaultReferenceConditioning,
   getDefaultReferenceImageDetail,
   resizeReferenceSampleWindow,
@@ -476,15 +476,10 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       // Built outside the updater so the caller holds the same object the list does: it is
       // the only durable handle on this entry once reordering moves it.
       const entry: Extract<VideoReferenceItem, { kind: 'video' }> = {
-        // Default to a short sample window from the clip's start, not the whole
-        // clip: reference frames cost denoise VRAM every step, and a few seconds
-        // captures the wanted features. (Not the extend-mode 2-frame-tail trim
-        // either -- references are truncated to the generated duration, not joined.)
-        clip: {
-          ...clip,
-          endFrame: Math.max(0, Math.min(DEFAULT_REFERENCE_SAMPLE_FRAMES, clip.numFrames) - 1),
-          startFrame: 0,
-        },
+        // The window depends on the conditioning -- a short sample of footage, the whole
+        // clip of a soundtrack. (Neither is the extend-mode 2-frame-tail trim: references
+        // are truncated to the generated duration, not joined.)
+        clip: getDefaultReferenceClip(clip, conditioning),
         conditioning,
         kind: 'video',
       };
@@ -655,10 +650,20 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
           if (conditioning === entry.conditioning) {
             return;
           }
+          // The window is re-derived with the conditioning, not carried over: this path adds
+          // BEFORE it knows the answer, so the card is holding the footage default, and
+          // leaving it would give a picked soundtrack a shorter window than the same clip
+          // dropped or uploaded. Safe to recompute -- the identity match below already
+          // establishes that the window is still the one this code chose.
+          //
           // Matched by identity, not index: a card the user has since edited is a different
           // object and keeps their choice, and a removed one is simply no longer there.
           onChange((current) =>
-            current.map((existing) => (existing === entry ? { ...entry, conditioning } : existing))
+            current.map((existing) =>
+              existing === entry
+                ? { ...entry, clip: getDefaultReferenceClip(entry.clip, conditioning), conditioning }
+                : existing
+            )
           );
         })
         .catch(() => undefined);
