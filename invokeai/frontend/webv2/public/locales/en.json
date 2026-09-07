@@ -2142,6 +2142,8 @@
         "addImage": "Add an image",
         "replaceImage": "Replace image",
         "removeImage": "Remove image",
+        "chooseFromGallery": "Choose from gallery",
+        "couldNotLoadImage": "Could not load that image",
         "import": "Import",
         "importHelp": "Import templates from a CSV or JSON file with name, prompt and negative_prompt.",
         "export": "Export",

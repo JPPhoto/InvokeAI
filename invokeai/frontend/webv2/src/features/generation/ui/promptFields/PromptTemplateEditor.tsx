@@ -1,3 +1,4 @@
+import type { GalleryItem } from '@features/gallery';
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
 import type {
   PromptTemplateCreateDraft,
@@ -9,19 +10,21 @@ import type { PendingPromptTemplateDraft } from '@features/generation/ui/promptT
 import type { PromptTemplateCatalog } from '@features/generation/ui/usePromptTemplates';
 import type { ChangeEvent } from 'react';
 
-import { HStack, Input, Stack, Text } from '@chakra-ui/react';
+import { Box, HStack, Input, Stack, Text } from '@chakra-ui/react';
+import { GalleryPickerPopover } from '@features/gallery/picker';
 import { PROMPT_TEMPLATE_PLACEHOLDER } from '@features/generation/core/promptTemplates';
 import { useGenerationUi } from '@features/generation/ui/GenerationUiContext';
 import { PromptPanelHeader } from '@features/generation/ui/promptFields/PromptPanelHeader';
 import { PromptTemplateImage } from '@features/generation/ui/promptFields/PromptTemplateImage';
 import { PromptTextarea } from '@features/generation/ui/promptFields/PromptTextarea';
 import { useMountEffect } from '@platform/react/useMountEffect';
+import { captureAccountScope } from '@platform/state/accountLifecycle';
 import { getApiErrorMessage } from '@platform/transport/http';
 import { Button, IconButton } from '@platform/ui/Button';
 import { DropZone } from '@platform/ui/DropZone';
 import { Field } from '@platform/ui/Field';
 import { Tooltip } from '@platform/ui/Tooltip';
-import { CheckIcon, ImageUpIcon, XIcon } from 'lucide-react';
+import { CheckIcon, ImageUpIcon, ImagesIcon, XIcon } from 'lucide-react';
 import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -47,6 +50,7 @@ interface EditorDraft {
 
 const MAX_NAME_LENGTH = 128;
 const NEW_TEMPLATE_IMAGE = { hasImage: false, id: 'new' } as const;
+const IMAGE_ONLY = ['image'] as const;
 
 export const PromptTemplateEditor = ({
   catalog,
@@ -69,6 +73,7 @@ export const PromptTemplateEditor = ({
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const objectUrlRef = useRef<string | null>(null);
+  const galleryFetchRef = useRef<AbortController | null>(null);
 
   /**
    * Swaps in a preview URL for a picked file, releasing the previous one.
@@ -88,6 +93,7 @@ export const PromptTemplateEditor = ({
   }, []);
 
   useMountEffect(() => () => {
+    galleryFetchRef.current?.abort();
     if (objectUrlRef.current) {
       URL.revokeObjectURL(objectUrlRef.current);
     }
@@ -160,30 +166,72 @@ export const PromptTemplateEditor = ({
     []
   );
 
+  /** Cancels a pending gallery fetch and hands back a controller for the next one. */
+  const abortGalleryFetch = useCallback((): AbortController => {
+    galleryFetchRef.current?.abort();
+    galleryFetchRef.current = new AbortController();
+    return galleryFetchRef.current;
+  }, []);
+
+  const setImageBlob = useCallback(
+    (blob: Blob) => {
+      const imagePreviewUrl = takeObjectUrl(blob);
+
+      setDraft((current) => ({ ...current, image: { blob, kind: 'replace' }, imagePreviewUrl }));
+    },
+    [takeObjectUrl]
+  );
+
+  // A gallery pick fetches the full image so it is uploaded like a local file.
+  // Only the latest pick may land: a later local file, gallery pick, clear, or
+  // unmount aborts an in-flight fetch.
+  const handleGalleryPick = useCallback(
+    (item: GalleryItem) => {
+      const controller = abortGalleryFetch();
+      const owner = captureAccountScope();
+      const signal = AbortSignal.any([controller.signal, owner.signal]);
+
+      void fetch(item.fullUrl, { signal })
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error(String(response.status));
+          }
+          return response.blob();
+        })
+        .then((blob) => {
+          if (!signal.aborted) {
+            setImageBlob(blob);
+          }
+        })
+        .catch(() => {
+          if (!signal.aborted) {
+            setError(t('widgets.generate.promptTemplates.couldNotLoadImage'));
+          }
+        });
+    },
+    [abortGalleryFetch, setImageBlob, t]
+  );
+
   const handleImageChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
       const file = event.currentTarget.files?.[0];
 
       if (file) {
-        const imagePreviewUrl = takeObjectUrl(file);
-
-        setDraft((current) => ({
-          ...current,
-          image: { blob: file, kind: 'replace' },
-          imagePreviewUrl,
-        }));
+        abortGalleryFetch();
+        setImageBlob(file);
       }
 
       // Reset so re-picking the same file still fires a change.
       event.currentTarget.value = '';
     },
-    [takeObjectUrl]
+    [abortGalleryFetch, setImageBlob]
   );
 
   const clearImage = useCallback(() => {
+    abortGalleryFetch();
     takeObjectUrl(null);
     setDraft((current) => ({ ...current, image: { kind: 'remove' }, imagePreviewUrl: null }));
-  }, [takeObjectUrl]);
+  }, [abortGalleryFetch, takeObjectUrl]);
 
   const reportSaveError = useCallback(
     (caught: unknown) =>
@@ -321,6 +369,20 @@ export const PromptTemplateEditor = ({
                 : t('widgets.generate.promptTemplates.addImage')}
             </Text>
           </DropZone>
+          <GalleryPickerPopover
+            accept={IMAGE_ONLY}
+            label={t('widgets.generate.promptTemplates.chooseFromGallery')}
+            onPick={handleGalleryPick}
+          >
+            <IconButton aria-label={t('widgets.generate.promptTemplates.chooseFromGallery')} size="2xs" variant="ghost">
+              {/* The tooltip sits inside the trigger so it cannot replace the popover trigger's id. */}
+              <Tooltip content={t('widgets.generate.promptTemplates.chooseFromGallery')}>
+                <Box alignItems="center" display="flex" h="full" justifyContent="center" w="full">
+                  <ImagesIcon />
+                </Box>
+              </Tooltip>
+            </IconButton>
+          </GalleryPickerPopover>
           {hasImage ? (
             <Tooltip content={t('widgets.generate.promptTemplates.removeImage')}>
               <IconButton
