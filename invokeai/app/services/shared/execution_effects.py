@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Literal, Union
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 from pydantic_core import PydanticSerializationError
@@ -16,6 +17,7 @@ from pydantic_core import PydanticSerializationError
 if TYPE_CHECKING:
     from invokeai.app.invocations.baseinvocation import BaseInvocationOutput
 
+from invokeai.app.services.shared.execution_engine.child import ChildExecutionCapability
 
 _JSON_SERIALIZER = TypeAdapter(Any)
 
@@ -408,13 +410,51 @@ class ExecutionInterface:
         child_execution_id: str | None = None,
         authorization_context: dict[str, Any] | None = None,
     ) -> "ChildExecutionHandle":
-        raise UnsupportedExecutionEffectError("Execution effect kind 'spawn_execution' is not supported")
+        capability = self._require_lifecycle_capability("spawn_execution")
+        if authorization_context is not None and authorization_context != capability.authorization_context:
+            raise PermissionError("child authorization context does not match capability")
+        child_id = child_execution_id or str(uuid4())
+        child = capability.create_child(child_id, graph=graph, inputs=inputs)
+        parent = self._recorder.execution_ref
+        self._recorder.record(
+            SpawnExecutionEffect(
+                execution_ref=parent,
+                parent=parent,
+                graph=graph,
+                inputs=inputs,
+                child_execution_id=child.child_execution_id,
+                authorization_context=authorization_context
+                if authorization_context is not None
+                else capability.authorization_context,
+            )
+        )
+        return ChildExecutionHandle(
+            child_execution_id=child.child_execution_id,
+            parent_execution_id=capability.parent_execution_id,
+            authorization_context=authorization_context
+            if authorization_context is not None
+            else capability.authorization_context,
+        )
 
     def await_dependency(self, dependency: ExecutionRef) -> None:
-        raise UnsupportedExecutionEffectError("Execution effect kind 'await' is not supported")
+        self._require_lifecycle_capability("await")
+        self._recorder.record(AwaitEffect(execution_ref=self._recorder.execution_ref, dependency=dependency))
 
     def fail(self, message: str) -> None:
-        raise UnsupportedExecutionEffectError("Execution effect kind 'fail' is not supported")
+        self._require_lifecycle_capability("fail")
+        self._recorder.record(FailEffect(execution_ref=self._recorder.execution_ref, message=message))
+
+    def _require_lifecycle_capability(self, effect_kind: str) -> ChildExecutionCapability:
+        if not self._recorder.allow_lifecycle_effects:
+            raise UnsupportedExecutionEffectError(f"Execution effect kind '{effect_kind}' is not supported")
+        capability = self._recorder.child_capability
+        if capability is None:
+            raise PermissionError("child execution capability is unavailable")
+        if capability.parent_execution_id != self._recorder.source_node_id:
+            raise PermissionError("child execution capability belongs to another execution")
+        if capability.parent_frame != tuple(self._recorder.frame_path):
+            raise PermissionError("child execution capability belongs to another execution frame")
+        return capability
 
     def authorize_workflow(self, workflow_id: str) -> Any:
         if self._authorize_workflow is None:
@@ -486,15 +526,28 @@ class ExecutionEffectsRecorder:
 
     _SUPPORTED_EFFECT_KINDS = frozenset({"emit", "close_stream"})
 
-    def __init__(self, source_node_id: str = "context", frame_path: tuple[int | str, ...] = ()) -> None:
+    def __init__(
+        self,
+        source_node_id: str = "context",
+        frame_path: tuple[int | str, ...] = (),
+        *,
+        allow_lifecycle_effects: bool = False,
+        child_capability: ChildExecutionCapability | None = None,
+    ) -> None:
         self._effects: list[ExecutionEffect] = []
         self.source_node_id = source_node_id
         self.frame_path = frame_path
+        self.allow_lifecycle_effects = allow_lifecycle_effects
+        self.child_capability = child_capability
+        self.execution_ref = ExecutionRef(execution_node_id=source_node_id, frame_path=frame_path)
 
     def record(self, effect: ExecutionEffect) -> None:
         if not isinstance(effect, ExecutionEffect):
             raise TypeError(f"Expected ExecutionEffect, got {type(effect).__name__}")
-        if effect.kind not in self._SUPPORTED_EFFECT_KINDS:
+        supported_effect_kinds = self._SUPPORTED_EFFECT_KINDS
+        if self.allow_lifecycle_effects:
+            supported_effect_kinds = supported_effect_kinds | {"spawn_execution", "await", "fail"}
+        if effect.kind not in supported_effect_kinds:
             raise UnsupportedExecutionEffectError(f"Execution effect kind '{effect.kind}' is not supported")
         try:
             effect.model_dump(mode="json", warnings="error")

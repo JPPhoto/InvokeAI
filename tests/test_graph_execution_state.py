@@ -381,6 +381,48 @@ def test_graph_state_apply_accepts_close_stream_effect():
     assert token.token_kind == "stream_end"
 
 
+def test_graph_state_apply_records_generic_effect_stream_and_rehydrates_it():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=2)
+
+    state.apply(
+        ref,
+        output,
+        effects=[
+            {
+                "kind": "emit",
+                "token": {"node_id": node.id, "field": "value", "value": 3, "sequence": 0},
+                "value": 3,
+            },
+            {
+                "kind": "close_stream",
+                "token": {
+                    "node_id": node.id,
+                    "field": "value",
+                    "token_kind": "stream_end",
+                    "sequence": 1,
+                },
+            },
+        ],
+    )
+
+    streams = list(state._generic_runtime().streams.values())
+    assert len(streams) == 1
+    assert streams[0].closed
+    assert streams[0].values == (3,)
+
+    restored = TypeAdapter(GraphExecutionState).validate_json(state.model_dump_json(), strict=False)
+    restored_streams = list(restored._generic_runtime().streams.values())
+    assert len(restored_streams) == 1
+    assert restored_streams[0].closed
+    assert restored_streams[0].values == (3,)
+
+
 @pytest.mark.parametrize("port", ["type", "output_meta", "loop_linkage"])
 @pytest.mark.parametrize("effect_kind, token_kind", [("emit", "data"), ("close_stream", "stream_end")])
 def test_graph_state_apply_rejects_reserved_effect_ports(port: str, effect_kind: str, token_kind: str):
@@ -642,6 +684,70 @@ def test_graph_state_apply_rejects_emit_token_from_another_frame(token_frame: di
     assert not state.results
     assert not state.execution_tokens
     assert not state.execution_effects
+
+
+def test_graph_state_apply_rejects_emit_token_from_another_owner():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+
+    with pytest.raises(ValueError, match="not owned"):
+        state.apply(
+            ref,
+            output,
+            effects=[
+                {
+                    "kind": "emit",
+                    "execution_ref": {"execution_node_id": node.id},
+                    "token": {"node_id": "other", "field": "value", "value": 3},
+                }
+            ],
+        )
+
+    assert node.id not in state.executed
+
+
+def test_graph_state_apply_rejects_emit_without_a_token():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+
+    with pytest.raises(ValueError, match="requires a data output token"):
+        state.apply(
+            ref,
+            output,
+            effects=[{"kind": "emit", "execution_ref": {"execution_node_id": node.id}}],
+        )
+
+    assert node.id not in state.executed
+
+
+def test_graph_state_rehydration_rejects_persisted_effect_token_from_another_owner():
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id, effect_count=1)
+    state.apply(
+        ref,
+        output,
+        effects=[{"kind": "emit", "token": {"node_id": node.id, "field": "value", "value": 3}}],
+    )
+    snapshot = state.model_dump(mode="json")
+    snapshot["execution_effects"][ref.reference_id][0]["token"]["node_id"] = "other"
+
+    with pytest.raises(ValueError, match="not owned"):
+        TypeAdapter(GraphExecutionState).validate_python(snapshot, strict=False)
 
 
 def test_graph_state_apply_does_not_complete_when_effect_persistence_preparation_fails():
@@ -1087,6 +1193,12 @@ def test_graph_for_rematerializes_indirect_body_for_each_iteration():
     )
     assert state.results[after_exec_id].value == ["alpha", "beta"]
     assert state.is_complete()
+
+    for exec_node_id, node in state.execution_graph.nodes.items():
+        if isinstance(node, ForInvocation) and node.index >= 0:
+            continuation = state._generic_runtime().get_continuation(f"{state.id}:for:{exec_node_id}")
+            assert continuation.owner_id == exec_node_id
+            assert continuation.status == "completed"
 
 
 def test_graph_for_rematerializes_nested_iterate_body_through_collect():
@@ -2955,7 +3067,9 @@ def test_graph_record_waiting_workflow_call_child_completion_aggregates_named_va
 
 
 def test_graph_record_waiting_workflow_call_child_completion_preserves_enqueue_order():
-    parent = GraphExecutionState(graph=Graph())
+    parent_graph = Graph()
+    parent_graph.add_node(AddInvocation(id="source-parent", a=1, b=2))
+    parent = GraphExecutionState(graph=parent_graph)
     parent.execution_graph.add_node(AddInvocation(id="prepared-parent", a=1, b=2))
     parent.prepared_source_mapping["prepared-parent"] = "source-parent"
 
@@ -2971,6 +3085,14 @@ def test_graph_record_waiting_workflow_call_child_completion_preserves_enqueue_o
 
     assert is_complete is True
     assert aggregated_values == {"sum": [3, 7]}
+
+    restored = TypeAdapter(GraphExecutionState).validate_json(parent.model_dump_json(), strict=False)
+    execution = restored.waiting_workflow_call_execution
+    assert execution is not None
+    generic_dependency = restored._generic_child_dependencies[execution.id]
+    assert generic_dependency.status == "completed"
+    assert generic_dependency.completions["101"].outputs == {"sum": 3}
+    assert generic_dependency.completions["102"].outputs == {"sum": 7}
 
 
 def test_graph_end_waiting_on_workflow_call_records_lifecycle_history():
@@ -4325,6 +4447,147 @@ def test_if_graph_optimized_behavior_records_skipped_branch_in_execution_history
 
     assert set(g.executed_history) == {"condition", "true_value", "false_value", "if", "selected_output"}
     assert g.executed_history.count("false_value") == 1
+
+
+def test_if_graph_lowers_legacy_branch_choice_to_frame_scoped_activation_token():
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=True))
+    graph.add_node(PromptTestInvocation(id="true_value", prompt="true branch"))
+    graph.add_node(PromptTestInvocation(id="false_value", prompt="false branch"))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_edge(create_edge("condition", "value", "if", "condition"))
+    graph.add_edge(create_edge("true_value", "prompt", "if", "true_input"))
+    graph.add_edge(create_edge("false_value", "prompt", "if", "false_input"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    if_exec_id = next(iter(state.source_prepared_mapping["if"]))
+    activation_tokens = [
+        token
+        for token in state.execution_tokens.values()
+        if token.owner_node_id == if_exec_id and token.token_kind == "activation"
+    ]
+    assert len(activation_tokens) == 1
+    assert activation_tokens[0].port == "true_input"
+    assert activation_tokens[0].frame == state.get_execution_ref(if_exec_id).frame
+    assert state._activation_gate(if_exec_id).is_active("true_input")
+
+
+def test_iterate_graph_records_a_closed_frame_scoped_stream_for_collect():
+    graph = Graph()
+    graph.add_node(BooleanCollectionInvocation(id="values", collection=[True, False]))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("values", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "collect", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    streams = [stream for stream in state._generic_runtime().streams.values() if stream.owner_id == "iterate"]
+    assert len(streams) == 1
+    assert streams[0].closed
+    assert streams[0].values == (True, False)
+
+
+def test_generic_control_records_rehydrate_from_runtime_snapshot():
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=True))
+    graph.add_node(PromptTestInvocation(id="true_value", prompt="true branch"))
+    graph.add_node(PromptTestInvocation(id="false_value", prompt="false branch"))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_edge(create_edge("condition", "value", "if", "condition"))
+    graph.add_edge(create_edge("true_value", "prompt", "if", "true_input"))
+    graph.add_edge(create_edge("false_value", "prompt", "if", "false_input"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+    restored = TypeAdapter(GraphExecutionState).validate_json(state.model_dump_json(), strict=False)
+
+    if_exec_id = next(iter(restored.source_prepared_mapping["if"]))
+    assert restored._activation_gate(if_exec_id).selected_branch == "true_input"
+    assert any(
+        token.owner_node_id == if_exec_id and token.token_kind == "activation"
+        for token in restored.execution_tokens.values()
+    )
+
+
+def test_if_snapshot_rejects_conflicting_activation_tokens():
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=True))
+    graph.add_node(PromptTestInvocation(id="true_value", prompt="true branch"))
+    graph.add_node(PromptTestInvocation(id="false_value", prompt="false branch"))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_edge(create_edge("condition", "value", "if", "condition"))
+    graph.add_edge(create_edge("true_value", "prompt", "if", "true_input"))
+    graph.add_edge(create_edge("false_value", "prompt", "if", "false_input"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+    snapshot = state.model_dump(mode="json")
+    activation_id, activation = next(
+        (token_id, token)
+        for token_id, token in snapshot["execution_tokens"].items()
+        if token["token_kind"] == "activation"
+    )
+    conflicting_id = f"{activation_id}:conflict"
+    snapshot["execution_tokens"][conflicting_id] = {
+        **activation,
+        "token_id": conflicting_id,
+        "port": "false_input",
+        "value": "false_input",
+    }
+
+    with pytest.raises(ValueError, match="conflicting activation tokens"):
+        TypeAdapter(GraphExecutionState).validate_python(snapshot, strict=False)
+
+
+def test_if_snapshot_rejects_activation_token_with_contradictory_value():
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=True))
+    graph.add_node(PromptTestInvocation(id="true_value", prompt="true branch"))
+    graph.add_node(PromptTestInvocation(id="false_value", prompt="false branch"))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_edge(create_edge("condition", "value", "if", "condition"))
+    graph.add_edge(create_edge("true_value", "prompt", "if", "true_input"))
+    graph.add_edge(create_edge("false_value", "prompt", "if", "false_input"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+    snapshot = state.model_dump(mode="json")
+    token_id, token = next(
+        (token_id, token)
+        for token_id, token in snapshot["execution_tokens"].items()
+        if token["token_kind"] == "activation"
+    )
+    snapshot["execution_tokens"][token_id] = {**token, "value": "false_input"}
+
+    with pytest.raises(ValueError, match="stale value"):
+        TypeAdapter(GraphExecutionState).validate_python(snapshot, strict=False)
+
+
+def test_empty_iterate_graph_records_a_closed_empty_stream():
+    graph = Graph()
+    graph.add_node(BooleanCollectionInvocation(id="values", collection=[]))
+    graph.add_node(IterateInvocation(id="iterate", collection=[]))
+    graph.add_edge(create_edge("values", "collection", "iterate", "collection"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    streams = [stream for stream in state._generic_runtime().streams.values() if stream.owner_id == "iterate"]
+    assert len(streams) == 1
+    assert streams[0].closed
+    assert streams[0].values == ()
+
+    restored = TypeAdapter(GraphExecutionState).validate_json(state.model_dump_json(), strict=False)
+    restored_streams = [
+        stream for stream in restored._generic_runtime().streams.values() if stream.owner_id == "iterate"
+    ]
+    assert len(restored_streams) == 1
+    assert restored_streams[0].closed
+    assert restored_streams[0].values == ()
 
 
 def test_if_graph_optimized_behavior_skips_unselected_branch_but_keeps_shared_ancestors():

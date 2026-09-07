@@ -27,9 +27,14 @@ from invokeai.app.services.shared.execution_effects import (
     SpawnExecutionEffect,
     UnsupportedExecutionEffectError,
 )
+from invokeai.app.services.shared.execution_engine.child import ChildExecutionCapability
 from invokeai.app.services.shared.execution_state_migration import dump_execution_state
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState
-from invokeai.app.services.shared.invocation_context import InvocationContext
+from invokeai.app.services.shared.invocation_context import (
+    InvocationContext,
+    InvocationContextData,
+    build_invocation_context,
+)
 
 
 @invocation_output("execution_effects_test_output")
@@ -88,6 +93,22 @@ def _services(cache_size: int = 1) -> MagicMock:
     services = MagicMock()
     services.configuration.node_cache_size = cache_size
     return services
+
+
+def test_context_default_recorder_preserves_execution_frame() -> None:
+    context = build_invocation_context(
+        services=MagicMock(),
+        data=InvocationContextData(
+            queue_item=None,  # type: ignore[arg-type]
+            invocation=ExecutionEffectsTestInvocation(id="node"),
+            source_invocation_id="source",
+            execution_frame=(2, 1),
+        ),
+        is_canceled=lambda: False,
+    )
+
+    assert context.execution_effects.source_node_id == "node"
+    assert context.execution_effects.frame_path == (2, 1)
 
 
 def test_execution_token_and_ref_are_frame_aware() -> None:
@@ -157,6 +178,53 @@ def test_execution_interface_spawn_is_guarded() -> None:
             inputs={"value": {"items": [1, True, None]}},
             authorization_context={"user_id": "user"},
         )
+
+
+def test_capability_enabled_execution_interface_records_child_lifecycle_effects() -> None:
+    capability = ChildExecutionCapability(
+        parent_execution_id="parent",
+        parent_frame=(),
+        authorization_context={"user_id": "user"},
+    )
+    recorder = ExecutionEffectsRecorder(
+        source_node_id="parent",
+        allow_lifecycle_effects=True,
+        child_capability=capability,
+    )
+    execution = ExecutionInterface(recorder)
+
+    handle = execution.spawn(graph={"nodes": {}}, inputs={})
+    execution.await_dependency(ExecutionRef(execution_node_id="dependency"))
+    execution.fail("failed")
+
+    assert handle.child_execution_id
+    assert handle.parent_execution_id == "parent"
+    assert [effect.kind for effect in recorder.snapshot()] == ["spawn_execution", "await", "fail"]
+    spawn = recorder.snapshot()[0]
+    assert isinstance(spawn, SpawnExecutionEffect)
+    assert spawn.child_execution_id == handle.child_execution_id
+    assert spawn.authorization_context == {"user_id": "user"}
+
+
+def test_capability_enabled_execution_interface_rejects_wrong_parent_scope() -> None:
+    capability = ChildExecutionCapability(parent_execution_id="other", parent_frame=())
+    recorder = ExecutionEffectsRecorder(
+        source_node_id="parent",
+        allow_lifecycle_effects=True,
+        child_capability=capability,
+    )
+
+    with pytest.raises(PermissionError, match="another execution"):
+        ExecutionInterface(recorder).spawn(graph={"nodes": {}}, inputs={})
+
+
+def test_lifecycle_effects_require_a_child_capability() -> None:
+    execution = ExecutionInterface(ExecutionEffectsRecorder(allow_lifecycle_effects=True))
+
+    with pytest.raises(PermissionError, match="unavailable"):
+        execution.await_dependency(ExecutionRef(execution_node_id="dependency"))
+    with pytest.raises(PermissionError, match="unavailable"):
+        execution.fail("failed")
 
 
 @pytest.mark.parametrize(

@@ -60,6 +60,21 @@ from invokeai.app.invocations.loops import (
     ForReturnInvocationOutput,
     LoopState,
 )
+from invokeai.app.services.shared.execution_engine.child import (
+    ChildDependencyRecord,
+    ChildDependencyUpdate,
+    ChildExecutionCapability,
+)
+from invokeai.app.services.shared.execution_engine.primitives import (
+    ActivationGate,
+    ContinuationRecord,
+    StreamBuffer,
+    StreamData,
+)
+from invokeai.app.services.shared.execution_engine.primitives import (
+    ExecutionFrame as EngineExecutionFrame,
+)
+from invokeai.app.services.shared.execution_engine.runtime import ExecutionEngineRuntime
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.misc import uuid_string
 
@@ -356,7 +371,7 @@ class _IfBranchScheduler:
         matching_prepared_if_ids = self._get_matching_prepared_if_ids(if_node_id, iteration_path)
         if not matching_prepared_if_ids:
             return True
-        return not all(pid in self._state._resolved_if_exec_branches for pid in matching_prepared_if_ids)
+        return not all(self._state._activation_gate(pid).resolved for pid in matching_prepared_if_ids)
 
     def _apply_condition_inputs(self, exec_node_id: str, node: IfInvocation) -> bool:
         return self._state._apply_if_condition_inputs(exec_node_id, node)
@@ -454,7 +469,25 @@ class _IfBranchScheduler:
             return
 
         selected_field, unselected_field = self._get_selected_branch_fields(node)
+        self._state._resolve_activation_gate(exec_node_id, selected_field)
+        # Compatibility cache for old snapshots and callers. The typed gate is
+        # the authority for new runtime decisions.
         self._state._tx_set_mapping(self._state._resolved_if_exec_branches, exec_node_id, selected_field)
+        execution_ref = self._state._expected_execution_ref(exec_node_id)
+        activation_token_id = f"{execution_ref.reference_id}:activation:{selected_field}"
+        self._state._tx_set_mapping(
+            self._state.execution_tokens,
+            activation_token_id,
+            ExecutionToken(
+                token_id=activation_token_id,
+                reference_id=execution_ref.reference_id,
+                owner_node_id=exec_node_id,
+                port=selected_field,
+                frame=execution_ref.frame,
+                value=selected_field,
+                token_kind="activation",
+            ),
+        )
 
         source_if_node_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
         exclusive_sources = self.get_branch_exclusive_sources(source_if_node_id)
@@ -1101,7 +1134,7 @@ class _ExecutionMaterializer:
             source_iterate_id, iterate_input_map, iteration_path=outer_iteration_path
         )
         if not inner_prepared_ids:
-            self._mark_source_node_empty(source_iterate_id)
+            self._mark_source_node_empty(source_iterate_id, outer_iteration_path)
 
         for inner_prepared_id in inner_prepared_ids:
             inner_iteration_path = self._state._get_iteration_path(inner_prepared_id)
@@ -1139,7 +1172,7 @@ class _ExecutionMaterializer:
                 if source_node_id in {source_iterate_id, source_collect_id, source_return_id}:
                     continue
                 if nx.has_path(graph, source_iterate_id, source_node_id):
-                    self._mark_source_node_empty(source_node_id)
+                    self._mark_source_node_empty(source_node_id, outer_iteration_path)
 
         collect_item_edge = self._state.graph._get_input_edges(source_collect_id, ITEM_FIELD)[0]
         collect_edges: list[Edge] = []
@@ -1426,9 +1459,11 @@ class _ExecutionMaterializer:
                 mappings.append(mapping)
         return mappings
 
-    def _mark_source_node_empty(self, source_node_id: str) -> None:
+    def _mark_source_node_empty(self, source_node_id: str, iteration_path: tuple[int, ...] = ()) -> None:
         self._state._tx_set_mapping(self._state.source_prepared_mapping, source_node_id, set())
         self._state._mark_source_executed(source_node_id)
+        if isinstance(self._state.graph.get_node(source_node_id), IterateInvocation):
+            self._state._record_empty_iterate_stream(source_node_id, iteration_path)
 
     def _index_prepared_nodes_by_iteration_path(
         self, prepared_nodes: set[str], input_edges: list[Edge]
@@ -1787,6 +1822,15 @@ class _ExecutionScheduler:
         self._state._set_prepared_exec_state(exec_node_id, "executed")
         self._state._tx_add_set(self._state.executed, exec_node_id)
         self._state._tx_set_mapping(self._state.results, exec_node_id, output)
+        # Keep the generic stream ledger in sync while the materializer remains
+        # the compatibility authority for runtime node creation.
+        if isinstance(self._state.execution_graph.nodes.get(exec_node_id), IterateInvocation):
+            self._state._record_iterate_stream(exec_node_id, output)
+        if isinstance(self._state.execution_graph.nodes.get(exec_node_id), ForInvocation):
+            for_node = self._state.execution_graph.nodes[exec_node_id]
+            assert isinstance(for_node, ForInvocation)
+            if for_node.index >= 0:
+                self._state._for_continuation(exec_node_id)
         node = self._state.execution_graph.nodes[exec_node_id]
         if isinstance(node, (IterateInvocation, CollectInvocation)):
             self._state._tx_set_attr(node, "collection", [])
@@ -1892,6 +1936,8 @@ class _ExecutionScheduler:
         for_node = self._state.execution_graph.get_node(for_exec_node_id)
         if not isinstance(for_node, ForInvocation):
             return None
+
+        self._state._complete_for_continuation(for_exec_node_id, output.model_dump(mode="json"))
 
         registry = self._state._prepared_registry()
         source_for_id = registry.get_source_node_id(for_exec_node_id)
@@ -2201,7 +2247,39 @@ class _ExecutionRuntime:
                 output_collection.extend(source_value)
             else:
                 output_collection.append(source_value)
-        output_collection.extend(self._get_copied_result_value(edge) for edge in item_edges)
+        item_values: list[tuple[tuple[Any, ...], str, Any]] = []
+        consumed_streams: set[str] = set()
+        for edge in item_edges:
+            stream_info = self._state._stream_for_iterate_edge(edge)
+            if stream_info is None:
+                item_values.append(
+                    (
+                        (*self.get_iteration_path(edge.source.node_id), 0),
+                        edge.source.node_id,
+                        self._get_copied_result_value(edge),
+                    )
+                )
+                continue
+            stream_id, parent_path = stream_info
+            stream = self._state._generic_runtime().streams.get(stream_id)
+            if stream is None or not stream.closed:
+                item_values.append(
+                    (
+                        (*self.get_iteration_path(edge.source.node_id), 0),
+                        edge.source.node_id,
+                        self._get_copied_result_value(edge),
+                    )
+                )
+                continue
+            if stream_id in consumed_streams:
+                continue
+            consumed_streams.add(stream_id)
+            item_values.extend(
+                ((*parent_path, sequence), edge.source.node_id, copydeep(value))
+                for sequence, value in enumerate(stream.values)
+            )
+        item_values.sort(key=lambda item: (item[0], item[1]))
+        output_collection.extend(value for _path, _source_id, value in item_values)
         return output_collection
 
     def _set_node_inputs(
@@ -4095,6 +4173,8 @@ class GraphExecutionState(BaseModel):
     _completed_source_ids_cache: Optional[set[str]] = PrivateAttr(default=None)
     _for_source_by_return_id: Optional[dict[str, str]] = PrivateAttr(default=None)
     _apply_transaction: Optional[_ApplyTransaction] = PrivateAttr(default=None)
+    _generic_execution_runtime: Optional[ExecutionEngineRuntime] = PrivateAttr(default=None)
+    _generic_child_dependencies: dict[str, ChildDependencyRecord] = PrivateAttr(default_factory=dict)
 
     def _tx_record_once(self, key: tuple[Any, ...], undo: Callable[[], None]) -> None:
         if self._apply_transaction is not None:
@@ -4298,6 +4378,218 @@ class GraphExecutionState(BaseModel):
             self._execution_runtime = _ExecutionRuntime(self)
         return self._execution_runtime
 
+    def _generic_runtime(self) -> ExecutionEngineRuntime:
+        """Return the private typed runtime used by legacy-control adapters."""
+
+        if self._generic_execution_runtime is None:
+            self._generic_execution_runtime = ExecutionEngineRuntime()
+        return self._generic_execution_runtime
+
+    def _engine_frame(self, iteration_path: tuple[int, ...]) -> EngineExecutionFrame:
+        frame_id = f"{self.id}:{len(self.workflow_call_stack)}:{','.join(str(i) for i in iteration_path)}"
+        return EngineExecutionFrame(
+            state_id=self.id,
+            frame_id=frame_id,
+            iteration_path=iteration_path,
+            workflow_call_depth=len(self.workflow_call_stack),
+        )
+
+    def _activation_gate(self, exec_node_id: str) -> ActivationGate:
+        return self._generic_runtime().register_gate(
+            gate_id=exec_node_id,
+            owner_id=exec_node_id,
+            frame=self._engine_frame(self._get_iteration_path(exec_node_id)),
+            branches=("true_input", "false_input"),
+        )
+
+    def _resolve_activation_gate(self, exec_node_id: str, branch: str) -> bool:
+        runtime = self._generic_runtime()
+        gate = self._activation_gate(exec_node_id)
+        if gate.resolved and gate.selected_branch == branch:
+            return False
+        previous = ActivationGate.model_validate(gate.model_dump(mode="python"))
+        changed = runtime.resolve_gate(
+            exec_node_id,
+            exec_node_id,
+            gate.frame,
+            branch,
+        )
+        if changed:
+            self._tx_record(lambda: runtime.replace_gate(previous))
+        return changed
+
+    def _iteration_stream_id(self, source_node_id: str, parent_path: tuple[int, ...]) -> str:
+        path = ",".join(str(index) for index in parent_path)
+        return f"{self.id}:iterate:{source_node_id}:{path}"
+
+    def _record_iterate_stream(self, exec_node_id: str, output: BaseInvocationOutput) -> None:
+        if not isinstance(output, IterateInvocationOutput):
+            return
+        source_node_id = self.prepared_source_mapping.get(exec_node_id)
+        if source_node_id is None:
+            return
+        iteration_path = self._get_iteration_path(exec_node_id)
+        parent_path = iteration_path[:-1] if iteration_path else ()
+        stream_id = self._iteration_stream_id(source_node_id, parent_path)
+        runtime = self._generic_runtime()
+        stream = runtime.streams.get(stream_id)
+        if stream is None:
+            self._tx_record(lambda: runtime.remove_stream(stream_id))
+            stream = runtime.get_or_create_stream(stream_id, source_node_id, self._engine_frame(parent_path))
+        elif self._apply_transaction is not None:
+            previous = StreamBuffer[Any].model_validate(stream.model_dump(mode="python"))
+            self._tx_record_once(("stream", stream_id), lambda: runtime.replace_stream(previous))
+        stream.accept(StreamData(sequence=output.index, value=copydeep(output.item)))
+        if output.index + 1 >= output.total:
+            stream.close(sequence=output.total)
+
+    def _record_empty_iterate_stream(self, source_node_id: str, parent_path: tuple[int, ...] = ()) -> None:
+        runtime = self._generic_runtime()
+        stream_id = self._iteration_stream_id(source_node_id, parent_path)
+        stream = runtime.streams.get(stream_id)
+        if stream is None:
+            self._tx_record(lambda: runtime.remove_stream(stream_id))
+            stream = runtime.get_or_create_stream(stream_id, source_node_id, self._engine_frame(parent_path))
+        elif stream.closed:
+            return
+        elif self._apply_transaction is not None:
+            previous = StreamBuffer[Any].model_validate(stream.model_dump(mode="python"))
+            self._tx_record_once(("stream", stream_id), lambda: runtime.replace_stream(previous))
+        stream.close(sequence=stream.next_sequence)
+
+    def _record_effect_streams(self, execution_ref: ExecutionReference, effects: Iterable[Any]) -> None:
+        """Mirror generic stream effects into the private stream registry."""
+
+        for effect in effects:
+            effect_kind = self._value_from_object(effect, "kind", "effect_type", "type")
+            if effect_kind not in {"emit", "close_stream"}:
+                continue
+            token = self._value_from_object(effect, "token")
+            port = self._value_from_object(token, "field", "port", "output", "output_name")
+            if not isinstance(port, str):
+                continue
+            stream_id = f"{self.id}:effect:{execution_ref.reference_id}:{port}"
+            runtime = self._generic_runtime()
+            stream = runtime.streams.get(stream_id)
+            if stream is None:
+                self._tx_record(lambda runtime=runtime, stream_id=stream_id: runtime.remove_stream(stream_id))
+                stream = runtime.get_or_create_stream(
+                    stream_id,
+                    execution_ref.exec_node_id,
+                    EngineExecutionFrame(
+                        state_id=execution_ref.frame.state_id or self.id,
+                        frame_id=execution_ref.frame.frame_id or f"{self.id}:{execution_ref.exec_node_id}",
+                        iteration_path=execution_ref.frame.iteration_path,
+                        workflow_call_depth=execution_ref.frame.workflow_call_depth,
+                    ),
+                )
+            elif self._apply_transaction is not None:
+                previous = StreamBuffer[Any].model_validate(stream.model_dump(mode="python"))
+                self._tx_record_once(
+                    ("stream", stream_id),
+                    lambda runtime=runtime, previous=previous: runtime.replace_stream(previous),
+                )
+
+            sequence = self._value_from_object(token, "sequence")
+            if sequence is None:
+                sequence = stream.next_sequence
+            if effect_kind == "close_stream":
+                stream.close(sequence=sequence)
+                continue
+            if self._value_from_object(token, "token_kind") == "stream_end":
+                continue
+            value = self._value_from_object(effect, "value")
+            if value is None:
+                value = self._value_from_object(token, "value")
+            stream.accept(StreamData(sequence=sequence, value=copydeep(value)))
+
+    def _stream_for_iterate_edge(self, edge: Edge) -> tuple[str, tuple[Any, ...]] | None:
+        source_node_id = self.prepared_source_mapping.get(edge.source.node_id)
+        if source_node_id is None or edge.source.field != ITEM_FIELD:
+            return None
+        if not isinstance(self.execution_graph.nodes.get(edge.source.node_id), IterateInvocation):
+            return None
+        iteration_path = self._get_iteration_path(edge.source.node_id)
+        parent_path = iteration_path[:-1] if iteration_path else ()
+        return self._iteration_stream_id(source_node_id, parent_path), parent_path
+
+    def _for_continuation(self, for_exec_node_id: str) -> ContinuationRecord[Any]:
+        runtime = self._generic_runtime()
+        continuation_id = f"{self.id}:for:{for_exec_node_id}"
+        continuation = runtime.continuations.get(continuation_id)
+        if continuation is None:
+            self._tx_record(lambda: runtime.remove_continuation(continuation_id))
+            continuation = runtime.register_continuation(
+                continuation_id,
+                for_exec_node_id,
+                self._engine_frame(self._get_iteration_path(for_exec_node_id)),
+                "for",
+            )
+        if continuation.status == "pending":
+            previous = ContinuationRecord[Any].model_validate(continuation.model_dump(mode="python"))
+            self._tx_record_once(("continuation", continuation_id), lambda: runtime.replace_continuation(previous))
+            continuation.start()
+        return continuation
+
+    def _complete_for_continuation(self, for_exec_node_id: str, result: Any) -> None:
+        continuation = self._for_continuation(for_exec_node_id)
+        if continuation.terminal:
+            return
+        previous = ContinuationRecord[Any].model_validate(continuation.model_dump(mode="python"))
+        self._tx_record_once(
+            ("continuation-complete", continuation.continuation_id),
+            lambda: self._generic_runtime().replace_continuation(previous),
+        )
+        continuation.complete(result)
+
+    def _register_generic_child_dependency(self) -> ChildDependencyRecord | None:
+        execution = self.waiting_workflow_call_execution
+        if execution is None or not execution.child_item_ids:
+            return None
+        existing = self._generic_child_dependencies.get(execution.id)
+        if existing is not None:
+            return existing
+        parent_reference_id = f"{self.id}:{execution.prepared_call_node_id}"
+        capability = ChildExecutionCapability(
+            parent_execution_id=self.id,
+            parent_frame=(),
+            parent_reference_id=parent_reference_id,
+            depth=max(execution.depth - 1, 0),
+            max_depth=max(self.max_workflow_call_depth, execution.depth),
+            max_children=max(execution.expected_child_count, 1),
+            capacity=max(execution.expected_child_count, 1),
+        )
+        record = capability.create_dependency(
+            [str(item_id) for item_id in execution.child_item_ids],
+            dependency_id=execution.id,
+        )
+        for child_item_id in execution.completed_child_item_ids:
+            output_values = execution.child_outputs.get(child_item_id)
+            if output_values is not None:
+                record.complete_child(str(child_item_id), output_values)
+        self._generic_child_dependencies[execution.id] = record
+        return record
+
+    def record_generic_child_completion(
+        self, child_item_id: int, output_values: dict[str, Any]
+    ) -> ChildDependencyUpdate | None:
+        dependency = self._register_generic_child_dependency()
+        if dependency is None:
+            return None
+        return dependency.complete_child(str(child_item_id), output_values)
+
+    def fail_generic_child(self, child_item_id: int, error_message: str) -> ChildDependencyUpdate | None:
+        dependency = self._register_generic_child_dependency()
+        if dependency is None:
+            return None
+        return dependency.fail_child(str(child_item_id), error_message)
+
+    def cancel_generic_child(self, child_item_id: int, error_message: str) -> ChildDependencyUpdate | None:
+        dependency = self._register_generic_child_dependency()
+        if dependency is None:
+            return None
+        return dependency.cancel_child(str(child_item_id), error_message)
+
     def _register_prepared_exec_node(self, exec_node_id: str, source_node_id: str) -> None:
         self._prepared_registry().register(exec_node_id, source_node_id)
         self._tx_discard_set(self.executed, source_node_id)
@@ -4500,6 +4792,18 @@ class GraphExecutionState(BaseModel):
             raise ValueError(f"{owner_name} belongs to another workflow-call depth")
 
     def _validate_execution_token(self, token: Any, execution_ref: ExecutionReference) -> None:
+        token_node_id = self._value_from_object(
+            token,
+            "node_id",
+            "invocation_id",
+            "source_node_id",
+            "owner_node_id",
+            "exec_node_id",
+            "execution_node_id",
+            "prepared_node_id",
+        )
+        if token_node_id not in (None, "", execution_ref.exec_node_id):
+            raise ValueError("Execution token is not owned by execution reference")
         token_reference_id = self._value_from_object(token, "reference_id", "execution_ref_id")
         if token_reference_id not in (None, "", execution_ref.reference_id):
             raise ValueError("Execution token belongs to another execution reference")
@@ -4603,8 +4907,11 @@ class GraphExecutionState(BaseModel):
                     raise ValueError("Close-stream effect requires a data output token")
                 if token_kind != "stream_end":
                     raise ValueError("Close-stream effect requires a stream_end token")
-            elif effect_kind == "emit" and self._value_from_object(token, "token_kind") == "stream_end":
-                raise ValueError("Emit effect cannot use a stream_end token")
+            elif effect_kind == "emit":
+                if token is None or token_port in (None, LOOP_LINKAGE_FIELD):
+                    raise ValueError("Emit effect requires a data output token")
+                if self._value_from_object(token, "token_kind") == "stream_end":
+                    raise ValueError("Emit effect cannot use a stream_end token")
 
             owner = self._value_from_object(
                 effect,
@@ -4791,6 +5098,7 @@ class GraphExecutionState(BaseModel):
         object.__setattr__(self, "_apply_transaction", transaction)
         try:
             finalized_outputs = self.complete(ref.exec_node_id, output_value)
+            self._record_effect_streams(ref, effect_values)
             ref.effect_count = effect_count if effect_count is not None else ref.effect_count
             self._tx_set_mapping(self.execution_refs, ref.exec_node_id, ref)
             for token_id, token in tokens.items():
@@ -5041,16 +5349,84 @@ class GraphExecutionState(BaseModel):
             if not isinstance(node, IfInvocation):
                 continue
 
+            activation_tokens = [
+                token
+                for token in self.execution_tokens.values()
+                if token.owner_node_id == exec_node_id and token.token_kind == "activation"
+            ]
+            if activation_tokens:
+                expected_ref = self._expected_execution_ref(exec_node_id)
+                selected_fields: set[str] = set()
+                for activation_token in activation_tokens:
+                    selected_field = activation_token.port
+                    if selected_field not in ("true_input", "false_input"):
+                        raise ValueError(f"Invalid activation token for If execution node {exec_node_id}")
+                    if activation_token.reference_id != expected_ref.reference_id:
+                        raise ValueError(f"Activation token for If execution node {exec_node_id} has a stale reference")
+                    if activation_token.owner_node_id != exec_node_id:
+                        raise ValueError(f"Activation token for If execution node {exec_node_id} has a stale owner")
+                    if activation_token.value != selected_field:
+                        raise ValueError(f"Activation token for If execution node {exec_node_id} has a stale value")
+                    self._validate_execution_token(activation_token, expected_ref)
+                    selected_fields.add(selected_field)
+                if len(selected_fields) != 1:
+                    raise ValueError(f"If execution node {exec_node_id} has conflicting activation tokens")
+                selected_field = next(iter(selected_fields))
+                self._resolve_activation_gate(exec_node_id, selected_field)
+                self._resolved_if_exec_branches[exec_node_id] = selected_field
+                continue
+
             if not self._apply_if_condition_inputs(exec_node_id, node):
                 continue
 
-            self._resolved_if_exec_branches[exec_node_id] = "true_input" if node.condition else "false_input"
+            selected_field = "true_input" if node.condition else "false_input"
+            self._resolve_activation_gate(exec_node_id, selected_field)
+            self._resolved_if_exec_branches[exec_node_id] = selected_field
 
     def _rehydrate_execution_refs(self) -> None:
         for exec_node_id in self.prepared_source_mapping:
             existing = self.execution_refs.get(exec_node_id)
             effect_count = existing.effect_count if existing is not None else None
             self.execution_refs[exec_node_id] = self._expected_execution_ref(exec_node_id, effect_count=effect_count)
+
+    def _rehydrate_generic_runtime_state(self) -> None:
+        """Rebuild private stream/continuation adapters from durable results."""
+
+        for source_node_id, source_node in self.graph.nodes.items():
+            if (
+                isinstance(source_node, IterateInvocation)
+                and source_node_id in self.executed
+                and not self.source_prepared_mapping.get(source_node_id)
+            ):
+                self._record_empty_iterate_stream(source_node_id)
+
+        iterate_results: list[tuple[str, IterateInvocationOutput]] = []
+        for exec_node_id, output in self.results.items():
+            if isinstance(output, IterateInvocationOutput):
+                iterate_results.append((exec_node_id, output))
+        iterate_results.sort(key=lambda item: (self._get_iteration_path(item[0]), item[1].index, item[0]))
+        for exec_node_id, output in iterate_results:
+            self._record_iterate_stream(exec_node_id, output)
+
+        for reference_id, effects in self.execution_effects.items():
+            execution_ref = next(
+                (ref for ref in self.execution_refs.values() if ref.reference_id == reference_id),
+                None,
+            )
+            if execution_ref is not None:
+                self._validate_effects(execution_ref, list(effects), None)
+                self._record_effect_streams(execution_ref, effects)
+
+        for exec_node_id, node in self.execution_graph.nodes.items():
+            if isinstance(node, ForInvocation) and node.index >= 0 and exec_node_id in self.results:
+                continuation = self._for_continuation(exec_node_id)
+                source_node_id = self.prepared_source_mapping.get(exec_node_id)
+                if source_node_id is not None and self._is_loop_context_finalized(
+                    source_node_id, self._get_for_parent_iteration_path(exec_node_id)
+                ):
+                    continuation.complete(self.results[exec_node_id].model_dump(mode="json"))
+
+        self._register_generic_child_dependency()
 
     def _rehydrate_ready_queues(self) -> None:
         if self.has_error():
@@ -5068,6 +5444,7 @@ class GraphExecutionState(BaseModel):
         self._reset_runtime_caches()
         self._rehydrate_prepared_exec_metadata()
         self._rehydrate_resolved_if_exec_branches()
+        self._rehydrate_generic_runtime_state()
         self._rehydrate_ready_queues()
 
     def model_post_init(self, __context: Any) -> None:
@@ -5262,6 +5639,7 @@ class GraphExecutionState(BaseModel):
         if len(set(child_item_ids)) != len(child_item_ids):
             raise ValueError("Workflow call child item ids must be unique.")
         self.waiting_workflow_call_execution.child_item_ids = list(child_item_ids)
+        self._register_generic_child_dependency()
 
     def record_waiting_workflow_call_child_completion(
         self, child_item_id: int, output_values: dict[str, Any]

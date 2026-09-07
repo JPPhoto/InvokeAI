@@ -984,7 +984,10 @@ class InvocationContext:
         self._services = services
         """An internal API providing access to all application services. You probably shouldn't use this. It may change without warning."""
         source_node_id = getattr(data.invocation, "id", None) or data.source_invocation_id or "context"
-        self.execution_effects = execution_effects or ExecutionEffectsRecorder(source_node_id=source_node_id)
+        self.execution_effects = execution_effects or ExecutionEffectsRecorder(
+            source_node_id=source_node_id,
+            frame_path=data.execution_frame,
+        )
         """Effects recorded during the current invocation run."""
         self.effects = self.execution_effects
         """Alias for :attr:`execution_effects`."""

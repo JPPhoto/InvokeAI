@@ -82,11 +82,18 @@ are persisted through `GraphExecutionState`. Runtime-only queues and metadata ar
 Finalization is keyed by the loop source and its parent iteration path so nested or repeated contexts cannot mix output
 collections or state.
 
-The current execution-effects migration seam is additive to this loop contract. The session runner applies each result
-through `GraphExecutionState.apply()` using a stable execution reference and records frame-aware output tokens and
-accepted effects. Only `emit` and `close_stream` effects are currently dispatchable; `For`, `ForReturn`, `Iterate`, and
-`Collect` still use the existing materializer and indegree scheduler. `loop_linkage` remains association metadata and
-never becomes a data token.
+The execution-engine seam is additive to this loop contract. The session runner applies each result through
+`GraphExecutionState.apply()` using a stable execution reference and records frame-aware output tokens and accepted
+effects. Legacy `For`/`ForReturn` continuation scheduling is mirrored by a typed, frame-scoped
+`ContinuationRecord`. `Iterate` records ordered item tokens in a closed `StreamBuffer`; an empty `Iterate` records an
+explicit empty close. `Collect` consumes that buffer when available and retains the materializer/indegree path as its
+compatibility adapter. `loop_linkage` remains association metadata and never becomes a data token.
+
+The engine still owns runtime node materialization and queue readiness for existing snapshots. This is intentional:
+the generic records preserve the tested loop semantics first, while the old execution graph remains the fallback for
+legacy snapshots and unsupported mixed loop shapes. No activation or stream ports are added to author-time graph JSON.
+This migration does not modify code under `invokeai/frontend/...`; the existing frontend/backend external interface
+remains frozen.
 
 The frontend and backend validate the same boundary rules. Saved workflows preserve node types, field handles, and the
 direct linkage edge. The current invocation templates provide output-scope metadata when a workflow is loaded. The

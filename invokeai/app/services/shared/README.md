@@ -7,9 +7,13 @@ High-level design for the graph module. Focuses on responsibilities, data flow, 
 Provide a typed, acyclic workflow model (**Graph**) plus a runtime scheduler (**GraphExecutionState**) that expands
 iterator patterns, tracks readiness via indegree (the number of incoming edges to a node in the directed graph), and
 executes nodes from class-grouped ready queues. In normal execution, runtime expansion happens in a separate execution graph
-instead of mutating the source graph. The runtime also exposes an additive execution-effects seam: invocations return
-their existing typed output plus recorded effects, while the current materializer and scheduler remain the execution
-authority.
+instead of mutating the source graph. The runtime also exposes an additive execution-engine seam: frame-scoped gates,
+ordered streams, continuations, and authorized child-dependency records are stored in
+`invokeai.app.services.shared.execution_engine`; legacy graph and queue behavior is retained behind adapters while
+those records become authoritative one behavior at a time.
+
+This refactoring is backend-only. No code under `invokeai/frontend/...` may be changed, and the existing frontend/backend
+external interface remains frozen; generated schemas may change only for additive optional runtime response metadata.
 
 ## 2) Major Data Types
 
@@ -34,6 +38,16 @@ authority.
 
   - **IterateInvocation**: input `collection`, outputs include `item` (and index/total).
   - **CollectInvocation**: many `item` inputs aggregated to one `collection` output.
+
+### Internal execution-engine records
+
+- `ExecutionFrame`, `ActivationGate`, `StreamBuffer`, and `ContinuationRecord` carry typed runtime identity and
+  lifecycle state without changing author-time graph models. Their private registries are rebuilt from persisted graph
+  results, tokens, and workflow-call state after rehydration.
+- `ChildExecutionCapability`, `ChildExecutionRecord`, and `ChildDependencyRecord` validate authorized parent/child
+  relationships, resource limits, ordered all-of aggregation, failure, cancellation, and idempotent completion.
+- `ExecutionEngineRuntime` owns these records for one graph state. It is private runtime machinery; it is not a new
+  frontend node, input handle, or public workflow contract.
 
 ## 3) Graph (author-time model)
 
@@ -157,11 +171,11 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
 existing invocation output contract remains unchanged. The session runner calls
 `invoke_internal_with_effects()` and passes its `InvocationRunResult` to `GraphExecutionState.apply()`.
 
-The current recorder accepts only `emit` and `close_stream`. `spawn`, `await_dependency`, and `fail`, along with
-mutation and child-execution effect models, are deliberately rejected until the corresponding dispatcher and queue
-semantics exist. `ExecutionInterface.authorize_workflow()` is only usable when the runner supplies an authorization
-capability. A cache hit never suppresses effects: effect-enabled invocations bypass the ordinary output cache for that
-dispatch.
+The recorder dispatches `emit` and `close_stream` by default. A runner may opt an invocation into lifecycle recording
+with an engine-issued `ChildExecutionCapability`; this records validated `spawn_execution`, `await`, and `fail` effects
+and returns a capability-bound child handle. Calls without that capability remain rejected. Mutation effects and queue
+row creation remain owned by graph/queue adapters, so an invocation cannot mutate either directly. A cache hit never
+suppresses effects: effect-enabled invocations bypass the ordinary output cache for that dispatch.
 
 `ExecutionFrame` identifies the owning state, loop iteration path, and workflow-call depth. `ExecutionReference`
 identifies one prepared execution node and its frame. `ExecutionToken` records an output port, value, frame, token
@@ -197,8 +211,10 @@ Workflow-call note:
   - child queue-row creation is cleaned up on boundary-setup failure and child fan-out is bounded by remaining queue
     capacity
   - child workflows that mix supported batch nodes with unrelated generator nodes are rejected for now
-- This is still an intermediate architecture step and should eventually be replaced by a more general parent/child
-  execution mechanism rather than workflow-call-specific queue lifecycle handling.
+- The generic `ChildDependencyRecord` adapter now validates the same waiting parent, ordered children, capability
+  identity, all-of aggregation, resource limits, and terminal transitions alongside this workflow-call lifecycle.
+  Existing queue fields, statuses, cancellation, retry, and event behavior remain authoritative; queue-row creation and
+  recovery are not silently delegated to an in-memory record.
 
 ### 4.3 Runtime helper classes
 
@@ -213,14 +229,17 @@ Workflow-call note:
 - `_ExecutionScheduler` Owns indegree transitions, class-grouped ready queues, and downstream release on completion.
 - `_ExecutionRuntime` Owns iteration-path lookup, collect input ordering, and input hydration for prepared exec nodes.
 - `_IfBranchScheduler` Applies lazy `If` semantics by deferring branch-local work until the condition is known, then
-  releasing the selected branch and skipping the unselected branch.
+  lowering the decision to a frame-scoped `ActivationGate` and persisted internal activation token, releasing the
+  selected branch, and skipping the unselected branch. Its topology analysis remains a compatibility adapter.
+- `ExecutionEngineRuntime` Owns the typed gate, stream, and continuation records used by compatibility adapters.
 
 `GraphExecutionState.model_post_init()` rehydrates private runtime helpers and caches after normal construction or a
-JSON/model round trip. Rehydration reconstructs prepared exec metadata, cached iteration paths, resolved `If` branch
-state when the condition is already available, and ready queues from `execution_graph`, `indegree`, `executed`, and
-`results`. Persisted execution references, tokens, and effects remain part of the serialized state; private helper
-objects do not. Queue snapshots carry an additive execution-state version marker and use the version-aware loader;
-legacy unmarked snapshots are treated as version 0, while unreadable snapshots are quarantined by the queue service.
+JSON/model round trip. Rehydration reconstructs prepared exec metadata, cached iteration paths, resolved `If` gate
+state from condition results or activation tokens, closed iteration streams from durable Iterate results or completed
+empty-source state, For continuation identity, and ready queues from `execution_graph`, `indegree`, `executed`, and
+`results`. Persisted execution references, tokens, and effects remain part of the serialized state; private helper objects
+do not. Queue snapshots carry an additive execution-state version marker and use the version-aware loader; legacy unmarked snapshots
+are treated as version 0, while unreadable snapshots are quarantined by the queue service.
 
 ### 4.4 Preparation (`_prepare()`)
 
@@ -341,17 +360,17 @@ In normal execution, all runtime expansion occurs in `execution_graph` with trac
   this file accepts them as `AnyInvocation`.
 - **Scheduling policy**: adjust `ready_order` to prioritize class queues. A batch-size or fairness cap is not currently
   implemented.
-- **Dynamic behaviors** (future): can be lowered to execution effects and frame/token primitives once their validation,
-  authorization, persistence, and queue semantics are implemented. Current `apply()` accepts only output, `emit`, and
-  `close_stream` behavior.
+- **Dynamic behaviors**: effect-enabled invocations may record frame-scoped stream, activation, and authorized child
+  lifecycle intent. `GraphExecutionState.apply()` remains the transactional graph boundary and rejects mutation or
+  queue effects unless a matching adapter owns their application.
 - **Workflow call boundaries**: `GraphExecutionState` can suspend a parent execution state on a workflow call, attach a
   child execution state, and later resume the parent without mutating the source graph.
 
 Current limitation:
 
-- Child workflow executions are now represented as first-class queue items. Parent resume/failure is intentionally
-  handled by a dedicated workflow-call queue lifecycle component for this PR because no other feature currently needs a
-  generalized dependent-queue scheduler.
+- Child workflow executions are represented as first-class queue items. Parent resume/failure remains handled by the
+  dedicated workflow-call queue lifecycle component; `ChildDependencyRecord` is the generic identity and aggregation
+  seam, not a replacement for durable queue operations.
 - Called workflows currently require exactly one valid `workflow_return` node to be callable at all.
 - A single `workflow_return_value.value` may connect directly to `workflow_return.values`; multiple named return members
   should be collected and then connected to `workflow_return.values`.
