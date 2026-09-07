@@ -21,13 +21,38 @@ def _frame_key(frame: Frame) -> tuple[tuple[str, str], ...]:
 
 
 @dataclass(frozen=True, slots=True)
+class ActivationDependency:
+    """Opaque requirement for one branch activation in one frame."""
+
+    owner_id: NodeId
+    branch: str
+    frame: Frame = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.owner_id, str) or not self.owner_id.strip():
+            raise ValueError("activation dependency owner must not be blank")
+        if not isinstance(self.branch, str) or not self.branch.strip():
+            raise ValueError("activation dependency branch must not be blank")
+        if not isinstance(self.frame, tuple):
+            raise TypeError("activation dependency frame must be a tuple")
+        for part in self.frame:
+            if isinstance(part, bool) or not isinstance(part, (int, str)):
+                raise ValueError("activation dependency frame values must be integers or strings")
+            if isinstance(part, int) and part < 0:
+                raise ValueError("activation dependency frame integers must be non-negative")
+            if isinstance(part, str) and not part.strip():
+                raise ValueError("activation dependency frame strings must not be blank")
+
+
+@dataclass(frozen=True, slots=True)
 class PlanNode:
-    """An opaque executable node and its direct prerequisites."""
+    """An opaque executable node, prerequisites, and frame-local requirements."""
 
     node_id: NodeId
     class_name: str
     frame: Frame
     dependencies: tuple[NodeId, ...]
+    activation_dependencies: tuple[ActivationDependency, ...]
     order: int
 
 
@@ -45,6 +70,7 @@ class ExecutionPlan:
         class_name: str,
         frame: Frame = (),
         dependencies: Iterable[NodeId] = (),
+        activation_dependencies: Iterable[ActivationDependency] = (),
     ) -> PlanNode:
         """Add one node, rejecting duplicate IDs and unknown prerequisites."""
 
@@ -60,7 +86,20 @@ class ExecutionPlan:
         missing = [dependency for dependency in dependency_ids if dependency not in self.nodes]
         if missing:
             raise KeyError(f"unknown dependency for {node_id}: {missing[0]}")
-        node = PlanNode(node_id, class_name, tuple(frame), dependency_ids, self._next_order)
+        activation_dependency_values = tuple(activation_dependencies)
+        for activation_dependency in activation_dependency_values:
+            if not isinstance(activation_dependency, ActivationDependency):
+                raise TypeError("activation dependencies must be ActivationDependency values")
+            if not activation_dependency.owner_id.strip() or not activation_dependency.branch.strip():
+                raise ValueError("activation dependency owner and branch must not be blank")
+        node = PlanNode(
+            node_id,
+            class_name,
+            tuple(frame),
+            dependency_ids,
+            activation_dependency_values,
+            self._next_order,
+        )
         self._next_order += 1
         self.nodes[node_id] = node
         self._dependents[node_id] = []
@@ -85,6 +124,14 @@ class ExecutionPlan:
                     "class_name": node.class_name,
                     "frame": list(node.frame),
                     "dependencies": list(node.dependencies),
+                    "activation_dependencies": [
+                        {
+                            "owner_id": dependency.owner_id,
+                            "branch": dependency.branch,
+                            "frame": list(dependency.frame),
+                        }
+                        for dependency in node.activation_dependencies
+                    ],
                     "order": node.order,
                 }
                 for node_id, node in self.nodes.items()
@@ -115,17 +162,37 @@ class ExecutionPlan:
                 raise ValueError("execution plan node order is invalid")
             frame = raw.get("frame", ())
             dependencies = raw.get("dependencies", ())
-            if not isinstance(frame, (list, tuple)) or not isinstance(dependencies, (list, tuple)):
-                raise ValueError("execution plan frame and dependencies must be sequences")
+            activation_dependencies = raw.get("activation_dependencies", ())
+            if (
+                not isinstance(frame, (list, tuple))
+                or not isinstance(dependencies, (list, tuple))
+                or not isinstance(activation_dependencies, (list, tuple))
+            ):
+                raise ValueError("execution plan frame, dependencies, and activation dependencies must be sequences")
             if not all(isinstance(dependency, str) for dependency in dependencies):
                 raise ValueError("execution plan dependencies must be node ids")
-            entries.append((order, raw))
+            parsed_activation_dependencies: list[ActivationDependency] = []
+            for activation_dependency in activation_dependencies:
+                if not isinstance(activation_dependency, Mapping):
+                    raise ValueError("execution plan activation dependency must be a mapping")
+                owner_id = activation_dependency.get("owner_id")
+                branch = activation_dependency.get("branch")
+                dependency_frame = activation_dependency.get("frame", ())
+                if not isinstance(owner_id, str) or not isinstance(branch, str):
+                    raise ValueError("execution plan activation dependency owner and branch must be strings")
+                if not isinstance(dependency_frame, (list, tuple)):
+                    raise ValueError("execution plan activation dependency frame must be a sequence")
+                parsed_activation_dependencies.append(
+                    ActivationDependency(owner_id=owner_id, branch=branch, frame=tuple(dependency_frame))
+                )
+            entries.append((order, {**raw, "_parsed_activation_dependencies": tuple(parsed_activation_dependencies)}))
         for _, raw in sorted(entries, key=lambda entry: entry[0]):
             plan.add_node(
                 raw["node_id"],
                 raw["class_name"],
                 tuple(raw.get("frame", ())),
                 tuple(raw.get("dependencies", ())),
+                activation_dependencies=raw.get("_parsed_activation_dependencies", ()),
             )
         next_order = snapshot.get("next_order", plan._next_order)
         if not isinstance(next_order, int) or next_order < plan._next_order:
@@ -252,7 +319,13 @@ class ExecutionScheduler:
         """Add a plan node without disturbing already-claimed work."""
 
         if node.node_id not in self.plan.nodes:
-            self.plan.add_node(node.node_id, node.class_name, node.frame, node.dependencies)
+            self.plan.add_node(
+                node.node_id,
+                node.class_name,
+                node.frame,
+                node.dependencies,
+                node.activation_dependencies,
+            )
         self.indegree[node.node_id] = sum(
             dependency not in self.executed and dependency not in self.discarded for dependency in node.dependencies
         )
@@ -384,4 +457,4 @@ class ExecutionScheduler:
                 self._arrival_order[node_id] = arrival
 
 
-__all__ = ["ExecutionPlan", "ExecutionScheduler", "PlanNode", "ReadyPredicate"]
+__all__ = ["ActivationDependency", "ExecutionPlan", "ExecutionScheduler", "PlanNode", "ReadyPredicate"]

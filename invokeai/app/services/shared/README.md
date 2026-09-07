@@ -8,8 +8,10 @@ Provide a typed, acyclic workflow model (**Graph**) plus a runtime scheduler (**
 iterator patterns, tracks readiness via indegree (the number of incoming edges to a node in the directed graph), and
 executes nodes from class-grouped ready queues. In normal execution, runtime expansion happens in a separate execution graph
 instead of mutating the source graph. Ordinary static DAGs and legacy-shaped `If` graphs use the opaque `ExecutionPlan`
-and deterministic `ExecutionScheduler` in `execution_engine/scheduler.py`; a private graph adapter supplies the `If`
-activation predicate and projects compatibility skips. Control-flow topology lowering remains behind the legacy graph adapter.
+and deterministic `ExecutionScheduler` in `execution_engine/scheduler.py`; a private graph adapter derives opaque,
+frame-local `If` activation dependencies, checks their private gate state plus persisted activation tokens, and projects
+compatibility skips.
+Control-flow topology lowering remains behind the legacy graph adapter.
 The runtime also exposes an additive execution-engine seam: frame-scoped gates, ordered streams, continuations, and
 authorized child-dependency records are stored in
 `invokeai.app.services.shared.execution_engine`; legacy graph and queue behavior is retained behind adapters while
@@ -49,10 +51,10 @@ external interface remains frozen; generated schemas may change only for additiv
   results, tokens, and workflow-call state after rehydration.
 - `ChildExecutionCapability`, `ChildExecutionRecord`, and `ChildDependencyRecord` validate authorized parent/child
   relationships, resource limits, ordered all-of aggregation, failure, cancellation, and idempotent completion.
-- `ExecutionPlan` stores opaque execution-node IDs, class names, prerequisite IDs, frame values, and stable insertion
-  order. `ExecutionScheduler` owns generic readiness, opaque readiness predicates, intentional skips, deterministic
-  ordering, completion, and durable plan rehydration. It does not import invocation classes and cannot alter author-time
-  graph or frontend contracts.
+- `ExecutionPlan` stores opaque execution-node IDs, class names, prerequisite IDs, frame values, activation-dependency
+  records, and stable insertion order. `ExecutionScheduler` owns generic readiness, opaque readiness predicates,
+  intentional skips, deterministic ordering, completion, and durable plan rehydration. It does not import invocation
+  classes and cannot alter author-time graph or frontend contracts.
 - `ExecutionEngineRuntime` owns these records for one graph state. It is private runtime machinery; it is not a new
   frontend node, input handle, or public workflow contract.
 
@@ -162,8 +164,10 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
 - `execution_effects: dict[str, list[Any]]` - JSON-safe effects accepted for each execution reference.
 - **Ready queues grouped by class** (private projection): `_ready_queues: dict[class_name, deque[str]]` and
   `_active_class: Optional[str]`. Ordinary static DAGs and legacy-shaped `If` graphs derive readiness from the generic
-  scheduler; loop and saved-workflow graphs retain the legacy scheduler. Optional `ready_order: list[str]` prioritizes
-  classes. Queues are rebuilt from persisted execution state when a session is deserialized.
+  scheduler; the `If` adapter stores frame-local activation dependencies whose private gate state plus persisted token
+  checks control generic branch readiness. Loop and saved-workflow graphs retain the legacy scheduler. Optional
+  `ready_order: list[str]` prioritizes classes. Queues are rebuilt from persisted execution state when a session is
+  deserialized.
 
 ### 4.2 Core methods
 
@@ -191,20 +195,24 @@ suppresses effects: effect-enabled invocations bypass the ordinary output cache 
 `IfInvocation` is the first control-flow invocation to declare an activation-effect contract. It emits one
 frame-scoped activation token for the selected `true_input` or `false_input` port; `GraphExecutionState` validates that
 port against the producing invocation's declared activation fields and persists it without creating a data stream.
-The generic scheduler receives an opaque readiness predicate for `If` branch-local nodes and an explicit skip projection
-for the unselected branch. The private `_IfBranchScheduler` still computes legacy branch topology, resolves the gate,
-prunes the unselected input edge, and records compatibility skip metadata. `apply()` validates and persists the
-invocation-emitted effect afterward, replacing the compatibility token by stable identity. Activation effects are
-excluded from data-stream handling. This is a routing seam, not yet the token-authoritative downstream topology
-migration: no author-time activation ports or literal successor IDs are introduced, and other control-flow
-invocations remain on their legacy paths until differential coverage proves each replacement.
+The generic plan stores opaque, frame-local activation-dependency records for `If` branch-local nodes. Its readiness
+callback accepts a node only when the required private `ActivationGate` runtime state is resolved and a matching
+persisted activation token is present for its frame; the activation token is therefore authoritative for generic
+successor readiness. The private `_IfBranchScheduler` still computes legacy branch topology, derives those records,
+resolves the gate, prunes the unselected input edge, and
+records compatibility skip metadata. `apply()` validates and persists the invocation-emitted effect afterward,
+replacing the compatibility token by stable identity. Activation effects are excluded from data-stream handling. This
+is not yet the token-authoritative downstream topology migration: compatibility topology still identifies branch-local
+nodes and skips the unselected branch, no author-time activation ports or literal successor IDs are introduced, and
+other control-flow invocations remain on their legacy paths until differential coverage proves each replacement.
 
 `ExecutionFrame` identifies the owning state, loop iteration path, and workflow-call depth. `ExecutionReference`
 identifies one prepared execution node and its frame. `ExecutionToken` records an output port, value, frame, token
 kind, and optional sequence. `loop_linkage` remains association metadata and never becomes a data token. This ledger is
 currently additive. Ordinary static-DAG and legacy-shaped `If` readiness comes from the generic scheduler through a
-compatibility projection; materialization and type-specific control paths remain authoritative for branch topology,
-loops, and workflow-call graphs. A future migration may make tokens authoritative only after compatibility is proven.
+compatibility projection; the activation token is authoritative for generic `If` branch readiness, while materialization
+and type-specific control paths remain authoritative for branch topology, loops, and workflow-call graphs. A future
+migration may make token-built topology and the remaining control-flow paths authoritative only after compatibility is proven.
 
 The generic scheduler is an in-memory graph-state component only. It does not
 create, update, retry, cancel, delete, or recover `SessionQueueItem` rows and
@@ -218,15 +226,16 @@ and terminal effects. The generic scheduler selects nodes from required
 effects for the current frame; it never receives a literal successor-node ID.
 Current implementation is narrower: `IfInvocation` is the only control-flow
 invocation using the effect recorder, while `Iterate`, `Collect`, `For`,
-`ForReturn`, and workflow-call invocations remain on compatibility paths. The
-generic scheduler currently consumes opaque plan dependencies, not token-built
-successor topology. The current `If` adapter still owns branch topology and
-compatibility skips, while loop and workflow-call adapters still own
-materialization and durable queue lifecycle. Those owners may be removed only
-after differential tests cover fresh, partially completed, rehydrated, failed,
-canceled, and retried sessions. The frontend boundary remains frozen: this
-refactoring does not modify `invokeai/frontend/...` or existing web/webv2
-interactions.
+`ForReturn`, and workflow-call invocations remain on compatibility paths. For
+`If`, generic readiness consumes opaque plan dependencies and requires both
+matching private `ActivationGate` runtime state and a persisted activation token;
+compatibility topology still derives those dependency records and handles unselected-branch skips.
+This is not token-built successor topology. Loop and workflow-call adapters
+still own materialization and durable queue lifecycle. Those owners may be
+removed only after differential tests cover fresh, partially completed,
+rehydrated, failed, canceled, and retried sessions. The frontend boundary
+remains frozen: this refactoring does not modify `invokeai/frontend/...` or
+existing web/webv2 interactions.
 
 The test-only differential harness at
 `tests/app/services/shared/test_execution_engine_differential.py` compares
@@ -287,24 +296,28 @@ Workflow-call note:
   be selected as live inputs.
 - `_GenericGraphSchedulerAdapter` Projects the generic `ExecutionPlan`/`ExecutionScheduler` into the existing state
   fields for ordinary static DAGs and legacy-shaped `If` graphs; the generic scheduler owns opaque readiness,
-  intentional skips, indegree transitions, deterministic ordering, claimed work, and completion. The adapter supplies
-  the private activation predicate and maps legacy branch skips into the generic projection.
+  intentional skips, indegree transitions, deterministic ordering, claimed work, and completion. The adapter records
+  frame-local activation dependencies, checks private gate state plus persisted activation tokens, and maps legacy
+  branch skips into the generic projection.
 - `_ExecutionScheduler` Owns materialized-graph indegree transitions, class-grouped ready queues, downstream release,
   and control-flow continuation scheduling for graphs that still require lowering.
 - `_ExecutionRuntime` Owns iteration-path lookup, collect input ordering, and input hydration for prepared exec nodes.
 - `_IfBranchScheduler` Computes legacy `If` topology, defers branch-local work until the condition is known, then
-  lowers the decision to a frame-scoped `ActivationGate` and persisted internal activation token, releases the
+  lowers the decision to private frame-scoped `ActivationGate` runtime state and a persisted internal activation token,
+  releases the
   selected branch, and maps the unselected branch to generic scheduler skips. Its topology analysis remains a
   compatibility adapter; the opaque scheduler has no `If`-specific branch.
 - `ExecutionEngineRuntime` Owns the typed gate, stream, and continuation records used by compatibility adapters.
 
 `GraphExecutionState.model_post_init()` rehydrates private runtime helpers and caches after normal construction or a
-JSON/model round trip. Rehydration reconstructs prepared exec metadata, cached iteration paths, resolved `If` gate
-state from condition results or activation tokens, closed iteration streams from durable Iterate results or completed
-empty-source state, For continuation identity, and ready queues from `execution_graph`, `indegree`, `executed`, and
-`results`. Persisted execution references, tokens, and effects remain part of the serialized state; private helper objects
-do not. Queue snapshots carry an additive execution-state version marker and use the version-aware loader; legacy unmarked snapshots
-are treated as version 0, while unreadable snapshots are quarantined by the queue service.
+JSON/model round trip. Rehydration reconstructs prepared exec metadata, cached iteration paths, private resolved `If`
+gate state from condition results or persisted activation tokens, closed iteration streams from durable Iterate results
+or completed empty-source state, For continuation identity, and ready queues from `execution_graph`, `indegree`,
+`executed`, and `results`. Activation tokens persist; private `ActivationGate` runtime state does not and is
+reconstructed from condition results or persisted activation tokens. Persisted execution references, tokens, and effects
+remain part of serialized state; private helper objects do not. Queue snapshots carry an additive execution-state version
+marker and use version-aware loader; legacy unmarked snapshots are treated as version 0, while unreadable snapshots are
+quarantined by queue service.
 
 ### 4.4 Preparation (`_prepare()`)
 
@@ -339,11 +352,14 @@ are treated as version 0, while unreadable snapshots are quarantined by the queu
 
 ### 4.5 Readiness and class ordering
 
-- `_enqueue_if_ready(nid)` applies the same readiness predicate to both adapters. The generic scheduler additionally
-  tracks claimed (returned-but-not-completed) work so re-registration cannot duplicate a node.
+- `_enqueue_if_ready(nid)` applies generic readiness: `indegree == 0`, not executed or claimed, and, for an `If`
+  branch-local node, both matching private `ActivationGate` runtime state and a persisted activation token are present
+  for its frame. The compatibility adapter uses the same result while deriving dependency records and handling
+  compatibility skips.
 - `_get_next_node()` uses the generic scheduler for ordinary static DAGs and legacy-shaped `If` graphs, projecting its
-  deterministic class/frame order into the compatibility queues. Loop and saved-workflow control-flow graphs use
-  `_active_class` and the legacy class queues. No batch-size or fairness cap is currently implemented.
+  deterministic class/frame order into the compatibility queues. The compatibility `If` topology remains responsible
+  for deriving branch-local records and mapping unselected branches to skips. Loop and saved-workflow control-flow
+  graphs use `_active_class` and the legacy class queues. No batch-size or fairness cap is currently implemented.
 
 #### 4.5.1 Indegree (what it is and how it's used)
 
@@ -410,7 +426,9 @@ In normal execution, all runtime expansion occurs in `execution_graph` with trac
 
 - Source **Graph** remains a DAG and type-consistent.
 - `execution_graph` remains a DAG.
-- Nodes are enqueued only when `indegree == 0` and they are not deferred by an unresolved `If`.
+- Nodes are enqueued only when `indegree == 0` and they are not deferred by an unresolved `If`; generic `If`
+  branch-local readiness additionally requires matching private `ActivationGate` runtime state and a persisted
+  activation token.
 - `results` and `errors` are keyed by **exec node id**.
 - Applied execution references are unique to one prepared node and frame; their output/effect records are JSON-safe.
 - Output and `emit` effects produce frame-aware tokens. `close_stream` produces a `stream_end` token. Association fields

@@ -8,6 +8,7 @@ from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.invocations.math import AddInvocation, MultiplyInvocation
 from invokeai.app.invocations.primitives import BooleanInvocation
 from invokeai.app.services.shared.execution_engine.scheduler import (
+    ActivationDependency,
     ExecutionPlan,
     ExecutionScheduler,
 )
@@ -72,6 +73,167 @@ def test_generic_scheduler_discards_node_with_unmet_prerequisites() -> None:
     assert scheduler.executed == set()
     assert scheduler.discarded == {"discarded"}
     assert scheduler.pop_next() == "dependent"
+
+
+def test_generic_plan_round_trips_frame_local_activation_dependencies() -> None:
+    plan = ExecutionPlan()
+    plan.add_node("if", "If")
+    dependency = ActivationDependency(owner_id="if", branch="true_input", frame=(0, "inner"))
+    plan.add_node("branch", "Work", dependencies=("if",), activation_dependencies=(dependency,))
+
+    restored = ExecutionPlan.from_snapshot(plan.snapshot())
+
+    assert restored.nodes["branch"].activation_dependencies == (dependency,)
+
+
+def test_generic_plan_rejects_malformed_activation_dependency_snapshot() -> None:
+    plan = ExecutionPlan()
+    plan.add_node("if", "If")
+    plan.add_node(
+        "branch",
+        "Work",
+        dependencies=("if",),
+        activation_dependencies=(ActivationDependency(owner_id="if", branch="true_input"),),
+    )
+    snapshot = plan.snapshot()
+    snapshot["nodes"]["branch"]["activation_dependencies"][0]["frame"] = "not-a-frame"
+
+    with pytest.raises(ValueError, match="activation dependency frame must be a sequence"):
+        ExecutionPlan.from_snapshot(snapshot)
+
+
+def test_graph_state_generic_if_readiness_uses_activation_dependency_records(monkeypatch: pytest.MonkeyPatch) -> None:
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=True))
+    graph.add_node(AddInvocation(id="true_value", a=2, b=2))
+    graph.add_node(AddInvocation(id="false_value", a=3, b=3))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="condition", field="value"),
+            destination=EdgeConnection(node_id="if", field="condition"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="true_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="true_input"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="false_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="false_input"),
+        )
+    )
+
+    state = GraphExecutionState(graph=graph)
+    condition = state.next()
+    assert condition is not None
+    state.complete(condition.id, condition.invoke(Mock()))
+
+    true_exec_id = next(
+        execution_id for execution_id, source_id in state.prepared_source_mapping.items() if source_id == "true_value"
+    )
+    plan_node = state._generic_graph_scheduler._scheduler.plan.nodes[true_exec_id]
+    assert plan_node.activation_dependencies == (ActivationDependency(owner_id="if", branch="true_input", frame=()),)
+    false_exec_id = next(
+        execution_id for execution_id, source_id in state.prepared_source_mapping.items() if source_id == "false_value"
+    )
+    assert state._generic_graph_scheduler._scheduler.plan.nodes[false_exec_id].activation_dependencies == (
+        ActivationDependency(owner_id="if", branch="false_input", frame=()),
+    )
+
+    if_exec_id = next(
+        execution_id for execution_id, source_id in state.prepared_source_mapping.items() if source_id == "if"
+    )
+    assert state._activation_gate(if_exec_id).selected_branch == "true_input"
+    assert any(
+        token.owner_node_id == if_exec_id
+        and token.port == "true_input"
+        and token.value == "true_input"
+        and token.token_kind == "activation"
+        for token in state.execution_tokens.values()
+    )
+    activation_dependency = plan_node.activation_dependencies[0]
+    assert state._is_activation_dependency_satisfied(activation_dependency)
+    activation_token_id, activation_token = next(
+        (token_id, token)
+        for token_id, token in state.execution_tokens.items()
+        if token.owner_node_id == if_exec_id and token.token_kind == "activation"
+    )
+    state.execution_tokens.pop(activation_token_id)
+    assert not state._is_activation_dependency_satisfied(activation_dependency)
+    assert not state._is_activation_dependency_satisfied(
+        ActivationDependency(owner_id="if", branch="true_input", frame=(1,))
+    )
+
+    def fail_if_topology_is_consulted(*_: object, **__: object) -> bool:
+        raise AssertionError("generic readiness consulted the If topology helper")
+
+    monkeypatch.setattr(GraphExecutionState, "_is_deferred_by_unresolved_if", fail_if_topology_is_consulted)
+    state._generic_graph_scheduler._scheduler.rebuild_ready()
+    assert state.next() is None
+
+    stale_token = activation_token.model_copy(update={"reference_id": "stale-reference"})
+    state.execution_tokens[activation_token_id] = stale_token
+    assert not state._is_activation_dependency_satisfied(activation_dependency)
+    state.execution_tokens[activation_token_id] = activation_token
+    stale_token_id = activation_token.model_copy(update={"token_id": "stale-token-id"})
+    state.execution_tokens[activation_token_id] = stale_token_id
+    assert not state._is_activation_dependency_satisfied(activation_dependency)
+    state.execution_tokens[activation_token_id] = activation_token
+    state._generic_graph_scheduler._scheduler.rebuild_ready()
+    next_node = state.next()
+    assert next_node is not None
+    assert state.prepared_source_mapping[next_node.id] == "true_value"
+
+
+def test_graph_state_rehydrates_legacy_if_without_activation_token() -> None:
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=True))
+    graph.add_node(AddInvocation(id="true_value", a=2, b=2))
+    graph.add_node(AddInvocation(id="false_value", a=3, b=3))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="condition", field="value"),
+            destination=EdgeConnection(node_id="if", field="condition"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="true_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="true_input"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="false_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="false_input"),
+        )
+    )
+
+    state = GraphExecutionState(graph=graph)
+    condition = state.next()
+    assert condition is not None
+    state.complete(condition.id, condition.invoke(Mock()))
+    snapshot = state.model_dump(mode="python")
+    snapshot["execution_tokens"] = {}
+
+    restored = GraphExecutionState.model_validate(snapshot, strict=False)
+
+    restored_if_id = next(
+        execution_id for execution_id, source_id in restored.prepared_source_mapping.items() if source_id == "if"
+    )
+    assert restored._activation_gate(restored_if_id).selected_branch == "true_input"
+    assert any(
+        token.owner_node_id == restored_if_id and token.token_kind == "activation" and token.port == "true_input"
+        for token in restored.execution_tokens.values()
+    )
+    next_node = restored.next()
+    assert next_node is not None
+    assert restored.prepared_source_mapping[next_node.id] == "true_value"
 
 
 def test_generic_scheduler_discarded_claim_is_not_requeued() -> None:
