@@ -185,6 +185,15 @@ and returns a capability-bound child handle. Calls without that capability remai
 row creation remain owned by graph/queue adapters, so an invocation cannot mutate either directly. A cache hit never
 suppresses effects: effect-enabled invocations bypass the ordinary output cache for that dispatch.
 
+`IfInvocation` is the first control-flow invocation to declare an activation-effect contract. It emits one
+frame-scoped activation token for the selected `true_input` or `false_input` port; `GraphExecutionState` validates that
+port against the producing invocation's declared activation fields and persists it without creating a data stream.
+The legacy `_IfBranchScheduler` still resolves readiness and writes a compatibility token before invocation; `apply()`
+validates and persists the invocation-emitted effect afterward, replacing that token by stable identity. Activation
+effects are excluded from data-stream handling. This is an additive effect declaration, not yet the generic
+successor-routing migration. Other control-flow invocations remain on their legacy paths until differential coverage
+proves each replacement.
+
 `ExecutionFrame` identifies the owning state, loop iteration path, and workflow-call depth. `ExecutionReference`
 identifies one prepared execution node and its frame. `ExecutionToken` records an output port, value, frame, token
 kind, and optional sequence. `loop_linkage` remains association metadata and never becomes a data token. This ledger is

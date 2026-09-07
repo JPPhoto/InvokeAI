@@ -4637,6 +4637,8 @@ class GraphExecutionState(BaseModel):
             port = self._value_from_object(token, "field", "port", "output", "output_name")
             if not isinstance(port, str):
                 continue
+            if self._value_from_object(token, "token_kind") == "activation":
+                continue
             stream_id = f"{self.id}:effect:{execution_ref.reference_id}:{port}"
             runtime = self._generic_runtime()
             stream = runtime.streams.get(stream_id)
@@ -5125,7 +5127,31 @@ class GraphExecutionState(BaseModel):
                     raise ValueError("Execution effect output port must be a string")
                 if source_port in _RESERVED_EFFECT_PORTS:
                     raise ValueError(f"Execution effect references reserved output port '{source_port}'")
-                if source_port not in output_fields:
+                is_activation = effect_kind == "emit" and self._value_from_object(token, "token_kind") == "activation"
+                if is_activation:
+                    activation_fields = getattr(type(node), "execution_activation_fields", frozenset())
+                    if source_port not in activation_fields:
+                        raise ValueError(f"Execution effect references unknown activation port '{source_port}'")
+                    activation_value = self._value_from_object(effect, "value")
+                    if activation_value is None:
+                        activation_value = self._value_from_object(token, "value")
+                    if activation_value != source_port:
+                        raise ValueError(
+                            f"Execution effect activation value '{activation_value}' does not match port '{source_port}'"
+                        )
+                    if isinstance(node, IfInvocation):
+                        resolved_branch = self._resolved_if_exec_branches.get(execution_ref.exec_node_id)
+                        if resolved_branch is None:
+                            raise ValueError(
+                                f"Execution effect activation for If execution node {execution_ref.exec_node_id} "
+                                "has no resolved branch"
+                            )
+                        if source_port != resolved_branch:
+                            raise ValueError(
+                                f"Execution effect activation port '{source_port}' does not match resolved If branch "
+                                f"'{resolved_branch}'"
+                            )
+                elif source_port not in output_fields:
                     raise ValueError(f"Execution effect references unknown output port '{source_port}'")
                 if is_loop_linkage:
                     if source_port != LOOP_LINKAGE_FIELD or destination_port != LOOP_LINKAGE_FIELD:
@@ -5212,6 +5238,10 @@ class GraphExecutionState(BaseModel):
                 token_id_base = (
                     f"{execution_ref.reference_id}:{port}:stream_end:{sequence if sequence is not None else 'effect'}"
                 )
+            elif token_kind == "activation":
+                # Compatibility If scheduling may already have lowered the same decision. Reuse its durable identity
+                # so the invocation-declared effect replaces, rather than duplicates, the activation token.
+                token_id_base = f"{execution_ref.reference_id}:activation:{port}"
             else:
                 token_id_base = f"{execution_ref.reference_id}:{port}:{sequence if sequence is not None else 'effect'}"
             token_id = token_id_base

@@ -11,6 +11,7 @@ from invokeai.app.invocations.baseinvocation import (
     invocation_output,
 )
 from invokeai.app.invocations.fields import InputField, OutputField
+from invokeai.app.invocations.logic import IfInvocation, IfInvocationOutput
 from invokeai.app.services.shared.execution_effects import (
     AddEdgeEffect,
     AwaitEffect,
@@ -28,8 +29,8 @@ from invokeai.app.services.shared.execution_effects import (
     UnsupportedExecutionEffectError,
 )
 from invokeai.app.services.shared.execution_engine.child import ChildExecutionCapability
-from invokeai.app.services.shared.execution_state_migration import dump_execution_state
-from invokeai.app.services.shared.graph import Graph, GraphExecutionState
+from invokeai.app.services.shared.execution_state_migration import dump_execution_state, load_execution_state
+from invokeai.app.services.shared.graph import Edge, EdgeConnection, Graph, GraphExecutionState
 from invokeai.app.services.shared.invocation_context import (
     InvocationContext,
     InvocationContextData,
@@ -109,6 +110,184 @@ def test_context_default_recorder_preserves_execution_frame() -> None:
 
     assert context.execution_effects.source_node_id == "node"
     assert context.execution_effects.frame_path == (2, 1)
+
+
+@pytest.mark.parametrize(
+    ("condition", "selected_field"),
+    [(True, "true_input"), (False, "false_input")],
+)
+def test_if_invocation_declares_selected_branch_activation_effect(condition: bool, selected_field: str) -> None:
+    context = _context()
+    context.execution_effects = ExecutionEffectsRecorder(source_node_id="if")
+    context.execution = ExecutionInterface(context.execution_effects)
+    invocation = IfInvocation(id="if", condition=condition, true_input="true", false_input="false")
+
+    result = invocation.invoke_internal_with_effects(context, _services())
+
+    assert result.output.value == ("true" if condition else "false")
+    assert len(result.effects) == 1
+    effect = result.effects[0]
+    assert isinstance(effect, EmitEffect)
+    assert effect.token.node_id == "if"
+    assert effect.token.field == selected_field
+    assert effect.token.value == selected_field
+    assert effect.token.token_kind == "activation"
+
+
+@pytest.mark.parametrize("condition", [True, False])
+def test_graph_state_applies_if_activation_and_releases_selected_branch(condition: bool) -> None:
+    graph = Graph()
+    graph.add_node(IfInvocation(id="if", condition=condition))
+    graph.add_node(ExecutionEffectsTestInvocation(id="true_branch", value=1))
+    graph.add_node(ExecutionEffectsTestInvocation(id="false_branch", value=2))
+    graph.add_node(ExecutionEffectsTestInvocation(id="successor"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="true_branch", field="value"),
+            destination=EdgeConnection(node_id="if", field="true_input"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="false_branch", field="value"),
+            destination=EdgeConnection(node_id="if", field="false_input"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="if", field="value"),
+            destination=EdgeConnection(node_id="successor", field="value"),
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+    executed_source_ids: list[str] = []
+    while True:
+        invocation = state.next()
+        if invocation is None:
+            break
+        executed_source_ids.append(state.prepared_source_mapping[invocation.id])
+        execution_ref = state.get_execution_ref(invocation.id)
+        if isinstance(invocation, IfInvocation):
+            context = _context()
+            context.execution_effects = ExecutionEffectsRecorder(
+                source_node_id=invocation.id,
+                frame_path=execution_ref.frame.iteration_path,
+            )
+            context.execution = ExecutionInterface(context.execution_effects)
+            run_result = invocation.invoke_internal_with_effects(context, _services())
+            execution_ref = state.get_execution_ref(invocation.id, effect_count=len(run_result.effects))
+            state.apply(execution_ref, run_result)
+        else:
+            state.complete(invocation.id, invocation.invoke(context=MagicMock()))
+
+    selected_branch = "true_branch" if condition else "false_branch"
+    unselected_branch = "false_branch" if condition else "true_branch"
+    assert selected_branch in executed_source_ids
+    assert unselected_branch not in executed_source_ids
+    assert "successor" in executed_source_ids
+    activation_tokens = [token for token in state.execution_tokens.values() if token.token_kind == "activation"]
+    assert len(activation_tokens) == 1
+    assert activation_tokens[0].port == ("true_input" if condition else "false_input")
+    if_exec_id = next(iter(state.source_prepared_mapping["if"]))
+    if_execution_ref = state.get_execution_ref(if_exec_id)
+    persisted_effects = state.execution_effects[if_execution_ref.reference_id]
+    assert len(persisted_effects) == 1
+    assert isinstance(persisted_effects[0], EmitEffect)
+    assert persisted_effects[0].token.token_kind == "activation"
+    snapshot = dump_execution_state(state)
+    restored = load_execution_state(snapshot)
+    assert (
+        dump_execution_state(restored)["execution_effects"][if_execution_ref.reference_id]
+        == snapshot["execution_effects"][if_execution_ref.reference_id]
+    )
+    assert not any(stream.owner_id == if_exec_id for stream in state._generic_runtime().streams.values())
+
+
+def test_graph_state_rejects_unknown_if_activation_port() -> None:
+    graph = Graph()
+    graph.add_node(IfInvocation(id="if", condition=True, true_input="true", false_input="false"))
+    state = GraphExecutionState(graph=graph)
+    invocation = state.next()
+    assert invocation is not None
+    execution_ref = state.get_execution_ref(invocation.id)
+    tokens_before = state.execution_tokens.copy()
+    invalid_effect = EmitEffect(
+        token=ExecutionToken(
+            node_id=invocation.id,
+            field="bogus",
+            value="bogus",
+            token_kind="activation",
+        ),
+        value="bogus",
+    )
+
+    with pytest.raises(ValueError, match="unknown activation port"):
+        state.apply(
+            execution_ref,
+            IfInvocationOutput(value="true"),
+            effects=[invalid_effect],
+        )
+
+    assert state.execution_tokens == tokens_before
+    assert not state.execution_effects
+
+
+def test_graph_state_rejects_unselected_if_activation_port() -> None:
+    graph = Graph()
+    graph.add_node(IfInvocation(id="if", condition=True, true_input="true", false_input="false"))
+    state = GraphExecutionState(graph=graph)
+    invocation = state.next()
+    assert invocation is not None
+    execution_ref = state.get_execution_ref(invocation.id)
+    tokens_before = state.execution_tokens.copy()
+    invalid_effect = EmitEffect(
+        token=ExecutionToken(
+            node_id=invocation.id,
+            field="false_input",
+            value="false_input",
+            token_kind="activation",
+        ),
+        value="false_input",
+    )
+
+    with pytest.raises(ValueError, match="resolved If branch"):
+        state.apply(
+            execution_ref,
+            IfInvocationOutput(value="true"),
+            effects=[invalid_effect],
+        )
+
+    assert state.execution_tokens == tokens_before
+    assert not state.execution_effects
+
+
+def test_graph_state_rejects_if_activation_value_mismatch() -> None:
+    graph = Graph()
+    graph.add_node(IfInvocation(id="if", condition=True, true_input="true", false_input="false"))
+    state = GraphExecutionState(graph=graph)
+    invocation = state.next()
+    assert invocation is not None
+    execution_ref = state.get_execution_ref(invocation.id)
+    tokens_before = state.execution_tokens.copy()
+    invalid_effect = EmitEffect(
+        token=ExecutionToken(
+            node_id=invocation.id,
+            field="true_input",
+            value="false_input",
+            token_kind="activation",
+        ),
+        value="false_input",
+    )
+
+    with pytest.raises(ValueError, match="activation value"):
+        state.apply(
+            execution_ref,
+            IfInvocationOutput(value="true"),
+            effects=[invalid_effect],
+        )
+
+    assert state.execution_tokens == tokens_before
+    assert not state.execution_effects
 
 
 def test_execution_token_and_ref_are_frame_aware() -> None:

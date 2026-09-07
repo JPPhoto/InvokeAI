@@ -331,6 +331,10 @@ class BaseInvocation(ABC, BaseModel):
     bottleneck: ClassVar[Bottleneck]
 
     execution_effects_enabled: ClassVar[bool] = False
+    """Whether this invocation may declare and emit execution effects."""
+
+    execution_activation_fields: ClassVar[frozenset[str]] = frozenset()
+    """Activation ports this invocation may emit as execution effects."""
 
     idle_gpu_offloadable: ClassVar[bool] = False
     """Whether this node's entire execution may be temporarily re-pinned to an idle GPU when
