@@ -36,10 +36,11 @@ import {
   Trash2Icon,
   XIcon,
 } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useCallback, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { CanvasFloatingBarDivider } from './CanvasFloatingBar';
+import { StagingItemContextMenu, type StagingItemContextMenuTarget } from './StagingItemContextMenu';
 
 type AutoSwitchMode = CanvasStagingAreaContractV2['autoSwitchMode'];
 
@@ -107,6 +108,14 @@ export const StagingBar = ({
 }: StagingBarProps) => {
   const { t } = useTranslation();
   const [isSaving, setIsSaving] = useState(false);
+  const [contextMenuTarget, setContextMenuTarget] = useState<StagingItemContextMenuTarget | null>(null);
+  const closeContextMenu = useCallback(() => setContextMenuTarget(null), []);
+  // The menu's candidate actions act on the selection, so it only stays open
+  // while its slot is the selected one: an auto-switch to a newer result
+  // closes it rather than letting Discard hit the wrong candidate.
+  if (contextMenuTarget && selectedSlot?.id !== contextMenuTarget.slot.id) {
+    setContextMenuTarget(null);
+  }
   const hasSlots = slots.length > 0;
   const cancelableQueueItemId = getCancelableCanvasStagingQueueItemId(selectedSlot);
 
@@ -131,6 +140,16 @@ export const StagingBar = ({
 
   return (
     <Stack align="center" gap="2" w="full">
+      {contextMenuTarget ? (
+        <StagingItemContextMenu
+          canAccept={canAccept}
+          target={contextMenuTarget}
+          onAccept={onAccept}
+          onClose={closeContextMenu}
+          onDiscard={onDiscardSelected}
+          onSaveToGallery={() => void handleSaveToGallery()}
+        />
+      ) : null}
       {hasSlots ? (
         // The strip spans the whole canvas widget and scrolls within it: the
         // overlay's staging slot stretches, so this width is definite and a long
@@ -162,6 +181,22 @@ export const StagingBar = ({
                     index={index}
                     isSelected={index === selectedImageIndex}
                     slot={slot}
+                    onContextMenu={(event) => {
+                      if (slot.kind !== 'candidate') {
+                        return;
+                      }
+                      // The menu acts on the selected candidate, so a right-click selects first.
+                      // The keyboard's context-menu key reports no pointer; anchor to the thumbnail.
+                      event.preventDefault();
+                      onSelectImage(index);
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      const fromKeyboard = event.clientX === 0 && event.clientY === 0;
+                      setContextMenuTarget({
+                        slot,
+                        x: fromKeyboard ? rect.left + rect.width / 2 : event.clientX,
+                        y: fromKeyboard ? rect.top : event.clientY,
+                      });
+                    }}
                     onPreloadCandidate={onPreloadCandidate}
                     onSelect={() => onSelectImage(index)}
                   />
@@ -371,6 +406,7 @@ const StagingThumbnail = ({
   index,
   isSelected,
   slot,
+  onContextMenu,
   onPreloadCandidate,
   onSelect,
 }: {
@@ -378,6 +414,7 @@ const StagingThumbnail = ({
   index: number;
   isSelected: boolean;
   slot: CanvasStagingSlot;
+  onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
   onPreloadCandidate: (imageName: string) => void;
   onSelect: () => void;
 }) => {
@@ -418,6 +455,7 @@ const StagingThumbnail = ({
       shadow={isSelected ? '0 0 0 1px {colors.accent.solid}' : 'md'}
       style={{ aspectRatio: '1 / 1' }}
       onClick={onSelect}
+      onContextMenu={onContextMenu}
     >
       {slot.kind === 'candidate' ? (
         <img

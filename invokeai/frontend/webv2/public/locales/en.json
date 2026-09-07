@@ -2623,6 +2623,7 @@
         "autoSwitchProgress": "In progress",
         "generating": "Generating…",
         "moreAcceptOptions": "More accept options",
+        "recall": "Recall settings",
         "saveAsDisabledLayer": "Save & Continue",
         "saveError": "Couldn't save to gallery",
         "saveToGallery": "Save to gallery",
