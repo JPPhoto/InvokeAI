@@ -131,6 +131,31 @@ describe('loadCanvasState', () => {
     expect(kinds).toEqual(['triangle', 'star']);
   });
 
+  it('round-trips a placed gradient without rounding its anchor, and refuses a zero span', () => {
+    const gradient = (span: number) => ({
+      ...createEmptyPaintLayer('Gradient', 'gradient'),
+      source: {
+        angle: 30,
+        center: { x: 12.5, y: 7 },
+        height: 64,
+        kind: 'radial',
+        span,
+        stops: [
+          { color: '#000000ff', offset: 0 },
+          { color: '#00000000', offset: 1 },
+        ],
+        type: 'gradient',
+        width: 64,
+      },
+    });
+    const loaded = load(withNodes([gradient(40)])).document.stacks.raster[0];
+    expect(loaded?.type === 'raster' ? loaded.source : null).toMatchObject({ center: { x: 12.5, y: 7 }, span: 40 });
+    expect(refusal(withNodes([gradient(0)]))).toMatchObject({
+      diagnostics: [{ message: expect.stringContaining('span'), path: 'document.stacks.raster[0]' }],
+      status: 'invalid',
+    });
+  });
+
   it('round-trips group adjustments in the raster stack, strips them from overlay groups, and drops a malformed group stack', () => {
     const stack = [{ brightness: 0.1, contrast: 0, id: 'ga1', isEnabled: true, type: 'brightness-contrast' }];
     const rasterGroup = {
