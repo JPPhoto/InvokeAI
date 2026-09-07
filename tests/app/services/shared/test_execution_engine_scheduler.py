@@ -61,20 +61,49 @@ def test_generic_scheduler_honors_opaque_readiness_predicate() -> None:
     assert scheduler.pop_next() == "blocked"
 
 
-def test_generic_scheduler_tracks_skipped_nodes_without_prerequisites() -> None:
+def test_generic_scheduler_discards_node_with_unmet_prerequisites() -> None:
     plan = ExecutionPlan()
-    plan.add_node("dependency", "Dependency")
-    plan.add_node("skipped", "Work", dependencies=("dependency",))
-    plan.add_node("after", "After", dependencies=("skipped",))
+    plan.add_node("prerequisite", "Prerequisite")
+    plan.add_node("discarded", "Skipped", dependencies=("prerequisite",))
+    plan.add_node("dependent", "Dependent", dependencies=("discarded",))
+    scheduler = ExecutionScheduler(plan, ready_order=("Dependent", "Prerequisite"))
+
+    assert scheduler.discard("discarded") == ("dependent",)
+    assert scheduler.executed == set()
+    assert scheduler.discarded == {"discarded"}
+    assert scheduler.pop_next() == "dependent"
+
+
+def test_generic_scheduler_discarded_claim_is_not_requeued() -> None:
+    plan = ExecutionPlan()
+    plan.add_node("source", "Source")
+    plan.add_node("dependent", "Dependent", dependencies=("source",))
+    scheduler = ExecutionScheduler(plan, ready_order=("Source", "Dependent"))
+
+    assert scheduler.pop_next() == "source"
+    assert scheduler.discard("source") == ("dependent",)
+    assert scheduler.executed == set()
+    scheduler.rebuild_ready()
+
+    assert scheduler.pop_next() == "dependent"
+    assert scheduler.pop_next() is None
+
+
+def test_generic_scheduler_rehydrates_discarded_completion_from_plan_snapshot() -> None:
+    plan = ExecutionPlan()
+    plan.add_node("discarded", "Skipped")
+    plan.add_node("dependent", "Dependent", dependencies=("discarded",))
     scheduler = ExecutionScheduler(plan)
+    scheduler.discard("discarded")
 
-    scheduler.skip("skipped")
+    restored = ExecutionScheduler(
+        ExecutionPlan.from_snapshot(plan.snapshot()),
+        discarded=scheduler.discarded,
+    )
 
-    assert scheduler.pop_next() == "after"
-    scheduler.complete("after")
-    assert scheduler.pop_next() == "dependency"
-    with pytest.raises(ValueError, match="skipped"):
-        scheduler.complete("skipped")
+    assert restored.executed == set()
+    assert restored.discarded == {"discarded"}
+    assert restored.pop_next() == "dependent"
 
 
 def test_generic_scheduler_preserves_legacy_class_drain_and_fifo_order() -> None:

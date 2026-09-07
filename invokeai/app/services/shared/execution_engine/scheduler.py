@@ -143,11 +143,12 @@ class ExecutionScheduler:
         ready_order: Iterable[str] = (),
         executed: Iterable[NodeId] = (),
         ready_predicate: ReadyPredicate | None = None,
+        discarded: Iterable[NodeId] = (),
     ) -> None:
         self.plan = plan
         self.ready_order = tuple(ready_order)
         self.executed: set[NodeId] = set(executed)
-        self.skipped: set[NodeId] = set()
+        self.discarded: set[NodeId] = set(discarded)
         self._ready_predicate = ready_predicate
         self._claimed: set[NodeId] = set()
         self.indegree: dict[NodeId, int] = {}
@@ -173,7 +174,7 @@ class ExecutionScheduler:
             raise KeyError(f"unknown node: {node_id}")
         if node_id in self.executed:
             raise ValueError(f"node already completed: {node_id}")
-        if node_id in self.skipped:
+        if node_id in self.discarded:
             return False
         if node_id in self._claimed:
             return False
@@ -194,23 +195,6 @@ class ExecutionScheduler:
         """Queue a currently-ready node when its opaque predicate permits it."""
 
         self._enqueue_if_ready(node_id)
-
-    def skip(self, node_id: NodeId) -> None:
-        """Mark a node as intentionally inactive without executing its prerequisites."""
-
-        if node_id not in self.plan.nodes:
-            raise KeyError(f"unknown node: {node_id}")
-        if node_id in self.executed:
-            raise ValueError(f"node already completed: {node_id}")
-        if node_id in self.skipped:
-            return
-        if node_id in self._claimed:
-            raise ValueError(f"node already claimed: {node_id}")
-        self._enqueued.discard(node_id)
-        self._ready.discard(node_id)
-        self._arrival_order.pop(node_id, None)
-        self.skipped.add(node_id)
-        self.rebuild_ready()
 
     def _next_class(self) -> str | None:
         classes = {self.plan.nodes[node_id].class_name for node_id in self._enqueued}
@@ -269,22 +253,52 @@ class ExecutionScheduler:
 
         if node.node_id not in self.plan.nodes:
             self.plan.add_node(node.node_id, node.class_name, node.frame, node.dependencies)
-        satisfied = self.executed | self.skipped
-        self.indegree[node.node_id] = sum(dependency not in satisfied for dependency in node.dependencies)
+        self.indegree[node.node_id] = sum(
+            dependency not in self.executed and dependency not in self.discarded for dependency in node.dependencies
+        )
         if (
             self.indegree[node.node_id] == 0
-            and node.node_id not in satisfied
+            and node.node_id not in self.executed
+            and node.node_id not in self.discarded
             and node.node_id not in self._claimed
         ):
             self.enqueue(node.node_id)
 
-    def discard(self, node_id: NodeId) -> None:
-        """Remove a node from queued or claimed work without completing it."""
+    def discard(self, node_id: NodeId) -> tuple[NodeId, ...]:
+        """Discard a node and satisfy its dependents without marking it executed."""
+
+        if node_id not in self.plan.nodes:
+            raise KeyError(f"unknown node: {node_id}")
+        if node_id in self.executed:
+            raise ValueError(f"node already completed: {node_id}")
+        if node_id in self.discarded:
+            return ()
+        if node_id not in self.indegree:
+            raise KeyError(f"indegree missing for node: {node_id}")
+        dependents = self.plan.dependents(node_id)
+        for dependent in dependents:
+            if dependent not in self.indegree:
+                raise KeyError(f"indegree missing for node: {dependent}")
+            if self.indegree[dependent] <= 0:
+                raise ValueError(f"dependency underflow for node: {dependent}")
 
         self._enqueued.discard(node_id)
         self._claimed.discard(node_id)
         self._ready.discard(node_id)
         self._arrival_order.pop(node_id, None)
+        self.discarded.add(node_id)
+        newly_ready: list[NodeId] = []
+        for dependent in dependents:
+            self.indegree[dependent] -= 1
+            if self.indegree[dependent] == 0 and dependent not in self.executed and dependent not in self.discarded:
+                if self._enqueue_if_ready(dependent):
+                    newly_ready.append(dependent)
+        return tuple(newly_ready)
+
+    def skip(self, node_id: NodeId) -> tuple[NodeId, ...]:
+        """Alias for :meth:`discard` for callers expressing control-flow skips."""
+
+        return self.discard(node_id)
 
     def set_ready_order(self, ready_order: Iterable[str]) -> None:
         """Change class priorities while retaining queued and claimed work."""
@@ -298,8 +312,8 @@ class ExecutionScheduler:
             raise KeyError(f"unknown node: {node_id}")
         if node_id in self.executed:
             raise ValueError(f"node already completed: {node_id}")
-        if node_id in self.skipped:
-            raise ValueError(f"node was skipped: {node_id}")
+        if node_id in self.discarded:
+            raise ValueError(f"node already discarded: {node_id}")
         if node_id not in self.indegree:
             raise KeyError(f"indegree missing for node: {node_id}")
         if self.indegree[node_id] != 0:
@@ -318,7 +332,7 @@ class ExecutionScheduler:
         newly_ready: list[NodeId] = []
         for dependent in dependents:
             self.indegree[dependent] -= 1
-            if self.indegree[dependent] == 0 and dependent not in self.executed and dependent not in self.skipped:
+            if self.indegree[dependent] == 0 and dependent not in self.executed and dependent not in self.discarded:
                 if self._enqueue_if_ready(dependent):
                     newly_ready.append(dependent)
         return tuple(newly_ready)
@@ -326,18 +340,27 @@ class ExecutionScheduler:
     def rebuild_ready(self) -> None:
         """Recompute indegrees and ready queue from plan and executed IDs."""
 
-        unknown = (self.executed | self.skipped).difference(self.plan.nodes)
+        overlapping = self.executed.intersection(self.discarded)
+        if overlapping:
+            raise ValueError(f"node cannot be both executed and discarded: {next(iter(overlapping))}")
+        unknown = (self.executed | self.discarded).difference(self.plan.nodes)
         if unknown:
-            raise KeyError(f"unknown executed node: {next(iter(unknown))}")
-        satisfied = self.executed | self.skipped
+            node_id = next(iter(unknown))
+            state = "executed" if node_id in self.executed else "discarded"
+            raise KeyError(f"unknown {state} node: {node_id}")
         for node_id in self.executed:
             missing = [
-                dependency for dependency in self.plan.nodes[node_id].dependencies if dependency not in satisfied
+                dependency
+                for dependency in self.plan.nodes[node_id].dependencies
+                if dependency not in self.executed and dependency not in self.discarded
             ]
             if missing:
                 raise ValueError(f"executed node {node_id} is missing prerequisite: {missing[0]}")
         self.indegree = {
-            node_id: sum(dependency not in satisfied for dependency in node.dependencies)
+            node_id: sum(
+                dependency not in self.executed and dependency not in self.discarded
+                for dependency in node.dependencies
+            )
             for node_id, node in self.plan.nodes.items()
         }
         previous_arrival = self._arrival_order
@@ -348,7 +371,7 @@ class ExecutionScheduler:
         for node_id in self.plan.nodes:
             if (
                 node_id not in self.executed
-                and node_id not in self.skipped
+                and node_id not in self.discarded
                 and node_id not in self._claimed
                 and self.indegree[node_id] == 0
                 and self._passes_ready_predicate(node_id)
@@ -362,4 +385,4 @@ class ExecutionScheduler:
                 self._arrival_order[node_id] = arrival
 
 
-__all__ = ["ExecutionPlan", "ExecutionScheduler", "PlanNode"]
+__all__ = ["ExecutionPlan", "ExecutionScheduler", "PlanNode", "ReadyPredicate"]
