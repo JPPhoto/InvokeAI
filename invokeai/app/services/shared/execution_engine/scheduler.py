@@ -96,6 +96,8 @@ class ExecutionPlan:
     def from_snapshot(cls, snapshot: Mapping[str, Any]) -> "ExecutionPlan":
         """Restore a plan using its insertion order and dependency list."""
 
+        if not isinstance(snapshot, Mapping):
+            raise ValueError("execution plan snapshot must be a mapping")
         plan = cls()
         raw_nodes = snapshot.get("nodes")
         if not isinstance(raw_nodes, Mapping):
