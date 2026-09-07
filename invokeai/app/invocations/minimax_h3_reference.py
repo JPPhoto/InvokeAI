@@ -47,6 +47,7 @@ from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import AutoencoderKLM
 from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3_audio import AutoencoderKLMiniMaxH3Audio
 from invokeai.backend.minimax_h3.packing import (
     MINIMAX_H3_CANVAS_MULTIPLE,
+    MINIMAX_H3_FPS,
     validate_reference_kinds,
 )
 from invokeai.backend.minimax_h3.presets import MINIMAX_H3_MIN_VIDEO_FRAMES
@@ -251,6 +252,12 @@ def load_reference_audio(
     pcm, rate = extracted
     window_start = round(span.start * rate / span.fps)
     window_end = round((span.end + 1) * rate / span.fps)
+    # Only the generated duration ever survives normalize_reference_audio, so bound the
+    # window here rather than carrying samples that are about to be dropped. This is what
+    # keeps the silence-pad below cheap: np.pad allocates the WHOLE window, and an
+    # audio-only reference defaults to its entire clip, so padding an unbounded window
+    # would copy a full-length track to preserve an alignment truncation then discards.
+    window_end = min(window_end, window_start + int(num_frames / MINIMAX_H3_FPS * rate))
     window = pcm[:, window_start:window_end]
     if window.shape[1] == 0:
         raise ValueError(
