@@ -1,5 +1,6 @@
 from collections import defaultdict, deque
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any, Optional
 from unittest.mock import Mock
 
@@ -41,6 +42,8 @@ from invokeai.app.invocations.primitives import (
 from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
 from invokeai.app.services.shared.execution_effects import (
     EmitEffect,
+    ExecutionEffectsRecorder,
+    ExecutionInterface,
 )
 from invokeai.app.services.shared.execution_effects import (
     ExecutionRef as ProtocolExecutionRef,
@@ -48,6 +51,7 @@ from invokeai.app.services.shared.execution_effects import (
 from invokeai.app.services.shared.execution_effects import (
     ExecutionToken as ProtocolExecutionToken,
 )
+from invokeai.app.services.shared.execution_state_migration import dump_execution_state, load_execution_state
 from invokeai.app.services.shared.graph import (
     CollectInvocation,
     Graph,
@@ -3710,6 +3714,78 @@ def test_if_graph_state_resumes_resolved_branch_after_json_round_trip():
     assert resumed.results[prepared_selected_output_id].prompt == "true branch"
     assert set(executed_source_ids) == {"if", "selected_output"}
     assert "false_value" not in executed_source_ids
+
+
+def test_if_graph_state_rehydrates_persisted_activation_over_stale_condition():
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=True))
+    graph.add_node(PromptTestInvocation(id="true_value", prompt="true branch"))
+    graph.add_node(PromptTestInvocation(id="false_value", prompt="false branch"))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_node(PromptTestInvocation(id="selected_output"))
+
+    graph.add_edge(create_edge("condition", "value", "if", "condition"))
+    graph.add_edge(create_edge("true_value", "prompt", "if", "true_input"))
+    graph.add_edge(create_edge("false_value", "prompt", "if", "false_input"))
+    graph.add_edge(create_edge("if", "value", "selected_output", "prompt"))
+
+    state = GraphExecutionState(graph=graph)
+    for _ in range(2):
+        invocation, output = invoke_next(state)
+        assert invocation is not None
+        assert output is not None
+
+    if_node = state.next()
+    assert isinstance(if_node, IfInvocation)
+    if_exec_id = if_node.id
+    context = SimpleNamespace(
+        execution_effects=ExecutionEffectsRecorder(
+            source_node_id=if_exec_id,
+            frame_path=state._get_iteration_path(if_exec_id),
+        )
+    )
+    context.execution = ExecutionInterface(context.execution_effects)
+    run_result = if_node.invoke_internal_with_effects(context, Mock())
+    state.apply(state.get_execution_ref(if_exec_id, effect_count=len(run_result.effects)), run_result)
+    assert if_exec_id in state.executed
+    assert state.execution_effects
+
+    snapshot = dump_execution_state(state)
+    snapshot["execution_graph"]["nodes"][if_exec_id]["condition"] = False
+
+    restored = load_execution_state(snapshot)
+
+    restored_if = restored.execution_graph.get_node(if_exec_id)
+    assert isinstance(restored_if, IfInvocation)
+    assert restored_if.condition is False
+    assert restored._activation_gate(if_exec_id).selected_branch == "true_input"
+
+    executed_source_ids = execute_all_nodes(restored)
+
+    prepared_selected_output_id = next(iter(restored.source_prepared_mapping["selected_output"]))
+    assert restored.results[prepared_selected_output_id].prompt == "true branch"
+    assert set(executed_source_ids) == {"selected_output"}
+    assert "false_value" not in executed_source_ids
+
+
+def test_late_prepared_node_completion_after_generic_scheduler_initialization():
+    graph = Graph()
+    graph.add_node(PromptTestInvocation(id="source", prompt="source"))
+    state = GraphExecutionState(graph=graph)
+
+    # Force generic scheduler construction before materializing late work.
+    assert state.next() is not None
+
+    late_node = PromptTestInvocation(id="late", prompt="late")
+    state.execution_graph.add_node(late_node)
+    state._register_prepared_exec_node(late_node.id, "late_source")
+    state._prepared_registry().set_iteration_path(late_node.id, ())
+    state.indegree[late_node.id] = 0
+
+    state.complete(late_node.id, late_node.invoke(Mock(InvocationContext)))
+
+    assert state.results[late_node.id].prompt == "late"
+    assert late_node.id in state.executed
 
 
 def test_graph_state_prepares_eagerly():

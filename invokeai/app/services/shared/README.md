@@ -212,6 +212,22 @@ does not own queue statuses or events. A graph containing a saved-workflow call
 therefore stays on the legacy scheduler and the dedicated workflow-call queue
 adapters.
 
+Target migration contract: control-flow nodes remain concrete invocation
+subclasses that declare frame-scoped data, activation, stream-closure, child,
+and terminal effects. The generic scheduler selects nodes from required
+effects for the current frame; it never receives a literal successor-node ID.
+Current implementation is narrower: `IfInvocation` is the only control-flow
+invocation using the effect recorder, while `Iterate`, `Collect`, `For`,
+`ForReturn`, and workflow-call invocations remain on compatibility paths. The
+generic scheduler currently consumes opaque plan dependencies, not token-built
+successor topology. The current `If` adapter still owns branch topology and
+compatibility skips, while loop and workflow-call adapters still own
+materialization and durable queue lifecycle. Those owners may be removed only
+after differential tests cover fresh, partially completed, rehydrated, failed,
+canceled, and retried sessions. The frontend boundary remains frozen: this
+refactoring does not modify `invokeai/frontend/...` or existing web/webv2
+interactions.
+
 Workflow-call note:
 
 - `GraphExecutionState` can represent a paused parent execution plus an attached child execution state, but it does not

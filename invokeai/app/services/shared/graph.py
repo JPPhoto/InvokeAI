@@ -2328,6 +2328,11 @@ class _GenericGraphSchedulerAdapter:
     ) -> list[tuple[BaseInvocation, BaseInvocationOutput]]:
         if exec_node_id not in self._state.execution_graph.nodes:
             return []
+        # A few compatibility callers register prepared execution nodes directly on the
+        # execution graph. Ensure those nodes are represented in the opaque plan before
+        # applying their completion, just as materialized nodes are.
+        if exec_node_id not in self._scheduler.plan.nodes:
+            self.register_node(exec_node_id)
         if exec_node_id not in self._state.indegree:
             raise KeyError(f"indegree missing for exec node {exec_node_id}")
         dependents = self._scheduler.plan.dependents(exec_node_id)

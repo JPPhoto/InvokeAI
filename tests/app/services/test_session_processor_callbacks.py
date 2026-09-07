@@ -7,6 +7,7 @@ import pytest
 
 from invokeai.app.services.progress_previews.progress_previews_default import MemoryProgressPreviews
 from invokeai.app.services.session_processor.session_processor_default import DefaultSessionRunner
+from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder
 from invokeai.app.services.shared.graph import CollectInvocation, Graph, GraphExecutionState, IterateInvocation
 
 
@@ -32,7 +33,13 @@ def test_after_run_node_callback_receives_control_node_inputs(monkeypatch: pytes
     services.performance_statistics.collect_stats.return_value = nullcontext()
     monkeypatch.setattr(
         "invokeai.app.services.session_processor.session_processor_default.build_invocation_context",
-        lambda data, services, is_canceled: context_data.append(data) or None,
+        lambda data, services, is_canceled: context_data.append(data)
+        or SimpleNamespace(
+            execution_effects=ExecutionEffectsRecorder(
+                source_node_id=data.invocation.id,
+                frame_path=data.execution_frame,
+            )
+        ),
     )
 
     def on_after_run_node(invocation, queue_item, output):

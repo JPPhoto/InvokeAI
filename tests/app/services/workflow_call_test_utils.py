@@ -15,6 +15,7 @@ from invokeai.app.invocations.workflow_return import (
     WorkflowReturnInvocation,
     WorkflowReturnOutput,
 )
+from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
 from invokeai.app.services.progress_previews.progress_previews_default import MemoryProgressPreviews
 from invokeai.app.services.session_processor.session_processor_default import (
     DefaultSessionProcessor,
@@ -25,6 +26,7 @@ from invokeai.app.services.session_processor.workflow_call_runtime import (
     WorkflowCallQueueLifecycle,
 )
 from invokeai.app.services.session_queue.session_queue_common import SessionQueueItemNotFoundError
+from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder, ExecutionInterface
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState, WorkflowCallFrame
 from invokeai.app.services.workflow_records.workflow_records_common import WorkflowCategory
 from tests.dangerously_run_function_in_subprocess import dangerously_run_function_in_subprocess
@@ -833,6 +835,13 @@ def _build_workflow_runner(monkeypatch: pytest.MonkeyPatch, session_queue=None):
         lambda data, services, is_canceled: SimpleNamespace(
             _services=services,
             _data=data,
+            execution_effects=(
+                execution_effects := ExecutionEffectsRecorder(
+                    source_node_id=data.invocation.id,
+                    frame_path=data.execution_frame,
+                )
+            ),
+            execution=ExecutionInterface(execution_effects),
             images=SimpleNamespace(get_dto=services.images.get_dto),
             boards=SimpleNamespace(
                 get_all_image_names_for_board=services.board_images.get_all_board_image_names_for_board
@@ -853,6 +862,7 @@ def _build_workflow_runner(monkeypatch: pytest.MonkeyPatch, session_queue=None):
                 "events": events,
                 "logger": _DummyLogger(),
                 "configuration": _DummyConfig(),
+                "invocation_cache": MemoryInvocationCache(max_cache_size=0),
                 "workflow_records": workflow_records,
                 "users": _DummyUsers(),
                 "board_images": _DummyBoardImages(),
@@ -1954,6 +1964,13 @@ def test_run_completes_call_saved_workflow_and_runs_downstream_nodes(
     downstream_outputs = [
         output for invocation, _queue_item, output in events.completed if invocation.get_type() == "if"
     ]
+    downstream_if_node_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in session.prepared_source_mapping.items()
+        if source_node_id == "downstream-if"
+    )
+    downstream_if_ref = session.execution_refs[downstream_if_node_id]
+    assert session.execution_effects[downstream_if_ref.reference_id]
     assert len(parent_outputs) == 1
     assert parent_outputs[0].values == {"result": [3]}
     assert len(downstream_outputs) == 1
