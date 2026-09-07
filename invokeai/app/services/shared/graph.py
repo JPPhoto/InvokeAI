@@ -328,6 +328,74 @@ class _PreparedExecRegistry:
             self._on_iteration_path_change(exec_node_id)
 
 
+def _get_if_branch_exclusive_sources(state: "GraphExecutionState", if_node_id: str) -> dict[str, set[str]]:
+    """Compile legacy If inputs into frame-independent branch source sets.
+
+    This is a graph-compilation helper, not a scheduler transition. The
+    generic adapter uses the result to attach opaque activation dependencies
+    and retire unselected prepared nodes without mutating execution edges.
+    """
+
+    cached = state._if_branch_exclusive_sources.get(if_node_id)
+    if cached is not None:
+        return cached
+
+    source_graph = state._get_source_graph_flat()
+    branch_sources: dict[str, set[str]] = {}
+    for branch_field in ("true_input", "false_input"):
+        direct_inputs = {edge.source.node_id for edge in state.graph._get_input_edges(if_node_id, branch_field)}
+        expanded = set(direct_inputs)
+        for node_id in list(expanded):
+            expanded.update(nx.ancestors(source_graph, node_id))
+
+        exclusive_sources = set(expanded)
+        changed = True
+        while changed:
+            changed = False
+            for node_id in list(exclusive_sources):
+                output_edges = state.graph._get_output_edges(node_id)
+                stays_in_branch = all(
+                    edge.destination.node_id in exclusive_sources
+                    or (edge.destination.node_id == if_node_id and edge.destination.field == branch_field)
+                    for edge in output_edges
+                )
+                if not stays_in_branch:
+                    exclusive_sources.remove(node_id)
+                    changed = True
+        branch_sources[branch_field] = exclusive_sources
+
+    state._tx_set_mapping(state._if_branch_exclusive_sources, if_node_id, branch_sources)
+    return branch_sources
+
+
+def _get_if_activation_dependencies(
+    state: "GraphExecutionState", exec_node_id: str
+) -> tuple[ActivationDependency, ...]:
+    """Compile opaque branch requirements for one prepared execution node."""
+
+    source_node_id = state._prepared_registry().get_source_node_id(exec_node_id)
+    iteration_path = state._get_iteration_path(exec_node_id)
+    dependencies: list[ActivationDependency] = []
+    for source_if_id, source_if_node in state.graph.nodes.items():
+        if not isinstance(source_if_node, IfInvocation):
+            continue
+        branches = _get_if_branch_exclusive_sources(state, source_if_id)
+        matching_fields = tuple(
+            branch_field for branch_field in ("true_input", "false_input") if source_node_id in branches[branch_field]
+        )
+        # A shared ancestor is live regardless of branch selection.
+        if len(matching_fields) != 1:
+            continue
+        dependencies.append(
+            ActivationDependency(
+                owner_id=source_if_id,
+                branch=matching_fields[0],
+                frame=iteration_path,
+            )
+        )
+    return tuple(dependencies)
+
+
 class _IfBranchScheduler:
     """Applies lazy `If` semantics by deferring, releasing, and skipping branch-local exec nodes."""
 
@@ -416,46 +484,10 @@ class _IfBranchScheduler:
                 self.mark_exec_node_skipped(prepared_id)
 
     def get_branch_exclusive_sources(self, if_node_id: str) -> dict[str, set[str]]:
-        cached = self._state._if_branch_exclusive_sources.get(if_node_id)
-        if cached is not None:
-            return cached
-
-        branch_sources: dict[str, set[str]] = {}
-        for branch_field in ("true_input", "false_input"):
-            direct_inputs = self._get_branch_input_sources(if_node_id, branch_field)
-            candidate_nodes = self._expand_with_ancestors(direct_inputs)
-            branch_sources[branch_field] = self._prune_nonexclusive_branch_nodes(
-                if_node_id, branch_field, candidate_nodes
-            )
-
-        self._state._tx_set_mapping(self._state._if_branch_exclusive_sources, if_node_id, branch_sources)
-        return branch_sources
+        return _get_if_branch_exclusive_sources(self._state, if_node_id)
 
     def get_activation_dependencies(self, exec_node_id: str) -> tuple[ActivationDependency, ...]:
-        """Describe branch gates for one prepared node without exposing successor IDs."""
-        source_node_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
-        iteration_path = self._state._get_iteration_path(exec_node_id)
-        dependencies: list[ActivationDependency] = []
-        for source_if_id, source_if_node in self._state.graph.nodes.items():
-            if not isinstance(source_if_node, IfInvocation):
-                continue
-            branches = self.get_branch_exclusive_sources(source_if_id)
-            matching_fields = tuple(
-                branch_field
-                for branch_field in ("true_input", "false_input")
-                if source_node_id in branches[branch_field]
-            )
-            # A shared ancestor is live regardless of branch selection.
-            if len(matching_fields) != 1:
-                continue
-            dependencies.append(
-                ActivationDependency(
-                    owner_id=source_if_id,
-                    branch=matching_fields[0],
-                    frame=iteration_path,
-                )
-            )
-        return tuple(dependencies)
+        return _get_if_activation_dependencies(self._state, exec_node_id)
 
     def is_deferred_by_unresolved_if(self, exec_node_id: str) -> bool:
         source_node_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
@@ -1263,9 +1295,8 @@ class _ExecutionMaterializer:
         self._state._tx_set_mapping(self._state.indegree, exec_node_id, unmet)
         scheduler = self._state._scheduler()
         # Resolve a known conditional before registering its generic plan node so
-        # the compatibility edge pruning is reflected in its initial dependencies.
-        # Unresolved conditionals remain registered with all input dependencies;
-        # their activation resolution later synchronizes skipped work.
+        # generic retirement can release unselected prerequisites without
+        # mutating the append-only execution graph.
         if isinstance(scheduler, _GenericGraphSchedulerAdapter):
             self._state._try_resolve_if_node(exec_node_id)
             scheduler.register_node(exec_node_id)
@@ -2224,6 +2255,64 @@ class _GenericGraphSchedulerAdapter:
             for dependency in self._scheduler.plan.nodes[exec_node_id].activation_dependencies
         )
 
+    def _retire_unselected_node(self, exec_node_id: str) -> None:
+        """Retire one unselected prepared node through generic scheduler state."""
+
+        if exec_node_id not in self._scheduler.plan.nodes or exec_node_id in self._state.executed:
+            return
+        if exec_node_id in self._scheduler.discarded:
+            return
+        self._remove_projected(exec_node_id)
+        self._state._set_prepared_exec_state(exec_node_id, "skipped")
+        self._state._tx_add_set(self._state.executed, exec_node_id)
+        self._scheduler.discard(exec_node_id)
+        source_node_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
+        prepared_nodes = self._state._prepared_registry().get_prepared_ids(source_node_id)
+        if all(node_id in self._state.executed for node_id in prepared_nodes):
+            if source_node_id not in self._state.executed:
+                self._state._mark_source_executed(source_node_id)
+
+    def _retire_unselected_nodes(self, if_exec_node_id: str) -> None:
+        source_if_node_id = self._state._prepared_registry().get_source_node_id(if_exec_node_id)
+        branches = _get_if_branch_exclusive_sources(self._state, source_if_node_id)
+        unselected_field = (
+            "false_input" if self._state._resolved_if_exec_branches[if_exec_node_id] == "true_input" else "true_input"
+        )
+        iteration_path = self._state._get_iteration_path(if_exec_node_id)
+        for prepared_id, prepared_source in tuple(self._state.prepared_source_mapping.items()):
+            if self._state._get_iteration_path(prepared_id) != iteration_path:
+                continue
+            if prepared_source in branches[unselected_field]:
+                self._retire_unselected_node(prepared_id)
+
+    def resolve_if_node(self, exec_node_id: str) -> None:
+        """Resolve legacy If inputs without pruning graph edges or using type-specific skips."""
+
+        if exec_node_id in self._state._resolved_if_exec_branches:
+            return
+        node = self._state.execution_graph.get_node(exec_node_id)
+        if not isinstance(node, IfInvocation):
+            return
+        if not self._state._apply_if_condition_inputs(exec_node_id, node):
+            return
+
+        selected_field = "true_input" if node.condition else "false_input"
+        self._state._resolve_activation_gate(exec_node_id, selected_field)
+        self._state._tx_set_mapping(self._state._resolved_if_exec_branches, exec_node_id, selected_field)
+        self._state._record_compatibility_activation_token(exec_node_id, selected_field)
+        self._retire_unselected_nodes(exec_node_id)
+        self._sync_indegree()
+        self._project_ready_nodes()
+
+    def _retire_if_rejected_node(self, exec_node_id: str) -> None:
+        node = self._scheduler.plan.nodes.get(exec_node_id)
+        if node is None or not node.activation_dependencies:
+            return
+        if any(
+            self._state._is_activation_dependency_rejected(dependency) for dependency in node.activation_dependencies
+        ):
+            self._retire_unselected_node(exec_node_id)
+
     def _sync_executed_state(self, excluded: Iterable[str] = ()) -> None:
         excluded_ids = set(excluded)
         self._scheduler.executed.update(
@@ -2260,6 +2349,7 @@ class _GenericGraphSchedulerAdapter:
             )
         )
         self._state._tx_set_mapping(self._state.indegree, exec_node_id, self._scheduler.indegree[exec_node_id])
+        self._retire_if_rejected_node(exec_node_id)
         if not self._initializing:
             self._project_ready_node(exec_node_id)
 
@@ -4709,6 +4799,22 @@ class GraphExecutionState(BaseModel):
                 return False
         return True
 
+    def _is_activation_dependency_rejected(self, dependency: ActivationDependency) -> bool:
+        """Return whether a resolved gate explicitly selected another branch."""
+
+        matching_gate_ids = [
+            prepared_if_id
+            for prepared_if_id in self._prepared_registry().get_prepared_ids(dependency.owner_id)
+            if self._get_iteration_path(prepared_if_id) == dependency.frame
+        ]
+        for gate_id in matching_gate_ids:
+            gate = self._activation_gate(gate_id)
+            if gate.frame != self._expected_execution_ref(gate_id).frame:
+                return False
+            if gate.resolved and gate.selected_branch != dependency.branch:
+                return True
+        return False
+
     def _resolve_activation_gate(self, exec_node_id: str, branch: str) -> bool:
         runtime = self._generic_runtime()
         gate = self._activation_gate(exec_node_id)
@@ -5606,13 +5712,17 @@ class GraphExecutionState(BaseModel):
         return self._if_scheduler().is_deferred_by_unresolved_if(exec_node_id)
 
     def _get_activation_dependencies(self, exec_node_id: str) -> tuple[ActivationDependency, ...]:
-        return self._if_scheduler().get_activation_dependencies(exec_node_id)
+        return _get_if_activation_dependencies(self, exec_node_id)
 
     def _remove_from_ready_queues(self, exec_node_id: str) -> None:
         self._scheduler().remove_from_ready_queues(exec_node_id)
 
     def _try_resolve_if_node(self, exec_node_id: str) -> None:
-        self._if_scheduler().try_resolve_if_node(exec_node_id)
+        scheduler = self._execution_scheduler
+        if isinstance(scheduler, _GenericGraphSchedulerAdapter):
+            scheduler.resolve_if_node(exec_node_id)
+        else:
+            self._if_scheduler().try_resolve_if_node(exec_node_id)
 
     def set_ready_order(self, order: Iterable[Type[BaseInvocation] | str]) -> None:
         names: list[str] = []

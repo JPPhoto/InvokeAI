@@ -16,7 +16,14 @@ from invokeai.app.services.shared.execution_state_migration import (
     dump_execution_state,
     load_execution_state,
 )
-from invokeai.app.services.shared.graph import Edge, EdgeConnection, Graph, GraphExecutionState, _ExecutionScheduler
+from invokeai.app.services.shared.graph import (
+    Edge,
+    EdgeConnection,
+    Graph,
+    GraphExecutionState,
+    _ExecutionScheduler,
+    _IfBranchScheduler,
+)
 
 FIXTURE_PATH = Path(__file__).parents[3] / "fixtures" / "execution_engine" / "static_dag_v1.json"
 
@@ -430,3 +437,32 @@ def test_fixture_is_versioned_and_future_versions_are_explicitly_rejected() -> N
     future_snapshot["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION + 1
     with pytest.raises(UnsupportedExecutionStateVersionError, match="newer than supported"):
         load_execution_state(future_snapshot)
+
+
+def test_generic_legacy_shaped_if_does_not_prune_or_skip_during_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = _nested_if_graph()
+    state = GraphExecutionState(graph=graph)
+    deleted_edges: list[Edge] = []
+
+    def fail_prune(*_: object, **__: object) -> None:
+        raise AssertionError("generic If execution called _prune_unselected_if_inputs")
+
+    def fail_skip(*_: object, **__: object) -> None:
+        raise AssertionError("generic If execution called mark_exec_node_skipped")
+
+    def record_deleted_edge(self: GraphExecutionState, edge: Edge) -> None:
+        deleted_edges.append(edge)
+
+    monkeypatch.setattr(_IfBranchScheduler, "_prune_unselected_if_inputs", fail_prune)
+    monkeypatch.setattr(_IfBranchScheduler, "mark_exec_node_skipped", fail_skip)
+    monkeypatch.setattr(GraphExecutionState, "_tx_delete_execution_edge", record_deleted_edge)
+
+    trace, state = _run_graph(state)
+
+    assert trace == ["outer_condition", "inner_condition", "inner_false", "inner_if", "outer_if", "sink"]
+    sink_id = next(iter(state.source_prepared_mapping["sink"]))
+    assert state.results[sink_id].value == 7
+    assert state.is_complete()
+    assert deleted_edges == []
