@@ -232,7 +232,7 @@ const sanitizeVideoReferences = (value: unknown, sourceVideoName?: string): Vide
     for (let index = valid.length - 1; index >= 0; index -= 1) {
       const entry = valid[index]!;
 
-      if (entry.kind === 'video' && entry.clip.video_name === sourceVideoName) {
+      if (entry.kind === 'video' && entry.clip.video_name === sourceVideoName && canAnchorReferenceExtend(entry)) {
         valid = valid.map((candidate, candidateIndex) =>
           candidateIndex === index && candidate.kind === 'video' ? { ...candidate, fromSourceVideo: true } : candidate
         );
@@ -554,6 +554,42 @@ export const getDefaultReferenceConditioning = (
 ): VideoReferenceConditioning => (metadata?.media_origin === 'audio_upload' ? 'audio' : 'video_audio');
 
 /**
+ * Whether a video reference can serve as the reference-extend ANCHOR.
+ *
+ * The anchor carries the tail of the Initial Video across the seam, and that is what the
+ * generated frames continue from. An 'audio' reference contributes soundtrack rows and no
+ * visual rows at all — the backend decodes a reference's frames only when its packed kind
+ * is `video` (`reference_kind`) — so it has nothing to offer the seam. Nor does it fail
+ * loudly: the all-audio validation reason needs EVERY reference to be audio-only, so one
+ * image reference alongside is enough to let a silently discontinuous seam queue.
+ *
+ * So an audio-only reference is never CHOSEN as the anchor. Adoption and the recall
+ * re-derive both skip it, and the anchor is appended fresh instead — which keeps the
+ * soundtrack the user actually asked for rather than overwriting it with a role it cannot
+ * fill. Only an entry already claiming the flag is converted, by
+ * {@link anchorReferenceConditioning}.
+ */
+const canAnchorReferenceExtend = (entry: VideoReferenceItem): boolean =>
+  entry.kind === 'video' && entry.conditioning !== 'audio';
+
+/**
+ * The conditioning an entry keeps once it IS the reference-extend anchor.
+ *
+ * Only reached for an entry already carrying the flag: a record written before
+ * {@link canAnchorReferenceExtend} existed, or a hand-edited one. Promoting keeps the
+ * soundtrack the choice asked for and restores the visuals the role requires; 'video' and
+ * 'video_audio' are the user's own answer and pass through.
+ *
+ * Deliberately applied only where the anchor's WINDOW is re-derived alongside it
+ * (`applyReferenceExtendSourceVideo`). Promoting in normalization instead would turn an
+ * entry that was merely inert into one emitting visual rows from whatever window it
+ * happens to hold — for a mis-flagged entry, the opening of the clip rather than the tail,
+ * which is a worse seam than no anchor at all.
+ */
+export const anchorReferenceConditioning = (conditioning: VideoReferenceConditioning): VideoReferenceConditioning =>
+  conditioning === 'audio' ? 'video_audio' : conditioning;
+
+/**
  * The detail a newly added image reference starts on.
  *
  * The FIRST image reference keeps upstream's rule, a 2048px short edge: it is usually the
@@ -835,12 +871,25 @@ export const applyReferenceExtendSourceVideo = (
   const linkedIndex =
     flaggedIndex >= 0
       ? flaggedIndex
-      : references.findIndex((entry) => entry.kind === 'video' && entry.clip.video_name === sourceVideo.video_name);
+      : references.findIndex(
+          (entry) =>
+            entry.kind === 'video' &&
+            entry.clip.video_name === sourceVideo.video_name &&
+            // An audio-only reference to this clip is the user's soundtrack, not a
+            // continuity anchor: adopting it would replace their window with the tail and
+            // still leave the seam with no visuals. Fall through and append instead.
+            canAnchorReferenceExtend(entry)
+        );
 
   if (linkedIndex >= 0) {
     return pinReferenceExtendAnchor(
       references.map((entry, index) =>
-        index === linkedIndex && entry.kind === 'video' ? { ...linked, conditioning: entry.conditioning } : entry
+        index === linkedIndex && entry.kind === 'video'
+          ? // Safe to convert here, and only here: `linked` re-derives the window in the
+            // same breath, so a flagged audio-only entry from an older record is healed
+            // whole rather than left pointing at the wrong part of the clip.
+            { ...linked, conditioning: anchorReferenceConditioning(entry.conditioning) }
+          : entry
       )
     );
   }

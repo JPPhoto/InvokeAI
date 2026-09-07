@@ -6,6 +6,7 @@ import { MINIMAX_H3_NUM_FRAMES_CHOICES } from './dimensions';
 import {
   resizeReferenceSampleWindow,
   slideReferenceSampleWindow,
+  anchorReferenceConditioning,
   applyReferenceExtendSourceVideo,
   applyReferenceExtendNumFrames,
   canPlaceReferenceExtendAnchor,
@@ -501,6 +502,124 @@ describe('references', () => {
     const sweptVideo = clearDeletedVideoMedia(values, new Set(), new Set(['ref.mp4']));
 
     expect(sweptVideo.references).toEqual([IMAGE_REFERENCE]);
+  });
+});
+
+describe('anchorReferenceConditioning', () => {
+  it('converts an audio-only choice, which cannot carry a seam', () => {
+    expect(anchorReferenceConditioning('audio')).toBe('video_audio');
+  });
+
+  it("leaves the user's own visual answers alone", () => {
+    expect(anchorReferenceConditioning('video')).toBe('video');
+    expect(anchorReferenceConditioning('video_audio')).toBe('video_audio');
+  });
+});
+
+describe('reference-extend anchor: audio-only references', () => {
+  const longSource = { ...SOURCE_VIDEO, endFrame: 400, numFrames: 402, video_name: 'long.mp4' };
+  const source24 = { ...longSource, fps: 24 };
+  const FRAMES = 141;
+  // The user's own soundtrack reference to the clip they are extending: whole clip, audio.
+  const userAudio = {
+    clip: { ...SOURCE_VIDEO, endFrame: 401, numFrames: 402, startFrame: 0, video_name: 'long.mp4' },
+    conditioning: 'audio',
+    kind: 'video',
+  } as const;
+
+  it('appends a real anchor beside an audio-only reference rather than consuming it', () => {
+    // Upload a soundtrack as a reference (it defaults to 'audio'), then extend that same
+    // clip. Adopting the audio entry would replace the user's window with the tail AND
+    // leave the seam with no visuals at all, since an 'audio' reference contributes no
+    // visual rows. Both references have a job; both survive.
+    const linked = applyReferenceExtendSourceVideo([userAudio], source24, 3, FRAMES);
+
+    expect(linked).toHaveLength(2);
+    expect(linked[0]).toBe(userAudio);
+    expect(linked[1]).toMatchObject({
+      clip: { endFrame: 400, startFrame: 260 },
+      conditioning: 'video_audio',
+      fromSourceVideo: true,
+    });
+  });
+
+  it('adopts a same-clip reference that CAN carry the seam, in preference to the audio one', () => {
+    const userVideo = {
+      ...userAudio,
+      clip: { ...userAudio.clip, endFrame: 172, startFrame: 100 },
+      conditioning: 'video',
+    } as const;
+    const linked = applyReferenceExtendSourceVideo([userAudio, userVideo], source24, 3, FRAMES);
+
+    // The audio entry is untouched, by identity; the video one becomes the anchor and
+    // keeps its deliberate 'video' choice.
+    expect(linked).toHaveLength(2);
+    expect(linked.find((entry) => entry === userAudio)).toBe(userAudio);
+    expect(linked[linked.length - 1]).toMatchObject({
+      clip: { endFrame: 400, startFrame: 260 },
+      conditioning: 'video',
+      fromSourceVideo: true,
+    });
+  });
+
+  it('converts an already-flagged audio anchor, re-deriving its window in the same pass', () => {
+    // A record written before this rule can carry one. It is healed WHOLE: the conditioning
+    // becomes usable and the window becomes the tail, which is why the conversion lives
+    // here and not in normalization.
+    const stale = {
+      ...userAudio,
+      clip: { ...userAudio.clip, endFrame: 72, startFrame: 0 },
+      fromSourceVideo: true,
+    } as const;
+    const linked = applyReferenceExtendSourceVideo([stale], source24, 3, FRAMES);
+
+    expect(linked[0]).toMatchObject({
+      clip: { endFrame: 400, startFrame: 260 },
+      conditioning: 'video_audio',
+      fromSourceVideo: true,
+    });
+  });
+
+  it('normalization never flags an audio-only reference as the anchor', () => {
+    // The recall re-derive picks the anchor by clip name. Landing on an audio-only entry
+    // would flag a reference whose window is NOT the tail -- once its conditioning implied
+    // visuals, the generation would continue from the opening of the clip. It is left as
+    // the plain reference it is, and no anchor is claimed.
+    const normalized = normalizeVideoSettings(
+      createSettings({ references: [IMAGE_REFERENCE, userAudio], sourceVideo: source24 })
+    );
+
+    expect(normalized?.references).toHaveLength(2);
+    expect(normalized?.references.some((entry) => entry.kind === 'video' && entry.fromSourceVideo === true)).toBe(
+      false
+    );
+    expect(normalized?.references.find((entry) => entry.kind === 'video')).toMatchObject({
+      clip: { endFrame: 401, startFrame: 0 },
+      conditioning: 'audio',
+    });
+  });
+
+  it('still re-derives the flag onto a same-clip reference that can carry the seam', () => {
+    // The recall re-derive itself is intact -- this is the case it exists for.
+    const recalled = { ...userAudio, conditioning: 'video_audio' as const };
+    const normalized = normalizeVideoSettings(
+      createSettings({ references: [IMAGE_REFERENCE, recalled], sourceVideo: source24 })
+    );
+
+    expect(normalized?.references[1]).toMatchObject({ conditioning: 'video_audio', fromSourceVideo: true });
+  });
+
+  it('leaves an audio-only reference beside a real anchor completely alone', () => {
+    // The rule is about the anchor's ROLE, not about audio references. With a flagged
+    // anchor present the re-derive does not run at all, and the user's soundtrack keeps
+    // its conditioning, its window and its object identity across normalization.
+    const realAnchor = { ...userAudio, conditioning: 'video_audio' as const, fromSourceVideo: true } as const;
+    const normalized = normalizeVideoSettings(
+      createSettings({ references: [userAudio, realAnchor], sourceVideo: source24 })
+    );
+
+    expect(normalized?.references[0]).toMatchObject({ conditioning: 'audio', clip: { endFrame: 401, startFrame: 0 } });
+    expect(normalized?.references[0]).not.toHaveProperty('fromSourceVideo', true);
   });
 });
 
