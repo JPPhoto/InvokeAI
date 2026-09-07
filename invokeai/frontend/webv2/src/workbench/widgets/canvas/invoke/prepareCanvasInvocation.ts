@@ -30,7 +30,7 @@
  * shallower user-facing guard from the instant the command begins.
  */
 
-import type { GenerateModelConfig } from '@features/generation/contracts';
+import type { CanvasScalingSettings, GenerateModelConfig } from '@features/generation/contracts';
 import type { ModelConfig } from '@features/models';
 import type {
   CanvasControlLayerContract,
@@ -69,6 +69,8 @@ import {
   DEFAULT_CANVAS_COMPOSITING,
   type CanvasCompositingSettings,
 } from '@workbench/widgets/canvas/invoke/canvasCompositing';
+
+import { readCanvasScaling } from './canvasScaling';
 
 /** Title on every canvas-invoke failure notice. */
 export const CANVAS_INVOKE_ERROR_TITLE = 'Canvas generation failed';
@@ -121,6 +123,8 @@ export interface RunCanvasInvocationDeps {
   strength: number;
   /** Persisted compositing settings (infill / coherence / mask blur / output policy), defaulted + clamped. */
   compositing: CanvasCompositingSettings;
+  /** Persisted "scale before processing" policy, defaulted. */
+  scaling: CanvasScalingSettings;
   commands: Pick<WorkbenchCommands, 'generation' | 'notifications'>;
   /** Localizes a control-layer rejection; defaults to the English validation sentence. */
   formatControlLayerError?: (code: ControlValidationReason, layerName: string) => string;
@@ -389,6 +393,7 @@ export const runCanvasInvocation = async (deps: RunCanvasInvocationDeps): Promis
       projectSettings: deps.projectSettings,
       randDevice: deps.randDevice,
       regionalGuidance: regions.toGraphInputs(composites.regionalMaskImages),
+      scaling: deps.scaling,
       settings,
       strength: deps.strength,
     });
@@ -447,6 +452,11 @@ export interface PrepareCanvasInvocationArgs {
   /** Expanded positive prompts, resolved by the caller before submitting. */
   positivePrompts?: string[];
   projectSettings: Pick<ProjectSettings, 'useCpuNoise'>;
+  /**
+   * The canvas widget's persisted values. The scaling policy is read here, in
+   * the lazily loaded orchestrator, so its reader stays out of the eager submit path.
+   */
+  canvasValues?: Record<string, unknown>;
   strength: number;
   signal?: AbortSignal;
   /**
@@ -494,6 +504,7 @@ export const prepareCanvasInvocation = async (args: PrepareCanvasInvocationArgs)
     projectSettings: args.projectSettings,
     randDevice: resolveRandDeviceMetadata(args.projectSettings.useCpuNoise, getGenerationDevicesSnapshot().options),
     signal,
+    scaling: readCanvasScaling(args.canvasValues),
     strength: args.strength,
   });
 };

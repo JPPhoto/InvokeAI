@@ -31,6 +31,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunCanvasInvocationDeps } from './prepareCanvasInvocation';
 
 import { DEFAULT_CANVAS_COMPOSITING } from './canvasCompositing';
+import { DEFAULT_CANVAS_SCALING } from './canvasScaling';
 import {
   prepareCanvasInvocation,
   resolveRegionalReferenceImages,
@@ -147,6 +148,7 @@ interface HarnessOptions {
   dispatch?: ReturnType<typeof vi.fn<(action: WorkbenchAction) => void>>;
   models?: RunCanvasInvocationDeps['models'];
   outputOnlyMaskedRegions?: boolean;
+  scaling?: RunCanvasInvocationDeps['scaling'];
 }
 
 const makeHarness = (options: HarnessOptions = {}): Harness => {
@@ -260,6 +262,7 @@ const makeHarness = (options: HarnessOptions = {}): Harness => {
       outputOnlyMaskedRegions: options.outputOnlyMaskedRegions ?? true,
     },
     destination: options.destination ?? 'canvas',
+    scaling: options.scaling ?? DEFAULT_CANVAS_SCALING,
     commands: {
       generation: {
         submitCanvas: (payload) => dispatch({ ...payload, type: 'submitCanvasInvocationSnapshot' }),
@@ -352,6 +355,7 @@ describe('prepareCanvasInvocation generation-device boundary', () => {
       generateValues: harness.deps.generateValues,
       models: harness.deps.models,
       projectId: harness.deps.projectId,
+      canvasValues: { scaleMethod: 'manual', scaledHeight: 768, scaledWidth: 1024 },
       projectSettings: { useCpuNoise: false },
       strength: harness.deps.strength,
     });
@@ -403,6 +407,17 @@ describe('runCanvasInvocation', () => {
     expect(nodes.denoise_latents.denoising_start).toBeCloseTo(0.25, 10);
     expect(harness.notices()).toHaveLength(0);
     expect(harness.dedupe.byKey.size).toBeGreaterThan(0);
+  });
+
+  it('denoises at the persisted manual processing size and restores the bbox', async () => {
+    const harness = makeHarness({ scaling: { height: 768, method: 'manual', width: 1024 } });
+
+    await runCanvasInvocation(harness.deps);
+
+    const nodes = harness.submittedGraphs()[0]!.graph.backendGraph!.nodes;
+    expect(nodes.noise).toMatchObject({ height: 768, width: 1024 });
+    expect(nodes.canvas_resize_initial_to_processing).toMatchObject({ height: 768, width: 1024 });
+    expect(nodes.canvas_output).toMatchObject({ type: 'img_resize' });
   });
 
   it('reuses committed composite uploads on a later successful invocation', async () => {

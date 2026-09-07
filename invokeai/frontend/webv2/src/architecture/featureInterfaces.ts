@@ -19,6 +19,7 @@ export const FEATURE_PUBLIC_INTERFACES: Readonly<Record<string, readonly string[
   ],
   generation: [
     'canvasGraph',
+    'canvasProcessingSize',
     'components',
     'contracts',
     'graph',

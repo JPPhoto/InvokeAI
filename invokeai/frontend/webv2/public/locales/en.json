@@ -2076,6 +2076,19 @@
       "resetToModelDefault": "Reset to model default",
       "savePresetAction": "Save",
       "savePresetTitle": "Save preset",
+      "scaleBeforeProcessing": "Scale before processing",
+      "scalingOptions": {
+        "height": "Height",
+        "method": "Scale method",
+        "methods": {
+          "auto": "Auto",
+          "manual": "Manual",
+          "none": "Off"
+        },
+        "processingAtFrame": "Generates at the generation size; nothing to resize.",
+        "processingSize": "Generates at {{width}}x{{height}}, then resizes back to the generation size.",
+        "width": "Width"
+      },
       "searchPresets": "Search presets",
       "secondsPerRun": "~{{value}}s/run",
       "sizePreviewHandle": "Drag to resize the generation size",
