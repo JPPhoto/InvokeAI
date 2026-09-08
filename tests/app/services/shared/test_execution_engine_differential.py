@@ -26,6 +26,7 @@ from invokeai.app.services.shared.graph import (
     GraphExecutionState,
     _ExecutionScheduler,
     _GenericGraphSchedulerAdapter,
+    _IfActivationCompiler,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContextData, build_invocation_context
 from tests.test_nodes import AnyTypeTestInvocation, ErrorInvocation, UnionCollectionTestInvocation
@@ -1535,6 +1536,22 @@ def test_generic_legacy_shaped_if_does_not_prune_or_skip_during_resolution(
     assert state.results[sink_id].value == 7
     assert state.is_complete()
     assert deleted_edges == []
+
+
+def test_if_readiness_does_not_delegate_to_legacy_activation_compiler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = _nested_if_graph()
+
+    def fail_compiler(*_: object, **__: object) -> tuple[object, ...]:
+        raise AssertionError("If readiness used compiler-derived branch topology")
+
+    monkeypatch.setattr(_IfActivationCompiler, "get_activation_dependencies", fail_compiler)
+
+    trace, state = _run_graph(GraphExecutionState(graph=graph))
+
+    assert trace == ["outer_condition", "inner_condition", "inner_false", "inner_if", "outer_if", "sink"]
+    assert state.is_complete()
 
 
 @pytest.mark.parametrize(

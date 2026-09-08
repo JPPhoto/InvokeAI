@@ -409,6 +409,67 @@ class _IfActivationCompiler:
         return tuple(dependencies)
 
 
+class _IfActivationController:
+    """Own activation admission for concrete execution nodes.
+
+    Unlike the legacy compiler, this controller does not lower or cache a
+    branch projection. It answers one readiness question for one prepared
+    execution node from the current source graph and durable execution frame.
+    """
+
+    def __init__(self, state: "GraphExecutionState") -> None:
+        self._state = state
+
+    def _branch_sources(self, if_node_id: str, branch_field: str, source_graph: "nx.DiGraph") -> set[str]:
+        direct_sources = {edge.source.node_id for edge in self._state.graph._get_input_edges(if_node_id, branch_field)}
+        branch_sources = set(direct_sources)
+        for source_node_id in direct_sources:
+            branch_sources.update(nx.ancestors(source_graph, source_node_id))
+
+        changed = True
+        while changed:
+            changed = False
+            for source_node_id in tuple(branch_sources):
+                if all(
+                    edge.destination.node_id in branch_sources
+                    or (edge.destination.node_id == if_node_id and edge.destination.field == branch_field)
+                    for edge in self._state.graph._get_output_edges(source_node_id)
+                ):
+                    continue
+                branch_sources.remove(source_node_id)
+                changed = True
+        return branch_sources
+
+    def get_dependencies(self, exec_node_id: str) -> tuple[ActivationDependency, ...]:
+        """Return activation requirements for one concrete prepared node."""
+
+        source_node_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
+        if not any(isinstance(node, IfInvocation) for node in self._state.graph.nodes.values()):
+            return ()
+        source_graph = self._state._get_source_graph_flat()
+        iteration_path = self._state._get_iteration_path(exec_node_id)
+        dependencies: list[ActivationDependency] = []
+        for source_if_id, source_if_node in self._state.graph.nodes.items():
+            if not isinstance(source_if_node, IfInvocation):
+                continue
+
+            matching_fields = tuple(
+                branch_field
+                for branch_field in ("true_input", "false_input")
+                if source_node_id in self._branch_sources(source_if_id, branch_field, source_graph)
+            )
+            if len(matching_fields) != 1:
+                continue
+            dependencies.append(
+                ActivationDependency(
+                    owner_id=source_if_id,
+                    branch=matching_fields[0],
+                    frame=iteration_path,
+                )
+            )
+        return tuple(dependencies)
+
+
 def _get_if_branch_exclusive_sources(state: "GraphExecutionState", if_node_id: str) -> dict[str, set[str]]:
     """Compatibility entry point for legacy ``If`` topology lowering."""
 
@@ -4309,6 +4370,7 @@ class GraphExecutionState(BaseModel):
     _prepared_exec_metadata: dict[str, _PreparedExecNodeMetadata] = PrivateAttr(default_factory=dict)
     _prepared_exec_registry: Optional[_PreparedExecRegistry] = PrivateAttr(default=None)
     _if_activation_compiler_instance: Optional[_IfActivationCompiler] = PrivateAttr(default=None)
+    _if_activation_controller_instance: Optional[_IfActivationController] = PrivateAttr(default=None)
     _execution_materializer: Optional[_ExecutionMaterializer] = PrivateAttr(default=None)
     _execution_scheduler: Optional[_ExecutionScheduler | _GenericGraphSchedulerAdapter] = PrivateAttr(default=None)
     _execution_runtime: Optional[_ExecutionRuntime] = PrivateAttr(default=None)
@@ -4424,6 +4486,7 @@ class GraphExecutionState(BaseModel):
         self._execution_scheduler = None
         self._generic_graph_scheduler = None
         self._if_activation_compiler_instance = None
+        self._if_activation_controller_instance = None
         self._execution_runtime = None
         self._if_branch_exclusive_sources = {}
         self._source_graph_flat = None
@@ -4455,6 +4518,11 @@ class GraphExecutionState(BaseModel):
         if self._if_activation_compiler_instance is None:
             self._if_activation_compiler_instance = _IfActivationCompiler(self)
         return self._if_activation_compiler_instance
+
+    def _if_activation_controller(self) -> _IfActivationController:
+        if self._if_activation_controller_instance is None:
+            self._if_activation_controller_instance = _IfActivationController(self)
+        return self._if_activation_controller_instance
 
     def _get_source_graph_flat(self) -> Any:
         if self._source_graph_flat is None:
@@ -6154,7 +6222,7 @@ class GraphExecutionState(BaseModel):
         )
 
     def _get_activation_dependencies(self, exec_node_id: str) -> tuple[ActivationDependency, ...]:
-        return self._if_activation_compiler().get_activation_dependencies(exec_node_id)
+        return self._if_activation_controller().get_dependencies(exec_node_id)
 
     def _remove_from_ready_queues(self, exec_node_id: str) -> None:
         self._scheduler().remove_from_ready_queues(exec_node_id)
@@ -6216,6 +6284,7 @@ class GraphExecutionState(BaseModel):
         self._execution_scheduler = None
         self._generic_graph_scheduler = None
         self._execution_runtime = None
+        self._if_activation_controller_instance = None
         self._source_graph_flat = None
         self._execution_graph_flat = None
         self._completed_source_ids_cache = None

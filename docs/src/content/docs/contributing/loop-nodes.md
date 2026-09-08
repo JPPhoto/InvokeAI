@@ -140,13 +140,15 @@ valid. A loaded terminal legacy state may retain its empty in-memory ledger for 
 
 `IfInvocation` now declares the same seam for branch activation: it emits one frame-scoped activation token for the
 selected branch, and the graph state validates and persists it after invocation. For a fresh generic `If`, the dedicated
-`_IfActivationCompiler` produces opaque, frame-local activation dependencies. `_GenericGraphSchedulerAdapter` consumes
+`_IfActivationController` produces opaque, frame-local activation dependencies; the legacy `_IfActivationCompiler`
+remains only as a compatibility lowering helper. `_GenericGraphSchedulerAdapter` consumes
 those dependencies through the opaque `ExecutionPlan` for readiness and rejects unselected prepared nodes through
 generic scheduler discard. The compatibility `_ExecutionScheduler` consumes the same dependencies and append-only
 discard projection; no type-specific branch scheduler prunes edges or propagates skips. Legacy skipped-state metadata
 remains as a compatibility projection for persisted snapshots and completion accounting. `apply()` replaces the
 activation token by stable identity, and activation effects are excluded from stream handling. This is an ownership
-seam, not final removal of all compiler-derived branch analysis or skipped-state projection. Author-time activation
+seam, not final removal of all controller-derived branch analysis or skipped-state projection. The controller still
+derives branch membership from the current author graph; author-time activation
 ports and literal successor IDs remain absent, while unsupported loop shapes and saved-workflow control flow remain on
 their compatibility paths until differential coverage proves their generic replacements.
 
