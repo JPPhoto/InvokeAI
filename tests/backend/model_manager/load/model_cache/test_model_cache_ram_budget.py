@@ -435,8 +435,8 @@ def test_a_dropped_admission_claim_lets_shutdown_evict_its_record(mock_logger):
     del admission_claim  # the load was cancelled before it could retrieve the model
     gc.collect()
     assert _wait_until(lambda: "m" not in cache._cached_models), "a cancelled admission stayed resident"
-    assert store.refcount("m") == 0
-    assert budget.total_in_use() == 0
+    assert _wait_until(lambda: store.refcount("m") == 0), "the evicted record kept its shared-weights reference"
+    assert _wait_until(lambda: budget.total_in_use() == 0), "the evicted record kept its budget bytes"
 
 
 def test_a_dead_worker_falls_back_to_the_admission_claim(mock_logger):
@@ -555,8 +555,8 @@ def test_a_live_admission_survives_worker_hold_being_stripped(mock_logger):
     del admission_claim  # the load ends; only now is the record nobody's
     gc.collect()
     assert _wait_until(lambda: "m" not in cache._cached_models), "the finished admission stayed resident"
-    assert store.refcount("m") == 0
-    assert budget.total_in_use() == 0
+    assert _wait_until(lambda: store.refcount("m") == 0), "the evicted record kept its shared-weights reference"
+    assert _wait_until(lambda: budget.total_in_use() == 0), "the evicted record kept its budget bytes"
 
 
 @pytest.mark.parametrize("death_before_shutdown", [True, False], ids=["death-then-shutdown", "shutdown-then-death"])
@@ -763,8 +763,8 @@ def test_an_unadopted_claim_releases_its_hold_when_dropped(mock_logger):
     gc.collect()
     assert _wait_until(lambda: "m" not in cache._cached_models), "a dropped claim stranded its record"
     assert record.first_use_holds == 0
-    assert store.refcount("m") == 0
-    assert budget.total_in_use() == 0
+    assert _wait_until(lambda: store.refcount("m") == 0), "the evicted record kept its shared-weights reference"
+    assert _wait_until(lambda: budget.total_in_use() == 0), "the evicted record kept its budget bytes"
 
 
 def test_a_spent_claim_cannot_consume_a_later_holders_hold(mock_logger):
@@ -798,8 +798,8 @@ def test_a_spent_claim_cannot_consume_a_later_holders_hold(mock_logger):
     del claim_b
     gc.collect()
     assert _wait_until(lambda: "m" not in cache._cached_models), "holder B's claim did not release"
-    assert store.refcount("m") == 0
-    assert budget.total_in_use() == 0
+    assert _wait_until(lambda: store.refcount("m") == 0), "the evicted record kept its shared-weights reference"
+    assert _wait_until(lambda: budget.total_in_use() == 0), "the evicted record kept its budget bytes"
 
 
 def test_abandoned_holder_reaches_zero_after_shutdown(mock_logger):
@@ -820,8 +820,8 @@ def test_abandoned_holder_reaches_zero_after_shutdown(mock_logger):
     del loaded_model
     gc.collect()
     assert _wait_until(lambda: "m" not in cache._cached_models), "the abandoned record was never evicted"
-    assert store.refcount("m") == 0
-    assert budget.total_in_use() == 0
+    assert _wait_until(lambda: store.refcount("m") == 0), "the evicted record kept its shared-weights reference"
+    assert _wait_until(lambda: budget.total_in_use() == 0), "the evicted record kept its budget bytes"
 
 
 def test_cold_admission_sweep_does_not_clear_wrapper_holds(mock_logger):
@@ -1179,7 +1179,7 @@ def test_shutdown_cleanup_start_failure_falls_back_to_a_live_normal_worker(mock_
     del admission_claim
     assert _wait_until(lambda: "m" not in cache._cached_models)
     assert record.first_use_holds == 0
-    assert store.refcount("m") == 0
+    assert _wait_until(lambda: store.refcount("m") == 0), "the evicted record kept its shared-weights reference"
 
 
 @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
