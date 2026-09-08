@@ -75,7 +75,7 @@ Collect.collection -> ForReturn.output
 
 The fresh generic scheduler admits this exact shape when the outer collection is a non-empty literal and there is one
 final consumer of `For.output_collection`. Each outer frame is isolated, including when the preparation node produces
-an empty inner collection. A checkpoint after any nested iterator boundary restores the generic class-drain state and
+an empty inner collection. A checkpoint after a nested iterator boundary restores the generic class-drain state and
 continues the same frame/stream order. Input-driven outer collections, additional loop or control-flow nodes, escaped
 body paths, and other mixed shapes remain on the compatibility scheduler.
 
