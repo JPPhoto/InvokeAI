@@ -1538,7 +1538,9 @@ def test_generic_legacy_shaped_if_does_not_prune_or_skip_during_resolution(
     assert deleted_edges == []
 
 
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
 def test_if_readiness_does_not_delegate_to_legacy_activation_compiler(
+    force_compatibility_scheduler: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     graph = _nested_if_graph()
@@ -1546,9 +1548,17 @@ def test_if_readiness_does_not_delegate_to_legacy_activation_compiler(
     def fail_compiler(*_: object, **__: object) -> tuple[object, ...]:
         raise AssertionError("If readiness used compiler-derived branch topology")
 
-    monkeypatch.setattr(_IfActivationCompiler, "get_activation_dependencies", fail_compiler)
+    def fail_topology(*_: object, **__: object) -> dict[str, set[str]]:
+        raise AssertionError("If readiness used the legacy topology entry point")
 
-    trace, state = _run_graph(GraphExecutionState(graph=graph))
+    monkeypatch.setattr(_IfActivationCompiler, "get_activation_dependencies", fail_compiler)
+    monkeypatch.setattr(_IfActivationCompiler, "get_branch_exclusive_sources", fail_topology)
+    monkeypatch.setattr(graph_module, "_get_if_branch_exclusive_sources", fail_topology)
+
+    trace, state = _run_graph(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+    )
 
     assert trace == ["outer_condition", "inner_condition", "inner_false", "inner_if", "outer_if", "sink"]
     assert state.is_complete()
