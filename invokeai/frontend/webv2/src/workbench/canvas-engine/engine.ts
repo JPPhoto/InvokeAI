@@ -2566,7 +2566,14 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   const setTextEditContentReader = (reader: (() => string) | null): void =>
     editingController.text.setContentReader(reader);
   const openTextCreate = (point: Vec2): void => editingController.text.openCreate(point);
-  const openTextEdit = (layerId: string): void => editingController.text.openEdit(layerId);
+  // The pane keeps styling the layer after the portal's blur commits the
+  // session, so opening an edit also makes that layer the document selection.
+  const openTextEdit = (layerId: string): void => {
+    editingController.text.openEdit(layerId);
+    if (stores.textEditSession.get()?.layerId === layerId && mirror.getDocument()?.selectedLayerId !== layerId) {
+      dispatchCanvasMutation({ id: layerId, type: 'setCanvasSelectedLayer' });
+    }
+  };
   const updateTextEditStyle = (patch: TextStylePatch): void => editingController.text.updateStyle(patch);
   const cancelTextEdit = (): void => editingController.text.cancel();
   const commitTextEdit = (content: string, styleChanges?: TextStylePatch): StructuralCommitResult | null =>
