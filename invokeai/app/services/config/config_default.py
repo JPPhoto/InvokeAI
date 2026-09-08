@@ -190,6 +190,9 @@ class InvokeAIAppConfig(BaseSettings):
     db_dir:                        Path = Field(default=Path("databases"),  description="Path to InvokeAI databases directory.")
     outputs_dir:                   Path = Field(default=Path("outputs"),    description="Path to directory for outputs.")
     fonts_dir:                     Path = Field(default=Path("fonts"),      description="Path to directory for custom fonts.")
+    fonts_storage_dir:             Path = Field(default=Path("fonts-uploaded"), description="Path to application-managed uploaded fonts.")
+    max_font_upload_bytes:          int = Field(default=32 * 1024 * 1024, gt=0, le=128 * 1024 * 1024, description="Maximum size of one uploaded custom font in bytes.")
+    max_font_library_bytes:         int = Field(default=1024 * 1024 * 1024, gt=0, le=16 * 1024 * 1024 * 1024, description="Maximum total size of uploaded custom fonts in bytes per account or shared library.")
     image_subfolder_strategy: IMAGE_SUBFOLDER_STRATEGY = Field(default="flat", description="Strategy for organizing images into subfolders. 'flat' stores all images in a single folder. 'date' organizes by YYYY/MM/DD. 'type' organizes by image category. 'hash' uses first 2 characters of UUID for filesystem performance.")
     custom_nodes_dir:              Path = Field(default=Path("nodes"),      description="Path to directory for custom nodes.")
     style_presets_dir:      Path = Field(default=Path("style_presets"),      description="Path to directory for style presets.")
@@ -430,6 +433,11 @@ class InvokeAIAppConfig(BaseSettings):
     def fonts_path(self) -> Path:
         """Path to the custom fonts directory, resolved to an absolute path."""
         return self._resolve(self.fonts_dir)
+
+    @property
+    def fonts_storage_path(self) -> Path:
+        """Path to application-managed uploaded fonts, resolved to an absolute path."""
+        return self._resolve(self.fonts_storage_dir)
 
     @property
     def db_path(self) -> Path:

@@ -232,7 +232,7 @@ def test_user_fonts_support_real_font_files_and_configured_directory(
 
     assert font_response.status_code == status.HTTP_200_OK
     assert font_response.headers["content-type"] == "font/ttf"
-    assert font_response.headers["cache-control"] == "private, max-age=31536000, immutable"
+    assert font_response.headers["cache-control"] == "private, no-cache"
     assert font_response.headers["content-disposition"].startswith('inline; filename="Inter-Regular.ttf"')
     assert font_response.content == source_font.read_bytes()
 
