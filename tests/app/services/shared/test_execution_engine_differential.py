@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.invocations.math import AddInvocation
 from invokeai.app.invocations.primitives import BooleanInvocation
+from invokeai.app.services.shared import graph as graph_module
 from invokeai.app.services.shared.execution_state_migration import (
     CURRENT_EXECUTION_STATE_VERSION,
     UnsupportedExecutionStateVersionError,
@@ -23,6 +24,7 @@ from invokeai.app.services.shared.graph import (
     Graph,
     GraphExecutionState,
     _ExecutionScheduler,
+    _GenericGraphSchedulerAdapter,
     _IfBranchScheduler,
 )
 
@@ -265,6 +267,117 @@ def _execution_identity_projection(state: GraphExecutionState) -> tuple[Any, ...
     return references, tokens, effects
 
 
+def _execution_edge_projection(state: GraphExecutionState) -> tuple[tuple[str, str, str, str, str], ...]:
+    return tuple(
+        sorted(
+            (
+                state.prepared_source_mapping[edge.source.node_id],
+                edge.source.field,
+                state.prepared_source_mapping[edge.destination.node_id],
+                edge.destination.field,
+                edge.type,
+            )
+            for edge in state.execution_graph.edges
+        )
+    )
+
+
+def _source_edge_projection(graph: Graph) -> tuple[tuple[str, str, str, str, str], ...]:
+    return tuple(
+        sorted(
+            (
+                edge.source.node_id,
+                edge.source.field,
+                edge.destination.node_id,
+                edge.destination.field,
+                edge.type,
+            )
+            for edge in graph.edges
+        )
+    )
+
+
+def _expected_edge_projection(
+    graph: Graph,
+    *,
+    force_compatibility_scheduler: bool,
+    outer_condition: bool,
+    inner_condition: bool,
+) -> tuple[tuple[str, str, str, str, str], ...]:
+    """Project the source graph using the explicit compatibility If lowering rules."""
+    source_edges = _source_edge_projection(graph)
+    if not force_compatibility_scheduler:
+        return source_edges
+
+    # The compatibility scheduler prunes only the inactive input edge at each If that it resolves. If the outer
+    # branch is false, the inner If is never resolved, so its two branch edges remain in the compatibility graph.
+    pruned_edges = {
+        (
+            "outer_false" if outer_condition else "inner_if",
+            "value",
+            "outer_if",
+            "false_input" if outer_condition else "true_input",
+            "default",
+        ),
+    }
+    if outer_condition:
+        pruned_edges.add(
+            (
+                "inner_false" if inner_condition else "inner_true",
+                "value",
+                "inner_if",
+                "false_input" if inner_condition else "true_input",
+                "default",
+            )
+        )
+    return tuple(edge for edge in source_edges if edge not in pruned_edges)
+
+
+def _normalized_indegree(state: GraphExecutionState) -> tuple[tuple[str, tuple[int, ...]], ...]:
+    return tuple(
+        sorted(
+            (
+                source_id,
+                tuple(
+                    sorted(
+                        degree
+                        for execution_id, degree in state.indegree.items()
+                        if state.prepared_source_mapping.get(execution_id) == source_id
+                    )
+                ),
+            )
+            for source_id in state.graph.nodes
+        )
+    )
+
+
+def _expected_remaining_input_indegree(
+    state: GraphExecutionState,
+    *,
+    force_compatibility_scheduler: bool,
+    outer_condition: bool,
+    inner_condition: bool,
+) -> dict[str, int]:
+    """Calculate remaining indegrees from source edges and durable source completion only."""
+    expected_edges = _expected_edge_projection(
+        state.graph,
+        force_compatibility_scheduler=force_compatibility_scheduler,
+        outer_condition=outer_condition,
+        inner_condition=inner_condition,
+    )
+    completed_sources = {
+        source_id for execution_id, source_id in state.prepared_source_mapping.items() if execution_id in state.executed
+    }
+    return {
+        execution_id: sum(
+            source_id not in completed_sources
+            for source_id, _source_field, destination_id, _destination_field, _edge_type in expected_edges
+            if destination_id == state.prepared_source_mapping[execution_id]
+        )
+        for execution_id in state.prepared_source_mapping
+    }
+
+
 def _assert_execution_identity_consistent(state: GraphExecutionState) -> None:
     for exec_node_id, reference in state.execution_refs.items():
         if exec_node_id not in state.prepared_source_mapping:
@@ -377,6 +490,30 @@ def test_nested_if_fresh_execution_matches_compatibility_scheduler(
         _activation_projection(generic_state)
         == _activation_projection(compatibility_state)
         == expected_activation_projection
+    )
+    assert _execution_edge_projection(generic_state) == _expected_edge_projection(
+        generic_state.graph,
+        force_compatibility_scheduler=False,
+        outer_condition=outer_condition,
+        inner_condition=inner_condition,
+    )
+    assert _execution_edge_projection(compatibility_state) == _expected_edge_projection(
+        compatibility_state.graph,
+        force_compatibility_scheduler=True,
+        outer_condition=outer_condition,
+        inner_condition=inner_condition,
+    )
+    assert dict(generic_state.indegree) == _expected_remaining_input_indegree(
+        generic_state,
+        force_compatibility_scheduler=False,
+        outer_condition=outer_condition,
+        inner_condition=inner_condition,
+    )
+    assert dict(compatibility_state.indegree) == _expected_remaining_input_indegree(
+        compatibility_state,
+        force_compatibility_scheduler=True,
+        outer_condition=outer_condition,
+        inner_condition=inner_condition,
     )
     assert generic_state.is_complete()
     assert compatibility_state.is_complete()
@@ -564,11 +701,19 @@ def test_generic_legacy_shaped_if_does_not_prune_or_skip_during_resolution(
     def fail_skip(*_: object, **__: object) -> None:
         raise AssertionError("generic If execution called mark_exec_node_skipped")
 
+    def fail_topology(*_: object, **__: object) -> dict[str, set[str]]:
+        raise AssertionError("generic If execution consulted legacy branch topology")
+
+    def fail_legacy_scheduler(*_: object, **__: object) -> None:
+        raise AssertionError("generic If execution instantiated the legacy branch scheduler")
+
     def record_deleted_edge(self: GraphExecutionState, edge: Edge) -> None:
         deleted_edges.append(edge)
 
     monkeypatch.setattr(_IfBranchScheduler, "_prune_unselected_if_inputs", fail_prune)
     monkeypatch.setattr(_IfBranchScheduler, "mark_exec_node_skipped", fail_skip)
+    monkeypatch.setattr(_IfBranchScheduler, "__init__", fail_legacy_scheduler)
+    monkeypatch.setattr(graph_module, "_get_if_branch_exclusive_sources", fail_topology)
     monkeypatch.setattr(GraphExecutionState, "_tx_delete_execution_edge", record_deleted_edge)
 
     trace, state = _run_graph(state)
@@ -580,11 +725,127 @@ def test_generic_legacy_shaped_if_does_not_prune_or_skip_during_resolution(
     assert deleted_edges == []
 
 
+@pytest.mark.parametrize(
+    ("outer_condition", "inner_condition", "expected_trace", "expected_history", "expected_value"),
+    [
+        (
+            True,
+            True,
+            ["outer_condition", "inner_condition", "inner_true", "inner_if", "outer_if", "sink"],
+            [
+                "outer_condition",
+                "outer_false",
+                "inner_condition",
+                "inner_false",
+                "inner_true",
+                "inner_if",
+                "outer_if",
+                "sink",
+            ],
+            5,
+        ),
+        (
+            True,
+            False,
+            ["outer_condition", "inner_condition", "inner_false", "inner_if", "outer_if", "sink"],
+            [
+                "outer_condition",
+                "outer_false",
+                "inner_condition",
+                "inner_true",
+                "inner_false",
+                "inner_if",
+                "outer_if",
+                "sink",
+            ],
+            7,
+        ),
+        (
+            False,
+            True,
+            ["outer_condition", "outer_false", "outer_if", "sink"],
+            [
+                "outer_condition",
+                "inner_condition",
+                "inner_true",
+                "inner_false",
+                "inner_if",
+                "outer_false",
+                "outer_if",
+                "sink",
+            ],
+            11,
+        ),
+        (
+            False,
+            False,
+            ["outer_condition", "outer_false", "outer_if", "sink"],
+            [
+                "outer_condition",
+                "inner_condition",
+                "inner_true",
+                "inner_false",
+                "inner_if",
+                "outer_false",
+                "outer_if",
+                "sink",
+            ],
+            11,
+        ),
+    ],
+)
+def test_fresh_generic_nested_if_preserves_state_without_legacy_branch_projection(
+    outer_condition: bool,
+    inner_condition: bool,
+    expected_trace: list[str],
+    expected_history: list[str],
+    expected_value: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = _nested_if_graph()
+    graph.get_node("outer_condition").value = outer_condition
+    graph.get_node("inner_condition").value = inner_condition
+
+    def fail_legacy_path(*_: object, **__: object) -> None:
+        raise AssertionError("fresh generic If execution used a legacy branch projection")
+
+    generic_retired_nodes: list[str] = []
+    original_discard = _GenericGraphSchedulerAdapter._retire_unselected_node
+
+    def record_generic_discard(adapter: _GenericGraphSchedulerAdapter, exec_node_id: str) -> None:
+        generic_retired_nodes.append(exec_node_id)
+        original_discard(adapter, exec_node_id)
+
+    monkeypatch.setattr(graph_module, "_get_if_branch_exclusive_sources", fail_legacy_path)
+    monkeypatch.setattr(_GenericGraphSchedulerAdapter, "_retire_unselected_node", record_generic_discard)
+    monkeypatch.setattr(_IfBranchScheduler, "_prune_unselected_if_inputs", fail_legacy_path)
+    monkeypatch.setattr(_IfBranchScheduler, "mark_exec_node_skipped", fail_legacy_path)
+    monkeypatch.setattr(GraphExecutionState, "_tx_delete_execution_edge", fail_legacy_path)
+
+    trace, state = _run_graph(GraphExecutionState(graph=graph))
+
+    assert trace == expected_trace
+    assert state.executed_history == expected_history
+    assert set(state.indegree) == set(state.prepared_source_mapping)
+    assert set(state.indegree.values()) == {0}
+    assert state.is_complete()
+    sink_id = next(iter(state.source_prepared_mapping["sink"]))
+    assert state.results[sink_id].value == expected_value
+    assert _execution_edge_projection(state) == _source_edge_projection(graph)
+    expected_retired_sources = (
+        {"inner_false" if inner_condition else "inner_true", "outer_false"}
+        if outer_condition
+        else {"inner_condition", "inner_true", "inner_false", "inner_if"}
+    )
+    assert {state.prepared_source_mapping[exec_id] for exec_id in generic_retired_nodes} == expected_retired_sources
+
+
 @pytest.mark.parametrize("stop_after_source", ["outer_if", "inner_false"])
 def test_if_partial_state_round_trip_rebuilds_fresh_runtime_and_matches_both_scheduler_paths(
     stop_after_source: str,
 ) -> None:
     """A partial If state round-trips and a fresh runtime matches both scheduler paths."""
+    expected_trace, expected_state = _run_graph(GraphExecutionState(graph=_nested_if_graph()))
     partial_projections: list[tuple[Any, ...]] = []
     projections: list[tuple[list[str], GraphExecutionState]] = []
 
@@ -607,6 +868,12 @@ def test_if_partial_state_round_trip_rebuilds_fresh_runtime_and_matches_both_sch
             canceled_state.prepared_source_mapping[execution_id] for execution_id in canceled_state.results
         }
         assert not canceled_state.is_complete()
+        assert dict(canceled_state.indegree) == _expected_remaining_input_indegree(
+            canceled_state,
+            force_compatibility_scheduler=force_compatibility_scheduler,
+            outer_condition=True,
+            inner_condition=False,
+        )
         assert _activation_projection(canceled_state) == (
             ("inner_if", "false_input", "false_input", ()),
             ("outer_if", "true_input", "true_input", ()),
@@ -622,8 +889,30 @@ def test_if_partial_state_round_trip_rebuilds_fresh_runtime_and_matches_both_sch
         assert dump_execution_state(restored_canceled)["execution_effects"] == partial_snapshot["execution_effects"]
         assert _execution_identity_projection(restored_canceled) == _execution_identity_projection(restored_expected)
         _assert_execution_identity_consistent(restored_canceled)
+        assert dict(restored_canceled.indegree) == _expected_remaining_input_indegree(
+            restored_canceled,
+            force_compatibility_scheduler=force_compatibility_scheduler,
+            outer_condition=True,
+            inner_condition=False,
+        )
         partial_projections.append(
             (_state_projection(restored_canceled), _execution_identity_projection(restored_canceled))
+        )
+
+        remaining_trace, resumed_state = _run_graph(
+            restored_canceled,
+            force_compatibility_scheduler=force_compatibility_scheduler,
+        )
+        assert partial_trace + remaining_trace == expected_trace
+        assert resumed_state.executed_history == expected_state.executed_history
+        assert _state_projection(resumed_state) == _state_projection(expected_state)
+        assert resumed_state.results[next(iter(resumed_state.source_prepared_mapping["sink"]))].value == 7
+        assert resumed_state.is_complete()
+        assert dict(resumed_state.indegree) == _expected_remaining_input_indegree(
+            resumed_state,
+            force_compatibility_scheduler=force_compatibility_scheduler,
+            outer_condition=True,
+            inner_condition=False,
         )
 
         retried_state = GraphExecutionState(graph=canceled_state.graph.model_copy(deep=True))

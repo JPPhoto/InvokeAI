@@ -8,10 +8,13 @@ Provide a typed, acyclic workflow model (**Graph**) plus a runtime scheduler (**
 iterator patterns, tracks readiness via indegree (the number of incoming edges to a node in the directed graph), and
 executes nodes from class-grouped ready queues. In normal execution, runtime expansion happens in a separate execution graph
 instead of mutating the source graph. Ordinary static DAGs and legacy-shaped `If` graphs use the opaque `ExecutionPlan`
-and deterministic `ExecutionScheduler` in `execution_engine/scheduler.py`; a private graph adapter derives opaque,
-frame-local `If` activation dependencies, checks their private gate state plus persisted activation tokens, and retires
-unselected prepared nodes through generic scheduler discard. The forced compatibility `_ExecutionScheduler` path retains
-legacy `If` topology lowering, input-edge pruning, and skip behavior.
+and deterministic `ExecutionScheduler` in `execution_engine/scheduler.py`. For a fresh generic `If`, the dedicated
+`_IfActivationCompiler` produces opaque, frame-local activation dependencies; `_GenericGraphSchedulerAdapter` registers
+and consumes those dependencies through the opaque plan, then rejects unselected prepared nodes through generic scheduler
+discard. It does not consult `_IfBranchScheduler` topology or call its prune/skip methods, and it does not delete
+execution edges. The forced compatibility `_ExecutionScheduler` path retains legacy `If` topology lowering, input-edge
+pruning, and skip behavior for compatibility snapshots. This is an ownership seam, not final removal of all legacy
+topology.
 The runtime also exposes an additive execution-engine seam: frame-scoped gates, ordered streams, continuations, and
 authorized child-dependency records are stored in
 `invokeai.app.services.shared.execution_engine`; legacy graph and queue behavior is retained behind adapters while
@@ -203,13 +206,14 @@ port against the producing invocation's declared activation fields and persists 
 rehydration, every activation token is bound to a currently prepared owner and its derived execution reference; its
 declared port, value, canonical token id, mapping key, and known frame fields must match. Unknown extra frame metadata
 remains forward-compatible.
-The generic plan stores opaque, frame-local activation-dependency records for `If` branch-local nodes. Its readiness
+For a fresh generic `If`, `_IfActivationCompiler` puts opaque, frame-local activation-dependency records on each
+branch-local plan node. `_GenericGraphSchedulerAdapter` consumes those records through the opaque plan: its readiness
 callback accepts a node only when the required private `ActivationGate` runtime state is resolved and a matching
-persisted activation token is present for its frame; the activation token is therefore authoritative for generic
-successor readiness. Generic legacy-shaped `If` resolution retires unselected prepared nodes through generic scheduler
-discard. It does not call `_IfBranchScheduler._prune_unselected_if_inputs`,
+persisted activation token is present for its frame, while rejected dependencies cause generic scheduler discard. This
+path does not consult `_IfBranchScheduler` topology, call `_IfBranchScheduler._prune_unselected_if_inputs` or
 `_IfBranchScheduler.mark_exec_node_skipped`, or delete execution edges. The forced compatibility `_ExecutionScheduler`
-path still uses `_IfBranchScheduler` for legacy branch topology, input-edge pruning, and skip behavior. `apply()`
+path still uses `_IfBranchScheduler` for legacy branch topology, input-edge pruning, and skip behavior. This is an
+ownership seam, not final removal of all legacy topology. `apply()`
 validates and persists the invocation-emitted effect afterward, replacing the compatibility token by stable identity.
 Activation effects are excluded from data-stream handling. `IterateInvocation` is the first stream-producing
 control-flow invocation on this seam: each non-empty prepared copy emits one ordered `item` effect with its iteration
@@ -317,20 +321,22 @@ Workflow-call note:
   ready work. It owns iterator expansion, collector grouping, prepared-parent selection, and creation of execution-graph
   edges. When matching prepared parents for a downstream exec node, skipped prepared exec nodes are ignored and cannot
   be selected as live inputs.
+- `_IfActivationCompiler` Compiles legacy-shaped `If` branch membership into opaque, frame-local activation dependency
+  records for the generic plan. It is separate from both schedulers and does not own execution-graph topology changes.
 - `_GenericGraphSchedulerAdapter` Projects the generic `ExecutionPlan`/`ExecutionScheduler` into the existing state
   fields for ordinary static DAGs and legacy-shaped `If` graphs; the generic scheduler owns opaque readiness,
-  intentional discards, indegree transitions, deterministic ordering, claimed work, and completion. The adapter records
-  frame-local activation dependencies, checks private gate state plus persisted activation tokens, and retires
-  unselected prepared nodes through generic scheduler discard.
+  intentional discards, indegree transitions, deterministic ordering, claimed work, and completion. The adapter registers
+  the compiler's activation dependencies, checks private gate state plus persisted activation tokens, and rejects
+  unselected prepared nodes through generic scheduler discard. Fresh generic `If` scheduling does not call
+  `_IfBranchScheduler` topology, prune, or skip methods and does not delete execution edges.
 - `_ExecutionScheduler` Owns materialized-graph indegree transitions, class-grouped ready queues, downstream release,
   control-flow continuation scheduling, and forced-compatibility `If` topology for graphs that still require lowering.
 - `_ExecutionRuntime` Owns iteration-path lookup, collect input ordering, and input hydration for prepared exec nodes.
 - `_IfBranchScheduler` Computes legacy `If` topology, defers branch-local work until the condition is known, then
   lowers the decision to private frame-scoped `ActivationGate` runtime state and a persisted internal activation token,
   releases the selected branch, prunes unselected input edges, and marks unselected branch-local nodes skipped. Used
-  only by forced compatibility `_ExecutionScheduler`; generic legacy-shaped `If` scheduling compiles opaque dependencies
-  and retires unselected prepared nodes through generic scheduler discard. The opaque scheduler has no `If`-specific
-  branch.
+  only by forced compatibility `_ExecutionScheduler`; it remains available for compatibility snapshots. Its retained
+  topology/pruning/skip ownership is an intentional seam, not a final removal of legacy topology.
 - `ExecutionEngineRuntime` Owns the typed gate, stream, and continuation records used by compatibility adapters. The
   canonical stream for a prepared `IterateInvocation` is keyed by the source iterator and its parent iteration path;
   its item/close effects and legacy output mirroring update the same idempotent buffer. Direct `CollectInvocation.item`
