@@ -9,6 +9,7 @@ import pytest
 from fastapi_events.handlers.local import local_handler
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput, invocation, invocation_output
+from invokeai.app.invocations.collections import RangeInvocation
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation
 from invokeai.app.services.events.events_base import EventServiceBase
@@ -83,6 +84,16 @@ def _build_nested_graph(*, fail_on: int | None = None) -> Graph:
     graph.add_edge(create_edge("collect", "collection", "return", "output"))
     graph.add_edge(create_edge("for", "output_collection", "after", "collection"))
     graph.add_edge(create_loop_linkage("for", "return"))
+    return graph
+
+
+def _build_iterate_collect_graph() -> Graph:
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="range", start=0, stop=3, step=1))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("range", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "collect", "item"))
     return graph
 
 
@@ -388,3 +399,107 @@ def test_processor_sqlite_queue_nested_for_cleanup(
                 assert inner_returns_seen == 2
     finally:
         _stop_processor(processor)
+
+
+def test_processor_sqlite_iterate_collect_cancel_retry_does_not_leak_stream_state(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_invoker: Invoker,
+    registered_event_bus: _RecordingRegisteredEventService,
+) -> None:
+    monkeypatch.setattr(
+        "invokeai.app.services.session_processor.session_processor_default.build_invocation_context",
+        _build_test_invocation_context,
+    )
+
+    queue = SqliteSessionQueue(db=mock_invoker.services.board_records._db)
+    mock_invoker.services.events = registered_event_bus
+    mock_invoker.services.session_queue = queue
+    mock_invoker.services.performance_statistics = _Stats()
+    queue.start(mock_invoker)
+
+    item_id = _insert_session(queue, _build_iterate_collect_graph())
+    session_persisted = Event()
+    processor = DefaultSessionProcessor(
+        session_runner=DefaultSessionRunner(
+            on_after_run_node_callbacks=[
+                lambda invocation, queue_item, output: queue.cancel_queue_item(queue_item.item_id)
+                if queue_item.session.prepared_source_mapping[invocation.id] == "iterate" and invocation.index == 0
+                else None
+            ],
+            on_after_run_session_callbacks=[lambda queue_item: session_persisted.set()],
+        ),
+        polling_interval=0,
+    )
+    try:
+        processor.start(mock_invoker)
+        assert registered_event_bus.wait_for_status(item_id, "canceled")
+        assert session_persisted.wait(timeout=5)
+    finally:
+        _stop_processor(processor)
+
+    canceled_item_before_retry = queue.get_queue_item(item_id)
+    assert canceled_item_before_retry.status == "canceled"
+    assert not canceled_item_before_retry.session.is_complete()
+    assert "collect" not in canceled_item_before_retry.session.source_prepared_mapping
+    [iterate_execution_id] = [
+        exec_node_id
+        for exec_node_id in canceled_item_before_retry.session.source_prepared_mapping["iterate"]
+        if exec_node_id in canceled_item_before_retry.session.results
+    ]
+    assert canceled_item_before_retry.session.results[iterate_execution_id].index == 0
+    assert sum(len(effects) for effects in canceled_item_before_retry.session.execution_effects.values()) == 1
+    canceled_streams = [
+        stream
+        for stream in canceled_item_before_retry.session._generic_runtime().streams.values()
+        if stream.owner_id == "iterate"
+    ]
+    assert len(canceled_streams) == 1
+    assert canceled_streams[0].values == (0,)
+    assert not canceled_streams[0].closed
+    canceled_stream_id = canceled_streams[0].stream_id
+
+    retry_result = queue.retry_items_by_id("default", [item_id])
+    assert retry_result.retried_item_ids == [item_id]
+    [retried_item] = [
+        queue_item for queue_item in queue.list_all_queue_items("default") if queue_item.retried_from_item_id == item_id
+    ]
+    assert retried_item.status == "pending"
+    assert retried_item.item_id != item_id
+    assert retried_item.retried_from_item_id == item_id
+    assert retried_item.session.id != canceled_item_before_retry.session.id
+    assert retried_item.session.results == {}
+    assert retried_item.session.execution_refs == {}
+    assert retried_item.session.execution_tokens == {}
+    assert retried_item.session.execution_effects == {}
+    assert not retried_item.session._generic_runtime().streams
+
+    retry_session_persisted = Event()
+    retry_processor = DefaultSessionProcessor(
+        session_runner=DefaultSessionRunner(
+            on_after_run_session_callbacks=[lambda queue_item: retry_session_persisted.set()],
+        ),
+        polling_interval=0,
+    )
+    try:
+        retry_processor.start(mock_invoker)
+        assert registered_event_bus.wait_for_status(retried_item.item_id, "completed")
+        assert retry_session_persisted.wait(timeout=5)
+    finally:
+        _stop_processor(retry_processor)
+
+    canceled_item = queue.get_queue_item(item_id)
+    completed_item = queue.get_queue_item(retried_item.item_id)
+    assert canceled_item.status == "canceled"
+    assert completed_item.status == "completed"
+    assert completed_item.session.is_complete()
+    [collect_execution_id] = completed_item.session.source_prepared_mapping["collect"]
+    assert completed_item.session.results[collect_execution_id].collection == [0, 1, 2]
+    completed_streams = [
+        stream for stream in completed_item.session._generic_runtime().streams.values() if stream.owner_id == "iterate"
+    ]
+    assert len(completed_streams) == 1
+    assert completed_streams[0].values == (0, 1, 2)
+    assert completed_streams[0].closed
+    assert completed_streams[0].stream_id != canceled_stream_id
+    assert completed_streams[0].stream_id.startswith(f"{completed_item.session.id}:iterate:")
+    assert sum(len(effects) for effects in completed_item.session.execution_effects.values()) == 4

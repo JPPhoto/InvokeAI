@@ -593,6 +593,155 @@ def test_rehydrated_terminal_iterate_result_closes_existing_effect_stream():
     assert restored_collect.collection == [0]
 
 
+def test_empty_iterate_closed_ledger_hydrates_collect_after_rehydrate():
+    graph = Graph()
+    graph.add_node(BooleanCollectionInvocation(id="values", collection=[]))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(create_edge("values", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "collect", "item"))
+    graph.add_edge(create_edge("collect", "collection", "after", "value"))
+
+    state = GraphExecutionState(graph=graph)
+    values_node, values_output = invoke_next(state)
+    assert values_node is not None
+    assert values_output is not None
+    collect_node = state.next()
+    assert isinstance(collect_node, CollectInvocation)
+    assert collect_node.collection == []
+
+    streams = [stream for stream in state._generic_runtime().streams.values() if stream.owner_id == "iterate"]
+    assert len(streams) == 1
+    assert streams[0].closed
+    assert streams[0].values == ()
+    collect_exec_id = next(iter(state.source_prepared_mapping["collect"]))
+    assert collect_exec_id not in state.results
+
+    restored = TypeAdapter(GraphExecutionState).validate_json(state.model_dump_json(warnings=False), strict=False)
+    restored_streams = [
+        stream for stream in restored._generic_runtime().streams.values() if stream.owner_id == "iterate"
+    ]
+    assert len(restored_streams) == 1
+    assert restored_streams[0].closed
+    assert restored_streams[0].values == ()
+    restored_collect = restored.next()
+    assert isinstance(restored_collect, CollectInvocation)
+    assert restored_collect.collection == []
+    restored_collect_output = restored_collect.invoke(Mock(InvocationContext))
+    restored.complete(restored_collect.id, restored_collect_output)
+    assert restored_collect_output.collection == []
+    after_node, after_output = invoke_next(restored)
+    assert after_node is not None
+    assert after_output is not None
+    assert after_output.value == []
+    assert restored.is_complete()
+
+
+def test_nested_iterate_collect_ledger_keeps_parent_streams_separate():
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="outer_range", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="outer_iter"))
+    graph.add_node(IntegerCollectionFromItemTestInvocation(id="inner_collection"))
+    graph.add_node(IterateInvocation(id="inner_iter"))
+    graph.add_node(AddInvocation(id="inner_item", b=0))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("outer_range", "collection", "outer_iter", "collection"))
+    graph.add_edge(create_edge("outer_iter", "item", "inner_collection", "value"))
+    graph.add_edge(create_edge("inner_collection", "collection", "inner_iter", "collection"))
+    graph.add_edge(create_edge("inner_iter", "item", "inner_item", "a"))
+    graph.add_edge(create_edge("inner_item", "value", "collect", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    streams = [stream for stream in state._generic_runtime().streams.values() if stream.owner_id == "inner_iter"]
+    assert sorted((stream.frame.iteration_path, stream.values, stream.closed) for stream in streams) == [
+        ((0,), (0, 1), True),
+        ((1,), (10, 11), True),
+    ]
+    collect_values = sorted(
+        state.results[exec_node_id].collection for exec_node_id in state.source_prepared_mapping["collect"]
+    )
+    assert collect_values == [[0, 1], [10, 11]]
+
+
+def test_collect_fan_in_consumes_each_closed_iterate_stream_once():
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="left_range", start=0, stop=2, step=1))
+    graph.add_node(RangeInvocation(id="right_range", start=10, stop=12, step=1))
+    graph.add_node(IterateInvocation(id="left_iter"))
+    graph.add_node(IterateInvocation(id="right_iter"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("left_range", "collection", "left_iter", "collection"))
+    graph.add_edge(create_edge("right_range", "collection", "right_iter", "collection"))
+    graph.add_edge(create_edge("left_iter", "item", "collect", "item"))
+    graph.add_edge(create_edge("right_iter", "item", "collect", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    streams = [
+        stream for stream in state._generic_runtime().streams.values() if stream.owner_id in {"left_iter", "right_iter"}
+    ]
+    assert sorted((stream.owner_id, stream.values, stream.closed) for stream in streams) == [
+        ("left_iter", (0, 1), True),
+        ("right_iter", (10, 11), True),
+    ]
+    collect_exec_ids = state.source_prepared_mapping["collect"]
+    assert len(collect_exec_ids) == 1
+    collect_results = [
+        state.results[exec_node_id] for exec_node_id in collect_exec_ids if exec_node_id in state.results
+    ]
+    assert len(collect_results) == 1
+    collected = collect_results[0].collection
+    assert sorted(collected) == [0, 1, 10, 11]
+    assert len(collected) == len(set(collected)) == 4
+
+
+def test_partial_iterate_stream_round_trip_defers_collect_until_close():
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="range", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("range", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "collect", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    range_node, range_output = invoke_next(state)
+    assert range_node is not None
+    assert range_output is not None
+    first_iterate = state.next()
+    assert isinstance(first_iterate, IterateInvocation)
+    state.complete(first_iterate.id, first_iterate.invoke(Mock(InvocationContext)))
+
+    stream = next(stream for stream in state._generic_runtime().streams.values() if stream.owner_id == "iterate")
+    assert stream.values == (0,)
+    assert not stream.closed
+    restored = TypeAdapter(GraphExecutionState).validate_json(
+        state.model_dump_json(warnings=False, exclude_none=True), strict=False
+    )
+    restored_stream = next(
+        stream for stream in restored._generic_runtime().streams.values() if stream.owner_id == "iterate"
+    )
+    assert restored_stream.values == (0,)
+    assert not restored_stream.closed
+
+    next_node = restored.next()
+    assert isinstance(next_node, IterateInvocation)
+    assert next_node.index == 1
+    restored.complete(next_node.id, next_node.invoke(Mock(InvocationContext)))
+    assert restored_stream.values == (0, 1)
+    assert restored_stream.closed
+    collect_node = restored.next()
+    assert isinstance(collect_node, CollectInvocation)
+    assert collect_node.collection == [0, 1]
+    collect_output = collect_node.invoke(Mock(InvocationContext))
+    restored.complete(collect_node.id, collect_output)
+    assert collect_output.collection == [0, 1]
+    assert restored.is_complete()
+
+
 @pytest.mark.parametrize("port", ["type", "output_meta", "loop_linkage"])
 @pytest.mark.parametrize("effect_kind, token_kind", [("emit", "data"), ("close_stream", "stream_end")])
 def test_graph_state_apply_rejects_reserved_effect_ports(port: str, effect_kind: str, token_kind: str):
