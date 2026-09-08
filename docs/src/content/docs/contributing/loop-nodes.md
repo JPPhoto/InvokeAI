@@ -135,7 +135,8 @@ synthetic `For`/`ForReturn` continuation effects. It still permits historical id
 already-applied node; arbitrary in-memory values that cannot be represented in the JSON ledger remain a scheduler-only
 compatibility case and cannot be persisted. When an explicitly unversioned, partially completed legacy snapshot is
 loaded, missing flat-loop continuation buckets are synthesized before a versioned re-save so the next load remains
-valid; terminal legacy snapshots retain their legacy no-ledger compatibility.
+valid. A loaded terminal legacy state may retain its empty in-memory ledger for compatibility, but
+`dump_execution_state()` upgrades missing loop buckets in the versioned snapshot.
 
 `IfInvocation` now declares the same seam for branch activation: it emits one frame-scoped activation token for the
 selected branch, and the graph state validates and persists it after invocation. For a fresh generic `If`, the dedicated

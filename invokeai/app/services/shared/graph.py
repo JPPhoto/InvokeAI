@@ -4999,7 +4999,13 @@ class GraphExecutionState(BaseModel):
             continuation.start()
         return continuation
 
-    def _record_continuation_effects(self, execution_ref: ExecutionReference, effects: Iterable[Any]) -> None:
+    def _record_continuation_effects(
+        self,
+        execution_ref: ExecutionReference,
+        effects: Iterable[Any],
+        *,
+        allow_return_state_override: bool = False,
+    ) -> None:
         """Reconcile durable For continuation effects with the private runtime record."""
 
         node = self.execution_graph.get_node(execution_ref.exec_node_id)
@@ -5023,7 +5029,9 @@ class GraphExecutionState(BaseModel):
                         self._tx_set_attr(continuation, "payload", copydeep(payload))
             elif isinstance(node, ForReturnInvocation) and operation == "complete":
                 expected_payload = self._prepared_for_continuation_payload(node)
-                if expected_payload is not None and not self._for_return_payloads_match(payload, expected_payload):
+                if expected_payload is not None and not self._for_return_payloads_match(
+                    payload, expected_payload, allow_state_override=allow_return_state_override
+                ):
                     raise ValueError("completed continuation payload does not match ForReturn output")
                 for_exec_node_id = self._get_for_parent(execution_ref.exec_node_id)
                 if for_exec_node_id is None:
@@ -5065,14 +5073,16 @@ class GraphExecutionState(BaseModel):
                 return False
 
     @classmethod
-    def _for_return_payloads_match(cls, left: Any, right: Any) -> bool:
-        """Compare durable return identity while allowing the returned loop state to be computed by the node."""
+    def _for_return_payloads_match(cls, left: Any, right: Any, *, allow_state_override: bool = False) -> bool:
+        """Compare durable return identity, optionally allowing compatibility callers to replace loop state."""
 
         if not isinstance(left, dict) or not isinstance(right, dict):
             return cls._payload_values_match(left, right)
-        return cls._payload_values_match(left.get("output"), right.get("output")) and left.get(
-            "continue_condition"
-        ) == right.get("continue_condition")
+        if not cls._payload_values_match(left.get("output"), right.get("output")):
+            return False
+        if left.get("continue_condition") != right.get("continue_condition"):
+            return False
+        return allow_state_override or cls._payload_values_match(left.get("state"), right.get("state"))
 
     @classmethod
     def _for_start_continuation_payload(
@@ -5157,7 +5167,11 @@ class GraphExecutionState(BaseModel):
         return collection[node.index]
 
     def _validate_for_continuation_output(
-        self, execution_ref: ExecutionReference, output: BaseInvocationOutput
+        self,
+        execution_ref: ExecutionReference,
+        output: BaseInvocationOutput,
+        *,
+        allow_return_state_override: bool = False,
     ) -> None:
         node = self.execution_graph.get_node(execution_ref.exec_node_id)
         if isinstance(node, ForInvocation) and isinstance(output, ForInvocationOutput):
@@ -5211,7 +5225,9 @@ class GraphExecutionState(BaseModel):
         elif isinstance(node, ForReturnInvocation) and isinstance(output, ForReturnInvocationOutput):
             expected_payload = self._prepared_for_continuation_payload(node)
             actual_payload = self._for_return_continuation_payload(node, output)
-            if not self._for_return_payloads_match(actual_payload, expected_payload):
+            if not self._for_return_payloads_match(
+                actual_payload, expected_payload, allow_state_override=allow_return_state_override
+            ):
                 raise ValueError("ForReturn output does not match prepared ForReturn")
 
     def _requires_continuation_effect(self, execution_ref: ExecutionReference) -> bool:
@@ -5909,6 +5925,7 @@ class GraphExecutionState(BaseModel):
         effects: Optional[Iterable[Any]] = None,
         *,
         effect_count: Optional[int] = None,
+        _compatibility_completion: bool = False,
     ) -> list[tuple[BaseInvocation, BaseInvocationOutput]]:
         """Apply output/effects through current scheduler while retaining old ``complete()`` behavior."""
 
@@ -5926,7 +5943,7 @@ class GraphExecutionState(BaseModel):
                 if effects is None:
                     effects = result_effects
         output_value = self._validate_output_owner(ref, output)
-        self._validate_for_continuation_output(ref, output_value)
+        self._validate_for_continuation_output(ref, output_value, allow_return_state_override=_compatibility_completion)
         require_continuation = effects is not None or effect_count is not None
         if effects is None:
             effect_values = []
@@ -5954,7 +5971,7 @@ class GraphExecutionState(BaseModel):
         try:
             # Capture and record the continuation before scheduler completion can clear the prepared For
             # collection or otherwise mutate the node used to validate its durable payload.
-            self._record_continuation_effects(ref, effect_values)
+            self._record_continuation_effects(ref, effect_values, allow_return_state_override=_compatibility_completion)
             finalized_outputs = self._complete(ref.exec_node_id, output_value)
             tokens = self._build_execution_tokens(ref, output_value, effect_values)
             self._record_effect_streams(ref, effect_values)
@@ -6338,6 +6355,24 @@ class GraphExecutionState(BaseModel):
             self.execution_effects[execution_ref.reference_id] = [effect]
             execution_ref.effect_count = 1
 
+    def _legacy_execution_effects_for_snapshot(self) -> dict[str, list[Any]]:
+        """Return missing loop effects needed to convert any loaded legacy state on its next dump."""
+
+        if not self._legacy_snapshot_loaded:
+            return {}
+        effects: dict[str, list[Any]] = {}
+        for exec_node_id, output in self.results.items():
+            execution_ref = self.execution_refs.get(exec_node_id)
+            if execution_ref is None or execution_ref.reference_id in self.execution_effects:
+                continue
+            if not self._requires_continuation_effect(execution_ref):
+                continue
+            if isinstance(output, (ForInvocationOutput, ForReturnInvocationOutput)):
+                effects[execution_ref.reference_id] = [
+                    self._build_compatibility_continuation_effect(execution_ref, output)
+                ]
+        return effects
+
     def _rehydrate_generic_runtime_state(self) -> None:
         """Rebuild private stream/continuation adapters from durable results."""
 
@@ -6498,7 +6533,17 @@ class GraphExecutionState(BaseModel):
         """Validate and apply a direct compatibility completion through the execution ledger."""
 
         if self._apply_transaction is None:
-            execution_ref = self.get_execution_ref(node_id)
+            existing_ref = self.execution_refs.get(node_id)
+            execution_ref = self._expected_execution_ref(
+                node_id, effect_count=existing_ref.effect_count if existing_ref is not None else None
+            )
+            if existing_ref is not None and (
+                existing_ref.reference_id not in ("", execution_ref.reference_id)
+                or existing_ref.state_id not in ("", execution_ref.state_id)
+                or existing_ref.exec_node_id not in ("", execution_ref.exec_node_id)
+                or existing_ref.source_node_id not in ("", execution_ref.source_node_id)
+            ):
+                raise ValueError(f"Execution reference for {node_id} does not belong to this state")
             if execution_ref.exec_node_id in self.executed or execution_ref.reference_id in self.execution_effects:
                 # Historical callers may replace a result after invoking a node directly. The scheduler has
                 # already applied its transition, so preserve that idempotent result-replacement contract.
@@ -6518,7 +6563,7 @@ class GraphExecutionState(BaseModel):
                     except ValueError:
                         # A return connected to a non-JSON in-memory value has the same non-persistable constraint.
                         return self._complete(node_id, output)
-            return self.apply(execution_ref, output)
+            return self.apply(execution_ref, output, _compatibility_completion=True)
         return self._complete(node_id, output)
 
     def _complete(

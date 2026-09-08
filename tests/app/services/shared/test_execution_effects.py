@@ -511,6 +511,29 @@ def test_graph_state_rejects_forged_for_return_output_with_matching_completion_e
     assert dump_execution_state(state) == before
 
 
+def test_graph_state_rejects_forged_for_return_state_with_matching_completion_effect() -> None:
+    state, return_ref, return_result = _apply_flat_for_pair(["item"], apply_return=False)
+    effect = return_result.effects[0]
+    assert isinstance(effect, ContinuationEffect)
+    forged_state = LoopState(values={"forged": True})
+    forged_output = return_result.output.model_copy(update={"state": forged_state})
+    forged_effect = effect.model_copy(
+        deep=True,
+        update={"payload": {**effect.payload, "state": forged_state.model_dump(mode="json")}},
+    )
+    before = dump_execution_state(state)
+
+    with pytest.raises(ValueError, match="ForReturn output does not match prepared ForReturn"):
+        state.apply(
+            return_ref,
+            InvocationRunResult(output=forged_output, effects=return_result.effects),
+            [forged_effect],
+            effect_count=1,
+        )
+
+    assert dump_execution_state(state) == before
+
+
 def test_graph_state_rejects_forged_for_item_with_valid_continuation_fields() -> None:
     graph = Graph()
     graph.add_node(ForInvocation(id="for", collection=["item"]))

@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation, LoopState, StateSetInvocation
 from invokeai.app.invocations.math import AddInvocation
-from invokeai.app.invocations.primitives import BooleanInvocation
+from invokeai.app.invocations.primitives import BooleanInvocation, BooleanOutput
 from invokeai.app.services.shared import graph as graph_module
 from invokeai.app.services.shared.execution_state_migration import (
     CURRENT_EXECUTION_STATE_VERSION,
@@ -810,6 +810,44 @@ def test_flat_for_fresh_execution_matches_compatibility_scheduler() -> None:
         for exec_node_id, source_node_id in generic_state.prepared_source_mapping.items()
         if source_node_id == "for"
     }
+    expected_continuations = [
+        (
+            (0,),
+            "completed",
+            {"index": 0, "total": 2, "state": {"values": {}}},
+            {"output": 11, "state": None, "continue_condition": True},
+        ),
+        (
+            (1,),
+            "completed",
+            {"index": 1, "total": 2, "state": {"values": {}}},
+            {"output": 12, "state": None, "continue_condition": True},
+        ),
+    ]
+    expected_effects = [
+        ("start", {"index": 0, "total": 2, "state": {"values": {}}}),
+        ("complete", {"output": 11, "state": None, "continue_condition": True}),
+        ("start", {"index": 1, "total": 2, "state": {"values": {}}}),
+        ("complete", {"output": 12, "state": None, "continue_condition": True}),
+    ]
+    for state in (generic_state, compatibility_state):
+        assert [
+            (tuple(continuation.frame.iteration_path), continuation.status, continuation.payload, continuation.result)
+            for continuation in sorted(
+                state._generic_runtime().continuations.values(),
+                key=lambda continuation: continuation.frame.iteration_path,
+            )
+        ] == expected_continuations
+        actual_effects = [
+            (effect.operation, effect.payload)
+            for effects in state.execution_effects.values()
+            for effect in effects
+            if effect.kind == "continuation"
+        ]
+        assert sorted(actual_effects, key=lambda item: (item[0], json.dumps(item[1], sort_keys=True))) == sorted(
+            expected_effects, key=lambda item: (item[0], json.dumps(item[1], sort_keys=True))
+        )
+        assert _final_for_output(state).output_collection == [11, 12]
     assert isinstance(compatibility_state._execution_scheduler, _ExecutionScheduler)
 
 
@@ -878,6 +916,34 @@ def test_legacy_flat_for_snapshot_uses_compatibility_scheduler() -> None:
     assert migrated.is_complete()
     assert _final_for_output(restored).output_collection == [11, 12]
     assert _final_for_output(migrated).output_collection == [11, 12]
+
+
+def test_terminal_legacy_flat_for_snapshot_can_be_resaved_and_reloaded() -> None:
+    _trace, state = _run_graph_with_effects(GraphExecutionState(graph=_flat_for_graph()))
+    snapshot = dump_execution_state(state)
+    snapshot.pop("execution_state_version")
+    snapshot.pop("execution_effects")
+
+    restored = load_execution_state(snapshot)
+    migrated = load_execution_state(dump_execution_state(restored))
+
+    assert restored.execution_effects == {}
+    assert migrated.is_complete()
+    assert _final_for_output(migrated).output_collection == [11, 12]
+
+
+def test_failed_direct_completion_does_not_persist_a_reference() -> None:
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert isinstance(node, AddInvocation)
+    before = dump_execution_state(state)
+
+    with pytest.raises(TypeError, match="does not belong to execution node"):
+        state.complete(node.id, BooleanOutput(value=True))
+
+    assert dump_execution_state(state) == before
 
 
 def test_flat_for_fresh_execution_releases_after_loop_consumer() -> None:

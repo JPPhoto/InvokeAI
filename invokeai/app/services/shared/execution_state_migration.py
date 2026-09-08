@@ -36,6 +36,10 @@ def dump_execution_state(state: GraphExecutionState) -> dict[str, Any]:
     # public model/schema, but an output port may legitimately carry None and the general
     # exclude_none policy would otherwise make the snapshot impossible to hydrate.
     _retain_nullable_execution_token_values(snapshot)
+    for reference_id, effects in state._legacy_execution_effects_for_snapshot().items():
+        snapshot.setdefault("execution_effects", {})[reference_id] = [
+            effect.model_dump(mode="json") if hasattr(effect, "model_dump") else effect for effect in effects
+        ]
     snapshot["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION
     return snapshot
 
