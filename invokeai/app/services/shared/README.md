@@ -149,9 +149,12 @@ other control-flow nodes also use that adapter: its readiness predicate waits fo
 completion mirrors Iterate outputs into the stream ledger. A fresh graph with one static, non-empty flat
 `For`/`ForReturn` pair also uses the adapter for readiness and continuation transitions; graph state owns the
 invocation-specific continuation boundary while the generic scheduler remains opaque. Empty or input-driven `For`
-collections, deeper or multiple loops, saved-workflow calls, and mixed control-flow shapes continue to use the legacy
-compatibility scheduler until their differential coverage is complete. The narrow canonical two-level nested-`For`
-shape is generic-routed. `Iterate` also records non-empty item streams through the generic effect ledger;
+collections, deeper or multiple loops, saved-workflow calls, and unsupported mixed control-flow shapes continue to use
+the legacy compatibility scheduler until their differential coverage is complete. The narrow canonical two-level
+nested-`For` shape and the canonical outer-`For`/bounded-`Iterate`/`Collect` shape are generic-routed. The latter has
+one ordinary preparation node from `For.item` into `Iterate.collection`, one ordinary body node into `Collect.item`,
+the `Collect.collection` output into the linked `ForReturn`, and one final outer-output consumer. Each outer iteration,
+including an empty inner collection, remains isolated by its frame path. `Iterate` also records non-empty item streams through the generic effect ledger;
 the materializer remains authoritative for expansion, iteration paths, collector grouping, and
 empty-source compatibility handling. Direct `Collect.item` consumers now use the closed stream ledger when available;
 the full Iterate/Collect compatibility matrix covers empty, nested, fan-in, partial rehydration, failure, cancellation,
@@ -258,8 +261,10 @@ readiness and calls the graph-state generic continuation boundary after each `Fo
 state, honors `continue_condition`, creates the next prepared iteration when needed, and finalizes `output_collection`
 and `final_state`. The generic scheduler receives only opaque node IDs and dependencies; it never receives a literal
 next node ID. The compatibility continuation bridge remains available only for unsupported loop shapes and explicitly
-legacy-loaded snapshots. Empty/input-driven collections and deeper, multiple, or mixed loop shapes remain
-compatibility-owned; the narrow canonical two-level nested-`For` shape is generic-routed.
+legacy-loaded snapshots. Empty/input-driven outer collections and deeper, multiple, or unsupported mixed loop shapes
+remain compatibility-owned; the narrow canonical two-level nested-`For` shape and the canonical bounded internal
+`Iterate`/`Collect` shape are generic-routed. On rehydration, the generic adapter restores the active class-drain
+boundary so an in-flight nested stream resumes in the same frame/sequence order.
 
 `ExecutionFrame` identifies the owning state, loop iteration path, and workflow-call depth. `ExecutionReference`
 identifies one prepared execution node and its frame. `ExecutionToken` records an output port, value, frame, token
@@ -313,8 +318,9 @@ which creates the next prepared iteration, aggregates outputs, and finalizes the
 supported flat loop. The compatibility bridge remains for empty/input-driven,
 deeper/multiple nested, mixed-loop, and legacy-snapshot execution; those paths
 retain their existing materialization and linkage ownership. The supported
-fresh static flat `For`/`ForReturn` shape and the narrow canonical two-level
-nested-`For` shape use the generic adapter. For
+fresh static flat `For`/`ForReturn` shape, the narrow canonical two-level
+nested-`For` shape, and the canonical bounded internal `Iterate`/`Collect`
+shape use the generic adapter. For
 `If`, generic readiness consumes opaque frame-local plan dependencies and requires
 both matching private `ActivationGate` runtime state and a persisted activation token. Fresh resolution attaches only
 the selected branch edge; the forced compatibility `_ExecutionScheduler` path preserves this behavior for fresh states,
@@ -329,8 +335,10 @@ existing web/webv2 interactions.
 The test-only differential harness at
 `tests/app/services/shared/test_execution_engine_differential.py` compares
 generic and forced-compatibility scheduling for static DAGs, a constructed
-mixed/nested `If` graph, the supported static flat `For`/`ForReturn` shape, and
-the narrow canonical nested-`For` shape.
+mixed/nested `If` graph, the supported static flat `For`/`ForReturn` shape, the
+narrow canonical nested-`For` shape, and the canonical nested
+`For`/`Iterate`/`Collect` shape. The latter covers empty inner collections and
+dump/load resume ordering.
 Its fixture corpus covers fresh completion, true/false branch selection, nested
 branch isolation, partial checkpoints, versioned rehydration, in-flight claim
 replay, activation-token persistence, injected failure, loop continuation,

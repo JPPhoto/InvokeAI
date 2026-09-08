@@ -63,14 +63,21 @@ Nested `For` boundaries are supported recursively when each inner boundary has i
 continuation. Independent inner loops must all feed one explicit fan-in continuation; collection concatenation, zipping,
 or Cartesian semantics come from the connected collection operation, not from loop scheduling.
 
-A bounded internal `Iterate` is supported only when one `Collect` collapses its item dimension before the parent
-`ForReturn`:
+A bounded internal `Iterate` is supported only for the canonical outer-`For` shape: one ordinary preparation node
+converts `For.item` to the inner collection, one ordinary body node consumes `Iterate.item`, and one `Collect` collapses
+that item dimension before the parent `ForReturn`:
 
 ```text
-For.item -> Iterate.collection
+For.item -> preparation -> Iterate.collection
 Iterate.item -> body -> Collect.item
 Collect.collection -> ForReturn.output
 ```
+
+The fresh generic scheduler admits this exact shape when the outer collection is a non-empty literal and there is one
+final consumer of `For.output_collection`. Each outer frame is isolated, including when the preparation node produces
+an empty inner collection. A checkpoint after any nested iterator boundary restores the generic class-drain state and
+continues the same frame/stream order. Input-driven outer collections, additional loop or control-flow nodes, escaped
+body paths, and other mixed shapes remain on the compatibility scheduler.
 
 Unsupported shapes, including independent iterator-derived body inputs, mixed nested `For`/`Iterate` bodies, escaping
 body paths, ambiguous returns, and arbitrary cyclic graphs, are rejected before execution.
@@ -95,17 +102,20 @@ pair now uses the generic scheduler adapter for readiness and continuation trans
 generic continuation boundary: it carries returned state, honors `continue_condition`, materializes the next body
 iteration, and finalizes the aggregate. The generic scheduler remains opaque and never receives a literal successor
 node ID. The compatibility continuation bridge is retained only for unsupported loop shapes and explicitly
-legacy-loaded snapshots. Empty or input-driven collections, deeper or multiple nested loops, and mixed control flow
-remain on the compatibility scheduler; the narrow canonical two-level nested-`For` shape is now generic-routed. This
-additive effect seam does not claim generic scheduling for the remaining shapes. `Iterate` records ordered item tokens in
+legacy-loaded snapshots. Empty or input-driven outer collections, deeper or multiple nested loops, and unsupported mixed
+control flow remain on the compatibility scheduler; the narrow canonical two-level nested-`For` shape and the exact
+bounded outer-`For`/`Iterate`/`Collect` shape are now generic-routed. This additive effect seam does not claim generic
+scheduling for the remaining shapes. `Iterate` records ordered item tokens in
 a closed `StreamBuffer`; an empty `Iterate` records an
 explicit empty close. A direct `Iterate.item` consumer waits for the canonical stream to close, then `Collect` consumes
 its ordered values; a missing stream falls back to materialized results for legacy snapshots. The materializer still
 owns iterator expansion, iteration paths, collector grouping, collection-input hydration, and empty-source closure.
 Focused compatibility coverage now proves empty, nested, fan-in, partial/rehydrated, failed, canceled, and retried
 Iterate/Collect sessions. This is evidence for the current adapters; it does not remove materialization or queue
-ownership. Direct `Iterate`/`Collect`-only graphs now use the generic scheduler adapter: its readiness predicate waits
-for the canonical stream to close, and completion mirrors Iterate outputs into that ledger before releasing Collect.
+ownership. Direct `Iterate`/`Collect`-only graphs and the exact bounded nested shape now use the generic scheduler
+adapter: its readiness predicate waits for the canonical stream to close, and completion mirrors Iterate outputs into
+that ledger before releasing Collect. Rehydration restores the active class-drain boundary so nested stream order is
+preserved across dump/load.
 Materialization still owns copy expansion, iteration paths, grouping, and explicit empty closure; mixed control-flow and
 queue lifecycle remain compatibility-owned. `loop_linkage` remains association metadata and never becomes a data token.
 

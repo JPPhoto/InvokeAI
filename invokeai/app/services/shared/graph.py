@@ -2310,6 +2310,22 @@ class _GenericGraphSchedulerAdapter:
         self._initializing = False
         self._sync_indegree()
         self._project_ready_nodes()
+        self._restore_active_class()
+
+    def _restore_active_class(self) -> None:
+        """Continue draining the class that produced the latest durable result."""
+
+        if not self._state.results:
+            return
+        last_exec_node_id = next(reversed(self._state.results))
+        last_plan_node = self._scheduler.plan.nodes.get(last_exec_node_id)
+        if last_plan_node is None:
+            return
+        if any(
+            self._scheduler.plan.nodes[ready_node_id].class_name == last_plan_node.class_name
+            for ready_node_id in self._scheduler.ready_ids
+        ):
+            self._scheduler._active_class = last_plan_node.class_name
 
     def _is_node_activation_ready(self, exec_node_id: str) -> bool:
         """Require every frame-local activation dependency to be satisfied."""
@@ -4907,7 +4923,7 @@ class GraphExecutionState(BaseModel):
                 self._tx_set_attr(existing, "value", copydeep(token.value))
 
     def _apply_generic_for_continuation(self, exec_node_id: str, output: BaseInvocationOutput) -> Optional[str]:
-        """Apply the graph-state continuation boundary for a generic flat For run."""
+        """Apply the graph-state continuation boundary for a supported fresh For run."""
 
         if not isinstance(output, ForReturnInvocationOutput):
             return None
@@ -4964,17 +4980,16 @@ class GraphExecutionState(BaseModel):
         return self._apply_generic_for_continuation(exec_node_id, output)
 
     def _can_use_generic_for_scheduler(self) -> bool:
-        """Allow generic routing only for one flat For body with no other control-flow node."""
+        """Allow generic routing only for the explicitly supported fresh For shapes."""
 
         if self._legacy_snapshot_loaded:
             return False
-        if any(
-            isinstance(node, (IterateInvocation, CollectInvocation, IfInvocation, CallSavedWorkflowInvocation))
-            for node in self.graph.nodes.values()
-        ):
+        if any(isinstance(node, (IfInvocation, CallSavedWorkflowInvocation)) for node in self.graph.nodes.values()):
             return False
         for_nodes = [node for node in self.graph.nodes.values() if isinstance(node, ForInvocation)]
         return_nodes = [node for node in self.graph.nodes.values() if isinstance(node, ForReturnInvocation)]
+        if any(isinstance(node, (IterateInvocation, CollectInvocation)) for node in self.graph.nodes.values()):
+            return self._can_use_generic_nested_iterate_scheduler(for_nodes, return_nodes)
         if len(for_nodes) == 2 and len(return_nodes) == 2:
             source_graph = self._get_source_graph_flat()
             outer_for = next(
@@ -5018,6 +5033,102 @@ class GraphExecutionState(BaseModel):
             for node_id in body_node_ids
             if node_id != return_node_id
         )
+
+    def _can_use_generic_nested_iterate_scheduler(
+        self, for_nodes: list[ForInvocation], return_nodes: list[ForReturnInvocation]
+    ) -> bool:
+        """Admit only the bounded single-outer-For Iterate/Collect contract."""
+
+        if len(for_nodes) != 1 or len(return_nodes) != 1:
+            return False
+        outer_for = for_nodes[0]
+        if not outer_for.collection or self.graph._get_input_edges(outer_for.id, COLLECTION_FIELD):
+            return False
+
+        iterate_nodes = [node for node in self.graph.nodes.values() if isinstance(node, IterateInvocation)]
+        collect_nodes = [node for node in self.graph.nodes.values() if isinstance(node, CollectInvocation)]
+        if len(iterate_nodes) != 1 or len(collect_nodes) != 1:
+            return False
+        iterate_node = iterate_nodes[0]
+        collect_node = collect_nodes[0]
+        return_node = return_nodes[0]
+
+        source_graph = self._get_source_graph_flat()
+        if self.graph._get_supported_for_nested_iterate_body(outer_for.id, source_graph) is None:
+            return False
+
+        iterate_collection_edges = self.graph._get_input_edges(iterate_node.id, COLLECTION_FIELD)
+        if len(iterate_collection_edges) != 1:
+            return False
+        preparation_node_id = iterate_collection_edges[0].source.node_id
+        preparation_node = self.graph.get_node(preparation_node_id)
+        if isinstance(preparation_node, (ForInvocation, ForReturnInvocation, IterateInvocation, CollectInvocation)):
+            return False
+        preparation_inputs = self.graph._get_input_edges(preparation_node_id)
+        if len(preparation_inputs) != 1 or (
+            preparation_inputs[0].source.node_id != outer_for.id or preparation_inputs[0].source.field != ITEM_FIELD
+        ):
+            return False
+        if self.graph._get_output_edges(outer_for.id, ITEM_FIELD) != preparation_inputs:
+            return False
+
+        collect_item_edges = self.graph._get_input_edges(collect_node.id, ITEM_FIELD)
+        if len(collect_item_edges) != 1:
+            return False
+        body_node_id = collect_item_edges[0].source.node_id
+        body_node = self.graph.get_node(body_node_id)
+        if body_node_id == preparation_node_id or isinstance(
+            body_node, (ForInvocation, ForReturnInvocation, IterateInvocation, CollectInvocation)
+        ):
+            return False
+        body_inputs = self.graph._get_input_edges(body_node_id)
+        if len(body_inputs) != 1 or (
+            body_inputs[0].source.node_id != iterate_node.id or body_inputs[0].source.field != ITEM_FIELD
+        ):
+            return False
+        if self.graph._get_output_edges(iterate_node.id, ITEM_FIELD) != body_inputs:
+            return False
+        if self.graph._get_output_edges(body_node_id) != collect_item_edges:
+            return False
+
+        if self.graph._get_input_edges(collect_node.id, COLLECTION_FIELD):
+            return False
+        collect_output_edges = self.graph._get_output_edges(collect_node.id, COLLECTION_FIELD)
+        if len(collect_output_edges) != 1 or (
+            collect_output_edges[0].destination.node_id != return_node.id
+            or collect_output_edges[0].destination.field != "output"
+        ):
+            return False
+        if self.graph._get_input_edges(return_node.id) != collect_output_edges:
+            return False
+        if self.graph._get_linked_for_return_id(outer_for.id) != return_node.id:
+            return False
+
+        final_output_edges = self.graph._get_for_final_output_edges(outer_for.id)
+        if len(final_output_edges) != 1:
+            return False
+        final_consumer_id = final_output_edges[0].destination.node_id
+        final_consumer = self.graph.get_node(final_consumer_id)
+        if final_consumer_id in {
+            outer_for.id,
+            iterate_node.id,
+            body_node_id,
+            collect_node.id,
+            return_node.id,
+        } or isinstance(final_consumer, (ForInvocation, ForReturnInvocation, IterateInvocation, CollectInvocation)):
+            return False
+        if self.graph._get_input_edges(final_consumer_id) != final_output_edges:
+            return False
+
+        return set(self.graph.nodes) == {
+            outer_for.id,
+            preparation_node_id,
+            iterate_node.id,
+            body_node_id,
+            collect_node.id,
+            return_node.id,
+            final_consumer_id,
+        }
 
     def _can_use_generic_scheduler(self) -> bool:
         """Use generic readiness for static graphs and supported direct control flow."""
