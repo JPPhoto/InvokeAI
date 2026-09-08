@@ -1857,11 +1857,14 @@ class _ExecutionScheduler:
             raise KeyError(f"indegree missing for exec node {exec_node_id}")
 
     def _should_skip_ready_enqueue(self, exec_node_id: str) -> bool:
-        return (
+        if (
             self._state.indegree[exec_node_id] != 0
             or exec_node_id in self._state.executed
             or self._state._is_deferred_by_unresolved_if(exec_node_id)
-        )
+        ):
+            return True
+        node = self._state.execution_graph.nodes[exec_node_id]
+        return isinstance(node, CollectInvocation) and not self._state._collect_streams_ready(exec_node_id)
 
     def _get_ready_queue(self, exec_node_id: str) -> Deque[str]:
         node_obj = self._state.execution_graph.nodes[exec_node_id]
@@ -2589,7 +2592,7 @@ class _ExecutionRuntime:
                 continue
             stream_id, parent_path = stream_info
             stream = self._state._generic_runtime().streams.get(stream_id)
-            if stream is None or not stream.closed:
+            if stream is None:
                 item_values.append(
                     (
                         (*self.get_iteration_path(edge.source.node_id), 0),
@@ -2598,6 +2601,8 @@ class _ExecutionRuntime:
                     )
                 )
                 continue
+            if not stream.closed:
+                raise RuntimeError(f"Cannot hydrate Collect from open Iterate stream {stream_id}")
             if stream_id in consumed_streams:
                 continue
             consumed_streams.add(stream_id)
@@ -4843,7 +4848,9 @@ class GraphExecutionState(BaseModel):
         path = ",".join(str(index) for index in parent_path)
         return f"{self.id}:iterate:{source_node_id}:{path}"
 
-    def _record_iterate_stream(self, exec_node_id: str, output: BaseInvocationOutput) -> None:
+    def _record_iterate_stream(
+        self, exec_node_id: str, output: BaseInvocationOutput, *, prefer_existing: bool = False
+    ) -> None:
         if not isinstance(output, IterateInvocationOutput):
             return
         source_node_id = self.prepared_source_mapping.get(exec_node_id)
@@ -4860,9 +4867,25 @@ class GraphExecutionState(BaseModel):
         elif self._apply_transaction is not None:
             previous = StreamBuffer[Any].model_validate(stream.model_dump(mode="python"))
             self._tx_record_once(("stream", stream_id), lambda: runtime.replace_stream(previous))
-        stream.accept(StreamData(sequence=output.index, value=copydeep(output.item)))
+        skip_data = False
+        if prefer_existing:
+            existing = next((event for event in stream.events if event.sequence == output.index), None)
+            if existing is not None:
+                if isinstance(existing, StreamData) and existing.value != output.item:
+                    # Durable effect values are authoritative when an older result mirror is stale.
+                    skip_data = True
+                elif isinstance(existing, StreamData):
+                    skip_data = True
+                else:
+                    raise ValueError(f"Iterate result conflicts with closed stream {stream_id}")
+        if not skip_data:
+            stream.accept(StreamData(sequence=output.index, value=copydeep(output.item)))
         if output.index + 1 >= output.total:
-            stream.close(sequence=output.total)
+            if stream.closed:
+                if stream.end_sequence != output.total:
+                    raise ValueError(f"Iterate result conflicts with closed stream {stream_id}")
+            else:
+                stream.close(sequence=output.total)
 
     def _record_empty_iterate_stream(self, source_node_id: str, parent_path: tuple[int, ...] = ()) -> None:
         runtime = self._generic_runtime()
@@ -4945,6 +4968,19 @@ class GraphExecutionState(BaseModel):
         iteration_path = self._get_iteration_path(edge.source.node_id)
         parent_path = iteration_path[:-1] if iteration_path else ()
         return self._iteration_stream_id(source_node_id, parent_path), parent_path
+
+    def _collect_streams_ready(self, exec_node_id: str) -> bool:
+        """Require any available Iterate streams to close before Collect is scheduled."""
+
+        for edge in self.execution_graph._get_input_edges(exec_node_id, ITEM_FIELD):
+            stream_info = self._stream_for_iterate_edge(edge)
+            if stream_info is None:
+                continue
+            stream_id, _parent_path = stream_info
+            stream = self._generic_runtime().streams.get(stream_id)
+            if stream is not None and not stream.closed:
+                return False
+        return True
 
     def _for_continuation(self, for_exec_node_id: str) -> ContinuationRecord[Any]:
         runtime = self._generic_runtime()
@@ -5909,14 +5945,6 @@ class GraphExecutionState(BaseModel):
             ):
                 self._record_empty_iterate_stream(source_node_id)
 
-        iterate_results: list[tuple[str, IterateInvocationOutput]] = []
-        for exec_node_id, output in self.results.items():
-            if isinstance(output, IterateInvocationOutput):
-                iterate_results.append((exec_node_id, output))
-        iterate_results.sort(key=lambda item: (self._get_iteration_path(item[0]), item[1].index, item[0]))
-        for exec_node_id, output in iterate_results:
-            self._record_iterate_stream(exec_node_id, output)
-
         for reference_id, effects in self.execution_effects.items():
             execution_ref = next(
                 (ref for ref in self.execution_refs.values() if ref.reference_id == reference_id),
@@ -5925,6 +5953,14 @@ class GraphExecutionState(BaseModel):
             if execution_ref is not None:
                 self._validate_effects(execution_ref, list(effects), None)
                 self._record_effect_streams(execution_ref, effects)
+
+        iterate_results: list[tuple[str, IterateInvocationOutput]] = []
+        for exec_node_id, output in self.results.items():
+            if isinstance(output, IterateInvocationOutput):
+                iterate_results.append((exec_node_id, output))
+        iterate_results.sort(key=lambda item: (self._get_iteration_path(item[0]), item[1].index, item[0]))
+        for exec_node_id, output in iterate_results:
+            self._record_iterate_stream(exec_node_id, output, prefer_existing=True)
 
         for exec_node_id, node in self.execution_graph.nodes.items():
             if isinstance(node, ForInvocation) and node.index >= 0 and exec_node_id in self.results:

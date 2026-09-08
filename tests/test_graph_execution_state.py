@@ -54,6 +54,8 @@ from invokeai.app.services.shared.execution_effects import (
 from invokeai.app.services.shared.execution_state_migration import dump_execution_state, load_execution_state
 from invokeai.app.services.shared.graph import (
     CollectInvocation,
+    Edge,
+    EdgeConnection,
     Graph,
     GraphExecutionState,
     IterateInvocation,
@@ -462,6 +464,133 @@ def test_graph_state_maps_iterate_effects_to_the_canonical_iteration_stream():
     assert ":effect:" not in streams[0].stream_id
     assert streams[0].values == (0,)
     assert not streams[0].closed
+
+
+def test_collect_does_not_hydrate_from_an_open_iterate_stream():
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="range", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(AddInvocation(id="add", b=1))
+    graph.add_edge(create_edge("range", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "add", "a"))
+
+    state = GraphExecutionState(graph=graph)
+    range_node, range_output = invoke_next(state)
+    assert range_node is not None
+    assert range_output is not None
+    iterate_node = state.next()
+    assert isinstance(iterate_node, IterateInvocation)
+    execution_ref = state.get_execution_ref(iterate_node.id)
+    recorder = ExecutionEffectsRecorder(
+        source_node_id=iterate_node.id,
+        frame_path=execution_ref.frame.iteration_path,
+    )
+    context = SimpleNamespace(
+        execution_effects=recorder,
+        effects=recorder,
+        execution=ExecutionInterface(recorder),
+    )
+    run_result = iterate_node.invoke_internal_with_effects(context, Mock())
+    state.apply(state.get_execution_ref(iterate_node.id, effect_count=len(run_result.effects)), run_result)
+
+    state.execution_graph.add_node(CollectInvocation(id="collect"))
+    edge = Edge(
+        source=EdgeConnection(node_id=iterate_node.id, field="item"),
+        destination=EdgeConnection(node_id="collect", field="item"),
+    )
+    state.execution_graph.add_edge(edge)
+    assert not state._collect_streams_ready("collect")
+    with pytest.raises(RuntimeError, match="open Iterate stream"):
+        state._runtime()._build_collect_collection([edge])
+
+
+def test_collect_prefers_closed_iterate_effect_stream_over_legacy_output():
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="range", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("range", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "collect", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    while True:
+        node = state.next()
+        if node is None:
+            break
+        if isinstance(node, IterateInvocation):
+            execution_ref = state.get_execution_ref(node.id)
+            recorder = ExecutionEffectsRecorder(
+                source_node_id=node.id,
+                frame_path=execution_ref.frame.iteration_path,
+            )
+            context = SimpleNamespace(
+                execution_effects=recorder,
+                effects=recorder,
+                execution=ExecutionInterface(recorder),
+            )
+            run_result = node.invoke_internal_with_effects(context, Mock())
+            state.apply(state.get_execution_ref(node.id, effect_count=len(run_result.effects)), run_result)
+            continue
+
+        if isinstance(node, CollectInvocation):
+            for iterate_exec_id in state.source_prepared_mapping["iterate"]:
+                object.__setattr__(state.results[iterate_exec_id], "item", -1)
+            assert node.collection == [0, 1]
+            restored = load_execution_state(dump_execution_state(state))
+            restored_node = restored.next()
+            assert isinstance(restored_node, CollectInvocation)
+            for iterate_exec_id in restored.source_prepared_mapping["iterate"]:
+                object.__setattr__(restored.results[iterate_exec_id], "item", -1)
+            assert restored_node.collection == [0, 1]
+            restored.complete(restored_node.id, restored_node.invoke(Mock(InvocationContext)))
+            assert restored.is_complete()
+        state.complete(node.id, node.invoke(Mock(InvocationContext)))
+
+    collect_exec_id = next(iter(state.source_prepared_mapping["collect"]))
+    assert state.results[collect_exec_id].collection == [0, 1]
+
+
+def test_rehydrated_terminal_iterate_result_closes_existing_effect_stream():
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="range", start=0, stop=1, step=1))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("range", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "collect", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    range_node, range_output = invoke_next(state)
+    assert range_node is not None
+    assert range_output is not None
+    iterate_node = state.next()
+    assert isinstance(iterate_node, IterateInvocation)
+    execution_ref = state.get_execution_ref(iterate_node.id)
+    recorder = ExecutionEffectsRecorder(
+        source_node_id=iterate_node.id,
+        frame_path=execution_ref.frame.iteration_path,
+    )
+    context = SimpleNamespace(
+        execution_effects=recorder,
+        effects=recorder,
+        execution=ExecutionInterface(recorder),
+    )
+    run_result = iterate_node.invoke_internal_with_effects(context, Mock())
+    assert len(run_result.effects) == 2
+
+    # Simulate an older snapshot that persisted the data effect but omitted its close effect.
+    state.apply(
+        state.get_execution_ref(iterate_node.id, effect_count=1),
+        run_result.output,
+        effects=[run_result.effects[0]],
+    )
+    restored = load_execution_state(dump_execution_state(state))
+    restored_streams = list(restored._generic_runtime().streams.values())
+    assert len(restored_streams) == 1
+    assert restored_streams[0].values == (0,)
+    assert restored_streams[0].closed
+    restored_collect = restored.next()
+    assert isinstance(restored_collect, CollectInvocation)
+    assert restored_collect.collection == [0]
 
 
 @pytest.mark.parametrize("port", ["type", "output_meta", "loop_linkage"])
