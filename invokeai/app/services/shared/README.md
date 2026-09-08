@@ -214,9 +214,11 @@ control-flow invocation on this seam: each non-empty prepared copy emits one ord
 index, and the final copy emits one `close_stream` effect. Graph state maps these effects to the existing
 frame-scoped iteration-stream identity, so legacy output mirroring is idempotent. The materializer still creates
 prepared copies, derives iteration paths, groups collector inputs, and records the explicit close for an empty source.
-This is not yet token-authoritative downstream topology or full `Collect` migration: no author-time activation ports or
-literal successor IDs are introduced, and the remaining control-flow invocations stay on compatibility paths until
-differential coverage proves each replacement.
+For a direct `Iterate.item` edge, the scheduler defers `CollectInvocation` while its canonical stream is open, and
+runtime hydration consumes the closed stream in sequence order. If no stream exists, hydration retains the legacy
+materialized-result fallback needed by older snapshots. This is not yet token-authoritative downstream topology or full
+`Collect` migration: the materializer still owns copy expansion, iteration paths, collector grouping, collection-input
+hydration, and empty-source closure; no author-time activation ports or literal successor IDs are introduced.
 
 `ExecutionFrame` identifies the owning state, loop iteration path, and workflow-call depth. `ExecutionReference`
 identifies one prepared execution node and its frame. `ExecutionToken` records an output port, value, frame, token
@@ -329,7 +331,8 @@ Workflow-call note:
   branch.
 - `ExecutionEngineRuntime` Owns the typed gate, stream, and continuation records used by compatibility adapters. The
   canonical stream for a prepared `IterateInvocation` is keyed by the source iterator and its parent iteration path;
-  its item/close effects and legacy output mirroring update the same idempotent buffer.
+  its item/close effects and legacy output mirroring update the same idempotent buffer. Direct `CollectInvocation.item`
+  edges consume a closed canonical stream when available and otherwise use the legacy snapshot fallback.
 
 `GraphExecutionState.model_post_init()` rehydrates private runtime helpers and caches after normal construction or a
 JSON/model round trip. Rehydration reconstructs prepared exec metadata, cached iteration paths, private resolved `If`
@@ -403,10 +406,10 @@ Run `C` -> `D:0` -> enqueue `D`. Run `D` -> done.
 
 ### 4.6 Input hydration (`_prepare_inputs()`)
 
-- For **CollectInvocation**: gather the materialized incoming `item` values into `collection`, sorting inputs by
-  iteration path so collected results are stable across expanded iterations. Incoming `collection` values are merged
-  first, then incoming `item` values are appended. By the time hydration runs, the materializer has already selected the
-  iteration group for this collector exec node, so hydration only sees inputs that belong to that group.
+- For **CollectInvocation**: merge incoming `collection` values first, then gather `item` inputs. A direct
+  `Iterate.item` edge uses its closed canonical stream ledger, preserving stream sequence order; an open stream is not
+  hydrated, and a missing stream falls back to the materialized source result for legacy snapshots. Materialized inputs
+  are still grouped by iteration path, so hydration only sees inputs belonging to that collector exec node.
 - For **IfInvocation**: hydrate only `condition` and the selected branch input. As a defensive guard against
   inconsistent runtime or deserialized session state, the runtime raises if the selected input edge points at an exec
   node with no stored runtime output. In normal scheduling this path should be unreachable.
@@ -467,7 +470,10 @@ In normal execution, all runtime expansion occurs in `execution_graph` with trac
   source/parent-path stream on the final copy. Exact output mirroring is
   idempotent; empty-source closure remains a materializer compatibility
   operation.
-- Collectors aggregate `item` inputs and may also merge incoming `collection` inputs during runtime hydration.
+- Collectors wait for available direct Iterate streams to close, then aggregate
+  their ledger values in stream order and may also merge incoming `collection`
+  inputs during runtime hydration. A missing ledger remains a legacy snapshot
+  fallback; stale legacy Iterate result mirrors do not override durable effects.
   Collectors nested under iterators preserve enclosing iteration paths, so downstream consumers materialize per enclosing
   iteration instead of receiving a mixed collection from unrelated outer iterations.
 - Branch-exclusive nodes behind an unselected `If` branch are skipped, not failed.

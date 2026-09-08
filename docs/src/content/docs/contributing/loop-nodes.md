@@ -86,8 +86,10 @@ The execution-engine seam is additive to this loop contract. The session runner 
 `GraphExecutionState.apply()` using a stable execution reference and records frame-aware output tokens and accepted
 effects. Legacy `For`/`ForReturn` continuation scheduling is mirrored by a typed, frame-scoped
 `ContinuationRecord`. `Iterate` records ordered item tokens in a closed `StreamBuffer`; an empty `Iterate` records an
-explicit empty close. `Collect` consumes that buffer when available and retains the materializer/indegree path as its
-compatibility adapter. `loop_linkage` remains association metadata and never becomes a data token.
+explicit empty close. A direct `Iterate.item` consumer waits for the canonical stream to close, then `Collect` consumes
+its ordered values; a missing stream falls back to materialized results for legacy snapshots. The materializer still
+owns iterator expansion, iteration paths, collector grouping, collection-input hydration, and empty-source closure.
+`loop_linkage` remains association metadata and never becomes a data token.
 
 `IfInvocation` now declares the same seam for branch activation: it emits one frame-scoped activation token for the
 selected branch, and the graph state validates and persists it after invocation. The generic opaque scheduler receives
