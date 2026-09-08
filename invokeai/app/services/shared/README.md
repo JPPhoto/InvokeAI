@@ -128,8 +128,10 @@ Holds the state for a single run. Keeps the source graph intact and materializes
 `GraphExecutionState` is still the public runtime entry point, but most execution behavior is now delegated to a small
 set of internal helper classes. For ordinary static DAGs and legacy-shaped `If` graphs, readiness and completion are
 projected through the generic `ExecutionPlan`/`ExecutionScheduler` adapter. `Iterate`, `Collect`, `For`, `ForReturn`,
-and saved-workflow call lowering continue to use the legacy compatibility scheduler until their differential coverage
-is complete.
+and saved-workflow call lowering continue to use the legacy compatibility scheduler for materialization and queue
+lifecycle until their differential coverage is complete. `Iterate` also records non-empty item streams through the
+generic effect ledger; the materializer remains authoritative for expansion, iteration paths, collector grouping, and
+empty-source compatibility handling.
 
 The source graph is treated as stable during normal execution, but the runtime object still exposes guarded graph
 mutation helpers. Those helpers reject changes once the affected nodes have already been prepared or executed.
@@ -207,9 +209,14 @@ discard. It does not call `_IfBranchScheduler._prune_unselected_if_inputs`,
 `_IfBranchScheduler.mark_exec_node_skipped`, or delete execution edges. The forced compatibility `_ExecutionScheduler`
 path still uses `_IfBranchScheduler` for legacy branch topology, input-edge pruning, and skip behavior. `apply()`
 validates and persists the invocation-emitted effect afterward, replacing the compatibility token by stable identity.
-Activation effects are excluded from data-stream handling. This is not yet the token-authoritative downstream topology
-migration: no author-time activation ports or literal successor IDs are introduced, and other control-flow invocations
-remain on their legacy paths until differential coverage proves each replacement.
+Activation effects are excluded from data-stream handling. `IterateInvocation` is the first stream-producing
+control-flow invocation on this seam: each non-empty prepared copy emits one ordered `item` effect with its iteration
+index, and the final copy emits one `close_stream` effect. Graph state maps these effects to the existing
+frame-scoped iteration-stream identity, so legacy output mirroring is idempotent. The materializer still creates
+prepared copies, derives iteration paths, groups collector inputs, and records the explicit close for an empty source.
+This is not yet token-authoritative downstream topology or full `Collect` migration: no author-time activation ports or
+literal successor IDs are introduced, and the remaining control-flow invocations stay on compatibility paths until
+differential coverage proves each replacement.
 
 `ExecutionFrame` identifies the owning state, loop iteration path, and workflow-call depth. `ExecutionReference`
 identifies one prepared execution node and its frame. `ExecutionToken` records an output port, value, frame, token
@@ -229,9 +236,10 @@ Target migration contract: control-flow nodes remain concrete invocation
 subclasses that declare frame-scoped data, activation, stream-closure, child,
 and terminal effects. The generic scheduler selects nodes from required
 effects for the current frame; it never receives a literal successor-node ID.
-Current implementation is narrower: `IfInvocation` is the only control-flow
-invocation using the effect recorder, while `Iterate`, `Collect`, `For`,
-`ForReturn`, and workflow-call invocations remain on compatibility paths. For
+Current implementation is narrower: `IfInvocation` and non-empty
+`IterateInvocation` use the effect recorder for activation and stream effects,
+while `Collect`, `For`, `ForReturn`, and workflow-call invocations remain on
+compatibility paths. For
 `If`, generic readiness consumes opaque frame-local plan dependencies and requires
 both matching private `ActivationGate` runtime state and a persisted activation token;
 generic resolution retires unselected prepared nodes through scheduler discard. The forced compatibility
@@ -319,15 +327,18 @@ Workflow-call note:
   only by forced compatibility `_ExecutionScheduler`; generic legacy-shaped `If` scheduling compiles opaque dependencies
   and retires unselected prepared nodes through generic scheduler discard. The opaque scheduler has no `If`-specific
   branch.
-- `ExecutionEngineRuntime` Owns the typed gate, stream, and continuation records used by compatibility adapters.
+- `ExecutionEngineRuntime` Owns the typed gate, stream, and continuation records used by compatibility adapters. The
+  canonical stream for a prepared `IterateInvocation` is keyed by the source iterator and its parent iteration path;
+  its item/close effects and legacy output mirroring update the same idempotent buffer.
 
 `GraphExecutionState.model_post_init()` rehydrates private runtime helpers and caches after normal construction or a
 JSON/model round trip. Rehydration reconstructs prepared exec metadata, cached iteration paths, private resolved `If`
-gate state from condition results or persisted activation tokens, closed iteration streams from durable Iterate results
-or completed empty-source state, For continuation identity, and ready queues from `execution_graph`, `indegree`,
-`executed`, and `results`. Activation tokens persist; private `ActivationGate` runtime state does not and is
-reconstructed from condition results or persisted activation tokens. Before token validation, missing legacy iteration-path
-metadata is rebuilt from the prepared execution graph. Persisted activation identity is then validated fail-closed
+gate state from condition results or persisted activation tokens, non-empty iteration streams from durable effects and
+legacy Iterate results, explicit empty-source closes, For continuation identity, and ready queues from
+`execution_graph`, `indegree`, `executed`, and `results`. Activation tokens persist; private `ActivationGate` runtime
+state does not and is reconstructed from condition results or persisted activation tokens. Before token validation,
+missing legacy iteration-path metadata is rebuilt from the prepared execution graph. Persisted activation identity is
+then validated fail-closed
 against prepared owners, derived references, declared activation fields, canonical ids, and known frame fields; extra
 frame metadata is retained. Persisted execution references, tokens, and effects remain part of serialized state; private
 helper objects do not. Queue snapshots carry an additive execution-state version marker and use version-aware loader;
@@ -451,6 +462,11 @@ In normal execution, all runtime expansion occurs in `execution_graph` with trac
 - Applied execution references are unique to one prepared node and frame; their output/effect records are JSON-safe.
 - Output and `emit` effects produce frame-aware tokens. `close_stream` produces a `stream_end` token. Association fields
   such as `loop_linkage` are never stored as data tokens.
+- A non-empty `IterateInvocation` emits one `item` effect per prepared copy,
+  with a contiguous sequence beginning at zero, and closes its canonical
+  source/parent-path stream on the final copy. Exact output mirroring is
+  idempotent; empty-source closure remains a materializer compatibility
+  operation.
 - Collectors aggregate `item` inputs and may also merge incoming `collection` inputs during runtime hydration.
   Collectors nested under iterators preserve enclosing iteration paths, so downstream consumers materialize per enclosing
   iteration instead of receiving a mixed collection from unrelated outer iterations.

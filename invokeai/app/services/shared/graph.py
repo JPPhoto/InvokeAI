@@ -2905,6 +2905,8 @@ class IterateInvocationOutput(BaseInvocationOutput):
 class IterateInvocation(BaseInvocation):
     """Iterates over a list of items"""
 
+    execution_effects_enabled = True
+
     collection: list[Any] = InputField(
         description="The list of items to iterate over", default=[], ui_type=UIType._Collection
     )
@@ -2912,7 +2914,13 @@ class IterateInvocation(BaseInvocation):
 
     def invoke(self, context: InvocationContext) -> IterateInvocationOutput:
         """Produces the outputs as values"""
-        return IterateInvocationOutput(item=self.collection[self.index], index=self.index, total=len(self.collection))
+        item = self.collection[self.index]
+        execution = getattr(context, "execution", None)
+        if execution is not None:
+            execution.emit("item", item, sequence=self.index)
+            if self.index + 1 >= len(self.collection):
+                execution.close_stream("item")
+        return IterateInvocationOutput(item=item, index=self.index, total=len(self.collection))
 
     def get_event_invocation(self) -> "IterateInvocation":
         event_invocation = self.model_copy()
@@ -4884,20 +4892,26 @@ class GraphExecutionState(BaseModel):
             if self._value_from_object(token, "token_kind") == "activation":
                 continue
             stream_id = f"{self.id}:effect:{execution_ref.reference_id}:{port}"
+            stream_owner_id = execution_ref.exec_node_id
+            stream_frame = EngineExecutionFrame(
+                state_id=execution_ref.frame.state_id or self.id,
+                frame_id=execution_ref.frame.frame_id or f"{self.id}:{execution_ref.exec_node_id}",
+                iteration_path=execution_ref.frame.iteration_path,
+                workflow_call_depth=execution_ref.frame.workflow_call_depth,
+            )
+            source_node = self.execution_graph.nodes.get(execution_ref.exec_node_id)
+            source_node_id = self.prepared_source_mapping.get(execution_ref.exec_node_id)
+            if isinstance(source_node, IterateInvocation) and port == ITEM_FIELD and source_node_id is not None:
+                iteration_path = self._get_iteration_path(execution_ref.exec_node_id)
+                parent_path = iteration_path[:-1] if iteration_path else ()
+                stream_id = self._iteration_stream_id(source_node_id, parent_path)
+                stream_owner_id = source_node_id
+                stream_frame = self._engine_frame(parent_path)
             runtime = self._generic_runtime()
             stream = runtime.streams.get(stream_id)
             if stream is None:
                 self._tx_record(lambda runtime=runtime, stream_id=stream_id: runtime.remove_stream(stream_id))
-                stream = runtime.get_or_create_stream(
-                    stream_id,
-                    execution_ref.exec_node_id,
-                    EngineExecutionFrame(
-                        state_id=execution_ref.frame.state_id or self.id,
-                        frame_id=execution_ref.frame.frame_id or f"{self.id}:{execution_ref.exec_node_id}",
-                        iteration_path=execution_ref.frame.iteration_path,
-                        workflow_call_depth=execution_ref.frame.workflow_call_depth,
-                    ),
-                )
+                stream = runtime.get_or_create_stream(stream_id, stream_owner_id, stream_frame)
             elif self._apply_transaction is not None:
                 previous = StreamBuffer[Any].model_validate(stream.model_dump(mode="python"))
                 self._tx_record_once(
@@ -4909,6 +4923,10 @@ class GraphExecutionState(BaseModel):
             if sequence is None:
                 sequence = stream.next_sequence
             if effect_kind == "close_stream":
+                if stream.closed:
+                    if stream.end_sequence == sequence:
+                        continue
+                    raise ValueError("conflicting close sequence for stream")
                 stream.close(sequence=sequence)
                 continue
             if self._value_from_object(token, "token_kind") == "stream_end":

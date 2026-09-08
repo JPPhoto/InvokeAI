@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from contextlib import contextmanager
 from threading import Condition, Event
+from types import SimpleNamespace
 from typing import Any, Iterator
 
 import pytest
@@ -18,6 +19,7 @@ from invokeai.app.services.session_processor.session_processor_default import (
     DefaultSessionRunner,
 )
 from invokeai.app.services.session_queue.session_queue_sqlite import SqliteSessionQueue
+from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder, ExecutionInterface
 from invokeai.app.services.shared.graph import CollectInvocation, Graph, GraphExecutionState, IterateInvocation
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from tests.test_nodes import create_edge, create_loop_linkage
@@ -168,6 +170,18 @@ def _insert_session(queue: SqliteSessionQueue, graph: Graph) -> int:
         return cursor.lastrowid  # type: ignore[return-value]
 
 
+def _build_test_invocation_context(data, services, is_canceled):
+    recorder = ExecutionEffectsRecorder(
+        source_node_id=data.invocation.id,
+        frame_path=data.execution_frame,
+    )
+    return SimpleNamespace(
+        execution_effects=recorder,
+        effects=recorder,
+        execution=ExecutionInterface(recorder),
+    )
+
+
 class _Stats:
     @contextmanager
     def collect_stats(self, invocation, graph_execution_state_id):
@@ -189,7 +203,7 @@ def test_processor_sqlite_queue_nested_iterate_for_cleanup(
 ) -> None:
     monkeypatch.setattr(
         "invokeai.app.services.session_processor.session_processor_default.build_invocation_context",
-        lambda data, services, is_canceled: None,
+        _build_test_invocation_context,
     )
 
     queue = SqliteSessionQueue(db=mock_invoker.services.board_records._db)
@@ -273,7 +287,7 @@ def test_processor_sqlite_queue_nested_for_cleanup(
 ) -> None:
     monkeypatch.setattr(
         "invokeai.app.services.session_processor.session_processor_default.build_invocation_context",
-        lambda data, services, is_canceled: None,
+        _build_test_invocation_context,
     )
 
     queue = SqliteSessionQueue(db=mock_invoker.services.board_records._db)

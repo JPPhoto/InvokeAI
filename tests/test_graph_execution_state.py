@@ -414,6 +414,7 @@ def test_graph_state_apply_records_generic_effect_stream_and_rehydrates_it():
             },
         ],
     )
+    state._record_effect_streams(ref, state.execution_effects[ref.reference_id])
 
     streams = list(state._generic_runtime().streams.values())
     assert len(streams) == 1
@@ -425,6 +426,42 @@ def test_graph_state_apply_records_generic_effect_stream_and_rehydrates_it():
     assert len(restored_streams) == 1
     assert restored_streams[0].closed
     assert restored_streams[0].values == (3,)
+
+
+def test_graph_state_maps_iterate_effects_to_the_canonical_iteration_stream():
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="range", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(AddInvocation(id="add", b=1))
+    graph.add_edge(create_edge("range", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "add", "a"))
+
+    state = GraphExecutionState(graph=graph)
+    range_node, range_output = invoke_next(state)
+    assert range_node is not None
+    assert range_output is not None
+    iterate_node = state.next()
+    assert isinstance(iterate_node, IterateInvocation)
+    execution_ref = state.get_execution_ref(iterate_node.id)
+    recorder = ExecutionEffectsRecorder(
+        source_node_id=iterate_node.id,
+        frame_path=execution_ref.frame.iteration_path,
+    )
+    context = SimpleNamespace(
+        execution_effects=recorder,
+        effects=recorder,
+        execution=ExecutionInterface(recorder),
+    )
+    run_result = iterate_node.invoke_internal_with_effects(context, Mock())
+
+    state.apply(state.get_execution_ref(iterate_node.id, effect_count=len(run_result.effects)), run_result)
+
+    streams = list(state._generic_runtime().streams.values())
+    assert len(streams) == 1
+    assert streams[0].owner_id == "iterate"
+    assert ":effect:" not in streams[0].stream_id
+    assert streams[0].values == (0,)
+    assert not streams[0].closed
 
 
 @pytest.mark.parametrize("port", ["type", "output_meta", "loop_linkage"])

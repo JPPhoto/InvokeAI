@@ -30,7 +30,7 @@ from invokeai.app.services.shared.execution_effects import (
 )
 from invokeai.app.services.shared.execution_engine.child import ChildExecutionCapability
 from invokeai.app.services.shared.execution_state_migration import dump_execution_state, load_execution_state
-from invokeai.app.services.shared.graph import Edge, EdgeConnection, Graph, GraphExecutionState
+from invokeai.app.services.shared.graph import Edge, EdgeConnection, Graph, GraphExecutionState, IterateInvocation
 from invokeai.app.services.shared.invocation_context import (
     InvocationContext,
     InvocationContextData,
@@ -134,25 +134,42 @@ def test_if_invocation_declares_selected_branch_activation_effect(condition: boo
     assert effect.token.token_kind == "activation"
 
 
+@pytest.mark.parametrize(
+    ("index", "expected_effect_kinds"),
+    [(0, ["emit"]), (1, ["emit", "close_stream"])],
+)
+def test_iterate_invocation_declares_ordered_item_stream_effects(index: int, expected_effect_kinds: list[str]) -> None:
+    context = _context()
+    context.execution_effects = ExecutionEffectsRecorder(source_node_id="iterate")
+    context.execution = ExecutionInterface(context.execution_effects)
+    invocation = IterateInvocation(id="iterate", collection=["first", "last"], index=index)
+
+    result = invocation.invoke_internal_with_effects(context, _services())
+
+    assert result.output.item == invocation.collection[index]
+    assert result.output.index == index
+    assert result.output.total == len(invocation.collection)
+    assert [effect.kind for effect in result.effects] == expected_effect_kinds
+    emit = result.effects[0]
+    assert isinstance(emit, EmitEffect)
+    assert emit.token.node_id == "iterate"
+    assert emit.token.field == "item"
+    assert emit.token.value == invocation.collection[index]
+    assert emit.token.sequence == index
+    assert emit.value == invocation.collection[index]
+    if index == 1:
+        close = result.effects[1]
+        assert isinstance(close, CloseStreamEffect)
+        assert close.token.node_id == "iterate"
+        assert close.token.field == "item"
+        assert close.token.token_kind == "stream_end"
+
+
 @pytest.mark.parametrize("condition", [True, False])
 def test_graph_state_applies_if_activation_and_releases_selected_branch(condition: bool) -> None:
     graph = Graph()
-    graph.add_node(IfInvocation(id="if", condition=condition))
-    graph.add_node(ExecutionEffectsTestInvocation(id="true_branch", value=1))
-    graph.add_node(ExecutionEffectsTestInvocation(id="false_branch", value=2))
+    graph.add_node(IfInvocation(id="if", condition=condition, true_input=1, false_input=2))
     graph.add_node(ExecutionEffectsTestInvocation(id="successor"))
-    graph.add_edge(
-        Edge(
-            source=EdgeConnection(node_id="true_branch", field="value"),
-            destination=EdgeConnection(node_id="if", field="true_input"),
-        )
-    )
-    graph.add_edge(
-        Edge(
-            source=EdgeConnection(node_id="false_branch", field="value"),
-            destination=EdgeConnection(node_id="if", field="false_input"),
-        )
-    )
     graph.add_edge(
         Edge(
             source=EdgeConnection(node_id="if", field="value"),
@@ -180,10 +197,7 @@ def test_graph_state_applies_if_activation_and_releases_selected_branch(conditio
         else:
             state.complete(invocation.id, invocation.invoke(context=MagicMock()))
 
-    selected_branch = "true_branch" if condition else "false_branch"
-    unselected_branch = "false_branch" if condition else "true_branch"
-    assert selected_branch in executed_source_ids
-    assert unselected_branch not in executed_source_ids
+    assert executed_source_ids == ["if", "successor"]
     assert "successor" in executed_source_ids
     activation_tokens = [token for token in state.execution_tokens.values() if token.token_kind == "activation"]
     assert len(activation_tokens) == 1
