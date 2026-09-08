@@ -379,6 +379,9 @@ class _IfActivationCompiler:
         """Compile opaque branch requirements for one prepared execution node."""
 
         source_node_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
+        if not any(isinstance(node, IfInvocation) for node in self._state.graph.nodes.values()):
+            return ()
+
         iteration_path = self._state._get_iteration_path(exec_node_id)
         dependencies: list[ActivationDependency] = []
         for source_if_id, source_if_node in self._state.graph.nodes.items():
@@ -415,126 +418,6 @@ def _get_if_activation_dependencies(
     """Compatibility entry point for callers that still request If dependencies."""
 
     return state._if_activation_compiler().get_activation_dependencies(exec_node_id)
-
-
-class _IfBranchScheduler:
-    """Applies lazy `If` semantics by deferring, releasing, and skipping branch-local exec nodes."""
-
-    def __init__(self, state: "GraphExecutionState") -> None:
-        self._state = state
-
-    def _get_matching_prepared_if_ids(self, if_node_id: str, iteration_path: tuple[int, ...]) -> list[str]:
-        prepared_if_ids = self._state._prepared_registry().get_prepared_ids(if_node_id)
-        return [pid for pid in prepared_if_ids if self._state._get_iteration_path(pid) == iteration_path]
-
-    def _has_unresolved_matching_if(self, if_node_id: str, iteration_path: tuple[int, ...]) -> bool:
-        matching_prepared_if_ids = self._get_matching_prepared_if_ids(if_node_id, iteration_path)
-        if not matching_prepared_if_ids:
-            return True
-        return not all(self._state._activation_gate(pid).resolved for pid in matching_prepared_if_ids)
-
-    def _apply_condition_inputs(self, exec_node_id: str, node: IfInvocation) -> bool:
-        return self._state._apply_if_condition_inputs(exec_node_id, node)
-
-    def _get_selected_branch_fields(self, node: IfInvocation) -> tuple[str, str]:
-        selected_field = "true_input" if node.condition else "false_input"
-        unselected_field = "false_input" if node.condition else "true_input"
-        return selected_field, unselected_field
-
-    def _prune_unselected_if_inputs(self, exec_node_id: str, unselected_field: str) -> None:
-        for edge in self._state.execution_graph._get_input_edges(exec_node_id, unselected_field):
-            if edge.source.node_id not in self._state.executed:
-                if self._state.indegree[exec_node_id] == 0:
-                    raise RuntimeError(f"indegree underflow for {exec_node_id} when pruning {unselected_field}")
-                self._state._tx_set_mapping(self._state.indegree, exec_node_id, self._state.indegree[exec_node_id] - 1)
-            self._state._tx_delete_execution_edge(edge)
-            self._state._invalidate_execution_graph_flat()
-
-    def _apply_branch_resolution(
-        self,
-        exec_node_id: str,
-        iteration_path: tuple[int, ...],
-        exclusive_sources: dict[str, set[str]],
-        selected_field: str,
-        unselected_field: str,
-    ) -> None:
-        # This iterates over the stable prepared-source mapping while mutating per-exec runtime state such as ready
-        # queues, execution state, and prepared metadata. Branch resolution never adds or removes prepared exec nodes.
-        for prepared_id, prepared_source in self._state.prepared_source_mapping.items():
-            if prepared_id in self._state.executed:
-                continue
-            if self._state._get_iteration_path(prepared_id) != iteration_path:
-                continue
-            if prepared_source in exclusive_sources[selected_field]:
-                self._state._enqueue_if_ready(prepared_id)
-            elif prepared_source in exclusive_sources[unselected_field]:
-                self.mark_exec_node_skipped(prepared_id)
-
-    def get_branch_exclusive_sources(self, if_node_id: str) -> dict[str, set[str]]:
-        return _get_if_branch_exclusive_sources(self._state, if_node_id)
-
-    def get_activation_dependencies(self, exec_node_id: str) -> tuple[ActivationDependency, ...]:
-        return _get_if_activation_dependencies(self._state, exec_node_id)
-
-    def is_deferred_by_unresolved_if(self, exec_node_id: str) -> bool:
-        source_node_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
-
-        for source_if_id, source_if_node in self._state.graph.nodes.items():
-            if not isinstance(source_if_node, IfInvocation):
-                continue
-
-            branches = self.get_branch_exclusive_sources(source_if_id)
-            if source_node_id not in branches["true_input"] and source_node_id not in branches["false_input"]:
-                continue
-
-            iteration_path = self._state._get_iteration_path(exec_node_id)
-            if self._has_unresolved_matching_if(source_if_id, iteration_path):
-                return True
-        return False
-
-    def mark_exec_node_skipped(self, exec_node_id: str) -> None:
-        state = self._state._get_prepared_exec_metadata(exec_node_id).state
-        if state in ("executed", "skipped"):
-            return
-
-        self._state._remove_from_ready_queues(exec_node_id)
-        self._state._set_prepared_exec_state(exec_node_id, "skipped")
-        self._state._tx_add_set(self._state.executed, exec_node_id)
-        scheduler = self._state._execution_scheduler
-        if scheduler is not None:
-            scheduler.mark_skipped(exec_node_id)
-
-        registry = self._state._prepared_registry()
-        source_node_id = registry.get_source_node_id(exec_node_id)
-        prepared_nodes = registry.get_prepared_ids(source_node_id)
-        if all(n in self._state.executed for n in prepared_nodes):
-            if source_node_id not in self._state.executed:
-                self._state._mark_source_executed(source_node_id)
-
-    def try_resolve_if_node(self, exec_node_id: str) -> None:
-        if exec_node_id in self._state._resolved_if_exec_branches:
-            return
-        node = self._state.execution_graph.get_node(exec_node_id)
-        if not isinstance(node, IfInvocation):
-            return
-
-        if not self._apply_condition_inputs(exec_node_id, node):
-            return
-
-        selected_field, unselected_field = self._get_selected_branch_fields(node)
-        self._state._resolve_activation_gate(exec_node_id, selected_field)
-        # Compatibility cache for old snapshots and callers. The typed gate is
-        # the authority for new runtime decisions.
-        self._state._tx_set_mapping(self._state._resolved_if_exec_branches, exec_node_id, selected_field)
-        self._state._record_compatibility_activation_token(exec_node_id, selected_field)
-
-        source_if_node_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
-        exclusive_sources = self.get_branch_exclusive_sources(source_if_node_id)
-
-        iteration_path = self._state._get_iteration_path(exec_node_id)
-        self._prune_unselected_if_inputs(exec_node_id, unselected_field)
-        self._apply_branch_resolution(exec_node_id, iteration_path, exclusive_sources, selected_field, unselected_field)
-        self._state._enqueue_if_ready(exec_node_id)
 
 
 class _ExecutionMaterializer:
@@ -1853,6 +1736,38 @@ class _ExecutionScheduler:
         node = self._state.execution_graph.nodes[exec_node_id]
         return isinstance(node, CollectInvocation) and not self._state._collect_streams_ready(exec_node_id)
 
+    def _discard_rejected_activation_node(self, exec_node_id: str) -> bool:
+        if exec_node_id not in self._state.indegree:
+            return False
+        metadata = self._state._get_prepared_exec_metadata(exec_node_id)
+        if metadata.state in ("executed", "skipped"):
+            return False
+        if not self._state._has_rejected_activation_dependency(exec_node_id):
+            return False
+
+        self.remove_from_ready_queues(exec_node_id)
+        self._state._set_prepared_exec_state(exec_node_id, "skipped")
+        self._state._tx_add_set(self._state.executed, exec_node_id)
+
+        registry = self._state._prepared_registry()
+        source_node_id = registry.get_source_node_id(exec_node_id)
+        prepared_nodes = registry.get_prepared_ids(source_node_id)
+        if all(node_id in self._state.executed for node_id in prepared_nodes):
+            if source_node_id not in self._state.executed:
+                self._state._mark_source_executed(source_node_id)
+        self.mark_skipped(exec_node_id)
+        return True
+
+    def _discard_rejected_activation_nodes(self) -> None:
+        for exec_node_id in tuple(nx.topological_sort(self._state._get_execution_graph_flat())):
+            self._discard_rejected_activation_node(exec_node_id)
+
+    def _enqueue_activation_ready_nodes(self) -> None:
+        for exec_node_id in tuple(self._state.prepared_source_mapping):
+            if exec_node_id not in self._state.indegree or exec_node_id in self._state.executed:
+                continue
+            self.enqueue_if_ready(exec_node_id)
+
     def _get_ready_queue(self, exec_node_id: str) -> Deque[str]:
         node_obj = self._state.execution_graph.nodes[exec_node_id]
         return self.queue_for(self._state._type_key(node_obj))
@@ -2000,6 +1915,8 @@ class _ExecutionScheduler:
     def enqueue_if_ready(self, exec_node_id: str) -> None:
         """Push exec_node_id to its class queue if unmet inputs == 0."""
         self._validate_exec_node_ready_state(exec_node_id)
+        if self._discard_rejected_activation_node(exec_node_id):
+            return
         if self._should_skip_ready_enqueue(exec_node_id):
             return
         queue = self._get_ready_queue(exec_node_id)
@@ -4378,7 +4295,6 @@ class GraphExecutionState(BaseModel):
     _resolved_if_exec_branches: dict[str, str] = PrivateAttr(default_factory=dict)
     _prepared_exec_metadata: dict[str, _PreparedExecNodeMetadata] = PrivateAttr(default_factory=dict)
     _prepared_exec_registry: Optional[_PreparedExecRegistry] = PrivateAttr(default=None)
-    _if_branch_scheduler: Optional[_IfBranchScheduler] = PrivateAttr(default=None)
     _if_activation_compiler_instance: Optional[_IfActivationCompiler] = PrivateAttr(default=None)
     _execution_materializer: Optional[_ExecutionMaterializer] = PrivateAttr(default=None)
     _execution_scheduler: Optional[_ExecutionScheduler | _GenericGraphSchedulerAdapter] = PrivateAttr(default=None)
@@ -4490,7 +4406,6 @@ class GraphExecutionState(BaseModel):
 
     def _reset_apply_derived_caches(self) -> None:
         self._prepared_exec_registry = None
-        self._if_branch_scheduler = None
         self._execution_materializer = None
         self._execution_scheduler = None
         self._generic_graph_scheduler = None
@@ -4521,11 +4436,6 @@ class GraphExecutionState(BaseModel):
                 state=self,
             )
         return self._prepared_exec_registry
-
-    def _if_scheduler(self) -> _IfBranchScheduler:
-        if self._if_branch_scheduler is None:
-            self._if_branch_scheduler = _IfBranchScheduler(self)
-        return self._if_branch_scheduler
 
     def _if_activation_compiler(self) -> _IfActivationCompiler:
         if self._if_activation_compiler_instance is None:
@@ -6133,7 +6043,16 @@ class GraphExecutionState(BaseModel):
         return self._scheduler().queue_for(cls_name)
 
     def _is_deferred_by_unresolved_if(self, exec_node_id: str) -> bool:
-        return self._if_scheduler().is_deferred_by_unresolved_if(exec_node_id)
+        dependencies = self._get_activation_dependencies(exec_node_id)
+        if not dependencies or any(self._is_activation_dependency_rejected(dependency) for dependency in dependencies):
+            return False
+        return not all(self._is_activation_dependency_satisfied(dependency) for dependency in dependencies)
+
+    def _has_rejected_activation_dependency(self, exec_node_id: str) -> bool:
+        return any(
+            self._is_activation_dependency_rejected(dependency)
+            for dependency in self._get_activation_dependencies(exec_node_id)
+        )
 
     def _get_activation_dependencies(self, exec_node_id: str) -> tuple[ActivationDependency, ...]:
         return self._if_activation_compiler().get_activation_dependencies(exec_node_id)
@@ -6145,8 +6064,22 @@ class GraphExecutionState(BaseModel):
         scheduler = self._execution_scheduler
         if isinstance(scheduler, _GenericGraphSchedulerAdapter):
             scheduler.resolve_if_node(exec_node_id)
-        else:
-            self._if_scheduler().try_resolve_if_node(exec_node_id)
+            return
+
+        if exec_node_id in self._resolved_if_exec_branches:
+            return
+        node = self.execution_graph.get_node(exec_node_id)
+        if not isinstance(node, IfInvocation) or not self._apply_if_condition_inputs(exec_node_id, node):
+            return
+
+        selected_field = "true_input" if node.condition else "false_input"
+        self._resolve_activation_gate(exec_node_id, selected_field)
+        self._tx_set_mapping(self._resolved_if_exec_branches, exec_node_id, selected_field)
+        self._record_compatibility_activation_token(exec_node_id, selected_field)
+        assert isinstance(scheduler, _ExecutionScheduler)
+        scheduler._discard_rejected_activation_nodes()
+        scheduler._enqueue_activation_ready_nodes()
+        self._enqueue_if_ready(exec_node_id)
 
     def set_ready_order(self, order: Iterable[Type[BaseInvocation] | str]) -> None:
         names: list[str] = []
@@ -6179,7 +6112,6 @@ class GraphExecutionState(BaseModel):
         self._resolved_if_exec_branches = {}
         self._prepared_exec_metadata = {}
         self._prepared_exec_registry = None
-        self._if_branch_scheduler = None
         self._if_activation_compiler_instance = None
         self._execution_materializer = None
         self._execution_scheduler = None

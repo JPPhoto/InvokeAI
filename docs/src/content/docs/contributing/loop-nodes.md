@@ -132,25 +132,24 @@ the compatibility continuation/materialization owner for unsupported shapes.
 selected branch, and the graph state validates and persists it after invocation. For a fresh generic `If`, the dedicated
 `_IfActivationCompiler` produces opaque, frame-local activation dependencies. `_GenericGraphSchedulerAdapter` consumes
 those dependencies through the opaque `ExecutionPlan` for readiness and rejects unselected prepared nodes through
-generic scheduler discard. It does not consult `_IfBranchScheduler` topology, call
-`_IfBranchScheduler._prune_unselected_if_inputs` or `_IfBranchScheduler.mark_exec_node_skipped`, or delete execution
-edges. Forced `_ExecutionScheduler` still retains
-`_IfBranchScheduler` legacy topology, input-edge pruning, and skip behavior for compatibility snapshots. `apply()`
-replaces the activation token by stable identity, and activation effects are excluded from stream handling. This is an
-ownership seam, not final removal of all legacy topology. Author-time activation ports and literal successor IDs remain
-absent, while unsupported loop shapes and saved-workflow control flow remain on their compatibility paths until
-differential coverage proves their generic replacements.
+generic scheduler discard. The compatibility `_ExecutionScheduler` consumes the same dependencies and append-only
+discard projection; no type-specific branch scheduler prunes edges or propagates skips. Legacy skipped-state metadata
+remains as a compatibility projection for persisted snapshots and completion accounting. `apply()` replaces the
+activation token by stable identity, and activation effects are excluded from stream handling. This is an ownership
+seam, not final removal of all compiler-derived branch analysis or skipped-state projection. Author-time activation
+ports and literal successor IDs remain absent, while unsupported loop shapes and saved-workflow control flow remain on
+their compatibility paths until differential coverage proves their generic replacements.
 
 The engine still owns runtime node materialization and queue readiness for loop-containing graphs that require empty or
 input-driven `For`, nested/mixed control flow, and existing snapshots. Ordinary static DAGs, legacy-shaped `If` graphs,
 direct `Iterate`/`Collect`-only graphs, and supported fresh static flat `For` graphs now use the generic opaque
-plan/scheduler through a compatibility projection; a fresh
-generic `If` uses the compiler/adapter seam described above. This is intentional:
+plan/scheduler through a compatibility projection. This is intentional:
 the generic records preserve tested loop semantics first, while the old execution graph remains the fallback for control
 lowerings, legacy snapshots, and unsupported mixed loop shapes. No activation or stream ports are added to author-time
 graph JSON.
 This migration does not modify any file under `invokeai/frontend/...`, including generated schemas; the existing
-frontend/backend external interface remains frozen. The ownership seam does not remove all legacy topology yet.
+frontend/backend external interface remains frozen. The ownership seam does not remove all compiler-derived branch
+analysis or skipped-state projection yet.
 
 The frontend and backend validate the same boundary rules. Saved workflows preserve node types, field handles, and the
 direct linkage edge. The current invocation templates provide output-scope metadata when a workflow is loaded. The

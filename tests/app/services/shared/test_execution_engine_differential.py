@@ -26,7 +26,6 @@ from invokeai.app.services.shared.graph import (
     GraphExecutionState,
     _ExecutionScheduler,
     _GenericGraphSchedulerAdapter,
-    _IfBranchScheduler,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContextData, build_invocation_context
 from tests.test_nodes import AnyTypeTestInvocation, ErrorInvocation, UnionCollectionTestInvocation
@@ -548,33 +547,9 @@ def _expected_edge_projection(
     outer_condition: bool,
     inner_condition: bool,
 ) -> tuple[tuple[str, str, str, str, str], ...]:
-    """Project the source graph using the explicit compatibility If lowering rules."""
-    source_edges = _source_edge_projection(graph)
-    if not force_compatibility_scheduler:
-        return source_edges
-
-    # The compatibility scheduler prunes only the inactive input edge at each If that it resolves. If the outer
-    # branch is false, the inner If is never resolved, so its two branch edges remain in the compatibility graph.
-    pruned_edges = {
-        (
-            "outer_false" if outer_condition else "inner_if",
-            "value",
-            "outer_if",
-            "false_input" if outer_condition else "true_input",
-            "default",
-        ),
-    }
-    if outer_condition:
-        pruned_edges.add(
-            (
-                "inner_false" if inner_condition else "inner_true",
-                "value",
-                "inner_if",
-                "false_input" if inner_condition else "true_input",
-                "default",
-            )
-        )
-    return tuple(edge for edge in source_edges if edge not in pruned_edges)
+    """Project the append-only execution graph for both scheduler adapters."""
+    del force_compatibility_scheduler, outer_condition, inner_condition
+    return _source_edge_projection(graph)
 
 
 def _normalized_indegree(state: GraphExecutionState) -> tuple[tuple[str, tuple[int, ...]], ...]:
@@ -1411,24 +1386,12 @@ def test_generic_legacy_shaped_if_does_not_prune_or_skip_during_resolution(
     state = GraphExecutionState(graph=graph)
     deleted_edges: list[Edge] = []
 
-    def fail_prune(*_: object, **__: object) -> None:
-        raise AssertionError("generic If execution called _prune_unselected_if_inputs")
-
-    def fail_skip(*_: object, **__: object) -> None:
-        raise AssertionError("generic If execution called mark_exec_node_skipped")
-
     def fail_topology(*_: object, **__: object) -> dict[str, set[str]]:
         raise AssertionError("generic If execution consulted legacy branch topology")
-
-    def fail_legacy_scheduler(*_: object, **__: object) -> None:
-        raise AssertionError("generic If execution instantiated the legacy branch scheduler")
 
     def record_deleted_edge(self: GraphExecutionState, edge: Edge) -> None:
         deleted_edges.append(edge)
 
-    monkeypatch.setattr(_IfBranchScheduler, "_prune_unselected_if_inputs", fail_prune)
-    monkeypatch.setattr(_IfBranchScheduler, "mark_exec_node_skipped", fail_skip)
-    monkeypatch.setattr(_IfBranchScheduler, "__init__", fail_legacy_scheduler)
     monkeypatch.setattr(graph_module, "_get_if_branch_exclusive_sources", fail_topology)
     monkeypatch.setattr(GraphExecutionState, "_tx_delete_execution_edge", record_deleted_edge)
 
@@ -1534,8 +1497,6 @@ def test_fresh_generic_nested_if_preserves_state_without_legacy_branch_projectio
 
     monkeypatch.setattr(graph_module, "_get_if_branch_exclusive_sources", fail_legacy_path)
     monkeypatch.setattr(_GenericGraphSchedulerAdapter, "_retire_unselected_node", record_generic_discard)
-    monkeypatch.setattr(_IfBranchScheduler, "_prune_unselected_if_inputs", fail_legacy_path)
-    monkeypatch.setattr(_IfBranchScheduler, "mark_exec_node_skipped", fail_legacy_path)
     monkeypatch.setattr(GraphExecutionState, "_tx_delete_execution_edge", fail_legacy_path)
 
     trace, state = _run_graph(GraphExecutionState(graph=graph))

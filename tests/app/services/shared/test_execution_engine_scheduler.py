@@ -615,6 +615,54 @@ def test_graph_state_if_uses_generic_activation_routing() -> None:
     }
 
 
+@pytest.mark.parametrize("condition", [False, True])
+def test_graph_state_compatibility_if_uses_opaque_activation_routing(
+    condition: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=condition))
+    graph.add_node(AddInvocation(id="true_value", a=2, b=2))
+    graph.add_node(AddInvocation(id="false_value", a=3, b=3))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="condition", field="value"),
+            destination=EdgeConnection(node_id="if", field="condition"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="true_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="true_input"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="false_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="false_input"),
+        )
+    )
+
+    state = GraphExecutionState(graph=graph)
+    state._execution_scheduler = _ExecutionScheduler(state)
+    deleted_edges: list[Edge] = []
+
+    def record_deleted_edge(self: GraphExecutionState, edge: Edge) -> None:
+        deleted_edges.append(edge)
+
+    monkeypatch.setattr(GraphExecutionState, "_tx_delete_execution_edge", record_deleted_edge)
+
+    trace: list[str] = []
+    while (node := state.next()) is not None:
+        trace.append(state.prepared_source_mapping[node.id])
+        state.complete(node.id, node.invoke(Mock()))
+
+    selected_value = "true_value" if condition else "false_value"
+    assert trace == ["condition", selected_value, "if"]
+    assert state.is_complete()
+    assert deleted_edges == []
+
+
 def test_graph_state_if_generic_and_legacy_paths_have_matching_completion() -> None:
     graph = Graph()
     graph.add_node(BooleanInvocation(id="condition", value=False))

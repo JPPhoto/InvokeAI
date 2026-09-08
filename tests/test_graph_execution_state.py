@@ -66,7 +66,6 @@ from invokeai.app.services.shared.graph import (
 # This import must happen before other invoke imports or test in other files(!!) break
 from tests.test_nodes import (
     AnyTypeTestInvocation,
-    AnyTypeTestInvocationOutput,
     PolymorphicStringTestInvocation,
     PromptCollectionTestInvocation,
     PromptTestInvocation,
@@ -3587,7 +3586,7 @@ def test_invocation_event_service_uses_compact_control_node_representation():
     assert iterator.collection == [1, 2, 3]
 
 
-def test_if_scheduler_does_not_resolve_iteration_path_when_graph_has_no_if(monkeypatch: pytest.MonkeyPatch):
+def test_activation_dependencies_do_not_resolve_iteration_path_when_graph_has_no_if(monkeypatch: pytest.MonkeyPatch):
     graph = Graph()
     graph.add_node(PromptTestInvocation(id="source", prompt="test"))
     state = GraphExecutionState(graph=graph)
@@ -3600,7 +3599,7 @@ def test_if_scheduler_does_not_resolve_iteration_path_when_graph_has_no_if(monke
 
     monkeypatch.setattr(GraphExecutionState, "_get_iteration_path", fail_get_iteration_path)
 
-    assert state._if_scheduler().is_deferred_by_unresolved_if(prepared_node.id) is False
+    assert state._is_deferred_by_unresolved_if(prepared_node.id) is False
 
 
 def test_materializer_caches_iteration_paths_for_single_parent_chain(monkeypatch: pytest.MonkeyPatch):
@@ -5475,38 +5474,6 @@ def test_get_iteration_node_does_not_reuse_wrong_iterator_when_only_other_iterat
 
     assert selected_exec_id is None
     assert active_value_exec_id != skipped_value_exec_id
-
-
-def test_mark_exec_node_skipped_does_not_hide_already_executed_results():
-    graph = Graph()
-    graph.add_node(AnyTypeTestInvocation(id="value", value="value"))
-
-    g = GraphExecutionState(graph=graph)
-
-    exec_id = g._create_execution_node("value", [])[0]
-    g.results[exec_id] = AnyTypeTestInvocationOutput(value="value")
-    g.executed.add(exec_id)
-    g._set_prepared_exec_state(exec_id, "executed")
-
-    g._if_scheduler().mark_exec_node_skipped(exec_id)
-
-    assert g._get_prepared_exec_metadata(exec_id).state == "executed"
-    assert g.results[exec_id].value == "value"
-
-
-def test_mark_exec_node_skipped_is_idempotent_for_skipped_state():
-    graph = Graph()
-    graph.add_node(AnyTypeTestInvocation(id="value", value="value"))
-
-    g = GraphExecutionState(graph=graph)
-
-    exec_id = g._create_execution_node("value", [])[0]
-
-    g._if_scheduler().mark_exec_node_skipped(exec_id)
-    g._if_scheduler().mark_exec_node_skipped(exec_id)
-
-    assert g._get_prepared_exec_metadata(exec_id).state == "skipped"
-    assert g.executed_history.count("value") == 1
 
 
 def test_are_connection_types_compatible_accepts_subclass_to_base():
