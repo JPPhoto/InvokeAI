@@ -344,7 +344,34 @@ async def _identify_video_upload_user_async(scope: Scope) -> tuple[bool, str | N
 
 
 class RequestBodyLimitASGIMiddleware:
-    """Bound selected request bodies before framework parsing and buffering."""
+    """Bound selected request bodies before framework parsing and buffering.
+
+    Rejects oversized requests from the Content-Length header, aborts chunked bodies that
+    exceed the cap mid-stream, and bounds concurrent requests both globally and per user
+    (so one tenant's slow uploads cannot starve the others into 429s).
+
+    It also asks the server to close the connection on any response sent before the request
+    body has been read to completion. The leases below are released as soon as the app
+    returns, and routes answer plenty of requests without reading the body (a forbidden
+    board, an unsupported filename) — FastAPI's own query-param validation answers 422
+    before the route body runs at all. A client that kept streaming after such a response
+    would hold ingress with no slot charged against it, outside the 429 bound, the idle
+    timeout and the duration cap; closing ends that upload along with the response.
+
+    Whether the body was read is the only thing that can be known here, so any early answer
+    closes — including when the client had in fact already finished sending. That costs a
+    fresh connection per rejected request, which is the conservative side to err on and is
+    what servers generally do when a response is sent without consuming the body.
+
+    Two limits worth knowing. Draining the body instead would also close the hole, but it
+    would pin one of the very few slots for the whole duration cap per rejection, which is a
+    cheaper denial of service than the hole it closes. And behind a reverse proxy that
+    buffers request bodies (nginx's default, per the multi-user admin guide) `Connection`
+    is hop-by-hop, so this only closes the proxy-to-app hop — there the proxy has already
+    absorbed the whole body before the app is invoked, so the hole does not arise. Responses
+    generated above this middleware (Starlette's ServerErrorMiddleware 500) do not pass
+    through it; uvicorn closes the transport on those itself.
+    """
 
     def __init__(
         self,
@@ -382,6 +409,11 @@ class RequestBodyLimitASGIMiddleware:
         if not self.matches_request(scope.get("method", ""), route_path):
             return await self.app(scope, receive, send)
 
+        # `connection` is a hop-by-hop header and illegal in HTTP/2+, so every use below is
+        # gated on HTTP/1.
+        is_http1 = str(scope.get("http_version", "1.1")).startswith("1.")
+        close_header = {"connection": "close"} if is_http1 else {}
+
         per_user_key: str | None = None
         if self.identify_user is not None:
             identity = self.identify_user(scope)
@@ -392,7 +424,7 @@ class RequestBodyLimitASGIMiddleware:
                 response = JSONResponse(
                     {"detail": "Authentication required"},
                     status_code=401,
-                    headers={"WWW-Authenticate": "Bearer"},
+                    headers={"WWW-Authenticate": "Bearer", **close_header},
                 )
                 return await response(scope, receive, send)
 
@@ -402,6 +434,7 @@ class RequestBodyLimitASGIMiddleware:
             response = JSONResponse(
                 {"detail": self.too_large_detail(content_length_bytes, self.max_body_bytes)},
                 status_code=413,
+                headers=close_header,
             )
             return await response(scope, receive, send)
 
@@ -416,7 +449,7 @@ class RequestBodyLimitASGIMiddleware:
             response = JSONResponse(
                 {"detail": self.capacity_refusal_detail(False)},
                 status_code=429,
-                headers={"Retry-After": str(self.retry_after_seconds)},
+                headers={"Retry-After": str(self.retry_after_seconds), **close_header},
             )
             return await response(scope, receive, send)
 
@@ -424,12 +457,19 @@ class RequestBodyLimitASGIMiddleware:
             response = JSONResponse(
                 {"detail": self.capacity_refusal_detail(True)},
                 status_code=429,
-                headers={"Retry-After": str(self.retry_after_seconds)},
+                headers={"Retry-After": str(self.retry_after_seconds), **close_header},
             )
             return await response(scope, receive, send)
 
         self._claim_capacity(per_user_key)
         received = 0
+        # Only reading the body to its end proves the client has finished sending. This must
+        # NOT be seeded from Content-Length: h11 accepts `Content-Length: 0` alongside
+        # `Transfer-Encoding: chunked` (the chunked framing wins), so trusting the header let
+        # a client suppress the close and then stream indefinitely with no lease held and
+        # none of the caps below applying — they all live in limited_receive, which an app
+        # that answers early never calls again.
+        body_finished = False
         upload_started_at = asyncio.get_running_loop().time()
 
         async def limited_receive() -> Message:
@@ -437,10 +477,13 @@ class RequestBodyLimitASGIMiddleware:
             # streamed body and abort the request once it exceeds the cap, so the multipart
             # parser stops spooling. A clean 413 isn't possible mid-parse; the aborted
             # request surfaces to the client as a dropped connection.
-            nonlocal received
+            nonlocal received, body_finished
             remaining_duration = self.max_upload_duration_seconds - (
                 asyncio.get_running_loop().time() - upload_started_at
             )
+            # The three aborts below synthesize a disconnect precisely because the client is
+            # still uploading, so they deliberately leave body_finished alone: whatever the
+            # app answers must still close the connection.
             if remaining_duration <= 0:
                 return {"type": "http.disconnect"}
             try:
@@ -451,10 +494,24 @@ class RequestBodyLimitASGIMiddleware:
                 received += len(message.get("body", b""))
                 if received > self.max_body_bytes:
                     return {"type": "http.disconnect"}
+                if not message.get("more_body", False):
+                    body_finished = True
+            elif message["type"] == "http.disconnect":
+                # The client is already gone; there is nothing left to close.
+                body_finished = True
             return message
 
+        async def close_if_answered_early(message: Message) -> None:
+            # See the class docstring: answering before the body has been read to its end must
+            # not leave the client uploading into an already-sent response.
+            if message["type"] == "http.response.start" and not body_finished and is_http1:
+                headers = [(name, value) for name, value in message.get("headers", []) if name.lower() != b"connection"]
+                headers.append((b"connection", b"close"))
+                message = {**message, "headers": headers}
+            await send(message)
+
         try:
-            await self.app(scope, limited_receive, send)
+            await self.app(scope, limited_receive, close_if_answered_early)
         finally:
             self._release_capacity(per_user_key)
 
