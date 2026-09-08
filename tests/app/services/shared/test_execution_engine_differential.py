@@ -29,7 +29,7 @@ from invokeai.app.services.shared.graph import (
     _IfActivationCompiler,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContextData, build_invocation_context
-from tests.test_nodes import AnyTypeTestInvocation, ErrorInvocation, UnionCollectionTestInvocation
+from tests.test_nodes import AnyTypeTestInvocation, ErrorInvocation, UnionCollectionTestInvocation, create_loop_linkage
 
 FIXTURE_PATH = Path(__file__).parents[3] / "fixtures" / "execution_engine" / "static_dag_v1.json"
 
@@ -173,6 +173,33 @@ def _flat_for_graph(
                 destination=EdgeConnection(node_id="after", field="value"),
             )
         )
+    return graph
+
+
+def _nested_for_graph(*, outer_collection: list[list[str]] | None = None) -> Graph:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="outer_for", collection=outer_collection or [["a", "b"], ["c"]]))
+    graph.add_node(ForInvocation(id="inner_for"))
+    graph.add_node(AnyTypeTestInvocation(id="inner_body"))
+    graph.add_node(ForReturnInvocation(id="inner_return"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+
+    def connect(source: str, source_field: str, destination: str, destination_field: str) -> None:
+        graph.add_edge(
+            Edge(
+                source=EdgeConnection(node_id=source, field=source_field),
+                destination=EdgeConnection(node_id=destination, field=destination_field),
+            )
+        )
+
+    connect("outer_for", "item", "inner_for", "collection")
+    connect("inner_for", "item", "inner_body", "value")
+    connect("inner_body", "value", "inner_return", "output")
+    connect("inner_for", "output_collection", "outer_return", "output")
+    connect("outer_for", "output_collection", "after", "value")
+    graph.add_edge(create_loop_linkage("outer_for", "outer_return"))
+    graph.add_edge(create_loop_linkage("inner_for", "inner_return"))
     return graph
 
 
@@ -915,6 +942,119 @@ def test_flat_for_generic_path_does_not_use_compatibility_continuation_bridge(
     assert trace == ["for", "body", "return", "for", "body", "return"]
     assert state.is_complete()
     assert _final_for_output(state).output_collection == [11, 12]
+
+
+def test_nested_for_generic_and_compatibility_paths_have_matching_completion() -> None:
+    def run(force_compatibility: bool) -> tuple[list[str], GraphExecutionState]:
+        state = GraphExecutionState(graph=_nested_for_graph())
+        if force_compatibility:
+            state._execution_scheduler = _ExecutionScheduler(state)
+        return _run(state)
+
+    compatibility_trace, compatibility_state = run(force_compatibility=True)
+    generic_trace, generic_state = run(force_compatibility=False)
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert isinstance(compatibility_state._execution_scheduler, _ExecutionScheduler)
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in generic_state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert generic_state.results[after_exec_id].value == [["a", "b"], ["c"]]
+    compatibility_after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in compatibility_state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert compatibility_state.results[compatibility_after_exec_id].value == [["a", "b"], ["c"]]
+
+
+def test_nested_for_generic_and_compatibility_paths_handle_empty_inner_collection() -> None:
+    def run(force_compatibility: bool) -> tuple[list[str], GraphExecutionState]:
+        state = GraphExecutionState(graph=_nested_for_graph(outer_collection=[[], ["c"]]))
+        if force_compatibility:
+            state._execution_scheduler = _ExecutionScheduler(state)
+        return _run(state)
+
+    compatibility_trace, compatibility_state = run(force_compatibility=True)
+    generic_trace, generic_state = run(force_compatibility=False)
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    # Empty inner iterations use different synthetic execution-node projections, but must preserve trace and outputs.
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in generic_state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert generic_state.results[after_exec_id].value == [[], ["c"]]
+    compatibility_after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in compatibility_state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert compatibility_state.results[compatibility_after_exec_id].value == [[], ["c"]]
+
+
+def test_nested_for_generic_path_rehydrates_after_inner_completion() -> None:
+    expected_state = GraphExecutionState(graph=_nested_for_graph())
+    expected_state._execution_scheduler = _ExecutionScheduler(expected_state)
+    expected_trace, expected_state = _run(expected_state)
+    assert expected_trace == [
+        "outer_for",
+        "inner_for",
+        "inner_body",
+        "inner_return",
+        "inner_for",
+        "inner_body",
+        "inner_return",
+        "outer_return",
+        "outer_for",
+        "inner_for",
+        "inner_body",
+        "inner_return",
+        "outer_return",
+        "after",
+    ]
+
+    state = GraphExecutionState(graph=_nested_for_graph())
+    state._execution_scheduler = _GenericGraphSchedulerAdapter(state)
+    partial_trace, partial_state = _run(state, stop_after=4)
+    assert partial_trace == ["outer_for", "inner_for", "inner_body", "inner_return"]
+
+    restored = load_execution_state(dump_execution_state(partial_state))
+    restored._execution_scheduler = _GenericGraphSchedulerAdapter(restored)
+    resumed_trace, resumed_state = _run(restored)
+
+    assert resumed_trace == [
+        "inner_for",
+        "inner_body",
+        "inner_return",
+        "outer_return",
+        "outer_for",
+        "inner_for",
+        "inner_body",
+        "inner_return",
+        "outer_return",
+        "after",
+    ]
+    assert resumed_state.is_complete()
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+
+    compatibility_partial = GraphExecutionState(graph=_nested_for_graph())
+    compatibility_partial._execution_scheduler = _ExecutionScheduler(compatibility_partial)
+    _, compatibility_partial = _run(compatibility_partial, stop_after=4)
+    compatibility_restored = load_execution_state(dump_execution_state(compatibility_partial))
+    compatibility_restored._execution_scheduler = _ExecutionScheduler(compatibility_restored)
+    compatibility_resumed_trace, compatibility_resumed = _run(compatibility_restored)
+    assert compatibility_resumed_trace == resumed_trace
+    assert _state_projection(compatibility_resumed) == _state_projection(expected_state)
 
 
 def test_direct_flat_for_completion_persists_continuations_and_final_tokens() -> None:

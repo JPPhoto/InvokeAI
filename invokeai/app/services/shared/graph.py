@@ -2401,6 +2401,8 @@ class _GenericGraphSchedulerAdapter:
         for dependency in dependencies:
             if dependency not in self._scheduler.plan.nodes:
                 self.register_node(dependency)
+        if exec_node_id in self._state.executed:
+            self._scheduler.executed.add(exec_node_id)
         self._scheduler.add_node(
             self._scheduler.plan.add_node(
                 exec_node_id,
@@ -2547,6 +2549,7 @@ class _GenericGraphSchedulerAdapter:
             self._state._tx_set_mapping(self._state.indegree, dependent, self._scheduler.indegree[dependent])
         for ready_node_id in newly_ready:
             self._project_ready_node(ready_node_id)
+        _ExecutionScheduler._try_materialize_deferred_nested_for_body(self, exec_node_id)
         if finalized_for_exec_node_id is None:
             return []
         finalized_for_node = self._state.execution_graph.get_node(finalized_for_exec_node_id)
@@ -4972,6 +4975,36 @@ class GraphExecutionState(BaseModel):
             return False
         for_nodes = [node for node in self.graph.nodes.values() if isinstance(node, ForInvocation)]
         return_nodes = [node for node in self.graph.nodes.values() if isinstance(node, ForReturnInvocation)]
+        if len(for_nodes) == 2 and len(return_nodes) == 2:
+            source_graph = self._get_source_graph_flat()
+            outer_for = next(
+                (
+                    node
+                    for node in for_nodes
+                    if (nested_body := self.graph._get_supported_for_nested_for_body(node.id, source_graph)) is not None
+                    and len(nested_body.inner_for_ids) == 1
+                    and not nested_body.continuation_nodes
+                ),
+                None,
+            )
+            if (
+                outer_for is None
+                or self.graph._get_input_edges(outer_for.id, COLLECTION_FIELD)
+                or not outer_for.collection
+            ):
+                return False
+            nested_body = self.graph._get_supported_for_nested_for_body(outer_for.id, source_graph)
+            assert nested_body is not None
+            inner_for = self.graph.get_node(nested_body.inner_for_ids[0])
+            if not isinstance(inner_for, ForInvocation):
+                return False
+            inner_collection_edges = self.graph._get_input_edges(inner_for.id, COLLECTION_FIELD)
+            if len(inner_collection_edges) != 1 or (
+                inner_collection_edges[0].source.node_id != outer_for.id
+                or inner_collection_edges[0].source.field != ITEM_FIELD
+            ):
+                return False
+            return True
         if len(for_nodes) != 1 or len(return_nodes) != 1:
             return False
         if self.graph._get_input_edges(for_nodes[0].id, COLLECTION_FIELD) or not for_nodes[0].collection:

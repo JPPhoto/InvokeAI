@@ -95,8 +95,10 @@ pair now uses the generic scheduler adapter for readiness and continuation trans
 generic continuation boundary: it carries returned state, honors `continue_condition`, materializes the next body
 iteration, and finalizes the aggregate. The generic scheduler remains opaque and never receives a literal successor
 node ID. The compatibility continuation bridge is retained only for unsupported loop shapes and explicitly
-legacy-loaded snapshots. Empty or input-driven collections, nested or multiple loops, and mixed control flow remain on the
-compatibility scheduler; this additive effect seam does not claim generic scheduling for those shapes. `Iterate` records ordered item tokens in a closed `StreamBuffer`; an empty `Iterate` records an
+legacy-loaded snapshots. Empty or input-driven collections, deeper or multiple nested loops, and mixed control flow
+remain on the compatibility scheduler; the narrow canonical two-level nested-`For` shape is now generic-routed. This
+additive effect seam does not claim generic scheduling for the remaining shapes. `Iterate` records ordered item tokens in
+a closed `StreamBuffer`; an empty `Iterate` records an
 explicit empty close. A direct `Iterate.item` consumer waits for the canonical stream to close, then `Collect` consumes
 its ordered values; a missing stream falls back to materialized results for legacy snapshots. The materializer still
 owns iterator expansion, iteration paths, collector grouping, collection-input hydration, and empty-source closure.
@@ -152,7 +154,7 @@ ports and literal successor IDs remain absent, while unsupported loop shapes and
 their compatibility paths until differential coverage proves their generic replacements.
 
 The engine still owns runtime node materialization and queue readiness for loop-containing graphs that require empty or
-input-driven `For`, nested/mixed control flow, and existing snapshots. Ordinary static DAGs, legacy-shaped `If` graphs,
+input-driven `For`, deeper nested/mixed control flow, and existing snapshots. Ordinary static DAGs, legacy-shaped `If` graphs,
 direct `Iterate`/`Collect`-only graphs, and supported fresh static flat `For` graphs now use the generic opaque
 plan/scheduler through a compatibility projection. This is intentional:
 the generic records preserve tested loop semantics first, while the old execution graph remains the fallback for control
