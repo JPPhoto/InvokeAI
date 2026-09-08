@@ -2239,10 +2239,13 @@ class _GenericGraphSchedulerAdapter:
     def _is_node_activation_ready(self, exec_node_id: str) -> bool:
         """Require every frame-local activation dependency to be satisfied."""
 
-        return all(
+        if not all(
             self._state._is_activation_dependency_satisfied(dependency)
             for dependency in self._scheduler.plan.nodes[exec_node_id].activation_dependencies
-        )
+        ):
+            return False
+        node = self._state.execution_graph.nodes[exec_node_id]
+        return not isinstance(node, CollectInvocation) or self._state._collect_streams_ready(exec_node_id)
 
     def _retire_unselected_node(self, exec_node_id: str) -> None:
         """Retire one unselected prepared node through generic scheduler state."""
@@ -2411,9 +2414,14 @@ class _GenericGraphSchedulerAdapter:
         return self._state.execution_graph.nodes[exec_node_id]
 
     def _record_completed_node(self, exec_node_id: str, output: BaseInvocationOutput) -> None:
+        node = self._state.execution_graph.nodes.get(exec_node_id)
         self._state._set_prepared_exec_state(exec_node_id, "executed")
         self._state._tx_add_set(self._state.executed, exec_node_id)
         self._state._tx_set_mapping(self._state.results, exec_node_id, output)
+        if isinstance(node, IterateInvocation):
+            self._state._record_iterate_stream(exec_node_id, output)
+        if isinstance(node, (IterateInvocation, CollectInvocation)):
+            self._state._tx_set_attr(node, "collection", [])
 
     def _mark_source_node_complete(self, exec_node_id: str) -> None:
         registry = self._state._prepared_registry()
@@ -4697,9 +4705,14 @@ class GraphExecutionState(BaseModel):
         return self._execution_materializer
 
     def _can_use_generic_scheduler(self) -> bool:
-        """Use generic readiness only for graphs without control-flow lowering."""
+        """Use generic readiness for static graphs and direct Iterate/Collect control flow."""
 
-        control_nodes = (IterateInvocation, CollectInvocation, ForInvocation, ForReturnInvocation)
+        control_nodes = (ForInvocation, ForReturnInvocation)
+        if any(isinstance(node, (IterateInvocation, CollectInvocation)) for node in self.graph.nodes.values()):
+            return not any(
+                isinstance(node, (*control_nodes, IfInvocation, CallSavedWorkflowInvocation))
+                for node in self.graph.nodes.values()
+            )
         return not any(isinstance(node, control_nodes) for node in self.graph.nodes.values()) and not any(
             isinstance(node, CallSavedWorkflowInvocation) for node in self.graph.nodes.values()
         )

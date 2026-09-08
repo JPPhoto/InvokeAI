@@ -15,6 +15,11 @@ discard. It does not consult `_IfBranchScheduler` topology or call its prune/ski
 execution edges. The forced compatibility `_ExecutionScheduler` path retains legacy `If` topology lowering, input-edge
 pruning, and skip behavior for compatibility snapshots. This is an ownership seam, not final removal of all legacy
 topology.
+Direct `Iterate`/`Collect` graphs that do not contain `If`, `For`, `ForReturn`, or saved-workflow control flow also use
+the generic adapter. Its adapter-level readiness predicate waits for canonical Iterate streams to close, and generic
+completion mirrors each Iterate result into that ledger before releasing `Collect`; materialization still owns copy
+expansion, iteration paths, grouping, and explicit empty-stream closure. Mixed control-flow shapes remain on the legacy
+compatibility scheduler until their differential gates are complete.
 The runtime also exposes an additive execution-engine seam: frame-scoped gates, ordered streams, continuations, and
 authorized child-dependency records are stored in
 `invokeai.app.services.shared.execution_engine`; legacy graph and queue behavior is retained behind adapters while
@@ -130,10 +135,12 @@ Checks a single prospective edge before insertion:
 Holds the state for a single run. Keeps the source graph intact and materializes a separate execution graph.
 `GraphExecutionState` is still the public runtime entry point, but most execution behavior is now delegated to a small
 set of internal helper classes. For ordinary static DAGs and legacy-shaped `If` graphs, readiness and completion are
-projected through the generic `ExecutionPlan`/`ExecutionScheduler` adapter. `Iterate`, `Collect`, `For`, `ForReturn`,
-and saved-workflow call lowering continue to use the legacy compatibility scheduler for materialization and queue
-lifecycle until their differential coverage is complete. `Iterate` also records non-empty item streams through the
-generic effect ledger; the materializer remains authoritative for expansion, iteration paths, collector grouping, and
+projected through the generic `ExecutionPlan`/`ExecutionScheduler` adapter. Direct `Iterate`/`Collect` graphs without
+other control-flow nodes also use that adapter: its readiness predicate waits for canonical streams to close and its
+completion mirrors Iterate outputs into the stream ledger. `For`, `ForReturn`, saved-workflow calls, and mixed
+control-flow shapes continue to use the legacy compatibility scheduler for materialization and queue lifecycle until
+their differential coverage is complete. `Iterate` also records non-empty item streams through the generic effect ledger;
+the materializer remains authoritative for expansion, iteration paths, collector grouping, and
 empty-source compatibility handling. Direct `Collect.item` consumers now use the closed stream ledger when available;
 the full Iterate/Collect compatibility matrix covers empty, nested, fan-in, partial rehydration, failure, cancellation,
 and retry behavior. This evidence does not remove the materializer or queue adapters.
@@ -217,8 +224,9 @@ ownership seam, not final removal of all legacy topology. `apply()`
 validates and persists the invocation-emitted effect afterward, replacing the compatibility token by stable identity.
 Activation effects are excluded from data-stream handling. `IterateInvocation` is the first stream-producing
 control-flow invocation on this seam: each non-empty prepared copy emits one ordered `item` effect with its iteration
-index, and the final copy emits one `close_stream` effect. Graph state maps these effects to the existing
-frame-scoped iteration-stream identity, so legacy output mirroring is idempotent. The materializer still creates
+index, and the final copy emits one `close_stream` effect. Direct Iterate/Collect-only graphs now run through the
+generic scheduler adapter; its completion maps these results/effects to the existing frame-scoped iteration-stream
+identity, so legacy output mirroring is idempotent. The materializer still creates
 prepared copies, derives iteration paths, groups collector inputs, and records the explicit close for an empty source.
 For a direct `Iterate.item` edge, the scheduler defers `CollectInvocation` while its canonical stream is open, and
 runtime hydration consumes the closed stream in sequence order. If no stream exists, hydration retains the legacy
@@ -245,9 +253,11 @@ subclasses that declare frame-scoped data, activation, stream-closure, child,
 and terminal effects. The generic scheduler selects nodes from required
 effects for the current frame; it never receives a literal successor-node ID.
 Current implementation is narrower: `IfInvocation` and non-empty
-`IterateInvocation` use the effect recorder for activation and stream effects,
-while `Collect`, `For`, `ForReturn`, and workflow-call invocations remain on
-compatibility paths. For
+`IterateInvocation` use the effect recorder for activation and stream effects.
+Direct `Iterate`/`Collect`-only graphs use the generic scheduler adapter for
+readiness and completion, while the materializer still expands copies and
+groups paths. `For`, `ForReturn`, workflow-call invocations, and mixed
+control-flow graphs remain on compatibility paths. For
 `If`, generic readiness consumes opaque frame-local plan dependencies and requires
 both matching private `ActivationGate` runtime state and a persisted activation token;
 generic resolution retires unselected prepared nodes through scheduler discard. The forced compatibility
@@ -382,7 +392,8 @@ legacy unmarked snapshots are treated as version 0, while unreadable snapshots a
   - Cache the preserved iteration path when the materializer has one, such as for grouped collectors.
   - Wire edges from chosen prepared parents.
   - Set `indegree = number of unmet inputs` (i.e., parents not yet executed). The generic scheduler mirrors this into
-    its opaque plan for ordinary static DAGs and legacy-shaped `If` graphs.
+    its opaque plan for ordinary static DAGs, legacy-shaped `If` graphs, and
+    direct `Iterate`/`Collect`-only graphs.
   - Try to resolve any `If`-specific scheduling state.
   - If the node is ready and not deferred by an unresolved `If`, enqueue it into its class queue.
 
@@ -391,7 +402,8 @@ legacy unmarked snapshots are treated as version 0, while unreadable snapshots a
 - `_enqueue_if_ready(nid)` applies generic readiness: `indegree == 0`, not executed or claimed, and, for an `If`
   branch-local node, both matching private `ActivationGate` runtime state and a persisted activation token are present
   for its frame. The generic adapter derives opaque dependencies and retires rejected nodes through generic scheduler
-  discard. Forced compatibility uses `_IfBranchScheduler` topology and skip handling.
+  discard. For direct `Collect` nodes, the adapter also requires available Iterate streams to be closed. Forced
+  compatibility uses `_IfBranchScheduler` topology and skip handling.
 - `_get_next_node()` uses the generic scheduler for ordinary static DAGs and legacy-shaped `If` graphs, projecting its
   deterministic class/frame order into the compatibility queues. Forced compatibility `If` topology remains responsible
   for branch-local lowering, input-edge pruning, and skips. Loop and saved-workflow control-flow graphs use `_active_class`

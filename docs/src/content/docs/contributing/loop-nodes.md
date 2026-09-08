@@ -91,7 +91,10 @@ its ordered values; a missing stream falls back to materialized results for lega
 owns iterator expansion, iteration paths, collector grouping, collection-input hydration, and empty-source closure.
 Focused compatibility coverage now proves empty, nested, fan-in, partial/rehydrated, failed, canceled, and retried
 Iterate/Collect sessions. This is evidence for the current adapters; it does not remove materialization or queue
-ownership. `loop_linkage` remains association metadata and never becomes a data token.
+ownership. Direct `Iterate`/`Collect`-only graphs now use the generic scheduler adapter: its readiness predicate waits
+for the canonical stream to close, and completion mirrors Iterate outputs into that ledger before releasing Collect.
+Materialization still owns copy expansion, iteration paths, grouping, and explicit empty closure; mixed control-flow and
+queue lifecycle remain compatibility-owned. `loop_linkage` remains association metadata and never becomes a data token.
 
 `IfInvocation` now declares the same seam for branch activation: it emits one frame-scoped activation token for the
 selected branch, and the graph state validates and persists it after invocation. For a fresh generic `If`, the dedicated
@@ -106,9 +109,10 @@ ownership seam, not final removal of all legacy topology. Author-time activation
 absent, while loop and saved-workflow control flow remain on their compatibility paths until differential coverage
 proves their generic replacements.
 
-The engine still owns runtime node materialization and queue readiness for loop-containing graphs and existing snapshots.
-Ordinary static DAGs and legacy-shaped `If` graphs now use the generic opaque plan/scheduler through a compatibility
-projection; a fresh generic `If` uses the compiler/adapter seam described above. This is intentional:
+The engine still owns runtime node materialization and queue readiness for loop-containing graphs that require `For`,
+nested/mixed control flow, and existing snapshots. Ordinary static DAGs, legacy-shaped `If` graphs, and direct
+`Iterate`/`Collect`-only graphs now use the generic opaque plan/scheduler through a compatibility projection; a fresh
+generic `If` uses the compiler/adapter seam described above. This is intentional:
 the generic records preserve tested loop semantics first, while the old execution graph remains the fallback for control
 lowerings, legacy snapshots, and unsupported mixed loop shapes. No activation or stream ports are added to author-time
 graph JSON.

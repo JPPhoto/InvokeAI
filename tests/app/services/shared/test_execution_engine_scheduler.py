@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from invokeai.app.invocations.collections import CollectionConcatInvocation
 from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.invocations.math import AddInvocation, MultiplyInvocation
 from invokeai.app.invocations.primitives import BooleanInvocation
@@ -12,7 +13,16 @@ from invokeai.app.services.shared.execution_engine.scheduler import (
     ExecutionPlan,
     ExecutionScheduler,
 )
-from invokeai.app.services.shared.graph import Edge, EdgeConnection, Graph, GraphExecutionState, _ExecutionScheduler
+from invokeai.app.services.shared.graph import (
+    CollectInvocation,
+    Edge,
+    EdgeConnection,
+    Graph,
+    GraphExecutionState,
+    IterateInvocation,
+    _ExecutionScheduler,
+    _GenericGraphSchedulerAdapter,
+)
 
 
 def _plan() -> ExecutionPlan:
@@ -496,6 +506,73 @@ def test_graph_state_static_dag_delegates_readiness_to_generic_scheduler() -> No
     assert type(state._scheduler()).__name__ == "_GenericGraphSchedulerAdapter"
     state.complete(node.id, node.invoke(Mock()))
     assert state.is_complete()
+
+
+@pytest.mark.parametrize(
+    ("source_collection", "expected_collection"),
+    [([], []), ([0, 1, 2, 3], [0, 1, 2, 3]), (list(range(11)), list(range(11)))],
+)
+def test_graph_state_iterate_collect_uses_generic_scheduler_and_closed_stream(
+    source_collection: list[int], expected_collection: list[int]
+) -> None:
+    graph = Graph()
+    graph.add_node(CollectionConcatInvocation(id="source", first=source_collection))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="source", field="collection"),
+            destination=EdgeConnection(node_id="iterate", field="collection"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="iterate", field="item"),
+            destination=EdgeConnection(node_id="collect", field="item"),
+        )
+    )
+
+    state = GraphExecutionState(graph=graph)
+    trace: list[str] = []
+    while (node := state.next()) is not None:
+        trace.append(state.prepared_source_mapping[node.id])
+        state.complete(node.id, node.invoke(Mock()))
+
+    assert isinstance(state._scheduler(), _GenericGraphSchedulerAdapter)
+    assert trace[0] == "source"
+    assert trace[-1] == "collect"
+    collect_exec_id = next(iter(state.source_prepared_mapping["collect"]))
+    assert state.results[collect_exec_id].collection == expected_collection
+    streams = [stream for stream in state._generic_runtime().streams.values() if stream.owner_id == "iterate"]
+    assert len(streams) == 1
+    assert streams[0].closed
+    assert streams[0].values == tuple(expected_collection)
+    assert state.is_complete()
+
+
+def test_graph_state_mixed_if_iterate_collect_keeps_compatibility_scheduler() -> None:
+    graph = Graph()
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_node(CollectionConcatInvocation(id="source", first=[1]))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="source", field="collection"),
+            destination=EdgeConnection(node_id="iterate", field="collection"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="iterate", field="item"),
+            destination=EdgeConnection(node_id="collect", field="item"),
+        )
+    )
+
+    state = GraphExecutionState(graph=graph)
+
+    assert not state._can_use_generic_scheduler()
+    assert isinstance(state._scheduler(), _ExecutionScheduler)
 
 
 def test_graph_state_if_uses_generic_activation_routing() -> None:

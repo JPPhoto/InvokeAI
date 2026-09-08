@@ -14,10 +14,17 @@ Frame = tuple[object, ...]
 ReadyPredicate = Callable[[NodeId], bool]
 
 
-def _frame_key(frame: Frame) -> tuple[tuple[str, str], ...]:
-    """Return a stable ordering key for mixed integer/string frame parts."""
+def _frame_key(frame: Frame) -> tuple[tuple[int, int | str], ...]:
+    """Return a stable ordering key that preserves numeric iteration order."""
 
-    return tuple((type(part).__name__, repr(part)) for part in frame)
+    return tuple(
+        (0, part)
+        if isinstance(part, int) and not isinstance(part, bool)
+        else (1, part)
+        if isinstance(part, str)
+        else (2, f"{type(part).__name__}:{part!r}")
+        for part in frame
+    )
 
 
 @dataclass(frozen=True, slots=True)
