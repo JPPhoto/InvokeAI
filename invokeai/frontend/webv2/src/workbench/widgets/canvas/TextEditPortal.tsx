@@ -3,21 +3,20 @@ import type { TextEditSession } from '@workbench/canvas-engine/api';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
 
-import { useMountEffect } from '@platform/react/useMountEffect';
 import { useNotify } from '@workbench/useNotify';
 import { useTextEditSession } from '@workbench/widgets/canvas/engineStoreHooks';
+import {
+  TextFontReadiness,
+  textFontKey,
+  textFontVariationSettings,
+  useResolvedTextFontFamily,
+} from '@workbench/widgets/canvas/textFontStyle';
 import { reportStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useCallback, useRef, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 
 type TextEditEngine = Pick<CanvasEngineHandle, 'interaction' | 'layers' | 'viewport'> &
   Partial<Pick<CanvasEngineHandle, 'fonts'>>;
-
-const textFontVariationSettings = (source: TextEditSession['source']): string =>
-  Object.entries(source.fontVariations ?? {})
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([tag, value]) => `"${tag}" ${value}`)
-    .join(', ');
 
 /**
  * The text-editing portal: a positioned `contenteditable` div, rendered over the
@@ -53,45 +52,6 @@ const useViewportTick = (engine: TextEditEngine): string => {
   }, [viewport]);
   useSyncExternalStore(subscribe, getSnapshot);
   return '';
-};
-
-/** Re-renders when the account-scoped runtime registers or evicts a custom face. */
-const useResolvedFontFamily = (engine: TextEditEngine, source: TextEditSession['source']): string => {
-  const fonts = engine.fonts;
-  const subscribe = useCallback((onChange: () => void) => fonts?.subscribe(onChange) ?? (() => {}), [fonts]);
-  const getSnapshot = useCallback(() => fonts?.resolveFamily(source) ?? source.fontFamily, [fonts, source]);
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-};
-
-const textFontKey = (source: TextEditSession['source']): string =>
-  JSON.stringify([
-    source.fontRef?.id ?? null,
-    source.fontRef?.contentHash ?? null,
-    source.fontFamily,
-    source.fontStyle ?? 'normal',
-    source.fontWeight,
-    Object.entries(source.fontVariations ?? {})
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([tag, value]) => [tag, value]),
-  ]);
-
-/** Keeps the active edit source loading until it is replaced or the portal unmounts. */
-const TextFontReadiness = ({
-  fonts,
-  source,
-}: {
-  fonts: TextEditEngine['fonts'];
-  source: TextEditSession['source'];
-}) => {
-  useMountEffect(() => {
-    if (!fonts || typeof fonts.ensurePreview !== 'function') {
-      return;
-    }
-    const controller = new AbortController();
-    void fonts.ensurePreview(source, controller.signal).catch(() => undefined);
-    return () => controller.abort();
-  });
-  return null;
 };
 
 /** Reads the editable's text with manual line breaks preserved (`\n` per visual line). */
@@ -144,7 +104,7 @@ const TextEditable = ({ engine, session }: TextEditableProps) => {
   useViewportTick(engine);
   const viewport = engine.viewport.getViewport();
   const { source, transform } = session;
-  const resolvedFontFamily = useResolvedFontFamily(engine, source);
+  const resolvedFontFamily = useResolvedTextFontFamily(engine.fonts, source);
   const ignoreNextBlur = useRef(false);
 
   // Seeds content + focus once when the element mounts, and registers a live-
