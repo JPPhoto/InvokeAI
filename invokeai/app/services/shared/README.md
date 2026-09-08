@@ -31,8 +31,8 @@ authorized child-dependency records are stored in
 `invokeai.app.services.shared.execution_engine`; legacy graph and queue behavior is retained behind adapters while
 those records become authoritative one behavior at a time.
 
-This refactoring is backend-only. No code under `invokeai/frontend/...` may be changed, and the existing frontend/backend
-external interface remains frozen; generated schemas may change only for additive optional runtime response metadata.
+This refactoring is backend-only. No file under `invokeai/frontend/...` may be changed, including generated schemas. The
+existing frontend/backend external interface remains frozen; any required schema or client change is a separate project.
 
 ## 2) Major Data Types
 
@@ -270,10 +270,13 @@ subclasses that declare frame-scoped data, activation, stream-closure, child,
 and terminal effects. The generic scheduler selects nodes from required
 effects for the current frame; it never receives a literal successor-node ID.
 Current implementation is narrower: `IfInvocation` and non-empty
-`IterateInvocation` use the effect recorder for activation and stream effects.
+`IterateInvocation` use the effect recorder for activation and stream effects;
+the supported static, non-empty flat `For`/`ForReturn` shape uses it for
+frame-scoped continuation effects and generic readiness/continuation
+projection.
 Direct `Iterate`/`Collect`-only graphs use the generic scheduler adapter for
 readiness and completion, while the materializer still expands copies and
-groups paths. `For`, `ForReturn`, workflow-call invocations, and mixed
+groups paths. Workflow-call invocations, unsupported loop shapes, and mixed
 control-flow graphs remain on compatibility paths. `ForInvocation` and
 `ForReturnInvocation` now declare one validated, frame-scoped `continuation`
 effect per prepared invocation: `For` starts the `for` continuation with its
@@ -282,35 +285,52 @@ continue-decision data. Session-built recorders bind the effect reference to
 the graph-state ID, durable frame ID, iteration path, and workflow-call depth;
 graph-state validation rejects a stale or cross-frame continuation before
 mutation. Graph state persists these effects under the invocation reference
-and excludes `loop_linkage` from token data. This is the
-invocation/effect ownership seam only: the legacy scheduler still resolves
-linkage, creates the next prepared iteration, aggregates outputs, finalizes
-the loop, and owns empty/nested/mixed materialization. Generic `For`
-scheduling is not claimed yet. For
+and excludes `loop_linkage` from token data. Continuation payloads are
+normalized to JSON values before runtime or durable comparison. Exact
+duplicate continuation effects in one batch are idempotently retained once;
+conflicting terminal payloads, including type-distinct JSON values, are
+rejected transactionally. Before `complete()` mutates scheduler state, `ForInvocationOutput`
+and `ForReturnInvocationOutput` continuation fields must match their prepared nodes;
+the `For` item must match its prepared collection item, and continuation effects must independently match those
+prepared values. Current versioned snapshots require an execution-effect ledger: each bucket must belong to an executed
+prepared node, while unknown references, pending-node buckets, missing executed markers, missing required continuation
+effects, and malformed ownership are rejected. Persisted `For` outputs are checked against prepared iteration data and,
+after finalization, their authoritative returned collection and final state. Unversioned legacy snapshots retain the
+compatibility loader. `For` start payloads must match the prepared index, collection total, and state before mutation. This is the invocation/effect ownership
+seam only: the legacy scheduler still resolves linkage, while the generic
+adapter's graph-state boundary creates the next prepared iteration, aggregates
+outputs, and finalizes the supported flat loop. The legacy scheduler still
+owns empty/input-driven, nested, multiple-loop, and mixed-loop
+materialization; unversioned legacy snapshots retain their compatibility
+loader. The supported fresh static flat `For`/`ForReturn` shape uses the
+generic adapter. For
 `If`, generic readiness consumes opaque frame-local plan dependencies and requires
 both matching private `ActivationGate` runtime state and a persisted activation token;
 generic resolution retires unselected prepared nodes through scheduler discard. The forced compatibility
 `_ExecutionScheduler` path retains `_IfBranchScheduler` topology, edge-prune, and skip behavior.
 This is not token-built successor topology. Loop and workflow-call adapters
-still own materialization and durable queue lifecycle. Those owners may be
-removed only after differential tests cover fresh, partially completed,
+still own materialization for unsupported shapes and durable queue lifecycle.
+Those owners may be removed only after differential tests cover fresh, partially completed,
 rehydrated, failed, canceled, and retried sessions. The frontend boundary
 remains frozen: this refactoring does not modify `invokeai/frontend/...` or
 existing web/webv2 interactions.
 
 The test-only differential harness at
 `tests/app/services/shared/test_execution_engine_differential.py` compares
-generic and forced-compatibility scheduling for static DAGs and a constructed
-mixed/nested `If` graph. Its fixture corpus covers fresh completion, true/false
-branch selection, nested branch isolation, partial checkpoints, versioned
-rehydration, in-flight claim replay, activation-token persistence, and injected
-failure. The `If` comparison includes strict source-level results, executed
-history, errors, terminal state, and normalized indegrees; compatibility skip
-propagation must not leave stale downstream indegrees. Both scheduler adapters
-expose the same skip transition; the legacy path releases downstream indegrees
-without trying to hydrate inputs from the skipped node. It intentionally does
-not claim durable persistence of the generic scheduler's private claim set, nor
-does it cover loop or workflow-call ownership migration. Real queue/processor
+generic and forced-compatibility scheduling for static DAGs, a constructed
+mixed/nested `If` graph, and the supported static flat `For`/`ForReturn` shape.
+Its fixture corpus covers fresh completion, true/false branch selection, nested
+branch isolation, partial checkpoints, versioned rehydration, in-flight claim
+replay, activation-token persistence, injected failure, loop continuation,
+carried state, early break, output `None`, cancellation/retry isolation, and
+continuation/effect integrity. The `If` comparison includes strict source-level
+results, executed history, errors, terminal state, and normalized indegrees;
+compatibility skip propagation must not leave stale downstream indegrees. Both
+scheduler adapters expose the same skip transition; the legacy path releases
+downstream indegrees without trying to hydrate inputs from the skipped node. It
+does not claim durable persistence of the generic scheduler's private claim set,
+nor does it claim ownership migration for empty/input-driven, nested, multiple,
+mixed, or workflow-call loop shapes. Real queue/processor
 coverage in `tests/app/services/session_processor/test_if_processor_sqlite.py`
 also exercises true and false `If` selection, cancellation before and after
 resolution, retry from a canceled SQLite item, fresh execution identities, and

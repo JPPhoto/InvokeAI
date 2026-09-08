@@ -150,6 +150,40 @@ def test_continuation_record_has_atomic_idempotent_status_transitions() -> None:
     assert continuation.error is None
 
 
+@pytest.mark.parametrize(
+    ("terminal_method", "value", "conflicting_value", "error"),
+    [
+        ("complete", {"output": 2}, {"output": 3}, "completed continuation has conflicting result"),
+        ("fail", "first failure", "different failure", "failed continuation has conflicting error"),
+        ("cancel", "user requested", "shutdown", "cancelled continuation has conflicting error"),
+    ],
+)
+def test_continuation_record_terminal_replay_rejects_conflicts_without_mutation(
+    terminal_method: str,
+    value: object,
+    conflicting_value: object,
+    error: str,
+) -> None:
+    continuation = ContinuationRecord(
+        continuation_id="continuation",
+        owner_id="owner",
+        frame=_frame(),
+        kind="child",
+    )
+    continuation.start()
+    transition = getattr(continuation, terminal_method)
+
+    assert transition(value) is True
+    terminal_state = continuation.model_dump(mode="python")
+
+    assert transition(value) is False
+    assert continuation.model_dump(mode="python") == terminal_state
+
+    with pytest.raises(ValueError, match=error):
+        transition(conflicting_value)
+    assert continuation.model_dump(mode="python") == terminal_state
+
+
 def test_continuation_record_rejects_invalid_transition_without_mutation() -> None:
     continuation = ContinuationRecord(
         continuation_id="continuation",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -28,7 +28,8 @@ from invokeai.app.services.shared.graph import (
     _GenericGraphSchedulerAdapter,
     _IfBranchScheduler,
 )
-from tests.test_nodes import AnyTypeTestInvocation
+from invokeai.app.services.shared.invocation_context import InvocationContextData, build_invocation_context
+from tests.test_nodes import AnyTypeTestInvocation, ErrorInvocation, UnionCollectionTestInvocation
 
 FIXTURE_PATH = Path(__file__).parents[3] / "fixtures" / "execution_engine" / "static_dag_v1.json"
 
@@ -100,17 +101,33 @@ def _nested_if_graph() -> Graph:
     return graph
 
 
-def _flat_for_graph(*, with_after: bool = False) -> Graph:
+def _flat_for_graph(
+    *,
+    with_after: bool = False,
+    collection: list[Any] | None = None,
+    input_collection: list[Any] | None = None,
+    body_returns_none: bool = False,
+) -> Graph:
     graph = Graph()
-    graph.add_node(ForInvocation(id="for", collection=[1, 2]))
-    graph.add_node(AddInvocation(id="body", b=10))
+    collection = [1, 2] if collection is None else collection
+    graph.add_node(ForInvocation(id="for", collection=collection))
+    if input_collection is not None:
+        graph.add_node(AnyTypeTestInvocation(id="collection", value=input_collection))
+    graph.add_node(UnionCollectionTestInvocation(id="body") if body_returns_none else AddInvocation(id="body", b=10))
     graph.add_node(ForReturnInvocation(id="return"))
     if with_after:
         graph.add_node(AnyTypeTestInvocation(id="after"))
+    if input_collection is not None:
+        graph.add_edge(
+            Edge(
+                source=EdgeConnection(node_id="collection", field="value"),
+                destination=EdgeConnection(node_id="for", field="collection"),
+            )
+        )
     graph.add_edge(
         Edge(
             source=EdgeConnection(node_id="for", field="item"),
-            destination=EdgeConnection(node_id="body", field="a"),
+            destination=EdgeConnection(node_id="body", field="value" if body_returns_none else "a"),
         )
     )
     graph.add_edge(
@@ -194,6 +211,59 @@ def _run_graph(
             state.set_node_error(node.id, "injected failure")
             break
         state.complete(node.id, node.invoke(Mock()))
+        if stop_after is not None and len(trace) == stop_after:
+            break
+    return trace, state
+
+
+def _run_graph_with_effects(
+    state: GraphExecutionState,
+    *,
+    force_compatibility_scheduler: bool = False,
+    stop_after_source: str | None = None,
+    fail_source_id: str | None = None,
+    stop_after: int | None = None,
+) -> tuple[list[str], GraphExecutionState]:
+    """Run a graph through the same invocation/effect/apply path as the session runner."""
+    if force_compatibility_scheduler:
+        state._execution_scheduler = _ExecutionScheduler(state)
+
+    services = Mock()
+    services.invocation_cache.get.return_value = None
+    trace: list[str] = []
+    while (node := state.next()) is not None:
+        source_id = state.prepared_source_mapping[node.id]
+        trace.append(source_id)
+        execution_ref = state.get_execution_ref(node.id)
+        context = build_invocation_context(
+            services=services,
+            data=InvocationContextData(
+                queue_item=None,  # type: ignore[arg-type]
+                invocation=node,
+                source_invocation_id=source_id,
+                execution_frame=execution_ref.frame.iteration_path,
+                execution_state_id=execution_ref.state_id,
+                execution_frame_id=execution_ref.frame.frame_id,
+                execution_workflow_call_depth=execution_ref.frame.workflow_call_depth,
+            ),
+            is_canceled=lambda: False,
+        )
+        try:
+            if source_id == fail_source_id:
+                with patch.object(
+                    type(node),
+                    "invoke_internal_with_effects",
+                    side_effect=RuntimeError("injected failure"),
+                ):
+                    run_result = node.invoke_internal_with_effects(context, services)
+            else:
+                run_result = node.invoke_internal_with_effects(context, services)
+        except RuntimeError as exc:
+            state.set_node_error(node.id, str(exc))
+            break
+        state.apply(state.get_execution_ref(node.id, effect_count=len(run_result.effects)), run_result)
+        if stop_after_source == source_id:
+            break
         if stop_after is not None and len(trace) == stop_after:
             break
     return trace, state
@@ -289,6 +359,32 @@ def _activation_projection(state: GraphExecutionState) -> tuple[tuple[str, str, 
 
 
 def _execution_identity_projection(state: GraphExecutionState) -> tuple[Any, ...]:
+    def json_projection(value: Any) -> str:
+        if hasattr(value, "model_dump"):
+            value = value.model_dump(mode="json")
+        return json.dumps(value, sort_keys=True)
+
+    def normalize_effect_identity(value: Any) -> Any:
+        if hasattr(value, "model_dump"):
+            value = value.model_dump(mode="json", warnings=False)
+        if isinstance(value, dict):
+            return {
+                key: normalize_effect_identity(item)
+                for key, item in value.items()
+                if key
+                not in {
+                    "state_id",
+                    "execution_node_id",
+                    "frame_id",
+                    "reference_id",
+                    "template_node_id",
+                    "token",
+                }
+            }
+        if isinstance(value, list):
+            return [normalize_effect_identity(item) for item in value]
+        return value
+
     references = tuple(
         sorted(
             (
@@ -307,7 +403,7 @@ def _execution_identity_projection(state: GraphExecutionState) -> tuple[Any, ...
             (
                 state.prepared_source_mapping.get(token.owner_node_id, token.owner_node_id),
                 token.port,
-                json.dumps(token.value, sort_keys=True),
+                json_projection(token.value),
                 token.token_kind,
                 token.sequence,
                 tuple(token.frame.iteration_path),
@@ -331,10 +427,7 @@ def _execution_identity_projection(state: GraphExecutionState) -> tuple[Any, ...
                     reference_id,
                 ),
                 json.dumps(
-                    [
-                        effect.model_dump(mode="json", warnings=False) if hasattr(effect, "model_dump") else effect
-                        for effect in effect_values
-                    ],
+                    [normalize_effect_identity(effect) for effect in effect_values],
                     sort_keys=True,
                 ),
             )
@@ -342,6 +435,36 @@ def _execution_identity_projection(state: GraphExecutionState) -> tuple[Any, ...
         )
     )
     return references, tokens, effects
+
+
+def _continuation_projection(state: GraphExecutionState) -> tuple[Any, ...]:
+    return tuple(
+        sorted(
+            (
+                state.prepared_source_mapping.get(continuation.owner_id, continuation.owner_id),
+                continuation.kind,
+                continuation.status,
+                tuple(continuation.frame.iteration_path),
+                continuation.frame.workflow_call_depth,
+                json.dumps(continuation.payload, sort_keys=True),
+                json.dumps(continuation.result, sort_keys=True),
+                continuation.error,
+            )
+            for continuation in state._generic_runtime().continuations.values()
+        )
+    )
+
+
+def _final_for_output(state: GraphExecutionState) -> Any:
+    final_for_id = max(
+        (
+            exec_node_id
+            for exec_node_id, source_node_id in state.prepared_source_mapping.items()
+            if source_node_id == "for"
+        ),
+        key=lambda exec_node_id: state.execution_graph.get_node(exec_node_id).index,
+    )
+    return state.results[final_for_id]
 
 
 def _execution_edge_projection(state: GraphExecutionState) -> tuple[tuple[str, str, str, str, str], ...]:
@@ -355,6 +478,50 @@ def _execution_edge_projection(state: GraphExecutionState) -> tuple[tuple[str, s
                 edge.type,
             )
             for edge in state.execution_graph.edges
+        )
+    )
+
+
+def _effect_ledger_projection(state: GraphExecutionState) -> tuple[Any, ...]:
+    """Compare persisted effects while ignoring generated state/reference IDs."""
+
+    def normalized(value: Any) -> Any:
+        if hasattr(value, "model_dump"):
+            value = value.model_dump(mode="json")
+        if isinstance(value, dict):
+            return tuple(
+                sorted(
+                    (key, normalized(item))
+                    for key, item in value.items()
+                    if key
+                    not in {
+                        "state_id",
+                        "execution_node_id",
+                        "frame_id",
+                        "reference_id",
+                        "template_node_id",
+                        "token",
+                    }
+                )
+            )
+        if isinstance(value, list):
+            return tuple(normalized(item) for item in value)
+        return value
+
+    return tuple(
+        sorted(
+            (
+                next(
+                    (
+                        state.prepared_source_mapping.get(exec_node_id, exec_node_id)
+                        for exec_node_id, reference in state.execution_refs.items()
+                        if reference.reference_id == reference_id
+                    ),
+                    reference_id,
+                ),
+                normalized(effects),
+            )
+            for reference_id, effects in state.execution_effects.items()
         )
     )
 
@@ -456,6 +623,18 @@ def _expected_remaining_input_indegree(
 
 
 def _assert_execution_identity_consistent(state: GraphExecutionState) -> None:
+    def value_from_object(value: Any, *names: str) -> Any:
+        if isinstance(value, dict):
+            for name in names:
+                if name in value:
+                    return value[name]
+            return None
+        for name in names:
+            candidate = getattr(value, name, None)
+            if candidate is not None:
+                return candidate
+        return None
+
     for exec_node_id, reference in state.execution_refs.items():
         if exec_node_id not in state.prepared_source_mapping:
             continue
@@ -480,6 +659,34 @@ def _assert_execution_identity_consistent(state: GraphExecutionState) -> None:
             assert token.port in activation_fields
             assert token.token_id == f"{expected.reference_id}:activation:{token.port}"
             assert token.value == token.port
+    references_by_id = {reference.reference_id: reference for reference in state.execution_refs.values()}
+    for reference_id, effects in state.execution_effects.items():
+        reference = references_by_id[reference_id]
+        for effect in effects:
+            effect_reference = value_from_object(
+                effect,
+                "execution_ref",
+                "execution_reference",
+                "owner_ref",
+                "owner",
+            )
+            assert effect_reference is not None
+            assert value_from_object(effect_reference, "state_id", "session_id") == reference.state_id
+            assert value_from_object(effect_reference, "execution_node_id", "node_id") == reference.exec_node_id
+            assert value_from_object(effect_reference, "frame_id") == reference.frame.frame_id
+            assert tuple(value_from_object(effect_reference, "frame_path", "iteration_path") or ()) == tuple(
+                reference.frame.iteration_path
+            )
+            assert value_from_object(effect_reference, "workflow_call_depth", "call_depth", "depth") == (
+                reference.frame.workflow_call_depth
+            )
+
+
+def _assert_generic_and_compatibility_schedulers(
+    generic_state: GraphExecutionState, compatibility_state: GraphExecutionState
+) -> None:
+    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert isinstance(compatibility_state._execution_scheduler, _ExecutionScheduler)
 
 
 def test_static_dag_fresh_execution_has_matching_source_trace() -> None:
@@ -555,6 +762,7 @@ def test_nested_if_fresh_execution_matches_compatibility_scheduler(
         == expected_value
     )
     assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    _assert_generic_and_compatibility_schedulers(generic_state, compatibility_state)
     expected_activations = [
         ("outer_if", "true_input" if outer_condition else "false_input"),
     ]
@@ -597,8 +805,8 @@ def test_nested_if_fresh_execution_matches_compatibility_scheduler(
 
 
 def test_flat_for_fresh_execution_matches_compatibility_scheduler() -> None:
-    generic_trace, generic_state = _run_graph(GraphExecutionState(graph=_flat_for_graph()))
-    compatibility_trace, compatibility_state = _run_graph(
+    generic_trace, generic_state = _run_graph_with_effects(GraphExecutionState(graph=_flat_for_graph()))
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
         GraphExecutionState(graph=_flat_for_graph()),
         force_compatibility_scheduler=True,
     )
@@ -607,7 +815,7 @@ def test_flat_for_fresh_execution_matches_compatibility_scheduler() -> None:
     assert _state_projection(generic_state) == _state_projection(compatibility_state)
     assert generic_state.is_complete()
     assert compatibility_state.is_complete()
-    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    _assert_generic_and_compatibility_schedulers(generic_state, compatibility_state)
     final_for_id = max(
         (
             exec_node_id
@@ -631,10 +839,10 @@ def test_flat_for_fresh_execution_matches_compatibility_scheduler() -> None:
 
 
 def test_flat_for_fresh_execution_releases_after_loop_consumer() -> None:
-    generic_trace, generic_state = _run_graph(
+    generic_trace, generic_state = _run_graph_with_effects(
         GraphExecutionState(graph=_flat_for_graph(with_after=True)),
     )
-    compatibility_trace, compatibility_state = _run_graph(
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
         GraphExecutionState(graph=_flat_for_graph(with_after=True)),
         force_compatibility_scheduler=True,
     )
@@ -654,6 +862,304 @@ def test_flat_for_fresh_execution_releases_after_loop_consumer() -> None:
         )
     ].value == [11, 12]
     assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    _assert_generic_and_compatibility_schedulers(generic_state, compatibility_state)
+
+
+def test_flat_for_none_output_matches_compatibility_scheduler() -> None:
+    graph = _flat_for_graph(collection=[None, None], body_returns_none=True)
+    generic_trace, generic_state = _run_graph_with_effects(GraphExecutionState(graph=graph.model_copy(deep=True)))
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph.model_copy(deep=True)),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace == ["for", "body", "return", "for", "body", "return"]
+    assert _final_for_output(generic_state).output_collection == [None, None]
+    assert _final_for_output(compatibility_state).output_collection == [None, None]
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert _execution_identity_projection(generic_state) == _execution_identity_projection(compatibility_state)
+    _assert_generic_and_compatibility_schedulers(generic_state, compatibility_state)
+
+
+def test_flat_for_apply_path_matches_compatibility_scheduler() -> None:
+    generic_trace, generic_state = _run_graph_with_effects(GraphExecutionState(graph=_flat_for_graph(with_after=True)))
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_flat_for_graph(with_after=True)),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace == ["for", "body", "return", "for", "body", "return", "after"]
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert _effect_ledger_projection(generic_state) == _effect_ledger_projection(compatibility_state)
+    _assert_generic_and_compatibility_schedulers(generic_state, compatibility_state)
+    for state in (generic_state, compatibility_state):
+        after_id = next(
+            execution_id for execution_id, source_id in state.prepared_source_mapping.items() if source_id == "after"
+        )
+        assert state.results[after_id].value == [11, 12]
+        assert _final_for_output(state).output_collection == [11, 12]
+
+        continuations = sorted(
+            state._generic_runtime().continuations.values(), key=lambda continuation: continuation.frame.iteration_path
+        )
+        assert [
+            (
+                state.prepared_source_mapping[continuation.owner_id],
+                continuation.kind,
+                continuation.status,
+                tuple(continuation.frame.iteration_path),
+                continuation.frame.state_id,
+                continuation.frame.workflow_call_depth,
+            )
+            for continuation in continuations
+        ] == [
+            ("for", "for", "completed", (0,), state.id, 0),
+            ("for", "for", "completed", (1,), state.id, 0),
+        ]
+        continuation_effects = sorted(
+            (
+                state.prepared_source_mapping[effect.execution_ref.node_id],
+                effect.operation,
+                effect.continuation_kind,
+                tuple(effect.execution_ref.frame),
+            )
+            for effects in state.execution_effects.values()
+            for effect in effects
+            if effect.kind == "continuation"
+        )
+        assert continuation_effects == [
+            ("for", "start", "for", (0,)),
+            ("for", "start", "for", (1,)),
+            ("return", "complete", "for", (0,)),
+            ("return", "complete", "for", (1,)),
+        ]
+
+
+def test_flat_for_apply_partial_rehydration_preserves_continuation_runtime() -> None:
+    graph = _flat_for_graph(with_after=True, collection=[None, None], body_returns_none=True)
+    resumed_projections: list[tuple[Any, ...]] = []
+
+    for force_compatibility_scheduler in (False, True):
+        expected_trace, expected_state = _run_graph_with_effects(
+            GraphExecutionState(graph=graph.model_copy(deep=True)),
+            force_compatibility_scheduler=force_compatibility_scheduler,
+        )
+        partial_trace, partial_state = _run_graph_with_effects(
+            GraphExecutionState(graph=graph.model_copy(deep=True)),
+            force_compatibility_scheduler=force_compatibility_scheduler,
+            stop_after_source="return",
+        )
+        restored = load_execution_state(dump_execution_state(partial_state))
+        if force_compatibility_scheduler:
+            _restore_compatibility_scheduler(restored)
+
+        assert _effect_ledger_projection(restored) == _effect_ledger_projection(partial_state)
+        # Rehydration reconstructs references for all prepared nodes, while the partial in-memory
+        # state only has references for nodes reached so far. Compare durable tokens/effects here;
+        # resumed execution below compares the complete identity projection.
+        assert _execution_identity_projection(restored)[1:] == _execution_identity_projection(partial_state)[1:]
+        _assert_execution_identity_consistent(restored)
+        assert any(
+            (effect.get("kind") if isinstance(effect, dict) else effect.kind) == "continuation"
+            and (effect.get("operation") if isinstance(effect, dict) else effect.operation) == "complete"
+            and (effect.get("payload") if isinstance(effect, dict) else effect.payload)
+            == {"output": None, "state": None, "continue_condition": True}
+            for effects in restored.execution_effects.values()
+            for effect in effects
+        )
+
+        remaining_trace, resumed_state = _run_graph_with_effects(
+            restored,
+            force_compatibility_scheduler=force_compatibility_scheduler,
+        )
+
+        assert partial_trace + remaining_trace == expected_trace
+        assert _state_projection(resumed_state) == _state_projection(expected_state)
+        assert _continuation_projection(resumed_state) == _continuation_projection(expected_state)
+        assert _effect_ledger_projection(resumed_state) == _effect_ledger_projection(expected_state)
+        assert _execution_identity_projection(resumed_state) == _execution_identity_projection(expected_state)
+        assert _final_for_output(resumed_state).output_collection == [None, None]
+        _assert_execution_identity_consistent(resumed_state)
+        if force_compatibility_scheduler:
+            assert isinstance(resumed_state._execution_scheduler, _ExecutionScheduler)
+        else:
+            assert isinstance(resumed_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+        resumed_projections.append(
+            (
+                _state_projection(resumed_state),
+                _continuation_projection(resumed_state),
+                _effect_ledger_projection(resumed_state),
+                _execution_identity_projection(resumed_state),
+            )
+        )
+
+    assert resumed_projections[0] == resumed_projections[1]
+
+
+@pytest.mark.parametrize(
+    ("fail_source_id", "expected_trace"),
+    [
+        ("body", ["for", "body"]),
+        ("return", ["for", "body", "return"]),
+    ],
+)
+def test_flat_for_failure_matches_compatibility_scheduler(fail_source_id: str, expected_trace: list[str]) -> None:
+    generic_trace, generic_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_flat_for_graph()),
+        fail_source_id=fail_source_id,
+    )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_flat_for_graph()),
+        force_compatibility_scheduler=True,
+        fail_source_id=fail_source_id,
+    )
+
+    assert generic_trace == compatibility_trace == expected_trace
+    for state in (generic_state, compatibility_state):
+        assert state.next() is None
+        assert {
+            state.prepared_source_mapping.get(node_id, node_id): message for node_id, message in state.errors.items()
+        } == {fail_source_id: "injected failure"}
+        assert state.is_complete()
+        assert sum(len(effects) for effects in state.execution_effects.values()) == 1
+        assert all(item.status == "running" for item in state._generic_runtime().continuations.values())
+        _assert_execution_identity_consistent(state)
+        restored = load_execution_state(dump_execution_state(state))
+        if isinstance(state._execution_scheduler, _ExecutionScheduler):
+            _restore_compatibility_scheduler(restored)
+        assert _effect_ledger_projection(restored) == _effect_ledger_projection(state)
+        assert _continuation_projection(restored) == _continuation_projection(state)
+        _assert_execution_identity_consistent(restored)
+        assert {
+            state.prepared_source_mapping.get(node_id, node_id): message for node_id, message in restored.errors.items()
+        } == {fail_source_id: "injected failure"}
+        assert restored.next() is None
+        assert restored.is_complete()
+        if isinstance(state._execution_scheduler, _ExecutionScheduler):
+            assert isinstance(restored._execution_scheduler, _ExecutionScheduler)
+        else:
+            assert restored._execution_scheduler is None
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+
+
+@pytest.mark.parametrize("stop_after_source", ["for", "body"])
+def test_flat_for_partial_rehydration_matches_compatibility_scheduler(stop_after_source: str) -> None:
+    graph = _flat_for_graph()
+    expected_trace, expected_state = _run_graph_with_effects(GraphExecutionState(graph=graph.model_copy(deep=True)))
+    resumed_projections: list[tuple[Any, ...]] = []
+
+    for force_compatibility_scheduler in (False, True):
+        partial_trace, partial_state = _run_graph_with_effects(
+            GraphExecutionState(graph=graph.model_copy(deep=True)),
+            stop_after_source=stop_after_source,
+            force_compatibility_scheduler=force_compatibility_scheduler,
+        )
+        snapshot = dump_execution_state(partial_state)
+        restored = load_execution_state(snapshot)
+        if force_compatibility_scheduler:
+            _restore_compatibility_scheduler(restored)
+
+        remaining_trace, resumed_state = _run_graph_with_effects(
+            restored,
+            force_compatibility_scheduler=force_compatibility_scheduler,
+        )
+
+        assert partial_trace + remaining_trace == expected_trace
+        assert _state_projection(resumed_state) == _state_projection(expected_state)
+        # Rehydration reconstructs durable execution references for all prepared nodes; a fresh
+        # in-memory run does not retain those references after terminal cleanup. Compare the
+        # durable token/effect portions directly and compare references across the two resumed
+        # scheduler paths below.
+        assert _execution_identity_projection(resumed_state)[1:] == _execution_identity_projection(expected_state)[1:]
+        assert _continuation_projection(resumed_state) == _continuation_projection(expected_state)
+        _assert_execution_identity_consistent(resumed_state)
+        if force_compatibility_scheduler:
+            assert isinstance(resumed_state._execution_scheduler, _ExecutionScheduler)
+        else:
+            assert isinstance(resumed_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+        resumed_projections.append((_state_projection(resumed_state), _execution_identity_projection(resumed_state)))
+
+    assert resumed_projections[0] == resumed_projections[1]
+
+
+def test_flat_for_frame_and_continuation_identity_matches_compatibility_scheduler() -> None:
+    generic_trace, generic_state = _run_graph_with_effects(GraphExecutionState(graph=_flat_for_graph()), stop_after=4)
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_flat_for_graph()),
+        force_compatibility_scheduler=True,
+        stop_after=4,
+    )
+
+    assert generic_trace == compatibility_trace == ["for", "body", "return", "for"]
+    assert _execution_identity_projection(generic_state) == _execution_identity_projection(compatibility_state)
+    assert _continuation_projection(generic_state) == _continuation_projection(compatibility_state)
+    _assert_generic_and_compatibility_schedulers(generic_state, compatibility_state)
+    for state in (generic_state, compatibility_state):
+        continuations = sorted(
+            state._generic_runtime().continuations.values(), key=lambda item: item.frame.iteration_path
+        )
+        assert len(continuations) == 2
+        assert [tuple(item.frame.iteration_path) for item in continuations] == [(0,), (1,)]
+        assert {state.prepared_source_mapping[item.owner_id] for item in continuations} == {"for"}
+        assert {item.frame.state_id for item in continuations} == {state.id}
+        assert {item.frame.workflow_call_depth for item in continuations} == {0}
+        frame_ids = [item.frame.frame_id for item in continuations]
+        assert all(frame_ids)
+        assert len(set(frame_ids)) == len(frame_ids)
+        assert all(
+            item.frame.model_dump(mode="json")
+            == state._expected_execution_ref(item.owner_id).frame.model_dump(mode="json")
+            for item in continuations
+        )
+        assert [item.status for item in continuations] == ["completed", "running"]
+        _assert_execution_identity_consistent(state)
+
+    generic_frames = {item.frame.frame_id for item in generic_state._generic_runtime().continuations.values()}
+    compatibility_frames = {
+        item.frame.frame_id for item in compatibility_state._generic_runtime().continuations.values()
+    }
+    assert generic_frames.isdisjoint(compatibility_frames)
+
+    other_trace, other_state = _run_graph_with_effects(GraphExecutionState(graph=_flat_for_graph()), stop_after=4)
+    assert other_trace == generic_trace
+    other_frames = {item.frame.frame_id for item in other_state._generic_runtime().continuations.values()}
+    generic_frames = {item.frame.frame_id for item in generic_state._generic_runtime().continuations.values()}
+    assert other_frames.isdisjoint(generic_frames)
+
+
+@pytest.mark.parametrize(
+    ("graph_kwargs", "expected_trace", "expected_collection"),
+    [
+        ({"collection": []}, [], []),
+        ({"input_collection": [1, 2]}, ["collection", "for", "body", "return", "for", "body", "return"], [11, 12]),
+    ],
+)
+def test_flat_for_ineligible_collections_use_compatibility_scheduler(
+    graph_kwargs: dict[str, list[Any]], expected_trace: list[str], expected_collection: list[Any]
+) -> None:
+    state = GraphExecutionState(graph=_flat_for_graph(**graph_kwargs))
+
+    assert state._can_use_generic_scheduler() is False
+    trace, state = _run_graph_with_effects(state)
+
+    assert trace == expected_trace
+    assert isinstance(state._execution_scheduler, _ExecutionScheduler)
+    assert _final_for_output(state).output_collection == expected_collection
+    assert state.is_complete()
+    continuations = list(state._generic_runtime().continuations.values())
+    assert len(continuations) == len(expected_collection)
+    assert all(state.prepared_source_mapping[item.owner_id] == "for" for item in continuations)
+    assert all(item.status == "completed" for item in continuations)
+    assert sum(len(effects) for effects in state.execution_effects.values()) == 2 * len(expected_collection)
+    _assert_execution_identity_consistent(state)
+
+    restored = load_execution_state(dump_execution_state(state))
+    _restore_compatibility_scheduler(restored)
+    assert isinstance(restored._execution_scheduler, _ExecutionScheduler)
+    assert _state_projection(restored) == _state_projection(state)
+    assert _effect_ledger_projection(restored) == _effect_ledger_projection(state)
+    assert _continuation_projection(restored) == _continuation_projection(state)
+    _assert_execution_identity_consistent(restored)
 
 
 @pytest.mark.parametrize(
@@ -669,10 +1175,10 @@ def test_flat_for_fresh_execution_matches_state_and_break_semantics(
     expected_collection: list[int],
     expected_state: dict[str, int],
 ) -> None:
-    generic_trace, generic_state = _run_graph(
+    generic_trace, generic_state = _run_graph_with_effects(
         GraphExecutionState(graph=_flat_for_state_graph(continue_condition)),
     )
-    compatibility_trace, compatibility_state = _run_graph(
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
         GraphExecutionState(graph=_flat_for_state_graph(continue_condition)),
         force_compatibility_scheduler=True,
     )
@@ -690,6 +1196,7 @@ def test_flat_for_fresh_execution_matches_state_and_break_semantics(
     assert final_for_output.output_collection == expected_collection
     assert final_for_output.final_state == LoopState(values=expected_state)
     assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    _assert_generic_and_compatibility_schedulers(generic_state, compatibility_state)
 
 
 def test_nested_if_checkpoint_restore_matches_compatibility_scheduler() -> None:
@@ -813,6 +1320,42 @@ def test_injected_failure_round_trip_preserves_both_scheduler_terminal_state() -
     assert restored_generic.is_complete()
     assert restored_compatibility.is_complete()
     assert _state_projection(restored_generic) == _state_projection(restored_compatibility)
+
+
+def test_real_invocation_failure_round_trip_preserves_both_scheduler_terminal_state() -> None:
+    expected_error = "This invocation is supposed to fail"
+    terminal_states: list[tuple[str, bool, bool]] = []
+
+    for force_compatibility_scheduler in (False, True):
+        graph = Graph()
+        graph.add_node(ErrorInvocation(id="error"))
+        state = GraphExecutionState(graph=graph)
+        if force_compatibility_scheduler:
+            state._execution_scheduler = _ExecutionScheduler(state)
+
+        node = state.next()
+        assert node is not None
+        with pytest.raises(Exception) as invocation_error:
+            node.invoke(Mock())
+        assert str(invocation_error.value) == expected_error
+        state.set_node_error(node.id, str(invocation_error.value))
+
+        assert state.next() is None
+        assert state.is_complete()
+        assert {
+            state.prepared_source_mapping.get(node_id, node_id): message for node_id, message in state.errors.items()
+        } == {"error": expected_error}
+
+        restored = load_execution_state(dump_execution_state(state))
+        if force_compatibility_scheduler:
+            _restore_compatibility_scheduler(restored)
+
+        assert restored.errors == state.errors
+        assert restored.next() is None
+        assert restored.is_complete()
+        terminal_states.append((str(next(iter(restored.errors.values()))), True, restored.is_complete()))
+
+    assert terminal_states == [(expected_error, True, True), (expected_error, True, True)]
 
 
 @pytest.mark.parametrize("fixture_name", ["static_dag_partial_v1.json", "static_dag_failed_v1.json"])

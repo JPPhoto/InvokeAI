@@ -86,6 +86,8 @@ def load_execution_state(snapshot: Mapping[str, Any]) -> GraphExecutionState:
             f"{CURRENT_EXECUTION_STATE_VERSION}"
         )
     migrated_payload = payload
+    legacy_execution_snapshot = version == LEGACY_EXECUTION_STATE_VERSION
+    execution_effects_persisted = "execution_effects" in migrated_payload and not legacy_execution_snapshot
     while version < CURRENT_EXECUTION_STATE_VERSION:
         migrate = _SNAPSHOT_MIGRATIONS.get(version)
         if migrate is None:
@@ -101,4 +103,11 @@ def load_execution_state(snapshot: Mapping[str, Any]) -> GraphExecutionState:
             f"Execution state snapshot version {version} is unsupported; current version is "
             f"{CURRENT_EXECUTION_STATE_VERSION}"
         )
-    return GraphExecutionState.model_validate(migrate(migrated_payload), strict=False)
+    return GraphExecutionState.model_validate(
+        migrate(migrated_payload),
+        strict=False,
+        context={
+            "execution_effects_persisted": execution_effects_persisted,
+            "legacy_execution_snapshot": legacy_execution_snapshot,
+        },
+    )

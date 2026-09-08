@@ -214,11 +214,9 @@ class DefaultSessionRunner(SessionRunnerBase):
             # use the cancel event to check if the session is canceled.
             session_finished = queue_item.session.is_complete()
             already_terminal = self._is_canceled() or queue_item.status in ["failed", "canceled", "completed"]
-            if session_finished or already_terminal:
-                # Last pass, so the check at the top will not run again — which leaves the
-                # node that just ran, the only node of a one-node graph, as the one node
-                # nothing re-checks. A revocation committed while it executed would
-                # otherwise let the item be recorded as completed.
+            if session_finished:
+                # Re-check ownership after the final node. The next pass still lets the scheduler
+                # materialize any downstream node that became ready while finalizing a loop.
                 #
                 # Deliberately narrow, because after a node the balance is the reverse of
                 # what it is before one: there is no execution left to refuse, only a
@@ -228,8 +226,13 @@ class DefaultSessionRunner(SessionRunnerBase):
                 # down with it — and it does not fail closed (see `queue_owner_is_active`).
                 # A suspended workflow call is not `is_complete()`, so it is untouched here
                 # and re-checked when the parent resumes.
-                if session_finished and not already_terminal and not queue_item.session.has_error():
-                    self._cancel_if_owner_revoked(queue_item, unreadable_is_active=True)
+                if session_finished and not queue_item.session.has_error():
+                    if self._cancel_if_owner_revoked(queue_item, unreadable_is_active=True):
+                        break
+                if not already_terminal:
+                    continue
+
+            if already_terminal:
                 break
 
     def _cancel_if_owner_revoked(self, queue_item: SessionQueueItem, *, unreadable_is_active: bool = False) -> bool:
@@ -524,6 +527,10 @@ class DefaultSessionRunner(SessionRunnerBase):
         )
         self._services.logger.error(error_traceback)
 
+        # Keep the live session for the invocation error event. Terminal queue persistence may clean up prepared
+        # execution mappings, but the event still needs the source id for the invocation that failed.
+        event_queue_item = queue_item
+
         # Fail the queue item
         queue_item = self._services.session_queue.set_queue_item_session(queue_item.item_id, queue_item.session)
         queue_item = self._services.session_queue.fail_queue_item(
@@ -532,7 +539,7 @@ class DefaultSessionRunner(SessionRunnerBase):
 
         # Send error event
         self._services.events.emit_invocation_error(
-            queue_item=queue_item,
+            queue_item=event_queue_item,
             invocation=invocation,
             error_type=error_type,
             error_message=error_message,

@@ -1,3 +1,4 @@
+from copy import deepcopy
 from typing import ClassVar
 from unittest.mock import MagicMock
 
@@ -12,7 +13,13 @@ from invokeai.app.invocations.baseinvocation import (
 )
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.logic import IfInvocation, IfInvocationOutput
-from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation, LoopState
+from invokeai.app.invocations.loops import (
+    ForInvocation,
+    ForInvocationOutput,
+    ForReturnInvocation,
+    ForReturnInvocationOutput,
+    LoopState,
+)
 from invokeai.app.services.shared.execution_effects import (
     AddEdgeEffect,
     AwaitEffect,
@@ -25,6 +32,7 @@ from invokeai.app.services.shared.execution_effects import (
     ExecutionRef,
     ExecutionToken,
     FailEffect,
+    InvocationRunResult,
     RemoveEdgeEffect,
     SetValueEffect,
     SpawnExecutionEffect,
@@ -288,6 +296,478 @@ def test_graph_state_accepts_for_continuation_effects_without_linkage_tokens() -
     snapshot = dump_execution_state(state)
     restored = load_execution_state(snapshot)
     assert dump_execution_state(restored)["execution_effects"] == snapshot["execution_effects"]
+
+
+def _apply_flat_for_pair(
+    collection: list[object], *, apply_return: bool = True
+) -> tuple[GraphExecutionState, object, object]:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=collection))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="item"),
+            destination=EdgeConnection(node_id="return", field="output"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="loop_linkage"),
+            destination=EdgeConnection(node_id="return", field="loop_linkage"),
+            type="loop_linkage",
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+
+    for_invocation = state.next()
+    assert isinstance(for_invocation, ForInvocation)
+    for_ref = state.get_execution_ref(for_invocation.id)
+    for_context = _context()
+    for_context.execution_effects = ExecutionEffectsRecorder(
+        source_node_id=for_invocation.id,
+        frame_path=for_ref.frame.iteration_path,
+        state_id=for_ref.state_id,
+        frame_id=for_ref.frame.frame_id,
+        workflow_call_depth=for_ref.frame.workflow_call_depth,
+    )
+    for_context.execution = ExecutionInterface(for_context.execution_effects)
+    for_result = for_invocation.invoke_internal_with_effects(for_context, _services())
+    state.apply(state.get_execution_ref(for_invocation.id, effect_count=len(for_result.effects)), for_result)
+
+    return_invocation = state.next()
+    assert isinstance(return_invocation, ForReturnInvocation)
+    return_ref = state.get_execution_ref(return_invocation.id)
+    return_context = _context()
+    return_context.execution_effects = ExecutionEffectsRecorder(
+        source_node_id=return_invocation.id,
+        frame_path=return_ref.frame.iteration_path,
+        state_id=return_ref.state_id,
+        frame_id=return_ref.frame.frame_id,
+        workflow_call_depth=return_ref.frame.workflow_call_depth,
+    )
+    return_context.execution = ExecutionInterface(return_context.execution_effects)
+    return_result = return_invocation.invoke_internal_with_effects(return_context, _services())
+    if apply_return:
+        state.apply(
+            state.get_execution_ref(return_invocation.id, effect_count=len(return_result.effects)), return_result
+        )
+    return state, return_ref, return_result
+
+
+def test_graph_state_normalizes_for_continuation_result_before_rehydration() -> None:
+    state, _return_ref, _return_result = _apply_flat_for_pair([("tuple",)])
+    continuation = next(iter(state._generic_runtime().continuations.values()))
+    expected_result = {"output": ["tuple"], "state": None, "continue_condition": True}
+
+    assert continuation.result == expected_result
+    restored = load_execution_state(dump_execution_state(state))
+    restored_continuation = next(iter(restored._generic_runtime().continuations.values()))
+    assert restored_continuation.result == expected_result
+
+
+def test_graph_state_rejects_type_distinct_for_continuation_replay() -> None:
+    state, return_ref, return_result = _apply_flat_for_pair([1], apply_return=False)
+    continuation_effect = return_result.effects[0]
+    assert isinstance(continuation_effect, ContinuationEffect)
+    replay_effect = continuation_effect.model_copy(
+        deep=True,
+        update={"payload": {**continuation_effect.payload, "output": True}},
+    )
+    before = dump_execution_state(state)
+
+    with pytest.raises(ValueError, match="completed continuation has conflicting result"):
+        state.apply(return_ref, return_result, [continuation_effect, replay_effect], effect_count=2)
+
+    assert dump_execution_state(state) == before
+
+
+def test_graph_state_rejects_malformed_for_start_payload_transactionally() -> None:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["item"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="item"),
+            destination=EdgeConnection(node_id="return", field="output"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="loop_linkage"),
+            destination=EdgeConnection(node_id="return", field="loop_linkage"),
+            type="loop_linkage",
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+    for_invocation = state.next()
+    assert isinstance(for_invocation, ForInvocation)
+    for_ref = state.get_execution_ref(for_invocation.id)
+    context = _context()
+    context.execution_effects = ExecutionEffectsRecorder(
+        source_node_id=for_invocation.id,
+        frame_path=for_ref.frame.iteration_path,
+        state_id=for_ref.state_id,
+        frame_id=for_ref.frame.frame_id,
+        workflow_call_depth=for_ref.frame.workflow_call_depth,
+    )
+    context.execution = ExecutionInterface(context.execution_effects)
+    result = for_invocation.invoke_internal_with_effects(context, _services())
+    effect = result.effects[0]
+    assert isinstance(effect, ContinuationEffect)
+    malformed = effect.model_copy(deep=True, update={"payload": {**effect.payload, "index": 1}})
+    before = dump_execution_state(state)
+
+    with pytest.raises(ValueError, match="continuation start payload"):
+        state.apply(for_ref, result, [malformed], effect_count=1)
+
+    assert dump_execution_state(state) == before
+
+
+def test_graph_state_rejects_forged_for_output_with_matching_start_effect() -> None:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["item"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="item"),
+            destination=EdgeConnection(node_id="return", field="output"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="loop_linkage"),
+            destination=EdgeConnection(node_id="return", field="loop_linkage"),
+            type="loop_linkage",
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+    invocation = state.next()
+    assert isinstance(invocation, ForInvocation)
+    execution_ref = state.get_execution_ref(invocation.id)
+    context = _context()
+    context.execution_effects = ExecutionEffectsRecorder(
+        source_node_id=invocation.id,
+        frame_path=execution_ref.frame.iteration_path,
+        state_id=execution_ref.state_id,
+        frame_id=execution_ref.frame.frame_id,
+        workflow_call_depth=execution_ref.frame.workflow_call_depth,
+    )
+    context.execution = ExecutionInterface(context.execution_effects)
+    result = invocation.invoke_internal_with_effects(context, _services())
+    effect = result.effects[0]
+    assert isinstance(effect, ContinuationEffect)
+    forged_state = LoopState(values={"forged": True})
+    forged_output = result.output.model_copy(update={"index": 99, "total": 99, "state": forged_state})
+    assert isinstance(forged_output, ForInvocationOutput)
+    forged_effect = effect.model_copy(
+        deep=True,
+        update={
+            "payload": {
+                "index": 99,
+                "total": 99,
+                "state": forged_state.model_dump(mode="json"),
+            }
+        },
+    )
+    before = dump_execution_state(state)
+
+    with pytest.raises(ValueError, match="For output does not match prepared For"):
+        state.apply(
+            execution_ref,
+            InvocationRunResult(output=forged_output, effects=result.effects),
+            [forged_effect],
+            effect_count=1,
+        )
+
+    assert dump_execution_state(state) == before
+
+
+def test_graph_state_rejects_forged_for_return_output_with_matching_completion_effect() -> None:
+    state, return_ref, return_result = _apply_flat_for_pair(["item"], apply_return=False)
+    effect = return_result.effects[0]
+    assert isinstance(effect, ContinuationEffect)
+    forged_state = LoopState(values={"forged": True})
+    forged_output = ForReturnInvocationOutput(output="forged", state=forged_state)
+    forged_effect = effect.model_copy(
+        deep=True,
+        update={
+            "payload": {
+                "output": "forged",
+                "state": forged_state.model_dump(mode="json"),
+                "continue_condition": True,
+            }
+        },
+    )
+    before = dump_execution_state(state)
+
+    with pytest.raises(ValueError, match="ForReturn output does not match prepared ForReturn"):
+        state.apply(
+            return_ref,
+            InvocationRunResult(output=forged_output, effects=return_result.effects),
+            [forged_effect],
+            effect_count=1,
+        )
+
+    assert dump_execution_state(state) == before
+
+
+def test_graph_state_rejects_forged_for_item_with_valid_continuation_fields() -> None:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["item"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="item"),
+            destination=EdgeConnection(node_id="return", field="output"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="loop_linkage"),
+            destination=EdgeConnection(node_id="return", field="loop_linkage"),
+            type="loop_linkage",
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+    invocation = state.next()
+    assert isinstance(invocation, ForInvocation)
+    execution_ref = state.get_execution_ref(invocation.id)
+    context = _context()
+    context.execution_effects = ExecutionEffectsRecorder(
+        source_node_id=invocation.id,
+        frame_path=execution_ref.frame.iteration_path,
+        state_id=execution_ref.state_id,
+        frame_id=execution_ref.frame.frame_id,
+        workflow_call_depth=execution_ref.frame.workflow_call_depth,
+    )
+    context.execution = ExecutionInterface(context.execution_effects)
+    result = invocation.invoke_internal_with_effects(context, _services())
+    forged_output = result.output.model_copy(update={"item": "forged"})
+    before = dump_execution_state(state)
+
+    with pytest.raises(ValueError, match="For output item does not match"):
+        state.apply(
+            execution_ref,
+            InvocationRunResult(output=forged_output, effects=result.effects),
+            result.effects,
+            effect_count=len(result.effects),
+        )
+
+    assert dump_execution_state(state) == before
+
+
+def test_graph_state_rejects_persisted_for_result_tampering() -> None:
+    state, _return_ref, _return_result = _apply_flat_for_pair(["item"])
+    for_exec_id = next(
+        execution_id for execution_id, source_id in state.prepared_source_mapping.items() if source_id == "for"
+    )
+    start_ref = state.get_execution_ref(for_exec_id)
+    snapshot = deepcopy(dump_execution_state(state))
+    snapshot["results"][for_exec_id]["index"] = 99
+    snapshot["results"][for_exec_id]["total"] = 99
+    snapshot["results"][for_exec_id]["state"] = {"values": {"forged": True}}
+    start_effect = snapshot["execution_effects"][start_ref.reference_id][0]
+    start_effect["payload"] = {
+        "index": 99,
+        "total": 99,
+        "state": {"values": {"forged": True}},
+    }
+
+    with pytest.raises(ValueError, match="continuation start payload"):
+        load_execution_state(snapshot)
+
+
+def test_graph_state_rejects_persisted_for_result_only_tampering_with_valid_effect() -> None:
+    state, _return_ref, _return_result = _apply_flat_for_pair(["item"])
+    for_exec_id = next(
+        execution_id for execution_id, source_id in state.prepared_source_mapping.items() if source_id == "for"
+    )
+    snapshot = deepcopy(dump_execution_state(state))
+    snapshot["results"][for_exec_id]["item"] = "forged"
+
+    with pytest.raises(ValueError, match="For output item does not match prepared For"):
+        load_execution_state(snapshot)
+
+
+def test_graph_state_rejects_effect_for_pending_for_return() -> None:
+    state, return_ref, return_result = _apply_flat_for_pair(["item"], apply_return=False)
+    snapshot = deepcopy(dump_execution_state(state))
+    snapshot["execution_effects"][return_ref.reference_id] = [return_result.effects[0].model_dump(mode="json")]
+
+    with pytest.raises(ValueError, match="pending execution node"):
+        load_execution_state(snapshot)
+
+
+def test_graph_state_rejects_for_effect_in_wrong_persisted_bucket() -> None:
+    state, return_ref, _return_result = _apply_flat_for_pair(["item"], apply_return=False)
+    for_exec_id = next(
+        execution_id for execution_id, source_id in state.prepared_source_mapping.items() if source_id == "for"
+    )
+    for_ref = state.get_execution_ref(for_exec_id)
+    snapshot = deepcopy(dump_execution_state(state))
+    snapshot["execution_effects"][return_ref.reference_id] = snapshot["execution_effects"].pop(for_ref.reference_id)
+
+    with pytest.raises(ValueError, match="pending execution node"):
+        load_execution_state(snapshot)
+
+
+def test_graph_state_rejects_nested_execution_owner_tampering() -> None:
+    state, return_ref, _return_result = _apply_flat_for_pair(["item"], apply_return=False)
+    for_exec_id = next(
+        execution_id for execution_id, source_id in state.prepared_source_mapping.items() if source_id == "for"
+    )
+    for_ref = state.get_execution_ref(for_exec_id)
+    snapshot = deepcopy(dump_execution_state(state))
+    effect = snapshot["execution_effects"][for_ref.reference_id][0]
+    effect["execution_ref"]["execution_node_id"] = return_ref.exec_node_id
+
+    with pytest.raises(ValueError, match="Execution effect is not owned by execution reference"):
+        load_execution_state(snapshot)
+
+
+def test_graph_state_rejects_missing_for_start_effect_transactionally() -> None:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["item"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="item"),
+            destination=EdgeConnection(node_id="return", field="output"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="loop_linkage"),
+            destination=EdgeConnection(node_id="return", field="loop_linkage"),
+            type="loop_linkage",
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+    invocation = state.next()
+    assert isinstance(invocation, ForInvocation)
+    execution_ref = state.get_execution_ref(invocation.id)
+    context = _context()
+    context.execution_effects = ExecutionEffectsRecorder(
+        source_node_id=invocation.id,
+        frame_path=execution_ref.frame.iteration_path,
+        state_id=execution_ref.state_id,
+        frame_id=execution_ref.frame.frame_id,
+        workflow_call_depth=execution_ref.frame.workflow_call_depth,
+    )
+    context.execution = ExecutionInterface(context.execution_effects)
+    result = invocation.invoke_internal_with_effects(context, _services())
+    before = dump_execution_state(state)
+
+    with pytest.raises(ValueError, match="must include a continuation effect"):
+        state.apply(execution_ref, result, [], effect_count=0)
+
+    assert dump_execution_state(state) == before
+
+
+def test_graph_state_requires_for_return_continuation_effect() -> None:
+    state, return_ref, return_result = _apply_flat_for_pair(["item"], apply_return=False)
+
+    with pytest.raises(ValueError, match="must include a continuation effect"):
+        state.apply(return_ref, return_result, [], effect_count=0)
+
+
+def test_graph_state_applies_direct_for_return_output() -> None:
+    state, return_ref, return_result = _apply_flat_for_pair(["item"], apply_return=False)
+
+    state.apply(return_ref, return_result)
+
+    assert state.is_complete()
+
+
+def test_graph_state_applies_direct_for_return_output_with_effects() -> None:
+    state, return_ref, return_result = _apply_flat_for_pair(["item"], apply_return=False)
+
+    state.apply(
+        return_ref,
+        return_result.output,
+        return_result.effects,
+        effect_count=len(return_result.effects),
+    )
+
+    assert state.is_complete()
+
+
+@pytest.mark.parametrize("conflicting", [False, True], ids=["exact-replay", "conflicting-payload"])
+def test_graph_state_reconciles_duplicate_flat_for_continuation_effects(conflicting: bool) -> None:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["item"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="item"),
+            destination=EdgeConnection(node_id="return", field="output"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="loop_linkage"),
+            destination=EdgeConnection(node_id="return", field="loop_linkage"),
+            type="loop_linkage",
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+
+    for_invocation = state.next()
+    assert isinstance(for_invocation, ForInvocation)
+    for_ref = state.get_execution_ref(for_invocation.id)
+    for_context = _context()
+    for_context.execution_effects = ExecutionEffectsRecorder(
+        source_node_id=for_invocation.id,
+        frame_path=for_ref.frame.iteration_path,
+        state_id=for_ref.state_id,
+        frame_id=for_ref.frame.frame_id,
+        workflow_call_depth=for_ref.frame.workflow_call_depth,
+    )
+    for_context.execution = ExecutionInterface(for_context.execution_effects)
+    for_result = for_invocation.invoke_internal_with_effects(for_context, _services())
+    state.apply(state.get_execution_ref(for_invocation.id, effect_count=len(for_result.effects)), for_result)
+
+    return_invocation = state.next()
+    assert isinstance(return_invocation, ForReturnInvocation)
+    return_ref = state.get_execution_ref(return_invocation.id)
+    return_context = _context()
+    return_context.execution_effects = ExecutionEffectsRecorder(
+        source_node_id=return_invocation.id,
+        frame_path=return_ref.frame.iteration_path,
+        state_id=return_ref.state_id,
+        frame_id=return_ref.frame.frame_id,
+        workflow_call_depth=return_ref.frame.workflow_call_depth,
+    )
+    return_context.execution = ExecutionInterface(return_context.execution_effects)
+    return_result = return_invocation.invoke_internal_with_effects(return_context, _services())
+    continuation_effect = return_result.effects[0]
+    assert isinstance(continuation_effect, ContinuationEffect)
+    replay_effect = continuation_effect
+    if conflicting:
+        replay_effect = continuation_effect.model_copy(
+            deep=True,
+            update={"payload": {**continuation_effect.payload, "output": "conflict"}},
+        )
+
+    before = dump_execution_state(state)
+    if conflicting:
+        with pytest.raises(ValueError, match="completed continuation has conflicting result"):
+            state.apply(
+                return_ref,
+                return_result,
+                [continuation_effect, replay_effect],
+                effect_count=2,
+            )
+        assert dump_execution_state(state) == before
+    else:
+        state.apply(
+            return_ref,
+            return_result,
+            [continuation_effect, replay_effect],
+            effect_count=2,
+        )
+        assert len(state._generic_runtime().continuations) == 1
+        assert state.execution_effects[return_ref.reference_id] == [continuation_effect]
 
 
 @pytest.mark.parametrize(

@@ -106,6 +106,28 @@ for the canonical stream to close, and completion mirrors Iterate outputs into t
 Materialization still owns copy expansion, iteration paths, grouping, and explicit empty closure; mixed control-flow and
 queue lifecycle remain compatibility-owned. `loop_linkage` remains association metadata and never becomes a data token.
 
+The supported flat-loop differential gate covers generic/compatibility parity
+for successful execution, carried and replaced state, early break, empty and
+input-driven fallback routing, `None` output items, body/return failure,
+partial rehydration, frame identity, and SQLite cancellation/retry isolation.
+Continuation effects are normalized to JSON values and validated before
+mutation: exact duplicate effects in one batch are retained once, while
+conflicting terminal payloads (including type-distinct JSON values) are
+rejected. Before scheduler completion, `ForInvocationOutput` and
+`ForReturnInvocationOutput` continuation fields must match their prepared nodes;
+the `For` item must match its prepared collection item, and effects must
+independently match those values. Current versioned snapshots must include an
+execution-effect ledger: every ledger key must name an executed prepared node,
+and pending nodes, unknown references, missing executed markers, missing
+continuation effects, and malformed ownership are rejected. Persisted `For`
+outputs are checked against prepared iteration data and, after finalization,
+the authoritative returned collection and final state. Unversioned legacy
+snapshots retain their compatibility loader. A `For` start effect must match
+the prepared index, collection total, and state; malformed effects leave the
+graph state unchanged.
+This evidence permits the supported flat routing slice only; it does not remove
+the compatibility continuation/materialization owner for unsupported shapes.
+
 `IfInvocation` now declares the same seam for branch activation: it emits one frame-scoped activation token for the
 selected branch, and the graph state validates and persists it after invocation. For a fresh generic `If`, the dedicated
 `_IfActivationCompiler` produces opaque, frame-local activation dependencies. `_GenericGraphSchedulerAdapter` consumes
@@ -116,8 +138,8 @@ edges. Forced `_ExecutionScheduler` still retains
 `_IfBranchScheduler` legacy topology, input-edge pruning, and skip behavior for compatibility snapshots. `apply()`
 replaces the activation token by stable identity, and activation effects are excluded from stream handling. This is an
 ownership seam, not final removal of all legacy topology. Author-time activation ports and literal successor IDs remain
-absent, while loop and saved-workflow control flow remain on their compatibility paths until differential coverage
-proves their generic replacements.
+absent, while unsupported loop shapes and saved-workflow control flow remain on their compatibility paths until
+differential coverage proves their generic replacements.
 
 The engine still owns runtime node materialization and queue readiness for loop-containing graphs that require empty or
 input-driven `For`, nested/mixed control flow, and existing snapshots. Ordinary static DAGs, legacy-shaped `If` graphs,
@@ -127,8 +149,8 @@ generic `If` uses the compiler/adapter seam described above. This is intentional
 the generic records preserve tested loop semantics first, while the old execution graph remains the fallback for control
 lowerings, legacy snapshots, and unsupported mixed loop shapes. No activation or stream ports are added to author-time
 graph JSON.
-This migration does not modify code under `invokeai/frontend/...`; the existing frontend/backend external interface
-remains frozen. The ownership seam does not remove all legacy topology yet.
+This migration does not modify any file under `invokeai/frontend/...`, including generated schemas; the existing
+frontend/backend external interface remains frozen. The ownership seam does not remove all legacy topology yet.
 
 The frontend and backend validate the same boundary rules. Saved workflows preserve node types, field handles, and the
 direct linkage edge. The current invocation templates provide output-scope metadata when a workflow is loaded. The

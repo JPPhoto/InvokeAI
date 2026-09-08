@@ -2,6 +2,7 @@
 
 import copy
 import itertools
+import json
 import weakref
 from collections import deque
 from dataclasses import dataclass
@@ -4397,6 +4398,8 @@ class GraphExecutionState(BaseModel):
     _generic_execution_runtime: Optional[ExecutionEngineRuntime] = PrivateAttr(default=None)
     _generic_graph_scheduler: Optional[_GenericGraphSchedulerAdapter] = PrivateAttr(default=None)
     _generic_child_dependencies: dict[str, ChildDependencyRecord] = PrivateAttr(default_factory=dict)
+    _execution_effects_persisted: bool = PrivateAttr(default=False)
+    _legacy_execution_snapshot: bool = PrivateAttr(default=True)
 
     def _tx_record_once(self, key: tuple[Any, ...], undo: Callable[[], None]) -> None:
         if self._apply_transaction is not None:
@@ -4690,16 +4693,19 @@ class GraphExecutionState(BaseModel):
         for_node = self.execution_graph.get_node(for_exec_node_id)
         if not isinstance(for_node, ForInvocation):
             return None
+        for_return_node = self.execution_graph.get_node(exec_node_id)
+        assert isinstance(for_return_node, ForReturnInvocation)
 
-        self._complete_for_continuation(for_exec_node_id, output.model_dump(mode="json"))
+        self._complete_for_continuation(
+            for_exec_node_id,
+            self._for_return_continuation_payload(for_return_node, output),
+        )
 
         registry = self._prepared_registry()
         source_for_id = registry.get_source_node_id(for_exec_node_id)
         source_return_id = registry.get_source_node_id(exec_node_id)
 
         next_index = for_node.index + 1
-        for_return_node = self.execution_graph.get_node(exec_node_id)
-        assert isinstance(for_return_node, ForReturnInvocation)
         if next_index >= len(for_node.collection) or for_return_node.continue_condition is False:
             self._finalize_for_outputs(for_exec_node_id, source_for_id, source_return_id, output)
             self._materializer().create_nested_for_return(
@@ -5049,16 +5055,229 @@ class GraphExecutionState(BaseModel):
             continuation.start()
         return continuation
 
+    def _record_continuation_effects(self, execution_ref: ExecutionReference, effects: Iterable[Any]) -> None:
+        """Reconcile durable For continuation effects with the private runtime record."""
+
+        node = self.execution_graph.get_node(execution_ref.exec_node_id)
+        for effect in effects:
+            if self._value_from_object(effect, "kind", "effect_type", "type") != "continuation":
+                continue
+
+            operation = self._value_from_object(effect, "operation")
+            payload = self._normalize_continuation_payload(self._value_from_object(effect, "payload"))
+            if isinstance(node, ForInvocation) and operation == "start":
+                expected_payload = self._prepared_for_continuation_payload(node)
+                if self._continuation_payload_key(payload) != self._continuation_payload_key(expected_payload):
+                    raise ValueError("continuation start payload does not match prepared For")
+                continuation = self._for_continuation(execution_ref.exec_node_id)
+                if payload is not None:
+                    if continuation.payload is not None and self._continuation_payload_key(
+                        continuation.payload
+                    ) != self._continuation_payload_key(payload):
+                        raise ValueError("started continuation has conflicting payload")
+                    if continuation.payload is None:
+                        self._tx_set_attr(continuation, "payload", copydeep(payload))
+            elif isinstance(node, ForReturnInvocation) and operation == "complete":
+                expected_payload = self._prepared_for_continuation_payload(node)
+                if expected_payload is not None and self._continuation_payload_key(
+                    payload
+                ) != self._continuation_payload_key(expected_payload):
+                    raise ValueError("completed continuation payload does not match ForReturn output")
+                for_exec_node_id = self._get_for_parent(execution_ref.exec_node_id)
+                if for_exec_node_id is None:
+                    continue
+                continuation = self._for_continuation(for_exec_node_id)
+                if continuation.terminal:
+                    if continuation.status == "completed" and self._continuation_payload_key(
+                        continuation.result
+                    ) != self._continuation_payload_key(payload):
+                        raise ValueError("completed continuation has conflicting result")
+                    continue
+                previous = ContinuationRecord[Any].model_validate(continuation.model_dump(mode="python"))
+                self._tx_record_once(
+                    ("continuation-complete", continuation.continuation_id),
+                    lambda previous=previous: self._generic_runtime().replace_continuation(previous),
+                )
+                continuation.complete(copydeep(payload))
+
+    @staticmethod
+    def _normalize_continuation_payload(payload: Any) -> Any:
+        try:
+            return _JSON_SERIALIZER.dump_python(payload, mode="json", warnings="error")
+        except (PydanticSerializationError, TypeError, ValueError) as exc:
+            raise ValueError("Continuation effect payload must be JSON-serializable") from exc
+
+    @classmethod
+    def _continuation_payload_key(cls, payload: Any) -> str:
+        normalized = cls._normalize_continuation_payload(payload)
+        return json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+    @classmethod
+    def _for_start_continuation_payload(
+        cls, node: ForInvocation, output: ForInvocationOutput | None = None
+    ) -> dict[str, Any]:
+        index = output.index if output is not None else node.index
+        total = output.total if output is not None else len(node.collection)
+        state = (output.state if output is not None else node.state) or LoopState()
+        return {
+            "index": index,
+            "total": total,
+            "state": cls._normalize_continuation_payload(state.model_dump(mode="json")),
+        }
+
+    @classmethod
+    def _for_return_continuation_payload(
+        cls, node: ForReturnInvocation, output: ForReturnInvocationOutput | None = None
+    ) -> dict[str, Any] | None:
+        if output is not None:
+            output_value = output.output
+            state = output.state
+        else:
+            output_value = node.output
+            state = node.state
+        return {
+            "output": cls._normalize_continuation_payload(output_value),
+            "state": cls._normalize_continuation_payload(state.model_dump(mode="json")) if state is not None else None,
+            "continue_condition": node.continue_condition,
+        }
+
+    def _for_collection_for_validation(self, node: ForInvocation) -> list[Any]:
+        if node.collection:
+            return node.collection
+
+        source_node_id = self.prepared_source_mapping.get(node.id)
+        if source_node_id is None:
+            return node.collection
+        source_node = self.graph.get_node(source_node_id)
+        if isinstance(source_node, ForInvocation) and source_node.collection:
+            return source_node.collection
+
+        collection_edges = self.graph._get_input_edges(source_node_id, COLLECTION_FIELD)
+        if collection_edges:
+            source_output = self.results.get(collection_edges[0].source.node_id)
+            if source_output is None:
+                parent_iteration_path = self._get_for_parent_iteration_path(node.id)
+                source_output_ids = [
+                    exec_node_id
+                    for exec_node_id in self.source_prepared_mapping.get(collection_edges[0].source.node_id, ())
+                    if exec_node_id in self.results
+                ]
+                source_output = next(
+                    (
+                        self.results[exec_node_id]
+                        for exec_node_id in source_output_ids
+                        if self._get_iteration_path(exec_node_id) == parent_iteration_path
+                    ),
+                    None,
+                )
+            collection = self._value_from_object(source_output, collection_edges[0].source.field)
+            if isinstance(collection, list):
+                return collection
+        return node.collection
+
+    def _prepared_for_continuation_payload(self, node: ForInvocation | ForReturnInvocation) -> dict[str, Any] | None:
+        if isinstance(node, ForInvocation):
+            collection = self._for_collection_for_validation(node)
+            state = node.state or LoopState()
+            return {
+                "index": node.index,
+                "total": len(collection),
+                "state": self._normalize_continuation_payload(state.model_dump(mode="json")),
+            }
+        return self._for_return_continuation_payload(node)
+
+    def _for_item_for_validation(self, node: ForInvocation) -> Any:
+        if node.index < 0:
+            return None
+        collection = self._for_collection_for_validation(node)
+        if node.index >= len(collection):
+            raise ValueError("For output item does not match prepared For")
+        return collection[node.index]
+
+    def _validate_for_continuation_output(
+        self, execution_ref: ExecutionReference, output: BaseInvocationOutput
+    ) -> None:
+        node = self.execution_graph.get_node(execution_ref.exec_node_id)
+        if isinstance(node, ForInvocation) and isinstance(output, ForInvocationOutput):
+            expected_payload = self._prepared_for_continuation_payload(node)
+            actual_payload = self._for_start_continuation_payload(node, output)
+            if self._continuation_payload_key(actual_payload) != self._continuation_payload_key(expected_payload):
+                raise ValueError("For output does not match prepared For")
+            if self._continuation_payload_key(output.item) != self._continuation_payload_key(
+                self._for_item_for_validation(node)
+            ):
+                raise ValueError("For output item does not match prepared For")
+            source_node_id = self.prepared_source_mapping.get(node.id)
+            parent_iteration_path = self._get_for_parent_iteration_path(node.id)
+            final_for_id = None
+            if source_node_id is not None:
+                final_candidates = [
+                    prepared_for_id
+                    for prepared_for_id in self.source_prepared_mapping.get(source_node_id, ())
+                    if self._get_for_parent_iteration_path(prepared_for_id) == parent_iteration_path
+                ]
+                if final_candidates:
+                    final_for_id = max(
+                        final_candidates,
+                        key=lambda prepared_for_id: self.execution_graph.get_node(prepared_for_id).index,
+                    )
+            if (
+                source_node_id is not None
+                and final_for_id == node.id
+                and self._is_loop_context_finalized(source_node_id, parent_iteration_path)
+            ):
+                body_path_to_return = self.graph._get_for_body_path_to_return(
+                    source_node_id, self._get_source_graph_flat()
+                )
+                if body_path_to_return is not None:
+                    _body_path_nodes, source_return_id = body_path_to_return
+                    return_outputs = self._get_ordered_for_return_outputs(node.id, source_return_id)
+                    expected_collection = [return_output.output for return_output in return_outputs]
+                    if self._continuation_payload_key(output.output_collection) != self._continuation_payload_key(
+                        expected_collection
+                    ):
+                        raise ValueError("For output output_collection is not authoritative")
+                    final_return = return_outputs[-1] if return_outputs else None
+                    expected_final_state = (
+                        self._get_loop_state_for_next_iteration(node.id, final_return)
+                        if final_return is not None
+                        else node.state
+                    )
+                    if self._continuation_payload_key(output.final_state) != self._continuation_payload_key(
+                        expected_final_state
+                    ):
+                        raise ValueError("For output final_state is not authoritative")
+
+        elif isinstance(node, ForReturnInvocation) and isinstance(output, ForReturnInvocationOutput):
+            expected_payload = self._prepared_for_continuation_payload(node)
+            actual_payload = self._for_return_continuation_payload(node, output)
+            if self._continuation_payload_key(actual_payload) != self._continuation_payload_key(expected_payload):
+                raise ValueError("ForReturn output does not match prepared ForReturn")
+
+    def _requires_continuation_effect(self, execution_ref: ExecutionReference) -> bool:
+        node = self.execution_graph.get_node(execution_ref.exec_node_id)
+        if isinstance(node, ForReturnInvocation):
+            return True
+        if not isinstance(node, ForInvocation):
+            return False
+        output = self.results.get(execution_ref.exec_node_id)
+        return isinstance(output, ForInvocationOutput) and output.total > 0
+
     def _complete_for_continuation(self, for_exec_node_id: str, result: Any) -> None:
+        result = self._normalize_continuation_payload(result)
         continuation = self._for_continuation(for_exec_node_id)
         if continuation.terminal:
+            if continuation.status == "completed" and self._continuation_payload_key(
+                continuation.result
+            ) != self._continuation_payload_key(result):
+                raise ValueError("completed continuation has conflicting result")
             return
         previous = ContinuationRecord[Any].model_validate(continuation.model_dump(mode="python"))
         self._tx_record_once(
             ("continuation-complete", continuation.continuation_id),
             lambda: self._generic_runtime().replace_continuation(previous),
         )
-        continuation.complete(result)
+        continuation.complete(copydeep(result))
 
     def _register_generic_child_dependency(self) -> ChildDependencyRecord | None:
         execution = self.waiting_workflow_call_execution
@@ -5398,14 +5617,22 @@ class GraphExecutionState(BaseModel):
         return wrapper
 
     def _validate_effects(
-        self, execution_ref: ExecutionReference, effects: list[Any], effect_count: Optional[int]
-    ) -> None:
+        self,
+        execution_ref: ExecutionReference,
+        effects: list[Any],
+        effect_count: Optional[int],
+        *,
+        require_continuation: bool = False,
+    ) -> list[Any]:
         expected_count = effect_count if effect_count is not None else execution_ref.effect_count
         if expected_count is not None and len(effects) != expected_count:
             raise ValueError(f"Effect count mismatch: expected {expected_count}, got {len(effects)}")
 
         node = self.execution_graph.get_node(execution_ref.exec_node_id)
         output_fields = type(node).get_output_annotation().model_fields
+        continuation_payloads: dict[tuple[str, str], str] = {}
+        duplicate_continuations: set[tuple[str, str]] = set()
+        continuation_operations: set[str] = set()
         for effect in effects:
             try:
                 _JSON_SERIALIZER.dump_python(effect, mode="json", warnings="error")
@@ -5442,6 +5669,7 @@ class GraphExecutionState(BaseModel):
                     raise ValueError(
                         f"{type(node).__name__} continuation effect must use operation '{expected_operation}'"
                     )
+                continuation_operations.add(operation)
                 continuation_owner = self._value_from_object(
                     effect,
                     "execution_ref",
@@ -5476,6 +5704,17 @@ class GraphExecutionState(BaseModel):
                     execution_ref,
                     "Continuation effect",
                 )
+                continuation_key = (operation, continuation_kind)
+                continuation_payload = self._value_from_object(effect, "payload")
+                serialized_payload = self._continuation_payload_key(continuation_payload)
+                if continuation_key in continuation_payloads:
+                    if continuation_payloads[continuation_key] != serialized_payload:
+                        if operation == "complete":
+                            raise ValueError("completed continuation has conflicting result")
+                        raise ValueError("started continuation has conflicting payload")
+                    duplicate_continuations.add(continuation_key)
+                else:
+                    continuation_payloads[continuation_key] = serialized_payload
 
             owner = self._value_from_object(
                 effect,
@@ -5590,6 +5829,28 @@ class GraphExecutionState(BaseModel):
                     ):
                         raise ValueError("Execution effect ports do not match prepared graph edge")
 
+        if require_continuation and isinstance(node, ForInvocation) and "start" not in continuation_operations:
+            raise ValueError("For execution must include a continuation effect")
+        if require_continuation and isinstance(node, ForReturnInvocation) and "complete" not in continuation_operations:
+            raise ValueError("ForReturn execution must include a continuation effect")
+
+        if not duplicate_continuations:
+            return effects
+
+        seen_continuations: set[tuple[str, str]] = set()
+        unique_effects: list[Any] = []
+        for effect in effects:
+            if self._value_from_object(effect, "kind", "effect_type", "type") == "continuation":
+                continuation_key = (
+                    self._value_from_object(effect, "operation"),
+                    self._value_from_object(effect, "continuation_kind"),
+                )
+                if continuation_key in seen_continuations:
+                    continue
+                seen_continuations.add(continuation_key)
+            unique_effects.append(effect)
+        return unique_effects
+
     def _build_execution_tokens(
         self, execution_ref: ExecutionReference, output: BaseInvocationOutput, effects: Iterable[Any] = ()
     ) -> dict[str, ExecutionToken]:
@@ -5667,19 +5928,30 @@ class GraphExecutionState(BaseModel):
         ref = self._validate_execution_ref(execution_ref)
         if ref.exec_node_id in self.executed or ref.reference_id in self.execution_effects:
             raise ValueError(f"Execution reference {ref.reference_id} has already been applied")
-        result_effects = self._value_from_object(output, "effects", "effect_batch")
-        result_output = self._value_from_object(output, "output", "invocation_output", "result")
-        if result_output is not None:
-            output = result_output
-            if effects is None:
-                effects = result_effects
+        if isinstance(output, BaseInvocationOutput):
+            result_effects = None
+            result_output = None
+        else:
+            result_effects = self._value_from_object(output, "effects", "effect_batch")
+            result_output = self._value_from_object(output, "output", "invocation_output", "result")
+            if result_output is not None:
+                output = result_output
+                if effects is None:
+                    effects = result_effects
         output_value = self._validate_output_owner(ref, output)
+        self._validate_for_continuation_output(ref, output_value)
+        require_continuation = effects is not None or effect_count is not None
         if effects is None:
             effect_values = []
         else:
             batch_values = self._value_from_object(effects, "effects")
             effect_values = list(batch_values if batch_values is not None else effects)
-        self._validate_effects(ref, effect_values, effect_count)
+        effect_values = self._validate_effects(
+            ref,
+            effect_values,
+            effect_count,
+            require_continuation=require_continuation,
+        )
         tokens = self._build_execution_tokens(ref, output_value, effect_values)
         persisted_effects = copydeep(effect_values)
 
@@ -5689,9 +5961,12 @@ class GraphExecutionState(BaseModel):
         transaction = _ApplyTransaction()
         object.__setattr__(self, "_apply_transaction", transaction)
         try:
+            # Capture and record the continuation before scheduler completion can clear the prepared For
+            # collection or otherwise mutate the node used to validate its durable payload.
+            self._record_continuation_effects(ref, effect_values)
             finalized_outputs = self.complete(ref.exec_node_id, output_value)
             self._record_effect_streams(ref, effect_values)
-            ref.effect_count = effect_count if effect_count is not None else ref.effect_count
+            ref.effect_count = len(effect_values)
             self._tx_set_mapping(self.execution_refs, ref.exec_node_id, ref)
             for token_id, token in tokens.items():
                 self._tx_set_mapping(self.execution_tokens, token_id, token)
@@ -6041,14 +6316,51 @@ class GraphExecutionState(BaseModel):
             ):
                 self._record_empty_iterate_stream(source_node_id)
 
-        for reference_id, effects in self.execution_effects.items():
-            execution_ref = next(
-                (ref for ref in self.execution_refs.values() if ref.reference_id == reference_id),
-                None,
-            )
-            if execution_ref is not None:
-                self._validate_effects(execution_ref, list(effects), None)
+        if not self._execution_effects_persisted and not self._legacy_execution_snapshot:
+            raise ValueError("Execution effects ledger is missing from the current execution snapshot")
+
+        if self._execution_effects_persisted:
+            references_by_id = {ref.reference_id: ref for ref in self.execution_refs.values()}
+            for reference_id, effects in self.execution_effects.items():
+                execution_ref = references_by_id.get(reference_id)
+                if execution_ref is None:
+                    raise ValueError("Execution effects contain an unknown execution reference")
+                if execution_ref.exec_node_id not in self.results:
+                    raise ValueError("Execution effects belong to a pending execution node")
+                if execution_ref.exec_node_id not in self.executed:
+                    raise ValueError("Execution effects require an executed marker")
+                node = self.execution_graph.get_node(execution_ref.exec_node_id)
+                effects = self._validate_effects(
+                    execution_ref,
+                    list(effects),
+                    len(effects),
+                    require_continuation=self._requires_continuation_effect(execution_ref),
+                )
+                self._record_continuation_effects(execution_ref, effects)
                 self._record_effect_streams(execution_ref, effects)
+        elif self._legacy_execution_snapshot:
+            for reference_id, effects in self.execution_effects.items():
+                execution_ref = next(
+                    (ref for ref in self.execution_refs.values() if ref.reference_id == reference_id),
+                    None,
+                )
+                if execution_ref is not None:
+                    effects = self._validate_effects(execution_ref, list(effects), None)
+                    self._record_continuation_effects(execution_ref, effects)
+                    self._record_effect_streams(execution_ref, effects)
+
+        for exec_node_id, output in self.results.items():
+            execution_ref = self.execution_refs.get(exec_node_id)
+            if execution_ref is None:
+                continue
+            node = self.execution_graph.get_node(exec_node_id)
+            if self._execution_effects_persisted and self._requires_continuation_effect(execution_ref):
+                if execution_ref.reference_id not in self.execution_effects:
+                    raise ValueError(f"{type(node).__name__} execution must include a continuation effect")
+                effects = self.execution_effects[execution_ref.reference_id]
+                self._validate_effects(execution_ref, list(effects), len(effects), require_continuation=True)
+            if self._execution_effects_persisted:
+                self._validate_for_continuation_output(execution_ref, output)
 
         iterate_results: list[tuple[str, IterateInvocationOutput]] = []
         for exec_node_id, output in self.results.items():
@@ -6065,7 +6377,8 @@ class GraphExecutionState(BaseModel):
                 if source_node_id is not None and self._is_loop_context_finalized(
                     source_node_id, self._get_for_parent_iteration_path(exec_node_id)
                 ):
-                    continuation.complete(self.results[exec_node_id].model_dump(mode="json"))
+                    if not continuation.terminal:
+                        continuation.complete(self.results[exec_node_id].model_dump(mode="json"))
 
         self._register_generic_child_dependency()
 
@@ -6089,6 +6402,9 @@ class GraphExecutionState(BaseModel):
         self._rehydrate_ready_queues()
 
     def model_post_init(self, __context: Any) -> None:
+        if isinstance(__context, dict) and "execution_effects_persisted" in __context:
+            self._execution_effects_persisted = __context["execution_effects_persisted"]
+            self._legacy_execution_snapshot = __context.get("legacy_execution_snapshot", False)
         self._rehydrate_execution_refs()
         self._rehydrate_runtime_state()
 

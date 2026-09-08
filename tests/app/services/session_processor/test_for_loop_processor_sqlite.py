@@ -21,7 +21,15 @@ from invokeai.app.services.session_processor.session_processor_default import (
 )
 from invokeai.app.services.session_queue.session_queue_sqlite import SqliteSessionQueue
 from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder, ExecutionInterface
-from invokeai.app.services.shared.graph import CollectInvocation, Graph, GraphExecutionState, IterateInvocation
+from invokeai.app.services.shared.execution_state_migration import dump_execution_state
+from invokeai.app.services.shared.graph import (
+    CollectInvocation,
+    Graph,
+    GraphExecutionState,
+    IterateInvocation,
+    _ExecutionScheduler,
+    _GenericGraphSchedulerAdapter,
+)
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from tests.test_nodes import create_edge, create_loop_linkage
 
@@ -94,6 +102,19 @@ def _build_iterate_collect_graph() -> Graph:
     graph.add_node(CollectInvocation(id="collect"))
     graph.add_edge(create_edge("range", "collection", "iterate", "collection"))
     graph.add_edge(create_edge("iterate", "item", "collect", "item"))
+    return graph
+
+
+def _build_flat_for_graph() -> Graph:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[0, 1, 2]))
+    graph.add_node(ForSqliteBodyInvocation(id="body"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_node(ForSqliteAfterInvocation(id="after"))
+    graph.add_edge(create_edge("for", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "return", "output"))
+    graph.add_edge(create_edge("for", "output_collection", "after", "collection"))
+    graph.add_edge(create_loop_linkage("for", "return"))
     return graph
 
 
@@ -506,3 +527,104 @@ def test_processor_sqlite_iterate_collect_cancel_retry_does_not_leak_stream_stat
     assert completed_streams[0].stream_id != canceled_stream_id
     assert completed_streams[0].stream_id.startswith(f"{completed_item.session.id}:iterate:")
     assert sum(len(effects) for effects in completed_item.session.execution_effects.values()) == 4
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+def test_processor_sqlite_flat_for_cancel_retry_isolates_execution_state(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_invoker: Invoker,
+    registered_event_bus: _RecordingRegisteredEventService,
+    force_compatibility_scheduler: bool,
+) -> None:
+    monkeypatch.setattr(
+        "invokeai.app.services.session_processor.session_processor_default.build_invocation_context",
+        _build_test_invocation_context,
+    )
+    if force_compatibility_scheduler:
+        monkeypatch.setattr(GraphExecutionState, "_can_use_generic_for_scheduler", lambda self: False)
+
+    queue = SqliteSessionQueue(db=mock_invoker.services.board_records._db)
+    mock_invoker.services.events = registered_event_bus
+    mock_invoker.services.session_queue = queue
+    mock_invoker.services.performance_statistics = _Stats()
+    queue.start(mock_invoker)
+
+    item_id = _insert_session(queue, _build_flat_for_graph())
+    session_persisted = Event()
+    completed_sources: list[str] = []
+
+    def cancel_after_first_return(invocation, queue_item, output) -> None:
+        source_id = queue_item.session.prepared_source_mapping[invocation.id]
+        completed_sources.append(source_id)
+        if source_id == "return":
+            queue.cancel_queue_item(queue_item.item_id)
+
+    processor = DefaultSessionProcessor(
+        session_runner=DefaultSessionRunner(
+            on_after_run_node_callbacks=[cancel_after_first_return],
+            on_after_run_session_callbacks=[lambda queue_item: session_persisted.set()],
+        ),
+        polling_interval=0,
+    )
+    try:
+        processor.start(mock_invoker)
+        assert registered_event_bus.wait_for_status(item_id, "canceled")
+        assert session_persisted.wait(timeout=5)
+    finally:
+        _stop_processor(processor)
+
+    canceled_item = queue.get_queue_item(item_id)
+    assert canceled_item.status == "canceled"
+    assert completed_sources == ["for", "body", "return"]
+    assert not canceled_item.session.is_complete()
+    assert "after" not in canceled_item.session.source_prepared_mapping
+    assert not canceled_item.session.finalized_loop_contexts
+    canceled_snapshot = dump_execution_state(canceled_item.session)
+    if force_compatibility_scheduler:
+        assert isinstance(canceled_item.session._execution_scheduler, _ExecutionScheduler)
+    else:
+        assert isinstance(canceled_item.session._execution_scheduler, _GenericGraphSchedulerAdapter)
+
+    retry_result = queue.retry_items_by_id("default", [item_id])
+    assert retry_result.retried_item_ids == [item_id]
+    [retried_item] = [
+        queue_item for queue_item in queue.list_all_queue_items("default") if queue_item.retried_from_item_id == item_id
+    ]
+    assert retried_item.status == "pending"
+    assert retried_item.item_id != item_id
+    assert retried_item.session.id != canceled_item.session.id
+    assert retried_item.session.results == {}
+    assert retried_item.session.execution_refs == {}
+    assert retried_item.session.execution_tokens == {}
+    assert retried_item.session.execution_effects == {}
+    retry_runtime = retried_item.session._generic_runtime()
+    assert not retry_runtime.gates
+    assert not retry_runtime.streams
+    assert not retry_runtime.continuations
+
+    retry_session_persisted = Event()
+    retry_processor = DefaultSessionProcessor(
+        session_runner=DefaultSessionRunner(
+            on_after_run_session_callbacks=[lambda queue_item: retry_session_persisted.set()],
+        ),
+        polling_interval=0,
+    )
+    try:
+        retry_processor.start(mock_invoker)
+        assert registered_event_bus.wait_for_status(retried_item.item_id, "completed")
+        assert retry_session_persisted.wait(timeout=5)
+    finally:
+        _stop_processor(retry_processor)
+
+    canceled_item = queue.get_queue_item(item_id)
+    completed_item = queue.get_queue_item(retried_item.item_id)
+    assert canceled_item.status == "canceled"
+    assert dump_execution_state(canceled_item.session) == canceled_snapshot
+    assert completed_item.status == "completed"
+    assert completed_item.session.id != canceled_item.session.id
+    assert completed_item.session.is_complete()
+    [after_execution_id] = completed_item.session.source_prepared_mapping["after"]
+    assert completed_item.session.results[after_execution_id].collection == [0, 1, 2]
+    assert all(
+        reference.state_id == completed_item.session.id for reference in completed_item.session.execution_refs.values()
+    )
