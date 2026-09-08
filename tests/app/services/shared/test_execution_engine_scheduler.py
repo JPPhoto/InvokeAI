@@ -13,6 +13,7 @@ from invokeai.app.services.shared.execution_engine.scheduler import (
     ExecutionPlan,
     ExecutionScheduler,
 )
+from invokeai.app.services.shared.execution_state_migration import dump_execution_state, load_execution_state
 from invokeai.app.services.shared.graph import (
     CollectInvocation,
     Edge,
@@ -142,17 +143,12 @@ def test_graph_state_generic_if_readiness_uses_activation_dependency_records(mon
     assert condition is not None
     state.complete(condition.id, condition.invoke(Mock()))
 
-    true_exec_id = next(
-        execution_id for execution_id, source_id in state.prepared_source_mapping.items() if source_id == "true_value"
-    )
+    while "true_value" not in state.source_prepared_mapping:
+        assert state._materializer().prepare(state._get_source_graph_flat()) is not None
+    true_exec_id = next(iter(state.source_prepared_mapping["true_value"]))
     plan_node = state._generic_graph_scheduler._scheduler.plan.nodes[true_exec_id]
     assert plan_node.activation_dependencies == (ActivationDependency(owner_id="if", branch="true_input", frame=()),)
-    false_exec_id = next(
-        execution_id for execution_id, source_id in state.prepared_source_mapping.items() if source_id == "false_value"
-    )
-    assert state._generic_graph_scheduler._scheduler.plan.nodes[false_exec_id].activation_dependencies == (
-        ActivationDependency(owner_id="if", branch="false_input", frame=()),
-    )
+    assert "false_value" not in state.source_prepared_mapping
 
     if_exec_id = next(
         execution_id for execution_id, source_id in state.prepared_source_mapping.items() if source_id == "if"
@@ -228,6 +224,9 @@ def test_graph_state_rehydrates_legacy_if_without_activation_token() -> None:
     condition = state.next()
     assert condition is not None
     state.complete(condition.id, condition.invoke(Mock()))
+    next_node = state.next()
+    assert next_node is not None
+    assert state.prepared_source_mapping[next_node.id] == "true_value"
     snapshot = state.model_dump(mode="python")
     snapshot["execution_tokens"] = {}
 
@@ -244,6 +243,73 @@ def test_graph_state_rehydrates_legacy_if_without_activation_token() -> None:
     next_node = restored.next()
     assert next_node is not None
     assert restored.prepared_source_mapping[next_node.id] == "true_value"
+
+
+def test_graph_state_loads_legacy_if_with_prepared_skipped_branch() -> None:
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=False))
+    graph.add_node(AddInvocation(id="true_value", a=2, b=2))
+    graph.add_node(AddInvocation(id="false_value", a=3, b=3))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="condition", field="value"),
+            destination=EdgeConnection(node_id="if", field="condition"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="true_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="true_input"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="false_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="false_input"),
+        )
+    )
+
+    state = GraphExecutionState(graph=graph)
+    condition = state.next()
+    assert condition is not None
+    state.complete(condition.id, condition.invoke(Mock()))
+    selected_branch = state.next()
+    assert selected_branch is not None
+    selected_branch_exec_id = selected_branch.id
+    assert state.prepared_source_mapping[selected_branch_exec_id] == "false_value"
+
+    # Recreate the prepared/skipped branch projection written by the legacy If scheduler.
+    skipped_exec_id = state._materializer().create_execution_node(
+        "true_value", [], iteration_path=(), enforce_admission=False
+    )[0]
+    assert state._get_prepared_exec_metadata(skipped_exec_id).state == "skipped"
+
+    snapshot = dump_execution_state(state)
+    snapshot.pop("execution_state_version")
+    snapshot.pop("execution_effects")
+    if_exec_id = next(
+        execution_id for execution_id, source_id in state.prepared_source_mapping.items() if source_id == "if"
+    )
+    snapshot["execution_graph"]["edges"].append(
+        Edge(
+            source=EdgeConnection(node_id=skipped_exec_id, field="value"),
+            destination=EdgeConnection(node_id=if_exec_id, field="true_input"),
+        ).model_dump(mode="json")
+    )
+
+    restored = load_execution_state(snapshot)
+
+    assert restored._legacy_snapshot_loaded
+    assert restored._get_prepared_exec_metadata(skipped_exec_id).state == "skipped"
+    restored_scheduler = restored._scheduler()
+    assert isinstance(restored_scheduler, _GenericGraphSchedulerAdapter)
+    assert skipped_exec_id in restored_scheduler._scheduler.discarded
+
+    next_node = restored.next()
+    assert next_node is not None
+    assert next_node.id == selected_branch_exec_id
+    assert restored.prepared_source_mapping[next_node.id] == "false_value"
 
 
 def test_generic_scheduler_discarded_claim_is_not_requeued() -> None:
@@ -745,22 +811,14 @@ def test_graph_state_if_rehydrates_discarded_unselected_branch() -> None:
     assert selected_branch is not None
     selected_branch_exec_id = selected_branch.id
     assert state.prepared_source_mapping[selected_branch_exec_id] == "false_value"
-    skipped_exec_id = next(
-        exec_node_id
-        for exec_node_id, source_node_id in state.prepared_source_mapping.items()
-        if source_node_id == "true_value"
-    )
-    assert state._get_prepared_exec_metadata(skipped_exec_id).state == "skipped"
+    assert "true_value" not in state.source_prepared_mapping
 
     restored = GraphExecutionState.model_validate(state.model_dump(mode="python"), strict=False)
-    restored_scheduler = restored._scheduler()
-    assert skipped_exec_id in restored_scheduler._scheduler.discarded
 
     next_node = restored.next()
     assert next_node is not None
     assert next_node.id == selected_branch_exec_id
     assert restored.prepared_source_mapping[next_node.id] == "false_value"
-    assert restored.next() is None
 
 
 def test_graph_state_static_dag_rehydrates_generic_scheduler_after_partial_run() -> None:

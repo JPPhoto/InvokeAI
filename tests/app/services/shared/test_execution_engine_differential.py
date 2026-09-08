@@ -101,6 +101,29 @@ def _nested_if_graph() -> Graph:
     return graph
 
 
+def _flat_if_graph(*, condition: bool = True) -> Graph:
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=condition))
+    graph.add_node(AddInvocation(id="true_branch", a=2, b=3))
+    graph.add_node(AddInvocation(id="false_branch", a=10, b=20))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_node(AddInvocation(id="sink", b=1))
+
+    def connect(source: str, source_field: str, destination: str, destination_field: str) -> None:
+        graph.add_edge(
+            Edge(
+                source=EdgeConnection(node_id=source, field=source_field),
+                destination=EdgeConnection(node_id=destination, field=destination_field),
+            )
+        )
+
+    connect("condition", "value", "if", "condition")
+    connect("true_branch", "value", "if", "true_input")
+    connect("false_branch", "value", "if", "false_input")
+    connect("if", "value", "sink", "a")
+    return graph
+
+
 def _flat_for_graph(
     *,
     with_after: bool = False,
@@ -548,9 +571,25 @@ def _expected_edge_projection(
     outer_condition: bool,
     inner_condition: bool,
 ) -> tuple[tuple[str, str, str, str, str], ...]:
-    """Project the append-only execution graph for both scheduler adapters."""
-    del force_compatibility_scheduler, outer_condition, inner_condition
-    return _source_edge_projection(graph)
+    """Project the live execution graph for either scheduler adapter."""
+    del force_compatibility_scheduler
+    live_edges = {("outer_condition", "value", "outer_if", "condition", "default")}
+    if outer_condition:
+        live_edges.add(("inner_condition", "value", "inner_if", "condition", "default"))
+        live_edges.add(
+            (
+                "inner_true" if inner_condition else "inner_false",
+                "value",
+                "inner_if",
+                "true_input" if inner_condition else "false_input",
+                "default",
+            )
+        )
+        live_edges.add(("inner_if", "value", "outer_if", "true_input", "default"))
+    else:
+        live_edges.add(("outer_false", "value", "outer_if", "false_input", "default"))
+    live_edges.add(("outer_if", "value", "sink", "a", "default"))
+    return tuple(sorted(live_edges))
 
 
 def _normalized_indegree(state: GraphExecutionState) -> tuple[tuple[str, tuple[int, ...]], ...]:
@@ -578,21 +617,32 @@ def _expected_remaining_input_indegree(
     outer_condition: bool,
     inner_condition: bool,
 ) -> dict[str, int]:
-    """Calculate remaining indegrees from source edges and durable source completion only."""
+    """Calculate remaining indegrees from an independent source-graph oracle."""
     expected_edges = _expected_edge_projection(
         state.graph,
         force_compatibility_scheduler=force_compatibility_scheduler,
         outer_condition=outer_condition,
         inner_condition=inner_condition,
     )
-    completed_sources = {
-        source_id for execution_id, source_id in state.prepared_source_mapping.items() if execution_id in state.executed
+    prepared_by_source = {
+        source_id: sorted(
+            prepared_ids,
+            key=lambda exec_id: (state._get_iteration_path(exec_id), exec_id),
+        )
+        for source_id, prepared_ids in state.source_prepared_mapping.items()
     }
     return {
         execution_id: sum(
-            source_id not in completed_sources
+            source_exec_id not in state.executed
             for source_id, _source_field, destination_id, _destination_field, _edge_type in expected_edges
             if destination_id == state.prepared_source_mapping[execution_id]
+            for source_exec_id in prepared_by_source.get(source_id, ())
+            if state._get_iteration_path(source_exec_id) == state._get_iteration_path(execution_id)
+            and not (
+                isinstance(state.execution_graph.get_node(execution_id), IfInvocation)
+                and isinstance(state.execution_graph.get_node(source_exec_id), IfInvocation)
+                and source_exec_id not in state.executed
+            )
         )
         for execution_id in state.prepared_source_mapping
     }
@@ -1564,6 +1614,39 @@ def test_if_readiness_does_not_delegate_to_legacy_activation_compiler(
     assert state.is_complete()
 
 
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+def test_flat_if_admission_is_demand_driven_and_token_authoritative(
+    force_compatibility_scheduler: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_legacy_path(*_: object, **__: object) -> None:
+        raise AssertionError("fresh If execution used a legacy branch projection")
+
+    monkeypatch.setattr(_IfActivationCompiler, "get_activation_dependencies", fail_legacy_path)
+    monkeypatch.setattr(_IfActivationCompiler, "get_branch_exclusive_sources", fail_legacy_path)
+    monkeypatch.setattr(graph_module, "_get_if_branch_exclusive_sources", fail_legacy_path)
+
+    trace, state = _run_graph(
+        GraphExecutionState(graph=_flat_if_graph()),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+    )
+
+    assert trace == ["condition", "true_branch", "if", "sink"]
+    assert set(state.source_prepared_mapping) == {"condition", "true_branch", "if", "sink"}
+    assert "false_branch" not in state.source_prepared_mapping
+    assert state.executed_history == trace
+    assert all(
+        state._get_prepared_exec_metadata(exec_node_id).state != "skipped"
+        for exec_node_id in state.prepared_source_mapping
+    )
+    activation_tokens = [token for token in state.execution_tokens.values() if token.token_kind == "activation"]
+    assert len(activation_tokens) == 1
+    assert activation_tokens[0].port == "true_input"
+    sink_id = next(iter(state.source_prepared_mapping["sink"]))
+    assert state.results[sink_id].value == 6
+    assert state.is_complete()
+
+
 @pytest.mark.parametrize(
     ("outer_condition", "inner_condition", "expected_trace", "expected_history", "expected_value"),
     [
@@ -1662,19 +1745,19 @@ def test_fresh_generic_nested_if_preserves_state_without_legacy_branch_projectio
     trace, state = _run_graph(GraphExecutionState(graph=graph))
 
     assert trace == expected_trace
-    assert state.executed_history == expected_history
+    assert state.executed_history == expected_trace
     assert set(state.indegree) == set(state.prepared_source_mapping)
     assert set(state.indegree.values()) == {0}
     assert state.is_complete()
     sink_id = next(iter(state.source_prepared_mapping["sink"]))
     assert state.results[sink_id].value == expected_value
-    assert _execution_edge_projection(state) == _source_edge_projection(graph)
-    expected_retired_sources = (
-        {"inner_false" if inner_condition else "inner_true", "outer_false"}
-        if outer_condition
-        else {"inner_condition", "inner_true", "inner_false", "inner_if"}
+    assert _execution_edge_projection(state) == _expected_edge_projection(
+        graph,
+        force_compatibility_scheduler=False,
+        outer_condition=outer_condition,
+        inner_condition=inner_condition,
     )
-    assert {state.prepared_source_mapping[exec_id] for exec_id in generic_retired_nodes} == expected_retired_sources
+    assert generic_retired_nodes == []
 
 
 @pytest.mark.parametrize("stop_after_source", ["outer_if", "inner_false"])

@@ -9,13 +9,13 @@ iterator patterns, tracks readiness via indegree (the number of incoming edges t
 executes nodes from class-grouped ready queues. In normal execution, runtime expansion happens in a separate execution graph
 instead of mutating the source graph. Ordinary static DAGs and legacy-shaped `If` graphs use the opaque `ExecutionPlan`
 and deterministic `ExecutionScheduler` in `execution_engine/scheduler.py`. For a fresh generic `If`, the dedicated
-`_IfActivationController` produces opaque, frame-local activation dependencies; the legacy
-`_IfActivationCompiler` remains only as a compatibility lowering helper. `_GenericGraphSchedulerAdapter` registers
-and consumes those dependencies through the opaque plan, then rejects unselected prepared nodes through generic scheduler
-discard. The compatibility `_ExecutionScheduler` path now consumes the same opaque dependencies and append-only
-retirement projection; it does not prune input edges or call a type-specific branch scheduler. Legacy skipped-state
-metadata remains a compatibility projection for runtime snapshots and completion accounting. This removes the
-branch-scheduler owner but does not yet remove all compiler-derived branch analysis or skipped-state projection.
+`_IfActivationController` owns fresh `If` admission and produces opaque, frame-local activation dependencies; the legacy
+`_IfActivationCompiler` remains only as a compatibility lowering helper for old snapshots. Fresh `If` materialization
+prepares the condition boundary first, resolves the activation token, and attaches only the selected branch input.
+Unselected branch nodes are never prepared, skipped, or added to fresh execution history. Both scheduler adapters
+consume the controller's decisions without pruning execution edges or calling a type-specific branch scheduler.
+Legacy skipped-state metadata remains only for snapshots that already contain the old projection. Branch-membership
+analysis remains an internal author-graph admission decision.
 Direct `Iterate`/`Collect` graphs that do not contain `If`, `For`, `ForReturn`, or saved-workflow control flow also use
 the generic adapter. Its adapter-level readiness predicate waits for canonical Iterate streams to close, and generic
 completion mirrors each Iterate result into that ledger before releasing `Collect`; materialization still owns copy
@@ -161,8 +161,9 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
 
 - `graph: Graph` - source graph for the run; treated as stable during normal execution.
 - `execution_graph: Graph` - materialized runtime nodes/edges. This is mutable runtime state, not an immutable audit
-  log. `If` retirement is append-only: rejected prepared nodes are discarded through scheduler state without deleting
-  input edges. Retry paths rebuild from `graph`, not from a previously persisted `execution_graph`.
+  log. Fresh `If` admission adds only the condition and selected-branch edges; legacy loaded execution graphs may still
+  contain append-only discarded nodes without deleted input edges. Retry paths rebuild from `graph`, not from a
+  previously persisted `execution_graph`.
 - `executed: set[str]`, `executed_history: list[str]`.
 - `results: dict[str, AnyInvocationOutput]`, `errors: dict[str, str]`.
 - `prepared_source_mapping: dict[str, str]` - exec id -> source id.
@@ -227,14 +228,15 @@ rehydration, every activation token is bound to a currently prepared owner and i
 declared port, value, canonical token id, mapping key, and known frame fields must match. Unknown extra frame metadata
 remains forward-compatible.
 For a fresh generic `If`, `_IfActivationController` puts opaque, frame-local activation-dependency records on each
-branch-local plan node. The controller is an intermediate runtime admission owner: it still derives branch membership
-from the current author graph, but the schedulers no longer call the legacy compiler. `_GenericGraphSchedulerAdapter`
+branch-local plan node. The controller derives branch membership from the current author graph, but the schedulers no
+longer call the legacy compiler. Fresh materialization prepares the condition boundary, resolves the activation token,
+and attaches only the selected branch input; rejected branch sources remain unprepared. `_GenericGraphSchedulerAdapter`
 consumes those records through the opaque plan: its readiness
 callback accepts a node only when the required private `ActivationGate` runtime state is resolved and a matching
 persisted activation token is present for its frame, while rejected dependencies cause scheduler discard. Both scheduler
 adapters use this same dependency controller; neither prunes execution edges or calls a type-specific branch scheduler.
 The compatibility path still projects discarded prepared nodes into legacy skipped metadata for rehydration and
-completion accounting. This is an ownership seam, not final removal of all compiler-derived branch analysis. `apply()`
+completion accounting when loading old execution graphs; fresh runs do not create those nodes. `apply()`
 validates and persists the invocation-emitted effect afterward, replacing the compatibility token by stable identity.
 Activation effects are excluded from data-stream handling. `IterateInvocation` is the first stream-producing
 control-flow invocation on this seam: each non-empty prepared copy emits one ordered `item` effect with its iteration
@@ -310,10 +312,9 @@ nested, multiple-loop, mixed-loop, and legacy-snapshot execution; those paths
 retain their existing materialization and linkage ownership. The supported
 fresh static flat `For`/`ForReturn` shape uses the generic adapter. For
 `If`, generic readiness consumes opaque frame-local plan dependencies and requires
-both matching private `ActivationGate` runtime state and a persisted activation token;
-generic resolution retires unselected prepared nodes through scheduler discard. The forced compatibility
-`_ExecutionScheduler` path uses the same append-only discard projection; legacy skipped metadata remains until the
-no-skipped-state migration gate is complete.
+both matching private `ActivationGate` runtime state and a persisted activation token. Fresh resolution attaches only
+the selected branch edge; the forced compatibility `_ExecutionScheduler` path preserves this behavior for fresh states,
+while legacy skipped metadata remains only when loading old discarded projections.
 This is not token-built successor topology. Loop and workflow-call adapters
 still own materialization for unsupported shapes and durable queue lifecycle.
 Those owners may be removed only after differential tests cover fresh, partially completed,
@@ -388,14 +389,14 @@ Workflow-call note:
   be selected as live inputs.
 - `_IfActivationController` Owns fresh runtime admission and compiles opaque, frame-local activation dependency
   records for prepared nodes. `_IfActivationCompiler` remains the compatibility-only lowering helper for legacy
-  callers. Neither helper owns execution-graph topology changes; removing this remaining branch-membership analysis is
-  a later `If` migration gate.
+  callers. Fresh admission leaves rejected branch sources unprepared; legacy discarded projections remain loadable.
+  Branch-membership analysis remains internal to the controller.
 - `_GenericGraphSchedulerAdapter` Projects the generic `ExecutionPlan`/`ExecutionScheduler` into the existing state
   fields for ordinary static DAGs and legacy-shaped `If` graphs; the generic scheduler owns opaque readiness,
   intentional discards, indegree transitions, deterministic ordering, claimed work, and completion. The adapter registers
-  the controller's activation dependencies, checks private gate state plus persisted activation tokens, and rejects
-  unselected prepared nodes through generic scheduler discard. `If` scheduling does not call a type-specific branch
-  scheduler, prune, or delete execution edges.
+  the controller's activation dependencies and checks private gate state plus persisted activation tokens. Fresh `If`
+  branch nodes are admitted before materialization; legacy prepared nodes may still be discarded for compatibility.
+  `If` scheduling does not call a type-specific branch scheduler, prune, or delete execution edges.
 - `_ExecutionScheduler` Owns materialized-graph indegree transitions, class-grouped ready queues, downstream release,
   control-flow continuation scheduling, and the shared opaque activation-dependency projection for compatibility graphs.
 - `_ExecutionRuntime` Owns iteration-path lookup, collect input ordering, and input hydration for prepared exec nodes.
@@ -438,6 +439,11 @@ legacy unmarked snapshots are treated as version 0, while unreadable snapshots a
   iterator ancestors because the source path crosses a collector, prepared parent iteration paths are still used to
   materialize one downstream exec node for each preserved collector path.
 
+- For a fresh **IfInvocation**: prepare only its condition inputs first. After the condition resolves, the activation
+  controller admits selected branch contexts and attaches only the selected branch input to the pending `If` execution.
+  Rejected branch sources are not materialized. Pending `If` state is reconstructed from its durable execution edges,
+  prepared mappings, and activation token after rehydration.
+
 - For each new exec node:
 
   - Deep-copy the source node; assign a fresh ID (and `index` for iterators).
@@ -453,10 +459,9 @@ legacy unmarked snapshots are treated as version 0, while unreadable snapshots a
 
 - `_enqueue_if_ready(nid)` applies generic readiness: `indegree == 0`, not executed or claimed, and, for an `If`
   branch-local node, both matching private `ActivationGate` runtime state and a persisted activation token are present
-  for its frame. The generic adapter derives opaque dependencies and retires rejected nodes through generic scheduler
-  discard. For direct `Collect` nodes, the adapter also requires available Iterate streams to be closed. Compatibility
-  uses the same opaque activation dependencies and scheduler discard projection; legacy skipped metadata remains for
-  snapshot compatibility.
+  for its frame. Fresh admission prevents rejected branch nodes from reaching this queue. For direct `Collect` nodes,
+  the adapter also requires available Iterate streams to be closed. Compatibility uses the same opaque activation
+  dependencies; legacy skipped metadata remains for old snapshots.
 - `_get_next_node()` uses the generic scheduler for ordinary static DAGs and legacy-shaped `If` graphs, projecting its
   deterministic class/frame order into the compatibility queues. Loop and saved-workflow control-flow graphs use `_active_class`
   and the legacy class queues. No batch-size or fairness cap is currently implemented.
@@ -493,19 +498,19 @@ Run `C` -> `D:0` -> enqueue `D`. Run `D` -> done.
 `IfInvocation` now acts as a lazy branch boundary rather than a simple value multiplexer.
 
 - The `condition` input must resolve first.
-- Nodes that are exclusive to the true or false branch can remain deferred even when their indegree is zero.
-- In `If` scheduling, once the prepared `If` node resolves its condition, the selected branch is released, unselected
-  prepared nodes are retired through scheduler discard, and branch-exclusive ancestors of the unselected branch are
-  never executed. The activation controller and both scheduler adapters use append-only execution edges; no
-  type-specific branch scheduler performs pruning or skip propagation.
-- In compatibility `_ExecutionScheduler` scheduling, the same activation dependencies release selected work and discard
-  rejected prepared nodes without deleting input edges. Legacy skipped metadata is still projected for persisted-state
-  compatibility; removing that projection remains a later gate.
+- Nodes that are exclusive to the true or false branch remain unmaterialized until their branch is admitted, even when
+  their indegree would otherwise be zero.
+- Once the condition resolves, the controller records the selected activation token and attaches only the selected
+  branch input to the pending `If` execution. Branch-exclusive ancestors of the unselected branch are never prepared,
+  executed, or added to fresh execution history. The activation controller and both scheduler adapters use append-only
+  execution edges; no type-specific branch scheduler performs pruning or skip propagation.
+- Legacy snapshots that already contain skipped prepared nodes retain their compatibility metadata and scheduler
+  projection. Fresh execution does not create that projection.
 - The SQLite queue/processor path has evidence for cancellation before and after `If` resolution and retry from each
   boundary for both condition polarities. A canceled attempt keeps its activation ledger and cannot resume; retry starts
   a fresh state and must emit a fresh matching activation token before selected-only completion.
-- Retired or skipped branch-local exec nodes may still be treated as executed for scheduling purposes, but they do not
-  create entries in `results`.
+- Legacy retired or skipped branch-local exec nodes may still be treated as executed for compatibility scheduling, but
+  they do not create entries in `results`.
 - Shared ancestors still execute if they are required by the selected branch or by any other live path in the graph.
 
 This behavior is implemented in the runtime scheduler, not in the invocation body itself.

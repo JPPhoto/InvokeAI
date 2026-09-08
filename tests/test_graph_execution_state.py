@@ -3645,6 +3645,24 @@ def test_materializer_reuses_matching_parent_iteration_paths():
     assert iteration_path == (2,)
 
 
+def test_materializer_deduplicates_one_iterator_source_used_by_multiple_inputs():
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="range", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(TwoAnyTestInvocation(id="pair"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("range", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "pair", "first"))
+    graph.add_edge(create_edge("iterate", "item", "pair", "second"))
+    graph.add_edge(create_edge("pair", "value", "collect", "item"))
+    state = GraphExecutionState(graph=graph)
+
+    execute_all_nodes(state)
+
+    collect_exec_id = next(iter(state.source_prepared_mapping["collect"]))
+    assert state.results[collect_exec_id].collection == [(0, 0), (1, 1)]
+
+
 def test_materializer_does_not_merge_matching_paths_from_independent_iterators():
     graph = Graph()
     graph.add_node(RangeInvocation(id="left_range", start=0, stop=2, step=1))
@@ -4876,7 +4894,7 @@ def test_if_graph_optimized_behavior_executes_only_selected_simple_branch():
     assert "false_value" not in executed_source_ids
 
 
-def test_if_graph_optimized_behavior_records_skipped_branch_in_execution_history():
+def test_if_graph_optimized_behavior_does_not_record_unselected_branch_in_execution_history():
     graph = Graph()
     graph.add_node(BooleanInvocation(id="condition", value=True))
     graph.add_node(PromptTestInvocation(id="true_value", prompt="true branch"))
@@ -4892,8 +4910,8 @@ def test_if_graph_optimized_behavior_records_skipped_branch_in_execution_history
     g = GraphExecutionState(graph=graph)
     execute_all_nodes(g)
 
-    assert set(g.executed_history) == {"condition", "true_value", "false_value", "if", "selected_output"}
-    assert g.executed_history.count("false_value") == 1
+    assert set(g.executed_history) == {"condition", "true_value", "if", "selected_output"}
+    assert "false_value" not in g.executed_history
 
 
 def test_if_graph_lowers_legacy_branch_choice_to_frame_scoped_activation_token():
@@ -5234,6 +5252,7 @@ def test_if_graph_optimized_behavior_prunes_branches_per_iteration():
     assert executed_source_ids.count("true_branch") == 2
     assert executed_source_ids.count("false_branch") == 1
     assert executed_source_ids.count("if") == 3
+    assert g.is_complete()
 
 
 def test_if_graph_optimized_behavior_keeps_shared_live_consumers_per_iteration():
@@ -5272,6 +5291,7 @@ def test_if_graph_optimized_behavior_keeps_shared_live_consumers_per_iteration()
     assert executed_source_ids.count("observer") == 3
     assert executed_source_ids.count("true_leaf") == 1
     assert executed_source_ids.count("false_branch") == 2
+    assert g.is_complete()
 
 
 def test_if_graph_optimized_behavior_handles_selected_true_branch_with_shared_false_input_ancestor():

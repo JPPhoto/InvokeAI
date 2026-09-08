@@ -140,15 +140,14 @@ valid. A loaded terminal legacy state may retain its empty in-memory ledger for 
 
 `IfInvocation` now declares the same seam for branch activation: it emits one frame-scoped activation token for the
 selected branch, and the graph state validates and persists it after invocation. For a fresh generic `If`, the dedicated
-`_IfActivationController` produces opaque, frame-local activation dependencies; the legacy `_IfActivationCompiler`
-remains only as a compatibility lowering helper. `_GenericGraphSchedulerAdapter` consumes
-those dependencies through the opaque `ExecutionPlan` for readiness and rejects unselected prepared nodes through
-generic scheduler discard. The compatibility `_ExecutionScheduler` consumes the same dependencies and append-only
-discard projection; no type-specific branch scheduler prunes edges or propagates skips. Legacy skipped-state metadata
-remains as a compatibility projection for persisted snapshots and completion accounting. `apply()` replaces the
-activation token by stable identity, and activation effects are excluded from stream handling. This is an ownership
-seam, not final removal of all controller-derived branch analysis or skipped-state projection. The controller still
-derives branch membership from the current author graph; author-time activation
+`_IfActivationController` owns opaque, frame-local activation dependencies; the legacy `_IfActivationCompiler`
+remains only as a compatibility lowering helper for old snapshots. Fresh materialization prepares the condition boundary,
+resolves the activation token, and attaches only the selected branch input; unselected branch nodes remain unprepared.
+The generic and compatibility adapters consume the same decisions and append-only execution edges; no type-specific
+branch scheduler prunes edges or propagates skips. Legacy skipped-state metadata remains only for snapshots that already
+contain the old projection. `apply()` replaces the activation token by stable identity, and activation effects are
+excluded from stream handling. The controller still derives branch membership from the current author graph; author-time
+activation
 ports and literal successor IDs remain absent, while unsupported loop shapes and saved-workflow control flow remain on
 their compatibility paths until differential coverage proves their generic replacements.
 
@@ -160,8 +159,8 @@ the generic records preserve tested loop semantics first, while the old executio
 lowerings, legacy snapshots, and unsupported mixed loop shapes. No activation or stream ports are added to author-time
 graph JSON.
 This migration does not modify any file under `invokeai/frontend/...`, including generated schemas; the existing
-frontend/backend external interface remains frozen. The ownership seam does not remove all compiler-derived branch
-analysis or skipped-state projection yet.
+frontend/backend external interface remains frozen. Branch-membership analysis remains internal, while fresh execution
+no longer creates skipped-state projection and old snapshots retain it for compatibility.
 
 The frontend and backend validate the same boundary rules. Saved workflows preserve node types, field handles, and the
 direct linkage edge. The current invocation templates provide output-scope metadata when a workflow is loaded. The
