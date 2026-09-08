@@ -5134,7 +5134,7 @@ class GraphExecutionState(BaseModel):
             return execution_ref.model_copy(deep=True)
 
         if isinstance(execution_ref, BaseModel):
-            values = execution_ref.model_dump(mode="python", warnings=False)
+            values = execution_ref.model_dump(mode="python", warnings=False, exclude_none=True)
         elif isinstance(execution_ref, dict):
             values = dict(execution_ref)
         else:
@@ -5386,6 +5386,52 @@ class GraphExecutionState(BaseModel):
                     raise ValueError("Emit effect requires a data output token")
                 if self._value_from_object(token, "token_kind") == "stream_end":
                     raise ValueError("Emit effect cannot use a stream_end token")
+            elif effect_kind == "continuation":
+                continuation_kind = self._value_from_object(effect, "continuation_kind")
+                operation = self._value_from_object(effect, "operation")
+                expected_operation = "start" if isinstance(node, ForInvocation) else "complete"
+                if not isinstance(node, (ForInvocation, ForReturnInvocation)):
+                    raise ValueError("Continuation effects are only supported by For control-flow nodes")
+                if continuation_kind != "for":
+                    raise ValueError("Unsupported continuation effect kind")
+                if operation != expected_operation:
+                    raise ValueError(
+                        f"{type(node).__name__} continuation effect must use operation '{expected_operation}'"
+                    )
+                continuation_owner = self._value_from_object(
+                    effect,
+                    "execution_ref",
+                    "execution_reference",
+                    "owner_ref",
+                    "owner",
+                )
+                continuation_state_id = self._value_from_object(continuation_owner, "state_id", "session_id")
+                continuation_frame_path = self._value_from_object(
+                    continuation_owner, "frame", "frame_path", "iteration_path"
+                )
+                if continuation_state_id not in (None, "", execution_ref.state_id):
+                    raise ValueError("Continuation effect belongs to another graph execution state")
+                continuation_frame_id = self._value_from_object(continuation_owner, "frame_id")
+                if continuation_frame_id not in (None, "", execution_ref.frame.frame_id):
+                    raise ValueError("Continuation effect belongs to another execution frame")
+                continuation_depth = self._value_from_object(
+                    continuation_owner, "workflow_call_depth", "call_depth", "depth"
+                )
+                if continuation_depth not in (None, execution_ref.frame.workflow_call_depth):
+                    raise ValueError("Continuation effect belongs to another workflow-call depth")
+                if continuation_state_id in (None, ""):
+                    raise ValueError("Continuation effect is missing graph execution-state identity")
+                if continuation_frame_id in (None, ""):
+                    raise ValueError("Continuation effect is missing durable frame identity")
+                if continuation_depth is None:
+                    raise ValueError("Continuation effect is missing workflow-call depth")
+                if continuation_frame_path is None:
+                    raise ValueError("Continuation effect is missing iteration-frame identity")
+                self._validate_execution_frame(
+                    continuation_frame_path,
+                    execution_ref,
+                    "Continuation effect",
+                )
 
             owner = self._value_from_object(
                 effect,
@@ -5404,7 +5450,7 @@ class GraphExecutionState(BaseModel):
             if owner is None or not self._same_execution_owner(owner, execution_ref):
                 raise ValueError("Execution effect is not owned by execution reference")
             if effect_kind is not None and (
-                not isinstance(effect_kind, str) or effect_kind not in {"emit", "close_stream"}
+                not isinstance(effect_kind, str) or effect_kind not in {"emit", "close_stream", "continuation"}
             ):
                 raise ValueError(f"Unsupported execution effect kind: {effect_kind}")
 

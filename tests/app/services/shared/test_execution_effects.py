@@ -12,11 +12,13 @@ from invokeai.app.invocations.baseinvocation import (
 )
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.logic import IfInvocation, IfInvocationOutput
+from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation, LoopState
 from invokeai.app.services.shared.execution_effects import (
     AddEdgeEffect,
     AwaitEffect,
     ChildExecutionHandle,
     CloseStreamEffect,
+    ContinuationEffect,
     EmitEffect,
     ExecutionEffectsRecorder,
     ExecutionInterface,
@@ -104,12 +106,18 @@ def test_context_default_recorder_preserves_execution_frame() -> None:
             invocation=ExecutionEffectsTestInvocation(id="node"),
             source_invocation_id="source",
             execution_frame=(2, 1),
+            execution_state_id="state",
+            execution_frame_id="frame",
+            execution_workflow_call_depth=2,
         ),
         is_canceled=lambda: False,
     )
 
     assert context.execution_effects.source_node_id == "node"
     assert context.execution_effects.frame_path == (2, 1)
+    assert context.execution_effects.execution_ref.state_id == "state"
+    assert context.execution_effects.execution_ref.frame_id == "frame"
+    assert context.execution_effects.execution_ref.workflow_call_depth == 2
 
 
 @pytest.mark.parametrize(
@@ -163,6 +171,174 @@ def test_iterate_invocation_declares_ordered_item_stream_effects(index: int, exp
         assert close.token.node_id == "iterate"
         assert close.token.field == "item"
         assert close.token.token_kind == "stream_end"
+
+
+def test_for_invocation_declares_frame_scoped_continuation_start_effect() -> None:
+    context = _context()
+    context.execution_effects = ExecutionEffectsRecorder(source_node_id="for", frame_path=(4, 2))
+    context.execution = ExecutionInterface(context.execution_effects)
+    state = LoopState(values={"count": 3})
+    invocation = ForInvocation(id="for", collection=["item"], index=0, state=state)
+
+    result = invocation.invoke_internal_with_effects(context, _services())
+
+    assert result.output.item == "item"
+    assert len(result.effects) == 1
+    effect = result.effects[0]
+    assert isinstance(effect, ContinuationEffect)
+    assert effect.operation == "start"
+    assert effect.continuation_kind == "for"
+    assert effect.execution_ref is not None
+    assert effect.execution_ref.node_id == "for"
+    assert effect.execution_ref.frame == (4, 2)
+    assert effect.payload == {
+        "index": 0,
+        "total": 1,
+        "state": {"values": {"count": 3}},
+    }
+
+
+def test_for_return_invocation_declares_continuation_completion_effect() -> None:
+    context = _context()
+    context.execution_effects = ExecutionEffectsRecorder(source_node_id="return", frame_path=(4, 2))
+    context.execution = ExecutionInterface(context.execution_effects)
+    state = LoopState(values={"count": 4})
+    invocation = ForReturnInvocation(
+        id="return",
+        output="item",
+        state=state,
+        continue_condition=False,
+    )
+
+    result = invocation.invoke_internal_with_effects(context, _services())
+
+    assert result.output.output == "item"
+    assert result.output.state == state
+    assert len(result.effects) == 1
+    effect = result.effects[0]
+    assert isinstance(effect, ContinuationEffect)
+    assert effect.operation == "complete"
+    assert effect.continuation_kind == "for"
+    assert effect.execution_ref is not None
+    assert effect.execution_ref.node_id == "return"
+    assert effect.execution_ref.frame == (4, 2)
+    assert effect.payload == {
+        "output": "item",
+        "state": {"values": {"count": 4}},
+        "continue_condition": False,
+    }
+
+
+def test_graph_state_accepts_for_continuation_effects_without_linkage_tokens() -> None:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["item"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="item"),
+            destination=EdgeConnection(node_id="return", field="output"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="loop_linkage"),
+            destination=EdgeConnection(node_id="return", field="loop_linkage"),
+            type="loop_linkage",
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+
+    for_invocation = state.next()
+    assert isinstance(for_invocation, ForInvocation)
+    for_ref = state.get_execution_ref(for_invocation.id)
+    for_context = _context()
+    for_context.execution_effects = ExecutionEffectsRecorder(
+        source_node_id=for_invocation.id,
+        frame_path=for_ref.frame.iteration_path,
+        state_id=for_ref.state_id,
+        frame_id=for_ref.frame.frame_id,
+        workflow_call_depth=for_ref.frame.workflow_call_depth,
+    )
+    for_context.execution = ExecutionInterface(for_context.execution_effects)
+    for_result = for_invocation.invoke_internal_with_effects(for_context, _services())
+    state.apply(state.get_execution_ref(for_invocation.id, effect_count=len(for_result.effects)), for_result)
+
+    return_invocation = state.next()
+    assert return_invocation is not None
+    return_ref = state.get_execution_ref(return_invocation.id)
+    return_context = _context()
+    return_context.execution_effects = ExecutionEffectsRecorder(
+        source_node_id=return_invocation.id,
+        frame_path=return_ref.frame.iteration_path,
+        state_id=return_ref.state_id,
+        frame_id=return_ref.frame.frame_id,
+        workflow_call_depth=return_ref.frame.workflow_call_depth,
+    )
+    return_context.execution = ExecutionInterface(return_context.execution_effects)
+    return_result = return_invocation.invoke_internal_with_effects(return_context, _services())
+    state.apply(state.get_execution_ref(return_invocation.id, effect_count=len(return_result.effects)), return_result)
+
+    continuation = next(iter(state._generic_runtime().continuations.values()))
+    assert continuation.status == "completed"
+    assert all(token.port != "loop_linkage" for token in state.execution_tokens.values())
+    assert [effect.kind for effects in state.execution_effects.values() for effect in effects] == [
+        "continuation",
+        "continuation",
+    ]
+    snapshot = dump_execution_state(state)
+    restored = load_execution_state(snapshot)
+    assert dump_execution_state(restored)["execution_effects"] == snapshot["execution_effects"]
+
+
+@pytest.mark.parametrize(
+    ("owner_kwargs", "message"),
+    [
+        ({"frame_path": (99,)}, "another execution frame"),
+        ({"state_id": "other"}, "another graph execution state"),
+        ({"workflow_call_depth": 1}, "another workflow-call depth"),
+    ],
+)
+def test_graph_state_rejects_continuation_effect_from_another_scope(
+    owner_kwargs: dict[str, object], message: str
+) -> None:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["item"]))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="item"),
+            destination=EdgeConnection(node_id="return", field="output"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="loop_linkage"),
+            destination=EdgeConnection(node_id="return", field="loop_linkage"),
+            type="loop_linkage",
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+    invocation = state.next()
+    assert isinstance(invocation, ForInvocation)
+    execution_ref = state.get_execution_ref(invocation.id)
+    owner_identity: dict[str, object] = {
+        "state_id": execution_ref.state_id,
+        "frame_id": execution_ref.frame.frame_id,
+        "frame_path": execution_ref.frame.iteration_path,
+        "workflow_call_depth": execution_ref.frame.workflow_call_depth,
+    }
+    owner_identity.update(owner_kwargs)
+
+    invalid_effect = ContinuationEffect(
+        execution_ref=ExecutionRef(execution_node_id=invocation.id, **owner_identity),  # type: ignore[arg-type]
+        operation="start",
+        continuation_kind="for",
+        payload={"index": 0, "total": 1, "state": {"values": {}}},
+    )
+    with pytest.raises(ValueError, match=message):
+        state.apply(execution_ref, invocation.invoke(MagicMock()), [invalid_effect])
+
+    assert not state.execution_effects
 
 
 @pytest.mark.parametrize("condition", [True, False])

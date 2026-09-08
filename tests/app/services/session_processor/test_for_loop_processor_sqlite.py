@@ -185,6 +185,9 @@ def _build_test_invocation_context(data, services, is_canceled):
     recorder = ExecutionEffectsRecorder(
         source_node_id=data.invocation.id,
         frame_path=data.execution_frame,
+        state_id=getattr(data, "execution_state_id", None),
+        frame_id=getattr(data, "execution_frame_id", None),
+        workflow_call_depth=getattr(data, "execution_workflow_call_depth", None),
     )
     return SimpleNamespace(
         execution_effects=recorder,

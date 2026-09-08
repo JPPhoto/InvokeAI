@@ -257,7 +257,19 @@ Current implementation is narrower: `IfInvocation` and non-empty
 Direct `Iterate`/`Collect`-only graphs use the generic scheduler adapter for
 readiness and completion, while the materializer still expands copies and
 groups paths. `For`, `ForReturn`, workflow-call invocations, and mixed
-control-flow graphs remain on compatibility paths. For
+control-flow graphs remain on compatibility paths. `ForInvocation` and
+`ForReturnInvocation` now declare one validated, frame-scoped `continuation`
+effect per prepared invocation: `For` starts the `for` continuation with its
+iteration/state payload, and `ForReturn` completes it with output/state/
+continue-decision data. Session-built recorders bind the effect reference to
+the graph-state ID, durable frame ID, iteration path, and workflow-call depth;
+graph-state validation rejects a stale or cross-frame continuation before
+mutation. Graph state persists these effects under the invocation reference
+and excludes `loop_linkage` from token data. This is the
+invocation/effect ownership seam only: the legacy scheduler still resolves
+linkage, creates the next prepared iteration, aggregates outputs, finalizes
+the loop, and owns empty/nested/mixed materialization. Generic `For`
+scheduling is not claimed yet. For
 `If`, generic readiness consumes opaque frame-local plan dependencies and requires
 both matching private `ActivationGate` runtime state and a persisted activation token;
 generic resolution retires unselected prepared nodes through scheduler discard. The forced compatibility

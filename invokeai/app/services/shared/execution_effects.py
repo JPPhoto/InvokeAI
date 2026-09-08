@@ -134,7 +134,10 @@ class ExecutionRef(_ExecutionModel):
     token: ExecutionToken | None = None
     template_node_id: str | None = Field(default=None, min_length=1)
     execution_node_id: str | None = Field(default=None, min_length=1)
+    state_id: str | None = Field(default=None, min_length=1)
     frame_path: tuple[int | str, ...] = ()
+    frame_id: str | None = Field(default=None, min_length=1)
+    workflow_call_depth: int | None = Field(default=None, ge=0)
     scope: Literal["iteration", "final"] = "final"
 
     @model_validator(mode="before")
@@ -334,6 +337,17 @@ class FailEffect(ExecutionEffect):
     message: str = Field(min_length=1)
 
 
+class ContinuationEffect(ExecutionEffect):
+    """A frame-scoped semantic transition for a generic control-flow continuation."""
+
+    kind: Literal["continuation"] = "continuation"
+    operation: Literal["start", "complete"]
+    continuation_kind: str = Field(min_length=1)
+    payload: Any | None = None
+
+    _validate_payload = field_validator("payload")(_validate_json_serializable)
+
+
 ExecutionEffectModel = Union[
     SetValueEffect,
     AddEdgeEffect,
@@ -343,6 +357,7 @@ ExecutionEffectModel = Union[
     SpawnExecutionEffect,
     AwaitEffect,
     FailEffect,
+    ContinuationEffect,
 ]
 
 # Descriptive aliases keep call sites free to use execution-specific names.
@@ -350,6 +365,7 @@ SetExecutionValueEffect = SetValueEffect
 AddExecutionEdgeEffect = AddEdgeEffect
 RemoveExecutionEdgeEffect = RemoveEdgeEffect
 EmitExecutionEffect = EmitEffect
+ContinuationExecutionEffect = ContinuationEffect
 
 
 class UnsupportedExecutionEffectError(RuntimeError):
@@ -444,6 +460,26 @@ class ExecutionInterface:
         self._require_lifecycle_capability("fail")
         self._recorder.record(FailEffect(execution_ref=self._recorder.execution_ref, message=message))
 
+    def start_continuation(self, continuation_kind: str, *, payload: Any | None = None) -> None:
+        self._recorder.record(
+            ContinuationEffect(
+                execution_ref=self._recorder.execution_ref,
+                operation="start",
+                continuation_kind=continuation_kind,
+                payload=payload,
+            )
+        )
+
+    def complete_continuation(self, continuation_kind: str, *, payload: Any | None = None) -> None:
+        self._recorder.record(
+            ContinuationEffect(
+                execution_ref=self._recorder.execution_ref,
+                operation="complete",
+                continuation_kind=continuation_kind,
+                payload=payload,
+            )
+        )
+
     def _require_lifecycle_capability(self, effect_kind: str) -> ChildExecutionCapability:
         if not self._recorder.allow_lifecycle_effects:
             raise UnsupportedExecutionEffectError(f"Execution effect kind '{effect_kind}' is not supported")
@@ -524,22 +560,34 @@ class ExecutionEffectBatch:
 class ExecutionEffectsRecorder:
     """Collects effects for one invocation run."""
 
-    _SUPPORTED_EFFECT_KINDS = frozenset({"emit", "close_stream"})
+    _SUPPORTED_EFFECT_KINDS = frozenset({"emit", "close_stream", "continuation"})
 
     def __init__(
         self,
         source_node_id: str = "context",
         frame_path: tuple[int | str, ...] = (),
         *,
+        state_id: str | None = None,
+        frame_id: str | None = None,
+        workflow_call_depth: int | None = None,
         allow_lifecycle_effects: bool = False,
         child_capability: ChildExecutionCapability | None = None,
     ) -> None:
         self._effects: list[ExecutionEffect] = []
         self.source_node_id = source_node_id
         self.frame_path = frame_path
+        self.state_id = state_id
+        self.frame_id = frame_id
+        self.workflow_call_depth = workflow_call_depth
         self.allow_lifecycle_effects = allow_lifecycle_effects
         self.child_capability = child_capability
-        self.execution_ref = ExecutionRef(execution_node_id=source_node_id, frame_path=frame_path)
+        self.execution_ref = ExecutionRef(
+            execution_node_id=source_node_id,
+            state_id=state_id,
+            frame_path=frame_path,
+            frame_id=frame_id,
+            workflow_call_depth=workflow_call_depth,
+        )
 
     def record(self, effect: ExecutionEffect) -> None:
         if not isinstance(effect, ExecutionEffect):

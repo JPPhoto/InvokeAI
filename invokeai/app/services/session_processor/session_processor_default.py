@@ -263,6 +263,9 @@ class DefaultSessionRunner(SessionRunnerBase):
                     source_invocation_id=queue_item.session.prepared_source_mapping[invocation.id],
                     queue_item=queue_item,
                     execution_frame=execution_ref.frame.iteration_path,
+                    execution_state_id=execution_ref.state_id,
+                    execution_frame_id=execution_ref.frame.frame_id,
+                    execution_workflow_call_depth=execution_ref.frame.workflow_call_depth,
                 )
                 context = build_invocation_context(
                     data=data,

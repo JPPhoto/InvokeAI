@@ -68,6 +68,12 @@ class InvocationContextData:
     """The ID of the invocation from which the currently executing invocation was prepared."""
     execution_frame: tuple[int, ...] = ()
     """The active prepared execution node's loop iteration path."""
+    execution_state_id: str | None = None
+    """The owning graph execution-state identity for effect ownership validation."""
+    execution_frame_id: str | None = None
+    """The durable frame identity for effect ownership validation."""
+    execution_workflow_call_depth: int = 0
+    """The active workflow-call depth for effect ownership validation."""
 
 
 class InvocationContextInterface:
@@ -987,6 +993,9 @@ class InvocationContext:
         self.execution_effects = execution_effects or ExecutionEffectsRecorder(
             source_node_id=source_node_id,
             frame_path=data.execution_frame,
+            state_id=data.execution_state_id,
+            frame_id=data.execution_frame_id,
+            workflow_call_depth=data.execution_workflow_call_depth,
         )
         """Effects recorded during the current invocation run."""
         self.effects = self.execution_effects
@@ -1027,6 +1036,9 @@ def build_invocation_context(
         execution_effects = ExecutionEffectsRecorder(
             source_node_id=getattr(data.invocation, "id", None) or data.source_invocation_id or "context",
             frame_path=data.execution_frame,
+            state_id=data.execution_state_id,
+            frame_id=data.execution_frame_id,
+            workflow_call_depth=data.execution_workflow_call_depth,
         )
 
     ctx = InvocationContext(
