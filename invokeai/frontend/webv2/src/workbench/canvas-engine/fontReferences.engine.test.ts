@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { CanvasDocumentContractV3, CanvasLayerContract, CanvasTextFontRef } from './contracts';
 import type { BitmapStore } from './document/bitmapStore';
+import type { CanvasFontRuntime } from './render/fontLoader';
 
 import { documentFrom, groupContract, layerContract } from './document-model/documentFixtures.testStub';
 import { createCanvasEngine } from './engine';
@@ -53,7 +54,7 @@ const createBitmapStoreStub = (): BitmapStore => ({
   suspendLayer: () => () => undefined,
 });
 
-const createHarness = (document: CanvasDocumentContractV3) => {
+const createHarness = (document: CanvasDocumentContractV3, fonts: CanvasFontRuntime | null = null) => {
   const initial = createInitialWorkbenchState().projects[0]!;
   let project: Project = { ...initial, canvas: { ...createEmptyCanvasState(), document } };
   const listeners = new Set<() => void>();
@@ -79,7 +80,7 @@ const createHarness = (document: CanvasDocumentContractV3) => {
   const composition = createCanvasEngine({
     backend: createTestStubRasterBackend(),
     bitmapStore: createBitmapStoreStub(),
-    fonts: null,
+    fonts,
     imageResolver: () => Promise.resolve(new Blob()),
     mutationPort,
     projectId: project.id,
@@ -147,6 +148,46 @@ describe('Canvas font replacement capability', () => {
       expect.objectContaining({ replacedCount: 0, status: 'unchanged' })
     );
     expect(engine.stores.canUndo.get()).toBe(false);
+    engine.lifecycle.dispose();
+  });
+});
+
+describe('Canvas active font sources', () => {
+  const pendingRuntime = () => {
+    const signals: AbortSignal[] = [];
+    const runtime: CanvasFontRuntime = {
+      ensure: (_reference, signal) => {
+        signals.push(signal!);
+        return new Promise<string>(() => {
+          // Never settles: the test observes the signal, not the face.
+        });
+      },
+      ensureForOutput: () => Promise.reject(new Error('unused')),
+      resolveFamily: (reference) => reference.family ?? 'sans-serif',
+      subscribe: () => () => undefined,
+    };
+    return { runtime, signals };
+  };
+
+  it('keeps the text defaults loading through a session open, while an unrelated preview is dropped', () => {
+    const { runtime, signals } = pendingRuntime();
+    const harness = createHarness(documentFrom([]), runtime);
+    const { engine } = harness.composition;
+    engine.interaction.set('textOptions', {
+      ...engine.interaction.get('textOptions'),
+      fontFamily: from.family,
+      fontRef: from,
+    });
+    const defaults = { ...engine.interaction.get('textOptions'), color: '#000000', content: '', type: 'text' as const };
+    void engine.fonts.ensurePreview(defaults).catch(() => undefined);
+    void engine.fonts.ensurePreview({ ...defaults, fontFamily: to.family, fontRef: to }).catch(() => undefined);
+    expect(signals).toHaveLength(2);
+
+    // The session's draft diverges from the defaults; only the defaults keep the first preview alive.
+    engine.layers.openTextCreate({ x: 0, y: 0 });
+    engine.layers.updateTextEditStyle({ fontWeight: 700 });
+    expect(signals[0]!.aborted).toBe(false);
+    expect(signals[1]!.aborted).toBe(true);
     engine.lifecycle.dispose();
   });
 });

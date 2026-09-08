@@ -122,6 +122,7 @@ import {
   type EngineStores,
   type ScalarStore,
   type TextStylePatch,
+  type TextToolOptions,
 } from '@workbench/canvas-engine/engineStores';
 import {
   exportRasterComposite as exportRasterCompositeWithDeps,
@@ -1780,11 +1781,16 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   let fontSourceStacks: CanvasDocumentContractV3['stacks'] | null = null;
   let documentFontSources: CanvasTextSource[] = [];
   let draftFontSource: CanvasTextSource | undefined;
+  let defaultsFontOptions: TextToolOptions | undefined;
+  let defaultsFontSource: CanvasTextSource | undefined;
   syncActiveFontSources = () => {
     const document = mutationPort.getCanvasState()?.document;
     const stacks = document?.stacks ?? null;
     const draft = document ? stores.textEditSession.get()?.source : undefined;
-    if (stacks === fontSourceStacks && draft === draftFontSource) {
+    // The text defaults are active too: the pane previews them, and the next
+    // created text rasterizes with them.
+    const options = document ? stores.textOptions.get() : undefined;
+    if (stacks === fontSourceStacks && draft === draftFontSource && options === defaultsFontOptions) {
       return;
     }
     if (stacks !== fontSourceStacks) {
@@ -1795,11 +1801,20 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
           )
         : [];
     }
+    if (options !== defaultsFontOptions) {
+      defaultsFontOptions = options;
+      defaultsFontSource = options ? { ...options, color: '#000000', content: '', type: 'text' } : undefined;
+    }
     draftFontSource = draft;
-    fontLoader.setActiveSources(draft ? [...documentFontSources, draft] : documentFontSources);
+    fontLoader.setActiveSources([
+      ...documentFontSources,
+      ...(draft ? [draft] : []),
+      ...(defaultsFontSource ? [defaultsFontSource] : []),
+    ]);
   };
   syncActiveFontSources();
   const unsubscribeTextFontSources = stores.textEditSession.subscribe(syncActiveFontSources);
+  const unsubscribeTextDefaultsFontSources = stores.textOptions.subscribe(syncActiveFontSources);
 
   for (const layer of getDocumentLeaves(mirror.getDocument())) {
     rasterController.setThumbnailKey(layer.id, getLayerThumbnailDisplayKey(layer));
@@ -2699,6 +2714,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     cleanup.run(unsubscribeRuleOfThirds);
     cleanup.run(unsubscribeProjectPreviewLifecycle);
     cleanup.run(unsubscribeTextFontSources);
+    cleanup.run(unsubscribeTextDefaultsFontSources);
     cleanup.run(() => mutationContext.dispose());
     cleanup.run(unsubscribeHistoryEpoch);
     cleanup.run(() => historyController.dispose());
