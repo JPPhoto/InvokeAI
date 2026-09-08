@@ -1,7 +1,6 @@
 """Regression coverage for scheduler overhead with trivial loop bodies."""
 
 import time
-from statistics import median
 from unittest.mock import Mock
 
 import pytest
@@ -43,9 +42,13 @@ def test_loop_scheduler_overhead_is_linear(loop_type: str) -> None:
             # perf_counter, not process_time: the latter ticks at ~15ms on Windows, so a 300-item
             # loop measures as 0.0 and the ratio below is compared against zero.
             timings[count].append(_run_trivial_loop(loop_type, count) / count)
-    per_node = {count: median(samples) for count, samples in timings.items()}
-    # Linear scheduling keeps per-item cost flat; the quadratic regression roughly doubled it per doubling.
-    assert per_node[1200] < per_node[300] * 1.5, f"{loop_type}: {per_node}"
+    # Best-of-N is the noise-tolerant estimator for a lower bound: shared CI hosts inflate any
+    # single sample (a GC pause or a scheduler hiccup), and the median of three still fell over
+    # a tight threshold on macOS.
+    per_node = {count: min(samples) for count, samples in timings.items()}
+    # Linear scheduling keeps per-item cost flat. The quadratic regression scaled per-item cost with
+    # the item count - about 4x between 300 and 1200 - so 2.5x leaves noise headroom on both sides.
+    assert per_node[1200] < per_node[300] * 2.5, f"{loop_type}: {per_node}"
 
 
 @pytest.mark.parametrize("loop_type", ["for", "iterate"])
