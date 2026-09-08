@@ -10,7 +10,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 
 const mocks = vi.hoisted(() => {
   const font: FontRecord = {
@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => {
       { default: 400, hidden: false, label: 'Weight', maximum: 900, minimum: 100, tag: 'wght' },
       { default: 0, hidden: false, label: 'Italic', maximum: 1, minimum: 0, tag: 'ital' },
       { default: 100, hidden: true, label: 'Width', maximum: 125, minimum: 75, tag: 'wdth' },
+      { default: 0, hidden: false, label: 'Flat', maximum: 0, minimum: 0, tag: 'FLAT' },
     ],
     byteSize: 1024,
     contentHash: 'a'.repeat(64),
@@ -86,7 +87,6 @@ await i18n.use(initReactI18next).init({
     en: {
       translation: {
         'widgets.canvas.toolOptions.textFont': 'Font',
-        'widgets.canvas.toolOptions.textFontAxes': 'Axes',
         'widgets.canvas.toolOptions.textFontCustomGroup': 'Custom fonts',
         'widgets.canvas.toolOptions.textFontDefaultPreset': 'Default',
         'widgets.canvas.toolOptions.textFontHideAdvancedAxes': 'Hide hidden axes',
@@ -185,15 +185,49 @@ describe('custom font controls', () => {
       );
     });
 
-    await expect.element(page.getByRole('combobox', { name: 'Style' })).toBeDisabled();
-    await expect.element(page.getByRole('combobox', { name: 'Weight' })).toBeDisabled();
     await expect.element(page.getByRole('slider', { name: 'Weight (wght)' })).toBeVisible();
-    await expect.element(page.getByText('Width (wdth)')).not.toBeInTheDocument();
+    // The face's own axes own style and weight: no second control for either.
+    expect(page.getByRole('combobox', { name: 'Style' }).query()).toBeNull();
+    expect(page.getByRole('combobox', { name: 'Weight' }).query()).toBeNull();
+    expect(page.getByRole('slider', { name: 'Width (wdth)' }).query()).toBeNull();
+    // A degenerate axis has nothing to edit and never appears.
+    expect(page.getByRole('slider', { name: 'Flat (FLAT)' }).query()).toBeNull();
     await expect.element(page.getByRole('button', { name: 'Show hidden axes' })).toBeVisible();
 
     await act(() => page.getByRole('button', { name: 'Show hidden axes' }).click());
     await expect.element(page.getByRole('slider', { name: 'Width (wdth)' })).toBeVisible();
     await expect.element(page.getByRole('combobox', { name: 'Preset' })).toBeVisible();
+  });
+
+  it('keeps a hidden weight axis editable instead of leaving weight with no control', async () => {
+    const hiddenWeight: FontRecord = {
+      ...mocks.font,
+      axes: mocks.font.axes.map((axis) => (axis.tag === 'wght' ? { ...axis, hidden: true } : axis)),
+    };
+    mocks.fontsInfiniteQueryOptions.mockReset().mockImplementation(() => ({
+      getNextPageParam: () => undefined,
+      initialPageParam: 0,
+      queryFn: () => Promise.resolve({ items: [hiddenWeight], limit: 100, offset: 0, total: 1 }),
+      queryKey: ['font-catalog-test', 'hidden-weight'],
+    }));
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const FontGroup = textForm.groups[0]!.body;
+    await act(() => {
+      root?.render(
+        <ChakraProvider value={system}>
+          <I18nextProvider i18n={i18n}>
+            <QueryClientProvider client={queryClient}>
+              <FontGroup engine={engine} isSurfaceInteractionLocked={false} />
+            </QueryClientProvider>
+          </I18nextProvider>
+        </ChakraProvider>
+      );
+    });
+    await expect.element(page.getByRole('slider', { name: 'Weight (wght)' })).toBeVisible();
+    expect(page.getByRole('combobox', { name: 'Weight' }).query()).toBeNull();
+    expect(page.getByRole('slider', { name: 'Width (wdth)' }).query()).toBeNull();
   });
 
   it('reveals catalog fonts beyond the first page with an explicit load-more action', async () => {
@@ -344,8 +378,10 @@ describe('custom font controls', () => {
 
     await act(() => page.getByRole('combobox', { name: 'Font' }).click());
     await expect.element(page.getByRole('option', { name: 'Variable Sans Regular', exact: true })).toBeVisible();
+    await act(() => userEvent.keyboard('{Escape}'));
 
     await act(() => page.getByRole('button', { name: 'Retry' }).click());
+    await act(() => page.getByRole('combobox', { name: 'Font' }).click());
     await expect.element(page.getByRole('option', { name: 'Second Page Sans Retry', exact: true })).toBeVisible();
   });
 });

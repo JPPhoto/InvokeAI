@@ -1,18 +1,21 @@
-import type {
-  ToolFormComponent,
-  ToolPropertyForm,
-} from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
+import type { ToolPropertyForm } from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
+import type { ComponentType, ReactNode } from 'react';
 
 import { Skeleton } from '@chakra-ui/react';
 import { lazy, Suspense } from 'react';
 
-const loading = <Skeleton height="8" />;
+const loadingRows = <Skeleton height="8" />;
+// Matches the specimen card so the form does not jump when the chunk lands.
+const loadingCard = <Skeleton height="20" />;
 
 // Catalog queries and variable-font controls are needed only while text is selected.
-const lazyGroup = (load: () => Promise<{ default: ToolFormComponent }>): ToolFormComponent => {
+const lazyPart = <Props extends object>(
+  load: () => Promise<{ default: ComponentType<Props> }>,
+  fallback: ReactNode = loadingRows
+) => {
   const Body = lazy(load);
-  return (props) => (
-    <Suspense fallback={loading}>
+  return (props: Props) => (
+    <Suspense fallback={fallback}>
       <Body {...props} />
     </Suspense>
   );
@@ -21,21 +24,22 @@ const lazyGroup = (load: () => Promise<{ default: ToolFormComponent }>): ToolFor
 export const textForm: ToolPropertyForm = {
   groups: [
     {
-      body: lazyGroup(() => import('./TextOptions').then((module) => ({ default: module.TextFontSettings }))),
+      body: lazyPart(() => import('./TextOptions').then((module) => ({ default: module.TextFontSettings }))),
       id: 'text-font',
       labelKey: 'widgets.properties.groups.font',
     },
     {
-      body: lazyGroup(() => import('./TextOptions').then((module) => ({ default: module.TextParagraphSettings }))),
+      body: lazyPart(() => import('./TextOptions').then((module) => ({ default: module.TextParagraphSettings }))),
       id: 'text-paragraph',
       labelKey: 'widgets.properties.groups.paragraph',
     },
     {
-      body: lazyGroup(() => import('./TextOptions').then((module) => ({ default: module.TextColorSettings }))),
+      body: lazyPart(() => import('./TextOptions').then((module) => ({ default: module.TextColorSettings }))),
       id: 'text-color',
       labelKey: 'widgets.properties.rows.color',
     },
   ],
   id: 'text',
   paintsLeaf: true,
+  preview: lazyPart(() => import('./TextOptions').then((module) => ({ default: module.TextPreview })), loadingCard),
 };

@@ -1,12 +1,15 @@
 import type { SelectValueChangeDetails } from '@chakra-ui/react';
-import type { CanvasLayerSourceContract, CanvasTextFontRef, TextToolOptions } from '@workbench/canvas-engine/api';
-import type { ToolFormProps } from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
+import type { CanvasTextFontRef, TextToolOptions } from '@workbench/canvas-engine/api';
+import type { TextSource } from '@workbench/widgets/canvas/textFontStyle';
+import type { ToolFormProps, ToolPreviewProps } from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
+import type { CSSProperties, KeyboardEvent } from 'react';
 
-import { Box, createListCollection, HStack, Spinner, Text } from '@chakra-ui/react';
+import { Box, createListCollection, HStack, Spinner, Stack, Text } from '@chakra-ui/react';
 import { fontsInfiniteQueryOptions, type FontAxis, type FontRecord } from '@features/fonts';
 import { Button, IconButton, ToggleIconButton } from '@platform/ui/Button';
 import { ColorPicker } from '@platform/ui/ColorPicker';
 import { Select } from '@platform/ui/Select';
+import { Tooltip } from '@platform/ui/Tooltip';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import {
   MAX_TEXT_FONT_SIZE,
@@ -17,6 +20,12 @@ import {
 } from '@workbench/canvas-engine/api';
 import { useActiveColorCommands, useActiveColorPair } from '@workbench/widgets/canvas/color-system/useActiveColors';
 import { useTextEditSession, useTextOptions } from '@workbench/widgets/canvas/engineStoreHooks';
+import {
+  TextFontReadiness,
+  textFontKey,
+  textFontVariationSettings,
+  useResolvedTextFontFamily,
+} from '@workbench/widgets/canvas/textFontStyle';
 import {
   FormNumberField,
   FormSlider,
@@ -31,7 +40,6 @@ import { AlignCenterIcon, AlignLeftIcon, AlignRightIcon, RotateCcwIcon, SlidersH
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-type TextSource = Extract<CanvasLayerSourceContract, { type: 'text' }>;
 type TextAlign = TextToolOptions['align'];
 
 interface SelectedText {
@@ -58,6 +66,34 @@ const ALIGN_LABEL_KEYS: Record<TextAlign, string> = {
 const ALIGN_VALUES: readonly TextAlign[] = ['left', 'center', 'right'];
 const EMPTY_FONT_VARIATIONS: Readonly<Record<string, number>> = {};
 const EMPTY_FONT_RECORDS: readonly FontRecord[] = [];
+
+/** The slider covers the sizes text is actually set at; the field still reaches the document limits. */
+const SIZE_SLIDER_MIN_PX = 4;
+const SIZE_SLIDER_MAX_PX = 600;
+const SIZE_SLIDER_POSITIONS = 1000;
+const SIZE_LOG_RANGE = Math.log(SIZE_SLIDER_MAX_PX / SIZE_SLIDER_MIN_PX);
+const SPECIMEN_MAX_CHARS = 40;
+const SPECIMEN_FALLBACK = 'Aa';
+/** The canvas surround's checker, so any text color reads the way it does over a transparent document. */
+const SPECIMEN_CHECKER =
+  'conic-gradient({colors.bg.subtle} 25%, transparent 0 50%, {colors.bg.subtle} 0 75%, transparent 0)';
+
+const clampTextSize = (value: number): number =>
+  Math.min(MAX_TEXT_FONT_SIZE, Math.max(MIN_TEXT_FONT_SIZE, Math.round(value)));
+
+export const textSizeToSliderPosition = (size: number): number => {
+  const clamped = Math.min(SIZE_SLIDER_MAX_PX, Math.max(SIZE_SLIDER_MIN_PX, size));
+  return (Math.log(clamped / SIZE_SLIDER_MIN_PX) / SIZE_LOG_RANGE) * SIZE_SLIDER_POSITIONS;
+};
+
+export const sliderPositionToTextSize = (position: number): number => {
+  const clamped = Math.min(SIZE_SLIDER_POSITIONS, Math.max(0, position));
+  return clampTextSize(SIZE_SLIDER_MIN_PX * Math.exp((clamped / SIZE_SLIDER_POSITIONS) * SIZE_LOG_RANGE));
+};
+
+/** Whole pixels below 100, tens above: a log track's own step is sub-pixel at small sizes. */
+export const textSizeKeyboardStep = (size: number, direction: -1 | 1): number =>
+  size < 100 || (direction < 0 && size === 100) ? 1 : 10;
 
 type FontChoiceGroup = 'builtin' | 'custom';
 
@@ -121,6 +157,13 @@ const fontVariationCoordinates = (
     font.axes.map((axis) => [axis.tag, clampFontAxisValue(coordinates[axis.tag] ?? axis.default, axis)])
   );
 
+/** Axes with a range to edit; a degenerate axis owns nothing. */
+const usableAxes = (font: FontRecord | undefined): readonly FontAxis[] =>
+  font?.axes.filter((axis) => axis.maximum > axis.minimum) ?? [];
+
+/** An axis that replaces the plain Style or Weight select stays visible even when the font flags it hidden. */
+const OWNING_AXIS_TAGS = new Set(['ital', 'slnt', 'wght']);
+
 const axisStep = (axis: FontAxis): number => {
   const span = axis.maximum - axis.minimum;
   if (span <= 2) {
@@ -130,6 +173,16 @@ const axisStep = (axis: FontAxis): number => {
     return 0.1;
   }
   return 1;
+};
+
+/** The first line of the text being styled, or a neutral specimen when there is none yet. */
+export const textSpecimen = (content: string | null): string => {
+  const line =
+    content
+      ?.split('\n')
+      .find((candidate) => candidate.trim().length > 0)
+      ?.trim() ?? '';
+  return line.length > 0 ? line.slice(0, SPECIMEN_MAX_CHARS) : SPECIMEN_FALLBACK;
 };
 
 const AlignButton = ({
@@ -145,15 +198,17 @@ const AlignButton = ({
   const Icon = ALIGN_ICONS[value];
   const onClick = useCallback(() => onSelect(value), [onSelect, value]);
   return (
-    <IconButton
-      aria-label={t(ALIGN_LABEL_KEYS[value])}
-      aria-pressed={active}
-      size="xs"
-      variant={active ? 'solid' : 'ghost'}
-      onClick={onClick}
-    >
-      <Icon />
-    </IconButton>
+    <Tooltip content={t(ALIGN_LABEL_KEYS[value])}>
+      <IconButton
+        aria-label={t(ALIGN_LABEL_KEYS[value])}
+        aria-pressed={active}
+        size="xs"
+        variant={active ? 'solid' : 'ghost'}
+        onClick={onClick}
+      >
+        <Icon />
+      </IconButton>
+    </Tooltip>
   );
 };
 
@@ -194,6 +249,7 @@ const useTextEditor = (engine: ToolFormProps['engine']) => {
     : (options.fontVariations ?? EMPTY_FONT_VARIATIONS);
   const lineHeight = styleSource?.lineHeight ?? options.lineHeight;
   const color = styleSource?.color ?? pair.foreground;
+  const content = styleSource?.content ?? null;
   const active = useMemo(
     () => ({ align, color, fontFamily, fontRef, fontSize, fontStyle, fontVariations, fontWeight, lineHeight }),
     [align, color, fontFamily, fontRef, fontSize, fontStyle, fontVariations, fontWeight, lineHeight]
@@ -258,7 +314,39 @@ const useTextEditor = (engine: ToolFormProps['engine']) => {
     return getDocumentLayer(project.canvas.document, session.layerId)?.name ?? null;
   });
   const targetName = session ? (sessionLayerName ?? t('widgets.properties.target.newText')) : (selected?.name ?? null);
-  return { active, applyEdit, targetName };
+  return { active, applyEdit, content, targetName };
+};
+
+/**
+ * A live specimen of the active face — family, style, weight, axes and color —
+ * with the target chip: the one place the form shows what its values add up to.
+ */
+export const TextPreview = ({ engine }: ToolPreviewProps) => {
+  const { active, content, targetName } = useTextEditor(engine);
+  // The instanced face the canvas rasterizes with; the engine keeps the
+  // session's, the document's and the defaults' faces active, so the load is shared.
+  const face = useMemo((): TextSource => ({ ...active, content: '', type: 'text' }), [active]);
+  const fontFamily = useResolvedTextFontFamily(engine.fonts, face);
+  const style = useMemo(
+    (): CSSProperties => ({
+      color: active.color,
+      fontFamily,
+      fontStyle: active.fontStyle,
+      fontVariationSettings: textFontVariationSettings(active) || 'normal',
+      fontWeight: active.fontWeight,
+      textAlign: active.align,
+    }),
+    [active, fontFamily]
+  );
+  return (
+    <Stack bg="bg.inset" bgImage={SPECIMEN_CHECKER} bgSize="1rem 1rem" gap="1" px="3" py="2" rounded="sm">
+      <TextFontReadiness key={textFontKey(face)} fonts={engine.fonts} source={face} />
+      <EditTargetChip layerName={targetName} />
+      <Text aria-hidden fontSize="2rem" lineHeight="1.25" minW="0" style={style} truncate>
+        {textSpecimen(content)}
+      </Text>
+    </Stack>
+  );
 };
 
 const AxisControl = ({
@@ -288,7 +376,7 @@ const AxisControl = ({
   const ariaLabel = `${axis.label} (${axis.tag})`;
 
   return (
-    <PropertyControlRow label={ariaLabel}>
+    <PropertyControlRow label={axis.label}>
       <FormSlider
         aria-label={ariaLabel}
         max={axis.maximum}
@@ -316,6 +404,7 @@ const variationMapsEqual = (
   axes: readonly FontAxis[]
 ): boolean => axes.every((axis) => left[axis.tag] === right[axis.tag]);
 
+/** A variable face's named instances and axes, as plain rows of the Font group. */
 const FontAxisSettings = ({
   activeVariations,
   applyEdit,
@@ -327,9 +416,12 @@ const FontAxisSettings = ({
 }) => {
   const { t } = useTranslation();
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const axes = useMemo(() => font?.axes.filter((axis) => axis.maximum > axis.minimum) ?? [], [font?.axes]);
-  const visibleAxes = useMemo(() => axes.filter((axis) => showAdvanced || !axis.hidden), [axes, showAdvanced]);
-  const hasHiddenAxes = axes.some((axis) => axis.hidden);
+  const axes = useMemo(() => usableAxes(font), [font]);
+  const visibleAxes = useMemo(
+    () => axes.filter((axis) => showAdvanced || !axis.hidden || OWNING_AXIS_TAGS.has(axis.tag)),
+    [axes, showAdvanced]
+  );
+  const hasHiddenAxes = axes.some((axis) => axis.hidden && !OWNING_AXIS_TAGS.has(axis.tag));
   const presetCollection = useMemo(
     () =>
       createListCollection<{ label: string; value: string }>({
@@ -388,20 +480,29 @@ const FontAxisSettings = ({
   );
 
   return (
-    <Box borderColor="border.subtle" borderTopWidth="1px" mt="1" pt="1">
-      <HStack justifyContent="space-between" minH="7">
-        <Text color="fg.muted" fontSize="xs">
-          {t('widgets.canvas.toolOptions.textFontAxes')}
-        </Text>
-        <HStack gap="1">
-          <Button
-            aria-label={t('widgets.canvas.toolOptions.textFontResetAxes')}
-            size="2xs"
-            variant="ghost"
-            onClick={resetAxes}
-          >
-            <RotateCcwIcon />
-          </Button>
+    <>
+      <PropertyControlRow label={t('widgets.canvas.toolOptions.textFontPreset')}>
+        <Select
+          aria-label={t('widgets.canvas.toolOptions.textFontPreset')}
+          collection={presetCollection}
+          minW="0"
+          positioning={SELECT_POSITIONING}
+          size="xs"
+          value={presetValue}
+          valueText={presetCollection.items.find((item) => item.value === presetValue[0])?.label}
+          onValueChange={onPreset}
+        />
+        <HStack gap="0.5">
+          <Tooltip content={t('widgets.canvas.toolOptions.textFontResetAxes')}>
+            <IconButton
+              aria-label={t('widgets.canvas.toolOptions.textFontResetAxes')}
+              size="2xs"
+              variant="ghost"
+              onClick={resetAxes}
+            >
+              <RotateCcwIcon />
+            </IconButton>
+          </Tooltip>
           {hasHiddenAxes ? (
             <ToggleIconButton
               checked={showAdvanced}
@@ -411,31 +512,88 @@ const FontAxisSettings = ({
             />
           ) : null}
         </HStack>
-      </HStack>
-      <PropertyControlRow label={t('widgets.canvas.toolOptions.textFontPreset')}>
-        <Select
-          aria-label={t('widgets.canvas.toolOptions.textFontPreset')}
-          collection={presetCollection}
-          gridColumn="2 / -1"
-          positioning={SELECT_POSITIONING}
-          size="xs"
-          value={presetValue}
-          valueText={presetCollection.items.find((item) => item.value === presetValue[0])?.label}
-          w="full"
-          onValueChange={onPreset}
-        />
       </PropertyControlRow>
       {visibleAxes.map((axis) => (
         <AxisControl key={axis.tag} activeVariations={activeVariations} applyEdit={applyEdit} axis={axis} />
       ))}
-    </Box>
+    </>
   );
+};
+
+/** One line under the Family row for the catalog's transient states; nothing when it is settled. */
+const FontCatalogStatus = ({
+  hasNextPage,
+  isError,
+  isFetchingNextPage,
+  isPending,
+  onLoadMore,
+  onRetry,
+}: {
+  hasNextPage: boolean;
+  isError: boolean;
+  isFetchingNextPage: boolean;
+  isPending: boolean;
+  onLoadMore: () => void;
+  onRetry: () => void;
+}) => {
+  const { t } = useTranslation();
+  const { t: tFonts } = useTranslation('fonts');
+  if (isPending) {
+    return (
+      <PropertyControlRow>
+        <HStack color="fg.muted" gap="1.5" gridColumn="2 / -1" role="status">
+          <Spinner size="xs" />
+          <Text fontSize="2xs">{t('common.loading')}</Text>
+        </HStack>
+      </PropertyControlRow>
+    );
+  }
+  if (isError) {
+    return (
+      <PropertyControlRow>
+        <HStack color="fg.error" gap="1" gridColumn="2 / -1" role="alert">
+          <Text fontSize="2xs" minW="0" truncate>
+            {tFonts('fonts.couldNotLoad')}
+          </Text>
+          <Button
+            aria-label={t('common.retry')}
+            disabled={isFetchingNextPage}
+            flexShrink="0"
+            size="2xs"
+            variant="ghost"
+            onClick={onRetry}
+          >
+            {t('common.retry')}
+          </Button>
+        </HStack>
+      </PropertyControlRow>
+    );
+  }
+  if (hasNextPage) {
+    return (
+      <PropertyControlRow>
+        <Box gridColumn="2 / -1">
+          <Button
+            aria-label={tFonts('fonts.loadMore', { defaultValue: 'Load more fonts' })}
+            disabled={isFetchingNextPage}
+            size="2xs"
+            variant="ghost"
+            onClick={onLoadMore}
+          >
+            {isFetchingNextPage
+              ? tFonts('fonts.loadingMore', { defaultValue: 'Loading more fonts…' })
+              : tFonts('fonts.loadMore', { defaultValue: 'Load more fonts' })}
+          </Button>
+        </Box>
+      </PropertyControlRow>
+    );
+  }
+  return null;
 };
 
 export const TextFontSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
-  const { t: tFonts } = useTranslation('fonts');
-  const { active, applyEdit, targetName } = useTextEditor(engine);
+  const { active, applyEdit } = useTextEditor(engine);
   const { data, fetchNextPage, hasNextPage, isError, isFetchNextPageError, isFetchingNextPage, isPending, refetch } =
     useInfiniteQuery(fontsInfiniteQueryOptions({ limit: 100, scope: 'all' }));
   const loadMoreFonts = useCallback(() => void fetchNextPage(), [fetchNextPage]);
@@ -499,8 +657,10 @@ export const TextFontSettings = ({ engine }: ToolFormProps) => {
   );
   const familyLabel = activeChoice?.label ?? active.fontRef?.label ?? active.fontFamily;
   const activeFont = activeChoice?.font;
-  const hasWeightAxis = activeFont?.axes.some((axis) => axis.tag === 'wght') ?? false;
-  const hasStyleAxis = activeFont?.axes.some((axis) => axis.tag === 'ital' || axis.tag === 'slnt') ?? false;
+  // An axis owns its property: the plain select for it is not offered alongside.
+  const activeAxes = useMemo(() => usableAxes(activeFont), [activeFont]);
+  const hasWeightAxis = activeAxes.some((axis) => axis.tag === 'wght');
+  const hasStyleAxis = activeAxes.some((axis) => axis.tag === 'ital' || axis.tag === 'slnt');
   const onFamily = useCallback(
     ({ value }: SelectValueChangeDetails<FontChoice>) => {
       const choice = familyChoices.find((entry) => entry.value === value[0]);
@@ -579,17 +739,52 @@ export const TextFontSettings = ({ engine }: ToolFormProps) => {
     [active.fontWeight, applyEdit]
   );
   // Ticks preview through the defaults/session; ONE document commit lands on release.
-  const previewSize = useCallback(
-    (value: number) =>
-      applyEdit({ fontSize: Math.min(MAX_TEXT_FONT_SIZE, Math.max(MIN_TEXT_FONT_SIZE, Math.round(value))) }, false),
-    [applyEdit]
-  );
-  const setSize = useCallback(
-    (value: number) =>
-      applyEdit({ fontSize: Math.min(MAX_TEXT_FONT_SIZE, Math.max(MIN_TEXT_FONT_SIZE, Math.round(value))) }, true),
-    [applyEdit]
-  );
+  const previewSize = useCallback((value: number) => applyEdit({ fontSize: clampTextSize(value) }, false), [applyEdit]);
+  const setSize = useCallback((value: number) => applyEdit({ fontSize: clampTextSize(value) }, true), [applyEdit]);
   const sizeGesture = useSliderGesture(Math.round(active.fontSize), setSize, previewSize);
+  const { onChange: onSizeGesture, onChangeEnd: onSizeGestureEnd } = sizeGesture;
+  const onSizeSlider = useCallback(
+    (position: number) => onSizeGesture(sliderPositionToTextSize(position)),
+    [onSizeGesture]
+  );
+  const onSizeSliderEnd = useCallback(
+    (position: number) => onSizeGestureEnd(sliderPositionToTextSize(position)),
+    [onSizeGestureEnd]
+  );
+  const onSizeSliderKeyDownCapture = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+        return;
+      }
+      const increase = event.key === 'ArrowUp' || event.key === 'ArrowRight' || event.key === 'PageUp';
+      const decrease = event.key === 'ArrowDown' || event.key === 'ArrowLeft' || event.key === 'PageDown';
+      if (!increase && !decrease) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const direction = increase ? 1 : -1;
+      const size = Math.round(active.fontSize);
+      if ((size > SIZE_SLIDER_MAX_PX && direction > 0) || (size < SIZE_SLIDER_MIN_PX && direction < 0)) {
+        return;
+      }
+      const multiplier = event.key === 'PageUp' || event.key === 'PageDown' ? 10 : 1;
+      const next =
+        size > SIZE_SLIDER_MAX_PX
+          ? SIZE_SLIDER_MAX_PX
+          : size < SIZE_SLIDER_MIN_PX
+            ? SIZE_SLIDER_MIN_PX
+            : Math.min(
+                SIZE_SLIDER_MAX_PX,
+                Math.max(SIZE_SLIDER_MIN_PX, size + direction * multiplier * textSizeKeyboardStep(size, direction))
+              );
+      if (next !== size) {
+        setSize(next);
+      }
+    },
+    [active.fontSize, setSize]
+  );
+  const formatSize = useCallback(() => `${sizeGesture.value}px`, [sizeGesture.value]);
   const onSize = useNumberCommit(setSize);
   const previewLineHeight = useCallback(
     (value: number) => applyEdit({ lineHeight: Math.max(0.5, Math.round(value * 10) / 10) }, false),
@@ -601,106 +796,87 @@ export const TextFontSettings = ({ engine }: ToolFormProps) => {
   );
   const lineHeightGesture = useSliderGesture(active.lineHeight, setLineHeight, previewLineHeight);
   const onLineHeight = useNumberCommit(setLineHeight);
+  const showStyle = !hasStyleAxis;
+  const showWeight = !hasWeightAxis;
   return (
     <>
-      <EditTargetChip layerName={targetName} />
       <PropertyControlRow label={t('widgets.properties.rows.family')}>
-        <HStack gap="1" gridColumn="2 / -1" minW="0" w="full">
-          <Select
-            aria-label={t('widgets.canvas.toolOptions.textFont')}
-            collection={familyCollection}
-            flex="1"
-            groupBy={groupBy}
-            itemsMaxH="20rem"
-            minW="0"
-            positioning={SELECT_POSITIONING}
-            renderGroupLabel={renderGroupLabel}
-            size="xs"
-            value={familyValue}
-            valueText={familyLabel}
-            onValueChange={onFamily}
-          />
-          {isPending ? (
-            <HStack aria-live="polite" color="fg.muted" flexShrink="0" gap="1" role="status">
-              <Spinner size="xs" />
-              <Text fontSize="2xs">{t('common.loading')}</Text>
-            </HStack>
-          ) : isError ? (
-            <HStack aria-live="polite" color="fg.error" flexShrink="0" gap="1" role="alert">
-              <Text fontSize="2xs">{tFonts('fonts.couldNotLoad')}</Text>
-              <Button
-                aria-label={t('common.retry')}
-                disabled={isFetchingNextPage}
-                size="2xs"
-                variant="ghost"
-                onClick={retryFontCatalog}
-              >
-                {t('common.retry')}
-              </Button>
-            </HStack>
-          ) : null}
-        </HStack>
-      </PropertyControlRow>
-      {hasNextPage ? (
-        <HStack justify="flex-end" minH="7">
-          <Button
-            aria-label={tFonts('fonts.loadMore', { defaultValue: 'Load more fonts' })}
-            disabled={isFetchingNextPage}
-            size="2xs"
-            variant="ghost"
-            onClick={loadMoreFonts}
-          >
-            {isFetchingNextPage
-              ? tFonts('fonts.loadingMore', { defaultValue: 'Loading more fonts…' })
-              : tFonts('fonts.loadMore', { defaultValue: 'Load more fonts' })}
-          </Button>
-        </HStack>
-      ) : null}
-      <PropertyControlRow label={t('widgets.canvas.toolOptions.textFontStyle')}>
         <Select
-          aria-label={t('widgets.canvas.toolOptions.textFontStyle')}
-          collection={styleCollection}
-          disabled={hasStyleAxis}
+          aria-label={t('widgets.canvas.toolOptions.textFont')}
+          collection={familyCollection}
           gridColumn="2 / -1"
+          groupBy={groupBy}
+          itemsMaxH="20rem"
+          minW="0"
           positioning={SELECT_POSITIONING}
+          renderGroupLabel={renderGroupLabel}
           size="xs"
-          value={styleValue}
-          valueText={styleCollection.items.find((item) => item.value === active.fontStyle)?.label}
-          w="full"
-          onValueChange={onStyle}
+          value={familyValue}
+          valueText={familyLabel}
+          onValueChange={onFamily}
         />
       </PropertyControlRow>
+      <FontCatalogStatus
+        hasNextPage={hasNextPage}
+        isError={isError}
+        isFetchingNextPage={isFetchingNextPage}
+        isPending={isPending}
+        onLoadMore={loadMoreFonts}
+        onRetry={retryFontCatalog}
+      />
+      {showStyle || showWeight ? (
+        <PropertyControlRow
+          label={t(showStyle ? 'widgets.canvas.toolOptions.textFontStyle' : 'widgets.properties.rows.weight')}
+        >
+          {showStyle ? (
+            <Select
+              aria-label={t('widgets.canvas.toolOptions.textFontStyle')}
+              collection={styleCollection}
+              gridColumn={showWeight ? undefined : '2 / -1'}
+              minW="0"
+              positioning={SELECT_POSITIONING}
+              size="xs"
+              value={styleValue}
+              valueText={styleCollection.items.find((item) => item.value === active.fontStyle)?.label}
+              onValueChange={onStyle}
+            />
+          ) : null}
+          {showWeight ? (
+            <Select
+              aria-label={t('widgets.canvas.toolOptions.textWeight')}
+              collection={weightCollection}
+              flexShrink={0}
+              positioning={SELECT_POSITIONING}
+              size="xs"
+              triggerProps={WEIGHT_TRIGGER_PROPS}
+              value={weightValue}
+              valueText={String(active.fontWeight)}
+              w="4.5rem"
+              onValueChange={onWeight}
+            />
+          ) : null}
+        </PropertyControlRow>
+      ) : null}
       <PropertyControlRow label={t('widgets.properties.rows.size')}>
         <FormSlider
           aria-label={t('widgets.canvas.toolOptions.textSize')}
-          max={MAX_TEXT_FONT_SIZE}
-          min={MIN_TEXT_FONT_SIZE}
-          value={sizeGesture.value}
-          onValueChange={sizeGesture.onChange}
-          onValueChangeEnd={sizeGesture.onChangeEnd}
+          formatValue={formatSize}
+          getAriaValueText={formatSize}
+          max={SIZE_SLIDER_POSITIONS}
+          min={0}
+          step={1}
+          value={textSizeToSliderPosition(sizeGesture.value)}
+          onKeyDownCapture={onSizeSliderKeyDownCapture}
+          onValueChange={onSizeSlider}
+          onValueChangeEnd={onSizeSliderEnd}
         />
         <FormNumberField
           aria-label={t('widgets.canvas.toolOptions.textSize')}
           max={MAX_TEXT_FONT_SIZE}
           min={MIN_TEXT_FONT_SIZE}
           suffix="px"
-          value={String(Math.round(active.fontSize))}
+          value={String(sizeGesture.value)}
           onValueCommit={onSize}
-        />
-      </PropertyControlRow>
-      <PropertyControlRow label={t('widgets.properties.rows.weight')}>
-        <Select
-          aria-label={t('widgets.canvas.toolOptions.textWeight')}
-          collection={weightCollection}
-          disabled={hasWeightAxis}
-          flexShrink={0}
-          positioning={SELECT_POSITIONING}
-          size="xs"
-          triggerProps={WEIGHT_TRIGGER_PROPS}
-          value={weightValue}
-          valueText={String(active.fontWeight)}
-          w="4.5rem"
-          onValueChange={onWeight}
         />
       </PropertyControlRow>
       <PropertyControlRow label={t('widgets.properties.rows.lineHeight')}>
@@ -718,11 +894,11 @@ export const TextFontSettings = ({ engine }: ToolFormProps) => {
           max={4}
           min={0.5}
           step={0.1}
-          value={active.lineHeight.toFixed(1)}
+          value={lineHeightGesture.value.toFixed(1)}
           onValueCommit={onLineHeight}
         />
       </PropertyControlRow>
-      <FontAxisSettings activeVariations={active.fontVariations} applyEdit={applyEdit} font={activeChoice?.font} />
+      <FontAxisSettings activeVariations={active.fontVariations} applyEdit={applyEdit} font={activeFont} />
     </>
   );
 };
@@ -733,7 +909,7 @@ export const TextParagraphSettings = ({ engine }: ToolFormProps) => {
   const onAlign = useCallback((next: TextAlign) => applyEdit({ align: next }, true), [applyEdit]);
   return (
     <PropertyControlRow label={t('widgets.properties.rows.align')}>
-      <HStack gap="0.5">
+      <HStack aria-label={t('widgets.properties.rows.align')} gap="0.5" role="group">
         {ALIGN_VALUES.map((value) => (
           <AlignButton key={value} active={active.align === value} value={value} onSelect={onAlign} />
         ))}
@@ -749,7 +925,7 @@ export const TextColorSettings = ({ engine }: ToolFormProps) => {
   const onChange = useCallback((hex: string) => applyEdit({ color: hex }, false), [applyEdit]);
   const onChangeEnd = useCallback((hex: string) => applyEdit({ color: hex }, true), [applyEdit]);
   return (
-    <PropertyControlRow label={t('widgets.properties.rows.color')}>
+    <PropertyControlRow label={t('widgets.properties.rows.fill')}>
       <ColorPicker
         aria-label={t('widgets.canvas.toolOptions.textColor')}
         value={active.color}
