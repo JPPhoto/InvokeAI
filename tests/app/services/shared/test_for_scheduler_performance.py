@@ -1,7 +1,6 @@
 """Regression coverage for scheduler overhead with trivial loop bodies."""
 
 import time
-from collections.abc import Callable
 from statistics import median
 from unittest.mock import Mock
 
@@ -13,7 +12,7 @@ from invokeai.app.services.shared.graph import CollectInvocation, Graph, GraphEx
 from tests.test_nodes import AnyTypeTestInvocation, create_edge, create_loop_linkage
 
 
-def _run_trivial_loop(loop_type: str, count: int, *, clock: Callable[[], float] = time.perf_counter) -> float:
+def _run_trivial_loop(loop_type: str, count: int) -> float:
     graph = Graph()
     graph.add_node(RangeInvocation(id="range", start=0, stop=count))
     graph.add_node(ForInvocation(id="loop") if loop_type == "for" else IterateInvocation(id="loop"))
@@ -29,11 +28,11 @@ def _run_trivial_loop(loop_type: str, count: int, *, clock: Callable[[], float] 
         graph.add_edge(create_edge("body", "value", "collect", "item"))
     state = GraphExecutionState(graph=graph)
     context = Mock()
-    started = clock()
+    started = time.perf_counter()
     while (node := state.next()) is not None:
         state.complete(node.id, node.invoke(context))
     assert state.is_complete()
-    return clock() - started
+    return time.perf_counter() - started
 
 
 @pytest.mark.parametrize("loop_type", ["iterate", "for"])
@@ -41,7 +40,9 @@ def test_loop_scheduler_overhead_is_linear(loop_type: str) -> None:
     timings = {count: [] for count in (300, 1200)}
     for _ in range(3):
         for count in (1200, 300):
-            timings[count].append(_run_trivial_loop(loop_type, count, clock=time.process_time) / count)
+            # perf_counter, not process_time: the latter ticks at ~15ms on Windows, so a 300-item
+            # loop measures as 0.0 and the ratio below is compared against zero.
+            timings[count].append(_run_trivial_loop(loop_type, count) / count)
     per_node = {count: median(samples) for count, samples in timings.items()}
     # Linear scheduling keeps per-item cost flat; the quadratic regression roughly doubled it per doubling.
     assert per_node[1200] < per_node[300] * 1.5, f"{loop_type}: {per_node}"
