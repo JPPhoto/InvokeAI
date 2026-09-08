@@ -131,7 +131,9 @@ projected through the generic `ExecutionPlan`/`ExecutionScheduler` adapter. `Ite
 and saved-workflow call lowering continue to use the legacy compatibility scheduler for materialization and queue
 lifecycle until their differential coverage is complete. `Iterate` also records non-empty item streams through the
 generic effect ledger; the materializer remains authoritative for expansion, iteration paths, collector grouping, and
-empty-source compatibility handling.
+empty-source compatibility handling. Direct `Collect.item` consumers now use the closed stream ledger when available;
+the full Iterate/Collect compatibility matrix covers empty, nested, fan-in, partial rehydration, failure, cancellation,
+and retry behavior. This evidence does not remove the materializer or queue adapters.
 
 The source graph is treated as stable during normal execution, but the runtime object still exposes guarded graph
 mutation helpers. Those helpers reject changes once the affected nodes have already been prepared or executed.

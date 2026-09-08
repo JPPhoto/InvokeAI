@@ -89,7 +89,9 @@ effects. Legacy `For`/`ForReturn` continuation scheduling is mirrored by a typed
 explicit empty close. A direct `Iterate.item` consumer waits for the canonical stream to close, then `Collect` consumes
 its ordered values; a missing stream falls back to materialized results for legacy snapshots. The materializer still
 owns iterator expansion, iteration paths, collector grouping, collection-input hydration, and empty-source closure.
-`loop_linkage` remains association metadata and never becomes a data token.
+Focused compatibility coverage now proves empty, nested, fan-in, partial/rehydrated, failed, canceled, and retried
+Iterate/Collect sessions. This is evidence for the current adapters; it does not remove materialization or queue
+ownership. `loop_linkage` remains association metadata and never becomes a data token.
 
 `IfInvocation` now declares the same seam for branch activation: it emits one frame-scoped activation token for the
 selected branch, and the graph state validates and persists it after invocation. The generic opaque scheduler receives
