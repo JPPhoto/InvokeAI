@@ -84,15 +84,18 @@ collections or state.
 
 The execution-engine seam is additive to this loop contract. The session runner applies each result through
 `GraphExecutionState.apply()` using a stable execution reference and records frame-aware output tokens and accepted
-effects. Legacy `For`/`ForReturn` continuation scheduling is mirrored by a typed, frame-scoped
+`For`/`ForReturn` continuation state is mirrored by a typed, frame-scoped
 `ContinuationRecord`. `ForInvocation` and `ForReturnInvocation` also declare one validated, frame-scoped
 `continuation` effect per prepared invocation. The `For` effect starts the `for` continuation with the current
 iteration and state; the `ForReturn` effect completes it with output, state, and the continue decision. These effects
 are persisted under the invocation reference. Session-built effect references carry graph-state, durable-frame,
 iteration-path, and workflow-call-depth identity, and stale or cross-scope effects are rejected before mutation. They
-never encode `loop_linkage` as a data token. The legacy scheduler still
-resolves the linkage, materializes the next iteration, aggregates output, finalizes the loop, and owns empty/nested/
-mixed loop behavior; this additive effect seam does not claim generic `For` scheduling. `Iterate` records ordered item tokens in a closed `StreamBuffer`; an empty `Iterate` records an
+never encode `loop_linkage` as a data token. A fresh graph with exactly one static, non-empty flat `For`/`ForReturn`
+pair now uses the generic scheduler adapter for readiness and continuation transitions. Graph state owns the
+invocation-specific continuation boundary: it carries returned state, honors `continue_condition`, materializes the
+next body iteration, and finalizes the aggregate. The generic scheduler remains opaque and never receives a literal
+successor node ID. Empty or input-driven collections, nested or multiple loops, and mixed control flow remain on the
+compatibility scheduler; this additive effect seam does not claim generic scheduling for those shapes. `Iterate` records ordered item tokens in a closed `StreamBuffer`; an empty `Iterate` records an
 explicit empty close. A direct `Iterate.item` consumer waits for the canonical stream to close, then `Collect` consumes
 its ordered values; a missing stream falls back to materialized results for legacy snapshots. The materializer still
 owns iterator expansion, iteration paths, collector grouping, collection-input hydration, and empty-source closure.
@@ -116,9 +119,10 @@ ownership seam, not final removal of all legacy topology. Author-time activation
 absent, while loop and saved-workflow control flow remain on their compatibility paths until differential coverage
 proves their generic replacements.
 
-The engine still owns runtime node materialization and queue readiness for loop-containing graphs that require `For`,
-nested/mixed control flow, and existing snapshots. Ordinary static DAGs, legacy-shaped `If` graphs, and direct
-`Iterate`/`Collect`-only graphs now use the generic opaque plan/scheduler through a compatibility projection; a fresh
+The engine still owns runtime node materialization and queue readiness for loop-containing graphs that require empty or
+input-driven `For`, nested/mixed control flow, and existing snapshots. Ordinary static DAGs, legacy-shaped `If` graphs,
+direct `Iterate`/`Collect`-only graphs, and supported fresh static flat `For` graphs now use the generic opaque
+plan/scheduler through a compatibility projection; a fresh
 generic `If` uses the compiler/adapter seam described above. This is intentional:
 the generic records preserve tested loop semantics first, while the old execution graph remains the fallback for control
 lowerings, legacy snapshots, and unsupported mixed loop shapes. No activation or stream ports are added to author-time

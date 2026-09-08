@@ -1894,130 +1894,8 @@ class _ExecutionScheduler:
         ):
             self._state._mark_source_executed(source_node_id)
 
-    def _get_for_parent(self, exec_node_id: str) -> Optional[str]:
-        source_return_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
-        iteration_path = self._state._get_iteration_path(exec_node_id)
-        source_for_id = self._state._get_for_source_by_return_id().get(source_return_id)
-        if source_for_id is not None:
-            prepared_for_id = self._state._get_prepared_for_index().get((source_for_id, iteration_path))
-            if prepared_for_id is not None:
-                return prepared_for_id
-
-        # The indexed source/path lookup is the normal path. The ancestor fallback only covers legacy execution
-        # graphs whose durable linkage was not materialized; keep it explicit so an unexpected miss is diagnosable.
-        execution_graph = self._state._get_execution_graph_flat()
-        for ancestor_id in nx.ancestors(execution_graph, exec_node_id):
-            source_node = self._state.execution_graph.get_node(ancestor_id)
-            if isinstance(source_node, ForInvocation):
-                return ancestor_id
-
-        # An empty nested Iterate has no item execution node, so its synthetic Collect and ForReturn have no
-        # execution-graph edge back to their owning For. The same indexed lookup handles this case when the
-        # synthetic node has been assigned its durable parent path.
-        if source_for_id is not None:
-            for prepared_for_id in self._state._prepared_registry().get_prepared_ids(source_for_id):
-                prepared_for_node = self._state.execution_graph.get_node(prepared_for_id)
-                if not isinstance(prepared_for_node, ForInvocation) or prepared_for_node.index < 0:
-                    continue
-                if self._state._get_iteration_path(prepared_for_id) == iteration_path:
-                    return prepared_for_id
-        return None
-
-    def _get_loop_state_for_next_iteration(
-        self, for_exec_node_id: str, return_output: "ForReturnInvocationOutput"
-    ) -> "LoopState":
-        if return_output.state is not None:
-            return return_output.state
-
-        for_output = self._state.results.get(for_exec_node_id)
-        if isinstance(for_output, ForInvocationOutput):
-            return for_output.state
-
-        return LoopState()
-
-    def _get_ordered_for_return_outputs(
-        self, for_exec_node_id: str, source_return_id: str
-    ) -> list["ForReturnInvocationOutput"]:
-        parent_iteration_path = self._state._get_for_parent_iteration_path(for_exec_node_id)
-        prepared_return_ids = self._state._prepared_registry().get_prepared_ids(source_return_id)
-        prepared_return_ids = [
-            prepared_return_id
-            for prepared_return_id in prepared_return_ids
-            if self._state._get_iteration_path(prepared_return_id)[:-1] == parent_iteration_path
-        ]
-        prepared_return_ids = sorted(prepared_return_ids, key=self._state._get_iteration_path)
-        return [
-            output
-            for prepared_return_id in prepared_return_ids
-            if isinstance((output := self._state.results.get(prepared_return_id)), ForReturnInvocationOutput)
-        ]
-
-    def _finalize_for_outputs(
-        self,
-        for_exec_node_id: str,
-        source_for_id: str,
-        source_return_id: str,
-        return_output: "ForReturnInvocationOutput",
-    ) -> None:
-        for_output = self._state.results.get(for_exec_node_id)
-        if not isinstance(for_output, ForInvocationOutput):
-            return
-
-        return_outputs = self._get_ordered_for_return_outputs(for_exec_node_id, source_return_id)
-        self._state._tx_set_attr(for_output, "output_collection", [output.output for output in return_outputs])
-        self._state._tx_set_attr(
-            for_output,
-            "final_state",
-            self._get_loop_state_for_next_iteration(for_exec_node_id, return_output),
-        )
-        self._state._mark_loop_context_finalized(source_for_id, for_exec_node_id)
-
     def _try_schedule_next_for_iteration(self, exec_node_id: str, output: BaseInvocationOutput) -> Optional[str]:
-        if not isinstance(output, ForReturnInvocationOutput):
-            return None
-        if not isinstance(self._state.execution_graph.get_node(exec_node_id), ForReturnInvocation):
-            return None
-
-        for_exec_node_id = self._get_for_parent(exec_node_id)
-        if for_exec_node_id is None:
-            return None
-
-        for_node = self._state.execution_graph.get_node(for_exec_node_id)
-        if not isinstance(for_node, ForInvocation):
-            return None
-
-        self._state._complete_for_continuation(for_exec_node_id, output.model_dump(mode="json"))
-
-        registry = self._state._prepared_registry()
-        source_for_id = registry.get_source_node_id(for_exec_node_id)
-        source_return_id = registry.get_source_node_id(exec_node_id)
-
-        next_index = for_node.index + 1
-        for_return_node = self._state.execution_graph.get_node(exec_node_id)
-        assert isinstance(for_return_node, ForReturnInvocation)
-        if next_index >= len(for_node.collection) or for_return_node.continue_condition is False:
-            self._finalize_for_outputs(for_exec_node_id, source_for_id, source_return_id, output)
-            self._state._materializer().create_nested_for_return(
-                inner_for_id=source_for_id,
-                prepared_inner_for_id=for_exec_node_id,
-            )
-            self._state._tx_set_attr(for_node, "collection", [])
-            return for_exec_node_id
-
-        next_state = self._get_loop_state_for_next_iteration(for_exec_node_id, output)
-        parent_iteration_path = self._state._get_for_parent_iteration_path(for_exec_node_id)
-
-        next_for_id = self._state._materializer().create_for_iteration(
-            source_for_id=source_for_id,
-            iteration_index=next_index,
-            collection=for_node.collection,
-            state=next_state,
-            iteration_path=(*parent_iteration_path, next_index),
-        )
-        self._state._discard_source_executed(source_for_id)
-        self._state._materializer().create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=next_for_id)
-        self._state._tx_set_attr(for_node, "collection", [])
-        return None
+        return self._state._try_schedule_next_for_iteration(exec_node_id, output)
 
     def _try_materialize_deferred_nested_for_body(self, exec_node_id: str) -> None:
         completed_source_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
@@ -2418,6 +2296,8 @@ class _GenericGraphSchedulerAdapter:
         self._state._set_prepared_exec_state(exec_node_id, "executed")
         self._state._tx_add_set(self._state.executed, exec_node_id)
         self._state._tx_set_mapping(self._state.results, exec_node_id, output)
+        if isinstance(node, ForInvocation) and node.index >= 0:
+            self._state._for_continuation(exec_node_id)
         if isinstance(node, IterateInvocation):
             self._state._record_iterate_stream(exec_node_id, output)
         if isinstance(node, (IterateInvocation, CollectInvocation)):
@@ -2445,12 +2325,17 @@ class _GenericGraphSchedulerAdapter:
             self.register_node(exec_node_id)
         if exec_node_id not in self._state.indegree:
             raise KeyError(f"indegree missing for exec node {exec_node_id}")
+        if exec_node_id in self._scheduler.executed:
+            # Compatibility callers may advance with the invocation result and then replace that result explicitly.
+            self._state._tx_set_mapping(self._state.results, exec_node_id, output)
+            return []
         dependents = self._scheduler.plan.dependents(exec_node_id)
         for dependent in dependents:
             if dependent not in self._state.indegree:
                 raise KeyError(f"indegree missing for exec node {dependent}")
         self._remove_projected(exec_node_id)
         self._record_completed_node(exec_node_id, output)
+        finalized_for_exec_node_id = self._state._try_schedule_next_for_iteration(exec_node_id, output)
         self._mark_source_node_complete(exec_node_id)
         # A condition may become resolvable when this node completes. Resolve it
         # while the state has the completed result, before recalculating generic
@@ -2463,7 +2348,15 @@ class _GenericGraphSchedulerAdapter:
             self._state._tx_set_mapping(self._state.indegree, dependent, self._scheduler.indegree[dependent])
         for ready_node_id in newly_ready:
             self._project_ready_node(ready_node_id)
-        return []
+        if finalized_for_exec_node_id is None:
+            return []
+        finalized_for_node = self._state.execution_graph.get_node(finalized_for_exec_node_id)
+        finalized_for_output = self._state.results.get(finalized_for_exec_node_id)
+        if not isinstance(finalized_for_node, ForInvocation) or not isinstance(
+            finalized_for_output, ForInvocationOutput
+        ):
+            return []
+        return [(finalized_for_node, finalized_for_output)]
 
     def set_ready_order(self, ready_order: Iterable[str]) -> None:
         self._scheduler.set_ready_order(ready_order)
@@ -4704,18 +4597,169 @@ class GraphExecutionState(BaseModel):
             self._execution_materializer = _ExecutionMaterializer(self)
         return self._execution_materializer
 
+    def _get_for_parent(self, exec_node_id: str) -> Optional[str]:
+        source_return_id = self._prepared_registry().get_source_node_id(exec_node_id)
+        iteration_path = self._get_iteration_path(exec_node_id)
+        source_for_id = self._get_for_source_by_return_id().get(source_return_id)
+        if source_for_id is not None:
+            prepared_for_id = self._get_prepared_for_index().get((source_for_id, iteration_path))
+            if prepared_for_id is not None:
+                return prepared_for_id
+
+        # The indexed source/path lookup is the normal path. The ancestor fallback only covers legacy execution
+        # graphs whose durable linkage was not materialized; keep it explicit so an unexpected miss is diagnosable.
+        execution_graph = self._get_execution_graph_flat()
+        for ancestor_id in nx.ancestors(execution_graph, exec_node_id):
+            source_node = self.execution_graph.get_node(ancestor_id)
+            if isinstance(source_node, ForInvocation):
+                return ancestor_id
+
+        # An empty nested Iterate has no item execution node, so its synthetic Collect and ForReturn have no
+        # execution-graph edge back to their owning For. The same indexed lookup handles this case when the
+        # synthetic node has been assigned its durable parent path.
+        if source_for_id is not None:
+            for prepared_for_id in self._prepared_registry().get_prepared_ids(source_for_id):
+                prepared_for_node = self.execution_graph.get_node(prepared_for_id)
+                if not isinstance(prepared_for_node, ForInvocation) or prepared_for_node.index < 0:
+                    continue
+                if self._get_iteration_path(prepared_for_id) == iteration_path:
+                    return prepared_for_id
+        return None
+
+    def _get_loop_state_for_next_iteration(
+        self, for_exec_node_id: str, return_output: ForReturnInvocationOutput
+    ) -> LoopState:
+        if return_output.state is not None:
+            return return_output.state
+
+        for_output = self.results.get(for_exec_node_id)
+        if isinstance(for_output, ForInvocationOutput):
+            return for_output.state
+
+        return LoopState()
+
+    def _get_ordered_for_return_outputs(
+        self, for_exec_node_id: str, source_return_id: str
+    ) -> list[ForReturnInvocationOutput]:
+        parent_iteration_path = self._get_for_parent_iteration_path(for_exec_node_id)
+        prepared_return_ids = self._prepared_registry().get_prepared_ids(source_return_id)
+        prepared_return_ids = [
+            prepared_return_id
+            for prepared_return_id in prepared_return_ids
+            if self._get_iteration_path(prepared_return_id)[:-1] == parent_iteration_path
+        ]
+        prepared_return_ids = sorted(prepared_return_ids, key=self._get_iteration_path)
+        return [
+            output
+            for prepared_return_id in prepared_return_ids
+            if isinstance((output := self.results.get(prepared_return_id)), ForReturnInvocationOutput)
+        ]
+
+    def _finalize_for_outputs(
+        self,
+        for_exec_node_id: str,
+        source_for_id: str,
+        source_return_id: str,
+        return_output: ForReturnInvocationOutput,
+    ) -> None:
+        for_output = self.results.get(for_exec_node_id)
+        if not isinstance(for_output, ForInvocationOutput):
+            return
+
+        return_outputs = self._get_ordered_for_return_outputs(for_exec_node_id, source_return_id)
+        self._tx_set_attr(for_output, "output_collection", [output.output for output in return_outputs])
+        self._tx_set_attr(
+            for_output,
+            "final_state",
+            self._get_loop_state_for_next_iteration(for_exec_node_id, return_output),
+        )
+        self._mark_loop_context_finalized(source_for_id, for_exec_node_id)
+
+    def _try_schedule_next_for_iteration(self, exec_node_id: str, output: BaseInvocationOutput) -> Optional[str]:
+        """Advance one For continuation without making the generic scheduler know loop semantics."""
+
+        if not isinstance(output, ForReturnInvocationOutput):
+            return None
+        if not isinstance(self.execution_graph.get_node(exec_node_id), ForReturnInvocation):
+            return None
+
+        for_exec_node_id = self._get_for_parent(exec_node_id)
+        if for_exec_node_id is None:
+            return None
+
+        for_node = self.execution_graph.get_node(for_exec_node_id)
+        if not isinstance(for_node, ForInvocation):
+            return None
+
+        self._complete_for_continuation(for_exec_node_id, output.model_dump(mode="json"))
+
+        registry = self._prepared_registry()
+        source_for_id = registry.get_source_node_id(for_exec_node_id)
+        source_return_id = registry.get_source_node_id(exec_node_id)
+
+        next_index = for_node.index + 1
+        for_return_node = self.execution_graph.get_node(exec_node_id)
+        assert isinstance(for_return_node, ForReturnInvocation)
+        if next_index >= len(for_node.collection) or for_return_node.continue_condition is False:
+            self._finalize_for_outputs(for_exec_node_id, source_for_id, source_return_id, output)
+            self._materializer().create_nested_for_return(
+                inner_for_id=source_for_id,
+                prepared_inner_for_id=for_exec_node_id,
+            )
+            self._tx_set_attr(for_node, "collection", [])
+            return for_exec_node_id
+
+        next_state = self._get_loop_state_for_next_iteration(for_exec_node_id, output)
+        parent_iteration_path = self._get_for_parent_iteration_path(for_exec_node_id)
+
+        next_for_id = self._materializer().create_for_iteration(
+            source_for_id=source_for_id,
+            iteration_index=next_index,
+            collection=for_node.collection,
+            state=next_state,
+            iteration_path=(*parent_iteration_path, next_index),
+        )
+        self._discard_source_executed(source_for_id)
+        self._materializer().create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=next_for_id)
+        self._tx_set_attr(for_node, "collection", [])
+        return None
+
+    def _can_use_generic_for_scheduler(self) -> bool:
+        """Allow generic routing only for one flat For body with no other control-flow node."""
+
+        if any(
+            isinstance(node, (IterateInvocation, CollectInvocation, IfInvocation, CallSavedWorkflowInvocation))
+            for node in self.graph.nodes.values()
+        ):
+            return False
+        for_nodes = [node for node in self.graph.nodes.values() if isinstance(node, ForInvocation)]
+        return_nodes = [node for node in self.graph.nodes.values() if isinstance(node, ForReturnInvocation)]
+        if len(for_nodes) != 1 or len(return_nodes) != 1:
+            return False
+        if self.graph._get_input_edges(for_nodes[0].id, COLLECTION_FIELD) or not for_nodes[0].collection:
+            return False
+        body_path = self.graph._get_for_body_path_to_return(for_nodes[0].id, self._get_source_graph_flat())
+        if body_path is None:
+            return False
+        body_node_ids, return_node_id = body_path
+        return return_node_id == return_nodes[0].id and not any(
+            isinstance(self.graph.get_node(node_id), (ForInvocation, ForReturnInvocation))
+            for node_id in body_node_ids
+            if node_id != return_node_id
+        )
+
     def _can_use_generic_scheduler(self) -> bool:
-        """Use generic readiness for static graphs and direct Iterate/Collect control flow."""
+        """Use generic readiness for static graphs and supported direct control flow."""
 
         control_nodes = (ForInvocation, ForReturnInvocation)
+        if any(isinstance(node, control_nodes) for node in self.graph.nodes.values()):
+            return self._can_use_generic_for_scheduler()
         if any(isinstance(node, (IterateInvocation, CollectInvocation)) for node in self.graph.nodes.values()):
             return not any(
                 isinstance(node, (*control_nodes, IfInvocation, CallSavedWorkflowInvocation))
                 for node in self.graph.nodes.values()
             )
-        return not any(isinstance(node, control_nodes) for node in self.graph.nodes.values()) and not any(
-            isinstance(node, CallSavedWorkflowInvocation) for node in self.graph.nodes.values()
-        )
+        return not any(isinstance(node, CallSavedWorkflowInvocation) for node in self.graph.nodes.values())
 
     def _scheduler(self) -> _ExecutionScheduler | _GenericGraphSchedulerAdapter:
         if self._execution_scheduler is None:

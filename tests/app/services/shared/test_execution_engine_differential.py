@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from invokeai.app.invocations.logic import IfInvocation
+from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation, LoopState, StateSetInvocation
 from invokeai.app.invocations.math import AddInvocation
 from invokeai.app.invocations.primitives import BooleanInvocation
 from invokeai.app.services.shared import graph as graph_module
@@ -27,6 +28,7 @@ from invokeai.app.services.shared.graph import (
     _GenericGraphSchedulerAdapter,
     _IfBranchScheduler,
 )
+from tests.test_nodes import AnyTypeTestInvocation
 
 FIXTURE_PATH = Path(__file__).parents[3] / "fixtures" / "execution_engine" / "static_dag_v1.json"
 
@@ -95,6 +97,81 @@ def _nested_if_graph() -> Graph:
     connect("inner_if", "value", "outer_if", "true_input")
     connect("outer_false", "value", "outer_if", "false_input")
     connect("outer_if", "value", "sink", "a")
+    return graph
+
+
+def _flat_for_graph(*, with_after: bool = False) -> Graph:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[1, 2]))
+    graph.add_node(AddInvocation(id="body", b=10))
+    graph.add_node(ForReturnInvocation(id="return"))
+    if with_after:
+        graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="item"),
+            destination=EdgeConnection(node_id="body", field="a"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="body", field="value"),
+            destination=EdgeConnection(node_id="return", field="output"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            type="loop_linkage",
+            source=EdgeConnection(node_id="for", field="loop_linkage"),
+            destination=EdgeConnection(node_id="return", field="loop_linkage"),
+        )
+    )
+    if with_after:
+        graph.add_edge(
+            Edge(
+                source=EdgeConnection(node_id="for", field="output_collection"),
+                destination=EdgeConnection(node_id="after", field="value"),
+            )
+        )
+    return graph
+
+
+def _flat_for_state_graph(continue_condition: bool) -> Graph:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[1, 2, 3], state=LoopState(values={"count": 0})))
+    graph.add_node(StateSetInvocation(id="body", key="count"))
+    graph.add_node(ForReturnInvocation(id="return", continue_condition=continue_condition))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="state"),
+            destination=EdgeConnection(node_id="body", field="state"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="item"),
+            destination=EdgeConnection(node_id="body", field="value"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="for", field="item"),
+            destination=EdgeConnection(node_id="return", field="output"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="body", field="state"),
+            destination=EdgeConnection(node_id="return", field="state"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            type="loop_linkage",
+            source=EdgeConnection(node_id="for", field="loop_linkage"),
+            destination=EdgeConnection(node_id="return", field="loop_linkage"),
+        )
+    )
     return graph
 
 
@@ -517,6 +594,102 @@ def test_nested_if_fresh_execution_matches_compatibility_scheduler(
     )
     assert generic_state.is_complete()
     assert compatibility_state.is_complete()
+
+
+def test_flat_for_fresh_execution_matches_compatibility_scheduler() -> None:
+    generic_trace, generic_state = _run_graph(GraphExecutionState(graph=_flat_for_graph()))
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=_flat_for_graph()),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace == ["for", "body", "return", "for", "body", "return"]
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    final_for_id = max(
+        (
+            exec_node_id
+            for exec_node_id, source_node_id in generic_state.prepared_source_mapping.items()
+            if source_node_id == "for"
+        ),
+        key=lambda exec_node_id: generic_state.execution_graph.get_node(exec_node_id).index,
+    )
+    assert generic_state.results[final_for_id].output_collection == [11, 12]
+    assert generic_state._generic_runtime().continuations
+    assert all(
+        continuation.status == "completed" for continuation in generic_state._generic_runtime().continuations.values()
+    )
+    assert len(generic_state._generic_runtime().continuations) == 2
+    assert {continuation.owner_id for continuation in generic_state._generic_runtime().continuations.values()} == {
+        exec_node_id
+        for exec_node_id, source_node_id in generic_state.prepared_source_mapping.items()
+        if source_node_id == "for"
+    }
+    assert isinstance(compatibility_state._execution_scheduler, _ExecutionScheduler)
+
+
+def test_flat_for_fresh_execution_releases_after_loop_consumer() -> None:
+    generic_trace, generic_state = _run_graph(
+        GraphExecutionState(graph=_flat_for_graph(with_after=True)),
+    )
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=_flat_for_graph(with_after=True)),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace == ["for", "body", "return", "for", "body", "return", "after"]
+    after_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in generic_state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert generic_state.results[after_id].value == [11, 12]
+    assert compatibility_state.results[
+        next(
+            exec_node_id
+            for exec_node_id, source_node_id in compatibility_state.prepared_source_mapping.items()
+            if source_node_id == "after"
+        )
+    ].value == [11, 12]
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+
+
+@pytest.mark.parametrize(
+    ("continue_condition", "expected_trace", "expected_collection", "expected_state"),
+    [
+        (True, ["for", "body", "return"] * 3, [1, 2, 3], {"count": 3}),
+        (False, ["for", "body", "return"], [1], {"count": 1}),
+    ],
+)
+def test_flat_for_fresh_execution_matches_state_and_break_semantics(
+    continue_condition: bool,
+    expected_trace: list[str],
+    expected_collection: list[int],
+    expected_state: dict[str, int],
+) -> None:
+    generic_trace, generic_state = _run_graph(
+        GraphExecutionState(graph=_flat_for_state_graph(continue_condition)),
+    )
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=_flat_for_state_graph(continue_condition)),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace == expected_trace
+    final_for_id = max(
+        (
+            exec_node_id
+            for exec_node_id, source_node_id in generic_state.prepared_source_mapping.items()
+            if source_node_id == "for"
+        ),
+        key=lambda exec_node_id: generic_state.execution_graph.get_node(exec_node_id).index,
+    )
+    final_for_output = generic_state.results[final_for_id]
+    assert final_for_output.output_collection == expected_collection
+    assert final_for_output.final_state == LoopState(values=expected_state)
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
 
 
 def test_nested_if_checkpoint_restore_matches_compatibility_scheduler() -> None:

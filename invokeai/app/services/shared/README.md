@@ -20,6 +20,12 @@ the generic adapter. Its adapter-level readiness predicate waits for canonical I
 completion mirrors each Iterate result into that ledger before releasing `Collect`; materialization still owns copy
 expansion, iteration paths, grouping, and explicit empty-stream closure. Mixed control-flow shapes remain on the legacy
 compatibility scheduler until their differential gates are complete.
+A fresh graph with exactly one static, non-empty `For`/`ForReturn` pair and ordinary body nodes also uses the generic
+adapter. It projects readiness and invokes the graph-state continuation boundary, which selects the next iteration or
+finalizes the aggregate without exposing a successor node ID to the generic scheduler. The materializer still owns
+execution-node copies, input hydration, iteration paths, and body expansion. Empty or input-driven collections,
+nested or multiple loops, mixed control flow, and saved-workflow calls remain on the compatibility scheduler until
+their own differential gates are complete.
 The runtime also exposes an additive execution-engine seam: frame-scoped gates, ordered streams, continuations, and
 authorized child-dependency records are stored in
 `invokeai.app.services.shared.execution_engine`; legacy graph and queue behavior is retained behind adapters while
@@ -137,9 +143,11 @@ Holds the state for a single run. Keeps the source graph intact and materializes
 set of internal helper classes. For ordinary static DAGs and legacy-shaped `If` graphs, readiness and completion are
 projected through the generic `ExecutionPlan`/`ExecutionScheduler` adapter. Direct `Iterate`/`Collect` graphs without
 other control-flow nodes also use that adapter: its readiness predicate waits for canonical streams to close and its
-completion mirrors Iterate outputs into the stream ledger. `For`, `ForReturn`, saved-workflow calls, and mixed
-control-flow shapes continue to use the legacy compatibility scheduler for materialization and queue lifecycle until
-their differential coverage is complete. `Iterate` also records non-empty item streams through the generic effect ledger;
+completion mirrors Iterate outputs into the stream ledger. A fresh graph with one static, non-empty flat
+`For`/`ForReturn` pair also uses the adapter for readiness and continuation transitions; graph state owns the
+invocation-specific continuation boundary while the generic scheduler remains opaque. Empty or input-driven `For`
+collections, nested or multiple loops, saved-workflow calls, and mixed control-flow shapes continue to use the legacy
+compatibility scheduler until their differential coverage is complete. `Iterate` also records non-empty item streams through the generic effect ledger;
 the materializer remains authoritative for expansion, iteration paths, collector grouping, and
 empty-source compatibility handling. Direct `Collect.item` consumers now use the closed stream ledger when available;
 the full Iterate/Collect compatibility matrix covers empty, nested, fan-in, partial rehydration, failure, cancellation,
@@ -180,7 +188,9 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
 - **Ready queues grouped by class** (private projection): `_ready_queues: dict[class_name, deque[str]]` and
   `_active_class: Optional[str]`. Ordinary static DAGs and legacy-shaped `If` graphs derive readiness from the generic
   scheduler; the `If` adapter stores frame-local activation dependencies whose private gate state plus persisted token
-  checks control generic branch readiness. Loop and saved-workflow graphs retain the legacy scheduler. Optional
+  checks control generic branch readiness. Supported static flat `For` graphs use the generic adapter for readiness and
+  continuation projection; empty/input-driven, nested/multiple-loop, mixed, and saved-workflow graphs retain the legacy
+  scheduler. Optional
   `ready_order: list[str]` prioritizes classes. Queues are rebuilt from persisted execution state when a session is
   deserialized.
 
@@ -234,12 +244,19 @@ materialized-result fallback needed by older snapshots. This is not yet token-au
 `Collect` migration: the materializer still owns copy expansion, iteration paths, collector grouping, collection-input
 hydration, and empty-source closure; no author-time activation ports or literal successor IDs are introduced.
 
+For a fresh graph with one static, non-empty flat `For`/`ForReturn` pair, the same adapter now projects ordinary
+readiness and calls the graph-state continuation boundary after each `ForReturn`. That boundary carries returned state,
+honors `continue_condition`, creates the next prepared iteration when needed, and finalizes `output_collection` and
+`final_state`. The generic scheduler receives only opaque node IDs and dependencies; it never receives a literal next
+node ID. Empty/input-driven collections and nested, multiple, or mixed loop shapes remain compatibility-owned.
+
 `ExecutionFrame` identifies the owning state, loop iteration path, and workflow-call depth. `ExecutionReference`
 identifies one prepared execution node and its frame. `ExecutionToken` records an output port, value, frame, token
 kind, and optional sequence. `loop_linkage` remains association metadata and never becomes a data token. This ledger is
 currently additive. Ordinary static-DAG and legacy-shaped `If` readiness comes from the generic scheduler through a
-compatibility projection; the activation token is authoritative for generic `If` branch readiness, while materialization
-and type-specific control paths remain authoritative for branch topology, loops, and workflow-call graphs. A future
+compatibility projection; the activation token is authoritative for generic `If` branch readiness. Supported static flat
+`For` readiness and continuation transitions also use the generic adapter, while materialization and type-specific
+control paths remain authoritative for unsupported loop shapes and workflow-call graphs. A future
 migration may make token-built topology and the remaining control-flow paths authoritative only after compatibility is proven.
 
 The generic scheduler is an in-memory graph-state component only. It does not
