@@ -28,6 +28,7 @@ from invokeai.app.api.routers import (
     boards,
     client_state,
     custom_nodes,
+    fonts,
     gallery,
     image_map,
     image_moves,
@@ -571,6 +572,10 @@ def _is_project_write(method: str, path: str) -> bool:
     return bool(project_id) and "/" not in project_id
 
 
+def _is_font_upload(method: str, path: str) -> bool:
+    return method == "POST" and path in ("/api/v1/fonts", "/api/v1/fonts/validate")
+
+
 class ProjectWriteLimitASGIMiddleware(RequestBodyLimitASGIMiddleware):
     """Bound project writes before FastAPI parses their JSON documents."""
 
@@ -657,6 +662,23 @@ app.add_middleware(
     identify_user=_identify_video_upload_user_async,
 )
 app.add_middleware(
+    RequestBodyLimitASGIMiddleware,
+    matches_request=_is_font_upload,
+    too_large_detail=lambda _actual, limit: f"Font upload exceeds maximum request size ({limit} bytes)",
+    capacity_refusal_detail=lambda per_user: (
+        "Too many concurrent font uploads for this user; try again shortly"
+        if per_user
+        else "Too many concurrent font uploads; try again shortly"
+    ),
+    max_body_bytes=app_config.max_font_upload_bytes + fonts.FONT_UPLOAD_MULTIPART_OVERHEAD,
+    max_concurrent=fonts.MAX_CONCURRENT_FONT_UPLOADS,
+    max_concurrent_per_user=fonts.MAX_CONCURRENT_FONT_UPLOADS_PER_USER,
+    identify_user=_identify_video_upload_user_async,
+    idle_timeout_seconds=fonts.FONT_UPLOAD_IDLE_TIMEOUT_SECONDS,
+    max_upload_duration_seconds=fonts.FONT_UPLOAD_MAX_DURATION_SECONDS,
+    retry_after_seconds=1,
+)
+app.add_middleware(
     ProjectWriteLimitASGIMiddleware,
     max_body_bytes=projects.PROJECT_WRITE_REQUEST_MAX_BYTES,
     max_concurrent=projects.MAX_CONCURRENT_PROJECT_WRITES,
@@ -693,6 +715,7 @@ configure_gzip(app, app_config.http_compression_level)
 # Authentication router should be first so it's registered before protected routes
 app.include_router(auth.auth_router, prefix="/api")
 app.include_router(utilities.utilities_router, prefix="/api")
+app.include_router(fonts.fonts_router, prefix="/api")
 app.include_router(model_manager.model_manager_router, prefix="/api")
 app.include_router(image_moves.image_moves_router, prefix="/api")
 app.include_router(images.images_router, prefix="/api")

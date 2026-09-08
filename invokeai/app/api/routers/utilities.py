@@ -40,7 +40,9 @@ FONT_MEDIA_TYPES = {
     ".woff": "font/woff",
     ".woff2": "font/woff2",
 }
-FONT_CACHE_CONTROL = "private, max-age=31536000, immutable"
+# Directory-backed files can be replaced in place. They must not be pinned by the browser's
+# immutable cache, otherwise a rescan can expose stale bytes to a project.
+FONT_CACHE_CONTROL = "private, no-cache"
 
 # The underlying model loader is not thread-safe, so we serialize load_model calls.
 _model_load_lock = threading.Lock()
