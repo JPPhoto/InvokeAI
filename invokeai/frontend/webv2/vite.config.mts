@@ -145,6 +145,7 @@ const CANVAS_LAYER_SHARED_MODULES = [
   '/workbench/widgets/canvas/color-system/colorPair.ts',
   '/workbench/widgets/canvas/color-system/useActiveColors.ts',
   '/workbench/widgets/canvas/engineStoreHooks.ts',
+  '/workbench/widgets/canvas/textFontStyle.tsx',
   '/workbench/widgets/canvas/tool-presentation/FormControls.tsx',
   '/workbench/widgets/canvas/tool-presentation/PropertyPrimitives.tsx',
   '/workbench/widgets/canvas/tool-presentation/propertyGroupStore.ts',

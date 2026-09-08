@@ -2979,6 +2979,7 @@
       "source:src/workbench/widgets/canvas/settingsContribution.ts",
       "source:src/workbench/widgets/canvas/stagingPreview.ts",
       "source:src/workbench/widgets/canvas/surfaceFocus.ts",
+      "source:src/workbench/widgets/canvas/textFontStyle.tsx",
       "source:src/workbench/widgets/canvas/tool-options/BrushOptions.tsx",
       "source:src/workbench/widgets/canvas/tool-options/CanvasOptionsBar.tsx",
       "source:src/workbench/widgets/canvas/tool-options/FilterOptions.tsx",
