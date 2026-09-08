@@ -92,9 +92,10 @@ are persisted under the invocation reference. Session-built effect references ca
 iteration-path, and workflow-call-depth identity, and stale or cross-scope effects are rejected before mutation. They
 never encode `loop_linkage` as a data token. A fresh graph with exactly one static, non-empty flat `For`/`ForReturn`
 pair now uses the generic scheduler adapter for readiness and continuation transitions. Graph state owns the
-invocation-specific continuation boundary: it carries returned state, honors `continue_condition`, materializes the
-next body iteration, and finalizes the aggregate. The generic scheduler remains opaque and never receives a literal
-successor node ID. Empty or input-driven collections, nested or multiple loops, and mixed control flow remain on the
+generic continuation boundary: it carries returned state, honors `continue_condition`, materializes the next body
+iteration, and finalizes the aggregate. The generic scheduler remains opaque and never receives a literal successor
+node ID. The compatibility continuation bridge is retained only for unsupported loop shapes and explicitly
+legacy-loaded snapshots. Empty or input-driven collections, nested or multiple loops, and mixed control flow remain on the
 compatibility scheduler; this additive effect seam does not claim generic scheduling for those shapes. `Iterate` records ordered item tokens in a closed `StreamBuffer`; an empty `Iterate` records an
 explicit empty close. A direct `Iterate.item` consumer waits for the canonical stream to close, then `Collect` consumes
 its ordered values; a missing stream falls back to materialized results for legacy snapshots. The materializer still
@@ -127,6 +128,14 @@ the prepared index, collection total, and state; malformed effects leave the
 graph state unchanged.
 This evidence permits the supported flat routing slice only; it does not remove
 the compatibility continuation/materialization owner for unsupported shapes.
+
+`GraphExecutionState.complete()` remains the compatibility entry point for callers that already have a node result.
+Its first JSON-safe completion uses the same validated, atomic ledger path as `apply()`, including output tokens and
+synthetic `For`/`ForReturn` continuation effects. It still permits historical idempotent result replacement for an
+already-applied node; arbitrary in-memory values that cannot be represented in the JSON ledger remain a scheduler-only
+compatibility case and cannot be persisted. When an explicitly unversioned, partially completed legacy snapshot is
+loaded, missing flat-loop continuation buckets are synthesized before a versioned re-save so the next load remains
+valid; terminal legacy snapshots retain their legacy no-ledger compatibility.
 
 `IfInvocation` now declares the same seam for branch activation: it emits one frame-scoped activation token for the
 selected branch, and the graph state validates and persists it after invocation. For a fresh generic `If`, the dedicated

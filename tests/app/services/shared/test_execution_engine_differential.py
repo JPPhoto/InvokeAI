@@ -813,6 +813,73 @@ def test_flat_for_fresh_execution_matches_compatibility_scheduler() -> None:
     assert isinstance(compatibility_state._execution_scheduler, _ExecutionScheduler)
 
 
+def test_flat_for_generic_path_does_not_use_compatibility_continuation_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_compatibility_bridge(*_: object, **__: object) -> None:
+        raise AssertionError("generic For execution used the compatibility continuation bridge")
+
+    monkeypatch.setattr(GraphExecutionState, "_try_schedule_next_for_iteration", fail_compatibility_bridge)
+
+    trace, state = _run_graph_with_effects(GraphExecutionState(graph=_flat_for_graph()))
+
+    assert trace == ["for", "body", "return", "for", "body", "return"]
+    assert state.is_complete()
+    assert _final_for_output(state).output_collection == [11, 12]
+
+
+def test_direct_flat_for_completion_persists_continuations_and_final_tokens() -> None:
+    trace, state = _run(GraphExecutionState(graph=_flat_for_graph()))
+
+    assert trace == ["for", "body", "return", "for", "body", "return"]
+    snapshot = dump_execution_state(state)
+    restored = load_execution_state(snapshot)
+    final_for_id = max(
+        state.source_prepared_mapping["for"],
+        key=lambda exec_node_id: state.execution_graph.get_node(exec_node_id).index,
+    )
+    final_ref = state.execution_refs[final_for_id]
+    final_output = state.results[final_for_id]
+    output_collection_token_id = f"{final_ref.reference_id}:output_collection"
+    final_state_token_id = f"{final_ref.reference_id}:final_state"
+
+    assert snapshot["execution_effects"]
+    assert state.execution_tokens[output_collection_token_id].value == final_output.output_collection == [11, 12]
+    assert state.execution_tokens[final_state_token_id].value == final_output.final_state
+    assert restored.execution_tokens[output_collection_token_id].value == [11, 12]
+    assert restored.execution_tokens[final_state_token_id].value == final_output.final_state.model_dump(mode="json")
+    assert sorted(
+        (effect.operation, effect.continuation_kind)
+        for effects in state.execution_effects.values()
+        for effect in effects
+        if effect.kind == "continuation"
+    ) == [("complete", "for"), ("complete", "for"), ("start", "for"), ("start", "for")]
+    assert restored.is_complete()
+
+
+def test_legacy_flat_for_snapshot_uses_compatibility_scheduler() -> None:
+    _trace, partial_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_flat_for_graph()),
+        stop_after=1,
+    )
+    snapshot = dump_execution_state(partial_state)
+    snapshot.pop("execution_state_version")
+    snapshot.pop("execution_effects")
+
+    restored = load_execution_state(snapshot)
+    migrated = load_execution_state(dump_execution_state(restored))
+
+    assert isinstance(restored._scheduler(), _ExecutionScheduler)
+    remaining_trace, restored = _run(restored)
+    migrated_trace, migrated = _run(migrated)
+    assert remaining_trace == ["body", "return", "for", "body", "return"]
+    assert migrated_trace == remaining_trace
+    assert restored.is_complete()
+    assert migrated.is_complete()
+    assert _final_for_output(restored).output_collection == [11, 12]
+    assert _final_for_output(migrated).output_collection == [11, 12]
+
+
 def test_flat_for_fresh_execution_releases_after_loop_consumer() -> None:
     generic_trace, generic_state = _run_graph_with_effects(
         GraphExecutionState(graph=_flat_for_graph(with_after=True)),

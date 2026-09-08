@@ -197,11 +197,15 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
 - `next()` Returns the next ready exec node. If none are ready, it asks the materializer to expand more source nodes and
   then retries. If the execution state is paused on a workflow call boundary, it returns `None` without scheduling more
   work. Before returning a node, the runtime helper deep-copies inbound values into the node fields.
-- `complete(node_id, output)` Records the result, marks the exec node executed, marks the source node executed once all
-  of its prepared exec copies are done, then decrements downstream indegrees and enqueues newly ready nodes.
+- `complete(node_id, output)` is the compatibility completion boundary. For a first JSON-safe completion it delegates
+  validation and the atomic scheduler/ledger transition to `apply()`, including output tokens and synthetic
+  continuation effects for direct `For`/`ForReturn` callers. An already-applied node retains the historical
+  idempotent result-replacement behavior; in-memory values that cannot be represented in the JSON effect ledger use
+  the scheduler-only compatibility path and are not persistable.
 - `apply(execution_ref, output, effects)` validates a result against its prepared node and frame, then applies the
   result through the existing scheduler while recording references, output/effect tokens, and JSON-safe effects. The
-  transition and ledger update are atomic. `complete()` remains the compatibility boundary used by the scheduler.
+  transition and ledger update are atomic. Direct `complete()` callers therefore receive the same durable state for
+  supported values without changing the invocation output contract.
 
 #### Current execution-effects seam
 
@@ -242,10 +246,12 @@ materialized-result fallback needed by older snapshots. This is not yet token-au
 hydration, and empty-source closure; no author-time activation ports or literal successor IDs are introduced.
 
 For a fresh graph with one static, non-empty flat `For`/`ForReturn` pair, the same adapter now projects ordinary
-readiness and calls the graph-state continuation boundary after each `ForReturn`. That boundary carries returned state,
-honors `continue_condition`, creates the next prepared iteration when needed, and finalizes `output_collection` and
-`final_state`. The generic scheduler receives only opaque node IDs and dependencies; it never receives a literal next
-node ID. Empty/input-driven collections and nested, multiple, or mixed loop shapes remain compatibility-owned.
+readiness and calls the graph-state generic continuation boundary after each `ForReturn`. That boundary carries returned
+state, honors `continue_condition`, creates the next prepared iteration when needed, and finalizes `output_collection`
+and `final_state`. The generic scheduler receives only opaque node IDs and dependencies; it never receives a literal
+next node ID. The compatibility continuation bridge remains available only for unsupported loop shapes and explicitly
+legacy-loaded snapshots. Empty/input-driven collections and nested, multiple, or mixed loop shapes remain
+compatibility-owned.
 
 `ExecutionFrame` identifies the owning state, loop iteration path, and workflow-call depth. `ExecutionReference`
 identifies one prepared execution node and its frame. `ExecutionToken` records an output port, value, frame, token
@@ -294,13 +300,12 @@ prepared node, while unknown references, pending-node buckets, missing executed 
 effects, and malformed ownership are rejected. Persisted `For` outputs are checked against prepared iteration data and,
 after finalization, their authoritative returned collection and final state. Unversioned legacy snapshots retain the
 compatibility loader. `For` start payloads must match the prepared index, collection total, and state before mutation. This is the invocation/effect ownership
-seam only: the legacy scheduler still resolves linkage, while the generic
-adapter's graph-state boundary creates the next prepared iteration, aggregates
-outputs, and finalizes the supported flat loop. The legacy scheduler still
-owns empty/input-driven, nested, multiple-loop, and mixed-loop
-materialization; unversioned legacy snapshots retain their compatibility
-loader. The supported fresh static flat `For`/`ForReturn` shape uses the
-generic adapter. For
+seam: the generic adapter calls the graph-state generic continuation boundary,
+which creates the next prepared iteration, aggregates outputs, and finalizes the
+supported flat loop. The compatibility bridge remains for empty/input-driven,
+nested, multiple-loop, mixed-loop, and legacy-snapshot execution; those paths
+retain their existing materialization and linkage ownership. The supported
+fresh static flat `For`/`ForReturn` shape uses the generic adapter. For
 `If`, generic readiness consumes opaque frame-local plan dependencies and requires
 both matching private `ActivationGate` runtime state and a persisted activation token;
 generic resolution retires unselected prepared nodes through scheduler discard. The forced compatibility
