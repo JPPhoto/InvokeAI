@@ -447,6 +447,8 @@ Workflow-call note:
 - `_ExecutionScheduler` Owns materialized-graph indegree transitions, class-grouped ready queues, downstream release,
   control-flow continuation scheduling, and the shared opaque activation-dependency projection for compatibility graphs.
 - `_ExecutionRuntime` Owns iteration-path lookup, collect input ordering, and input hydration for prepared exec nodes.
+  Its implementation lives in the private `graph_execution_runtime.py` module; `graph.py` re-exports the runtime
+  class and its fan-in record types so existing imports and test seams remain stable.
 - `ExecutionEngineRuntime` Owns the typed gate, stream, and continuation records used by compatibility adapters. The
   canonical stream for a prepared `IterateInvocation` is keyed by the source iterator and its parent iteration path;
   its item/close effects and legacy output mirroring update the same idempotent buffer. Direct `CollectInvocation.item`
