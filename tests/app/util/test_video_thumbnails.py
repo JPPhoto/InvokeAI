@@ -206,12 +206,13 @@ class TestStreamedDecoderIsBounded:
 
     @pytest.mark.slow
     def test_consumer_time_does_not_count_as_decoder_inactivity(self, synthetic_mp4: Path) -> None:
-        """Marked slow: this one cannot be made robust under parallel execution.
+        """Marked slow: this one only holds on a quiet machine.
 
         The decoder has to deliver its first frame inside the same window the consumer then
-        sleeps past, so the test fails whenever FFmpeg startup is starved -- observed at 16 and
-        24 xdist workers, and still failing after the window was widened from 2s to 5s. Making
-        it deterministic needs an injectable clock in the decoder rather than a larger number.
+        sleeps past, so it fails whenever FFmpeg startup is starved -- observed at 16 and 24 xdist
+        workers, and still failing after the window was widened from 2s to 5s. Widening it further
+        is not the answer; running it where nothing competes for the cores is, until an injectable
+        clock makes the accounting observable without a real timer.
         """
         timeout = 5.0
         frames = iter_video_frames(synthetic_mp4, timeout=timeout)
