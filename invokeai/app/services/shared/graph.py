@@ -6681,11 +6681,11 @@ class GraphExecutionState(BaseModel):
         return next_node
 
     def _get_direct_iterate_collect_nodes(self) -> Optional[tuple[str, str, str, str, tuple[str, ...]]]:
-        """Return direct planner nodes, including up to two ordinary downstream consumers."""
+        """Return direct planner nodes, including ordinary downstream consumers."""
 
         if (
             self._legacy_snapshot_loaded
-            or len(self.graph.nodes) not in {4, 5, 6}
+            or len(self.graph.nodes) < 4
             or len(self.graph.edges) != len(self.graph.nodes) - 1
         ):
             return None

@@ -1493,9 +1493,62 @@ def test_direct_iterate_body_collect_two_downstream_consumers_admits_exact_shape
     )
     assert state._can_use_direct_iterate_collect_planner()
 
-    assert not GraphExecutionState(
-        graph=_direct_iterate_body_collect_graph(collection=["value"], downstream_count=3)
-    )._can_use_direct_iterate_collect_planner()
+
+def test_direct_iterate_body_collect_three_downstream_consumers_uses_private_planner() -> None:
+    state = GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=["value"], downstream_count=3))
+    assert state._get_direct_iterate_collect_nodes() == (
+        "source",
+        "iterate",
+        "body",
+        "collect",
+        ("after_1", "after_2", "after_3"),
+    )
+    assert state._can_use_direct_iterate_collect_planner()
+
+    with (
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "prepare",
+            side_effect=AssertionError("three direct downstream consumers must not use materializer.prepare"),
+        ) as prepare,
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "_get_collect_iteration_mapping_groups",
+            side_effect=AssertionError("three direct downstream consumers must not group collector inputs"),
+        ) as group_collector_inputs,
+    ):
+        trace, state = _run_graph(state)
+
+    assert trace == ["source", "iterate", "body", "collect", "after_1", "after_2", "after_3"]
+    for downstream_id in ("after_1", "after_2", "after_3"):
+        assert _source_output(state, downstream_id).value == ["value"]
+    assert state.is_complete()
+    prepare.assert_not_called()
+    group_collector_inputs.assert_not_called()
+
+
+@pytest.mark.parametrize("collection", [["first", None, "last"], []], ids=["ordered-none", "empty"])
+def test_direct_iterate_body_collect_three_downstream_consumers_matches_compatibility(
+    collection: list[Any],
+) -> None:
+    generic_trace, generic_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=collection, downstream_count=3))
+    )
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=collection, downstream_count=3)),
+        force_compatibility_scheduler=True,
+    )
+
+    expected_trace = ["source"] + ["iterate"] * len(collection) + ["body"] * len(collection)
+    expected_trace += ["collect", "after_1", "after_2", "after_3"]
+    assert generic_trace == expected_trace
+    assert generic_trace[:-3] == compatibility_trace[:-3]
+    assert sorted(generic_trace[-3:]) == sorted(compatibility_trace[-3:]) == ["after_1", "after_2", "after_3"]
+    for state in (generic_state, compatibility_state):
+        assert _source_output(state, "collect").collection == collection
+        for downstream_id in ("after_1", "after_2", "after_3"):
+            assert _source_output(state, downstream_id).value == collection
+        assert state.is_complete()
 
 
 def test_direct_iterate_body_collect_two_downstream_consumers_uses_private_planner() -> None:
@@ -1581,6 +1634,40 @@ def test_direct_iterate_body_collect_two_downstream_consumers_rolls_back_partial
     assert state.is_complete()
 
 
+def test_direct_iterate_body_collect_three_downstream_consumers_rolls_back_partial_expansion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = GraphExecutionState(
+        graph=_direct_iterate_body_collect_graph(collection=["first", "last"], downstream_count=3)
+    )
+    source_node = state.next()
+    assert source_node is not None
+    state.complete(source_node.id, source_node.invoke(Mock()))
+
+    original_create = GraphExecutionState._create_direct_execution_node_copy
+
+    def fail_at_third_downstream(self: GraphExecutionState, source_node_id: str, *args: Any, **kwargs: Any):
+        if source_node_id == "after_3":
+            raise RuntimeError("injected third downstream planner failure")
+        return original_create(self, source_node_id, *args, **kwargs)
+
+    monkeypatch.setattr(GraphExecutionState, "_create_direct_execution_node_copy", fail_at_third_downstream)
+    with pytest.raises(RuntimeError, match="injected third downstream planner failure"):
+        state.next()
+
+    assert set(state.source_prepared_mapping) == {"source"}
+    assert len(state.execution_graph.nodes) == 1
+    assert not state.execution_graph.edges
+
+    monkeypatch.setattr(GraphExecutionState, "_create_direct_execution_node_copy", original_create)
+    trace, state = _run_graph(state)
+
+    assert trace == ["iterate", "iterate", "body", "body", "collect", "after_1", "after_2", "after_3"]
+    for downstream_id in ("after_1", "after_2", "after_3"):
+        assert _source_output(state, downstream_id).value == ["first", "last"]
+    assert state.is_complete()
+
+
 def test_direct_iterate_body_collect_two_downstream_consumers_checkpoint_rehydrates() -> None:
     collection = ["first", None, "last"]
     expected_trace, expected_state = _run_graph(
@@ -1597,6 +1684,26 @@ def test_direct_iterate_body_collect_two_downstream_consumers_checkpoint_rehydra
     assert _source_output(resumed_state, "collect").collection == collection
     assert _source_output(resumed_state, "after_1").value == collection
     assert _source_output(resumed_state, "after_2").value == collection
+    assert resumed_state.is_complete()
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+
+
+def test_direct_iterate_body_collect_three_downstream_consumers_checkpoint_rehydrates() -> None:
+    collection = ["first", None, "last"]
+    expected_trace, expected_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=collection, downstream_count=3))
+    )
+    partial_trace, partial_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=collection, downstream_count=3)),
+        stop_after=3,
+    )
+
+    resumed_trace, resumed_state = _run_graph(load_execution_state(dump_execution_state(partial_state)))
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert _source_output(resumed_state, "collect").collection == collection
+    for downstream_id in ("after_1", "after_2", "after_3"):
+        assert _source_output(resumed_state, downstream_id).value == collection
     assert resumed_state.is_complete()
     assert _state_projection(resumed_state) == _state_projection(expected_state)
 
