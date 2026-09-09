@@ -6679,10 +6679,14 @@ class GraphExecutionState(BaseModel):
 
         return next_node
 
-    def _get_direct_iterate_collect_nodes(self) -> Optional[tuple[str, str, str, str]]:
-        """Return the source, iterator, body, and collector for the narrow direct planner shape."""
+    def _get_direct_iterate_collect_nodes(self) -> Optional[tuple[str, str, str, str, str | None]]:
+        """Return the direct planner nodes, including one optional ordinary downstream consumer."""
 
-        if self._legacy_snapshot_loaded or len(self.graph.nodes) != 4 or len(self.graph.edges) != 3:
+        if (
+            self._legacy_snapshot_loaded
+            or len(self.graph.nodes) not in {4, 5}
+            or len(self.graph.edges) != len(self.graph.nodes) - 1
+        ):
             return None
 
         iterator_ids = [node_id for node_id, node in self.graph.nodes.items() if isinstance(node, IterateInvocation)]
@@ -6735,7 +6739,23 @@ class GraphExecutionState(BaseModel):
         if self.graph._get_input_edges(collector_id) != [item_edge]:
             return None
 
-        return source_id, iterator_id, body_id, collector_id
+        downstream_id: str | None = None
+        downstream_edges = self.graph._get_output_edges(collector_id, COLLECTION_FIELD)
+        if len(self.graph.nodes) == 5:
+            if len(downstream_edges) != 1:
+                return None
+            downstream_id = downstream_edges[0].destination.node_id
+            downstream = self.graph.get_node(downstream_id)
+            if downstream_id in {source_id, iterator_id, body_id, collector_id} or isinstance(
+                downstream, (ForInvocation, ForReturnInvocation, IfInvocation, IterateInvocation, CollectInvocation)
+            ):
+                return None
+            if self.graph._get_input_edges(downstream_id) != downstream_edges:
+                return None
+        elif downstream_edges:
+            return None
+
+        return source_id, iterator_id, body_id, collector_id, downstream_id
 
     def _can_use_direct_iterate_collect_planner(self) -> bool:
         """Use fresh planner ownership only for the exact direct stream shape."""
@@ -6817,7 +6837,7 @@ class GraphExecutionState(BaseModel):
         node_ids = self._get_direct_iterate_collect_nodes()
         if node_ids is None:
             return
-        source_id, iterator_id, body_id, collector_id = node_ids
+        source_id, iterator_id, body_id, collector_id, downstream_id = node_ids
 
         if source_id not in self.source_prepared_mapping:
             source_node = self._create_direct_execution_node_copy(source_id)
@@ -6877,6 +6897,20 @@ class GraphExecutionState(BaseModel):
         ]
         attached_collector_edges = self._attach_direct_execution_edges(collector_node.id, collector_edges)
         self._initialize_direct_execution_node(collector_node.id, attached_collector_edges)
+
+        if downstream_id is not None:
+            downstream_node = self._create_direct_execution_node_copy(downstream_id)
+            downstream_edge = self.graph._get_input_edges(downstream_id)[0]
+            attached_downstream_edges = self._attach_direct_execution_edges(
+                downstream_node.id,
+                [
+                    Edge(
+                        source=EdgeConnection(node_id=collector_node.id, field=downstream_edge.source.field),
+                        destination=EdgeConnection(node_id="", field=downstream_edge.destination.field),
+                    )
+                ],
+            )
+            self._initialize_direct_execution_node(downstream_node.id, attached_downstream_edges)
 
     def _reset_runtime_caches(self) -> None:
         self._ready_queues = {}

@@ -1318,6 +1318,37 @@ def test_direct_iterate_body_collect_planner_rolls_back_partial_expansion(
     assert state.is_complete()
 
 
+def test_direct_iterate_body_collect_downstream_planner_rolls_back_partial_expansion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=["first", "last"], with_after=True))
+    source_node = state.next()
+    assert source_node is not None
+    state.complete(source_node.id, source_node.invoke(Mock()))
+
+    original_create = GraphExecutionState._create_direct_execution_node_copy
+
+    def fail_at_downstream(self: GraphExecutionState, source_node_id: str, *args: Any, **kwargs: Any):
+        if source_node_id == "after":
+            raise RuntimeError("injected downstream planner failure")
+        return original_create(self, source_node_id, *args, **kwargs)
+
+    monkeypatch.setattr(GraphExecutionState, "_create_direct_execution_node_copy", fail_at_downstream)
+    with pytest.raises(RuntimeError, match="injected downstream planner failure"):
+        state.next()
+
+    assert set(state.source_prepared_mapping) == {"source"}
+    assert len(state.execution_graph.nodes) == 1
+    assert not state.execution_graph.edges
+
+    monkeypatch.setattr(GraphExecutionState, "_create_direct_execution_node_copy", original_create)
+    trace, state = _run_graph(state)
+
+    assert trace == ["iterate", "iterate", "body", "body", "collect", "after"]
+    assert _source_output(state, "after").value == ["first", "last"]
+    assert state.is_complete()
+
+
 @pytest.mark.parametrize(
     "collection",
     [
@@ -1419,16 +1450,19 @@ def test_direct_iterate_body_collect_failure_rehydrates_pending_state_without_re
     assert restored.is_complete()
 
 
-def test_direct_iterate_body_collect_with_downstream_consumer_uses_fallback_materializer() -> None:
-    prepare_calls = 0
-    original_prepare = graph_module._ExecutionMaterializer.prepare
-
-    def prepare_spy(materializer: Any, base_graph: Any = None) -> Any:
-        nonlocal prepare_calls
-        prepare_calls += 1
-        return original_prepare(materializer, base_graph)
-
-    with patch.object(graph_module._ExecutionMaterializer, "prepare", autospec=True, side_effect=prepare_spy):
+def test_direct_iterate_body_collect_with_downstream_consumer_uses_private_planner() -> None:
+    with (
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "prepare",
+            side_effect=AssertionError("direct Iterate -> body -> Collect -> after must not use materializer.prepare"),
+        ) as prepare,
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "_get_collect_iteration_mapping_groups",
+            side_effect=AssertionError("direct downstream Collect must not group collector inputs"),
+        ) as group_collector_inputs,
+    ):
         trace, state = _run_graph(
             GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=["value"], with_after=True))
         )
@@ -1436,7 +1470,30 @@ def test_direct_iterate_body_collect_with_downstream_consumer_uses_fallback_mate
     assert trace[-1] == "after"
     assert _source_output(state, "after").value == ["value"]
     assert state.is_complete()
-    assert prepare_calls > 0
+    prepare.assert_not_called()
+    group_collector_inputs.assert_not_called()
+
+
+def test_direct_iterate_body_collect_with_downstream_consumer_matches_forced_compatibility_scheduler() -> None:
+    generic_trace, generic_state = _run_graph(
+        GraphExecutionState(
+            graph=_direct_iterate_body_collect_graph(collection=["first", None, "last"], with_after=True)
+        )
+    )
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(
+            graph=_direct_iterate_body_collect_graph(collection=["first", None, "last"], with_after=True)
+        ),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_trace[-2:] == ["collect", "after"]
+    assert _source_output(generic_state, "after").value == ["first", None, "last"]
+    assert _source_output(compatibility_state, "after").value == ["first", None, "last"]
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
 
 
 def test_direct_flat_for_completion_persists_continuations_and_final_tokens() -> None:

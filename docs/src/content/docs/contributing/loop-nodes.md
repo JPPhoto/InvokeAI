@@ -109,17 +109,18 @@ scheduling for the remaining shapes. `Iterate` records ordered item tokens in
 a closed `StreamBuffer`; an empty `Iterate` records an
 explicit empty close. A direct `Iterate.item` consumer waits for the canonical stream to close, then `Collect` consumes
 its ordered values; a missing stream falls back to materialized results for legacy snapshots. The exact fresh four-node
-`literal collection source -> Iterate -> one ordinary body -> Collect` shape uses a private graph-state planner for
-prepared-copy expansion, iteration paths, and the empty-stream barrier. Downstream consumers, fan-in, nested or
-input-driven iterators, and mixed control flow remain on the compatibility materializer for those responsibilities.
+`literal collection source -> Iterate -> one ordinary body -> Collect` shape, with one ordinary downstream consumer
+from `Collect.collection`, uses a private graph-state planner for prepared-copy expansion, iteration paths, and the
+empty-stream barrier. Fan-in, additional downstream consumers, nested or input-driven iterators, and mixed control
+flow remain on the compatibility materializer for those responsibilities.
 Focused compatibility coverage now proves empty, nested, fan-in, partial/rehydrated, failed, canceled, and retried
 Iterate/Collect sessions. This is evidence for the current adapters; it does not remove materialization or queue
 ownership. Direct `Iterate`/`Collect`-only graphs and the exact bounded nested shape now use the generic scheduler
 adapter: its readiness predicate waits for the canonical stream to close, and completion mirrors Iterate outputs into
 that ledger before releasing Collect. Rehydration restores the active class-drain boundary so nested stream order is
 preserved across dump/load.
-For the exact fresh four-node shape, the planner owns expansion and empty closure atomically: a failed expansion leaves
-no partial prepared copies to be resumed. Versioned queue checkpoints and retries preserve the existing durable
+For the exact fresh direct shape, the planner owns expansion, downstream admission, and empty closure atomically: a
+failed expansion leaves no partial prepared copies to be resumed. Versioned queue checkpoints and retries preserve the existing durable
 execution-state boundary and receive fresh execution identities. Materialization still owns those responsibilities for
 fallback shapes. Mixed control-flow and queue lifecycle remain compatibility-owned. `loop_linkage`
 remains association metadata and never becomes a data token.
