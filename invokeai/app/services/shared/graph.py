@@ -6774,7 +6774,28 @@ class GraphExecutionState(BaseModel):
             self._record_empty_iterate_stream(source_node_id)
 
     def _prepare_direct_iterate_collect(self) -> None:
-        """Expand the fresh direct stream shape without invoking the legacy materializer."""
+        """Expand the fresh direct stream shape atomically, without the legacy materializer."""
+
+        if self._apply_transaction is not None:
+            self._prepare_direct_iterate_collect_unchecked()
+            return
+
+        transaction = _ApplyTransaction()
+        object.__setattr__(self, "_apply_transaction", transaction)
+        try:
+            self._prepare_direct_iterate_collect_unchecked()
+        except Exception:
+            try:
+                transaction.rollback()
+            finally:
+                self._reset_apply_derived_caches()
+                self._rehydrate_ready_queues()
+            raise
+        finally:
+            object.__setattr__(self, "_apply_transaction", None)
+
+    def _prepare_direct_iterate_collect_unchecked(self) -> None:
+        """Expand the direct stream shape while the caller owns mutation rollback."""
 
         node_ids = self._get_direct_iterate_collect_nodes()
         if node_ids is None:

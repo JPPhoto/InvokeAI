@@ -1,4 +1,5 @@
 import asyncio
+import json
 import uuid
 from contextlib import contextmanager
 from threading import Condition, Event
@@ -9,7 +10,7 @@ import pytest
 from fastapi_events.handlers.local import local_handler
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput, invocation, invocation_output
-from invokeai.app.invocations.collections import RangeInvocation
+from invokeai.app.invocations.collections import CollectionConcatInvocation, RangeInvocation
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation
 from invokeai.app.services.events.events_base import EventServiceBase
@@ -105,6 +106,18 @@ def _build_iterate_collect_graph() -> Graph:
     return graph
 
 
+def _build_direct_planner_iterate_body_collect_graph() -> Graph:
+    graph = Graph()
+    graph.add_node(CollectionConcatInvocation(id="source", first=[0, 1, 2]))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(ForSqliteBodyInvocation(id="body"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("source", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "collect", "item"))
+    return graph
+
+
 def _build_flat_for_graph() -> Graph:
     graph = Graph()
     graph.add_node(ForInvocation(id="for", collection=[0, 1, 2]))
@@ -175,8 +188,13 @@ def _stop_processor(processor: DefaultSessionProcessor) -> None:
         assert not worker.thread.is_alive()
 
 
-def _insert_session(queue: SqliteSessionQueue, graph: Graph) -> int:
+def _insert_session(queue: SqliteSessionQueue, graph: Graph, *, versioned: bool = False) -> int:
     session = GraphExecutionState(graph=graph)
+    session_json = (
+        json.dumps(dump_execution_state(session))
+        if versioned
+        else session.model_dump_json(warnings=False, exclude_none=True)
+    )
     with queue._db.transaction() as cursor:
         cursor.execute(
             """--sql
@@ -187,7 +205,7 @@ def _insert_session(queue: SqliteSessionQueue, graph: Graph) -> int:
             """,
             (
                 "default",
-                session.model_dump_json(warnings=False, exclude_none=True),
+                session_json,
                 session.id,
                 str(uuid.uuid4()),
                 None,
@@ -527,6 +545,137 @@ def test_processor_sqlite_iterate_collect_cancel_retry_does_not_leak_stream_stat
     assert completed_streams[0].stream_id != canceled_stream_id
     assert completed_streams[0].stream_id.startswith(f"{completed_item.session.id}:iterate:")
     assert sum(len(effects) for effects in completed_item.session.execution_effects.values()) == 4
+
+
+@pytest.mark.parametrize("cancel_after", ["source", "iterate"])
+def test_processor_sqlite_direct_planner_cancel_retry_isolates_execution_state(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_invoker: Invoker,
+    registered_event_bus: _RecordingRegisteredEventService,
+    cancel_after: str,
+) -> None:
+    monkeypatch.setattr(
+        "invokeai.app.services.session_processor.session_processor_default.build_invocation_context",
+        _build_test_invocation_context,
+    )
+
+    queue = SqliteSessionQueue(db=mock_invoker.services.board_records._db)
+    mock_invoker.services.events = registered_event_bus
+    mock_invoker.services.session_queue = queue
+    mock_invoker.services.performance_statistics = _Stats()
+    queue.start(mock_invoker)
+
+    item_id = _insert_session(queue, _build_direct_planner_iterate_body_collect_graph(), versioned=True)
+    session_persisted = Event()
+
+    def cancel_at_boundary(invocation, queue_item, output) -> None:
+        source_id = queue_item.session.prepared_source_mapping[invocation.id]
+        if source_id == cancel_after and (source_id != "iterate" or invocation.index == 0):
+            queue.cancel_queue_item(queue_item.item_id)
+
+    processor = DefaultSessionProcessor(
+        session_runner=DefaultSessionRunner(
+            on_after_run_node_callbacks=[cancel_at_boundary],
+            on_after_run_session_callbacks=[lambda queue_item: session_persisted.set()],
+        ),
+        polling_interval=0,
+    )
+    try:
+        processor.start(mock_invoker)
+        assert registered_event_bus.wait_for_status(item_id, "canceled")
+        assert session_persisted.wait(timeout=5)
+    finally:
+        _stop_processor(processor)
+
+    canceled_item = queue.get_queue_item(item_id)
+    assert canceled_item.status == "canceled"
+    assert not canceled_item.session.is_complete()
+    completed_sources = [
+        canceled_item.session.prepared_source_mapping[execution_id] for execution_id in canceled_item.session.results
+    ]
+    if cancel_after == "source":
+        assert completed_sources == ["source"]
+        assert "iterate" not in canceled_item.session.source_prepared_mapping
+        assert "body" not in canceled_item.session.source_prepared_mapping
+        assert "collect" not in canceled_item.session.source_prepared_mapping
+        assert not canceled_item.session._generic_runtime().streams
+        canceled_stream_id = None
+    else:
+        assert completed_sources == ["source", "iterate"]
+        assert len(canceled_item.session.source_prepared_mapping["iterate"]) == 3
+        assert len(canceled_item.session.source_prepared_mapping["body"]) == 3
+        assert len(canceled_item.session.source_prepared_mapping["collect"]) == 1
+        assert not any(
+            execution_id in canceled_item.session.results
+            for execution_id in canceled_item.session.source_prepared_mapping["body"]
+        )
+        canceled_streams = [
+            stream
+            for stream in canceled_item.session._generic_runtime().streams.values()
+            if stream.owner_id == "iterate"
+        ]
+        assert len(canceled_streams) == 1
+        assert canceled_streams[0].values == (0,)
+        assert not canceled_streams[0].closed
+        canceled_stream_id = canceled_streams[0].stream_id
+
+    retry_result = queue.retry_items_by_id("default", [item_id])
+    assert retry_result.retried_item_ids == [item_id]
+    retried_item = next(
+        queue_item for queue_item in queue.list_all_queue_items("default") if queue_item.retried_from_item_id == item_id
+    )
+    assert retried_item.status == "pending"
+    assert retried_item.item_id != item_id
+    assert retried_item.session.id != canceled_item.session.id
+    assert retried_item.session.results == {}
+    assert retried_item.session.execution_refs == {}
+    assert retried_item.session.execution_tokens == {}
+    assert retried_item.session.execution_effects == {}
+    assert not retried_item.session._generic_runtime().streams
+
+    retry_session_persisted = Event()
+    retry_processor = DefaultSessionProcessor(
+        session_runner=DefaultSessionRunner(
+            on_after_run_session_callbacks=[lambda queue_item: retry_session_persisted.set()],
+        ),
+        polling_interval=0,
+    )
+    try:
+        retry_processor.start(mock_invoker)
+        assert registered_event_bus.wait_for_status(retried_item.item_id, "completed")
+        assert retry_session_persisted.wait(timeout=5)
+    finally:
+        _stop_processor(retry_processor)
+
+    completed_item = queue.get_queue_item(retried_item.item_id)
+    assert queue.get_queue_item(item_id).status == "canceled"
+    assert completed_item.status == "completed"
+    assert completed_item.session.is_complete()
+    completed_sources = [
+        completed_item.session.prepared_source_mapping[execution_id] for execution_id in completed_item.session.results
+    ]
+    assert completed_sources[0] == "source"
+    assert completed_sources.count("iterate") == 3
+    assert completed_sources.count("body") == 3
+    assert completed_sources[-1] == "collect"
+    [collect_execution_id] = completed_item.session.source_prepared_mapping["collect"]
+    assert completed_item.session.results[collect_execution_id].collection == [0, 1, 2]
+    canceled_execution_ids = set(canceled_item.session.prepared_source_mapping)
+    retried_execution_ids = set(completed_item.session.prepared_source_mapping)
+    assert canceled_execution_ids.isdisjoint(retried_execution_ids)
+    assert all(
+        reference.frame.state_id == completed_item.session.id
+        for reference in completed_item.session.execution_refs.values()
+    )
+    completed_streams = [
+        stream for stream in completed_item.session._generic_runtime().streams.values() if stream.owner_id == "iterate"
+    ]
+    assert len(completed_streams) == 1
+    assert completed_streams[0].values == (0, 1, 2)
+    assert completed_streams[0].closed
+    if canceled_stream_id is not None:
+        assert completed_streams[0].stream_id != canceled_stream_id
+    assert completed_streams[0].stream_id.startswith(f"{completed_item.session.id}:iterate:")
 
 
 @pytest.mark.parametrize("force_compatibility_scheduler", [False, True])

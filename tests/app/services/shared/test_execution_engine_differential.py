@@ -1282,6 +1282,41 @@ def test_direct_iterate_body_collect_fresh_execution_handles_empty_input() -> No
     group_collector_inputs.assert_not_called()
 
 
+def test_direct_iterate_body_collect_planner_rolls_back_partial_expansion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=["first", "last"]))
+    source_node = state.next()
+    assert source_node is not None
+    state.complete(source_node.id, source_node.invoke(Mock()))
+
+    original_create = GraphExecutionState._create_direct_execution_node_copy
+    failed = False
+
+    def fail_after_body(self: GraphExecutionState, source_node_id: str, *args: Any, **kwargs: Any):
+        nonlocal failed
+        node = original_create(self, source_node_id, *args, **kwargs)
+        if source_node_id == "body" and not failed:
+            failed = True
+            raise RuntimeError("injected direct planner failure")
+        return node
+
+    monkeypatch.setattr(GraphExecutionState, "_create_direct_execution_node_copy", fail_after_body)
+    with pytest.raises(RuntimeError, match="injected direct planner failure"):
+        state.next()
+
+    assert set(state.source_prepared_mapping) == {"source"}
+    assert len(state.execution_graph.nodes) == 1
+    assert not state.execution_graph.edges
+
+    monkeypatch.setattr(GraphExecutionState, "_create_direct_execution_node_copy", original_create)
+    trace, state = _run(state)
+
+    assert trace == ["iterate", "iterate", "body", "body", "collect"]
+    assert _source_output(state, "collect").collection == ["first", "last"]
+    assert state.is_complete()
+
+
 @pytest.mark.parametrize(
     "collection",
     [

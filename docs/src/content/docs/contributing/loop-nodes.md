@@ -118,8 +118,10 @@ ownership. Direct `Iterate`/`Collect`-only graphs and the exact bounded nested s
 adapter: its readiness predicate waits for the canonical stream to close, and completion mirrors Iterate outputs into
 that ledger before releasing Collect. Rehydration restores the active class-drain boundary so nested stream order is
 preserved across dump/load.
-For the exact fresh four-node shape, the planner owns expansion and empty closure; materialization still owns those
-responsibilities for fallback shapes. Mixed control-flow and queue lifecycle remain compatibility-owned. `loop_linkage`
+For the exact fresh four-node shape, the planner owns expansion and empty closure atomically: a failed expansion leaves
+no partial prepared copies to be resumed. Versioned queue checkpoints and retries preserve the existing durable
+execution-state boundary and receive fresh execution identities. Materialization still owns those responsibilities for
+fallback shapes. Mixed control-flow and queue lifecycle remain compatibility-owned. `loop_linkage`
 remains association metadata and never becomes a data token.
 
 The supported flat-loop differential gate covers generic/compatibility parity
