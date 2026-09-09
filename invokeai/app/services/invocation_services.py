@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from invokeai.app.services.download import DownloadQueueServiceBase
     from invokeai.app.services.events.events_base import EventServiceBase
     from invokeai.app.services.external_generation.external_generation_base import ExternalGenerationServiceBase
+    from invokeai.app.services.fonts.fonts_default import FontService
     from invokeai.app.services.gallery.gallery_base import GalleryServiceABC
     from invokeai.app.services.image_files.image_files_base import ImageFileStorageBase
     from invokeai.app.services.image_index.image_index_base import ImageIndexServiceBase
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
     )
     from invokeai.app.services.model_relationships.model_relationships_base import ModelRelationshipsServiceABC
     from invokeai.app.services.names.names_base import NameServiceBase
+    from invokeai.app.services.progress_previews.progress_previews_base import ProgressPreviewsBase
     from invokeai.app.services.project_records.project_records_base import ProjectRecordsStorageBase
     from invokeai.app.services.session_processor.session_processor_base import SessionProcessorBase
     from invokeai.app.services.session_queue.session_queue_base import SessionQueueBase
@@ -52,6 +54,12 @@ if TYPE_CHECKING:
     from invokeai.app.services.workflow_records.workflow_records_base import WorkflowRecordsStorageBase
     from invokeai.app.services.workflow_thumbnails.workflow_thumbnails_base import WorkflowThumbnailServiceBase
     from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ConditioningFieldData
+
+
+def _default_progress_previews() -> "ProgressPreviewsBase":
+    from invokeai.app.services.progress_previews.progress_previews_default import MemoryProgressPreviews
+
+    return MemoryProgressPreviews()
 
 
 class InvocationServices:
@@ -101,6 +109,8 @@ class InvocationServices:
         image_index_records: "ImageIndexRecordsBase",
         image_index: "ImageIndexServiceBase",
         image_moves: "ImageMoveService | None" = None,
+        progress_previews: "ProgressPreviewsBase | None" = None,
+        fonts: "FontService | None" = None,
     ):
         self.board_images = board_images
         self.board_image_records = board_image_records
@@ -122,6 +132,11 @@ class InvocationServices:
         self.performance_statistics = performance_statistics
         self.session_queue = session_queue
         self.image_moves = image_moves
+        # Pure in-memory state with no dependencies, so callers (including the many test
+        # constructors) may leave it out.
+        self.progress_previews: "ProgressPreviewsBase" = (
+            progress_previews if progress_previews is not None else _default_progress_previews()
+        )
         self.session_processor = session_processor
         self.invocation_cache = invocation_cache
         self.names = names
@@ -144,3 +159,4 @@ class InvocationServices:
         self.gallery = gallery
         self.image_index_records = image_index_records
         self.image_index = image_index
+        self.fonts = fonts

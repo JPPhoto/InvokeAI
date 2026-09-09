@@ -34,23 +34,15 @@ import type {
   CompositePlan,
 } from '@workbench/canvas-operations/generationContracts';
 
+import { sha256Hex } from '@platform/browser/sha256';
 import { fromTRS, multiply } from '@workbench/canvas-engine/math/mat2d';
 import { renderRasterComposite } from '@workbench/canvas-engine/render/rasterComposite';
 import { getCompositeLayerBounds } from '@workbench/canvas-operations/generationCompositePlan';
 
 type Ctx = RasterSurface['ctx'];
 
-/** SHA-256 hex of a blob's bytes, via the Web Crypto API (matches `bitmapStore`). */
-const defaultHashBlob = async (blob: Blob): Promise<string> => {
-  const buffer = await blob.arrayBuffer();
-  const digest = await crypto.subtle.digest('SHA-256', buffer);
-  const bytes = new Uint8Array(digest);
-  let hex = '';
-  for (const byte of bytes) {
-    hex += byte.toString(16).padStart(2, '0');
-  }
-  return hex;
-};
+/** SHA-256 hex of a blob's bytes, via `@platform/browser/sha256` (matches `bitmapStore`). */
+const defaultHashBlob = async (blob: Blob): Promise<string> => sha256Hex(await blob.arrayBuffer());
 
 /** Reads a surface's pixels via its 2D context (real DOM path; injectable for tests). */
 const defaultReadImageData = (surface: RasterSurface, rect: Rect): ImageData =>
@@ -129,7 +121,7 @@ export interface ExecuteCompositePlanDeps {
   uploadImage(blob: Blob): Promise<CanvasImageUploadResult>;
   /** Persistent dedupe state (see {@link CompositeDedupeCache}). */
   dedupe: CompositeDedupeCache;
-  /** Content-hashes a blob (default SHA-256 hex via `crypto.subtle`). */
+  /** Content-hashes a blob (default SHA-256 hex via `@platform/browser/sha256`). */
   hashBlob?(blob: Blob): Promise<string>;
   /** Reads a surface region's pixels for the coverage scan (default `getImageData`). */
   readImageData?(surface: RasterSurface, rect: Rect): ImageData;
@@ -202,11 +194,33 @@ const setTransform = (ctx: Ctx, m: Mat2d): void => {
  * Union of a plan's base-raster content bounds in document space, or `null`
  * when the plan has no enabled raster content. Pure geometry (no pixels, no
  * upload), so the invoke orchestrator can run it as a bounds-only pre-pass to
- * decide txt2img (no bbox overlap) *before* paying for a composite/encode/upload.
+ * decide txt2img (no bbox overlap) before paying for a composite/encode/upload.
+ * When `actualLayerRects` is supplied, those detached cache rects replace the
+ * planner's estimates for sources whose browser metrics can differ from their
+ * DOM-free extent.
  */
-export const computeCompositeContentBounds = (plan: CompositePlan): Rect | null => {
+export const computeCompositeContentBounds = (
+  plan: CompositePlan,
+  actualLayerRects?: ReadonlyMap<string, Rect>
+): Rect | null => {
   const entry = plan.entries.find((e) => e.kind === 'base-raster');
-  return entry ? getCompositeLayerBounds(entry.layers) : null;
+  if (!entry) {
+    return null;
+  }
+  if (!actualLayerRects || actualLayerRects.size === 0) {
+    return getCompositeLayerBounds(entry.layers);
+  }
+  const layers = entry.layers.map((layer) => {
+    const rect = actualLayerRects.get(layer.id);
+    return rect
+      ? {
+          ...layer,
+          contentOffset: { x: rect.x, y: rect.y },
+          contentSize: { height: rect.height, width: rect.width },
+        }
+      : layer;
+  });
+  return getCompositeLayerBounds(layers);
 };
 
 /** True when every pixel of `imageData` is fully opaque (alpha === 255). Empty → false. */
@@ -270,10 +284,12 @@ const executeRasterEntry = async (
     };
   }
 
+  const countGroupScopes = (scopes: typeof entry.groupScopes): number =>
+    (scopes ?? []).reduce((total, scope) => total + 1 + countGroupScopes(scope.children), 0);
   const reservation = reserveComposite(
     entry,
     deps,
-    entry.layers.filter((layer) => layer.adjustments !== undefined).length
+    entry.layers.filter((layer) => layer.adjustments !== undefined).length + countGroupScopes(entry.groupScopes)
   );
   try {
     const surface = await renderRasterComposite(entry, deps);

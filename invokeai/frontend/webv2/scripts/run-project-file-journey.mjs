@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 import {
+  collectCanvasLeaves,
   MOCK_BACKEND_PROFILE_COUNTS,
   MOCK_BACKEND_REPRESENTATIVE_VIDEO_NAME,
   PROJECT_FILE_BOARD,
@@ -199,7 +200,7 @@ const writeArchiveWithout = async (entries, omitted, targetPath) => {
 const getBoardSnapshot = (projectId) => fetchJson(`/api/v1/projects/${encodeURIComponent(projectId)}/board-snapshot`);
 
 const getLayerImageNames = (project) =>
-  project.data.canvas.document.layers.map((layer) => layer.source.image.imageName);
+  collectCanvasLeaves(project.data.canvas.document).map((layer) => layer.source.image.imageName);
 
 const getDocumentVideoName = (project) => project.data.projectGraph.nodes[0]?.data.inputs.video?.value?.video_name;
 
@@ -268,6 +269,9 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
     .getByRole('button', { exact: true, name: `Switch project. Current project: ${sourceProjectName}` })
     .click();
   await exportPage.getByRole('menuitem', { exact: true, name: 'Export' }).click();
+  await exportPage.getByRole('dialog', { name: `Export ${sourceProjectName}`, exact: true }).waitFor();
+  assert.equal(await exportPage.getByRole('checkbox', { name: 'Include font files', exact: true }).isChecked(), false);
+  await exportPage.getByRole('button', { name: 'Export project', exact: true }).click();
 
   const download = await downloadPromise;
   const archivePath = join(tempDirectory, 'fixture-project-002.invk');

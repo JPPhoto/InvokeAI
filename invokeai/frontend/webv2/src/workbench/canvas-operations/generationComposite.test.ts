@@ -1,14 +1,16 @@
 import type {
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
 } from '@workbench/canvas-engine/contracts';
 import type { CanvasImageUploadResult } from '@workbench/canvas-engine/document/imageUpload';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { getDocumentLeaves } from '@workbench/canvas-engine/api';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -28,6 +30,36 @@ const rasterLayer = (id: string, size = 64): CanvasRasterLayerContractV2 => ({
   transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
   type: 'raster',
 });
+
+const textLayer = (id: string, overrides: Partial<CanvasRasterLayerContractV2> = {}): CanvasRasterLayerContractV2 => ({
+  ...rasterLayer(id),
+  source: {
+    align: 'left',
+    color: '#ffffff',
+    content: 'hello',
+    fontFamily: 'Inter',
+    fontSize: 32,
+    fontWeight: 400,
+    lineHeight: 1.2,
+    type: 'text',
+  },
+  ...overrides,
+});
+
+const customTextLayer = (id: string): CanvasRasterLayerContractV2 =>
+  textLayer(id, {
+    source: {
+      align: 'left',
+      color: '#ffffff',
+      content: 'hello',
+      fontFamily: 'Custom Sans',
+      fontRef: { contentHash: 'hash-v1', family: 'Custom Sans', id: 'font-1', label: 'Custom Sans' },
+      fontSize: 32,
+      fontWeight: 400,
+      lineHeight: 1.2,
+      type: 'text',
+    },
+  });
 
 const controlLayer = (id: string): CanvasControlLayerContract => ({
   adapter: { beginEndStepPct: [0, 1], controlMode: 'balanced', kind: 'controlnet', model: null, weight: 0.75 },
@@ -66,23 +98,23 @@ const inpaintMaskLayer = (id: string, noiseLevel?: number): CanvasLayerContract 
   isLocked: false,
   mask: { bitmap: { height: 64, imageName: `${id}-bmp`, width: 64 }, fill: { color: '#ff0000', style: 'solid' } },
   name: id,
-  ...(noiseLevel !== undefined ? { noiseLevel } : {}),
+  ...(noiseLevel !== undefined ? { noise: { isEnabled: true, level: noiseLevel } } : {}),
   opacity: 1,
   transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
   type: 'inpaint_mask',
 });
 
-const makeDoc = (layers: CanvasLayerContract[], size = 64): CanvasDocumentContractV2 => ({
+const makeDoc = (layers: CanvasLayerContract[], size = 64): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: size, width: size, x: 0, y: 0 },
   height: size,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: size,
 });
 
-const makeCanvas = (document: CanvasDocumentContractV2): CanvasStateContractV2 => ({
+const makeCanvas = (document: CanvasDocumentContractV3): CanvasStateContractV3 => ({
   document: structuredClone(document),
   documentRevision: 0,
   snapshots: [],
@@ -94,7 +126,7 @@ const makeCanvas = (document: CanvasDocumentContractV2): CanvasStateContractV2 =
     pendingImages: [],
     selectedImageIndex: 0,
   },
-  version: 2,
+  version: 3,
 });
 
 /** Uniform-alpha ImageData (255 = fully opaque → bboxFullyCovered true). */
@@ -118,6 +150,7 @@ interface HostHarness {
 
 interface HostOptions {
   alpha?: number;
+  layerRects?: Readonly<Record<string, Rect>>;
   uploadImage?: (blob: Blob) => Promise<CanvasImageUploadResult>;
 }
 
@@ -127,7 +160,7 @@ interface HostOptions {
  * release, and a per-call-unique hash so every distinct composite entry uploads
  * (plan-key dedupe still reuses across calls).
  */
-const makeHost = (document: CanvasDocumentContractV2, options: HostOptions = {}): HostHarness => {
+const makeHost = (document: CanvasDocumentContractV3, options: HostOptions = {}): HostHarness => {
   const stub = createTestStubRasterBackend();
   const events: string[] = [];
   const surfaceIds: string[] = [];
@@ -155,12 +188,13 @@ const makeHost = (document: CanvasDocumentContractV2, options: HostOptions = {})
       const detached = new Map<string, { rect: Rect; surface: RasterSurface }>();
       for (const layerId of layerIds) {
         surfaceIds.push(layerId);
+        const rect = options.layerRects?.[layerId] ?? { height: 64, width: 64, x: 0, y: 0 };
         let surface = layerSurfaces.get(layerId);
         if (!surface) {
-          surface = stub.createSurface(64, 64);
+          surface = stub.createSurface(rect.width, rect.height);
           layerSurfaces.set(layerId, surface);
         }
-        detached.set(layerId, { rect: { height: 64, width: 64, x: 0, y: 0 }, surface });
+        detached.set(layerId, { rect, surface });
       }
       return Promise.resolve({
         snapshot: {
@@ -316,8 +350,63 @@ describe('composeForGeneration', () => {
     }
     expect(result.composites.mode).toBe('img2img');
     expect(result.composites.baseImageName).toBe('composite-1.png');
-    expect(result.composites.canvas.document.layers[0]?.id).toBe('base');
+    expect(getDocumentLeaves(result.composites.canvas.document)[0]?.id).toBe('base');
     expect(result.composites.bbox).toEqual({ height: 64, width: 64, x: 0, y: 0 });
+  });
+
+  it('uses captured custom-text bounds when browser metrics exceed the pure estimate', async () => {
+    const text = customTextLayer('text');
+    const document = {
+      ...makeDoc([text]),
+      // The estimate is 60px wide, so this bbox only edge-touches it. The
+      // captured surface below is 100px wide, representing a wider loaded face.
+      bbox: { height: 32, width: 4, x: 60, y: 0 },
+    };
+    const harness = makeHost(document, { layerRects: { text: { height: 32, width: 100, x: 0, y: 0 } } });
+    const detectMode = vi.fn(() => 'img2img' as const);
+
+    const result = await compose(harness.host, { detectMode });
+
+    expect(result.status).toBe('ok');
+    expect(detectMode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bbox: { height: 32, width: 4, x: 60, y: 0 },
+        contentBounds: { height: 32, width: 100, x: 0, y: 0 },
+      })
+    );
+    expect(harness.uploadImage).toHaveBeenCalledOnce();
+  });
+
+  it('requests custom text from raster capture and composites the authorized pixels', async () => {
+    const text = customTextLayer('text');
+    const harness = makeHost(makeDoc([text]));
+    const captureRasterSnapshot = vi.fn(harness.host.captureRasterSnapshot);
+    harness.host.captureRasterSnapshot = captureRasterSnapshot;
+
+    const result = await compose(harness.host);
+    expect(result.status).toBe('ok');
+    expect(captureRasterSnapshot).toHaveBeenCalledWith(
+      expect.any(Object),
+      ['text'],
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
+    expect(harness.surfaceIds).toContain('text');
+    expect(harness.uploadImage).toHaveBeenCalledOnce();
+    if (result.status === 'ok') {
+      expect(result.composites.mode).toBe('img2img');
+      expect(result.composites.baseImageName).toBe('composite-1.png');
+    }
+  });
+
+  it('fails closed when raster capture cannot authorize a custom text font', async () => {
+    const text = customTextLayer('text');
+    const harness = makeHost(makeDoc([text]));
+    harness.host.captureRasterSnapshot = vi.fn(() => Promise.resolve({ status: 'not-ready' as const }));
+
+    const result = await compose(harness.host);
+
+    expect(result).toEqual({ status: 'not-ready' });
+    expect(harness.uploadImage).not.toHaveBeenCalled();
   });
 
   it('executes the inpaint mask before consulting detectMode and reports its coverage', async () => {
@@ -339,6 +428,31 @@ describe('composeForGeneration', () => {
     }
     expect(result.composites.mode).toBe('inpaint');
     expect(result.composites.maskImageName).toBe('composite-2.png');
+  });
+
+  it("composites a regenerate-region raster's own surface into the inpaint mask", async () => {
+    const base = rasterLayer('base');
+    const regionLayer: CanvasRasterLayerContractV2 = {
+      ...base,
+      inpaint: { fill: { color: '#e07575', style: 'diagonal' }, isEnabled: true },
+    };
+    const harness = makeHost(makeDoc([regionLayer]));
+    const detectMode = vi.fn((facts: GenerationModeFacts) =>
+      facts.hasActiveInpaintMask ? ('inpaint' as const) : ('img2img' as const)
+    );
+
+    const result = await compose(harness.host, { detectMode });
+
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') {
+      return;
+    }
+    // Base upload + the region-driven inpaint-mask upload; the mask composite
+    // read the raster layer's own surface — the mask IS the layer content.
+    expect(result.composites.mode).toBe('inpaint');
+    expect(result.composites.maskImageName).toBe('composite-2.png');
+    expect(harness.surfaceIds).toContain('base');
+    expect(detectMode).toHaveBeenCalledWith(expect.objectContaining({ hasActiveInpaintMask: true }));
   });
 
   it.each([

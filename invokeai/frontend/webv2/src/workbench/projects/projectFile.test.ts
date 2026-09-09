@@ -1,3 +1,4 @@
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createDraftProject } from '@workbench/workbenchState';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -33,6 +34,13 @@ const api = vi.hoisted(() => ({
 const downloads = vi.hoisted(() => ({ downloadBlob: vi.fn(), downloadText: vi.fn() }));
 
 const covers = vi.hoisted(() => ({ recordProjectCover: vi.fn() }));
+const fontTransport = vi.hoisted(() => ({
+  download: vi.fn(),
+  remove: vi.fn(async () => {}),
+  upload: vi.fn(),
+  validate: vi.fn(async () => {}),
+}));
+vi.mock('./invk/fontTransport', () => ({ createFontArchiveTransport: () => fontTransport }));
 
 const transport = vi.hoisted(() => ({
   coverExtensionForMime: () => 'webp',
@@ -124,7 +132,7 @@ const projectWithRestorableAssets = (includeVideo = true) => {
       ...project.canvas,
       document: {
         ...project.canvas.document,
-        layers: [rasterImageLayer('restored-image', 'archive-image.png')],
+        stacks: stacksFrom([rasterImageLayer('restored-image', 'archive-image.png')]),
       },
     },
     ...(includeVideo ? { futureVideoInput: { video_name: 'archive-video.mp4' } } : {}),
@@ -140,11 +148,18 @@ const capturedArchive = (): File => {
 /** The server answers with the board it claimed, or with the one it created for a boardless create. */
 const acceptCreate = (): void => {
   api.createProjectSettled.mockImplementation(
-    (request: { board_id?: string; data?: Record<string, unknown>; name: string; project_id?: string }) =>
+    (request: {
+      board_id?: string;
+      data?: Record<string, unknown>;
+      minimum_canvas_schema_version?: number;
+      name: string;
+      project_id?: string;
+    }) =>
       Promise.resolve({
         board_id: request.board_id ?? 'server-created-board',
         created_at: '2026-06-10 10:00:00.000',
         data: request.data ?? {},
+        minimum_canvas_schema_version: request.minimum_canvas_schema_version ?? 2,
         name: request.name,
         project_id: request.project_id ?? '',
         revision: 1,
@@ -180,7 +195,11 @@ describe('exportOpenProject', () => {
   it('reaches the server through the mocked transport', async () => {
     api.getProject.mockResolvedValue({
       data: {
-        canvas: { document: { layers: [{ id: 'l', source: { image: { imageName: 'pinned.png' }, type: 'image' } }] } },
+        canvas: {
+          document: {
+            stacks: { raster: [{ id: 'l', source: { image: { imageName: 'pinned.png' }, type: 'image' } }] },
+          },
+        },
         id: 'p1',
         layout: {},
         name: 'Pinned',
@@ -206,6 +225,64 @@ describe('exportLibraryProject', () => {
 
     expect(api.getProject).toHaveBeenCalledWith('p1', expect.anything());
     expect(downloads.downloadBlob.mock.calls[0]![1]).toBe('Closed.invk');
+  });
+
+  it('canonicalizes a supported legacy server record before exporting it', async () => {
+    const document = {
+      ...persistence.serializeProjectDocument({ ...createDraftProject([]), name: 'Legacy' }),
+      events: [{ id: 'legacy-event' }],
+      graphHistory: [{ id: 'legacy-graph' }],
+      queue: { items: [{ id: 'legacy-queue' }] },
+    };
+
+    api.getProject.mockResolvedValue({ data: document, name: 'Legacy', project_id: 'p1', revision: 3 });
+
+    await projectFile.exportLibraryProject('p1');
+
+    const { readArchive, readEntryText } = await import('./invk/archive');
+    const [blob] = downloads.downloadBlob.mock.calls.at(-1)! as [Blob];
+    const entries = await readArchive(new Uint8Array(await blob.arrayBuffer()));
+    const exported = JSON.parse(readEntryText(entries.get('project.json')!)) as Record<string, unknown>;
+
+    expect(exported.documentSchemaVersion).toBe(2);
+    expect(exported).not.toHaveProperty('events');
+    expect(exported).not.toHaveProperty('graphHistory');
+    expect(exported).not.toHaveProperty('queue');
+  });
+
+  it('exports a future-schema server record verbatim for recovery', async () => {
+    const document = { documentSchemaVersion: 3, futureField: { value: 42 }, id: 'future', name: 'Future' };
+
+    api.getProject.mockResolvedValue({ data: document, name: 'Future', project_id: 'p1', revision: 3 });
+
+    await projectFile.exportLibraryProject('p1');
+
+    const { readArchive, readEntryText } = await import('./invk/archive');
+    const [blob] = downloads.downloadBlob.mock.calls.at(-1)! as [Blob];
+    const entries = await readArchive(new Uint8Array(await blob.arrayBuffer()));
+
+    expect(JSON.parse(readEntryText(entries.get('project.json')!))).toEqual(document);
+  });
+
+  it('records the source project compatibility floor in the archive', async () => {
+    const document = persistence.serializeProjectDocument({ ...createDraftProject([]), name: 'Future history' });
+
+    api.getProject.mockResolvedValue({
+      data: document,
+      minimum_canvas_schema_version: 4,
+      name: 'Future history',
+      project_id: 'p1',
+      revision: 3,
+    });
+
+    await projectFile.exportLibraryProject('p1');
+
+    const { readArchive, readEntryText } = await import('./invk/archive');
+    const [blob] = downloads.downloadBlob.mock.calls.at(-1)! as [Blob];
+    const entries = await readArchive(new Uint8Array(await blob.arrayBuffer()));
+    const manifest = JSON.parse(readEntryText(entries.get('manifest.json')!)) as Record<string, unknown>;
+
+    expect(manifest.minimumCanvasSchemaVersion).toBe(4);
   });
 
   /**
@@ -309,7 +386,7 @@ describe('what a transfer reports', () => {
         ...project.canvas,
         document: {
           ...project.canvas.document,
-          layers: [rasterImageLayer('l1', 'a.png'), rasterImageLayer('l2', 'b.png')],
+          stacks: stacksFrom([rasterImageLayer('l1', 'a.png'), rasterImageLayer('l2', 'b.png')]),
         },
       },
       name: 'Two layers',
@@ -393,7 +470,7 @@ describe('importing a project board', () => {
       ...project,
       canvas: {
         ...project.canvas,
-        document: { ...project.canvas.document, layers: [rasterImageLayer('l1', 'shared.png')] },
+        document: { ...project.canvas.document, stacks: stacksFrom([rasterImageLayer('l1', 'shared.png')]) },
       },
       name: 'Board project',
     };
@@ -449,10 +526,10 @@ describe('importing a project board', () => {
     await projectFile.importProjectFile(await exportedBoardArchive());
 
     const { data } = api.createProjectSettled.mock.calls[0]![0] as {
-      data: { canvas: { document: { layers: Array<{ source: { image: { imageName: string } } }> } } };
+      data: { canvas: { document: { stacks: { raster: Array<{ source: { image: { imageName: string } } }> } } } };
     };
 
-    expect(data.canvas.document.layers[0]?.source.image.imageName).toBe('board-shared.png');
+    expect(data.canvas.document.stacks.raster[0]?.source.image.imageName).toBe('board-shared.png');
   });
 
   /** The dedup that document references get is deliberately not applied to board membership. */
@@ -482,9 +559,9 @@ describe('importing a project board', () => {
 
     const outcome = await projectFile.importProjectFile(await exportedBoardArchive());
     const { data } = api.createProjectSettled.mock.calls[0]![0] as {
-      data: { canvas: { document: { layers: Array<{ source: { image: { imageName: string } } }> } } };
+      data: { canvas: { document: { stacks: { raster: Array<{ source: { image: { imageName: string } } }> } } } };
     };
-    const restoredName = data.canvas.document.layers[0]!.source.image.imageName;
+    const restoredName = data.canvas.document.stacks.raster[0]!.source.image.imageName;
 
     expect(restoredName).not.toBe('shared.png');
     expect(restoredName).toContain('-missing-image-');
@@ -510,7 +587,30 @@ describe('importing a project board', () => {
     await projectFile.importProjectFile(capturedArchive());
 
     expect(transport.createStagingBoard).not.toHaveBeenCalled();
+    expect(api.createProjectSettled.mock.calls[0]![0]).toMatchObject({ minimum_canvas_schema_version: 3 });
     expect(api.createProjectSettled.mock.calls[0]![0]).not.toHaveProperty('board_id');
+  });
+
+  it('refuses an incompatible archive before staging or restoring any media', async () => {
+    const { binaryEntry, readArchive, readEntryText, textEntry, writeArchive } = await import('./invk/archive');
+
+    await projectFile.exportOpenProject(boardProject());
+
+    const original = capturedArchive();
+    const entries = await readArchive(new Uint8Array(await original.arrayBuffer()));
+    const manifest = JSON.parse(readEntryText(entries.get('manifest.json')!)) as Record<string, unknown>;
+
+    const rewrittenEntries = new Map([...entries].map(([path, bytes]) => [path, binaryEntry(bytes)]));
+
+    rewrittenEntries.set('manifest.json', textEntry(JSON.stringify({ ...manifest, minimumCanvasSchemaVersion: 5 })));
+    const archive = new File([await writeArchive(rewrittenEntries)], original.name);
+
+    await expect(projectFile.importProjectFile(archive)).rejects.toMatchObject({ reason: 'unsupported-version' });
+
+    expect(transport.createStagingBoard).not.toHaveBeenCalled();
+    expect(transport.uploadBoardImage).not.toHaveBeenCalled();
+    expect(transport.uploadBoardVideo).not.toHaveBeenCalled();
+    expect(api.createProjectSettled).not.toHaveBeenCalled();
   });
 
   it('deletes the media it created and then the staging board when the create fails', async () => {
@@ -675,7 +775,7 @@ describe('importProjectFile', () => {
         ...project.canvas,
         document: {
           ...project.canvas.document,
-          layers: [rasterImageLayer('image-layer', 'legacy.png')],
+          stacks: stacksFrom([rasterImageLayer('image-layer', 'legacy.png')]),
         },
       },
       futureDocumentKey: { survives: true },
@@ -708,12 +808,12 @@ describe('importProjectFile', () => {
     const createRequest = api.createProjectSettled.mock.calls[0]![0] as { data: Record<string, unknown> };
     const invocation = createRequest.data.invocation as { sourceId: string };
     const canvas = createRequest.data.canvas as {
-      document: { layers: Array<{ source: { image: { imageName: string } } }> };
+      document: { stacks: { raster: Array<{ source: { image: { imageName: string } } }> } };
     };
 
     expect(invocation.sourceId).toBe('workflow');
     expect(createRequest.data.futureDocumentKey).toEqual({ survives: true });
-    expect(canvas.document.layers[0]?.source.image.imageName).toBe('server-legacy.png');
+    expect(canvas.document.stacks.raster[0]?.source.image.imageName).toBe('server-legacy.png');
   });
 
   it('imports the shipped legacy JSON envelope under a fresh canonical identity without restoring assets', async () => {
@@ -765,7 +865,7 @@ describe('importProjectFile', () => {
       JSON.stringify({
         document: {},
         kind: 'invokeai-project',
-        version: 2,
+        version: 4,
       }),
     ],
     ['a missing document', JSON.stringify({ kind: 'invokeai-project', version: 1 })],
@@ -890,5 +990,80 @@ describe('importProjectFile', () => {
     await expect(imported).rejects.toThrow('no longer active');
     expect(api.createProjectSettled).not.toHaveBeenCalled();
     account.accountLifecycle.invalidate();
+  });
+});
+
+describe('embedded font project imports', () => {
+  const fontProject = async () => {
+    const { sha256Hex } = await import('@platform/browser/sha256');
+    const bytes = new Uint8Array([0, 1, 0, 0, 4, 5, 6]);
+    const font = {
+      contentHash: await sha256Hex(bytes),
+      family: 'Example',
+      id: 'source-font',
+      label: 'Example Regular',
+    };
+    const project = createDraftProject([]);
+    const layer = {
+      ...rasterImageLayer('text', 'unused.png'),
+      source: {
+        align: 'left' as const,
+        color: '#ffffff',
+        content: 'Portable typography',
+        fontFamily: 'Example',
+        fontRef: font,
+        fontSize: 40,
+        fontWeight: 400,
+        lineHeight: 1.2,
+        type: 'text' as const,
+      },
+    };
+    project.canvas.document.stacks = stacksFrom([layer]);
+    fontTransport.download.mockResolvedValue({ bytes, filename: 'Example.ttf' });
+    fontTransport.upload.mockResolvedValue({ created: true, font: { ...font, id: 'imported-font' } });
+    await projectFile.exportOpenProject(project, { includeFonts: true });
+    return capturedArchive();
+  };
+
+  it('validates included fonts, installs them privately, and persists remapped references', async () => {
+    const archive = await fontProject();
+    acceptCreate();
+    const result = await projectFile.importProjectFile(archive);
+    const { collectFontDependencies } = await import('./invk/fonts');
+    expect(collectFontDependencies(result.record.data)[0]?.references).toEqual(['imported-font']);
+    expect(fontTransport.validate).toHaveBeenCalledTimes(1);
+    expect(fontTransport.upload).toHaveBeenCalledTimes(1);
+    expect(fontTransport.remove).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid font payloads before creating any server resources', async () => {
+    const archive = await fontProject();
+    fontTransport.validate.mockRejectedValue(new Error('Invalid font tables'));
+    await expect(projectFile.importProjectFile(archive)).rejects.toThrow('Invalid font tables');
+    expect(fontTransport.upload).not.toHaveBeenCalled();
+    expect(transport.createStagingBoard).not.toHaveBeenCalled();
+    expect(api.createProjectSettled).not.toHaveBeenCalled();
+  });
+
+  it('cleans up newly installed fonts only when failed project creation proves absence', async () => {
+    const archive = await fontProject();
+    const { ProjectCreateAbsentError: AbsentError } = await import('./api');
+    api.createProjectSettled.mockRejectedValue(new AbsentError(new Error('rejected')));
+    await expect(projectFile.importProjectFile(archive)).rejects.toBeInstanceOf(AbsentError);
+    expect(fontTransport.remove).toHaveBeenCalledWith('imported-font', expect.any(AbortSignal));
+    fontTransport.remove.mockClear();
+    api.createProjectSettled.mockRejectedValue(new Error('Unknown create outcome'));
+    await expect(projectFile.importProjectFile(archive)).rejects.toThrow('Unknown create outcome');
+    expect(fontTransport.remove).not.toHaveBeenCalled();
+  });
+
+  it('allows an explicit references-only retry without installing or deleting fonts', async () => {
+    const archive = await fontProject();
+    acceptCreate();
+    const result = await projectFile.importProjectFile(archive, { skipEmbeddedFonts: true });
+    const { collectFontDependencies } = await import('./invk/fonts');
+    expect(collectFontDependencies(result.record.data)[0]?.references).toEqual(['source-font']);
+    expect(fontTransport.upload).not.toHaveBeenCalled();
+    expect(fontTransport.remove).not.toHaveBeenCalled();
   });
 });

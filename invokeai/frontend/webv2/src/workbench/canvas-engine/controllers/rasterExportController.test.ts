@@ -1,5 +1,6 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { describe, expect, it, vi } from 'vitest';
@@ -24,13 +25,13 @@ describe('RasterExportController budget', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster' as const,
     };
-    const document: CanvasDocumentContractV2 = {
+    const document: CanvasDocumentContractV3 = {
       background: 'transparent',
       bbox: { height: 100, width: 100, x: 0, y: 0 },
       height: 100,
-      layers: [layer],
+      stacks: stacksFrom([layer]),
       selectedLayerId: null,
-      version: 2,
+      version: 3,
       width: 100,
     };
     const reserve = vi.fn(() => ({ availableBytes: 0, requestedBytes: 40_000, status: 'over-budget' as const }));
@@ -65,7 +66,9 @@ describe('RasterExportController budget', () => {
     entry.hasPublishedPixels = true;
     entry.stale = false;
     const layer = {
-      adjustments: { brightness: 0.1, contrast: 0, saturation: 0 },
+      adjustments: [
+        { brightness: 0.1, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
       blendMode: 'normal' as const,
       id: 'layer',
       isEnabled: true,
@@ -76,13 +79,13 @@ describe('RasterExportController budget', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster' as const,
     };
-    const document: CanvasDocumentContractV2 = {
+    const document: CanvasDocumentContractV3 = {
       background: 'transparent',
       bbox: { height: 100, width: 100, x: 0, y: 0 },
       height: 100,
-      layers: [layer],
+      stacks: stacksFrom([layer]),
       selectedLayerId: null,
-      version: 2,
+      version: 3,
       width: 100,
     };
     const release = vi.fn();
@@ -115,7 +118,9 @@ describe('RasterExportController budget', () => {
     entry.hasPublishedPixels = true;
     entry.stale = false;
     const layer = {
-      adjustments: { brightness: 0.1, contrast: 0, saturation: 0 },
+      adjustments: [
+        { brightness: 0.1, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
       blendMode: 'normal' as const,
       id: 'layer',
       isEnabled: true,
@@ -126,13 +131,13 @@ describe('RasterExportController budget', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster' as const,
     };
-    const document: CanvasDocumentContractV2 = {
+    const document: CanvasDocumentContractV3 = {
       background: 'transparent',
       bbox: { height: 100, width: 100, x: 0, y: 0 },
       height: 100,
-      layers: [layer],
+      stacks: stacksFrom([layer]),
       selectedLayerId: null,
-      version: 2,
+      version: 3,
       width: 100,
     };
     const release = vi.fn();
@@ -158,5 +163,156 @@ describe('RasterExportController budget', () => {
       result.release();
     }
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('waits for custom font readiness before returning cached text pixels', async () => {
+    const backend = createTestStubRasterBackend();
+    const layers = createLayerCacheStore(backend);
+    const entry = layers.getOrCreate('text-layer', 80, 32);
+    entry.hasPublishedPixels = true;
+    entry.renderedFontFamily = '__invoke_font_1';
+    entry.stale = false;
+    const source = {
+      align: 'left' as const,
+      color: '#fff',
+      content: 'custom',
+      fontFamily: 'Catalog Family',
+      fontRef: { contentHash: 'hash-1', family: 'Catalog Family', id: 'font-1', label: 'Catalog Regular' },
+      fontSize: 24,
+      fontWeight: 400,
+      lineHeight: 1.2,
+      type: 'text' as const,
+    };
+    const layer = {
+      blendMode: 'normal' as const,
+      id: 'text-layer',
+      isEnabled: true,
+      isLocked: false,
+      name: 'Text',
+      opacity: 1,
+      source,
+      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+      type: 'raster' as const,
+    };
+    const document: CanvasDocumentContractV3 = {
+      background: 'transparent',
+      bbox: { height: 32, width: 80, x: 0, y: 0 },
+      height: 32,
+      stacks: stacksFrom([layer]),
+      selectedLayerId: null,
+      version: 3,
+      width: 80,
+    };
+    let resolveFont!: (family: string) => void;
+    const waitForFont = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveFont = resolve;
+        })
+    );
+    const getOrStartRasterization = vi.fn(() => Promise.resolve<'published'>('published'));
+    const controller = new RasterExportController({
+      backend,
+      captureGuard: () => ({ cacheVersion: 1, documentGeneration: 1, layer, layerId: 'text-layer', projectId: 'p' }),
+      getDocument: () => document,
+      getOrStartRasterization,
+      isGuardCurrent: () => true,
+      isRasterizing: () => false,
+      isSupportedSource: () => true,
+      layers,
+      waitForFont,
+    });
+
+    const pending = controller.rasterize('text-layer');
+    expect(waitForFont).toHaveBeenCalledWith(source, undefined);
+    expect(getOrStartRasterization).not.toHaveBeenCalled();
+    resolveFont('__invoke_font_1');
+    await expect(pending).resolves.toMatchObject({ status: 'ok' });
+  });
+
+  it('re-rasterizes fallback text once when a missing font recovers before export', async () => {
+    const backend = createTestStubRasterBackend();
+    const layers = createLayerCacheStore(backend);
+    const entry = layers.getOrCreate('text-layer', 80, 32);
+    entry.hasPublishedPixels = true;
+    entry.renderedFontFamily = 'Catalog Family';
+    entry.stale = false;
+    const source = {
+      align: 'left' as const,
+      color: '#fff',
+      content: 'custom',
+      fontFamily: 'Catalog Family',
+      fontRef: { contentHash: 'hash-1', family: 'Catalog Family', id: 'font-1', label: 'Catalog Regular' },
+      fontSize: 24,
+      fontWeight: 400,
+      lineHeight: 1.2,
+      type: 'text' as const,
+    };
+    const layer = {
+      blendMode: 'normal' as const,
+      id: 'text-layer',
+      isEnabled: true,
+      isLocked: false,
+      name: 'Text',
+      opacity: 1,
+      source,
+      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+      type: 'raster' as const,
+    };
+    const document: CanvasDocumentContractV3 = {
+      background: 'transparent',
+      bbox: { height: 32, width: 80, x: 0, y: 0 },
+      height: 32,
+      stacks: stacksFrom([layer]),
+      selectedLayerId: null,
+      version: 3,
+      width: 80,
+    };
+    const waitForFont = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('font unavailable'))
+      .mockResolvedValue('__invoke_font_1');
+    const invalidateLayerCache = vi.fn((layerId: string) => layers.invalidate(layerId));
+    const rasterizedCustomPixels = vi.fn(() => {
+      entry.renderedFontFamily = '__invoke_font_1';
+      entry.stale = false;
+      entry.hasPublishedPixels = true;
+      entry.surface.ctx.fillText('custom pixels', 0, 0);
+    });
+    const getOrStartRasterization = vi.fn(() => {
+      rasterizedCustomPixels();
+      return Promise.resolve('published' as const);
+    });
+    const controller = new RasterExportController({
+      backend,
+      captureGuard: () => ({
+        cacheVersion: entry.version,
+        documentGeneration: 1,
+        layer,
+        layerId: 'text-layer',
+        projectId: 'p',
+      }),
+      getDocument: () => document,
+      getOrStartRasterization,
+      invalidateLayerCache,
+      isGuardCurrent: () => true,
+      isRasterizing: () => false,
+      isSupportedSource: () => true,
+      layers,
+      waitForFont,
+    });
+
+    await expect(controller.rasterize('text-layer')).resolves.toEqual({ status: 'not-ready' });
+    expect(getOrStartRasterization).not.toHaveBeenCalled();
+
+    await expect(controller.rasterize('text-layer')).resolves.toMatchObject({ status: 'ok' });
+    expect(invalidateLayerCache).toHaveBeenCalledOnce();
+    expect(getOrStartRasterization).toHaveBeenCalledOnce();
+    expect(rasterizedCustomPixels).toHaveBeenCalledOnce();
+    expect(entry.renderedFontFamily).toBe('__invoke_font_1');
+
+    await expect(controller.rasterize('text-layer')).resolves.toMatchObject({ status: 'ok' });
+    expect(invalidateLayerCache).toHaveBeenCalledOnce();
+    expect(getOrStartRasterization).toHaveBeenCalledOnce();
   });
 });

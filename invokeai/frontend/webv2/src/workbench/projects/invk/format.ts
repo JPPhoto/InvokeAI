@@ -1,3 +1,7 @@
+import type { RefusedWorkbenchProject } from '@workbench/projectContracts';
+
+import { MIN_SUPPORTED_CANVAS_SCHEMA_VERSION } from '@workbench/canvasSchemaVersion';
+
 /**
  * What an `.invk` is called and how reading one can fail.
  *
@@ -32,6 +36,13 @@ export const INVK_BOARD_ENTRY = 'board.json';
 export const INVK_IMAGES_PREFIX = 'images/';
 export const INVK_VIDEOS_PREFIX = 'videos/';
 
+export class FontImportQuotaError extends Error {
+  constructor() {
+    super('The font library has insufficient space for the embedded fonts.');
+    this.name = 'FontImportQuotaError';
+  }
+}
+
 export type InvkFormatReason =
   /** A ZIP, but the manifest is a canvas project written by the previous frontend. */
   | 'legacy-canvas-project'
@@ -57,3 +68,13 @@ export class InvkFormatError extends Error {
     this.reason = reason;
   }
 }
+
+/** The archive-format reason that matches a project the canvas version gate refused. */
+export const toInvkFormatReason = (refused: RefusedWorkbenchProject): InvkFormatReason => {
+  if (refused.refusal.status !== 'unsupported-version') {
+    return 'damaged';
+  }
+  return refused.refusal.version < MIN_SUPPORTED_CANVAS_SCHEMA_VERSION
+    ? 'legacy-canvas-project'
+    : 'unsupported-version';
+};

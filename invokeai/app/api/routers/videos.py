@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import tempfile
@@ -6,13 +7,16 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, BinaryIO, Optional
 
-from fastapi import Body, HTTPException, Query, Request, Response, UploadFile
+from fastapi import Body, HTTPException, Query, Request, Response
 from fastapi import Path as PathParam
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRouter
 from PIL import Image as PILImage
 from pydantic import BaseModel, Field, StringConstraints, ValidationError
+from python_multipart.exceptions import MultipartParseError
+from python_multipart.multipart import MultipartParser, parse_options_header
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import ClientDisconnect
 
 from invokeai.app.api.auth_dependencies import CurrentMediaUserOrDefault, CurrentUserOrDefault
 from invokeai.app.api.dependencies import ApiDependencies
@@ -48,34 +52,76 @@ from invokeai.app.services.videos.videos_common import (
     VideoDTO,
     VideoUrlsDTO,
 )
-from invokeai.app.util.video_thumbnails import VideoDecodeTimeoutError, extract_video_frame, probe_video_with_codec
+from invokeai.app.util.video_ingest import VideoIngestError, ingest_media_to_mp4, probe_media_streams
+from invokeai.app.util.video_thumbnails import (
+    VideoDecodeTimeoutError,
+    extract_representative_video_frame,
+    probe_video_with_codec,
+)
 
 videos_router = APIRouter(prefix="/v1/videos", tags=["videos"])
 
 # Videos are immutable; set a high max-age (1 year)
 VIDEO_MAX_AGE = 31536000
 
-# MP4 only — the names service emits `{uuid}.mp4` unconditionally and we don't transcode on
-# upload. Accepting .mov/.webm/.mkv here previously caused those containers to be stored
-# under a .mp4 name and served with the .mp4 MIME type, which silently broke playback in
-# browsers when the container did not match.
-ACCEPTED_VIDEO_MIME_PREFIXES = ("video/mp4",)
-ACCEPTED_VIDEO_EXTENSIONS = (".mp4",)
+# The names service emits `{uuid}.mp4` unconditionally and files are served as video/mp4,
+# so everything *stored* must genuinely be H.264 MP4 — storing foreign containers under a
+# .mp4 name silently broke browser playback, which is why uploads were historically
+# restricted to already-compliant files. Uploads are now normalized at ingest instead
+# (see invokeai.app.util.video_ingest): H.264 in a foreign container is losslessly
+# remuxed, other codecs (iPhone HEVC, ProRes, VP9) are transcoded, and audio-only files
+# are wrapped into waveform videos so audio clips flow through the video pipeline
+# (gallery, trim, audio-only reference conditioning) without a first-class audio type.
+ACCEPTED_VIDEO_MIME_PREFIXES = ("video/",)
+# The extension lists are the fallback for uploads whose type the browser could not
+# determine (they arrive as application/octet-stream); the MIME prefixes above accept the
+# ordinary case. Everything here is demuxable and decodable by the bundled ffmpeg — ASF
+# (Windows Media) included — and lands as H.264/AAC MP4 through the ingest converter.
+ACCEPTED_VIDEO_EXTENSIONS = (
+    ".mp4",
+    ".mov",
+    ".m4v",
+    ".webm",
+    ".mkv",
+    ".avi",
+    ".mpg",
+    ".mpeg",
+    ".3gp",
+    ".wmv",
+    ".asf",
+)
+ACCEPTED_AUDIO_MIME_PREFIXES = ("audio/",)
+ACCEPTED_AUDIO_EXTENSIONS = (
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".wav",
+    ".flac",
+    ".ogg",
+    ".oga",
+    ".opus",
+    ".aiff",
+    ".aif",
+    ".wma",
+)
 
 # Per-chunk size for HTTP Range responses (1 MB)
 RANGE_CHUNK_SIZE = 1024 * 1024
 
-# Upload streaming chunk size (1 MB) and a coarse per-upload size cap. The cap is generous
+# Coarse per-upload size cap, enforced against the file part as it streams in. Generous
 # because Wan-generated MP4s for long sequences can run into the hundreds of megabytes;
-# the goal is to prevent a single client from exhausting RAM, not to be a content policy.
-UPLOAD_CHUNK_SIZE = 1024 * 1024
+# the goal is to prevent a single client from exhausting RAM/disk, not to be a content policy.
 MAX_UPLOAD_SIZE = 1024 * 1024 * 1024  # 1 GB
 # Pre-parse ingress cap enforced by VideoUploadLimitASGIMiddleware, applied to the whole
-# request body *before* the multipart parser spools it to temp storage. Slightly larger
-# than MAX_UPLOAD_SIZE to allow for multipart framing and the metadata form field.
+# request body *before* the upload route parses it. Slightly larger than MAX_UPLOAD_SIZE
+# to allow for multipart framing and the metadata form field.
 MAX_UPLOAD_REQUEST_SIZE = MAX_UPLOAD_SIZE + 10 * 1024 * 1024
-# Global bound on concurrent video uploads — each in-flight upload can hold up to two
-# copies of the file in temp storage (the multipart spool + the route's own tmp file).
+# The `metadata` form field is a stringified JSON dict; it is buffered in memory while the
+# body streams, so it gets its own (generous) cap.
+MAX_UPLOAD_METADATA_SIZE = 1024 * 1024
+# Global bound on concurrent video uploads — each in-flight upload holds one full-size copy
+# of the file in temp storage until probe/thumbnail/create finish with it, and a second (also
+# capped at MAX_UPLOAD_SIZE) while the ingest converter is writing its output.
 MAX_CONCURRENT_VIDEO_UPLOADS = 2
 # Per-user bound (multiuser mode only): keeps one tenant's slow uploads from holding
 # every global slot and starving the other users into 429s.
@@ -113,12 +159,195 @@ def _assert_video_direct_owner(video_name: str, current_user: CurrentUserOrDefau
     raise HTTPException(status_code=403, detail="Not authorized to move this video")
 
 
-def _is_accepted_video_upload(file: UploadFile) -> bool:
-    if file.content_type and file.content_type.startswith(ACCEPTED_VIDEO_MIME_PREFIXES):
-        return True
-    if file.filename:
-        return file.filename.lower().endswith(ACCEPTED_VIDEO_EXTENSIONS)
-    return False
+def _classify_upload(filename: Optional[str], content_type: Optional[str]) -> Optional[str]:
+    """Returns 'video' or 'audio' for an accepted upload, None for a rejected one.
+
+    The classification is advisory (it picks the 415 message and nothing else): the
+    ingest path probes actual stream content, so a mislabeled file still converts
+    correctly or fails with a clear error.
+    """
+    if content_type:
+        if content_type.startswith(ACCEPTED_VIDEO_MIME_PREFIXES):
+            return "video"
+        if content_type.startswith(ACCEPTED_AUDIO_MIME_PREFIXES):
+            return "audio"
+    if filename:
+        name = filename.lower()
+        if name.endswith(ACCEPTED_VIDEO_EXTENSIONS):
+            return "video"
+        if name.endswith(ACCEPTED_AUDIO_EXTENSIONS):
+            return "audio"
+    return None
+
+
+def _with_media_origin(metadata: Optional[str], origin: str) -> str:
+    """Merges a `media_origin` marker into the upload's (already-validated) metadata JSON."""
+    parsed = json.loads(metadata) if metadata else {}
+    parsed.setdefault("media_origin", origin)
+    return json.dumps(parsed)
+
+
+class _VideoUploadStreamParser:
+    """Parses the multipart upload body, writing the file part straight to `destination`.
+
+    Declaring `file: UploadFile` on the route makes Starlette parse the body into its own
+    spooled temp file first, so the route's copy to a named temp file was a SECOND
+    full-size copy: every in-flight upload occupied up to 2 x MAX_UPLOAD_SIZE of temp
+    storage (x MAX_CONCURRENT_VIDEO_UPLOADS) for the whole probe/thumbnail/create phase.
+    The spool's path cannot be reused instead — once rolled over it is an unlinked
+    anonymous file, and both ffmpeg and videos.create need a real path.
+
+    Parsing the stream ourselves keeps exactly one copy of the upload on disk (the ingest
+    step, when a file needs it, adds its own output file on top). It also lets the file-type
+    and size checks fire while the body is still arriving, rather than after the whole thing
+    has been written somewhere.
+
+    Callbacks run inside `MultipartParser.write`, which the route calls in a worker thread
+    — the disk writes must not happen on the event loop.
+    """
+
+    def __init__(self, destination: BinaryIO) -> None:
+        self._destination = destination
+        self._header_field = bytearray()
+        self._header_value = bytearray()
+        self._headers: dict[bytes, bytes] = {}
+        self._part_name: Optional[bytes] = None
+        self._metadata_chunks: list[bytes] = []
+        self._metadata_size = 0
+        self.filename: Optional[str] = None
+        self.content_type: Optional[str] = None
+        self.upload_kind: Optional[str] = None
+        self.metadata: Optional[str] = None
+        self.file_size = 0
+        self.saw_file_part = False
+        # `MultipartParser.finalize()` is a no-op that does NOT check the parser reached its
+        # end state, so a body that stops after the file bytes — truncated upload, aborted
+        # client, or the parser's own silent `max_size` truncation — would otherwise look
+        # exactly like a complete one and get probed and persisted. `on_end` fires only when
+        # the closing `--boundary--` is parsed, so it is the proof of a complete body.
+        self.saw_end = False
+
+    @property
+    def callbacks(self) -> dict[str, object]:
+        return {
+            "on_part_begin": self._on_part_begin,
+            "on_part_data": self._on_part_data,
+            "on_part_end": self._on_part_end,
+            "on_header_field": self._on_header_field,
+            "on_header_value": self._on_header_value,
+            "on_header_end": self._on_header_end,
+            "on_headers_finished": self._on_headers_finished,
+            "on_end": self._on_end,
+        }
+
+    def _on_part_begin(self) -> None:
+        self._headers = {}
+        self._header_field = bytearray()
+        self._header_value = bytearray()
+        self._part_name = None
+        self._metadata_chunks = []
+        self._metadata_size = 0
+
+    def _on_header_field(self, data: bytes, start: int, end: int) -> None:
+        self._header_field.extend(data[start:end])
+
+    def _on_header_value(self, data: bytes, start: int, end: int) -> None:
+        self._header_value.extend(data[start:end])
+
+    def _on_header_end(self) -> None:
+        self._headers[bytes(self._header_field).lower()] = bytes(self._header_value)
+        self._header_field = bytearray()
+        self._header_value = bytearray()
+
+    def _on_headers_finished(self) -> None:
+        _, options = parse_options_header(self._headers.get(b"content-disposition", b""))
+        self._part_name = options.get(b"name")
+        if self._part_name != b"file":
+            return
+        if self.saw_file_part:
+            raise HTTPException(status_code=422, detail="Expected exactly one video file")
+        self.saw_file_part = True
+        filename = options.get(b"filename")
+        self.filename = filename.decode("utf-8", errors="replace") if filename is not None else None
+        content_type = self._headers.get(b"content-type")
+        self.content_type = content_type.decode("latin-1") if content_type is not None else None
+        # Reject the wrong kind of file before any of its bytes reach the disk.
+        self.upload_kind = _classify_upload(self.filename, self.content_type)
+        if self.upload_kind is None:
+            raise HTTPException(status_code=415, detail="Not a supported video or audio file")
+
+    def _on_part_data(self, data: bytes, start: int, end: int) -> None:
+        chunk = data[start:end]
+        if self._part_name == b"file":
+            self.file_size += len(chunk)
+            if self.file_size > MAX_UPLOAD_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Video upload exceeds maximum size ({MAX_UPLOAD_SIZE} bytes)",
+                )
+            self._destination.write(chunk)
+        elif self._part_name == b"metadata":
+            self._metadata_size += len(chunk)
+            if self._metadata_size > MAX_UPLOAD_METADATA_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Video metadata exceeds maximum size ({MAX_UPLOAD_METADATA_SIZE} bytes)",
+                )
+            self._metadata_chunks.append(chunk)
+        # Any other field is dropped rather than buffered: an unknown part must not be a
+        # way to make the server hold arbitrary bytes in memory.
+
+    def _on_part_end(self) -> None:
+        if self._part_name == b"metadata":
+            try:
+                self.metadata = b"".join(self._metadata_chunks).decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise HTTPException(status_code=422, detail="Metadata must be UTF-8 encoded") from error
+        self._part_name = None
+        self._metadata_chunks = []
+        self._metadata_size = 0
+
+    def _on_end(self) -> None:
+        self.saw_end = True
+
+
+async def _stream_video_upload(request: Request, destination: BinaryIO) -> _VideoUploadStreamParser:
+    """Streams the request body through the multipart parser into `destination`."""
+    media_type, options = parse_options_header(request.headers.get("content-type", ""))
+    boundary = options.get(b"boundary")
+    # Content-Type is case-insensitive (RFC 7231) and parse_options_header preserves case.
+    if media_type.lower() != b"multipart/form-data" or boundary is None:
+        raise HTTPException(status_code=422, detail="Expected a multipart/form-data video upload")
+
+    parser_state = _VideoUploadStreamParser(destination)
+    # max_size is the pre-parse ingress cap the middleware already enforces; repeating it
+    # here bounds the parser itself for any path that reaches it directly. The parser
+    # silently *truncates* past it rather than erroring, so on such a path the body would
+    # look short rather than rejected — the saw_end check below is what catches that.
+    parser = MultipartParser(boundary, parser_state.callbacks, max_size=MAX_UPLOAD_REQUEST_SIZE)
+    try:
+        async for chunk in request.stream():
+            # Parsing writes to disk, so it belongs in the thread pool alongside the rest of
+            # the blocking upload work.
+            await run_in_threadpool(parser.write, chunk)
+        await run_in_threadpool(parser.finalize)
+    except MultipartParseError as error:
+        # A malformed body is the client's fault, not a server error.
+        raise HTTPException(status_code=422, detail="Malformed multipart body") from error
+    except ClientDisconnect as error:
+        # The client went away, or VideoUploadLimitASGIMiddleware cut it off for exceeding the
+        # ingress cap, the idle timeout or the duration cap. Left to propagate this surfaces as
+        # a 500 raised above the middleware, which both misreports a client-side abort as a
+        # server fault and bypasses the middleware's connection-close handling.
+        raise HTTPException(status_code=400, detail="Upload ended before the body was complete") from error
+
+    if not parser_state.saw_end:
+        # No closing boundary: the body was truncated. Proceeding would probe and persist a
+        # partial file whenever the truncated bytes happen to survive the MP4 checks.
+        raise HTTPException(status_code=422, detail="Incomplete multipart body")
+    if not parser_state.saw_file_part:
+        raise HTTPException(status_code=422, detail="Expected a video file in the upload")
+    return parser_state
 
 
 def _is_mp4_file(path: Path) -> bool:
@@ -150,20 +379,24 @@ def _is_mp4_file(path: Path) -> bool:
 
 
 def _probe_decodable_video(path: Path) -> tuple[tuple[int, int, float, Optional[float]], Optional[PILImage.Image]]:
-    """Probes metadata and proves the video has a decodable first frame.
+    """Probes metadata and proves the video has a decodable frame.
 
     Returns the metadata plus the decoded frame so the save path can reuse it as the
-    thumbnail source instead of spawning another decode worker. A decode timeout is
-    contention on a loaded server, not evidence the video is bad — probe_video already
-    succeeded — so it yields (metadata, None) and the upload proceeds, with save-time
-    thumbnail extraction as the backstop.
+    thumbnail source instead of spawning another decode worker. The frame is taken ~1s into
+    the clip (see representative_thumbnail_frame_index) rather than at index 0 — first
+    frames are routinely unrepresentative (fade-ins, the synthesized waveform track's empty
+    first window) — with a frame-0 fallback inside the helper. Acceptance is thereby
+    slightly WIDER than before: a file whose frame 0 is corrupt but whose ~1s frame decodes
+    is now accepted rather than 415'd. A decode timeout is contention on a loaded server, not evidence the video is
+    bad — probe_video already succeeded — so it yields (metadata, None) and the upload
+    proceeds, with save-time thumbnail extraction as the backstop.
     """
     width, height, duration, fps, codec = probe_video_with_codec(path)
     if codec is None or codec.lower() not in {"h264", "avc", "avc1", "libx264"}:
         raise ValueError("Video must use a browser-compatible H.264/AVC codec")
     metadata = (width, height, duration, fps)
     try:
-        first_frame = extract_video_frame(path, frame_index=0, raise_on_timeout=True)
+        first_frame = extract_representative_video_frame(path, duration, fps, raise_on_timeout=True)
     except VideoDecodeTimeoutError:
         return metadata, None
     if first_frame is None:
@@ -180,64 +413,108 @@ def _probe_decodable_video(path: Path) -> tuple[tuple[int, int, float, Optional[
     },
     status_code=201,
     response_model=VideoDTO,
+    # The body is parsed by hand (see _stream_video_upload) so the file lands in exactly
+    # one temp file, which means FastAPI cannot infer the request schema from the
+    # signature. This spells out the same multipart body the `file` + `metadata`
+    # parameters used to generate, so the documented contract is unchanged.
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "properties": {
+                            # Key order and shape mirror what FastAPI generates for the sibling
+                            # upload routes (see Body_upload_image), so the documented contract
+                            # stays byte-identical to what `file` + `metadata` produced.
+                            "file": {
+                                "type": "string",
+                                "contentMediaType": "application/octet-stream",
+                                "title": "File",
+                            },
+                            "metadata": {
+                                "anyOf": [{"type": "string"}, {"type": "null"}],
+                                "title": "Metadata",
+                                "description": "The metadata to associate with the video, must be a stringified JSON dict",
+                            },
+                        },
+                        "type": "object",
+                        "required": ["file"],
+                        "title": "Body_upload_video",
+                    }
+                }
+            },
+        }
+    },
 )
 async def upload_video(
     current_user: CurrentUserOrDefault,
-    file: UploadFile,
     request: Request,
     response: Response,
     video_category: ImageCategory = Query(description="The category of the video"),
     is_intermediate: bool = Query(description="Whether this is an intermediate video"),
     board_id: Optional[str] = Query(default=None, description="The board to add this video to, if any"),
     session_id: Optional[str] = Query(default=None, description="The session ID associated with this upload, if any"),
-    metadata: Optional[str] = Body(
-        default=None,
-        description="The metadata to associate with the video, must be a stringified JSON dict",
-        embed=True,
-    ),
 ) -> VideoDTO:
     """Uploads a video for the current user."""
-    if metadata is not None:
-        try:
-            MetadataFieldValidator.validate_json(metadata)
-        except ValidationError as e:
-            raise HTTPException(status_code=422, detail="Metadata must be a JSON object") from e
-
     # Check board access for uploads to a specific board.
     await run_in_threadpool(_assert_board_write_access, board_id, current_user)
 
-    if not _is_accepted_video_upload(file):
-        raise HTTPException(status_code=415, detail="Not a supported video file")
-
-    # Stream the upload to a tmp file so we can probe and then hand its path to the service.
-    # Reading the full body into memory first risked exhausting RAM on multi-GB uploads;
-    # chunk-stream instead and enforce a hard size cap. Filesystem writes, container
-    # validation, ffmpeg probing, and thumbnail extraction are all blocking — run them in
-    # the thread pool so a slow (or hostile) file can't stall the event loop and every
-    # other API request with it.
+    # Stream the upload straight into a tmp file so we can probe it and then hand its path
+    # to the service. Reading the full body into memory first risked exhausting RAM on
+    # multi-GB uploads; the parser streams it instead and enforces a hard size cap as the
+    # bytes arrive. Filesystem writes, container validation, ffmpeg probing, and thumbnail
+    # extraction are all blocking — run them in the thread pool so a slow (or hostile) file
+    # can't stall the event loop and every other API request with it.
     tmp = tempfile.NamedTemporaryFile(prefix="invokeai_upload_", suffix=".mp4", delete=False)
     tmp_path = Path(tmp.name)
     try:
-        total = 0
-        while chunk := await file.read(UPLOAD_CHUNK_SIZE):
-            total += len(chunk)
-            if total > MAX_UPLOAD_SIZE:
-                tmp.close()
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Video upload exceeds maximum size ({MAX_UPLOAD_SIZE} bytes)",
-                )
-            await run_in_threadpool(tmp.write, chunk)
+        upload = await _stream_video_upload(request, tmp)
         tmp.close()
-        # Release the multipart spool now that the body is copied: each in-flight
-        # upload otherwise holds TWO on-disk copies (Starlette's spool + our tmp file)
-        # through the probe/thumbnail/create phase — up to 2 x MAX_UPLOAD_SIZE x
-        # MAX_CONCURRENT_VIDEO_UPLOADS of temp disk. Closing shrinks the double-copy
-        # window to the copy loop itself.
-        await file.close()
 
-        if not await run_in_threadpool(_is_mp4_file, tmp_path):
-            raise HTTPException(status_code=415, detail="Not an MP4 video file")
+        upload_kind = upload.upload_kind
+        metadata = upload.metadata
+        if metadata is not None:
+            try:
+                MetadataFieldValidator.validate_json(metadata)
+            except ValidationError as e:
+                raise HTTPException(status_code=422, detail="Metadata must be a JSON object") from e
+
+        # Already-compliant H.264 MP4s pass through byte-identical (the historical path);
+        # everything else — foreign containers, foreign codecs, audio-only files — is
+        # normalized by the ingest converter. The conversion runs inside this upload's
+        # concurrency slot: a long HEVC transcode holds one of MAX_CONCURRENT_VIDEO_UPLOADS
+        # slots for its duration, which is the intended backpressure.
+        needs_ingest = True
+        if upload_kind == "video" and await run_in_threadpool(_is_mp4_file, tmp_path):
+            try:
+                container_probe = await run_in_threadpool(probe_media_streams, tmp_path)
+            except VideoIngestError as e:
+                raise HTTPException(status_code=415, detail=str(e))
+            # Both codecs must already be browser-safe to skip ingest: an mp4-family
+            # container can legally carry h264 video with AMR/opus/mp3/ac3 audio (e.g.
+            # older Android .3gp camera files), which browsers render as silent video.
+            # The remux branch stream-copies the h264 and normalizes only the audio.
+            needs_ingest = container_probe.video_codec != "h264" or container_probe.audio_codec not in (None, "aac")
+
+        if needs_ingest:
+            converted = tempfile.NamedTemporaryFile(prefix="invokeai_ingest_", suffix=".mp4", delete=False)
+            converted_path = Path(converted.name)
+            converted.close()
+            try:
+                ingest_action = await run_in_threadpool(
+                    ingest_media_to_mp4, tmp_path, converted_path, max_output_bytes=MAX_UPLOAD_SIZE
+                )
+                await run_in_threadpool(os.replace, converted_path, tmp_path)
+            except VideoIngestError as e:
+                ApiDependencies.invoker.services.logger.info(f"Video upload ingest failed: {e}")
+                raise HTTPException(status_code=415, detail=str(e))
+            finally:
+                converted_path.unlink(missing_ok=True)
+            if ingest_action == "audio_wrap":
+                # Mark wrapped audio uploads so clients can treat them as audio clips
+                # (e.g. defaulting an audio-only reference conditioning mode).
+                metadata = _with_media_origin(metadata, "audio_upload")
 
         try:
             (width, height, duration, fps), first_frame = await run_in_threadpool(_probe_decodable_video, tmp_path)

@@ -1993,6 +1993,20 @@ minimax_h3_int8_transformer = StarterModel(
     dependencies=[minimax_h3_components, minimax_h3_int8_text_encoder],
 )
 
+minimax_h3_ref2va_int8_transformer = StarterModel(
+    name="MiniMax H3 Ref2VA Transformer (int8, pruned)",
+    base=BaseModelType.MiniMaxH3,
+    source="Comfy-Org/MiniMax-H3::diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+    description="MiniMax H3 reference-conditioned video+audio generation: up to 3 video and 9 image "
+    "references. AdaLN-pruned int8 single-file transformer (~21 GB); select it in the MiniMax H3 "
+    "Model Loader's transformer field. Total size with dependencies: ~59 GB. NOTE: This model is "
+    "distributed under a restrictive license that forbids its use in certain territories. Please "
+    "see https://huggingface.co/MiniMaxAI/MiniMax-H3 for details.",
+    type=ModelType.Main,
+    format=ModelFormat.Checkpoint,
+    dependencies=[minimax_h3_components, minimax_h3_int8_text_encoder],
+)
+
 minimax_h3_turbo_lora = StarterModel(
     name="MiniMax H3 Turbo LoRA",
     base=BaseModelType.MiniMaxH3,
@@ -2015,6 +2029,24 @@ minimax_h3_lightx2v_turbo_lora = StarterModel(
     description="LightX2V step-distillation LoRA for MiniMax H3 (Apache 2.0), 8-step v1.0 (~2 GB): "
     "renders video+audio in ~8 denoising steps instead of ~50. Apply at strength 1.0 and lower "
     "Steps to 8. Works with the full and the pruned int8 transformers.",
+    type=ModelType.LoRA,
+    format=ModelFormat.LyCORIS,
+)
+
+# The LightX2V 8-step v1.0 (768p) Ref2V distillation replaces the earlier 4-step v0.1 repack
+# (Comfy-Org/MiniMax-H3::loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors):
+# v0.1 carries a strong rightward camera-pan bias whenever a VIDEO reference is conditioned
+# on, which neither the undistilled 30-step base nor this v1.0 release shows (verified
+# 2026-09-07). Same fused-key comfyui layout as the FL2VA LightX2V file above.
+minimax_h3_lightx2v_ref2v_turbo_lora = StarterModel(
+    name="MiniMax H3 LightX2V Ref2V Turbo LoRA",
+    base=BaseModelType.MiniMaxH3,
+    source="lightx2v/Minimax-h3-Turbo::minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+    description="LightX2V step-distillation LoRA for the MiniMax H3 Ref2VA transformer (Apache 2.0), "
+    "8-step v1.0 768p (~2 GB): renders reference-conditioned video+audio in ~8 denoising steps "
+    "instead of ~50. Apply at strength 1.0 and lower Steps to 8. Trained against the Ref2VA "
+    "transformer; not intended for FL2VA. Supersedes the 4-step v0.1 Ref2V Turbo repack, which "
+    "pans the camera rightward whenever a video reference is used.",
     type=ModelType.LoRA,
     format=ModelFormat.LyCORIS,
 )
@@ -2539,10 +2571,12 @@ STARTER_MODELS: list[StarterModel] = [
     wan_22_ti2v_5b_gguf_q4_k_m,
     wan_22_ti2v_5b_gguf_q8_0,
     minimax_h3_int8_transformer,
+    minimax_h3_ref2va_int8_transformer,
     minimax_h3_int8_text_encoder,
     minimax_h3_components,
     minimax_h3_turbo_lora,
     minimax_h3_lightx2v_turbo_lora,
+    minimax_h3_lightx2v_ref2v_turbo_lora,
     gemini_flash_image,
     gemini_pro_image_preview,
     gemini_3_1_flash_image_preview,
@@ -2714,16 +2748,18 @@ ideogram_bundle: list[StarterModel] = [
     ideogram_4_nf4,
 ]
 
-# The working set for MiniMax H3 video+audio generation (~62 GB): shared components from
-# the official repo plus Comfy-Org's int8 single-file transformer and text encoder, and the
-# two turbo (step-distillation) LoRAs for fast low-step rendering. See the license note in
-# the MiniMax H3 region above.
+# The working set for MiniMax H3 video+audio generation (~85 GB): shared components from
+# the official repo plus Comfy-Org's int8 single-file FL2VA and Ref2VA transformers and the
+# text encoder, and the three turbo (step-distillation) LoRAs for fast low-step rendering.
+# See the license note in the MiniMax H3 region above.
 minimax_h3_bundle: list[StarterModel] = [
     minimax_h3_components,
     minimax_h3_int8_text_encoder,
     minimax_h3_int8_transformer,
+    minimax_h3_ref2va_int8_transformer,
     minimax_h3_turbo_lora,
     minimax_h3_lightx2v_turbo_lora,
+    minimax_h3_lightx2v_ref2v_turbo_lora,
 ]
 
 STARTER_BUNDLES: dict[str, StarterModelBundle] = {

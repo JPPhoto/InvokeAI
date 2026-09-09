@@ -8,15 +8,17 @@ import {
   captureAccountScope,
   isAccountScopeCurrent,
 } from '@platform/state/accountLifecycle';
+import { getProjectCanvasSchemaRequirement, MAX_SUPPORTED_CANVAS_SCHEMA_VERSION } from '@workbench/canvasSchemaVersion';
 
 import type { ProjectTransferIssues } from './invk/transfer';
 
 import { createProjectSettled, getProjectBoardSnapshot, type ProjectRecordDTO } from './api';
 import { recordProjectCover } from './covers';
 import { createProjectId } from './ids';
-import { INVK_EXTENSION, InvkFormatError } from './invk/format';
+import { INVK_EXTENSION, InvkFormatError, toInvkFormatReason } from './invk/format';
 import { readAcknowledgedProject, upsertProjectSummary } from './library';
 import { remapAssetRefs, stripInstallationState } from './projectAssets';
+import { getOpenProject } from './syncStore';
 
 export const LEGACY_PROJECT_FILE_EXTENSION = '.invokeproject.json';
 
@@ -74,13 +76,15 @@ export const parseProjectFile = (text: string): Record<string, unknown> | null =
  */
 export interface ProjectFileProgress {
   completed: number;
-  phase: 'bundling' | 'packing' | 'restoring';
+  phase: 'bundling' | 'packing' | 'restoring' | 'restoring-fonts';
   total: number;
 }
 
 export interface ProjectFileOptions {
   onProgress?: (progress: ProjectFileProgress) => void;
   owner?: AccountScope;
+  includeFonts?: boolean;
+  skipEmbeddedFonts?: boolean;
 }
 
 export interface ProjectExportOutcome extends ProjectTransferIssues {
@@ -118,6 +122,7 @@ const exportProjectDocument = async (
   name: string,
   projectId: string,
   projectDocument: Record<string, unknown>,
+  minimumCanvasSchemaVersion: number,
   options: Required<Pick<ProjectFileOptions, 'owner'>> & ProjectFileOptions
 ): Promise<ProjectExportOutcome> => {
   const { executeInvkExport, planInvkExport } = await import('./invk/exportProject');
@@ -135,8 +140,10 @@ const exportProjectDocument = async (
     appVersion: APP_VERSION,
     boardItems: snapshot.items,
     createdAt: new Date().toISOString(),
+    minimumCanvasSchemaVersion,
     name,
     projectDocument,
+    includeFonts: options.includeFonts ?? false,
   });
 
   const result = await executeInvkExport(plan, {
@@ -164,7 +171,17 @@ export const exportLibraryProject = async (
 
   assertAccountScopeCurrent(owner);
 
-  return exportProjectDocument(record.name, record.project_id, record.data, { ...options, owner });
+  const [{ deserializeProjectDocument }, { serializeProjectDocumentV2 }] = await Promise.all([
+    import('./projectHydration'),
+    import('./projectDocument'),
+  ]);
+  const loaded = deserializeProjectDocument(record.data);
+  const document = loaded.status === 'loaded' ? serializeProjectDocumentV2(loaded.project) : record.data;
+
+  return exportProjectDocument(record.name, record.project_id, document, record.minimum_canvas_schema_version, {
+    ...options,
+    owner,
+  });
 };
 
 /** Export an open project from its live in-memory document. */
@@ -174,13 +191,19 @@ export const exportOpenProject = async (
 ): Promise<ProjectExportOutcome> => {
   const owner = options.owner ?? captureAccountScope();
   const { serializeProjectDocument } = await import('./projectDocument');
+  const document = serializeProjectDocument(project);
 
   assertAccountScopeCurrent(owner);
 
-  return exportProjectDocument(project.name, project.id, serializeProjectDocument(project), {
-    ...options,
-    owner,
-  });
+  // Preserve any higher compatibility floor already acknowledged by the server. Direct/offline
+  // exports fall back to what their live canvas demonstrably requires.
+  const record = getOpenProject(project.id) ? await readAcknowledgedProject(project.id, owner) : null;
+  const minimumCanvasSchemaVersion = Math.max(
+    getProjectCanvasSchemaRequirement(document),
+    record?.minimum_canvas_schema_version ?? 1
+  );
+
+  return exportProjectDocument(project.name, project.id, document, minimumCanvasSchemaVersion, { ...options, owner });
 };
 
 /**
@@ -198,6 +221,16 @@ export const importProjectFile = async (
   const owner = options.owner ?? captureAccountScope();
   const source = await readProjectDocument(file);
   const projectDocument = source.format === 'invk' ? source.contents.projectDocument : source.projectDocument;
+
+  if (
+    source.format === 'invk' &&
+    (source.contents.manifest.minimumCanvasSchemaVersion ?? 1) > MAX_SUPPORTED_CANVAS_SCHEMA_VERSION
+  ) {
+    throw new InvkFormatError(
+      'unsupported-version',
+      `Project requires canvas schema ${source.contents.manifest.minimumCanvasSchemaVersion}.`
+    );
+  }
 
   assertAccountScopeCurrent(owner);
 
@@ -218,17 +251,30 @@ export const importProjectFile = async (
 
   assertAccountScopeCurrent(owner);
 
-  const project = deserializeProjectDocument(candidate);
+  const loaded = deserializeProjectDocument(candidate);
 
-  if (!project) {
+  if (loaded.status === 'refused') {
+    throw new InvkFormatError(toInvkFormatReason(loaded.refused), 'The project document was refused.');
+  }
+
+  if (loaded.status !== 'loaded') {
     throw new InvkFormatError('damaged', 'The project document will not rehydrate.');
   }
+
+  const project = loaded.project;
 
   const { applyAuthoritativeProjectBoard, serializeProjectDocument } = await import('./projectDocument');
   const canonicalDocument = serializeProjectDocument(project);
   const archive = source.format === 'invk' ? source.contents : null;
   // Loaded only for an archive: a legacy JSON document restores nothing, so it has nothing to undo.
   const restoreMedia = archive === null ? null : await import('./invk/restoreProjectMedia');
+  const fontTransfer = archive?.fonts?.length && !options.skipEmbeddedFonts ? await import('./invk/fonts') : null;
+  const fontTransport = fontTransfer ? (await import('./invk/fontTransport')).createFontArchiveTransport() : null;
+  const fontLedger = fontTransfer?.createRestoredFontLedger() ?? null;
+
+  if (fontTransfer && fontTransport && archive?.fonts) {
+    await fontTransfer.preflightEmbeddedFonts(archive.fonts, fontTransport, owner.signal);
+  }
 
   assertAccountScopeCurrent(owner);
 
@@ -244,9 +290,21 @@ export const importProjectFile = async (
       : null;
   const ledger = restoreMedia?.createRestoredMediaLedger(stagingBoardId) ?? null;
   let didCreateProject = false;
+  let didAttemptProjectCreate = false;
 
   try {
     assertAccountScopeCurrent(owner);
+
+    if (fontTransfer && fontTransport && fontLedger && archive?.fonts) {
+      await fontTransfer.restoreEmbeddedFonts(
+        archive.fonts,
+        fontLedger,
+        fontTransport,
+        owner.signal,
+        (completed, total) => options.onProgress?.({ completed, phase: 'restoring-fonts', total })
+      );
+      assertAccountScopeCurrent(owner);
+    }
 
     const restored =
       archive === null || ledger === null
@@ -271,10 +329,18 @@ export const importProjectFile = async (
 
     assertAccountScopeCurrent(owner);
 
-    const document = restored === null ? canonicalDocument : remapAssetRefs(canonicalDocument, restored.mappings);
+    const mediaDocument = restored === null ? canonicalDocument : remapAssetRefs(canonicalDocument, restored.mappings);
+    const document =
+      fontTransfer && fontLedger ? fontTransfer.remapFontReferences(mediaDocument, fontLedger.mappings) : mediaDocument;
+    const minimumCanvasSchemaVersion = Math.max(
+      getProjectCanvasSchemaRequirement(document),
+      archive?.manifest.minimumCanvasSchemaVersion ?? 1
+    );
+    didAttemptProjectCreate = true;
     const record = await createProjectSettled(
       {
         data: document,
+        minimum_canvas_schema_version: minimumCanvasSchemaVersion,
         name,
         project_id: id,
         ...(stagingBoardId === null ? {} : { board_id: stagingBoardId }),
@@ -284,7 +350,15 @@ export const importProjectFile = async (
 
     didCreateProject = true;
     assertAccountScopeCurrent(owner);
-    upsertProjectSummary({ id: record.project_id, name: record.name, revision: record.revision }, owner);
+    upsertProjectSummary(
+      {
+        id: record.project_id,
+        minimumCanvasSchemaVersion: record.minimum_canvas_schema_version,
+        name: record.name,
+        revision: record.revision,
+      },
+      owner
+    );
 
     if (restored?.coverImageName) {
       recordProjectCover(record.project_id, restored.coverImageName, owner);
@@ -301,12 +375,23 @@ export const importProjectFile = async (
       },
     };
   } catch (error) {
+    if (fontTransfer && fontTransport && fontLedger && isAccountScopeCurrent(owner)) {
+      const rollback = () => fontTransfer.rollbackRestoredFonts(fontLedger, fontTransport, owner.signal);
+      if (!didAttemptProjectCreate) {
+        await rollback();
+      } else if (restoreMedia) {
+        await restoreMedia.rollbackUnlessProjectExists(error, didCreateProject, owner, rollback);
+      }
+    }
     // Reached through the lazily-loaded module, so a legacy JSON import still never pulls the
     // restore engine into the graph — it has no media to undo.
     if (ledger !== null && restoreMedia !== null) {
-      await restoreMedia.rollbackUnlessProjectExists(error, didCreateProject, owner, () =>
-        restoreMedia.rollbackRestoredMedia(ledger, { signal: owner.signal })
-      );
+      const rollback = () => restoreMedia.rollbackRestoredMedia(ledger, { signal: owner.signal });
+      if (!didAttemptProjectCreate && isAccountScopeCurrent(owner)) {
+        await rollback();
+      } else {
+        await restoreMedia.rollbackUnlessProjectExists(error, didCreateProject, owner, rollback);
+      }
     }
 
     throw error;

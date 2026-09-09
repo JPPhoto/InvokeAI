@@ -47,6 +47,9 @@ If you're not familiar with Diffusion, take a look at our [Diffusion Overview](.
 <Card title="Node Caching" icon="rocket">
   Nodes have a **"Use Cache"** option in their footer. This allows for performance improvements by reusing previously cached values during workflow processing.
 </Card>
+<Card title="Workflow Image Export" icon="download">
+  Click the camera button in the workflow editor controls to download a PNG of the complete workflow, rendered at up to 2x resolution. The image includes connectors, the background grid, and the selected Invoke color scheme, with nodes shown deselected and the MiniMap omitted.
+</Card>
 
 ### Managing Nodes
 
@@ -119,6 +122,9 @@ The screenshots below aren't examples of complete functioning node graphs, but r
   </TabItem>
 
   <TabItem label="Iteration & Batching" icon="list-format">
+    For a guide to the newer collection-based **For** and **ForReturn** nodes, including loop state and nested loops,
+    see the [Loop Nodes guide](./loop-nodes).
+
     ### Defined & Random Seeds
     It is common to want to use both the same seed (for continuity) and random seeds (for variety). To define a seed, simply enter it into the **'Seed'** field on a noise node. Conversely, the **RandomInt** node generates a random integer between 'Low' and 'High', and can be used as input to the 'Seed' edge point on a noise node to randomize your seed.
 

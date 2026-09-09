@@ -17,6 +17,7 @@ vi.mock('@dnd-kit/core', () => ({ useDndMonitor: () => undefined }));
 vi.mock('@workbench/WorkbenchContext', () => ({
   useActiveProjectId: () => harness.project!.id,
   useActiveProjectSelector: (selector: (project: Project) => unknown) => selector(harness.project!),
+  useOptionalWorkbenchCommands: () => null,
   useWorkbenchCommands: () => ({
     canvas: { apply: vi.fn() },
     notifications: { add: vi.fn(), reportError: vi.fn() },
@@ -40,12 +41,12 @@ vi.mock('./useCanvasGallerySave', () => ({
 vi.mock('./useCreateFromBbox', () => ({
   useCreateFromBbox: () => ({ createFromBbox: () => undefined, isCreating: false }),
 }));
-vi.mock('./CanvasBottomControls', () => ({ CanvasBottomControls: () => null }));
 vi.mock('./CanvasCreateFromBboxSubmenu', () => ({ CanvasCreateFromBboxSubmenu: () => null }));
 vi.mock('./CanvasGlobalContextMenu', () => ({ CanvasGlobalContextMenu: () => null }));
 vi.mock('./CanvasImageDropOverlay', () => ({ CanvasImageDropOverlay: () => null }));
 vi.mock('./CanvasSaveToGallerySubmenu', () => ({ CanvasSaveToGallerySubmenu: () => null }));
 vi.mock('./CanvasSurface', () => ({ CanvasSurface: () => null }));
+vi.mock('./MissingFontsDialog', () => ({ MissingFontsDialog: () => null }));
 vi.mock('./ToolStrip', () => ({ ToolStrip: () => null }));
 vi.mock('@workbench/widgets/layers/LayerContextMenu', () => ({ CanvasLayerContextMenu: () => null }));
 
@@ -99,7 +100,10 @@ describe('CanvasWidgetView staged acceptance eligibility', () => {
     harness.engine = null;
     expect(getAcceptButtonTag(renderView())).toContain('disabled=""');
 
-    harness.engine = { layers: { commitStagedImage: vi.fn() } } as unknown as CanvasEngine;
+    harness.engine = {
+      fonts: { collectReferences: () => [] },
+      layers: { commitStagedImage: vi.fn() },
+    } as unknown as CanvasEngine;
     expect(getAcceptButtonTag(renderView())).not.toContain('disabled=""');
   });
 });
