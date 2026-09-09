@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import filecmp
 import locale
+import logging
 import os
 import re
 import shutil
@@ -47,6 +48,8 @@ EXTERNAL_PROVIDER_CONFIG_FIELDS = (
     "external_seedream_api_key",
     "external_seedream_base_url",
 )
+
+logger = logging.getLogger(__name__)
 
 
 class URLRegexTokenPair(BaseModel):
@@ -108,6 +111,8 @@ class InvokeAIAppConfig(BaseSettings):
         device_working_mem_gb: The amount of working memory to keep available on the compute device (in GB). Has no effect if running on CPU. If you are experiencing OOM errors, try increasing this value.
         enable_partial_loading: Enable partial loading of models. This enables models to run with reduced VRAM requirements (at the cost of slower speed) by streaming the model from RAM to VRAM as its used. In some edge cases, partial loading can cause models to run more slowly if they were previously being fully loaded into VRAM.
         keep_ram_copy_of_weights: Whether to keep a full RAM copy of a model's weights when the model is loaded in VRAM. Keeping a RAM copy increases average RAM usage, but speeds up model switching and LoRA patching (assuming there is sufficient RAM). Set this to False if RAM pressure is consistently high.
+        fp8_compute: Keep ComfyUI 'scaled fp8' checkpoints quantized instead of dequantizing them at load, and run their matmuls on the fp8 tensor cores (requires an Ada/SM 8.9 or newer NVIDIA GPU; falls back automatically otherwise). Roughly halves the transformer's VRAM and speeds up denoising, but quantizes activations as well, so images will differ from previous versions at the same seed. Reproducibility also requires the model to be FULLY resident in VRAM: a layer whose weights are still in RAM falls back to the dequantized path, and since which layers are resident shifts from run to run, the same seed then yields visibly different images. For repeatable output, ensure the model loads at 100% (e.g. enable_partial_loading=false with enough free VRAM).
+        fp8_compute_full_precision_hints: Honor the per-layer 'full_precision_matrix_mult' flags that some scaled-fp8 checkpoints ship. Those layers then dequantize on every forward instead of using the fp8 tensor cores, which can cost a large part of the fp8_compute speedup - on checkpoints that mark many layers, most of it. Set to false to run every quantized layer on the fp8 tensor cores, ignoring the producer's instruction; faster, but the marked layers were flagged as numerically sensitive, so quality may suffer. Only has an effect when fp8_compute is enabled.
         ram: DEPRECATED: This setting is no longer used. It has been replaced by `max_cache_ram_gb`, but most users will not need to use this config since automatic cache size limits should work well in most cases. This config setting will be removed once the new model cache behavior is stable.
         vram: DEPRECATED: This setting is no longer used. It has been replaced by `max_cache_vram_gb`, but most users will not need to use this config since automatic cache size limits should work well in most cases. This config setting will be removed once the new model cache behavior is stable.
         lazy_offload: DEPRECATED: This setting is no longer used. Lazy-offloading is enabled by default. This config setting will be removed once the new model cache behavior is stable.
@@ -189,6 +194,10 @@ class InvokeAIAppConfig(BaseSettings):
     db_dir:                        Path = Field(default=Path("databases"),  description="Path to InvokeAI databases directory.")
     db_synchronous:      DB_SYNCHRONOUS = Field(default="full", description="SQLite durability setting. `full` (the default) flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database, because WAL guarantees consistency either way. What it gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.")
     outputs_dir:                   Path = Field(default=Path("outputs"),    description="Path to directory for outputs.")
+    fonts_dir:                     Path = Field(default=Path("fonts"),      description="Path to directory for custom fonts.")
+    fonts_storage_dir:             Path = Field(default=Path("fonts-uploaded"), description="Path to application-managed uploaded fonts.")
+    max_font_upload_bytes:          int = Field(default=32 * 1024 * 1024, gt=0, le=128 * 1024 * 1024, description="Maximum size of one uploaded custom font in bytes.")
+    max_font_library_bytes:         int = Field(default=1024 * 1024 * 1024, gt=0, le=16 * 1024 * 1024 * 1024, description="Maximum total size of uploaded custom fonts in bytes per account or shared library.")
     image_subfolder_strategy: IMAGE_SUBFOLDER_STRATEGY = Field(default="flat", description="Strategy for organizing images into subfolders. 'flat' stores all images in a single folder. 'date' organizes by YYYY/MM/DD. 'type' organizes by image category. 'hash' uses first 2 characters of UUID for filesystem performance.")
     custom_nodes_dir:              Path = Field(default=Path("nodes"),      description="Path to directory for custom nodes.")
     style_presets_dir:      Path = Field(default=Path("style_presets"),      description="Path to directory for style presets.")
@@ -217,6 +226,8 @@ class InvokeAIAppConfig(BaseSettings):
     device_working_mem_gb:        float = Field(default=3,                  description="The amount of working memory to keep available on the compute device (in GB). Has no effect if running on CPU. If you are experiencing OOM errors, try increasing this value.")
     enable_partial_loading:        bool = Field(default=True,               description="Enable partial loading of models. This enables models to run with reduced VRAM requirements (at the cost of slower speed) by streaming the model from RAM to VRAM as its used. In some edge cases, partial loading can cause models to run more slowly if they were previously being fully loaded into VRAM.")
     keep_ram_copy_of_weights:      bool = Field(default=True,               description="Whether to keep a full RAM copy of a model's weights when the model is loaded in VRAM. Keeping a RAM copy increases average RAM usage, but speeds up model switching and LoRA patching (assuming there is sufficient RAM). Set this to False if RAM pressure is consistently high.")
+    fp8_compute:                   bool = Field(default=False,              description="Keep ComfyUI 'scaled fp8' checkpoints quantized instead of dequantizing them at load, and run their matmuls on the fp8 tensor cores (requires an Ada/SM 8.9 or newer NVIDIA GPU; falls back automatically otherwise). Roughly halves the transformer's VRAM and speeds up denoising, but quantizes activations as well, so images will differ from previous versions at the same seed. Reproducibility also requires the model to be FULLY resident in VRAM: a layer whose weights are still in RAM falls back to the dequantized path, and since which layers are resident shifts from run to run, the same seed then yields visibly different images. For repeatable output, ensure the model loads at 100% (e.g. enable_partial_loading=false with enough free VRAM).")
+    fp8_compute_full_precision_hints: bool = Field(default=True,            description="Honor the per-layer 'full_precision_matrix_mult' flags that some scaled-fp8 checkpoints ship. Those layers then dequantize on every forward instead of using the fp8 tensor cores, which can cost a large part of the fp8_compute speedup - on checkpoints that mark many layers, most of it. Set to false to run every quantized layer on the fp8 tensor cores, ignoring the producer's instruction; faster, but the marked layers were flagged as numerically sensitive, so quality may suffer. Only has an effect when fp8_compute is enabled.")
     # Deprecated CACHE configs
     ram:                Optional[float] = Field(default=None, gt=0,         description="DEPRECATED: This setting is no longer used. It has been replaced by `max_cache_ram_gb`, but most users will not need to use this config since automatic cache size limits should work well in most cases. This config setting will be removed once the new model cache behavior is stable.")
     vram:               Optional[float] = Field(default=None, ge=0,         description="DEPRECATED: This setting is no longer used. It has been replaced by `max_cache_vram_gb`, but most users will not need to use this config since automatic cache size limits should work well in most cases. This config setting will be removed once the new model cache behavior is stable.")
@@ -424,6 +435,16 @@ class InvokeAIAppConfig(BaseSettings):
     def outputs_path(self) -> Optional[Path]:
         """Path to the outputs directory, resolved to an absolute path.."""
         return self._resolve(self.outputs_dir)
+
+    @property
+    def fonts_path(self) -> Path:
+        """Path to the custom fonts directory, resolved to an absolute path."""
+        return self._resolve(self.fonts_dir)
+
+    @property
+    def fonts_storage_path(self) -> Path:
+        """Path to application-managed uploaded fonts, resolved to an absolute path."""
+        return self._resolve(self.fonts_storage_dir)
 
     @property
     def db_path(self) -> Path:
@@ -679,6 +700,22 @@ def load_external_api_keys(api_keys_file_path: Path) -> dict[str, str]:
     return parsed_api_keys
 
 
+def ensure_fonts_dir(fonts_path: Path) -> None:
+    fonts_readme_path = fonts_path / "README.txt"
+
+    try:
+        fonts_path.mkdir(parents=True, exist_ok=True)
+        if not fonts_readme_path.exists():
+            with open(fonts_readme_path, "wt", encoding="utf-8") as f:
+                f.write(
+                    "Custom fonts folder for InvokeAI text tools.\n\n"
+                    "Place your font files in this folder (or subfolders).\n"
+                    "Supported formats: .ttf, .otf, .woff, .woff2\n"
+                )
+    except OSError:
+        logger.warning("Unable to initialize fonts directory at %s", fonts_path, exc_info=True)
+
+
 @lru_cache(maxsize=1)
 def get_config() -> InvokeAIAppConfig:
     """Get the global singleton app config.
@@ -756,6 +793,8 @@ def get_config() -> InvokeAIAppConfig:
         # We should never write env vars to the config file
         default_config = DefaultInvokeAIAppConfig()
         default_config.write_file(config.config_file_path, as_example=False)
+
+    ensure_fonts_dir(config.fonts_path)
 
     api_keys_from_file = load_external_api_keys(config.api_keys_file_path)
     if api_keys_from_file:
