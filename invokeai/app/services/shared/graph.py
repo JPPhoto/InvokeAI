@@ -62,6 +62,7 @@ from invokeai.app.invocations.loops import (
     ForReturnInvocationOutput,
     LoopState,
 )
+from invokeai.app.services.shared import graph_if_dependencies
 from invokeai.app.services.shared.execution_effects import ContinuationEffect
 from invokeai.app.services.shared.execution_effects import ExecutionRef as EffectExecutionRef
 from invokeai.app.services.shared.execution_engine.child import (
@@ -2693,127 +2694,18 @@ class GraphExecutionState(BaseModel):
         return self._source_graph_flat
 
     def _get_fresh_if_nodes(self) -> tuple[IfInvocation, ...]:
-        source_graph = self._get_source_graph_flat()
-        source_order = {node_id: index for index, node_id in enumerate(nx.topological_sort(source_graph))}
-        return tuple(
-            sorted(
-                (node for node in self.graph.nodes.values() if isinstance(node, IfInvocation)),
-                key=lambda node: (source_order.get(node.id, len(source_order)), node.id),
-            )
-        )
+        return graph_if_dependencies._get_fresh_if_nodes(self)
 
     def _can_use_fresh_flat_if_activation(self) -> bool:
-        """Admit fresh single-If or bounded nested-If dependency compilation."""
-
-        if self._legacy_snapshot_loaded:
-            return False
-
-        forbidden_nodes = (
-            CallSavedWorkflowInvocation,
-            ForInvocation,
-            ForReturnInvocation,
-            IterateInvocation,
-            CollectInvocation,
-        )
-        if any(isinstance(node, forbidden_nodes) for node in self.graph.nodes.values()):
-            return False
-
-        try:
-            source_graph = self._get_source_graph_flat()
-            if not nx.is_directed_acyclic_graph(source_graph):
-                return False
-            if_nodes = self._get_fresh_if_nodes()
-        except nx.NetworkXUnfeasible:
-            return False
-
-        if len(if_nodes) != 1:
-            if len(if_nodes) != 2:
-                return False
-
-            if any(edge.type != "default" for edge in self.graph.edges):
-                return False
-
-            if_node_ids = {node.id for node in if_nodes}
-            nested_edges = [
-                edge
-                for edge in self.graph.edges
-                if edge.source.node_id in if_node_ids and edge.destination.node_id in if_node_ids
-            ]
-            if len(nested_edges) != 1:
-                return False
-
-            nested_edge = nested_edges[0]
-            if nested_edge.source.field != "value" or nested_edge.destination.field not in {
-                "true_input",
-                "false_input",
-            }:
-                return False
-
-            inner_if_id = nested_edge.source.node_id
-            if any(edge.source.node_id == inner_if_id and edge != nested_edge for edge in self.graph.edges):
-                return False
-
-            outer_if_id = nested_edge.destination.node_id
-            for if_node in if_nodes:
-                for field in ("condition", "true_input", "false_input"):
-                    input_edges = self.graph._get_input_edges(if_node.id, field)
-                    if len(input_edges) != 1:
-                        return False
-                    for edge in input_edges:
-                        if edge.source.node_id in if_node_ids and edge != nested_edge:
-                            return False
-                        if edge == nested_edge and (
-                            if_node.id != outer_if_id or field != nested_edge.destination.field
-                        ):
-                            return False
-
-        return True
+        return graph_if_dependencies._can_use_fresh_flat_if_activation(self)
 
     def _get_fresh_if_branch_sources(self, if_node_id: str, branch_field: str) -> set[str]:
-        cache_key = (if_node_id, branch_field)
-        cached = self._if_branch_sources_cache.get(cache_key)
-        if cached is not None:
-            return set(cached)
-
-        source_graph = self._get_source_graph_flat()
-        direct_sources = {edge.source.node_id for edge in self.graph._get_input_edges(if_node_id, branch_field)}
-        branch_sources = set(direct_sources)
-        for source_node_id in direct_sources:
-            branch_sources.update(nx.ancestors(source_graph, source_node_id))
-
-        changed = True
-        while changed:
-            changed = False
-            for source_node_id in tuple(branch_sources):
-                if all(
-                    edge.destination.node_id in branch_sources
-                    or (edge.destination.node_id == if_node_id and edge.destination.field == branch_field)
-                    for edge in self.graph._get_output_edges(source_node_id)
-                ):
-                    continue
-                branch_sources.remove(source_node_id)
-                changed = True
-        self._if_branch_sources_cache[cache_key] = frozenset(branch_sources)
-        return branch_sources
+        return graph_if_dependencies._get_fresh_if_branch_sources(self, if_node_id, branch_field)
 
     def _get_source_activation_dependencies(
         self, source_node_id: str, iteration_path: tuple[int, ...] = ()
     ) -> tuple[ActivationDependency, ...]:
-        key = (source_node_id, iteration_path)
-        if key in self._if_activation_dependencies_by_source:
-            return self._if_activation_dependencies_by_source[key]
-
-        if not self._can_use_fresh_flat_if_activation():
-            return self._if_activation_controller().get_source_dependencies(source_node_id, iteration_path)
-
-        dependencies = tuple(
-            ActivationDependency(owner_id=if_node.id, branch=branch_field, frame=iteration_path)
-            for if_node in self._get_fresh_if_nodes()
-            for branch_field in ("true_input", "false_input")
-            if source_node_id in self._get_fresh_if_branch_sources(if_node.id, branch_field)
-        )
-        self._tx_set_mapping(self._if_activation_dependencies_by_source, key, dependencies)
-        return dependencies
+        return graph_if_dependencies._get_source_activation_dependencies(self, source_node_id, iteration_path)
 
     def _record_activation_dependencies(self, exec_node_id: str) -> tuple[ActivationDependency, ...]:
         dependencies = self._if_activation_dependencies_by_exec.get(exec_node_id)

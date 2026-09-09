@@ -1,0 +1,137 @@
+# Copyright (c) 2022 Kyle Schouviller (https://github.com/kyle0654)
+
+from typing import TYPE_CHECKING
+
+from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvocation
+from invokeai.app.invocations.logic import IfInvocation
+from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation
+from invokeai.app.services.shared.execution_engine.scheduler import ActivationDependency
+from invokeai.app.services.shared.graph_validation import CollectInvocation, IterateInvocation, nx
+
+if TYPE_CHECKING:
+    from invokeai.app.services.shared.graph import GraphExecutionState
+
+
+def _get_fresh_if_nodes(state: "GraphExecutionState") -> tuple[IfInvocation, ...]:
+    source_graph = state._get_source_graph_flat()
+    source_order = {node_id: index for index, node_id in enumerate(nx.topological_sort(source_graph))}
+    return tuple(
+        sorted(
+            (node for node in state.graph.nodes.values() if isinstance(node, IfInvocation)),
+            key=lambda node: (source_order.get(node.id, len(source_order)), node.id),
+        )
+    )
+
+
+def _can_use_fresh_flat_if_activation(state: "GraphExecutionState") -> bool:
+    """Admit fresh single-If or bounded nested-If dependency compilation."""
+
+    if state._legacy_snapshot_loaded:
+        return False
+
+    forbidden_nodes = (
+        CallSavedWorkflowInvocation,
+        ForInvocation,
+        ForReturnInvocation,
+        IterateInvocation,
+        CollectInvocation,
+    )
+    if any(isinstance(node, forbidden_nodes) for node in state.graph.nodes.values()):
+        return False
+
+    try:
+        source_graph = state._get_source_graph_flat()
+        if not nx.is_directed_acyclic_graph(source_graph):
+            return False
+        if_nodes = _get_fresh_if_nodes(state)
+    except nx.NetworkXUnfeasible:
+        return False
+
+    if len(if_nodes) != 1:
+        if len(if_nodes) != 2:
+            return False
+
+        if any(edge.type != "default" for edge in state.graph.edges):
+            return False
+
+        if_node_ids = {node.id for node in if_nodes}
+        nested_edges = [
+            edge
+            for edge in state.graph.edges
+            if edge.source.node_id in if_node_ids and edge.destination.node_id in if_node_ids
+        ]
+        if len(nested_edges) != 1:
+            return False
+
+        nested_edge = nested_edges[0]
+        if nested_edge.source.field != "value" or nested_edge.destination.field not in {
+            "true_input",
+            "false_input",
+        }:
+            return False
+
+        inner_if_id = nested_edge.source.node_id
+        if any(edge.source.node_id == inner_if_id and edge != nested_edge for edge in state.graph.edges):
+            return False
+
+        outer_if_id = nested_edge.destination.node_id
+        for if_node in if_nodes:
+            for field in ("condition", "true_input", "false_input"):
+                input_edges = state.graph._get_input_edges(if_node.id, field)
+                if len(input_edges) != 1:
+                    return False
+                for edge in input_edges:
+                    if edge.source.node_id in if_node_ids and edge != nested_edge:
+                        return False
+                    if edge == nested_edge and (if_node.id != outer_if_id or field != nested_edge.destination.field):
+                        return False
+
+    return True
+
+
+def _get_fresh_if_branch_sources(state: "GraphExecutionState", if_node_id: str, branch_field: str) -> set[str]:
+    cache_key = (if_node_id, branch_field)
+    cached = state._if_branch_sources_cache.get(cache_key)
+    if cached is not None:
+        return set(cached)
+
+    source_graph = state._get_source_graph_flat()
+    direct_sources = {edge.source.node_id for edge in state.graph._get_input_edges(if_node_id, branch_field)}
+    branch_sources = set(direct_sources)
+    for source_node_id in direct_sources:
+        branch_sources.update(nx.ancestors(source_graph, source_node_id))
+
+    changed = True
+    while changed:
+        changed = False
+        for source_node_id in tuple(branch_sources):
+            if all(
+                edge.destination.node_id in branch_sources
+                or (edge.destination.node_id == if_node_id and edge.destination.field == branch_field)
+                for edge in state.graph._get_output_edges(source_node_id)
+            ):
+                continue
+            branch_sources.remove(source_node_id)
+            changed = True
+    state._if_branch_sources_cache[cache_key] = frozenset(branch_sources)
+    return branch_sources
+
+
+def _get_source_activation_dependencies(
+    state: "GraphExecutionState", source_node_id: str, iteration_path: tuple[int, ...] = ()
+) -> tuple[ActivationDependency, ...]:
+    key = (source_node_id, iteration_path)
+    if key in state._if_activation_dependencies_by_source:
+        return state._if_activation_dependencies_by_source[key]
+
+    if not _can_use_fresh_flat_if_activation(state):
+        return state._if_activation_controller().get_source_dependencies(source_node_id, iteration_path)
+
+    dependencies = tuple(
+        ActivationDependency(owner_id=if_node.id, branch=branch_field, frame=iteration_path)
+        for if_node in _get_fresh_if_nodes(state)
+        for branch_field in ("true_input", "false_input")
+        if source_node_id in _get_fresh_if_branch_sources(state, if_node.id, branch_field)
+    )
+    state._tx_set_mapping(state._if_activation_dependencies_by_source, key, dependencies)
+    return dependencies
