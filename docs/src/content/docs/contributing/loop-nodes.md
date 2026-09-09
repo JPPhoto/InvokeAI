@@ -113,8 +113,17 @@ its ordered values; a missing stream falls back to materialized results for lega
 consumers from `Collect.collection` use a private graph-state planner for prepared-copy expansion, iteration paths,
 and the empty-stream barrier. The exact fresh two-source/two-`Iterate`/shared-`Collect.item` and exact fresh
 three-source/three-`Iterate`/shared-`Collect.item` fan-in shapes also use the planner for independent stream expansion,
-closure gating, and deterministic source-ordered hydration. Fan-in with four or more branches, nested or input-driven
-iterators, and mixed control flow remain on the compatibility materializer for those responsibilities.
+closure gating, and deterministic source-ordered hydration. The exact fresh two-branch body-mediated shape,
+`source_a -> Iterate_a -> body_a -> Collect.item` plus
+`source_b -> Iterate_b -> body_b -> Collect.item`, is also planner-owned:
+source IDs are ordered lexically, branch order is preserved, and `Collect` waits
+for both streams to close, including empty streams. This is a private bounded
+planner case with exactly seven nodes and six ordinary edges: two inputless
+ordinary sources, two `Iterate` nodes, two ordinary bodies, and one `Collect`.
+It has no `Collect.collection` input, downstream consumer, or extra topology.
+Three or more body-mediated
+branches, fan-in with four or more direct branches, nested or input-driven
+iterators, and mixed control flow remain on the compatibility materializer.
 Focused compatibility coverage now proves empty, nested, fan-in, partial/rehydrated, failed, canceled, and retried
 Iterate/Collect sessions. This is evidence for the current adapters; it does not remove materialization or queue
 ownership. Direct `Iterate`/`Collect`-only graphs and the exact bounded nested shape now use the generic scheduler

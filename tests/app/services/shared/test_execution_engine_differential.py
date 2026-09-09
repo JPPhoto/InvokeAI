@@ -332,6 +332,34 @@ def _direct_iterate_fan_in_graph(*, left: list[Any], right: list[Any]) -> Graph:
     return graph
 
 
+def _body_iterate_fan_in_graph(*, branches: tuple[tuple[str, str, str, list[Any]], ...]) -> Graph:
+    graph = Graph()
+    graph.add_node(CollectInvocation(id="collect"))
+    for source_id, iterate_id, body_id, values in branches:
+        graph.add_node(CollectionConcatInvocation(id=source_id, first=values))
+        graph.add_node(IterateInvocation(id=iterate_id))
+        graph.add_node(AnyTypeTestInvocation(id=body_id))
+        graph.add_edge(
+            Edge(
+                source=EdgeConnection(node_id=source_id, field="collection"),
+                destination=EdgeConnection(node_id=iterate_id, field="collection"),
+            )
+        )
+        graph.add_edge(
+            Edge(
+                source=EdgeConnection(node_id=iterate_id, field="item"),
+                destination=EdgeConnection(node_id=body_id, field="value"),
+            )
+        )
+        graph.add_edge(
+            Edge(
+                source=EdgeConnection(node_id=body_id, field="value"),
+                destination=EdgeConnection(node_id="collect", field="item"),
+            )
+        )
+    return graph
+
+
 def _direct_iterate_fan_in_graph_with_branches(
     branches: tuple[tuple[str, str, list[Any]], ...],
 ) -> Graph:
@@ -742,18 +770,124 @@ def _effect_ledger_projection(state: GraphExecutionState) -> tuple[Any, ...]:
     return tuple(
         sorted(
             (
-                next(
-                    (
-                        state.prepared_source_mapping.get(exec_node_id, exec_node_id)
-                        for exec_node_id, reference in state.execution_refs.items()
-                        if reference.reference_id == reference_id
+                (
+                    next(
+                        (
+                            state.prepared_source_mapping.get(exec_node_id, exec_node_id)
+                            for exec_node_id, reference in state.execution_refs.items()
+                            if reference.reference_id == reference_id
+                        ),
+                        reference_id,
                     ),
-                    reference_id,
-                ),
-                normalized(effects),
-            )
-            for reference_id, effects in state.execution_effects.items()
+                    normalized(effects),
+                )
+                for reference_id, effects in state.execution_effects.items()
+            ),
+            key=repr,
         )
+    )
+
+
+def _execution_token_projection(state: GraphExecutionState) -> tuple[Any, ...]:
+    """Project durable data tokens without generated execution identities."""
+    return tuple(
+        sorted(
+            (
+                (
+                    state.prepared_source_mapping.get(token.owner_node_id, token.owner_node_id),
+                    token.port,
+                    _stable_json(token.value),
+                    token.token_kind,
+                    token.sequence,
+                    tuple(token.frame.iteration_path),
+                    token.frame.workflow_call_depth,
+                )
+                for token in state.execution_tokens.values()
+            ),
+            key=repr,
+        )
+    )
+
+
+def _stable_json(value: Any) -> str:
+    def jsonable(item: Any) -> Any:
+        if hasattr(item, "model_dump"):
+            return jsonable(item.model_dump(mode="json", warnings=False))
+        if isinstance(item, dict):
+            return {str(key): jsonable(value) for key, value in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [jsonable(value) for value in item]
+        if isinstance(item, set):
+            return sorted((jsonable(value) for value in item), key=repr)
+        return item
+
+    return json.dumps(jsonable(value), sort_keys=True, default=str)
+
+
+def _body_fan_in_graph_projection(state: GraphExecutionState) -> tuple[Any, ...]:
+    nodes = tuple(sorted((node_id, _stable_json(node)) for node_id, node in state.execution_graph.nodes.items()))
+    edges = tuple(
+        sorted(
+            (
+                edge.source.node_id,
+                edge.source.field,
+                edge.destination.node_id,
+                edge.destination.field,
+                edge.type,
+            )
+            for edge in state.execution_graph.edges
+        )
+    )
+    return nodes, edges
+
+
+def _body_fan_in_durable_projection(state: GraphExecutionState) -> tuple[Any, ...]:
+    """Exact pre/post transaction projection; generated IDs intentionally remain exact."""
+    return (
+        tuple(sorted(state.prepared_source_mapping.items())),
+        tuple(
+            sorted(
+                (source_id, tuple(sorted(exec_ids))) for source_id, exec_ids in state.source_prepared_mapping.items()
+            )
+        ),
+        tuple(sorted(state.prepared_iteration_paths.items())),
+        tuple(sorted(state.finalized_loop_contexts)),
+        _body_fan_in_graph_projection(state),
+        tuple(sorted(state.indegree.items())),
+        tuple(sorted(state.executed)),
+        tuple(state.executed_history),
+        tuple(sorted((exec_node_id, _stable_json(output)) for exec_node_id, output in state.results.items())),
+        tuple(sorted(state.errors.items())),
+        tuple(
+            sorted((exec_node_id, _stable_json(reference)) for exec_node_id, reference in state.execution_refs.items())
+        ),
+        tuple(sorted((token_id, _stable_json(token)) for token_id, token in state.execution_tokens.items())),
+        tuple(
+            sorted((reference_id, _stable_json(effects)) for reference_id, effects in state.execution_effects.items())
+        ),
+    )
+
+
+def _body_fan_in_runtime_projection(state: GraphExecutionState) -> tuple[Any, ...]:
+    metadata = tuple(
+        sorted(
+            (
+                exec_node_id,
+                metadata.source_node_id,
+                metadata.iteration_path,
+                metadata.state,
+            )
+            for exec_node_id, metadata in state._prepared_exec_metadata.items()
+        )
+    )
+    ready_queues = tuple(sorted((class_name, tuple(queue)) for class_name, queue in state._ready_queues.items()))
+    return (
+        _direct_iterate_fan_in_stream_projection(state),
+        metadata,
+        ready_queues,
+        tuple(sorted(state._ready_node_ids)),
+        state._active_class,
+        tuple(state.ready_order),
     )
 
 
@@ -1893,6 +2027,502 @@ def test_direct_iterate_four_fan_in_stays_on_compatibility_fallback() -> None:
 
     assert compatibility_trace
     assert sorted(_source_output(compatibility_state, "collect").collection) == ["a", "m", "q", "z"]
+    assert compatibility_state.is_complete()
+
+
+def test_body_iterate_fan_in_fresh_execution_owns_exact_two_branch_shape() -> None:
+    graph = _body_iterate_fan_in_graph(
+        branches=(
+            ("z_source", "z_iterate", "z_body", ["z", None, "z"]),
+            ("a_source", "a_iterate", "a_body", ["a", None, "a"]),
+        )
+    )
+    assert len(graph.nodes) == 7
+    assert len(graph.edges) == 6
+    state = GraphExecutionState(graph=graph)
+    fan_in = state._get_direct_iterate_collect_nodes()
+    assert isinstance(fan_in, graph_module._BodyIterateCollectFanIn)
+    assert fan_in.branches == (
+        ("a_source", "a_iterate", "a_body"),
+        ("z_source", "z_iterate", "z_body"),
+    )
+
+    with (
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "prepare",
+            side_effect=AssertionError("body fan-in must not use materializer.prepare"),
+        ) as prepare,
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "_get_collect_iteration_mapping_groups",
+            side_effect=AssertionError("body fan-in must not group collector inputs"),
+        ) as group_collector_inputs,
+    ):
+        trace, state = _run_graph(state)
+
+    assert trace.count("a_source") == trace.count("z_source") == 1
+    assert trace.count("a_iterate") == 3
+    assert trace.count("z_iterate") == 3
+    assert trace.count("a_body") == 3
+    assert trace.count("z_body") == 3
+    assert trace.count("collect") == 1
+    assert _source_output(state, "collect").collection == ["a", None, "a", "z", None, "z"]
+    assert state.is_complete()
+    assert isinstance(state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    prepare.assert_not_called()
+    group_collector_inputs.assert_not_called()
+
+
+def test_body_iterate_fan_in_orders_by_source_id_not_body_id() -> None:
+    graph = _body_iterate_fan_in_graph(
+        branches=(
+            ("z_source", "z_iterate", "a_body", ["z-0", "z-1"]),
+            ("a_source", "a_iterate", "z_body", ["a-0", "a-1"]),
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+    fan_in = state._get_direct_iterate_collect_nodes()
+    assert isinstance(fan_in, graph_module._BodyIterateCollectFanIn)
+    assert fan_in.branches == (
+        ("a_source", "a_iterate", "z_body"),
+        ("z_source", "z_iterate", "a_body"),
+    )
+
+    trace, state = _run_graph_with_effects(state)
+
+    assert trace[-1] == "collect"
+    assert _source_output(state, "collect").collection == ["a-0", "a-1", "z-0", "z-1"]
+    assert state.is_complete()
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        ([], ["right", None], ["right", None]),
+        (["left", None], [], ["left", None]),
+        ([], [], []),
+    ],
+    ids=["left-empty", "right-empty", "both-empty"],
+)
+def test_body_iterate_fan_in_closes_empty_branches(left: list[Any], right: list[Any], expected: list[Any]) -> None:
+    graph = _body_iterate_fan_in_graph(
+        branches=(
+            ("right_source", "right_iterate", "right_body", right),
+            ("left_source", "left_iterate", "left_body", left),
+        )
+    )
+    trace, state = _run_graph(GraphExecutionState(graph=graph))
+
+    assert trace.count("collect") == 1
+    assert _source_output(state, "collect").collection == expected
+    streams = {
+        stream.owner_id: stream
+        for stream in state._generic_runtime().streams.values()
+        if stream.owner_id in {"left_iterate", "right_iterate"}
+    }
+    assert set(streams) == {"left_iterate", "right_iterate"}
+    assert all(stream.closed for stream in streams.values())
+    assert state.is_complete()
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+def test_body_iterate_fan_in_partial_dump_load_preserves_streams_and_effects(
+    force_compatibility_scheduler: bool,
+) -> None:
+    graph = _body_iterate_fan_in_graph(
+        branches=(
+            ("right_source", "right_iterate", "right_body", ["right-0", "right-1"]),
+            ("left_source", "left_iterate", "left_body", ["left-0", "left-1"]),
+        )
+    )
+    expected_trace, expected_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph), force_compatibility_scheduler=force_compatibility_scheduler
+    )
+    partial_trace, partial_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+        stop_after=3,
+    )
+
+    assert "collect" not in partial_trace
+    if not force_compatibility_scheduler:
+        assert (
+            not partial_state._generic_runtime().streams[partial_state._iteration_stream_id("left_iterate", ())].closed
+        )
+    restored = load_execution_state(dump_execution_state(partial_state))
+    assert _direct_iterate_fan_in_stream_projection(restored) == _direct_iterate_fan_in_stream_projection(partial_state)
+    assert _direct_iterate_fan_in_execution_ref_projection(
+        restored, execution_ids=set(partial_state.execution_refs)
+    ) == _direct_iterate_fan_in_execution_ref_projection(partial_state)
+    assert _effect_ledger_projection(restored) == _effect_ledger_projection(partial_state)
+    if force_compatibility_scheduler:
+        _restore_compatibility_scheduler(restored)
+    resumed_trace, resumed_state = _run_graph_with_effects(
+        restored, force_compatibility_scheduler=force_compatibility_scheduler
+    )
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert _source_output(resumed_state, "collect").collection == [
+        "left-0",
+        "left-1",
+        "right-0",
+        "right-1",
+    ]
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+    assert _direct_iterate_fan_in_stream_projection(resumed_state) == _direct_iterate_fan_in_stream_projection(
+        expected_state
+    )
+    assert _direct_iterate_fan_in_execution_ref_projection(
+        resumed_state
+    ) == _direct_iterate_fan_in_execution_ref_projection(expected_state)
+    assert _effect_ledger_projection(resumed_state) == _effect_ledger_projection(expected_state)
+    assert resumed_state.is_complete()
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+def test_body_iterate_fan_in_source_prepared_dump_load_resumes(
+    force_compatibility_scheduler: bool,
+) -> None:
+    graph = _body_iterate_fan_in_graph(
+        branches=(
+            ("right_source", "right_iterate", "right_body", ["right-0", "right-1"]),
+            ("left_source", "left_iterate", "left_body", ["left-0", "left-1"]),
+        )
+    )
+    expected_trace, expected_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph), force_compatibility_scheduler=force_compatibility_scheduler
+    )
+    partial_trace, partial_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+        stop_after=2,
+    )
+
+    assert partial_trace == expected_trace[:2]
+    assert set(partial_trace) == {"left_source", "right_source"}
+    assert set(partial_state.source_prepared_mapping) == {"left_source", "right_source"}
+    assert "collect" not in partial_state.source_prepared_mapping
+    assert not partial_state._generic_runtime().streams
+    checkpoint = dump_execution_state(partial_state)
+    restored = load_execution_state(checkpoint)
+    assert _state_projection(restored) == _state_projection(partial_state)
+    assert _direct_iterate_fan_in_stream_projection(restored) == _direct_iterate_fan_in_stream_projection(partial_state)
+    assert _direct_iterate_fan_in_execution_ref_projection(
+        restored, execution_ids=set(partial_state.execution_refs)
+    ) == _direct_iterate_fan_in_execution_ref_projection(partial_state)
+    assert _execution_token_projection(restored) == _execution_token_projection(partial_state)
+    assert _effect_ledger_projection(restored) == _effect_ledger_projection(partial_state)
+    if force_compatibility_scheduler:
+        _restore_compatibility_scheduler(restored)
+
+    resumed_trace, resumed_state = _run_graph_with_effects(
+        restored, force_compatibility_scheduler=force_compatibility_scheduler
+    )
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+    assert _direct_iterate_fan_in_stream_projection(resumed_state) == _direct_iterate_fan_in_stream_projection(
+        expected_state
+    )
+    assert _direct_iterate_fan_in_execution_ref_projection(
+        resumed_state
+    ) == _direct_iterate_fan_in_execution_ref_projection(expected_state)
+    assert _execution_token_projection(resumed_state) == _execution_token_projection(expected_state)
+    assert _effect_ledger_projection(resumed_state) == _effect_ledger_projection(expected_state)
+    assert resumed_state.is_complete()
+
+
+def test_body_iterate_fan_in_partial_dump_load_after_one_stream_closes() -> None:
+    graph = _body_iterate_fan_in_graph(
+        branches=(
+            ("right_source", "right_iterate", "right_body", ["right-0", "right-1"]),
+            ("left_source", "left_iterate", "left_body", ["left-0"]),
+        )
+    )
+    expected_trace, expected_state = _run_graph_with_effects(GraphExecutionState(graph=graph))
+    partial_trace, partial_state = _run_graph_with_effects(GraphExecutionState(graph=graph), stop_after=3)
+
+    assert partial_trace == ["left_source", "right_source", "left_iterate"]
+    streams = partial_state._generic_runtime().streams
+    assert streams[partial_state._iteration_stream_id("left_iterate", ())].closed
+    right_stream = streams.get(partial_state._iteration_stream_id("right_iterate", ()))
+    assert right_stream is None or not right_stream.closed
+    assert "collect" not in partial_trace
+
+    restored = load_execution_state(dump_execution_state(partial_state))
+    assert _direct_iterate_fan_in_stream_projection(restored) == _direct_iterate_fan_in_stream_projection(partial_state)
+    assert _effect_ledger_projection(restored) == _effect_ledger_projection(partial_state)
+    resumed_trace, resumed_state = _run_graph_with_effects(restored)
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert _source_output(resumed_state, "collect").collection == ["left-0", "right-0", "right-1"]
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+    assert _direct_iterate_fan_in_stream_projection(resumed_state) == _direct_iterate_fan_in_stream_projection(
+        expected_state
+    )
+    assert _effect_ledger_projection(resumed_state) == _effect_ledger_projection(expected_state)
+    assert resumed_state.is_complete()
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        (["left", None, "left"], ["right", None], ["left", None, "left", "right", None]),
+        ([], ["right", None], ["right", None]),
+        ([], [], []),
+    ],
+    ids=["ordered-none-duplicates", "mixed-empty", "all-empty"],
+)
+def test_body_iterate_fan_in_matches_forced_compatibility_scheduler(
+    left: list[Any], right: list[Any], expected: list[Any]
+) -> None:
+    graph = _body_iterate_fan_in_graph(
+        branches=(
+            ("left_source", "left_iterate", "left_body", left),
+            ("right_source", "right_iterate", "right_body", right),
+        )
+    )
+    generic_trace, generic_state = _run_graph_with_effects(GraphExecutionState(graph=graph))
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph), force_compatibility_scheduler=True
+    )
+
+    assert generic_trace == compatibility_trace
+    assert _source_output(generic_state, "collect").collection == expected
+    assert (
+        _source_output(generic_state, "collect").collection == _source_output(compatibility_state, "collect").collection
+    )
+    if left or right:
+        assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert _direct_iterate_fan_in_stream_projection(generic_state) == _direct_iterate_fan_in_stream_projection(
+        compatibility_state
+    )
+    assert _direct_iterate_fan_in_execution_ref_projection(
+        generic_state
+    ) == _direct_iterate_fan_in_execution_ref_projection(compatibility_state)
+    assert _execution_token_projection(generic_state) == _execution_token_projection(compatibility_state)
+    assert _effect_ledger_projection(generic_state) == _effect_ledger_projection(compatibility_state)
+    assert _execution_edge_projection(generic_state) == _execution_edge_projection(compatibility_state)
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+@pytest.mark.parametrize("fail_source_id", ["right_source", "right_iterate", "right_body"])
+def test_body_iterate_fan_in_failure_blocks_collect_and_persists(
+    force_compatibility_scheduler: bool, fail_source_id: str
+) -> None:
+    graph = _body_iterate_fan_in_graph(
+        branches=(
+            ("left_source", "left_iterate", "left_body", ["left"]),
+            ("right_source", "right_iterate", "right_body", ["right"]),
+        )
+    )
+    trace, state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+        fail_source_id=fail_source_id,
+    )
+
+    assert trace[-1] == fail_source_id
+    assert "collect" not in trace
+    assert state.has_error()
+    assert state.is_complete()
+    assert state.next() is None
+    assert tuple(
+        sorted(
+            (state.prepared_source_mapping.get(execution_id, execution_id), message)
+            for execution_id, message in state.errors.items()
+        )
+    ) == ((fail_source_id, "injected failure"),)
+    restored = load_execution_state(dump_execution_state(state))
+    assert _state_projection(restored) == _state_projection(state)
+    assert _execution_edge_projection(restored) == _execution_edge_projection(state)
+    assert _direct_iterate_fan_in_stream_projection(restored) == _direct_iterate_fan_in_stream_projection(state)
+    assert _direct_iterate_fan_in_execution_ref_projection(
+        restored, execution_ids=set(state.execution_refs)
+    ) == _direct_iterate_fan_in_execution_ref_projection(state)
+    assert _execution_token_projection(restored) == _execution_token_projection(state)
+    assert _effect_ledger_projection(restored) == _effect_ledger_projection(state)
+    assert restored.has_error()
+    assert tuple(
+        sorted(
+            (restored.prepared_source_mapping.get(execution_id, execution_id), message)
+            for execution_id, message in restored.errors.items()
+        )
+    ) == ((fail_source_id, "injected failure"),)
+    assert restored.next() is None
+    assert restored.is_complete()
+
+
+@pytest.mark.parametrize("fail_source_id", ["right_source", "right_iterate", "right_body"])
+def test_body_iterate_fan_in_failure_matches_forced_compatibility_scheduler(fail_source_id: str) -> None:
+    graph = _body_iterate_fan_in_graph(
+        branches=(
+            ("left_source", "left_iterate", "left_body", ["left"]),
+            ("right_source", "right_iterate", "right_body", ["right"]),
+        )
+    )
+    generic_trace, generic_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph), fail_source_id=fail_source_id
+    )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+        fail_source_id=fail_source_id,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.has_error() == compatibility_state.has_error()
+    assert generic_state.is_complete() == compatibility_state.is_complete()
+    assert {
+        generic_state.prepared_source_mapping.get(execution_id, execution_id): message
+        for execution_id, message in generic_state.errors.items()
+    } == {
+        compatibility_state.prepared_source_mapping.get(execution_id, execution_id): message
+        for execution_id, message in compatibility_state.errors.items()
+    }
+    assert _direct_iterate_fan_in_stream_projection(generic_state) == _direct_iterate_fan_in_stream_projection(
+        compatibility_state
+    )
+    assert _direct_iterate_fan_in_execution_ref_projection(
+        generic_state
+    ) == _direct_iterate_fan_in_execution_ref_projection(compatibility_state)
+    assert _execution_token_projection(generic_state) == _execution_token_projection(compatibility_state)
+    assert _effect_ledger_projection(generic_state) == _effect_ledger_projection(compatibility_state)
+    for state in (generic_state, compatibility_state):
+        assert state.has_error()
+        assert "collect" not in {
+            state.prepared_source_mapping.get(execution_id, execution_id) for execution_id in state.executed
+        }
+        assert state.is_complete()
+
+
+def test_body_iterate_fan_in_rolls_back_mid_expansion_and_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    graph = _body_iterate_fan_in_graph(
+        branches=(
+            ("left_source", "left_iterate", "left_body", ["left"]),
+            ("right_source", "right_iterate", "right_body", ["right"]),
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+    _partial_trace, state = _run_graph_with_effects(state, stop_after=2)
+    before_failure_durable = _body_fan_in_durable_projection(state)
+    before_failure_runtime = _body_fan_in_runtime_projection(state)
+
+    original_create = GraphExecutionState._create_direct_execution_node_copy
+
+    def fail_at_right_body(self: GraphExecutionState, source_node_id: str, *args: Any, **kwargs: Any):
+        if source_node_id == "right_body":
+            raise RuntimeError("injected body fan-in planner failure")
+        return original_create(self, source_node_id, *args, **kwargs)
+
+    monkeypatch.setattr(GraphExecutionState, "_create_direct_execution_node_copy", fail_at_right_body)
+    with pytest.raises(RuntimeError, match="injected body fan-in planner failure"):
+        state.next()
+
+    assert _body_fan_in_durable_projection(state) == before_failure_durable
+    assert _body_fan_in_runtime_projection(state) == before_failure_runtime
+
+    monkeypatch.setattr(GraphExecutionState, "_create_direct_execution_node_copy", original_create)
+    trace, state = _run_graph_with_effects(state)
+    expected_trace, expected_state = _run_graph_with_effects(
+        GraphExecutionState(
+            graph=_body_iterate_fan_in_graph(
+                branches=(
+                    ("left_source", "left_iterate", "left_body", ["left"]),
+                    ("right_source", "right_iterate", "right_body", ["right"]),
+                )
+            )
+        )
+    )
+
+    assert _partial_trace + trace == expected_trace
+    assert trace == ["left_iterate", "right_iterate", "left_body", "right_body", "collect"]
+    assert _source_output(state, "collect").collection == ["left", "right"]
+    assert _state_projection(state) == _state_projection(expected_state)
+    assert _direct_iterate_fan_in_stream_projection(state) == _direct_iterate_fan_in_stream_projection(expected_state)
+    assert _direct_iterate_fan_in_execution_ref_projection(state) == _direct_iterate_fan_in_execution_ref_projection(
+        expected_state
+    )
+    assert _execution_token_projection(state) == _execution_token_projection(expected_state)
+    assert _effect_ledger_projection(state) == _effect_ledger_projection(expected_state)
+    assert state.is_complete()
+
+
+def test_body_iterate_fan_in_unsupported_topology_uses_compatibility_fallback() -> None:
+    graph = _body_iterate_fan_in_graph(
+        branches=(
+            ("m_source", "m_iterate", "m_body", ["m"]),
+            ("z_source", "z_iterate", "z_body", ["z"]),
+            ("a_source", "a_iterate", "a_body", ["a"]),
+        )
+    )
+    assert GraphExecutionState(graph=graph)._get_direct_iterate_collect_nodes() is None
+
+    generic_trace, generic_state = _run_graph_with_effects(GraphExecutionState(graph=graph))
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph), force_compatibility_scheduler=True
+    )
+
+    assert generic_trace == compatibility_trace
+    generic_collection = _source_output(generic_state, "collect").collection
+    compatibility_collection = _source_output(compatibility_state, "collect").collection
+    # Unsupported body-mediated fan-in stays on the legacy materializer. Its item ordering
+    # is not part of this bounded planner's contract, but values (including duplicates) must
+    # be retained; only the admitted two-branch planner promises lexical source ordering.
+    assert sorted(generic_collection) == sorted(compatibility_collection) == ["a", "m", "z"]
+    assert _execution_edge_projection(generic_state) == _execution_edge_projection(compatibility_state)
+    assert _direct_iterate_fan_in_stream_projection(generic_state) == _direct_iterate_fan_in_stream_projection(
+        compatibility_state
+    )
+    assert _direct_iterate_fan_in_execution_ref_projection(
+        generic_state
+    ) == _direct_iterate_fan_in_execution_ref_projection(compatibility_state)
+    assert _effect_ledger_projection(generic_state) == _effect_ledger_projection(compatibility_state)
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+
+
+def test_body_iterate_fan_in_downstream_topology_stays_on_compatibility_fallback() -> None:
+    graph = _body_iterate_fan_in_graph(
+        branches=(
+            ("right_source", "right_iterate", "right_body", ["right"]),
+            ("left_source", "left_iterate", "left_body", ["left"]),
+        )
+    )
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="collect", field="collection"),
+            destination=EdgeConnection(node_id="after", field="value"),
+        )
+    )
+
+    assert GraphExecutionState(graph=graph)._get_direct_iterate_collect_nodes() is None
+
+    generic_trace, generic_state = _run_graph_with_effects(GraphExecutionState(graph=graph))
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph), force_compatibility_scheduler=True
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_trace[-2:] == ["collect", "after"]
+    generic_collection = _source_output(generic_state, "collect").collection
+    compatibility_collection = _source_output(compatibility_state, "collect").collection
+    assert sorted(generic_collection) == sorted(compatibility_collection) == ["left", "right"]
+    assert _source_output(generic_state, "after").value == generic_collection
+    assert _source_output(compatibility_state, "after").value == compatibility_collection
+    assert _execution_edge_projection(generic_state) == _execution_edge_projection(compatibility_state)
+    assert _direct_iterate_fan_in_stream_projection(generic_state) == _direct_iterate_fan_in_stream_projection(
+        compatibility_state
+    )
+    assert _direct_iterate_fan_in_execution_ref_projection(
+        generic_state
+    ) == _direct_iterate_fan_in_execution_ref_projection(compatibility_state)
+    assert _effect_ledger_projection(generic_state) == _effect_ledger_projection(compatibility_state)
+    assert generic_state.is_complete()
     assert compatibility_state.is_complete()
 
 

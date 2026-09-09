@@ -25,9 +25,19 @@ consumers from `Collect.collection`, is planned by a private graph-state planner
 expansion, iteration paths, downstream admission, and explicit empty-stream barrier without calling the legacy
 materializer. The exact fresh two-source/two-`Iterate`/shared-`Collect.item` and exact fresh three-source/three-`Iterate`/
 shared-`Collect.item` fan-in shapes also use the planner for independent stream expansions, closure gating, and
-deterministic source-ordered hydration. Fan-in with four or more branches, nested or input-driven iterators, and all
-mixed control flow retain materializer copy expansion, grouping, and empty-source handling on the legacy compatibility
-route.
+deterministic source-ordered hydration. The exact fresh two-branch body-mediated shape
+`source_a -> Iterate_a -> body_a -> Collect.item` plus
+`source_b -> Iterate_b -> body_b -> Collect.item` uses the same planner: source IDs
+are ordered lexically, each branch preserves its item order, and `Collect` runs
+only after both streams close, including explicit empty closes. This is a
+private bounded planner case: exactly seven nodes and six ordinary edges—two
+inputless ordinary sources, two `Iterate` nodes, two ordinary bodies, and one
+`Collect`; it has no
+`Collect.collection` input or downstream/extra topology. It is not a change to
+the public workflow contract.
+Three or more body-mediated branches, fan-in with four or more direct branches,
+nested or input-driven iterators, and all mixed control flow retain materializer
+copy expansion, grouping, and empty-source handling on the legacy compatibility route.
 A fresh graph with exactly one static, non-empty `For`/`ForReturn` pair and ordinary body nodes also uses the generic
 adapter. It projects readiness and invokes the graph-state continuation boundary, which selects the next iteration or
 finalizes the aggregate without exposing a successor node ID to the generic scheduler. The materializer still owns
@@ -163,8 +173,9 @@ one ordinary preparation node from `For.item` into `Iterate.collection`, one ord
 the `Collect.collection` output into the linked `ForReturn`, and one final outer-output consumer. Each outer iteration,
 including an empty inner collection, remains isolated by its frame path. `Iterate` also records non-empty item streams through the generic effect ledger;
 the materializer remains authoritative for fallback expansion, iteration paths, collector grouping, and
-empty-source compatibility handling. The exact fresh four-node body shape and exact two- or three-stream fan-in shapes
-use the private planner for those responsibilities; four or more streams remain compatibility-owned. Direct `Collect.item`
+empty-source compatibility handling. The exact fresh four-node body shape, exact two- or three-stream fan-in shapes,
+and exact two-branch body-mediated fan-in use the private planner for those responsibilities; three or more
+body-mediated branches and four or more direct streams remain compatibility-owned. Direct `Collect.item`
 consumers now use the closed stream ledger when available;
 the full Iterate/Collect compatibility matrix covers empty, nested, fan-in, partial rehydration, failure, cancellation,
 and retry behavior. This evidence does not remove the materializer or queue adapters.
@@ -259,8 +270,9 @@ control-flow invocation on this seam: each non-empty prepared copy emits one ord
 index, and the final copy emits one `close_stream` effect. Direct Iterate/Collect-only graphs now run through the
 generic scheduler adapter; its completion maps these results/effects to the existing frame-scoped iteration-stream
 identity, so legacy output mirroring is idempotent. The exact fresh four-node source/Iterate/body/Collect shape,
-its ordinary downstream consumers, and the exact two- or three-stream fan-in shapes use the private planner described
-above; four or more streams and other fallback shapes still let the
+its ordinary downstream consumers, the exact two- or three-stream fan-in shapes,
+and the exact two-branch body-mediated fan-in use the private planner described
+above; broader body-mediated fan-in, four or more streams, and other fallback shapes still let the
 materializer create
 prepared copies, derive iteration paths, group collector inputs, and record the explicit close for an empty source.
 For a direct `Iterate.item` edge, the scheduler defers `CollectInvocation` while its canonical stream is open, and
@@ -308,8 +320,9 @@ frame-scoped continuation effects and generic readiness/continuation
 projection.
 Direct `Iterate`/`Collect`-only graphs use the generic scheduler adapter for
 readiness and completion. The exact fresh four-node source/Iterate/body/Collect
-shape, its ordinary downstream-consumer extensions, and the exact two- or three-stream
-fan-in shapes use the private planner for expansion and empty-stream closure; four or more streams, workflow-call
+shape, its ordinary downstream-consumer extensions, the exact two- or three-stream
+fan-in shapes, and the exact two-branch body-mediated fan-in use the private planner
+for expansion and empty-stream closure; broader body-mediated fan-in, four or more streams, workflow-call
 invocations, unsupported loop shapes, and mixed control-flow graphs remain on
 compatibility paths. `ForInvocation` and
 `ForReturnInvocation` now declare one validated, frame-scoped `continuation`
@@ -578,8 +591,9 @@ In normal execution, all runtime expansion occurs in `execution_graph` with trac
   with a contiguous sequence beginning at zero, and closes its canonical
   source/parent-path stream on the final copy. Exact output mirroring is
   idempotent. The private planner closes empty streams for the exact fresh
-  source/Iterate/body/Collect and exact two- or three-stream fan-in shapes; four or more
-  streams and other fallback shapes retain materializer compatibility ownership.
+  source/Iterate/body/Collect, exact two- or three-stream fan-in, and exact
+  two-branch body-mediated fan-in shapes; broader body-mediated fan-in, four or
+  more streams, and other fallback shapes retain materializer compatibility ownership.
 - Collectors wait for available direct Iterate streams to close, then aggregate
   their ledger values in stream order and may also merge incoming `collection`
   inputs during runtime hydration. A missing ledger remains a legacy snapshot
