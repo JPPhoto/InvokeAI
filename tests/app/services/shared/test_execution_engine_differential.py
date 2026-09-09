@@ -298,6 +298,40 @@ def _direct_iterate_body_collect_graph(
     return graph
 
 
+def _direct_iterate_fan_in_graph(*, left: list[Any], right: list[Any]) -> Graph:
+    graph = Graph()
+    graph.add_node(CollectionConcatInvocation(id="left_source", first=left))
+    graph.add_node(CollectionConcatInvocation(id="right_source", first=right))
+    graph.add_node(IterateInvocation(id="left_iterate"))
+    graph.add_node(IterateInvocation(id="right_iterate"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="left_source", field="collection"),
+            destination=EdgeConnection(node_id="left_iterate", field="collection"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="right_source", field="collection"),
+            destination=EdgeConnection(node_id="right_iterate", field="collection"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="left_iterate", field="item"),
+            destination=EdgeConnection(node_id="collect", field="item"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="right_iterate", field="item"),
+            destination=EdgeConnection(node_id="collect", field="item"),
+        )
+    )
+    return graph
+
+
 def _flat_for_state_graph(continue_condition: bool) -> Graph:
     graph = Graph()
     graph.add_node(ForInvocation(id="for", collection=[1, 2, 3], state=LoopState(values={"count": 0})))
@@ -1271,6 +1305,188 @@ def test_direct_iterate_body_collect_fresh_execution_preserves_order_and_none() 
     assert isinstance(state._execution_scheduler, _GenericGraphSchedulerAdapter)
     prepare.assert_not_called()
     group_collector_inputs.assert_not_called()
+
+
+def test_direct_iterate_fan_in_fresh_execution_owns_two_stream_expansion() -> None:
+    state = GraphExecutionState(graph=_direct_iterate_fan_in_graph(left=[None, "left-last"], right=["right-first"]))
+
+    with (
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "prepare",
+            side_effect=AssertionError("fresh direct fan-in must not use materializer.prepare"),
+        ) as prepare,
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "_get_collect_iteration_mapping_groups",
+            side_effect=AssertionError("fresh direct fan-in must not group collector inputs"),
+        ) as group_collector_inputs,
+    ):
+        trace, state = _run_graph(state)
+
+    assert trace.count("collect") == 1
+    assert trace == ["left_source", "right_source", "left_iterate", "right_iterate", "left_iterate", "collect"]
+    assert _source_output(state, "collect").collection == [None, "left-last", "right-first"]
+    streams = {
+        stream.owner_id: stream
+        for stream in state._generic_runtime().streams.values()
+        if stream.owner_id in {"left_iterate", "right_iterate"}
+    }
+    assert {owner_id: (stream.values, stream.closed) for owner_id, stream in streams.items()} == {
+        "left_iterate": ((None, "left-last"), True),
+        "right_iterate": (("right-first",), True),
+    }
+    assert state.is_complete()
+    prepare.assert_not_called()
+    group_collector_inputs.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        ([], ["right", None], ["right", None]),
+        (["left", None], [], ["left", None]),
+        ([], [], []),
+    ],
+    ids=["left-empty", "right-empty", "both-empty"],
+)
+def test_direct_iterate_fan_in_fresh_execution_closes_empty_streams(
+    left: list[Any], right: list[Any], expected: list[Any]
+) -> None:
+    trace, state = _run_graph(GraphExecutionState(graph=_direct_iterate_fan_in_graph(left=left, right=right)))
+
+    assert trace.count("collect") == 1
+    assert _source_output(state, "collect").collection == expected
+    streams = {
+        stream.owner_id: stream
+        for stream in state._generic_runtime().streams.values()
+        if stream.owner_id in {"left_iterate", "right_iterate"}
+    }
+    assert set(streams) == {"left_iterate", "right_iterate"}
+    assert all(stream.closed for stream in streams.values())
+    assert state.is_complete()
+
+
+def test_direct_iterate_fan_in_gates_collect_until_both_streams_close_and_rehydrates() -> None:
+    graph = _direct_iterate_fan_in_graph(left=["left-0", "left-1"], right=["right-0", "right-1"])
+    expected_trace, expected_state = _run_graph(GraphExecutionState(graph=graph))
+    partial_trace, partial_state = _run_graph(GraphExecutionState(graph=graph), stop_after=3)
+
+    assert partial_trace == ["left_source", "right_source", "left_iterate"]
+    assert "collect" not in partial_trace
+    collect_exec_ids = partial_state.source_prepared_mapping["collect"]
+    assert len(collect_exec_ids) == 1
+    collect_exec_id = next(iter(collect_exec_ids))
+    assert collect_exec_id not in partial_state.executed
+    assert not partial_state._generic_runtime().streams[partial_state._iteration_stream_id("left_iterate", ())].closed
+
+    restored = load_execution_state(dump_execution_state(partial_state))
+    resumed_trace, resumed_state = _run_graph(restored)
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert _source_output(resumed_state, "collect").collection == ["left-0", "left-1", "right-0", "right-1"]
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+    assert collect_exec_id in resumed_state.executed
+    assert resumed_state.is_complete()
+
+
+def _assert_direct_iterate_fan_in_matches_forced_compatibility_scheduler(left: list[Any], right: list[Any]) -> None:
+    generic_trace, generic_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_fan_in_graph(left=left, right=right))
+    )
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_fan_in_graph(left=left, right=right)),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert (
+        _source_output(generic_state, "collect").collection == _source_output(compatibility_state, "collect").collection
+    )
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [(["left", None], ["right"]), ([], ["right", None]), ([], [])],
+    ids=["ordered-none", "mixed-empty", "both-empty"],
+)
+def test_direct_iterate_fan_in_parity_cases(left: list[Any], right: list[Any]) -> None:
+    _assert_direct_iterate_fan_in_matches_forced_compatibility_scheduler(left, right)
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+def test_direct_iterate_fan_in_partial_dump_load_parity(
+    force_compatibility_scheduler: bool,
+) -> None:
+    graph = _direct_iterate_fan_in_graph(left=["left-0", "left-1"], right=["right-0", "right-1"])
+    expected_trace, expected_state = _run_graph(
+        GraphExecutionState(graph=graph), force_compatibility_scheduler=force_compatibility_scheduler
+    )
+    partial_trace, partial_state = _run_graph(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+        stop_after=3,
+    )
+
+    restored = load_execution_state(dump_execution_state(partial_state))
+    if force_compatibility_scheduler:
+        _restore_compatibility_scheduler(restored)
+    resumed_trace, resumed_state = _run_graph(restored, force_compatibility_scheduler=force_compatibility_scheduler)
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert _source_output(resumed_state, "collect").collection == ["left-0", "left-1", "right-0", "right-1"]
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+    assert resumed_state.is_complete()
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+def test_direct_iterate_fan_in_failure_does_not_execute_collect(
+    force_compatibility_scheduler: bool,
+) -> None:
+    trace, state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_fan_in_graph(left=["left"], right=["right"])),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+        fail_source_id="right_iterate",
+    )
+
+    assert trace[-1] == "right_iterate"
+    assert "collect" not in trace
+    assert state.has_error()
+    assert state.is_complete()
+    restored = load_execution_state(dump_execution_state(state))
+    assert restored.has_error()
+    assert restored.is_complete()
+
+
+def test_direct_iterate_fan_in_rolls_back_partial_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = GraphExecutionState(graph=_direct_iterate_fan_in_graph(left=["left"], right=["right"]))
+    _partial_trace, state = _run_graph(state, stop_after=2)
+
+    original_create = GraphExecutionState._create_direct_execution_node_copy
+
+    def fail_at_right_iterate(self: GraphExecutionState, source_node_id: str, *args: Any, **kwargs: Any):
+        if source_node_id == "right_iterate":
+            raise RuntimeError("injected fan-in planner failure")
+        return original_create(self, source_node_id, *args, **kwargs)
+
+    monkeypatch.setattr(GraphExecutionState, "_create_direct_execution_node_copy", fail_at_right_iterate)
+    with pytest.raises(RuntimeError, match="injected fan-in planner failure"):
+        state.next()
+
+    assert set(state.source_prepared_mapping) == {"left_source", "right_source"}
+    assert len(state.execution_graph.nodes) == 2
+    assert not state.execution_graph.edges
+    assert not state._generic_runtime().streams
+
+    monkeypatch.setattr(GraphExecutionState, "_create_direct_execution_node_copy", original_create)
+    trace, state = _run_graph(state)
+
+    assert trace == ["left_iterate", "right_iterate", "collect"]
+    assert _source_output(state, "collect").collection == ["left", "right"]
+    assert state.is_complete()
 
 
 def test_direct_iterate_body_collect_fresh_execution_handles_empty_input() -> None:

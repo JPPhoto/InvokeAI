@@ -128,6 +128,12 @@ class _SupportedNestedForBody:
 
 
 @dataclass(frozen=True)
+class _DirectIterateCollectFanIn:
+    branches: tuple[tuple[str, str], tuple[str, str]]
+    collector_id: str
+
+
+@dataclass(frozen=True)
 class _SupportedNestedIterateBody:
     body_path_nodes: set[str]
     return_node_id: str
@@ -2562,7 +2568,15 @@ class _ExecutionRuntime:
 
     def _sort_collect_input_edges(self, input_edges: list[Edge], field_name: str) -> list[Edge]:
         matching_edges = [edge for edge in input_edges if edge.destination.field == field_name]
-        matching_edges.sort(key=lambda edge: (self.get_iteration_path(edge.source.node_id), edge.source.node_id))
+        if isinstance(self._state._get_direct_iterate_collect_nodes(), _DirectIterateCollectFanIn):
+            matching_edges.sort(
+                key=lambda edge: (
+                    self._state.prepared_source_mapping.get(edge.source.node_id, edge.source.node_id),
+                    self.get_iteration_path(edge.source.node_id),
+                )
+            )
+        else:
+            matching_edges.sort(key=lambda edge: (self.get_iteration_path(edge.source.node_id), edge.source.node_id))
         return matching_edges
 
     def _get_copied_result_value(self, edge: Edge) -> Any:
@@ -2585,15 +2599,20 @@ class _ExecutionRuntime:
                 output_collection.extend(source_value)
             else:
                 output_collection.append(source_value)
-        item_values: list[tuple[tuple[Any, ...], str, Any]] = []
+        stable_direct_fan_in = isinstance(self._state._get_direct_iterate_collect_nodes(), _DirectIterateCollectFanIn)
+        item_values: list[tuple[Any, ...]] = []
         consumed_streams: set[str] = set()
         for edge in item_edges:
+            source_node_id = self._state.prepared_source_mapping.get(edge.source.node_id, edge.source.node_id)
+            item_source_id = source_node_id if stable_direct_fan_in else ""
+            item_exec_id = "" if stable_direct_fan_in else edge.source.node_id
             stream_info = self._state._stream_for_iterate_edge(edge)
             if stream_info is None:
                 item_values.append(
                     (
+                        item_source_id,
                         (*self.get_iteration_path(edge.source.node_id), 0),
-                        edge.source.node_id,
+                        item_exec_id,
                         self._get_copied_result_value(edge),
                     )
                 )
@@ -2603,8 +2622,9 @@ class _ExecutionRuntime:
             if stream is None:
                 item_values.append(
                     (
+                        item_source_id,
                         (*self.get_iteration_path(edge.source.node_id), 0),
-                        edge.source.node_id,
+                        item_exec_id,
                         self._get_copied_result_value(edge),
                     )
                 )
@@ -2615,11 +2635,14 @@ class _ExecutionRuntime:
                 continue
             consumed_streams.add(stream_id)
             item_values.extend(
-                ((*parent_path, sequence), edge.source.node_id, copydeep(value))
+                (item_source_id, (*parent_path, sequence), item_exec_id, copydeep(value))
                 for sequence, value in enumerate(stream.values)
             )
-        item_values.sort(key=lambda item: (item[0], item[1]))
-        output_collection.extend(value for _path, _source_id, value in item_values)
+        if stable_direct_fan_in:
+            item_values.sort(key=lambda item: (item[0], item[1]))
+        else:
+            item_values.sort(key=lambda item: (item[1], item[2]))
+        output_collection.extend(value for _source_id, _path, _exec_id, value in item_values)
         return output_collection
 
     def _set_node_inputs(
@@ -5434,6 +5457,14 @@ class GraphExecutionState(BaseModel):
     def _collect_streams_ready(self, exec_node_id: str) -> bool:
         """Require any available Iterate streams to close before Collect is scheduled."""
 
+        collector_source_id = self.prepared_source_mapping.get(exec_node_id)
+        direct_fan_in = self._get_direct_iterate_collect_nodes() if collector_source_id is not None else None
+        if isinstance(direct_fan_in, _DirectIterateCollectFanIn) and collector_source_id == direct_fan_in.collector_id:
+            for _source_id, iterator_id in direct_fan_in.branches:
+                stream = self._generic_runtime().streams.get(self._iteration_stream_id(iterator_id, ()))
+                if stream is None or not stream.closed:
+                    return False
+
         for edge in self.execution_graph._get_input_edges(exec_node_id, ITEM_FIELD):
             stream_info = self._stream_for_iterate_edge(edge)
             if stream_info is None:
@@ -6692,7 +6723,59 @@ class GraphExecutionState(BaseModel):
 
         return next_node
 
-    def _get_direct_iterate_collect_nodes(self) -> Optional[tuple[str, str, str, str, tuple[str, ...]]]:
+    def _get_direct_iterate_collect_fan_in(
+        self, iterator_ids: list[str], collector_id: str
+    ) -> Optional[_DirectIterateCollectFanIn]:
+        if len(self.graph.nodes) != 5 or len(self.graph.edges) != 4:
+            return None
+
+        item_edges = self.graph._get_input_edges(collector_id, ITEM_FIELD)
+        if len(item_edges) != 2 or self.graph._get_input_edges(collector_id, COLLECTION_FIELD):
+            return None
+        if {edge.source.node_id for edge in item_edges} != set(iterator_ids) or any(
+            edge.destination.field != ITEM_FIELD or edge.source.field != ITEM_FIELD for edge in item_edges
+        ):
+            return None
+
+        branches: list[tuple[str, str]] = []
+        for iterator_id in iterator_ids:
+            collection_edges = self.graph._get_input_edges(iterator_id, COLLECTION_FIELD)
+            if len(collection_edges) != 1:
+                return None
+            collection_edge = collection_edges[0]
+            if collection_edge.destination.node_id != iterator_id or collection_edge.source.field != COLLECTION_FIELD:
+                return None
+
+            source_id = collection_edge.source.node_id
+            source = self.graph.get_node(source_id)
+            if isinstance(
+                source,
+                (
+                    CallSavedWorkflowInvocation,
+                    ForInvocation,
+                    ForReturnInvocation,
+                    IfInvocation,
+                    IterateInvocation,
+                    CollectInvocation,
+                ),
+            ):
+                return None
+            if self.graph._get_input_edges(source_id) or self.graph._get_output_edges(source_id) != [collection_edge]:
+                return None
+
+            iterator_item_edges = self.graph._get_output_edges(iterator_id, ITEM_FIELD)
+            if len(iterator_item_edges) != 1 or iterator_item_edges[0] not in item_edges:
+                return None
+            if self.graph._get_output_edges(iterator_id) != iterator_item_edges:
+                return None
+            branches.append((source_id, iterator_id))
+
+        branches.sort(key=lambda branch: branch[0])
+        return _DirectIterateCollectFanIn(branches=(branches[0], branches[1]), collector_id=collector_id)
+
+    def _get_direct_iterate_collect_nodes(
+        self,
+    ) -> Optional[tuple[str, str, str, str, tuple[str, ...]] | _DirectIterateCollectFanIn]:
         """Return direct planner nodes, including ordinary downstream consumers."""
 
         if (
@@ -6704,6 +6787,8 @@ class GraphExecutionState(BaseModel):
 
         iterator_ids = [node_id for node_id, node in self.graph.nodes.items() if isinstance(node, IterateInvocation)]
         collector_ids = [node_id for node_id, node in self.graph.nodes.items() if isinstance(node, CollectInvocation)]
+        if len(iterator_ids) == 2 and len(collector_ids) == 1:
+            return self._get_direct_iterate_collect_fan_in(iterator_ids, collector_ids[0])
         if len(iterator_ids) != 1 or len(collector_ids) != 1:
             return None
         iterator_id = iterator_ids[0]
@@ -6822,6 +6907,60 @@ class GraphExecutionState(BaseModel):
         if isinstance(self.graph.get_node(source_node_id), IterateInvocation):
             self._record_empty_iterate_stream(source_node_id)
 
+    def _prepare_direct_iterate_collect_fan_in_unchecked(self, fan_in: _DirectIterateCollectFanIn) -> None:
+        source_exec_ids: dict[str, str] = {}
+        for source_id, _iterator_id in fan_in.branches:
+            if source_id not in self.source_prepared_mapping:
+                source_node = self._create_direct_execution_node_copy(source_id)
+                self._initialize_direct_execution_node(source_node.id, ())
+            if source_id in self.executed:
+                source_exec_ids[source_id] = sorted(self.source_prepared_mapping[source_id])[0]
+
+        if len(source_exec_ids) != len(fan_in.branches):
+            return
+        if fan_in.collector_id in self.source_prepared_mapping:
+            return
+
+        iterator_exec_ids: list[tuple[str, str]] = []
+        collector_item_edges = {
+            edge.source.node_id: edge for edge in self.graph._get_input_edges(fan_in.collector_id, ITEM_FIELD)
+        }
+        for source_id, iterator_id in fan_in.branches:
+            collection_edge = self.graph._get_input_edges(iterator_id, COLLECTION_FIELD)[0]
+            collection = getattr(self.results[source_exec_ids[source_id]], collection_edge.source.field)
+            if not isinstance(collection, list):
+                raise ValueError("Direct Iterate collection source must produce a list")
+
+            for index in range(len(collection)):
+                iterator_node = self._create_direct_execution_node_copy(iterator_id, index, (index,))
+                attached_iterator_edges = self._attach_direct_execution_edges(
+                    iterator_node.id,
+                    [
+                        Edge(
+                            source=EdgeConnection(
+                                node_id=source_exec_ids[source_id], field=collection_edge.source.field
+                            ),
+                            destination=EdgeConnection(node_id="", field=collection_edge.destination.field),
+                        )
+                    ],
+                )
+                self._initialize_direct_execution_node(iterator_node.id, attached_iterator_edges)
+                iterator_exec_ids.append((iterator_node.id, iterator_id))
+
+            if not collection:
+                self._mark_direct_source_empty(iterator_id)
+
+        collector_node = self._create_direct_execution_node_copy(fan_in.collector_id, iteration_path=())
+        collector_edges = [
+            Edge(
+                source=EdgeConnection(node_id=iterator_exec_id, field=ITEM_FIELD),
+                destination=EdgeConnection(node_id="", field=collector_item_edges[iterator_id].destination.field),
+            )
+            for iterator_exec_id, iterator_id in iterator_exec_ids
+        ]
+        attached_collector_edges = self._attach_direct_execution_edges(collector_node.id, collector_edges)
+        self._initialize_direct_execution_node(collector_node.id, attached_collector_edges)
+
     def _prepare_direct_iterate_collect(self) -> None:
         """Expand the fresh direct stream shape atomically, without the legacy materializer."""
 
@@ -6848,6 +6987,9 @@ class GraphExecutionState(BaseModel):
 
         node_ids = self._get_direct_iterate_collect_nodes()
         if node_ids is None:
+            return
+        if isinstance(node_ids, _DirectIterateCollectFanIn):
+            self._prepare_direct_iterate_collect_fan_in_unchecked(node_ids)
             return
         source_id, iterator_id, body_id, collector_id, downstream_ids = node_ids
 
