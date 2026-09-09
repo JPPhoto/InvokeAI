@@ -10,7 +10,11 @@ LEGACY_EXECUTION_STATE_VERSION: Final[int] = 0
 
 
 def _retain_nullable_execution_token_values(snapshot: dict[str, Any]) -> None:
-    """Retain omitted null token values in this state and any embedded child state."""
+    """Retain omitted null execution values in this state and any embedded child state."""
+    for output in snapshot.get("results", {}).values():
+        if isinstance(output, dict) and output.get("type") == "iterate_output":
+            output.setdefault("item", None)
+
     for token in snapshot.get("execution_tokens", {}).values():
         token.setdefault("value", None)
 

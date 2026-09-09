@@ -20,11 +20,12 @@ analysis remains an internal author-graph admission decision.
 Direct `Iterate`/`Collect` graphs that do not contain `If`, `For`, `ForReturn`, or saved-workflow control flow also use
 the generic adapter. Its adapter-level readiness predicate waits for canonical Iterate streams to close, and generic
 completion mirrors each Iterate result into that ledger before releasing `Collect`. The exact fresh four-node shape
-`literal collection source -> Iterate -> one ordinary body -> Collect` is planned by a private graph-state planner,
-which owns its prepared-copy expansion, iteration paths, and explicit empty-stream barrier without calling the legacy
-materializer. The planner intentionally excludes downstream consumers, fan-in, nested or input-driven iterators, and
-all mixed control flow; those shapes retain materializer copy expansion, grouping, and empty-source handling on the
-legacy compatibility route.
+`literal collection source -> Iterate -> one ordinary body -> Collect`, plus its exact five-node extension with one
+ordinary downstream consumer from `Collect.collection`, is planned by a private graph-state planner, which owns its
+prepared-copy expansion, iteration paths, downstream admission, and explicit empty-stream barrier without calling the
+legacy materializer. The planner excludes fan-in, additional downstream consumers, nested or input-driven iterators,
+and all mixed control flow; those shapes retain materializer copy expansion, grouping, and empty-source handling on
+the legacy compatibility route.
 A fresh graph with exactly one static, non-empty `For`/`ForReturn` pair and ordinary body nodes also uses the generic
 adapter. It projects readiness and invokes the graph-state continuation boundary, which selects the next iteration or
 finalizes the aggregate without exposing a successor node ID to the generic scheduler. The materializer still owns
@@ -252,15 +253,17 @@ Activation effects are excluded from data-stream handling. `IterateInvocation` i
 control-flow invocation on this seam: each non-empty prepared copy emits one ordered `item` effect with its iteration
 index, and the final copy emits one `close_stream` effect. Direct Iterate/Collect-only graphs now run through the
 generic scheduler adapter; its completion maps these results/effects to the existing frame-scoped iteration-stream
-identity, so legacy output mirroring is idempotent. The exact fresh four-node source/Iterate/body/Collect shape uses
-the private planner described above; fallback shapes still let the materializer create prepared copies, derive
-iteration paths, group collector inputs, and record the explicit close for an empty source.
+identity, so legacy output mirroring is idempotent. The exact fresh four-node source/Iterate/body/Collect shape and its
+exact five-node extension with one ordinary downstream consumer use the private planner described above; fallback
+shapes still let the materializer create prepared copies, derive iteration paths, group collector inputs, and record
+the explicit close for an empty source.
 For a direct `Iterate.item` edge, the scheduler defers `CollectInvocation` while its canonical stream is open, and
 runtime hydration consumes the closed stream in sequence order. If no stream exists, hydration retains the legacy
-materialized-result fallback needed by older snapshots. This is not yet token-authoritative downstream topology or full
-`Collect` migration: fallback shapes still let the materializer own copy expansion, iteration paths, collector grouping,
-collection-input hydration, and empty-source closure; the exact fresh four-node source/Iterate/body/Collect shape uses
-the private planner instead. No author-time activation ports or literal successor IDs are introduced.
+materialized-result fallback needed by older snapshots. This is not yet token-authoritative downstream topology beyond
+the supported one-consumer shape or full `Collect` migration: fallback shapes still let the materializer own copy
+expansion, iteration paths, collector grouping, collection-input hydration, and empty-source closure; the exact fresh
+four-node source/Iterate/body/Collect shape and its five-node one-consumer extension use the private planner instead.
+No author-time activation ports or literal successor IDs are introduced.
 
 For a fresh graph with one static, non-empty flat `For`/`ForReturn` pair, the same adapter now projects ordinary
 readiness and calls the graph-state generic continuation boundary after each `ForReturn`. That boundary carries returned
@@ -298,9 +301,10 @@ frame-scoped continuation effects and generic readiness/continuation
 projection.
 Direct `Iterate`/`Collect`-only graphs use the generic scheduler adapter for
 readiness and completion. The exact fresh four-node source/Iterate/body/Collect
-shape uses the private planner for expansion and empty-stream closure;
-workflow-call invocations, unsupported loop shapes, and mixed
-control-flow graphs remain on compatibility paths. `ForInvocation` and
+shape and its exact five-node extension with one ordinary downstream consumer
+use the private planner for expansion and empty-stream closure; workflow-call
+invocations, unsupported loop shapes, and mixed control-flow graphs remain on
+compatibility paths. `ForInvocation` and
 `ForReturnInvocation` now declare one validated, frame-scoped `continuation`
 effect per prepared invocation: `For` starts the `for` continuation with its
 iteration/state payload, and `ForReturn` completes it with output/state/

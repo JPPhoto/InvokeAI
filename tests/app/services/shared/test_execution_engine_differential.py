@@ -1496,6 +1496,36 @@ def test_direct_iterate_body_collect_with_downstream_consumer_matches_forced_com
     assert _state_projection(generic_state) == _state_projection(compatibility_state)
 
 
+def test_direct_iterate_body_collect_downstream_checkpoint_after_none_item_rehydrates() -> None:
+    collection = ["first", None, "last"]
+    expected_trace, expected_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=collection, with_after=True))
+    )
+    partial_trace, partial_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=collection, with_after=True)),
+        stop_after=3,
+    )
+
+    assert partial_trace == ["source", "iterate", "iterate"]
+    iterate_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in partial_state.prepared_source_mapping.items()
+        if source_node_id == "iterate"
+        and exec_node_id in partial_state.results
+        and partial_state.results[exec_node_id].index == 1  # type: ignore[union-attr]
+    )
+    snapshot = dump_execution_state(partial_state)
+    assert snapshot["results"][iterate_exec_id]["item"] is None
+
+    resumed_trace, resumed_state = _run_graph(load_execution_state(snapshot))
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert _source_output(resumed_state, "collect").collection == collection
+    assert _source_output(resumed_state, "after").value == collection
+    assert resumed_state.is_complete()
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+
+
 def test_direct_flat_for_completion_persists_continuations_and_final_tokens() -> None:
     trace, state = _run(GraphExecutionState(graph=_flat_for_graph()))
 
