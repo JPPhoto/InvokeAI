@@ -324,6 +324,11 @@ def test_media_origin_survives_a_listing(store: SqliteVideoRecordStorage) -> Non
         pytest.param("true", id="a JSON boolean"),
         pytest.param("1.5", id="a JSON float"),
         pytest.param('""', id="an empty string, which the frontend also reads as no marker"),
+        # `json_extract` hands an object or array back as its SERIALIZED TEXT, so these
+        # arrive as `str` and an isinstance check alone would propagate them.
+        pytest.param('{"a": "b"}', id="a JSON object, returned as its text"),
+        pytest.param("[1, 2]", id="a JSON array, returned as its text"),
+        pytest.param('"has a space"', id="a string that is not marker-shaped"),
     ],
 )
 def test_a_non_string_marker_does_not_break_the_record(store: SqliteVideoRecordStorage, raw: str) -> None:

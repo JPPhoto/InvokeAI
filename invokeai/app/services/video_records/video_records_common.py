@@ -1,4 +1,5 @@
 import datetime
+import re
 from typing import Any, Optional, Union
 
 from pydantic import BaseModel, Field, StrictBool, StrictStr
@@ -52,6 +53,13 @@ MEDIA_ORIGIN_SQL_EXPR = f"{MEDIA_ORIGIN_JSON_EXPR} AS media_origin"
 # gallery page that includes it.
 MEDIA_ORIGIN_MAX_LENGTH = 64
 
+# A marker is an identifier-shaped token (`audio_upload` is the only one so far). Matching
+# the SHAPE rather than an allowlist keeps the vocabulary open, while rejecting the two
+# things `json_extract` hands back as strings without them being markers: a JSON object or
+# array arrives as its serialized text (`'{"a":"b"}'`, `'[1,2]'`), which `isinstance(str)`
+# alone would happily propagate.
+MEDIA_ORIGIN_PATTERN = re.compile(r"\A[A-Za-z0-9_-]+\Z")
+
 
 def coerce_media_origin(value: Any) -> Optional[str]:
     """The `media_origin` marker as a string, or None for anything that is not one.
@@ -63,13 +71,13 @@ def coerce_media_origin(value: Any) -> Optional[str]:
     `ValidationError` while *deserializing the row*, which does not merely mislabel the
     video: it makes the record, its DTO, and every gallery listing that contains it fail to
     build. One odd upload would take out the gallery. An unrecognized marker means the same
-    thing as an absent one, so it is dropped here rather than propagated -- including the
-    empty string, which the frontend's own mapper also treats as no marker, and one past
-    :data:`MEDIA_ORIGIN_MAX_LENGTH`, which no real marker reaches.
+    thing as an absent one, so it is dropped here rather than propagated -- an empty string,
+    one past :data:`MEDIA_ORIGIN_MAX_LENGTH`, and anything not shaped like a marker per
+    :data:`MEDIA_ORIGIN_PATTERN`.
     """
-    if not isinstance(value, str) or not value or len(value) > MEDIA_ORIGIN_MAX_LENGTH:
+    if not isinstance(value, str) or len(value) > MEDIA_ORIGIN_MAX_LENGTH:
         return None
-    return value
+    return value if MEDIA_ORIGIN_PATTERN.match(value) else None
 
 
 VIDEO_DTO_COLS = ", ".join(
