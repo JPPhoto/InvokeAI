@@ -507,7 +507,13 @@ class ZImageCheckpointModel(ModelLoader):
         # above, which carries them (and their scales) through the fused-QKV split onto the module
         # names the model actually has -- so no re-keying is needed here.
         int8_markers = extract_int8_convrot_markers(sd)
-        sd = drop_unconsumed_quantization_sidecars(sd)
+        # Filtered in place rather than rebound: the `sd.clear()` below has to reach the same dict
+        # the checkpoint was read into, or the originals stay alive through it and peak RAM
+        # overshoots the `make_room()` reservation (see test_state_dict_is_released_before_the_fp8_cast).
+        kept = drop_unconsumed_quantization_sidecars(sd)
+        sd.clear()
+        sd.update(kept)
+        del kept
         orphans = sorted(k for k, v in sd.items() if v.dtype is torch.int8 and k[: -len(".weight")] not in int8_markers)
         if orphans:
             raise ValueError(
