@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 from pydantic import ValidationError
 
+from invokeai.app.invocations.collections import CollectionConcatInvocation
 from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.invocations.loops import (
     ForInvocation,
@@ -243,6 +244,41 @@ def _nested_for_iterate_collect_graph(*, outer_collection: list[list[str]] | Non
     connect("nested_collect", "collection", "outer_return", "output")
     connect("outer_for", "output_collection", "after", "value")
     graph.add_edge(create_loop_linkage("outer_for", "outer_return"))
+    return graph
+
+
+def _direct_iterate_body_collect_graph(*, collection: list[Any] | None = None, with_after: bool = False) -> Graph:
+    graph = Graph()
+    graph.add_node(CollectionConcatInvocation(id="source", first=[] if collection is None else collection))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="source", field="collection"),
+            destination=EdgeConnection(node_id="iterate", field="collection"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="iterate", field="item"),
+            destination=EdgeConnection(node_id="body", field="value"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="body", field="value"),
+            destination=EdgeConnection(node_id="collect", field="item"),
+        )
+    )
+    if with_after:
+        graph.add_node(AnyTypeTestInvocation(id="after"))
+        graph.add_edge(
+            Edge(
+                source=EdgeConnection(node_id="collect", field="collection"),
+                destination=EdgeConnection(node_id="after", field="value"),
+            )
+        )
     return graph
 
 
@@ -558,6 +594,15 @@ def _final_for_output(state: GraphExecutionState) -> Any:
         key=lambda exec_node_id: state.execution_graph.get_node(exec_node_id).index,
     )
     return state.results[final_for_id]
+
+
+def _source_output(state: GraphExecutionState, source_id: str) -> Any:
+    execution_id = next(
+        execution_id
+        for execution_id, prepared_source_id in state.prepared_source_mapping.items()
+        if prepared_source_id == source_id and execution_id in state.results
+    )
+    return state.results[execution_id]
 
 
 def _execution_edge_projection(state: GraphExecutionState) -> tuple[tuple[str, str, str, str, str], ...]:
@@ -1182,6 +1227,180 @@ def test_nested_for_iterate_collect_generic_rehydrates_after_inner_completion() 
     assert resumed_state.is_complete()
     assert isinstance(resumed_state._execution_scheduler, _GenericGraphSchedulerAdapter)
     assert _state_projection(resumed_state) == _state_projection(expected_state)
+
+
+def test_direct_iterate_body_collect_fresh_execution_preserves_order_and_none() -> None:
+    collection = ["first", None, "last"]
+    state = GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=collection))
+
+    with (
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "prepare",
+            side_effect=AssertionError("canonical Iterate -> body -> Collect must not use materializer.prepare"),
+        ) as prepare,
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "_get_collect_iteration_mapping_groups",
+            side_effect=AssertionError("canonical Iterate -> body -> Collect must not group collector inputs"),
+        ) as group_collector_inputs,
+    ):
+        trace, state = _run_graph(state)
+
+    assert trace.count("iterate") == len(collection)
+    assert trace.count("body") == len(collection)
+    assert trace.count("collect") == 1
+    assert _source_output(state, "collect").collection == collection
+    assert state.is_complete()
+    assert isinstance(state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    prepare.assert_not_called()
+    group_collector_inputs.assert_not_called()
+
+
+def test_direct_iterate_body_collect_fresh_execution_handles_empty_input() -> None:
+    state = GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=[]))
+    with (
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "prepare",
+            side_effect=AssertionError("canonical empty Iterate -> body -> Collect must not use materializer.prepare"),
+        ) as prepare,
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "_get_collect_iteration_mapping_groups",
+            side_effect=AssertionError("canonical empty Iterate -> body -> Collect must not group collector inputs"),
+        ) as group_collector_inputs,
+    ):
+        trace, state = _run_graph(state)
+
+    assert "iterate" not in trace
+    assert "body" not in trace
+    assert trace[-1] == "collect"
+    assert _source_output(state, "collect").collection == []
+    assert state.is_complete()
+    prepare.assert_not_called()
+    group_collector_inputs.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "collection",
+    [
+        ["first", None, "last"],
+        [],
+    ],
+    ids=["ordered-values-including-none", "empty"],
+)
+def test_direct_iterate_body_collect_matches_forced_compatibility_scheduler(collection: list[Any]) -> None:
+    generic_trace, generic_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=collection))
+    )
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=collection)),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert _source_output(generic_state, "collect").collection == collection
+    assert _source_output(compatibility_state, "collect").collection == collection
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert isinstance(compatibility_state._execution_scheduler, _ExecutionScheduler)
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+def test_direct_iterate_body_collect_partial_dump_load_resume_matches_fresh_execution(
+    force_compatibility_scheduler: bool,
+) -> None:
+    collection = ["first", None, "last"]
+    expected_trace, expected_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=collection)),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+    )
+    partial_trace, partial_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=collection)),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+        stop_after=2,
+    )
+
+    restored = load_execution_state(dump_execution_state(partial_state))
+    if force_compatibility_scheduler:
+        _restore_compatibility_scheduler(restored)
+    resumed_trace, resumed_state = _run_graph(
+        restored,
+        force_compatibility_scheduler=force_compatibility_scheduler,
+    )
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert _source_output(resumed_state, "collect").collection == collection
+    assert resumed_state.is_complete()
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+    if force_compatibility_scheduler:
+        assert isinstance(resumed_state._execution_scheduler, _ExecutionScheduler)
+    else:
+        assert isinstance(resumed_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+
+
+def test_direct_iterate_body_collect_empty_checkpoint_rehydrates_without_materializer() -> None:
+    _partial_trace, partial_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=[])), stop_after=1
+    )
+    with (
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "prepare",
+            side_effect=AssertionError("empty canonical checkpoint must not use materializer.prepare"),
+        ) as prepare,
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "_get_collect_iteration_mapping_groups",
+            side_effect=AssertionError("empty canonical checkpoint must not group collector inputs"),
+        ) as group_collector_inputs,
+    ):
+        resumed_trace, resumed_state = _run_graph(load_execution_state(dump_execution_state(partial_state)))
+
+    assert resumed_trace == ["collect"]
+    assert _source_output(resumed_state, "collect").collection == []
+    assert resumed_state.is_complete()
+    prepare.assert_not_called()
+    group_collector_inputs.assert_not_called()
+
+
+def test_direct_iterate_body_collect_failure_rehydrates_pending_state_without_replanning() -> None:
+    trace, failed_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=["first", "last"])),
+        fail_source_id="body",
+    )
+    assert trace[0] == "source"
+    assert trace.count("iterate") == 2
+    assert trace[-1] == "body"
+    assert failed_state.has_error()
+
+    restored = load_execution_state(dump_execution_state(failed_state))
+    assert restored.has_error()
+    assert restored.source_prepared_mapping.get("collect")
+    assert restored.is_complete()
+
+
+def test_direct_iterate_body_collect_with_downstream_consumer_uses_fallback_materializer() -> None:
+    prepare_calls = 0
+    original_prepare = graph_module._ExecutionMaterializer.prepare
+
+    def prepare_spy(materializer: Any, base_graph: Any = None) -> Any:
+        nonlocal prepare_calls
+        prepare_calls += 1
+        return original_prepare(materializer, base_graph)
+
+    with patch.object(graph_module._ExecutionMaterializer, "prepare", autospec=True, side_effect=prepare_spy):
+        trace, state = _run_graph(
+            GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=["value"], with_after=True))
+        )
+
+    assert trace[-1] == "after"
+    assert _source_output(state, "after").value == ["value"]
+    assert state.is_complete()
+    assert prepare_calls > 0
 
 
 def test_direct_flat_for_completion_persists_continuations_and_final_tokens() -> None:

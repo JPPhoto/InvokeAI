@@ -6645,6 +6645,14 @@ class GraphExecutionState(BaseModel):
         next_node = self._get_next_node()
         if next_node is not None:
             return next_node
+
+        if (
+            isinstance(self._scheduler(), _GenericGraphSchedulerAdapter)
+            and self._can_use_direct_iterate_collect_planner()
+        ):
+            self._prepare_direct_iterate_collect()
+            return self._get_next_node()
+
         prepared_id = self._materializer().prepare(base_graph)
 
         while prepared_id is not None:
@@ -6653,6 +6661,184 @@ class GraphExecutionState(BaseModel):
                 next_node = self._get_next_node()
 
         return next_node
+
+    def _get_direct_iterate_collect_nodes(self) -> Optional[tuple[str, str, str, str]]:
+        """Return the source, iterator, body, and collector for the narrow direct planner shape."""
+
+        if self._legacy_snapshot_loaded or len(self.graph.nodes) != 4 or len(self.graph.edges) != 3:
+            return None
+
+        iterator_ids = [node_id for node_id, node in self.graph.nodes.items() if isinstance(node, IterateInvocation)]
+        collector_ids = [node_id for node_id, node in self.graph.nodes.items() if isinstance(node, CollectInvocation)]
+        if len(iterator_ids) != 1 or len(collector_ids) != 1:
+            return None
+        iterator_id = iterator_ids[0]
+        collector_id = collector_ids[0]
+
+        collection_edges = self.graph._get_input_edges(iterator_id, COLLECTION_FIELD)
+        item_edges = self.graph._get_input_edges(collector_id, ITEM_FIELD)
+        if len(collection_edges) != 1 or len(item_edges) != 1:
+            return None
+        collection_edge = collection_edges[0]
+        item_edge = item_edges[0]
+        if collection_edge.source.field != COLLECTION_FIELD or item_edge.destination.field != ITEM_FIELD:
+            return None
+        if collection_edge.destination.node_id != iterator_id:
+            return None
+
+        body_id = item_edge.source.node_id
+        if body_id in {iterator_id, collector_id}:
+            return None
+        body = self.graph.get_node(body_id)
+        if isinstance(body, (ForInvocation, ForReturnInvocation, IfInvocation, IterateInvocation, CollectInvocation)):
+            return None
+        body_input_edges = self.graph._get_input_edges(body_id)
+        if len(body_input_edges) != 1 or body_input_edges[0] != Edge(
+            source=EdgeConnection(node_id=iterator_id, field=ITEM_FIELD),
+            destination=EdgeConnection(node_id=body_id, field=body_input_edges[0].destination.field),
+        ):
+            return None
+        if body_input_edges[0].source.field != ITEM_FIELD:
+            return None
+
+        source_id = collection_edge.source.node_id
+        if source_id in {iterator_id, body_id, collector_id}:
+            return None
+        source = self.graph.get_node(source_id)
+        if isinstance(source, (ForInvocation, ForReturnInvocation, IfInvocation, IterateInvocation, CollectInvocation)):
+            return None
+        if self.graph._get_input_edges(source_id):
+            return None
+        if self.graph._get_output_edges(source_id) != [collection_edge]:
+            return None
+        if self.graph._get_output_edges(iterator_id) != [body_input_edges[0]]:
+            return None
+        if self.graph._get_output_edges(body_id) != [item_edge]:
+            return None
+        if self.graph._get_input_edges(collector_id) != [item_edge]:
+            return None
+
+        return source_id, iterator_id, body_id, collector_id
+
+    def _can_use_direct_iterate_collect_planner(self) -> bool:
+        """Use fresh planner ownership only for the exact direct stream shape."""
+
+        return self._get_direct_iterate_collect_nodes() is not None
+
+    def _create_direct_execution_node_copy(
+        self, source_node_id: str, iteration_index: int = -1, iteration_path: tuple[int, ...] = ()
+    ) -> BaseInvocation:
+        source_node = self.graph.get_node(source_node_id)
+        new_node = source_node.model_copy(deep=True)
+        new_node.id = uuid_string()
+        if isinstance(new_node, IterateInvocation):
+            new_node.index = iteration_index
+        if iteration_index >= 0 or isinstance(new_node, CollectInvocation):
+            new_node.use_cache = False
+        self._tx_add_execution_node(new_node)
+        self._add_execution_graph_node(new_node.id)
+        self._register_prepared_exec_node(new_node.id, source_node_id)
+        self._prepared_registry().set_iteration_path(new_node.id, iteration_path)
+        return new_node
+
+    def _attach_direct_execution_edges(self, exec_node_id: str, edges: Iterable[Edge]) -> list[Edge]:
+        attached_edges = [
+            Edge(
+                source=edge.source,
+                destination=EdgeConnection(node_id=exec_node_id, field=edge.destination.field),
+            )
+            for edge in edges
+        ]
+        self._tx_add_execution_edges(attached_edges)
+        self._add_execution_graph_edges(attached_edges)
+        return attached_edges
+
+    def _initialize_direct_execution_node(self, exec_node_id: str, input_edges: Iterable[Edge]) -> None:
+        input_edges = list(input_edges)
+        self._tx_set_mapping(
+            self.indegree,
+            exec_node_id,
+            sum(1 for edge in input_edges if edge.source.node_id not in self.executed),
+        )
+        scheduler = self._scheduler()
+        assert isinstance(scheduler, _GenericGraphSchedulerAdapter)
+        scheduler.register_node(exec_node_id)
+        self._enqueue_if_ready(exec_node_id)
+
+    def _mark_direct_source_empty(self, source_node_id: str) -> None:
+        """Record an empty direct iterator source without entering the legacy materializer."""
+
+        self._tx_set_mapping(self.source_prepared_mapping, source_node_id, set())
+        self._mark_source_executed(source_node_id)
+        if isinstance(self.graph.get_node(source_node_id), IterateInvocation):
+            self._record_empty_iterate_stream(source_node_id)
+
+    def _prepare_direct_iterate_collect(self) -> None:
+        """Expand the fresh direct stream shape without invoking the legacy materializer."""
+
+        node_ids = self._get_direct_iterate_collect_nodes()
+        if node_ids is None:
+            return
+        source_id, iterator_id, body_id, collector_id = node_ids
+
+        if source_id not in self.source_prepared_mapping:
+            source_node = self._create_direct_execution_node_copy(source_id)
+            self._initialize_direct_execution_node(source_node.id, ())
+            return
+
+        if collector_id in self.source_prepared_mapping:
+            return
+
+        if source_id not in self.executed:
+            return
+        source_exec_id = next(iter(self.source_prepared_mapping[source_id]))
+        source_output = self.results[source_exec_id]
+        collection_edge = self.graph._get_input_edges(iterator_id, COLLECTION_FIELD)[0]
+        collection = getattr(source_output, collection_edge.source.field)
+        if not isinstance(collection, list):
+            raise ValueError("Direct Iterate collection source must produce a list")
+
+        iterator_exec_ids: list[str] = []
+        body_exec_ids: list[str] = []
+        body_input_edge = self.graph._get_input_edges(body_id)[0]
+        collect_item_edge = self.graph._get_input_edges(collector_id, ITEM_FIELD)[0]
+        for index in range(len(collection)):
+            iterator_node = self._create_direct_execution_node_copy(iterator_id, index, (index,))
+            iterator_edges = [
+                Edge(
+                    source=EdgeConnection(node_id=source_exec_id, field=collection_edge.source.field),
+                    destination=EdgeConnection(node_id="", field=collection_edge.destination.field),
+                )
+            ]
+            attached_iterator_edges = self._attach_direct_execution_edges(iterator_node.id, iterator_edges)
+            self._initialize_direct_execution_node(iterator_node.id, attached_iterator_edges)
+            iterator_exec_ids.append(iterator_node.id)
+
+            body_node = self._create_direct_execution_node_copy(body_id, iteration_path=(index,))
+            body_edges = [
+                Edge(
+                    source=EdgeConnection(node_id=iterator_node.id, field=body_input_edge.source.field),
+                    destination=EdgeConnection(node_id="", field=body_input_edge.destination.field),
+                )
+            ]
+            attached_body_edges = self._attach_direct_execution_edges(body_node.id, body_edges)
+            self._initialize_direct_execution_node(body_node.id, attached_body_edges)
+            body_exec_ids.append(body_node.id)
+
+        if not iterator_exec_ids:
+            self._mark_direct_source_empty(iterator_id)
+            self._mark_direct_source_empty(body_id)
+
+        collector_node = self._create_direct_execution_node_copy(collector_id, iteration_path=())
+        collector_edges = [
+            Edge(
+                source=EdgeConnection(node_id=body_exec_id, field=collect_item_edge.source.field),
+                destination=EdgeConnection(node_id="", field=collect_item_edge.destination.field),
+            )
+            for body_exec_id in body_exec_ids
+        ]
+        attached_collector_edges = self._attach_direct_execution_edges(collector_node.id, collector_edges)
+        self._initialize_direct_execution_node(collector_node.id, attached_collector_edges)
 
     def _reset_runtime_caches(self) -> None:
         self._ready_queues = {}
