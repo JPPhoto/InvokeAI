@@ -9,8 +9,8 @@ iterator patterns, tracks readiness via indegree (the number of incoming edges t
 executes nodes from class-grouped ready queues. In normal execution, runtime expansion happens in a separate execution graph
 instead of mutating the source graph. Ordinary static DAGs and legacy-shaped `If` graphs use the opaque `ExecutionPlan`
 and deterministic `ExecutionScheduler` in `execution_engine/scheduler.py`. For a fresh generic `If`, the dedicated
-`_IfActivationController` owns fresh `If` admission and produces opaque, frame-local activation dependencies; the legacy
-`_IfActivationCompiler` remains only as a compatibility lowering helper for old snapshots. Fresh `If` materialization
+`_IfActivationController` is the sole runtime dependency owner for `If` admission and produces opaque, frame-local
+activation dependencies. Legacy skipped-state projection remains only for old snapshots. Fresh `If` materialization
 prepares the condition boundary first, resolves the activation token, and attaches only the selected branch input.
 Unselected branch nodes are never prepared, skipped, or added to fresh execution history. Both scheduler adapters
 consume the controller's decisions without pruning execution edges or calling a type-specific branch scheduler.
@@ -237,8 +237,8 @@ rehydration, every activation token is bound to a currently prepared owner and i
 declared port, value, canonical token id, mapping key, and known frame fields must match. Unknown extra frame metadata
 remains forward-compatible.
 For a fresh generic `If`, `_IfActivationController` puts opaque, frame-local activation-dependency records on each
-branch-local plan node. The controller derives branch membership from the current author graph, but the schedulers no
-longer call the legacy compiler. Fresh materialization prepares the condition boundary, resolves the activation token,
+branch-local plan node. The controller is the sole runtime dependency owner; the schedulers no longer call a legacy
+compiler. Fresh materialization prepares the condition boundary, resolves the activation token,
 and attaches only the selected branch input; rejected branch sources remain unprepared. `_GenericGraphSchedulerAdapter`
 consumes those records through the opaque plan: its readiness
 callback accepts a node only when the required private `ActivationGate` runtime state is resolved and a matching
@@ -406,9 +406,9 @@ Workflow-call note:
   ready work. It owns iterator expansion, collector grouping, prepared-parent selection, and creation of execution-graph
   edges. When matching prepared parents for a downstream exec node, skipped prepared exec nodes are ignored and cannot
   be selected as live inputs.
-- `_IfActivationController` Owns fresh runtime admission and compiles opaque, frame-local activation dependency
-  records for prepared nodes. `_IfActivationCompiler` remains the compatibility-only lowering helper for legacy
-  callers. Fresh admission leaves rejected branch sources unprepared; legacy discarded projections remain loadable.
+- `_IfActivationController` Owns all runtime `If` admission and compiles opaque, frame-local activation dependency
+  records for prepared nodes. Fresh admission leaves rejected branch sources unprepared; legacy skipped-state
+  projections remain loadable.
   Branch-membership analysis remains internal to the controller.
 - `_GenericGraphSchedulerAdapter` Projects the generic `ExecutionPlan`/`ExecutionScheduler` into the existing state
   fields for ordinary static DAGs and legacy-shaped `If` graphs; the generic scheduler owns opaque readiness,

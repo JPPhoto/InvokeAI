@@ -157,8 +157,8 @@ valid. A loaded terminal legacy state may retain its empty in-memory ledger for 
 
 `IfInvocation` now declares the same seam for branch activation: it emits one frame-scoped activation token for the
 selected branch, and the graph state validates and persists it after invocation. For a fresh generic `If`, the dedicated
-`_IfActivationController` owns opaque, frame-local activation dependencies; the legacy `_IfActivationCompiler`
-remains only as a compatibility lowering helper for old snapshots. Fresh materialization prepares the condition boundary,
+`_IfActivationController` is the sole runtime dependency owner for opaque, frame-local activation dependencies. Legacy
+skipped-state projection remains only for old snapshots. Fresh materialization prepares the condition boundary,
 resolves the activation token, and attaches only the selected branch input; unselected branch nodes remain unprepared.
 The generic and compatibility adapters consume the same decisions and append-only execution edges; no type-specific
 branch scheduler prunes edges or propagates skips. Legacy skipped-state metadata remains only for snapshots that already

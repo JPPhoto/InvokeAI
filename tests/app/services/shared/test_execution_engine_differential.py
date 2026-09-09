@@ -34,7 +34,6 @@ from invokeai.app.services.shared.graph import (
     IterateInvocation,
     _ExecutionScheduler,
     _GenericGraphSchedulerAdapter,
-    _IfActivationCompiler,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContextData, build_invocation_context
 from tests.test_nodes import (
@@ -2091,13 +2090,9 @@ def test_generic_legacy_shaped_if_does_not_prune_or_skip_during_resolution(
     state = GraphExecutionState(graph=graph)
     deleted_edges: list[Edge] = []
 
-    def fail_topology(*_: object, **__: object) -> dict[str, set[str]]:
-        raise AssertionError("generic If execution consulted legacy branch topology")
-
     def record_deleted_edge(self: GraphExecutionState, edge: Edge) -> None:
         deleted_edges.append(edge)
 
-    monkeypatch.setattr(graph_module, "_get_if_branch_exclusive_sources", fail_topology)
     monkeypatch.setattr(GraphExecutionState, "_tx_delete_execution_edge", record_deleted_edge)
 
     trace, state = _run_graph(state)
@@ -2110,21 +2105,10 @@ def test_generic_legacy_shaped_if_does_not_prune_or_skip_during_resolution(
 
 
 @pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
-def test_if_readiness_does_not_delegate_to_legacy_activation_compiler(
+def test_if_readiness_preserves_both_schedulers(
     force_compatibility_scheduler: bool,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     graph = _nested_if_graph()
-
-    def fail_compiler(*_: object, **__: object) -> tuple[object, ...]:
-        raise AssertionError("If readiness used compiler-derived branch topology")
-
-    def fail_topology(*_: object, **__: object) -> dict[str, set[str]]:
-        raise AssertionError("If readiness used the legacy topology entry point")
-
-    monkeypatch.setattr(_IfActivationCompiler, "get_activation_dependencies", fail_compiler)
-    monkeypatch.setattr(_IfActivationCompiler, "get_branch_exclusive_sources", fail_topology)
-    monkeypatch.setattr(graph_module, "_get_if_branch_exclusive_sources", fail_topology)
 
     trace, state = _run_graph(
         GraphExecutionState(graph=graph),
@@ -2138,15 +2122,7 @@ def test_if_readiness_does_not_delegate_to_legacy_activation_compiler(
 @pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
 def test_flat_if_admission_is_demand_driven_and_token_authoritative(
     force_compatibility_scheduler: bool,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fail_legacy_path(*_: object, **__: object) -> None:
-        raise AssertionError("fresh If execution used a legacy branch projection")
-
-    monkeypatch.setattr(_IfActivationCompiler, "get_activation_dependencies", fail_legacy_path)
-    monkeypatch.setattr(_IfActivationCompiler, "get_branch_exclusive_sources", fail_legacy_path)
-    monkeypatch.setattr(graph_module, "_get_if_branch_exclusive_sources", fail_legacy_path)
-
     trace, state = _run_graph(
         GraphExecutionState(graph=_flat_if_graph()),
         force_compatibility_scheduler=force_compatibility_scheduler,
@@ -2249,8 +2225,8 @@ def test_fresh_generic_nested_if_preserves_state_without_legacy_branch_projectio
     graph.get_node("outer_condition").value = outer_condition
     graph.get_node("inner_condition").value = inner_condition
 
-    def fail_legacy_path(*_: object, **__: object) -> None:
-        raise AssertionError("fresh generic If execution used a legacy branch projection")
+    def fail_edge_deletion(*_: object, **__: object) -> None:
+        raise AssertionError("fresh generic If execution deleted an execution edge")
 
     generic_retired_nodes: list[str] = []
     original_discard = _GenericGraphSchedulerAdapter._retire_unselected_node
@@ -2259,9 +2235,8 @@ def test_fresh_generic_nested_if_preserves_state_without_legacy_branch_projectio
         generic_retired_nodes.append(exec_node_id)
         original_discard(adapter, exec_node_id)
 
-    monkeypatch.setattr(graph_module, "_get_if_branch_exclusive_sources", fail_legacy_path)
     monkeypatch.setattr(_GenericGraphSchedulerAdapter, "_retire_unselected_node", record_generic_discard)
-    monkeypatch.setattr(GraphExecutionState, "_tx_delete_execution_edge", fail_legacy_path)
+    monkeypatch.setattr(GraphExecutionState, "_tx_delete_execution_edge", fail_edge_deletion)
 
     trace, state = _run_graph(GraphExecutionState(graph=graph))
 
