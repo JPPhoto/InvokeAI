@@ -3728,7 +3728,9 @@ def test_dropped_cache_is_collectable_and_its_worker_exits(mock_logger):
     cache = _make_cache(store, budget, mock_logger)
     module = DummyModule()
     cache.put("model", module)
-    assert worker_count() == before + 1
+    # The worker starts asynchronously, and a worker from an earlier test may still be winding
+    # down, so the count is converged on rather than sampled at one instant.
+    assert _wait_until(lambda: worker_count() == before + 1), "the cache never started its worker"
 
     cache_ref = weakref.ref(cache)
     module_ref = weakref.ref(module)
