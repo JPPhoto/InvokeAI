@@ -58,7 +58,7 @@ from invokeai.app.invocations.loops import (
     ForReturnInvocationOutput,
     LoopState,
 )
-from invokeai.app.services.shared import graph_if_dependencies
+from invokeai.app.services.shared import graph_if_dependencies, graph_if_runtime
 from invokeai.app.services.shared.execution_effects import ContinuationEffect
 from invokeai.app.services.shared.execution_effects import ExecutionRef as EffectExecutionRef
 from invokeai.app.services.shared.execution_engine.child import (
@@ -2464,50 +2464,13 @@ class GraphExecutionState(BaseModel):
         return graph_if_dependencies._get_source_activation_dependencies(self, source_node_id, iteration_path)
 
     def _record_activation_dependencies(self, exec_node_id: str) -> tuple[ActivationDependency, ...]:
-        dependencies = self._if_activation_dependencies_by_exec.get(exec_node_id)
-        if dependencies is not None:
-            return dependencies
-        source_node_id = self._prepared_registry().get_source_node_id(exec_node_id)
-        if any(isinstance(node, IfInvocation) for node in self.graph.nodes.values()):
-            dependencies = self._get_source_activation_dependencies(
-                source_node_id, self._get_iteration_path(exec_node_id)
-            )
-        else:
-            dependencies = ()
-        self._tx_set_mapping(self._if_activation_dependencies_by_exec, exec_node_id, dependencies)
-        return dependencies
+        return graph_if_runtime._record_activation_dependencies(self, exec_node_id)
 
     def _is_source_activation_admitted(self, source_node_id: str, iteration_path: tuple[int, ...] = ()) -> bool:
-        dependencies = self._get_source_activation_dependencies(source_node_id, iteration_path)
-        return not dependencies or all(
-            self._is_activation_dependency_satisfied(dependency) for dependency in dependencies
-        )
+        return graph_if_runtime._is_source_activation_admitted(self, source_node_id, iteration_path)
 
     def _is_source_inactive(self, source_node_id: str, iteration_path: tuple[int, ...] = ()) -> bool:
-        if not self._can_use_fresh_flat_if_activation():
-            return self._if_activation_controller().is_source_inactive(source_node_id, iteration_path)
-
-        dependencies = self._get_source_activation_dependencies(source_node_id, iteration_path)
-        if not dependencies:
-            return False
-        if iteration_path:
-            return any(self._is_activation_dependency_rejected(dependency) for dependency in dependencies)
-
-        frames = {
-            self._get_iteration_path(exec_node_id)
-            for dependency in dependencies
-            for exec_node_id in self._prepared_registry().get_prepared_ids(dependency.owner_id)
-        }
-        if not frames:
-            return False
-        return all(
-            self._get_source_activation_dependencies(source_node_id, frame)
-            and any(
-                self._is_activation_dependency_rejected(frame_dependency)
-                for frame_dependency in self._get_source_activation_dependencies(source_node_id, frame)
-            )
-            for frame in frames
-        )
+        return graph_if_runtime._is_source_inactive(self, source_node_id, iteration_path)
 
     def _get_execution_graph_flat(self) -> Any:
         if self._execution_graph_flat is None:
@@ -2920,107 +2883,19 @@ class GraphExecutionState(BaseModel):
         )
 
     def _activation_gate(self, exec_node_id: str) -> ActivationGate:
-        return self._generic_runtime().register_gate(
-            gate_id=exec_node_id,
-            owner_id=exec_node_id,
-            frame=self._engine_frame(self._get_iteration_path(exec_node_id)),
-            branches=("true_input", "false_input"),
-        )
+        return graph_if_runtime._activation_gate(self, exec_node_id)
 
     def _record_compatibility_activation_token(self, exec_node_id: str, selected_field: str) -> None:
-        execution_ref = self._expected_execution_ref(exec_node_id)
-        activation_token_id = f"{execution_ref.reference_id}:activation:{selected_field}"
-        self._tx_set_mapping(
-            self.execution_tokens,
-            activation_token_id,
-            ExecutionToken(
-                token_id=activation_token_id,
-                reference_id=execution_ref.reference_id,
-                owner_node_id=exec_node_id,
-                port=selected_field,
-                frame=execution_ref.frame,
-                value=selected_field,
-                token_kind="activation",
-            ),
-        )
+        return graph_if_runtime._record_compatibility_activation_token(self, exec_node_id, selected_field)
 
     def _is_activation_dependency_satisfied(self, dependency: ActivationDependency) -> bool:
-        """Check one opaque plan requirement against durable gate and token state."""
-        matching_gate_ids = [
-            prepared_if_id
-            for prepared_if_id in self._prepared_registry().get_prepared_ids(dependency.owner_id)
-            if self._get_iteration_path(prepared_if_id) == dependency.frame
-        ]
-        if not matching_gate_ids:
-            return False
-
-        for gate_id in matching_gate_ids:
-            expected_ref = self._expected_execution_ref(gate_id)
-            gate = self._activation_gate(gate_id)
-            if (
-                gate.frame.state_id != expected_ref.frame.state_id
-                or gate.frame.frame_id != expected_ref.frame.frame_id
-                or gate.frame.iteration_path != expected_ref.frame.iteration_path
-                or gate.frame.workflow_call_depth != expected_ref.frame.workflow_call_depth
-                or gate.frame.iteration_path != dependency.frame
-            ):
-                return False
-            if not gate.is_active(dependency.branch, owner_id=gate_id, frame=gate.frame):
-                return False
-            if not any(
-                token.token_id == f"{expected_ref.reference_id}:activation:{dependency.branch}"
-                and token.reference_id == expected_ref.reference_id
-                and token.owner_node_id == gate_id
-                and token.token_kind == "activation"
-                and token.port == dependency.branch
-                and token.value == dependency.branch
-                and token.frame.state_id == expected_ref.frame.state_id
-                and token.frame.frame_id == expected_ref.frame.frame_id
-                and token.frame.iteration_path == expected_ref.frame.iteration_path
-                and token.frame.workflow_call_depth == expected_ref.frame.workflow_call_depth
-                for token in self.execution_tokens.values()
-            ):
-                return False
-        return True
+        return graph_if_runtime._is_activation_dependency_satisfied(self, dependency)
 
     def _is_activation_dependency_rejected(self, dependency: ActivationDependency) -> bool:
-        """Return whether a resolved gate explicitly selected another branch."""
-
-        matching_gate_ids = [
-            prepared_if_id
-            for prepared_if_id in self._prepared_registry().get_prepared_ids(dependency.owner_id)
-            if self._get_iteration_path(prepared_if_id) == dependency.frame
-        ]
-        for gate_id in matching_gate_ids:
-            gate = self._activation_gate(gate_id)
-            expected_frame = self._expected_execution_ref(gate_id).frame
-            if (
-                gate.frame.state_id != expected_frame.state_id
-                or gate.frame.frame_id != expected_frame.frame_id
-                or gate.frame.iteration_path != expected_frame.iteration_path
-                or gate.frame.workflow_call_depth != expected_frame.workflow_call_depth
-            ):
-                return False
-            if gate.resolved and gate.selected_branch != dependency.branch:
-                return True
-        return False
+        return graph_if_runtime._is_activation_dependency_rejected(self, dependency)
 
     def _resolve_activation_gate(self, exec_node_id: str, branch: str) -> bool:
-        runtime = self._generic_runtime()
-        gate = self._activation_gate(exec_node_id)
-        if gate.resolved and gate.selected_branch == branch:
-            return False
-        previous = ActivationGate.model_validate(gate.model_dump(mode="python"))
-        changed = runtime.resolve_gate(
-            exec_node_id,
-            exec_node_id,
-            gate.frame,
-            branch,
-        )
-        if changed:
-            self._completed_source_ids_cache = None
-            self._tx_record(lambda: runtime.replace_gate(previous))
-        return changed
+        return graph_if_runtime._resolve_activation_gate(self, exec_node_id, branch)
 
     def _iteration_stream_id(self, source_node_id: str, parent_path: tuple[int, ...]) -> str:
         path = ",".join(str(index) for index in parent_path)
@@ -4333,19 +4208,13 @@ class GraphExecutionState(BaseModel):
         return self._scheduler().queue_for(cls_name)
 
     def _is_deferred_by_unresolved_if(self, exec_node_id: str) -> bool:
-        dependencies = self._get_activation_dependencies(exec_node_id)
-        if not dependencies or any(self._is_activation_dependency_rejected(dependency) for dependency in dependencies):
-            return False
-        return not all(self._is_activation_dependency_satisfied(dependency) for dependency in dependencies)
+        return graph_if_runtime._is_deferred_by_unresolved_if(self, exec_node_id)
 
     def _has_rejected_activation_dependency(self, exec_node_id: str) -> bool:
-        return any(
-            self._is_activation_dependency_rejected(dependency)
-            for dependency in self._get_activation_dependencies(exec_node_id)
-        )
+        return graph_if_runtime._has_rejected_activation_dependency(self, exec_node_id)
 
     def _get_activation_dependencies(self, exec_node_id: str) -> tuple[ActivationDependency, ...]:
-        return self._record_activation_dependencies(exec_node_id)
+        return graph_if_runtime._get_activation_dependencies(self, exec_node_id)
 
     def _remove_from_ready_queues(self, exec_node_id: str) -> None:
         self._scheduler().remove_from_ready_queues(exec_node_id)

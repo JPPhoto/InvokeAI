@@ -437,6 +437,10 @@ Workflow-call note:
   records for unsupported fresh shapes and legacy prepared nodes. Fresh ordinary-node single-`If` graphs compile those
   dependencies in graph state. Fresh admission leaves rejected branch sources unprepared; legacy skipped-state
   projections remain loadable.
+- Private `graph_if_dependencies.py` compiles fresh activation dependencies, and
+  `graph_if_runtime.py` records dependencies and evaluates admission against gates and tokens.
+  `GraphExecutionState` retains the method entry points, durable token/reference/effect storage,
+  derived caches, transaction journal, and fallback controller selection.
 - `_GenericGraphSchedulerAdapter` Projects the generic `ExecutionPlan`/`ExecutionScheduler` into the existing state
   fields for ordinary static DAGs and legacy-shaped `If` graphs; the generic scheduler owns opaque readiness,
   intentional discards, indegree transitions, deterministic ordering, claimed work, and completion. The adapter registers
