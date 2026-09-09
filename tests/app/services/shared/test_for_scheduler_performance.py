@@ -1,4 +1,13 @@
-"""Regression coverage for scheduler overhead with trivial loop bodies."""
+"""Scheduler behavior and overhead for trivial loop bodies.
+
+The two overhead tests assert wall-clock budgets and per-item ratios, so they are marked `slow`
+and excluded from the default run: once CI spreads the suite over xdist workers sharing the
+runner's cores, those numbers measure the runner. Run them with
+`pytest -m slow tests/app/services/shared/test_for_scheduler_performance.py`.
+
+The completion-state tests below them are not benchmarks -- they assert `GraphExecutionState`
+invariants in milliseconds and keep running by default.
+"""
 
 import time
 from unittest.mock import Mock
@@ -34,6 +43,7 @@ def _run_trivial_loop(loop_type: str, count: int) -> float:
     return time.perf_counter() - started
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("loop_type", ["iterate", "for"])
 def test_loop_scheduler_overhead_is_linear(loop_type: str) -> None:
     timings = {count: [] for count in (300, 1200)}
@@ -51,6 +61,7 @@ def test_loop_scheduler_overhead_is_linear(loop_type: str) -> None:
     assert per_node[1200] < per_node[300] * 2.5, f"{loop_type}: {per_node}"
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("loop_type", ["for", "iterate"])
 def test_trivial_loop_scheduler_overhead(loop_type: str) -> None:
     elapsed = _run_trivial_loop(loop_type, 600)

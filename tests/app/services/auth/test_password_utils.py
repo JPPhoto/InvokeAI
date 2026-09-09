@@ -1,5 +1,7 @@
 """Unit tests for password utilities."""
 
+import pytest
+
 from invokeai.app.services.auth.password_utils import (
     get_password_strength,
     hash_password,
@@ -283,10 +285,14 @@ class TestGetPasswordStrength:
 class TestPasswordSecurityProperties:
     """Tests for security properties of password handling."""
 
+    @pytest.mark.slow
     def test_timing_attack_resistance_same_length(self):
         """Test that password verification takes similar time for correct and incorrect passwords.
 
         Note: This is a basic check. Real timing attack resistance requires more sophisticated testing.
+
+        Marked `slow`: 200 bcrypt verifications cost ~34s, and the ratio it asserts measures the
+        machine as much as the code, so it cannot hold on xdist workers sharing a CI runner.
         """
         import time
 
