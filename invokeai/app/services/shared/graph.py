@@ -4685,7 +4685,17 @@ class GraphExecutionState(BaseModel):
             return False
         if_node = if_nodes[0]
         if any(
-            isinstance(node, (IfInvocation, ForInvocation, ForReturnInvocation, IterateInvocation, CollectInvocation))
+            isinstance(
+                node,
+                (
+                    IfInvocation,
+                    CallSavedWorkflowInvocation,
+                    ForInvocation,
+                    ForReturnInvocation,
+                    IterateInvocation,
+                    CollectInvocation,
+                ),
+            )
             for node in self.graph.nodes.values()
             if node is not if_node
         ):

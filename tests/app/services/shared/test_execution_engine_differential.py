@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 from pydantic import ValidationError
 
+from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvocation
 from invokeai.app.invocations.collections import CollectionConcatInvocation
 from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.invocations.loops import (
@@ -41,6 +42,7 @@ from tests.test_nodes import (
     ErrorInvocation,
     PolymorphicStringTestInvocation,
     UnionCollectionTestInvocation,
+    create_edge,
     create_loop_linkage,
 )
 
@@ -2168,6 +2170,35 @@ def test_fresh_flat_if_records_dependencies_without_author_graph_branch_analysis
         for dependency in state._if_activation_dependencies_by_exec[true_branch_id]
     ] == [("if", "true_input", ())]
     assert state.is_complete()
+
+
+def test_fresh_flat_if_with_saved_workflow_uses_controller_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = _flat_if_graph()
+    graph.delete_node("sink")
+    graph.add_node(CallSavedWorkflowInvocation(id="call", workflow_id="saved-workflow"))
+    graph.add_edge(create_edge("if", "value", "call", "saved_workflow_input::input::value"))
+    state = GraphExecutionState(graph=graph)
+    branch_analysis_calls: list[tuple[str, str]] = []
+    original_branch_sources = graph_module._IfActivationController._branch_sources
+
+    def record_branch_analysis(
+        controller: graph_module._IfActivationController,
+        if_node_id: str,
+        branch_field: str,
+        source_graph: Any,
+    ) -> set[str]:
+        branch_analysis_calls.append((if_node_id, branch_field))
+        return original_branch_sources(controller, if_node_id, branch_field, source_graph)
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", record_branch_analysis)
+
+    assert not state._can_use_fresh_flat_if_activation()
+    assert state._get_source_activation_dependencies("true_branch") == (
+        graph_module.ActivationDependency(owner_id="if", branch="true_input", frame=()),
+    )
+    assert branch_analysis_calls
 
 
 @pytest.mark.parametrize(
