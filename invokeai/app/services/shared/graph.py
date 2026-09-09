@@ -4401,7 +4401,8 @@ class Graph(BaseModel):
         # TODO: Cache this?
         g = nx.DiGraph()
         g.add_nodes_from(list(self.nodes.keys()))
-        g.add_edges_from({(e.source.node_id, e.destination.node_id) for e in self.edges if e.type == "default"})
+        edges = dict.fromkeys((e.source.node_id, e.destination.node_id) for e in self.edges if e.type == "default")
+        g.add_edges_from(edges)
         return g
 
     def nx_graph_flat(self, nx_graph: Optional["nx.DiGraph"] = None) -> "nx.DiGraph":
@@ -4411,8 +4412,8 @@ class Graph(BaseModel):
         # Add all nodes from this graph except graph/iteration nodes
         g.add_nodes_from([n.id for n in self.nodes.values()])
 
-        unique_edges = {(e.source.node_id, e.destination.node_id) for e in self.edges if e.type == "default"}
-        g.add_edges_from(unique_edges)
+        edges = dict.fromkeys((e.source.node_id, e.destination.node_id) for e in self.edges if e.type == "default")
+        g.add_edges_from(edges)
         return g
 
 
@@ -6679,12 +6680,12 @@ class GraphExecutionState(BaseModel):
 
         return next_node
 
-    def _get_direct_iterate_collect_nodes(self) -> Optional[tuple[str, str, str, str, str | None]]:
-        """Return the direct planner nodes, including one optional ordinary downstream consumer."""
+    def _get_direct_iterate_collect_nodes(self) -> Optional[tuple[str, str, str, str, tuple[str, ...]]]:
+        """Return direct planner nodes, including up to two ordinary downstream consumers."""
 
         if (
             self._legacy_snapshot_loaded
-            or len(self.graph.nodes) not in {4, 5}
+            or len(self.graph.nodes) not in {4, 5, 6}
             or len(self.graph.edges) != len(self.graph.nodes) - 1
         ):
             return None
@@ -6739,23 +6740,22 @@ class GraphExecutionState(BaseModel):
         if self.graph._get_input_edges(collector_id) != [item_edge]:
             return None
 
-        downstream_id: str | None = None
         downstream_edges = self.graph._get_output_edges(collector_id, COLLECTION_FIELD)
-        if len(self.graph.nodes) == 5:
-            if len(downstream_edges) != 1:
-                return None
-            downstream_id = downstream_edges[0].destination.node_id
+        if len(downstream_edges) != len(self.graph.nodes) - 4:
+            return None
+        downstream_ids: list[str] = []
+        for downstream_edge in downstream_edges:
+            downstream_id = downstream_edge.destination.node_id
             downstream = self.graph.get_node(downstream_id)
             if downstream_id in {source_id, iterator_id, body_id, collector_id} or isinstance(
                 downstream, (ForInvocation, ForReturnInvocation, IfInvocation, IterateInvocation, CollectInvocation)
             ):
                 return None
-            if self.graph._get_input_edges(downstream_id) != downstream_edges:
+            if self.graph._get_input_edges(downstream_id) != [downstream_edge]:
                 return None
-        elif downstream_edges:
-            return None
+            downstream_ids.append(downstream_id)
 
-        return source_id, iterator_id, body_id, collector_id, downstream_id
+        return source_id, iterator_id, body_id, collector_id, tuple(downstream_ids)
 
     def _can_use_direct_iterate_collect_planner(self) -> bool:
         """Use fresh planner ownership only for the exact direct stream shape."""
@@ -6837,7 +6837,7 @@ class GraphExecutionState(BaseModel):
         node_ids = self._get_direct_iterate_collect_nodes()
         if node_ids is None:
             return
-        source_id, iterator_id, body_id, collector_id, downstream_id = node_ids
+        source_id, iterator_id, body_id, collector_id, downstream_ids = node_ids
 
         if source_id not in self.source_prepared_mapping:
             source_node = self._create_direct_execution_node_copy(source_id)
@@ -6898,7 +6898,7 @@ class GraphExecutionState(BaseModel):
         attached_collector_edges = self._attach_direct_execution_edges(collector_node.id, collector_edges)
         self._initialize_direct_execution_node(collector_node.id, attached_collector_edges)
 
-        if downstream_id is not None:
+        for downstream_id in downstream_ids:
             downstream_node = self._create_direct_execution_node_copy(downstream_id)
             downstream_edge = self.graph._get_input_edges(downstream_id)[0]
             attached_downstream_edges = self._attach_direct_execution_edges(
