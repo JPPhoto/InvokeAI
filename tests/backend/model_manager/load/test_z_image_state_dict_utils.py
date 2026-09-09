@@ -7,7 +7,7 @@ import torch
 
 from invokeai.backend.model_manager.load.model_loaders.z_image import (
     _convert_z_image_gguf_to_diffusers,
-    _split_qkv_sidechannel,
+    _remap_z_image_layer_paths,
 )
 from invokeai.backend.quantization.int8_convrot import extract_int8_convrot_markers
 from tests.backend.model_manager.load.state_dicts.utils import keys_to_mock_state_dict
@@ -80,47 +80,65 @@ def _marker_blob(marker: dict) -> torch.Tensor:
 MARKER = {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 256}
 
 
-class TestTheFusedQkvSplitCarriesQuantizationMetadata:
-    """A quantized fused QKV travels as three keys, and all three have to reach the same three
-    modules. The weight already split; the scale and the marker did not, and were left behind
-    under a module name the model does not have."""
+class TestQkvQuantizationSideChannel:
+    """A scaled-fp8 checkpoint puts a `scale_weight` next to the fused `qkv.weight`.
 
-    def test_a_per_output_channel_scale_splits_with_its_weight(self) -> None:
-        scale = torch.arange(3 * 4, dtype=torch.float32).reshape(3 * 4, 1)
-        pieces = [_split_qkv_sidechannel(scale, "weight_scale", t) for t in ("to_q", "to_k", "to_v")]
-        assert [tuple(p.shape) for p in pieces] == [(4, 1)] * 3
-        assert torch.equal(torch.cat(pieces), scale)
+    Left on `...attention.qkv`, the recovered scale is keyed on a module path the diffusers model
+    does not have, so `attach_fp8_scales` finds nothing and the three split weights stay quantized
+    but *unscaled* — off by 1/weight_scale, with no error anywhere.
+    """
 
-    def test_a_marker_is_copied_whole_to_all_three(self) -> None:
-        """The regression that motivated the suffix check: a 72-byte JSON blob is divisible by
-        three, so a rule based on the tensor's shape cuts it into three fragments of broken JSON."""
-        blob = _marker_blob(MARKER)
-        assert len(blob) % 3 == 0, "the fixture has to reproduce the divisible-by-three trap"
-        for target in ("to_q", "to_k", "to_v"):
-            piece = _split_qkv_sidechannel(blob, "comfy_quant", target)
-            assert torch.equal(piece, blob)
-            assert json.loads(bytes(piece.numpy().tobytes()).decode()) == MARKER
+    def test_per_tensor_scale_reaches_all_three_projections(self):
+        out = _convert_z_image_gguf_to_diffusers(
+            {
+                "blk.attention.qkv.weight": torch.arange(12, dtype=torch.float32).reshape(6, 2),
+                "blk.attention.qkv.scale_weight": torch.tensor(0.25),
+            }
+        )
+        assert not any(".attention.qkv." in k for k in out)
+        for name in ("to_q", "to_k", "to_v"):
+            assert torch.equal(out[f"blk.attention.{name}.scale_weight"], torch.tensor(0.25))
 
-    def test_a_per_tensor_scale_is_copied_rather_than_split(self) -> None:
-        for scale in (torch.tensor(0.5), torch.tensor([0.5])):
-            assert torch.equal(_split_qkv_sidechannel(scale, "weight_scale", "to_k"), scale)
+    def test_per_channel_scale_is_split_like_the_weight(self):
+        out = _convert_z_image_gguf_to_diffusers(
+            {
+                "blk.attention.qkv.weight": torch.arange(12, dtype=torch.float32).reshape(6, 2),
+                "blk.attention.qkv.weight_scale": torch.arange(6, dtype=torch.float32),
+            }
+        )
+        assert torch.equal(out["blk.attention.to_q.weight_scale"], torch.tensor([0.0, 1.0]))
+        assert torch.equal(out["blk.attention.to_k.weight_scale"], torch.tensor([2.0, 3.0]))
+        assert torch.equal(out["blk.attention.to_v.weight_scale"], torch.tensor([4.0, 5.0]))
 
-    def test_weight_scale_and_marker_land_on_the_same_three_modules(self) -> None:
-        prefix = "layers.0.attention"
-        sd = {
-            f"{prefix}.qkv.weight": torch.arange(3 * 4 * 8, dtype=torch.int8).reshape(3 * 4, 8),
-            f"{prefix}.qkv.weight_scale": torch.arange(3 * 4, dtype=torch.float32).reshape(3 * 4, 1),
-            f"{prefix}.qkv.comfy_quant": _marker_blob(MARKER),
-            # `x_embedder.` is what makes the loader run this conversion at all.
-            "x_embedder.weight": torch.zeros(2, 2),
-        }
-        out = _convert_z_image_gguf_to_diffusers(sd)
+    def test_marker_blob_is_copied_not_split(self):
+        # `.comfy_quant` is a 1-D JSON byte string describing the layer, not a per-channel vector.
+        blob = torch.frombuffer(b'{"format":"float8_e4m3fn"}', dtype=torch.uint8).clone()
+        out = _convert_z_image_gguf_to_diffusers(
+            {
+                "blk.attention.qkv.weight": torch.arange(12, dtype=torch.float32).reshape(6, 2),
+                "blk.attention.qkv.comfy_quant": blob,
+            }
+        )
+        for name in ("to_q", "to_k", "to_v"):
+            assert torch.equal(out[f"blk.attention.{name}.comfy_quant"], blob)
 
-        for target in ("to_q", "to_k", "to_v"):
-            assert f"{prefix}.{target}.weight" in out
-            assert f"{prefix}.{target}.weight_scale" in out
-            assert f"{prefix}.{target}.comfy_quant" in out
-        assert not any(".qkv." in k for k in out), "the fused keys must not survive"
+    def test_unknown_suffix_is_left_alone(self):
+        out = _convert_z_image_gguf_to_diffusers(
+            {
+                "blk.attention.qkv.weight": torch.arange(12, dtype=torch.float32).reshape(6, 2),
+                "blk.attention.qkv.something_else": torch.tensor(1.0),
+            }
+        )
+        assert "blk.attention.qkv.something_else" in out
+
+    def test_undivisible_scale_is_rejected_rather_than_mis_split(self):
+        with pytest.raises(ValueError, match="Cannot split fused QKV quantization data"):
+            _convert_z_image_gguf_to_diffusers(
+                {
+                    "blk.attention.qkv.weight": torch.arange(12, dtype=torch.float32).reshape(6, 2),
+                    "blk.attention.qkv.weight_scale": torch.arange(4, dtype=torch.float32),
+                }
+            )
 
     def test_the_markers_are_readable_after_the_conversion(self) -> None:
         """Why Z-Image reads them after converting rather than before: unlike Krea-2's converter,
@@ -136,7 +154,21 @@ class TestTheFusedQkvSplitCarriesQuantizationMetadata:
         assert set(markers) == {f"{prefix}.to_q", f"{prefix}.to_k", f"{prefix}.to_v"}
         assert all(m == MARKER for m in markers.values())
 
-    def test_a_qkv_weight_that_does_not_divide_by_three_is_refused(self) -> None:
-        sd = {"layers.0.attention.qkv.weight": torch.zeros(7, 8), "x_embedder.weight": torch.zeros(2, 2)}
-        with pytest.raises(ValueError, match="not divisible by 3"):
-            _convert_z_image_gguf_to_diffusers(sd)
+
+class TestMetadataPathRemap:
+    """`_quantization_metadata` names layers in the checkpoint's scheme; the scales are recovered
+    after the rename, so the per-layer hints have to follow the same route."""
+
+    def test_renamed_layers_map_one_to_one(self):
+        mapping = _remap_z_image_layer_paths(["x_embedder", "final_layer.linear", "layers.0.attention.out"])
+        assert mapping["x_embedder"] == ["all_x_embedder.2-1"]
+        assert mapping["final_layer.linear"] == ["all_final_layer.2-1.linear"]
+        assert mapping["layers.0.attention.out"] == ["layers.0.attention.to_out.0"]
+
+    def test_fused_qkv_maps_to_all_three_projections(self):
+        mapping = _remap_z_image_layer_paths(["layers.0.attention.qkv"])
+        assert mapping["layers.0.attention.qkv"] == [
+            "layers.0.attention.to_q",
+            "layers.0.attention.to_k",
+            "layers.0.attention.to_v",
+        ]

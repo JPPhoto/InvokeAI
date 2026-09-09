@@ -41,6 +41,8 @@ def test_single_file_loader_constructs_and_materializes_model(monkeypatch, tmp_p
     ram_cache = SimpleNamespace(make_room=MagicMock())
     loader = object.__new__(Krea2CheckpointModel)
     loader._ram_cache = ram_cache
+    # ModelLoader.__init__ always sets a logger; this test bypasses __init__, so supply one.
+    loader._logger = MagicMock()
     loader._apply_fp8_layerwise_casting = lambda model, _config, _submodel: model
 
     monkeypatch.setattr(diffusers, "Krea2Transformer2DModel", _TinyKrea2Transformer, raising=False)
@@ -103,6 +105,7 @@ def test_single_file_loader_decodes_an_int8_convrot_checkpoint(monkeypatch, tmp_
     )
     loader = object.__new__(Krea2CheckpointModel)
     loader._ram_cache = SimpleNamespace(make_room=MagicMock())
+    loader._logger = MagicMock()
     loader._apply_fp8_layerwise_casting = lambda model, _config, _submodel: model
 
     monkeypatch.setattr(diffusers, "Krea2Transformer2DModel", _TinyInt8Krea2Transformer, raising=False)
@@ -118,6 +121,12 @@ def test_single_file_loader_decodes_an_int8_convrot_checkpoint(monkeypatch, tmp_
 
     model = loader._load_from_singlefile(config)
 
+    # This is also what pins the one-or-the-other split in the loader: the fixture's int8 weight
+    # carries a `.weight_scale`, which is exactly what an fp8 scaled layer looks like from outside.
+    # Route it down the fp8 path and it is scaled but never un-rotated -- `load_state_dict` then
+    # refuses the still-int8 tensor, and failing that the correlation below does. (Verified by
+    # forcing the branch: the test fails.)
+    #
     # The weight stays quantized: that is the whole point of the swap, and it is what keeps a
     # 12 GB checkpoint at 12 GB instead of the ~24 GB a dense decode would produce.
     assert isinstance(model.proj, Int8ConvrotLinear)
