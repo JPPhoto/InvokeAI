@@ -1,12 +1,9 @@
 """Scheduler behavior and overhead for trivial loop bodies.
 
-The two overhead tests assert wall-clock budgets and per-item ratios, so they are marked `slow`
-and excluded from the default run: once CI spreads the suite over xdist workers sharing the
-runner's cores, those numbers measure the runner. Run them with
-`pytest -m slow tests/app/services/shared/test_for_scheduler_performance.py`.
-
-The completion-state tests below them are not benchmarks -- they assert `GraphExecutionState`
-invariants in milliseconds and keep running by default.
+`test_loop_scheduler_overhead_is_linear` measures CPU time, not wall clock: it compares per-item
+cost at two sizes, and CPU time is not inflated when xdist workers share the runner's cores. The
+absolute budget below it is machine-dependent and stays `slow`, as does the sibling
+`test_graph_execution_performance.py`. The completion-state tests are not benchmarks at all.
 """
 
 import time
@@ -36,21 +33,21 @@ def _run_trivial_loop(loop_type: str, count: int) -> float:
         graph.add_edge(create_edge("body", "value", "collect", "item"))
     state = GraphExecutionState(graph=graph)
     context = Mock()
-    started = time.perf_counter()
+    started = time.process_time()
     while (node := state.next()) is not None:
         state.complete(node.id, node.invoke(context))
     assert state.is_complete()
-    return time.perf_counter() - started
+    return time.process_time() - started
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("loop_type", ["iterate", "for"])
 def test_loop_scheduler_overhead_is_linear(loop_type: str) -> None:
     timings = {count: [] for count in (300, 1200)}
     for _ in range(3):
         for count in (1200, 300):
-            # perf_counter, not process_time: the latter ticks at ~15ms on Windows, so a 300-item
-            # loop measures as 0.0 and the ratio below is compared against zero.
+            # CPU time, so a worker losing the core to a sibling does not read as scheduler cost.
+            # Both sizes take hundreds of milliseconds, well clear of the ~15ms clock granularity
+            # that made this measurement unusable when the loops were cheaper.
             timings[count].append(_run_trivial_loop(loop_type, count) / count)
     # Best-of-N is the noise-tolerant estimator for a lower bound: shared CI hosts inflate any
     # single sample (a GC pause or a scheduler hiccup), and the median of three still fell over

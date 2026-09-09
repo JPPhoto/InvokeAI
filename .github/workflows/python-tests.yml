@@ -109,4 +109,4 @@ jobs:
         # `logical`, not `auto`: xdist's `auto` asks psutil for *physical* cores, which is half
         # the vCPUs a standard runner exposes. Much of the suite waits on timers and polls, so
         # one worker per vCPU is the right level.
-        run: uv run --no-sync pytest -n logical
+        run: uv run --no-sync pytest -n logical --max-worker-restart=0

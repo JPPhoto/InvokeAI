@@ -17,6 +17,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     extract_comfy_quant_hints,
     extract_fp8_scaled_layers,
 )
+from tests.backend.model_manager.load.state_dicts.utils import token_extents
 from tests.backend.model_manager.load.state_dicts.z_image_transformer_scaled_fp8_keys import (
     state_dict_keys as scaled_keys,
 )
@@ -24,22 +25,13 @@ from tests.backend.model_manager.load.state_dicts.z_image_transformer_scaled_fp8
 _DTYPES = {"F8_E4M3": FP8_DTYPE, "F32": torch.float32, "BF16": torch.bfloat16}
 
 
-def _capped(shape: list[int]) -> list[int]:
-    """Token extents for a captured layout.
-
-    Only key names, dtypes, values and rank are asserted here, never a size, so the real extents
-    buy nothing and cost GBs -- more than parallel CI test processes can hold at once.
-    """
-    return [min(extent, 4) for extent in shape]
-
-
 def _mock_state_dict(scale_value: float = 4.0) -> dict[str, torch.Tensor]:
     sd: dict[str, torch.Tensor] = {}
     for key, (shape, dtype) in scaled_keys.items():
         if key.endswith(".scale_weight"):
-            sd[key] = torch.full(_capped(shape), scale_value, dtype=torch.float32)
+            sd[key] = torch.full(token_extents(shape), scale_value, dtype=torch.float32)
         else:
-            sd[key] = torch.ones(_capped(shape), dtype=_DTYPES[dtype])
+            sd[key] = torch.ones(token_extents(shape), dtype=_DTYPES[dtype])
     return sd
 
 
