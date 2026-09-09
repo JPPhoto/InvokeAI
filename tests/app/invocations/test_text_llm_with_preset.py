@@ -15,17 +15,18 @@ from invokeai.app.invocations.fields import SystemPromptField
 from invokeai.app.invocations.model import ModelIdentifierField
 from invokeai.app.invocations.text_llm import TextLLMInvocation, TextLLMWithPresetInvocation
 from invokeai.app.services.system_prompt_records.system_prompt_records_common import (
+    EXPAND_PROMPT_MAX_TOKENS_DEFAULT,
     SystemPromptNotFoundError,
 )
 
 
-def _make_invocation(prompt_id: str = "test-id") -> TextLLMWithPresetInvocation:
+def _make_invocation(prompt_id: str = "test-id", max_tokens: int | None = 50) -> TextLLMWithPresetInvocation:
     return TextLLMWithPresetInvocation(
         id="test-node",
         prompt="a cat",
         system_prompt=SystemPromptField(system_prompt_id=prompt_id),
         text_llm_model=ModelIdentifierField(key="dummy", hash="x", name="dummy", base="any", type="text_llm"),
-        max_tokens=50,
+        max_tokens=max_tokens,
         seed=123,
     )
 
@@ -53,6 +54,7 @@ def test_plain_text_llm_node_passes_seed_to_llm() -> None:
 def _make_context(
     prompt_record_content: str | None,
     *,
+    record_max_tokens: int | None = None,
     multiuser: bool = False,
     record_user_id: str = "system",
     record_is_public: bool = True,
@@ -70,6 +72,7 @@ def _make_context(
     else:
         record = MagicMock()
         record.content = prompt_record_content
+        record.max_tokens = record_max_tokens
         record.user_id = record_user_id
         record.is_public = record_is_public
         context._services.system_prompt_records.get.return_value = record
@@ -191,3 +194,36 @@ def test_preset_node_skips_the_ownership_check_in_single_user_mode() -> None:
 
     context._services.users.get.assert_not_called()
     assert mock_run.call_count == 1
+
+
+def test_preset_node_uses_the_presets_own_cap_when_the_field_is_unset() -> None:
+    # The whole point of a per-prompt cap: a structured preset that needs 500 tokens must not be
+    # truncated at the shared default just because the workflow left the field alone.
+    inv = _make_invocation(max_tokens=None)
+    context = _make_context(prompt_record_content="structured instruction", record_max_tokens=500)
+
+    with patch("invokeai.app.invocations.text_llm._run_text_llm", return_value="expanded") as mock_run:
+        inv.invoke(context)
+
+    assert mock_run.call_args.kwargs["max_tokens"] == 500
+
+
+def test_preset_node_falls_back_to_the_default_when_neither_names_a_cap() -> None:
+    inv = _make_invocation(max_tokens=None)
+    context = _make_context(prompt_record_content="instruction", record_max_tokens=None)
+
+    with patch("invokeai.app.invocations.text_llm._run_text_llm", return_value="expanded") as mock_run:
+        inv.invoke(context)
+
+    assert mock_run.call_args.kwargs["max_tokens"] == EXPAND_PROMPT_MAX_TOKENS_DEFAULT
+
+
+def test_an_explicit_field_value_overrides_the_presets_cap() -> None:
+    # An author who typed a number meant it, even when the preset carries one of its own.
+    inv = _make_invocation(max_tokens=50)
+    context = _make_context(prompt_record_content="instruction", record_max_tokens=500)
+
+    with patch("invokeai.app.invocations.text_llm._run_text_llm", return_value="expanded") as mock_run:
+        inv.invoke(context)
+
+    assert mock_run.call_args.kwargs["max_tokens"] == 50

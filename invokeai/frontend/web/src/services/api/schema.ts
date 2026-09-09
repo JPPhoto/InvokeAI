@@ -11376,6 +11376,7 @@ export type components = {
             model_key: string;
             /**
              * Max Tokens
+             * @description Cap on the tokens the LLM may emit. Clients that expand with a stored system prompt send that prompt's own `max_tokens` here; omitting it uses the default.
              * @default 300
              */
             max_tokens?: number;
@@ -39692,6 +39693,11 @@ export type components = {
              * @description Whether the prompt is shared with all users.
              */
             is_public?: boolean | null;
+            /**
+             * Max Tokens
+             * @description The new output-token cap. Unlike the other fields, an explicitly supplied null is a change -- it clears the cap back to the default; omitting the field leaves it alone.
+             */
+            max_tokens?: number | null;
         };
         /**
          * SystemPromptField
@@ -39716,6 +39722,11 @@ export type components = {
              * @description The system prompt content.
              */
             content: string;
+            /**
+             * Max Tokens
+             * @description Cap on the tokens the LLM may emit when expanding with this prompt. Null means use the default of 300.
+             */
+            max_tokens?: number | null;
             /**
              * Id
              * @description The system prompt ID.
@@ -39756,6 +39767,11 @@ export type components = {
              * @description The system prompt content.
              */
             content: string;
+            /**
+             * Max Tokens
+             * @description Cap on the tokens the LLM may emit when expanding with this prompt. Null means use the default of 300.
+             */
+            max_tokens?: number | null;
         };
         /** T2IAdapterField */
         T2IAdapterField: {
@@ -40983,10 +40999,10 @@ export type components = {
             text_llm_model?: components["schemas"]["ModelIdentifierField"] | null;
             /**
              * Max Tokens
-             * @description Maximum number of tokens to generate.
-             * @default 300
+             * @description Maximum number of tokens to generate. Leave unset to use the preset's own cap, or 300 if it does not set one.
+             * @default null
              */
-            max_tokens?: number;
+            max_tokens?: number | null;
             /**
              * Seed
              * @description Seed for random number generation
