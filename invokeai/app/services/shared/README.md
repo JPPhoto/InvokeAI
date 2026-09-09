@@ -8,10 +8,10 @@ Provide a typed, acyclic workflow model (**Graph**) plus a runtime scheduler (**
 iterator patterns, tracks readiness via indegree (the number of incoming edges to a node in the directed graph), and
 executes nodes from class-grouped ready queues. In normal execution, runtime expansion happens in a separate execution graph
 instead of mutating the source graph. Ordinary static DAGs and legacy-shaped `If` graphs use the opaque `ExecutionPlan`
-and deterministic `ExecutionScheduler` in `execution_engine/scheduler.py`. The bounded fresh flat `If` shape records
-opaque, frame-local activation dependencies privately; other fresh `If` shapes use the dedicated
-`_IfActivationController` as the fallback runtime dependency owner. Legacy skipped-state projection remains only for old
-snapshots. Fresh `If` materialization prepares the condition boundary first, resolves the activation token, and
+and deterministic `ExecutionScheduler` in `execution_engine/scheduler.py`. Fresh graphs with one ordinary-node `If`
+compile opaque, frame-local activation dependencies in `GraphExecutionState`; nested, mixed, loop-containing,
+saved-workflow, and legacy shapes use the dedicated `_IfActivationController` fallback. Legacy skipped-state projection
+remains only for old snapshots. Fresh `If` materialization prepares the condition boundary first, resolves the activation token, and
 attaches only the selected branch input.
 Unselected branch nodes are never prepared, skipped, or added to fresh execution history. Both scheduler adapters
 consume these dependency decisions without pruning execution edges or calling a type-specific branch scheduler.
@@ -237,8 +237,9 @@ port against the producing invocation's declared activation fields and persists 
 rehydration, every activation token is bound to a currently prepared owner and its derived execution reference; its
 declared port, value, canonical token id, mapping key, and known frame fields must match. Unknown extra frame metadata
 remains forward-compatible.
-For a fresh generic `If`, the bounded flat shape records opaque, frame-local activation-dependency records privately
-on each branch-local plan node; other fresh shapes use `_IfActivationController` for the same records. The controller
+For a fresh generic `If` graph with one ordinary-node `If`, `GraphExecutionState` compiles opaque, frame-local
+activation-dependency records privately on each branch-local plan node; nested, mixed, loop-containing,
+saved-workflow, and legacy shapes use `_IfActivationController` for the same records. The controller
 remains the fallback runtime dependency owner, and the schedulers no longer call a legacy compiler. Fresh materialization prepares the condition boundary, resolves the activation token,
 and attaches only the selected branch input; rejected branch sources remain unprepared. `_GenericGraphSchedulerAdapter`
 consumes those records through the opaque plan: its readiness
@@ -412,13 +413,13 @@ Workflow-call note:
   edges. When matching prepared parents for a downstream exec node, skipped prepared exec nodes are ignored and cannot
   be selected as live inputs.
 - `_IfActivationController` Owns fallback runtime `If` admission and compiles opaque, frame-local activation dependency
-  records for prepared nodes. The bounded fresh flat `If` shape records those dependencies privately in graph state.
-  Fresh admission leaves rejected branch sources unprepared; legacy skipped-state projections remain loadable.
-  Branch-membership analysis remains internal to the controller.
+  records for unsupported fresh shapes and legacy prepared nodes. Fresh ordinary-node single-`If` graphs compile those
+  dependencies in graph state. Fresh admission leaves rejected branch sources unprepared; legacy skipped-state
+  projections remain loadable.
 - `_GenericGraphSchedulerAdapter` Projects the generic `ExecutionPlan`/`ExecutionScheduler` into the existing state
   fields for ordinary static DAGs and legacy-shaped `If` graphs; the generic scheduler owns opaque readiness,
   intentional discards, indegree transitions, deterministic ordering, claimed work, and completion. The adapter registers
-  activation dependencies from bounded flat graph state or the fallback controller and checks private gate state plus
+  activation dependencies from graph-state compilation or the fallback controller and checks private gate state plus
   persisted activation tokens. Fresh `If`
   branch nodes are admitted before materialization; legacy prepared nodes may still be discarded for compatibility.
   `If` scheduling does not call a type-specific branch scheduler, prune, or delete execution edges.

@@ -157,15 +157,16 @@ valid. A loaded terminal legacy state may retain its empty in-memory ledger for 
 `dump_execution_state()` upgrades missing loop buckets in the versioned snapshot.
 
 `IfInvocation` now declares the same seam for branch activation: it emits one frame-scoped activation token for the
-selected branch, and the graph state validates and persists it after invocation. The bounded fresh flat `If` shape
-records opaque, frame-local activation dependencies privately; other fresh shapes use the dedicated
-`_IfActivationController` as their runtime dependency owner. Legacy
+selected branch, and the graph state validates and persists it after invocation. Fresh graphs with one ordinary-node
+`If` compile opaque, frame-local activation dependencies in graph state; nested, mixed, loop-containing,
+saved-workflow, and legacy shapes use the dedicated `_IfActivationController` fallback. Legacy
 skipped-state projection remains only for old snapshots. Fresh materialization prepares the condition boundary,
 resolves the activation token, and attaches only the selected branch input; unselected branch nodes remain unprepared.
 The generic and compatibility adapters consume the same decisions and append-only execution edges; no type-specific
 branch scheduler prunes edges or propagates skips. Legacy skipped-state metadata remains only for snapshots that already
 contain the old projection. `apply()` replaces the activation token by stable identity, and activation effects are
-excluded from stream handling. The controller still derives branch membership from the current author graph; author-time
+excluded from stream handling. Graph state derives branch membership for the supported fresh shape; the fallback
+controller retains it for unsupported and legacy shapes. Author-time
 activation
 ports and literal successor IDs remain absent, while unsupported loop shapes and saved-workflow control flow remain on
 their compatibility paths until differential coverage proves their generic replacements.
