@@ -21,6 +21,7 @@ export {
   clearDeletedVideoMedia,
   cloneVideoWidgetValues,
   createVideoSourceClip,
+  getDefaultReferenceConditioning,
   isImageWithDims,
   isVideoAspectRatioId,
   isVideoReferenceItem,

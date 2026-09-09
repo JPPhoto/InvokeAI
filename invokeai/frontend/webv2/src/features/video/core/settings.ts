@@ -534,6 +534,7 @@ export const createVideoSourceClip = (item: {
   durationSeconds: number;
   fps?: number;
   height: number;
+  mediaOrigin?: string;
   name: string;
   width: number;
 }): VideoSourceClip => {
@@ -545,6 +546,7 @@ export const createVideoSourceClip = (item: {
     endFrame: Math.max(1, numFrames - 2),
     fps,
     height: item.height,
+    ...(item.mediaOrigin ? { mediaOrigin: item.mediaOrigin } : {}),
     numFrames,
     startFrame: 0,
     video_name: item.name,
@@ -556,15 +558,22 @@ export const createVideoSourceClip = (item: {
  * The conditioning a video reference starts on when it is added from the gallery or an
  * upload.
  *
+ * NOT used for the reference-extend anchor: that role requires visual rows, so it takes
+ * `video_audio` regardless of the clip and promotes an adopted audio-only entry via
+ * {@link anchorReferenceConditioning}.
+ *
  * Audio uploads are stored as videos: the server wraps an uploaded audio file into a
- * rendered-waveform clip at ingest and stamps `media_origin: audio_upload` on it. Those
- * frames are a picture of the sound rather than footage anyone means to condition on, so
+ * rendered-waveform clip at ingest and marks it `audio_upload`. Those frames are a picture
+ * of the sound rather than footage anyone means to condition on — and conditioning on them
+ * is not free, it costs a video reference slot and roughly doubles the packed sequence — so
  * such a reference defaults to its soundtrack alone. Everything else keeps video + audio.
  * This is only the starting value — the card's selector still offers all three.
+ *
+ * Takes the marker rather than a metadata bag: it rides on the gallery item and on
+ * `VideoSourceClip`, so no caller needs a second request to decide this.
  */
-export const getDefaultReferenceConditioning = (
-  metadata: Record<string, unknown> | null | undefined
-): VideoReferenceConditioning => (metadata?.media_origin === 'audio_upload' ? 'audio' : 'video_audio');
+export const getDefaultReferenceConditioning = (mediaOrigin: string | null | undefined): VideoReferenceConditioning =>
+  mediaOrigin === 'audio_upload' ? 'audio' : 'video_audio';
 
 /**
  * Whether a video reference can serve as the reference-extend ANCHOR.

@@ -32,6 +32,8 @@ export const MOCK_BACKEND_PROFILE_COUNTS = Object.freeze({
 
 export const MOCK_BACKEND_FIXED_EPOCH = '2026-01-15T12:00:00.000Z';
 export const MOCK_BACKEND_REPRESENTATIVE_VIDEO_NAME = 'fixture-video-001.mp4';
+/** The wrapped-audio upload fixture: a waveform video marked `media_origin: audio_upload`. */
+export const MOCK_BACKEND_WRAPPED_AUDIO_VIDEO_NAME = 'fixture-video-audio.mp4';
 
 const FIXED_EPOCH_MS = Date.parse(MOCK_BACKEND_FIXED_EPOCH);
 const range = (length, build) => Array.from({ length }, (_, index) => build(index));
@@ -276,6 +278,27 @@ const createVideos = () => [
     video_origin: 'internal',
     video_url: '/api/v1/videos/i/fixture-video-old.mp4/full',
     width: 64,
+    workflow: null,
+  },
+  {
+    // An uploaded audio file, as the server stores one: a waveform video carrying
+    // `media_origin: audio_upload`. Video references made from it start on "Audio only".
+    board_id: null,
+    created_at: timestampAt(3),
+    duration: 1,
+    fps: 24,
+    graph: null,
+    height: 360,
+    is_intermediate: false,
+    metadata: { media_origin: 'audio_upload' },
+    owner_user_id: 'fixture-user',
+    starred: false,
+    thumbnail_url: `/api/v1/videos/i/${MOCK_BACKEND_WRAPPED_AUDIO_VIDEO_NAME}/thumbnail`,
+    video_category: 'user',
+    video_name: MOCK_BACKEND_WRAPPED_AUDIO_VIDEO_NAME,
+    video_origin: 'external',
+    video_url: `/api/v1/videos/i/${MOCK_BACKEND_WRAPPED_AUDIO_VIDEO_NAME}/full`,
+    width: 640,
     workflow: null,
   },
 ];

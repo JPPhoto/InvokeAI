@@ -15,6 +15,7 @@ from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.shared.pagination import OffsetPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
+from invokeai.app.services.video_records.video_records_common import MEDIA_ORIGIN_JSON_EXPR, coerce_media_origin
 from invokeai.app.services.virtual_boards.virtual_boards_common import VirtualSubBoardDTO
 
 
@@ -451,7 +452,7 @@ class SqliteGalleryService(GalleryServiceABC):
 
         Returns `(query_with_select, params, count_query)`. Both halves emit the same columns so
         UNION ALL is shape-compatible: `kind`, `name`, `width`, `height`, `category`, `starred`,
-        `is_intermediate`, `board_id`, `created_at`, `duration`, `fps`.
+        `is_intermediate`, `board_id`, `created_at`, `duration`, `fps`, `media_origin`.
 
         `names_only=True` selects only `kind`, `name`, `starred`, `created_at` (the minimum needed
         for ordering + the counts result).
@@ -464,6 +465,7 @@ class SqliteGalleryService(GalleryServiceABC):
             origin_col = "image_origin"
             duration_expr = "NULL"
             fps_expr = "NULL"
+            media_origin_expr = "NULL"
         elif kind == "video":
             base_table = "videos"
             join_table = "board_videos"
@@ -472,6 +474,7 @@ class SqliteGalleryService(GalleryServiceABC):
             origin_col = "video_origin"
             duration_expr = f"{base_table}.duration"
             fps_expr = f"{base_table}.fps"
+            media_origin_expr = MEDIA_ORIGIN_JSON_EXPR
         else:
             raise ValueError(f"Unknown kind: {kind}")
 
@@ -512,7 +515,8 @@ class SqliteGalleryService(GalleryServiceABC):
                 f"{board_id_expr} AS board_id, "
                 f"{base_table}.created_at AS created_at, "
                 f"{duration_expr} AS duration, "
-                f"{fps_expr} AS fps"
+                f"{fps_expr} AS fps, "
+                f"{media_origin_expr} AS media_origin"
             )
 
         conditions = ""
@@ -584,11 +588,13 @@ class SqliteGalleryService(GalleryServiceABC):
             thumbnail_url = urls.get_image_url(name, thumbnail=True)
             duration = None
             fps = None
+            media_origin = None
         else:
             full_url = urls.get_video_url(name)
             thumbnail_url = urls.get_video_url(name, thumbnail=True)
             duration = row["duration"]
             fps = row["fps"]
+            media_origin = coerce_media_origin(row["media_origin"])
         return GalleryItem(
             kind=kind,
             name=name,
@@ -603,4 +609,5 @@ class SqliteGalleryService(GalleryServiceABC):
             created_at=row["created_at"],
             duration=duration,
             fps=fps,
+            media_origin=media_origin,
         )

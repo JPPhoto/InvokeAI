@@ -247,6 +247,23 @@ describe('createVideoSourceClip', () => {
     });
   });
 
+  it('carries the media-origin marker so a derived reference needs no metadata fetch', () => {
+    const wrapped = createVideoSourceClip({
+      durationSeconds: 5,
+      fps: 24,
+      height: 360,
+      mediaOrigin: 'audio_upload',
+      name: 'song.mp4',
+      width: 640,
+    });
+
+    expect(wrapped.mediaOrigin).toBe('audio_upload');
+    // An unmarked clip stays clean rather than carrying an explicit undefined.
+    expect(
+      'mediaOrigin' in createVideoSourceClip({ durationSeconds: 5, fps: 24, height: 360, name: 'c.mp4', width: 640 })
+    ).toBe(false);
+  });
+
   it('falls back to 16 fps when the probe recorded none, mirroring extract_video_range', () => {
     const clip = createVideoSourceClip({ durationSeconds: 2, height: 480, name: 'clip.mp4', width: 832 });
 
@@ -271,18 +288,16 @@ describe('createVideoSourceClip', () => {
 
 describe('getDefaultReferenceConditioning', () => {
   it('starts a wrapped audio upload on its soundtrack alone', () => {
-    expect(getDefaultReferenceConditioning({ media_origin: 'audio_upload' })).toBe('audio');
+    expect(getDefaultReferenceConditioning('audio_upload')).toBe('audio');
   });
 
   it('keeps video + audio for ordinary videos', () => {
-    expect(getDefaultReferenceConditioning({ generation_mode: 'minimax_h3_ref2v' })).toBe('video_audio');
-    expect(getDefaultReferenceConditioning({ media_origin: 'something_else' })).toBe('video_audio');
+    expect(getDefaultReferenceConditioning('some_other_origin')).toBe('video_audio');
   });
 
-  it('keeps video + audio when there is no metadata to read', () => {
+  it('keeps video + audio when the video carries no marker', () => {
     expect(getDefaultReferenceConditioning(null)).toBe('video_audio');
     expect(getDefaultReferenceConditioning(undefined)).toBe('video_audio');
-    expect(getDefaultReferenceConditioning({})).toBe('video_audio');
   });
 });
 
@@ -737,6 +752,21 @@ describe('reference-extend linkage', () => {
   const source24 = { ...longSource, fps: 24 };
   // The panel's default; every choice is on the 17n+5 grid.
   const FRAMES = 141;
+
+  it('anchors on video + audio even for a wrapped audio clip -- the role needs visual rows', () => {
+    const [ordinary] = applyReferenceExtendSourceVideo([], source24, 3, FRAMES);
+
+    expect(ordinary).toMatchObject({ conditioning: 'video_audio', fromSourceVideo: true });
+
+    // The marker now rides on the clip, so deriving the anchor's conditioning from it is an
+    // easy mistake to make. It would be wrong: the anchor is what the generated frames
+    // continue from, an 'audio' reference emits no visual rows at all, and the all-audio
+    // validation does not fire when other references are visual -- so the seam would go
+    // silently discontinuous. `anchorReferenceConditioning` promotes in the other direction.
+    const [wrapped] = applyReferenceExtendSourceVideo([], { ...source24, mediaOrigin: 'audio_upload' }, 3, FRAMES);
+
+    expect(wrapped).toMatchObject({ conditioning: 'video_audio', fromSourceVideo: true });
+  });
 
   it('derives the tail trim: the window ending at the cutpoint, clamped at 0', () => {
     expect(deriveReferenceExtendClip(source24, FRAMES)).toMatchObject({ endFrame: 400, startFrame: 260 });

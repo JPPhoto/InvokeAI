@@ -388,6 +388,7 @@ const SingleItemMenuItems = ({
         durationSeconds: item.durationSeconds,
         fps: item.fps,
         height: item.height,
+        mediaOrigin: item.mediaOrigin,
         name: item.name,
         width: item.width,
       }),

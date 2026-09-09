@@ -101,6 +101,7 @@ export const VideoSourceClipField = memo(
                 durationSeconds: item.durationSeconds,
                 fps: item.fps,
                 height: item.height,
+                mediaOrigin: item.mediaOrigin,
                 name: item.name,
                 width: item.width,
               })
@@ -153,6 +154,7 @@ export const VideoSourceClipField = memo(
               durationSeconds: uploaded.durationSeconds,
               fps: uploaded.fps,
               height: uploaded.height,
+              mediaOrigin: uploaded.mediaOrigin,
               name: uploaded.name,
               width: uploaded.width,
             })
