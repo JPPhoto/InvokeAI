@@ -4729,32 +4729,80 @@ class GraphExecutionState(BaseModel):
             self._source_graph_flat = self.graph.nx_graph_flat()
         return self._source_graph_flat
 
+    def _get_fresh_if_nodes(self) -> tuple[IfInvocation, ...]:
+        source_graph = self._get_source_graph_flat()
+        source_order = {node_id: index for index, node_id in enumerate(nx.topological_sort(source_graph))}
+        return tuple(
+            sorted(
+                (node for node in self.graph.nodes.values() if isinstance(node, IfInvocation)),
+                key=lambda node: (source_order.get(node.id, len(source_order)), node.id),
+            )
+        )
+
     def _can_use_fresh_flat_if_activation(self) -> bool:
-        """Admit fresh single-If dependency compilation for ordinary graph nodes."""
+        """Admit fresh single-If or bounded nested-If dependency compilation."""
 
         if self._legacy_snapshot_loaded:
             return False
 
-        if_nodes = [node for node in self.graph.nodes.values() if isinstance(node, IfInvocation)]
+        forbidden_nodes = (
+            CallSavedWorkflowInvocation,
+            ForInvocation,
+            ForReturnInvocation,
+            IterateInvocation,
+            CollectInvocation,
+        )
+        if any(isinstance(node, forbidden_nodes) for node in self.graph.nodes.values()):
+            return False
+
+        try:
+            source_graph = self._get_source_graph_flat()
+            if not nx.is_directed_acyclic_graph(source_graph):
+                return False
+            if_nodes = self._get_fresh_if_nodes()
+        except nx.NetworkXUnfeasible:
+            return False
+
         if len(if_nodes) != 1:
-            return False
-        if_node = if_nodes[0]
-        if any(
-            isinstance(
-                node,
-                (
-                    IfInvocation,
-                    CallSavedWorkflowInvocation,
-                    ForInvocation,
-                    ForReturnInvocation,
-                    IterateInvocation,
-                    CollectInvocation,
-                ),
-            )
-            for node in self.graph.nodes.values()
-            if node is not if_node
-        ):
-            return False
+            if len(if_nodes) != 2:
+                return False
+
+            if any(edge.type != "default" for edge in self.graph.edges):
+                return False
+
+            if_node_ids = {node.id for node in if_nodes}
+            nested_edges = [
+                edge
+                for edge in self.graph.edges
+                if edge.source.node_id in if_node_ids and edge.destination.node_id in if_node_ids
+            ]
+            if len(nested_edges) != 1:
+                return False
+
+            nested_edge = nested_edges[0]
+            if nested_edge.source.field != "value" or nested_edge.destination.field not in {
+                "true_input",
+                "false_input",
+            }:
+                return False
+
+            inner_if_id = nested_edge.source.node_id
+            if any(edge.source.node_id == inner_if_id and edge != nested_edge for edge in self.graph.edges):
+                return False
+
+            outer_if_id = nested_edge.destination.node_id
+            for if_node in if_nodes:
+                for field in ("condition", "true_input", "false_input"):
+                    input_edges = self.graph._get_input_edges(if_node.id, field)
+                    if len(input_edges) != 1:
+                        return False
+                    for edge in input_edges:
+                        if edge.source.node_id in if_node_ids and edge != nested_edge:
+                            return False
+                        if edge == nested_edge and (
+                            if_node.id != outer_if_id or field != nested_edge.destination.field
+                        ):
+                            return False
 
         return True
 
@@ -4795,9 +4843,9 @@ class GraphExecutionState(BaseModel):
         if not self._can_use_fresh_flat_if_activation():
             return self._if_activation_controller().get_source_dependencies(source_node_id, iteration_path)
 
-        if_node = next(node for node in self.graph.nodes.values() if isinstance(node, IfInvocation))
         dependencies = tuple(
             ActivationDependency(owner_id=if_node.id, branch=branch_field, frame=iteration_path)
+            for if_node in self._get_fresh_if_nodes()
             for branch_field in ("true_input", "false_input")
             if source_node_id in self._get_fresh_if_branch_sources(if_node.id, branch_field)
         )
@@ -4809,7 +4857,12 @@ class GraphExecutionState(BaseModel):
         if dependencies is not None:
             return dependencies
         source_node_id = self._prepared_registry().get_source_node_id(exec_node_id)
-        dependencies = self._get_source_activation_dependencies(source_node_id, self._get_iteration_path(exec_node_id))
+        if any(isinstance(node, IfInvocation) for node in self.graph.nodes.values()):
+            dependencies = self._get_source_activation_dependencies(
+                source_node_id, self._get_iteration_path(exec_node_id)
+            )
+        else:
+            dependencies = ()
         self._tx_set_mapping(self._if_activation_dependencies_by_exec, exec_node_id, dependencies)
         return dependencies
 
@@ -4838,7 +4891,7 @@ class GraphExecutionState(BaseModel):
             return False
         return all(
             self._get_source_activation_dependencies(source_node_id, frame)
-            and all(
+            and any(
                 self._is_activation_dependency_rejected(frame_dependency)
                 for frame_dependency in self._get_source_activation_dependencies(source_node_id, frame)
             )

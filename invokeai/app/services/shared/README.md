@@ -8,11 +8,12 @@ Provide a typed, acyclic workflow model (**Graph**) plus a runtime scheduler (**
 iterator patterns, tracks readiness via indegree (the number of incoming edges to a node in the directed graph), and
 executes nodes from class-grouped ready queues. In normal execution, runtime expansion happens in a separate execution graph
 instead of mutating the source graph. Ordinary static DAGs and legacy-shaped `If` graphs use the opaque `ExecutionPlan`
-and deterministic `ExecutionScheduler` in `execution_engine/scheduler.py`. Fresh graphs with one ordinary-node `If`
-compile opaque, frame-local activation dependencies in `GraphExecutionState`; nested, mixed, loop-containing,
-saved-workflow, and legacy shapes use the dedicated `_IfActivationController` fallback. Legacy skipped-state projection
-remains only for old snapshots. Fresh `If` materialization prepares the condition boundary first, resolves the activation token, and
-attaches only the selected branch input.
+and deterministic `ExecutionScheduler` in `execution_engine/scheduler.py`. Fresh graphs with one ordinary-node `If`, or
+the exact one-level nested shape with two `If` nodes where the inner value feeds one outer branch and has no other
+consumer, compile opaque, frame-local activation dependencies in `GraphExecutionState`; sibling, deeper, fan-out,
+mixed, loop-containing, saved-workflow, and legacy shapes use the dedicated `_IfActivationController` fallback.
+Legacy skipped-state projection remains only for old snapshots. Fresh `If` materialization prepares the condition boundary first,
+resolves the activation token, and attaches only the selected branch input.
 Unselected branch nodes are never prepared, skipped, or added to fresh execution history. Both scheduler adapters
 consume these dependency decisions without pruning execution edges or calling a type-specific branch scheduler.
 Legacy skipped-state metadata remains only for snapshots that already contain the old projection. Branch-membership
@@ -253,9 +254,10 @@ port against the producing invocation's declared activation fields and persists 
 rehydration, every activation token is bound to a currently prepared owner and its derived execution reference; its
 declared port, value, canonical token id, mapping key, and known frame fields must match. Unknown extra frame metadata
 remains forward-compatible.
-For a fresh generic `If` graph with one ordinary-node `If`, `GraphExecutionState` compiles opaque, frame-local
-activation-dependency records privately on each branch-local plan node; nested, mixed, loop-containing,
-saved-workflow, and legacy shapes use `_IfActivationController` for the same records. The controller
+For a fresh generic `If` graph with one ordinary-node `If`, or the exact one-level nested shape described above,
+`GraphExecutionState` compiles opaque, frame-local activation-dependency records privately on each branch-local plan
+node. Sibling, deeper, fan-out, mixed, loop-containing, saved-workflow, and legacy shapes use `_IfActivationController`
+for the same records. The controller
 remains the fallback runtime dependency owner, and the schedulers no longer call a legacy compiler. Fresh materialization prepares the condition boundary, resolves the activation token,
 and attaches only the selected branch input; rejected branch sources remain unprepared. `_GenericGraphSchedulerAdapter`
 consumes those records through the opaque plan: its readiness

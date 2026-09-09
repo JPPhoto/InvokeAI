@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvocation
-from invokeai.app.invocations.collections import CollectionConcatInvocation
+from invokeai.app.invocations.collections import CollectionConcatInvocation, RangeInvocation
 from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.invocations.loops import (
     ForInvocation,
@@ -113,6 +113,14 @@ def _nested_if_graph() -> Graph:
     connect("inner_if", "value", "outer_if", "true_input")
     connect("outer_false", "value", "outer_if", "false_input")
     connect("outer_if", "value", "sink", "a")
+    return graph
+
+
+def _nested_if_graph_with_shared_ancestor() -> Graph:
+    graph = _nested_if_graph()
+    graph.add_node(AddInvocation(id="shared", a=1, b=1))
+    graph.add_edge(create_edge("shared", "value", "inner_true", "a"))
+    graph.add_edge(create_edge("shared", "value", "inner_false", "a"))
     return graph
 
 
@@ -3757,6 +3765,92 @@ def test_fresh_flat_if_records_dependencies_without_author_graph_branch_analysis
 
 
 @pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+@pytest.mark.parametrize(
+    ("outer_condition", "inner_condition", "expected_trace"),
+    [
+        (
+            True,
+            True,
+            ["outer_condition", "inner_condition", "inner_true", "inner_if", "outer_if", "sink"],
+        ),
+        (
+            True,
+            False,
+            ["outer_condition", "inner_condition", "inner_false", "inner_if", "outer_if", "sink"],
+        ),
+        (False, True, ["outer_condition", "outer_false", "outer_if", "sink"]),
+        (False, False, ["outer_condition", "outer_false", "outer_if", "sink"]),
+    ],
+)
+def test_fresh_nested_if_records_graph_state_dependencies_without_controller_analysis(
+    force_compatibility_scheduler: bool,
+    outer_condition: bool,
+    inner_condition: bool,
+    expected_trace: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh nested If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+
+    graph = _nested_if_graph()
+    graph.get_node("outer_condition").value = outer_condition
+    graph.get_node("inner_condition").value = inner_condition
+    state = GraphExecutionState(graph=graph)
+    dependencies_by_source = {
+        source_id: {
+            (dependency.owner_id, dependency.branch, dependency.frame)
+            for dependency in state._get_source_activation_dependencies(source_id)
+        }
+        for source_id in {"inner_condition", "inner_true", "inner_false", "inner_if"}
+    }
+
+    trace, state = _run_graph(
+        state,
+        force_compatibility_scheduler=force_compatibility_scheduler,
+    )
+
+    assert trace == expected_trace
+    assert dependencies_by_source == {
+        "inner_condition": {("outer_if", "true_input", ())},
+        "inner_true": {("outer_if", "true_input", ()), ("inner_if", "true_input", ())},
+        "inner_false": {("outer_if", "true_input", ()), ("inner_if", "false_input", ())},
+        "inner_if": {("outer_if", "true_input", ())},
+    }
+    assert state.is_complete()
+
+
+@pytest.mark.parametrize(
+    ("outer_condition", "inner_condition", "expected_value"),
+    [(True, True, 5), (True, False, 6), (False, True, 11), (False, False, 11)],
+)
+def test_fresh_nested_if_preserves_shared_ancestor_isolation(
+    outer_condition: bool,
+    inner_condition: bool,
+    expected_value: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh nested If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+    graph = _nested_if_graph_with_shared_ancestor()
+    graph.get_node("outer_condition").value = outer_condition
+    graph.get_node("inner_condition").value = inner_condition
+
+    trace, state = _run_graph(GraphExecutionState(graph=graph))
+
+    assert trace.count("shared") == int(outer_condition)
+    assert ("inner_true" in trace) is (outer_condition and inner_condition)
+    assert ("inner_false" in trace) is (outer_condition and not inner_condition)
+    assert trace.count("outer_false") == int(not outer_condition)
+    sink_id = next(iter(state.source_prepared_mapping["sink"]))
+    assert state.results[sink_id].value == expected_value
+    assert state.is_complete()
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
 def test_fresh_noncanonical_if_compiles_branch_membership_without_controller_analysis(
     force_compatibility_scheduler: bool,
     monkeypatch: pytest.MonkeyPatch,
@@ -3835,6 +3929,43 @@ def test_fresh_flat_if_with_saved_workflow_uses_controller_fallback(
     assert state._get_source_activation_dependencies("true_branch") == (
         graph_module.ActivationDependency(owner_id="if", branch="true_input", frame=()),
     )
+    assert branch_analysis_calls
+
+
+@pytest.mark.parametrize("unsupported_shape", ["extra_if", "mixed_iterate", "inner_fanout"])
+def test_nested_if_unsupported_shapes_use_controller_fallback(
+    unsupported_shape: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = _nested_if_graph()
+    if unsupported_shape == "extra_if":
+        graph.add_node(IfInvocation(id="extra_if"))
+    elif unsupported_shape == "mixed_iterate":
+        graph.add_node(RangeInvocation(id="extra_range", start=0, stop=1, step=1))
+        graph.add_node(IterateInvocation(id="extra_iterate"))
+        graph.add_edge(create_edge("extra_range", "collection", "extra_iterate", "collection"))
+    else:
+        graph.add_node(AddInvocation(id="inner_side_consumer", b=1))
+        graph.add_edge(create_edge("inner_if", "value", "inner_side_consumer", "a"))
+
+    state = GraphExecutionState(graph=graph)
+    branch_analysis_calls: list[tuple[str, str]] = []
+    original_branch_sources = graph_module._IfActivationController._branch_sources
+
+    def record_branch_analysis(
+        controller: graph_module._IfActivationController,
+        if_node_id: str,
+        branch_field: str,
+        source_graph: Any,
+    ) -> set[str]:
+        branch_analysis_calls.append((if_node_id, branch_field))
+        return original_branch_sources(controller, if_node_id, branch_field, source_graph)
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", record_branch_analysis)
+
+    assert not state._can_use_fresh_flat_if_activation()
+    dependencies = state._get_source_activation_dependencies("inner_true")
+    assert {dependency.owner_id for dependency in dependencies} >= {"inner_if"}
     assert branch_analysis_calls
 
 

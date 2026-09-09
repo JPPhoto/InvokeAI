@@ -169,8 +169,9 @@ valid. A loaded terminal legacy state may retain its empty in-memory ledger for 
 
 `IfInvocation` now declares the same seam for branch activation: it emits one frame-scoped activation token for the
 selected branch, and the graph state validates and persists it after invocation. Fresh graphs with one ordinary-node
-`If` compile opaque, frame-local activation dependencies in graph state; nested, mixed, loop-containing,
-saved-workflow, and legacy shapes use the dedicated `_IfActivationController` fallback. Legacy
+`If`, or the exact one-level nested shape with two `If` nodes where the inner value feeds one outer branch and has no
+other consumer, compile opaque, frame-local activation dependencies in graph state. Sibling, deeper, fan-out, mixed,
+loop-containing, saved-workflow, and legacy shapes use the dedicated `_IfActivationController` fallback. Legacy
 skipped-state projection remains only for old snapshots. Fresh materialization prepares the condition boundary,
 resolves the activation token, and attaches only the selected branch input; unselected branch nodes remain unprepared.
 The generic and compatibility adapters consume the same decisions and append-only execution edges; no type-specific
