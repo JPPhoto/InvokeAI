@@ -2144,6 +2144,32 @@ def test_flat_if_admission_is_demand_driven_and_token_authoritative(
     assert state.is_complete()
 
 
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+def test_fresh_flat_if_records_dependencies_without_author_graph_branch_analysis(
+    force_compatibility_scheduler: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh flat If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+
+    trace, state = _run_graph(
+        GraphExecutionState(graph=_flat_if_graph()),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+    )
+
+    assert trace == ["condition", "true_branch", "if", "sink"]
+    true_branch_id = next(
+        execution_id for execution_id, source_id in state.prepared_source_mapping.items() if source_id == "true_branch"
+    )
+    assert [
+        (dependency.owner_id, dependency.branch, dependency.frame)
+        for dependency in state._if_activation_dependencies_by_exec[true_branch_id]
+    ] == [("if", "true_input", ())]
+    assert state.is_complete()
+
+
 @pytest.mark.parametrize(
     ("outer_condition", "inner_condition", "expected_trace", "expected_history", "expected_value"),
     [

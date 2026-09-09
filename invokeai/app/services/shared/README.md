@@ -236,9 +236,9 @@ port against the producing invocation's declared activation fields and persists 
 rehydration, every activation token is bound to a currently prepared owner and its derived execution reference; its
 declared port, value, canonical token id, mapping key, and known frame fields must match. Unknown extra frame metadata
 remains forward-compatible.
-For a fresh generic `If`, `_IfActivationController` puts opaque, frame-local activation-dependency records on each
-branch-local plan node. The controller is the sole runtime dependency owner; the schedulers no longer call a legacy
-compiler. Fresh materialization prepares the condition boundary, resolves the activation token,
+For a fresh generic `If`, the bounded flat shape records opaque, frame-local activation-dependency records privately
+on each branch-local plan node; other fresh shapes use `_IfActivationController` for the same records. The controller
+remains the fallback runtime dependency owner, and the schedulers no longer call a legacy compiler. Fresh materialization prepares the condition boundary, resolves the activation token,
 and attaches only the selected branch input; rejected branch sources remain unprepared. `_GenericGraphSchedulerAdapter`
 consumes those records through the opaque plan: its readiness
 callback accepts a node only when the required private `ActivationGate` runtime state is resolved and a matching

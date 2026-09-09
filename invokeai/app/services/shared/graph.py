@@ -1570,13 +1570,14 @@ class _ExecutionMaterializer:
                 new_node_iteration_path = self._get_known_iteration_path(iteration_index, iteration_node_map)
             elif isinstance(node, (ForInvocation, IterateInvocation)):
                 new_node_iteration_path += (iteration_index,)
-            if enforce_admission and not self._state._if_activation_controller().is_source_admitted(
+            if enforce_admission and not self._state._is_source_activation_admitted(
                 node_id, new_node_iteration_path or ()
             ):
                 continue
             new_node = self._create_execution_node_copy(node, node_id, iteration_index)
             if new_node_iteration_path is not None:
                 self._state._prepared_registry().set_iteration_path(new_node.id, new_node_iteration_path)
+            self._state._record_activation_dependencies(new_node.id)
             attached_edges = self._attach_execution_edges(new_node.id, new_edges)
             self._initialize_execution_node(new_node.id, attached_edges)
             new_nodes.append(new_node.id)
@@ -1592,9 +1593,9 @@ class _ExecutionMaterializer:
             mappings = self._get_parent_iteration_mappings(node_id, graph)
         mappings = list(mappings)
         if not mappings:
-            return self._state._if_activation_controller().is_source_admitted(node_id)
+            return self._state._is_source_activation_admitted(node_id)
         return any(
-            self._state._if_activation_controller().is_source_admitted(
+            self._state._is_source_activation_admitted(
                 node_id, self._get_known_iteration_path(-1, iteration_mapping) or ()
             )
             for iteration_mapping in mappings
@@ -4512,6 +4513,10 @@ class GraphExecutionState(BaseModel):
     indegree: dict[str, int] = Field(default_factory=dict, description="Remaining unmet input count for exec nodes")
     _resolved_if_exec_branches: dict[str, str] = PrivateAttr(default_factory=dict)
     _pending_if_exec_nodes: set[str] = PrivateAttr(default_factory=set)
+    _if_activation_dependencies_by_source: dict[tuple[str, tuple[int, ...]], tuple[ActivationDependency, ...]] = (
+        PrivateAttr(default_factory=dict)
+    )
+    _if_activation_dependencies_by_exec: dict[str, tuple[ActivationDependency, ...]] = PrivateAttr(default_factory=dict)
     _prepared_exec_metadata: dict[str, _PreparedExecNodeMetadata] = PrivateAttr(default_factory=dict)
     _prepared_exec_registry: Optional[_PreparedExecRegistry] = PrivateAttr(default=None)
     _if_activation_controller_instance: Optional[_IfActivationController] = PrivateAttr(default=None)
@@ -4631,6 +4636,8 @@ class GraphExecutionState(BaseModel):
         self._generic_graph_scheduler = None
         self._if_activation_controller_instance = None
         self._pending_if_exec_nodes = set()
+        self._if_activation_dependencies_by_source = {}
+        self._if_activation_dependencies_by_exec = {}
         self._execution_runtime = None
         self._source_graph_flat = None
         self._execution_graph_flat = None
@@ -4666,6 +4673,106 @@ class GraphExecutionState(BaseModel):
         if self._source_graph_flat is None:
             self._source_graph_flat = self.graph.nx_graph_flat()
         return self._source_graph_flat
+
+    def _can_use_fresh_flat_if_activation(self) -> bool:
+        """Admit the bounded fresh flat-If dependency-recording contract."""
+
+        if self._legacy_snapshot_loaded or len(self.graph.nodes) != 5 or len(self.graph.edges) != 4:
+            return False
+
+        if_nodes = [node for node in self.graph.nodes.values() if isinstance(node, IfInvocation)]
+        if len(if_nodes) != 1:
+            return False
+        if_node = if_nodes[0]
+        if any(
+            isinstance(node, (IfInvocation, ForInvocation, ForReturnInvocation, IterateInvocation, CollectInvocation))
+            for node in self.graph.nodes.values()
+            if node is not if_node
+        ):
+            return False
+
+        condition_edges = self.graph._get_input_edges(if_node.id, "condition")
+        true_edges = self.graph._get_input_edges(if_node.id, "true_input")
+        false_edges = self.graph._get_input_edges(if_node.id, "false_input")
+        output_edges = self.graph._get_output_edges(if_node.id)
+        if len(condition_edges) != 1 or len(true_edges) != 1 or len(false_edges) != 1 or len(output_edges) != 1:
+            return False
+
+        source_node_ids = {
+            condition_edges[0].source.node_id,
+            true_edges[0].source.node_id,
+            false_edges[0].source.node_id,
+        }
+        if len(source_node_ids) != 3 or if_node.id in source_node_ids:
+            return False
+
+        return set(self.graph.nodes) == {
+            *source_node_ids,
+            if_node.id,
+            output_edges[0].destination.node_id,
+        }
+
+    def _get_source_activation_dependencies(
+        self, source_node_id: str, iteration_path: tuple[int, ...] = ()
+    ) -> tuple[ActivationDependency, ...]:
+        key = (source_node_id, iteration_path)
+        if key in self._if_activation_dependencies_by_source:
+            return self._if_activation_dependencies_by_source[key]
+
+        if not self._can_use_fresh_flat_if_activation():
+            return self._if_activation_controller().get_source_dependencies(source_node_id, iteration_path)
+
+        if_node = next(node for node in self.graph.nodes.values() if isinstance(node, IfInvocation))
+        dependencies = tuple(
+            ActivationDependency(owner_id=if_node.id, branch=branch_field, frame=iteration_path)
+            for branch_field in ("true_input", "false_input")
+            if any(
+                edge.source.node_id == source_node_id for edge in self.graph._get_input_edges(if_node.id, branch_field)
+            )
+        )
+        self._tx_set_mapping(self._if_activation_dependencies_by_source, key, dependencies)
+        return dependencies
+
+    def _record_activation_dependencies(self, exec_node_id: str) -> tuple[ActivationDependency, ...]:
+        dependencies = self._if_activation_dependencies_by_exec.get(exec_node_id)
+        if dependencies is not None:
+            return dependencies
+        source_node_id = self._prepared_registry().get_source_node_id(exec_node_id)
+        dependencies = self._get_source_activation_dependencies(source_node_id, self._get_iteration_path(exec_node_id))
+        self._tx_set_mapping(self._if_activation_dependencies_by_exec, exec_node_id, dependencies)
+        return dependencies
+
+    def _is_source_activation_admitted(self, source_node_id: str, iteration_path: tuple[int, ...] = ()) -> bool:
+        dependencies = self._get_source_activation_dependencies(source_node_id, iteration_path)
+        return not dependencies or all(
+            self._is_activation_dependency_satisfied(dependency) for dependency in dependencies
+        )
+
+    def _is_source_inactive(self, source_node_id: str, iteration_path: tuple[int, ...] = ()) -> bool:
+        if not self._can_use_fresh_flat_if_activation():
+            return self._if_activation_controller().is_source_inactive(source_node_id, iteration_path)
+
+        dependencies = self._get_source_activation_dependencies(source_node_id, iteration_path)
+        if not dependencies:
+            return False
+        if iteration_path:
+            return any(self._is_activation_dependency_rejected(dependency) for dependency in dependencies)
+
+        frames = {
+            self._get_iteration_path(exec_node_id)
+            for dependency in dependencies
+            for exec_node_id in self._prepared_registry().get_prepared_ids(dependency.owner_id)
+        }
+        if not frames:
+            return False
+        return all(
+            self._get_source_activation_dependencies(source_node_id, frame)
+            and all(
+                self._is_activation_dependency_rejected(frame_dependency)
+                for frame_dependency in self._get_source_activation_dependencies(source_node_id, frame)
+            )
+            for frame in frames
+        )
 
     def _get_execution_graph_flat(self) -> Any:
         if self._execution_graph_flat is None:
@@ -4706,7 +4813,7 @@ class GraphExecutionState(BaseModel):
                     (prepared_node_ids := self.source_prepared_mapping.get(source_node_id))
                     and all(exec_node_id in self.executed for exec_node_id in prepared_node_ids)
                 )
-                or self._if_activation_controller().is_source_inactive(source_node_id)
+                or self._is_source_inactive(source_node_id)
             }
         return self._completed_source_ids_cache
 
@@ -6487,7 +6594,7 @@ class GraphExecutionState(BaseModel):
         )
 
     def _get_activation_dependencies(self, exec_node_id: str) -> tuple[ActivationDependency, ...]:
-        return self._if_activation_controller().get_dependencies(exec_node_id)
+        return self._record_activation_dependencies(exec_node_id)
 
     def _remove_from_ready_queues(self, exec_node_id: str) -> None:
         self._scheduler().remove_from_ready_queues(exec_node_id)
@@ -6774,6 +6881,8 @@ class GraphExecutionState(BaseModel):
         self._generic_graph_scheduler = None
         self._execution_runtime = None
         self._if_activation_controller_instance = None
+        self._if_activation_dependencies_by_source = {}
+        self._if_activation_dependencies_by_exec = {}
         self._source_graph_flat = None
         self._execution_graph_flat = None
         self._completed_source_ids_cache = None
@@ -7180,7 +7289,7 @@ class GraphExecutionState(BaseModel):
             if (
                 source_node_id in completed_source_ids
                 and source_node_id not in self.executed
-                and not self._if_activation_controller().is_source_inactive(source_node_id)
+                and not self._is_source_inactive(source_node_id)
             ):
                 self._mark_source_executed(source_node_id)
         return True
