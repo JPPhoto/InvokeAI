@@ -139,6 +139,16 @@ def _flat_if_graph(*, condition: bool = True) -> Graph:
     return graph
 
 
+def _noncanonical_flat_if_graph(*, condition: bool = True) -> Graph:
+    graph = _flat_if_graph(condition=condition)
+    graph.delete_node("true_branch")
+    graph.add_node(AddInvocation(id="true_source", a=2, b=3))
+    graph.add_node(AddInvocation(id="true_branch", b=4))
+    graph.add_edge(create_edge("true_source", "value", "true_branch", "a"))
+    graph.add_edge(create_edge("true_branch", "value", "if", "true_input"))
+    return graph
+
+
 def _flat_for_graph(
     *,
     with_after: bool = False,
@@ -2490,6 +2500,59 @@ def test_fresh_flat_if_records_dependencies_without_author_graph_branch_analysis
         (dependency.owner_id, dependency.branch, dependency.frame)
         for dependency in state._if_activation_dependencies_by_exec[true_branch_id]
     ] == [("if", "true_input", ())]
+    assert state.is_complete()
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+def test_fresh_noncanonical_if_compiles_branch_membership_without_controller_analysis(
+    force_compatibility_scheduler: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh noncanonical If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+
+    trace, state = _run_graph(
+        GraphExecutionState(graph=_noncanonical_flat_if_graph()),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+    )
+
+    assert trace == ["condition", "true_source", "true_branch", "if", "sink"]
+    dependencies_by_source = {
+        source_id: {
+            (dependency.owner_id, dependency.branch, dependency.frame)
+            for execution_id, source_id in state.prepared_source_mapping.items()
+            for dependency in state._if_activation_dependencies_by_exec.get(execution_id, ())
+        }
+        for source_id in {"true_source", "true_branch"}
+    }
+    assert dependencies_by_source == {
+        "true_source": {("if", "true_input", ())},
+        "true_branch": {("if", "true_input", ())},
+    }
+    assert state.is_complete()
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+def test_fresh_if_dependency_cache_refreshes_after_branch_source_graph_edit(
+    force_compatibility_scheduler: bool,
+) -> None:
+    state = GraphExecutionState(graph=_flat_if_graph(condition=False))
+
+    assert state._get_source_activation_dependencies("true_branch") == (
+        graph_module.ActivationDependency(owner_id="if", branch="true_input", frame=()),
+    )
+
+    state.add_node(AddInvocation(id="true_consumer", b=1))
+    state.add_edge(create_edge("true_branch", "value", "true_consumer", "a"))
+
+    assert state._get_source_activation_dependencies("true_branch") == ()
+    trace, state = _run_graph(state, force_compatibility_scheduler=force_compatibility_scheduler)
+
+    assert trace == ["true_branch", "true_consumer", "condition", "false_branch", "if", "sink"]
+    assert state.results[next(iter(state.source_prepared_mapping["true_consumer"]))].value == 6
+    assert state.results[next(iter(state.source_prepared_mapping["sink"]))].value == 31
     assert state.is_complete()
 
 

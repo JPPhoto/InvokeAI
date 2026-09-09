@@ -4514,6 +4514,7 @@ class GraphExecutionState(BaseModel):
     indegree: dict[str, int] = Field(default_factory=dict, description="Remaining unmet input count for exec nodes")
     _resolved_if_exec_branches: dict[str, str] = PrivateAttr(default_factory=dict)
     _pending_if_exec_nodes: set[str] = PrivateAttr(default_factory=set)
+    _if_branch_sources_cache: dict[tuple[str, str], frozenset[str]] = PrivateAttr(default_factory=dict)
     _if_activation_dependencies_by_source: dict[tuple[str, tuple[int, ...]], tuple[ActivationDependency, ...]] = (
         PrivateAttr(default_factory=dict)
     )
@@ -4637,6 +4638,7 @@ class GraphExecutionState(BaseModel):
         self._generic_graph_scheduler = None
         self._if_activation_controller_instance = None
         self._pending_if_exec_nodes = set()
+        self._if_branch_sources_cache = {}
         self._if_activation_dependencies_by_source = {}
         self._if_activation_dependencies_by_exec = {}
         self._execution_runtime = None
@@ -4676,9 +4678,9 @@ class GraphExecutionState(BaseModel):
         return self._source_graph_flat
 
     def _can_use_fresh_flat_if_activation(self) -> bool:
-        """Admit the bounded fresh flat-If dependency-recording contract."""
+        """Admit fresh single-If dependency compilation for ordinary graph nodes."""
 
-        if self._legacy_snapshot_loaded or len(self.graph.nodes) != 5 or len(self.graph.edges) != 4:
+        if self._legacy_snapshot_loaded:
             return False
 
         if_nodes = [node for node in self.graph.nodes.values() if isinstance(node, IfInvocation)]
@@ -4702,26 +4704,34 @@ class GraphExecutionState(BaseModel):
         ):
             return False
 
-        condition_edges = self.graph._get_input_edges(if_node.id, "condition")
-        true_edges = self.graph._get_input_edges(if_node.id, "true_input")
-        false_edges = self.graph._get_input_edges(if_node.id, "false_input")
-        output_edges = self.graph._get_output_edges(if_node.id)
-        if len(condition_edges) != 1 or len(true_edges) != 1 or len(false_edges) != 1 or len(output_edges) != 1:
-            return False
+        return True
 
-        source_node_ids = {
-            condition_edges[0].source.node_id,
-            true_edges[0].source.node_id,
-            false_edges[0].source.node_id,
-        }
-        if len(source_node_ids) != 3 or if_node.id in source_node_ids:
-            return False
+    def _get_fresh_if_branch_sources(self, if_node_id: str, branch_field: str) -> set[str]:
+        cache_key = (if_node_id, branch_field)
+        cached = self._if_branch_sources_cache.get(cache_key)
+        if cached is not None:
+            return set(cached)
 
-        return set(self.graph.nodes) == {
-            *source_node_ids,
-            if_node.id,
-            output_edges[0].destination.node_id,
-        }
+        source_graph = self._get_source_graph_flat()
+        direct_sources = {edge.source.node_id for edge in self.graph._get_input_edges(if_node_id, branch_field)}
+        branch_sources = set(direct_sources)
+        for source_node_id in direct_sources:
+            branch_sources.update(nx.ancestors(source_graph, source_node_id))
+
+        changed = True
+        while changed:
+            changed = False
+            for source_node_id in tuple(branch_sources):
+                if all(
+                    edge.destination.node_id in branch_sources
+                    or (edge.destination.node_id == if_node_id and edge.destination.field == branch_field)
+                    for edge in self.graph._get_output_edges(source_node_id)
+                ):
+                    continue
+                branch_sources.remove(source_node_id)
+                changed = True
+        self._if_branch_sources_cache[cache_key] = frozenset(branch_sources)
+        return branch_sources
 
     def _get_source_activation_dependencies(
         self, source_node_id: str, iteration_path: tuple[int, ...] = ()
@@ -4737,9 +4747,7 @@ class GraphExecutionState(BaseModel):
         dependencies = tuple(
             ActivationDependency(owner_id=if_node.id, branch=branch_field, frame=iteration_path)
             for branch_field in ("true_input", "false_input")
-            if any(
-                edge.source.node_id == source_node_id for edge in self.graph._get_input_edges(if_node.id, branch_field)
-            )
+            if source_node_id in self._get_fresh_if_branch_sources(if_node.id, branch_field)
         )
         self._tx_set_mapping(self._if_activation_dependencies_by_source, key, dependencies)
         return dependencies
@@ -4843,6 +4851,10 @@ class GraphExecutionState(BaseModel):
     def _invalidate_source_graph_cache(self) -> None:
         self._source_graph_flat = None
         self._for_source_by_return_id = None
+        self._if_branch_sources_cache = {}
+        self._if_activation_dependencies_by_source = {}
+        self._if_activation_dependencies_by_exec = {}
+        self._if_activation_controller_instance = None
 
     def _materializer(self) -> _ExecutionMaterializer:
         if self._execution_materializer is None:
@@ -6918,6 +6930,7 @@ class GraphExecutionState(BaseModel):
         self._active_class = None
         self._resolved_if_exec_branches = {}
         self._pending_if_exec_nodes = set()
+        self._if_branch_sources_cache = {}
         self._prepared_exec_metadata = {}
         self._prepared_exec_registry = None
         self._execution_materializer = None
