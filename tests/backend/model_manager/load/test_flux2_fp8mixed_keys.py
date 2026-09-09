@@ -21,12 +21,20 @@ SCALE_VALUE = 0.25
 
 
 def _mock_state_dict() -> dict[str, torch.Tensor]:
+    """Builds the captured layout at a token size.
+
+    The assertions below read key names, dtypes, values and -- in one case -- rank; none reads an
+    extent. Materializing the real extents means 2.3 billion elements, which peaks at ~15GB per
+    call and cannot be afforded once CI runs several test processes at once, so every dimension is
+    capped while rank and dtype are kept exactly as captured.
+    """
     sd: dict[str, torch.Tensor] = {}
     for key, (shape, dtype) in mixed_keys.items():
         if key.endswith((".weight_scale", ".input_scale")):
             sd[key] = torch.tensor(SCALE_VALUE, dtype=torch.float32)
         else:
-            sd[key] = torch.ones(shape, dtype=torch.float32).to(_DTYPES[dtype])
+            token_shape = [min(extent, 4) for extent in shape]
+            sd[key] = torch.ones(token_shape, dtype=_DTYPES[dtype])
     return sd
 
 
