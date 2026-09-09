@@ -111,8 +111,10 @@ explicit empty close. A direct `Iterate.item` consumer waits for the canonical s
 its ordered values; a missing stream falls back to materialized results for legacy snapshots. The exact fresh four-node
 `literal collection source -> Iterate -> one ordinary body -> Collect` shape and any number of ordinary downstream
 consumers from `Collect.collection` use a private graph-state planner for prepared-copy expansion, iteration paths,
-and the empty-stream barrier. Fan-in, nested or input-driven iterators, and mixed control flow remain on the
-compatibility materializer for those responsibilities.
+and the empty-stream barrier. The exact fresh two-source/two-`Iterate`/shared-`Collect.item` fan-in shape also uses
+the planner for independent stream expansion, closure gating, and deterministic source-ordered hydration. Fan-in
+beyond that shape, nested or input-driven iterators, and mixed control flow remain on the compatibility materializer
+for those responsibilities.
 Focused compatibility coverage now proves empty, nested, fan-in, partial/rehydrated, failed, canceled, and retried
 Iterate/Collect sessions. This is evidence for the current adapters; it does not remove materialization or queue
 ownership. Direct `Iterate`/`Collect`-only graphs and the exact bounded nested shape now use the generic scheduler
