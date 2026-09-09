@@ -332,6 +332,44 @@ def _direct_iterate_fan_in_graph(*, left: list[Any], right: list[Any]) -> Graph:
     return graph
 
 
+def _direct_iterate_fan_in_graph_with_branches(
+    branches: tuple[tuple[str, str, list[Any]], ...],
+) -> Graph:
+    graph = Graph()
+    graph.add_node(CollectInvocation(id="collect"))
+    for source_id, iterator_id, values in sorted(branches):
+        graph.add_node(CollectionConcatInvocation(id=source_id, first=values))
+        graph.add_node(IterateInvocation(id=iterator_id))
+        graph.add_edge(
+            Edge(
+                source=EdgeConnection(node_id=source_id, field="collection"),
+                destination=EdgeConnection(node_id=iterator_id, field="collection"),
+            )
+        )
+        graph.add_edge(
+            Edge(
+                source=EdgeConnection(node_id=iterator_id, field="item"),
+                destination=EdgeConnection(node_id="collect", field="item"),
+            )
+        )
+    return graph
+
+
+def _direct_iterate_three_fan_in_graph(
+    *,
+    a: list[Any],
+    m: list[Any],
+    z: list[Any],
+) -> Graph:
+    return _direct_iterate_fan_in_graph_with_branches(
+        branches=(
+            ("z_source", "z_iterate", z),
+            ("a_source", "a_iterate", a),
+            ("m_source", "m_iterate", m),
+        )
+    )
+
+
 def _flat_for_state_graph(continue_condition: bool) -> Graph:
     graph = Graph()
     graph.add_node(ForInvocation(id="for", collection=[1, 2, 3], state=LoopState(values={"count": 0})))
@@ -1606,6 +1644,243 @@ def test_direct_iterate_fan_in_rolls_back_partial_expansion(monkeypatch: pytest.
     assert trace == ["left_iterate", "right_iterate", "collect"]
     assert _source_output(state, "collect").collection == ["left", "right"]
     assert state.is_complete()
+
+
+def test_direct_iterate_three_fan_in_fresh_execution_owns_sorted_stream_expansion() -> None:
+    graph = _direct_iterate_three_fan_in_graph(a=["dup", None, "dup"], m=["middle"], z=[None, "dup"])
+    state = GraphExecutionState(graph=graph)
+    fan_in = state._get_direct_iterate_collect_nodes()
+    assert isinstance(fan_in, graph_module._DirectIterateCollectFanIn)
+    assert fan_in.branches == (
+        ("a_source", "a_iterate"),
+        ("m_source", "m_iterate"),
+        ("z_source", "z_iterate"),
+    )
+
+    with (
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "prepare",
+            side_effect=AssertionError("fresh three-branch fan-in must not use materializer.prepare"),
+        ) as prepare,
+        patch.object(
+            graph_module._ExecutionMaterializer,
+            "_get_collect_iteration_mapping_groups",
+            side_effect=AssertionError("fresh three-branch fan-in must not group collector inputs"),
+        ) as group_collector_inputs,
+    ):
+        trace, state = _run_graph(state)
+
+    assert trace == [
+        "a_source",
+        "m_source",
+        "z_source",
+        "a_iterate",
+        "m_iterate",
+        "z_iterate",
+        "a_iterate",
+        "z_iterate",
+        "a_iterate",
+        "collect",
+    ]
+    assert _source_output(state, "collect").collection == ["dup", None, "dup", "middle", None, "dup"]
+    streams = {
+        stream.owner_id: stream
+        for stream in state._generic_runtime().streams.values()
+        if stream.owner_id in {"a_iterate", "m_iterate", "z_iterate"}
+    }
+    assert {owner_id: (stream.values, stream.closed) for owner_id, stream in streams.items()} == {
+        "a_iterate": (("dup", None, "dup"), True),
+        "m_iterate": (("middle",), True),
+        "z_iterate": ((None, "dup"), True),
+    }
+    assert state.is_complete()
+    prepare.assert_not_called()
+    group_collector_inputs.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("a", "m", "z"),
+    [
+        ([], [], []),
+        (["a"], [], []),
+        ([], ["m"], []),
+        ([], [], ["z"]),
+        (["a"], ["m"], []),
+        (["a"], [], ["z"]),
+        ([], ["m"], ["z"]),
+    ],
+    ids=["all-empty", "a-only", "m-only", "z-only", "a-m", "a-z", "m-z"],
+)
+def test_direct_iterate_three_fan_in_closes_every_empty_stream(a: list[Any], m: list[Any], z: list[Any]) -> None:
+    trace, state = _run_graph(GraphExecutionState(graph=_direct_iterate_three_fan_in_graph(a=a, m=m, z=z)))
+
+    assert trace.count("collect") == 1
+    assert _source_output(state, "collect").collection == a + m + z
+    streams = {
+        stream.owner_id: stream
+        for stream in state._generic_runtime().streams.values()
+        if stream.owner_id in {"a_iterate", "m_iterate", "z_iterate"}
+    }
+    assert set(streams) == {"a_iterate", "m_iterate", "z_iterate"}
+    assert all(stream.closed for stream in streams.values())
+    assert state.is_complete()
+
+
+def test_direct_iterate_three_fan_in_partial_dump_load_resumes_without_duplicate_work() -> None:
+    graph = _direct_iterate_three_fan_in_graph(a=["a-0", "a-1"], m=["m-0", "m-1"], z=["z-0", "z-1"])
+    expected_trace, expected_state = _run_graph_with_effects(GraphExecutionState(graph=graph))
+    partial_trace, partial_state = _run_graph_with_effects(GraphExecutionState(graph=graph), stop_after=5)
+
+    assert partial_trace == ["a_source", "m_source", "z_source", "a_iterate", "m_iterate"]
+    assert "collect" not in partial_trace
+    collect_exec_ids = partial_state.source_prepared_mapping["collect"]
+    assert len(collect_exec_ids) == 1
+    collect_exec_id = next(iter(collect_exec_ids))
+    assert collect_exec_id not in partial_state.executed
+
+    restored = load_execution_state(dump_execution_state(partial_state))
+    assert _direct_iterate_fan_in_stream_projection(restored) == _direct_iterate_fan_in_stream_projection(partial_state)
+    assert _direct_iterate_fan_in_execution_ref_projection(
+        restored, execution_ids=set(partial_state.execution_refs)
+    ) == _direct_iterate_fan_in_execution_ref_projection(partial_state)
+    assert _effect_ledger_projection(restored) == _effect_ledger_projection(partial_state)
+    resumed_trace, resumed_state = _run_graph_with_effects(restored)
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert _source_output(resumed_state, "collect").collection == ["a-0", "a-1", "m-0", "m-1", "z-0", "z-1"]
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+    assert _direct_iterate_fan_in_stream_projection(resumed_state) == _direct_iterate_fan_in_stream_projection(
+        expected_state
+    )
+    assert _direct_iterate_fan_in_execution_ref_projection(
+        resumed_state
+    ) == _direct_iterate_fan_in_execution_ref_projection(expected_state)
+    assert _effect_ledger_projection(resumed_state) == _effect_ledger_projection(expected_state)
+    assert collect_exec_id in resumed_state.executed
+    assert resumed_state.is_complete()
+
+
+@pytest.mark.parametrize(
+    ("a", "m", "z"),
+    [
+        (["a", None, "a"], ["m"], ["z", None]),
+        ([], ["m", "m"], []),
+        ([], [], []),
+    ],
+    ids=["ordered-none-duplicates", "mixed-empty-duplicates", "all-empty"],
+)
+def test_direct_iterate_three_fan_in_matches_forced_compatibility_scheduler(
+    a: list[Any], m: list[Any], z: list[Any]
+) -> None:
+    generic_trace, generic_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_three_fan_in_graph(a=a, m=m, z=z))
+    )
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_three_fan_in_graph(a=a, m=m, z=z)),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert (
+        _source_output(generic_state, "collect").collection == _source_output(compatibility_state, "collect").collection
+    )
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+
+
+@pytest.mark.parametrize(
+    ("fail_source_id", "expected_trace"),
+    [
+        ("m_source", ["a_source", "m_source"]),
+        (
+            "m_iterate",
+            ["a_source", "m_source", "z_source", "a_iterate", "m_iterate"],
+        ),
+    ],
+    ids=["source-failure", "iterator-failure"],
+)
+def test_direct_iterate_three_fan_in_failure_matches_compatibility_and_blocks_collect(
+    fail_source_id: str, expected_trace: list[str]
+) -> None:
+    generic_trace, generic_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_direct_iterate_three_fan_in_graph(a=["a"], m=["m"], z=["z"])),
+        fail_source_id=fail_source_id,
+    )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_direct_iterate_three_fan_in_graph(a=["a"], m=["m"], z=["z"])),
+        force_compatibility_scheduler=True,
+        fail_source_id=fail_source_id,
+    )
+
+    assert generic_trace == compatibility_trace == expected_trace
+    for state in (generic_state, compatibility_state):
+        assert state.next() is None
+        assert state.has_error()
+        assert "collect" not in {
+            state.prepared_source_mapping.get(execution_id, execution_id) for execution_id in state.executed
+        }
+        assert state.is_complete()
+        restored = load_execution_state(dump_execution_state(state))
+        assert _direct_iterate_fan_in_stream_projection(restored) == _direct_iterate_fan_in_stream_projection(state)
+        assert _effect_ledger_projection(restored) == _effect_ledger_projection(state)
+        assert restored.next() is None
+        assert restored.is_complete()
+
+    assert _effect_ledger_projection(generic_state) == _effect_ledger_projection(compatibility_state)
+    assert _direct_iterate_fan_in_stream_projection(generic_state) == _direct_iterate_fan_in_stream_projection(
+        compatibility_state
+    )
+
+
+def test_direct_iterate_three_fan_in_rolls_back_partial_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = GraphExecutionState(graph=_direct_iterate_three_fan_in_graph(a=["a"], m=["m"], z=["z"]))
+    _partial_trace, state = _run_graph(state, stop_after=3)
+
+    original_create = GraphExecutionState._create_direct_execution_node_copy
+
+    def fail_at_m_iterate(self: GraphExecutionState, source_node_id: str, *args: Any, **kwargs: Any):
+        if source_node_id == "m_iterate":
+            raise RuntimeError("injected three-branch fan-in planner failure")
+        return original_create(self, source_node_id, *args, **kwargs)
+
+    monkeypatch.setattr(GraphExecutionState, "_create_direct_execution_node_copy", fail_at_m_iterate)
+    with pytest.raises(RuntimeError, match="injected three-branch fan-in planner failure"):
+        state.next()
+
+    assert set(state.source_prepared_mapping) == {"a_source", "m_source", "z_source"}
+    assert len(state.execution_graph.nodes) == 3
+    assert not state.execution_graph.edges
+    assert not state._generic_runtime().streams
+
+    monkeypatch.setattr(GraphExecutionState, "_create_direct_execution_node_copy", original_create)
+    trace, state = _run_graph(state)
+
+    assert trace == ["a_iterate", "m_iterate", "z_iterate", "collect"]
+    assert _source_output(state, "collect").collection == ["a", "m", "z"]
+    assert state.is_complete()
+
+
+def test_direct_iterate_four_fan_in_stays_on_compatibility_fallback() -> None:
+    graph = _direct_iterate_fan_in_graph_with_branches(
+        branches=(
+            ("a_source", "a_iterate", ["a"]),
+            ("m_source", "m_iterate", ["m"]),
+            ("z_source", "z_iterate", ["z"]),
+            ("q_source", "q_iterate", ["q"]),
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+    assert state._get_direct_iterate_collect_nodes() is None
+
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=graph), force_compatibility_scheduler=True
+    )
+
+    assert compatibility_trace
+    assert sorted(_source_output(compatibility_state, "collect").collection) == ["a", "m", "q", "z"]
+    assert compatibility_state.is_complete()
 
 
 def test_direct_iterate_body_collect_fresh_execution_handles_empty_input() -> None:

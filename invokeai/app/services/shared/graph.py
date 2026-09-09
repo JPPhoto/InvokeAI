@@ -129,7 +129,7 @@ class _SupportedNestedForBody:
 
 @dataclass(frozen=True)
 class _DirectIterateCollectFanIn:
-    branches: tuple[tuple[str, str], tuple[str, str]]
+    branches: tuple[tuple[str, str], ...]
     collector_id: str
 
 
@@ -6726,11 +6726,14 @@ class GraphExecutionState(BaseModel):
     def _get_direct_iterate_collect_fan_in(
         self, iterator_ids: list[str], collector_id: str
     ) -> Optional[_DirectIterateCollectFanIn]:
-        if len(self.graph.nodes) != 5 or len(self.graph.edges) != 4:
+        branch_count = len(iterator_ids)
+        if branch_count not in {2, 3} or len(self.graph.nodes) != 2 * branch_count + 1:
+            return None
+        if len(self.graph.edges) != 2 * branch_count:
             return None
 
         item_edges = self.graph._get_input_edges(collector_id, ITEM_FIELD)
-        if len(item_edges) != 2 or self.graph._get_input_edges(collector_id, COLLECTION_FIELD):
+        if len(item_edges) != branch_count or self.graph._get_input_edges(collector_id, COLLECTION_FIELD):
             return None
         if {edge.source.node_id for edge in item_edges} != set(iterator_ids) or any(
             edge.destination.field != ITEM_FIELD or edge.source.field != ITEM_FIELD for edge in item_edges
@@ -6771,7 +6774,7 @@ class GraphExecutionState(BaseModel):
             branches.append((source_id, iterator_id))
 
         branches.sort(key=lambda branch: branch[0])
-        return _DirectIterateCollectFanIn(branches=(branches[0], branches[1]), collector_id=collector_id)
+        return _DirectIterateCollectFanIn(branches=tuple(branches), collector_id=collector_id)
 
     def _get_direct_iterate_collect_nodes(
         self,
@@ -6787,7 +6790,7 @@ class GraphExecutionState(BaseModel):
 
         iterator_ids = [node_id for node_id, node in self.graph.nodes.items() if isinstance(node, IterateInvocation)]
         collector_ids = [node_id for node_id, node in self.graph.nodes.items() if isinstance(node, CollectInvocation)]
-        if len(iterator_ids) == 2 and len(collector_ids) == 1:
+        if len(iterator_ids) in {2, 3} and len(collector_ids) == 1:
             return self._get_direct_iterate_collect_fan_in(iterator_ids, collector_ids[0])
         if len(iterator_ids) != 1 or len(collector_ids) != 1:
             return None
