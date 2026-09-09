@@ -323,6 +323,7 @@ def test_media_origin_survives_a_listing(store: SqliteVideoRecordStorage) -> Non
         pytest.param("1", id="a JSON number"),
         pytest.param("true", id="a JSON boolean"),
         pytest.param("1.5", id="a JSON float"),
+        pytest.param('""', id="an empty string, which the frontend also reads as no marker"),
     ],
 )
 def test_a_non_string_marker_does_not_break_the_record(store: SqliteVideoRecordStorage, raw: str) -> None:

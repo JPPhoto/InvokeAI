@@ -156,6 +156,16 @@ export const resizeReferenceSampleWindow = (clip: VideoSourceClip, rawSampleFram
 };
 
 const VIDEO_REFERENCE_CONDITIONINGS = ['video_audio', 'video', 'audio'] as const;
+
+/**
+ * Whether a value is one of the three conditionings a video reference can carry.
+ *
+ * Exported for recall, which must tell "the run recorded this" from "the run recorded
+ * nothing usable" -- the two take different branches, and enumerating the literals at the
+ * call site is how one of them gets forgotten.
+ */
+export const isVideoReferenceConditioning = (value: unknown): value is VideoReferenceConditioning =>
+  VIDEO_REFERENCE_CONDITIONINGS.includes(value as (typeof VIDEO_REFERENCE_CONDITIONINGS)[number]);
 const VIDEO_REFERENCE_IMAGE_DETAILS = ['max', 'match'] as const;
 
 export const isVideoReferenceItem = (value: unknown): value is VideoReferenceItem => {
@@ -534,7 +544,6 @@ export const createVideoSourceClip = (item: {
   durationSeconds: number;
   fps?: number;
   height: number;
-  mediaOrigin?: string;
   name: string;
   width: number;
 }): VideoSourceClip => {
@@ -546,7 +555,6 @@ export const createVideoSourceClip = (item: {
     endFrame: Math.max(1, numFrames - 2),
     fps,
     height: item.height,
-    ...(item.mediaOrigin ? { mediaOrigin: item.mediaOrigin } : {}),
     numFrames,
     startFrame: 0,
     video_name: item.name,

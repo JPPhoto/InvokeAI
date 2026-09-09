@@ -22,11 +22,6 @@ export interface VideoSourceClip {
   /** Inclusive trim bounds forwarded to `extract_video_range`; negative indices count from the end. */
   startFrame: number;
   endFrame: number;
-  /**
-   * The clip's `mediaOrigin` marker, carried so the conditioning a derived reference starts
-   * on can be decided without re-fetching the video's metadata. See `GalleryVideoItem`.
-   */
-  mediaOrigin?: string;
 }
 
 /**

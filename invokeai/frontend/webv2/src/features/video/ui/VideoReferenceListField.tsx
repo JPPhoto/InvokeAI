@@ -549,8 +549,11 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
     // wrapped audio upload from footage without a second request, so every caller gets the
     // right answer synchronously.
     (item: GalleryVideoItem) => {
+      // The marker is read here and NOT stored on the clip: a clip outlives the gallery
+      // record it came from (it is persisted in the project and re-uploaded under a fresh
+      // name on import, where the server does not re-derive the marker), so a copy on the
+      // clip would go stale, and nothing downstream should be tempted to trust it.
       const conditioning = getDefaultReferenceConditioning(item.mediaOrigin);
-      // `createVideoSourceClip` reads `mediaOrigin` off the item too, so the clip carries it.
       const clip = createVideoSourceClip(item);
       // Built outside the updater so the caller holds the same object the list does: it is
       // the only durable handle on this entry once reordering moves it.

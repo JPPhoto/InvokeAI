@@ -24,6 +24,7 @@ export {
   getDefaultReferenceConditioning,
   isImageWithDims,
   isVideoAspectRatioId,
+  isVideoReferenceConditioning,
   isVideoReferenceItem,
   isVideoSettings,
   isVideoSourceClip,

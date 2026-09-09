@@ -247,23 +247,6 @@ describe('createVideoSourceClip', () => {
     });
   });
 
-  it('carries the media-origin marker so a derived reference needs no metadata fetch', () => {
-    const wrapped = createVideoSourceClip({
-      durationSeconds: 5,
-      fps: 24,
-      height: 360,
-      mediaOrigin: 'audio_upload',
-      name: 'song.mp4',
-      width: 640,
-    });
-
-    expect(wrapped.mediaOrigin).toBe('audio_upload');
-    // An unmarked clip stays clean rather than carrying an explicit undefined.
-    expect(
-      'mediaOrigin' in createVideoSourceClip({ durationSeconds: 5, fps: 24, height: 360, name: 'c.mp4', width: 640 })
-    ).toBe(false);
-  });
-
   it('falls back to 16 fps when the probe recorded none, mirroring extract_video_range', () => {
     const clip = createVideoSourceClip({ durationSeconds: 2, height: 480, name: 'clip.mp4', width: 832 });
 
@@ -753,19 +736,16 @@ describe('reference-extend linkage', () => {
   // The panel's default; every choice is on the 17n+5 grid.
   const FRAMES = 141;
 
-  it('anchors on video + audio even for a wrapped audio clip -- the role needs visual rows', () => {
+  it('anchors on video + audio -- the role needs visual rows', () => {
     const [ordinary] = applyReferenceExtendSourceVideo([], source24, 3, FRAMES);
 
+    // Deliberately NOT derived from whether the clip is a wrapped audio upload. The anchor
+    // is what the generated frames continue from, an 'audio' reference emits no visual rows
+    // at all, and the all-audio validation does not fire when other references are visual --
+    // so the seam would go silently discontinuous. `anchorReferenceConditioning` promotes in
+    // the other direction. (The clip carries no marker at all, so this cannot regress by
+    // accident.)
     expect(ordinary).toMatchObject({ conditioning: 'video_audio', fromSourceVideo: true });
-
-    // The marker now rides on the clip, so deriving the anchor's conditioning from it is an
-    // easy mistake to make. It would be wrong: the anchor is what the generated frames
-    // continue from, an 'audio' reference emits no visual rows at all, and the all-audio
-    // validation does not fire when other references are visual -- so the seam would go
-    // silently discontinuous. `anchorReferenceConditioning` promotes in the other direction.
-    const [wrapped] = applyReferenceExtendSourceVideo([], { ...source24, mediaOrigin: 'audio_upload' }, 3, FRAMES);
-
-    expect(wrapped).toMatchObject({ conditioning: 'video_audio', fromSourceVideo: true });
   });
 
   it('derives the tail trim: the window ending at the cutpoint, clamped at 0', () => {
