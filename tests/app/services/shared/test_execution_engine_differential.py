@@ -337,7 +337,7 @@ def _direct_iterate_fan_in_graph_with_branches(
 ) -> Graph:
     graph = Graph()
     graph.add_node(CollectInvocation(id="collect"))
-    for source_id, iterator_id, values in sorted(branches):
+    for source_id, iterator_id, values in branches:
         graph.add_node(CollectionConcatInvocation(id=source_id, first=values))
         graph.add_node(IterateInvocation(id=iterator_id))
         graph.add_edge(
@@ -360,13 +360,17 @@ def _direct_iterate_three_fan_in_graph(
     a: list[Any],
     m: list[Any],
     z: list[Any],
+    unsorted: bool = False,
 ) -> Graph:
+    branches = (
+        ("a_source", "a_iterate", a),
+        ("m_source", "m_iterate", m),
+        ("z_source", "z_iterate", z),
+    )
+    if unsorted:
+        branches = (branches[2], branches[0], branches[1])
     return _direct_iterate_fan_in_graph_with_branches(
-        branches=(
-            ("z_source", "z_iterate", z),
-            ("a_source", "a_iterate", a),
-            ("m_source", "m_iterate", m),
-        )
+        branches=branches,
     )
 
 
@@ -1647,7 +1651,16 @@ def test_direct_iterate_fan_in_rolls_back_partial_expansion(monkeypatch: pytest.
 
 
 def test_direct_iterate_three_fan_in_fresh_execution_owns_sorted_stream_expansion() -> None:
-    graph = _direct_iterate_three_fan_in_graph(a=["dup", None, "dup"], m=["middle"], z=[None, "dup"])
+    graph = _direct_iterate_three_fan_in_graph(a=["dup", None, "dup"], m=["middle"], z=[None, "dup"], unsorted=True)
+    assert tuple(graph.nodes) == (
+        "collect",
+        "z_source",
+        "z_iterate",
+        "a_source",
+        "a_iterate",
+        "m_source",
+        "m_iterate",
+    )
     state = GraphExecutionState(graph=graph)
     fan_in = state._get_direct_iterate_collect_nodes()
     assert isinstance(fan_in, graph_module._DirectIterateCollectFanIn)
