@@ -124,6 +124,62 @@ def _nested_if_graph_with_shared_ancestor() -> Graph:
     return graph
 
 
+def _three_nested_if_graph(
+    *,
+    outer_condition: bool = True,
+    middle_condition: bool = True,
+    inner_condition: bool = True,
+    middle_branch: str = "true_input",
+    outer_branch: str = "true_input",
+) -> Graph:
+    assert middle_branch in {"true_input", "false_input"}
+    assert outer_branch in {"true_input", "false_input"}
+    middle_other_branch = "false_input" if middle_branch == "true_input" else "true_input"
+    outer_other_branch = "false_input" if outer_branch == "true_input" else "true_input"
+    middle_other_id = "middle_false" if middle_branch == "true_input" else "middle_true"
+    outer_other_id = "outer_false" if outer_branch == "true_input" else "outer_true"
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="outer_condition", value=outer_condition))
+    graph.add_node(BooleanInvocation(id="middle_condition", value=middle_condition))
+    graph.add_node(BooleanInvocation(id="inner_condition", value=inner_condition))
+    graph.add_node(AddInvocation(id="inner_true", a=2, b=2))
+    graph.add_node(AddInvocation(id="inner_false", a=3, b=3))
+    graph.add_node(AddInvocation(id=middle_other_id, a=10, b=0))
+    graph.add_node(AddInvocation(id=outer_other_id, a=20, b=0))
+    graph.add_node(IfInvocation(id="inner_if"))
+    graph.add_node(IfInvocation(id="middle_if"))
+    graph.add_node(IfInvocation(id="outer_if"))
+    graph.add_node(AddInvocation(id="sink", b=1))
+
+    def connect(source: str, source_field: str, destination: str, destination_field: str) -> None:
+        graph.add_edge(
+            Edge(
+                source=EdgeConnection(node_id=source, field=source_field),
+                destination=EdgeConnection(node_id=destination, field=destination_field),
+            )
+        )
+
+    connect("inner_condition", "value", "inner_if", "condition")
+    connect("inner_true", "value", "inner_if", "true_input")
+    connect("inner_false", "value", "inner_if", "false_input")
+    connect("middle_condition", "value", "middle_if", "condition")
+    connect("inner_if", "value", "middle_if", middle_branch)
+    connect(middle_other_id, "value", "middle_if", middle_other_branch)
+    connect("outer_condition", "value", "outer_if", "condition")
+    connect("middle_if", "value", "outer_if", outer_branch)
+    connect(outer_other_id, "value", "outer_if", outer_other_branch)
+    connect("outer_if", "value", "sink", "a")
+    return graph
+
+
+def _three_nested_if_graph_with_shared_ancestor(**kwargs: bool) -> Graph:
+    graph = _three_nested_if_graph(**kwargs)
+    graph.add_node(AddInvocation(id="shared", a=1, b=1))
+    graph.add_edge(create_edge("shared", "value", "inner_true", "a"))
+    graph.add_edge(create_edge("shared", "value", "inner_false", "a"))
+    return graph
+
+
 def _flat_if_graph(*, condition: bool = True) -> Graph:
     graph = Graph()
     graph.add_node(BooleanInvocation(id="condition", value=condition))
@@ -4260,6 +4316,184 @@ def test_fresh_nested_if_records_graph_state_dependencies_without_controller_ana
         "inner_if": {("outer_if", "true_input", ())},
     }
     assert state.is_complete()
+
+
+@pytest.mark.parametrize(
+    ("outer_condition", "middle_condition", "inner_condition", "selected", "expected_value", "expected_trace"),
+    [
+        (
+            True,
+            True,
+            True,
+            "inner_true",
+            5,
+            [
+                "outer_condition",
+                "middle_condition",
+                "inner_condition",
+                "inner_true",
+                "inner_if",
+                "middle_if",
+                "outer_if",
+                "sink",
+            ],
+        ),
+        (
+            True,
+            True,
+            False,
+            "inner_false",
+            7,
+            [
+                "outer_condition",
+                "middle_condition",
+                "inner_condition",
+                "inner_false",
+                "inner_if",
+                "middle_if",
+                "outer_if",
+                "sink",
+            ],
+        ),
+        (
+            True,
+            False,
+            True,
+            "middle_false",
+            11,
+            ["outer_condition", "middle_condition", "middle_false", "middle_if", "outer_if", "sink"],
+        ),
+        (
+            True,
+            False,
+            False,
+            "middle_false",
+            11,
+            ["outer_condition", "middle_condition", "middle_false", "middle_if", "outer_if", "sink"],
+        ),
+        (False, True, True, "outer_false", 21, ["outer_condition", "outer_false", "outer_if", "sink"]),
+        (False, True, False, "outer_false", 21, ["outer_condition", "outer_false", "outer_if", "sink"]),
+        (False, False, True, "outer_false", 21, ["outer_condition", "outer_false", "outer_if", "sink"]),
+        (False, False, False, "outer_false", 21, ["outer_condition", "outer_false", "outer_if", "sink"]),
+    ],
+)
+def test_fresh_three_nested_ifs_select_only_branches_and_match_compatibility(
+    outer_condition: bool,
+    middle_condition: bool,
+    inner_condition: bool,
+    selected: str,
+    expected_value: int,
+    expected_trace: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh three-nested If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+    runs: list[tuple[list[str], GraphExecutionState]] = []
+    for force_compatibility_scheduler in (False, True):
+        state = GraphExecutionState(
+            graph=_three_nested_if_graph(
+                outer_condition=outer_condition,
+                middle_condition=middle_condition,
+                inner_condition=inner_condition,
+            )
+        )
+        assert state._can_use_fresh_flat_if_activation()
+        trace, state = _run_graph(state, force_compatibility_scheduler=force_compatibility_scheduler)
+        runs.append((trace, state))
+
+        assert trace == expected_trace
+        assert set(state.source_prepared_mapping) == set(expected_trace)
+        assert selected in trace
+        sink_id = next(iter(state.source_prepared_mapping["sink"]))
+        assert state.results[sink_id].value == expected_value
+        assert state.is_complete()
+
+    _assert_generic_and_compatibility_schedulers(runs[0][1], runs[1][1])
+    assert runs[0][0] == runs[1][0]
+    assert _state_projection(runs[0][1]) == _state_projection(runs[1][1])
+    assert _activation_projection(runs[0][1]) == _activation_projection(runs[1][1])
+
+
+@pytest.mark.parametrize("middle_branch", ["true_input", "false_input"])
+@pytest.mark.parametrize("outer_branch", ["true_input", "false_input"])
+def test_fresh_three_nested_ifs_support_direct_false_parent_branch_edges(
+    middle_branch: str,
+    outer_branch: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh three-nested If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+    graph = _three_nested_if_graph(
+        outer_condition=outer_branch == "true_input",
+        middle_condition=middle_branch == "true_input",
+        middle_branch=middle_branch,
+        outer_branch=outer_branch,
+    )
+
+    runs: list[tuple[list[str], GraphExecutionState]] = []
+    for force_compatibility_scheduler in (False, True):
+        trace, state = _run_graph(
+            GraphExecutionState(graph=graph.model_copy(deep=True)),
+            force_compatibility_scheduler=force_compatibility_scheduler,
+        )
+        runs.append((trace, state))
+
+        assert trace == [
+            "outer_condition",
+            "middle_condition",
+            "inner_condition",
+            "inner_true",
+            "inner_if",
+            "middle_if",
+            "outer_if",
+            "sink",
+        ]
+        assert set(state.source_prepared_mapping) == set(trace)
+        assert state.results[next(iter(state.source_prepared_mapping["sink"]))].value == 5
+        assert state.is_complete()
+
+    _assert_generic_and_compatibility_schedulers(runs[0][1], runs[1][1])
+    assert runs[0][0] == runs[1][0]
+    assert _state_projection(runs[0][1]) == _state_projection(runs[1][1])
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+@pytest.mark.parametrize("stop_after", range(1, 10))
+def test_fresh_three_nested_ifs_shared_ancestor_isolated_and_checkpoint_resumes(
+    force_compatibility_scheduler: bool,
+    stop_after: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh three-nested If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+    graph = _three_nested_if_graph_with_shared_ancestor(
+        outer_condition=True, middle_condition=True, inner_condition=False
+    )
+    expected_trace, expected_state = _run_graph(GraphExecutionState(graph=graph.model_copy(deep=True)))
+    checkpoint_trace, checkpoint_state = _run_graph(
+        GraphExecutionState(graph=graph.model_copy(deep=True)),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+        stop_after=stop_after,
+    )
+    restored = load_execution_state(dump_execution_state(checkpoint_state))
+    if force_compatibility_scheduler:
+        _restore_compatibility_scheduler(restored)
+    resumed_trace, resumed_state = _run_graph(restored, force_compatibility_scheduler=force_compatibility_scheduler)
+
+    combined_trace = checkpoint_trace + resumed_trace
+    assert combined_trace == expected_trace
+    assert resumed_state.executed_history == expected_state.executed_history
+    assert resumed_state.results[next(iter(resumed_state.source_prepared_mapping["sink"]))].value == 6
+    assert resumed_state.is_complete()
+    assert resumed_state.executed_history.count("shared") == 1
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+    assert _activation_projection(resumed_state) == _activation_projection(expected_state)
 
 
 @pytest.mark.parametrize(

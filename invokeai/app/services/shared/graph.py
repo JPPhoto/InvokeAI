@@ -505,11 +505,7 @@ class _GenericGraphSchedulerAdapter:
         last_plan_node = self._scheduler.plan.nodes.get(last_exec_node_id)
         if last_plan_node is None:
             return
-        if any(
-            self._scheduler.plan.nodes[ready_node_id].class_name == last_plan_node.class_name
-            for ready_node_id in self._scheduler.ready_ids
-        ):
-            self._scheduler._active_class = last_plan_node.class_name
+        self._scheduler._active_class = last_plan_node.class_name
 
     def _is_node_activation_ready(self, exec_node_id: str) -> bool:
         """Require every frame-local activation dependency to be satisfied."""

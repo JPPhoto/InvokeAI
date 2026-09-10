@@ -77,31 +77,43 @@ def _can_use_fresh_flat_if_activation(state: "GraphExecutionState") -> bool:
                     return False
                 if any(edge.source.node_id in if_node_ids for edge in input_edges):
                     return False
-        elif len(if_nodes) == 2 and len(nested_edges) == 1:
-            nested_edge = nested_edges[0]
-            if nested_edge.source.field != "value" or nested_edge.destination.field not in {
-                "true_input",
-                "false_input",
-            }:
+        elif len(nested_edges) == len(if_nodes) - 1:
+            if any(
+                edge.source.field != "value" or edge.destination.field not in {"true_input", "false_input"}
+                for edge in nested_edges
+            ):
                 return False
 
-            inner_if_id = nested_edge.source.node_id
-            if any(edge.source.node_id == inner_if_id and edge != nested_edge for edge in state.graph.edges):
+            nested_edge_by_source = {edge.source.node_id: edge for edge in nested_edges}
+            nested_destinations = {edge.destination.node_id for edge in nested_edges}
+            if len(nested_edge_by_source) != len(nested_edges) or len(nested_destinations) != len(nested_edges):
                 return False
 
-            outer_if_id = nested_edge.destination.node_id
+            chain_start_ids = if_node_ids - nested_destinations
+            chain_end_ids = if_node_ids - set(nested_edge_by_source)
+            if len(chain_start_ids) != 1 or len(chain_end_ids) != 1:
+                return False
+
+            current_if_id = next(iter(chain_start_ids))
+            for _ in range(len(nested_edges)):
+                nested_edge = nested_edge_by_source.get(current_if_id)
+                if nested_edge is None:
+                    return False
+                if any(edge.source.node_id == current_if_id and edge != nested_edge for edge in state.graph.edges):
+                    return False
+                current_if_id = nested_edge.destination.node_id
+            if current_if_id not in chain_end_ids:
+                return False
+
+            expected_input_fields = {"condition", "true_input", "false_input"}
             for if_node in if_nodes:
-                for field in ("condition", "true_input", "false_input"):
-                    input_edges = state.graph._get_input_edges(if_node.id, field)
-                    if len(input_edges) != 1:
-                        return False
-                    for edge in input_edges:
-                        if edge.source.node_id in if_node_ids and edge != nested_edge:
-                            return False
-                        if edge == nested_edge and (
-                            if_node.id != outer_if_id or field != nested_edge.destination.field
-                        ):
-                            return False
+                input_edges = state.graph._get_input_edges(if_node.id)
+                if (
+                    len(input_edges) != len(expected_input_fields)
+                    or {edge.destination.field for edge in input_edges} != expected_input_fields
+                    or any(edge.source.node_id in if_node_ids and edge not in nested_edges for edge in input_edges)
+                ):
+                    return False
         else:
             return False
 

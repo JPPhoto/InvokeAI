@@ -129,6 +129,27 @@ def _three_nested_if_graph() -> Graph:
     return graph
 
 
+def _four_nested_if_graph() -> Graph:
+    graph = _three_nested_if_graph()
+    graph.delete_node("sink")
+    graph.add_node(BooleanInvocation(id="deepest_condition", value=True))
+    graph.add_node(AddInvocation(id="deepest_false", a=30, b=0))
+    graph.add_node(IfInvocation(id="deepest_if"))
+    graph.add_node(AddInvocation(id="sink", b=1))
+    graph.add_edge(_edge("deepest_condition", "value", "deepest_if", "condition"))
+    graph.add_edge(_edge("outer_if", "value", "deepest_if", "true_input"))
+    graph.add_edge(_edge("deepest_false", "value", "deepest_if", "false_input"))
+    graph.add_edge(_edge("deepest_if", "value", "sink", "a"))
+    return graph
+
+
+def _three_nested_if_fanout_graph() -> Graph:
+    graph = _three_nested_if_graph()
+    graph.add_node(AddInvocation(id="middle_side_consumer", b=1))
+    graph.add_edge(_edge("middle_if", "value", "middle_side_consumer", "a"))
+    return graph
+
+
 def _indirectly_connected_if_graph() -> Graph:
     graph = Graph()
     graph.add_node(BooleanInvocation(id="first_condition", value=True))
@@ -335,7 +356,9 @@ def test_three_independent_sibling_ifs_admit_owner_local_frame_local_dependencie
     ("graph_factory", "source_node_id"),
     [
         pytest.param(lambda: _sibling_if_graph_with_count(4), "first_true", id="four-sibling-ifs"),
-        pytest.param(_three_nested_if_graph, "inner_true", id="three-nested-ifs"),
+        pytest.param(_indirectly_connected_if_graph, "first_true", id="indirect-chain"),
+        pytest.param(_four_nested_if_graph, "inner_true", id="four-nested-ifs"),
+        pytest.param(_three_nested_if_fanout_graph, "inner_true", id="three-nested-if-fanout"),
     ],
 )
 def test_unsupported_if_shapes_use_controller_fallback(
@@ -358,6 +381,38 @@ def test_unsupported_if_shapes_use_controller_fallback(
     assert not state._can_use_fresh_flat_if_activation()
     assert state._get_source_activation_dependencies(source_node_id, (9,)) == expected
     assert calls == [(source_node_id, (9,))]
+
+
+@pytest.mark.parametrize("outer_condition", [False, True])
+@pytest.mark.parametrize("middle_condition", [False, True])
+@pytest.mark.parametrize("inner_condition", [False, True])
+def test_three_nested_ifs_admit_owner_and_frame_dependencies(
+    outer_condition: bool, middle_condition: bool, inner_condition: bool
+) -> None:
+    graph = _three_nested_if_graph()
+    graph.get_node("outer_condition").value = outer_condition
+    graph.get_node("middle_condition").value = middle_condition
+    graph.get_node("inner_condition").value = inner_condition
+    state = GraphExecutionState(graph=graph)
+
+    assert state._can_use_fresh_flat_if_activation()
+    assert state._get_source_activation_dependencies("inner_true", (1,)) == (
+        ActivationDependency(owner_id="inner_if", branch="true_input", frame=(1,)),
+        ActivationDependency(owner_id="middle_if", branch="true_input", frame=(1,)),
+        ActivationDependency(owner_id="outer_if", branch="true_input", frame=(1,)),
+    )
+    assert state._get_source_activation_dependencies("inner_false", (2,)) == (
+        ActivationDependency(owner_id="inner_if", branch="false_input", frame=(2,)),
+        ActivationDependency(owner_id="middle_if", branch="true_input", frame=(2,)),
+        ActivationDependency(owner_id="outer_if", branch="true_input", frame=(2,)),
+    )
+    assert state._get_source_activation_dependencies("middle_false", (3,)) == (
+        ActivationDependency(owner_id="middle_if", branch="false_input", frame=(3,)),
+        ActivationDependency(owner_id="outer_if", branch="true_input", frame=(3,)),
+    )
+    assert state._get_source_activation_dependencies("outer_false", (4,)) == (
+        ActivationDependency(owner_id="outer_if", branch="false_input", frame=(4,)),
+    )
 
 
 def test_indirectly_connected_ifs_retain_controller_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
