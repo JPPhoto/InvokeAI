@@ -54,6 +54,7 @@ def probe_attention_backends(device: torch.device) -> dict[str, bool] | None:
     """
     if device.type != "cuda":
         return None
+    probe = params = None
     try:
         probe = torch.empty(
             1,
@@ -76,6 +77,11 @@ def probe_attention_backends(device: torch.device) -> dict[str, bool] | None:
         return None
     finally:
         # Do not leave the probe tensor sitting in the caching allocator for the first generation.
+        # `empty_cache()` only releases blocks nothing references. Both locals still hold the probe
+        # here -- `SDPAParams` keeps a reference of its own -- so dropping both is what makes the
+        # call do anything at all. Measured: without this the segment stays reserved for the
+        # process lifetime, which is the opposite of what the line above says.
+        del probe, params
         torch.cuda.empty_cache()
 
 

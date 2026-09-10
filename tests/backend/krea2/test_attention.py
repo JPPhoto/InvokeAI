@@ -7,6 +7,16 @@ import invokeai.backend.krea2.attention as krea2_attention
 from invokeai.backend.krea2.attention import Krea2MemoryEfficientAttnProcessor, Krea2RegionalPromptingState
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_override(monkeypatch):
+    """These assert the default ranking, so they have to own the default rather than inherit it.
+
+    Four of the six fail in a shell where `INVOKE_KREA2_SDPA_BACKEND` is exported -- which is the
+    shell the PR asks users and its own A/B workflow to run in.
+    """
+    monkeypatch.delenv(krea2_attention.KREA2_SDPA_BACKEND_ENV_VAR, raising=False)
+
+
 def _build_gqa_attention() -> Krea2Attention:
     # Krea-2's main blocks use grouped-query attention: more query heads than key/value heads.
     torch.manual_seed(0)

@@ -26,6 +26,18 @@ from invokeai.backend.krea2.attention import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_override(monkeypatch):
+    """Decide the override here, never inherit it from the shell.
+
+    The PR tells users -- and its own A/B workflow -- to export this variable, so the suite is run
+    in exactly the shell where it is set. Reading it made 11 of these 24 tests fail there, including
+    the fallback test the design rests on. A test that asserts what the default ranking is has to
+    own that default; one that wants an override sets it explicitly.
+    """
+    monkeypatch.delenv(KREA2_SDPA_BACKEND_ENV_VAR, raising=False)
+
+
 class TestTheDefaultRanking:
     def test_flash_leads_and_cudnn_follows(self):
         """Flash is the fastest kernel where the build has it -- and is already what runs today,
