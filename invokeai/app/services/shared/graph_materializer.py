@@ -21,6 +21,7 @@ from invokeai.app.services.shared.graph_validation import (
     IterateInvocation,
     _SupportedNestedForBody,
     _SupportedNestedIterateBody,
+    _SupportedNestedIterateChain,
     copydeep,
     get_output_field_scope,
     nx,
@@ -270,6 +271,11 @@ class _ExecutionMaterializer:
     def create_for_body_iteration(self, source_for_id: str, prepared_for_id: str) -> Optional[str]:
         graph = self._state._get_source_graph_flat()
         execution_graph = self._state._get_execution_graph_flat()
+        serial_nested_body = self._state.graph._get_supported_for_serial_nested_iterate_chain(source_for_id, graph)
+        if serial_nested_body is not None:
+            return self._create_serial_nested_iterate_body_iteration(
+                source_for_id, prepared_for_id, graph, execution_graph, serial_nested_body
+            )
         nested_body = self._state.graph._get_supported_for_nested_iterate_body(source_for_id, graph)
         if nested_body is not None:
             return self._create_nested_iterate_body_iteration(
@@ -468,6 +474,229 @@ class _ExecutionMaterializer:
         attached_return_edges = self._attach_execution_edges(prepared_return_node.id, return_edges)
         self._initialize_execution_node(prepared_return_node.id, attached_return_edges)
         return prepared_return_node.id
+
+    def _create_serial_nested_iterate_copy(
+        self,
+        source_node_id: str,
+        input_source_id: str,
+        input_source_field: str,
+        input_destination_field: str,
+        iteration_path: tuple[int, ...],
+    ) -> str:
+        new_node = self._create_execution_node_copy(self._state.graph.get_node(source_node_id), source_node_id, -1)
+        self._state._prepared_registry().set_iteration_path(new_node.id, iteration_path)
+        attached_edges = self._attach_execution_edges(
+            new_node.id,
+            [
+                Edge(
+                    source=EdgeConnection(node_id=input_source_id, field=input_source_field),
+                    destination=EdgeConnection(node_id="", field=input_destination_field),
+                )
+            ],
+        )
+        self._initialize_execution_node(new_node.id, attached_edges)
+        return new_node.id
+
+    def _get_serial_nested_outer_path(self, prepared_for_id: str) -> tuple[int, ...]:
+        prepared_for = self._state.execution_graph.get_node(prepared_for_id)
+        iteration_path = self._state._get_iteration_path(prepared_for_id)
+        if isinstance(prepared_for, ForInvocation) and prepared_for.index >= 0:
+            return (*self._state._get_for_parent_iteration_path(prepared_for_id), prepared_for.index)
+        return iteration_path
+
+    def _get_serial_nested_prepared_at_path(
+        self, source_node_id: str, iteration_path: tuple[int, ...]
+    ) -> Optional[str]:
+        matching_ids = [
+            prepared_id
+            for prepared_id in self._state._prepared_registry().get_prepared_ids(source_node_id)
+            if self._state._get_iteration_path(prepared_id) == iteration_path
+        ]
+        if len(matching_ids) > 1:
+            raise RuntimeError(f"Multiple prepared nested nodes exist for {source_node_id} at {iteration_path}")
+        return matching_ids[0] if matching_ids else None
+
+    def _create_serial_nested_collect_and_return(
+        self,
+        source_for_id: str,
+        prepared_for_id: str,
+        nested_body: _SupportedNestedIterateChain,
+        outer_iteration_path: tuple[int, ...],
+        body_prepared_ids: list[str],
+    ) -> str:
+        source_collect_id = nested_body.collect_node_id
+        source_return_id = nested_body.return_node_id
+        prepared_collect_id = self._get_serial_nested_prepared_at_path(source_collect_id, outer_iteration_path)
+        if prepared_collect_id is None:
+            collect_item_edge = self._state.graph._get_input_edges(source_collect_id, ITEM_FIELD)[0]
+            collect_edges = [
+                Edge(
+                    source=EdgeConnection(node_id=body_prepared_id, field=collect_item_edge.source.field),
+                    destination=EdgeConnection(node_id="", field=collect_item_edge.destination.field),
+                )
+                for body_prepared_id in body_prepared_ids
+            ]
+            self._state._discard_source_executed(source_collect_id)
+            prepared_collect_node = self._create_execution_node_copy(
+                self._state.graph.get_node(source_collect_id), source_collect_id, -1
+            )
+            self._state._prepared_registry().set_iteration_path(prepared_collect_node.id, outer_iteration_path)
+            attached_collect_edges = self._attach_execution_edges(prepared_collect_node.id, collect_edges)
+            self._initialize_execution_node(prepared_collect_node.id, attached_collect_edges)
+            prepared_collect_id = prepared_collect_node.id
+
+        prepared_return_id = self._get_serial_nested_prepared_at_path(source_return_id, outer_iteration_path)
+        if prepared_return_id is not None:
+            return prepared_return_id
+
+        self._state._discard_source_executed(source_return_id)
+        return_edges: list[Edge] = []
+        for edge in self._state.graph._get_input_edges(source_return_id):
+            if edge.destination.field == "output":
+                prepared_source_id = prepared_collect_id
+                source_field = COLLECTION_FIELD
+            elif edge.source.node_id == source_for_id:
+                prepared_source_id = prepared_for_id
+                source_field = edge.source.field
+            else:
+                raise RuntimeError(f"Unable to rematerialize serial nested ForReturn input {edge}")
+            return_edges.append(
+                Edge(
+                    source=EdgeConnection(node_id=prepared_source_id, field=source_field),
+                    destination=EdgeConnection(node_id="", field=edge.destination.field),
+                )
+            )
+
+        prepared_return_node = self._create_execution_node_copy(
+            self._state.graph.get_node(source_return_id), source_return_id, -1
+        )
+        self._state._prepared_registry().set_iteration_path(prepared_return_node.id, outer_iteration_path)
+        attached_return_edges = self._attach_execution_edges(prepared_return_node.id, return_edges)
+        self._initialize_execution_node(prepared_return_node.id, attached_return_edges)
+        return prepared_return_node.id
+
+    def _create_serial_nested_iterate_body_iteration(
+        self,
+        source_for_id: str,
+        prepared_for_id: str,
+        graph: "nx.DiGraph",
+        execution_graph: "nx.DiGraph",
+        nested_body: _SupportedNestedIterateChain,
+    ) -> Optional[str]:
+        del execution_graph
+        outer_iteration_path = self._get_serial_nested_outer_path(prepared_for_id)
+        first_iterate_id, second_iterate_id = nested_body.iterate_node_ids
+        first_preparation_id = self._state.graph._get_input_edges(first_iterate_id, COLLECTION_FIELD)[0].source.node_id
+        first_preparation_edge = self._state.graph._get_input_edges(first_preparation_id)[0]
+
+        prepared_first_preparation_id = self._get_serial_nested_prepared_at_path(
+            first_preparation_id, outer_iteration_path
+        )
+        if prepared_first_preparation_id is None:
+            prepared_first_preparation_id = self._create_serial_nested_iterate_copy(
+                first_preparation_id,
+                prepared_for_id,
+                first_preparation_edge.source.field,
+                first_preparation_edge.destination.field,
+                outer_iteration_path,
+            )
+            self._state._discard_source_executed(first_preparation_id)
+
+        if prepared_first_preparation_id not in self._state.results:
+            return None
+
+        first_prepared_ids = [
+            prepared_id
+            for prepared_id in self._state._prepared_registry().get_prepared_ids(first_iterate_id)
+            if self._state._get_iteration_path(prepared_id)[: len(outer_iteration_path)] == outer_iteration_path
+        ]
+        if not first_prepared_ids:
+            self._state._discard_source_executed(first_iterate_id)
+            first_prepared_ids = self.create_execution_node(
+                first_iterate_id,
+                [(first_preparation_id, prepared_first_preparation_id)],
+                iteration_path=outer_iteration_path,
+            )
+            if not first_prepared_ids:
+                self._state._record_empty_iterate_stream(first_iterate_id, outer_iteration_path)
+                return self._create_serial_nested_collect_and_return(
+                    source_for_id, prepared_for_id, nested_body, outer_iteration_path, []
+                )
+            return first_prepared_ids[0]
+
+        second_preparation_id = self._state.graph._get_input_edges(second_iterate_id, COLLECTION_FIELD)[
+            0
+        ].source.node_id
+        second_preparation_edge = self._state.graph._get_input_edges(second_preparation_id)[0]
+        prepared_second_preparation_ids: list[str] = []
+        for first_prepared_id in first_prepared_ids:
+            if first_prepared_id not in self._state.results:
+                continue
+            prepared_id = self._get_serial_nested_prepared_at_path(
+                second_preparation_id, self._state._get_iteration_path(first_prepared_id)
+            )
+            if prepared_id is not None and prepared_id in self._state.results:
+                prepared_second_preparation_ids.append(prepared_id)
+        if len(prepared_second_preparation_ids) != len(first_prepared_ids):
+            self._state._discard_source_executed(second_preparation_id)
+            created_ids: list[str] = []
+            for first_prepared_id in first_prepared_ids:
+                iteration_path = self._state._get_iteration_path(first_prepared_id)
+                if self._get_serial_nested_prepared_at_path(second_preparation_id, iteration_path) is not None:
+                    continue
+                created_ids.append(
+                    self._create_serial_nested_iterate_copy(
+                        second_preparation_id,
+                        first_prepared_id,
+                        second_preparation_edge.source.field,
+                        second_preparation_edge.destination.field,
+                        iteration_path,
+                    )
+                )
+            return created_ids[0] if created_ids else None
+
+        second_prepared_ids: list[str] = []
+        body_prepared_ids: list[str] = []
+        body_node_id = self._state.graph._get_input_edges(nested_body.collect_node_id, ITEM_FIELD)[0].source.node_id
+        body_input_edge = self._state.graph._get_input_edges(body_node_id)[0]
+        self._state._discard_source_executed(second_iterate_id)
+        for prepared_second_preparation_id in prepared_second_preparation_ids:
+            iteration_path = self._state._get_iteration_path(prepared_second_preparation_id)
+            second_ids = [
+                prepared_id
+                for prepared_id in self._state._prepared_registry().get_prepared_ids(second_iterate_id)
+                if self._state._get_iteration_path(prepared_id)[: len(iteration_path)] == iteration_path
+                and len(self._state._get_iteration_path(prepared_id)) == len(iteration_path) + 1
+            ]
+            if not second_ids:
+                second_ids = self.create_execution_node(
+                    second_iterate_id,
+                    [(second_preparation_id, prepared_second_preparation_id)],
+                    iteration_path=iteration_path,
+                )
+            second_prepared_ids.extend(second_ids)
+            for prepared_second_id in second_ids:
+                prepared_body_id = self._get_serial_nested_prepared_at_path(
+                    body_node_id, self._state._get_iteration_path(prepared_second_id)
+                )
+                if prepared_body_id is None:
+                    prepared_body_id = self._create_serial_nested_iterate_copy(
+                        body_node_id,
+                        prepared_second_id,
+                        body_input_edge.source.field,
+                        body_input_edge.destination.field,
+                        self._state._get_iteration_path(prepared_second_id),
+                    )
+                body_prepared_ids.append(prepared_body_id)
+            if not second_ids:
+                self._state._record_empty_iterate_stream(second_iterate_id, iteration_path)
+
+        if not second_prepared_ids:
+            self._state._mark_source_node_empty(second_iterate_id, outer_iteration_path)
+            self._state._mark_source_node_empty(body_node_id, outer_iteration_path)
+        return self._create_serial_nested_collect_and_return(
+            source_for_id, prepared_for_id, nested_body, outer_iteration_path, body_prepared_ids
+        )
 
     def _create_nested_for_body_iteration(
         self,

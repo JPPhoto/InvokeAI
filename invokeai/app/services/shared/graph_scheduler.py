@@ -122,6 +122,24 @@ class _ExecutionScheduler:
         for source_for_id, source_node in self._state.graph.nodes.items():
             if not isinstance(source_node, ForInvocation):
                 continue
+            serial_nested_body = self._state.graph._get_supported_for_serial_nested_iterate_chain(source_for_id, graph)
+            if serial_nested_body is not None:
+                if completed_source_id not in serial_nested_body.body_path_nodes:
+                    continue
+                prepared_exec_path = self._state._get_iteration_path(exec_node_id)
+                for prepared_for_id in self._state._prepared_registry().get_prepared_ids(source_for_id):
+                    prepared_for_path = self._state._get_iteration_path(prepared_for_id)
+                    prepared_for_node = self._state.execution_graph.get_node(prepared_for_id)
+                    if isinstance(prepared_for_node, ForInvocation) and prepared_for_node.index >= 0:
+                        prepared_for_path = (
+                            *self._state._get_for_parent_iteration_path(prepared_for_id),
+                            prepared_for_node.index,
+                        )
+                    if prepared_exec_path[: len(prepared_for_path)] == prepared_for_path:
+                        self._state._materializer().create_for_body_iteration(
+                            source_for_id=source_for_id, prepared_for_id=prepared_for_id
+                        )
+                        return
             nested_body = self._state.graph._get_supported_for_nested_iterate_body(source_for_id, graph)
             nested_for_body = self._state.graph._get_supported_for_nested_for_body(source_for_id, graph)
             if nested_body is not None:

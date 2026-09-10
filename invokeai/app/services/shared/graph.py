@@ -814,13 +814,37 @@ class GraphExecutionState(BaseModel):
 
         iterate_nodes = [node for node in self.graph.nodes.values() if isinstance(node, IterateInvocation)]
         collect_nodes = [node for node in self.graph.nodes.values() if isinstance(node, CollectInvocation)]
+        source_graph = self._get_source_graph_flat()
+        if len(iterate_nodes) == 2 and len(collect_nodes) == 1:
+            serial_chain = self.graph._get_supported_for_serial_nested_iterate_chain(outer_for.id, source_graph)
+            if (
+                can_use_nested_iterate_planner(self)
+                and serial_chain is not None
+                and len(self.graph.nodes) == 9
+                and len(self.graph.edges) == 9
+            ):
+                body_nodes = set(serial_chain.body_path_nodes)
+                outer_consumers = [
+                    node for node in self.graph.nodes.values() if node.id not in body_nodes and node.id != outer_for.id
+                ]
+                if len(outer_consumers) != 1:
+                    return False
+                consumer = outer_consumers[0]
+                output_edges = self.graph._get_output_edges(outer_for.id, "output_collection")
+                consumer_inputs = self.graph._get_input_edges(consumer.id)
+                return (
+                    not isinstance(consumer, (ForInvocation, ForReturnInvocation, IterateInvocation, CollectInvocation))
+                    and len(output_edges) == 1
+                    and output_edges[0].destination.node_id == consumer.id
+                    and output_edges[0].destination.field == "value"
+                    and consumer_inputs == output_edges
+                )
         if len(iterate_nodes) != 1 or len(collect_nodes) != 1:
             return False
         iterate_node = iterate_nodes[0]
         collect_node = collect_nodes[0]
         return_node = return_nodes[0]
 
-        source_graph = self._get_source_graph_flat()
         if (
             not can_use_nested_iterate_planner(self)
             or self.graph._get_supported_for_nested_iterate_body(outer_for.id, source_graph) is None

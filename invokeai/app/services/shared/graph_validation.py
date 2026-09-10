@@ -39,6 +39,7 @@ from invokeai.app.invocations.call_saved_workflow import (
     is_call_saved_workflow_dynamic_input,
 )
 from invokeai.app.invocations.fields import Input, InputField, OutputField, OutputScope, UIType
+from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.invocations.loops import (
     LOOP_LINKAGE_FIELD,
     ForInvocation,
@@ -107,6 +108,14 @@ class _SupportedNestedIterateBody:
     body_path_nodes: set[str]
     return_node_id: str
     iterate_node_id: str
+    collect_node_id: str
+
+
+@dataclass(frozen=True)
+class _SupportedNestedIterateChain:
+    body_path_nodes: frozenset[str]
+    return_node_id: str
+    iterate_node_ids: tuple[str, str]
     collect_node_id: str
 
 
@@ -1237,6 +1246,127 @@ class Graph(BaseModel):
             collect_node_id=collect_node_id,
         )
 
+    def _get_supported_for_serial_nested_iterate_chain(
+        self, node_id: str, graph: "nx.DiGraph"
+    ) -> _SupportedNestedIterateChain | None:
+        """Return the exact two-level serial Iterate contract, if present.
+
+        Supported shape::
+
+            For.item -> prep1 -> Iterate1.item -> prep2 -> Iterate2.item -> body -> Collect.item
+                                                                                         Collect.collection -> ForReturn.output
+
+        This intentionally excludes sibling iterators, fan-in, and additional control-flow nodes. Those shapes must
+        remain on the compatibility path until separately proven equivalent.
+        """
+        body_path_to_return = self._get_for_body_path_to_return(node_id, graph)
+        if body_path_to_return is None:
+            return None
+        body_path_nodes, return_node_id = body_path_to_return
+        iterate_node_ids = tuple(
+            body_node_id
+            for body_node_id in body_path_nodes
+            if isinstance(self.get_node(body_node_id), IterateInvocation)
+        )
+        collect_node_ids = tuple(
+            body_node_id
+            for body_node_id in body_path_nodes
+            if isinstance(self.get_node(body_node_id), CollectInvocation)
+        )
+        if len(iterate_node_ids) != 2 or len(collect_node_ids) != 1:
+            return None
+
+        collect_node_id = collect_node_ids[0]
+        if len(body_path_nodes) != 7:
+            return None
+        return_output_edges = self._get_input_edges(return_node_id, "output")
+        if len(return_output_edges) != 1 or (
+            return_output_edges[0].source.node_id != collect_node_id
+            or return_output_edges[0].source.field != COLLECTION_FIELD
+        ):
+            return None
+        if self._get_input_edges(collect_node_id, COLLECTION_FIELD):
+            return None
+        collect_item_edges = self._get_input_edges(collect_node_id, ITEM_FIELD)
+        if len(collect_item_edges) != 1:
+            return None
+
+        first_iterate_id, second_iterate_id = sorted(
+            iterate_node_ids, key=lambda iterate_id: nx.shortest_path_length(graph, node_id, iterate_id)
+        )
+        if not nx.has_path(graph, first_iterate_id, second_iterate_id) or not nx.has_path(
+            graph, second_iterate_id, collect_node_id
+        ):
+            return None
+        first_input_edges = self._get_input_edges(first_iterate_id, COLLECTION_FIELD)
+        second_input_edges = self._get_input_edges(second_iterate_id, COLLECTION_FIELD)
+        if len(first_input_edges) != 1 or len(second_input_edges) != 1:
+            return None
+        first_preparation_id = first_input_edges[0].source.node_id
+        second_preparation_id = second_input_edges[0].source.node_id
+        body_node_id = collect_item_edges[0].source.node_id
+        expected_nodes = {
+            first_preparation_id,
+            first_iterate_id,
+            second_preparation_id,
+            second_iterate_id,
+            body_node_id,
+            collect_node_id,
+            return_node_id,
+        }
+        if body_path_nodes != expected_nodes or first_preparation_id == second_preparation_id:
+            return None
+
+        control_types = (
+            CallSavedWorkflowInvocation,
+            IfInvocation,
+            ForInvocation,
+            ForReturnInvocation,
+            IterateInvocation,
+            CollectInvocation,
+        )
+        ordinary_nodes = {first_preparation_id, second_preparation_id, body_node_id}
+        if any(isinstance(self.get_node(candidate_id), control_types) for candidate_id in ordinary_nodes):
+            return None
+        if (
+            first_input_edges[0].source.node_id != first_preparation_id
+            or first_input_edges[0].source.field != COLLECTION_FIELD
+            or second_input_edges[0].source.node_id != second_preparation_id
+            or second_input_edges[0].source.field != COLLECTION_FIELD
+        ):
+            return None
+
+        first_preparation_inputs = self._get_input_edges(first_preparation_id)
+        second_preparation_inputs = self._get_input_edges(second_preparation_id)
+        body_inputs = self._get_input_edges(body_node_id)
+        if (
+            len(first_preparation_inputs) != 1
+            or first_preparation_inputs[0].source.node_id != node_id
+            or first_preparation_inputs[0].source.field != ITEM_FIELD
+            or len(second_preparation_inputs) != 1
+            or second_preparation_inputs[0].source.node_id != first_iterate_id
+            or second_preparation_inputs[0].source.field != ITEM_FIELD
+            or len(body_inputs) != 1
+            or body_inputs[0].source.node_id != second_iterate_id
+            or body_inputs[0].source.field != ITEM_FIELD
+        ):
+            return None
+        if self._get_output_edges(node_id, ITEM_FIELD) != first_preparation_inputs:
+            return None
+        if self._get_output_edges(first_iterate_id, ITEM_FIELD) != second_preparation_inputs:
+            return None
+        if self._get_output_edges(second_iterate_id, ITEM_FIELD) != body_inputs:
+            return None
+        if self._get_output_edges(body_node_id) != collect_item_edges:
+            return None
+
+        return _SupportedNestedIterateChain(
+            body_path_nodes=frozenset(body_path_nodes),
+            return_node_id=return_node_id,
+            iterate_node_ids=(first_iterate_id, second_iterate_id),
+            collect_node_id=collect_node_id,
+        )
+
     def _get_supported_for_nested_for_body(self, node_id: str, graph: "nx.DiGraph") -> _SupportedNestedForBody | None:
         """Returns the supported recursive nested For contract, if this For uses it.
 
@@ -1481,7 +1611,10 @@ class Graph(BaseModel):
             return "For loop body paths must terminate at the matching ForReturn and not escape the loop body"
 
         if any(isinstance(self.get_node(body_node_id), IterateInvocation) for body_node_id in body_path_nodes):
-            if self._get_supported_for_nested_iterate_body(node_id, graph) is None:
+            if (
+                self._get_supported_for_nested_iterate_body(node_id, graph) is None
+                and self._get_supported_for_serial_nested_iterate_chain(node_id, graph) is None
+            ):
                 return "Iterate nodes inside For loop bodies are unsupported"
 
         for body_node_id in body_path_nodes:

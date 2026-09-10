@@ -575,6 +575,33 @@ def _input_driven_nested_for_iterate_collect_graph() -> Graph:
     return graph
 
 
+def _serial_two_level_nested_for_iterate_collect_graph(*, outer_collection: list[list[str]] | None = None) -> Graph:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="outer_for", collection=outer_collection or [["a", "b"], ["c"]]))
+    graph.add_node(PolymorphicStringTestInvocation(id="nested_collection_1"))
+    graph.add_node(IterateInvocation(id="nested_iterate_1"))
+    graph.add_node(PolymorphicStringTestInvocation(id="nested_collection_2"))
+    graph.add_node(IterateInvocation(id="nested_iterate_2"))
+    graph.add_node(AnyTypeTestInvocation(id="nested_body"))
+    graph.add_node(CollectInvocation(id="nested_collect"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+
+    def connect(source: str, source_field: str, destination: str, destination_field: str) -> None:
+        graph.add_edge(create_edge(source, source_field, destination, destination_field))
+
+    connect("outer_for", "item", "nested_collection_1", "value")
+    connect("nested_collection_1", "collection", "nested_iterate_1", "collection")
+    connect("nested_iterate_1", "item", "nested_collection_2", "value")
+    connect("nested_collection_2", "collection", "nested_iterate_2", "collection")
+    connect("nested_iterate_2", "item", "nested_body", "value")
+    connect("nested_body", "value", "nested_collect", "item")
+    connect("nested_collect", "collection", "outer_return", "output")
+    connect("outer_for", "output_collection", "after", "value")
+    graph.add_edge(create_loop_linkage("outer_for", "outer_return"))
+    return graph
+
+
 def _direct_iterate_body_collect_graph(
     *, collection: list[Any] | None = None, with_after: bool = False, downstream_count: int | None = None
 ) -> Graph:
@@ -1948,6 +1975,101 @@ def test_input_driven_nested_for_iterate_collect_failure_matches_compatibility()
     assert "outer_return" not in generic_trace
     assert "after" not in generic_state.source_prepared_mapping
     assert _state_projection(generic_state) == _state_projection(compatibility_state)
+
+
+def test_serial_two_level_nested_for_iterate_collect_uses_generic_planner() -> None:
+    compatibility_state = GraphExecutionState(graph=_serial_two_level_nested_for_iterate_collect_graph())
+    compatibility_trace, compatibility_state = _run(
+        compatibility_state,
+        force_compatibility_scheduler=True,
+    )
+    state = GraphExecutionState(graph=_serial_two_level_nested_for_iterate_collect_graph())
+    assert state._can_use_generic_scheduler()
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "_create_nested_iterate_body_iteration",
+        side_effect=AssertionError("serial nested Iterate/Collect used materializer copy creation"),
+    ):
+        trace, state = _run(state)
+    assert state.is_complete()
+    assert compatibility_state.is_complete()
+    assert trace == compatibility_trace
+
+
+def test_serial_two_level_nested_for_iterate_collect_generic_closes_empty_streams() -> None:
+    graph = _serial_two_level_nested_for_iterate_collect_graph(outer_collection=[[], ["c"]])
+    compatibility_trace, compatibility_state = _run(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+    )
+    state = GraphExecutionState(graph=graph)
+    trace, state = _run(state)
+
+    assert state.is_complete()
+    assert compatibility_state.is_complete()
+    assert trace == compatibility_trace
+    assert _state_projection(state) == _state_projection(compatibility_state)
+    assert trace[-1] == "after"
+    runtime = state._generic_runtime()
+    assert runtime.streams[state._iteration_stream_id("nested_iterate_1", (0,))].values == ()
+    assert runtime.streams[state._iteration_stream_id("nested_iterate_2", (1, 0))].values == ("c",)
+    assert _source_output(state, "after").value == [[], ["c"]]
+
+
+def test_serial_two_level_nested_for_iterate_collect_generic_rehydrates() -> None:
+    graph = _serial_two_level_nested_for_iterate_collect_graph()
+    expected_trace, expected_state = _run(GraphExecutionState(graph=graph))
+    partial_trace, partial_state = _run(GraphExecutionState(graph=graph), stop_after=5)
+
+    resumed_trace, resumed_state = _run(load_execution_state(dump_execution_state(partial_state)))
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert resumed_state.is_complete()
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+    compatibility_trace, compatibility_state = _run(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+    )
+    assert compatibility_trace == expected_trace
+    assert _state_projection(compatibility_state) == _state_projection(expected_state)
+
+
+def test_serial_two_level_nested_for_iterate_collect_generic_failure_stops_outer_return() -> None:
+    graph = _serial_two_level_nested_for_iterate_collect_graph()
+    trace, state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph),
+        fail_source_id="nested_body",
+    )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+        fail_source_id="nested_body",
+    )
+
+    assert state.has_error()
+    assert state.is_complete()
+    assert compatibility_state.has_error()
+    assert compatibility_state.is_complete()
+    assert trace == compatibility_trace
+    assert "nested_collect" not in trace
+    assert "outer_return" not in trace
+    assert "after" not in trace
+
+
+def test_serial_two_level_nested_for_iterate_collect_retry_isolated() -> None:
+    graph = _serial_two_level_nested_for_iterate_collect_graph()
+    canceled_trace, canceled_state = _run_until_source(
+        GraphExecutionState(graph=graph),
+        "nested_collection_2",
+    )
+    retry_trace, retry_state = _run_graph(GraphExecutionState(graph=graph.model_copy(deep=True)))
+
+    assert canceled_trace[:3] == ["outer_for", "nested_collection_1", "nested_iterate_1"]
+    assert not canceled_state.is_complete()
+    assert retry_trace[-2:] == ["outer_return", "after"]
+    assert retry_state.id != canceled_state.id
+    assert _source_output(retry_state, "after").value == [["a", "b"], ["c"]]
+    assert retry_state.is_complete()
 
 
 @pytest.mark.parametrize("values", [[1, None, 1], []], ids=["ordered-duplicates-and-none", "empty"])

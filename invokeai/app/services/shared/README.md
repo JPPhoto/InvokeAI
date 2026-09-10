@@ -89,6 +89,13 @@ and one ordinary outer-output consumer—is also generic-routed. It owns outer
 input hydration, per-outer-frame stream expansion, checkpoint rehydration, and
 failure parity; input-driven inner preparation, deeper or multiple nesting,
 mixed control flow, and legacy snapshots remain compatibility-owned.
+The exact serial two-level extension—`For.item -> preparation1 -> Iterate1 ->
+preparation2 -> Iterate2 -> ordinary body -> Collect -> linked ForReturn`, plus
+one ordinary outer-output consumer—is also generic-routed. Its planner and
+compatibility adapter preserve ordered nested frame paths, close empty streams,
+resume from checkpoints, and stop downstream completion on failure/retry. Fan-in,
+sibling iterators, input-driven inner preparation, mixed control flow, deeper
+nesting, and legacy snapshots remain compatibility-owned.
 Three or more body-mediated branches, fan-in with four or more direct branches,
 nested iterators, and all mixed control flow retain materializer copy expansion,
 grouping, and empty-source handling on the legacy compatibility route.
