@@ -331,6 +331,111 @@ def test_processor_sqlite_queue_nested_iterate_for_cleanup(
         _stop_processor(processor)
 
 
+def test_processor_sqlite_nested_iterate_for_cancel_retry_reloads_fresh_stream_state(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_invoker: Invoker,
+    registered_event_bus: _RecordingRegisteredEventService,
+) -> None:
+    monkeypatch.setattr(
+        "invokeai.app.services.session_processor.session_processor_default.build_invocation_context",
+        _build_test_invocation_context,
+    )
+
+    queue = SqliteSessionQueue(db=mock_invoker.services.board_records._db)
+    mock_invoker.services.events = registered_event_bus
+    mock_invoker.services.session_queue = queue
+    mock_invoker.services.performance_statistics = _Stats()
+    queue.start(mock_invoker)
+
+    item_id = _insert_session(queue, _build_nested_graph(), versioned=True)
+    session_persisted = Event()
+    returns_seen = 0
+
+    def cancel_after_first_inner_return(invocation, queue_item, output) -> None:
+        nonlocal returns_seen
+        if queue_item.session.prepared_source_mapping[invocation.id] != "return":
+            return
+        returns_seen += 1
+        if returns_seen == 1:
+            queue.cancel_queue_item(queue_item.item_id)
+
+    processor = DefaultSessionProcessor(
+        session_runner=DefaultSessionRunner(
+            on_after_run_node_callbacks=[cancel_after_first_inner_return],
+            on_after_run_session_callbacks=[lambda queue_item: session_persisted.set()],
+        ),
+        polling_interval=0,
+    )
+    try:
+        processor.start(mock_invoker)
+        assert registered_event_bus.wait_for_status(item_id, "canceled")
+        assert session_persisted.wait(timeout=5)
+    finally:
+        _stop_processor(processor)
+
+    canceled_item = queue.get_queue_item(item_id)
+    assert canceled_item.status == "canceled"
+    assert returns_seen == 1
+    assert not canceled_item.session.is_complete()
+    assert "after" not in canceled_item.session.source_prepared_mapping
+    canceled_snapshot = dump_execution_state(canceled_item.session)
+
+    # Simulate an interrupted process after the partial state was persisted. Startup must cancel
+    # the stale row while preserving the nested frame/stream snapshot for inspection or retry.
+    with queue._db.transaction() as cursor:
+        cursor.execute("UPDATE session_queue SET status = 'in_progress' WHERE item_id = ?", (item_id,))
+    restarted_queue = SqliteSessionQueue(db=mock_invoker.services.board_records._db)
+    restarted_queue.start(mock_invoker)
+    reloaded_canceled_item = restarted_queue.get_queue_item(item_id)
+    assert reloaded_canceled_item.status == "canceled"
+    assert dump_execution_state(reloaded_canceled_item.session) == canceled_snapshot
+    assert restarted_queue.dequeue() is None
+
+    retry_result = queue.retry_items_by_id("default", [item_id])
+    assert retry_result.retried_item_ids == [item_id]
+    retried_item = next(
+        queue_item for queue_item in queue.list_all_queue_items("default") if queue_item.retried_from_item_id == item_id
+    )
+    assert retried_item.status == "pending"
+    assert retried_item.item_id != item_id
+    assert retried_item.session.id != canceled_item.session.id
+    assert retried_item.session.results == {}
+    assert retried_item.session.execution_refs == {}
+    assert retried_item.session.execution_tokens == {}
+    assert retried_item.session.execution_effects == {}
+    assert not retried_item.session._generic_runtime().streams
+
+    retry_session_persisted = Event()
+    retry_processor = DefaultSessionProcessor(
+        session_runner=DefaultSessionRunner(
+            on_after_run_session_callbacks=[lambda queue_item: retry_session_persisted.set()],
+        ),
+        polling_interval=0,
+    )
+    try:
+        retry_processor.start(mock_invoker)
+        assert registered_event_bus.wait_for_status(retried_item.item_id, "completed")
+        assert retry_session_persisted.wait(timeout=5)
+    finally:
+        _stop_processor(retry_processor)
+
+    canceled_item = queue.get_queue_item(item_id)
+    completed_item = queue.get_queue_item(retried_item.item_id)
+    assert dump_execution_state(canceled_item.session) == canceled_snapshot
+    assert canceled_item.status == "canceled"
+    assert completed_item.status == "completed"
+    assert completed_item.session.is_complete()
+    [after_execution_id] = completed_item.session.source_prepared_mapping["after"]
+    assert completed_item.session.results[after_execution_id].collection == [[1, 2], [3, 4]]
+    completed_streams = [
+        stream for stream in completed_item.session._generic_runtime().streams.values() if stream.owner_id == "iterate"
+    ]
+    assert len(completed_streams) == 2
+    assert all(stream.closed for stream in completed_streams)
+    assert {stream.values for stream in completed_streams} == {(1, 2), (3, 4)}
+    assert all(stream.stream_id.startswith(f"{completed_item.session.id}:iterate:") for stream in completed_streams)
+
+
 @pytest.mark.parametrize("outcome", ["success", "canceled", "failure"])
 def test_processor_sqlite_queue_nested_for_cleanup(
     monkeypatch: pytest.MonkeyPatch,

@@ -232,6 +232,12 @@ body-mediated branches and four or more direct streams remain compatibility-owne
 consumers now use the closed stream ledger when available;
 the full Iterate/Collect compatibility matrix covers empty, nested, fan-in, partial rehydration, failure, cancellation,
 and retry behavior. This evidence does not remove the materializer or queue adapters.
+The SQLite/session boundary also preserves this exact nested shape across
+cancellation, simulated interrupted-process startup, and retry: startup
+cancels stale in-progress rows without changing the persisted partial snapshot,
+while retry creates fresh execution/frame/stream identities and completes the
+same outer collection. Broader nested shapes and compatibility-owner removal
+remain separate gates.
 
 The source graph is treated as stable during normal execution, but the runtime object still exposes guarded graph
 mutation helpers. Those helpers reject changes once the affected nodes have already been prepared or executed.
