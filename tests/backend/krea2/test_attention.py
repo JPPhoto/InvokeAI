@@ -7,6 +7,16 @@ import invokeai.backend.krea2.attention as krea2_attention
 from invokeai.backend.krea2.attention import Krea2MemoryEfficientAttnProcessor, Krea2RegionalPromptingState
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_override(monkeypatch):
+    """These assert the default ranking, so they have to own the default rather than inherit it.
+
+    Four of the six fail in a shell where `INVOKE_KREA2_SDPA_BACKEND` is exported -- which is the
+    shell the PR asks users and its own A/B workflow to run in.
+    """
+    monkeypatch.delenv(krea2_attention.KREA2_SDPA_BACKEND_ENV_VAR, raising=False)
+
+
 def _build_gqa_attention() -> Krea2Attention:
     # Krea-2's main blocks use grouped-query attention: more query heads than key/value heads.
     torch.manual_seed(0)
@@ -99,7 +109,21 @@ def test_processor_without_regional_state_ignores_the_shared_mask() -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required to exercise fused SDPA")
-def test_cuda_memory_efficient_sdpa_accepts_dense_regional_mask(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("backend", "can_use"),
+    [
+        (SDPBackend.EFFICIENT_ATTENTION, torch.backends.cuda.can_use_efficient_attention),
+        (SDPBackend.CUDNN_ATTENTION, torch.backends.cuda.can_use_cudnn_attention),
+    ],
+    ids=["efficient", "cudnn"],
+)
+def test_cuda_fused_sdpa_accepts_dense_regional_mask(monkeypatch: pytest.MonkeyPatch, backend, can_use) -> None:
+    """Both fused kernels that can serve this path, not just the one that used to.
+
+    Flash refuses the mask the regional blocks pass, so after the ranking change cuDNN is what
+    actually serves them -- and on a build without flash it serves every block. Pinning only
+    efficient here would guard a kernel the product no longer reaches first.
+    """
     attn = _build_gqa_attention().to(device="cuda", dtype=torch.float16)
     hidden_states = torch.randn(1, 24, attn.hidden_size, device="cuda", dtype=torch.float16)
     mask = torch.block_diag(
@@ -107,13 +131,13 @@ def test_cuda_memory_efficient_sdpa_accepts_dense_regional_mask(monkeypatch: pyt
         torch.ones(12, 12, device="cuda", dtype=torch.bool),
     )
     state = Krea2RegionalPromptingState(attention_mask=mask)
-    monkeypatch.setattr(krea2_attention, "_KREA2_SDPA_BACKENDS", [SDPBackend.EFFICIENT_ATTENTION])
+    monkeypatch.setattr(krea2_attention, "_KREA2_SDPA_BACKENDS", [backend])
 
     head_dim = attn.hidden_size // attn.num_heads
     sdpa_tensor = torch.empty(1, attn.num_heads, 24, head_dim, device="cuda", dtype=torch.float16)
     sdpa_params = torch.backends.cuda.SDPAParams(sdpa_tensor, sdpa_tensor, sdpa_tensor, mask, 0.0, False, False)
-    if not torch.backends.cuda.can_use_efficient_attention(sdpa_params):
-        pytest.skip("This CUDA device/build does not support dense masks with memory-efficient SDPA")
+    if not can_use(sdpa_params):
+        pytest.skip(f"This CUDA device/build cannot serve a dense mask with {backend.name}")
 
     with torch.no_grad():
         attn.set_processor(Krea2MemoryEfficientAttnProcessor(regional_prompting_state=state))

@@ -38,17 +38,20 @@ class TestProbe:
             available = probe_attention_backends(torch.device("cuda"))
         assert available == {"cudnn": False, "flash": False, "efficient": False, "math": True}
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="the allocator is the thing under test")
     def test_the_probe_tensor_is_not_left_in_the_allocator(self):
-        with (
-            patch.object(torch, "empty", return_value=MagicMock()),
-            patch.object(torch.backends.cuda, "SDPAParams", return_value=MagicMock()),
-            patch.object(torch.backends.cuda, "can_use_cudnn_attention", return_value=True),
-            patch.object(torch.backends.cuda, "can_use_flash_attention", return_value=True),
-            patch.object(torch.backends.cuda, "can_use_efficient_attention", return_value=True),
-            patch.object(torch.cuda, "empty_cache") as empty_cache,
-        ):
-            probe_attention_backends(torch.device("cuda"))
-        empty_cache.assert_called_once()
+        """Measured against the real allocator, because that is the claim.
+
+        Patching `torch.empty` and `torch.cuda.empty_cache` and asserting the call happened tests
+        choreography: it passes just as happily when the probe is still referenced and the call
+        therefore frees nothing, which is what it did.
+        """
+        torch.cuda.empty_cache()
+        before = torch.cuda.memory_reserved()
+
+        probe_attention_backends(torch.device("cuda"))
+
+        assert torch.cuda.memory_reserved() == before
 
 
 class TestLogLine:

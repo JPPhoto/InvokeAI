@@ -180,6 +180,18 @@ class Krea2MemoryEfficientAttnProcessor:
             key = key.repeat_interleave(repeats, dim=1)
             value = value.repeat_interleave(repeats, dim=1)
 
+        # `sdpa_kernel` sets process-global flags, not thread-local ones, and torch offers no
+        # thread-scoped variant. InvokeAI runs one generation session per GPU concurrently, so a
+        # session on another device inside this window is affected too. Measured, on both paths:
+        #
+        # - Default (the four-backend list): a foreign thread still sees all four enabled. Only the
+        #   priority order moves, so a concurrent call flash cannot serve may land on cuDNN rather
+        #   than efficient. Both are valid kernels; the effect is which one runs, not whether one
+        #   is available.
+        # - Exclusive override (`INVOKE_KREA2_SDPA_BACKEND=cudnn` and friends): a foreign thread
+        #   sees the other three *disabled* for the duration. That is opt-in, and the variable
+        #   exists for measuring one kernel against another rather than for normal operation --
+        #   worth knowing before reaching for it on a multi-GPU box.
         with sdpa_kernel(list(self.sdpa_backends.backends), set_priority=self.sdpa_backends.set_priority):
             hidden_states = F.scaled_dot_product_attention(
                 query, key, value, attn_mask=attention_mask, enable_gqa=enable_gqa
