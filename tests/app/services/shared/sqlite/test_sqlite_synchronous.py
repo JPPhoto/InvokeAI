@@ -5,11 +5,14 @@ transactions on a power loss for much shorter commits. The default must not move
 change the durability of every existing install without anyone asking for it.
 """
 
+from unittest.mock import Mock
+
 import pytest
 from pydantic import ValidationError
 
 from invokeai.app.services.config.config_default import InvokeAIAppConfig
 from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
+from invokeai.app.services.shared.sqlite.sqlite_util import init_db
 from invokeai.backend.util.logging import InvokeAILogger
 
 # What `PRAGMA synchronous` reports back, as documented by SQLite.
@@ -69,33 +72,19 @@ class TestTheSettingReachesTheDatabase:
     Both halves can be correct while nothing connects them -- and that failure is silent: the app
     boots, every other test passes, and the setting simply does nothing. This happened once during
     development, which is why it is pinned rather than assumed.
+
+    Driven through the real `init_db` against an in-memory database, migrations and all, so what is
+    asserted is the connection the app ends up with. Stubbing `SqliteDatabase` here and checking the
+    keyword arrived would pin the argument's *name* instead: an implementation that accepts it and
+    then applies it conditionally would still pass, which is the regression worth catching.
     """
 
     @pytest.mark.parametrize("setting", ["full", "normal"])
-    def test_init_db_passes_the_configured_value_through(self, monkeypatch, setting):
-        from invokeai.app.services.shared.sqlite import sqlite_util
+    def test_init_db_carries_the_configured_value_to_the_connection(self, setting):
+        db = init_db(
+            config=InvokeAIAppConfig(use_memory_db=True, db_synchronous=setting),
+            logger=InvokeAILogger.get_logger(),
+            image_files=Mock(),
+        )
 
-        seen: dict[str, object] = {}
-
-        class _StubDatabase:
-            def __init__(self, **kwargs):
-                seen.update(kwargs)
-
-        class _StubMigrator:
-            def __init__(self, db):
-                pass
-
-            def register_migration(self, migration):
-                pass
-
-            def run_migrations(self):
-                pass
-
-        monkeypatch.setattr(sqlite_util, "SqliteDatabase", _StubDatabase)
-        monkeypatch.setattr(sqlite_util, "SqliteMigrator", _StubMigrator)
-        monkeypatch.setattr(sqlite_util, "build_migrations", lambda context: [])
-
-        config = InvokeAIAppConfig(use_memory_db=True, db_synchronous=setting)
-        sqlite_util.init_db(config=config, logger=InvokeAILogger.get_logger(), image_files=object())
-
-        assert seen["synchronous"] == setting
+        assert _synchronous_of(db) == PRAGMA_VALUES[setting]
