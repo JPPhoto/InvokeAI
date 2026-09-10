@@ -86,7 +86,7 @@ def _sibling_if_graph(*, first_condition: bool = True, second_condition: bool = 
 
 def _sibling_if_graph_with_count(count: int) -> Graph:
     graph = _sibling_if_graph()
-    names = ("first", "second", "third", "fourth")
+    names = ("first", "second", "third", "fourth", "fifth")
     assert 2 <= count <= len(names)
     for index in range(3, count + 1):
         name = names[index - 1]
@@ -379,10 +379,25 @@ def test_three_independent_sibling_ifs_admit_owner_local_frame_local_dependencie
     assert state._get_source_activation_dependencies("shared") == ()
 
 
+def test_four_independent_sibling_ifs_admit_owner_local_frame_local_dependencies() -> None:
+    state = GraphExecutionState(graph=_sibling_if_graph_with_count(4))
+
+    assert state._can_use_fresh_flat_if_activation()
+    for index, name in enumerate(("first", "second", "third", "fourth"), start=1):
+        assert state._get_source_activation_dependencies(f"{name}_true", (index,)) == (
+            ActivationDependency(owner_id=f"{name}_if", branch="true_input", frame=(index,)),
+        )
+        assert state._get_source_activation_dependencies(f"{name}_false", (index + 4,)) == (
+            ActivationDependency(owner_id=f"{name}_if", branch="false_input", frame=(index + 4,)),
+        )
+
+    assert state._get_source_activation_dependencies("shared") == ()
+
+
 @pytest.mark.parametrize(
     ("graph_factory", "source_node_id"),
     [
-        pytest.param(lambda: _sibling_if_graph_with_count(4), "first_true", id="four-sibling-ifs"),
+        pytest.param(lambda: _sibling_if_graph_with_count(5), "first_true", id="five-sibling-ifs"),
         pytest.param(_indirectly_connected_if_graph, "first_true", id="indirect-chain"),
         pytest.param(_four_nested_if_graph, "inner_true", id="four-nested-ifs"),
         pytest.param(_three_nested_if_extra_fanout_graph, "inner_true", id="three-nested-if-extra-fanout"),

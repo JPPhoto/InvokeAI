@@ -319,6 +319,7 @@ class _GenericGraphSchedulerAdapter:
     def __init__(self, state: "GraphExecutionState") -> None:
         self._state = state
         self._initializing = True
+        self._if_exec_ids: dict[str, None] = {}
         self._scheduler = ExecutionScheduler(
             ExecutionPlan(),
             state.ready_order,
@@ -441,6 +442,8 @@ class _GenericGraphSchedulerAdapter:
         node = self._state.execution_graph.nodes.get(exec_node_id)
         if node is None:
             raise KeyError(f"exec node {exec_node_id} missing from execution_graph")
+        if isinstance(node, IfInvocation):
+            self._if_exec_ids[exec_node_id] = None
         dependencies = tuple(edge.source.node_id for edge in self._state.execution_graph._get_input_edges(exec_node_id))
         activation_dependencies = self._state._get_activation_dependencies(exec_node_id)
         for dependency in dependencies:
@@ -494,6 +497,17 @@ class _GenericGraphSchedulerAdapter:
     def _project_ready_nodes(self) -> None:
         for exec_node_id in self._scheduler.ready_ids:
             self._project_ready_node(exec_node_id)
+
+    def _enqueue_activation_ready_nodes(self) -> None:
+        """Recheck prepared nodes whose activation input arrived after plan registration."""
+
+        for exec_node_id in tuple(self._if_exec_ids):
+            if exec_node_id not in self._state.indegree or exec_node_id in self._state.executed:
+                continue
+            self._state._tx_set_mapping(
+                self._state.indegree, exec_node_id, self._scheduler.indegree.get(exec_node_id, 0)
+            )
+            self.enqueue_if_ready(exec_node_id)
 
     def _remove_projected(self, exec_node_id: str) -> None:
         for queue in self._state._ready_queues.values():
@@ -590,6 +604,11 @@ class _GenericGraphSchedulerAdapter:
             self._state._tx_set_mapping(self._state.indegree, dependent, self._scheduler.indegree[dependent])
         for ready_node_id in newly_ready:
             self._project_ready_node(ready_node_id)
+        # Fresh If branch inputs may be materialized after the If dependency was
+        # registered, so no ordinary plan edge exists to re-enqueue the If when
+        # its selected branch completes. Recheck activation readiness here.
+        if any(isinstance(node, IfInvocation) for node in self._state.graph.nodes.values()):
+            self._enqueue_activation_ready_nodes()
         _ExecutionScheduler._try_materialize_deferred_nested_for_body(self, exec_node_id)
         if finalized_for_exec_node_id is None:
             return []

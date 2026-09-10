@@ -322,6 +322,43 @@ def _three_sibling_if_graph(
     return graph
 
 
+def _four_sibling_if_graph(
+    *,
+    first_condition: bool = True,
+    second_condition: bool = True,
+    third_condition: bool = True,
+    fourth_condition: bool = True,
+    with_shared_ancestor: bool = False,
+) -> Graph:
+    graph = _three_sibling_if_graph(
+        first_condition=first_condition,
+        second_condition=second_condition,
+        third_condition=third_condition,
+        with_shared_ancestor=with_shared_ancestor,
+    )
+    graph.add_node(BooleanInvocation(id="fourth_condition", value=fourth_condition))
+    graph.add_node(AddInvocation(id="fourth_true", b=6))
+    graph.add_node(AddInvocation(id="fourth_false", a=40, b=1))
+    graph.add_node(IfInvocation(id="fourth_if"))
+    graph.add_node(AddInvocation(id="fourth_sink", b=400))
+
+    def connect(source: str, source_field: str, destination: str, destination_field: str) -> None:
+        graph.add_edge(
+            Edge(
+                source=EdgeConnection(node_id=source, field=source_field),
+                destination=EdgeConnection(node_id=destination, field=destination_field),
+            )
+        )
+
+    if with_shared_ancestor:
+        connect("shared", "value", "fourth_true", "a")
+    connect("fourth_condition", "value", "fourth_if", "condition")
+    connect("fourth_true", "value", "fourth_if", "true_input")
+    connect("fourth_false", "value", "fourth_if", "false_input")
+    connect("fourth_if", "value", "fourth_sink", "a")
+    return graph
+
+
 def _indirectly_connected_sibling_if_graph() -> Graph:
     graph = _sibling_if_graph()
     graph.delete_node("second_true")
@@ -4198,6 +4235,115 @@ def test_fresh_three_sibling_ifs_shared_ancestor_executes_once_without_cross_own
                 (dependency.owner_id, dependency.branch, dependency.frame)
                 for dependency in state._if_activation_dependencies_by_exec[execution_id]
             } == {(if_id, branch, ())}
+
+    _assert_generic_and_compatibility_schedulers(runs[0][1], runs[1][1])
+    assert runs[0][0] == runs[1][0]
+    assert _state_projection(runs[0][1]) == _state_projection(runs[1][1])
+    assert _activation_projection(runs[0][1]) == _activation_projection(runs[1][1])
+
+
+@pytest.mark.parametrize("first_condition", [False, True])
+@pytest.mark.parametrize("second_condition", [False, True])
+@pytest.mark.parametrize("third_condition", [False, True])
+@pytest.mark.parametrize("fourth_condition", [False, True])
+def test_fresh_four_sibling_ifs_match_compatibility_for_all_polarities(
+    first_condition: bool,
+    second_condition: bool,
+    third_condition: bool,
+    fourth_condition: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh four-sibling If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+    graph = _four_sibling_if_graph(
+        first_condition=first_condition,
+        second_condition=second_condition,
+        third_condition=third_condition,
+        fourth_condition=fourth_condition,
+    )
+    runs: list[tuple[list[str], GraphExecutionState]] = []
+    for force_compatibility_scheduler in (False, True):
+        state = GraphExecutionState(graph=graph.model_copy(deep=True))
+        assert state._can_use_fresh_flat_if_activation()
+        trace, state = _run_graph(state, force_compatibility_scheduler=force_compatibility_scheduler)
+        runs.append((trace, state))
+        selected = {
+            "first_true" if first_condition else "first_false",
+            "second_true" if second_condition else "second_false",
+            "third_true" if third_condition else "third_false",
+            "fourth_true" if fourth_condition else "fourth_false",
+        }
+        unselected = {
+            "first_false" if first_condition else "first_true",
+            "second_false" if second_condition else "second_true",
+            "third_false" if third_condition else "third_true",
+            "fourth_false" if fourth_condition else "fourth_true",
+        }
+        assert state.is_complete()
+        assert selected.issubset(trace)
+        assert not unselected.intersection(trace)
+        assert not unselected.intersection(state.prepared_source_mapping.values())
+
+    _assert_generic_and_compatibility_schedulers(runs[0][1], runs[1][1])
+    assert runs[0][0] == runs[1][0]
+    assert _state_projection(runs[0][1]) == _state_projection(runs[1][1])
+    assert _activation_projection(runs[0][1]) == _activation_projection(runs[1][1])
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+@pytest.mark.parametrize("stop_after", [1, 4, 5, 8, 9, 12])
+def test_fresh_four_sibling_ifs_checkpoint_resume_matches_fresh_execution(
+    force_compatibility_scheduler: bool,
+    stop_after: int,
+) -> None:
+    graph = _four_sibling_if_graph(
+        first_condition=True,
+        second_condition=False,
+        third_condition=True,
+        fourth_condition=False,
+    )
+    expected_trace, expected_state = _run_graph(
+        GraphExecutionState(graph=graph.model_copy(deep=True)),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+    )
+    checkpoint_trace, checkpoint_state = _run_graph(
+        GraphExecutionState(graph=graph.model_copy(deep=True)),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+        stop_after=stop_after,
+    )
+
+    restored = load_execution_state(dump_execution_state(checkpoint_state))
+    if force_compatibility_scheduler:
+        _restore_compatibility_scheduler(restored)
+    resumed_trace, resumed_state = _run_graph(
+        restored,
+        force_compatibility_scheduler=force_compatibility_scheduler,
+    )
+
+    assert checkpoint_trace + resumed_trace == expected_trace
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+    assert _activation_projection(resumed_state) == _activation_projection(expected_state)
+    assert resumed_state.is_complete()
+
+
+def test_fresh_four_sibling_ifs_shared_ancestor_executes_once_without_cross_owner_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh four-sibling If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+    graph = _four_sibling_if_graph(with_shared_ancestor=True)
+    runs: list[tuple[list[str], GraphExecutionState]] = []
+    for force_compatibility_scheduler in (False, True):
+        state = GraphExecutionState(graph=graph.model_copy(deep=True))
+        assert state._can_use_fresh_flat_if_activation()
+        trace, state = _run_graph(state, force_compatibility_scheduler=force_compatibility_scheduler)
+        runs.append((trace, state))
+        assert trace.count("shared") == 1
+        assert state.is_complete()
 
     _assert_generic_and_compatibility_schedulers(runs[0][1], runs[1][1])
     assert runs[0][0] == runs[1][0]

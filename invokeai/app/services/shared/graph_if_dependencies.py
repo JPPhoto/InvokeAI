@@ -24,7 +24,7 @@ def _get_fresh_if_nodes(state: "GraphExecutionState") -> tuple[IfInvocation, ...
 
 
 def _can_use_fresh_flat_if_activation(state: "GraphExecutionState") -> bool:
-    """Admit fresh single-If or bounded nested-If dependency compilation."""
+    """Admit fresh bounded independent-sibling or nested-If dependency compilation."""
 
     if state._legacy_snapshot_loaded:
         return False
@@ -48,7 +48,7 @@ def _can_use_fresh_flat_if_activation(state: "GraphExecutionState") -> bool:
         return False
 
     if len(if_nodes) != 1:
-        if len(if_nodes) not in {2, 3}:
+        if len(if_nodes) not in {2, 3, 4}:
             return False
 
         if any(edge.type != "default" for edge in state.graph.edges):
@@ -77,7 +77,7 @@ def _can_use_fresh_flat_if_activation(state: "GraphExecutionState") -> bool:
                     return False
                 if any(edge.source.node_id in if_node_ids for edge in input_edges):
                     return False
-        elif len(nested_edges) == len(if_nodes) - 1:
+        elif len(if_nodes) in {2, 3} and len(nested_edges) == len(if_nodes) - 1:
             if any(
                 edge.source.field != "value" or edge.destination.field not in {"true_input", "false_input"}
                 for edge in nested_edges
