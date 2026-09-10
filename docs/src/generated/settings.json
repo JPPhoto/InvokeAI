@@ -204,6 +204,20 @@
     },
     {
       "category": "PATHS",
+      "default": "full",
+      "description": "SQLite durability setting. `full` (the default) flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database, because WAL guarantees consistency either way. What it gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.",
+      "env_var": "INVOKEAI_DB_SYNCHRONOUS",
+      "literal_values": [
+        "full",
+        "normal"
+      ],
+      "name": "db_synchronous",
+      "required": false,
+      "type": "typing.Literal['full', 'normal']",
+      "validation": {}
+    },
+    {
+      "category": "PATHS",
       "default": "outputs",
       "description": "Path to directory for outputs.",
       "env_var": "INVOKEAI_OUTPUTS_DIR",
