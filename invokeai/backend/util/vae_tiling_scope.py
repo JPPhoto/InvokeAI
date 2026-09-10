@@ -47,9 +47,17 @@ def scoped_vae_tiling(vae: Any, tile_size: int | None) -> Iterator[None]:
             # gets the same answer for the same field value.
             vae.enable_tiling(tile_sample_min_size=resolve_tile_size(tile_size))
         else:
-            # This class does not expose a settable size -- diffusers' AutoencoderKL.enable_tiling()
-            # takes no arguments and uses its own geometry.
+            # Diffusers' `AutoencoderKL.enable_tiling()` takes no arguments and leaves the geometry
+            # at the VAE's own `sample_size` -- 1024 for Z-Image, which means a 1024px decode does
+            # not tile at all while the caller's working-memory reservation assumes it did. Setting
+            # the two attributes afterwards is how the rest of this codebase sizes a diffusers VAE's
+            # tiles; see `flux2/ref_image_extension.py`, which forces 512 for the same reason. Both
+            # are in `_TILING_ATTRS`, so the finally block puts them back.
+            resolved = resolve_tile_size(tile_size)
             vae.enable_tiling()
+            vae.tile_sample_min_size = resolved
+            downsample = 2 ** (len(vae.config.block_out_channels) - 1)
+            vae.tile_latent_min_size = max(1, resolved // downsample)
         yield
     finally:
         for name, value in original.items():

@@ -167,6 +167,14 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
                             raise
                         # The working-memory estimate was insufficient on this system;
                         # retry once with tiling, which caps the peak allocation.
+                        # Drop the failed attempt's traceback before retrying. It pins that
+                        # decode's frames, and their locals hold the full-resolution
+                        # activations -- exception/traceback/frame is a reference cycle rooted
+                        # on the stack, so `empty_cache()` frees nothing while `e` is bound and
+                        # the retry has to fit on top of it. Measured at 1536px: 1.4 GiB held,
+                        # and a retry that fails with it and succeeds without. Same reasoning as
+                        # `ModelConfigFactory._detach_traceback`.
+                        e.__traceback__ = None
                         TorchDevice.empty_cache()
                         vae.enable_tiling(
                             tile_sample_min_height=ANIMA_VAE_TILE_SIZE,

@@ -130,18 +130,60 @@ class TestStateIsRestored:
 
 
 class TestDiffusersVaesAreHandledToo:
-    def test_a_class_without_a_settable_size_is_enabled_without_arguments(self):
-        # diffusers' AutoencoderKL.enable_tiling() takes no parameters; passing one would raise.
-        vae = AutoencoderKL(
+    """`AutoencoderKL.enable_tiling()` takes no arguments, so the size has to be set afterwards.
+
+    Leaving it out is not a smaller tile than asked for -- it is the VAE's own `sample_size`, which
+    for Z-Image is 1024, so a 1024px decode does not tile at all while the caller has already
+    reserved working memory on the assumption that it did. Asserting `use_tiling is True` alone does
+    not see that: it held while every requested size was being discarded.
+    """
+
+    @staticmethod
+    def _vae(block_out_channels=(32, 64, 128, 128), sample_size=1024) -> AutoencoderKL:
+        return AutoencoderKL(
             in_channels=3,
             out_channels=3,
             latent_channels=4,
-            block_out_channels=(32,),
-            down_block_types=("DownEncoderBlock2D",),
-            up_block_types=("UpDecoderBlock2D",),
+            block_out_channels=block_out_channels,
+            down_block_types=("DownEncoderBlock2D",) * len(block_out_channels),
+            up_block_types=("UpDecoderBlock2D",) * len(block_out_channels),
             layers_per_block=1,
             norm_num_groups=32,
+            sample_size=sample_size,
         )
-        with scoped_vae_tiling(vae, 384):
+
+    @pytest.mark.parametrize(
+        ("requested", "expected_sample"), [(384, 384), (256, 256), (0, DEFAULT_TILE_SAMPLE_MIN_SIZE)]
+    )
+    def test_the_requested_size_reaches_the_vae(self, requested, expected_sample):
+        vae = self._vae()
+        # Four blocks, so the latent grid is 8x smaller than the pixel grid.
+        downsample = 2 ** (len(vae.config.block_out_channels) - 1)
+
+        with scoped_vae_tiling(vae, requested):
             assert vae.use_tiling is True
-        assert vae.use_tiling is False
+            assert vae.tile_sample_min_size == expected_sample
+            assert vae.tile_latent_min_size == expected_sample // downsample
+
+    def test_the_vaes_own_geometry_is_restored(self):
+        vae = self._vae()
+        before = (vae.use_tiling, vae.tile_sample_min_size, vae.tile_latent_min_size)
+
+        with scoped_vae_tiling(vae, 256):
+            pass
+
+        assert (vae.use_tiling, vae.tile_sample_min_size, vae.tile_latent_min_size) == before
+
+    def test_a_decode_at_the_vaes_default_resolution_actually_tiles(self):
+        """The case the missing size costs: a 1024px decode against a VAE whose default tile is also
+        1024 stays in the single-pass path, which is the one the reservation was sized against."""
+        vae = self._vae().eval()
+        calls = []
+        real = vae.tiled_decode
+        vae.tiled_decode = lambda z, return_dict=True: (calls.append(1), real(z, return_dict=return_dict))[1]
+
+        latent = torch.zeros(1, 4, 1024 // 8, 1024 // 8)
+        with torch.no_grad(), scoped_vae_tiling(vae, 0):
+            vae.decode(latent)
+
+        assert calls, "the decode did not tile, so the tile size never reached the VAE"

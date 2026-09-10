@@ -121,6 +121,14 @@ class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
                     # The working-memory estimate was insufficient on this system. Retry once with
                     # tiling, which caps the peak allocation regardless of resolution.
                     context.util.signal_progress("VAE decode ran out of memory, retrying tiled")
+                    # Drop the failed attempt's traceback before retrying. It pins that
+                    # decode's frames, and their locals hold the full-resolution
+                    # activations -- exception/traceback/frame is a reference cycle rooted
+                    # on the stack, so `empty_cache()` frees nothing while `e` is bound and
+                    # the retry has to fit on top of it. Measured at 1536px: 1.4 GiB held,
+                    # and a retry that fails with it and succeeds without. Same reasoning as
+                    # `ModelConfigFactory._detach_traceback`.
+                    e.__traceback__ = None
                     TorchDevice.empty_cache()
                     with scoped_vae_tiling(vae, self.tile_size):
                         img = decode()
