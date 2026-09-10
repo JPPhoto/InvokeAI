@@ -15,10 +15,12 @@ import { GalleryPickerPopover } from '@features/gallery/picker';
 import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
 import { resolveMiniMaxH3ReferenceImage } from '@features/video/core/dimensions';
 import {
+  clampReferenceSampleFrames,
   createVideoSourceClip,
-  DEFAULT_REFERENCE_SAMPLE_FRAMES,
+  getDefaultReferenceClip,
   getDefaultReferenceConditioning,
   getDefaultReferenceImageDetail,
+  referenceSampleFrames,
   resizeReferenceSampleWindow,
   slideReferenceSampleWindow,
 } from '@features/video/core/settings';
@@ -35,7 +37,7 @@ import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Select } from '@platform/ui/Select';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
 import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, FilmIcon, ImagePlusIcon, UploadIcon, XIcon } from 'lucide-react';
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { TrimBoundThumb } from './TrimBoundThumb';
@@ -102,6 +104,8 @@ const getSingleGalleryDragItem = (data: unknown): { kind: 'image' | 'video'; nam
 };
 
 type ReferenceCollections = {
+  /** The anchor's options: 'Audio only' is absent, see `anchorReferenceConditioning`. */
+  anchorConditioning: ReturnType<typeof createListCollection<{ label: string; value: string }>>;
   conditioning: ReturnType<typeof createListCollection<{ label: string; value: string }>>;
   detail: ReturnType<typeof createListCollection<{ label: string; value: string }>>;
 };
@@ -131,11 +135,22 @@ const ReferenceCard = memo(function ReferenceCard({
   targetArea: number | null;
 }) {
   const { t } = useTranslation();
+  const moveUpRef = useRef<HTMLButtonElement>(null);
+  const moveDownRef = useRef<HTMLButtonElement>(null);
   const name = reference.kind === 'video' ? reference.clip.video_name : reference.image.image_name;
   const selectValue = useMemo(
     () => [reference.kind === 'video' ? reference.conditioning : reference.detail],
     [reference]
   );
+  const selectCollection = useMemo(() => {
+    if (reference.kind !== 'video') {
+      return collections.detail;
+    }
+
+    // The anchor is not offered 'Audio only': it is the reference the extension continues
+    // FROM, and an audio-only one contributes no visual rows to continue from.
+    return reference.fromSourceVideo === true ? collections.anchorConditioning : collections.conditioning;
+  }, [collections, reference]);
   const handleSelect = useCallback(
     (details: { value: string[] }) => {
       const value = details.value[0];
@@ -154,14 +169,26 @@ const ReferenceCard = memo(function ReferenceCard({
   // The trim is presented as a sliding sample window — start frame plus length — because
   // what the user is choosing is "how much" (every reference frame costs denoise VRAM) and
   // "from where". Storage stays startFrame/endFrame (the request contract); the window
-  // math (constant-length slide that stops at the clip's end, and the extend anchor's
-  // pinned-to-the-cutpoint end) lives in core/settings.
+  // math (a start that reaches every frame, with the length pinned to what the clip can
+  // still supply) lives in core/settings.
+  //
+  // Touching either control on the extend anchor marks its window overridden, which stops
+  // the panel re-deriving it from the Initial Video's cutpoint and frame count. The
+  // derived window is only a default: Ref2VA has no frame-exact seam to protect, so where
+  // the anchor samples is the user's editorial call.
   const handleStartFrame = useCallback(
     (rawStart: number) => {
       if (reference.kind === 'video') {
+        // Recording the length here as well as reading it is what makes a drag
+        // reversible: the first pointer step of the drag captures the pre-drag window's
+        // length, and every step after it slides that same length.
+        const sampleFrames = referenceSampleFrames(reference);
+
         onUpdate(index, {
           ...reference,
-          clip: slideReferenceSampleWindow(reference.clip, rawStart, reference.fromSourceVideo === true),
+          clip: slideReferenceSampleWindow(reference.clip, rawStart, sampleFrames),
+          sampleFrames,
+          ...(reference.fromSourceVideo === true ? { trimOverridden: true } : {}),
         });
       }
     },
@@ -172,7 +199,9 @@ const ReferenceCard = memo(function ReferenceCard({
       if (reference.kind === 'video') {
         onUpdate(index, {
           ...reference,
-          clip: resizeReferenceSampleWindow(reference.clip, rawSampleFrames, reference.fromSourceVideo === true),
+          clip: resizeReferenceSampleWindow(reference.clip, rawSampleFrames),
+          sampleFrames: clampReferenceSampleFrames(reference.clip, rawSampleFrames),
+          ...(reference.fromSourceVideo === true ? { trimOverridden: true } : {}),
         });
       }
     },
@@ -196,8 +225,52 @@ const ReferenceCard = memo(function ReferenceCard({
     reference.kind === 'video' && Number.isFinite(reference.clip.fps) && reference.clip.fps > 0
       ? (sampleFrames / reference.clip.fps).toFixed(1)
       : null;
-  const handleMoveUp = useCallback(() => onMove(index, -1), [index, onMove]);
-  const handleMoveDown = useCallback(() => onMove(index, 1), [index, onMove]);
+  // A move that lands on an end -- the top of the stack, or the slot above the
+  // pinned continuity anchor -- disables the very button that was just pressed,
+  // and a disabled element cannot hold focus, so a keyboard user is dropped to
+  // <body> mid-gesture. Which button that is depends on the anchor rule, so the
+  // handoff reacts to what actually came back disabled rather than predicting
+  // it. It is armed only when the arrow ALREADY holds focus, because pressing a
+  // button does not focus it in every browser (Safari, Firefox on macOS): a
+  // pointer press there runs this handler with the caret still in the prompt,
+  // and moving focus would haul the user out of what they were typing.
+  const pendingFocusRef = useRef<'down' | 'up' | null>(null);
+  const handleMoveUp = useCallback(() => {
+    const arrow = moveUpRef.current;
+
+    pendingFocusRef.current = arrow !== null && document.activeElement === arrow ? 'up' : null;
+    onMove(index, -1);
+  }, [index, onMove]);
+  const handleMoveDown = useCallback(() => {
+    const arrow = moveDownRef.current;
+
+    pendingFocusRef.current = arrow !== null && document.activeElement === arrow ? 'down' : null;
+    onMove(index, 1);
+  }, [index, onMove]);
+
+  useLayoutEffect(() => {
+    const pending = pendingFocusRef.current;
+
+    if (pending === null) {
+      return;
+    }
+    pendingFocusRef.current = null;
+
+    const pressed = pending === 'up' ? moveUpRef.current : moveDownRef.current;
+    const sibling = pending === 'up' ? moveDownRef.current : moveUpRef.current;
+    // Hand off only the focus this card is responsible for losing. Disabling a
+    // focused button blurs it to <body>, so that -- or focus still sitting on
+    // the arrow -- is the whole set of states worth repairing. Anywhere else and
+    // the user has moved on since, which happens whenever the write did not land
+    // in this commit: `setReferences` drops writes from a panel that is no
+    // longer live, and `memo` then keeps this card from rendering at all, so the
+    // arm survives to a later render that has nothing to do with the gesture.
+    const isOursToRestore = document.activeElement === document.body || document.activeElement === pressed;
+
+    if (isOursToRestore && pressed?.disabled === true && sibling !== null && !sibling.disabled) {
+      sibling.focus();
+    }
+  });
   const handleRemove = useCallback(() => onRemove(index), [index, onRemove]);
 
   return (
@@ -222,7 +295,7 @@ const ReferenceCard = memo(function ReferenceCard({
             ) : null}
           </HStack>
           <Select
-            collection={reference.kind === 'video' ? collections.conditioning : collections.detail}
+            collection={selectCollection}
             disabled={disabled}
             size="xs"
             value={selectValue}
@@ -282,13 +355,9 @@ const ReferenceCard = memo(function ReferenceCard({
                   <SliderNumberField
                     ariaLabel={t('widgets.video.sampleLength')}
                     disabled={disabled}
-                    // The anchor grows backward from its pinned end, so its ceiling is the
-                    // available lead-in; ordinary windows grow forward from their start.
-                    max={
-                      reference.fromSourceVideo === true
-                        ? Math.max(1, reference.clip.endFrame + 1)
-                        : Math.max(1, reference.clip.numFrames - reference.clip.startFrame)
-                    }
+                    // The window grows forward from its start, so the ceiling is what the
+                    // clip has left from there — it falls as the start frame climbs.
+                    max={Math.max(1, reference.clip.numFrames - reference.clip.startFrame)}
                     min={1}
                     showStepper
                     step={1}
@@ -302,6 +371,7 @@ const ReferenceCard = memo(function ReferenceCard({
         </Stack>
         <Stack gap="0">
           <IconButton
+            ref={moveUpRef}
             aria-label={t('widgets.video.moveReferenceUp')}
             disabled={disabled || !canMoveUp}
             size="2xs"
@@ -311,6 +381,7 @@ const ReferenceCard = memo(function ReferenceCard({
             <ArrowUpIcon size={12} />
           </IconButton>
           <IconButton
+            ref={moveDownRef}
             aria-label={t('widgets.video.moveReferenceDown')}
             disabled={disabled || !canMoveDown}
             size="2xs"
@@ -381,16 +452,18 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
     !isInert && activeDragItem !== null && (activeDragItem.kind === 'video' ? canAddVideo : canAddImage);
   const { isOver, setNodeRef } = useDroppable({ disabled: !acceptsActiveDrag, id: DROP_ID });
 
-  const conditioningCollection = useMemo(
-    () =>
-      createListCollection({
-        items: [
-          { label: t('widgets.video.referenceConditioningVideoAudio'), value: 'video_audio' },
-          { label: t('widgets.video.referenceConditioningVideo'), value: 'video' },
-          { label: t('widgets.video.referenceConditioningAudio'), value: 'audio' },
-        ],
-      }),
+  const conditioningItems = useMemo(
+    () => [
+      { label: t('widgets.video.referenceConditioningVideoAudio'), value: 'video_audio' },
+      { label: t('widgets.video.referenceConditioningVideo'), value: 'video' },
+      { label: t('widgets.video.referenceConditioningAudio'), value: 'audio' },
+    ],
     [t]
+  );
+  const conditioningCollection = useMemo(() => createListCollection({ items: conditioningItems }), [conditioningItems]);
+  const anchorConditioningCollection = useMemo(
+    () => createListCollection({ items: conditioningItems.filter((item) => item.value !== 'audio') }),
+    [conditioningItems]
   );
   const detailCollection = useMemo(
     () =>
@@ -403,8 +476,12 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
     [t]
   );
   const collections = useMemo(
-    () => ({ conditioning: conditioningCollection, detail: detailCollection }),
-    [conditioningCollection, detailCollection]
+    () => ({
+      anchorConditioning: anchorConditioningCollection,
+      conditioning: conditioningCollection,
+      detail: detailCollection,
+    }),
+    [anchorConditioningCollection, conditioningCollection, detailCollection]
   );
   const handlePickImage = useCallback(() => imageInputRef.current?.click(), []);
   const handlePickVideo = useCallback(() => videoInputRef.current?.click(), []);
@@ -476,15 +553,10 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       // Built outside the updater so the caller holds the same object the list does: it is
       // the only durable handle on this entry once reordering moves it.
       const entry: Extract<VideoReferenceItem, { kind: 'video' }> = {
-        // Default to a short sample window from the clip's start, not the whole
-        // clip: reference frames cost denoise VRAM every step, and a few seconds
-        // captures the wanted features. (Not the extend-mode 2-frame-tail trim
-        // either -- references are truncated to the generated duration, not joined.)
-        clip: {
-          ...clip,
-          endFrame: Math.max(0, Math.min(DEFAULT_REFERENCE_SAMPLE_FRAMES, clip.numFrames) - 1),
-          startFrame: 0,
-        },
+        // The window depends on the conditioning -- a short sample of footage, the whole
+        // clip of a soundtrack. (Neither is the extend-mode 2-frame-tail trim: references
+        // are truncated to the generated duration, not joined.)
+        clip: getDefaultReferenceClip(clip, conditioning),
         conditioning,
         kind: 'video',
       };
@@ -655,10 +727,20 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
           if (conditioning === entry.conditioning) {
             return;
           }
+          // The window is re-derived with the conditioning, not carried over: this path adds
+          // BEFORE it knows the answer, so the card is holding the footage default, and
+          // leaving it would give a picked soundtrack a shorter window than the same clip
+          // dropped or uploaded. Safe to recompute -- the identity match below already
+          // establishes that the window is still the one this code chose.
+          //
           // Matched by identity, not index: a card the user has since edited is a different
           // object and keeps their choice, and a removed one is simply no longer there.
           onChange((current) =>
-            current.map((existing) => (existing === entry ? { ...entry, conditioning } : existing))
+            current.map((existing) =>
+              existing === entry
+                ? { ...entry, clip: getDefaultReferenceClip(entry.clip, conditioning), conditioning }
+                : existing
+            )
           );
         })
         .catch(() => undefined);
@@ -688,6 +770,35 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
     },
     [onChange]
   );
+  // Identity for the list, and it must NOT contain the index: an index-bearing key
+  // changes for every card a reorder touches, so React unmounts and remounts them --
+  // reloading a video reference's seeking trim thumbnails and throwing away keyboard
+  // focus on the arrow just pressed. Media can legitimately appear twice (the same
+  // clip sampled over two different windows), so a bare name is not unique either; it
+  // is disambiguated by how many entries of the same kind and name precede it.
+  //
+  // That makes a card stable against every move EXCEPT a swap with its own twin,
+  // where the two occurrence numbers trade places and React swaps the props between
+  // the instances instead of moving one. Rendering stays correct; the cards simply do
+  // not travel. Giving twins independent identity needs a per-entry uid minted on add
+  // and carried through normalization, which the persisted reference shape has no
+  // room for today.
+  const referenceKeys = useMemo(() => {
+    const seen = new Map<string, number>();
+
+    return references.map((reference) => {
+      const name = reference.kind === 'video' ? reference.clip.video_name : reference.image.image_name;
+      // Kind is part of the identity, matching `toGalleryItemKey`: an image and a
+      // video are different references even where a backend gives them one name.
+      const identity = `${reference.kind}:${name}`;
+      const occurrence = seen.get(identity) ?? 0;
+
+      seen.set(identity, occurrence + 1);
+
+      return `${identity}-${occurrence}`;
+    });
+  }, [references]);
+
   const moveReference = useCallback(
     (index: number, direction: -1 | 1) => {
       onChange((current) => {
@@ -714,7 +825,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
     <Stack gap="2">
       {references.map((reference, index) => (
         <ReferenceCard
-          key={`${reference.kind === 'video' ? reference.clip.video_name : reference.image.image_name}-${index}`}
+          key={referenceKeys[index]}
           collections={collections}
           disabled={isInert}
           index={index}
