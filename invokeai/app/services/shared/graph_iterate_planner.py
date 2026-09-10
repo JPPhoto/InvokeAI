@@ -304,6 +304,7 @@ def _mark_direct_source_empty(state: "GraphExecutionState", source_node_id: str)
     """Record an empty direct iterator source without entering the legacy materializer."""
 
     state._tx_set_mapping(state.source_prepared_mapping, source_node_id, set())
+    state._reset_unexecuted_prepared(source_node_id)
     state._mark_source_executed(source_node_id)
     if isinstance(state.graph.get_node(source_node_id), IterateInvocation):
         state._record_empty_iterate_stream(source_node_id)

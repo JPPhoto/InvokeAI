@@ -47,6 +47,16 @@ def test_loop_scheduler_overhead_is_linear(loop_type: str) -> None:
     assert per_node[1200] < per_node[300] * 1.5, f"{loop_type}: {per_node}"
 
 
+def test_for_loop_scheduler_overhead_is_linear_with_wall_clock() -> None:
+    """Use wall clock for the For guard so Windows' coarse process clock cannot quantize the baseline."""
+    timings: dict[int, list[float]] = {count: [] for count in (300, 1200)}
+    for _ in range(5):
+        for count in (1200, 300):
+            timings[count].append(_run_trivial_loop("for", count) / count)
+    per_node = {count: min(samples) for count, samples in timings.items()}
+    assert per_node[1200] < per_node[300] * 1.5, f"for: {per_node}"
+
+
 @pytest.mark.parametrize("loop_type", ["for", "iterate"])
 def test_trivial_loop_scheduler_overhead(loop_type: str) -> None:
     elapsed = _run_trivial_loop(loop_type, 600)

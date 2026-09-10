@@ -224,7 +224,7 @@ class _ExecutionMaterializer:
                 final_state=initial_state,
             ),
         )
-        self._state._tx_add_set(self._state.executed, new_node.id)
+        self._state._mark_exec_node_executed(new_node.id)
         self._state._set_prepared_exec_state(new_node.id, "executed")
 
         return new_node.id
@@ -250,13 +250,18 @@ class _ExecutionMaterializer:
         state: "LoopState",
         iteration_path: tuple[int, ...],
     ) -> str:
+        """Prepare a For iteration, taking ownership of the remaining collection.
+
+        The caller clears the completed For node before handing over this list. Bypassing Pydantic assignment
+        validation is intentional: validation would rebuild the list and restore quadratic scheduling cost.
+        """
         node = self._state.graph.get_node(source_for_id)
         if not isinstance(node, ForInvocation):
             raise TypeError(f"Expected source ForInvocation, got {type(node).__name__}")
 
         new_node = self._create_execution_node_copy(node, source_for_id, iteration_index, deep_copy=False)
         assert isinstance(new_node, ForInvocation)
-        self._state._tx_set_attr(new_node, "collection", copydeep(collection))
+        object.__setattr__(new_node, COLLECTION_FIELD, collection)
         self._state._tx_set_attr(new_node, "state", copydeep(state))
         self._state._prepared_registry().set_iteration_path(new_node.id, iteration_path)
         self._initialize_execution_node(new_node.id)
@@ -1019,6 +1024,7 @@ class _ExecutionMaterializer:
 
     def _mark_source_node_empty(self, source_node_id: str, iteration_path: tuple[int, ...] = ()) -> None:
         self._state._tx_set_mapping(self._state.source_prepared_mapping, source_node_id, set())
+        self._state._reset_unexecuted_prepared(source_node_id)
         self._state._mark_source_executed(source_node_id)
         if isinstance(self._state.graph.get_node(source_node_id), IterateInvocation):
             self._state._record_empty_iterate_stream(source_node_id, iteration_path)

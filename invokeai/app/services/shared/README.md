@@ -305,6 +305,14 @@ remain compatibility-owned; the narrow canonical two-level nested-`For` shape an
 `Iterate`/`Collect` shape are generic-routed. On rehydration, the generic adapter restores the active class-drain
 boundary so an in-flight nested stream resumes in the same frame/sequence order.
 
+For scheduling is linear in the collection size. The continuation transfers ownership of the remaining collection to the
+next prepared `For` node instead of deep-copying it at every iteration. Source completion uses a derived, lazy per-source
+count of pending prepared executions, and continuation validation uses the existing prepared-`For` index rather than
+rescanning every prior iteration. The count is runtime-only and is rebuilt after snapshot rehydration; it does not change
+the persisted execution-state or invocation contracts. The focused For performance, collection-ownership, count-invariant,
+and generic/compatibility differential tests cover this boundary. The direct Iterate planner has separate readiness
+projection costs and is not part of this For-specific optimization.
+
 `ExecutionFrame` identifies the owning state, loop iteration path, and workflow-call depth. `ExecutionReference`
 identifies one prepared execution node and its frame. `ExecutionToken` records an output port, value, frame, token
 kind, and optional sequence. `loop_linkage` remains association metadata and never becomes a data token. This ledger is

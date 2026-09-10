@@ -52,12 +52,10 @@ class _ExecutionScheduler:
 
         self.remove_from_ready_queues(exec_node_id)
         self._state._set_prepared_exec_state(exec_node_id, "skipped")
-        self._state._tx_add_set(self._state.executed, exec_node_id)
+        self._state._mark_exec_node_executed(exec_node_id)
 
-        registry = self._state._prepared_registry()
-        source_node_id = registry.get_source_node_id(exec_node_id)
-        prepared_nodes = registry.get_prepared_ids(source_node_id)
-        if all(node_id in self._state.executed for node_id in prepared_nodes):
+        source_node_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
+        if self._state._count_unexecuted_prepared(source_node_id) == 0:
             if source_node_id not in self._state.executed:
                 self._state._mark_source_executed(source_node_id)
         self.mark_skipped(exec_node_id)
@@ -90,7 +88,7 @@ class _ExecutionScheduler:
 
     def _record_completed_node(self, exec_node_id: str, output: BaseInvocationOutput) -> None:
         self._state._set_prepared_exec_state(exec_node_id, "executed")
-        self._state._tx_add_set(self._state.executed, exec_node_id)
+        self._state._mark_exec_node_executed(exec_node_id)
         self._state._tx_set_mapping(self._state.results, exec_node_id, output)
         # Keep the generic stream ledger in sync while the materializer remains
         # the compatibility authority for runtime node creation.
@@ -108,11 +106,7 @@ class _ExecutionScheduler:
     def _mark_source_node_complete(self, exec_node_id: str) -> None:
         registry = self._state._prepared_registry()
         source_node_id = registry.get_source_node_id(exec_node_id)
-        prepared_nodes = registry.get_prepared_ids(source_node_id)
-        if (
-            all(node_id in self._state.executed for node_id in prepared_nodes)
-            and source_node_id not in self._state.executed
-        ):
+        if self._state._count_unexecuted_prepared(source_node_id) == 0 and source_node_id not in self._state.executed:
             self._state._mark_source_executed(source_node_id)
 
     def _try_schedule_next_for_iteration(self, exec_node_id: str, output: BaseInvocationOutput) -> Optional[str]:
@@ -378,11 +372,10 @@ class _GenericGraphSchedulerAdapter:
             return
         self._remove_projected(exec_node_id)
         self._state._set_prepared_exec_state(exec_node_id, "skipped")
-        self._state._tx_add_set(self._state.executed, exec_node_id)
+        self._state._mark_exec_node_executed(exec_node_id)
         self._scheduler.discard(exec_node_id)
         source_node_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
-        prepared_nodes = self._state._prepared_registry().get_prepared_ids(source_node_id)
-        if all(node_id in self._state.executed for node_id in prepared_nodes):
+        if self._state._count_unexecuted_prepared(source_node_id) == 0:
             if source_node_id not in self._state.executed:
                 self._state._mark_source_executed(source_node_id)
 
@@ -422,12 +415,18 @@ class _GenericGraphSchedulerAdapter:
             self._discard_rejected_node(exec_node_id)
 
     def _sync_executed_state(self, excluded: Iterable[str] = ()) -> None:
+        """Synchronize externally completed plan nodes without rebuilding on every normal completion."""
         excluded_ids = set(excluded)
-        self._scheduler.executed.update(
+        newly_executed = {
             exec_node_id
             for exec_node_id in self._state.results
-            if exec_node_id not in excluded_ids and exec_node_id in self._scheduler.plan.nodes
-        )
+            if exec_node_id not in excluded_ids
+            and exec_node_id in self._scheduler.plan.nodes
+            and exec_node_id not in self._scheduler.executed
+        }
+        if not newly_executed:
+            return
+        self._scheduler.executed.update(newly_executed)
         self._scheduler.rebuild_ready()
         self._sync_indegree()
 
@@ -541,7 +540,7 @@ class _GenericGraphSchedulerAdapter:
     def _record_completed_node(self, exec_node_id: str, output: BaseInvocationOutput) -> None:
         node = self._state.execution_graph.nodes.get(exec_node_id)
         self._state._set_prepared_exec_state(exec_node_id, "executed")
-        self._state._tx_add_set(self._state.executed, exec_node_id)
+        self._state._mark_exec_node_executed(exec_node_id)
         self._state._tx_set_mapping(self._state.results, exec_node_id, output)
         if isinstance(node, ForInvocation) and node.index >= 0:
             self._state._for_continuation(exec_node_id)
@@ -553,11 +552,7 @@ class _GenericGraphSchedulerAdapter:
     def _mark_source_node_complete(self, exec_node_id: str) -> None:
         registry = self._state._prepared_registry()
         source_node_id = registry.get_source_node_id(exec_node_id)
-        prepared_nodes = registry.get_prepared_ids(source_node_id)
-        if (
-            all(node_id in self._state.executed for node_id in prepared_nodes)
-            and source_node_id not in self._state.executed
-        ):
+        if self._state._count_unexecuted_prepared(source_node_id) == 0 and source_node_id not in self._state.executed:
             self._state._mark_source_executed(source_node_id)
 
     def complete(

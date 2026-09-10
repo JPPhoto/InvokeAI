@@ -285,6 +285,7 @@ class GraphExecutionState(BaseModel):
     _source_graph_flat: Any | None = PrivateAttr(default=None)
     _execution_graph_flat: Any | None = PrivateAttr(default=None)
     _completed_source_ids_cache: Optional[set[str]] = PrivateAttr(default=None)
+    _unexecuted_prepared_counts: Optional[dict[str, int]] = PrivateAttr(default=None)
     _for_source_by_return_id: Optional[dict[str, str]] = PrivateAttr(default=None)
     _apply_transaction: Optional[_ApplyTransaction] = PrivateAttr(default=None)
     _generic_execution_runtime: Optional[ExecutionEngineRuntime] = PrivateAttr(default=None)
@@ -395,6 +396,7 @@ class GraphExecutionState(BaseModel):
         self._source_graph_flat = None
         self._execution_graph_flat = None
         self._completed_source_ids_cache = None
+        self._unexecuted_prepared_counts = None
         self._for_source_by_return_id = None
         self._for_parent_iteration_paths_cache = {}
         self._all_for_contexts_finalized_cache = {}
@@ -479,6 +481,48 @@ class GraphExecutionState(BaseModel):
         # A source can be discarded while its already-prepared executions are still complete. New executions
         # invalidate the derived completion cache when they are registered.
 
+    def _mark_exec_node_executed(self, exec_node_id: str) -> None:
+        """Mark prepared exec node executed and maintain per-source pending count."""
+        if exec_node_id in self.executed:
+            return
+        self._tx_add_set(self.executed, exec_node_id)
+        counts = self._unexecuted_prepared_counts
+        if counts is None:
+            return
+        source_node_id = self.prepared_source_mapping.get(exec_node_id)
+        if source_node_id is None:
+            return
+        # Empty loop contexts can drop reverse mappings while retaining forward mappings.
+        if exec_node_id not in self.source_prepared_mapping.get(source_node_id, ()):
+            return
+        old_count = counts.get(source_node_id, 0)
+        self._tx_record_once(
+            ("unexecuted_prepared_count", source_node_id),
+            lambda: counts.__setitem__(source_node_id, old_count),
+        )
+        counts[source_node_id] = max(old_count - 1, 0)
+
+    def _reset_unexecuted_prepared(self, source_node_id: str) -> None:
+        """Reset pending count after dropping prepared nodes for a source."""
+        if self._unexecuted_prepared_counts is None:
+            return
+        counts = self._unexecuted_prepared_counts
+        old_count = counts.get(source_node_id, 0)
+        self._tx_record_once(
+            ("unexecuted_prepared_count", source_node_id),
+            lambda: counts.__setitem__(source_node_id, old_count),
+        )
+        counts[source_node_id] = 0
+
+    def _count_unexecuted_prepared(self, source_node_id: str) -> int:
+        """Return prepared exec nodes not yet executed or skipped for source."""
+        if self._unexecuted_prepared_counts is None:
+            self._unexecuted_prepared_counts = {
+                mapped_source_id: sum(1 for exec_node_id in prepared_ids if exec_node_id not in self.executed)
+                for mapped_source_id, prepared_ids in self.source_prepared_mapping.items()
+            }
+        return self._unexecuted_prepared_counts.get(source_node_id, 0)
+
     def _get_completed_source_ids_cache(self) -> set[str]:
         if self._completed_source_ids_cache is None:
             self._completed_source_ids_cache = {
@@ -486,8 +530,8 @@ class GraphExecutionState(BaseModel):
                 for source_node_id in self.graph.nodes
                 if source_node_id in self.executed
                 or (
-                    (prepared_node_ids := self.source_prepared_mapping.get(source_node_id))
-                    and all(exec_node_id in self.executed for exec_node_id in prepared_node_ids)
+                    self.source_prepared_mapping.get(source_node_id)
+                    and self._count_unexecuted_prepared(source_node_id) == 0
                 )
                 or self._is_source_inactive(source_node_id)
             }
@@ -648,17 +692,18 @@ class GraphExecutionState(BaseModel):
 
         next_state = self._get_loop_state_for_next_iteration(for_exec_node_id, output)
         parent_iteration_path = self._get_for_parent_iteration_path(for_exec_node_id)
+        collection = for_node.collection
+        self._tx_set_attr(for_node, "collection", [])
 
         next_for_id = self._materializer().create_for_iteration(
             source_for_id=source_for_id,
             iteration_index=next_index,
-            collection=for_node.collection,
+            collection=collection,
             state=next_state,
             iteration_path=(*parent_iteration_path, next_index),
         )
         self._discard_source_executed(source_for_id)
         self._materializer().create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=next_for_id)
-        self._tx_set_attr(for_node, "collection", [])
         return None
 
     def _try_schedule_next_for_iteration(self, exec_node_id: str, output: BaseInvocationOutput) -> Optional[str]:
@@ -1239,16 +1284,9 @@ class GraphExecutionState(BaseModel):
             parent_iteration_path = self._get_for_parent_iteration_path(node.id)
             final_for_id = None
             if source_node_id is not None:
-                final_candidates = [
-                    prepared_for_id
-                    for prepared_for_id in self.source_prepared_mapping.get(source_node_id, ())
-                    if self._get_for_parent_iteration_path(prepared_for_id) == parent_iteration_path
-                ]
-                if final_candidates:
-                    final_for_id = max(
-                        final_candidates,
-                        key=lambda prepared_for_id: self.execution_graph.get_node(prepared_for_id).index,
-                    )
+                self._get_prepared_for_index()
+                assert self._final_prepared_for_index is not None
+                final_for_id = self._final_prepared_for_index.get((source_node_id, parent_iteration_path))
             if (
                 source_node_id is not None
                 and final_for_id == node.id
@@ -1385,7 +1423,16 @@ class GraphExecutionState(BaseModel):
         return dependency.cancel_child(str(child_item_id), error_message)
 
     def _register_prepared_exec_node(self, exec_node_id: str, source_node_id: str) -> None:
+        is_new = exec_node_id not in self.source_prepared_mapping.get(source_node_id, ())
         self._prepared_registry().register(exec_node_id, source_node_id)
+        if is_new and self._unexecuted_prepared_counts is not None and exec_node_id not in self.executed:
+            counts = self._unexecuted_prepared_counts
+            old_count = counts.get(source_node_id, 0)
+            self._tx_record_once(
+                ("unexecuted_prepared_count", source_node_id),
+                lambda: counts.__setitem__(source_node_id, old_count),
+            )
+            counts[source_node_id] = old_count + 1
         self._tx_discard_set(self.executed, source_node_id)
         if self._completed_source_ids_cache is not None:
             self._tx_discard_set(self._completed_source_ids_cache, source_node_id)
@@ -2341,6 +2388,7 @@ class GraphExecutionState(BaseModel):
         self._source_graph_flat = None
         self._execution_graph_flat = None
         self._completed_source_ids_cache = None
+        self._unexecuted_prepared_counts = None
         self._for_parent_iteration_paths_cache = {}
         self._all_for_contexts_finalized_cache = {}
         self._prepared_for_index = None
