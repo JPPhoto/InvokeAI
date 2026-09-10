@@ -455,6 +455,9 @@ Workflow-call note:
   `graph_if_runtime.py` records dependencies and evaluates admission against gates and tokens.
   `GraphExecutionState` retains the method entry points, durable token/reference/effect storage,
   derived caches, transaction journal, and fallback controller selection.
+- Private `graph_scheduler.py` contains `_ExecutionScheduler` and `_GenericGraphSchedulerAdapter`. `graph.py`
+  deliberately re-exports both classes, preserving their existing import paths and monkeypatch seams while keeping
+  scheduler implementation details out of the graph-state façade.
 - `_GenericGraphSchedulerAdapter` Projects the generic `ExecutionPlan`/`ExecutionScheduler` into the existing state
   fields for ordinary static DAGs and legacy-shaped `If` graphs; the generic scheduler owns opaque readiness,
   intentional discards, indegree transitions, deterministic ordering, claimed work, and completion. The adapter registers
