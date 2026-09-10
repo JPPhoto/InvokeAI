@@ -809,7 +809,7 @@ class GraphExecutionState(BaseModel):
         if len(for_nodes) != 1 or len(return_nodes) != 1:
             return False
         outer_for = for_nodes[0]
-        if not outer_for.collection or self.graph._get_input_edges(outer_for.id, COLLECTION_FIELD):
+        if not outer_for.collection and not self.graph._get_input_edges(outer_for.id, COLLECTION_FIELD):
             return False
 
         iterate_nodes = [node for node in self.graph.nodes.values() if isinstance(node, IterateInvocation)]
@@ -890,7 +890,7 @@ class GraphExecutionState(BaseModel):
         if self.graph._get_input_edges(final_consumer_id) != final_output_edges:
             return False
 
-        return set(self.graph.nodes) == {
+        expected_nodes = {
             outer_for.id,
             preparation_node_id,
             iterate_node.id,
@@ -899,6 +899,10 @@ class GraphExecutionState(BaseModel):
             return_node.id,
             final_consumer_id,
         }
+        outer_collection_edges = self.graph._get_input_edges(outer_for.id, COLLECTION_FIELD)
+        if outer_collection_edges:
+            expected_nodes.add(outer_collection_edges[0].source.node_id)
+        return set(self.graph.nodes) == expected_nodes
 
     def _can_use_generic_scheduler(self) -> bool:
         """Use generic readiness for static graphs and supported direct control flow."""

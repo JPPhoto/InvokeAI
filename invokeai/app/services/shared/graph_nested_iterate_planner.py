@@ -2,7 +2,9 @@
 
 from typing import TYPE_CHECKING
 
-from invokeai.app.invocations.loops import ForInvocation
+from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvocation
+from invokeai.app.invocations.logic import IfInvocation
+from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation
 from invokeai.app.services.shared.graph_iterate_planner import (
     _attach_direct_execution_edges,
     _create_direct_execution_node_copy,
@@ -19,12 +21,37 @@ if TYPE_CHECKING:
 
 
 def _get_exact_nested_iterate_body(state: "GraphExecutionState"):
-    """Return the seven-node nested stream contract, excluding broader topologies."""
-    if len(state.graph.nodes) != 7 or len(state.graph.edges) != 7:
-        return None
+    """Return the supported nested stream contract, excluding broader topologies."""
     for_node = next((node for node in state.graph.nodes.values() if isinstance(node, ForInvocation)), None)
     if for_node is None:
         return None
+    outer_collection_edges = state.graph._get_input_edges(for_node.id, COLLECTION_FIELD)
+    if len(outer_collection_edges) > 1:
+        return None
+    input_driven_outer = bool(outer_collection_edges)
+    expected_node_count = 8 if input_driven_outer else 7
+    expected_edge_count = 8 if input_driven_outer else 7
+    if len(state.graph.nodes) != expected_node_count or len(state.graph.edges) != expected_edge_count:
+        return None
+    if input_driven_outer:
+        outer_collection_edge = outer_collection_edges[0]
+        producer = state.graph.get_node(outer_collection_edge.source.node_id)
+        if (
+            outer_collection_edge.destination.node_id != for_node.id
+            or outer_collection_edge.source.field != COLLECTION_FIELD
+            or isinstance(
+                producer,
+                (
+                    CallSavedWorkflowInvocation,
+                    IfInvocation,
+                    ForInvocation,
+                    ForReturnInvocation,
+                ),
+            )
+            or state.graph._get_input_edges(producer.id)
+            or state.graph._get_output_edges(producer.id) != [outer_collection_edge]
+        ):
+            return None
     nested_body = state.graph._get_supported_for_nested_iterate_body(for_node.id, state._get_source_graph_flat())
     if nested_body is None or len(nested_body.body_path_nodes) != 5:
         return None

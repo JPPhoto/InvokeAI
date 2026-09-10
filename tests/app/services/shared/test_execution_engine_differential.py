@@ -568,6 +568,13 @@ def _nested_for_iterate_collect_graph(*, outer_collection: list[list[str]] | Non
     return graph
 
 
+def _input_driven_nested_for_iterate_collect_graph() -> Graph:
+    graph = _nested_for_iterate_collect_graph()
+    graph.add_node(CollectionConcatInvocation(id="outer_source", first=[["a", "b"], ["c"]]))
+    graph.add_edge(create_edge("outer_source", "collection", "outer_for", "collection"))
+    return graph
+
+
 def _direct_iterate_body_collect_graph(
     *, collection: list[Any] | None = None, with_after: bool = False, downstream_count: int | None = None
 ) -> Graph:
@@ -1879,6 +1886,67 @@ def test_nested_for_iterate_collect_generic_failure_does_not_release_outer_retur
     assert generic_state.is_complete() and compatibility_state.is_complete()
     assert "nested_collect" not in generic_trace
     assert "outer_return" not in generic_trace
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+
+
+def test_input_driven_nested_for_iterate_collect_uses_generic_stream_planner() -> None:
+    generic_state = GraphExecutionState(graph=_input_driven_nested_for_iterate_collect_graph())
+    compatibility_state = GraphExecutionState(graph=_input_driven_nested_for_iterate_collect_graph())
+
+    assert generic_state._can_use_generic_scheduler()
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "_create_nested_iterate_body_iteration",
+        side_effect=AssertionError("input-driven nested Iterate/Collect used materializer copy creation"),
+    ):
+        generic_trace, generic_state = _run_graph_with_effects(generic_state)
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        compatibility_state,
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    after_exec_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in generic_state.prepared_source_mapping.items()
+        if source_node_id == "after"
+    )
+    assert generic_state.results[after_exec_id].value == [["a", "b"], ["c"]]
+
+
+def test_input_driven_nested_for_iterate_collect_rehydrates_without_replay() -> None:
+    graph = _input_driven_nested_for_iterate_collect_graph()
+    expected_trace, expected_state = _run(GraphExecutionState(graph=graph))
+    partial_trace, partial_state = _run(GraphExecutionState(graph=graph), stop_after=4)
+
+    restored = load_execution_state(dump_execution_state(partial_state))
+    resumed_trace, resumed_state = _run(restored)
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert resumed_state.is_complete()
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+
+
+def test_input_driven_nested_for_iterate_collect_failure_matches_compatibility() -> None:
+    graph = _input_driven_nested_for_iterate_collect_graph()
+    generic_trace, generic_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph),
+        fail_source_id="nested_body",
+    )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+        fail_source_id="nested_body",
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.has_error() and compatibility_state.has_error()
+    assert "nested_collect" not in generic_trace
+    assert "outer_return" not in generic_trace
+    assert "after" not in generic_state.source_prepared_mapping
     assert _state_projection(generic_state) == _state_projection(compatibility_state)
 
 

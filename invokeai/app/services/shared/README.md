@@ -81,8 +81,14 @@ The nested planner owns per-outer-frame stream expansion, parent-frame stream
 identity, empty closure, `Collect` readiness/hydration, checkpoint rehydration,
 and failure parity for this shape without calling the materializer's nested-copy
 helper. Ordinary nested `For`, deeper or multiple nested iterators,
-input-driven outer collections, mixed control flow, and legacy snapshots retain
+other input-driven outer collections, mixed control flow, and legacy snapshots retain
 compatibility materializer ownership.
+The exact eight-node producer-driven extension—one inputless ordinary
+collection producer feeding `outer For.collection`, with the same nested body
+and one ordinary outer-output consumer—is also generic-routed. It owns outer
+input hydration, per-outer-frame stream expansion, checkpoint rehydration, and
+failure parity; input-driven inner preparation, deeper or multiple nesting,
+mixed control flow, and legacy snapshots remain compatibility-owned.
 Three or more body-mediated branches, fan-in with four or more direct branches,
 nested iterators, and all mixed control flow retain materializer copy expansion,
 grouping, and empty-source handling on the legacy compatibility route.
@@ -93,7 +99,7 @@ execution-node copies, input hydration, iteration paths, and body expansion. Emp
 deeper or multiple loops, mixed control flow, and saved-workflow calls remain on the compatibility scheduler until
 their own differential gates are complete. One narrow fresh two-level nested-`For` shape (one non-empty literal outer
 collection, one inner `For` sourced from `outer.item`, and no continuation nodes) now uses the generic adapter;
-deeper, multiple-child, empty/input-driven, mixed, and legacy-loaded shapes remain compatibility-owned.
+deeper, multiple-child, other empty/input-driven, mixed, and legacy-loaded shapes remain compatibility-owned.
 The runtime also exposes an additive execution-engine seam: frame-scoped gates, ordered streams, continuations, and
 authorized child-dependency records are stored in
 `invokeai.app.services.shared.execution_engine`; legacy graph and queue behavior is retained behind adapters while
@@ -222,8 +228,9 @@ the `Collect.collection` output into the linked `ForReturn`, and one final outer
 including an empty inner collection, remains isolated by its frame path. `Iterate` also records non-empty item streams through the generic effect ledger;
 for this exact seven-node shape, the private nested planner owns per-outer-frame
 copy expansion, stream identity, empty closure, `Collect` readiness/hydration,
-checkpoint rehydration, and failure parity. Ordinary nested `For`, deeper or
-multiple nested iterators, input-driven outer collections, mixed control flow,
+checkpoint rehydration, and failure parity. The exact producer-driven outer
+extension described above is also generic-routed. Ordinary nested `For`, deeper or
+multiple nested iterators, other input-driven outer collections, mixed control flow,
 and legacy snapshots retain compatibility materializer ownership. The
 materializer remains authoritative for fallback expansion, iteration paths, collector grouping, and
 empty-source compatibility handling. The exact fresh four-node body shape, exact two- or three-stream fan-in shapes,
@@ -274,7 +281,7 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
   `_active_class: Optional[str]`. Ordinary static DAGs and legacy-shaped `If` graphs derive readiness from the generic
   scheduler; the `If` adapter stores frame-local activation dependencies whose private gate state plus persisted token
   checks control generic branch readiness. Supported static flat `For` graphs and the narrow canonical two-level nested
-  `For` shape use the generic adapter for readiness and continuation projection; empty/input-driven, deeper/multiple,
+`For` shape and the exact producer-driven nested extension use the generic adapter for readiness and continuation projection; empty/input-driven, deeper/multiple,
   mixed, and saved-workflow graphs retain the legacy scheduler. Optional
   `ready_order: list[str]` prioritizes classes. Queues are rebuilt from persisted execution state when a session is
   deserialized.
@@ -352,9 +359,10 @@ readiness and calls the graph-state generic continuation boundary after each `Fo
 state, honors `continue_condition`, creates the next prepared iteration when needed, and finalizes `output_collection`
 and `final_state`. The generic scheduler receives only opaque node IDs and dependencies; it never receives a literal
 next node ID. The compatibility continuation bridge remains available only for unsupported loop shapes and explicitly
-legacy-loaded snapshots. Empty/input-driven outer collections and deeper, multiple, or unsupported mixed loop shapes
-remain compatibility-owned; the narrow canonical two-level nested-`For` shape and the canonical bounded internal
-`Iterate`/`Collect` shape are generic-routed. On rehydration, the generic adapter restores the active class-drain
+legacy-loaded snapshots. Unsupported empty/input-driven outer collections and deeper, multiple, or unsupported mixed
+loop shapes remain compatibility-owned; the narrow canonical two-level nested-`For` shape, the canonical bounded
+internal `Iterate`/`Collect` shape, and the exact producer-driven outer nested extension are generic-routed. On
+rehydration, the generic adapter restores the active class-drain
 boundary so an in-flight nested stream resumes in the same frame/sequence order.
 
 For scheduling is linear in the collection size. The continuation transfers ownership of the remaining collection to the
