@@ -11,12 +11,15 @@ latter the list only *permits* backends and torch picks by its own order, so the
 silent no-op.
 """
 
+import contextlib
 from unittest.mock import MagicMock
 
 import pytest
 import torch
+from diffusers.models.transformers.transformer_krea2 import Krea2Attention
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
+import invokeai.backend.krea2.attention as krea2_attention
 from invokeai.backend.krea2.attention import (
     KREA2_SDPA_BACKEND_ENV_VAR,
     Krea2MemoryEfficientAttnProcessor,
@@ -194,3 +197,49 @@ class TestTheFallbackIsReal:
         with pytest.raises(RuntimeError, match="No available kernel"):
             with sdpa_kernel(list(choice.backends), set_priority=choice.set_priority):
                 torch.nn.functional.scaled_dot_product_attention(t, t, t)
+
+
+class TestTheDispatchSite:
+    """That the resolved choice actually reaches `sdpa_kernel`.
+
+    Everything above asserts what `resolve_krea2_sdpa_backends` *returns*. None of it survives the
+    processor ignoring that value: drop `set_priority=` from the call, or read the module constant
+    instead of `self.sdpa_backends`, and Krea-2 falls back to torch's own order on every block --
+    the entire measured win -- with all 31 tests still green.
+
+    Spying on the context manager is the only place the effect is observable: torch exposes no way
+    to read back the priority order a `sdpa_kernel` window installed.
+    """
+
+    def _run_with_spy(self, monkeypatch, processor):
+        seen: dict[str, object] = {}
+
+        def spy(backends, set_priority=False):
+            seen["backends"] = list(backends)
+            seen["set_priority"] = set_priority
+            return contextlib.nullcontext()
+
+        monkeypatch.setattr(krea2_attention, "sdpa_kernel", spy)
+
+        attn = Krea2Attention(hidden_size=256, num_heads=8, num_kv_heads=2, eps=1e-5).eval()
+        attn.set_processor(processor)
+        with torch.no_grad():
+            attn(torch.randn(1, 24, attn.hidden_size), attention_mask=None, image_rotary_emb=None)
+        return seen
+
+    def test_the_default_ranking_reaches_the_dispatcher_with_priority_on(self, monkeypatch):
+        seen = self._run_with_spy(monkeypatch, Krea2MemoryEfficientAttnProcessor())
+
+        assert seen["backends"] == list(resolve_krea2_sdpa_backends(raw_override=None).backends)
+        # Without this the list only *permits* backends and torch picks by its own order, which is
+        # what the ranking exists to override.
+        assert seen["set_priority"] is True
+
+    def test_the_processors_own_choice_is_used_not_the_module_default(self, monkeypatch):
+        """An exclusive override differs from the shipped list in both fields, so a processor that
+        reads the module constant instead of its own attribute fails here on either one."""
+        exclusive = resolve_krea2_sdpa_backends(raw_override="math")
+        seen = self._run_with_spy(monkeypatch, Krea2MemoryEfficientAttnProcessor(sdpa_backends=exclusive))
+
+        assert seen["backends"] == [SDPBackend.MATH]
+        assert seen["set_priority"] is False
