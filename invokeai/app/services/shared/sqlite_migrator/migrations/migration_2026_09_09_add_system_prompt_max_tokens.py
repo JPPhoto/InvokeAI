@@ -3,7 +3,7 @@
 Expand Prompt asks the text LLM for at most ``EXPAND_PROMPT_MAX_TOKENS_DEFAULT`` (300) new
 tokens. That suits the one-paragraph rewrites the original seeded prompts produce, but truncates
 prompts that are structurally longer by design -- the MiniMax H3 Ref2VA prompt emits six labelled
-sections and routinely needs more.
+sections and routinely needs three to five times as much.
 
 The cap therefore becomes a property of the system prompt: ``max_tokens`` is NULL for every
 existing row (meaning "use the default"), and is set to 500 for the Ref2VA prompt.
@@ -16,8 +16,17 @@ from invokeai.app.services.shared.sqlite_migrator.migrations.migration_2026_09_0
 )
 from invokeai.app.services.shared.sqlite_migrator.sqlite_migrator_common import Migration
 
-MINIMAX_H3_REF2VA_MAX_TOKENS = 500
-"""Headroom for the six-section structured prompt, measured against the seeded example."""
+MINIMAX_H3_REF2VA_MAX_TOKENS = 1000
+"""Headroom for the six-section structured prompt.
+
+Measured with the Qwen BPE tokenizer these models use, a realistic output costs roughly
+75 tokens of fixed structure, +55 per reference (a `subject_definitions` bullet plus a
+`retention_analysis` bullet) and +155 per shot, so three references and one shot land near 470
+and five references with two shots near 745. The two audio sections come last and are cheap
+(~45 combined), which is why a cap sized off the prompt's own terse worked example (187 tokens)
+truncated them first. `max_new_tokens` is a safety stop rather than a target -- generation ends
+at EOS -- so this is sized for the worst realistic request, not the median one.
+"""
 
 
 class AddSystemPromptMaxTokensCallback:

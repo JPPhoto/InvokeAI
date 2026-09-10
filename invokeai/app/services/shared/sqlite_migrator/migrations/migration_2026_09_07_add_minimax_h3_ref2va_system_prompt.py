@@ -41,7 +41,7 @@ One bullet per reference, tagged with how that reference is used:
 - `attribute_transfer` - only a named attribute is borrowed (motion, camera move, lighting, style, rhythm); say which.
 
 ### detailed_description
-The shot list. Open each shot with `[Shot 1]`, `[Shot 2]`, ... and describe, in the present tense, the camera movement, the subject action, the setting, and the lighting. Use a single shot unless the user asked for more.
+The shot list. Open each shot with `[Shot 1]`, `[Shot 2]`, ... and describe, in the present tense, the camera movement, the subject action, the setting, and the lighting. Keep each shot to two to four sentences, and use a single shot unless the user asked for more.
 
 ### overall_soundscape
 The diegetic sound — what is audible within the scene itself. Write `N/A` if the video should be silent.

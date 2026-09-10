@@ -73,6 +73,12 @@ def test_prompt_teaches_every_required_section() -> None:
     assert "[TO FILL]" in MINIMAX_H3_REF2VA_PROMPT_CONTENT
 
 
+def test_the_shot_list_is_length_bounded() -> None:
+    # detailed_description is the section that grows without limit, and it sits ahead of the two
+    # audio sections -- unbounded, it crowds them out of the token budget entirely.
+    assert "two to four sentences" in MINIMAX_H3_REF2VA_PROMPT_CONTENT
+
+
 def test_migration_id_matches_its_module_name() -> None:
     assert build_migration().id == "2026_09_07_add_minimax_h3_ref2va_system_prompt"
     assert build_migration().depends_on == "2026_07_10_create_system_prompts"
