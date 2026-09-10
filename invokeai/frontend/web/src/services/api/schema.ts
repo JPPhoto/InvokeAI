@@ -40999,10 +40999,10 @@ export type components = {
             text_llm_model?: components["schemas"]["ModelIdentifierField"] | null;
             /**
              * Max Tokens
-             * @description Maximum number of tokens to generate. Leave unset to use the preset's own cap, or 300 if it does not set one.
-             * @default null
+             * @description Maximum number of tokens to generate. 0 uses the preset's own cap, or 300 if it does not set one.
+             * @default 0
              */
-            max_tokens?: number | null;
+            max_tokens?: number;
             /**
              * Seed
              * @description Seed for random number generation

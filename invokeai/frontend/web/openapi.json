@@ -93053,23 +93053,16 @@
             "ui_model_type": ["text_llm"]
           },
           "max_tokens": {
-            "anyOf": [
-              {
-                "maximum": 2048,
-                "minimum": 1,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "Maximum number of tokens to generate. Leave unset to use the preset's own cap, or 300 if it does not set one.",
+            "default": 0,
+            "description": "Maximum number of tokens to generate. 0 uses the preset's own cap, or 300 if it does not set one.",
             "field_kind": "input",
             "input": "any",
-            "orig_default": null,
+            "maximum": 2048,
+            "minimum": 0,
+            "orig_default": 0,
             "orig_required": false,
-            "title": "Max Tokens"
+            "title": "Max Tokens",
+            "type": "integer"
           },
           "seed": {
             "default": 0,

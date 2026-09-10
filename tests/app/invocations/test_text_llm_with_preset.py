@@ -16,11 +16,12 @@ from invokeai.app.invocations.model import ModelIdentifierField
 from invokeai.app.invocations.text_llm import TextLLMInvocation, TextLLMWithPresetInvocation
 from invokeai.app.services.system_prompt_records.system_prompt_records_common import (
     EXPAND_PROMPT_MAX_TOKENS_DEFAULT,
+    EXPAND_PROMPT_MAX_TOKENS_MAX,
     SystemPromptNotFoundError,
 )
 
 
-def _make_invocation(prompt_id: str = "test-id", max_tokens: int | None = 50) -> TextLLMWithPresetInvocation:
+def _make_invocation(prompt_id: str = "test-id", max_tokens: int = 50) -> TextLLMWithPresetInvocation:
     return TextLLMWithPresetInvocation(
         id="test-node",
         prompt="a cat",
@@ -199,7 +200,7 @@ def test_preset_node_skips_the_ownership_check_in_single_user_mode() -> None:
 def test_preset_node_uses_the_presets_own_cap_when_the_field_is_unset() -> None:
     # The whole point of a per-prompt cap: a structured preset that needs 500 tokens must not be
     # truncated at the shared default just because the workflow left the field alone.
-    inv = _make_invocation(max_tokens=None)
+    inv = _make_invocation(max_tokens=0)
     context = _make_context(prompt_record_content="structured instruction", record_max_tokens=500)
 
     with patch("invokeai.app.invocations.text_llm._run_text_llm", return_value="expanded") as mock_run:
@@ -209,7 +210,7 @@ def test_preset_node_uses_the_presets_own_cap_when_the_field_is_unset() -> None:
 
 
 def test_preset_node_falls_back_to_the_default_when_neither_names_a_cap() -> None:
-    inv = _make_invocation(max_tokens=None)
+    inv = _make_invocation(max_tokens=0)
     context = _make_context(prompt_record_content="instruction", record_max_tokens=None)
 
     with patch("invokeai.app.invocations.text_llm._run_text_llm", return_value="expanded") as mock_run:
@@ -227,3 +228,22 @@ def test_an_explicit_field_value_overrides_the_presets_cap() -> None:
         inv.invoke(context)
 
     assert mock_run.call_args.kwargs["max_tokens"] == 50
+
+
+def test_the_unset_sentinel_is_the_field_default_and_is_accepted() -> None:
+    # The editors materialise every input from the schema default, so the sentinel has to be a
+    # value the node itself accepts -- an `int | None` field defaults to null in the schema, which
+    # both editors turn into 0 and the node would then reject.
+    field = TextLLMWithPresetInvocation.model_fields["max_tokens"]
+    assert field.default == 0
+    assert _make_invocation(max_tokens=field.default).max_tokens == 0
+
+
+def test_the_field_publishes_its_bounds_at_the_top_level_of_the_schema() -> None:
+    # Bounds nested inside an `anyOf` are invisible to both editors' field-template builders,
+    # which leaves the node's number input unbounded.
+    prop = TextLLMWithPresetInvocation.model_json_schema()["properties"]["max_tokens"]
+    assert "anyOf" not in prop
+    assert prop["minimum"] == 0
+    assert prop["maximum"] == EXPAND_PROMPT_MAX_TOKENS_MAX
+    assert prop["default"] == 0

@@ -6,7 +6,7 @@ prompts that are structurally longer by design -- the MiniMax H3 Ref2VA prompt e
 sections and routinely needs three to five times as much.
 
 The cap therefore becomes a property of the system prompt: ``max_tokens`` is NULL for every
-existing row (meaning "use the default"), and is set to 500 for the Ref2VA prompt.
+existing row (meaning "use the default"), and is set to 1000 for the Ref2VA prompt.
 """
 
 import sqlite3
