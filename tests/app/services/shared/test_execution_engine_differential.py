@@ -608,6 +608,23 @@ def _direct_iterate_body_collect_graph(
     return graph
 
 
+def _input_driven_iterate_body_collect_graph(values: list[Any] | None = None) -> Graph:
+    graph = Graph()
+    graph.add_node(CollectionConcatInvocation(id="producer", first=[1, 2, 3] if values is None else values))
+    graph.add_node(CollectionConcatInvocation(id="source"))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+
+    graph.add_edge(create_edge("producer", "collection", "source", "first"))
+    graph.add_edge(create_edge("source", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "collect", "item"))
+    graph.add_edge(create_edge("collect", "collection", "after", "value"))
+    return graph
+
+
 def _direct_iterate_fan_in_graph(*, left: list[Any], right: list[Any]) -> Graph:
     graph = Graph()
     graph.add_node(CollectionConcatInvocation(id="left_source", first=left))
@@ -1813,6 +1830,121 @@ def test_nested_for_iterate_collect_generic_rehydrates_after_inner_completion() 
     assert resumed_state.is_complete()
     assert isinstance(resumed_state._execution_scheduler, _GenericGraphSchedulerAdapter)
     assert _state_projection(resumed_state) == _state_projection(expected_state)
+
+
+@pytest.mark.parametrize("values", [[1, None, 1], []], ids=["ordered-duplicates-and-none", "empty"])
+def test_input_driven_iterate_collect_uses_generic_stream_ownership(values: list[Any]) -> None:
+    compatibility_state = GraphExecutionState(graph=_input_driven_iterate_body_collect_graph(values))
+    compatibility_trace, compatibility_state = _run(
+        compatibility_state,
+        force_compatibility_scheduler=True,
+    )
+
+    generic_state = GraphExecutionState(graph=_input_driven_iterate_body_collect_graph(values))
+    with patch.object(
+        generic_state._materializer(),
+        "prepare",
+        side_effect=AssertionError("input-driven Iterate/Collect must not use materializer.prepare"),
+    ):
+        generic_trace, generic_state = _run(generic_state)
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert isinstance(compatibility_state._execution_scheduler, _ExecutionScheduler)
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert _source_output(generic_state, "after").value == values
+
+
+def test_input_driven_iterate_collect_partial_dump_load_preserves_generic_streams() -> None:
+    graph = _input_driven_iterate_body_collect_graph(["first", None, "last"])
+    expected_trace, expected_state = _run_graph(GraphExecutionState(graph=graph))
+    partial_trace, partial_state = _run_graph(GraphExecutionState(graph=graph), stop_after=3)
+
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "prepare",
+        side_effect=AssertionError("input-driven checkpoint must not use materializer.prepare"),
+    ):
+        resumed_trace, resumed_state = _run_graph(load_execution_state(dump_execution_state(partial_state)))
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert _source_output(resumed_state, "after").value == ["first", None, "last"]
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+
+
+def test_input_driven_iterate_collect_failure_matches_compatibility() -> None:
+    graph = _input_driven_iterate_body_collect_graph(["first", "last"])
+    generic_trace, generic_state = _run_graph_with_effects(GraphExecutionState(graph=graph), fail_source_id="body")
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph), force_compatibility_scheduler=True, fail_source_id="body"
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.has_error() == compatibility_state.has_error()
+    assert generic_state.is_complete() == compatibility_state.is_complete()
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert generic_state.next() is None
+
+
+def test_input_driven_iterate_collect_planner_rolls_back_partial_expansion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = GraphExecutionState(graph=_input_driven_iterate_body_collect_graph(["first", "last"]))
+    for _ in range(2):
+        node = state.next()
+        assert node is not None
+        state.complete(node.id, node.invoke(Mock()))
+
+    original_create = GraphExecutionState._create_direct_execution_node_copy
+
+    def fail_at_body(self: GraphExecutionState, source_node_id: str, *args: Any, **kwargs: Any):
+        node = original_create(self, source_node_id, *args, **kwargs)
+        if source_node_id == "body":
+            raise RuntimeError("injected input-driven planner failure")
+        return node
+
+    monkeypatch.setattr(GraphExecutionState, "_create_direct_execution_node_copy", fail_at_body)
+    with pytest.raises(RuntimeError, match="injected input-driven planner failure"):
+        state.next()
+
+    assert set(state.source_prepared_mapping) == {"producer", "source"}
+    assert len(state.execution_graph.nodes) == 2
+    assert len(state.execution_graph.edges) == 1
+
+    monkeypatch.setattr(GraphExecutionState, "_create_direct_execution_node_copy", original_create)
+    trace, state = _run_graph(state)
+    assert trace == ["iterate", "iterate", "body", "body", "collect", "after"]
+    assert _source_output(state, "after").value == ["first", "last"]
+    assert state.is_complete()
+
+
+def test_input_driven_iterate_collect_retry_after_input_boundary_isolated() -> None:
+    graph = _input_driven_iterate_body_collect_graph(["first", None, "last"])
+    canceled_trace, canceled_state = _run_until_source(
+        GraphExecutionState(graph=graph),
+        "source",
+    )
+    retry_trace, retry_state = _run_graph(GraphExecutionState(graph=graph.model_copy(deep=True)))
+
+    assert canceled_trace == ["producer", "source"]
+    assert not canceled_state.is_complete()
+    assert retry_trace == [
+        "producer",
+        "source",
+        "iterate",
+        "iterate",
+        "iterate",
+        "body",
+        "body",
+        "body",
+        "collect",
+        "after",
+    ]
+    assert retry_state.id != canceled_state.id
+    assert _source_output(retry_state, "after").value == ["first", None, "last"]
+    assert retry_state.is_complete()
 
 
 def test_direct_iterate_body_collect_fresh_execution_preserves_order_and_none() -> None:

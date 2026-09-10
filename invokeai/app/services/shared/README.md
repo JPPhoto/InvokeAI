@@ -66,9 +66,17 @@ inputless ordinary sources, two `Iterate` nodes, two ordinary bodies, and one
 `Collect`; it has no
 `Collect.collection` input or downstream/extra topology. It is not a change to
 the public workflow contract.
+The planner also admits one bounded input-driven extension: one inputless
+ordinary collection producer feeds one ordinary collection-preparation node,
+which feeds the same `Iterate` -> ordinary body -> `Collect` path, with
+ordinary downstream consumers allowed. It owns the preparation input edge,
+ordered stream effects, empty closure, checkpoint rehydration, failure,
+rollback, and fresh retry behavior for that exact shape. It does not admit
+`If`, `For`, `ForReturn`, saved-workflow, nested-iterator, fan-in, or mixed
+control-flow nodes; those remain compatibility-owned.
 Three or more body-mediated branches, fan-in with four or more direct branches,
-nested or input-driven iterators, and all mixed control flow retain materializer
-copy expansion, grouping, and empty-source handling on the legacy compatibility route.
+nested iterators, and all mixed control flow retain materializer copy expansion,
+grouping, and empty-source handling on the legacy compatibility route.
 A fresh graph with exactly one static, non-empty `For`/`ForReturn` pair and ordinary body nodes also uses the generic
 adapter. It projects readiness and invokes the graph-state continuation boundary, which selects the next iteration or
 finalizes the aggregate without exposing a successor node ID to the generic scheduler. The materializer still owns

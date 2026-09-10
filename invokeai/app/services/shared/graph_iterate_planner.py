@@ -164,7 +164,7 @@ def _get_body_iterate_collect_fan_in(
 def _get_direct_iterate_collect_nodes(
     state: "GraphExecutionState",
 ) -> Optional[tuple[str, str, str, str, tuple[str, ...]] | _DirectIterateCollectFanIn | _BodyIterateCollectFanIn]:
-    """Return fresh direct/body planner nodes, including ordinary downstream consumers."""
+    """Return bounded fresh stream-planner nodes, including one input-driven source chain."""
 
     if (
         state._legacy_snapshot_loaded
@@ -218,8 +218,22 @@ def _get_direct_iterate_collect_nodes(
     source = state.graph.get_node(source_id)
     if isinstance(source, (ForInvocation, ForReturnInvocation, IfInvocation, IterateInvocation, CollectInvocation)):
         return None
-    if state.graph._get_input_edges(source_id):
+    source_input_edges = state.graph._get_input_edges(source_id)
+    if len(source_input_edges) > 1:
         return None
+    for source_input_edge in source_input_edges:
+        upstream_id = source_input_edge.source.node_id
+        if upstream_id in {source_id, iterator_id, body_id, collector_id}:
+            return None
+        upstream = state.graph.get_node(upstream_id)
+        if isinstance(
+            upstream, (ForInvocation, ForReturnInvocation, IfInvocation, IterateInvocation, CollectInvocation)
+        ):
+            return None
+        if state.graph._get_input_edges(upstream_id) or state.graph._get_output_edges(upstream_id) != [
+            source_input_edge
+        ]:
+            return None
     if state.graph._get_output_edges(source_id) != [collection_edge]:
         return None
     if state.graph._get_output_edges(iterator_id) != [body_input_edges[0]]:
@@ -230,7 +244,8 @@ def _get_direct_iterate_collect_nodes(
         return None
 
     downstream_edges = state.graph._get_output_edges(collector_id, COLLECTION_FIELD)
-    if len(downstream_edges) != len(state.graph.nodes) - 4:
+    upstream_count = len(source_input_edges)
+    if len(downstream_edges) != len(state.graph.nodes) - 4 - upstream_count:
         return None
     downstream_ids: list[str] = []
     for downstream_edge in downstream_edges:
@@ -248,7 +263,7 @@ def _get_direct_iterate_collect_nodes(
 
 
 def _can_use_direct_iterate_collect_planner(state: "GraphExecutionState") -> bool:
-    """Use fresh planner ownership only for the exact direct stream shape."""
+    """Use fresh planner ownership only for the bounded direct stream shapes."""
 
     return state._get_direct_iterate_collect_nodes() is not None
 
@@ -482,8 +497,30 @@ def _prepare_direct_iterate_collect_unchecked(state: "GraphExecutionState") -> N
     source_id, iterator_id, body_id, collector_id, downstream_ids = node_ids
 
     if source_id not in state.source_prepared_mapping:
+        source_input_edges = state.graph._get_input_edges(source_id)
+        source_input_exec_ids: dict[str, str] = {}
+        for source_input_edge in source_input_edges:
+            upstream_id = source_input_edge.source.node_id
+            if upstream_id not in state.source_prepared_mapping:
+                upstream_node = state._create_direct_execution_node_copy(upstream_id)
+                state._initialize_direct_execution_node(upstream_node.id, ())
+            source_input_exec_ids[upstream_id] = next(iter(state.source_prepared_mapping[upstream_id]))
+
         source_node = state._create_direct_execution_node_copy(source_id)
-        state._initialize_direct_execution_node(source_node.id, ())
+        attached_source_edges = state._attach_direct_execution_edges(
+            source_node.id,
+            [
+                Edge(
+                    source=EdgeConnection(
+                        node_id=source_input_exec_ids[edge.source.node_id],
+                        field=edge.source.field,
+                    ),
+                    destination=EdgeConnection(node_id="", field=edge.destination.field),
+                )
+                for edge in source_input_edges
+            ],
+        )
+        state._initialize_direct_execution_node(source_node.id, attached_source_edges)
         return
 
     if collector_id in state.source_prepared_mapping:
