@@ -33,6 +33,7 @@ largest layer) has to fit inside the calling node's working-memory reservation.
 """
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 import torch
@@ -225,6 +226,27 @@ def check_int8_scale_layout(path: str, weight: torch.Tensor, scale: torch.Tensor
         f"'{path}' has a {tuple(scale.shape)} scale for a {tuple(weight.shape)} weight, which is "
         "neither per-output-channel nor per-tensor. Blockwise scale grids are not implemented."
     )
+
+
+def reject_unmarked_int8_weights(sd: dict[str, Any], markers: Mapping[str, Any], architecture: str) -> None:
+    """Refuse a checkpoint holding an int8 weight that no ``int8_tensorwise`` marker claims.
+
+    Call this *outside* the "did we find markers" branch. An int8 weight whose marker is missing --
+    or, since :func:`parse_comfy_quant_marker` is tolerant, one whose marker did not parse -- leaves
+    `markers` without an entry for it, so a check living inside the int8 path would never see the
+    very case it exists for. Such a weight then takes the unquantized path: cast to the compute
+    dtype as raw int8 codes, unscaled and un-derotated, into a model that loads clean and generates
+    noise.
+
+    That tolerance is deliberate and this is its other half: a malformed marker is a lost hint, and
+    this is what stops the loss from being silent.
+    """
+    orphans = sorted(k for k, v in sd.items() if v.dtype is torch.int8 and k[: -len(".weight")] not in markers)
+    if orphans:
+        raise ValueError(
+            f"{architecture} checkpoint has {len(orphans)} int8 weight(s) with no `comfy_quant` marker, "
+            f"e.g. {orphans[:3]}. Loading them would produce a model that runs and generates noise."
+        )
 
 
 def requires_sidecar_patching(transformer: Any, model_format: ModelFormat) -> bool:

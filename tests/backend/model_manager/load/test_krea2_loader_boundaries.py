@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 import torch
 
 from invokeai.backend.model_manager.configs.main import (
@@ -20,6 +21,7 @@ from invokeai.backend.model_manager.load.model_loaders.krea2 import (
     Qwen3VLEncoderLoader,
 )
 from invokeai.backend.model_manager.taxonomy import Krea2VariantType, SubModelType
+from invokeai.backend.quantization.fp8_scaled import predict_cast_state_dict_size
 from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
 
 
@@ -120,6 +122,12 @@ def test_single_file_loader_decodes_an_int8_convrot_checkpoint(monkeypatch, tmp_
     )
 
     model = loader._load_from_singlefile(config)
+
+    # The reservation must be what the load actually occupies. `max(element_size, itemsize)` charged
+    # the compute dtype's width for the int8 payloads -- `max(1, 2)` is 2 -- so every int8 load asked
+    # the cache to free twice what it needed, evicting other models for room nobody used.
+    (reserved,), _ = loader._ram_cache.make_room.call_args
+    assert reserved == predict_cast_state_dict_size(state_dict, torch.float32, keep_fp8=False)
 
     # This is also what pins the one-or-the-other split in the loader: the fixture's int8 weight
     # carries a `.weight_scale`, which is exactly what an fp8 scaled layer looks like from outside.
@@ -318,3 +326,56 @@ def test_directory_encoder_loader_estimates_standalone_root_weights(tmp_path) ->
     estimated_size = loader.get_size_fs(config, tmp_path, SubModelType.TextEncoder)
 
     assert estimated_size == weight_size
+
+
+def test_an_int8_weight_without_a_marker_is_refused(monkeypatch, tmp_path) -> None:
+    """A weight the markers do not claim would be cast to the compute dtype as raw int8 codes.
+
+    Unscaled and un-derotated, into a model that loads clean and generates noise. Z-Image has always
+    refused this; Krea-2 accepted it silently, and `parse_comfy_quant_marker` being tolerant makes
+    the case reachable through a marker that merely fails to parse.
+    """
+    import json
+
+    import diffusers
+    import safetensors.torch
+
+    class _TinyInt8Krea2Transformer(torch.nn.Module):
+        def __init__(self, **_kwargs) -> None:
+            super().__init__()
+            self.marked = torch.nn.Linear(8, 8, bias=False)
+            self.unmarked = torch.nn.Linear(8, 8, bias=False)
+
+    marker = json.dumps({"format": "int8_tensorwise", "convrot": False})
+    state_dict = {
+        "marked.weight": torch.zeros(8, 8, dtype=torch.int8),
+        "marked.weight_scale": torch.ones(8, 1, dtype=torch.float32),
+        "marked.comfy_quant": torch.frombuffer(bytearray(marker.encode("utf-8")), dtype=torch.uint8),
+        # No marker at all: the orphan.
+        "unmarked.weight": torch.zeros(8, 8, dtype=torch.int8),
+    }
+
+    checkpoint_path = tmp_path / "krea2_int8_convrot.safetensors"
+    checkpoint_path.touch()
+    config = Main_Checkpoint_Krea2_Config.model_construct(
+        path=str(checkpoint_path), variant=Krea2VariantType.Turbo, fp8_storage=None
+    )
+    loader = object.__new__(Krea2CheckpointModel)
+    loader._ram_cache = SimpleNamespace(make_room=MagicMock())
+    loader._logger = MagicMock()
+
+    monkeypatch.setattr(diffusers, "Krea2Transformer2DModel", _TinyInt8Krea2Transformer, raising=False)
+    monkeypatch.setattr(safetensors.torch, "load_file", lambda _path: state_dict)
+    monkeypatch.setattr(
+        "invokeai.backend.model_manager.load.model_loaders.krea2.TorchDevice.choose_torch_device",
+        lambda: torch.device("cpu"),
+    )
+    monkeypatch.setattr(
+        "invokeai.backend.model_manager.load.model_loaders.krea2.TorchDevice.choose_bfloat16_safe_dtype",
+        lambda _device: torch.float32,
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        loader._load_from_singlefile(config)
+
+    assert "unmarked.weight" in str(excinfo.value)

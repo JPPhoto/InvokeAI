@@ -63,6 +63,7 @@ from invokeai.backend.quantization.int8_convrot import (
     cast_unquantized,
     drop_unconsumed_quantization_sidecars,
     extract_int8_convrot_markers,
+    reject_unmarked_int8_weights,
     swap_in_int8_linears,
 )
 from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
@@ -551,16 +552,8 @@ class ZImageCheckpointModel(ModelLoader):
         # other's tensors.
         int8_markers = extract_int8_convrot_markers(sd)
 
-        # Outside the branch on purpose: an int8 weight whose marker is missing leaves `int8_markers`
-        # empty, so a check living inside the int8 path would never see the very case it exists for.
-        # Such a weight would take the fp8 path, be treated as an ordinary tensor and load into a
-        # model that runs and generates noise.
-        orphans = sorted(k for k, v in sd.items() if v.dtype is torch.int8 and k[: -len(".weight")] not in int8_markers)
-        if orphans:
-            raise ValueError(
-                f"Z-Image checkpoint has {len(orphans)} int8 weight(s) with no `comfy_quant` marker, "
-                f"e.g. {orphans[:3]}. Loading them would produce a model that runs and generates noise."
-            )
+        # Outside the branch on purpose -- see the helper, which explains why.
+        reject_unmarked_int8_weights(sd, int8_markers, "Z-Image")
 
         if int8_markers:
             # Markers are read *after* the key conversion above, which carries them (and their
@@ -578,7 +571,10 @@ class ZImageCheckpointModel(ModelLoader):
 
             # int8 payloads are one byte, not two: reserving the compute dtype's width for them
             # would ask the cache to free memory this load never uses.
-            new_sd_size = sum(ten.nelement() * max(ten.element_size(), model_dtype.itemsize) for ten in sd.values())
+            # `max(element_size, itemsize)` would charge the compute dtype's width for the int8
+            # payloads -- `max(1, 2)` is 2 -- which is the doubling this comment exists to avoid.
+            # `predict_cast_state_dict_size` charges each tensor what it will actually occupy.
+            new_sd_size = predict_cast_state_dict_size(sd, model_dtype, keep_fp8=False)
             self._ram_cache.make_room(new_sd_size)
 
             cast_unquantized(sd, model_dtype, int8_markers)

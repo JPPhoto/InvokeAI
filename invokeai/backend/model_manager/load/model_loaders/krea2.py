@@ -51,6 +51,7 @@ from invokeai.backend.quantization.int8_convrot import (
     cast_unquantized,
     drop_unconsumed_quantization_sidecars,
     extract_int8_convrot_markers,
+    reject_unmarked_int8_weights,
     resolve_quantized_module_paths,
     swap_in_int8_linears,
 )
@@ -357,9 +358,10 @@ class Krea2CheckpointModel(ModelLoader):
     and native/ComfyUI key naming. Apply the fp8-storage setting to keep the (large) transformer
     fp8-resident; otherwise it loads in full precision.
 
-    The int8 build is decoded to dense weights rather than kept int8-resident: on this model that
-    costs nothing, because fp8 storage and int8 storage measure the same 12.0 GiB, and the reason to
-    keep int8 resident is int8 *compute*, which needs a kernel InvokeAI does not have yet.
+    The int8 build stays int8-resident: `swap_in_int8_linears` installs `Int8ConvrotLinear`, which
+    holds the stored codes and dequantizes per forward, so a 12.0 GiB checkpoint stays 12.0 GiB.
+    What it does not get is int8 *compute* -- that needs a kernel InvokeAI does not have yet -- so
+    the saving here is resident memory, not speed.
     """
 
     def _load_model(
@@ -403,6 +405,11 @@ class Krea2CheckpointModel(ModelLoader):
         # would be scaled but never un-rotated -- a state dict that loads cleanly and generates
         # noise.
         int8_markers = extract_int8_convrot_markers(sd)
+
+        # Outside the branch on purpose -- see the helper, which explains why. Z-Image has always
+        # had this; Krea-2 did not, so an int8 weight whose marker was missing or unparseable was
+        # cast to the compute dtype as raw codes and loaded silently.
+        reject_unmarked_int8_weights(sd, int8_markers, "Krea-2")
 
         if int8_markers:
             sd = drop_unconsumed_quantization_sidecars(sd)
@@ -458,7 +465,10 @@ class Krea2CheckpointModel(ModelLoader):
         if int8_markers:
             # int8 payloads are one byte, not two: reserving the compute dtype's width for them
             # would ask the cache to free ~12 GB that this load never uses.
-            new_sd_size = sum(ten.nelement() * max(ten.element_size(), model_dtype.itemsize) for ten in sd.values())
+            # `max(element_size, itemsize)` would charge the compute dtype's width for the int8
+            # payloads -- `max(1, 2)` is 2 -- which is the doubling this comment exists to avoid.
+            # `predict_cast_state_dict_size` charges each tensor what it will actually occupy.
+            new_sd_size = predict_cast_state_dict_size(sd, model_dtype, keep_fp8=False)
             self._ram_cache.make_room(new_sd_size)
             cast_unquantized(sd, model_dtype, quantized)
             swap_in_int8_linears(model, sd, quantized)
@@ -779,6 +789,11 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
         # fp8.
         int8_markers = extract_int8_convrot_markers(sd)
 
+        # Outside the branch on purpose -- see the helper, which explains why. Z-Image has always
+        # had this; Krea-2 did not, so an int8 weight whose marker was missing or unparseable was
+        # cast to the compute dtype as raw codes and loaded silently.
+        reject_unmarked_int8_weights(sd, int8_markers, "Krea-2")
+
         if int8_markers:
             sd = drop_unconsumed_quantization_sidecars(sd)
             key_map: dict[str, str] = {}
@@ -826,7 +841,10 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
 
         if int8_markers:
             # int8 payloads are one byte, not two.
-            new_sd_size = sum(ten.nelement() * max(ten.element_size(), model_dtype.itemsize) for ten in sd.values())
+            # `max(element_size, itemsize)` would charge the compute dtype's width for the int8
+            # payloads -- `max(1, 2)` is 2 -- which is the doubling this comment exists to avoid.
+            # `predict_cast_state_dict_size` charges each tensor what it will actually occupy.
+            new_sd_size = predict_cast_state_dict_size(sd, model_dtype, keep_fp8=False)
             self._ram_cache.make_room(new_sd_size)
             cast_unquantized(sd, model_dtype, quantized)
             swap_in_int8_linears(model, sd, quantized)
