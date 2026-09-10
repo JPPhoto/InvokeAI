@@ -386,7 +386,7 @@ class _GenericGraphSchedulerAdapter:
             if source_node_id not in self._state.executed:
                 self._state._mark_source_executed(source_node_id)
 
-    def resolve_if_node(self, exec_node_id: str) -> None:
+    def resolve_if_node(self, exec_node_id: str, *, enqueue: bool = True) -> None:
         """Resolve legacy If inputs without pruning graph edges or using type-specific skips."""
 
         if exec_node_id in self._state._resolved_if_exec_branches:
@@ -403,7 +403,8 @@ class _GenericGraphSchedulerAdapter:
         self._state._record_compatibility_activation_token(exec_node_id, selected_field)
         self._discard_rejected_nodes()
         self._sync_indegree()
-        self._project_ready_nodes()
+        if enqueue:
+            self._project_ready_nodes()
 
     def _discard_rejected_node(self, exec_node_id: str) -> None:
         node = self._scheduler.plan.nodes.get(exec_node_id)

@@ -449,7 +449,9 @@ Workflow-call note:
 - `_IfActivationController` Owns fallback runtime `If` admission and compiles opaque, frame-local activation dependency
   records for unsupported fresh shapes and legacy prepared nodes. Fresh ordinary-node single-`If` graphs, the bounded
   nested pair, the exact bounded three-`If` inner/middle/outer chain, and exactly two or three independent sibling `If`s
-  compile those dependencies in graph state. Fresh admission leaves rejected
+  compile those dependencies in graph state. The bounded three-`If` chain also admits one middle-`If` value fan-out to
+  one ordinary leaf consumer; that leaf inherits only the outer branch dependency, not middle-`If` polarity. Other
+  fan-out remains fallback. Fresh admission leaves rejected
   branch sources unprepared; legacy skipped-state projections remain loadable.
 - Private `graph_if_dependencies.py` compiles fresh activation dependencies, and
   `graph_if_runtime.py` records dependencies and evaluates admission against gates and tokens.
@@ -480,7 +482,9 @@ JSON/model round trip. Rehydration reconstructs prepared exec metadata, cached i
 gate state from condition results or persisted activation tokens, non-empty iteration streams from durable effects and
 legacy Iterate results, explicit empty-source closes, For continuation identity, and ready queues from
 `execution_graph`, `indegree`, `executed`, and `results`. Activation tokens persist; private `ActivationGate` runtime
-state does not and is reconstructed from condition results or persisted activation tokens. Before token validation,
+state does not and is reconstructed from condition results or persisted activation tokens. Pending selected `If` inputs
+remain excluded from ready-queue projection during rehydration, preserving ready-node order across checkpoints before
+the pending `If` is admitted. Before token validation,
 missing legacy iteration-path metadata is rebuilt from the prepared execution graph. Persisted activation identity is
 then validated fail-closed
 against prepared owners, derived references, declared activation fields, canonical ids, and known frame fields; extra

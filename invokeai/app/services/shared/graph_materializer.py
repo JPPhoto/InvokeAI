@@ -1188,7 +1188,7 @@ class _ExecutionMaterializer:
             for edge in self._state.graph._get_input_edges(node_id, "condition")
         )
 
-    def _attach_pending_if_inputs(self) -> None:
+    def _attach_pending_if_inputs(self, *, enqueue: bool = True) -> None:
         """Attach only the selected branch edge to condition-ready If executions."""
 
         source_graph = self._state._get_source_graph_flat()
@@ -1210,7 +1210,8 @@ class _ExecutionMaterializer:
                 edge.destination.field == selected_field
                 for edge in self._state.execution_graph._get_input_edges(exec_node_id)
             ):
-                self._state._tx_discard_set(self._state._pending_if_exec_nodes, exec_node_id)
+                if enqueue:
+                    self._state._tx_discard_set(self._state._pending_if_exec_nodes, exec_node_id)
                 continue
 
             source_if_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
@@ -1249,11 +1250,13 @@ class _ExecutionMaterializer:
             input_edges = self._state.execution_graph._get_input_edges(exec_node_id)
             unmet = sum(1 for edge in input_edges if edge.source.node_id not in self._state.executed)
             self._state._tx_set_mapping(self._state.indegree, exec_node_id, unmet)
-            self._state._tx_discard_set(self._state._pending_if_exec_nodes, exec_node_id)
+            if enqueue:
+                self._state._tx_discard_set(self._state._pending_if_exec_nodes, exec_node_id)
             scheduler = self._state._scheduler()
             if self._state._is_generic_graph_scheduler(scheduler):
                 scheduler.register_node(exec_node_id)
-            self._state._enqueue_if_ready(exec_node_id)
+            if enqueue:
+                self._state._enqueue_if_ready(exec_node_id)
 
     def iterator_graph(self, base: Optional["nx.DiGraph"] = None) -> "nx.DiGraph":
         """Gets a DiGraph with edges to collectors removed so an ancestor search produces all active iterators for any node"""

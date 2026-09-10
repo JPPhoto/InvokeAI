@@ -2210,7 +2210,7 @@ class GraphExecutionState(BaseModel):
     def _try_resolve_if_node(self, exec_node_id: str, *, enqueue: bool = True) -> None:
         scheduler = self._execution_scheduler
         if isinstance(scheduler, _GenericGraphSchedulerAdapter):
-            scheduler.resolve_if_node(exec_node_id)
+            scheduler.resolve_if_node(exec_node_id, enqueue=enqueue)
             return
 
         if exec_node_id in self._resolved_if_exec_branches:
@@ -2257,6 +2257,7 @@ class GraphExecutionState(BaseModel):
     def _prepare_until_node_ready(self) -> Optional[BaseInvocation]:
         base_graph = self._get_source_graph_flat()
         self._materializer()._attach_pending_if_inputs()
+        self._rehydrate_ready_queues()
         next_node = self._get_next_node()
         if next_node is not None:
             return next_node
@@ -2584,6 +2585,8 @@ class GraphExecutionState(BaseModel):
         for exec_node_id in nx.topological_sort(execution_graph):
             if exec_node_id in self.executed:
                 continue
+            if exec_node_id in self._pending_if_exec_nodes:
+                continue
             if self.indegree.get(exec_node_id) != 0:
                 continue
             self._enqueue_if_ready(exec_node_id)
@@ -2593,8 +2596,8 @@ class GraphExecutionState(BaseModel):
         self._rehydrate_prepared_exec_metadata()
         self._rehydrate_resolved_if_exec_branches()
         self._rehydrate_generic_runtime_state()
-        self._materializer()._attach_pending_if_inputs()
         self._rehydrate_ready_queues()
+        self._materializer()._attach_pending_if_inputs(enqueue=False)
 
     def model_post_init(self, __context: Any) -> None:
         if isinstance(__context, dict) and "execution_effects_persisted" in __context:

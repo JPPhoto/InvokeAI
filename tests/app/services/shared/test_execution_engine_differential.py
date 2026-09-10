@@ -172,6 +172,42 @@ def _three_nested_if_graph(
     return graph
 
 
+def _three_nested_if_graph_with_middle_leaf_fanout(**kwargs: Any) -> Graph:
+    graph = _three_nested_if_graph(**kwargs)
+    graph.add_node(AddInvocation(id="middle_side_consumer", b=1))
+    graph.add_edge(create_edge("middle_if", "value", "middle_side_consumer", "a"))
+    return graph
+
+
+def _three_nested_if_graph_with_middle_leaf_fanout_and_shared_ancestor(**kwargs: Any) -> Graph:
+    graph = _three_nested_if_graph_with_middle_leaf_fanout(**kwargs)
+    graph.add_node(AddInvocation(id="shared", a=1, b=1))
+    graph.add_edge(create_edge("shared", "value", "inner_true", "a"))
+    graph.add_edge(create_edge("shared", "value", "inner_false", "a"))
+    return graph
+
+
+def _three_nested_if_graph_with_extra_middle_fanout() -> Graph:
+    graph = _three_nested_if_graph_with_middle_leaf_fanout()
+    graph.add_node(AddInvocation(id="middle_side_consumer_2", b=2))
+    graph.add_edge(create_edge("middle_if", "value", "middle_side_consumer_2", "a"))
+    return graph
+
+
+def _three_nested_if_graph_with_non_leaf_middle_fanout() -> Graph:
+    graph = _three_nested_if_graph_with_middle_leaf_fanout()
+    graph.add_node(AddInvocation(id="middle_side_tail", b=2))
+    graph.add_edge(create_edge("middle_side_consumer", "value", "middle_side_tail", "a"))
+    return graph
+
+
+def _three_nested_if_graph_with_inner_fanout() -> Graph:
+    graph = _three_nested_if_graph_with_middle_leaf_fanout()
+    graph.add_node(AddInvocation(id="inner_side_consumer", b=2))
+    graph.add_edge(create_edge("inner_if", "value", "inner_side_consumer", "a"))
+    return graph
+
+
 def _three_nested_if_graph_with_shared_ancestor(**kwargs: bool) -> Graph:
     graph = _three_nested_if_graph(**kwargs)
     graph.add_node(AddInvocation(id="shared", a=1, b=1))
@@ -4494,6 +4530,226 @@ def test_fresh_three_nested_ifs_shared_ancestor_isolated_and_checkpoint_resumes(
     assert resumed_state.executed_history.count("shared") == 1
     assert _state_projection(resumed_state) == _state_projection(expected_state)
     assert _activation_projection(resumed_state) == _activation_projection(expected_state)
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+@pytest.mark.parametrize(
+    ("outer_condition", "middle_condition", "inner_condition", "expected_trace", "expected_value"),
+    [
+        (
+            True,
+            True,
+            True,
+            [
+                "outer_condition",
+                "middle_condition",
+                "inner_condition",
+                "inner_true",
+                "inner_if",
+                "middle_if",
+                "middle_side_consumer",
+                "outer_if",
+                "sink",
+            ],
+            5,
+        ),
+        (
+            True,
+            True,
+            False,
+            [
+                "outer_condition",
+                "middle_condition",
+                "inner_condition",
+                "inner_false",
+                "inner_if",
+                "middle_if",
+                "middle_side_consumer",
+                "outer_if",
+                "sink",
+            ],
+            7,
+        ),
+        (
+            True,
+            False,
+            True,
+            [
+                "outer_condition",
+                "middle_condition",
+                "middle_false",
+                "middle_if",
+                "middle_side_consumer",
+                "outer_if",
+                "sink",
+            ],
+            11,
+        ),
+        (
+            True,
+            False,
+            False,
+            [
+                "outer_condition",
+                "middle_condition",
+                "middle_false",
+                "middle_if",
+                "middle_side_consumer",
+                "outer_if",
+                "sink",
+            ],
+            11,
+        ),
+        (False, True, True, ["outer_condition", "outer_false", "outer_if", "sink"], 21),
+        (False, True, False, ["outer_condition", "outer_false", "outer_if", "sink"], 21),
+        (False, False, True, ["outer_condition", "outer_false", "outer_if", "sink"], 21),
+        (False, False, False, ["outer_condition", "outer_false", "outer_if", "sink"], 21),
+    ],
+)
+def test_fresh_three_nested_middle_leaf_fanout_matches_compatibility(
+    force_compatibility_scheduler: bool,
+    outer_condition: bool,
+    middle_condition: bool,
+    inner_condition: bool,
+    expected_trace: list[str],
+    expected_value: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh middle fanout If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+    graph = _three_nested_if_graph_with_middle_leaf_fanout(
+        outer_condition=outer_condition,
+        middle_condition=middle_condition,
+        inner_condition=inner_condition,
+    )
+    state = GraphExecutionState(graph=graph)
+
+    assert state._can_use_fresh_flat_if_activation()
+    trace, state = _run_graph(state, force_compatibility_scheduler=force_compatibility_scheduler)
+
+    assert trace == expected_trace
+    assert set(state.source_prepared_mapping) == set(expected_trace)
+    assert state.results[next(iter(state.source_prepared_mapping["sink"]))].value == expected_value
+    if outer_condition:
+        side_consumer_id = next(iter(state.source_prepared_mapping["middle_side_consumer"]))
+        expected_side_value = expected_value
+        assert state.results[side_consumer_id].value == expected_side_value
+    else:
+        assert "middle_side_consumer" not in state.source_prepared_mapping
+    assert state.is_complete()
+
+
+@pytest.mark.parametrize("middle_branch", ["true_input", "false_input"])
+@pytest.mark.parametrize("outer_branch", ["true_input", "false_input"])
+def test_fresh_three_nested_middle_leaf_fanout_supports_direct_parent_branch_ports(
+    middle_branch: str,
+    outer_branch: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh middle fanout If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+    graph = _three_nested_if_graph_with_middle_leaf_fanout(
+        outer_condition=outer_branch == "true_input",
+        middle_condition=middle_branch == "true_input",
+        inner_condition=True,
+        middle_branch=middle_branch,
+        outer_branch=outer_branch,
+    )
+    expected_trace = [
+        "outer_condition",
+        "middle_condition",
+        "inner_condition",
+        "inner_true",
+        "inner_if",
+        "middle_if",
+        "middle_side_consumer",
+        "outer_if",
+        "sink",
+    ]
+    runs: list[tuple[list[str], GraphExecutionState]] = []
+    for force_compatibility_scheduler in (False, True):
+        trace, state = _run_graph(
+            GraphExecutionState(graph=graph.model_copy(deep=True)),
+            force_compatibility_scheduler=force_compatibility_scheduler,
+        )
+        runs.append((trace, state))
+        assert trace == expected_trace
+        assert state.is_complete()
+
+    assert runs[0][0] == runs[1][0]
+    assert _state_projection(runs[0][1]) == _state_projection(runs[1][1])
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+@pytest.mark.parametrize("stop_after", range(1, 11))
+def test_fresh_three_nested_middle_leaf_fanout_shared_checkpoint_resumes(
+    force_compatibility_scheduler: bool,
+    stop_after: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh middle fanout If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+    graph = _three_nested_if_graph_with_middle_leaf_fanout_and_shared_ancestor(
+        outer_condition=True,
+        middle_condition=True,
+        inner_condition=False,
+    )
+    expected_trace, expected_state = _run_graph(GraphExecutionState(graph=graph.model_copy(deep=True)))
+    checkpoint_trace, checkpoint_state = _run_graph(
+        GraphExecutionState(graph=graph.model_copy(deep=True)),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+        stop_after=stop_after,
+    )
+    restored = load_execution_state(dump_execution_state(checkpoint_state))
+    if force_compatibility_scheduler:
+        _restore_compatibility_scheduler(restored)
+    resumed_trace, resumed_state = _run_graph(restored, force_compatibility_scheduler=force_compatibility_scheduler)
+
+    assert checkpoint_trace + resumed_trace == expected_trace
+    assert resumed_state.executed_history == expected_state.executed_history
+    assert resumed_state.executed_history.count("shared") == 1
+    assert resumed_state.executed_history.count("middle_side_consumer") == 1
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+    assert _activation_projection(resumed_state) == _activation_projection(expected_state)
+    assert resumed_state.is_complete()
+
+
+@pytest.mark.parametrize(
+    "graph_factory",
+    [
+        pytest.param(_three_nested_if_graph_with_extra_middle_fanout, id="extra-middle-fanout"),
+        pytest.param(_three_nested_if_graph_with_non_leaf_middle_fanout, id="non-leaf-middle-fanout"),
+        pytest.param(_three_nested_if_graph_with_inner_fanout, id="inner-fanout"),
+    ],
+)
+def test_fresh_three_nested_invalid_fanout_shapes_use_controller_fallback(
+    graph_factory: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch_analysis_calls: list[tuple[str, str]] = []
+    original_branch_sources = graph_module._IfActivationController._branch_sources
+
+    def record_branch_analysis(
+        controller: graph_module._IfActivationController,
+        if_node_id: str,
+        branch_field: str,
+        source_graph: Any,
+    ) -> set[str]:
+        branch_analysis_calls.append((if_node_id, branch_field))
+        return original_branch_sources(controller, if_node_id, branch_field, source_graph)
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", record_branch_analysis)
+    state = GraphExecutionState(graph=graph_factory())
+
+    assert not state._can_use_fresh_flat_if_activation()
+    state._get_source_activation_dependencies("inner_true")
+    assert branch_analysis_calls
 
 
 @pytest.mark.parametrize(

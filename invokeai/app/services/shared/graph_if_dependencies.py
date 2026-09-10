@@ -95,15 +95,39 @@ def _can_use_fresh_flat_if_activation(state: "GraphExecutionState") -> bool:
                 return False
 
             current_if_id = next(iter(chain_start_ids))
+            chain_path = [current_if_id]
             for _ in range(len(nested_edges)):
                 nested_edge = nested_edge_by_source.get(current_if_id)
                 if nested_edge is None:
                     return False
-                if any(edge.source.node_id == current_if_id and edge != nested_edge for edge in state.graph.edges):
-                    return False
-                current_if_id = nested_edge.destination.node_id
+                next_if_id = nested_edge.destination.node_id
+                current_if_id = next_if_id
+                chain_path.append(current_if_id)
             if current_if_id not in chain_end_ids:
                 return False
+
+            middle_if_id = chain_path[-2]
+            middle_nested_edge = nested_edge_by_source[middle_if_id]
+            for chain_source_id in chain_path[:-1]:
+                if chain_source_id == middle_if_id and len(if_nodes) == 3:
+                    continue
+                nested_edge = nested_edge_by_source[chain_source_id]
+                if any(edge.source.node_id == chain_source_id and edge != nested_edge for edge in state.graph.edges):
+                    return False
+            middle_extra_edges = [
+                edge for edge in state.graph.edges if edge.source.node_id == middle_if_id and edge != middle_nested_edge
+            ]
+            if len(middle_extra_edges) > 1:
+                return False
+            if middle_extra_edges:
+                fanout_edge = middle_extra_edges[0]
+                fanout_node = state.graph.get_node(fanout_edge.destination.node_id)
+                if (
+                    fanout_edge.source.field != "value"
+                    or isinstance(fanout_node, IfInvocation)
+                    or state.graph._get_output_edges(fanout_node.id)
+                ):
+                    return False
 
             expected_input_fields = {"condition", "true_input", "false_input"}
             for if_node in if_nodes:
@@ -131,6 +155,14 @@ def _get_fresh_if_branch_sources(state: "GraphExecutionState", if_node_id: str, 
     branch_sources = set(direct_sources)
     for source_node_id in direct_sources:
         branch_sources.update(nx.ancestors(source_graph, source_node_id))
+        source_node = state.graph.get_node(source_node_id)
+        if isinstance(source_node, IfInvocation):
+            branch_sources.update(
+                edge.destination.node_id
+                for edge in state.graph._get_output_edges(source_node_id)
+                if not isinstance(state.graph.get_node(edge.destination.node_id), IfInvocation)
+                and not state.graph._get_output_edges(edge.destination.node_id)
+            )
 
     changed = True
     while changed:

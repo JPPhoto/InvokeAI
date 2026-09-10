@@ -103,15 +103,21 @@ def _sibling_if_graph_with_count(count: int) -> Graph:
     return graph
 
 
-def _three_nested_if_graph() -> Graph:
+def _three_nested_if_graph(*, middle_branch: str = "true_input", outer_branch: str = "true_input") -> Graph:
+    assert middle_branch in {"true_input", "false_input"}
+    assert outer_branch in {"true_input", "false_input"}
+    middle_other_branch = "false_input" if middle_branch == "true_input" else "true_input"
+    outer_other_branch = "false_input" if outer_branch == "true_input" else "true_input"
+    middle_other_id = "middle_false" if middle_branch == "true_input" else "middle_true"
+    outer_other_id = "outer_false" if outer_branch == "true_input" else "outer_true"
     graph = Graph()
     graph.add_node(BooleanInvocation(id="outer_condition", value=True))
     graph.add_node(BooleanInvocation(id="middle_condition", value=False))
     graph.add_node(BooleanInvocation(id="inner_condition", value=True))
     graph.add_node(AddInvocation(id="inner_true", a=2, b=2))
     graph.add_node(AddInvocation(id="inner_false", a=3, b=3))
-    graph.add_node(AddInvocation(id="middle_false", a=10, b=0))
-    graph.add_node(AddInvocation(id="outer_false", a=20, b=0))
+    graph.add_node(AddInvocation(id=middle_other_id, a=10, b=0))
+    graph.add_node(AddInvocation(id=outer_other_id, a=20, b=0))
     graph.add_node(IfInvocation(id="inner_if"))
     graph.add_node(IfInvocation(id="middle_if"))
     graph.add_node(IfInvocation(id="outer_if"))
@@ -120,11 +126,11 @@ def _three_nested_if_graph() -> Graph:
     graph.add_edge(_edge("inner_true", "value", "inner_if", "true_input"))
     graph.add_edge(_edge("inner_false", "value", "inner_if", "false_input"))
     graph.add_edge(_edge("middle_condition", "value", "middle_if", "condition"))
-    graph.add_edge(_edge("inner_if", "value", "middle_if", "true_input"))
-    graph.add_edge(_edge("middle_false", "value", "middle_if", "false_input"))
+    graph.add_edge(_edge("inner_if", "value", "middle_if", middle_branch))
+    graph.add_edge(_edge(middle_other_id, "value", "middle_if", middle_other_branch))
     graph.add_edge(_edge("outer_condition", "value", "outer_if", "condition"))
-    graph.add_edge(_edge("middle_if", "value", "outer_if", "true_input"))
-    graph.add_edge(_edge("outer_false", "value", "outer_if", "false_input"))
+    graph.add_edge(_edge("middle_if", "value", "outer_if", outer_branch))
+    graph.add_edge(_edge(outer_other_id, "value", "outer_if", outer_other_branch))
     graph.add_edge(_edge("outer_if", "value", "sink", "a"))
     return graph
 
@@ -147,6 +153,27 @@ def _three_nested_if_fanout_graph() -> Graph:
     graph = _three_nested_if_graph()
     graph.add_node(AddInvocation(id="middle_side_consumer", b=1))
     graph.add_edge(_edge("middle_if", "value", "middle_side_consumer", "a"))
+    return graph
+
+
+def _three_nested_if_extra_fanout_graph() -> Graph:
+    graph = _three_nested_if_fanout_graph()
+    graph.add_node(AddInvocation(id="middle_side_consumer_2", b=2))
+    graph.add_edge(_edge("middle_if", "value", "middle_side_consumer_2", "a"))
+    return graph
+
+
+def _three_nested_if_non_leaf_fanout_graph() -> Graph:
+    graph = _three_nested_if_fanout_graph()
+    graph.add_node(AddInvocation(id="middle_side_tail", b=2))
+    graph.add_edge(_edge("middle_side_consumer", "value", "middle_side_tail", "a"))
+    return graph
+
+
+def _three_nested_if_inner_fanout_graph() -> Graph:
+    graph = _three_nested_if_fanout_graph()
+    graph.add_node(AddInvocation(id="inner_side_consumer", b=2))
+    graph.add_edge(_edge("inner_if", "value", "inner_side_consumer", "a"))
     return graph
 
 
@@ -358,7 +385,9 @@ def test_three_independent_sibling_ifs_admit_owner_local_frame_local_dependencie
         pytest.param(lambda: _sibling_if_graph_with_count(4), "first_true", id="four-sibling-ifs"),
         pytest.param(_indirectly_connected_if_graph, "first_true", id="indirect-chain"),
         pytest.param(_four_nested_if_graph, "inner_true", id="four-nested-ifs"),
-        pytest.param(_three_nested_if_fanout_graph, "inner_true", id="three-nested-if-fanout"),
+        pytest.param(_three_nested_if_extra_fanout_graph, "inner_true", id="three-nested-if-extra-fanout"),
+        pytest.param(_three_nested_if_non_leaf_fanout_graph, "inner_true", id="three-nested-if-non-leaf-fanout"),
+        pytest.param(_three_nested_if_inner_fanout_graph, "inner_true", id="three-nested-if-inner-fanout"),
     ],
 )
 def test_unsupported_if_shapes_use_controller_fallback(
@@ -412,6 +441,48 @@ def test_three_nested_ifs_admit_owner_and_frame_dependencies(
     )
     assert state._get_source_activation_dependencies("outer_false", (4,)) == (
         ActivationDependency(owner_id="outer_if", branch="false_input", frame=(4,)),
+    )
+
+
+def test_three_nested_ifs_with_one_middle_leaf_fanout_admit_exact_dependencies() -> None:
+    state = GraphExecutionState(graph=_three_nested_if_fanout_graph())
+
+    assert state._can_use_fresh_flat_if_activation()
+    assert state._get_source_activation_dependencies("inner_true", (1,)) == (
+        ActivationDependency(owner_id="inner_if", branch="true_input", frame=(1,)),
+        ActivationDependency(owner_id="middle_if", branch="true_input", frame=(1,)),
+        ActivationDependency(owner_id="outer_if", branch="true_input", frame=(1,)),
+    )
+    assert state._get_source_activation_dependencies("middle_false", (2,)) == (
+        ActivationDependency(owner_id="middle_if", branch="false_input", frame=(2,)),
+        ActivationDependency(owner_id="outer_if", branch="true_input", frame=(2,)),
+    )
+    assert state._get_source_activation_dependencies("outer_false", (3,)) == (
+        ActivationDependency(owner_id="outer_if", branch="false_input", frame=(3,)),
+    )
+    assert state._get_source_activation_dependencies("middle_side_consumer", (4,)) == (
+        ActivationDependency(owner_id="outer_if", branch="true_input", frame=(4,)),
+    )
+
+
+@pytest.mark.parametrize("middle_branch", ["true_input", "false_input"])
+@pytest.mark.parametrize("outer_branch", ["true_input", "false_input"])
+def test_three_nested_ifs_with_one_middle_leaf_fanout_preserve_parent_branch_ports(
+    middle_branch: str, outer_branch: str
+) -> None:
+    state = GraphExecutionState(
+        graph=_three_nested_if_graph(
+            middle_branch=middle_branch,
+            outer_branch=outer_branch,
+        )
+    )
+    # This fixture does not include fan-out. Add the exact permitted side leaf.
+    state.graph.add_node(AddInvocation(id="middle_side_consumer", b=1))
+    state.graph.add_edge(_edge("middle_if", "value", "middle_side_consumer", "a"))
+
+    assert state._can_use_fresh_flat_if_activation()
+    assert state._get_source_activation_dependencies("middle_side_consumer", (4,)) == (
+        ActivationDependency(owner_id="outer_if", branch=outer_branch, frame=(4,)),
     )
 
 
