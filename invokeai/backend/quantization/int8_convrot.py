@@ -38,6 +38,8 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
+from invokeai.backend.model_manager.taxonomy import ModelFormat
+
 CONVROT_GROUP_SIZE = 256
 
 _HADAMARD_SEED = ((1, 1, 1, -1), (1, 1, -1, 1), (1, -1, 1, 1), (-1, 1, 1, 1))
@@ -57,8 +59,39 @@ def build_regular_hadamard(size: int, dtype: torch.dtype = torch.float32) -> tor
 
 
 def parse_comfy_quant_marker(blob: torch.Tensor) -> dict:
-    """Decode a ``<layer>.comfy_quant`` uint8 tensor into its JSON dict."""
-    return json.loads(bytes(blob.cpu().numpy().tobytes()).decode("utf-8"))
+    """Decode a ``<layer>.comfy_quant`` uint8 tensor into its JSON dict, or ``{}``.
+
+    Tolerant on purpose, and it has to be: this runs over *every* marker in the file before the
+    loader knows which format it is dealing with, so a blob belonging to some other scheme decides
+    whether an fp8 checkpoint loads at all. Comfy pads these to a fixed width with NUL bytes -- the
+    fp8 reader documents that and strips it -- and a strict parse turns a padded marker into
+    `JSONDecodeError: Extra data` out of the middle of a load, naming neither the file nor the key.
+
+    A malformed marker is a lost hint, never a failed load: an int8 weight whose marker did not
+    parse is then caught by the orphan check in the loaders, which says what is wrong.
+    """
+    try:
+        text = bytes(blob.cpu().numpy().tobytes()).decode("utf-8", errors="replace").rstrip("\x00")
+        parsed = json.loads(text)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def as_column_scale(weight: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    """A per-output-channel scale shaped `[out, 1]`, so it multiplies down the rows.
+
+    `check_int8_scale_layout` accepts `[out]` as well as `[out, 1]`, but broadcasting aligns
+    *trailing* dimensions: `weight[out, in] * scale[out]` scales along the input axis instead. For a
+    square weight that is silent -- measured at 0.82 correlation against the intended result, so the
+    model loads and generates subtly wrong images -- and for every other shape it raises with a size
+    mismatch that names neither the layer nor the cause.
+
+    A scalar, `[1]` or `[1, 1]` is per-tensor and broadcasts correctly as it is.
+    """
+    if scale.dim() == 1 and scale.shape[0] == weight.shape[0]:
+        return scale.unsqueeze(1)
+    return scale
 
 
 def dequantize_convrot_weight(
@@ -69,7 +102,7 @@ def dequantize_convrot_weight(
     group_size: int = CONVROT_GROUP_SIZE,
 ) -> torch.Tensor:
     """Recover the bf16/fp16 weight from int8 storage (and undo convrot if applied)."""
-    w = weight_q.to(torch.float32) * weight_scale.to(torch.float32)
+    w = weight_q.to(torch.float32) * as_column_scale(weight_q, weight_scale).to(torch.float32)
     if convrot:
         out_features, in_features = w.shape
         if in_features % group_size != 0:
@@ -134,7 +167,8 @@ class Int8ConvrotLinear(torch.nn.Module):
         # per-call transient at ~two weight-sized tensors (~620 MB peak for the fused-SwiGLU
         # fc1 in bf16) instead of tripling through an fp32 intermediate (~1.5 GiB). An fp32
         # compute dtype still gets the exact fp32 path for free.
-        w = self.weight.to(device=device, dtype=dtype) * self.weight_scale.to(device=device, dtype=dtype)
+        scale = as_column_scale(self.weight, self.weight_scale).to(device=device, dtype=dtype)
+        w = self.weight.to(device=device, dtype=dtype) * scale
         if self.convrot:
             assert self.hadamard is not None
             w = (
@@ -191,6 +225,25 @@ def check_int8_scale_layout(path: str, weight: torch.Tensor, scale: torch.Tensor
         f"'{path}' has a {tuple(scale.shape)} scale for a {tuple(weight.shape)} weight, which is "
         "neither per-output-channel nor per-tensor. Blockwise scale grids are not implemented."
     )
+
+
+def requires_sidecar_patching(transformer: Any, model_format: ModelFormat) -> bool:
+    """Whether LoRA has to be applied as a sidecar rather than written into the weights.
+
+    The format alone does not answer this. A plain ``checkpoint`` may still be an
+    ``int8_tensorwise`` build, whose Linears the loader replaced with :class:`Int8ConvrotLinear` --
+    those hold their weights as int8 *buffers*, which a direct patch cannot write into (and which
+    could not represent the patched values anyway, the rotation having mixed 256 of them). Worse,
+    the fallbacks that would otherwise catch this iterate ``module.parameters()``, and these modules
+    have none, so they answer "not quantized" and direct patching is chosen. So the loaded module
+    tree is consulted, not just the config.
+
+    Lives here rather than beside one denoise node because every architecture this scheme reaches
+    needs the same answer, and getting it from the config alone is wrong in the same way for each.
+    """
+    if model_format in (ModelFormat.GGUFQuantized, ModelFormat.SDNQQuantized):
+        return True
+    return any(isinstance(module, Int8ConvrotLinear) for module in transformer.modules())
 
 
 def drop_unconsumed_quantization_sidecars(sd: dict[str, Any]) -> dict[str, Any]:
