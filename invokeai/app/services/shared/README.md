@@ -10,9 +10,12 @@ executes nodes from class-grouped ready queues. In normal execution, runtime exp
 instead of mutating the source graph. Ordinary static DAGs and legacy-shaped `If` graphs use the opaque `ExecutionPlan`
 and deterministic `ExecutionScheduler` in `execution_engine/scheduler.py`. Fresh graphs with one ordinary-node `If`, the
 exact one-level nested shape with two `If` nodes where the inner value feeds one outer branch and has no other
-consumer, or exactly two independent ordinary-node sibling `If`s compile opaque, frame-local activation dependencies in
-`GraphExecutionState`; unsupported fresh shapes use the compatibility scheduler with the dedicated
+consumer, or exactly two or exactly three independent ordinary-node sibling `If`s compile opaque, frame-local
+activation dependencies in `GraphExecutionState`; unsupported fresh shapes use the compatibility scheduler with the dedicated
 `_IfActivationController` fallback, while legacy snapshots retain their generic compatibility projection.
+Current fresh sibling support includes exactly three independent `If`s with no nesting, fan-out, or other control-flow
+nodes. Four or more sibling `If`s, deeper nesting, fan-out, mixed, and saved-workflow shapes remain on the compatibility
+fallback. Legacy snapshots retain their generic compatibility projection and legacy skipped-state metadata.
 Legacy skipped-state projection remains only for old snapshots. Fresh `If` materialization prepares the condition boundary first,
 resolves the activation token, and attaches only the selected branch input.
 Unselected branch nodes are never prepared, skipped, or added to fresh execution history. Both scheduler adapters
@@ -256,10 +259,10 @@ rehydration, every activation token is bound to a currently prepared owner and i
 declared port, value, canonical token id, mapping key, and known frame fields must match. Unknown extra frame metadata
 remains forward-compatible.
 For a fresh generic `If` graph with one ordinary-node `If`, the exact one-level nested shape described above, or exactly
-two independent sibling `If`s, `GraphExecutionState` compiles opaque, frame-local activation-dependency records privately
-on each branch-local plan node. Deeper, fan-out, mixed, loop-containing, and saved-workflow shapes use the compatibility
-scheduler and `_IfActivationController` for the same records; legacy snapshots retain the generic compatibility
-projection. The controller
+two or exactly three independent sibling `If`s, `GraphExecutionState` compiles opaque, frame-local activation-dependency
+records privately on each branch-local plan node. Four or more sibling `If`s, deeper nesting, fan-out, mixed,
+loop-containing, and saved-workflow shapes use the compatibility scheduler and `_IfActivationController` for the same
+records; legacy snapshots retain the generic compatibility projection and legacy skipped-state metadata. The controller
 remains the fallback runtime dependency owner, and the schedulers no longer call a legacy compiler. Fresh materialization prepares the condition boundary, resolves the activation token,
 and attaches only the selected branch input; rejected branch sources remain unprepared. `_GenericGraphSchedulerAdapter`
 consumes those records through the opaque plan: its readiness
@@ -440,9 +443,9 @@ Workflow-call note:
   Graph-state method wrappers preserve the admission, copy creation, edge attachment, and atomic preparation entry
   points. The planner continues to use the graph state's journal, mappings, caches, and scheduler.
 - `_IfActivationController` Owns fallback runtime `If` admission and compiles opaque, frame-local activation dependency
-  records for unsupported fresh shapes and legacy prepared nodes. Fresh ordinary-node single-`If` graphs compile those
-  dependencies in graph state. Fresh admission leaves rejected branch sources unprepared; legacy skipped-state
-  projections remain loadable.
+  records for unsupported fresh shapes and legacy prepared nodes. Fresh ordinary-node single-`If` graphs, the bounded
+  nested pair, and exactly two or three independent sibling `If`s compile those dependencies in graph state. Fresh admission leaves rejected
+  branch sources unprepared; legacy skipped-state projections remain loadable.
 - Private `graph_if_dependencies.py` compiles fresh activation dependencies, and
   `graph_if_runtime.py` records dependencies and evaluates admission against gates and tokens.
   `GraphExecutionState` retains the method entry points, durable token/reference/effect storage,

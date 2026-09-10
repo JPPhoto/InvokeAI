@@ -195,6 +195,41 @@ def _sibling_if_graph(
     return graph
 
 
+def _three_sibling_if_graph(
+    *,
+    first_condition: bool = True,
+    second_condition: bool = True,
+    third_condition: bool = True,
+    with_shared_ancestor: bool = False,
+) -> Graph:
+    graph = _sibling_if_graph(
+        first_condition=first_condition,
+        second_condition=second_condition,
+        with_shared_ancestor=with_shared_ancestor,
+    )
+    graph.add_node(BooleanInvocation(id="third_condition", value=third_condition))
+    graph.add_node(AddInvocation(id="third_true", b=5))
+    graph.add_node(AddInvocation(id="third_false", a=30, b=1))
+    graph.add_node(IfInvocation(id="third_if"))
+    graph.add_node(AddInvocation(id="third_sink", b=300))
+
+    def connect(source: str, source_field: str, destination: str, destination_field: str) -> None:
+        graph.add_edge(
+            Edge(
+                source=EdgeConnection(node_id=source, field=source_field),
+                destination=EdgeConnection(node_id=destination, field=destination_field),
+            )
+        )
+
+    if with_shared_ancestor:
+        connect("shared", "value", "third_true", "a")
+    connect("third_condition", "value", "third_if", "condition")
+    connect("third_true", "value", "third_if", "true_input")
+    connect("third_false", "value", "third_if", "false_input")
+    connect("third_if", "value", "third_sink", "a")
+    return graph
+
+
 def _indirectly_connected_sibling_if_graph() -> Graph:
     graph = _sibling_if_graph()
     graph.delete_node("second_true")
@@ -3937,6 +3972,196 @@ def test_fresh_sibling_ifs_shared_ancestor_executes_once(
 
     assert trace.count("shared") == 1
     assert state.is_complete()
+
+
+@pytest.mark.parametrize(
+    ("first_condition", "second_condition", "third_condition"),
+    [
+        (True, True, True),
+        (True, True, False),
+        (True, False, True),
+        (True, False, False),
+        (False, True, True),
+        (False, True, False),
+        (False, False, True),
+        (False, False, False),
+    ],
+)
+def test_fresh_three_sibling_ifs_select_only_owner_local_branches_and_match_compatibility(
+    first_condition: bool,
+    second_condition: bool,
+    third_condition: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh three-sibling If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+    runs: list[tuple[list[str], GraphExecutionState]] = []
+
+    for force_compatibility_scheduler in (False, True):
+        state = GraphExecutionState(
+            graph=_three_sibling_if_graph(
+                first_condition=first_condition,
+                second_condition=second_condition,
+                third_condition=third_condition,
+            )
+        )
+        assert state._can_use_fresh_flat_if_activation()
+        trace, state = _run_graph(state, force_compatibility_scheduler=force_compatibility_scheduler)
+        runs.append((trace, state))
+
+        selected = {
+            "first_true" if first_condition else "first_false",
+            "second_true" if second_condition else "second_false",
+            "third_true" if third_condition else "third_false",
+        }
+        expected_sources = {
+            "first_condition",
+            "second_condition",
+            "third_condition",
+            "first_if",
+            "second_if",
+            "third_if",
+            "first_sink",
+            "second_sink",
+            "third_sink",
+            *selected,
+        }
+        unselected = {
+            "first_false" if first_condition else "first_true",
+            "second_false" if second_condition else "second_true",
+            "third_false" if third_condition else "third_true",
+        }
+        assert set(state.source_prepared_mapping) == expected_sources
+        assert set(trace) == expected_sources
+        assert not unselected.intersection(trace)
+
+        dependencies_by_source = {
+            source_id: {
+                (dependency.owner_id, dependency.branch, dependency.frame)
+                for execution_id, source_id_value in state.prepared_source_mapping.items()
+                if source_id_value == source_id
+                for dependency in state._if_activation_dependencies_by_exec.get(execution_id, ())
+            }
+            for source_id in selected
+        }
+        assert dependencies_by_source == {
+            "first_true" if first_condition else "first_false": {
+                ("first_if", "true_input" if first_condition else "false_input", ())
+            },
+            "second_true" if second_condition else "second_false": {
+                ("second_if", "true_input" if second_condition else "false_input", ())
+            },
+            "third_true" if third_condition else "third_false": {
+                ("third_if", "true_input" if third_condition else "false_input", ())
+            },
+        }
+        first_sink_id = next(iter(state.source_prepared_mapping["first_sink"]))
+        second_sink_id = next(iter(state.source_prepared_mapping["second_sink"]))
+        third_sink_id = next(iter(state.source_prepared_mapping["third_sink"]))
+        assert state.results[first_sink_id].value == (103 if first_condition else 111)
+        assert state.results[second_sink_id].value == (204 if second_condition else 221)
+        assert state.results[third_sink_id].value == (305 if third_condition else 331)
+        assert state.is_complete()
+
+    _assert_generic_and_compatibility_schedulers(runs[0][1], runs[1][1])
+    assert runs[0][0] == runs[1][0]
+    assert _state_projection(runs[0][1]) == _state_projection(runs[1][1])
+    assert _activation_projection(runs[0][1]) == _activation_projection(runs[1][1])
+
+
+def test_fresh_three_sibling_ifs_shared_ancestor_executes_once_without_cross_owner_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh three-sibling If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+    runs: list[tuple[list[str], GraphExecutionState]] = []
+
+    for force_compatibility_scheduler in (False, True):
+        state = GraphExecutionState(graph=_three_sibling_if_graph(with_shared_ancestor=True))
+        assert state._can_use_fresh_flat_if_activation()
+        trace, state = _run_graph(state, force_compatibility_scheduler=force_compatibility_scheduler)
+        runs.append((trace, state))
+
+        assert trace.count("shared") == 1
+        assert state.results[next(iter(state.source_prepared_mapping["first_sink"]))].value == 105
+        assert state.results[next(iter(state.source_prepared_mapping["second_sink"]))].value == 206
+        assert state.results[next(iter(state.source_prepared_mapping["third_sink"]))].value == 307
+        assert state.is_complete()
+
+        for source_id, if_id, branch in (
+            ("first_true", "first_if", "true_input"),
+            ("second_true", "second_if", "true_input"),
+            ("third_true", "third_if", "true_input"),
+        ):
+            execution_id = next(
+                execution_id
+                for execution_id, prepared_source_id in state.prepared_source_mapping.items()
+                if prepared_source_id == source_id
+            )
+            assert {
+                (dependency.owner_id, dependency.branch, dependency.frame)
+                for dependency in state._if_activation_dependencies_by_exec[execution_id]
+            } == {(if_id, branch, ())}
+
+    _assert_generic_and_compatibility_schedulers(runs[0][1], runs[1][1])
+    assert runs[0][0] == runs[1][0]
+    assert _state_projection(runs[0][1]) == _state_projection(runs[1][1])
+    assert _activation_projection(runs[0][1]) == _activation_projection(runs[1][1])
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+@pytest.mark.parametrize(
+    ("first_condition", "second_condition", "third_condition"),
+    [
+        (True, True, True),
+        (True, True, False),
+        (True, False, True),
+        (True, False, False),
+        (False, True, True),
+        (False, True, False),
+        (False, False, True),
+        (False, False, False),
+    ],
+)
+@pytest.mark.parametrize("stop_after", range(1, 12))
+def test_fresh_three_sibling_ifs_checkpoint_resume_matches_fresh_execution(
+    force_compatibility_scheduler: bool,
+    first_condition: bool,
+    second_condition: bool,
+    third_condition: bool,
+    stop_after: int,
+) -> None:
+    graph = _three_sibling_if_graph(
+        first_condition=first_condition,
+        second_condition=second_condition,
+        third_condition=third_condition,
+    )
+    expected_trace, expected_state = _run_graph(
+        GraphExecutionState(graph=graph.model_copy(deep=True)),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+    )
+    checkpoint_trace, checkpoint_state = _run_graph(
+        GraphExecutionState(graph=graph.model_copy(deep=True)),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+        stop_after=stop_after,
+    )
+
+    restored = load_execution_state(dump_execution_state(checkpoint_state))
+    if force_compatibility_scheduler:
+        _restore_compatibility_scheduler(restored)
+    resumed_trace, resumed_state = _run_graph(
+        restored,
+        force_compatibility_scheduler=force_compatibility_scheduler,
+    )
+
+    assert checkpoint_trace + resumed_trace == expected_trace
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+    assert _activation_projection(resumed_state) == _activation_projection(expected_state)
+    assert resumed_state.is_complete()
 
 
 def test_sibling_if_unsupported_saved_workflow_keeps_controller_fallback(

@@ -48,7 +48,7 @@ def _can_use_fresh_flat_if_activation(state: "GraphExecutionState") -> bool:
         return False
 
     if len(if_nodes) != 1:
-        if len(if_nodes) != 2:
+        if len(if_nodes) not in {2, 3}:
             return False
 
         if any(edge.type != "default" for edge in state.graph.edges):
@@ -77,7 +77,7 @@ def _can_use_fresh_flat_if_activation(state: "GraphExecutionState") -> bool:
                     return False
                 if any(edge.source.node_id in if_node_ids for edge in input_edges):
                     return False
-        elif len(nested_edges) == 1:
+        elif len(if_nodes) == 2 and len(nested_edges) == 1:
             nested_edge = nested_edges[0]
             if nested_edge.source.field != "value" or nested_edge.destination.field not in {
                 "true_input",
