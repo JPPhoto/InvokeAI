@@ -35,6 +35,15 @@ compatibility controller or project fresh skipped nodes in either scheduler
 route. This proves the current ownership boundary; it does not remove the
 controller, which remains required for unsupported fresh shapes and legacy
 snapshots.
+The bounded If evidence rerun on the current branch passes 639 tests across
+the differential, dependency, runtime, SQLite processor, and snapshot
+migration suites. This is focused migration evidence, not a full-suite result;
+the controller fallback and legacy projection remain intentional.
+The execution ledgers (`execution_refs`, `execution_tokens`, and
+`execution_effects`) are internal persistence data. They are excluded from
+ordinary model/API serialization and schemas; `dump_execution_state()` is the
+explicit internal persistence path that retains them, including nested child
+states.
 Direct `Iterate`/`Collect` graphs that do not contain `If`, `For`, `ForReturn`, or saved-workflow control flow also use
 the generic adapter. Its adapter-level readiness predicate waits for canonical Iterate streams to close, and generic
 completion mirrors each Iterate result into that ledger before releasing `Collect`. The exact fresh four-node shape

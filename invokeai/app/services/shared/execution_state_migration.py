@@ -23,6 +23,31 @@ def _retain_nullable_execution_token_values(snapshot: dict[str, Any]) -> None:
         _retain_nullable_execution_token_values(child_snapshot)
 
 
+def _append_runtime_fields(snapshot: dict[str, Any], state: GraphExecutionState) -> None:
+    """Add private runtime ledgers to an internal snapshot, including child states."""
+    snapshot["execution_refs"] = {
+        reference_id: reference.model_dump(mode="json") for reference_id, reference in state.execution_refs.items()
+    }
+    snapshot["execution_tokens"] = {
+        token_id: token.model_dump(mode="json") for token_id, token in state.execution_tokens.items()
+    }
+    snapshot["execution_effects"] = {
+        reference_id: [
+            effect.model_dump(mode="json") if hasattr(effect, "model_dump") else effect for effect in effects
+        ]
+        for reference_id, effects in state.execution_effects.items()
+    }
+    for reference_id, effects in state._legacy_execution_effects_for_snapshot().items():
+        snapshot["execution_effects"][reference_id] = [
+            effect.model_dump(mode="json") if hasattr(effect, "model_dump") else effect for effect in effects
+        ]
+
+    child_snapshot = snapshot.get("waiting_workflow_call_child_session")
+    child_state = state.waiting_workflow_call_child_session
+    if isinstance(child_snapshot, dict) and child_state is not None:
+        _append_runtime_fields(child_snapshot, child_state)
+
+
 class UnsupportedExecutionStateVersionError(ValueError):
     """Raised when an execution-state snapshot cannot be read by this runtime."""
 
@@ -36,14 +61,11 @@ def dump_execution_state(state: GraphExecutionState) -> dict[str, Any]:
     migration experiments.
     """
     snapshot = state.model_dump(mode="json", warnings=False, exclude_none=True)
+    _append_runtime_fields(snapshot, state)
     # Persist nullable output tokens explicitly. `ExecutionToken.value` remains required in the
     # public model/schema, but an output port may legitimately carry None and the general
     # exclude_none policy would otherwise make the snapshot impossible to hydrate.
     _retain_nullable_execution_token_values(snapshot)
-    for reference_id, effects in state._legacy_execution_effects_for_snapshot().items():
-        snapshot.setdefault("execution_effects", {})[reference_id] = [
-            effect.model_dump(mode="json") if hasattr(effect, "model_dump") else effect for effect in effects
-        ]
     snapshot["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION
     return snapshot
 

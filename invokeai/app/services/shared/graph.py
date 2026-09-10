@@ -166,6 +166,31 @@ from invokeai.app.util.misc import uuid_string
 
 _JSON_SERIALIZER = TypeAdapter(Any)
 
+_EXECUTION_STATE_RUNTIME_FIELDS = frozenset({"execution_refs", "execution_tokens", "execution_effects"})
+_EXECUTION_STATE_REQUIRED_FIELDS = (
+    "id",
+    "graph",
+    "execution_graph",
+    "executed",
+    "executed_history",
+    "results",
+    "errors",
+    "workflow_call_stack",
+    "workflow_call_history",
+    "prepared_source_mapping",
+    "source_prepared_mapping",
+)
+
+
+def _hide_execution_state_runtime_fields(schema: JsonSchemaValue) -> None:
+    """Keep private execution-ledger fields out of API schemas."""
+
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        for field_name in _EXECUTION_STATE_RUNTIME_FIELDS:
+            properties.pop(field_name, None)
+        schema["required"] = [field_name for field_name in _EXECUTION_STATE_REQUIRED_FIELDS if field_name in properties]
+
 
 class GraphExecutionState(BaseModel):
     """Tracks source-graph expansion, execution progress, and runtime results."""
@@ -245,14 +270,17 @@ class GraphExecutionState(BaseModel):
     execution_refs: dict[str, ExecutionReference] = Field(
         default_factory=dict,
         description="Stable frame-aware references for prepared execution nodes",
+        exclude=True,
     )
     execution_tokens: dict[str, ExecutionToken] = Field(
         default_factory=dict,
         description="Data tokens produced by prepared execution output ports",
+        exclude=True,
     )
     execution_effects: dict[str, list[Any]] = Field(
         default_factory=dict,
         description="Effects accepted for each execution reference",
+        exclude=True,
     )
     # Ready queues grouped by node class name (internal only)
     _ready_queues: dict[str, Deque[str]] = PrivateAttr(default_factory=dict)
@@ -2656,23 +2684,7 @@ class GraphExecutionState(BaseModel):
         self._synthesize_legacy_execution_effects()
         self._rehydrate_runtime_state()
 
-    model_config = ConfigDict(
-        json_schema_extra={
-            "required": [
-                "id",
-                "graph",
-                "execution_graph",
-                "executed",
-                "executed_history",
-                "results",
-                "errors",
-                "workflow_call_stack",
-                "workflow_call_history",
-                "prepared_source_mapping",
-                "source_prepared_mapping",
-            ]
-        }
-    )
+    model_config = ConfigDict(json_schema_extra=_hide_execution_state_runtime_fields)
 
     @field_validator("graph")
     def graph_is_valid(cls, v: Graph):

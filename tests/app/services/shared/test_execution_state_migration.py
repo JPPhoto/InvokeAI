@@ -7,7 +7,13 @@ from invokeai.app.services.shared.execution_state_migration import (
     dump_execution_state,
     load_execution_state,
 )
-from invokeai.app.services.shared.graph import ExecutionFrame, ExecutionToken, Graph, GraphExecutionState
+from invokeai.app.services.shared.graph import (
+    ExecutionFrame,
+    ExecutionReference,
+    ExecutionToken,
+    Graph,
+    GraphExecutionState,
+)
 
 
 def _make_state() -> GraphExecutionState:
@@ -50,12 +56,15 @@ def test_dumps_and_loads_versioned_execution_state_envelope() -> None:
     assert "state" not in snapshot
     expected = dict(snapshot)
     expected.pop("execution_state_version")
-    assert restored.model_dump(mode="json", warnings=False, exclude_none=True) == expected
+    restored_snapshot = dump_execution_state(restored)
+    restored_snapshot.pop("execution_state_version")
+    assert restored_snapshot == expected
 
 
 def test_loads_temporary_versioned_envelope() -> None:
     state = _make_state()
-    raw = state.model_dump(mode="json", warnings=False, exclude_none=True)
+    raw = dump_execution_state(state)
+    raw.pop("execution_state_version")
 
     restored = load_execution_state({"version": CURRENT_EXECUTION_STATE_VERSION, "state": raw})
 
@@ -118,3 +127,33 @@ def test_round_trips_nullable_execution_token_value_in_child_state() -> None:
 
     assert restored.waiting_workflow_call_child_session is not None
     assert restored.waiting_workflow_call_child_session.execution_tokens["token-id"].value is None
+
+
+def test_internal_execution_fields_are_persisted_but_not_publicly_serialized() -> None:
+    state = _make_state()
+    execution_ref = ExecutionReference(
+        reference_id="state-id:exec-node",
+        state_id="state-id",
+        exec_node_id="exec-node",
+        source_node_id="node-id",
+        frame=ExecutionFrame(state_id="state-id", frame_id="frame-id"),
+    )
+    state.execution_refs["exec-node"] = execution_ref
+    state.execution_tokens["token-id"] = ExecutionToken(
+        token_id="token-id",
+        reference_id=execution_ref.reference_id,
+        owner_node_id="exec-node",
+        port="value",
+        frame=execution_ref.frame,
+        value=3,
+    )
+
+    public_payload = state.model_dump(mode="json", warnings=False, exclude_none=True)
+    assert "execution_refs" not in public_payload
+    assert "execution_tokens" not in public_payload
+    assert "execution_effects" not in public_payload
+
+    persisted_payload = dump_execution_state(state)
+    assert persisted_payload["execution_refs"]["exec-node"]["reference_id"] == execution_ref.reference_id
+    assert persisted_payload["execution_tokens"]["token-id"]["value"] == 3
+    assert persisted_payload["execution_effects"] == {}

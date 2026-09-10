@@ -9,6 +9,7 @@ from pydantic.json_schema import models_json_schema
 from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation
 from invokeai.app.invocations.math import AddInvocation
+from invokeai.app.services.session_queue.session_queue_common import SessionQueueItem
 from invokeai.app.services.shared import graph as graph_facade
 from invokeai.app.services.shared import graph_models, graph_validation
 
@@ -169,12 +170,19 @@ def test_graph_models_preserve_graph_and_execution_state_serialization() -> None
         "ExecutionToken",
     } <= definitions.keys()
     assert {"id", "nodes", "edges"} <= definitions["Graph"]["properties"].keys()
-    assert {"id", "graph", "execution_graph", "execution_refs", "execution_tokens"} <= definitions[
-        "GraphExecutionState"
-    ]["properties"].keys()
+    assert {"id", "graph", "execution_graph"} <= definitions["GraphExecutionState"]["properties"].keys()
+    assert {"execution_refs", "execution_tokens", "execution_effects"}.isdisjoint(
+        definitions["GraphExecutionState"]["properties"].keys()
+    )
     assert {"source", "destination", "type"} <= definitions["Edge"]["properties"].keys()
     assert {"reference_id", "exec_node_id", "frame"} <= definitions["ExecutionReference"]["properties"].keys()
     assert {"token_id", "reference_id", "owner_node_id", "value"} <= definitions["ExecutionToken"]["properties"].keys()
+
+    _, queue_schema = models_json_schema([(SessionQueueItem, "serialization")])
+    queue_graph_schema = queue_schema["$defs"]["GraphExecutionState"]
+    assert {"execution_refs", "execution_tokens", "execution_effects"}.isdisjoint(
+        queue_graph_schema["properties"].keys()
+    )
 
     node_refs = {
         reference["$ref"] for reference in definitions["Graph"]["properties"]["nodes"]["additionalProperties"]["oneOf"]
