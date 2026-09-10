@@ -17,7 +17,7 @@ dependencies in `GraphExecutionState`; unsupported fresh shapes use the compatib
 Current fresh sibling support includes exactly four independent `If`s with no nesting, fan-out, or other control-flow
 nodes. The bounded three-`If` chain requires direct `default` edges, all three `If`s to have `condition`, `true_input`,
 and `false_input` inputs, and inner/middle `If`s to have no output except their direct nested branch edge. Four or more
-nested `If`s, fan-out, mixed, loop-containing, saved-workflow, legacy, and five-or-more sibling shapes remain on the
+nested `If`s, other fan-out, mixed, loop-containing, saved-workflow, legacy, and five-or-more sibling shapes remain on the
 compatibility fallback. Legacy snapshots retain their generic compatibility projection and legacy skipped-state metadata.
 Legacy skipped-state projection remains only for old snapshots. Fresh `If` materialization prepares the condition boundary first,
 resolves the activation token, and attaches only the selected branch input.
@@ -25,6 +25,12 @@ Unselected branch nodes are never prepared, skipped, or added to fresh execution
 consume these dependency decisions without pruning execution edges or calling a type-specific branch scheduler.
 Legacy skipped-state metadata remains only for snapshots that already contain the old projection. Branch-membership
 analysis remains an internal author-graph admission decision.
+The focused fresh-shape ownership matrix also verifies that supported flat,
+nested, bounded fan-out, and four-sibling graphs do not instantiate the
+compatibility controller or project fresh skipped nodes in either scheduler
+route. This proves the current ownership boundary; it does not remove the
+controller, which remains required for unsupported fresh shapes and legacy
+snapshots.
 Direct `Iterate`/`Collect` graphs that do not contain `If`, `For`, `ForReturn`, or saved-workflow control flow also use
 the generic adapter. Its adapter-level readiness predicate waits for canonical Iterate streams to close, and generic
 completion mirrors each Iterate result into that ledger before releasing `Collect`. The exact fresh four-node shape
@@ -264,7 +270,7 @@ remains forward-compatible.
 For a fresh generic `If` graph with one ordinary-node `If`, the exact one-level nested shape described above, the exact
 bounded three-`If` inner/middle/outer chain, or exactly two, exactly three, or exactly four independent sibling `If`s,
 `GraphExecutionState` compiles opaque, frame-local activation-dependency records privately on each branch-local plan
-node. Four-or-more nesting, five-or-more sibling `If`s, fan-out, mixed, loop-containing, and saved-workflow shapes use
+node. Four-or-more nesting, five-or-more sibling `If`s, other fan-out, mixed, loop-containing, and saved-workflow shapes use
 the compatibility scheduler and `_IfActivationController` for the same records; legacy snapshots retain the generic
 compatibility projection and legacy skipped-state metadata. The controller
 remains the fallback runtime dependency owner, and the schedulers no longer call a legacy compiler. Fresh materialization prepares the condition boundary, resolves the activation token,

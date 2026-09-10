@@ -4351,6 +4351,46 @@ def test_fresh_four_sibling_ifs_shared_ancestor_executes_once_without_cross_owne
     assert _activation_projection(runs[0][1]) == _activation_projection(runs[1][1])
 
 
+@pytest.mark.parametrize(
+    "graph_factory",
+    [
+        pytest.param(_flat_if_graph, id="flat"),
+        pytest.param(_noncanonical_flat_if_graph, id="noncanonical-flat"),
+        pytest.param(_nested_if_graph, id="nested"),
+        pytest.param(_three_nested_if_graph, id="three-nested"),
+        pytest.param(_three_nested_if_graph_with_middle_leaf_fanout, id="middle-leaf-fanout"),
+        pytest.param(_four_sibling_if_graph, id="four-siblings"),
+    ],
+)
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+def test_supported_fresh_if_shapes_do_not_use_controller_or_skip_projection(
+    graph_factory: Any,
+    force_compatibility_scheduler: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fresh supported shapes use graph-state dependencies in both scheduler routes."""
+
+    def fail_controller(*_: object, **__: object) -> Any:
+        raise AssertionError("fresh supported If shape used compatibility controller")
+
+    def fail_generic_retirement(*_: object, **__: object) -> None:
+        raise AssertionError("fresh supported If shape used generic skip projection")
+
+    monkeypatch.setattr(GraphExecutionState, "_if_activation_controller", fail_controller)
+    monkeypatch.setattr(_GenericGraphSchedulerAdapter, "_retire_unselected_node", fail_generic_retirement)
+
+    state = GraphExecutionState(graph=graph_factory())
+    assert state._can_use_fresh_flat_if_activation()
+    trace, state = _run(state, force_compatibility_scheduler=force_compatibility_scheduler)
+
+    assert trace
+    assert state.is_complete()
+    assert all(
+        state._get_prepared_exec_metadata(exec_node_id).state != "skipped"
+        for exec_node_id in state.prepared_source_mapping
+    )
+
+
 @pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
 @pytest.mark.parametrize(
     ("first_condition", "second_condition", "third_condition"),
