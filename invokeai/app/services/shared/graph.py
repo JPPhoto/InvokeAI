@@ -385,6 +385,13 @@ class _ExecutionScheduler:
     def get_next_node(self) -> Optional[BaseInvocation]:
         """Gets the next ready node: FIFO within class, drain class before switching."""
         while True:
+            if not self._state._active_class and self._state.results:
+                last_exec_node_id = next(reversed(self._state.results))
+                last_node = self._state.execution_graph.nodes.get(last_exec_node_id)
+                if last_node is not None:
+                    last_class = self._state._type_key(last_node)
+                    if self._state._ready_queues.get(last_class):
+                        self._state._active_class = last_class
             if self._state._active_class:
                 q = self._state._ready_queues.get(self._state._active_class)
                 while q:
@@ -1410,6 +1417,10 @@ class GraphExecutionState(BaseModel):
 
     def _can_use_generic_scheduler(self) -> bool:
         """Use generic readiness for static graphs and supported direct control flow."""
+
+        if any(isinstance(node, IfInvocation) for node in self.graph.nodes.values()):
+            if not self._legacy_snapshot_loaded and not self._can_use_fresh_flat_if_activation():
+                return False
 
         control_nodes = (ForInvocation, ForReturnInvocation)
         if any(isinstance(node, control_nodes) for node in self.graph.nodes.values()):

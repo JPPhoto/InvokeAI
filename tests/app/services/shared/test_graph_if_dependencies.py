@@ -58,6 +58,56 @@ def _nested_if_graph() -> Graph:
     return graph
 
 
+def _sibling_if_graph(*, first_condition: bool = True, second_condition: bool = True) -> Graph:
+    graph = Graph()
+    graph.add_node(AddInvocation(id="shared", a=1, b=1))
+    graph.add_node(BooleanInvocation(id="first_condition", value=first_condition))
+    graph.add_node(BooleanInvocation(id="second_condition", value=second_condition))
+    graph.add_node(AddInvocation(id="first_true", b=3))
+    graph.add_node(AddInvocation(id="first_false", a=10, b=1))
+    graph.add_node(AddInvocation(id="second_true", b=4))
+    graph.add_node(AddInvocation(id="second_false", a=20, b=1))
+    graph.add_node(IfInvocation(id="first_if"))
+    graph.add_node(IfInvocation(id="second_if"))
+    graph.add_node(AddInvocation(id="first_sink", b=100))
+    graph.add_node(AddInvocation(id="second_sink", b=200))
+    graph.add_edge(_edge("shared", "value", "first_true", "a"))
+    graph.add_edge(_edge("shared", "value", "second_true", "a"))
+    graph.add_edge(_edge("first_condition", "value", "first_if", "condition"))
+    graph.add_edge(_edge("first_true", "value", "first_if", "true_input"))
+    graph.add_edge(_edge("first_false", "value", "first_if", "false_input"))
+    graph.add_edge(_edge("second_condition", "value", "second_if", "condition"))
+    graph.add_edge(_edge("second_true", "value", "second_if", "true_input"))
+    graph.add_edge(_edge("second_false", "value", "second_if", "false_input"))
+    graph.add_edge(_edge("first_if", "value", "first_sink", "a"))
+    graph.add_edge(_edge("second_if", "value", "second_sink", "a"))
+    return graph
+
+
+def _indirectly_connected_if_graph() -> Graph:
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="first_condition", value=True))
+    graph.add_node(BooleanInvocation(id="second_condition", value=True))
+    graph.add_node(AddInvocation(id="first_true", a=2, b=3))
+    graph.add_node(AddInvocation(id="first_false", a=10, b=1))
+    graph.add_node(IfInvocation(id="first_if"))
+    graph.add_node(AddInvocation(id="bridge", b=4))
+    graph.add_node(AddInvocation(id="second_false", a=20, b=1))
+    graph.add_node(IfInvocation(id="second_if"))
+    graph.add_node(AddInvocation(id="first_sink", b=100))
+    graph.add_node(AddInvocation(id="second_sink", b=200))
+    graph.add_edge(_edge("first_condition", "value", "first_if", "condition"))
+    graph.add_edge(_edge("first_true", "value", "first_if", "true_input"))
+    graph.add_edge(_edge("first_false", "value", "first_if", "false_input"))
+    graph.add_edge(_edge("first_if", "value", "bridge", "a"))
+    graph.add_edge(_edge("bridge", "value", "second_if", "true_input"))
+    graph.add_edge(_edge("second_condition", "value", "second_if", "condition"))
+    graph.add_edge(_edge("second_false", "value", "second_if", "false_input"))
+    graph.add_edge(_edge("first_if", "value", "first_sink", "a"))
+    graph.add_edge(_edge("second_if", "value", "second_sink", "a"))
+    return graph
+
+
 def test_leaf_import_does_not_import_graph() -> None:
     script = """
     import builtins
@@ -197,3 +247,48 @@ def test_branch_dependency_cache_is_frame_local_and_graph_edits_invalidate() -> 
     state.add_node(AddInvocation(id="true_consumer", b=1))
     state.add_edge(_edge("true_branch", "value", "true_consumer", "a"))
     assert state._get_source_activation_dependencies("true_branch") == ()
+
+
+def test_sibling_if_dependencies_are_owner_local_and_frame_local() -> None:
+    state = GraphExecutionState(graph=_sibling_if_graph(first_condition=True, second_condition=False))
+
+    assert state._can_use_fresh_flat_if_activation()
+    assert state._get_source_activation_dependencies("first_true", (1,)) == (
+        ActivationDependency(owner_id="first_if", branch="true_input", frame=(1,)),
+    )
+    assert state._get_source_activation_dependencies("first_false", (2,)) == (
+        ActivationDependency(owner_id="first_if", branch="false_input", frame=(2,)),
+    )
+    assert state._get_source_activation_dependencies("second_true", (3,)) == (
+        ActivationDependency(owner_id="second_if", branch="true_input", frame=(3,)),
+    )
+    assert state._get_source_activation_dependencies("second_false", (4,)) == (
+        ActivationDependency(owner_id="second_if", branch="false_input", frame=(4,)),
+    )
+    assert state._get_source_activation_dependencies("shared") == ()
+    assert state._get_source_activation_dependencies("first_true", (5,)) != state._get_source_activation_dependencies(
+        "first_true", (6,)
+    )
+
+
+def test_indirectly_connected_ifs_retain_controller_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = GraphExecutionState(graph=_indirectly_connected_if_graph())
+    calls: list[tuple[str, str]] = []
+    original_branch_sources = graph_module._IfActivationController._branch_sources
+
+    def record_branch_analysis(
+        controller: graph_module._IfActivationController,
+        if_node_id: str,
+        branch_field: str,
+        source_graph: Any,
+    ) -> set[str]:
+        calls.append((if_node_id, branch_field))
+        return original_branch_sources(controller, if_node_id, branch_field, source_graph)
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", record_branch_analysis)
+
+    assert not state._can_use_fresh_flat_if_activation()
+    assert state._get_source_activation_dependencies("first_true", (7,)) == (
+        ActivationDependency(owner_id="first_if", branch="true_input", frame=(7,)),
+    )
+    assert ("first_if", "true_input") in calls
