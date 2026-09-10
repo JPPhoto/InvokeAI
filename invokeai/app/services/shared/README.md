@@ -433,6 +433,10 @@ Workflow-call note:
   ready work. It owns iterator expansion, collector grouping, prepared-parent selection, and creation of execution-graph
   edges. When matching prepared parents for a downstream exec node, skipped prepared exec nodes are ignored and cannot
   be selected as live inputs.
+  The class lives in `graph_materializer.py` and is re-exported by `graph.py`.
+- Private `graph_iterate_planner.py` expands the supported direct and body-mediated Iterate/Collect shapes.
+  Graph-state method wrappers preserve the admission, copy creation, edge attachment, and atomic preparation entry
+  points. The planner continues to use the graph state's journal, mappings, caches, and scheduler.
 - `_IfActivationController` Owns fallback runtime `If` admission and compiles opaque, frame-local activation dependency
   records for unsupported fresh shapes and legacy prepared nodes. Fresh ordinary-node single-`If` graphs compile those
   dependencies in graph state. Fresh admission leaves rejected branch sources unprepared; legacy skipped-state
