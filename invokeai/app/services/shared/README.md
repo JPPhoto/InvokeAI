@@ -35,6 +35,10 @@ compatibility controller or project fresh skipped nodes in either scheduler
 route. This proves the current ownership boundary; it does not remove the
 controller, which remains required for unsupported fresh shapes and legacy
 snapshots.
+The token-authoritative topology gate is complete for every currently
+supported fresh shape listed above. Removing the controller's remaining
+author-graph fallback is a separate later gate and remains deferred until
+unsupported fresh shapes have their own explicit generic ownership proof.
 The bounded If evidence rerun on the current branch passes 639 tests across
 the differential, dependency, runtime, SQLite processor, and snapshot
 migration suites. This is focused migration evidence, not a full-suite result;
