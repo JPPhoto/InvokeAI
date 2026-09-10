@@ -32,6 +32,7 @@ from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat
 from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
 from invokeai.backend.patches.lora_conversions.z_image_lora_constants import Z_IMAGE_LORA_TRANSFORMER_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
+from invokeai.backend.quantization.int8_convrot import requires_sidecar_patching
 from invokeai.backend.rectified_flow.rectified_flow_inpaint_extension import RectifiedFlowInpaintExtension
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ZImageConditioningInfo
@@ -434,18 +435,23 @@ class ZImageDenoiseInvocation(BaseInvocation):
             # Get transformer config to determine if it's quantized
             transformer_config = context.models.get_config(self.transformer.transformer)
 
-            # Determine if the model is quantized.
-            # If the model is quantized, then we need to apply the LoRA weights as sidecar layers. This results in
-            # slower inference than direct patching, but is agnostic to the quantization format.
-            if transformer_config.format in [ModelFormat.Diffusers, ModelFormat.Checkpoint]:
-                model_is_quantized = False
-            elif transformer_config.format in [ModelFormat.GGUFQuantized, ModelFormat.SDNQQuantized]:
-                model_is_quantized = True
-            else:
+            if transformer_config.format not in (
+                ModelFormat.Diffusers,
+                ModelFormat.Checkpoint,
+                ModelFormat.GGUFQuantized,
+                ModelFormat.SDNQQuantized,
+            ):
                 raise ValueError(f"Unsupported Z-Image model format: {transformer_config.format}")
 
             # Load transformer - always use base transformer, control is handled via extension
             (cached_weights, transformer) = exit_stack.enter_context(transformer_info.model_on_device())
+
+            # Whether LoRA has to go on as a sidecar. Asked of the loaded module tree, not the
+            # format: a `checkpoint` Z-Image may be an int8_tensorwise build, whose Linears are
+            # Int8ConvrotLinear. Those carry their weights as buffers rather than parameters, so
+            # the fallbacks inside the patcher -- which iterate `module.parameters()` -- find
+            # nothing and choose direct patching on a module that has no patchable weights.
+            model_is_quantized = requires_sidecar_patching(transformer, transformer_config.format)
 
             # Prepare control extension if control is provided
             control_extension: ZImageControlNetExtension | None = None
