@@ -112,6 +112,10 @@ from invokeai.app.services.shared.graph_models import (
     WorkflowCallParentRef,  # noqa: F401
     WorkflowCallStatus,  # noqa: F401
 )
+from invokeai.app.services.shared.graph_nested_iterate_planner import (
+    can_use_nested_iterate_planner,
+    prepare_nested_iterate_bodies,
+)
 from invokeai.app.services.shared.graph_runtime_records import (
     _ApplyTransaction,
     _PreparedExecNodeMetadata,
@@ -731,7 +735,10 @@ class GraphExecutionState(BaseModel):
             iteration_path=(*parent_iteration_path, next_index),
         )
         self._discard_source_executed(source_for_id)
-        self._materializer().create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=next_for_id)
+        if self._is_generic_graph_scheduler(self._scheduler()) and can_use_nested_iterate_planner(self):
+            prepare_nested_iterate_bodies(self)
+        else:
+            self._materializer().create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=next_for_id)
         return None
 
     def _try_schedule_next_for_iteration(self, exec_node_id: str, output: BaseInvocationOutput) -> Optional[str]:
@@ -814,7 +821,10 @@ class GraphExecutionState(BaseModel):
         return_node = return_nodes[0]
 
         source_graph = self._get_source_graph_flat()
-        if self.graph._get_supported_for_nested_iterate_body(outer_for.id, source_graph) is None:
+        if (
+            not can_use_nested_iterate_planner(self)
+            or self.graph._get_supported_for_nested_iterate_body(outer_for.id, source_graph) is None
+        ):
             return False
 
         iterate_collection_edges = self.graph._get_input_edges(iterate_node.id, COLLECTION_FIELD)

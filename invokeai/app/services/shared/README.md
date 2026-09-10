@@ -74,6 +74,15 @@ ordered stream effects, empty closure, checkpoint rehydration, failure,
 rollback, and fresh retry behavior for that exact shape. It does not admit
 `If`, `For`, `ForReturn`, saved-workflow, nested-iterator, fan-in, or mixed
 control-flow nodes; those remain compatibility-owned.
+The exact fresh seven-node nested shape `outer For -> ordinary collection
+preparation -> Iterate -> ordinary body -> Collect -> linked outer ForReturn`,
+with one ordinary `outer For.output_collection` consumer, is also generic-routed.
+The nested planner owns per-outer-frame stream expansion, parent-frame stream
+identity, empty closure, `Collect` readiness/hydration, checkpoint rehydration,
+and failure parity for this shape without calling the materializer's nested-copy
+helper. Ordinary nested `For`, deeper or multiple nested iterators,
+input-driven outer collections, mixed control flow, and legacy snapshots retain
+compatibility materializer ownership.
 Three or more body-mediated branches, fan-in with four or more direct branches,
 nested iterators, and all mixed control flow retain materializer copy expansion,
 grouping, and empty-source handling on the legacy compatibility route.
@@ -211,7 +220,12 @@ nested-`For` shape and the canonical outer-`For`/bounded-`Iterate`/`Collect` sha
 one ordinary preparation node from `For.item` into `Iterate.collection`, one ordinary body node into `Collect.item`,
 the `Collect.collection` output into the linked `ForReturn`, and one final outer-output consumer. Each outer iteration,
 including an empty inner collection, remains isolated by its frame path. `Iterate` also records non-empty item streams through the generic effect ledger;
-the materializer remains authoritative for fallback expansion, iteration paths, collector grouping, and
+for this exact seven-node shape, the private nested planner owns per-outer-frame
+copy expansion, stream identity, empty closure, `Collect` readiness/hydration,
+checkpoint rehydration, and failure parity. Ordinary nested `For`, deeper or
+multiple nested iterators, input-driven outer collections, mixed control flow,
+and legacy snapshots retain compatibility materializer ownership. The
+materializer remains authoritative for fallback expansion, iteration paths, collector grouping, and
 empty-source compatibility handling. The exact fresh four-node body shape, exact two- or three-stream fan-in shapes,
 and exact two-branch body-mediated fan-in use the private planner for those responsibilities; three or more
 body-mediated branches and four or more direct streams remain compatibility-owned. Direct `Collect.item`

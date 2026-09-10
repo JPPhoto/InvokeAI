@@ -1792,6 +1792,29 @@ def test_nested_for_iterate_collect_generic_and_compatibility_paths_have_matchin
         assert state.results[after_exec_id].value == [["a", "b"], ["c"]]
 
 
+def test_nested_for_iterate_collect_generic_owns_nested_stream_expansion() -> None:
+    compatibility_state = GraphExecutionState(graph=_nested_for_iterate_collect_graph())
+    compatibility_trace, compatibility_state = _run(
+        compatibility_state,
+        force_compatibility_scheduler=True,
+    )
+
+    generic_state = GraphExecutionState(graph=_nested_for_iterate_collect_graph())
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "_create_nested_iterate_body_iteration",
+        side_effect=AssertionError("generic nested Iterate/Collect used materializer copy creation"),
+    ):
+        generic_trace, generic_state = _run(generic_state)
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert _direct_iterate_fan_in_stream_projection(generic_state) == _direct_iterate_fan_in_stream_projection(
+        compatibility_state
+    )
+
+
 def test_nested_for_iterate_collect_generic_handles_empty_inner_collection() -> None:
     compatibility_state = GraphExecutionState(graph=_nested_for_iterate_collect_graph(outer_collection=[[], ["c"]]))
     compatibility_trace, compatibility_state = _run(
@@ -1813,6 +1836,10 @@ def test_nested_for_iterate_collect_generic_handles_empty_inner_collection() -> 
             if source_node_id == "after"
         )
         assert state.results[after_exec_id].value == [[], ["c"]]
+    generic_streams = generic_state._generic_runtime().streams
+    assert generic_streams[generic_state._iteration_stream_id("nested_iterate", (0,))].closed
+    assert generic_streams[generic_state._iteration_stream_id("nested_iterate", (0,))].values == ()
+    assert generic_streams[generic_state._iteration_stream_id("nested_iterate", (1,))].values == ("c",)
 
 
 def test_nested_for_iterate_collect_generic_rehydrates_after_inner_completion() -> None:
@@ -1830,6 +1857,29 @@ def test_nested_for_iterate_collect_generic_rehydrates_after_inner_completion() 
     assert resumed_state.is_complete()
     assert isinstance(resumed_state._execution_scheduler, _GenericGraphSchedulerAdapter)
     assert _state_projection(resumed_state) == _state_projection(expected_state)
+    assert _direct_iterate_fan_in_stream_projection(resumed_state) == _direct_iterate_fan_in_stream_projection(
+        expected_state
+    )
+
+
+def test_nested_for_iterate_collect_generic_failure_does_not_release_outer_return() -> None:
+    graph = _nested_for_iterate_collect_graph()
+    generic_trace, generic_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph),
+        fail_source_id="nested_body",
+    )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+        fail_source_id="nested_body",
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.has_error() and compatibility_state.has_error()
+    assert generic_state.is_complete() and compatibility_state.is_complete()
+    assert "nested_collect" not in generic_trace
+    assert "outer_return" not in generic_trace
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
 
 
 @pytest.mark.parametrize("values", [[1, None, 1], []], ids=["ordered-duplicates-and-none", "empty"])

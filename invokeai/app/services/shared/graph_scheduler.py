@@ -12,6 +12,10 @@ from invokeai.app.services.shared.execution_engine.scheduler import (
     ExecutionPlan,
     ExecutionScheduler,
 )
+from invokeai.app.services.shared.graph_nested_iterate_planner import (
+    can_use_nested_iterate_planner,
+    prepare_nested_iterate_bodies,
+)
 from invokeai.app.services.shared.graph_validation import CollectInvocation, IterateInvocation, nx
 
 if TYPE_CHECKING:
@@ -569,6 +573,11 @@ class _GenericGraphSchedulerAdapter:
         if self._state._count_unexecuted_prepared(source_node_id) == 0 and source_node_id not in self._state.executed:
             self._state._mark_source_executed(source_node_id)
 
+    def _try_materialize_deferred_nested_for_body(self, exec_node_id: str) -> None:
+        """Keep the compatibility materializer for generic shapes outside the new planner."""
+
+        _ExecutionScheduler._try_materialize_deferred_nested_for_body(self, exec_node_id)
+
     def complete(
         self, exec_node_id: str, output: BaseInvocationOutput
     ) -> list[tuple[BaseInvocation, BaseInvocationOutput]]:
@@ -609,7 +618,10 @@ class _GenericGraphSchedulerAdapter:
         # its selected branch completes. Recheck activation readiness here.
         if any(isinstance(node, IfInvocation) for node in self._state.graph.nodes.values()):
             self._enqueue_activation_ready_nodes()
-        _ExecutionScheduler._try_materialize_deferred_nested_for_body(self, exec_node_id)
+        if can_use_nested_iterate_planner(self._state):
+            prepare_nested_iterate_bodies(self._state)
+        else:
+            self._try_materialize_deferred_nested_for_body(exec_node_id)
         if finalized_for_exec_node_id is None:
             return []
         finalized_for_node = self._state.execution_graph.get_node(finalized_for_exec_node_id)
