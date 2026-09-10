@@ -77,7 +77,7 @@ def _can_use_fresh_flat_if_activation(state: "GraphExecutionState") -> bool:
                     return False
                 if any(edge.source.node_id in if_node_ids for edge in input_edges):
                     return False
-        elif len(if_nodes) in {2, 3} and len(nested_edges) == len(if_nodes) - 1:
+        elif len(if_nodes) in {2, 3, 4} and len(nested_edges) == len(if_nodes) - 1:
             if any(
                 edge.source.field != "value" or edge.destination.field not in {"true_input", "false_input"}
                 for edge in nested_edges
@@ -104,6 +104,8 @@ def _can_use_fresh_flat_if_activation(state: "GraphExecutionState") -> bool:
                 current_if_id = next_if_id
                 chain_path.append(current_if_id)
             if current_if_id not in chain_end_ids:
+                return False
+            if len(state.graph._get_output_edges(current_if_id)) > 1:
                 return False
 
             middle_if_id = chain_path[-2]

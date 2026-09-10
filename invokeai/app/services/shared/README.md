@@ -11,13 +11,17 @@ instead of mutating the source graph. Ordinary static DAGs and legacy-shaped `If
 and deterministic `ExecutionScheduler` in `execution_engine/scheduler.py`. Fresh graphs with one ordinary-node `If`, the
 exact one-level nested shape with two `If` nodes where the inner value feeds one outer branch and has no other
 consumer, the exact bounded three-`If` chain where inner `value` feeds a middle branch and middle `value` feeds an outer
-branch, or exactly two, exactly three, or exactly four independent ordinary-node sibling `If`s compile opaque, frame-local activation
+branch, the exact four-`If` nested chain where each `If.value` feeds one
+branch port of the next `If`, or exactly two, exactly three, or exactly four
+independent ordinary-node sibling `If`s compile opaque, frame-local activation
 dependencies in `GraphExecutionState`; unsupported fresh shapes use the compatibility scheduler with the dedicated
 `_IfActivationController` fallback, while legacy snapshots retain their generic compatibility projection.
 Current fresh sibling support includes exactly four independent `If`s with no nesting, fan-out, or other control-flow
 nodes. The bounded three-`If` chain requires direct `default` edges, all three `If`s to have `condition`, `true_input`,
-and `false_input` inputs, and inner/middle `If`s to have no output except their direct nested branch edge. Four or more
-nested `If`s, other fan-out, mixed, loop-containing, saved-workflow, legacy, and five-or-more sibling shapes remain on the
+and `false_input` inputs, and inner/middle `If`s to have no output except their direct nested branch edge. The exact
+four-`If` chain has the same input and direct-edge requirements, with no extra
+output fan-out. Five or more nested `If`s, other fan-out, mixed, loop-containing,
+saved-workflow, legacy, and five-or-more sibling shapes remain on the
 compatibility fallback. Legacy snapshots retain their generic compatibility projection and legacy skipped-state metadata.
 Legacy skipped-state projection remains only for old snapshots. Fresh `If` materialization prepares the condition boundary first,
 resolves the activation token, and attaches only the selected branch input.
@@ -268,9 +272,10 @@ rehydration, every activation token is bound to a currently prepared owner and i
 declared port, value, canonical token id, mapping key, and known frame fields must match. Unknown extra frame metadata
 remains forward-compatible.
 For a fresh generic `If` graph with one ordinary-node `If`, the exact one-level nested shape described above, the exact
-bounded three-`If` inner/middle/outer chain, or exactly two, exactly three, or exactly four independent sibling `If`s,
+bounded three-`If` inner/middle/outer chain, the exact four-`If` nested chain,
+or exactly two, exactly three, or exactly four independent sibling `If`s,
 `GraphExecutionState` compiles opaque, frame-local activation-dependency records privately on each branch-local plan
-node. Four-or-more nesting, five-or-more sibling `If`s, other fan-out, mixed, loop-containing, and saved-workflow shapes use
+node. Five-or-more nesting, five-or-more sibling `If`s, other fan-out, mixed, loop-containing, and saved-workflow shapes use
 the compatibility scheduler and `_IfActivationController` for the same records; legacy snapshots retain the generic
 compatibility projection and legacy skipped-state metadata. The controller
 remains the fallback runtime dependency owner, and the schedulers no longer call a legacy compiler. Fresh materialization prepares the condition boundary, resolves the activation token,
@@ -462,7 +467,7 @@ Workflow-call note:
   points. The planner continues to use the graph state's journal, mappings, caches, and scheduler.
 - `_IfActivationController` Owns fallback runtime `If` admission and compiles opaque, frame-local activation dependency
   records for unsupported fresh shapes and legacy prepared nodes. Fresh ordinary-node single-`If` graphs, the bounded
-  nested pair, the exact bounded three-`If` inner/middle/outer chain, and exactly two, exactly three, or exactly four independent sibling `If`s
+  nested pair, the exact bounded three-`If` inner/middle/outer chain, the exact four-`If` nested chain, and exactly two, exactly three, or exactly four independent sibling `If`s
   compile those dependencies in graph state. The bounded three-`If` chain also admits one middle-`If` value fan-out to
   one ordinary leaf consumer; that leaf inherits only the outer branch dependency, not middle-`If` polarity. Other
   fan-out remains fallback. Fresh admission leaves rejected

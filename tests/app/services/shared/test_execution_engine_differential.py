@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from itertools import product
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
@@ -213,6 +214,96 @@ def _three_nested_if_graph_with_shared_ancestor(**kwargs: bool) -> Graph:
     graph.add_node(AddInvocation(id="shared", a=1, b=1))
     graph.add_edge(create_edge("shared", "value", "inner_true", "a"))
     graph.add_edge(create_edge("shared", "value", "inner_false", "a"))
+    return graph
+
+
+def _four_nested_if_graph(
+    *,
+    root_condition: bool = True,
+    outer_condition: bool = True,
+    middle_condition: bool = True,
+    inner_condition: bool = True,
+    middle_branch: str = "true_input",
+    outer_branch: str = "true_input",
+    root_branch: str = "true_input",
+    with_shared_ancestor: bool = False,
+) -> Graph:
+    branches = (middle_branch, outer_branch, root_branch)
+    assert all(branch in {"true_input", "false_input"} for branch in branches)
+
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="root_condition", value=root_condition))
+    graph.add_node(BooleanInvocation(id="outer_condition", value=outer_condition))
+    graph.add_node(BooleanInvocation(id="middle_condition", value=middle_condition))
+    graph.add_node(BooleanInvocation(id="inner_condition", value=inner_condition))
+    graph.add_node(AddInvocation(id="inner_true", b=2))
+    graph.add_node(AddInvocation(id="inner_false", b=3))
+    graph.add_node(
+        AddInvocation(
+            id="middle_false" if middle_branch == "true_input" else "middle_true",
+            a=10,
+            b=0,
+        )
+    )
+    graph.add_node(
+        AddInvocation(
+            id="outer_false" if outer_branch == "true_input" else "outer_true",
+            a=20,
+            b=0,
+        )
+    )
+    graph.add_node(
+        AddInvocation(
+            id="root_false" if root_branch == "true_input" else "root_true",
+            a=30,
+            b=0,
+        )
+    )
+    graph.add_node(IfInvocation(id="inner_if"))
+    graph.add_node(IfInvocation(id="middle_if"))
+    graph.add_node(IfInvocation(id="outer_if"))
+    graph.add_node(IfInvocation(id="root_if"))
+    graph.add_node(AddInvocation(id="sink", b=1))
+
+    def connect(source: str, source_field: str, destination: str, destination_field: str) -> None:
+        graph.add_edge(create_edge(source, source_field, destination, destination_field))
+
+    connect("root_condition", "value", "root_if", "condition")
+    connect("outer_condition", "value", "outer_if", "condition")
+    connect("middle_condition", "value", "middle_if", "condition")
+    connect("inner_condition", "value", "inner_if", "condition")
+    connect("inner_true", "value", "inner_if", "true_input")
+    connect("inner_false", "value", "inner_if", "false_input")
+    connect("inner_if", "value", "middle_if", middle_branch)
+    connect(
+        "middle_false" if middle_branch == "true_input" else "middle_true",
+        "value",
+        "middle_if",
+        "false_input" if middle_branch == "true_input" else "true_input",
+    )
+    connect("middle_if", "value", "outer_if", outer_branch)
+    connect(
+        "outer_false" if outer_branch == "true_input" else "outer_true",
+        "value",
+        "outer_if",
+        "false_input" if outer_branch == "true_input" else "true_input",
+    )
+    connect("outer_if", "value", "root_if", root_branch)
+    connect(
+        "root_false" if root_branch == "true_input" else "root_true",
+        "value",
+        "root_if",
+        "false_input" if root_branch == "true_input" else "true_input",
+    )
+    connect("root_if", "value", "sink", "a")
+
+    if with_shared_ancestor:
+        graph.add_node(AddInvocation(id="shared", a=1, b=1))
+        connect("shared", "value", "inner_true", "a")
+        connect("shared", "value", "inner_false", "a")
+    else:
+        graph.get_node("inner_true").a = 2
+        graph.get_node("inner_false").a = 3
     return graph
 
 
@@ -5442,3 +5533,176 @@ def test_rehydrated_activation_token_allows_unknown_frame_metadata() -> None:
 
     restored = load_execution_state(snapshot)
     assert restored.execution_tokens[token_id].frame.model_extra["future_frame_metadata"] == "preserved"
+
+
+def _expected_four_nested_if_run(conditions: tuple[bool, bool, bool, bool]) -> tuple[list[str], int]:
+    root_condition, outer_condition, middle_condition, inner_condition = conditions
+    trace = ["root_condition"]
+    if not root_condition:
+        return trace + ["root_false", "root_if", "sink"], 31
+
+    trace.append("outer_condition")
+    if not outer_condition:
+        return trace + ["outer_false", "outer_if", "root_if", "sink"], 21
+
+    trace.append("middle_condition")
+    if not middle_condition:
+        return trace + ["middle_false", "middle_if", "outer_if", "root_if", "sink"], 11
+
+    trace.extend(["inner_condition", "inner_true" if inner_condition else "inner_false"])
+    return trace + ["inner_if", "middle_if", "outer_if", "root_if", "sink"], 5 if inner_condition else 7
+
+
+@pytest.mark.parametrize("conditions", list(product((True, False), repeat=4)))
+def test_fresh_four_nested_ifs_select_only_branches_and_match_compatibility(
+    conditions: tuple[bool, bool, bool, bool],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh four-nested If used controller-owned branch analysis")
+
+    def fail_controller_access(*_: object, **__: object) -> Any:
+        raise AssertionError("fresh four-nested If instantiated the compatibility controller")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+    monkeypatch.setattr(GraphExecutionState, "_if_activation_controller", fail_controller_access)
+    expected_trace, expected_value = _expected_four_nested_if_run(conditions)
+    runs: list[tuple[list[str], GraphExecutionState]] = []
+    for force_compatibility_scheduler in (False, True):
+        state = GraphExecutionState(
+            graph=_four_nested_if_graph(
+                root_condition=conditions[0],
+                outer_condition=conditions[1],
+                middle_condition=conditions[2],
+                inner_condition=conditions[3],
+            )
+        )
+        assert state._can_use_fresh_flat_if_activation()
+        trace, state = _run_graph(state, force_compatibility_scheduler=force_compatibility_scheduler)
+        runs.append((trace, state))
+
+        assert trace == expected_trace
+        assert set(state.source_prepared_mapping) == set(expected_trace)
+        assert all(
+            state._get_prepared_exec_metadata(exec_node_id).state != "skipped"
+            for exec_node_id in state.prepared_source_mapping
+        )
+        assert state.results[next(iter(state.source_prepared_mapping["sink"]))].value == expected_value
+        assert state.is_complete()
+
+    _assert_generic_and_compatibility_schedulers(runs[0][1], runs[1][1])
+    assert runs[0][0] == runs[1][0]
+    assert _state_projection(runs[0][1]) == _state_projection(runs[1][1])
+    assert _activation_projection(runs[0][1]) == _activation_projection(runs[1][1])
+    assert _execution_token_projection(runs[0][1]) == _execution_token_projection(runs[1][1])
+
+
+@pytest.mark.parametrize("middle_branch", ["true_input", "false_input"])
+@pytest.mark.parametrize("outer_branch", ["true_input", "false_input"])
+@pytest.mark.parametrize("root_branch", ["true_input", "false_input"])
+def test_fresh_four_nested_ifs_support_all_direct_parent_branch_ports(
+    middle_branch: str,
+    outer_branch: str,
+    root_branch: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh four-nested If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+    graph = _four_nested_if_graph(
+        middle_branch=middle_branch,
+        outer_branch=outer_branch,
+        root_branch=root_branch,
+        middle_condition=middle_branch == "true_input",
+        outer_condition=outer_branch == "true_input",
+        root_condition=root_branch == "true_input",
+    )
+    expected_trace = [
+        "root_condition",
+        "outer_condition",
+        "middle_condition",
+        "inner_condition",
+        "inner_true",
+        "inner_if",
+        "middle_if",
+        "outer_if",
+        "root_if",
+        "sink",
+    ]
+    runs: list[tuple[list[str], GraphExecutionState]] = []
+    for force_compatibility_scheduler in (False, True):
+        state = GraphExecutionState(graph=graph.model_copy(deep=True))
+        assert state._can_use_fresh_flat_if_activation()
+        trace, state = _run_graph(state, force_compatibility_scheduler=force_compatibility_scheduler)
+        runs.append((trace, state))
+
+        assert trace == expected_trace
+        assert state.is_complete()
+        assert {
+            (dependency.owner_id, dependency.branch, dependency.frame)
+            for dependency in state._get_source_activation_dependencies("inner_true")
+        } == {
+            ("inner_if", "true_input", ()),
+            ("middle_if", middle_branch, ()),
+            ("outer_if", outer_branch, ()),
+            ("root_if", root_branch, ()),
+        }
+
+    _assert_generic_and_compatibility_schedulers(runs[0][1], runs[1][1])
+    assert runs[0][0] == runs[1][0]
+    assert _state_projection(runs[0][1]) == _state_projection(runs[1][1])
+    assert _activation_projection(runs[0][1]) == _activation_projection(runs[1][1])
+
+
+@pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
+@pytest.mark.parametrize("stop_after", range(1, 12))
+def test_fresh_four_nested_ifs_shared_ancestor_checkpoint_resume_matches_both_schedulers(
+    force_compatibility_scheduler: bool,
+    stop_after: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_branch_analysis(*_: object, **__: object) -> set[str]:
+        raise AssertionError("fresh four-nested If used controller-owned branch analysis")
+
+    monkeypatch.setattr(graph_module._IfActivationController, "_branch_sources", fail_branch_analysis)
+    graph = _four_nested_if_graph(
+        root_condition=True,
+        outer_condition=True,
+        middle_condition=True,
+        inner_condition=False,
+        with_shared_ancestor=True,
+    )
+    expected_trace = [
+        "root_condition",
+        "outer_condition",
+        "middle_condition",
+        "inner_condition",
+        "shared",
+        "inner_false",
+        "inner_if",
+        "middle_if",
+        "outer_if",
+        "root_if",
+        "sink",
+    ]
+    expected_trace_run, expected_state = _run_graph(GraphExecutionState(graph=graph.model_copy(deep=True)))
+    assert expected_trace_run == expected_trace
+    checkpoint_trace, checkpoint_state = _run_graph(
+        GraphExecutionState(graph=graph.model_copy(deep=True)),
+        force_compatibility_scheduler=force_compatibility_scheduler,
+        stop_after=stop_after,
+    )
+    restored = load_execution_state(dump_execution_state(checkpoint_state))
+    if force_compatibility_scheduler:
+        _restore_compatibility_scheduler(restored)
+    resumed_trace, resumed_state = _run_graph(restored, force_compatibility_scheduler=force_compatibility_scheduler)
+
+    assert checkpoint_trace + resumed_trace == expected_trace
+    assert resumed_state.executed_history == expected_state.executed_history
+    assert resumed_state.executed_history.count("shared") == 1
+    assert resumed_state.results[next(iter(resumed_state.source_prepared_mapping["sink"]))].value == 6
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+    assert _activation_projection(resumed_state) == _activation_projection(expected_state)
+    assert _execution_token_projection(resumed_state) == _execution_token_projection(expected_state)
+    assert resumed_state.is_complete()

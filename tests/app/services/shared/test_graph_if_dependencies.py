@@ -149,6 +149,34 @@ def _four_nested_if_graph() -> Graph:
     return graph
 
 
+def _five_nested_if_graph() -> Graph:
+    graph = _four_nested_if_graph()
+    graph.delete_node("sink")
+    graph.add_node(BooleanInvocation(id="fifth_condition", value=True))
+    graph.add_node(AddInvocation(id="fifth_false", a=40, b=0))
+    graph.add_node(IfInvocation(id="fifth_if"))
+    graph.add_node(AddInvocation(id="sink", b=1))
+    graph.add_edge(_edge("fifth_condition", "value", "fifth_if", "condition"))
+    graph.add_edge(_edge("deepest_if", "value", "fifth_if", "true_input"))
+    graph.add_edge(_edge("fifth_false", "value", "fifth_if", "false_input"))
+    graph.add_edge(_edge("fifth_if", "value", "sink", "a"))
+    return graph
+
+
+def _four_nested_if_fanout_graph() -> Graph:
+    graph = _four_nested_if_graph()
+    graph.add_node(AddInvocation(id="outer_side_consumer", b=1))
+    graph.add_edge(_edge("outer_if", "value", "outer_side_consumer", "a"))
+    return graph
+
+
+def _four_nested_if_terminal_fanout_graph() -> Graph:
+    graph = _four_nested_if_graph()
+    graph.add_node(AddInvocation(id="deepest_side_consumer", b=1))
+    graph.add_edge(_edge("deepest_if", "value", "deepest_side_consumer", "a"))
+    return graph
+
+
 def _three_nested_if_fanout_graph() -> Graph:
     graph = _three_nested_if_graph()
     graph.add_node(AddInvocation(id="middle_side_consumer", b=1))
@@ -399,7 +427,9 @@ def test_four_independent_sibling_ifs_admit_owner_local_frame_local_dependencies
     [
         pytest.param(lambda: _sibling_if_graph_with_count(5), "first_true", id="five-sibling-ifs"),
         pytest.param(_indirectly_connected_if_graph, "first_true", id="indirect-chain"),
-        pytest.param(_four_nested_if_graph, "inner_true", id="four-nested-ifs"),
+        pytest.param(_five_nested_if_graph, "inner_true", id="five-nested-ifs"),
+        pytest.param(_four_nested_if_fanout_graph, "inner_true", id="four-nested-if-fanout"),
+        pytest.param(_four_nested_if_terminal_fanout_graph, "inner_true", id="four-nested-if-terminal-fanout"),
         pytest.param(_three_nested_if_extra_fanout_graph, "inner_true", id="three-nested-if-extra-fanout"),
         pytest.param(_three_nested_if_non_leaf_fanout_graph, "inner_true", id="three-nested-if-non-leaf-fanout"),
         pytest.param(_three_nested_if_inner_fanout_graph, "inner_true", id="three-nested-if-inner-fanout"),
@@ -477,6 +507,25 @@ def test_three_nested_ifs_with_one_middle_leaf_fanout_admit_exact_dependencies()
     )
     assert state._get_source_activation_dependencies("middle_side_consumer", (4,)) == (
         ActivationDependency(owner_id="outer_if", branch="true_input", frame=(4,)),
+    )
+
+
+def test_four_nested_ifs_admit_owner_and_frame_dependencies() -> None:
+    state = GraphExecutionState(graph=_four_nested_if_graph())
+
+    assert state._can_use_fresh_flat_if_activation()
+    assert state._get_source_activation_dependencies("inner_true", (1,)) == (
+        ActivationDependency(owner_id="inner_if", branch="true_input", frame=(1,)),
+        ActivationDependency(owner_id="middle_if", branch="true_input", frame=(1,)),
+        ActivationDependency(owner_id="outer_if", branch="true_input", frame=(1,)),
+        ActivationDependency(owner_id="deepest_if", branch="true_input", frame=(1,)),
+    )
+    assert state._get_source_activation_dependencies("outer_false", (2,)) == (
+        ActivationDependency(owner_id="outer_if", branch="false_input", frame=(2,)),
+        ActivationDependency(owner_id="deepest_if", branch="true_input", frame=(2,)),
+    )
+    assert state._get_source_activation_dependencies("deepest_false", (3,)) == (
+        ActivationDependency(owner_id="deepest_if", branch="false_input", frame=(3,)),
     )
 
 

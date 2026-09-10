@@ -168,14 +168,15 @@ valid. A loaded terminal legacy state may retain its empty in-memory ledger for 
 `dump_execution_state()` upgrades missing loop buckets in the versioned snapshot.
 
 `IfInvocation` now declares the same seam for branch activation: it emits one frame-scoped activation token for the
-selected branch, and the graph state validates and persists it after invocation. Fresh graphs with one ordinary-node
-`If`, the exact one-level nested shape with two `If` nodes where the inner value feeds one outer branch and has no
-other consumer, the exact bounded three-`If` chain with direct inner-to-middle-to-outer branch edges, or exactly two
-or exactly three independent ordinary-node sibling `If`s compile opaque, frame-local activation dependencies in graph
-state. The three-`If` admission requires `default` edges, all branch inputs (`condition`, `true_input`, `false_input`) on
-each `If`, and no output from inner or middle `If` except its direct nested branch edge. Four-or-more nesting, fan-out,
-mixed, loop-containing, saved-workflow, legacy, and four-or-more sibling shapes use the compatibility scheduler with the
-dedicated `_IfActivationController` fallback. Legacy snapshots retain their generic compatibility
+selected branch, and the graph state validates and persists it after invocation. Fresh graphs with one ordinary-node `If`,
+the exact one-level nested shape with two `If` nodes where the inner value feeds one outer branch and has no other
+consumer, the exact bounded three-`If` chain with direct inner-to-middle-to-outer branch edges, the exact four-`If` nested
+chain, or exactly two, exactly three, or exactly four independent ordinary-node sibling `If`s compile opaque, frame-local
+activation dependencies in graph state. The three- and four-`If` admissions require `default` edges, all branch inputs
+(`condition`, `true_input`, `false_input`) on each `If`, and no output from inner or middle `If` except its direct nested
+branch edge; the four-`If` chain permits no extra output fan-out. Five-or-more nested `If`s, other fan-out, mixed,
+loop-containing, saved-workflow, legacy, and five-or-more sibling shapes use the compatibility scheduler with the dedicated
+`_IfActivationController` fallback. Legacy snapshots retain their generic compatibility
 projection. Legacy
 skipped-state projection remains only for old snapshots. Fresh materialization prepares the condition boundary,
 resolves the activation token, and attaches only the selected branch input; unselected branch nodes remain unprepared.
