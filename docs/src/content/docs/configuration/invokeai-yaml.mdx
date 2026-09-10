@@ -236,7 +236,7 @@ db_synchronous: full # default value
 
 The setting can also be given as the `INVOKEAI_DB_SYNCHRONOUS` environment variable.
 
-**`normal` cannot corrupt the database.** InvokeAI runs SQLite in WAL mode, and WAL guarantees a consistent database either way. What `normal` gives up is the *most recent transactions* if the machine loses power or the OS crashes mid-write — a just-written image record or a queue status. The image file itself is already on disk and can be recovered by the orphan scan; the row pointing at it is what would be missing.
+**`normal` cannot corrupt the database.** InvokeAI runs SQLite in WAL mode, and WAL guarantees a consistent database either way. What `normal` gives up is the *most recent transactions* if the machine loses power or the OS crashes mid-write — a just-written image record or a queue status. The image file itself survives on disk, but nothing rebuilds the row, and the gallery is driven by the database: the image is simply gone from it. The gallery orphan scan does not heal this — it *archives* record-less files out of `outputs/` so you can delete them or re-import them, which takes the separate `invokeai/frontend/install/import_images.py` script.
 
 Measured on a copy of a real library, 300 single-row inserts each committed on its own:
 

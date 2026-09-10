@@ -65,7 +65,7 @@ class SqliteDatabase:
         self._conn.execute("PRAGMA busy_timeout = 5000;")  # 5 seconds
 
         # Durability. SQLite's own default is `full`, which fsyncs on every commit; `normal` under WAL
-        # trades the last transactions on a power loss or OS crash for roughly 6x shorter commits. It
+        # trades the last transactions on a power loss or OS crash for roughly 12x shorter commits. It
         # cannot corrupt the database -- that is WAL's guarantee either way. Shorter commits matter
         # twice here, because every write holds the lock that serialises all database work.
         #
