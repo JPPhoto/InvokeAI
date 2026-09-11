@@ -102,8 +102,8 @@ which feeds `inner Iterate`, whose item feeds one ordinary body—is also
 generic-routed. Its private planner owns ordered outer/inner frame expansion,
 empty outer and inner closure, source completion, checkpoint rehydration, and
 failure parity without calling the compatibility materializer. `For`, `Collect`,
-fan-in, sibling iterators, deeper or multiple nested iterators, mixed control
-flow, and legacy snapshots remain compatibility-owned.
+fan-in, sibling iterators, mixed control flow, and legacy snapshots remain
+compatibility-owned; the bounded deeper serial extensions are described next.
 The exact seven-node/six-edge serial nested-`Iterate` chain extends this
 bounded planner by adding one ordinary preparation/`Iterate` pair between the
 outer iterator and body. It owns three-component frame paths, ordered
@@ -111,9 +111,10 @@ expansion, empty outer and intermediate streams, source completion, checkpoint
 rehydration, and failure parity. The exact nine-node/eight-edge serial chain
 extends the same planner to four `Iterate` nodes and four-component frame
 paths, with the same empty-stream, checkpoint, source-completion, and failure
-parity guarantees. Five-level or deeper chains and all other expanded,
-fan-in, sibling, mixed, `For`, `Collect`, and legacy shapes remain
-compatibility-owned.
+parity guarantees. The exact eleven-node/ten-edge serial chain extends the
+same planner to five `Iterate` nodes and five-component frame paths, with the
+same guarantees. Six-level or deeper chains and all other expanded, fan-in,
+sibling, mixed, `For`, `Collect`, and legacy shapes remain compatibility-owned.
 Three or more body-mediated branches, fan-in with four or more direct branches,
 broader or deeper nested iterators, and all mixed control flow retain materializer copy expansion,
 grouping, and empty-source handling on the legacy compatibility route.
