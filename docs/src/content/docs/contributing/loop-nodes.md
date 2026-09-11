@@ -200,7 +200,9 @@ plan/scheduler through a compatibility projection. This is intentional:
 the generic records preserve tested loop semantics first, while the old execution graph remains the fallback for control
 lowerings, legacy snapshots, and unsupported mixed loop shapes. No activation or stream ports are added to author-time
 graph JSON.
-This migration does not modify any file under `invokeai/frontend/...`, including generated schemas; the existing
+Exact fresh serial nested-`Iterate` chains through seven levels use the generic planner for ordered frame expansion,
+empty-stream closure, checkpoint rehydration, source completion, and failure parity. Eight-level or deeper chains,
+other deeper or multiple nested loops, and unsupported mixed shapes remain compatibility-owned. This migration does not modify any file under `invokeai/frontend/...`, including generated schemas; the existing
 frontend/backend external interface remains frozen. Branch-membership analysis remains internal, while fresh execution
 no longer creates skipped-state projection and old snapshots retain it for compatibility.
 

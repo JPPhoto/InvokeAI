@@ -2879,8 +2879,104 @@ def test_six_level_nested_iterate_failure_matches_compatibility() -> None:
     assert generic_trace.count("body") == 1
 
 
-def test_seven_level_nested_iterate_remains_on_compatibility_fallback() -> None:
-    state = GraphExecutionState(graph=_serial_nested_iterate_chain_graph_at_depth(7))
+def test_seven_level_nested_iterate_matches_compatibility() -> None:
+    graph = _serial_nested_iterate_chain_graph_at_depth(7)
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "prepare",
+        side_effect=AssertionError("seven-level nested Iterate used compatibility materializer"),
+    ):
+        generic_trace, generic_state = _run(GraphExecutionState(graph=graph))
+    compatibility_trace, compatibility_state = _run(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert sorted(
+        generic_state._get_iteration_path(exec_id)
+        for exec_id in generic_state._prepared_registry().get_prepared_ids("body")
+    ) == [(0, 0, 0, 0, 0, 0, 0)]
+
+
+@pytest.mark.parametrize(
+    ("outer_collection", "expected_body_paths"),
+    [
+        ([], []),
+        ([[], _nested_collection("c", 6)], [(1, 0, 0, 0, 0, 0, 0)]),
+        ([_nested_collection([], 5)], []),
+    ],
+    ids=["outer-empty", "mixed-empty", "deepest-empty"],
+)
+def test_seven_level_nested_iterate_closes_empty_frames(
+    outer_collection: list[Any], expected_body_paths: list[tuple[int, ...]]
+) -> None:
+    graph = _serial_nested_iterate_chain_graph_at_depth(7)
+    graph.get_node("source").first = outer_collection
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "prepare",
+        side_effect=AssertionError("seven-level nested Iterate used compatibility materializer"),
+    ):
+        generic_trace, generic_state = _run(GraphExecutionState(graph=graph))
+    compatibility_trace, compatibility_state = _run(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert (
+        sorted(
+            generic_state._get_iteration_path(exec_id)
+            for exec_id in generic_state._prepared_registry().get_prepared_ids("body")
+        )
+        == expected_body_paths
+    )
+
+
+def test_seven_level_nested_iterate_rehydrates_without_replay() -> None:
+    graph = _serial_nested_iterate_chain_graph_at_depth(7)
+    expected_trace, expected_state = _run(GraphExecutionState(graph=graph))
+    partial_trace, partial_state = _run(GraphExecutionState(graph=graph), stop_after=8)
+
+    resumed_trace, resumed_state = _run(load_execution_state(dump_execution_state(partial_state)))
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert resumed_state.is_complete()
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+
+
+def test_seven_level_nested_iterate_failure_matches_compatibility() -> None:
+    graph = _serial_nested_iterate_chain_graph_at_depth(7)
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "prepare",
+        side_effect=AssertionError("seven-level nested Iterate used compatibility materializer"),
+    ):
+        generic_trace, generic_state = _run_graph_with_effects(
+            GraphExecutionState(graph=graph),
+            fail_source_id="body",
+        )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+        fail_source_id="body",
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.has_error() and compatibility_state.has_error()
+    assert generic_state.is_complete() and compatibility_state.is_complete()
+    assert generic_trace.count("body") == 1
+
+
+def test_eight_level_nested_iterate_remains_on_compatibility_fallback() -> None:
+    state = GraphExecutionState(graph=_serial_nested_iterate_chain_graph_at_depth(8))
     materializer = state._materializer()
     with patch.object(materializer, "prepare", wraps=materializer.prepare) as prepare:
         trace, state = _run(state)
