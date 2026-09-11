@@ -13,6 +13,7 @@ from invokeai.app.services.shared.execution_engine.scheduler import (
     ExecutionScheduler,
 )
 from invokeai.app.services.shared.graph_nested_iterate_planner import (
+    can_use_eight_level_nested_iterate_sequence_planner,
     can_use_five_level_nested_iterate_sequence_planner,
     can_use_four_level_nested_iterate_sequence_planner,
     can_use_nested_iterate_planner,
@@ -20,6 +21,7 @@ from invokeai.app.services.shared.graph_nested_iterate_planner import (
     can_use_seven_level_nested_iterate_sequence_planner,
     can_use_six_level_nested_iterate_sequence_planner,
     can_use_three_level_nested_iterate_sequence_planner,
+    prepare_eight_level_nested_iterate_sequences,
     prepare_five_level_nested_iterate_sequences,
     prepare_four_level_nested_iterate_sequences,
     prepare_nested_iterate_bodies,
@@ -638,6 +640,7 @@ class _GenericGraphSchedulerAdapter:
             or can_use_five_level_nested_iterate_sequence_planner(self._state)
             or can_use_six_level_nested_iterate_sequence_planner(self._state)
             or can_use_seven_level_nested_iterate_sequence_planner(self._state)
+            or can_use_eight_level_nested_iterate_sequence_planner(self._state)
         )
         if not nested_iterate_sequence:
             self._mark_source_node_complete(exec_node_id)
@@ -671,6 +674,8 @@ class _GenericGraphSchedulerAdapter:
             prepare_six_level_nested_iterate_sequences(self._state)
         elif can_use_seven_level_nested_iterate_sequence_planner(self._state):
             prepare_seven_level_nested_iterate_sequences(self._state)
+        elif can_use_eight_level_nested_iterate_sequence_planner(self._state):
+            prepare_eight_level_nested_iterate_sequences(self._state)
         else:
             self._try_materialize_deferred_nested_for_body(exec_node_id)
         if finalized_for_exec_node_id is None:
