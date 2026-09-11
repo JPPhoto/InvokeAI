@@ -98,14 +98,16 @@ iteration and state; the `ForReturn` effect completes it with output, state, and
 are persisted under the invocation reference. Session-built effect references carry graph-state, durable-frame,
 iteration-path, and workflow-call-depth identity, and stale or cross-scope effects are rejected before mutation. They
 never encode `loop_linkage` as a data token. A fresh graph with exactly one static flat `For`/`ForReturn` pair,
-including an empty literal collection, now uses the generic scheduler adapter for readiness and continuation transitions.
+including an empty literal collection or a supported non-empty input-driven collection producer, now uses the generic
+scheduler adapter for readiness and continuation transitions.
 Graph state owns the
 generic continuation boundary: it carries returned state, honors `continue_condition`, materializes the next body
 iteration, and finalizes the aggregate. An empty literal collection completes through the existing synthetic terminal
 `For` result without running the body or `ForReturn`. The generic scheduler remains opaque and never receives a literal
 successor node ID. The compatibility continuation bridge is retained only for unsupported loop shapes and explicitly
-legacy-loaded snapshots. Input-driven outer collections, deeper or multiple nested loops, and unsupported mixed control
-flow remain on the compatibility scheduler; the narrow canonical two-level nested-`For` shape and the exact
+legacy-loaded snapshots. Empty input-driven collections, unsupported input-driven outer collections, deeper or multiple
+nested loops, and unsupported mixed control flow remain on the compatibility scheduler; the narrow canonical two-level
+nested-`For` shape and the exact
 bounded outer-`For`/`Iterate`/`Collect` shape are now generic-routed. This additive effect seam does not claim generic
 scheduling for the remaining shapes. `Iterate` records ordered item tokens in
 a closed `StreamBuffer`; an empty `Iterate` records an
@@ -192,7 +194,7 @@ ports and literal successor IDs remain absent, while unsupported loop shapes and
 their compatibility paths until differential coverage proves their generic replacements.
 
 The engine still owns runtime node materialization and queue readiness for loop-containing graphs that require empty or
-input-driven `For`, deeper nested/mixed control flow, and existing snapshots. Ordinary static DAGs, legacy-shaped `If` graphs,
+unsupported input-driven `For`, deeper nested/mixed control flow, and existing snapshots. Ordinary static DAGs, legacy-shaped `If` graphs,
 direct `Iterate`/`Collect`-only graphs, and supported fresh static flat `For` graphs now use the generic opaque
 plan/scheduler through a compatibility projection. This is intentional:
 the generic records preserve tested loop semantics first, while the old execution graph remains the fallback for control

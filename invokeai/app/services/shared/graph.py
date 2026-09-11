@@ -802,8 +802,16 @@ class GraphExecutionState(BaseModel):
             return True
         if len(for_nodes) != 1 or len(return_nodes) != 1:
             return False
-        if self.graph._get_input_edges(for_nodes[0].id, COLLECTION_FIELD):
-            return False
+        collection_edges = self.graph._get_input_edges(for_nodes[0].id, COLLECTION_FIELD)
+        if collection_edges:
+            collection_source = self.graph.get_node(collection_edges[0].source.node_id)
+            collection_value = getattr(collection_source, "value", None)
+            if (
+                collection_edges[0].source.field == "value"
+                and isinstance(collection_value, list)
+                and not collection_value
+            ):
+                return False
         body_path = self.graph._get_for_body_path_to_return(for_nodes[0].id, self._get_source_graph_flat())
         if body_path is None:
             return False
@@ -1301,10 +1309,6 @@ class GraphExecutionState(BaseModel):
         source_node_id = self.prepared_source_mapping.get(node.id)
         if source_node_id is None:
             return node.collection
-        source_node = self.graph.get_node(source_node_id)
-        if isinstance(source_node, ForInvocation) and source_node.collection:
-            return source_node.collection
-
         collection_edges = self.graph._get_input_edges(source_node_id, COLLECTION_FIELD)
         if collection_edges:
             source_output = self.results.get(collection_edges[0].source.node_id)
@@ -1326,6 +1330,9 @@ class GraphExecutionState(BaseModel):
             collection = self._value_from_object(source_output, collection_edges[0].source.field)
             if isinstance(collection, list):
                 return collection
+        source_node = self.graph.get_node(source_node_id)
+        if isinstance(source_node, ForInvocation) and source_node.collection:
+            return source_node.collection
         return node.collection
 
     def _prepared_for_continuation_payload(self, node: ForInvocation | ForReturnInvocation) -> dict[str, Any] | None:

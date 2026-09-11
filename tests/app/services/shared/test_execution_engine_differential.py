@@ -4916,40 +4916,6 @@ def test_empty_literal_flat_for_matches_compatibility_scheduler() -> None:
     assert _state_projection(generic_state) == _state_projection(compatibility_state)
 
 
-@pytest.mark.parametrize(
-    ("graph_kwargs", "expected_trace", "expected_collection"),
-    [
-        ({"input_collection": [1, 2]}, ["collection", "for", "body", "return", "for", "body", "return"], [11, 12]),
-    ],
-)
-def test_flat_for_ineligible_collections_use_compatibility_scheduler(
-    graph_kwargs: dict[str, list[Any]], expected_trace: list[str], expected_collection: list[Any]
-) -> None:
-    state = GraphExecutionState(graph=_flat_for_graph(**graph_kwargs))
-
-    assert state._can_use_generic_scheduler() is False
-    trace, state = _run_graph_with_effects(state)
-
-    assert trace == expected_trace
-    assert isinstance(state._execution_scheduler, _ExecutionScheduler)
-    assert _final_for_output(state).output_collection == expected_collection
-    assert state.is_complete()
-    continuations = list(state._generic_runtime().continuations.values())
-    assert len(continuations) == len(expected_collection)
-    assert all(state.prepared_source_mapping[item.owner_id] == "for" for item in continuations)
-    assert all(item.status == "completed" for item in continuations)
-    assert sum(len(effects) for effects in state.execution_effects.values()) == 2 * len(expected_collection)
-    _assert_execution_identity_consistent(state)
-
-    restored = load_execution_state(dump_execution_state(state))
-    _restore_compatibility_scheduler(restored)
-    assert isinstance(restored._execution_scheduler, _ExecutionScheduler)
-    assert _state_projection(restored) == _state_projection(state)
-    assert _effect_ledger_projection(restored) == _effect_ledger_projection(state)
-    assert _continuation_projection(restored) == _continuation_projection(state)
-    _assert_execution_identity_consistent(restored)
-
-
 def test_input_driven_empty_flat_for_uses_compatibility_scheduler() -> None:
     state = GraphExecutionState(graph=_flat_for_graph(input_collection=[]))
 
@@ -4962,6 +4928,54 @@ def test_input_driven_empty_flat_for_uses_compatibility_scheduler() -> None:
     assert state.is_complete()
     assert list(state._generic_runtime().continuations.values()) == []
     _assert_execution_identity_consistent(state)
+
+
+def test_input_driven_flat_for_uses_generic_scheduler() -> None:
+    state = GraphExecutionState(graph=_flat_for_graph(input_collection=[3, 7]))
+
+    assert state._can_use_generic_scheduler()
+    assert isinstance(state._scheduler(), _GenericGraphSchedulerAdapter)
+
+
+def test_input_driven_flat_for_matches_compatibility_scheduler() -> None:
+    generic_trace, generic_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_flat_for_graph(input_collection=[3, 7]))
+    )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_flat_for_graph(input_collection=[3, 7])),
+        force_compatibility_scheduler=True,
+    )
+
+    assert (
+        generic_trace
+        == compatibility_trace
+        == [
+            "collection",
+            "for",
+            "body",
+            "return",
+            "for",
+            "body",
+            "return",
+        ]
+    )
+    assert _final_for_output(generic_state).output_collection == [13, 17]
+    assert _final_for_output(compatibility_state).output_collection == [13, 17]
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert isinstance(compatibility_state._execution_scheduler, _ExecutionScheduler)
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+
+    restored_generic = load_execution_state(dump_execution_state(generic_state))
+    restored_compatibility = load_execution_state(dump_execution_state(compatibility_state))
+    _restore_compatibility_scheduler(restored_compatibility)
+    assert isinstance(restored_generic._scheduler(), _GenericGraphSchedulerAdapter)
+    assert isinstance(restored_compatibility._execution_scheduler, _ExecutionScheduler)
+    assert _state_projection(restored_generic) == _state_projection(generic_state)
+    assert _state_projection(restored_compatibility) == _state_projection(compatibility_state)
+    _assert_execution_identity_consistent(restored_generic)
+    _assert_execution_identity_consistent(restored_compatibility)
 
 
 @pytest.mark.parametrize(

@@ -260,10 +260,10 @@ Holds the state for a single run. Keeps the source graph intact and materializes
 set of internal helper classes. For ordinary static DAGs and legacy-shaped `If` graphs, readiness and completion are
 projected through the generic `ExecutionPlan`/`ExecutionScheduler` adapter. Direct `Iterate`/`Collect` graphs without
 other control-flow nodes also use that adapter: its readiness predicate waits for canonical streams to close and its
-completion mirrors Iterate outputs into the stream ledger. A fresh graph with one static, non-empty flat
-`For`/`ForReturn` pair also uses the adapter for readiness and continuation transitions; graph state owns the
-invocation-specific continuation boundary while the generic scheduler remains opaque. Empty or input-driven `For`
-collections, deeper or multiple loops, saved-workflow calls, and unsupported mixed control-flow shapes outside the
+completion mirrors Iterate outputs into the stream ledger. A fresh graph with one static flat `For`/`ForReturn` pair,
+including a supported non-empty input-driven collection producer, also uses the adapter for readiness and continuation
+transitions; graph state owns the invocation-specific continuation boundary while the generic scheduler remains opaque.
+Empty input-driven collections, unsupported input-driven shapes, deeper or multiple loops, saved-workflow calls, and unsupported mixed control-flow shapes outside the
 bounded per-item topology continue to use
 the legacy compatibility scheduler until their differential coverage is complete. The narrow canonical two-level
 nested-`For` shape, the canonical outer-`For`/bounded-`Iterate`/`Collect` shape,
@@ -332,7 +332,7 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
   checks control generic branch readiness. Supported static flat `For` graphs and the narrow canonical two-level nested
   `For` shape, the exact producer-driven nested extension, and the bounded two- through six-level serial nested-
   `Iterate` chains and the bounded per-item `Iterate`/`If`/`Collect` topology use the generic adapter for readiness and
-  continuation projection; empty/input-driven, seven-level or deeper, mixed graphs outside that topology, and saved-workflow
+  continuation projection; empty input-driven, unsupported input-driven, seven-level or deeper, mixed graphs outside that topology, and saved-workflow
   graphs retain the legacy scheduler. Optional
   `ready_order: list[str]` prioritizes classes. Queues are rebuilt from persisted execution state when a session is
   deserialized.
@@ -448,7 +448,8 @@ and terminal effects. The generic scheduler selects nodes from required
 effects for the current frame; it never receives a literal successor-node ID.
 Current implementation is narrower: `IfInvocation` and non-empty
 `IterateInvocation` use the effect recorder for activation and stream effects;
-the supported static, non-empty flat `For`/`ForReturn` shape uses it for
+the supported static flat `For`/`ForReturn` shape, including the non-empty
+input-driven producer case, uses it for
 frame-scoped continuation effects and generic readiness/continuation
 projection.
 Direct `Iterate`/`Collect`-only graphs use the generic scheduler adapter for
@@ -479,7 +480,8 @@ after finalization, their authoritative returned collection and final state. Unv
 compatibility loader. `For` start payloads must match the prepared index, collection total, and state before mutation. This is the invocation/effect ownership
 seam: the generic adapter calls the graph-state generic continuation boundary,
 which creates the next prepared iteration, aggregates outputs, and finalizes the
-supported flat loop. The compatibility bridge remains for empty/input-driven,
+supported flat loop. The compatibility bridge remains for empty input-driven,
+unsupported input-driven,
 deeper/multiple nested, mixed-loop, and legacy-snapshot execution; those paths
 retain their existing materialization and linkage ownership. The supported
 fresh static flat `For`/`ForReturn` shape, the narrow canonical two-level
@@ -513,7 +515,7 @@ compatibility skip propagation must not leave stale downstream indegrees. Both
 scheduler adapters expose the same skip transition; the legacy path releases
 downstream indegrees without trying to hydrate inputs from the skipped node. It
 does not claim durable persistence of the generic scheduler's private claim set,
-nor does it claim ownership migration for empty/input-driven, deeper/multiple,
+nor does it claim ownership migration for empty input-driven, unsupported input-driven, deeper/multiple,
 mixed, or workflow-call loop shapes. Real queue/processor
 coverage in `tests/app/services/session_processor/test_if_processor_sqlite.py`
 also exercises true and false `If` selection, cancellation before and after
