@@ -108,8 +108,11 @@ The exact seven-node/six-edge serial nested-`Iterate` chain extends this
 bounded planner by adding one ordinary preparation/`Iterate` pair between the
 outer iterator and body. It owns three-component frame paths, ordered
 expansion, empty outer and intermediate streams, source completion, checkpoint
-rehydration, and failure parity. Four-level or deeper chains and all other
-expanded, fan-in, sibling, mixed, `For`, `Collect`, and legacy shapes remain
+rehydration, and failure parity. The exact nine-node/eight-edge serial chain
+extends the same planner to four `Iterate` nodes and four-component frame
+paths, with the same empty-stream, checkpoint, source-completion, and failure
+parity guarantees. Five-level or deeper chains and all other expanded,
+fan-in, sibling, mixed, `For`, `Collect`, and legacy shapes remain
 compatibility-owned.
 Three or more body-mediated branches, fan-in with four or more direct branches,
 broader or deeper nested iterators, and all mixed control flow retain materializer copy expansion,

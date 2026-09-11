@@ -13,9 +13,11 @@ from invokeai.app.services.shared.execution_engine.scheduler import (
     ExecutionScheduler,
 )
 from invokeai.app.services.shared.graph_nested_iterate_planner import (
+    can_use_four_level_nested_iterate_sequence_planner,
     can_use_nested_iterate_planner,
     can_use_nested_iterate_sequence_planner,
     can_use_three_level_nested_iterate_sequence_planner,
+    prepare_four_level_nested_iterate_sequences,
     prepare_nested_iterate_bodies,
     prepare_nested_iterate_sequences,
     prepare_three_level_nested_iterate_sequences,
@@ -623,9 +625,11 @@ class _GenericGraphSchedulerAdapter:
         self._remove_projected(exec_node_id)
         self._record_completed_node(exec_node_id, output)
         finalized_for_exec_node_id = self._state._apply_generic_for_continuation(exec_node_id, output)
-        nested_iterate_sequence = can_use_nested_iterate_sequence_planner(
-            self._state
-        ) or can_use_three_level_nested_iterate_sequence_planner(self._state)
+        nested_iterate_sequence = (
+            can_use_nested_iterate_sequence_planner(self._state)
+            or can_use_three_level_nested_iterate_sequence_planner(self._state)
+            or can_use_four_level_nested_iterate_sequence_planner(self._state)
+        )
         if not nested_iterate_sequence:
             self._mark_source_node_complete(exec_node_id)
         # A condition may become resolvable when this node completes. Resolve it
@@ -650,6 +654,8 @@ class _GenericGraphSchedulerAdapter:
             prepare_nested_iterate_sequences(self._state)
         elif can_use_three_level_nested_iterate_sequence_planner(self._state):
             prepare_three_level_nested_iterate_sequences(self._state)
+        elif can_use_four_level_nested_iterate_sequence_planner(self._state):
+            prepare_four_level_nested_iterate_sequences(self._state)
         else:
             self._try_materialize_deferred_nested_for_body(exec_node_id)
         if finalized_for_exec_node_id is None:

@@ -113,9 +113,11 @@ from invokeai.app.services.shared.graph_models import (
     WorkflowCallStatus,  # noqa: F401
 )
 from invokeai.app.services.shared.graph_nested_iterate_planner import (
+    can_use_four_level_nested_iterate_sequence_planner,
     can_use_nested_iterate_planner,
     can_use_nested_iterate_sequence_planner,
     can_use_three_level_nested_iterate_sequence_planner,
+    prepare_four_level_nested_iterate_sequences,
     prepare_nested_iterate_bodies,
     prepare_nested_iterate_sequences,
     prepare_three_level_nested_iterate_sequences,
@@ -2394,6 +2396,11 @@ class GraphExecutionState(BaseModel):
             self._scheduler(), _GenericGraphSchedulerAdapter
         ) and can_use_three_level_nested_iterate_sequence_planner(self):
             prepare_three_level_nested_iterate_sequences(self)
+            return self._get_next_node()
+        if isinstance(
+            self._scheduler(), _GenericGraphSchedulerAdapter
+        ) and can_use_four_level_nested_iterate_sequence_planner(self):
+            prepare_four_level_nested_iterate_sequences(self)
             return self._get_next_node()
 
         prepared_id = self._materializer().prepare(base_graph)
