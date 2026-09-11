@@ -731,6 +731,72 @@ def _five_level_nested_iterate_chain_graph(
     return graph
 
 
+def _six_level_nested_iterate_chain_graph(
+    *, outer_collection: list[list[list[list[list[list[str]]]]]] | None = None
+) -> Graph:
+    """Exact six-level serial nested-iterator shape."""
+    graph = Graph()
+    graph.add_node(
+        CollectionConcatInvocation(
+            id="outer_source",
+            first=[
+                [
+                    [
+                        [
+                            [
+                                [
+                                    "a",
+                                    "b",
+                                ]
+                            ],
+                            [["c"]],
+                        ],
+                        [
+                            [
+                                [
+                                    "d",
+                                ]
+                            ]
+                        ],
+                    ],
+                ],
+                [[[[["e"]]]]],
+            ]
+            if outer_collection is None
+            else outer_collection,
+        )
+    )
+    graph.add_node(IterateInvocation(id="outer_iterate"))
+    graph.add_node(CollectionConcatInvocation(id="level1_collection"))
+    graph.add_node(IterateInvocation(id="level1_iterate"))
+    graph.add_node(CollectionConcatInvocation(id="level2_collection"))
+    graph.add_node(IterateInvocation(id="level2_iterate"))
+    graph.add_node(CollectionConcatInvocation(id="level3_collection"))
+    graph.add_node(IterateInvocation(id="level3_iterate"))
+    graph.add_node(CollectionConcatInvocation(id="level4_collection"))
+    graph.add_node(IterateInvocation(id="level4_iterate"))
+    graph.add_node(CollectionConcatInvocation(id="level5_collection"))
+    graph.add_node(IterateInvocation(id="level5_iterate"))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+
+    def connect(source: str, source_field: str, destination: str, destination_field: str) -> None:
+        graph.add_edge(create_edge(source, source_field, destination, destination_field))
+
+    connect("outer_source", "collection", "outer_iterate", "collection")
+    connect("outer_iterate", "item", "level1_collection", "first")
+    connect("level1_collection", "collection", "level1_iterate", "collection")
+    connect("level1_iterate", "item", "level2_collection", "first")
+    connect("level2_collection", "collection", "level2_iterate", "collection")
+    connect("level2_iterate", "item", "level3_collection", "first")
+    connect("level3_collection", "collection", "level3_iterate", "collection")
+    connect("level3_iterate", "item", "level4_collection", "first")
+    connect("level4_collection", "collection", "level4_iterate", "collection")
+    connect("level4_iterate", "item", "level5_collection", "first")
+    connect("level5_collection", "collection", "level5_iterate", "collection")
+    connect("level5_iterate", "item", "body", "value")
+    return graph
+
+
 def _serial_nested_iterate_chain_graph_at_depth(iterate_count: int) -> Graph:
     """Build one non-empty serial nested-iterator chain for admission-boundary tests."""
     collection: list[Any] = ["value"]
@@ -2704,8 +2770,117 @@ def test_five_level_nested_iterate_failure_matches_compatibility() -> None:
     assert _state_projection(generic_state) == _state_projection(compatibility_state)
 
 
-def test_six_level_nested_iterate_remains_on_compatibility_fallback() -> None:
-    state = GraphExecutionState(graph=_serial_nested_iterate_chain_graph_at_depth(6))
+def test_six_level_nested_iterate_matches_compatibility() -> None:
+    graph = _six_level_nested_iterate_chain_graph()
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "prepare",
+        side_effect=AssertionError("six-level nested Iterate used compatibility materializer"),
+    ):
+        generic_trace, generic_state = _run(GraphExecutionState(graph=graph))
+    compatibility_trace, compatibility_state = _run(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert sorted(
+        generic_state._get_iteration_path(exec_id)
+        for exec_id in generic_state._prepared_registry().get_prepared_ids("body")
+    ) == [
+        (0, 0, 0, 0, 0, 0),
+        (0, 0, 0, 0, 0, 1),
+        (0, 0, 0, 1, 0, 0),
+        (0, 0, 1, 0, 0, 0),
+        (1, 0, 0, 0, 0, 0),
+    ]
+
+
+def _nested_collection(value: Any, depth: int) -> list[Any]:
+    collection: Any = [value]
+    for _ in range(depth - 1):
+        collection = [collection]
+    return collection
+
+
+@pytest.mark.parametrize(
+    ("outer_collection", "expected_body_paths"),
+    [
+        ([], []),
+        ([[], _nested_collection("c", 5)], [(1, 0, 0, 0, 0, 0)]),
+        ([_nested_collection([], 4)], []),
+        ([_nested_collection([], 3)], []),
+    ],
+    ids=["outer-empty", "mixed-empty", "deepest-empty", "intermediate-empty"],
+)
+def test_six_level_nested_iterate_closes_empty_frames(
+    outer_collection: list[Any], expected_body_paths: list[tuple[int, ...]]
+) -> None:
+    graph = _six_level_nested_iterate_chain_graph(outer_collection=outer_collection)
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "prepare",
+        side_effect=AssertionError("six-level nested Iterate used compatibility materializer"),
+    ):
+        generic_trace, generic_state = _run(GraphExecutionState(graph=graph))
+    compatibility_trace, compatibility_state = _run(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert (
+        sorted(
+            generic_state._get_iteration_path(exec_id)
+            for exec_id in generic_state._prepared_registry().get_prepared_ids("body")
+        )
+        == expected_body_paths
+    )
+
+
+def test_six_level_nested_iterate_rehydrates_without_replay() -> None:
+    graph = _six_level_nested_iterate_chain_graph()
+    expected_trace, expected_state = _run(GraphExecutionState(graph=graph))
+    partial_trace, partial_state = _run(GraphExecutionState(graph=graph), stop_after=8)
+
+    resumed_trace, resumed_state = _run(load_execution_state(dump_execution_state(partial_state)))
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert resumed_state.is_complete()
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+
+
+def test_six_level_nested_iterate_failure_matches_compatibility() -> None:
+    graph = _six_level_nested_iterate_chain_graph()
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "prepare",
+        side_effect=AssertionError("six-level nested Iterate used compatibility materializer"),
+    ):
+        generic_trace, generic_state = _run_graph_with_effects(
+            GraphExecutionState(graph=graph),
+            fail_source_id="body",
+        )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+        fail_source_id="body",
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.has_error() and compatibility_state.has_error()
+    assert generic_state.is_complete() and compatibility_state.is_complete()
+    assert generic_trace.count("body") == 1
+
+
+def test_seven_level_nested_iterate_remains_on_compatibility_fallback() -> None:
+    state = GraphExecutionState(graph=_serial_nested_iterate_chain_graph_at_depth(7))
     materializer = state._materializer()
     with patch.object(materializer, "prepare", wraps=materializer.prepare) as prepare:
         trace, state = _run(state)
