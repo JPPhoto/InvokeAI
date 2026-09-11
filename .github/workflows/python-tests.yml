@@ -62,8 +62,7 @@ jobs:
     env:
       PIP_USE_PEP517: '1'
       # One compute thread per worker. Torch otherwise sizes its thread pools to the whole
-      # machine, so `-n logical` puts vCPUs^2 threads on a runner: they fight for the same cores
-      # and, on the Windows CPU build, the fp8 tests take a native worker down with them.
+      # machine, so `-n logical` puts vCPUs^2 threads on a runner that fight for the same cores.
       OMP_NUM_THREADS: '1'
       MKL_NUM_THREADS: '1'
 
