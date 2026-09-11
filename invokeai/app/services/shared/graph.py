@@ -114,7 +114,9 @@ from invokeai.app.services.shared.graph_models import (
 )
 from invokeai.app.services.shared.graph_nested_iterate_planner import (
     can_use_nested_iterate_planner,
+    can_use_nested_iterate_sequence_planner,
     prepare_nested_iterate_bodies,
+    prepare_nested_iterate_sequences,
 )
 from invokeai.app.services.shared.graph_runtime_records import (
     _ApplyTransaction,
@@ -2380,6 +2382,11 @@ class GraphExecutionState(BaseModel):
             and self._can_use_direct_iterate_collect_planner()
         ):
             self._prepare_direct_iterate_collect()
+            return self._get_next_node()
+        if isinstance(self._scheduler(), _GenericGraphSchedulerAdapter) and can_use_nested_iterate_sequence_planner(
+            self
+        ):
+            prepare_nested_iterate_sequences(self)
             return self._get_next_node()
 
         prepared_id = self._materializer().prepare(base_graph)

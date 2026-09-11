@@ -119,6 +119,15 @@ class _SupportedNestedIterateChain:
     collect_node_id: str
 
 
+@dataclass(frozen=True)
+class _SupportedNestedIterateSequence:
+    body_path_nodes: frozenset[str]
+    outer_iterate_id: str
+    preparation_node_id: str
+    inner_iterate_id: str
+    body_node_id: str
+
+
 def get_output_field_type(node: BaseInvocation, field: str) -> Any:
     implementation = _get_facade_override("get_output_field_type", get_output_field_type)
     if implementation is not get_output_field_type:
@@ -1365,6 +1374,81 @@ class Graph(BaseModel):
             return_node_id=return_node_id,
             iterate_node_ids=(first_iterate_id, second_iterate_id),
             collect_node_id=collect_node_id,
+        )
+
+    def _get_supported_nested_iterate_sequence(self, graph: "nx.DiGraph") -> _SupportedNestedIterateSequence | None:
+        """Return the exact outer-Iterate/preparation/inner-Iterate/body shape, if present."""
+        if len(self.nodes) != 5 or len(self.edges) != 4:
+            return None
+        iterate_node_ids = tuple(node_id for node_id, node in self.nodes.items() if isinstance(node, IterateInvocation))
+        if len(iterate_node_ids) != 2:
+            return None
+        # The outer iterator is the one whose collection source is outside the two-iterator body.
+        outer_candidates = [
+            node_id
+            for node_id in iterate_node_ids
+            if self._get_input_edges(node_id, COLLECTION_FIELD)
+            and not self._get_input_edges(self._get_input_edges(node_id, COLLECTION_FIELD)[0].source.node_id)
+        ]
+        if len(outer_candidates) != 1:
+            return None
+        outer_iterate_id = outer_candidates[0]
+        inner_iterate_id = next(node_id for node_id in iterate_node_ids if node_id != outer_iterate_id)
+
+        outer_collection_edges = self._get_input_edges(outer_iterate_id, COLLECTION_FIELD)
+        inner_collection_edges = self._get_input_edges(inner_iterate_id, COLLECTION_FIELD)
+        if len(outer_collection_edges) != 1 or len(inner_collection_edges) != 1:
+            return None
+        source_node_id = outer_collection_edges[0].source.node_id
+        preparation_node_id = inner_collection_edges[0].source.node_id
+        body_candidates = [
+            node_id
+            for node_id in self.nodes
+            if node_id not in {outer_iterate_id, inner_iterate_id, source_node_id, preparation_node_id}
+        ]
+        if len(body_candidates) != 1:
+            return None
+        body_node_id = body_candidates[0]
+        control_types = (
+            CallSavedWorkflowInvocation,
+            IfInvocation,
+            ForInvocation,
+            ForReturnInvocation,
+            CollectInvocation,
+            IterateInvocation,
+        )
+        if any(
+            isinstance(self.get_node(node_id), control_types)
+            for node_id in {source_node_id, preparation_node_id, body_node_id}
+        ):
+            return None
+        source_inputs = self._get_input_edges(source_node_id)
+        preparation_inputs = self._get_input_edges(preparation_node_id)
+        body_inputs = self._get_input_edges(body_node_id)
+        if (
+            source_inputs
+            or len(preparation_inputs) != 1
+            or preparation_inputs[0].source.node_id != outer_iterate_id
+            or preparation_inputs[0].source.field != ITEM_FIELD
+            or len(body_inputs) != 1
+            or body_inputs[0].source.node_id != inner_iterate_id
+            or body_inputs[0].source.field != ITEM_FIELD
+        ):
+            return None
+        if self._get_output_edges(outer_iterate_id, ITEM_FIELD) != preparation_inputs:
+            return None
+        if self._get_output_edges(inner_iterate_id, ITEM_FIELD) != body_inputs:
+            return None
+        if self._get_output_edges(source_node_id) != outer_collection_edges:
+            return None
+        if self._get_output_edges(preparation_node_id) != inner_collection_edges:
+            return None
+        return _SupportedNestedIterateSequence(
+            body_path_nodes=frozenset(self.nodes),
+            outer_iterate_id=outer_iterate_id,
+            preparation_node_id=preparation_node_id,
+            inner_iterate_id=inner_iterate_id,
+            body_node_id=body_node_id,
         )
 
     def _get_supported_for_nested_for_body(self, node_id: str, graph: "nx.DiGraph") -> _SupportedNestedForBody | None:

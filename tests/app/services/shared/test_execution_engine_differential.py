@@ -602,6 +602,29 @@ def _serial_two_level_nested_for_iterate_collect_graph(*, outer_collection: list
     return graph
 
 
+def _nested_iterate_chain_graph(*, outer_collection: list[list[str]] | None = None) -> Graph:
+    """Existing nested-iterator shape: outer Iterate -> preparation -> inner Iterate -> body."""
+    graph = Graph()
+    graph.add_node(
+        CollectionConcatInvocation(
+            id="outer_source", first=[["a", "b"], ["c"]] if outer_collection is None else outer_collection
+        )
+    )
+    graph.add_node(IterateInvocation(id="outer_iterate"))
+    graph.add_node(PolymorphicStringTestInvocation(id="inner_collection"))
+    graph.add_node(IterateInvocation(id="inner_iterate"))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+
+    def connect(source: str, source_field: str, destination: str, destination_field: str) -> None:
+        graph.add_edge(create_edge(source, source_field, destination, destination_field))
+
+    connect("outer_source", "collection", "outer_iterate", "collection")
+    connect("outer_iterate", "item", "inner_collection", "value")
+    connect("inner_collection", "collection", "inner_iterate", "collection")
+    connect("inner_iterate", "item", "body", "value")
+    return graph
+
+
 def _direct_iterate_body_collect_graph(
     *, collection: list[Any] | None = None, with_after: bool = False, downstream_count: int | None = None
 ) -> Graph:
@@ -2070,6 +2093,130 @@ def test_serial_two_level_nested_for_iterate_collect_retry_isolated() -> None:
     assert retry_state.id != canceled_state.id
     assert _source_output(retry_state, "after").value == [["a", "b"], ["c"]]
     assert retry_state.is_complete()
+
+
+def test_nested_iterate_chain_matches_compatibility() -> None:
+    graph = _nested_iterate_chain_graph()
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "prepare",
+        side_effect=AssertionError("nested Iterate chain used compatibility materializer"),
+    ):
+        generic_trace, generic_state = _run(GraphExecutionState(graph=graph))
+    compatibility_trace, compatibility_state = _run(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_trace == [
+        "outer_source",
+        "outer_iterate",
+        "outer_iterate",
+        "inner_collection",
+        "inner_collection",
+        "inner_iterate",
+        "inner_iterate",
+        "inner_iterate",
+        "body",
+        "body",
+        "body",
+    ]
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+
+
+def test_nested_iterate_chain_closes_empty_inner_frame() -> None:
+    graph = _nested_iterate_chain_graph(outer_collection=[[], ["c"]])
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "prepare",
+        side_effect=AssertionError("nested Iterate chain used compatibility materializer"),
+    ):
+        generic_trace, generic_state = _run(GraphExecutionState(graph=graph))
+    compatibility_trace, compatibility_state = _run(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_trace == [
+        "outer_source",
+        "outer_iterate",
+        "outer_iterate",
+        "inner_collection",
+        "inner_collection",
+        "inner_iterate",
+        "body",
+    ]
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert (
+        generic_state._generic_runtime().streams[generic_state._iteration_stream_id("inner_iterate", (0,))].values == ()
+    )
+
+
+def test_nested_iterate_chain_completes_when_all_collections_are_empty() -> None:
+    graph = _nested_iterate_chain_graph(outer_collection=[[], []])
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "prepare",
+        side_effect=AssertionError("nested Iterate chain used compatibility materializer"),
+    ):
+        generic_trace, generic_state = _run(GraphExecutionState(graph=graph))
+    compatibility_trace, compatibility_state = _run(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_trace == [
+        "outer_source",
+        "outer_iterate",
+        "outer_iterate",
+        "inner_collection",
+        "inner_collection",
+    ]
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+
+
+def test_nested_iterate_chain_rehydrates_without_replay() -> None:
+    graph = _nested_iterate_chain_graph()
+    expected_trace, expected_state = _run(GraphExecutionState(graph=graph))
+    partial_trace, partial_state = _run(GraphExecutionState(graph=graph), stop_after=5)
+
+    resumed_trace, resumed_state = _run(load_execution_state(dump_execution_state(partial_state)))
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert resumed_state.is_complete()
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+
+
+def test_nested_iterate_chain_failure_does_not_release_later_frames() -> None:
+    graph = _nested_iterate_chain_graph()
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "prepare",
+        side_effect=AssertionError("nested Iterate chain used compatibility materializer"),
+    ):
+        generic_trace, generic_state = _run_graph_with_effects(
+            GraphExecutionState(graph=graph),
+            fail_source_id="body",
+        )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+        fail_source_id="body",
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.has_error() and compatibility_state.has_error()
+    assert generic_state.is_complete() and compatibility_state.is_complete()
+    assert "body" in generic_trace
+    assert generic_trace.count("body") == 1
 
 
 @pytest.mark.parametrize("values", [[1, None, 1], []], ids=["ordered-duplicates-and-none", "empty"])

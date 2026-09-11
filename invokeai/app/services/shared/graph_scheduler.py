@@ -14,7 +14,9 @@ from invokeai.app.services.shared.execution_engine.scheduler import (
 )
 from invokeai.app.services.shared.graph_nested_iterate_planner import (
     can_use_nested_iterate_planner,
+    can_use_nested_iterate_sequence_planner,
     prepare_nested_iterate_bodies,
+    prepare_nested_iterate_sequences,
 )
 from invokeai.app.services.shared.graph_validation import CollectInvocation, IterateInvocation, nx
 
@@ -638,6 +640,8 @@ class _GenericGraphSchedulerAdapter:
             self._enqueue_activation_ready_nodes()
         if can_use_nested_iterate_planner(self._state):
             prepare_nested_iterate_bodies(self._state)
+        elif can_use_nested_iterate_sequence_planner(self._state):
+            prepare_nested_iterate_sequences(self._state)
         else:
             self._try_materialize_deferred_nested_for_body(exec_node_id)
         if finalized_for_exec_node_id is None:
