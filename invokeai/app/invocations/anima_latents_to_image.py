@@ -29,6 +29,7 @@ from invokeai.app.invocations.primitives import ImageOutput
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
 from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.oom import is_oom_error
 from invokeai.backend.util.vae_decode_diagnostics import (
     allocator_state_summary,
     force_real_empty_cache,
@@ -45,34 +46,6 @@ from invokeai.backend.util.vae_working_memory import (
 # <=512px still decode in a single pass.
 ANIMA_VAE_TILE_SIZE = 512
 ANIMA_VAE_TILE_STRIDE = 384
-
-
-def _is_oom_error(e: RuntimeError) -> bool:
-    """Return True if the error indicates an out-of-memory condition.
-
-    The caching allocator raises torch.cuda.OutOfMemoryError, but an OOM surfaced from inside a
-    cuDNN/cuBLAS kernel (e.g. workspace allocation in the Wan VAE's convolutions) arrives as a
-    plain RuntimeError, which must be matched by message. XPU exhaustion likewise arrives as a
-    plain RuntimeError, naming the Level Zero/UR result code (`..._OUT_OF_DEVICE_MEMORY`) rather
-    than the words "out of memory" -- so it needs its own spelling to be matched here.
-
-    `out_of_host_memory` is knowingly over-broad: Level Zero returns it for driver-side resource
-    failures generally (kernel compilation, handle exhaustion), not only host allocation. Matching
-    it means a genuinely broken decode costs one wasted tiled retry before the error re-raises
-    unchanged. That is preferred over the alternative -- a real host-memory exhaustion that skips
-    the retry -- because the retry is bounded and non-destructive, while a missed OOM fails a
-    generation that would have succeeded tiled.
-    """
-    if isinstance(e, torch.cuda.OutOfMemoryError):
-        return True
-    msg = str(e).lower()
-    return (
-        "out of memory" in msg
-        or "out_of_device_memory" in msg
-        or "out_of_host_memory" in msg
-        or "cudnn_status_alloc_failed" in msg
-        or "cublas_status_alloc_failed" in msg
-    )
 
 
 @invocation(
@@ -190,10 +163,18 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
                     try:
                         decoded = vae.decode(latents, return_dict=False)[0]
                     except RuntimeError as e:
-                        if use_tiling or not _is_oom_error(e):
+                        if use_tiling or not is_oom_error(e):
                             raise
                         # The working-memory estimate was insufficient on this system;
                         # retry once with tiling, which caps the peak allocation.
+                        # Drop the failed attempt's traceback before retrying. It pins that
+                        # decode's frames, and their locals hold the full-resolution
+                        # activations -- exception/traceback/frame is a reference cycle rooted
+                        # on the stack, so `empty_cache()` frees nothing while `e` is bound and
+                        # the retry has to fit on top of it. Measured at 1536px: 1.4 GiB held,
+                        # and a retry that fails with it and succeeds without. Same reasoning as
+                        # `ModelConfigFactory._detach_traceback`.
+                        e.__traceback__ = None
                         TorchDevice.empty_cache()
                         vae.enable_tiling(
                             tile_sample_min_height=ANIMA_VAE_TILE_SIZE,

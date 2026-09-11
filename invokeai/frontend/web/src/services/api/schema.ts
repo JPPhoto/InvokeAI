@@ -356,6 +356,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/utilities/fonts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List User Fonts */
+        get: operations["list_user_fonts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/utilities/fonts/{font_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get User Font File */
+        get: operations["get_user_font_file"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/utilities/expand-prompt": {
         parameters: {
             query?: never;
@@ -390,6 +424,110 @@ export type paths = {
          * @description Generate a descriptive prompt from an image using a vision-language model.
          */
         post: operations["image_to_prompt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/fonts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Fonts */
+        get: operations["list_fonts"];
+        put?: never;
+        /** Upload Font */
+        post: operations["upload_font"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/fonts/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Font */
+        post: operations["validate_font"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/fonts/rescan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rescan Fonts */
+        post: operations["rescan_fonts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/fonts/{font_id}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Font File */
+        get: operations["get_font_file"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/fonts/{font_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Font */
+        get: operations["get_font"];
+        put?: never;
+        post?: never;
+        /** Delete Font */
+        delete: operations["delete_font"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/fonts/{font_id}/instance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Font Instance */
+        post: operations["create_font_instance"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2736,6 +2874,26 @@ export type paths = {
          * @description Immediately cancels all queue items except in-processing items. Non-admin users can only cancel their own items.
          */
         put: operations["cancel_all_except_current"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/queue/{queue_id}/cancel_all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Cancel All
+         * @description Immediately cancels all queue items, in-progress items included. Non-admin users can only cancel their own items.
+         */
+        put: operations["cancel_all"];
         post?: never;
         delete?: never;
         options?: never;
@@ -5707,6 +5865,19 @@ export type components = {
              */
             is_public: boolean;
         };
+        /** Body_upload_font */
+        Body_upload_font: {
+            /**
+             * File
+             * @description The font file to upload
+             */
+            file: Blob;
+            /**
+             * Scope
+             * @default private
+             */
+            scope?: string;
+        };
         /** Body_upload_image */
         Body_upload_image: {
             /** File */
@@ -5723,15 +5894,13 @@ export type components = {
              */
             metadata?: string | null;
         };
-        /** Body_upload_video */
-        Body_upload_video: {
-            /** File */
-            file: Blob;
+        /** Body_validate_font */
+        Body_validate_font: {
             /**
-             * Metadata
-             * @description The metadata to associate with the video, must be a stringified JSON dict
+             * File
+             * @description The font file to validate
              */
-            metadata?: string | null;
+            file: Blob;
         };
         /**
          * Boolean Collection Primitive
@@ -6810,6 +6979,17 @@ export type components = {
          * @description Result of canceling by a destination
          */
         CancelByDestinationResult: {
+            /**
+             * Canceled
+             * @description Number of queue items canceled
+             */
+            canceled: number;
+        };
+        /**
+         * CancelByQueueIDResult
+         * @description Result of canceling by queue id
+         */
+        CancelByQueueIDResult: {
             /**
              * Canceled
              * @description Number of queue items canceled
@@ -14829,6 +15009,125 @@ export type components = {
          * @enum {string}
          */
         FluxVariantType: "schnell" | "dev" | "dev_fill";
+        /** FontAxisDTO */
+        FontAxisDTO: {
+            /** Tag */
+            tag: string;
+            /** Label */
+            label: string;
+            /** Minimum */
+            minimum: number;
+            /** Default */
+            default: number;
+            /** Maximum */
+            maximum: number;
+            /** Hidden */
+            hidden: boolean;
+        };
+        /** FontDTO */
+        FontDTO: {
+            /** Id */
+            id: string;
+            /** Family */
+            family: string;
+            /** Label */
+            label: string;
+            /** Style */
+            style: string;
+            /** Weight */
+            weight: number;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "private" | "shared";
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "uploaded" | "directory";
+            /** Filename */
+            filename: string;
+            /** Byte Size */
+            byte_size: number;
+            /** Url */
+            url: string;
+            /** Axes */
+            axes: components["schemas"]["FontAxisDTO"][];
+            /** Instances */
+            instances: components["schemas"]["FontInstanceDTO"][];
+        };
+        /** FontInstanceDTO */
+        FontInstanceDTO: {
+            /** Name */
+            name: string;
+            /** Coordinates */
+            coordinates: {
+                [key: string]: number;
+            };
+        };
+        /** FontInstanceRequest */
+        FontInstanceRequest: {
+            /** Content Hash */
+            content_hash: string;
+            /** Coordinates */
+            coordinates?: {
+                [key: string]: number;
+            };
+        };
+        /** FontListResponse */
+        FontListResponse: {
+            /** Offset */
+            offset: number;
+            /** Limit */
+            limit: number;
+            /** Total */
+            total: number;
+            /** Items */
+            items: components["schemas"]["FontDTO"][];
+        };
+        /** FontRescanResponse */
+        FontRescanResponse: {
+            /** Indexed */
+            indexed: number;
+            /** Revision */
+            revision: number;
+        };
+        /**
+         * FontScope
+         * @description The account scope of an uploaded font.
+         * @enum {string}
+         */
+        FontScope: "private" | "shared" | "all";
+        /** FontUploadResponse */
+        FontUploadResponse: {
+            font: components["schemas"]["FontDTO"];
+            /** Created */
+            created: boolean;
+        };
+        /** FontValidationResponse */
+        FontValidationResponse: {
+            /** Filename */
+            filename: string;
+            /** Family */
+            family: string;
+            /** Label */
+            label: string;
+            /** Style */
+            style: string;
+            /** Weight */
+            weight: number;
+            /** Content Hash */
+            content_hash: string;
+            /** Byte Size */
+            byte_size: number;
+            /** Axes */
+            axes: components["schemas"]["FontAxisDTO"][];
+            /** Instances */
+            instances: components["schemas"]["FontInstanceDTO"][];
+        };
         /** ForInvocation */
         ForInvocation: {
             /**
@@ -20475,6 +20774,7 @@ export type components = {
          *         download_cache_dir: Path to the directory that contains dynamically downloaded models.
          *         legacy_conf_dir: Path to directory of legacy checkpoint config files.
          *         db_dir: Path to InvokeAI databases directory.
+         *         db_synchronous: SQLite durability setting. `full` (the default) flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database, because WAL guarantees consistency either way. What it gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.<br>Valid values: `full`, `normal`
          *         outputs_dir: Path to directory for outputs.
          *         image_subfolder_strategy: Strategy for organizing images into subfolders. 'flat' stores all images in a single folder. 'date' organizes by YYYY/MM/DD. 'type' organizes by image category. 'hash' uses first 2 characters of UUID for filesystem performance.<br>Valid values: `flat`, `date`, `type`, `hash`
          *         custom_nodes_dir: Path to directory for custom nodes.
@@ -20497,6 +20797,8 @@ export type components = {
          *         device_working_mem_gb: The amount of working memory to keep available on the compute device (in GB). Has no effect if running on CPU. If you are experiencing OOM errors, try increasing this value.
          *         enable_partial_loading: Enable partial loading of models. This enables models to run with reduced VRAM requirements (at the cost of slower speed) by streaming the model from RAM to VRAM as its used. In some edge cases, partial loading can cause models to run more slowly if they were previously being fully loaded into VRAM.
          *         keep_ram_copy_of_weights: Whether to keep a full RAM copy of a model's weights when the model is loaded in VRAM. Keeping a RAM copy increases average RAM usage, but speeds up model switching and LoRA patching (assuming there is sufficient RAM). Set this to False if RAM pressure is consistently high.
+         *         fp8_compute: Keep ComfyUI 'scaled fp8' checkpoints quantized instead of dequantizing them at load, and run their matmuls on the fp8 tensor cores (requires an Ada/SM 8.9 or newer NVIDIA GPU; falls back automatically otherwise). Roughly halves the transformer's VRAM and speeds up denoising, but quantizes activations as well, so images will differ from previous versions at the same seed. Reproducibility also requires the model to be FULLY resident in VRAM: a layer whose weights are still in RAM falls back to the dequantized path, and since which layers are resident shifts from run to run, the same seed then yields visibly different images. For repeatable output, ensure the model loads at 100% (e.g. enable_partial_loading=false with enough free VRAM).
+         *         fp8_compute_full_precision_hints: Honor the per-layer 'full_precision_matrix_mult' flags that some scaled-fp8 checkpoints ship. Those layers then dequantize on every forward instead of using the fp8 tensor cores, which can cost a large part of the fp8_compute speedup - on checkpoints that mark many layers, most of it. Set to false to run every quantized layer on the fp8 tensor cores, ignoring the producer's instruction; faster, but the marked layers were flagged as numerically sensitive, so quality may suffer. Only has an effect when fp8_compute is enabled.
          *         ram: DEPRECATED: This setting is no longer used. It has been replaced by `max_cache_ram_gb`, but most users will not need to use this config since automatic cache size limits should work well in most cases. This config setting will be removed once the new model cache behavior is stable.
          *         vram: DEPRECATED: This setting is no longer used. It has been replaced by `max_cache_vram_gb`, but most users will not need to use this config since automatic cache size limits should work well in most cases. This config setting will be removed once the new model cache behavior is stable.
          *         lazy_offload: DEPRECATED: This setting is no longer used. Lazy-offloading is enabled by default. This config setting will be removed once the new model cache behavior is stable.
@@ -20669,12 +20971,45 @@ export type components = {
              */
             db_dir?: string;
             /**
+             * Db Synchronous
+             * @description SQLite durability setting. `full` (the default) flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database, because WAL guarantees consistency either way. What it gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.
+             * @default full
+             * @enum {string}
+             */
+            db_synchronous?: "full" | "normal";
+            /**
              * Outputs Dir
              * Format: path
              * @description Path to directory for outputs.
              * @default outputs
              */
             outputs_dir?: string;
+            /**
+             * Fonts Dir
+             * Format: path
+             * @description Path to directory for custom fonts.
+             * @default fonts
+             */
+            fonts_dir?: string;
+            /**
+             * Fonts Storage Dir
+             * Format: path
+             * @description Path to application-managed uploaded fonts.
+             * @default fonts-uploaded
+             */
+            fonts_storage_dir?: string;
+            /**
+             * Max Font Upload Bytes
+             * @description Maximum size of one uploaded custom font in bytes.
+             * @default 33554432
+             */
+            max_font_upload_bytes?: number;
+            /**
+             * Max Font Library Bytes
+             * @description Maximum total size of uploaded custom fonts in bytes per account or shared library.
+             * @default 1073741824
+             */
+            max_font_library_bytes?: number;
             /**
              * Image Subfolder Strategy
              * @description Strategy for organizing images into subfolders. 'flat' stores all images in a single folder. 'date' organizes by YYYY/MM/DD. 'type' organizes by image category. 'hash' uses first 2 characters of UUID for filesystem performance.
@@ -20808,6 +21143,18 @@ export type components = {
              * @default true
              */
             keep_ram_copy_of_weights?: boolean;
+            /**
+             * Fp8 Compute
+             * @description Keep ComfyUI 'scaled fp8' checkpoints quantized instead of dequantizing them at load, and run their matmuls on the fp8 tensor cores (requires an Ada/SM 8.9 or newer NVIDIA GPU; falls back automatically otherwise). Roughly halves the transformer's VRAM and speeds up denoising, but quantizes activations as well, so images will differ from previous versions at the same seed. Reproducibility also requires the model to be FULLY resident in VRAM: a layer whose weights are still in RAM falls back to the dequantized path, and since which layers are resident shifts from run to run, the same seed then yields visibly different images. For repeatable output, ensure the model loads at 100% (e.g. enable_partial_loading=false with enough free VRAM).
+             * @default false
+             */
+            fp8_compute?: boolean;
+            /**
+             * Fp8 Compute Full Precision Hints
+             * @description Honor the per-layer 'full_precision_matrix_mult' flags that some scaled-fp8 checkpoints ship. Those layers then dequantize on every forward instead of using the fp8 tensor cores, which can cost a large part of the fp8_compute speedup - on checkpoints that mark many layers, most of it. Set to false to run every quantized layer on the fp8 tensor cores, ignoring the producer's instruction; faster, but the marked layers were flagged as numerically sensitive, so quality may suffer. Only has an effect when fp8_compute is enabled.
+             * @default true
+             */
+            fp8_compute_full_precision_hints?: boolean;
             /**
              * Ram
              * @description DEPRECATED: This setting is no longer used. It has been replaced by `max_cache_ram_gb`, but most users will not need to use this config since automatic cache size limits should work well in most cases. This config setting will be removed once the new model cache behavior is stable.
@@ -41748,6 +42095,37 @@ export type components = {
              */
             token_epoch?: number;
         };
+        /** UserFont */
+        UserFont: {
+            /** Id */
+            id: string;
+            /** Family */
+            family: string;
+            /** Label */
+            label: string;
+            /** Path */
+            path: string;
+            /** Url */
+            url: string;
+            /** Faces */
+            faces: components["schemas"]["UserFontFace"][];
+        };
+        /** UserFontFace */
+        UserFontFace: {
+            /** Path */
+            path: string;
+            /** Url */
+            url: string;
+            /** Weight */
+            weight: number;
+            /** Style */
+            style: string;
+        };
+        /** UserFontsResponse */
+        UserFontsResponse: {
+            /** Fonts */
+            fonts: components["schemas"]["UserFont"][];
+        };
         /**
          * UserProfileUpdateRequest
          * @description Request body for a user to update their own profile.
@@ -45820,6 +46198,18 @@ export type components = {
              */
             vae?: components["schemas"]["VAEField"] | null;
             /**
+             * Tiled
+             * @description Processing using overlapping tiles (reduce memory consumption)
+             * @default false
+             */
+            tiled?: boolean;
+            /**
+             * Tile Size
+             * @description The tile size for VAE tiling in pixels (image space). If set to 0, the default tile size for the model will be used. Larger tile sizes generally produce better results at the cost of higher memory usage.
+             * @default 0
+             */
+            tile_size?: number;
+            /**
              * type
              * @default z_image_l2i
              * @constant
@@ -46625,6 +47015,57 @@ export interface operations {
             };
         };
     };
+    list_user_fonts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserFontsResponse"];
+                };
+            };
+        };
+    };
+    get_user_font_file: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                font_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     expand_prompt: {
         parameters: {
             query?: never;
@@ -46678,6 +47119,255 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageToPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_fonts: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                search?: string | null;
+                scope?: components["schemas"]["FontScope"];
+                content_hash?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FontListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_font: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_font"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FontUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_font: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_validate_font"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FontValidationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rescan_fonts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FontRescanResponse"];
+                };
+            };
+        };
+    };
+    get_font_file: {
+        parameters: {
+            query?: {
+                expected_hash?: string | null;
+            };
+            header?: never;
+            path: {
+                font_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_font: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                font_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FontDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_font: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                font_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_font_instance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                font_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FontInstanceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -49195,7 +49885,15 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "multipart/form-data": components["schemas"]["Body_upload_video"];
+                "multipart/form-data": {
+                    /** File */
+                    file: Blob;
+                    /**
+                     * Metadata
+                     * @description The metadata to associate with the video, must be a stringified JSON dict
+                     */
+                    metadata?: string | null;
+                };
             };
         };
         responses: {
@@ -49883,6 +50581,8 @@ export interface operations {
                 order_dir?: components["schemas"]["SQLiteDirection"];
                 /** @description Whether to sort by starred items first */
                 starred_first?: boolean;
+                /** @description Filter by starred state: true for starred items only, false for unstarred only. Omit to include both. */
+                starred?: boolean | null;
                 /** @description The term to search for */
                 search_term?: string | null;
                 /** @description Inclusive start date (YYYY-MM-DD) to filter by created_at. */
@@ -49937,6 +50637,8 @@ export interface operations {
                 order_dir?: components["schemas"]["SQLiteDirection"];
                 /** @description Whether to sort by starred items first */
                 starred_first?: boolean;
+                /** @description Filter by starred state: true for starred items only, false for unstarred only. Omit to include both. */
+                starred?: boolean | null;
                 /** @description The term to search for */
                 search_term?: string | null;
             };
@@ -49981,6 +50683,8 @@ export interface operations {
                 order_dir?: components["schemas"]["SQLiteDirection"];
                 /** @description Whether to sort by starred items first */
                 starred_first?: boolean;
+                /** @description Filter by starred state: true for starred items only, false for unstarred only. Omit to include both. */
+                starred?: boolean | null;
                 /** @description The term to search for */
                 search_term?: string | null;
                 /** @description Inclusive start date (YYYY-MM-DD) to filter by created_at. */
@@ -50426,6 +51130,8 @@ export interface operations {
             query?: {
                 /** @description Whether to sort starred items first */
                 starred_first?: boolean;
+                /** @description Filter by starred state: true for starred items only, false for unstarred only. Omit to include both. */
+                starred?: boolean | null;
                 /** @description The sort direction */
                 order_dir?: components["schemas"]["SQLiteDirection"];
                 /** @description The categories of items to include */
@@ -51355,7 +52061,10 @@ export interface operations {
     };
     cancel_all_except_current: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only cancel queue items whose origin starts with this prefix */
+                origin_prefix?: string | null;
+            };
             header?: never;
             path: {
                 /** @description The queue id to perform this operation on */
@@ -51372,6 +52081,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CancelAllExceptCurrentResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_all: {
+        parameters: {
+            query?: {
+                /** @description Only cancel queue items whose origin starts with this prefix */
+                origin_prefix?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description The queue id to perform this operation on */
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelByQueueIDResult"];
                 };
             };
             /** @description Validation Error */
