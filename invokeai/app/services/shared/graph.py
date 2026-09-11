@@ -2396,7 +2396,8 @@ class GraphExecutionState(BaseModel):
 
     def _prepare_until_node_ready(self) -> Optional[BaseInvocation]:
         base_graph = self._get_source_graph_flat()
-        self._materializer()._attach_pending_if_inputs()
+        if self._pending_if_exec_nodes:
+            self._materializer()._attach_pending_if_inputs()
         self._rehydrate_ready_queues()
         next_node = self._get_next_node()
         if next_node is not None:
@@ -2773,7 +2774,8 @@ class GraphExecutionState(BaseModel):
         self._rehydrate_resolved_if_exec_branches()
         self._rehydrate_generic_runtime_state()
         self._rehydrate_ready_queues()
-        self._materializer()._attach_pending_if_inputs(enqueue=False)
+        if self._pending_if_exec_nodes:
+            self._materializer()._attach_pending_if_inputs(enqueue=False)
 
     def model_post_init(self, __context: Any) -> None:
         if isinstance(__context, dict) and "execution_effects_persisted" in __context:

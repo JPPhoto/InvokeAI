@@ -3225,6 +3225,79 @@ def test_direct_iterate_body_collect_fresh_execution_preserves_order_and_none() 
     group_collector_inputs.assert_not_called()
 
 
+def test_direct_iterate_body_collect_fresh_construction_and_execution_do_not_instantiate_materializer() -> None:
+    collection = ["first", None, "last"]
+    with patch.object(
+        graph_module,
+        "_ExecutionMaterializer",
+        side_effect=AssertionError("fresh direct Iterate/Collect must not instantiate materializer"),
+    ) as materializer:
+        trace, state = _run_graph(GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=collection)))
+
+    assert trace == ["source", "iterate", "iterate", "iterate", "body", "body", "body", "collect"]
+    assert _source_output(state, "collect").collection == collection
+    assert state.is_complete()
+    materializer.assert_not_called()
+
+
+def test_direct_iterate_body_collect_checkpoint_rehydration_does_not_instantiate_materializer() -> None:
+    collection = ["first", None, "last"]
+    partial_trace, partial_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=collection)), stop_after=2
+    )
+
+    with patch.object(
+        graph_module,
+        "_ExecutionMaterializer",
+        side_effect=AssertionError("direct Iterate/Collect checkpoint must not instantiate materializer"),
+    ) as materializer:
+        resumed_trace, resumed_state = _run_graph(load_execution_state(dump_execution_state(partial_state)))
+
+    assert partial_trace + resumed_trace == [
+        "source",
+        "iterate",
+        "iterate",
+        "iterate",
+        "body",
+        "body",
+        "body",
+        "collect",
+    ]
+    assert _source_output(resumed_state, "collect").collection == collection
+    assert resumed_state.is_complete()
+    materializer.assert_not_called()
+
+
+def test_legacy_direct_iterate_body_collect_snapshot_uses_compatibility_materializer() -> None:
+    collection = ["first", None, "last"]
+    partial_trace, partial_state = _run_graph(
+        GraphExecutionState(graph=_direct_iterate_body_collect_graph(collection=collection)), stop_after=1
+    )
+    snapshot = dump_execution_state(partial_state)
+    snapshot.pop("execution_state_version")
+    snapshot.pop("execution_effects")
+    materializer_type = graph_module._ExecutionMaterializer
+
+    with patch.object(graph_module, "_ExecutionMaterializer", wraps=materializer_type) as materializer:
+        restored = load_execution_state(snapshot)
+        assert restored._legacy_snapshot_loaded
+        resumed_trace, restored = _run_graph(restored)
+
+    assert materializer.call_count == 1
+    assert partial_trace + resumed_trace == [
+        "source",
+        "iterate",
+        "iterate",
+        "iterate",
+        "body",
+        "body",
+        "body",
+        "collect",
+    ]
+    assert _source_output(restored, "collect").collection == collection
+    assert restored.is_complete()
+
+
 def test_direct_iterate_fan_in_fresh_execution_owns_two_stream_expansion() -> None:
     state = GraphExecutionState(graph=_direct_iterate_fan_in_graph(left=[None, "left-last"], right=["right-first"]))
 

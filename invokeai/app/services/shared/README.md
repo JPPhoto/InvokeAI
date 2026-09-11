@@ -570,10 +570,10 @@ Workflow-call note:
 
 - `_PreparedExecRegistry` Owns the relationship between source graph nodes and prepared execution graph nodes, plus
   cached metadata such as iteration path and runtime state.
-- `_ExecutionMaterializer` Expands source graph nodes into concrete execution graph nodes when the scheduler runs out of
-  ready work. It owns iterator expansion, collector grouping, prepared-parent selection, and creation of execution-graph
-  edges. When matching prepared parents for a downstream exec node, skipped prepared exec nodes are ignored and cannot
-  be selected as live inputs.
+- `_ExecutionMaterializer` Expands source graph nodes into concrete execution graph nodes when an unsupported or legacy
+  shape runs out of ready work. On those compatibility paths it owns iterator expansion, collector grouping,
+  prepared-parent selection, and creation of execution-graph edges. When matching prepared parents for a downstream
+  exec node, skipped prepared exec nodes are ignored and cannot be selected as live inputs.
   The class lives in `graph_materializer.py` and is re-exported by `graph.py`.
 - Private `graph_iterate_planner.py` expands the supported direct and body-mediated Iterate/Collect shapes.
   Graph-state method wrappers preserve the admission, copy creation, edge attachment, and atomic preparation entry
@@ -625,7 +625,11 @@ frame metadata is retained. Persisted execution references, tokens, and effects 
 helper objects do not. Queue snapshots carry an additive execution-state version marker and use version-aware loader;
 legacy unmarked snapshots are treated as version 0, while unreadable snapshots are quarantined by queue service.
 
-### 4.4 Preparation (`_prepare()`)
+### 4.4 Compatibility preparation (`_prepare()`)
+
+The steps below describe compatibility materialization for unsupported shapes and legacy snapshots. Supported fresh
+`Iterate`/`Collect` shapes use the bounded planners described above and do not perform this ancestry or collector
+materialization.
 
 - Build a flat DAG from the **source** graph.
 
