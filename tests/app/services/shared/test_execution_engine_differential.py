@@ -625,6 +625,34 @@ def _nested_iterate_chain_graph(*, outer_collection: list[list[str]] | None = No
     return graph
 
 
+def _three_level_nested_iterate_chain_graph(*, outer_collection: list[list[list[str]]] | None = None) -> Graph:
+    """Exact three-level serial nested-iterator shape."""
+    graph = Graph()
+    graph.add_node(
+        CollectionConcatInvocation(
+            id="outer_source",
+            first=[[["a", "b"], ["c"]], [["d"]]] if outer_collection is None else outer_collection,
+        )
+    )
+    graph.add_node(IterateInvocation(id="outer_iterate"))
+    graph.add_node(CollectionConcatInvocation(id="middle_collection"))
+    graph.add_node(IterateInvocation(id="middle_iterate"))
+    graph.add_node(CollectionConcatInvocation(id="inner_collection"))
+    graph.add_node(IterateInvocation(id="inner_iterate"))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+
+    def connect(source: str, source_field: str, destination: str, destination_field: str) -> None:
+        graph.add_edge(create_edge(source, source_field, destination, destination_field))
+
+    connect("outer_source", "collection", "outer_iterate", "collection")
+    connect("outer_iterate", "item", "middle_collection", "first")
+    connect("middle_collection", "collection", "middle_iterate", "collection")
+    connect("middle_iterate", "item", "inner_collection", "first")
+    connect("inner_collection", "collection", "inner_iterate", "collection")
+    connect("inner_iterate", "item", "body", "value")
+    return graph
+
+
 def _direct_iterate_body_collect_graph(
     *, collection: list[Any] | None = None, with_after: bool = False, downstream_count: int | None = None
 ) -> Graph:
@@ -2217,6 +2245,129 @@ def test_nested_iterate_chain_failure_does_not_release_later_frames() -> None:
     assert generic_state.is_complete() and compatibility_state.is_complete()
     assert "body" in generic_trace
     assert generic_trace.count("body") == 1
+
+
+def test_three_level_nested_iterate_matches_compatibility() -> None:
+    graph = _three_level_nested_iterate_chain_graph()
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "prepare",
+        side_effect=AssertionError("three-level nested Iterate used compatibility materializer"),
+    ):
+        generic_trace, generic_state = _run(GraphExecutionState(graph=graph))
+    compatibility_trace, compatibility_state = _run(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_trace == [
+        "outer_source",
+        "outer_iterate",
+        "outer_iterate",
+        "middle_collection",
+        "middle_collection",
+        "middle_iterate",
+        "middle_iterate",
+        "middle_iterate",
+        "inner_collection",
+        "inner_collection",
+        "inner_collection",
+        "inner_iterate",
+        "inner_iterate",
+        "inner_iterate",
+        "inner_iterate",
+        "body",
+        "body",
+        "body",
+        "body",
+    ]
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert _direct_iterate_fan_in_stream_projection(generic_state) == _direct_iterate_fan_in_stream_projection(
+        compatibility_state
+    )
+    assert sorted(
+        generic_state._get_iteration_path(exec_id)
+        for exec_id in generic_state._prepared_registry().get_prepared_ids("body")
+    ) == [(0, 0, 0), (0, 0, 1), (0, 1, 0), (1, 0, 0)]
+
+
+@pytest.mark.parametrize(
+    ("outer_collection", "expected_body_paths"),
+    [
+        ([], []),
+        ([[], [["c"]]], [(1, 0, 0)]),
+        ([[[], []]], []),
+    ],
+    ids=["outer-empty", "mixed-empty", "all-empty"],
+)
+def test_three_level_nested_iterate_closes_empty_frames(
+    outer_collection: list[list[list[str]]], expected_body_paths: list[tuple[int, ...]]
+) -> None:
+    graph = _three_level_nested_iterate_chain_graph(outer_collection=outer_collection)
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "prepare",
+        side_effect=AssertionError("three-level nested Iterate used compatibility materializer"),
+    ):
+        generic_trace, generic_state = _run(GraphExecutionState(graph=graph))
+    compatibility_trace, compatibility_state = _run(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert (
+        sorted(
+            generic_state._get_iteration_path(exec_id)
+            for exec_id in generic_state._prepared_registry().get_prepared_ids("body")
+        )
+        == expected_body_paths
+    )
+
+
+def test_three_level_nested_iterate_rehydrates_without_replay() -> None:
+    graph = _three_level_nested_iterate_chain_graph()
+    expected_trace, expected_state = _run(GraphExecutionState(graph=graph))
+    partial_trace, partial_state = _run(GraphExecutionState(graph=graph), stop_after=8)
+
+    resumed_trace, resumed_state = _run(load_execution_state(dump_execution_state(partial_state)))
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert resumed_state.is_complete()
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+    assert _direct_iterate_fan_in_stream_projection(resumed_state) == _direct_iterate_fan_in_stream_projection(
+        expected_state
+    )
+
+
+def test_three_level_nested_iterate_failure_matches_compatibility() -> None:
+    graph = _three_level_nested_iterate_chain_graph()
+    with patch.object(
+        graph_module._ExecutionMaterializer,
+        "prepare",
+        side_effect=AssertionError("three-level nested Iterate used compatibility materializer"),
+    ):
+        generic_trace, generic_state = _run_graph_with_effects(
+            GraphExecutionState(graph=graph),
+            fail_source_id="body",
+        )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+        fail_source_id="body",
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.has_error() and compatibility_state.has_error()
+    assert generic_state.is_complete() and compatibility_state.is_complete()
+    assert generic_trace.count("body") == 1
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
 
 
 @pytest.mark.parametrize("values", [[1, None, 1], []], ids=["ordered-duplicates-and-none", "empty"])

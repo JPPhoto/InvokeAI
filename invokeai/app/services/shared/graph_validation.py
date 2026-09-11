@@ -122,9 +122,9 @@ class _SupportedNestedIterateChain:
 @dataclass(frozen=True)
 class _SupportedNestedIterateSequence:
     body_path_nodes: frozenset[str]
-    outer_iterate_id: str
-    preparation_node_id: str
-    inner_iterate_id: str
+    source_node_id: str
+    iterate_node_ids: tuple[str, ...]
+    preparation_node_ids: tuple[str, ...]
     body_node_id: str
 
 
@@ -1376,14 +1376,15 @@ class Graph(BaseModel):
             collect_node_id=collect_node_id,
         )
 
-    def _get_supported_nested_iterate_sequence(self, graph: "nx.DiGraph") -> _SupportedNestedIterateSequence | None:
-        """Return the exact outer-Iterate/preparation/inner-Iterate/body shape, if present."""
-        if len(self.nodes) != 5 or len(self.edges) != 4:
+    def _get_supported_nested_iterate_sequence(
+        self, graph: "nx.DiGraph", *, iterate_count: int = 2
+    ) -> _SupportedNestedIterateSequence | None:
+        """Return exact serial nested-Iterate chain of requested depth, if present."""
+        if iterate_count < 2 or len(self.nodes) != iterate_count * 2 + 1 or len(self.edges) != iterate_count * 2:
             return None
         iterate_node_ids = tuple(node_id for node_id, node in self.nodes.items() if isinstance(node, IterateInvocation))
-        if len(iterate_node_ids) != 2:
+        if len(iterate_node_ids) != iterate_count:
             return None
-        # The outer iterator is the one whose collection source is outside the two-iterator body.
         outer_candidates = [
             node_id
             for node_id in iterate_node_ids
@@ -1392,19 +1393,38 @@ class Graph(BaseModel):
         ]
         if len(outer_candidates) != 1:
             return None
-        outer_iterate_id = outer_candidates[0]
-        inner_iterate_id = next(node_id for node_id in iterate_node_ids if node_id != outer_iterate_id)
 
-        outer_collection_edges = self._get_input_edges(outer_iterate_id, COLLECTION_FIELD)
-        inner_collection_edges = self._get_input_edges(inner_iterate_id, COLLECTION_FIELD)
-        if len(outer_collection_edges) != 1 or len(inner_collection_edges) != 1:
+        ordered_iterate_ids = [outer_candidates[0]]
+        preparation_node_ids: list[str] = []
+        source_node_id = self._get_input_edges(ordered_iterate_ids[0], COLLECTION_FIELD)[0].source.node_id
+        remaining_iterate_ids = set(iterate_node_ids) - set(ordered_iterate_ids)
+        for _ in range(iterate_count - 1):
+            candidates: list[tuple[str, str]] = []
+            for candidate_id in remaining_iterate_ids:
+                collection_edges = self._get_input_edges(candidate_id, COLLECTION_FIELD)
+                if len(collection_edges) != 1:
+                    continue
+                preparation_id = collection_edges[0].source.node_id
+                preparation_inputs = self._get_input_edges(preparation_id)
+                if (
+                    len(preparation_inputs) == 1
+                    and preparation_inputs[0].source.node_id == ordered_iterate_ids[-1]
+                    and preparation_inputs[0].source.field == ITEM_FIELD
+                ):
+                    candidates.append((candidate_id, preparation_id))
+            if len(candidates) != 1:
+                return None
+            next_iterate_id, preparation_id = candidates[0]
+            ordered_iterate_ids.append(next_iterate_id)
+            preparation_node_ids.append(preparation_id)
+            remaining_iterate_ids.remove(next_iterate_id)
+        if remaining_iterate_ids:
             return None
-        source_node_id = outer_collection_edges[0].source.node_id
-        preparation_node_id = inner_collection_edges[0].source.node_id
+
         body_candidates = [
             node_id
             for node_id in self.nodes
-            if node_id not in {outer_iterate_id, inner_iterate_id, source_node_id, preparation_node_id}
+            if node_id not in set(ordered_iterate_ids) | set(preparation_node_ids) | {source_node_id}
         ]
         if len(body_candidates) != 1:
             return None
@@ -1419,35 +1439,40 @@ class Graph(BaseModel):
         )
         if any(
             isinstance(self.get_node(node_id), control_types)
-            for node_id in {source_node_id, preparation_node_id, body_node_id}
+            for node_id in {source_node_id, *preparation_node_ids, body_node_id}
         ):
             return None
-        source_inputs = self._get_input_edges(source_node_id)
-        preparation_inputs = self._get_input_edges(preparation_node_id)
+        outer_collection_edges = self._get_input_edges(ordered_iterate_ids[0], COLLECTION_FIELD)
         body_inputs = self._get_input_edges(body_node_id)
-        if (
-            source_inputs
-            or len(preparation_inputs) != 1
-            or preparation_inputs[0].source.node_id != outer_iterate_id
-            or preparation_inputs[0].source.field != ITEM_FIELD
-            or len(body_inputs) != 1
-            or body_inputs[0].source.node_id != inner_iterate_id
-            or body_inputs[0].source.field != ITEM_FIELD
-        ):
-            return None
-        if self._get_output_edges(outer_iterate_id, ITEM_FIELD) != preparation_inputs:
-            return None
-        if self._get_output_edges(inner_iterate_id, ITEM_FIELD) != body_inputs:
+        if self._get_input_edges(source_node_id) or len(outer_collection_edges) != 1 or len(body_inputs) != 1:
             return None
         if self._get_output_edges(source_node_id) != outer_collection_edges:
             return None
-        if self._get_output_edges(preparation_node_id) != inner_collection_edges:
+        for index, preparation_id in enumerate(preparation_node_ids):
+            preparation_inputs = self._get_input_edges(preparation_id)
+            next_collection_edges = self._get_input_edges(ordered_iterate_ids[index + 1], COLLECTION_FIELD)
+            if (
+                len(preparation_inputs) != 1
+                or preparation_inputs[0].source.node_id != ordered_iterate_ids[index]
+                or preparation_inputs[0].source.field != ITEM_FIELD
+                or len(next_collection_edges) != 1
+                or next_collection_edges[0].source.node_id != preparation_id
+                or self._get_output_edges(ordered_iterate_ids[index], ITEM_FIELD) != preparation_inputs
+                or self._get_output_edges(preparation_id) != next_collection_edges
+            ):
+                return None
+        if (
+            body_inputs[0].source.node_id != ordered_iterate_ids[-1]
+            or body_inputs[0].source.field != ITEM_FIELD
+            or self._get_output_edges(ordered_iterate_ids[-1], ITEM_FIELD) != body_inputs
+            or self._get_output_edges(body_node_id)
+        ):
             return None
         return _SupportedNestedIterateSequence(
             body_path_nodes=frozenset(self.nodes),
-            outer_iterate_id=outer_iterate_id,
-            preparation_node_id=preparation_node_id,
-            inner_iterate_id=inner_iterate_id,
+            source_node_id=source_node_id,
+            iterate_node_ids=tuple(ordered_iterate_ids),
+            preparation_node_ids=tuple(preparation_node_ids),
             body_node_id=body_node_id,
         )
 

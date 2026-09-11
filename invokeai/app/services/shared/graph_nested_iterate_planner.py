@@ -74,7 +74,17 @@ def can_use_nested_iterate_sequence_planner(state: "GraphExecutionState") -> boo
     """Check the exact two-level Iterate-only chain before generic admission."""
     return (
         not state._legacy_snapshot_loaded
-        and state.graph._get_supported_nested_iterate_sequence(state._get_source_graph_flat()) is not None
+        and state.graph._get_supported_nested_iterate_sequence(state._get_source_graph_flat(), iterate_count=2)
+        is not None
+    )
+
+
+def can_use_three_level_nested_iterate_sequence_planner(state: "GraphExecutionState") -> bool:
+    """Check the exact three-level Iterate-only chain before generic admission."""
+    return (
+        not state._legacy_snapshot_loaded
+        and state.graph._get_supported_nested_iterate_sequence(state._get_source_graph_flat(), iterate_count=3)
+        is not None
     )
 
 
@@ -397,11 +407,10 @@ def prepare_nested_iterate_bodies(state: "GraphExecutionState") -> None:
             _prepare_nested_iterate_body_for_outer(state, source_for_id, prepared_for_id)
 
 
-def prepare_nested_iterate_sequences(state: "GraphExecutionState") -> None:
-    """Prepare the exact outer-Iterate/preparation/inner-Iterate/body chain."""
-    if not can_use_nested_iterate_sequence_planner(state):
-        return
-    nested = state.graph._get_supported_nested_iterate_sequence(state._get_source_graph_flat())
+def _prepare_nested_iterate_sequence(state: "GraphExecutionState", *, iterate_count: int) -> None:
+    nested = state.graph._get_supported_nested_iterate_sequence(
+        state._get_source_graph_flat(), iterate_count=iterate_count
+    )
     assert nested is not None
 
     def prepared_at_path(source_node_id: str, path: tuple[int, ...]) -> str | None:
@@ -427,101 +436,107 @@ def prepare_nested_iterate_sequences(state: "GraphExecutionState") -> None:
         _initialize_direct_execution_node(state, node.id, attached_edges)
         return node.id
 
-    outer_collection_edge = state.graph._get_input_edges(nested.outer_iterate_id, COLLECTION_FIELD)[0]
-    outer_source_node_id = outer_collection_edge.source.node_id
-    source_exec_id = prepared_at_path(outer_source_node_id, ())
+    iterate_edges = [
+        state.graph._get_input_edges(iterate_id, COLLECTION_FIELD)[0] for iterate_id in nested.iterate_node_ids
+    ]
+    preparation_inputs = [
+        state.graph._get_input_edges(preparation_id)[0] for preparation_id in nested.preparation_node_ids
+    ]
+    body_input = state.graph._get_input_edges(nested.body_node_id)[0]
+    source_exec_id = prepared_at_path(nested.source_node_id, ())
     if source_exec_id is None:
-        source_exec_id = create_copy(outer_source_node_id, (), [])
+        source_exec_id = create_copy(nested.source_node_id, (), [])
     if source_exec_id not in state.results:
         return
 
-    collection = getattr(state.results[source_exec_id], outer_collection_edge.source.field)
-    if not isinstance(collection, list):
+    source_collection = getattr(state.results[source_exec_id], iterate_edges[0].source.field)
+    if not isinstance(source_collection, list):
         raise ValueError("Nested Iterate collection source must produce a list")
-    if not collection:
-        state._discard_source_executed(nested.outer_iterate_id)
-        state._record_empty_iterate_stream(nested.outer_iterate_id, ())
-        for source_node_id in (
-            nested.outer_iterate_id,
-            nested.preparation_node_id,
-            nested.inner_iterate_id,
-            nested.body_node_id,
-        ):
-            state._mark_source_executed(source_node_id)
-        return
-    preparation_input = state.graph._get_input_edges(nested.preparation_node_id)[0]
-    inner_collection_edge = state.graph._get_input_edges(nested.inner_iterate_id, COLLECTION_FIELD)[0]
-    body_input = state.graph._get_input_edges(nested.body_node_id)[0]
+
     all_preparations_ready = True
-    all_inner_collections_empty = True
-    for outer_index in range(len(collection)):
-        outer_path = (outer_index,)
-        outer_exec_id = prepared_at_path(nested.outer_iterate_id, outer_path)
-        if outer_exec_id is None:
-            outer_exec_id = create_copy(
-                nested.outer_iterate_id,
-                outer_path,
-                [
-                    Edge(
-                        source=EdgeConnection(node_id=source_exec_id, field=outer_collection_edge.source.field),
-                        destination=EdgeConnection(node_id="", field=outer_collection_edge.destination.field),
+
+    def expand(level: int, collection: list[object], parent_exec_id: str, parent_path: tuple[int, ...]) -> None:
+        nonlocal all_preparations_ready
+        iterate_id = nested.iterate_node_ids[level]
+        iterate_input = iterate_edges[level]
+        if not collection:
+            state._discard_source_executed(iterate_id)
+            state._record_empty_iterate_stream(iterate_id, parent_path)
+            return
+        for index in range(len(collection)):
+            path = (*parent_path, index)
+            iterate_exec_id = prepared_at_path(iterate_id, path)
+            if iterate_exec_id is None:
+                iterate_exec_id = create_copy(
+                    iterate_id,
+                    path,
+                    [
+                        Edge(
+                            source=EdgeConnection(node_id=parent_exec_id, field=iterate_input.source.field),
+                            destination=EdgeConnection(node_id="", field=iterate_input.destination.field),
+                        )
+                    ],
+                    iteration_index=index,
+                )
+            if level == iterate_count - 1:
+                if prepared_at_path(nested.body_node_id, path) is None:
+                    create_copy(
+                        nested.body_node_id,
+                        path,
+                        [
+                            Edge(
+                                source=EdgeConnection(node_id=iterate_exec_id, field=body_input.source.field),
+                                destination=EdgeConnection(node_id="", field=body_input.destination.field),
+                            )
+                        ],
                     )
-                ],
-                iteration_index=outer_index,
-            )
-        preparation_exec_id = prepared_at_path(nested.preparation_node_id, outer_path)
-        if preparation_exec_id is None:
-            preparation_exec_id = create_copy(
-                nested.preparation_node_id,
-                outer_path,
-                [
-                    Edge(
-                        source=EdgeConnection(node_id=outer_exec_id, field=preparation_input.source.field),
-                        destination=EdgeConnection(node_id="", field=preparation_input.destination.field),
-                    )
-                ],
-            )
-        if preparation_exec_id not in state.results:
-            all_preparations_ready = False
-            continue
-        inner_collection = getattr(state.results[preparation_exec_id], inner_collection_edge.source.field)
-        if not isinstance(inner_collection, list):
-            raise ValueError("Nested Iterate collection source must produce a list")
-        if not inner_collection:
-            state._discard_source_executed(nested.inner_iterate_id)
-            state._record_empty_iterate_stream(nested.inner_iterate_id, outer_path)
-        else:
-            all_inner_collections_empty = False
-        for inner_index in range(len(inner_collection)):
-            inner_path = (*outer_path, inner_index)
-            inner_exec_id = prepared_at_path(nested.inner_iterate_id, inner_path)
-            if inner_exec_id is None:
-                inner_exec_id = create_copy(
-                    nested.inner_iterate_id,
-                    inner_path,
+                continue
+            preparation_id = nested.preparation_node_ids[level]
+            preparation_exec_id = prepared_at_path(preparation_id, path)
+            if preparation_exec_id is None:
+                preparation_exec_id = create_copy(
+                    preparation_id,
+                    path,
                     [
                         Edge(
                             source=EdgeConnection(
-                                node_id=preparation_exec_id, field=inner_collection_edge.source.field
+                                node_id=iterate_exec_id, field=preparation_inputs[level].source.field
                             ),
-                            destination=EdgeConnection(node_id="", field=inner_collection_edge.destination.field),
-                        )
-                    ],
-                    iteration_index=inner_index,
-                )
-
-            if prepared_at_path(nested.body_node_id, inner_path) is None:
-                create_copy(
-                    nested.body_node_id,
-                    inner_path,
-                    [
-                        Edge(
-                            source=EdgeConnection(node_id=inner_exec_id, field=body_input.source.field),
-                            destination=EdgeConnection(node_id="", field=body_input.destination.field),
+                            destination=EdgeConnection(node_id="", field=preparation_inputs[level].destination.field),
                         )
                     ],
                 )
+            if preparation_exec_id not in state.results:
+                all_preparations_ready = False
+                continue
+            next_collection = getattr(state.results[preparation_exec_id], iterate_edges[level + 1].source.field)
+            if not isinstance(next_collection, list):
+                raise ValueError("Nested Iterate collection source must produce a list")
+            expand(level + 1, next_collection, preparation_exec_id, path)
 
-    if all_preparations_ready and all_inner_collections_empty:
-        state._mark_source_executed(nested.inner_iterate_id)
-        state._mark_source_executed(nested.body_node_id)
+    expand(0, source_collection, source_exec_id, ())
+    if all_preparations_ready:
+        source_node_ids = [nested.source_node_id]
+        for index, iterate_id in enumerate(nested.iterate_node_ids):
+            source_node_ids.append(iterate_id)
+            if index < len(nested.preparation_node_ids):
+                source_node_ids.append(nested.preparation_node_ids[index])
+        source_node_ids.append(nested.body_node_id)
+        for source_node_id in source_node_ids:
+            prepared_ids = state._prepared_registry().get_prepared_ids(source_node_id)
+            if (
+                not prepared_ids or all(exec_id in state.executed for exec_id in prepared_ids)
+            ) and source_node_id not in state.executed:
+                state._mark_source_executed(source_node_id)
+
+
+def prepare_nested_iterate_sequences(state: "GraphExecutionState") -> None:
+    """Prepare the exact two-level nested Iterate chain."""
+    if can_use_nested_iterate_sequence_planner(state):
+        _prepare_nested_iterate_sequence(state, iterate_count=2)
+
+
+def prepare_three_level_nested_iterate_sequences(state: "GraphExecutionState") -> None:
+    """Prepare the exact three-level nested Iterate chain."""
+    if can_use_three_level_nested_iterate_sequence_planner(state):
+        _prepare_nested_iterate_sequence(state, iterate_count=3)
