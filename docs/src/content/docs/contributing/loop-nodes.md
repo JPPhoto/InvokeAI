@@ -126,7 +126,8 @@ ordinary sources, two `Iterate` nodes, two ordinary bodies, and one `Collect`.
 It has no `Collect.collection` input, downstream consumer, or extra topology.
 Three or more body-mediated
 branches, fan-in with four or more direct branches, nested or input-driven
-iterators, and mixed control flow remain on the compatibility materializer.
+iterators, and mixed control flow outside the bounded per-item
+`Iterate`/`If`/`Collect` topology remain on the compatibility materializer.
 Focused compatibility coverage now proves empty, nested, fan-in, partial/rehydrated, failed, canceled, and retried
 Iterate/Collect sessions. This is evidence for the current adapters; it does not remove materialization or queue
 ownership. Direct `Iterate`/`Collect`-only graphs and the exact bounded nested shape now use the generic scheduler
