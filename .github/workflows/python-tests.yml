@@ -37,6 +37,8 @@ concurrency:
 jobs:
   matrix:
     strategy:
+      # Let the other platforms finish when one runner fails, so a rerun repeats only the failed job.
+      fail-fast: false
       matrix:
         python-version:
           - '3.11'
