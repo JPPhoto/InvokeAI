@@ -475,6 +475,9 @@ class GraphExecutionState(BaseModel):
     def _can_use_fresh_flat_if_activation(self) -> bool:
         return graph_if_dependencies._can_use_fresh_flat_if_activation(self)
 
+    def _can_use_fresh_mixed_if_iterate_collect(self) -> bool:
+        return graph_if_dependencies._can_use_fresh_mixed_if_iterate_collect(self)
+
     def _get_fresh_if_branch_sources(self, if_node_id: str, branch_field: str) -> set[str]:
         return graph_if_dependencies._get_fresh_if_branch_sources(self, if_node_id, branch_field)
 
@@ -947,10 +950,13 @@ class GraphExecutionState(BaseModel):
         if any(isinstance(node, control_nodes) for node in self.graph.nodes.values()):
             return self._can_use_generic_for_scheduler()
         if any(isinstance(node, (IterateInvocation, CollectInvocation)) for node in self.graph.nodes.values()):
-            return not any(
-                isinstance(node, (*control_nodes, IfInvocation, CallSavedWorkflowInvocation))
-                for node in self.graph.nodes.values()
-            )
+            if any(
+                isinstance(node, (*control_nodes, CallSavedWorkflowInvocation)) for node in self.graph.nodes.values()
+            ):
+                return False
+            if any(isinstance(node, IfInvocation) for node in self.graph.nodes.values()):
+                return self._can_use_fresh_mixed_if_iterate_collect()
+            return True
         return not any(isinstance(node, CallSavedWorkflowInvocation) for node in self.graph.nodes.values())
 
     def _scheduler(self) -> _ExecutionScheduler | _GenericGraphSchedulerAdapter:

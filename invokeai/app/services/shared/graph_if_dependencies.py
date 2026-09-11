@@ -6,7 +6,13 @@ from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvoca
 from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation
 from invokeai.app.services.shared.execution_engine.scheduler import ActivationDependency
-from invokeai.app.services.shared.graph_validation import CollectInvocation, IterateInvocation, nx
+from invokeai.app.services.shared.graph_validation import (
+    COLLECTION_FIELD,
+    ITEM_FIELD,
+    CollectInvocation,
+    IterateInvocation,
+    nx,
+)
 
 if TYPE_CHECKING:
     from invokeai.app.services.shared.graph import GraphExecutionState
@@ -23,21 +29,93 @@ def _get_fresh_if_nodes(state: "GraphExecutionState") -> tuple[IfInvocation, ...
     )
 
 
+def _can_use_fresh_mixed_if_iterate_collect(state: "GraphExecutionState") -> bool:
+    """Admit the bounded per-item Iterate/If/Collect topology."""
+
+    if state._legacy_snapshot_loaded or len(state.graph.nodes) != 6 or len(state.graph.edges) != 7:
+        return False
+
+    if_nodes = [node for node in state.graph.nodes.values() if isinstance(node, IfInvocation)]
+    iterate_nodes = [node for node in state.graph.nodes.values() if isinstance(node, IterateInvocation)]
+    collect_nodes = [node for node in state.graph.nodes.values() if isinstance(node, CollectInvocation)]
+    if len(if_nodes) != 1 or len(iterate_nodes) != 1 or len(collect_nodes) != 1:
+        return False
+
+    if any(
+        isinstance(node, (CallSavedWorkflowInvocation, ForInvocation, ForReturnInvocation))
+        for node in state.graph.nodes.values()
+    ):
+        return False
+
+    if_node = if_nodes[0]
+    iterate_node = iterate_nodes[0]
+    collect_node = collect_nodes[0]
+
+    collection_edges = state.graph._get_input_edges(iterate_node.id, COLLECTION_FIELD)
+    if len(collection_edges) != 1:
+        return False
+    collection_edge = collection_edges[0]
+    collection_source = state.graph.get_node(collection_edge.source.node_id)
+    if (
+        collection_edge.source.field != COLLECTION_FIELD
+        or state.graph._get_input_edges(collection_source.id)
+        or state.graph._get_output_edges(collection_source.id) != [collection_edge]
+    ):
+        return False
+
+    condition_edges = state.graph._get_input_edges(if_node.id, "condition")
+    iterate_item_edges = state.graph._get_output_edges(iterate_node.id, ITEM_FIELD)
+    if (
+        len(condition_edges) != 1
+        or len(iterate_item_edges) != 3
+        or condition_edges[0].source.node_id != iterate_node.id
+    ):
+        return False
+    if condition_edges[0].source.field != ITEM_FIELD:
+        return False
+
+    branch_edges = []
+    for branch_field in ("true_input", "false_input"):
+        input_edges = state.graph._get_input_edges(if_node.id, branch_field)
+        if len(input_edges) != 1:
+            return False
+        branch_edge = input_edges[0]
+        branch_node = state.graph.get_node(branch_edge.source.node_id)
+        branch_input_edges = state.graph._get_input_edges(branch_node.id)
+        if len(branch_input_edges) != 1 or branch_input_edges[0].source.node_id != iterate_node.id:
+            return False
+        if branch_input_edges[0].source.field != ITEM_FIELD or state.graph._get_output_edges(branch_node.id) != [
+            branch_edge
+        ]:
+            return False
+        branch_edges.append(branch_input_edges[0])
+
+    if len({edge.destination.node_id for edge in branch_edges}) != 2:
+        return False
+
+    collect_edges = state.graph._get_input_edges(collect_node.id, "item")
+    if len(collect_edges) != 1 or collect_edges[0].source.node_id != if_node.id:
+        return False
+    if collect_edges[0].source.field != "value" or state.graph._get_output_edges(if_node.id) != [collect_edges[0]]:
+        return False
+    return not state.graph._get_input_edges(collect_node.id, COLLECTION_FIELD) and not state.graph._get_output_edges(
+        collect_node.id
+    )
+
+
 def _can_use_fresh_flat_if_activation(state: "GraphExecutionState") -> bool:
     """Admit fresh bounded independent-sibling or nested-If dependency compilation."""
 
     if state._legacy_snapshot_loaded:
         return False
 
-    forbidden_nodes = (
-        CallSavedWorkflowInvocation,
-        ForInvocation,
-        ForReturnInvocation,
-        IterateInvocation,
-        CollectInvocation,
-    )
-    if any(isinstance(node, forbidden_nodes) for node in state.graph.nodes.values()):
+    if any(
+        isinstance(node, (CallSavedWorkflowInvocation, ForInvocation, ForReturnInvocation))
+        for node in state.graph.nodes.values()
+    ):
         return False
+    if any(isinstance(node, (IterateInvocation, CollectInvocation)) for node in state.graph.nodes.values()):
+        return _can_use_fresh_mixed_if_iterate_collect(state)
 
     try:
         source_graph = state._get_source_graph_flat()

@@ -61,6 +61,7 @@ from invokeai.app.services.shared.graph import (
     IterateInvocation,
     NodeNotFoundError,
     WorkflowCallFrame,
+    _GenericGraphSchedulerAdapter,
 )
 
 # This import must happen before other invoke imports or test in other files(!!) break
@@ -5293,6 +5294,7 @@ def test_if_graph_optimized_behavior_prunes_branches_per_iteration():
     graph.add_edge(create_edge("if", "value", "collect", "item"))
 
     g = GraphExecutionState(graph=graph)
+    assert isinstance(g._scheduler(), _GenericGraphSchedulerAdapter)
     executed_source_ids = execute_all_nodes(g)
 
     prepared_collect_id = next(iter(g.source_prepared_mapping["collect"]))
@@ -5301,6 +5303,33 @@ def test_if_graph_optimized_behavior_prunes_branches_per_iteration():
     assert executed_source_ids.count("true_branch") == 2
     assert executed_source_ids.count("false_branch") == 1
     assert executed_source_ids.count("if") == 3
+    assert g.is_complete()
+
+
+def test_if_graph_optimized_behavior_handles_empty_iteration():
+    graph = Graph()
+    graph.add_node(BooleanCollectionInvocation(id="conditions", collection=[]))
+    graph.add_node(IterateInvocation(id="condition_iter"))
+    graph.add_node(AnyTypeTestInvocation(id="true_branch"))
+    graph.add_node(AnyTypeTestInvocation(id="false_branch"))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_node(CollectInvocation(id="collect"))
+
+    graph.add_edge(create_edge("conditions", "collection", "condition_iter", "collection"))
+    graph.add_edge(create_edge("condition_iter", "item", "if", "condition"))
+    graph.add_edge(create_edge("condition_iter", "item", "true_branch", "value"))
+    graph.add_edge(create_edge("true_branch", "value", "if", "true_input"))
+    graph.add_edge(create_edge("condition_iter", "item", "false_branch", "value"))
+    graph.add_edge(create_edge("false_branch", "value", "if", "false_input"))
+    graph.add_edge(create_edge("if", "value", "collect", "item"))
+
+    g = GraphExecutionState(graph=graph)
+    assert isinstance(g._scheduler(), _GenericGraphSchedulerAdapter)
+    executed_source_ids = execute_all_nodes(g)
+
+    prepared_collect_id = next(iter(g.source_prepared_mapping["collect"]))
+    assert g.results[prepared_collect_id].collection == []
+    assert executed_source_ids == ["conditions", "collect"]
     assert g.is_complete()
 
 
