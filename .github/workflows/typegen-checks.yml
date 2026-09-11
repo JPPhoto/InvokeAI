@@ -69,7 +69,11 @@ jobs:
           files_yaml: |
             src:
               - 'pyproject.toml'
+              - '.github/workflows/typegen-checks.yml'
+              - 'scripts/generate_openapi_schema.py'
               - 'invokeai/**'
+              # The schema is generated from Python and compared against legacy web's artifacts.
+              - '!invokeai/frontend/webv2/**'
 
       - name: setup uv
         if: ${{ steps.changed-files.outputs.src_any_changed == 'true' || inputs.always_run == true }}

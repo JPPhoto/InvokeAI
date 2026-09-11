@@ -55,10 +55,11 @@ jobs:
         with:
           files_yaml: |
             python:
+              # ruff config and the classifier check both read pyproject.toml.
               - 'pyproject.toml'
-              - 'invokeai/**'
-              - '!invokeai/frontend/web/**'
-              - 'tests/**'
+              - '.github/workflows/python-checks.yml'
+              # ruff lints every tracked .py file from the repository root, wherever it lives.
+              - '**/*.py'
 
       - name: setup uv
         if: ${{ steps.changed-files.outputs.python_any_changed == 'true' || inputs.always_run == true }}
