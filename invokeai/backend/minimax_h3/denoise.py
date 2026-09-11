@@ -125,15 +125,20 @@ def _profile_one_step(trace_target: str, device: torch.device, run_step: Callabl
 
 @contextmanager
 def _cancel_between_blocks(
-    transformer: MiniMaxH3Transformer3DModel, is_canceled: Callable[[], bool] | None
+    transformer: MiniMaxH3Transformer3DModel, is_canceled: Callable[[], bool] | None, device: torch.device
 ) -> Iterator[None]:
     """Poll ``is_canceled`` before every transformer block for the duration of the context.
 
     A step is one forward through the full block stack — 40-100 s for a video on the reference
     dual-GPU rig — and the step loop only polls between steps, so a cancel used to keep the GPU
     busy for the rest of the step. Polling from a forward pre-hook on each block bounds the
-    latency to one block plus the drain of the kernels already queued. The hooks are removed on
-    exit: the transformer is a shared cache resident, and the callback belongs to this session.
+    latency to one block — provided the poll waits for the queued kernels first. Kernel launches
+    are asynchronous: left alone, the CPU enqueues the whole step's blocks in tens of
+    milliseconds and parks at the step's end, so every poll would already have run by the time a
+    mid-step cancel arrived and the GPU would grind through the step regardless. Waiting for the
+    previous block's kernels to finish before each poll costs one launch gap, under a millisecond
+    (below 0.5% of a step at production sizes). The hooks are removed on exit: the transformer is
+    a shared cache resident, and the callback belongs to this session.
     """
     if is_canceled is None:
         yield
@@ -141,6 +146,8 @@ def _cancel_between_blocks(
     from invokeai.app.services.session_processor.session_processor_common import CanceledException
 
     def raise_if_canceled(module: torch.nn.Module, args: tuple[object, ...]) -> None:
+        if device.type != "cpu":
+            torch.accelerator.synchronize(device)
         if is_canceled():
             raise CanceledException
 
@@ -169,9 +176,10 @@ def denoise(
             — the step's *predicted-clean* (x-hat-0) estimate of the GENERATED video rows
             (conditioning rows excluded), float32, for previews. Unlike the noisy running
             latents, the prediction is decodable at every step.
-        is_canceled: Polled before every step and before every transformer block within a step;
-            a True return raises ``CanceledException`` from inside the forward, so a cancel takes
-            effect within one block rather than at the end of a 40-100 s step.
+        is_canceled: Polled before every step and before every transformer block within a step,
+            after the previous block's kernels have finished; a True return raises
+            ``CanceledException`` from inside the forward, so a cancel idles the GPU within one
+            block rather than at the end of a 40-100 s step.
 
     Returns:
         The denoised ``(video_rows, audio_rows)`` (conditioning/reference rows still included).
@@ -233,7 +241,7 @@ def denoise(
             assert pred_x0_video_rows is not None
             step_callback(i + 1, total_steps, pred_x0_video_rows)
 
-    with _cancel_between_blocks(transformer, is_canceled):
+    with _cancel_between_blocks(transformer, is_canceled, latents.device):
         for i, t in enumerate(state.timesteps):
             if is_canceled is not None and is_canceled():
                 raise CanceledException
