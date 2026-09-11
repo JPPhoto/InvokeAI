@@ -95,13 +95,8 @@ jobs:
               # test_imports.py walks every package, including the frontend ones.
               - 'invokeai/frontend/web/**/*.py'
               - 'invokeai/frontend/webv2/**/*.py'
-              # Non-Python files that tests read.
-              # test_workflow_graph_builder.py validates these fixtures against the backend.
+              # test_workflow_graph_builder.py validates these editor fixtures against the backend.
               - 'invokeai/frontend/webv2/src/features/workflow/core/fixtures/**'
-              # test_config_generation_devices.py checks these against the config field description.
-              - 'invokeai/frontend/web/public/locales/en.json'
-              - 'docs/src/generated/settings.json'
-              - 'docs/src/content/docs/configuration/invokeai-yaml.mdx'
               - 'tests/**'
               # tests/ covers a few of these (e.g. test_check_pins.py, test_docs_json_export.py)
               - 'scripts/**'
