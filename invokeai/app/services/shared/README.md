@@ -406,13 +406,14 @@ four-node source/Iterate/body/Collect shape and any number of ordinary downstrea
 private planner instead.
 No author-time activation ports or literal successor IDs are introduced.
 
-For a fresh graph with one static, non-empty flat `For`/`ForReturn` pair, the same adapter now projects ordinary
-readiness and calls the graph-state generic continuation boundary after each `ForReturn`. That boundary carries returned
-state, honors `continue_condition`, creates the next prepared iteration when needed, and finalizes `output_collection`
-and `final_state`. The generic scheduler receives only opaque node IDs and dependencies; it never receives a literal
-next node ID. The compatibility continuation bridge remains available only for unsupported loop shapes and explicitly
-legacy-loaded snapshots. Unsupported empty/input-driven outer collections and deeper, multiple, or unsupported mixed
-loop shapes remain compatibility-owned; the narrow canonical two-level nested-`For` shape, the canonical bounded
+For a fresh graph with one static flat `For`/`ForReturn` pair, including the exact empty literal collection case, the
+same adapter now projects ordinary readiness and calls the graph-state generic continuation boundary after each
+`ForReturn` when iterations exist. That boundary carries returned state, honors `continue_condition`, creates the next
+prepared iteration when needed, and finalizes `output_collection` and `final_state`. For an empty literal collection,
+the generic path completes through the existing synthetic terminal `For` result without running the body or `ForReturn`.
+The generic scheduler receives only opaque node IDs and dependencies; it never receives a literal next node ID. The
+compatibility continuation bridge remains available only for unsupported loop shapes and explicitly legacy-loaded snapshots.
+Input-driven outer collections, deeper, multiple, or unsupported mixed loop shapes remain compatibility-owned; the narrow canonical two-level nested-`For` shape, the canonical bounded
   internal `Iterate`/`Collect` shape, the exact producer-driven outer nested extension, and the bounded two- through
   six-level serial nested-`Iterate` chains are generic-routed. On
 rehydration, the generic adapter restores the active class-drain

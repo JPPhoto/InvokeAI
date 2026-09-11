@@ -4892,10 +4892,33 @@ def test_flat_for_frame_and_continuation_identity_matches_compatibility_schedule
     assert other_frames.isdisjoint(generic_frames)
 
 
+def test_empty_literal_flat_for_uses_generic_scheduler() -> None:
+    state = GraphExecutionState(graph=_flat_for_graph(collection=[]))
+
+    assert state._can_use_generic_scheduler()
+    assert isinstance(state._scheduler(), _GenericGraphSchedulerAdapter)
+
+
+def test_empty_literal_flat_for_matches_compatibility_scheduler() -> None:
+    generic_trace, generic_state = _run_graph_with_effects(GraphExecutionState(graph=_flat_for_graph(collection=[])))
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_flat_for_graph(collection=[])),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace == []
+    assert _final_for_output(generic_state).output_collection == []
+    assert _final_for_output(compatibility_state).output_collection == []
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert isinstance(compatibility_state._execution_scheduler, _ExecutionScheduler)
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+
+
 @pytest.mark.parametrize(
     ("graph_kwargs", "expected_trace", "expected_collection"),
     [
-        ({"collection": []}, [], []),
         ({"input_collection": [1, 2]}, ["collection", "for", "body", "return", "for", "body", "return"], [11, 12]),
     ],
 )
@@ -4925,6 +4948,20 @@ def test_flat_for_ineligible_collections_use_compatibility_scheduler(
     assert _effect_ledger_projection(restored) == _effect_ledger_projection(state)
     assert _continuation_projection(restored) == _continuation_projection(state)
     _assert_execution_identity_consistent(restored)
+
+
+def test_input_driven_empty_flat_for_uses_compatibility_scheduler() -> None:
+    state = GraphExecutionState(graph=_flat_for_graph(input_collection=[]))
+
+    assert state._can_use_generic_scheduler() is False
+    trace, state = _run_graph_with_effects(state)
+
+    assert trace == ["collection"]
+    assert isinstance(state._execution_scheduler, _ExecutionScheduler)
+    assert _final_for_output(state).output_collection == []
+    assert state.is_complete()
+    assert list(state._generic_runtime().continuations.values()) == []
+    _assert_execution_identity_consistent(state)
 
 
 @pytest.mark.parametrize(

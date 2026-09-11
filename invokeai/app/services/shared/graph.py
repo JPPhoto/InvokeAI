@@ -802,7 +802,7 @@ class GraphExecutionState(BaseModel):
             return True
         if len(for_nodes) != 1 or len(return_nodes) != 1:
             return False
-        if self.graph._get_input_edges(for_nodes[0].id, COLLECTION_FIELD) or not for_nodes[0].collection:
+        if self.graph._get_input_edges(for_nodes[0].id, COLLECTION_FIELD):
             return False
         body_path = self.graph._get_for_body_path_to_return(for_nodes[0].id, self._get_source_graph_flat())
         if body_path is None:
