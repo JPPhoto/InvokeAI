@@ -230,20 +230,25 @@ def test_an_explicit_field_value_overrides_the_presets_cap() -> None:
     assert mock_run.call_args.kwargs["max_tokens"] == 50
 
 
-def test_the_unset_sentinel_is_the_field_default_and_is_accepted() -> None:
-    # The editors materialise every input from the schema default, so the sentinel has to be a
-    # value the node itself accepts -- an `int | None` field defaults to null in the schema, which
-    # both editors turn into 0 and the node would then reject.
-    field = TextLLMWithPresetInvocation.model_fields["max_tokens"]
-    assert field.default == 0
-    assert _make_invocation(max_tokens=field.default).max_tokens == 0
+def test_a_node_built_from_the_schema_default_defers_to_the_preset() -> None:
+    # Both editors materialise every input from the schema default, so the default has to be a
+    # value the node accepts AND has to mean "defer". Declaring the field `int | None` made the
+    # default null, which the editors turn into 0 and the field's own lower bound then rejected --
+    # so the node 422'd on enqueue instead of honouring the preset's cap.
+    default = TextLLMWithPresetInvocation.model_json_schema()["properties"]["max_tokens"]["default"]
+    inv = _make_invocation(max_tokens=default)
+    context = _make_context(prompt_record_content="instruction", record_max_tokens=500)
+
+    with patch("invokeai.app.invocations.text_llm._run_text_llm", return_value="expanded") as mock_run:
+        inv.invoke(context)
+
+    assert mock_run.call_args.kwargs["max_tokens"] == 500
 
 
-def test_the_field_publishes_its_bounds_at_the_top_level_of_the_schema() -> None:
-    # Bounds nested inside an `anyOf` are invisible to both editors' field-template builders,
-    # which leaves the node's number input unbounded.
+def test_the_field_publishes_its_bounds_where_the_editors_read_them() -> None:
+    # Constraints nested inside an `anyOf` are dropped by both editors' field-template builders,
+    # which leaves the node's number input unbounded and silences the pre-enqueue range check.
     prop = TextLLMWithPresetInvocation.model_json_schema()["properties"]["max_tokens"]
+
     assert "anyOf" not in prop
-    assert prop["minimum"] == 0
-    assert prop["maximum"] == EXPAND_PROMPT_MAX_TOKENS_MAX
-    assert prop["default"] == 0
+    assert (prop["minimum"], prop["maximum"]) == (0, EXPAND_PROMPT_MAX_TOKENS_MAX)
