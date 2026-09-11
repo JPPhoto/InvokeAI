@@ -177,8 +177,9 @@ consumer, the exact bounded three-`If` chain with direct inner-to-middle-to-oute
 chain, or exactly two, exactly three, or exactly four independent ordinary-node sibling `If`s compile opaque, frame-local
 activation dependencies in graph state. The three- and four-`If` admissions require `default` edges, all branch inputs
 (`condition`, `true_input`, `false_input`) on each `If`, and no output from inner or middle `If` except its direct nested
-branch edge; the four-`If` chain permits no extra output fan-out. Five-or-more nested `If`s, other fan-out, mixed,
-loop-containing, saved-workflow, legacy, and five-or-more sibling shapes use the compatibility scheduler with the dedicated
+branch edge; the four-`If` chain permits no extra output fan-out. Five-or-more nested `If`s, other fan-out, mixed
+shapes outside the bounded per-item `Iterate`/`If`/`Collect` topology, loop-containing, saved-workflow, legacy, and
+five-or-more sibling shapes use the compatibility scheduler with the dedicated
 `_IfActivationController` fallback. Legacy snapshots retain their generic compatibility
 projection. Legacy
 skipped-state projection remains only for old snapshots. Fresh materialization prepares the condition boundary,

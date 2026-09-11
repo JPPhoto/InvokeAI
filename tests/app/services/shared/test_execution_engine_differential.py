@@ -5723,6 +5723,76 @@ def test_supported_fresh_if_shapes_do_not_use_controller_or_skip_projection(
     )
 
 
+def test_fresh_mixed_iterate_if_collect_uses_selected_branches_in_both_scheduler_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = Graph()
+    graph.add_node(CollectionConcatInvocation(id="source", first=[True, False, True, False]))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_node(AnyTypeTestInvocation(id="true_branch"))
+    graph.add_node(AnyTypeTestInvocation(id="false_branch"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("source", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "if", "condition"))
+    graph.add_edge(create_edge("iterate", "item", "true_branch", "value"))
+    graph.add_edge(create_edge("iterate", "item", "false_branch", "value"))
+    graph.add_edge(create_edge("true_branch", "value", "if", "true_input"))
+    graph.add_edge(create_edge("false_branch", "value", "if", "false_input"))
+    graph.add_edge(create_edge("if", "value", "collect", "item"))
+
+    def fail_controller(*_: object, **__: object) -> Any:
+        raise AssertionError("fresh mixed If used compatibility controller")
+
+    def fail_generic_retirement(*_: object, **__: object) -> None:
+        raise AssertionError("fresh mixed If used generic skip projection")
+
+    monkeypatch.setattr(GraphExecutionState, "_if_activation_controller", fail_controller)
+    monkeypatch.setattr(_GenericGraphSchedulerAdapter, "_retire_unselected_node", fail_generic_retirement)
+
+    runs: list[tuple[list[str], GraphExecutionState]] = []
+    for force_compatibility_scheduler in (False, True):
+        state = GraphExecutionState(graph=graph.model_copy(deep=True))
+        assert state._can_use_fresh_mixed_if_iterate_collect()
+        trace, state = _run_graph(state, force_compatibility_scheduler=force_compatibility_scheduler)
+        runs.append((trace, state))
+
+        assert trace[0] == "source"
+        assert trace[-1] == "collect"
+        assert trace.count("iterate") == 4
+        assert trace.count("true_branch") == 2
+        assert trace.count("false_branch") == 2
+        assert trace.count("if") == 4
+        assert state.executed_history[-1] == "collect"
+        assert set(state.executed_history) == {"source", "iterate", "true_branch", "false_branch", "if", "collect"}
+        assert list(state.prepared_source_mapping.values()).count("true_branch") == 2
+        assert list(state.prepared_source_mapping.values()).count("false_branch") == 2
+        assert state.results[next(iter(state.source_prepared_mapping["collect"]))].collection == [
+            True,
+            False,
+            True,
+            False,
+        ]
+        activation_tokens = sorted(
+            (token for token in state.execution_tokens.values() if token.token_kind == "activation"),
+            key=lambda token: token.frame.iteration_path,
+        )
+        assert [token.port for token in activation_tokens] == [
+            "true_input",
+            "false_input",
+            "true_input",
+            "false_input",
+        ]
+        assert all(
+            state._get_prepared_exec_metadata(exec_node_id).state != "skipped"
+            for exec_node_id in state.prepared_source_mapping
+        )
+        assert state.is_complete()
+
+    assert runs[0][0] == runs[1][0]
+    assert _state_projection(runs[0][1]) == _state_projection(runs[1][1])
+
+
 @pytest.mark.parametrize("force_compatibility_scheduler", [False, True])
 @pytest.mark.parametrize(
     ("first_condition", "second_condition", "third_condition"),

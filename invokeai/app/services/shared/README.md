@@ -638,10 +638,11 @@ legacy unmarked snapshots are treated as version 0, while unreadable snapshots a
   iterator ancestors because the source path crosses a collector, prepared parent iteration paths are still used to
   materialize one downstream exec node for each preserved collector path.
 
-- For a fresh **IfInvocation**: prepare only its condition inputs first. After the condition resolves, the activation
-  controller admits selected branch contexts and attaches only the selected branch input to the pending `If` execution.
-  Rejected branch sources are not materialized. Pending `If` state is reconstructed from its durable execution edges,
-  prepared mappings, and activation token after rehydration.
+- For a fresh **IfInvocation**: prepare only its condition inputs first. After the condition resolves, graph-state
+  activation dependencies admit selected branch contexts and attach only the selected branch input to the pending `If`
+  execution. Unsupported fresh shapes and legacy snapshots use the compatibility controller. Rejected branch sources
+  are not materialized. Pending `If` state is reconstructed from its durable execution edges, prepared mappings, and
+  activation token after rehydration.
 
 - For each new exec node:
 
@@ -699,10 +700,11 @@ Run `C` -> `D:0` -> enqueue `D`. Run `D` -> done.
 - The `condition` input must resolve first.
 - Nodes that are exclusive to the true or false branch remain unmaterialized until their branch is admitted, even when
   their indegree would otherwise be zero.
-- Once the condition resolves, the controller records the selected activation token and attaches only the selected
-  branch input to the pending `If` execution. Branch-exclusive ancestors of the unselected branch are never prepared,
-  executed, or added to fresh execution history. The activation controller and both scheduler adapters use append-only
-  execution edges; no type-specific branch scheduler performs pruning or skip propagation.
+- Once the condition resolves, graph-state activation logic records the selected activation token and attaches only the
+  selected branch input to the pending `If` execution. Branch-exclusive ancestors of the unselected branch are never
+  prepared, executed, or added to fresh execution history. Unsupported fresh shapes and legacy snapshots use the
+  compatibility controller. Both scheduler adapters use append-only execution edges; no type-specific branch
+  scheduler performs pruning or skip propagation.
 - Legacy snapshots that already contain skipped prepared nodes retain their compatibility metadata and scheduler
   projection. Fresh execution does not create that projection.
 - The SQLite queue/processor path has evidence for cancellation before and after `If` resolution and retry from each
@@ -754,7 +756,8 @@ In normal execution, all runtime expansion occurs in `execution_graph` with trac
   fallback; stale legacy Iterate result mirrors do not override durable effects.
   Collectors nested under iterators preserve enclosing iteration paths, so downstream consumers materialize per enclosing
   iteration instead of receiving a mixed collection from unrelated outer iterations.
-- Branch-exclusive nodes behind an unselected `If` branch are skipped, not failed.
+- Branch-exclusive nodes behind an unselected fresh `If` branch remain unmaterialized. Legacy snapshots may retain
+  skipped nodes for compatibility; they are not failed.
 
 ## 7) Extensibility
 
