@@ -90,9 +90,9 @@ Finalization is keyed by the loop source and its parent iteration path so nested
 collections or state.
 
 The execution-engine seam is additive to this loop contract. The session runner applies each result through
-`GraphExecutionState.apply()` using a stable execution reference and records frame-aware output tokens and accepted
-`For`/`ForReturn` continuation state is mirrored by a typed, frame-scoped
-`ContinuationRecord`. `ForInvocation` and `ForReturnInvocation` also declare one validated, frame-scoped
+`GraphExecutionState.apply()` using a stable execution reference and records frame-aware output tokens; accepted
+`For`/`ForReturn` continuation state is mirrored by a typed, frame-scoped `ContinuationRecord`.
+`ForInvocation` and `ForReturnInvocation` also declare one validated, frame-scoped
 `continuation` effect per prepared invocation. The `For` effect starts the `for` continuation with the current
 iteration and state; the `ForReturn` effect completes it with output, state, and the continue decision. These effects
 are persisted under the invocation reference. Session-built effect references carry graph-state, durable-frame,
@@ -100,8 +100,7 @@ iteration-path, and workflow-call-depth identity, and stale or cross-scope effec
 never encode `loop_linkage` as a data token. A fresh graph with exactly one static flat `For`/`ForReturn` pair,
 including an empty literal collection or a supported non-empty input-driven collection producer, now uses the generic
 scheduler adapter for readiness and continuation transitions.
-Graph state owns the
-generic continuation boundary: it carries returned state, honors `continue_condition`, materializes the next body
+Graph state owns the generic continuation boundary: it carries returned state, honors `continue_condition`, materializes the next body
 iteration, and finalizes the aggregate. An empty literal collection completes through the existing synthetic terminal
 `For` result without running the body or `ForReturn`. The generic scheduler remains opaque and never receives a literal
 successor node ID. The compatibility continuation bridge is retained only for unsupported loop shapes and explicitly

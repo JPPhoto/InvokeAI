@@ -572,7 +572,8 @@ Workflow-call note:
   points. The planner continues to use the graph state's journal, mappings, caches, and scheduler.
 - `_IfActivationController` Owns fallback runtime `If` admission and compiles opaque, frame-local activation dependency
   records for unsupported fresh shapes and legacy prepared nodes. Fresh ordinary-node single-`If` graphs, the bounded
-  nested pair, the exact bounded three-`If` inner/middle/outer chain, the exact four-`If` nested chain, and exactly two, exactly three, or exactly four independent sibling `If`s
+  nested pair, the exact bounded three-`If` inner/middle/outer chain, the exact four-`If` nested chain, and exactly two,
+  exactly three, or exactly four independent sibling `If`s
   compile those dependencies in graph state. The bounded three-`If` chain also admits one middle-`If` value fan-out to
   one ordinary leaf consumer; that leaf inherits only the outer branch dependency, not middle-`If` polarity. Other
   fan-out remains fallback. Fresh admission leaves rejected

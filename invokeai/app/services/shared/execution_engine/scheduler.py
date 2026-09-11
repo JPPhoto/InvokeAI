@@ -226,7 +226,6 @@ class ExecutionScheduler:
         self._ready_predicate = ready_predicate
         self._claimed: set[NodeId] = set()
         self.indegree: dict[NodeId, int] = {}
-        self._ready: set[NodeId] = set()
         self._enqueued: set[NodeId] = set()
         self._arrival_order: dict[NodeId, int] = {}
         self._next_arrival = 0
@@ -259,7 +258,6 @@ class ExecutionScheduler:
         if not self._passes_ready_predicate(node_id):
             return False
         if node_id not in self._enqueued:
-            self._ready.add(node_id)
             self._enqueued.add(node_id)
             self._arrival_order[node_id] = self._next_arrival
             self._next_arrival += 1
@@ -295,7 +293,6 @@ class ExecutionScheduler:
             self._active_class = self._next_class()
         assert self._active_class is not None
         node_id = self._next_id_for_class(self._active_class)
-        self._ready.remove(node_id)
         self._enqueued.remove(node_id)
         self._claimed.add(node_id)
         return node_id
@@ -364,7 +361,6 @@ class ExecutionScheduler:
 
         self._enqueued.discard(node_id)
         self._claimed.discard(node_id)
-        self._ready.discard(node_id)
         self._arrival_order.pop(node_id, None)
         self.discarded.add(node_id)
         newly_ready: list[NodeId] = []
@@ -407,7 +403,6 @@ class ExecutionScheduler:
         self.executed.add(node_id)
         self._enqueued.discard(node_id)
         self._claimed.discard(node_id)
-        self._ready.discard(node_id)
         self._arrival_order.pop(node_id, None)
         newly_ready: list[NodeId] = []
         for dependent in dependents:
@@ -443,7 +438,6 @@ class ExecutionScheduler:
             for node_id, node in self.plan.nodes.items()
         }
         previous_arrival = self._arrival_order
-        self._ready = set()
         self._enqueued = set()
         self._arrival_order = {}
         self._next_arrival = max(previous_arrival.values(), default=-1) + 1
@@ -455,7 +449,6 @@ class ExecutionScheduler:
                 and self.indegree[node_id] == 0
                 and self._passes_ready_predicate(node_id)
             ):
-                self._ready.add(node_id)
                 self._enqueued.add(node_id)
                 arrival = previous_arrival.get(node_id)
                 if arrival is None:
