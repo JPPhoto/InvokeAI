@@ -423,7 +423,8 @@ prepared iteration when needed, and finalizes `output_collection` and `final_sta
 the generic path completes through the existing synthetic terminal `For` result without running the body or `ForReturn`.
 The generic scheduler receives only opaque node IDs and dependencies; it never receives a literal next node ID. The
 compatibility continuation bridge remains available only for unsupported loop shapes and explicitly legacy-loaded snapshots.
-Input-driven outer collections, deeper, multiple, or unsupported mixed loop shapes remain compatibility-owned; the narrow canonical two-level nested-`For` shape, the canonical bounded
+The exact four-node/four-edge empty input-driven shape with one inputless static-list producer is also generic-routed.
+Other input-driven outer collections, deeper, multiple, or unsupported mixed loop shapes remain compatibility-owned; the narrow canonical two-level nested-`For` shape, the canonical bounded
   internal `Iterate`/`Collect` shape, the exact producer-driven outer nested extension, and the bounded two- through
   six-, seven-, and eight-level serial nested-`Iterate` chains are generic-routed. On
 rehydration, the generic adapter restores the active class-drain
