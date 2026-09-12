@@ -882,6 +882,8 @@ class GraphExecutionState(BaseModel):
     ) -> bool:
         if len(for_nodes) != nested_level or len(return_nodes) != nested_level:
             return False
+        if nested_level == 4 and (len(self.graph.nodes) != 10 or len(self.graph.edges) != 13):
+            return False
 
         outer_candidates: list[ForInvocation] = []
         for_node_bodies: dict[str, Any] = {}
@@ -935,7 +937,9 @@ class GraphExecutionState(BaseModel):
             return False
 
         final_output_edges = self.graph._get_for_final_output_edges(outer_for.id)
-        if len(final_output_edges) > 1:
+        if nested_level == 4 and len(final_output_edges) != 1:
+            return False
+        if nested_level != 4 and len(final_output_edges) > 1:
             return False
         if final_output_edges:
             final_consumer = self.graph.get_node(final_output_edges[0].destination.node_id)

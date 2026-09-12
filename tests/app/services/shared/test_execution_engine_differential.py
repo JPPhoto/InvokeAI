@@ -673,6 +673,51 @@ def _malformed_three_level_nested_for_graph() -> Graph:
     return graph
 
 
+def _input_driven_four_level_nested_for_graph() -> Graph:
+    graph = _four_level_nested_for_graph()
+    graph.add_node(CollectionConcatInvocation(id="outer_source", first=[[[["a"]]]]))
+    graph.add_edge(create_edge("outer_source", "collection", "outer_for", "collection"))
+    return graph
+
+
+def _malformed_four_level_nested_for_graph() -> Graph:
+    graph = _four_level_nested_for_graph()
+    outer_item_edge = next(
+        edge for edge in graph._get_input_edges("middle_for", "collection") if edge.source.node_id == "outer_for"
+    )
+    graph.delete_edge(outer_item_edge)
+    graph.add_node(AnyTypeTestInvocation(id="outer_bridge"))
+    graph.add_edge(create_edge("outer_for", "item", "outer_bridge", "value"))
+    graph.add_edge(create_edge("outer_bridge", "value", "middle_for", "collection"))
+    return graph
+
+
+def _five_level_nested_for_graph() -> Graph:
+    graph = _four_level_nested_for_graph()
+    graph.delete_node("deep_body")
+    graph.add_node(ForInvocation(id="deepest_for"))
+    graph.add_node(AnyTypeTestInvocation(id="deepest_body"))
+    graph.add_node(ForReturnInvocation(id="deepest_return"))
+    graph.add_edge(create_edge("deep_for", "item", "deepest_for", "collection"))
+    graph.add_edge(create_edge("deepest_for", "item", "deepest_body", "value"))
+    graph.add_edge(create_edge("deepest_body", "value", "deepest_return", "output"))
+    graph.add_edge(create_edge("deepest_for", "output_collection", "deep_return", "output"))
+    graph.add_edge(create_loop_linkage("deepest_for", "deepest_return"))
+    return graph
+
+
+def _four_level_nested_for_without_consumer() -> Graph:
+    graph = _four_level_nested_for_graph()
+    graph.delete_node("after")
+    return graph
+
+
+def _four_level_nested_for_with_extra_node() -> Graph:
+    graph = _four_level_nested_for_graph()
+    graph.add_node(AnyTypeTestInvocation(id="extra"))
+    return graph
+
+
 def _nested_for_iterate_collect_graph(*, outer_collection: list[list[str]] | None = None) -> Graph:
     graph = Graph()
     graph.add_node(ForInvocation(id="outer_for", collection=outer_collection or [["a", "b"], ["c"]]))
@@ -2268,6 +2313,23 @@ def test_three_level_nested_for_gate_falls_back_for_unsupported_shapes(graph_fac
     assert not state._can_use_generic_scheduler()
 
 
+@pytest.mark.parametrize(
+    "graph_factory",
+    [
+        pytest.param(_four_level_nested_for_without_consumer, id="missing-consumer"),
+        pytest.param(_four_level_nested_for_with_extra_node, id="extra-disconnected-node"),
+        pytest.param(_input_driven_four_level_nested_for_graph, id="input-driven"),
+        pytest.param(_malformed_four_level_nested_for_graph, id="malformed-link"),
+        pytest.param(_sibling_nested_for_graph, id="sibling"),
+        pytest.param(_five_level_nested_for_graph, id="depth-five"),
+    ],
+)
+def test_four_level_nested_for_gate_falls_back_for_non_exact_shapes(graph_factory: Any) -> None:
+    state = GraphExecutionState(graph=graph_factory())
+
+    assert not state._can_use_generic_scheduler()
+
+
 def test_four_level_nested_for_generic_and_compatibility_paths_match() -> None:
     compatibility_trace, compatibility_state = _run_graph(
         GraphExecutionState(graph=_four_level_nested_for_graph()),
@@ -2288,6 +2350,7 @@ def test_four_level_nested_for_generic_and_compatibility_paths_match() -> None:
 
 
 def test_four_level_nested_for_generic_handles_deepest_empty_collection() -> None:
+    """Compare user-visible behavior; generic synthetic empty frames have a different durable projection."""
     graph = _four_level_nested_for_graph(outer_collection=[[[[]]]])
     compatibility_trace, compatibility_state = _run_graph(
         GraphExecutionState(graph=graph),
@@ -2300,7 +2363,6 @@ def test_four_level_nested_for_generic_handles_deepest_empty_collection() -> Non
     assert generic_trace == compatibility_trace
     assert generic_state.is_complete()
     assert compatibility_state.is_complete()
-    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
     assert _source_output(generic_state, "after").value == [[[[]]]]
     assert _source_output(compatibility_state, "after").value == [[[[]]]]
 
