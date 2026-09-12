@@ -981,14 +981,45 @@ class GraphExecutionState(BaseModel):
                 ),
                 None,
             )
-            if (
-                outer_for is None
-                or self.graph._get_input_edges(outer_for.id, COLLECTION_FIELD)
-                or not outer_for.collection
+            if outer_for is None or (
+                not self.graph._get_input_edges(outer_for.id, COLLECTION_FIELD) and not outer_for.collection
             ):
                 return False
             nested_body = self.graph._get_supported_for_nested_for_body(outer_for.id, source_graph)
             assert nested_body is not None
+            outer_collection_edges = self.graph._get_input_edges(outer_for.id, COLLECTION_FIELD)
+            if outer_collection_edges:
+                if len(outer_collection_edges) != 1 or outer_for.collection:
+                    return False
+                outer_collection_edge = outer_collection_edges[0]
+                if outer_collection_edge.destination.field != COLLECTION_FIELD:
+                    return False
+                producer = self.graph.get_node(outer_collection_edge.source.node_id)
+                if not isinstance(producer, CollectionConcatInvocation) or (not producer.first and not producer.second):
+                    return False
+                if (
+                    outer_collection_edge.source.field != "collection"
+                    or self.graph._get_input_edges(producer.id)
+                    or self.graph._get_output_edges(producer.id) != outer_collection_edges
+                ):
+                    return False
+                inner_for_id = nested_body.inner_for_ids[0]
+                inner_return_id = self.graph._get_linked_for_return_id(inner_for_id)
+                final_output_edges = self.graph._get_for_final_output_edges(outer_for.id)
+                if inner_return_id is None or len(final_output_edges) != 1:
+                    return False
+                final_consumer = self.graph.get_node(final_output_edges[0].destination.node_id)
+                if (
+                    final_output_edges[0].source.field != "output_collection"
+                    or final_consumer.id in {outer_for.id, inner_for_id, inner_return_id, nested_body.outer_return_id}
+                    or isinstance(
+                        final_consumer, (ForInvocation, ForReturnInvocation, IterateInvocation, CollectInvocation)
+                    )
+                    or self.graph._get_input_edges(final_consumer.id) != final_output_edges
+                    or len(self.graph.nodes) != 7
+                    or len(self.graph.edges) != 8
+                ):
+                    return False
             inner_for = self.graph.get_node(nested_body.inner_for_ids[0])
             if not isinstance(inner_for, ForInvocation):
                 return False

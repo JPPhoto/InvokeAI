@@ -661,6 +661,19 @@ def _input_driven_three_level_nested_for_graph() -> Graph:
     return graph
 
 
+def _input_driven_nested_for_graph(*, outer_collection: list[list[str]] | None = None) -> Graph:
+    graph = _nested_for_graph(outer_collection=outer_collection)
+    graph.get_node("outer_for").collection = []
+    graph.add_node(
+        CollectionConcatInvocation(
+            id="outer_source",
+            first=[["a", "b"], ["c"]] if outer_collection is None else outer_collection,
+        )
+    )
+    graph.add_edge(create_edge("outer_source", "collection", "outer_for", "collection"))
+    return graph
+
+
 def _malformed_three_level_nested_for_graph() -> Graph:
     graph = _three_level_nested_for_graph()
     outer_item_edge = next(
@@ -2096,6 +2109,120 @@ def test_nested_for_generic_and_compatibility_paths_have_matching_completion() -
         if source_node_id == "after"
     )
     assert compatibility_state.results[compatibility_after_exec_id].value == [["a", "b"], ["c"]]
+
+
+def test_input_driven_nested_for_uses_generic_scheduler() -> None:
+    state = GraphExecutionState(graph=_input_driven_nested_for_graph())
+
+    assert state._can_use_generic_scheduler()
+
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=_input_driven_nested_for_graph()),
+        force_compatibility_scheduler=True,
+    )
+    generic_trace, generic_state = _run_graph(state)
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert isinstance(compatibility_state._execution_scheduler, _ExecutionScheduler)
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert _source_output(generic_state, "after").value == [["a", "b"], ["c"]]
+    assert generic_trace.count("outer_source") == compatibility_trace.count("outer_source") == 1
+
+
+def test_input_driven_nested_for_empty_outer_result_remains_compatibility_owned() -> None:
+    graph = _input_driven_nested_for_graph(outer_collection=[])
+    state = GraphExecutionState(graph=graph)
+
+    assert not state._can_use_generic_scheduler()
+    assert isinstance(state._scheduler(), _ExecutionScheduler)
+
+
+def test_input_driven_nested_for_empty_range_remains_compatibility_owned_and_completes() -> None:
+    graph = _input_driven_nested_for_graph()
+    graph.delete_node("outer_source")
+    graph.add_node(RangeInvocation(id="outer_source", start=0, stop=1, step=-1))
+    graph.add_edge(create_edge("outer_source", "collection", "outer_for", "collection"))
+    state = GraphExecutionState(graph=graph)
+
+    assert not state._can_use_generic_scheduler()
+
+    trace, state = _run_graph(state, stop_after=1)
+
+    assert trace == ["outer_source"]
+    assert _source_output(state, "outer_source").collection == []
+    assert isinstance(state._execution_scheduler, _ExecutionScheduler)
+
+
+def test_input_driven_nested_for_generic_handles_empty_inner_collection() -> None:
+    def graph_factory() -> Graph:
+        return _input_driven_nested_for_graph(outer_collection=[[], ["c"]])
+
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=graph_factory()),
+        force_compatibility_scheduler=True,
+    )
+    generic_trace, generic_state = _run_graph(GraphExecutionState(graph=graph_factory()))
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert _source_output(generic_state, "after").value == [[], ["c"]]
+    assert _source_output(compatibility_state, "after").value == [[], ["c"]]
+
+
+@pytest.mark.parametrize("stop_after", [1, 4], ids=["after-producer", "mid-inner"])
+def test_input_driven_nested_for_reload_does_not_replay_completed_work(stop_after: int) -> None:
+    expected_trace, expected_state = _run_graph(GraphExecutionState(graph=_input_driven_nested_for_graph()))
+    partial_trace, partial_state = _run_graph(
+        GraphExecutionState(graph=_input_driven_nested_for_graph()),
+        stop_after=stop_after,
+    )
+
+    resumed_trace, resumed_state = _run_graph(load_execution_state(dump_execution_state(partial_state)))
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert "outer_source" not in resumed_trace
+    assert resumed_state.is_complete()
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+
+    compatibility_partial_trace, compatibility_partial_state = _run_graph(
+        GraphExecutionState(graph=_input_driven_nested_for_graph()),
+        force_compatibility_scheduler=True,
+        stop_after=stop_after,
+    )
+    compatibility_resumed_trace, compatibility_resumed_state = _run_graph(
+        load_execution_state(dump_execution_state(compatibility_partial_state)),
+        force_compatibility_scheduler=True,
+    )
+
+    assert compatibility_partial_trace + compatibility_resumed_trace == expected_trace
+    assert "outer_source" not in compatibility_resumed_trace
+    assert compatibility_resumed_state.is_complete()
+    assert _state_projection(compatibility_resumed_state) == _state_projection(expected_state)
+    assert resumed_trace == compatibility_resumed_trace
+
+
+def test_input_driven_nested_for_failure_matches_compatibility() -> None:
+    generic_trace, generic_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_input_driven_nested_for_graph()),
+        fail_source_id="inner_body",
+    )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_input_driven_nested_for_graph()),
+        force_compatibility_scheduler=True,
+        fail_source_id="inner_body",
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.has_error() and compatibility_state.has_error()
+    assert generic_state.is_complete() and compatibility_state.is_complete()
+    assert "inner_return" not in generic_trace
+    assert "outer_return" not in generic_trace
+    assert "after" not in generic_trace
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
 
 
 def test_two_sibling_nested_for_fan_in_uses_generic_scheduler() -> None:
