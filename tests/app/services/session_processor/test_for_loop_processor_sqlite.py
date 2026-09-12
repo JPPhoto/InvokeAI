@@ -775,6 +775,85 @@ def test_processor_sqlite_two_sibling_nested_for_cancel_root_retry_cleans_identi
     )
 
 
+def test_processor_sqlite_two_sibling_nested_for_failure_cleans_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_invoker: Invoker,
+    registered_event_bus: _RecordingRegisteredEventService,
+) -> None:
+    monkeypatch.setattr(
+        "invokeai.app.services.session_processor.session_processor_default.build_invocation_context",
+        _build_test_invocation_context,
+    )
+
+    queue = SqliteSessionQueue(db=mock_invoker.services.board_records._db)
+    mock_invoker.services.events = registered_event_bus
+    mock_invoker.services.session_queue = queue
+    mock_invoker.services.performance_statistics = _Stats()
+    queue.start(mock_invoker)
+
+    captured_sessions: list[GraphExecutionState] = []
+    original_set_queue_item_session = queue.set_queue_item_session
+
+    def capture_set_queue_item_session(item_id: int, session: GraphExecutionState):
+        captured_sessions.append(session)
+        return original_set_queue_item_session(item_id, session)
+
+    monkeypatch.setattr(queue, "set_queue_item_session", capture_set_queue_item_session)
+
+    graph = _build_two_sibling_nested_for_fan_in_graph()
+    graph.nodes["left_body"].fail_on = 1
+    item_id = _insert_session(queue, graph, versioned=True)
+    processor = DefaultSessionProcessor(polling_interval=0)
+    try:
+        processor.start(mock_invoker)
+        assert registered_event_bus.wait_for_status(item_id, "failed")
+    finally:
+        _stop_processor(processor)
+
+    assert captured_sessions
+    live_failed_session = captured_sessions[0]
+    live_runtime = live_failed_session._generic_runtime()
+    assert not live_runtime.gates
+    assert not live_runtime.streams
+    assert not live_runtime.continuations
+    assert not live_failed_session._ready_queues
+    assert not live_failed_session._ready_node_ids
+    assert live_failed_session._active_class is None
+    assert live_failed_session._generic_graph_scheduler is None
+    assert not isinstance(live_failed_session._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert live_failed_session.execution_refs
+    assert live_failed_session.execution_tokens
+    assert live_failed_session.execution_effects
+
+    failed_item = queue.get_queue_item(item_id)
+    assert failed_item.status == "failed"
+    assert failed_item.error_type == "ValueError"
+    assert failed_item.error_message == "Refusing loop value 1"
+    assert queue.get_current("default") is None
+
+    session = failed_item.session
+    assert session.execution_refs
+    assert all(
+        session.execution_refs[execution_id] == execution_ref
+        for execution_id, execution_ref in live_failed_session.execution_refs.items()
+    )
+    assert session.execution_tokens
+    assert set(live_failed_session.execution_tokens) <= set(session.execution_tokens)
+    assert session.execution_effects
+    assert set(live_failed_session.execution_effects) <= set(session.execution_effects)
+    assert session.has_error()
+    assert ("outer_for", ()) not in session.finalized_loop_contexts
+    for source_id in ("join", "outer_return", "after"):
+        assert not any(
+            execution_id in session.results for execution_id in session.source_prepared_mapping.get(source_id, ())
+        )
+
+    runtime = session._generic_runtime()
+    assert not runtime.gates
+    assert not runtime.streams
+    assert not runtime.continuations
+
+
 @pytest.mark.parametrize("outcome", ["success", "canceled", "failure"])
 def test_processor_sqlite_queue_nested_for_cleanup(
     monkeypatch: pytest.MonkeyPatch,

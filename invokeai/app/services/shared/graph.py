@@ -1227,6 +1227,20 @@ class GraphExecutionState(BaseModel):
             self._generic_execution_runtime = ExecutionEngineRuntime()
         return self._generic_execution_runtime
 
+    def _clear_transient_runtime(self) -> None:
+        """Clear scheduling projections after execution reaches a terminal error."""
+
+        if self._generic_execution_runtime is not None:
+            self._generic_execution_runtime.gates.clear()
+            self._generic_execution_runtime.streams.clear()
+            self._generic_execution_runtime.continuations.clear()
+        self._ready_queues = {}
+        self._ready_node_ids = set()
+        self._active_class = None
+        if isinstance(self._execution_scheduler, _GenericGraphSchedulerAdapter):
+            self._execution_scheduler = None
+            self._generic_graph_scheduler = None
+
     def _engine_frame(self, iteration_path: tuple[int, ...]) -> EngineExecutionFrame:
         frame_id = f"{self.id}:{len(self.workflow_call_stack)}:{','.join(str(i) for i in iteration_path)}"
         return EngineExecutionFrame(
@@ -3000,6 +3014,8 @@ class GraphExecutionState(BaseModel):
         self._rehydrate_prepared_exec_metadata()
         self._rehydrate_resolved_if_exec_branches()
         self._rehydrate_generic_runtime_state()
+        if self.has_error():
+            self._clear_transient_runtime()
         self._rehydrate_ready_queues()
         if self._pending_if_exec_nodes:
             self._materializer()._attach_pending_if_inputs(enqueue=False)
@@ -3101,6 +3117,7 @@ class GraphExecutionState(BaseModel):
     def set_node_error(self, node_id: str, error: str):
         """Marks a node as errored"""
         self.errors[node_id] = error
+        self._clear_transient_runtime()
 
     def is_complete(self) -> bool:
         """Returns true if the graph is complete"""
