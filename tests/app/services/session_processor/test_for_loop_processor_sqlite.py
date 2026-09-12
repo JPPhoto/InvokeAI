@@ -951,6 +951,7 @@ def test_processor_sqlite_two_sibling_nested_for_cancel_root_retry_cleans_identi
     completed_runtime = completed_item.session._generic_runtime()
     assert not completed_runtime.gates
     assert not completed_runtime.streams
+    assert completed_runtime.continuations
     assert all(
         continuation.frame.state_id == completed_item.session.id
         for continuation in completed_runtime.continuations.values()
