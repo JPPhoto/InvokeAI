@@ -1083,6 +1083,40 @@ def test_processor_sqlite_four_level_nested_for_failure_cleans_runtime(
     assert session.has_error()
     assert reloaded_item.error_type == "ValueError"
     assert reloaded_item.error_message == "Refusing loop value 1"
+
+    expected_sources = {
+        "outer_for": 1,
+        "second_for": 1,
+        "third_for": 1,
+        "deepest_for": 1,
+        "body": 1,
+        "deepest_return": 1,
+    }
+    assert {source_id: len(execution_ids) for source_id, execution_ids in session.source_prepared_mapping.items()} == (
+        expected_sources
+    )
+    assert {
+        reference.source_node_id: reference.frame.iteration_path for reference in session.execution_refs.values()
+    } == {
+        "outer_for": (0,),
+        "second_for": (0, 0),
+        "third_for": (0, 0, 0),
+        "deepest_for": (0, 0, 0, 0),
+        "body": (0, 0, 0, 0),
+        "deepest_return": (0, 0, 0, 0),
+    }
+    assert len(session.execution_refs) == 6
+    assert len(session.execution_tokens) == 24
+    assert len(session.execution_effects) == 4
+    assert all(
+        reference.state_id == session.id
+        and reference.frame.state_id == session.id
+        and reference.frame.frame_id
+        and reference.frame.iteration_path
+        for reference in session.execution_refs.values()
+    )
+    assert len(session.errors) == 1
+    assert next(iter(session.errors.values())) == "ValueError: Refusing loop value 1"
     assert ("outer_for", ()) not in session.finalized_loop_contexts
     for source_id in ("deepest_return", "third_return", "second_return", "outer_return", "after"):
         assert not any(
