@@ -808,6 +808,7 @@ def test_processor_sqlite_four_level_nested_for_cancel_restart_retry_isolates_ex
     completed_runtime = completed_item.session._generic_runtime()
     assert not completed_runtime.gates
     assert not completed_runtime.streams
+    assert completed_runtime.continuations
     assert all(
         continuation.frame.state_id == completed_item.session.id
         and continuation.frame.frame_id not in canceled_frame_ids
