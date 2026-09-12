@@ -46,6 +46,7 @@ from invokeai.app.invocations.baseinvocation import (
     invocation_output,  # noqa: F401
 )
 from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvocation
+from invokeai.app.invocations.collections import CollectionConcatInvocation
 from invokeai.app.invocations.fields import Input, InputField, OutputField, OutputScope, UIType  # noqa: F401
 from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.invocations.loops import (
@@ -763,6 +764,114 @@ class GraphExecutionState(BaseModel):
 
         return self._apply_generic_for_continuation(exec_node_id, output)
 
+    def _can_use_generic_two_sibling_nested_for_scheduler(
+        self, for_nodes: list[ForInvocation], return_nodes: list[ForReturnInvocation], source_graph: Any
+    ) -> bool:
+        if len(for_nodes) != 3 or len(return_nodes) != 3 or len(self.graph.nodes) != 10 or len(self.graph.edges) != 13:
+            return False
+
+        outer_candidates = []
+        nested_bodies = {}
+        for node in for_nodes:
+            nested_body = self.graph._get_supported_for_nested_for_body(node.id, source_graph)
+            if nested_body is not None:
+                nested_bodies[node.id] = nested_body
+                if len(nested_body.inner_for_ids) == 2 and len(nested_body.continuation_nodes) == 1:
+                    outer_candidates.append(node)
+        if len(outer_candidates) != 1:
+            return False
+
+        outer_for = outer_candidates[0]
+        nested_body = nested_bodies[outer_for.id]
+        child_ids = set(nested_body.inner_for_ids)
+        if self.graph._get_input_edges(outer_for.id, COLLECTION_FIELD) or not outer_for.collection:
+            return False
+        outer_return_id = nested_body.outer_return_id
+        child_return_ids = {self.graph._get_linked_for_return_id(child_id) for child_id in child_ids}
+        if None in child_return_ids or child_return_ids | {outer_return_id} != {node.id for node in return_nodes}:
+            return False
+
+        join_id = next(iter(nested_body.continuation_nodes))
+        join = self.graph.get_node(join_id)
+        if not isinstance(join, CollectionConcatInvocation):
+            return False
+        join_inputs = self.graph._get_input_edges(join_id)
+        if len(join_inputs) != 2 or {edge.destination.field for edge in join_inputs} != {"first", "second"}:
+            return False
+        if {edge.source.node_id for edge in join_inputs} != child_ids or any(
+            edge.source.field != "output_collection" for edge in join_inputs
+        ):
+            return False
+
+        outer_return_inputs = self.graph._get_input_edges(outer_return_id, "output")
+        if len(outer_return_inputs) != 1 or (
+            outer_return_inputs[0].source.node_id != join_id or outer_return_inputs[0].source.field != "collection"
+        ):
+            return False
+        if self.graph._get_input_edges(outer_return_id) != outer_return_inputs:
+            return False
+        if self.graph._get_linked_for_return_id(outer_for.id) != outer_return_id:
+            return False
+
+        control_types = (ForInvocation, ForReturnInvocation, IterateInvocation, CollectInvocation, IfInvocation)
+        outer_item_edges = self.graph._get_output_edges(outer_for.id, ITEM_FIELD)
+        if len(outer_item_edges) != 2:
+            return False
+        body_ids: set[str] = set()
+
+        for child_id in child_ids:
+            child_collection_edges = self.graph._get_input_edges(child_id, COLLECTION_FIELD)
+            if len(child_collection_edges) != 1 or self.graph._get_input_edges(child_id) != child_collection_edges:
+                return False
+            child_collection_edge = child_collection_edges[0]
+            if child_collection_edge.source.node_id != outer_for.id or child_collection_edge.source.field != ITEM_FIELD:
+                return False
+            if child_collection_edges[0] not in outer_item_edges:
+                return False
+
+            child_return_id = self.graph._get_linked_for_return_id(child_id)
+            if child_return_id is None:
+                return False
+            child_body_path = self.graph._get_for_body_path_to_return(child_id, source_graph)
+            if child_body_path is None or len(child_body_path[0]) != 2 or child_body_path[1] != child_return_id:
+                return False
+            child_body_ids = child_body_path[0] - {child_return_id}
+            if len(child_body_ids) != 1:
+                return False
+            body_id = next(iter(child_body_ids))
+            body_ids.add(body_id)
+            body = self.graph.get_node(body_id)
+            if isinstance(body, control_types):
+                return False
+            body_inputs = self.graph._get_input_edges(body_id)
+            body_outputs = self.graph._get_output_edges(body_id)
+            if len(body_inputs) != 1 or len(body_outputs) != 1:
+                return False
+            if body_inputs[0].source.node_id != child_id or body_inputs[0].source.field != ITEM_FIELD:
+                return False
+            if self.graph._get_output_edges(child_id, ITEM_FIELD) != body_inputs:
+                return False
+            if body_outputs[0].destination.node_id != child_return_id or body_outputs[0].destination.field != "output":
+                return False
+            if self.graph._get_input_edges(child_return_id) != body_outputs:
+                return False
+            if self.graph._get_for_final_output_edges(child_id) != [
+                edge for edge in self.graph._get_output_edges(child_id) if edge.source.field == "output_collection"
+            ]:
+                return False
+
+        outer_final_edges = self.graph._get_for_final_output_edges(outer_for.id)
+        if len(outer_final_edges) != 1 or outer_final_edges[0].source.field != "output_collection":
+            return False
+        after_id = outer_final_edges[0].destination.node_id
+        after = self.graph.get_node(after_id)
+        if isinstance(after, control_types) or outer_final_edges[0].destination.field != "value":
+            return False
+        if self.graph._get_input_edges(after_id) != outer_final_edges:
+            return False
+        expected_nodes = {outer_for.id, *child_ids, outer_return_id, join_id, after_id, *child_return_ids, *body_ids}
+        return set(self.graph.nodes) == expected_nodes
+
     def _can_use_generic_three_level_nested_for_scheduler(
         self, for_nodes: list[ForInvocation], return_nodes: list[ForReturnInvocation], source_graph: Any
     ) -> bool:
@@ -842,6 +951,8 @@ class GraphExecutionState(BaseModel):
             return self._can_use_generic_nested_iterate_scheduler(for_nodes, return_nodes)
         source_graph = self._get_source_graph_flat()
         if len(for_nodes) == 3 and len(return_nodes) == 3:
+            if self._can_use_generic_two_sibling_nested_for_scheduler(for_nodes, return_nodes, source_graph):
+                return True
             return self._can_use_generic_three_level_nested_for_scheduler(for_nodes, return_nodes, source_graph)
         if len(for_nodes) == 2 and len(return_nodes) == 2:
             outer_for = next(

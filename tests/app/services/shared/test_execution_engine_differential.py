@@ -41,6 +41,7 @@ from invokeai.app.services.shared.invocation_context import InvocationContextDat
 from tests.test_nodes import (
     AnyTypeTestInvocation,
     ErrorInvocation,
+    MarkedAnyTypeTestInvocation,
     PolymorphicStringTestInvocation,
     UnionCollectionTestInvocation,
     create_edge,
@@ -537,6 +538,42 @@ def _nested_for_graph(*, outer_collection: list[list[str]] | None = None) -> Gra
     connect("outer_for", "output_collection", "after", "value")
     graph.add_edge(create_loop_linkage("outer_for", "outer_return"))
     graph.add_edge(create_loop_linkage("inner_for", "inner_return"))
+    return graph
+
+
+def _two_sibling_nested_for_fan_in_graph(
+    *, outer_collection: list[list[str]] | None = None, outer_output_field: str = "output_collection"
+) -> Graph:
+    graph = Graph()
+    graph.add_node(
+        ForInvocation(id="outer_for", collection=[["a", "b"], ["c"]] if outer_collection is None else outer_collection)
+    )
+    graph.add_node(ForInvocation(id="left_for"))
+    graph.add_node(ForInvocation(id="right_for"))
+    graph.add_node(MarkedAnyTypeTestInvocation(id="left_body", marker="left:"))
+    graph.add_node(MarkedAnyTypeTestInvocation(id="right_body", marker="right:"))
+    graph.add_node(ForReturnInvocation(id="left_return"))
+    graph.add_node(ForReturnInvocation(id="right_return"))
+    graph.add_node(CollectionConcatInvocation(id="join"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+
+    def connect(source: str, source_field: str, destination: str, destination_field: str) -> None:
+        graph.add_edge(create_edge(source, source_field, destination, destination_field))
+
+    connect("outer_for", "item", "left_for", "collection")
+    connect("outer_for", "item", "right_for", "collection")
+    connect("left_for", "item", "left_body", "value")
+    connect("right_for", "item", "right_body", "value")
+    connect("left_body", "value", "left_return", "output")
+    connect("right_body", "value", "right_return", "output")
+    connect("left_for", "output_collection", "join", "first")
+    connect("right_for", "output_collection", "join", "second")
+    connect("join", "collection", "outer_return", "output")
+    connect("outer_for", outer_output_field, "after", "value")
+    graph.add_edge(create_loop_linkage("outer_for", "outer_return"))
+    graph.add_edge(create_loop_linkage("left_for", "left_return"))
+    graph.add_edge(create_loop_linkage("right_for", "right_return"))
     return graph
 
 
@@ -2011,6 +2048,55 @@ def test_nested_for_generic_and_compatibility_paths_have_matching_completion() -
         if source_node_id == "after"
     )
     assert compatibility_state.results[compatibility_after_exec_id].value == [["a", "b"], ["c"]]
+
+
+def test_two_sibling_nested_for_fan_in_uses_generic_scheduler() -> None:
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=_two_sibling_nested_for_fan_in_graph()),
+        force_compatibility_scheduler=True,
+    )
+    generic_trace, generic_state = _run_graph(GraphExecutionState(graph=_two_sibling_nested_for_fan_in_graph()))
+
+    assert generic_trace == compatibility_trace
+    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert isinstance(compatibility_state._execution_scheduler, _ExecutionScheduler)
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert _source_output(generic_state, "after").value == [
+        ["left:a", "left:b", "right:a", "right:b"],
+        ["left:c", "right:c"],
+    ]
+
+
+def test_two_sibling_nested_for_final_state_consumer_uses_compatibility_scheduler() -> None:
+    state = GraphExecutionState(graph=_two_sibling_nested_for_fan_in_graph(outer_output_field="final_state"))
+    trace, state = _run_graph(state)
+
+    assert trace
+    assert isinstance(state._execution_scheduler, _ExecutionScheduler)
+    assert state.is_complete()
+    assert _source_output(state, "after").value.values == {}
+
+
+def test_two_sibling_nested_for_fan_in_failure_matches_compatibility() -> None:
+    generic_trace, generic_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_two_sibling_nested_for_fan_in_graph()),
+        fail_source_id="left_body",
+    )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_two_sibling_nested_for_fan_in_graph()),
+        force_compatibility_scheduler=True,
+        fail_source_id="left_body",
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.has_error() and compatibility_state.has_error()
+    assert generic_state.is_complete() and compatibility_state.is_complete()
+    assert "join" not in generic_trace
+    assert "outer_return" not in generic_trace
+    assert "after" not in generic_trace
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
 
 
 def test_nested_for_generic_and_compatibility_paths_handle_empty_inner_collection() -> None:
