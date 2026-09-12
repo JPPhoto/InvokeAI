@@ -872,10 +872,15 @@ class GraphExecutionState(BaseModel):
         expected_nodes = {outer_for.id, *child_ids, outer_return_id, join_id, after_id, *child_return_ids, *body_ids}
         return set(self.graph.nodes) == expected_nodes
 
-    def _can_use_generic_three_level_nested_for_scheduler(
-        self, for_nodes: list[ForInvocation], return_nodes: list[ForReturnInvocation], source_graph: Any
+    def _can_use_generic_serial_nested_for_scheduler(
+        self,
+        for_nodes: list[ForInvocation],
+        return_nodes: list[ForReturnInvocation],
+        source_graph: Any,
+        *,
+        nested_level: Literal[3, 4] = 3,
     ) -> bool:
-        if len(for_nodes) != 3 or len(return_nodes) != 3:
+        if len(for_nodes) != nested_level or len(return_nodes) != nested_level:
             return False
 
         outer_candidates: list[ForInvocation] = []
@@ -903,7 +908,7 @@ class GraphExecutionState(BaseModel):
             return False
 
         chain = [outer_for]
-        while len(chain) < 3:
+        while len(chain) < nested_level:
             parent_for = chain[-1]
             nested_body = for_node_bodies.get(parent_for.id)
             if nested_body is None or len(nested_body.inner_for_ids) != 1 or nested_body.continuation_nodes:
@@ -920,7 +925,7 @@ class GraphExecutionState(BaseModel):
                 return False
             chain.append(child_for)
 
-        if len(chain) != 3 or {node.id for node in chain} != {node.id for node in for_nodes}:
+        if len(chain) != nested_level or {node.id for node in chain} != {node.id for node in for_nodes}:
             return False
         if chain[-1].id in for_node_bodies:
             return False
@@ -953,7 +958,14 @@ class GraphExecutionState(BaseModel):
         if len(for_nodes) == 3 and len(return_nodes) == 3:
             if self._can_use_generic_two_sibling_nested_for_scheduler(for_nodes, return_nodes, source_graph):
                 return True
-            return self._can_use_generic_three_level_nested_for_scheduler(for_nodes, return_nodes, source_graph)
+            return self._can_use_generic_serial_nested_for_scheduler(for_nodes, return_nodes, source_graph)
+        if len(for_nodes) == 4 and len(return_nodes) == 4:
+            return self._can_use_generic_serial_nested_for_scheduler(
+                for_nodes,
+                return_nodes,
+                source_graph,
+                nested_level=4,
+            )
         if len(for_nodes) == 2 and len(return_nodes) == 2:
             outer_for = next(
                 (

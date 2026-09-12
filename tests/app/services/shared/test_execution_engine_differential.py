@@ -609,8 +609,11 @@ def _three_level_nested_for_graph(*, outer_collection: list[list[list[str]]] | N
     return graph
 
 
-def _four_level_nested_for_graph() -> Graph:
+def _four_level_nested_for_graph(*, outer_collection: list[list[list[list[str]]]] | None = None) -> Graph:
     graph = _three_level_nested_for_graph()
+    graph.get_node("outer_for").collection = (
+        [[[["a", "b"], ["c"]], [["d"]]], [[["e"]]]] if outer_collection is None else outer_collection
+    )
     graph.delete_node("inner_body")
     graph.add_node(ForInvocation(id="deep_for"))
     graph.add_node(AnyTypeTestInvocation(id="deep_body"))
@@ -2254,7 +2257,6 @@ def test_three_level_nested_for_generic_failure_matches_compatibility() -> None:
 @pytest.mark.parametrize(
     "graph_factory",
     [
-        pytest.param(_four_level_nested_for_graph, id="four-level"),
         pytest.param(_sibling_nested_for_graph, id="sibling"),
         pytest.param(_input_driven_three_level_nested_for_graph, id="input-driven"),
         pytest.param(_malformed_three_level_nested_for_graph, id="malformed-link"),
@@ -2264,6 +2266,97 @@ def test_three_level_nested_for_gate_falls_back_for_unsupported_shapes(graph_fac
     state = GraphExecutionState(graph=graph_factory())
 
     assert not state._can_use_generic_scheduler()
+
+
+def test_four_level_nested_for_generic_and_compatibility_paths_match() -> None:
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=_four_level_nested_for_graph()),
+        force_compatibility_scheduler=True,
+    )
+    generic_trace, generic_state = _run_graph(GraphExecutionState(graph=_four_level_nested_for_graph()))
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert isinstance(compatibility_state._execution_scheduler, _ExecutionScheduler)
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert _source_output(generic_state, "after").value == [
+        [[["a", "b"], ["c"]], [["d"]]],
+        [[["e"]]],
+    ]
+
+
+def test_four_level_nested_for_generic_handles_deepest_empty_collection() -> None:
+    graph = _four_level_nested_for_graph(outer_collection=[[[[]]]])
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+    )
+    generic_trace, generic_state = _run_graph(
+        GraphExecutionState(graph=_four_level_nested_for_graph(outer_collection=[[[[]]]]))
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert _source_output(generic_state, "after").value == [[[[]]]]
+    assert _source_output(compatibility_state, "after").value == [[[[]]]]
+
+
+def test_four_level_nested_for_generic_rehydrates_without_replaying_completed_body() -> None:
+    expected_trace, expected_state = _run_graph(GraphExecutionState(graph=_four_level_nested_for_graph()))
+    partial_trace, partial_state = _run_graph(
+        GraphExecutionState(graph=_four_level_nested_for_graph()),
+        stop_after=6,
+    )
+
+    resumed_trace, resumed_state = _run_graph(load_execution_state(dump_execution_state(partial_state)))
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert resumed_trace[0] != "outer_for"
+    assert resumed_state.is_complete()
+    assert isinstance(resumed_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+
+
+def test_four_level_nested_for_generic_failure_matches_compatibility() -> None:
+    generic_trace, generic_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_four_level_nested_for_graph()),
+        fail_source_id="deep_body",
+    )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_four_level_nested_for_graph()),
+        force_compatibility_scheduler=True,
+        fail_source_id="deep_body",
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.has_error() and compatibility_state.has_error()
+    assert generic_state.is_complete() and compatibility_state.is_complete()
+    assert "deep_return" not in generic_trace
+    assert "inner_return" not in generic_trace
+    assert "middle_return" not in generic_trace
+    assert "outer_return" not in generic_trace
+    assert "after" not in generic_trace
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+
+
+def test_four_level_nested_for_legacy_snapshot_remains_compatibility_owned() -> None:
+    _, partial_state = _run_graph(
+        GraphExecutionState(graph=_four_level_nested_for_graph()),
+        stop_after=2,
+    )
+    snapshot = dump_execution_state(partial_state)
+    snapshot.pop("execution_state_version")
+    snapshot.pop("execution_effects")
+
+    restored = load_execution_state(snapshot)
+
+    assert restored._legacy_snapshot_loaded
+    assert restored._can_use_generic_scheduler() is False
+    assert isinstance(restored._scheduler(), _ExecutionScheduler)
 
 
 def test_nested_for_iterate_collect_generic_and_compatibility_paths_have_matching_completion() -> None:
