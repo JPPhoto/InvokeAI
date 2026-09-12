@@ -59,6 +59,7 @@ const videoItem = (mediaOrigin?: string): GalleryVideoItem => ({
 const adapter = {
   getUploadBoardId: () => 'none',
   patchValues: (_values: Partial<VideoWidgetValues>) => undefined,
+  playVideoSpanInPreview: () => undefined,
   projectId: 'project-1',
   rawValues: {},
   reportError: () => undefined,
