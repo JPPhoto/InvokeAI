@@ -2382,6 +2382,19 @@ def test_four_level_nested_for_generic_rehydrates_without_replaying_completed_bo
     assert isinstance(resumed_state._execution_scheduler, _GenericGraphSchedulerAdapter)
     assert _state_projection(resumed_state) == _state_projection(expected_state)
 
+    compatibility_partial_trace, compatibility_partial_state = _run_graph(
+        GraphExecutionState(graph=_four_level_nested_for_graph()),
+        force_compatibility_scheduler=True,
+        stop_after=6,
+    )
+    compatibility_resumed_trace, compatibility_resumed_state = _run_graph(
+        load_execution_state(dump_execution_state(compatibility_partial_state)),
+        force_compatibility_scheduler=True,
+    )
+
+    assert compatibility_partial_trace + compatibility_resumed_trace == expected_trace
+    assert _state_projection(compatibility_resumed_state) == _state_projection(expected_state)
+
 
 def test_four_level_nested_for_generic_failure_matches_compatibility() -> None:
     generic_trace, generic_state = _run_graph_with_effects(
