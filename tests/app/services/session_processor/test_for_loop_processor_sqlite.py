@@ -2,6 +2,7 @@ import asyncio
 import json
 import uuid
 from contextlib import contextmanager
+from copy import deepcopy
 from threading import Condition, Event
 from types import SimpleNamespace
 from typing import Any, Iterator
@@ -870,11 +871,37 @@ def test_processor_sqlite_three_level_nested_for_failure_cleans_runtime(
     mock_invoker.services.performance_statistics = _Stats()
     queue.start(mock_invoker)
 
-    captured_sessions: list[GraphExecutionState] = []
+    body_scheduler_seen: list[str] = []
     original_set_queue_item_session = queue.set_queue_item_session
+    failed_persistence_snapshot: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, str]] | None = None
+
+    def record_generic_scheduler_before_body(invocation, queue_item) -> None:
+        if queue_item.session.prepared_source_mapping[invocation.id] == "body":
+            assert isinstance(queue_item.session._execution_scheduler, _GenericGraphSchedulerAdapter)
+            body_scheduler_seen.append(invocation.id)
 
     def capture_set_queue_item_session(item_id: int, session: GraphExecutionState):
-        captured_sessions.append(session)
+        nonlocal failed_persistence_snapshot
+        if session.has_error():
+            assert session._generic_execution_runtime is not None
+            runtime = session._generic_execution_runtime
+            assert not runtime.gates
+            assert not runtime.streams
+            assert not runtime.continuations
+            assert not session._ready_queues
+            assert not session._ready_node_ids
+            assert session._active_class is None
+            assert session._generic_graph_scheduler is None
+            assert not isinstance(session._execution_scheduler, _GenericGraphSchedulerAdapter)
+            snapshot_session = session.model_copy(deep=True)
+            snapshot_session._rehydrate_execution_refs()
+            durable_snapshot = dump_execution_state(snapshot_session)
+            failed_persistence_snapshot = (
+                deepcopy(durable_snapshot["execution_refs"]),
+                deepcopy(durable_snapshot["execution_tokens"]),
+                deepcopy(durable_snapshot["execution_effects"]),
+                deepcopy(session.errors),
+            )
         return original_set_queue_item_session(item_id, session)
 
     monkeypatch.setattr(queue, "set_queue_item_session", capture_set_queue_item_session)
@@ -882,27 +909,24 @@ def test_processor_sqlite_three_level_nested_for_failure_cleans_runtime(
     graph = _build_three_level_nested_for_graph()
     graph.nodes["body"].fail_on = 1
     item_id = _insert_session(queue, graph, versioned=True)
-    processor = DefaultSessionProcessor(polling_interval=0)
+    processor = DefaultSessionProcessor(
+        session_runner=DefaultSessionRunner(on_before_run_node_callbacks=[record_generic_scheduler_before_body]),
+        polling_interval=0,
+    )
     try:
         processor.start(mock_invoker)
         assert registered_event_bus.wait_for_status(item_id, "failed")
     finally:
         _stop_processor(processor)
 
-    assert captured_sessions
-    live_failed_session = captured_sessions[0]
-    live_runtime = live_failed_session._generic_runtime()
-    assert not live_runtime.gates
-    assert not live_runtime.streams
-    assert not live_runtime.continuations
-    assert not live_failed_session._ready_queues
-    assert not live_failed_session._ready_node_ids
-    assert live_failed_session._active_class is None
-    assert live_failed_session._generic_graph_scheduler is None
-    assert not isinstance(live_failed_session._execution_scheduler, _GenericGraphSchedulerAdapter)
-    assert live_failed_session.execution_refs
-    assert live_failed_session.execution_tokens
-    assert live_failed_session.execution_effects
+    assert body_scheduler_seen
+    assert failed_persistence_snapshot is not None
+    execution_refs_snapshot, execution_tokens_snapshot, execution_effects_snapshot, errors_snapshot = (
+        failed_persistence_snapshot
+    )
+    assert execution_refs_snapshot
+    assert execution_tokens_snapshot
+    assert execution_effects_snapshot
 
     failed_item = queue.get_queue_item(item_id)
     assert failed_item.status == "failed"
@@ -917,16 +941,14 @@ def test_processor_sqlite_three_level_nested_for_failure_cleans_runtime(
     assert reloaded_queue.get_current("default") is None
 
     session = reloaded_item.session
-    assert session.execution_refs
-    assert all(
-        session.execution_refs[execution_id] == execution_ref
-        for execution_id, execution_ref in live_failed_session.execution_refs.items()
-    )
-    assert session.execution_tokens
-    assert set(live_failed_session.execution_tokens) <= set(session.execution_tokens)
-    assert session.execution_effects
-    assert set(live_failed_session.execution_effects) <= set(session.execution_effects)
+    durable_snapshot = dump_execution_state(session)
+    assert durable_snapshot["execution_refs"] == execution_refs_snapshot
+    assert durable_snapshot["execution_tokens"] == execution_tokens_snapshot
+    assert durable_snapshot["execution_effects"] == execution_effects_snapshot
+    assert session.errors == errors_snapshot
     assert session.has_error()
+    assert reloaded_item.error_type == "ValueError"
+    assert reloaded_item.error_message == "Refusing loop value 1"
     assert ("outer_for", ()) not in session.finalized_loop_contexts
     for source_id in ("inner_return", "middle_return", "outer_return", "after"):
         assert not any(
