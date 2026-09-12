@@ -807,6 +807,7 @@ class GraphExecutionState(BaseModel):
         if len(for_nodes) != 1 or len(return_nodes) != 1:
             return False
         collection_edges = self.graph._get_input_edges(for_nodes[0].id, COLLECTION_FIELD)
+        empty_collection_source: BaseInvocation | None = None
         if collection_edges:
             collection_source = self.graph.get_node(collection_edges[0].source.node_id)
             collection_value = getattr(collection_source, "value", None)
@@ -815,11 +816,58 @@ class GraphExecutionState(BaseModel):
                 and isinstance(collection_value, list)
                 and not collection_value
             ):
-                return False
+                empty_collection_source = collection_source
         body_path = self.graph._get_for_body_path_to_return(for_nodes[0].id, self._get_source_graph_flat())
         if body_path is None:
             return False
         body_node_ids, return_node_id = body_path
+        if empty_collection_source is not None:
+            body_node_ids_without_return = body_node_ids - {return_node_id}
+            if len(body_node_ids_without_return) != 1:
+                return False
+            body_node_id = next(iter(body_node_ids_without_return))
+            body_node = self.graph.get_node(body_node_id)
+            control_node_types = (
+                ForInvocation,
+                ForReturnInvocation,
+                IterateInvocation,
+                CollectInvocation,
+                IfInvocation,
+                CallSavedWorkflowInvocation,
+            )
+            if (
+                len(self.graph.nodes) != 4
+                or len(self.graph.edges) != 4
+                or set(self.graph.nodes)
+                != {empty_collection_source.id, for_nodes[0].id, body_node_id, return_nodes[0].id}
+                or isinstance(empty_collection_source, control_node_types)
+                or isinstance(body_node, control_node_types)
+                or len(collection_edges) != 1
+                or self.graph._get_input_edges(empty_collection_source.id)
+                or self.graph._get_output_edges(empty_collection_source.id) != collection_edges
+                or self.graph._get_input_edges(for_nodes[0].id) != collection_edges
+                or collection_edges[0].source.field != "value"
+                or collection_edges[0].destination.field != COLLECTION_FIELD
+                or self.graph._get_output_edges(for_nodes[0].id, ITEM_FIELD)
+                != [edge for edge in self.graph._get_input_edges(body_node_id) if edge.source.field == ITEM_FIELD]
+                or len(self.graph._get_input_edges(body_node_id)) != 1
+                or self.graph._get_input_edges(body_node_id)[0].source.node_id != for_nodes[0].id
+                or self.graph._get_input_edges(body_node_id)[0].source.field != ITEM_FIELD
+                or self.graph._get_output_edges(body_node_id, "value")
+                != self.graph._get_input_edges(return_nodes[0].id, "output")
+                or len(self.graph._get_input_edges(return_nodes[0].id, "output")) != 1
+                or len(self.graph._get_input_edges(return_nodes[0].id, "loop_linkage", include_loop_linkage=True)) != 1
+                or self.graph._get_input_edges(return_nodes[0].id, "loop_linkage", include_loop_linkage=True)[
+                    0
+                ].source.node_id
+                != for_nodes[0].id
+                or self.graph._get_input_edges(return_nodes[0].id, "loop_linkage", include_loop_linkage=True)[
+                    0
+                ].source.field
+                != "loop_linkage"
+                or self.graph._get_for_final_output_edges(for_nodes[0].id)
+            ):
+                return False
         return return_node_id == return_nodes[0].id and not any(
             isinstance(self.graph.get_node(node_id), (ForInvocation, ForReturnInvocation))
             for node_id in body_node_ids

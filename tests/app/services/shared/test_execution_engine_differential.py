@@ -5181,18 +5181,97 @@ def test_empty_literal_flat_for_matches_compatibility_scheduler() -> None:
     assert _state_projection(generic_state) == _state_projection(compatibility_state)
 
 
-def test_input_driven_empty_flat_for_uses_compatibility_scheduler() -> None:
+def test_input_driven_empty_flat_for_uses_generic_scheduler_and_exact_terminal_semantics() -> None:
     state = GraphExecutionState(graph=_flat_for_graph(input_collection=[]))
 
-    assert state._can_use_generic_scheduler() is False
+    assert state._can_use_generic_scheduler()
     trace, state = _run_graph_with_effects(state)
 
     assert trace == ["collection"]
-    assert isinstance(state._execution_scheduler, _ExecutionScheduler)
-    assert _final_for_output(state).output_collection == []
+    assert isinstance(state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    final_output = _final_for_output(state)
+    assert final_output.item is None
+    assert final_output.index == -1
+    assert final_output.total == 0
+    assert final_output.state == LoopState()
+    assert final_output.output_collection == []
+    assert final_output.final_state == LoopState()
+    assert "body" not in state.source_prepared_mapping
+    assert "return" not in state.source_prepared_mapping
     assert state.is_complete()
     assert list(state._generic_runtime().continuations.values()) == []
     _assert_execution_identity_consistent(state)
+
+
+def test_input_driven_empty_flat_for_matches_compatibility_scheduler() -> None:
+    generic_trace, generic_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_flat_for_graph(input_collection=[]))
+    )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_flat_for_graph(input_collection=[])),
+        force_compatibility_scheduler=True,
+    )
+
+    assert generic_trace == compatibility_trace == ["collection"]
+    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert isinstance(compatibility_state._execution_scheduler, _ExecutionScheduler)
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    _assert_execution_identity_consistent(generic_state)
+    _assert_execution_identity_consistent(compatibility_state)
+
+
+def test_input_driven_empty_flat_for_checkpoint_after_producer_does_not_replay() -> None:
+    expected_trace, expected_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_flat_for_graph(input_collection=[]))
+    )
+    partial_trace, partial_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_flat_for_graph(input_collection=[])),
+        stop_after_source="collection",
+    )
+
+    restored = load_execution_state(dump_execution_state(partial_state))
+    resumed_trace, restored = _run_graph_with_effects(restored)
+    terminal_reload = load_execution_state(dump_execution_state(restored))
+
+    assert expected_trace == partial_trace == ["collection"]
+    assert resumed_trace == []
+    assert isinstance(restored._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert _state_projection(restored) == _state_projection(expected_state)
+    assert terminal_reload.is_complete()
+    assert _state_projection(terminal_reload) == _state_projection(restored)
+    assert _final_for_output(terminal_reload).output_collection == []
+    _assert_execution_identity_consistent(restored)
+    _assert_execution_identity_consistent(terminal_reload)
+
+
+def test_input_driven_empty_flat_for_with_downstream_remains_compatibility_owned() -> None:
+    state = GraphExecutionState(graph=_flat_for_graph(input_collection=[], with_after=True))
+
+    assert state._can_use_generic_scheduler() is False
+    assert isinstance(state._scheduler(), _ExecutionScheduler)
+
+
+def test_input_driven_empty_flat_for_with_index_body_edge_remains_compatibility_owned() -> None:
+    graph = _flat_for_graph(input_collection=[])
+    body_edge = next(edge for edge in graph.edges if edge.destination.node_id == "body")
+    graph.delete_edge(body_edge)
+    graph.add_edge(create_edge("for", "index", "body", body_edge.destination.field))
+
+    state = GraphExecutionState(graph=graph)
+
+    assert state._can_use_generic_scheduler() is False
+
+
+def test_input_driven_empty_flat_for_with_wrong_return_edge_remains_compatibility_owned() -> None:
+    graph = _flat_for_graph(input_collection=[])
+    graph.delete_node("body")
+    graph.add_node(StateSetInvocation(id="body"))
+    graph.add_edge(create_edge("for", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "state", "return", "state"))
+
+    state = GraphExecutionState(graph=graph)
+
+    assert state._can_use_generic_scheduler() is False
 
 
 def test_input_driven_flat_for_uses_generic_scheduler() -> None:
