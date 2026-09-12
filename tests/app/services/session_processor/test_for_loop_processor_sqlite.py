@@ -203,6 +203,34 @@ def _build_three_level_nested_for_graph() -> Graph:
     return graph
 
 
+def _build_four_level_nested_for_graph() -> Graph:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="outer_for", collection=[[[[1, 2], [3, 4]], [[5, 6], [7, 8]]]]))
+    graph.add_node(ForInvocation(id="second_for"))
+    graph.add_node(ForInvocation(id="third_for"))
+    graph.add_node(ForInvocation(id="deepest_for"))
+    graph.add_node(ForSqliteBodyInvocation(id="body"))
+    graph.add_node(ForReturnInvocation(id="deepest_return"))
+    graph.add_node(ForReturnInvocation(id="third_return"))
+    graph.add_node(ForReturnInvocation(id="second_return"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
+    graph.add_node(ForSqliteAfterInvocation(id="after"))
+    graph.add_edge(create_edge("outer_for", "item", "second_for", "collection"))
+    graph.add_edge(create_edge("second_for", "item", "third_for", "collection"))
+    graph.add_edge(create_edge("third_for", "item", "deepest_for", "collection"))
+    graph.add_edge(create_edge("deepest_for", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "deepest_return", "output"))
+    graph.add_edge(create_edge("deepest_for", "output_collection", "third_return", "output"))
+    graph.add_edge(create_edge("third_for", "output_collection", "second_return", "output"))
+    graph.add_edge(create_edge("second_for", "output_collection", "outer_return", "output"))
+    graph.add_edge(create_edge("outer_for", "output_collection", "after", "collection"))
+    graph.add_edge(create_loop_linkage("outer_for", "outer_return"))
+    graph.add_edge(create_loop_linkage("second_for", "second_return"))
+    graph.add_edge(create_loop_linkage("third_for", "third_return"))
+    graph.add_edge(create_loop_linkage("deepest_for", "deepest_return"))
+    return graph
+
+
 class _RecordingRegisteredEventService(EventServiceBase):
     def __init__(self) -> None:
         self._events: list[EventBase] = []
@@ -951,6 +979,112 @@ def test_processor_sqlite_three_level_nested_for_failure_cleans_runtime(
     assert reloaded_item.error_message == "Refusing loop value 1"
     assert ("outer_for", ()) not in session.finalized_loop_contexts
     for source_id in ("inner_return", "middle_return", "outer_return", "after"):
+        assert not any(
+            execution_id in session.results for execution_id in session.source_prepared_mapping.get(source_id, ())
+        )
+
+    runtime = session._generic_runtime()
+    assert not runtime.gates
+    assert not runtime.streams
+    assert not runtime.continuations
+
+
+def test_processor_sqlite_four_level_nested_for_failure_cleans_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_invoker: Invoker,
+    registered_event_bus: _RecordingRegisteredEventService,
+) -> None:
+    monkeypatch.setattr(
+        "invokeai.app.services.session_processor.session_processor_default.build_invocation_context",
+        _build_test_invocation_context,
+    )
+
+    queue = SqliteSessionQueue(db=mock_invoker.services.board_records._db)
+    mock_invoker.services.events = registered_event_bus
+    mock_invoker.services.session_queue = queue
+    mock_invoker.services.performance_statistics = _Stats()
+    queue.start(mock_invoker)
+
+    body_scheduler_seen: list[str] = []
+    original_set_queue_item_session = queue.set_queue_item_session
+    failed_persistence_snapshot: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, str]] | None = None
+
+    def record_generic_scheduler_before_body(invocation, queue_item) -> None:
+        if queue_item.session.prepared_source_mapping[invocation.id] == "body":
+            assert isinstance(queue_item.session._execution_scheduler, _GenericGraphSchedulerAdapter)
+            body_scheduler_seen.append(invocation.id)
+
+    def capture_set_queue_item_session(item_id: int, session: GraphExecutionState):
+        nonlocal failed_persistence_snapshot
+        if session.has_error():
+            assert session._generic_execution_runtime is not None
+            runtime = session._generic_execution_runtime
+            assert not runtime.gates
+            assert not runtime.streams
+            assert not runtime.continuations
+            assert not session._ready_queues
+            assert not session._ready_node_ids
+            assert session._active_class is None
+            assert session._generic_graph_scheduler is None
+            assert not isinstance(session._execution_scheduler, _GenericGraphSchedulerAdapter)
+            snapshot_session = session.model_copy(deep=True)
+            snapshot_session._rehydrate_execution_refs()
+            durable_snapshot = dump_execution_state(snapshot_session)
+            failed_persistence_snapshot = (
+                deepcopy(durable_snapshot["execution_refs"]),
+                deepcopy(durable_snapshot["execution_tokens"]),
+                deepcopy(durable_snapshot["execution_effects"]),
+                deepcopy(session.errors),
+            )
+        return original_set_queue_item_session(item_id, session)
+
+    monkeypatch.setattr(queue, "set_queue_item_session", capture_set_queue_item_session)
+
+    graph = _build_four_level_nested_for_graph()
+    graph.nodes["body"].fail_on = 1
+    item_id = _insert_session(queue, graph, versioned=True)
+    processor = DefaultSessionProcessor(
+        session_runner=DefaultSessionRunner(on_before_run_node_callbacks=[record_generic_scheduler_before_body]),
+        polling_interval=0,
+    )
+    try:
+        processor.start(mock_invoker)
+        assert registered_event_bus.wait_for_status(item_id, "failed")
+    finally:
+        _stop_processor(processor)
+
+    assert body_scheduler_seen
+    assert failed_persistence_snapshot is not None
+    execution_refs_snapshot, execution_tokens_snapshot, execution_effects_snapshot, errors_snapshot = (
+        failed_persistence_snapshot
+    )
+    assert execution_refs_snapshot
+    assert execution_tokens_snapshot
+    assert execution_effects_snapshot
+
+    failed_item = queue.get_queue_item(item_id)
+    assert failed_item.status == "failed"
+    assert failed_item.error_type == "ValueError"
+    assert failed_item.error_message == "Refusing loop value 1"
+    assert queue.get_current("default") is None
+
+    reloaded_queue = SqliteSessionQueue(db=mock_invoker.services.board_records._db)
+    reloaded_queue.start(mock_invoker)
+    reloaded_item = reloaded_queue.get_queue_item(item_id)
+    assert reloaded_item.status == "failed"
+    assert reloaded_queue.get_current("default") is None
+
+    session = reloaded_item.session
+    durable_snapshot = dump_execution_state(session)
+    assert durable_snapshot["execution_refs"] == execution_refs_snapshot
+    assert durable_snapshot["execution_tokens"] == execution_tokens_snapshot
+    assert durable_snapshot["execution_effects"] == execution_effects_snapshot
+    assert session.errors == errors_snapshot
+    assert session.has_error()
+    assert reloaded_item.error_type == "ValueError"
+    assert reloaded_item.error_message == "Refusing loop value 1"
+    assert ("outer_for", ()) not in session.finalized_loop_contexts
+    for source_id in ("deepest_return", "third_return", "second_return", "outer_return", "after"):
         assert not any(
             execution_id in session.results for execution_id in session.source_prepared_mapping.get(source_id, ())
         )
