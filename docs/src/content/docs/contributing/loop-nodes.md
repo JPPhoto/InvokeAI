@@ -105,9 +105,9 @@ iteration, and finalizes the aggregate. An empty literal collection completes th
 `For` result without running the body or `ForReturn`. The generic scheduler remains opaque and never receives a literal
 successor node ID. The compatibility continuation bridge is retained only for unsupported loop shapes and explicitly
 legacy-loaded snapshots. Empty input-driven shapes outside the exact four-node/four-edge bounded topology, unsupported
-input-driven outer collections, deeper or multiple nested loops, and unsupported mixed control flow remain on the
-compatibility scheduler; the narrow canonical two-level
-nested-`For` shape and the exact
+input-driven outer collections, four-level-or-deeper or sibling nested loops, and unsupported mixed control flow remain on the
+compatibility scheduler; the narrow canonical two-level and exact fresh three-level serial nested-`For` shapes
+(one literal outer collection, one direct child at each level, no continuation nodes) and the exact
 bounded outer-`For`/`Iterate`/`Collect` shape are now generic-routed. This additive effect seam does not claim generic
 scheduling for the remaining shapes. `Iterate` records ordered item tokens in
 a closed `StreamBuffer`; an empty `Iterate` records an
@@ -204,7 +204,7 @@ lowerings, legacy snapshots, and unsupported mixed loop shapes. No activation or
 graph JSON.
 Exact fresh serial nested-`Iterate` chains through eight levels use the generic planner for ordered frame expansion,
 empty-stream closure, checkpoint rehydration, source completion, and failure parity. Nine-level or deeper chains,
-other deeper or multiple nested loops, and unsupported mixed shapes remain compatibility-owned. This migration does not modify any file under `invokeai/frontend/...`, including generated schemas; the existing
+other four-level-or-deeper or sibling nested loops, and unsupported mixed shapes remain compatibility-owned. This migration does not modify any file under `invokeai/frontend/...`, including generated schemas; the existing
 frontend/backend external interface remains frozen. Branch-membership analysis remains internal, while fresh execution
 no longer creates skipped-state projection and old snapshots retain it for compatibility.
 

@@ -93,7 +93,7 @@ with one ordinary `outer For.output_collection` consumer, is also generic-routed
 The nested planner owns per-outer-frame stream expansion, parent-frame stream
 identity, empty closure, `Collect` readiness/hydration, checkpoint rehydration,
 and failure parity for this shape without calling the materializer's nested-copy
-helper. Ordinary nested `For`, deeper or multiple nested iterators,
+helper. Four-level-or-deeper or sibling nested `For`, deeper or multiple nested iterators,
 other input-driven outer collections, other mixed control flow, and legacy snapshots retain
 compatibility materializer ownership.
 The exact eight-node producer-driven extension—one inputless ordinary
@@ -142,16 +142,19 @@ The exact seventeen-node/sixteen-edge serial chain extends the same planner to
 eight `Iterate` nodes and eight-component frame paths, with the same
 empty-stream, checkpoint, source-completion, and failure-parity guarantees.
 Nine-level or deeper chains and all other expanded, fan-in, sibling, mixed,
-`For`, `Collect`, and legacy shapes remain compatibility-owned.
+four-level-or-deeper `For`, `Collect`, and legacy shapes remain compatibility-owned.
 A fresh graph with exactly one flat `For`/`ForReturn` pair and ordinary body nodes also uses the generic adapter for a
 literal collection, a supported non-empty input-driven collection, or the exact four-node/four-edge empty input-driven
 shape with one inputless producer and no downstream node. It projects readiness and invokes the graph-state
 continuation boundary, which selects the next iteration or finalizes the aggregate without exposing a successor node ID
 to the generic scheduler. The materializer still owns execution-node copies, input hydration, iteration paths, and body
-expansion. Other empty/input-driven shapes, deeper or multiple loops, mixed control flow, and saved-workflow calls remain
+ expansion. Other empty/input-driven shapes, four-level-or-deeper or sibling loops, mixed control flow, and saved-workflow calls remain
 on the compatibility scheduler until their own differential gates are complete. One narrow fresh two-level nested-`For` shape (one non-empty literal outer
 collection, one inner `For` sourced from `outer.item`, and no continuation nodes) now uses the generic adapter;
-deeper, multiple-child, other empty/input-driven, mixed, and legacy-loaded shapes remain compatibility-owned.
+deeper-than-three-level, multiple-child, other empty/input-driven, mixed, and legacy-loaded shapes remain compatibility-owned.
+The exact fresh three-level serial nested-`For` shape (one literal outer collection,
+one direct child at each level, no continuation nodes) also uses the generic adapter;
+four-level-or-deeper and sibling nested-`For` shapes remain compatibility-owned.
 The runtime also exposes an additive execution-engine seam: frame-scoped gates, ordered streams, continuations, and
 authorized child-dependency records are stored in
 `invokeai.app.services.shared.execution_engine`; legacy graph and queue behavior is retained behind adapters while
@@ -273,7 +276,7 @@ completion mirrors Iterate outputs into the stream ledger. A fresh graph with on
 including a supported non-empty input-driven collection producer or the exact bounded empty input-driven producer
 shape, also uses the adapter for readiness and continuation transitions; graph state owns the invocation-specific
 continuation boundary while the generic scheduler remains opaque. Other empty or unsupported input-driven shapes,
-deeper or multiple loops, saved-workflow calls, and unsupported mixed control-flow shapes outside the bounded per-item
+four-level-or-deeper or sibling loops, saved-workflow calls, and unsupported mixed control-flow shapes outside the bounded per-item
 topology continue to use
 the legacy compatibility scheduler until their differential coverage is complete. The narrow canonical two-level
 nested-`For` shape, the canonical outer-`For`/bounded-`Iterate`/`Collect` shape,
@@ -286,7 +289,8 @@ including an empty inner collection, remains isolated by its frame path. `Iterat
 for this exact seven-node shape, the private nested planner owns per-outer-frame
 copy expansion, stream identity, empty closure, `Collect` readiness/hydration,
 checkpoint rehydration, and failure parity. The exact producer-driven outer
-extension described above is also generic-routed. Ordinary nested `For`, nine-level
+extension described above is also generic-routed. The exact fresh three-level serial nested-`For` shape is also
+generic-routed; four-level-or-deeper or sibling nested `For`, nine-level
 or deeper nested iterators, other input-driven outer collections, mixed control
 flow, and legacy snapshots retain compatibility materializer ownership. The
 exact nested-`Iterate` chains above do not admit `For`, `Collect`, fan-in, sibling,
@@ -424,7 +428,7 @@ the generic path completes through the existing synthetic terminal `For` result 
 The generic scheduler receives only opaque node IDs and dependencies; it never receives a literal next node ID. The
 compatibility continuation bridge remains available only for unsupported loop shapes and explicitly legacy-loaded snapshots.
 The exact four-node/four-edge empty input-driven shape with one inputless static-list producer is also generic-routed.
-Other input-driven outer collections, deeper, multiple, or unsupported mixed loop shapes remain compatibility-owned; the narrow canonical two-level nested-`For` shape, the canonical bounded
+Other input-driven outer collections, four-level-or-deeper or sibling nested loops, or unsupported mixed loop shapes remain compatibility-owned; the narrow canonical two-level and exact fresh three-level serial nested-`For` shapes, the canonical bounded
   internal `Iterate`/`Collect` shape, the exact producer-driven outer nested extension, and the bounded two- through
   six-, seven-, and eight-level serial nested-`Iterate` chains are generic-routed. On
 rehydration, the generic adapter restores the active class-drain
@@ -492,10 +496,10 @@ compatibility loader. `For` start payloads must match the prepared index, collec
 seam: the generic adapter calls the graph-state generic continuation boundary,
 which creates the next prepared iteration, aggregates outputs, and finalizes the
 supported flat loop. The compatibility bridge remains for other unsupported input-driven,
-deeper/multiple nested, mixed-loop, and legacy-snapshot execution; those paths
+four-level-or-deeper/sibling nested, mixed-loop, and legacy-snapshot execution; those paths
 retain their existing materialization and linkage ownership. The supported
 fresh static flat `For`/`ForReturn` shape, the exact bounded empty input-driven
-flat shape, the narrow canonical two-level
+flat shape, the narrow canonical two-level and exact fresh three-level serial nested-`For`
 nested-`For` shape, and the canonical bounded internal `Iterate`/`Collect`
 shape use the generic adapter. For
 `If`, generic readiness consumes opaque frame-local plan dependencies and requires

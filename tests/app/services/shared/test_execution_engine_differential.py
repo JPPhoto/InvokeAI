@@ -540,6 +540,99 @@ def _nested_for_graph(*, outer_collection: list[list[str]] | None = None) -> Gra
     return graph
 
 
+def _three_level_nested_for_graph(*, outer_collection: list[list[list[str]]] | None = None) -> Graph:
+    graph = Graph()
+    graph.add_node(
+        ForInvocation(
+            id="outer_for",
+            collection=[[["a", "b"], ["c"]], [["d"]]] if outer_collection is None else outer_collection,
+        )
+    )
+    graph.add_node(ForInvocation(id="middle_for"))
+    graph.add_node(ForInvocation(id="inner_for"))
+    graph.add_node(AnyTypeTestInvocation(id="inner_body"))
+    graph.add_node(ForReturnInvocation(id="inner_return"))
+    graph.add_node(ForReturnInvocation(id="middle_return"))
+    graph.add_node(ForReturnInvocation(id="outer_return"))
+    graph.add_node(AnyTypeTestInvocation(id="after"))
+
+    def connect(source: str, source_field: str, destination: str, destination_field: str) -> None:
+        graph.add_edge(create_edge(source, source_field, destination, destination_field))
+
+    connect("outer_for", "item", "middle_for", "collection")
+    connect("middle_for", "item", "inner_for", "collection")
+    connect("inner_for", "item", "inner_body", "value")
+    connect("inner_body", "value", "inner_return", "output")
+    connect("inner_for", "output_collection", "middle_return", "output")
+    connect("middle_for", "output_collection", "outer_return", "output")
+    connect("outer_for", "output_collection", "after", "value")
+    graph.add_edge(create_loop_linkage("outer_for", "outer_return"))
+    graph.add_edge(create_loop_linkage("middle_for", "middle_return"))
+    graph.add_edge(create_loop_linkage("inner_for", "inner_return"))
+    return graph
+
+
+def _four_level_nested_for_graph() -> Graph:
+    graph = _three_level_nested_for_graph()
+    graph.delete_node("inner_body")
+    graph.add_node(ForInvocation(id="deep_for"))
+    graph.add_node(AnyTypeTestInvocation(id="deep_body"))
+    graph.add_node(ForReturnInvocation(id="deep_return"))
+
+    def connect(source: str, source_field: str, destination: str, destination_field: str) -> None:
+        graph.add_edge(create_edge(source, source_field, destination, destination_field))
+
+    connect("inner_for", "item", "deep_for", "collection")
+    connect("deep_for", "item", "deep_body", "value")
+    connect("deep_body", "value", "deep_return", "output")
+    connect("deep_for", "output_collection", "inner_return", "output")
+    graph.add_edge(create_loop_linkage("deep_for", "deep_return"))
+    return graph
+
+
+def _sibling_nested_for_graph() -> Graph:
+    graph = _three_level_nested_for_graph()
+    middle_return_edge = next(
+        edge for edge in graph._get_input_edges("middle_return", "output") if edge.source.node_id == "inner_for"
+    )
+    graph.delete_edge(middle_return_edge)
+    graph.add_node(ForInvocation(id="sibling_for"))
+    graph.add_node(AnyTypeTestInvocation(id="sibling_body"))
+    graph.add_node(ForReturnInvocation(id="sibling_return"))
+    graph.add_node(CollectionConcatInvocation(id="middle_join"))
+
+    def connect(source: str, source_field: str, destination: str, destination_field: str) -> None:
+        graph.add_edge(create_edge(source, source_field, destination, destination_field))
+
+    connect("middle_for", "item", "sibling_for", "collection")
+    connect("sibling_for", "item", "sibling_body", "value")
+    connect("sibling_body", "value", "sibling_return", "output")
+    connect("inner_for", "output_collection", "middle_join", "first")
+    connect("sibling_for", "output_collection", "middle_join", "second")
+    connect("middle_join", "collection", "middle_return", "output")
+    graph.add_edge(create_loop_linkage("sibling_for", "sibling_return"))
+    return graph
+
+
+def _input_driven_three_level_nested_for_graph() -> Graph:
+    graph = _three_level_nested_for_graph()
+    graph.add_node(CollectionConcatInvocation(id="outer_source", first=[[["a", "b"], ["c"]], [["d"]]]))
+    graph.add_edge(create_edge("outer_source", "collection", "outer_for", "collection"))
+    return graph
+
+
+def _malformed_three_level_nested_for_graph() -> Graph:
+    graph = _three_level_nested_for_graph()
+    outer_item_edge = next(
+        edge for edge in graph._get_input_edges("middle_for", "collection") if edge.source.node_id == "outer_for"
+    )
+    graph.delete_edge(outer_item_edge)
+    graph.add_node(AnyTypeTestInvocation(id="outer_bridge"))
+    graph.add_edge(create_edge("outer_for", "item", "outer_bridge", "value"))
+    graph.add_edge(create_edge("outer_bridge", "value", "middle_for", "collection"))
+    return graph
+
+
 def _nested_for_iterate_collect_graph(*, outer_collection: list[list[str]] | None = None) -> Graph:
     graph = Graph()
     graph.add_node(ForInvocation(id="outer_for", collection=outer_collection or [["a", "b"], ["c"]]))
@@ -2001,6 +2094,90 @@ def test_nested_for_generic_path_rehydrates_after_inner_completion() -> None:
     compatibility_resumed_trace, compatibility_resumed = _run(compatibility_restored)
     assert compatibility_resumed_trace == resumed_trace
     assert _state_projection(compatibility_resumed) == _state_projection(expected_state)
+
+
+def test_three_level_nested_for_generic_and_compatibility_paths_match() -> None:
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=_three_level_nested_for_graph()),
+        force_compatibility_scheduler=True,
+    )
+    generic_trace, generic_state = _run_graph(GraphExecutionState(graph=_three_level_nested_for_graph()))
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter)
+    assert isinstance(compatibility_state._execution_scheduler, _ExecutionScheduler)
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+    assert _source_output(generic_state, "after").value == [[["a", "b"], ["c"]], [["d"]]]
+
+
+def test_three_level_nested_for_generic_and_compatibility_paths_match_empty_inner_collection() -> None:
+    graph = _three_level_nested_for_graph(outer_collection=[[[], ["c"]], [["d"]]])
+    compatibility_trace, compatibility_state = _run_graph(
+        GraphExecutionState(graph=graph),
+        force_compatibility_scheduler=True,
+    )
+    generic_trace, generic_state = _run_graph(
+        GraphExecutionState(graph=_three_level_nested_for_graph(outer_collection=[[[], ["c"]], [["d"]]]))
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.is_complete()
+    assert compatibility_state.is_complete()
+    assert _source_output(generic_state, "after").value == [[[], ["c"]], [["d"]]]
+    assert _source_output(compatibility_state, "after").value == [[[], ["c"]], [["d"]]]
+
+
+def test_three_level_nested_for_generic_rehydrates_after_inner_completion() -> None:
+    expected_trace, expected_state = _run_graph(GraphExecutionState(graph=_three_level_nested_for_graph()))
+    partial_trace, partial_state = _run_graph(
+        GraphExecutionState(graph=_three_level_nested_for_graph()),
+        stop_after=5,
+    )
+
+    restored = load_execution_state(dump_execution_state(partial_state))
+    resumed_trace, resumed_state = _run_graph(restored)
+
+    assert partial_trace + resumed_trace == expected_trace
+    assert resumed_state.is_complete()
+    assert _state_projection(resumed_state) == _state_projection(expected_state)
+
+
+def test_three_level_nested_for_generic_failure_matches_compatibility() -> None:
+    generic_trace, generic_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_three_level_nested_for_graph()),
+        fail_source_id="inner_body",
+    )
+    compatibility_trace, compatibility_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_three_level_nested_for_graph()),
+        force_compatibility_scheduler=True,
+        fail_source_id="inner_body",
+    )
+
+    assert generic_trace == compatibility_trace
+    assert generic_state.has_error() and compatibility_state.has_error()
+    assert generic_state.is_complete() and compatibility_state.is_complete()
+    assert "inner_return" not in generic_trace
+    assert "middle_return" not in generic_trace
+    assert "outer_return" not in generic_trace
+    assert "after" not in generic_trace
+    assert _state_projection(generic_state) == _state_projection(compatibility_state)
+
+
+@pytest.mark.parametrize(
+    "graph_factory",
+    [
+        pytest.param(_four_level_nested_for_graph, id="four-level"),
+        pytest.param(_sibling_nested_for_graph, id="sibling"),
+        pytest.param(_input_driven_three_level_nested_for_graph, id="input-driven"),
+        pytest.param(_malformed_three_level_nested_for_graph, id="malformed-link"),
+    ],
+)
+def test_three_level_nested_for_gate_falls_back_for_unsupported_shapes(graph_factory: Any) -> None:
+    state = GraphExecutionState(graph=graph_factory())
+
+    assert not state._can_use_generic_scheduler()
 
 
 def test_nested_for_iterate_collect_generic_and_compatibility_paths_have_matching_completion() -> None:

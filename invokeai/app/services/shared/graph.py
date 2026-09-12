@@ -763,6 +763,72 @@ class GraphExecutionState(BaseModel):
 
         return self._apply_generic_for_continuation(exec_node_id, output)
 
+    def _can_use_generic_three_level_nested_for_scheduler(
+        self, for_nodes: list[ForInvocation], return_nodes: list[ForReturnInvocation], source_graph: Any
+    ) -> bool:
+        if len(for_nodes) != 3 or len(return_nodes) != 3:
+            return False
+
+        outer_candidates: list[ForInvocation] = []
+        for_node_bodies: dict[str, Any] = {}
+        for node in for_nodes:
+            nested_body = self.graph._get_supported_for_nested_for_body(node.id, source_graph)
+            if nested_body is not None:
+                for_node_bodies[node.id] = nested_body
+        nested_child_ids = {
+            inner_for_id for nested_body in for_node_bodies.values() for inner_for_id in nested_body.inner_for_ids
+        }
+        outer_candidates = [
+            node
+            for node in for_nodes
+            if node.id not in nested_child_ids
+            and (nested_body := for_node_bodies.get(node.id)) is not None
+            and len(nested_body.inner_for_ids) == 1
+            and not nested_body.continuation_nodes
+        ]
+        if len(outer_candidates) != 1:
+            return False
+
+        outer_for = outer_candidates[0]
+        if self.graph._get_input_edges(outer_for.id, COLLECTION_FIELD) or not outer_for.collection:
+            return False
+
+        chain = [outer_for]
+        while len(chain) < 3:
+            parent_for = chain[-1]
+            nested_body = for_node_bodies.get(parent_for.id)
+            if nested_body is None or len(nested_body.inner_for_ids) != 1 or nested_body.continuation_nodes:
+                return False
+            child_for = self.graph.get_node(nested_body.inner_for_ids[0])
+            if not isinstance(child_for, ForInvocation):
+                return False
+            collection_edges = self.graph._get_input_edges(child_for.id, COLLECTION_FIELD)
+            if len(collection_edges) != 1 or (
+                collection_edges[0].source.node_id != parent_for.id
+                or collection_edges[0].source.field != ITEM_FIELD
+                or self.graph._get_output_edges(parent_for.id, ITEM_FIELD) != collection_edges
+            ):
+                return False
+            chain.append(child_for)
+
+        if len(chain) != 3 or {node.id for node in chain} != {node.id for node in for_nodes}:
+            return False
+        if chain[-1].id in for_node_bodies:
+            return False
+
+        linked_return_ids = {self.graph._get_linked_for_return_id(node.id) for node in chain}
+        if None in linked_return_ids or linked_return_ids != {node.id for node in return_nodes}:
+            return False
+
+        final_output_edges = self.graph._get_for_final_output_edges(outer_for.id)
+        if len(final_output_edges) > 1:
+            return False
+        if final_output_edges:
+            final_consumer = self.graph.get_node(final_output_edges[0].destination.node_id)
+            if isinstance(final_consumer, (ForInvocation, ForReturnInvocation, IterateInvocation, CollectInvocation)):
+                return False
+        return True
+
     def _can_use_generic_for_scheduler(self) -> bool:
         """Allow generic routing only for the explicitly supported fresh For shapes."""
 
@@ -774,8 +840,10 @@ class GraphExecutionState(BaseModel):
         return_nodes = [node for node in self.graph.nodes.values() if isinstance(node, ForReturnInvocation)]
         if any(isinstance(node, (IterateInvocation, CollectInvocation)) for node in self.graph.nodes.values()):
             return self._can_use_generic_nested_iterate_scheduler(for_nodes, return_nodes)
+        source_graph = self._get_source_graph_flat()
+        if len(for_nodes) == 3 and len(return_nodes) == 3:
+            return self._can_use_generic_three_level_nested_for_scheduler(for_nodes, return_nodes, source_graph)
         if len(for_nodes) == 2 and len(return_nodes) == 2:
-            source_graph = self._get_source_graph_flat()
             outer_for = next(
                 (
                     node
