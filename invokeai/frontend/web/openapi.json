@@ -21486,6 +21486,302 @@
           "$ref": "#/components/schemas/ImageOutput"
         }
       },
+      "ChildCompletion": {
+        "properties": {
+          "child_execution_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Child Execution Id"
+          },
+          "parent_execution_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Parent Execution Id"
+          },
+          "parent_frame": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Parent Frame"
+          },
+          "parent_reference_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Reference Id"
+          },
+          "child_frame": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Child Frame"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["completed", "failed", "canceled"],
+            "title": "Status"
+          },
+          "outputs": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Outputs"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["child_execution_id", "parent_execution_id", "status"],
+        "title": "ChildCompletion",
+        "description": "One terminal child result, including its ownership proof."
+      },
+      "ChildDependencyRecord": {
+        "properties": {
+          "dependency_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Dependency Id"
+          },
+          "parent_execution_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Parent Execution Id"
+          },
+          "parent_frame": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Parent Frame"
+          },
+          "parent_reference_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Reference Id"
+          },
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/ChildExecutionRecord"
+            },
+            "type": "array",
+            "title": "Children"
+          },
+          "completions": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ChildCompletion"
+            },
+            "type": "object",
+            "title": "Completions"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["waiting", "running", "completed", "failed", "canceled"],
+            "title": "Status",
+            "default": "waiting"
+          },
+          "failure_policy": {
+            "type": "string",
+            "enum": ["fail_parent", "cancel_siblings", "continue"],
+            "title": "Failure Policy",
+            "default": "fail_parent"
+          },
+          "cancellation_policy": {
+            "type": "string",
+            "enum": ["cancel_parent", "cancel_siblings", "continue"],
+            "title": "Cancellation Policy",
+            "default": "cancel_parent"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "output_keys": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Keys"
+          },
+          "terminal_transition_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Terminal Transition Count",
+            "default": 0
+          },
+          "sealed": {
+            "type": "boolean",
+            "title": "Sealed",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["dependency_id", "parent_execution_id"],
+        "title": "ChildDependencyRecord",
+        "description": "All-of parent dependency with durable enqueue and terminal state."
+      },
+      "ChildExecutionRecord": {
+        "properties": {
+          "child_execution_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Child Execution Id"
+          },
+          "parent_execution_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Parent Execution Id"
+          },
+          "parent_frame": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Parent Frame"
+          },
+          "parent_reference_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Reference Id"
+          },
+          "child_frame": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Child Frame"
+          },
+          "depth": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Depth",
+            "default": 0
+          },
+          "enqueue_index": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Enqueue Index",
+            "default": 0
+          },
+          "capability_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capability Id"
+          },
+          "graph": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph"
+          },
+          "inputs": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Inputs"
+          },
+          "state": {
+            "type": "string",
+            "enum": ["pending", "queued", "running", "completed", "failed", "canceled"],
+            "title": "State",
+            "default": "pending"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["child_execution_id", "parent_execution_id"],
+        "title": "ChildExecutionRecord",
+        "description": "Durable identity and payload for one child execution."
+      },
       "Classification": {
         "description": "The classification of an Invocation.\n- `Stable`: The invocation, including its inputs/outputs and internal logic, is stable. You may build workflows with it, having confidence that they will not break because of a change in this invocation.\n- `Beta`: The invocation is not yet stable, but is planned to be stable in the future. Workflows built around this invocation may break, but we are committed to supporting this invocation long-term.\n- `Prototype`: The invocation is not yet stable and may be removed from the application at any time. Workflows built around this invocation may break, and we are *not* committed to supporting this invocation.\n- `Deprecated`: The invocation is deprecated and may be removed in a future version.\n- `Internal`: The invocation is not intended for use by end-users. It may be changed or removed at any time, but is exposed for users to play with.\n- `Special`: The invocation is a special case and does not fit into any of the other classifications.",
         "enum": ["stable", "beta", "prototype", "deprecated", "internal", "special"],
@@ -29828,6 +30124,145 @@
         "output": {
           "$ref": "#/components/schemas/ImageOutput"
         }
+      },
+      "ExecutionFrame": {
+        "properties": {
+          "frame_id": {
+            "type": "string",
+            "title": "Frame Id",
+            "description": "Stable frame identifier",
+            "default": ""
+          },
+          "state_id": {
+            "type": "string",
+            "title": "State Id",
+            "description": "Owning graph execution state id",
+            "default": ""
+          },
+          "iteration_path": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Iteration Path",
+            "description": "Loop iteration coordinates"
+          },
+          "workflow_call_depth": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Workflow Call Depth",
+            "description": "Nested workflow-call depth",
+            "default": 0
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "ExecutionFrame",
+        "description": "Stable execution location for a prepared node."
+      },
+      "ExecutionReference": {
+        "properties": {
+          "reference_id": {
+            "type": "string",
+            "title": "Reference Id",
+            "description": "Stable reference identifier",
+            "default": ""
+          },
+          "state_id": {
+            "type": "string",
+            "title": "State Id",
+            "description": "Owning graph execution state id",
+            "default": ""
+          },
+          "exec_node_id": {
+            "type": "string",
+            "title": "Exec Node Id",
+            "description": "Prepared execution node id",
+            "default": ""
+          },
+          "source_node_id": {
+            "type": "string",
+            "title": "Source Node Id",
+            "description": "Authoring graph node id",
+            "default": ""
+          },
+          "frame": {
+            "$ref": "#/components/schemas/ExecutionFrame",
+            "description": "Execution frame"
+          },
+          "effect_count": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effect Count",
+            "description": "Expected effect count, if declared"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "ExecutionReference",
+        "description": "Stable, frame-aware reference to one prepared execution node.\n\nThis intentionally stays independent from invocation-context/effect models. The execution engine can reconcile\nthis small compatibility type with a richer protocol later without changing persisted graph state."
+      },
+      "ExecutionToken": {
+        "properties": {
+          "token_id": {
+            "type": "string",
+            "title": "Token Id",
+            "description": "Stable token identifier"
+          },
+          "reference_id": {
+            "type": "string",
+            "title": "Reference Id",
+            "description": "Owning execution reference id"
+          },
+          "owner_node_id": {
+            "type": "string",
+            "title": "Owner Node Id",
+            "description": "Prepared node that produced the token"
+          },
+          "port": {
+            "type": "string",
+            "title": "Port",
+            "description": "Output port name"
+          },
+          "frame": {
+            "$ref": "#/components/schemas/ExecutionFrame",
+            "description": "Frame that produced the token"
+          },
+          "value": {
+            "title": "Value",
+            "description": "Output port value"
+          },
+          "token_kind": {
+            "type": "string",
+            "enum": ["data", "activation", "stream_end"],
+            "title": "Token Kind",
+            "default": "data"
+          },
+          "sequence": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sequence"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": ["token_id", "reference_id", "owner_node_id", "port", "frame", "value"],
+        "title": "ExecutionToken",
+        "description": "Data token owned by one prepared output port.\n\nTokens contain no graph edge or association metadata. In particular, loop-linkage edges never become data\ntokens."
       },
       "ExpandMaskWithFadeInvocation": {
         "category": "mask",
