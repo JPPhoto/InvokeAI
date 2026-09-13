@@ -82,6 +82,26 @@ body paths, and other mixed shapes remain on the compatibility scheduler.
 Unsupported shapes, including independent iterator-derived body inputs, mixed nested `For`/`Iterate` bodies, escaping
 body paths, ambiguous returns, and arbitrary cyclic graphs, are rejected before execution.
 
+## Generic `For` migration matrix
+
+`_GenericForPlanner` owns these fresh shapes. `_ExecutionMaterializer` remains the compatibility facade for every other
+shape and for explicitly forced compatibility runs:
+
+- One flat `For`/`ForReturn`: literal empty or non-empty collection, supported non-empty input producer, or the exact
+  four-node/four-edge empty input producer with no downstream consumer.
+- Canonical two-level nested `For` with a non-empty literal outer collection or supported non-empty input producer;
+  empty input-driven outer results remain compatibility-owned.
+- Exact two-sibling nested `For` fan-in through non-empty `CollectionConcat`.
+- Exact serial three-level nested `For`, including its statically non-empty `CollectionConcat` producer variant.
+- Exact serial four-level nested `For`.
+- Exact bounded outer `For`/`Iterate`/`Collect`.
+- Exact serial two-`Iterate` nested outer-`For` shape with one ordinary final consumer.
+
+Compatibility-owned shapes include legacy snapshots, unsupported input producers, extra nodes or consumers, fan-out,
+malformed linkage or output-scope edges, nested `For` depth five or greater, unsupported sibling or deeper shapes,
+unsupported mixed control flow, and saved-workflow or `If`-containing `For` graphs. No invocation emits or requires a
+literal successor node ID. This matrix changes no invocation, API, saved-workflow, frontend, or generated-schema contract.
+
 ## Persistence and validation
 
 Prepared execution nodes, source/prepared mappings, iteration paths, results, indegrees, and finalized loop contexts
@@ -100,8 +120,9 @@ iteration-path, and workflow-call-depth identity, and stale or cross-scope effec
 never encode `loop_linkage` as a data token. A fresh graph with exactly one static flat `For`/`ForReturn` pair,
 including an empty literal collection, a supported non-empty input-driven collection producer, or the exact bounded
 empty input-driven producer shape, now uses the generic scheduler adapter for readiness and continuation transitions.
-Graph state owns the generic continuation boundary: it carries returned state, honors `continue_condition`, materializes the next body
-iteration, and finalizes the aggregate. An empty literal collection completes through the existing synthetic terminal
+Graph state owns the generic continuation boundary. `_GenericForPlanner` owns admitted For-specific preparation,
+materializes the next body iteration, preserves frame paths and carried state, and finalizes nested completion. It
+shares only low-level execution-node construction mechanics with the compatibility materializer. An empty literal collection completes through the existing synthetic terminal
 `For` result without running the body or `ForReturn`. The generic scheduler remains opaque and never receives a literal
 successor node ID. The compatibility continuation bridge is retained only for unsupported loop shapes and explicitly
 legacy-loaded snapshots. Empty input-driven shapes outside the exact four-node/four-edge bounded topology, unsupported
@@ -195,13 +216,11 @@ activation
 ports and literal successor IDs remain absent, while unsupported loop shapes and saved-workflow control flow remain on
 their compatibility paths until differential coverage proves their generic replacements.
 
-The engine still owns runtime node materialization and queue readiness for loop-containing graphs that require empty or
-unsupported input-driven `For`, deeper nested/mixed control flow, and existing snapshots. Ordinary static DAGs, legacy-shaped `If` graphs,
-direct `Iterate`/`Collect`-only graphs, and supported fresh static flat `For` graphs now use the generic opaque
-plan/scheduler through a compatibility projection. This is intentional:
-the generic records preserve tested loop semantics first, while the old execution graph remains the fallback for control
-lowerings, legacy snapshots, and unsupported mixed loop shapes. No activation or stream ports are added to author-time
-graph JSON.
+The engine keeps compatibility materialization and queue readiness for loop-containing graphs outside the migration
+matrix and for existing snapshots. Admitted fresh `For` graphs use the generic opaque plan/scheduler plus
+`_GenericForPlanner`; `_ExecutionNodeBuilder` supplies shared low-level graph mutation mechanics. Ordinary static DAGs,
+legacy-shaped `If` graphs, and direct `Iterate`/`Collect`-only graphs retain their existing generic or compatibility
+routes. No activation, stream, or continuation ports are added to author-time graph JSON.
 Exact fresh serial nested-`Iterate` chains through eight levels use the generic planner for ordered frame expansion,
 empty-stream closure, checkpoint rehydration, source completion, and failure parity. Nine-level or deeper chains,
 five-level-or-deeper or unsupported sibling nested loops, and unsupported mixed shapes remain compatibility-owned. The exact fresh two-sibling `For`/`ForReturn` `CollectionConcat` fan-in shape, the exact fresh three-level serial nested-`For` shape with its bounded static `CollectionConcat` producer, and the exact fresh four-level serial nested-`For` shape are generic-routed. This migration does not modify any file under `invokeai/frontend/...`, including generated schemas; the existing

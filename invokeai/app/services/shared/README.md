@@ -152,8 +152,10 @@ A fresh graph with exactly one flat `For`/`ForReturn` pair and ordinary body nod
 literal collection, a supported non-empty input-driven collection, or the exact four-node/four-edge empty input-driven
 shape with one inputless producer and no downstream node. It projects readiness and invokes the graph-state
 continuation boundary, which selects the next iteration or finalizes the aggregate without exposing a successor node ID
-to the generic scheduler. The materializer still owns execution-node copies, input hydration, iteration paths, and body
-expansion. Other empty/input-driven shapes, five-level-or-deeper or sibling loops outside the exact two-sibling nested-`For` `CollectionConcat` fan-in shape, mixed control flow, and saved-workflow calls remain
+to the generic scheduler. The admitted For planner owns For-specific preparation, continuation, input hydration,
+iteration paths, and body expansion; it shares only low-level execution-node construction mechanics with the
+compatibility materializer. Other empty/input-driven shapes, five-level-or-deeper or sibling loops outside the exact
+two-sibling nested-`For` `CollectionConcat` fan-in shape, mixed control flow, and saved-workflow calls remain
 on the compatibility scheduler until their own differential gates are complete. One narrow fresh two-level nested-`For` shape (one non-empty literal outer
 collection, one inner `For` sourced from `outer.item`, and no continuation nodes) now uses the generic adapter;
 deeper-than-four-level, multiple-child shapes outside the exact two-sibling `CollectionConcat` fan-in contract, other empty/input-driven, mixed, and legacy-loaded shapes remain compatibility-owned.
@@ -588,11 +590,15 @@ Workflow-call note:
 
 - `_PreparedExecRegistry` Owns the relationship between source graph nodes and prepared execution graph nodes, plus
   cached metadata such as iteration path and runtime state.
-- `_ExecutionMaterializer` Expands source graph nodes into concrete execution graph nodes when an unsupported or legacy
-  shape runs out of ready work. On those compatibility paths it owns iterator expansion, collector grouping,
+- `_ExecutionMaterializer` is the compatibility planner facade. It expands source graph nodes into concrete execution
+  graph nodes when an unsupported or legacy shape runs out of ready work. On those compatibility paths it owns iterator expansion, collector grouping,
   prepared-parent selection, and creation of execution-graph edges. When matching prepared parents for a downstream
   exec node, skipped prepared exec nodes are ignored and cannot be selected as live inputs.
   The class lives in `graph_materializer.py` and is re-exported by `graph.py`.
+- `_GenericForPlanner` owns admitted fresh `For`/`ForReturn` preparation, continuation transitions, carried state,
+  frame paths, and nested `For` completion. It uses `_ExecutionNodeBuilder` only for low-level copy, edge, input,
+  and scheduler-registration mechanics; it does not construct `_ExecutionMaterializer`. Unsupported and legacy shapes
+  retain the compatibility facade.
 - Private `graph_iterate_planner.py` expands the supported direct and body-mediated Iterate/Collect shapes.
   Graph-state method wrappers preserve the admission, copy creation, edge attachment, and atomic preparation entry
   points. The planner continues to use the graph state's journal, mappings, caches, and scheduler.

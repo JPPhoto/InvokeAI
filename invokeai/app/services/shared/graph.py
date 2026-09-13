@@ -83,6 +83,7 @@ from invokeai.app.services.shared.graph_execution_runtime import (
     _DirectIterateCollectFanIn,
     _ExecutionRuntime,
 )
+from invokeai.app.services.shared.graph_for_planner import _GenericForPlanner
 from invokeai.app.services.shared.graph_if_activation import _IfActivationController
 from invokeai.app.services.shared.graph_iterate_planner import (
     _attach_direct_execution_edges,
@@ -320,6 +321,7 @@ class GraphExecutionState(BaseModel):
     _prepared_exec_registry: Optional[_PreparedExecRegistry] = PrivateAttr(default=None)
     _if_activation_controller_instance: Optional[_IfActivationController] = PrivateAttr(default=None)
     _execution_materializer: Optional[_ExecutionMaterializer] = PrivateAttr(default=None)
+    _generic_for_planner: Optional[_GenericForPlanner] = PrivateAttr(default=None)
     _execution_scheduler: Optional[_ExecutionScheduler | _GenericGraphSchedulerAdapter] = PrivateAttr(default=None)
     _execution_runtime: Optional[_ExecutionRuntime] = PrivateAttr(default=None)
     _for_parent_iteration_paths_cache: dict[str, set[tuple[int, ...]]] = PrivateAttr(default_factory=dict)
@@ -432,6 +434,7 @@ class GraphExecutionState(BaseModel):
     def _reset_apply_derived_caches(self) -> None:
         self._prepared_exec_registry = None
         self._execution_materializer = None
+        self._generic_for_planner = None
         self._execution_scheduler = None
         self._generic_graph_scheduler = None
         self._if_activation_controller_instance = None
@@ -612,6 +615,22 @@ class GraphExecutionState(BaseModel):
             self._execution_materializer = _ExecutionMaterializer(self)
         return self._execution_materializer
 
+    def _for_planner(self) -> _GenericForPlanner:
+        if self._generic_for_planner is None:
+            self._generic_for_planner = _GenericForPlanner(self)
+        return self._generic_for_planner
+
+    def _create_for_body_iteration(self, source_for_id: str, prepared_for_id: str) -> Optional[str]:
+        if self._is_generic_graph_scheduler(self._scheduler()) and self._can_use_generic_for_scheduler():
+            return self._for_planner().create_for_body_iteration(
+                source_for_id=source_for_id,
+                prepared_for_id=prepared_for_id,
+            )
+        return self._materializer().create_for_body_iteration(
+            source_for_id=source_for_id,
+            prepared_for_id=prepared_for_id,
+        )
+
     def _get_for_parent(self, exec_node_id: str) -> Optional[str]:
         source_return_id = self._prepared_registry().get_source_node_id(exec_node_id)
         iteration_path = self._get_iteration_path(exec_node_id)
@@ -703,9 +722,12 @@ class GraphExecutionState(BaseModel):
             else:
                 self._tx_set_attr(existing, "value", copydeep(token.value))
 
-    def _apply_generic_for_continuation(self, exec_node_id: str, output: BaseInvocationOutput) -> Optional[str]:
-        """Apply the graph-state continuation boundary for a supported fresh For run."""
-
+    def _apply_for_continuation(
+        self,
+        exec_node_id: str,
+        output: BaseInvocationOutput,
+        planner: _GenericForPlanner | _ExecutionMaterializer,
+    ) -> Optional[str]:
         if not isinstance(output, ForReturnInvocationOutput):
             return None
         if not isinstance(self.execution_graph.get_node(exec_node_id), ForReturnInvocation):
@@ -733,7 +755,7 @@ class GraphExecutionState(BaseModel):
         next_index = for_node.index + 1
         if next_index >= len(for_node.collection) or for_return_node.continue_condition is False:
             self._finalize_for_outputs(for_exec_node_id, source_for_id, source_return_id, output)
-            self._materializer().create_nested_for_return(
+            planner.create_nested_for_return(
                 inner_for_id=source_for_id,
                 prepared_inner_for_id=for_exec_node_id,
             )
@@ -745,7 +767,7 @@ class GraphExecutionState(BaseModel):
         collection = for_node.collection
         self._tx_set_attr(for_node, "collection", [])
 
-        next_for_id = self._materializer().create_for_iteration(
+        next_for_id = planner.create_for_iteration(
             source_for_id=source_for_id,
             iteration_index=next_index,
             collection=collection,
@@ -756,13 +778,18 @@ class GraphExecutionState(BaseModel):
         if self._is_generic_graph_scheduler(self._scheduler()) and can_use_nested_iterate_planner(self):
             prepare_nested_iterate_bodies(self)
         else:
-            self._materializer().create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=next_for_id)
+            planner.create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=next_for_id)
         return None
+
+    def _apply_generic_for_continuation(self, exec_node_id: str, output: BaseInvocationOutput) -> Optional[str]:
+        """Apply graph-state continuation boundary for an admitted fresh For run."""
+
+        return self._apply_for_continuation(exec_node_id, output, self._for_planner())
 
     def _try_schedule_next_for_iteration(self, exec_node_id: str, output: BaseInvocationOutput) -> Optional[str]:
         """Advance a compatibility-owned loop continuation."""
 
-        return self._apply_generic_for_continuation(exec_node_id, output)
+        return self._apply_for_continuation(exec_node_id, output, self._materializer())
 
     def _can_use_generic_two_sibling_nested_for_scheduler(
         self, for_nodes: list[ForInvocation], return_nodes: list[ForReturnInvocation], source_graph: Any
@@ -2751,10 +2778,15 @@ class GraphExecutionState(BaseModel):
             prepare_eight_level_nested_iterate_sequences(self)
             return self._get_next_node()
 
-        prepared_id = self._materializer().prepare(base_graph)
+        planner = (
+            self._for_planner()
+            if isinstance(self._scheduler(), _GenericGraphSchedulerAdapter) and self._can_use_generic_for_scheduler()
+            else self._materializer()
+        )
+        prepared_id = planner.prepare(base_graph)
 
         while prepared_id is not None:
-            prepared_id = self._materializer().prepare(base_graph)
+            prepared_id = planner.prepare(base_graph)
             if next_node is None:
                 next_node = self._get_next_node()
 
@@ -2814,6 +2846,7 @@ class GraphExecutionState(BaseModel):
         self._prepared_exec_metadata = {}
         self._prepared_exec_registry = None
         self._execution_materializer = None
+        self._generic_for_planner = None
         self._execution_scheduler = None
         self._generic_graph_scheduler = None
         self._execution_runtime = None
@@ -3375,6 +3408,8 @@ class GraphExecutionState(BaseModel):
         return self._materializer().create_execution_node(node_id, iteration_node_map, enforce_admission=False)
 
     def _iterator_graph(self, base: Optional["nx.DiGraph"] = None) -> "nx.DiGraph":
+        if isinstance(self._scheduler(), _GenericGraphSchedulerAdapter) and self._can_use_generic_for_scheduler():
+            return self._for_planner().iterator_graph(base)
         return self._materializer().iterator_graph(base)
 
     def _get_node_iterators(self, node_id: str, it_graph: Optional["nx.DiGraph"] = None) -> list[str]:

@@ -31,12 +31,12 @@ if TYPE_CHECKING:
     from invokeai.app.services.shared.graph import GraphExecutionState
 
 
-class _ExecutionMaterializer:
-    """Expands source-graph nodes into concrete execution-graph nodes for the current runtime state.
+class _ExecutionNodeBuilder:
+    """Builds concrete execution-graph nodes for a selected runtime planner.
 
-    `GraphExecutionState.next()` calls into this helper when no prepared exec node is ready. The materializer chooses
-    the next source node that can be expanded, creates the corresponding exec nodes in the execution graph, wires their
-    inputs, and initializes their scheduler state.
+    This class contains low-level copy, edge, input, and iteration mechanics. A
+    planner owns whether those mechanics are used for generic or compatibility
+    execution.
     """
 
     def __init__(self, state: "GraphExecutionState") -> None:
@@ -475,6 +475,12 @@ class _ExecutionMaterializer:
         self._initialize_execution_node(prepared_return_node.id, attached_return_edges)
         return prepared_return_node.id
 
+    # Generic For planning uses private aliases. Compatibility callers retain
+    # the public methods as an explicit fallback seam.
+    _create_for_iteration_generic = create_for_iteration
+    _create_for_body_iteration_generic = create_for_body_iteration
+    _create_nested_for_return_generic = create_nested_for_return
+
     def _create_serial_nested_iterate_copy(
         self,
         source_node_id: str,
@@ -811,10 +817,10 @@ class _ExecutionMaterializer:
             ):
                 self._mark_empty_for_complete(source_inner_for_id)
                 for inner_prepared_id in inner_prepared_ids:
-                    self.create_nested_for_return(source_inner_for_id, inner_prepared_id)
+                    self._create_nested_for_return_generic(source_inner_for_id, inner_prepared_id)
             else:
                 for inner_prepared_id in inner_prepared_ids:
-                    self.create_for_body_iteration(
+                    self._create_for_body_iteration_generic(
                         source_for_id=source_inner_for_id,
                         prepared_for_id=inner_prepared_id,
                     )
@@ -1711,3 +1717,9 @@ class _ExecutionMaterializer:
             self._mark_empty_for_complete(next_node_id)
 
         return new_node_ids[0]
+
+
+class _ExecutionMaterializer(_ExecutionNodeBuilder):
+    """Compatibility planner facade for unsupported and legacy graphs."""
+
+    pass

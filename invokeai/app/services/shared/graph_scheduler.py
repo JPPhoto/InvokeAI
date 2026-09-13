@@ -150,7 +150,7 @@ class _ExecutionScheduler:
                             prepared_for_node.index,
                         )
                     if prepared_exec_path[: len(prepared_for_path)] == prepared_for_path:
-                        self._state._materializer().create_for_body_iteration(
+                        self._state._create_for_body_iteration(
                             source_for_id=source_for_id, prepared_for_id=prepared_for_id
                         )
                         return
@@ -189,7 +189,7 @@ class _ExecutionScheduler:
                         )
                         for child_id in deferred_node_ids
                     ):
-                        self._state._materializer().create_for_body_iteration(
+                        self._state._create_for_body_iteration(
                             source_for_id=source_for_id, prepared_for_id=prepared_for_id
                         )
                         return
@@ -201,9 +201,7 @@ class _ExecutionScheduler:
                     for prepared_iterate_id in self._state._prepared_registry().get_prepared_ids(deferred_node_ids[0])
                 ):
                     continue
-                self._state._materializer().create_for_body_iteration(
-                    source_for_id=source_for_id, prepared_for_id=prepared_for_id
-                )
+                self._state._create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=prepared_for_id)
                 return
 
     def _decrement_child_indegree(self, child_exec_node_id: str, parent_exec_node_id: str) -> None:
@@ -331,9 +329,7 @@ class _ExecutionScheduler:
                     nested_body.iterate_node_id
                 )
             ):
-                self._state._materializer().create_for_body_iteration(
-                    source_for_id=source_for_id, prepared_for_id=exec_node_id
-                )
+                self._state._create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=exec_node_id)
             elif nested_body is None:
                 self._try_materialize_deferred_nested_for_body(exec_node_id)
         else:
