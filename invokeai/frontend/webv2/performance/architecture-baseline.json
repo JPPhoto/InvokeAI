@@ -2,15 +2,15 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 854238,
+        "brotliBytes": 859342,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 853412,
+        "gzipBytes": 858484,
         "imageRawBytes": 156376,
-        "initialRawBytes": 1995691,
-        "largestAssetRawBytes": 747209,
+        "initialRawBytes": 2010846,
+        "largestAssetRawBytes": 747218,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 74196,
+        "ownedRawBytes": 74443,
         "requestCount": 44,
         "scriptRequestCount": 28,
         "sourceOwners": [
@@ -311,15 +311,15 @@
         ]
       },
       "limits": {
-        "brotliBytes": 862781,
+        "brotliBytes": 867936,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 861947,
+        "gzipBytes": 867069,
         "imageRawBytes": 157940,
-        "initialRawBytes": 2015648,
-        "largestAssetRawBytes": 754682,
+        "initialRawBytes": 2030955,
+        "largestAssetRawBytes": 754691,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 74196,
+        "ownedRawBytes": 74443,
         "requestCount": 44,
         "scriptRequestCount": 28
       },
@@ -329,15 +329,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1181677,
+        "brotliBytes": 1182294,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1175836,
+        "gzipBytes": 1176418,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2991311,
+        "initialRawBytes": 2992581,
         "largestAssetRawBytes": 747218,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 132452,
+        "ownedRawBytes": 132915,
         "requestCount": 106,
         "scriptRequestCount": 90,
         "sourceOwners": [
@@ -1013,6 +1013,7 @@
           "source:src/workbench/widgets/preview/manifest.ts",
           "source:src/workbench/widgets/preview/previewSettings.ts",
           "source:src/workbench/widgets/preview/settingsContribution.ts",
+          "source:src/workbench/widgets/preview/spanPlaybackRequest.ts",
           "source:src/workbench/widgets/project/manifest.ts",
           "source:src/workbench/widgets/queue-status/manifest.ts",
           "source:src/workbench/widgets/queue/manifest.ts",
@@ -1025,15 +1026,15 @@
         ]
       },
       "limits": {
-        "brotliBytes": 1193494,
+        "brotliBytes": 1194117,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 1187595,
+        "gzipBytes": 1188183,
         "imageRawBytes": 157940,
-        "initialRawBytes": 3021225,
+        "initialRawBytes": 3022507,
         "largestAssetRawBytes": 754691,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 132452,
+        "ownedRawBytes": 132915,
         "requestCount": 106,
         "scriptRequestCount": 90
       },
@@ -1042,7 +1043,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-07",
+  "capturedAt": "2026-09-11",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",

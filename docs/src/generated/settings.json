@@ -205,7 +205,7 @@
     {
       "category": "PATHS",
       "default": "full",
-      "description": "SQLite durability setting. `full` (the default) flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database, because WAL guarantees consistency either way. What it gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.",
+      "description": "SQLite durability setting. `full`, the default and what InvokeAI has always used, flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database under WAL, which is why it is refused, with a warning, when WAL is unavailable for the database file. What `normal` gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.",
       "env_var": "INVOKEAI_DB_SYNCHRONOUS",
       "literal_values": [
         "full",
@@ -717,7 +717,7 @@
     {
       "category": "GENERATION",
       "default": false,
-      "description": "Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty).",
+      "description": "Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty). A tiled decode is not pixel-identical to a single-pass one: a VAE decoder normalises and attends over the whole image, so the difference is spread across it rather than confined to the tile seams. As of this release the setting also applies to FLUX.1, which previously ignored it.",
       "env_var": "INVOKEAI_FORCE_TILED_DECODE",
       "literal_values": [],
       "name": "force_tiled_decode",
@@ -936,7 +936,7 @@
     {
       "category": "IMAGE INDEX",
       "default": true,
-      "description": "Maintain a semantic embedding index of gallery images, used by the image map and semantic search features.",
+      "description": "Maintain a semantic embedding index of gallery images and videos, used by the image map and semantic search features.",
       "env_var": "INVOKEAI_IMAGE_INDEX_ENABLED",
       "literal_values": [],
       "name": "image_index_enabled",
@@ -947,7 +947,7 @@
     {
       "category": "IMAGE INDEX",
       "default": "DFN2B-CLIP-ViT-L-14-39B",
-      "description": "Name of the installed CLIP Vision or SigLIP model used to embed gallery images. Changing the model discards embeddings computed by the previous model.",
+      "description": "Name of the installed CLIP Vision or SigLIP model used to embed gallery images and video thumbnails. Changing the model discards embeddings computed by the previous model.",
       "env_var": "INVOKEAI_IMAGE_INDEX_MODEL",
       "literal_values": [],
       "name": "image_index_model",
@@ -969,7 +969,7 @@
     {
       "category": "IMAGE INDEX",
       "default": 8,
-      "description": "Number of images embedded per batch by the image index worker.",
+      "description": "Number of gallery items embedded per batch by the image index worker.",
       "env_var": "INVOKEAI_IMAGE_INDEX_BATCH_SIZE",
       "literal_values": [],
       "name": "image_index_batch_size",

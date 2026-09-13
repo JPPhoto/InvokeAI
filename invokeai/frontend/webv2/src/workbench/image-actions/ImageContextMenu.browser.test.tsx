@@ -77,11 +77,31 @@ const interact = (action: () => void): Promise<void> =>
     });
   });
 
+/** Polls inside `act` until the condition holds, so a wait tracks state rather than a fixed delay. */
+const settleUntil = async (isSettled: () => boolean, description: string, timeoutMs = 2000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+
+  while (!isSettled()) {
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out after ${String(timeoutMs)}ms waiting for ${description}`);
+    }
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, 10);
+      });
+    });
+  }
+};
+
 /** Quick icon items select through zag, which needs the item highlighted by a hover before the click. */
 const pickQuickItem = async (label: string): Promise<void> => {
   const target = document.querySelector<HTMLElement>(`[aria-label="${label}"]`);
   expect(target).not.toBeNull();
   await interact(() => target!.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' })));
+  // zag applies `data-highlighted` asynchronously and ignores a click on an unhighlighted item, so
+  // a fixed wait here silently dropped the click whenever the machine needed longer than it --
+  // the action mock simply recorded no call, and only under CI load.
+  await settleUntil(() => target!.hasAttribute('data-highlighted'), `"${label}" to be highlighted`);
   await interact(() => target!.click());
 };
 
