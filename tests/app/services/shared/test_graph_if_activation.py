@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import subprocess
-import sys
-import textwrap
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,6 +9,7 @@ from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.services.shared import graph as graph_module
 from invokeai.app.services.shared.execution_engine import ActivationDependency
 from invokeai.app.services.shared.graph_if_activation import _IfActivationController
+from tests.app.services.shared.import_test_utils import assert_module_imports_without_graph
 
 
 def _edge(source: str, destination: str, field: str) -> Any:
@@ -77,30 +75,7 @@ class _State:
 
 
 def test_standalone_import_does_not_import_graph() -> None:
-    script = """
-    import builtins
-    import sys
-
-    real_import = builtins.__import__
-
-    def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "invokeai.app.services.shared.graph" or name.startswith("invokeai.app.services.shared.graph."):
-            raise ModuleNotFoundError("graph import blocked")
-        return real_import(name, globals, locals, fromlist, level)
-
-    builtins.__import__ = blocked_import
-    import invokeai.app.services.shared.graph_if_activation
-
-    assert "invokeai.app.services.shared.graph" not in sys.modules
-    """
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        capture_output=True,
-        text=True,
-        timeout=300,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
+    assert_module_imports_without_graph("invokeai.app.services.shared.graph_if_activation")
 
 
 def test_graph_reexports_controller_class() -> None:

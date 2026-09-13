@@ -4924,7 +4924,7 @@ def test_if_graph_current_behavior_executes_both_simple_branches():
     assert g.results[prepared_selected_output_id].prompt == "true branch"
 
 
-def test_if_graph_optimized_behavior_executes_only_selected_simple_branch():
+def test_if_graph_optimized_behavior_executes_only_selected_simple_branch_and_records_history():
     graph = Graph()
     graph.add_node(BooleanInvocation(id="condition", value=True))
     graph.add_node(PromptTestInvocation(id="true_value", prompt="true branch"))
@@ -4942,23 +4942,6 @@ def test_if_graph_optimized_behavior_executes_only_selected_simple_branch():
 
     assert set(executed_source_ids) == {"condition", "true_value", "if", "selected_output"}
     assert "false_value" not in executed_source_ids
-
-
-def test_if_graph_optimized_behavior_does_not_record_unselected_branch_in_execution_history():
-    graph = Graph()
-    graph.add_node(BooleanInvocation(id="condition", value=True))
-    graph.add_node(PromptTestInvocation(id="true_value", prompt="true branch"))
-    graph.add_node(PromptTestInvocation(id="false_value", prompt="false branch"))
-    graph.add_node(IfInvocation(id="if"))
-    graph.add_node(PromptTestInvocation(id="selected_output"))
-
-    graph.add_edge(create_edge("condition", "value", "if", "condition"))
-    graph.add_edge(create_edge("true_value", "prompt", "if", "true_input"))
-    graph.add_edge(create_edge("false_value", "prompt", "if", "false_input"))
-    graph.add_edge(create_edge("if", "value", "selected_output", "prompt"))
-
-    g = GraphExecutionState(graph=graph)
-    execute_all_nodes(g)
 
     assert set(g.executed_history) == {"condition", "true_value", "if", "selected_output"}
     assert "false_value" not in g.executed_history
@@ -5372,9 +5355,36 @@ def test_if_graph_optimized_behavior_keeps_shared_live_consumers_per_iteration()
     assert g.is_complete()
 
 
-def test_if_graph_optimized_behavior_handles_selected_true_branch_with_shared_false_input_ancestor():
+@pytest.mark.parametrize(
+    ("condition", "expected_value", "expected_source_ids"),
+    [
+        pytest.param(
+            True,
+            ["shared", "true"],
+            {
+                "condition",
+                "shared_item",
+                "true_item",
+                "shared_collect",
+                "true_collect",
+                "if",
+                "selected_output",
+            },
+            id="true-branch",
+        ),
+        pytest.param(
+            False,
+            ["shared"],
+            {"condition", "shared_item", "shared_collect", "if", "selected_output"},
+            id="false-branch",
+        ),
+    ],
+)
+def test_if_graph_optimized_behavior_handles_selected_branch_with_shared_ancestor(
+    condition: bool, expected_value: list[str], expected_source_ids: set[str]
+):
     graph = Graph()
-    graph.add_node(BooleanInvocation(id="condition", value=True))
+    graph.add_node(BooleanInvocation(id="condition", value=condition))
     graph.add_node(AnyTypeTestInvocation(id="shared_item", value="shared"))
     graph.add_node(AnyTypeTestInvocation(id="true_item", value="true"))
     graph.add_node(CollectInvocation(id="shared_collect"))
@@ -5394,50 +5404,8 @@ def test_if_graph_optimized_behavior_handles_selected_true_branch_with_shared_fa
     executed_source_ids = execute_all_nodes(g)
 
     prepared_selected_output_id = next(iter(g.source_prepared_mapping["selected_output"]))
-    assert g.results[prepared_selected_output_id].value == ["shared", "true"]
-    assert set(executed_source_ids) == {
-        "condition",
-        "shared_item",
-        "true_item",
-        "shared_collect",
-        "true_collect",
-        "if",
-        "selected_output",
-    }
-
-
-def test_if_graph_optimized_behavior_handles_selected_false_branch_with_shared_true_input_ancestor():
-    graph = Graph()
-    graph.add_node(BooleanInvocation(id="condition", value=False))
-    graph.add_node(AnyTypeTestInvocation(id="shared_item", value="shared"))
-    graph.add_node(AnyTypeTestInvocation(id="true_item", value="true"))
-    graph.add_node(CollectInvocation(id="shared_collect"))
-    graph.add_node(CollectInvocation(id="true_collect"))
-    graph.add_node(IfInvocation(id="if"))
-    graph.add_node(AnyTypeTestInvocation(id="selected_output"))
-
-    graph.add_edge(create_edge("condition", "value", "if", "condition"))
-    graph.add_edge(create_edge("shared_item", "value", "shared_collect", "item"))
-    graph.add_edge(create_edge("shared_collect", "collection", "true_collect", "collection"))
-    graph.add_edge(create_edge("true_item", "value", "true_collect", "item"))
-    graph.add_edge(create_edge("shared_collect", "collection", "if", "false_input"))
-    graph.add_edge(create_edge("true_collect", "collection", "if", "true_input"))
-    graph.add_edge(create_edge("if", "value", "selected_output", "value"))
-
-    g = GraphExecutionState(graph=graph)
-    executed_source_ids = execute_all_nodes(g)
-
-    prepared_selected_output_id = next(iter(g.source_prepared_mapping["selected_output"]))
-    assert g.results[prepared_selected_output_id].value == ["shared"]
-    assert set(executed_source_ids) == {
-        "condition",
-        "shared_item",
-        "shared_collect",
-        "if",
-        "selected_output",
-    }
-    assert "true_item" not in executed_source_ids
-    assert "true_collect" not in executed_source_ids
+    assert g.results[prepared_selected_output_id].value == expected_value
+    assert set(executed_source_ids) == expected_source_ids
 
 
 def test_prepare_if_inputs_raises_when_selected_branch_source_has_no_result():

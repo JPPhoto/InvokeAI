@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import subprocess
-import sys
-import textwrap
 from typing import Any
 
 import pytest
@@ -15,6 +12,7 @@ from invokeai.app.services.shared import graph as graph_module
 from invokeai.app.services.shared import graph_if_dependencies
 from invokeai.app.services.shared.execution_engine import ActivationDependency
 from invokeai.app.services.shared.graph import Edge, EdgeConnection, Graph, GraphExecutionState
+from tests.app.services.shared.import_test_utils import assert_module_imports_without_graph
 
 
 def _edge(source: str, source_field: str, destination: str, destination_field: str) -> Edge:
@@ -230,30 +228,7 @@ def _indirectly_connected_if_graph() -> Graph:
 
 
 def test_leaf_import_does_not_import_graph() -> None:
-    script = """
-    import builtins
-    import sys
-
-    real_import = builtins.__import__
-
-    def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "invokeai.app.services.shared.graph" or name.startswith("invokeai.app.services.shared.graph."):
-            raise ModuleNotFoundError("graph import blocked")
-        return real_import(name, globals, locals, fromlist, level)
-
-    builtins.__import__ = blocked_import
-    import invokeai.app.services.shared.graph_if_dependencies
-
-    assert "invokeai.app.services.shared.graph" not in sys.modules
-    """
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        capture_output=True,
-        text=True,
-        timeout=300,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
+    assert_module_imports_without_graph("invokeai.app.services.shared.graph_if_dependencies")
 
 
 def test_graph_methods_delegate_to_leaf_functions(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,13 +1,10 @@
-import subprocess
-import sys
-import textwrap
-
 import pytest
 
 from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.services.shared.execution_engine.scheduler import ActivationDependency
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState
 from invokeai.app.services.shared.graph_runtime_records import _ApplyTransaction
+from tests.app.services.shared.import_test_utils import assert_module_imports_without_graph
 
 
 @pytest.fixture
@@ -20,25 +17,7 @@ def state() -> GraphExecutionState:
 
 
 def test_runtime_import_without_graph() -> None:
-    script = textwrap.dedent(
-        """
-        import builtins
-        import sys
-
-        real_import = builtins.__import__
-
-        def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
-            if name == "invokeai.app.services.shared.graph":
-                raise AssertionError("runtime imported graph")
-            return real_import(name, globals, locals, fromlist, level)
-
-        builtins.__import__ = blocked_import
-        import invokeai.app.services.shared.graph_if_runtime
-        assert "invokeai.app.services.shared.graph" not in sys.modules
-        """
-    )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=300)
-    assert result.returncode == 0, result.stderr
+    assert_module_imports_without_graph("invokeai.app.services.shared.graph_if_runtime")
 
 
 @pytest.mark.parametrize(
