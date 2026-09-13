@@ -18,6 +18,7 @@ import {
   cloneVideoWidgetValues,
   createVideoSourceClip,
   deriveReferenceExtendClip,
+  formatReferencePromptLabels,
   getDefaultReferenceClip,
   getDefaultReferenceConditioning,
   getDefaultReferenceImageDetail,
@@ -25,6 +26,7 @@ import {
   isVideoSourceClip,
   normalizeVideoSettings,
   normalizeVideoWidgetValues,
+  referencePromptLabels,
   resolveVideoMode,
   videoClipSpanSeconds,
   VIDEO_SOURCE_FALLBACK_FPS,
@@ -289,18 +291,16 @@ describe('createVideoSourceClip', () => {
 
 describe('getDefaultReferenceConditioning', () => {
   it('starts a wrapped audio upload on its soundtrack alone', () => {
-    expect(getDefaultReferenceConditioning({ media_origin: 'audio_upload' })).toBe('audio');
+    expect(getDefaultReferenceConditioning('audio_upload')).toBe('audio');
   });
 
   it('keeps video + audio for ordinary videos', () => {
-    expect(getDefaultReferenceConditioning({ generation_mode: 'minimax_h3_ref2v' })).toBe('video_audio');
-    expect(getDefaultReferenceConditioning({ media_origin: 'something_else' })).toBe('video_audio');
+    expect(getDefaultReferenceConditioning('some_other_origin')).toBe('video_audio');
   });
 
-  it('keeps video + audio when there is no metadata to read', () => {
+  it('keeps video + audio when the video carries no marker', () => {
     expect(getDefaultReferenceConditioning(null)).toBe('video_audio');
     expect(getDefaultReferenceConditioning(undefined)).toBe('video_audio');
-    expect(getDefaultReferenceConditioning({})).toBe('video_audio');
   });
 });
 
@@ -621,6 +621,80 @@ describe('anchorReferenceConditioning', () => {
   });
 });
 
+describe('referencePromptLabels', () => {
+  const withConditioning = (conditioning: 'video_audio' | 'video' | 'audio'): VideoReferenceItem => ({
+    ...VIDEO_REFERENCE,
+    conditioning,
+  });
+
+  // The numbering the model is handed (`build_ref2va_presentation`): one counter per
+  // modality, advanced in attachment order, so no label number is the card's position.
+  it('numbers each modality on its own counter', () => {
+    expect(
+      referencePromptLabels([
+        withConditioning('audio'),
+        IMAGE_REFERENCE,
+        withConditioning('video_audio'),
+        IMAGE_REFERENCE,
+        withConditioning('video'),
+      ]).map(formatReferencePromptLabels)
+    ).toEqual([['<Audio 1>'], ['<Picture 1>'], ['<Video 1>', '<Audio 2>'], ['<Picture 2>'], ['<Video 2>']]);
+  });
+
+  it('gives an audio-only reference no video number, which the next video then takes', () => {
+    expect(referencePromptLabels([withConditioning('audio'), withConditioning('video')])).toEqual([
+      { audio: 1, picture: null, video: null },
+      { audio: null, picture: null, video: 1 },
+    ]);
+  });
+
+  it('renumbers on reorder, since order is what the numbering follows', () => {
+    const first = { ...IMAGE_REFERENCE, image: { ...IMAGE_REFERENCE.image, image_name: 'first.png' } };
+    const second = { ...IMAGE_REFERENCE, image: { ...IMAGE_REFERENCE.image, image_name: 'second.png' } };
+    const numbered = (references: VideoReferenceItem[]) =>
+      Object.fromEntries(
+        references.map((reference, index) => [
+          reference.kind === 'image' ? reference.image.image_name : reference.clip.video_name,
+          referencePromptLabels(references)[index],
+        ])
+      );
+
+    // The same three references in two orders: the numbers follow the list, so the swap
+    // trades the two images' picture numbers and leaves the video's alone.
+    expect(numbered([first, withConditioning('video_audio'), second])).toEqual({
+      'first.png': { audio: null, picture: 1, video: null },
+      'ref.mp4': { audio: 1, picture: null, video: 1 },
+      'second.png': { audio: null, picture: 2, video: null },
+    });
+    expect(numbered([second, withConditioning('video_audio'), first])).toEqual({
+      'first.png': { audio: null, picture: 2, video: null },
+      'ref.mp4': { audio: 1, picture: null, video: 1 },
+      'second.png': { audio: null, picture: 1, video: null },
+    });
+  });
+
+  it('numbers a full list, where the widest label lives', () => {
+    const images = Array.from({ length: 9 }, (_unused, index) => ({
+      ...IMAGE_REFERENCE,
+      image: { ...IMAGE_REFERENCE.image, image_name: `image-${index}.png` },
+    }));
+
+    expect(
+      referencePromptLabels([
+        ...images,
+        withConditioning('video'),
+        withConditioning('video_audio'),
+        withConditioning('audio'),
+      ]).map(formatReferencePromptLabels)
+    ).toEqual([
+      ...images.map((_unused, index) => [`<Picture ${index + 1}>`]),
+      ['<Video 1>'],
+      ['<Video 2>', '<Audio 1>'],
+      ['<Audio 2>'],
+    ]);
+  });
+});
+
 describe('reference-extend anchor: audio-only references', () => {
   const longSource = { ...SOURCE_VIDEO, endFrame: 400, numFrames: 402, video_name: 'long.mp4' };
   const source24 = { ...longSource, fps: 24 };
@@ -755,6 +829,18 @@ describe('reference-extend linkage', () => {
   const source24 = { ...longSource, fps: 24 };
   // The panel's default; every choice is on the 17n+5 grid.
   const FRAMES = 141;
+
+  it('anchors on video + audio -- the role needs visual rows', () => {
+    const [ordinary] = applyReferenceExtendSourceVideo([], source24, 3, FRAMES);
+
+    // Deliberately NOT derived from whether the clip is a wrapped audio upload. The anchor
+    // is what the generated frames continue from, an 'audio' reference emits no visual rows
+    // at all, and the all-audio validation does not fire when other references are visual --
+    // so the seam would go silently discontinuous. `anchorReferenceConditioning` promotes in
+    // the other direction. (The clip carries no marker at all, so this cannot regress by
+    // accident.)
+    expect(ordinary).toMatchObject({ conditioning: 'video_audio', fromSourceVideo: true });
+  });
 
   it('derives the tail trim: the window ending at the cutpoint, clamped at 0', () => {
     expect(deriveReferenceExtendClip(source24, FRAMES)).toMatchObject({ endFrame: 400, startFrame: 260 });

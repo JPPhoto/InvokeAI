@@ -10,16 +10,18 @@ import type { ChangeEvent } from 'react';
 
 import { Badge, Box, createListCollection, HStack, Icon, Image, Input, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
-import { galleryItems, galleryTransfers, galleryVideos, toGalleryItemKey } from '@features/gallery';
+import { galleryItems, galleryTransfers, toGalleryItemKey } from '@features/gallery';
 import { GalleryPickerPopover } from '@features/gallery/picker';
 import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
 import { resolveMiniMaxH3ReferenceImage } from '@features/video/core/dimensions';
 import {
   clampReferenceSampleFrames,
   createVideoSourceClip,
+  formatReferencePromptLabels,
   getDefaultReferenceClip,
   getDefaultReferenceConditioning,
   getDefaultReferenceImageDetail,
+  referencePromptLabels,
   referenceSampleFrames,
   resizeReferenceSampleWindow,
   slideReferenceSampleWindow,
@@ -36,7 +38,7 @@ import { Field, FieldLabel } from '@platform/ui/Field';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Select } from '@platform/ui/Select';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
-import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, FilmIcon, ImagePlusIcon, UploadIcon, XIcon } from 'lucide-react';
+import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, ImagePlusIcon, UploadIcon, XIcon } from 'lucide-react';
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -45,10 +47,11 @@ import { TrimBoundThumb } from './TrimBoundThumb';
 import { useVideoUiActions } from './VideoUiContext';
 
 /**
- * The ordered Ref2VA reference list: numbered cards (order is part of the request — a
- * different order is a different generation), one gallery drop target that accepts a single
- * image or video, per-kind file uploads, a per-video conditioning selector and trim, and a
- * per-image detail selector.
+ * The ordered Ref2VA reference list: one card per reference, badged with the labels the
+ * structured prompt addresses it by (order is part of the request — a different order is a
+ * different generation), one gallery drop target that accepts a single image or video,
+ * per-kind file uploads, a per-video conditioning selector and trim, and a per-image detail
+ * selector.
  */
 
 const DROP_ID = 'video-reference-list';
@@ -112,6 +115,7 @@ type ReferenceCollections = {
 };
 
 const ReferenceCard = memo(function ReferenceCard({
+  audioLabel,
   collections,
   disabled,
   index,
@@ -120,14 +124,27 @@ const ReferenceCard = memo(function ReferenceCard({
   onMove,
   onRemove,
   onUpdate,
+  pictureLabel,
   reference,
   targetArea,
+  videoLabel,
 }: {
+  /**
+   * The card's structured-prompt label numbers, flattened to scalars rather than passed as
+   * the object `referencePromptLabels` returns: they are derived from the WHOLE list, so an
+   * object would be a fresh prop on every card on every edit to any reference. `updateReference`
+   * keeps the identity of the entries it did not touch, which is what lets the other cards bail
+   * out of a trim drag entirely; a per-card object would re-render all twelve — each one a zag
+   * Select and two SliderNumberFields — once per pointer step.
+   */
+  audioLabel: number | null;
   collections: ReferenceCollections;
   disabled: boolean;
   index: number;
   canMoveDown: boolean;
   canMoveUp: boolean;
+  pictureLabel: number | null;
+  videoLabel: number | null;
   onMove: (index: number, direction: -1 | 1) => void;
   onRemove: (index: number) => void;
   onUpdate: (index: number, reference: VideoReferenceItem) => void;
@@ -139,6 +156,10 @@ const ReferenceCard = memo(function ReferenceCard({
   const moveUpRef = useRef<HTMLButtonElement>(null);
   const moveDownRef = useRef<HTMLButtonElement>(null);
   const name = reference.kind === 'video' ? reference.clip.video_name : reference.image.image_name;
+  const promptLabels = useMemo(
+    () => formatReferencePromptLabels({ audio: audioLabel, picture: pictureLabel, video: videoLabel }),
+    [audioLabel, pictureLabel, videoLabel]
+  );
   const selectValue = useMemo(
     () => [reference.kind === 'video' ? reference.conditioning : reference.detail],
     [reference]
@@ -275,17 +296,14 @@ const ReferenceCard = memo(function ReferenceCard({
   const handleRemove = useCallback(() => onRemove(index), [index, onRemove]);
 
   return (
-    <Box borderWidth="1px" p="2" rounded="md">
+    /* Named after the labels the prompt uses, so the twelve identical Remove/Move/trim
+       controls a full list can hold announce which reference they belong to. */
+    <Box aria-label={[...promptLabels, name].join(' ')} borderWidth="1px" p="2" role="group" rounded="md">
       <HStack align="start" gap="2">
-        <Stack align="center" flexShrink={0} gap="1">
-          <Badge fontVariantNumeric="tabular-nums" size="xs" variant="solid">
-            {index + 1}
-          </Badge>
-          {/* Leading the card, left of every thumbnail it shows: plays what the trim
-              below actually selected, which the two still bounds cannot convey — and for
-              an audio reference, whose frames are a drawing of the sound, nothing can. */}
-          {reference.kind === 'video' ? <PlayClipSpanButton clip={reference.clip} /> : null}
-        </Stack>
+        {/* Leading the card, left of every thumbnail it shows: plays what the trim
+            below actually selected, which the two still bounds cannot convey — and for
+            an audio reference, whose frames are a drawing of the sound, nothing can. */}
+        {reference.kind === 'video' ? <PlayClipSpanButton clip={reference.clip} /> : null}
         {reference.kind === 'image' ? (
           <Box bg="blackAlpha.300" flexShrink={0} h="12" overflow="hidden" rounded="sm" w="16">
             <Image alt="" fit="cover" h="100%" src={galleryImageUrls.thumbnail(name)} w="100%" />
@@ -293,7 +311,19 @@ const ReferenceCard = memo(function ReferenceCard({
         ) : null}
         <Stack flex="1" gap="1" minW="0">
           <HStack gap="1">
-            {reference.kind === 'video' ? <FilmIcon size={12} /> : <ImagePlusIcon size={12} />}
+            {/* The names the prompt has to use for this reference, leading the row that
+                names it and standing in for the kind icon that used to sit here: the label
+                already says which kind it is, and for a waveform clip conditioning on its
+                soundtrack alone it says so more honestly than a film icon would. The number
+                is NOT the card's slot — the three modality counters advance independently —
+                so it goes beside the filename rather than in a gutter that would cost every
+                card a fixed 64px. Rendered verbatim, brackets and LTR order included,
+                because the badge is the token to type. */}
+            {promptLabels.map((label) => (
+              <Badge key={label} dir="ltr" flexShrink={0} size="xs" userSelect="text" variant="solid">
+                {label}
+              </Badge>
+            ))}
             <MiddleTruncate flex="1" fontSize="xs" text={name} />
             {reference.kind === 'video' && reference.fromSourceVideo === true ? (
               <Badge flexShrink={0} size="xs" variant="outline">
@@ -552,10 +582,15 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   );
 
   const addVideoItem = useCallback(
-    // The conditioning is passed in rather than derived here: only a caller holding the
-    // clip's metadata can tell a wrapped audio upload from footage. Callers without it get
-    // the ordinary video default -- and the entry back, so a late answer can correct it.
-    (item: GalleryVideoItem, conditioning: VideoReferenceConditioning = 'video_audio') => {
+    // The conditioning is derived here, from the marker the gallery item carries: it tells a
+    // wrapped audio upload from footage without a second request, so every caller gets the
+    // right answer synchronously.
+    (item: GalleryVideoItem) => {
+      // The marker is read here and NOT stored on the clip: a clip outlives the gallery
+      // record it came from (it is persisted in the project and re-uploaded under a fresh
+      // name on import, where the server does not re-derive the marker), so a copy on the
+      // clip would go stale, and nothing downstream should be tempted to trust it.
+      const conditioning = getDefaultReferenceConditioning(item.mediaOrigin);
       const clip = createVideoSourceClip(item);
       // Built outside the updater so the caller holds the same object the list does: it is
       // the only durable handle on this entry once reordering moves it.
@@ -598,17 +633,10 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       setIsLoading(true);
 
       try {
-        // Fetched alongside the resolve, not after it: the metadata only picks the
-        // card's starting conditioning, and it must not add a round trip to the add.
-        // A missing or unreadable record is not a failure -- it just means the
-        // ordinary video default.
-        const [item, metadata] = await Promise.all([
-          galleryItems.resolve({ kind: 'video', name: videoName }),
-          galleryVideos.metadata(videoName).catch(() => null),
-        ]);
+        const item = await galleryItems.resolve({ kind: 'video', name: videoName });
 
         if (item?.kind === 'video') {
-          addVideoItem(item, getDefaultReferenceConditioning(metadata));
+          addVideoItem(item);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -712,47 +740,16 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   );
   const addPickedVideo = useCallback(
     (item: GalleryVideoItem) => {
-      // The card goes in SYNCHRONOUSLY and is corrected afterwards, rather than waiting on
-      // the metadata the way the drop and upload paths do. The picker stays open and judges
-      // each click against the reference list as it stands -- an add that had not landed yet
-      // would leave the tile pickable (a second click would duplicate it), leave the
-      // remaining count stale, and let two picks land in whichever order their fetches
-      // finished, which for references is a different generation.
-      const entry = addVideoItem(item);
-
-      if (!entry) {
-        return;
-      }
-
-      // The metadata is the only thing that tells a wrapped audio upload from footage. An
-      // unreadable record is not a failure -- the ordinary video default just stands.
-      void galleryVideos
-        .metadata(item.name)
-        .then((metadata) => {
-          const conditioning = getDefaultReferenceConditioning(metadata);
-
-          if (conditioning === entry.conditioning) {
-            return;
-          }
-          // The window is re-derived with the conditioning, not carried over: this path adds
-          // BEFORE it knows the answer, so the card is holding the footage default, and
-          // leaving it would give a picked soundtrack a shorter window than the same clip
-          // dropped or uploaded. Safe to recompute -- the identity match below already
-          // establishes that the window is still the one this code chose.
-          //
-          // Matched by identity, not index: a card the user has since edited is a different
-          // object and keeps their choice, and a removed one is simply no longer there.
-          onChange((current) =>
-            current.map((existing) =>
-              existing === entry
-                ? { ...entry, clip: getDefaultReferenceClip(entry.clip, conditioning), conditioning }
-                : existing
-            )
-          );
-        })
-        .catch(() => undefined);
+      // Fully synchronous, which the picker requires: it stays open and judges each click
+      // against the reference list as it stands, so an add that had not landed yet would
+      // leave the tile pickable (a second click would duplicate it), leave the remaining
+      // count stale, and let two picks land in whichever order their fetches finished --
+      // which for references is a different generation. This path used to add on the
+      // footage default and correct the card once a metadata fetch answered; the marker
+      // rides on the picked item, so there is nothing left to correct.
+      addVideoItem(item);
     },
-    [addVideoItem, onChange]
+    [addVideoItem]
   );
   const handlePick = useCallback(
     (item: GalleryItem) => {
@@ -805,6 +802,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       return `${identity}-${occurrence}`;
     });
   }, [references]);
+  const promptLabels = useMemo(() => referencePromptLabels(references), [references]);
 
   const moveReference = useCallback(
     (index: number, direction: -1 | 1) => {
@@ -833,13 +831,16 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       {references.map((reference, index) => (
         <ReferenceCard
           key={referenceKeys[index]}
+          audioLabel={promptLabels[index]?.audio ?? null}
           collections={collections}
           disabled={isInert}
           index={index}
           canMoveDown={index < references.length - 1 && index + 1 !== anchorIndex}
           canMoveUp={index > 0 && index !== anchorIndex}
+          pictureLabel={promptLabels[index]?.picture ?? null}
           reference={reference}
           targetArea={targetArea}
+          videoLabel={promptLabels[index]?.video ?? null}
           onMove={moveReference}
           onRemove={removeReference}
           onUpdate={updateReference}
