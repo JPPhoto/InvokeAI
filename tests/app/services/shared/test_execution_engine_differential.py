@@ -5014,6 +5014,9 @@ def test_body_iterate_fan_in_unsupported_topology_uses_compatibility_fallback() 
         GraphExecutionState(graph=graph), force_compatibility_scheduler=True
     )
 
+    assert isinstance(generic_state._execution_scheduler, _GenericGraphSchedulerAdapter) and isinstance(
+        compatibility_state._execution_scheduler, _ExecutionScheduler
+    )
     assert generic_trace == compatibility_trace
     generic_collection = _source_output(generic_state, "collect").collection
     compatibility_collection = _source_output(compatibility_state, "collect").collection

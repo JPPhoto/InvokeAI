@@ -140,8 +140,12 @@ seven `Iterate` nodes and seven-component frame paths, with the same empty-strea
 checkpoint, source-completion, and failure-parity guarantees.
 Three or more body-mediated branches, fan-in with four or more direct branches,
 broader nested iterators, and mixed control flow outside the bounded
-per-item topology retain materializer copy expansion,
-grouping, and empty-source handling on the legacy compatibility route.
+per-item topology retain `_ExecutionMaterializer` ownership for copy expansion,
+grouping, and empty-source handling. `_GenericGraphSchedulerAdapter` may still
+own readiness for these unsupported fresh `Iterate`/`Collect` graphs; the
+compatibility materializer owns expansion and materialization. Forced
+compatibility runs and legacy snapshots retain `_ExecutionScheduler` and
+compatibility-materializer ownership.
 
 The exact seventeen-node/sixteen-edge serial chain extends the same planner to
 eight `Iterate` nodes and eight-component frame paths, with the same
