@@ -226,7 +226,7 @@ class DefaultSessionRunner(SessionRunnerBase):
                 # down with it — and it does not fail closed (see `queue_owner_is_active`).
                 # A suspended workflow call is not `is_complete()`, so it is untouched here
                 # and re-checked when the parent resumes.
-                if session_finished and not queue_item.session.has_error():
+                if session_finished and not already_terminal and not queue_item.session.has_error():
                     if self._cancel_if_owner_revoked(queue_item, unreadable_is_active=True):
                         break
                 if not already_terminal:

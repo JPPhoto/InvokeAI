@@ -3618,7 +3618,10 @@ class GraphExecutionState(BaseModel):
         return self._materializer().create_execution_node(node_id, iteration_node_map, enforce_admission=False)
 
     def _iterator_graph(self, base: Optional["nx.DiGraph"] = None) -> "nx.DiGraph":
-        if self._can_use_generic_for_scheduler():
+        if (
+            isinstance(self._execution_scheduler, _GenericGraphSchedulerAdapter)
+            and self._can_use_generic_for_scheduler()
+        ):
             return self._for_planner().iterator_graph(base)
         return self._materializer().iterator_graph(base)
 
