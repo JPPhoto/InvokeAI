@@ -672,6 +672,12 @@ def _input_driven_three_level_nested_for_graph_with_collection(
     return graph
 
 
+def _input_driven_three_level_nested_for_graph_with_extra_node() -> Graph:
+    graph = _input_driven_three_level_nested_for_graph()
+    graph.add_node(AnyTypeTestInvocation(id="extra"))
+    return graph
+
+
 def _input_driven_nested_for_graph(*, outer_collection: list[list[str]] | None = None) -> Graph:
     graph = _nested_for_graph(outer_collection=outer_collection)
     graph.get_node("outer_for").collection = []
@@ -2517,6 +2523,11 @@ def test_input_driven_three_level_nested_for_failure_matches_compatibility() -> 
     [
         pytest.param(_sibling_nested_for_graph, id="sibling"),
         pytest.param(_malformed_three_level_nested_for_graph, id="malformed-link"),
+        pytest.param(
+            lambda: _input_driven_three_level_nested_for_graph_with_collection([]),
+            id="empty-outer-producer",
+        ),
+        pytest.param(_input_driven_three_level_nested_for_graph_with_extra_node, id="extra-node"),
     ],
 )
 def test_three_level_nested_for_gate_falls_back_for_unsupported_shapes(graph_factory: Any) -> None:
