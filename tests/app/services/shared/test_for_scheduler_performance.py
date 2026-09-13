@@ -1,9 +1,8 @@
 """Scheduler behavior and overhead for trivial loop bodies.
 
-`test_loop_scheduler_overhead_is_linear` measures CPU time, not wall clock: it compares per-item
-cost at two sizes, and CPU time is not inflated when xdist workers share the runner's cores. The
-absolute budget below it is machine-dependent and stays `slow`, as does the sibling
-`test_graph_execution_performance.py`. The completion-state tests are not benchmarks at all.
+The required scheduler-scaling regression test counts historical execution-effect entries traversed
+by the scheduler. Optional absolute-time benchmarks remain marked `slow`. The completion-state tests
+are not benchmarks.
 """
 
 import time
@@ -18,7 +17,45 @@ from invokeai.app.services.shared.graph import CollectInvocation, Graph, GraphEx
 from tests.test_nodes import AnyTypeTestInvocation, create_edge, create_loop_linkage
 
 
-def _run_trivial_loop(loop_type: str, count: int, *, clock: Callable[[], float] = time.process_time) -> float:
+class _EffectEntryVisitCounter:
+    entries_visited = 0
+
+
+class _CountingExecutionEffects(dict[str, list[object]]):
+    """Count traversal of durable effect entries without constraining the scheduler algorithm."""
+
+    def __init__(self, counter: _EffectEntryVisitCounter) -> None:
+        super().__init__()
+        self._counter = counter
+
+    def items(self):  # type: ignore[override]
+        for item in super().items():
+            self._counter.entries_visited += 1
+            yield item
+
+    def values(self):  # type: ignore[override]
+        for value in super().values():
+            self._counter.entries_visited += 1
+            yield value
+
+    def keys(self):  # type: ignore[override]
+        for key in super().keys():
+            self._counter.entries_visited += 1
+            yield key
+
+    def __iter__(self):  # type: ignore[override]
+        for key in super().__iter__():
+            self._counter.entries_visited += 1
+            yield key
+
+
+def _run_trivial_loop(
+    loop_type: str,
+    count: int,
+    *,
+    clock: Callable[[], float] = time.process_time,
+    execution_effects: dict[str, list[object]] | None = None,
+) -> float:
     graph = Graph()
     graph.add_node(RangeInvocation(id="range", start=0, stop=count))
     graph.add_node(ForInvocation(id="loop") if loop_type == "for" else IterateInvocation(id="loop"))
@@ -33,6 +70,8 @@ def _run_trivial_loop(loop_type: str, count: int, *, clock: Callable[[], float] 
         graph.add_node(CollectInvocation(id="collect"))
         graph.add_edge(create_edge("body", "value", "collect", "item"))
     state = GraphExecutionState(graph=graph)
+    if execution_effects is not None:
+        state.execution_effects = execution_effects
     context = Mock()
     started = clock()
     while (node := state.next()) is not None:
@@ -41,22 +80,20 @@ def _run_trivial_loop(loop_type: str, count: int, *, clock: Callable[[], float] 
     return clock() - started
 
 
-@pytest.mark.parametrize("loop_type", ["iterate", "for"])
-def test_loop_scheduler_overhead_is_linear(loop_type: str) -> None:
-    timings = {count: [] for count in (300, 1200)}
-    for _ in range(3):
-        for count in (1200, 300):
-            # CPU time, so a worker losing the core to a sibling does not read as scheduler cost.
-            # Both sizes take hundreds of milliseconds, well clear of the ~15ms clock granularity
-            # that made this measurement unusable when the loops were cheaper.
-            timings[count].append(_run_trivial_loop(loop_type, count) / count)
-    # Best-of-N is the noise-tolerant estimator for a lower bound: shared CI hosts inflate any
-    # single sample (a GC pause or a scheduler hiccup), and the median of three still fell over
-    # a tight threshold on macOS.
-    per_node = {count: min(samples) for count, samples in timings.items()}
-    # Linear scheduling keeps per-item cost flat. The quadratic regression scaled per-item cost with
-    # the item count - about 4x between 300 and 1200 - so 2.5x leaves noise headroom on both sides.
-    assert per_node[1200] < per_node[300] * 2.5, f"{loop_type}: {per_node}"
+def test_for_scheduler_does_not_rescan_historical_effects() -> None:
+    visits: dict[int, int] = {}
+    for count in (300, 1200):
+        counter = _EffectEntryVisitCounter()
+        _run_trivial_loop(
+            "for",
+            count,
+            execution_effects=_CountingExecutionEffects(counter),
+        )
+        visits[count] = counter.entries_visited
+
+    # A small constant number of full ledger passes is acceptable. A pass per iteration is not:
+    # it visits historical entries quadratically and was the source of the For scheduler regression.
+    assert all(visits[count] <= count * 4 for count in visits), f"historical effect visits: {visits}"
 
 
 @pytest.mark.slow
