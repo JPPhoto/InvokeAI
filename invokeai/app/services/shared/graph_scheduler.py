@@ -365,6 +365,7 @@ class _GenericGraphSchedulerAdapter:
             state.ready_order,
             ready_predicate=self._is_node_activation_ready,
         )
+        self._known_result_ids = set(state.results)
         self._register_existing_nodes()
         prepared_ids = set(state.prepared_source_mapping).intersection(state.results)
         discarded_ids = {
@@ -457,14 +458,18 @@ class _GenericGraphSchedulerAdapter:
 
     def _sync_executed_state(self, excluded: Iterable[str] = ()) -> None:
         """Synchronize externally completed plan nodes without rebuilding on every normal completion."""
+        if len(self._state.results) == len(self._known_result_ids):
+            return
         excluded_ids = set(excluded)
         newly_executed = {
             exec_node_id
             for exec_node_id in self._state.results
+            if exec_node_id not in self._known_result_ids
             if exec_node_id not in excluded_ids
             and exec_node_id in self._scheduler.plan.nodes
             and exec_node_id not in self._scheduler.executed
         }
+        self._known_result_ids.update(self._state.results)
         if not newly_executed:
             return
         self._scheduler.executed.update(newly_executed)
@@ -628,6 +633,7 @@ class _GenericGraphSchedulerAdapter:
                 raise KeyError(f"indegree missing for exec node {dependent}")
         self._remove_projected(exec_node_id)
         self._record_completed_node(exec_node_id, output)
+        self._known_result_ids.add(exec_node_id)
         finalized_for_exec_node_id = self._state._apply_generic_for_continuation(exec_node_id, output)
         nested_iterate_sequence = (
             can_use_nested_iterate_sequence_planner(self._state)

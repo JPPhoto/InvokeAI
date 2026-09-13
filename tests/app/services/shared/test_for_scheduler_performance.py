@@ -1,8 +1,8 @@
 """Scheduler behavior and overhead for trivial loop bodies.
 
-The required scheduler-scaling regression test counts historical execution-effect entries traversed
-by the scheduler. Optional absolute-time benchmarks remain marked `slow`. The completion-state tests
-are not benchmarks.
+The required scheduler-scaling regression test counts entries traversed in the growing scheduler
+ledgers. Optional absolute-time benchmarks remain marked `slow`. The completion-state tests are not
+benchmarks.
 """
 
 import time
@@ -17,35 +17,43 @@ from invokeai.app.services.shared.graph import CollectInvocation, Graph, GraphEx
 from tests.test_nodes import AnyTypeTestInvocation, create_edge, create_loop_linkage
 
 
-class _EffectEntryVisitCounter:
-    entries_visited = 0
+class _MappingTraversalCounter:
+    def __init__(self) -> None:
+        self.entries_visited = 0
+        self.visits_by_mapping: dict[str, int] = {}
+
+    def record(self, mapping_name: str) -> None:
+        self.entries_visited += 1
+        self.visits_by_mapping[mapping_name] = self.visits_by_mapping.get(mapping_name, 0) + 1
 
 
-class _CountingExecutionEffects(dict[str, list[object]]):
-    """Count traversal of durable effect entries without constraining the scheduler algorithm."""
+class _CountingMapping(dict[str, object]):
+    """Count mapping-entry traversal without constraining the scheduler algorithm."""
 
-    def __init__(self, counter: _EffectEntryVisitCounter) -> None:
+    def __init__(self, values: dict[str, object], counter: _MappingTraversalCounter, mapping_name: str) -> None:
         super().__init__()
+        self.update(values)
         self._counter = counter
+        self._mapping_name = mapping_name
 
     def items(self):  # type: ignore[override]
         for item in super().items():
-            self._counter.entries_visited += 1
+            self._counter.record(self._mapping_name)
             yield item
 
     def values(self):  # type: ignore[override]
         for value in super().values():
-            self._counter.entries_visited += 1
+            self._counter.record(self._mapping_name)
             yield value
 
     def keys(self):  # type: ignore[override]
         for key in super().keys():
-            self._counter.entries_visited += 1
+            self._counter.record(self._mapping_name)
             yield key
 
     def __iter__(self):  # type: ignore[override]
         for key in super().__iter__():
-            self._counter.entries_visited += 1
+            self._counter.record(self._mapping_name)
             yield key
 
 
@@ -54,7 +62,7 @@ def _run_trivial_loop(
     count: int,
     *,
     clock: Callable[[], float] = time.process_time,
-    execution_effects: dict[str, list[object]] | None = None,
+    mapping_counter: _MappingTraversalCounter | None = None,
 ) -> float:
     graph = Graph()
     graph.add_node(RangeInvocation(id="range", start=0, stop=count))
@@ -70,8 +78,10 @@ def _run_trivial_loop(
         graph.add_node(CollectInvocation(id="collect"))
         graph.add_edge(create_edge("body", "value", "collect", "item"))
     state = GraphExecutionState(graph=graph)
-    if execution_effects is not None:
-        state.execution_effects = execution_effects
+    if mapping_counter is not None:
+        state._scheduler()
+        state.execution_effects = _CountingMapping(state.execution_effects, mapping_counter, "execution_effects")
+        state.results = _CountingMapping(state.results, mapping_counter, "results")
     context = Mock()
     started = clock()
     while (node := state.next()) is not None:
@@ -80,20 +90,22 @@ def _run_trivial_loop(
     return clock() - started
 
 
-def test_for_scheduler_does_not_rescan_historical_effects() -> None:
+@pytest.mark.parametrize("loop_type", ["iterate", "for"])
+def test_loop_scheduler_does_not_rescan_growing_state(loop_type: str) -> None:
     visits: dict[int, int] = {}
+    visits_by_mapping: dict[int, dict[str, int]] = {}
     for count in (300, 1200):
-        counter = _EffectEntryVisitCounter()
-        _run_trivial_loop(
-            "for",
-            count,
-            execution_effects=_CountingExecutionEffects(counter),
-        )
+        counter = _MappingTraversalCounter()
+        _run_trivial_loop(loop_type, count, mapping_counter=counter)
         visits[count] = counter.entries_visited
+        visits_by_mapping[count] = counter.visits_by_mapping
 
-    # A small constant number of full ledger passes is acceptable. A pass per iteration is not:
-    # it visits historical entries quadratically and was the source of the For scheduler regression.
-    assert all(visits[count] <= count * 4 for count in visits), f"historical effect visits: {visits}"
+    # A small constant number of full mapping passes is acceptable. A pass per iteration is not:
+    # it visits growing scheduler state quadratically. For covers durable effect history; Iterate covers
+    # result synchronization in the generic scheduler.
+    assert all(visits[count] <= count * 32 for count in visits), (
+        f"mapping visits for {loop_type}: {visits}; by mapping: {visits_by_mapping}"
+    )
 
 
 @pytest.mark.slow
