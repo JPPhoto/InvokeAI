@@ -906,8 +906,26 @@ class GraphExecutionState(BaseModel):
             return False
 
         outer_for = outer_candidates[0]
-        if self.graph._get_input_edges(outer_for.id, COLLECTION_FIELD) or not outer_for.collection:
+        outer_collection_edges = self.graph._get_input_edges(outer_for.id, COLLECTION_FIELD)
+        if not outer_collection_edges and not outer_for.collection:
             return False
+        if outer_collection_edges:
+            if nested_level != 3 or len(outer_collection_edges) != 1 or outer_for.collection:
+                return False
+            outer_collection_edge = outer_collection_edges[0]
+            if outer_collection_edge.destination.field != COLLECTION_FIELD:
+                return False
+            producer = self.graph.get_node(outer_collection_edge.source.node_id)
+            if not isinstance(producer, CollectionConcatInvocation) or (not producer.first and not producer.second):
+                return False
+            if (
+                outer_collection_edge.source.field != "collection"
+                or self.graph._get_input_edges(producer.id)
+                or self.graph._get_output_edges(producer.id) != outer_collection_edges
+                or len(self.graph.nodes) != 9
+                or len(self.graph.edges) != 11
+            ):
+                return False
 
         chain = [outer_for]
         while len(chain) < nested_level:

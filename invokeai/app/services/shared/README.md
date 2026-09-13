@@ -102,6 +102,11 @@ and one ordinary outer-output consumer—is also generic-routed. It owns outer
 input hydration, per-outer-frame stream expansion, checkpoint rehydration, and
 failure parity; input-driven inner preparation, deeper or multiple nesting,
 other mixed control flow, and legacy snapshots remain compatibility-owned.
+The exact nine-node producer-driven extension adds the same inputless,
+statically non-empty `CollectionConcatInvocation` outer producer to the
+three-level serial nested-`For` chain. It is generic-routed with the same
+trace, output, checkpoint, and failure guarantees; other producer classes and
+deeper, multiple, sibling, mixed, and legacy shapes remain compatibility-owned.
 The exact serial two-level extension—`For.item -> preparation1 -> Iterate1 ->
 preparation2 -> Iterate2 -> ordinary body -> Collect -> linked ForReturn`, plus
 one ordinary outer-output consumer—is also generic-routed. Its planner and
@@ -152,7 +157,8 @@ expansion. Other empty/input-driven shapes, five-level-or-deeper or sibling loop
 on the compatibility scheduler until their own differential gates are complete. One narrow fresh two-level nested-`For` shape (one non-empty literal outer
 collection, one inner `For` sourced from `outer.item`, and no continuation nodes) now uses the generic adapter;
 deeper-than-four-level, multiple-child shapes outside the exact two-sibling `CollectionConcat` fan-in contract, other empty/input-driven, mixed, and legacy-loaded shapes remain compatibility-owned.
-The exact fresh three-level serial nested-`For` shape (one literal outer collection,
+The exact fresh three-level serial nested-`For` shape (one literal outer
+collection or one statically non-empty `CollectionConcatInvocation` producer,
 one direct child at each level, no continuation nodes) also uses the generic adapter. The exact fresh
 four-level serial nested-`For` shape (one literal outer collection, one direct child at each level, no continuation
 nodes) is also generic-routed. Its deepest-empty behavior matches compatibility at the trace, output, and completion
@@ -292,7 +298,8 @@ including an empty inner collection, remains isolated by its frame path. `Iterat
 for this exact seven-node shape, the private nested planner owns per-outer-frame
 copy expansion, stream identity, empty closure, `Collect` readiness/hydration,
 checkpoint rehydration, and failure parity. The exact producer-driven outer
-extension described above is also generic-routed. The exact fresh three-level serial nested-`For` shape and the exact
+extension described above is also generic-routed. The exact fresh three-level serial nested-`For` shape, including its
+statically non-empty producer-driven outer variant, and the exact
 fresh four-level serial nested-`For` shape are also generic-routed; five-level-or-deeper or sibling nested `For` outside the exact two-sibling `CollectionConcat` fan-in contract, nine-level
 or deeper nested iterators, other input-driven outer collections, mixed control
 flow, and legacy snapshots retain compatibility materializer ownership. The
@@ -347,7 +354,7 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
   `_active_class: Optional[str]`. Ordinary static DAGs and legacy-shaped `If` graphs derive readiness from the generic
   scheduler; the `If` adapter stores frame-local activation dependencies whose private gate state plus persisted token
   checks control generic branch readiness. Supported static flat `For` graphs, the narrow canonical two-level nested
-  `For` shape, the exact fresh three-level and four-level serial nested-`For` shapes, the exact producer-driven nested extension, the exact bounded empty input-driven flat `For`, the bounded
+  `For` shape, the exact fresh three-level and four-level serial nested-`For` shapes (including the exact three-level producer-driven outer variant), the exact producer-driven nested extension, the exact bounded empty input-driven flat `For`, the bounded
   two- through eight-level serial nested-`Iterate` chains, and the bounded per-item `Iterate`/`If`/`Collect` topology use
   the generic adapter for readiness and continuation projection; other unsupported input-driven, nine-level or deeper,
   mixed graphs outside that topology, and saved-workflow graphs retain the legacy scheduler. Optional
@@ -431,7 +438,7 @@ the generic path completes through the existing synthetic terminal `For` result 
 The generic scheduler receives only opaque node IDs and dependencies; it never receives a literal next node ID. The
 compatibility continuation bridge remains available only for unsupported loop shapes and explicitly legacy-loaded snapshots.
 The exact four-node/four-edge empty input-driven shape with one inputless static-list producer is also generic-routed.
-Other input-driven outer collections, five-level-or-deeper or sibling nested loops outside the exact two-sibling `CollectionConcat` fan-in contract, or unsupported mixed loop shapes remain compatibility-owned; the exact fresh two-sibling `For`/`ForReturn` `CollectionConcat` fan-in shape, the narrow canonical two-level, and exact fresh three-level and four-level serial nested-`For` shapes, the canonical bounded
+Other input-driven outer collections, five-level-or-deeper or sibling nested loops outside the exact two-sibling `CollectionConcat` fan-in contract, or unsupported mixed loop shapes remain compatibility-owned; the exact fresh two-sibling `For`/`ForReturn` `CollectionConcat` fan-in shape, the narrow canonical two-level, and exact fresh three-level and four-level serial nested-`For` shapes (including the exact three-level producer-driven outer variant), the canonical bounded
   internal `Iterate`/`Collect` shape, the exact producer-driven outer nested extension, and the bounded two- through
   six-, seven-, and eight-level serial nested-`Iterate` chains are generic-routed. On
 rehydration, the generic adapter restores the active class-drain
@@ -503,7 +510,8 @@ five-level-or-deeper/sibling nested outside the exact two-sibling `CollectionCon
 retain their existing materialization and linkage ownership. The supported
   fresh static flat `For`/`ForReturn` shape, the exact bounded empty input-driven
   flat shape, the narrow canonical two-level and exact fresh three-level and four-level serial nested-`For`
-  shapes, and the canonical bounded internal `Iterate`/`Collect`
+  shapes (including the exact three-level producer-driven outer variant),
+  and the canonical bounded internal `Iterate`/`Collect`
 shape use the generic adapter. For
 `If`, generic readiness consumes opaque frame-local plan dependencies and requires
 both matching private `ActivationGate` runtime state and a persisted activation token. Fresh resolution attaches only
