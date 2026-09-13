@@ -25,6 +25,7 @@ import {
   CURRENT_IMAGE_TRACE,
   declutterAnnotations,
   HIGHLIGHTED_POINTS_TRACE,
+  toHighlightRestyle,
 } from '@workbench/image-map/imageMapTraces';
 import {
   computePercentileRanges,
@@ -415,18 +416,7 @@ const ImageMapPlot = ({
     }
 
     const trace = buildHighlightedPointsTrace(points, selectedKeys);
-    swallow(
-      Plotly.restyle(
-        container,
-        {
-          customdata: [trace.customdata],
-          'marker.color': [trace.marker.color as string[]],
-          x: [trace.x],
-          y: [trace.y],
-        },
-        [highlightIndex]
-      )
-    );
+    swallow(Plotly.restyle(container, toHighlightRestyle(trace), [highlightIndex]));
   }, [plotRevision, points, selectedKeys]);
 
   // The timer must not outlive the component; the scene effect used to do

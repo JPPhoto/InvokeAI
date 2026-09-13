@@ -126,6 +126,23 @@ export const buildCurrentImageTrace = (): ScatterTrace => ({
 const GRID_LINE_COLOR = 'rgba(128, 128, 128, 0.16)';
 const GRID_ZERO_COLOR = 'rgba(128, 128, 128, 0.32)';
 
+/**
+ * The restyle payload for the highlight overlay: every per-point array the
+ * trace carries, so the overlay can be updated in place.
+ *
+ * Derived from the trace rather than listed at the call site, because plotly
+ * keeps whatever a restyle omits — so leaving one array behind means it is
+ * indexed at the NEW point count, and scattergl dies inside its own marker
+ * lookup rather than anywhere near the omission.
+ */
+export const toHighlightRestyle = (trace: ScatterTrace): Record<string, unknown[]> => ({
+  customdata: [trace.customdata],
+  'marker.color': [trace.marker.color as string[]],
+  'marker.symbol': [trace.marker.symbol as string[]],
+  x: [trace.x],
+  y: [trace.y],
+});
+
 export const buildMapLayout = (
   initialRanges?: AxisRanges | null,
   annotations: ClusterAnnotation[] = []

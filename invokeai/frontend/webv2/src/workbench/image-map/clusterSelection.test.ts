@@ -11,6 +11,7 @@ import {
   buildHighlightedPointsTrace,
   declutterAnnotations,
   HIGHLIGHTED_POINTS_TRACE,
+  toHighlightRestyle,
 } from './imageMapTraces';
 
 const point = (name: string, x: number, y: number, cluster: number): ImageMapPoint => {
@@ -82,6 +83,32 @@ describe('buildHighlightedPointsTrace', () => {
     expect(multi.customdata).toEqual(['image:a.png', 'video:clip.mp4']);
     expect(multi.marker.size).toBe(8);
     expect(multi.marker.line).toEqual({ color: '#FFFFFF', width: 1 });
+  });
+});
+
+describe('toHighlightRestyle', () => {
+  it('carries every per-point array the highlight trace holds', () => {
+    // plotly keeps whatever a restyle omits, so an array left behind is then
+    // indexed at the new point count — which crashes inside scattergl's own
+    // marker lookup, nowhere near the omission. Selecting a cluster is what
+    // resizes this trace, so the failure lands on an ordinary click.
+    const trace = buildHighlightedPointsTrace(POINTS, new Set(['image:a.png' as const, 'video:clip.mp4' as const]));
+    const payload = toHighlightRestyle(trace);
+
+    const perPointKeys = Object.entries(trace.marker)
+      .filter(([, value]) => Array.isArray(value))
+      .map(([name]) => `marker.${name}`);
+
+    expect(perPointKeys.length).toBeGreaterThan(0);
+    for (const key of [...perPointKeys, 'customdata', 'x', 'y']) {
+      expect(Object.keys(payload)).toContain(key);
+    }
+    // Every entry is wrapped for the one trace it restyles, and describes the
+    // same points.
+    for (const value of Object.values(payload)) {
+      expect(value).toHaveLength(1);
+      expect(value[0]).toHaveLength(trace.x.length);
+    }
   });
 });
 
