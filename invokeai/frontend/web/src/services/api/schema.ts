@@ -7270,6 +7270,125 @@ export type components = {
             type: "img_pad_crop";
         };
         /**
+         * ChildCompletion
+         * @description One terminal child result, including its ownership proof.
+         */
+        ChildCompletion: {
+            /** Child Execution Id */
+            child_execution_id: string;
+            /** Parent Execution Id */
+            parent_execution_id: string;
+            /** Parent Frame */
+            parent_frame?: (number | string)[];
+            /** Parent Reference Id */
+            parent_reference_id?: string | null;
+            /** Child Frame */
+            child_frame?: (number | string)[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "failed" | "canceled";
+            /** Outputs */
+            outputs?: {
+                [key: string]: unknown;
+            };
+            /** Error Message */
+            error_message?: string | null;
+        };
+        /**
+         * ChildDependencyRecord
+         * @description All-of parent dependency with durable enqueue and terminal state.
+         */
+        ChildDependencyRecord: {
+            /** Dependency Id */
+            dependency_id: string;
+            /** Parent Execution Id */
+            parent_execution_id: string;
+            /** Parent Frame */
+            parent_frame?: (number | string)[];
+            /** Parent Reference Id */
+            parent_reference_id?: string | null;
+            /** Children */
+            children?: components["schemas"]["ChildExecutionRecord"][];
+            /** Completions */
+            completions?: {
+                [key: string]: components["schemas"]["ChildCompletion"];
+            };
+            /**
+             * Status
+             * @default waiting
+             * @enum {string}
+             */
+            status?: "waiting" | "running" | "completed" | "failed" | "canceled";
+            /**
+             * Failure Policy
+             * @default fail_parent
+             * @enum {string}
+             */
+            failure_policy?: "fail_parent" | "cancel_siblings" | "continue";
+            /**
+             * Cancellation Policy
+             * @default cancel_parent
+             * @enum {string}
+             */
+            cancellation_policy?: "cancel_parent" | "cancel_siblings" | "continue";
+            /** Error Message */
+            error_message?: string | null;
+            /** Output Keys */
+            output_keys?: string[] | null;
+            /**
+             * Terminal Transition Count
+             * @default 0
+             */
+            terminal_transition_count?: number;
+            /**
+             * Sealed
+             * @default true
+             */
+            sealed?: boolean;
+        };
+        /**
+         * ChildExecutionRecord
+         * @description Durable identity and payload for one child execution.
+         */
+        ChildExecutionRecord: {
+            /** Child Execution Id */
+            child_execution_id: string;
+            /** Parent Execution Id */
+            parent_execution_id: string;
+            /** Parent Frame */
+            parent_frame?: (number | string)[];
+            /** Parent Reference Id */
+            parent_reference_id?: string | null;
+            /** Child Frame */
+            child_frame?: (number | string)[];
+            /**
+             * Depth
+             * @default 0
+             */
+            depth?: number;
+            /**
+             * Enqueue Index
+             * @default 0
+             */
+            enqueue_index?: number;
+            /** Capability Id */
+            capability_id?: string | null;
+            /** Graph */
+            graph?: unknown | null;
+            /** Inputs */
+            inputs?: {
+                [key: string]: unknown;
+            };
+            /**
+             * State
+             * @default pending
+             * @enum {string}
+             */
+            state?: "pending" | "queued" | "running" | "completed" | "failed" | "canceled";
+        };
+        /**
          * Classification
          * @description The classification of an Invocation.
          *     - `Stable`: The invocation, including its inputs/outputs and internal logic, is stable. You may build workflows with it, having confidence that they will not break because of a change in this invocation.
