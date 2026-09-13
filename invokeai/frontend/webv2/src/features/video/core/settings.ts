@@ -621,6 +621,75 @@ export const anchorReferenceConditioning = (conditioning: VideoReferenceConditio
   conditioning === 'audio' ? 'video_audio' : conditioning;
 
 /**
+ * The structured-prompt labels one reference answers to, or `null` where it has none.
+ *
+ * Ref2VA presents every reference to the model under a per-MODALITY label numbered in
+ * attachment order — `<Picture i>` for an image, `<Video k>` for conditioned footage,
+ * `<Audio j>` for a soundtrack — and the prompt refers to references only by those labels.
+ * The three counters run independently, so a reference's label numbers are not its position
+ * in the list: the second card can be `<Picture 1>`, and a video contributing both streams
+ * claims one number from each of two counters.
+ *
+ * Mirrors the backend's `build_ref2va_presentation` numbering (audio on 'video_audio' and
+ * 'audio', a `<Video k>` on everything else video-kind), which is the numbering the model
+ * actually sees. The two must not drift: a label shown here that the prompt cannot address
+ * is worse than no label at all.
+ */
+export type VideoReferencePromptLabels = {
+  audio: number | null;
+  picture: number | null;
+  video: number | null;
+};
+
+/**
+ * The labels, spelled the way the prompt must spell them.
+ *
+ * Never translated and never reformatted: these are tokens the text encoder matches
+ * literally, so what the badge shows is exactly what the user types into the prompt. The
+ * visual track leads a reference that carries both, since that is what the card depicts.
+ */
+export const formatReferencePromptLabels = (labels: VideoReferencePromptLabels): string[] => {
+  const formatted: string[] = [];
+
+  if (labels.picture !== null) {
+    formatted.push(`<Picture ${labels.picture}>`);
+  }
+  if (labels.video !== null) {
+    formatted.push(`<Video ${labels.video}>`);
+  }
+  if (labels.audio !== null) {
+    formatted.push(`<Audio ${labels.audio}>`);
+  }
+
+  return formatted;
+};
+
+/** {@link VideoReferencePromptLabels} for every reference, positionally. */
+export const referencePromptLabels = (references: readonly VideoReferenceItem[]): VideoReferencePromptLabels[] => {
+  const counts = { audio: 0, picture: 0, video: 0 };
+
+  return references.map((reference) => {
+    if (reference.kind === 'image') {
+      counts.picture += 1;
+      return { audio: null, picture: counts.picture, video: null };
+    }
+
+    if (reference.conditioning !== 'audio') {
+      counts.video += 1;
+    }
+    if (reference.conditioning !== 'video') {
+      counts.audio += 1;
+    }
+
+    return {
+      audio: reference.conditioning === 'video' ? null : counts.audio,
+      picture: null,
+      video: reference.conditioning === 'audio' ? null : counts.video,
+    };
+  });
+};
+
+/**
  * The sample window a newly added video reference starts on.
  *
  * Footage starts on {@link DEFAULT_REFERENCE_SAMPLE_FRAMES} from the clip's head, because
