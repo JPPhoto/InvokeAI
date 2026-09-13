@@ -291,14 +291,17 @@ class GraphExecutionState(BaseModel):
     execution_refs: dict[str, ExecutionReference] = Field(
         default_factory=dict,
         description="Stable frame-aware references for prepared execution nodes",
+        exclude=True,
     )
     execution_tokens: dict[str, ExecutionToken] = Field(
         default_factory=dict,
         description="Data tokens produced by prepared execution output ports",
+        exclude=True,
     )
     execution_effects: dict[str, list[Any]] = Field(
         default_factory=dict,
         description="Effects accepted for each execution reference",
+        exclude=True,
     )
     execution_child_dependencies: dict[str, ChildDependencyRecord] = Field(
         default_factory=dict,
@@ -3341,6 +3344,7 @@ class GraphExecutionState(BaseModel):
             if effects
             and self._is_pending_lifecycle_effects(effects)
             and (reference := references_by_id.get(reference_id)) is not None
+            and reference.exec_node_id not in self.errors
         }
         self._rehydrate_runtime_state()
 
@@ -3432,10 +3436,13 @@ class GraphExecutionState(BaseModel):
     def set_node_error(self, node_id: str, error: str):
         """Marks a node as errored"""
         self.errors[node_id] = error
+        self._pending_lifecycle_execution_nodes.discard(node_id)
         self._clear_transient_runtime()
 
     def is_complete(self) -> bool:
         """Returns true if the graph is complete"""
+        if self.has_error():
+            return self._is_complete_with_completed_sources()
         if self.is_waiting_on_workflow_call() or self._has_pending_lifecycle_execution():
             return False
         return self._is_complete_with_completed_sources()

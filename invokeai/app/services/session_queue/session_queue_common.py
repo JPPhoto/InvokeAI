@@ -18,7 +18,7 @@ from pydantic_core import to_jsonable_python
 
 from invokeai.app.invocations.fields import ImageField, VideoField
 from invokeai.app.services.shared.execution_state_migration import (
-    CURRENT_EXECUTION_STATE_VERSION,
+    dump_execution_state,
     load_execution_state,
 )
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState, NodeNotFoundError
@@ -618,8 +618,7 @@ def create_session_nfv_tuples(batch: Batch, maximum: int) -> Generator[tuple[str
 
     # We must provide a Graph object when creating the "dummy" session dict, but we don't actually use it. It will be
     # overwritten for each session by the mutated graph_as_dict.
-    session_dict = GraphExecutionState(graph=Graph()).model_dump(warnings=False, exclude_none=True)
-    session_dict["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION
+    session_dict = dump_execution_state(GraphExecutionState(graph=Graph()))
 
     # Now we can create a generator that yields the session_id, session_json, and field_values_json for each session.
     count = 0

@@ -1275,6 +1275,34 @@ def test_saved_workflow_lifecycle_effects_survive_json_round_trip() -> None:
     assert dump_execution_state(restored)["execution_effects"] == snapshot["execution_effects"]
 
 
+def test_failed_pending_workflow_call_is_terminal_after_json_round_trip() -> None:
+    graph = Graph()
+    graph.add_node(CallSavedWorkflowInvocation(id="saved-workflow", workflow_id="workflow"))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    parent = ExecutionRef(execution_node_id=node.id)
+    effects = [
+        SpawnExecutionEffect(
+            execution_ref=parent,
+            parent=parent,
+            graph={"nodes": {}},
+            inputs={},
+            child_execution_id="child",
+        ),
+        AwaitEffect(execution_ref=parent, dependency=ExecutionRef(execution_node_id="child")),
+    ]
+    ref = state.get_execution_ref(node.id, effect_count=len(effects))
+    state.execution_refs[node.id] = ref
+    state.execution_effects[ref.reference_id] = effects
+    state.errors[node.id] = "child failed"
+
+    restored = load_execution_state(dump_execution_state(state))
+
+    assert restored.is_complete()
+    assert restored.next() is None
+
+
 def test_set_value_effect_requires_a_value() -> None:
     with pytest.raises(ValidationError):
         SetValueEffect(target=ExecutionRef(node_id="node", field="value"))

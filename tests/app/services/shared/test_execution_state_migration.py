@@ -80,6 +80,27 @@ def test_migrates_explicit_legacy_version() -> None:
     assert restored.model_dump(mode="json", warnings=False, exclude_none=True) == raw
 
 
+def test_loads_frozen_legacy_snapshot_without_runtime_ledgers() -> None:
+    legacy_payload = {
+        "id": "legacy-state",
+        "graph": {"id": "legacy-graph", "nodes": {}, "edges": []},
+        "execution_graph": {"id": "legacy-execution-graph", "nodes": {}, "edges": []},
+        "executed": [],
+        "executed_history": [],
+        "results": {},
+        "errors": {},
+        "workflow_call_stack": [],
+        "workflow_call_history": [],
+        "prepared_source_mapping": {},
+        "source_prepared_mapping": {},
+    }
+
+    restored = load_execution_state(legacy_payload)
+
+    assert restored.id == "legacy-state"
+    assert dump_execution_state(restored)["execution_state_version"] == CURRENT_EXECUTION_STATE_VERSION
+
+
 def test_rejects_future_execution_state_versions() -> None:
     snapshot = dump_execution_state(_make_state())
     snapshot["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION + 1
@@ -172,7 +193,13 @@ def test_internal_execution_fields_are_persisted_but_not_publicly_serialized() -
     assert "execution_effects" not in public_payload["properties"]
     assert "execution_child_dependencies" not in public_payload["properties"]
 
-    assert "execution_child_dependencies" not in state.model_dump(mode="json", warnings=False)
+    public_model_dump = state.model_dump(mode="json", warnings=False)
+    assert {
+        "execution_refs",
+        "execution_tokens",
+        "execution_effects",
+        "execution_child_dependencies",
+    }.isdisjoint(public_model_dump)
 
     persisted_payload = dump_execution_state(state)
     assert persisted_payload["execution_refs"]["exec-node"]["reference_id"] == execution_ref.reference_id
