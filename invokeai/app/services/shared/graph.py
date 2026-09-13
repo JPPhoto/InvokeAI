@@ -343,6 +343,7 @@ class GraphExecutionState(BaseModel):
     _generic_execution_runtime: Optional[ExecutionEngineRuntime] = PrivateAttr(default=None)
     _generic_graph_scheduler: Optional[_GenericGraphSchedulerAdapter] = PrivateAttr(default=None)
     _generic_child_dependencies: dict[str, ChildDependencyRecord] = PrivateAttr(default_factory=dict)
+    _pending_lifecycle_execution_nodes: set[str] = PrivateAttr(default_factory=set)
     _execution_effects_persisted: bool = PrivateAttr(default=False)
     _legacy_execution_snapshot: bool = PrivateAttr(default=True)
     _legacy_snapshot_loaded: bool = PrivateAttr(default=False)
@@ -1983,6 +1984,9 @@ class GraphExecutionState(BaseModel):
             if existing.effect_count is not None and effect_count is None:
                 expected.effect_count = existing.effect_count
         self.execution_refs[exec_node_id] = expected
+        persisted_effects = self.execution_effects.get(expected.reference_id)
+        if persisted_effects is not None:
+            self._update_pending_lifecycle_execution(exec_node_id, persisted_effects)
         return expected.model_copy(deep=True)
 
     get_execution_reference = get_execution_ref
@@ -2598,6 +2602,12 @@ class GraphExecutionState(BaseModel):
         effect_kinds = cls._lifecycle_effect_kinds(effects)
         return bool(effect_kinds & {"spawn_execution", "await"}) and "fail" not in effect_kinds
 
+    def _update_pending_lifecycle_execution(self, exec_node_id: str, effects: Iterable[Any]) -> None:
+        if self._is_pending_lifecycle_effects(effects) and exec_node_id not in self.executed:
+            self._pending_lifecycle_execution_nodes.add(exec_node_id)
+        else:
+            self._pending_lifecycle_execution_nodes.discard(exec_node_id)
+
     def apply(
         self,
         execution_ref: ExecutionReference | str | Any,
@@ -2661,6 +2671,7 @@ class GraphExecutionState(BaseModel):
             if lifecycle_effect_kinds and not pending_resume:
                 self._tx_set_mapping(self.execution_refs, ref.exec_node_id, ref)
                 self._tx_set_mapping(self.execution_effects, ref.reference_id, effect_values)
+                self._update_pending_lifecycle_execution(ref.exec_node_id, effect_values)
                 if "fail" in lifecycle_effect_kinds:
                     failure = next(
                         str(self._value_from_object(effect, "message"))
@@ -2680,6 +2691,7 @@ class GraphExecutionState(BaseModel):
             for token_id, token in tokens.items():
                 self._tx_set_mapping(self.execution_tokens, token_id, token)
             self._tx_set_mapping(self.execution_effects, ref.reference_id, persisted_effects)
+            self._update_pending_lifecycle_execution(ref.exec_node_id, persisted_effects)
             return finalized_outputs
         except Exception:
             try:
@@ -3322,6 +3334,14 @@ class GraphExecutionState(BaseModel):
         self.execution_child_dependencies.update(self._generic_child_dependencies)
         self._rehydrate_execution_refs()
         self._synthesize_legacy_execution_effects()
+        references_by_id = {reference.reference_id: reference for reference in self.execution_refs.values()}
+        self._pending_lifecycle_execution_nodes = {
+            reference.exec_node_id
+            for reference_id, effects in self.execution_effects.items()
+            if effects
+            and self._is_pending_lifecycle_effects(effects)
+            and (reference := references_by_id.get(reference_id)) is not None
+        }
         self._rehydrate_runtime_state()
 
     model_config = ConfigDict(json_schema_extra=_hide_execution_state_runtime_fields)
@@ -3463,14 +3483,7 @@ class GraphExecutionState(BaseModel):
         return self.waiting_workflow_call is not None
 
     def _has_pending_lifecycle_execution(self) -> bool:
-        references_by_id = {reference.reference_id: reference for reference in self.execution_refs.values()}
-        return any(
-            self._is_pending_lifecycle_effects(effects)
-            and (reference := references_by_id.get(reference_id)) is not None
-            and reference.exec_node_id not in self.executed
-            for reference_id, effects in self.execution_effects.items()
-            if effects
-        )
+        return any(exec_node_id not in self.executed for exec_node_id in self._pending_lifecycle_execution_nodes)
 
     def build_workflow_call_frame(self, exec_node_id: str, workflow_id: str) -> WorkflowCallFrame:
         if exec_node_id not in self.execution_graph.nodes:
