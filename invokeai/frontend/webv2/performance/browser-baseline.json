@@ -108,9 +108,9 @@
         "largestAssetRawBytes": 747209,
         "otherRawBytes": 152221,
         "requestCount": 122,
-        "scriptRawBytes": 3511549,
+        "scriptRawBytes": 3546763,
         "scriptRequestCount": 117,
-        "totalRawBytes": 3844356
+        "totalRawBytes": 3883548
       },
       "routeReadyMedianMs": 427,
       "scriptSourceOwnerSet": "editor-minimal-static",
@@ -146,9 +146,9 @@
         "largestAssetRawBytes": 747209,
         "otherRawBytes": 152221,
         "requestCount": 122,
-        "scriptRawBytes": 3511549,
+        "scriptRawBytes": 3546763,
         "scriptRequestCount": 117,
-        "totalRawBytes": 3844356
+        "totalRawBytes": 3883548
       },
       "routeReadyMedianMs": 434.1000000014901,
       "scriptSourceOwnerSet": "editor-minimal-static",
@@ -336,9 +336,9 @@
         "largestAssetRawBytes": 747209,
         "otherRawBytes": 152221,
         "requestCount": 122,
-        "scriptRawBytes": 3511549,
+        "scriptRawBytes": 3546763,
         "scriptRequestCount": 117,
-        "totalRawBytes": 3844356
+        "totalRawBytes": 3883548
       },
       "routeReadyMedianMs": 1309.3999999985099,
       "scriptSourceOwnerSet": "editor-minimal-static",
@@ -374,9 +374,9 @@
         "largestAssetRawBytes": 747209,
         "otherRawBytes": 152221,
         "requestCount": 122,
-        "scriptRawBytes": 3511549,
+        "scriptRawBytes": 3546763,
         "scriptRequestCount": 117,
-        "totalRawBytes": 3844356
+        "totalRawBytes": 3883548
       },
       "routeReadyMedianMs": 1329.0999999940395,
       "scriptSourceOwnerSet": "editor-minimal-static",
