@@ -2,12 +2,12 @@ import type * as FontsFeature from '@features/fonts';
 import type { CanvasEngine } from '@workbench/canvas-engine/api';
 
 import { ChakraProvider } from '@chakra-ui/react';
+import { auditAccessibility } from '@platform/browser/auditAccessibility.testing';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { ApiError } from '@platform/transport/http';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { system } from '@theme/system';
 import { createEmptyCanvasState } from '@workbench/canvasMigration';
-import axe from 'axe-core';
 import { createInstance } from 'i18next';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -90,7 +90,7 @@ it('groups affected layers, keeps a warning after dismissal, and reopens recover
   await expect.element(page.getByRole('dialog', { name: 'Missing fonts' })).toBeVisible();
   await expect.element(page.getByText('Used by 3 text layers')).toBeVisible();
   await expect.element(page.getByRole('button', { name: 'Replace all uses' })).toBeDisabled();
-  expect((await axe.run(document.querySelector('[role="dialog"]')!)).violations).toEqual([]);
+  expect(await auditAccessibility(document.querySelector('[role="dialog"]')!)).toEqual([]);
   await page.screenshot({ path: '../../../../artifacts/fonts/missing-fonts-dialog.png' });
   await act(() => page.getByRole('button', { name: 'Continue with previews' }).click());
   await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();

@@ -1,7 +1,8 @@
 import { ChakraProvider } from '@chakra-ui/react';
+import { auditAccessibility } from '@platform/browser/auditAccessibility.testing';
+import { settleAnimations } from '@platform/browser/settleAnimations.testing';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { system } from '@theme/system';
-import axe from 'axe-core';
 import { createInstance } from 'i18next';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -119,13 +120,16 @@ it('renders the font library with the real English locale', async () => {
   await page.getByRole('button', { name: /Example Sans Variable/ }).click();
   await expect.element(page.getByRole('heading', { name: 'Example Sans Variable' })).toBeVisible();
   await expect.element(page.getByText('Variation axes', { exact: true })).toBeVisible();
+  await settleAnimations();
   await page.screenshot({ path: '../../../../artifacts/fonts/fonts-page-real-en.png' });
   await page.getByRole('button', { name: 'Filter fonts' }).click();
   await expect
     .element(page.getByRole('menuitemradio', { name: 'All', exact: true }))
     .toHaveAttribute('aria-checked', 'true');
-  expect((await axe.run(host!)).violations).toEqual([]);
-  expect((await axe.run(document.querySelector('[role="menu"]')!)).violations).toEqual([]);
+  const menu = document.querySelector('[role="menu"]')!;
+
+  expect(await auditAccessibility(host!)).toEqual([]);
+  expect(await auditAccessibility(menu)).toEqual([]);
   await page.screenshot({ path: '../../../../artifacts/fonts/fonts-filter-real-en.png' });
   await page.getByRole('menuitemradio', { name: 'My fonts', exact: true }).click();
   await vi.waitFor(() =>
@@ -138,6 +142,7 @@ it('renders the font library with the real English locale', async () => {
   await expect.element(page.getByRole('button', { name: 'Filter fonts' })).toHaveFocus();
   await page.getByRole('tab', { name: 'Add Fonts' }).click();
   await expect.element(page.getByRole('button', { name: 'Upload fonts' })).toBeVisible();
+  await settleAnimations();
   await page.screenshot({ path: '../../../../artifacts/fonts/fonts-add-real-en.png' });
 });
 
@@ -148,7 +153,7 @@ it('uses the manager empty state and opens Add Fonts from its action', async () 
   }));
   await renderPage();
   await expect.element(page.getByText('No fonts available', { exact: true })).toBeVisible();
-  expect((await axe.run(host!)).violations).toEqual([]);
+  expect(await auditAccessibility(host!)).toEqual([]);
   await page.screenshot({ path: '../../../../artifacts/fonts/fonts-empty-real-en.png' });
   await page.getByRole('button', { name: 'Add Fonts', exact: true }).click();
   await expect.element(page.getByRole('button', { name: 'Upload fonts', exact: true })).toBeVisible();

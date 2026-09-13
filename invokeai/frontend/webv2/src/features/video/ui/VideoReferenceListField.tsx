@@ -17,9 +17,11 @@ import { resolveMiniMaxH3ReferenceImage } from '@features/video/core/dimensions'
 import {
   clampReferenceSampleFrames,
   createVideoSourceClip,
+  formatReferencePromptLabels,
   getDefaultReferenceClip,
   getDefaultReferenceConditioning,
   getDefaultReferenceImageDetail,
+  referencePromptLabels,
   referenceSampleFrames,
   resizeReferenceSampleWindow,
   slideReferenceSampleWindow,
@@ -36,7 +38,7 @@ import { Field, FieldLabel } from '@platform/ui/Field';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Select } from '@platform/ui/Select';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
-import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, FilmIcon, ImagePlusIcon, UploadIcon, XIcon } from 'lucide-react';
+import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, ImagePlusIcon, UploadIcon, XIcon } from 'lucide-react';
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -45,10 +47,11 @@ import { TrimBoundThumb } from './TrimBoundThumb';
 import { useVideoUiActions } from './VideoUiContext';
 
 /**
- * The ordered Ref2VA reference list: numbered cards (order is part of the request — a
- * different order is a different generation), one gallery drop target that accepts a single
- * image or video, per-kind file uploads, a per-video conditioning selector and trim, and a
- * per-image detail selector.
+ * The ordered Ref2VA reference list: one card per reference, badged with the labels the
+ * structured prompt addresses it by (order is part of the request — a different order is a
+ * different generation), one gallery drop target that accepts a single image or video,
+ * per-kind file uploads, a per-video conditioning selector and trim, and a per-image detail
+ * selector.
  */
 
 const DROP_ID = 'video-reference-list';
@@ -112,6 +115,7 @@ type ReferenceCollections = {
 };
 
 const ReferenceCard = memo(function ReferenceCard({
+  audioLabel,
   collections,
   disabled,
   index,
@@ -120,14 +124,27 @@ const ReferenceCard = memo(function ReferenceCard({
   onMove,
   onRemove,
   onUpdate,
+  pictureLabel,
   reference,
   targetArea,
+  videoLabel,
 }: {
+  /**
+   * The card's structured-prompt label numbers, flattened to scalars rather than passed as
+   * the object `referencePromptLabels` returns: they are derived from the WHOLE list, so an
+   * object would be a fresh prop on every card on every edit to any reference. `updateReference`
+   * keeps the identity of the entries it did not touch, which is what lets the other cards bail
+   * out of a trim drag entirely; a per-card object would re-render all twelve — each one a zag
+   * Select and two SliderNumberFields — once per pointer step.
+   */
+  audioLabel: number | null;
   collections: ReferenceCollections;
   disabled: boolean;
   index: number;
   canMoveDown: boolean;
   canMoveUp: boolean;
+  pictureLabel: number | null;
+  videoLabel: number | null;
   onMove: (index: number, direction: -1 | 1) => void;
   onRemove: (index: number) => void;
   onUpdate: (index: number, reference: VideoReferenceItem) => void;
@@ -139,6 +156,10 @@ const ReferenceCard = memo(function ReferenceCard({
   const moveUpRef = useRef<HTMLButtonElement>(null);
   const moveDownRef = useRef<HTMLButtonElement>(null);
   const name = reference.kind === 'video' ? reference.clip.video_name : reference.image.image_name;
+  const promptLabels = useMemo(
+    () => formatReferencePromptLabels({ audio: audioLabel, picture: pictureLabel, video: videoLabel }),
+    [audioLabel, pictureLabel, videoLabel]
+  );
   const selectValue = useMemo(
     () => [reference.kind === 'video' ? reference.conditioning : reference.detail],
     [reference]
@@ -275,17 +296,14 @@ const ReferenceCard = memo(function ReferenceCard({
   const handleRemove = useCallback(() => onRemove(index), [index, onRemove]);
 
   return (
-    <Box borderWidth="1px" p="2" rounded="md">
+    /* Named after the labels the prompt uses, so the twelve identical Remove/Move/trim
+       controls a full list can hold announce which reference they belong to. */
+    <Box aria-label={[...promptLabels, name].join(' ')} borderWidth="1px" p="2" role="group" rounded="md">
       <HStack align="start" gap="2">
-        <Stack align="center" flexShrink={0} gap="1">
-          <Badge fontVariantNumeric="tabular-nums" size="xs" variant="solid">
-            {index + 1}
-          </Badge>
-          {/* Leading the card, left of every thumbnail it shows: plays what the trim
-              below actually selected, which the two still bounds cannot convey — and for
-              an audio reference, whose frames are a drawing of the sound, nothing can. */}
-          {reference.kind === 'video' ? <PlayClipSpanButton clip={reference.clip} /> : null}
-        </Stack>
+        {/* Leading the card, left of every thumbnail it shows: plays what the trim
+            below actually selected, which the two still bounds cannot convey — and for
+            an audio reference, whose frames are a drawing of the sound, nothing can. */}
+        {reference.kind === 'video' ? <PlayClipSpanButton clip={reference.clip} /> : null}
         {reference.kind === 'image' ? (
           <Box bg="blackAlpha.300" flexShrink={0} h="12" overflow="hidden" rounded="sm" w="16">
             <Image alt="" fit="cover" h="100%" src={galleryImageUrls.thumbnail(name)} w="100%" />
@@ -293,7 +311,19 @@ const ReferenceCard = memo(function ReferenceCard({
         ) : null}
         <Stack flex="1" gap="1" minW="0">
           <HStack gap="1">
-            {reference.kind === 'video' ? <FilmIcon size={12} /> : <ImagePlusIcon size={12} />}
+            {/* The names the prompt has to use for this reference, leading the row that
+                names it and standing in for the kind icon that used to sit here: the label
+                already says which kind it is, and for a waveform clip conditioning on its
+                soundtrack alone it says so more honestly than a film icon would. The number
+                is NOT the card's slot — the three modality counters advance independently —
+                so it goes beside the filename rather than in a gutter that would cost every
+                card a fixed 64px. Rendered verbatim, brackets and LTR order included,
+                because the badge is the token to type. */}
+            {promptLabels.map((label) => (
+              <Badge key={label} dir="ltr" flexShrink={0} size="xs" userSelect="text" variant="solid">
+                {label}
+              </Badge>
+            ))}
             <MiddleTruncate flex="1" fontSize="xs" text={name} />
             {reference.kind === 'video' && reference.fromSourceVideo === true ? (
               <Badge flexShrink={0} size="xs" variant="outline">
@@ -772,6 +802,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       return `${identity}-${occurrence}`;
     });
   }, [references]);
+  const promptLabels = useMemo(() => referencePromptLabels(references), [references]);
 
   const moveReference = useCallback(
     (index: number, direction: -1 | 1) => {
@@ -800,13 +831,16 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       {references.map((reference, index) => (
         <ReferenceCard
           key={referenceKeys[index]}
+          audioLabel={promptLabels[index]?.audio ?? null}
           collections={collections}
           disabled={isInert}
           index={index}
           canMoveDown={index < references.length - 1 && index + 1 !== anchorIndex}
           canMoveUp={index > 0 && index !== anchorIndex}
+          pictureLabel={promptLabels[index]?.picture ?? null}
           reference={reference}
           targetArea={targetArea}
+          videoLabel={promptLabels[index]?.video ?? null}
           onMove={moveReference}
           onRemove={removeReference}
           onUpdate={updateReference}
