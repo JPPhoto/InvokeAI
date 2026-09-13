@@ -35,6 +35,7 @@
     "test:performance:browser": "node scripts/measure-architecture-performance.mjs",
     "test:performance:browser:update-baseline": "node scripts/measure-architecture-performance.mjs --update-baseline",
     "test:performance:build": "pnpm run test:performance:contracts && vite build && node scripts/check-architecture-performance.mjs",
+    "test:performance:build:update-baseline": "pnpm run test:performance:contracts && vite build && node scripts/check-architecture-performance.mjs --update-baseline",
     "test:performance:contracts": "node --test scripts/performance-budgets.test.mjs",
     "test:project-files": "vite build && pnpm run test:project-files:browser",
     "test:project-files:browser": "node scripts/run-project-file-journey.mjs"

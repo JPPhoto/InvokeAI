@@ -310,19 +310,6 @@
           "source:src/workbench/settings/store.ts"
         ]
       },
-      "limits": {
-        "brotliBytes": 867936,
-        "cssRawBytes": 2181,
-        "fontRawBytes": 221675,
-        "gzipBytes": 867069,
-        "imageRawBytes": 157940,
-        "initialRawBytes": 2030955,
-        "largestAssetRawBytes": 754691,
-        "otherAssetRawBytes": 0,
-        "ownedRawBytes": 74443,
-        "requestCount": 44,
-        "scriptRequestCount": 28
-      },
       "owner": "app",
       "remediationTicket": "set-performance-budgets",
       "source": "index.html"
@@ -1024,19 +1011,6 @@
           "source:src/workbench/workbenchState.ts",
           "source:src/workbench/workbenchStore.ts"
         ]
-      },
-      "limits": {
-        "brotliBytes": 1194117,
-        "cssRawBytes": 2181,
-        "fontRawBytes": 221675,
-        "gzipBytes": 1188183,
-        "imageRawBytes": 157940,
-        "initialRawBytes": 3022507,
-        "largestAssetRawBytes": 754691,
-        "otherAssetRawBytes": 0,
-        "ownedRawBytes": 132915,
-        "requestCount": 106,
-        "scriptRequestCount": 90
       },
       "owner": "workbench",
       "remediationTicket": "deepen-widget-registry-loading",
