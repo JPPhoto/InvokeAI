@@ -68,7 +68,6 @@ from invokeai.app.services.shared.execution_engine.child import (
 from invokeai.app.services.shared.execution_engine.primitives import (
     ActivationGate,
     ContinuationRecord,
-    StreamBuffer,
     StreamData,
 )
 from invokeai.app.services.shared.execution_engine.primitives import (
@@ -290,17 +289,14 @@ class GraphExecutionState(BaseModel):
     execution_refs: dict[str, ExecutionReference] = Field(
         default_factory=dict,
         description="Stable frame-aware references for prepared execution nodes",
-        exclude=True,
     )
     execution_tokens: dict[str, ExecutionToken] = Field(
         default_factory=dict,
         description="Data tokens produced by prepared execution output ports",
-        exclude=True,
     )
     execution_effects: dict[str, list[Any]] = Field(
         default_factory=dict,
         description="Effects accepted for each execution reference",
-        exclude=True,
     )
     # Ready queues grouped by node class name (internal only)
     _ready_queues: dict[str, Deque[str]] = PrivateAttr(default_factory=dict)
@@ -525,6 +521,7 @@ class GraphExecutionState(BaseModel):
 
     def _mark_source_executed(self, source_node_id: str) -> None:
         self._tx_add_set(self.executed, source_node_id)
+        self._completed_source_ids_cache = None
         self._tx_add_set(self._get_completed_source_ids_cache(), source_node_id)
         if source_node_id not in self.executed_history:
             self._tx_append_list(self.executed_history, source_node_id)
@@ -1378,8 +1375,13 @@ class GraphExecutionState(BaseModel):
             self._tx_record(lambda: runtime.remove_stream(stream_id))
             stream = runtime.get_or_create_stream(stream_id, source_node_id, self._engine_frame(parent_path))
         elif self._apply_transaction is not None:
-            previous = StreamBuffer[Any].model_validate(stream.model_dump(mode="python"))
-            self._tx_record_once(("stream", stream_id), lambda: runtime.replace_stream(previous))
+            transaction_key = ("stream", stream_id)
+            if not self._apply_transaction.is_recorded(transaction_key):
+                snapshot = (len(stream.events), stream.next_sequence, stream.closed, stream.end_sequence)
+                self._tx_record_once(
+                    transaction_key,
+                    lambda stream=stream, snapshot=snapshot: stream._restore(*snapshot),
+                )
         skip_data = False
         if prefer_existing:
             existing = next((event for event in stream.events if event.sequence == output.index), None)
@@ -1410,8 +1412,13 @@ class GraphExecutionState(BaseModel):
         elif stream.closed:
             return
         elif self._apply_transaction is not None:
-            previous = StreamBuffer[Any].model_validate(stream.model_dump(mode="python"))
-            self._tx_record_once(("stream", stream_id), lambda: runtime.replace_stream(previous))
+            transaction_key = ("stream", stream_id)
+            if not self._apply_transaction.is_recorded(transaction_key):
+                snapshot = (len(stream.events), stream.next_sequence, stream.closed, stream.end_sequence)
+                self._tx_record_once(
+                    transaction_key,
+                    lambda stream=stream, snapshot=snapshot: stream._restore(*snapshot),
+                )
         stream.close(sequence=stream.next_sequence)
 
     def _record_effect_streams(self, execution_ref: ExecutionReference, effects: Iterable[Any]) -> None:
@@ -1449,11 +1456,13 @@ class GraphExecutionState(BaseModel):
                 self._tx_record(lambda runtime=runtime, stream_id=stream_id: runtime.remove_stream(stream_id))
                 stream = runtime.get_or_create_stream(stream_id, stream_owner_id, stream_frame)
             elif self._apply_transaction is not None:
-                previous = StreamBuffer[Any].model_validate(stream.model_dump(mode="python"))
-                self._tx_record_once(
-                    ("stream", stream_id),
-                    lambda runtime=runtime, previous=previous: runtime.replace_stream(previous),
-                )
+                transaction_key = ("stream", stream_id)
+                if not self._apply_transaction.is_recorded(transaction_key):
+                    snapshot = (len(stream.events), stream.next_sequence, stream.closed, stream.end_sequence)
+                    self._tx_record_once(
+                        transaction_key,
+                        lambda stream=stream, snapshot=snapshot: stream._restore(*snapshot),
+                    )
 
             sequence = self._value_from_object(token, "sequence")
             if sequence is None:
@@ -2818,8 +2827,10 @@ class GraphExecutionState(BaseModel):
     def _attach_direct_execution_edges(self, exec_node_id: str, edges: Iterable[Edge]) -> list[Edge]:
         return _attach_direct_execution_edges(self, exec_node_id, edges)
 
-    def _initialize_direct_execution_node(self, exec_node_id: str, input_edges: Iterable[Edge]) -> None:
-        _initialize_direct_execution_node(self, exec_node_id, input_edges)
+    def _initialize_direct_execution_node(
+        self, exec_node_id: str, input_edges: Iterable[Edge], *, project: bool = True
+    ) -> None:
+        _initialize_direct_execution_node(self, exec_node_id, input_edges, project=project)
 
     def _mark_direct_source_empty(self, source_node_id: str) -> None:
         _mark_direct_source_empty(self, source_node_id)
@@ -3408,7 +3419,7 @@ class GraphExecutionState(BaseModel):
         return self._materializer().create_execution_node(node_id, iteration_node_map, enforce_admission=False)
 
     def _iterator_graph(self, base: Optional["nx.DiGraph"] = None) -> "nx.DiGraph":
-        if isinstance(self._scheduler(), _GenericGraphSchedulerAdapter) and self._can_use_generic_for_scheduler():
+        if self._can_use_generic_for_scheduler():
             return self._for_planner().iterator_graph(base)
         return self._materializer().iterator_graph(base)
 

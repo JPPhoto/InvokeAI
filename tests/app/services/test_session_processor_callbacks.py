@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
 from invokeai.app.services.progress_previews.progress_previews_default import MemoryProgressPreviews
 from invokeai.app.services.session_processor.session_processor_default import DefaultSessionRunner
 from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder
@@ -29,6 +30,7 @@ def test_after_run_node_callback_receives_control_node_inputs(monkeypatch: pytes
         events=Mock(),
         logger=Mock(),
         performance_statistics=Mock(),
+        invocation_cache=MemoryInvocationCache(max_cache_size=0),
     )
     services.performance_statistics.collect_stats.return_value = nullcontext()
     monkeypatch.setattr(

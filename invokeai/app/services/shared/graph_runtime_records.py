@@ -21,6 +21,9 @@ class _ApplyTransaction:
         self._recorded.add(key)
         self._undo.append(undo)
 
+    def is_recorded(self, key: tuple[Any, ...]) -> bool:
+        return key in self._recorded
+
     def record(self, undo: Callable[[], None]) -> None:
         self._undo.append(undo)
 

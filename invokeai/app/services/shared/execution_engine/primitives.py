@@ -265,7 +265,7 @@ class StreamBuffer(_InternalModel, Generic[T]):
         description="Node or runtime owner of this stream.",
     )
     frame: ExecutionFrame
-    events: tuple[StreamData[T] | StreamEnd, ...] = Field(default_factory=tuple)
+    events: list[StreamData[T] | StreamEnd] = Field(default_factory=list)
     next_sequence: int = Field(default=0, ge=0)
     closed: bool = False
     end_sequence: int | None = Field(default=None, ge=0)
@@ -368,7 +368,7 @@ class StreamBuffer(_InternalModel, Generic[T]):
 
         with self._lock:
             candidate = self._coerce_event(event, value=value, sequence=sequence)
-            existing = next((item for item in self.events if item.sequence == candidate.sequence), None)
+            existing = self.events[candidate.sequence] if candidate.sequence < len(self.events) else None
             if existing is not None:
                 if existing == candidate:
                     return False
@@ -379,12 +379,10 @@ class StreamBuffer(_InternalModel, Generic[T]):
             if candidate.sequence != self.next_sequence:
                 raise ValueError("stream event is out of order")
 
-            new_events = (*self.events, candidate)
+            self.events.append(candidate)
             if isinstance(candidate, StreamData):
-                object.__setattr__(self, "events", new_events)
                 object.__setattr__(self, "next_sequence", self.next_sequence + 1)
             else:
-                object.__setattr__(self, "events", new_events)
                 object.__setattr__(self, "closed", True)
                 object.__setattr__(self, "end_sequence", candidate.sequence)
             return True
@@ -398,6 +396,14 @@ class StreamBuffer(_InternalModel, Generic[T]):
         return self.accept("stream_end", sequence=sequence)
 
     stream_end = close
+
+    def _restore(self, event_count: int, next_sequence: int, closed: bool, end_sequence: int | None) -> None:
+        """Restore the mutable stream fields after a failed execution-state transaction."""
+
+        del self.events[event_count:]
+        object.__setattr__(self, "next_sequence", next_sequence)
+        object.__setattr__(self, "closed", closed)
+        object.__setattr__(self, "end_sequence", end_sequence)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, StreamBuffer):

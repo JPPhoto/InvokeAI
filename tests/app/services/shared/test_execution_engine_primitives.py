@@ -113,7 +113,7 @@ def test_stream_buffer_rejects_data_after_close_without_mutation() -> None:
     with pytest.raises(ValueError, match="closed"):
         buffer.append_data(1)
     assert buffer.values == ()
-    assert buffer.events == (StreamEnd(sequence=0),)
+    assert buffer.events == [StreamEnd(sequence=0)]
 
 
 def test_stream_buffer_validates_event_json_and_round_trips() -> None:

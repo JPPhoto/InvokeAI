@@ -33,6 +33,22 @@ from tests.dangerously_run_function_in_subprocess import dangerously_run_functio
 from tests.test_nodes import create_edge
 
 
+def _test_execution_ref(node_id: str, effect_count: int | None = None) -> SimpleNamespace:
+    return SimpleNamespace(
+        reference_id=f"session-id:{node_id}",
+        state_id="session-id",
+        exec_node_id=node_id,
+        source_node_id=node_id,
+        frame=SimpleNamespace(
+            frame_id="session-id:0:",
+            state_id="session-id",
+            iteration_path=(),
+            workflow_call_depth=0,
+        ),
+        effect_count=effect_count,
+    )
+
+
 @invocation_output("test_interrupt_output")
 class InterruptTestOutput(BaseInvocationOutput):
     pass
@@ -881,7 +897,7 @@ def _build_queue_item(invocation: BaseInvocation):
 
         @staticmethod
         def get_execution_ref(node_id: str, *, effect_count: int | None = None):
-            return SimpleNamespace(frame=SimpleNamespace(iteration_path=()))
+            return _test_execution_ref(node_id, effect_count)
 
         @staticmethod
         def apply(execution_ref, output, effects=None, *, effect_count: int | None = None):
@@ -1162,7 +1178,7 @@ class _WorkflowCallBoundarySession:
         self.completed.append((node_id, output))
 
     def get_execution_ref(self, node_id: str, *, effect_count: int | None = None):
-        return SimpleNamespace(frame=SimpleNamespace(iteration_path=()))
+        return _test_execution_ref(node_id, effect_count)
 
     def is_waiting_on_workflow_call(self) -> bool:
         return self.waiting is not None
@@ -1188,7 +1204,6 @@ def test_run_node_does_not_swallow_sigint_in_subprocess() -> None:
         import time
         from contextlib import contextmanager
         from threading import Event
-        from types import SimpleNamespace
 
         import invokeai.app.services.session_processor.session_processor_default as session_processor_default
         from invokeai.app.invocations.baseinvocation import (
@@ -1262,7 +1277,7 @@ def test_run_node_does_not_swallow_sigint_in_subprocess() -> None:
 
             @staticmethod
             def get_execution_ref(node_id: str, *, effect_count: int | None = None):
-                return SimpleNamespace(frame=SimpleNamespace(iteration_path=()))
+                return _test_execution_ref(node_id, effect_count)
 
             @staticmethod
             def apply(execution_ref, output, effects=None, *, effect_count: int | None = None):

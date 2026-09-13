@@ -476,7 +476,7 @@ class _GenericGraphSchedulerAdapter:
         for exec_node_id in nx.topological_sort(execution_graph):
             self.register_node(exec_node_id)
 
-    def register_node(self, exec_node_id: str) -> None:
+    def register_node(self, exec_node_id: str, *, project: bool = True) -> None:
         if exec_node_id in self._scheduler.plan.nodes:
             return
         node = self._state.execution_graph.nodes.get(exec_node_id)
@@ -502,7 +502,7 @@ class _GenericGraphSchedulerAdapter:
         )
         self._state._tx_set_mapping(self._state.indegree, exec_node_id, self._scheduler.indegree[exec_node_id])
         self._discard_rejected_node(exec_node_id)
-        if not self._initializing:
+        if not self._initializing and project:
             self._project_ready_node(exec_node_id)
 
     def _sync_indegree(self) -> None:
@@ -510,7 +510,7 @@ class _GenericGraphSchedulerAdapter:
             self._state._tx_set_mapping(self._state.indegree, exec_node_id, degree)
 
     def _project_ready_node(self, exec_node_id: str) -> None:
-        if exec_node_id not in self._scheduler.ready_ids or exec_node_id in self._state._ready_node_ids:
+        if not self._scheduler.is_ready(exec_node_id) or exec_node_id in self._state._ready_node_ids:
             return
         node = self._state.execution_graph.nodes[exec_node_id]
         cls_name = self._state._type_key(node)
@@ -519,17 +519,14 @@ class _GenericGraphSchedulerAdapter:
             queue = deque()
             self._state._tx_set_mapping(self._state._ready_queues, cls_name, queue)
         iteration_path = self._state._get_iteration_path(exec_node_id)
-        insert_at = next(
-            (
+        if not queue or self._state._get_iteration_path(queue[-1]) <= iteration_path:
+            self._state._tx_queue_append(queue, exec_node_id)
+        else:
+            insert_at = next(
                 index
                 for index, queued_id in enumerate(queue)
                 if self._state._get_iteration_path(queued_id) > iteration_path
-            ),
-            len(queue),
-        )
-        if insert_at == len(queue):
-            self._state._tx_queue_append(queue, exec_node_id)
-        else:
+            )
             self._state._tx_queue_insert(queue, insert_at, exec_node_id)
         self._state._set_prepared_exec_state(exec_node_id, "ready")
         self._state._tx_add_set(self._state._ready_node_ids, exec_node_id)

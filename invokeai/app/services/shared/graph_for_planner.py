@@ -7,12 +7,12 @@ construction mechanics with the compatibility planner.
 
 from typing import TYPE_CHECKING, Any, Optional
 
-import networkx as nx
-
 from invokeai.app.invocations.loops import LoopState
 from invokeai.app.services.shared.graph_materializer import _ExecutionNodeBuilder
 
 if TYPE_CHECKING:
+    import networkx as nx
+
     from invokeai.app.services.shared.graph import GraphExecutionState
 
 
@@ -28,7 +28,7 @@ class _GenericForPlanner:
 
         return self._builder.prepare(base_graph)
 
-    def iterator_graph(self, base: Optional[nx.DiGraph] = None) -> nx.DiGraph:
+    def iterator_graph(self, base: Optional["nx.DiGraph"] = None) -> "nx.DiGraph":
         return self._builder.iterator_graph(base)
 
     def create_for_iteration(

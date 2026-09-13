@@ -6,6 +6,7 @@ frame values. Graph and invocation semantics belong to adapters above it.
 
 from __future__ import annotations
 
+import heapq
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping
 
@@ -227,6 +228,8 @@ class ExecutionScheduler:
         self._claimed: set[NodeId] = set()
         self.indegree: dict[NodeId, int] = {}
         self._enqueued: set[NodeId] = set()
+        self._enqueued_by_class: dict[str, int] = {}
+        self._ready_heaps: dict[str, list[tuple[Any, int, NodeId]]] = {}
         self._arrival_order: dict[NodeId, int] = {}
         self._next_arrival = 0
         self._active_class: str | None = None
@@ -261,6 +264,13 @@ class ExecutionScheduler:
             self._enqueued.add(node_id)
             self._arrival_order[node_id] = self._next_arrival
             self._next_arrival += 1
+            class_name = self.plan.nodes[node_id].class_name
+            self._enqueued_by_class[class_name] = self._enqueued_by_class.get(class_name, 0) + 1
+            heap = self._ready_heaps.setdefault(class_name, [])
+            heapq.heappush(
+                heap,
+                (_frame_key(self.plan.nodes[node_id].frame), self._arrival_order[node_id], node_id),
+            )
         return True
 
     def enqueue(self, node_id: NodeId) -> None:
@@ -269,31 +279,32 @@ class ExecutionScheduler:
         self._enqueue_if_ready(node_id)
 
     def _next_class(self) -> str | None:
-        classes = {self.plan.nodes[node_id].class_name for node_id in self._enqueued}
+        classes = {class_name for class_name, count in self._enqueued_by_class.items() if count}
         for class_name in self.ready_order:
             if class_name in classes:
                 return class_name
         return min(classes) if classes else None
 
     def _next_id_for_class(self, class_name: str) -> NodeId:
-        return min(
-            (node_id for node_id in self._enqueued if self.plan.nodes[node_id].class_name == class_name),
-            key=lambda node_id: (
-                _frame_key(self.plan.nodes[node_id].frame),
-                self._arrival_order[node_id],
-            ),
-        )
+        heap = self._ready_heaps[class_name]
+        while heap and heap[0][2] not in self._enqueued:
+            heapq.heappop(heap)
+        if not heap:
+            raise RuntimeError(f"ready queue for class {class_name!r} is empty")
+        return heap[0][2]
 
     def pop_next(self) -> NodeId | None:
         """Remove and return the next ready node ID, or ``None`` when empty."""
 
         if not self._enqueued:
             return None
-        if self._active_class not in {self.plan.nodes[node_id].class_name for node_id in self._enqueued}:
+        if self._enqueued_by_class.get(self._active_class or "", 0) == 0:
             self._active_class = self._next_class()
         assert self._active_class is not None
         node_id = self._next_id_for_class(self._active_class)
         self._enqueued.remove(node_id)
+        self._enqueued_by_class[self._active_class] -= 1
+        heapq.heappop(self._ready_heaps[self._active_class])
         self._claimed.add(node_id)
         return node_id
 
@@ -318,6 +329,11 @@ class ExecutionScheduler:
                 ),
             )
         )
+
+    def is_ready(self, node_id: NodeId) -> bool:
+        """Return whether a node is currently queued without sorting the ready set."""
+
+        return node_id in self._enqueued
 
     def add_node(self, node: PlanNode) -> None:
         """Add a plan node without disturbing already-claimed work."""
@@ -359,7 +375,10 @@ class ExecutionScheduler:
             if self.indegree[dependent] <= 0:
                 raise ValueError(f"dependency underflow for node: {dependent}")
 
-        self._enqueued.discard(node_id)
+        if node_id in self._enqueued:
+            self._enqueued.discard(node_id)
+            class_name = self.plan.nodes[node_id].class_name
+            self._enqueued_by_class[class_name] -= 1
         self._claimed.discard(node_id)
         self._arrival_order.pop(node_id, None)
         self.discarded.add(node_id)
@@ -401,7 +420,10 @@ class ExecutionScheduler:
             if self.indegree[dependent] <= 0:
                 raise ValueError(f"dependency underflow for node: {dependent}")
         self.executed.add(node_id)
-        self._enqueued.discard(node_id)
+        if node_id in self._enqueued:
+            self._enqueued.discard(node_id)
+            class_name = self.plan.nodes[node_id].class_name
+            self._enqueued_by_class[class_name] -= 1
         self._claimed.discard(node_id)
         self._arrival_order.pop(node_id, None)
         newly_ready: list[NodeId] = []
@@ -439,6 +461,8 @@ class ExecutionScheduler:
         }
         previous_arrival = self._arrival_order
         self._enqueued = set()
+        self._enqueued_by_class = {}
+        self._ready_heaps = {}
         self._arrival_order = {}
         self._next_arrival = max(previous_arrival.values(), default=-1) + 1
         for node_id in self.plan.nodes:
@@ -455,6 +479,10 @@ class ExecutionScheduler:
                     arrival = self._next_arrival
                     self._next_arrival += 1
                 self._arrival_order[node_id] = arrival
+                class_name = self.plan.nodes[node_id].class_name
+                self._enqueued_by_class[class_name] = self._enqueued_by_class.get(class_name, 0) + 1
+                heap = self._ready_heaps.setdefault(class_name, [])
+                heapq.heappush(heap, (_frame_key(self.plan.nodes[node_id].frame), arrival, node_id))
 
 
 __all__ = ["ActivationDependency", "ExecutionPlan", "ExecutionScheduler", "PlanNode", "ReadyPredicate"]

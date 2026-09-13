@@ -301,7 +301,7 @@ def _attach_direct_execution_edges(
 
 
 def _initialize_direct_execution_node(
-    state: "GraphExecutionState", exec_node_id: str, input_edges: Iterable[Edge]
+    state: "GraphExecutionState", exec_node_id: str, input_edges: Iterable[Edge], *, project: bool = True
 ) -> None:
     input_edges = list(input_edges)
     state._tx_set_mapping(
@@ -311,8 +311,12 @@ def _initialize_direct_execution_node(
     )
     scheduler = state._scheduler()
     assert state._is_generic_graph_scheduler(scheduler)
-    scheduler.register_node(exec_node_id)
-    state._enqueue_if_ready(exec_node_id)
+    scheduler.register_node(exec_node_id, project=project)
+    if state.indegree[exec_node_id] == 0 and exec_node_id not in state.executed:
+        if project:
+            state._enqueue_if_ready(exec_node_id)
+        else:
+            scheduler._scheduler.enqueue(exec_node_id)
 
 
 def _mark_direct_source_empty(state: "GraphExecutionState", source_node_id: str) -> None:
@@ -548,7 +552,7 @@ def _prepare_direct_iterate_collect_unchecked(state: "GraphExecutionState") -> N
             )
         ]
         attached_iterator_edges = state._attach_direct_execution_edges(iterator_node.id, iterator_edges)
-        state._initialize_direct_execution_node(iterator_node.id, attached_iterator_edges)
+        state._initialize_direct_execution_node(iterator_node.id, attached_iterator_edges, project=False)
         iterator_exec_ids.append(iterator_node.id)
 
         body_node = state._create_direct_execution_node_copy(body_id, iteration_path=(index,))
@@ -559,7 +563,7 @@ def _prepare_direct_iterate_collect_unchecked(state: "GraphExecutionState") -> N
             )
         ]
         attached_body_edges = state._attach_direct_execution_edges(body_node.id, body_edges)
-        state._initialize_direct_execution_node(body_node.id, attached_body_edges)
+        state._initialize_direct_execution_node(body_node.id, attached_body_edges, project=False)
         body_exec_ids.append(body_node.id)
 
     if not iterator_exec_ids:
@@ -575,7 +579,7 @@ def _prepare_direct_iterate_collect_unchecked(state: "GraphExecutionState") -> N
         for body_exec_id in body_exec_ids
     ]
     attached_collector_edges = state._attach_direct_execution_edges(collector_node.id, collector_edges)
-    state._initialize_direct_execution_node(collector_node.id, attached_collector_edges)
+    state._initialize_direct_execution_node(collector_node.id, attached_collector_edges, project=False)
 
     for downstream_id in downstream_ids:
         downstream_node = state._create_direct_execution_node_copy(downstream_id)
@@ -589,4 +593,6 @@ def _prepare_direct_iterate_collect_unchecked(state: "GraphExecutionState") -> N
                 )
             ],
         )
-        state._initialize_direct_execution_node(downstream_node.id, attached_downstream_edges)
+        state._initialize_direct_execution_node(downstream_node.id, attached_downstream_edges, project=False)
+
+    state._scheduler()._project_ready_nodes()

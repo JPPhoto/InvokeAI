@@ -6,6 +6,7 @@ from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.services.shared.execution_engine.primitives import ActivationGate
 from invokeai.app.services.shared.execution_engine.scheduler import ActivationDependency
 from invokeai.app.services.shared.graph_models import ExecutionToken
+from invokeai.app.services.shared.graph_validation import IterateInvocation
 
 if TYPE_CHECKING:
     from invokeai.app.services.shared.graph import GraphExecutionState
@@ -53,7 +54,7 @@ def _is_source_inactive(
         for exec_node_id in state._prepared_registry().get_prepared_ids(dependency.owner_id)
     }
     if not frames:
-        return False
+        return all(_is_empty_if_condition(state, dependency) for dependency in dependencies)
     return all(
         state._get_source_activation_dependencies(source_node_id, frame)
         and any(
@@ -61,6 +62,23 @@ def _is_source_inactive(
             for frame_dependency in state._get_source_activation_dependencies(source_node_id, frame)
         )
         for frame in frames
+    )
+
+
+def _is_empty_if_condition(state: "GraphExecutionState", dependency: ActivationDependency) -> bool:
+    """Recognize a branch whose If never materialized because its Iterate was empty."""
+
+    owner = state.graph.nodes.get(dependency.owner_id)
+    if not isinstance(owner, IfInvocation):
+        return False
+    condition_edges = state.graph._get_input_edges(dependency.owner_id, "condition")
+    if len(condition_edges) != 1:
+        return False
+    condition_source_id = condition_edges[0].source.node_id
+    return (
+        isinstance(state.graph.get_node(condition_source_id), IterateInvocation)
+        and condition_source_id in state.executed
+        and not state.source_prepared_mapping.get(condition_source_id)
     )
 
 
