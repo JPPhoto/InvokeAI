@@ -18,6 +18,7 @@ import {
   cloneVideoWidgetValues,
   createVideoSourceClip,
   deriveReferenceExtendClip,
+  formatReferencePromptLabels,
   getDefaultReferenceClip,
   getDefaultReferenceConditioning,
   getDefaultReferenceImageDetail,
@@ -25,6 +26,7 @@ import {
   isVideoSourceClip,
   normalizeVideoSettings,
   normalizeVideoWidgetValues,
+  referencePromptLabels,
   resolveVideoMode,
   videoClipSpanSeconds,
   VIDEO_SOURCE_FALLBACK_FPS,
@@ -616,6 +618,80 @@ describe('anchorReferenceConditioning', () => {
   it("leaves the user's own visual answers alone", () => {
     expect(anchorReferenceConditioning('video')).toBe('video');
     expect(anchorReferenceConditioning('video_audio')).toBe('video_audio');
+  });
+});
+
+describe('referencePromptLabels', () => {
+  const withConditioning = (conditioning: 'video_audio' | 'video' | 'audio'): VideoReferenceItem => ({
+    ...VIDEO_REFERENCE,
+    conditioning,
+  });
+
+  // The numbering the model is handed (`build_ref2va_presentation`): one counter per
+  // modality, advanced in attachment order, so no label number is the card's position.
+  it('numbers each modality on its own counter', () => {
+    expect(
+      referencePromptLabels([
+        withConditioning('audio'),
+        IMAGE_REFERENCE,
+        withConditioning('video_audio'),
+        IMAGE_REFERENCE,
+        withConditioning('video'),
+      ]).map(formatReferencePromptLabels)
+    ).toEqual([['<Audio 1>'], ['<Picture 1>'], ['<Video 1>', '<Audio 2>'], ['<Picture 2>'], ['<Video 2>']]);
+  });
+
+  it('gives an audio-only reference no video number, which the next video then takes', () => {
+    expect(referencePromptLabels([withConditioning('audio'), withConditioning('video')])).toEqual([
+      { audio: 1, picture: null, video: null },
+      { audio: null, picture: null, video: 1 },
+    ]);
+  });
+
+  it('renumbers on reorder, since order is what the numbering follows', () => {
+    const first = { ...IMAGE_REFERENCE, image: { ...IMAGE_REFERENCE.image, image_name: 'first.png' } };
+    const second = { ...IMAGE_REFERENCE, image: { ...IMAGE_REFERENCE.image, image_name: 'second.png' } };
+    const numbered = (references: VideoReferenceItem[]) =>
+      Object.fromEntries(
+        references.map((reference, index) => [
+          reference.kind === 'image' ? reference.image.image_name : reference.clip.video_name,
+          referencePromptLabels(references)[index],
+        ])
+      );
+
+    // The same three references in two orders: the numbers follow the list, so the swap
+    // trades the two images' picture numbers and leaves the video's alone.
+    expect(numbered([first, withConditioning('video_audio'), second])).toEqual({
+      'first.png': { audio: null, picture: 1, video: null },
+      'ref.mp4': { audio: 1, picture: null, video: 1 },
+      'second.png': { audio: null, picture: 2, video: null },
+    });
+    expect(numbered([second, withConditioning('video_audio'), first])).toEqual({
+      'first.png': { audio: null, picture: 2, video: null },
+      'ref.mp4': { audio: 1, picture: null, video: 1 },
+      'second.png': { audio: null, picture: 1, video: null },
+    });
+  });
+
+  it('numbers a full list, where the widest label lives', () => {
+    const images = Array.from({ length: 9 }, (_unused, index) => ({
+      ...IMAGE_REFERENCE,
+      image: { ...IMAGE_REFERENCE.image, image_name: `image-${index}.png` },
+    }));
+
+    expect(
+      referencePromptLabels([
+        ...images,
+        withConditioning('video'),
+        withConditioning('video_audio'),
+        withConditioning('audio'),
+      ]).map(formatReferencePromptLabels)
+    ).toEqual([
+      ...images.map((_unused, index) => [`<Picture ${index + 1}>`]),
+      ['<Video 1>'],
+      ['<Video 2>', '<Audio 1>'],
+      ['<Audio 2>'],
+    ]);
   });
 });
 
