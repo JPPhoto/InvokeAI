@@ -2123,12 +2123,14 @@ def test_flat_for_generic_path_does_not_use_compatibility_materializer_helpers(
     "graph_factory",
     [
         pytest.param(_flat_for_graph, id="flat"),
+        pytest.param(_nested_for_graph, id="nested"),
         pytest.param(_input_driven_nested_for_graph, id="input-driven-nested"),
         pytest.param(_two_sibling_nested_for_fan_in_graph, id="two-sibling"),
         pytest.param(_three_level_nested_for_graph, id="three-level"),
         pytest.param(_input_driven_three_level_nested_for_graph, id="input-driven-three-level"),
         pytest.param(_four_level_nested_for_graph, id="four-level"),
         pytest.param(_nested_for_iterate_collect_graph, id="nested-iterate-collect"),
+        pytest.param(_input_driven_nested_for_iterate_collect_graph, id="input-driven-nested-iterate-collect"),
         pytest.param(_serial_two_level_nested_for_iterate_collect_graph, id="serial-nested-iterate"),
     ],
 )
@@ -2142,6 +2144,69 @@ def test_admitted_generic_for_shapes_do_not_construct_compatibility_materializer
     monkeypatch.setattr(graph_module, "_ExecutionMaterializer", fail_compatibility_materializer)
 
     trace, state = _run_graph_with_effects(GraphExecutionState(graph=graph_factory()))
+
+    assert trace
+    assert state.is_complete()
+
+
+@pytest.mark.parametrize(
+    "graph_factory",
+    [
+        pytest.param(_nested_for_graph, id="nested"),
+        pytest.param(_input_driven_nested_for_graph, id="input-driven-nested"),
+        pytest.param(_two_sibling_nested_for_fan_in_graph, id="two-sibling"),
+        pytest.param(_input_driven_three_level_nested_for_graph, id="input-driven-three-level"),
+        pytest.param(_nested_for_iterate_collect_graph, id="nested-iterate-collect"),
+    ],
+)
+def test_admitted_nested_for_checkpoint_does_not_construct_compatibility_materializer(
+    monkeypatch: pytest.MonkeyPatch,
+    graph_factory: Callable[[], Graph],
+) -> None:
+    partial_trace, partial_state = _run_graph_with_effects(
+        GraphExecutionState(graph=graph_factory()),
+        stop_after=4,
+    )
+
+    def fail_compatibility_materializer(*_: object, **__: object) -> None:
+        raise AssertionError("generic nested For rehydration instantiated compatibility materializer")
+
+    monkeypatch.setattr(graph_module, "_ExecutionMaterializer", fail_compatibility_materializer)
+    resumed_trace, resumed_state = _run_graph_with_effects(load_execution_state(dump_execution_state(partial_state)))
+
+    assert partial_trace
+    assert resumed_trace
+    assert resumed_state.is_complete()
+
+
+def test_legacy_nested_for_snapshot_uses_compatibility_materializer() -> None:
+    _partial_trace, partial_state = _run_graph_with_effects(
+        GraphExecutionState(graph=_nested_for_graph()),
+        stop_after=2,
+    )
+    snapshot = dump_execution_state(partial_state)
+    snapshot.pop("execution_state_version")
+    snapshot.pop("execution_effects")
+    materializer_type = graph_module._ExecutionMaterializer
+
+    with patch.object(graph_module, "_ExecutionMaterializer", wraps=materializer_type) as materializer:
+        restored = load_execution_state(snapshot)
+        assert restored._legacy_snapshot_loaded
+        _resumed_trace, restored = _run_graph(restored)
+
+    assert materializer.call_count == 1
+    assert restored.is_complete()
+
+
+def test_generic_nested_for_path_does_not_use_compatibility_deferred_body_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_compatibility_helper(*_: object, **__: object) -> None:
+        raise AssertionError("generic nested For execution used the compatibility deferred-body helper")
+
+    monkeypatch.setattr(_ExecutionScheduler, "_try_materialize_deferred_nested_for_body", fail_compatibility_helper)
+
+    trace, state = _run_graph_with_effects(GraphExecutionState(graph=_nested_for_graph()))
 
     assert trace
     assert state.is_complete()

@@ -73,11 +73,12 @@ Iterate.item -> body -> Collect.item
 Collect.collection -> ForReturn.output
 ```
 
-The fresh generic scheduler admits this exact shape when the outer collection is a non-empty literal and there is one
-final consumer of `For.output_collection`. Each outer frame is isolated, including when the preparation node produces
-an empty inner collection. A checkpoint after a nested iterator boundary restores the generic class-drain state and
-continues the same frame/stream order. Input-driven outer collections, additional loop or control-flow nodes, escaped
-body paths, and other mixed shapes remain on the compatibility scheduler.
+The fresh generic scheduler admits this exact shape when the outer collection is a non-empty literal or one of the
+supported input-driven outer-collection variants, and there is one final consumer of `For.output_collection`. Each
+outer frame is isolated, including when the preparation node produces an empty inner collection. A checkpoint after a
+nested iterator boundary restores the generic class-drain state and continues the same frame/stream order. Unsupported
+input-driven outer collections, additional loop or control-flow nodes, escaped body paths, and other mixed shapes
+remain on the compatibility scheduler.
 
 Unsupported shapes, including independent iterator-derived body inputs, mixed nested `For`/`Iterate` bodies, escaping
 body paths, ambiguous returns, and arbitrary cyclic graphs, are rejected before execution.
@@ -146,10 +147,10 @@ for both streams to close, including empty streams. This is a private bounded
 planner case with exactly seven nodes and six ordinary edges: two inputless
 ordinary sources, two `Iterate` nodes, two ordinary bodies, and one `Collect`.
 It has no `Collect.collection` input, downstream consumer, or extra topology.
-Three or more body-mediated
-branches, fan-in with four or more direct branches, nested or input-driven
-iterators, and mixed control flow outside the bounded per-item
-`Iterate`/`If`/`Collect` topology remain on the compatibility materializer.
+Three or more body-mediated branches, fan-in with four or more direct branches, unsupported nested or input-driven
+iterator topologies, and mixed control flow outside the bounded per-item `Iterate`/`If`/`Collect` topology remain on
+the compatibility materializer. The exact admitted serial nested-`Iterate` chains and producer-driven bounded
+`For`/`Iterate`/`Collect` variants use the generic planner described above.
 Focused compatibility coverage now proves empty, nested, fan-in, partial/rehydrated, failed, canceled, and retried
 Iterate/Collect sessions. This is evidence for the current adapters; it does not remove materialization or queue
 ownership. Direct `Iterate`/`Collect`-only graphs and the exact bounded nested shape now use the generic scheduler

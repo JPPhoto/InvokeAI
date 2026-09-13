@@ -34,6 +34,85 @@ from invokeai.app.services.shared.graph_validation import CollectInvocation, Ite
 
 if TYPE_CHECKING:
     from invokeai.app.services.shared.graph import GraphExecutionState
+    from invokeai.app.services.shared.graph_for_planner import _GenericForPlanner
+    from invokeai.app.services.shared.graph_materializer import _ExecutionMaterializer
+
+
+def _prepare_deferred_nested_for_body(
+    state: "GraphExecutionState",
+    exec_node_id: str,
+    planner: "_GenericForPlanner | _ExecutionMaterializer",
+) -> None:
+    """Prepare a deferred nested For body through the caller's node planner."""
+
+    completed_source_id = state._prepared_registry().get_source_node_id(exec_node_id)
+    graph = state._get_source_graph_flat()
+    for source_for_id, source_node in state.graph.nodes.items():
+        if not isinstance(source_node, ForInvocation):
+            continue
+        serial_nested_body = state.graph._get_supported_for_serial_nested_iterate_chain(source_for_id, graph)
+        if serial_nested_body is not None:
+            if completed_source_id not in serial_nested_body.body_path_nodes:
+                continue
+            prepared_exec_path = state._get_iteration_path(exec_node_id)
+            for prepared_for_id in state._prepared_registry().get_prepared_ids(source_for_id):
+                prepared_for_path = state._get_iteration_path(prepared_for_id)
+                prepared_for_node = state.execution_graph.get_node(prepared_for_id)
+                if isinstance(prepared_for_node, ForInvocation) and prepared_for_node.index >= 0:
+                    prepared_for_path = (
+                        *state._get_for_parent_iteration_path(prepared_for_id),
+                        prepared_for_node.index,
+                    )
+                if prepared_exec_path[: len(prepared_for_path)] == prepared_for_path:
+                    planner.create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=prepared_for_id)
+                    return
+        nested_body = state.graph._get_supported_for_nested_iterate_body(source_for_id, graph)
+        nested_for_body = state.graph._get_supported_for_nested_for_body(source_for_id, graph)
+        if nested_body is not None:
+            body_path_nodes = nested_body.body_path_nodes
+            deferred_node_ids = (nested_body.iterate_node_id,)
+        elif nested_for_body is None:
+            continue
+        else:
+            body_path_nodes = nested_for_body.body_path_nodes
+            deferred_node_ids = nested_for_body.inner_for_ids
+        if completed_source_id != source_for_id and (
+            completed_source_id not in body_path_nodes
+            or not any(
+                nx.has_path(graph, completed_source_id, deferred_node_id) for deferred_node_id in deferred_node_ids
+            )
+        ):
+            continue
+        for prepared_for_id in state._prepared_registry().get_prepared_ids(source_for_id):
+            prepared_for_node = state.execution_graph.get_node(prepared_for_id)
+            prepared_for_path = state._get_iteration_path(prepared_for_id)
+            if isinstance(prepared_for_node, ForInvocation) and prepared_for_node.index >= 0:
+                prepared_for_path = (
+                    *state._get_for_parent_iteration_path(prepared_for_id),
+                    prepared_for_node.index,
+                )
+            if prepared_for_path != state._get_iteration_path(exec_node_id):
+                continue
+            if nested_for_body is not None:
+                if not all(
+                    any(
+                        state._get_for_parent_iteration_path(prepared_child_id) == prepared_for_path
+                        for prepared_child_id in state._prepared_registry().get_prepared_ids(child_id)
+                    )
+                    for child_id in deferred_node_ids
+                ):
+                    planner.create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=prepared_for_id)
+                    return
+                continue
+            if any(
+                (iterate_path := state._get_iteration_path(prepared_iterate_id))[: len(prepared_for_path)]
+                == prepared_for_path
+                and len(iterate_path) > len(prepared_for_path)
+                for prepared_iterate_id in state._prepared_registry().get_prepared_ids(deferred_node_ids[0])
+            ):
+                continue
+            planner.create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=prepared_for_id)
+            return
 
 
 class _ExecutionScheduler:
@@ -131,78 +210,7 @@ class _ExecutionScheduler:
         return self._state._try_schedule_next_for_iteration(exec_node_id, output)
 
     def _try_materialize_deferred_nested_for_body(self, exec_node_id: str) -> None:
-        completed_source_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
-        graph = self._state._get_source_graph_flat()
-        for source_for_id, source_node in self._state.graph.nodes.items():
-            if not isinstance(source_node, ForInvocation):
-                continue
-            serial_nested_body = self._state.graph._get_supported_for_serial_nested_iterate_chain(source_for_id, graph)
-            if serial_nested_body is not None:
-                if completed_source_id not in serial_nested_body.body_path_nodes:
-                    continue
-                prepared_exec_path = self._state._get_iteration_path(exec_node_id)
-                for prepared_for_id in self._state._prepared_registry().get_prepared_ids(source_for_id):
-                    prepared_for_path = self._state._get_iteration_path(prepared_for_id)
-                    prepared_for_node = self._state.execution_graph.get_node(prepared_for_id)
-                    if isinstance(prepared_for_node, ForInvocation) and prepared_for_node.index >= 0:
-                        prepared_for_path = (
-                            *self._state._get_for_parent_iteration_path(prepared_for_id),
-                            prepared_for_node.index,
-                        )
-                    if prepared_exec_path[: len(prepared_for_path)] == prepared_for_path:
-                        self._state._create_for_body_iteration(
-                            source_for_id=source_for_id, prepared_for_id=prepared_for_id
-                        )
-                        return
-            nested_body = self._state.graph._get_supported_for_nested_iterate_body(source_for_id, graph)
-            nested_for_body = self._state.graph._get_supported_for_nested_for_body(source_for_id, graph)
-            if nested_body is not None:
-                body_path_nodes = nested_body.body_path_nodes
-                deferred_node_ids = (nested_body.iterate_node_id,)
-            elif nested_for_body is None:
-                continue
-            else:
-                body_path_nodes = nested_for_body.body_path_nodes
-                deferred_node_ids = nested_for_body.inner_for_ids
-            if completed_source_id != source_for_id and (
-                completed_source_id not in body_path_nodes
-                or not any(
-                    nx.has_path(graph, completed_source_id, deferred_node_id) for deferred_node_id in deferred_node_ids
-                )
-            ):
-                continue
-            for prepared_for_id in self._state._prepared_registry().get_prepared_ids(source_for_id):
-                prepared_for_node = self._state.execution_graph.get_node(prepared_for_id)
-                prepared_for_path = self._state._get_iteration_path(prepared_for_id)
-                if isinstance(prepared_for_node, ForInvocation) and prepared_for_node.index >= 0:
-                    prepared_for_path = (
-                        *self._state._get_for_parent_iteration_path(prepared_for_id),
-                        prepared_for_node.index,
-                    )
-                if prepared_for_path != self._state._get_iteration_path(exec_node_id):
-                    continue
-                if nested_for_body is not None:
-                    if not all(
-                        any(
-                            self._state._get_for_parent_iteration_path(prepared_child_id) == prepared_for_path
-                            for prepared_child_id in self._state._prepared_registry().get_prepared_ids(child_id)
-                        )
-                        for child_id in deferred_node_ids
-                    ):
-                        self._state._create_for_body_iteration(
-                            source_for_id=source_for_id, prepared_for_id=prepared_for_id
-                        )
-                        return
-                    continue
-                if any(
-                    (iterate_path := self._state._get_iteration_path(prepared_iterate_id))[: len(prepared_for_path)]
-                    == prepared_for_path
-                    and len(iterate_path) > len(prepared_for_path)
-                    for prepared_iterate_id in self._state._prepared_registry().get_prepared_ids(deferred_node_ids[0])
-                ):
-                    continue
-                self._state._create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=prepared_for_id)
-                return
+        _prepare_deferred_nested_for_body(self._state, exec_node_id, self._state._materializer())
 
     def _decrement_child_indegree(self, child_exec_node_id: str, parent_exec_node_id: str) -> None:
         if child_exec_node_id not in self._state.indegree:
@@ -601,11 +609,6 @@ class _GenericGraphSchedulerAdapter:
         if self._state._count_unexecuted_prepared(source_node_id) == 0 and source_node_id not in self._state.executed:
             self._state._mark_source_executed(source_node_id)
 
-    def _try_materialize_deferred_nested_for_body(self, exec_node_id: str) -> None:
-        """Keep the compatibility materializer for generic shapes outside the new planner."""
-
-        _ExecutionScheduler._try_materialize_deferred_nested_for_body(self, exec_node_id)
-
     def complete(
         self, exec_node_id: str, output: BaseInvocationOutput
     ) -> list[tuple[BaseInvocation, BaseInvocationOutput]]:
@@ -673,7 +676,7 @@ class _GenericGraphSchedulerAdapter:
         elif can_use_eight_level_nested_iterate_sequence_planner(self._state):
             prepare_eight_level_nested_iterate_sequences(self._state)
         else:
-            self._try_materialize_deferred_nested_for_body(exec_node_id)
+            _prepare_deferred_nested_for_body(self._state, exec_node_id, self._state._for_planner())
         if finalized_for_exec_node_id is None:
             return []
         finalized_for_node = self._state.execution_graph.get_node(finalized_for_exec_node_id)
