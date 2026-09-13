@@ -143,9 +143,10 @@ broader nested iterators, and mixed control flow outside the bounded
 per-item topology retain `_ExecutionMaterializer` ownership for copy expansion,
 grouping, and empty-source handling. `_GenericGraphSchedulerAdapter` may still
 own readiness for these unsupported fresh `Iterate`/`Collect` graphs; the
-compatibility materializer owns expansion and materialization. Forced
-compatibility runs and legacy snapshots retain `_ExecutionScheduler` and
-compatibility-materializer ownership.
+compatibility materializer owns expansion and materialization. Scheduler/materializer
+ownership is topology-dependent: pure legacy `Iterate`/`Collect` uses generic scheduler
+readiness with compatibility materializer expansion; forced compatibility and legacy
+control-flow paths retain `_ExecutionScheduler` where applicable.
 
 The exact seventeen-node/sixteen-edge serial chain extends the same planner to
 eight `Iterate` nodes and eight-component frame paths, with the same

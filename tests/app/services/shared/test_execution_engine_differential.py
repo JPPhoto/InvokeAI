@@ -4064,6 +4064,7 @@ def test_legacy_direct_iterate_body_collect_snapshot_uses_compatibility_material
     with patch.object(graph_module, "_ExecutionMaterializer", wraps=materializer_type) as materializer:
         restored = load_execution_state(snapshot)
         assert restored._legacy_snapshot_loaded
+        assert isinstance(restored._scheduler(), _GenericGraphSchedulerAdapter)
         resumed_trace, restored = _run_graph(restored)
 
     assert materializer.call_count == 1
