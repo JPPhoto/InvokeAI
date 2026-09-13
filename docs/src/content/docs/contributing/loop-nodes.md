@@ -5,6 +5,34 @@ title: Loop Nodes Architecture
 This page records the implementation contract for the collection-based `For` and `ForReturn` nodes. The durable
 contract is shared by the backend graph executor, saved workflow format, and workflow editor.
 
+## Current execution-engine shape
+
+The author-time graph contract is unchanged. `GraphExecutionState` remains the execution façade: it owns graph
+validation, prepared execution-node identity, frame and iteration-path metadata, persistence, and the boundary between
+invocation results and scheduling.
+
+Readiness is split by admitted topology:
+
+- `ExecutionPlan` and `ExecutionScheduler` provide opaque, deterministic node readiness and completion. They do not
+  choose successors by node type or accept literal successor-node IDs.
+- `_GenericGraphSchedulerAdapter` projects existing graph state into that scheduler for admitted fresh graphs and for
+  the ordinary static-DAG/legacy compatibility path.
+- `_GenericForPlanner`, the bounded `Iterate` planners, and the frame-scoped `If` dependency code supply the
+  control-flow-specific preparation and activation rules for their exact admitted shapes.
+- `_ExecutionMaterializer` remains the compatibility owner for unsupported topologies and legacy snapshots.
+- `CallSavedWorkflowInvocation` declares one capability-bound `spawn_execution` plus matching `await` effect (or a
+  capability-bound `fail`). `GraphExecutionState` persists the pending lifecycle effects and generic child dependency;
+  `WorkflowCallCoordinator` and `WorkflowCallQueueLifecycle` remain the durable owner of saved-workflow child queue
+  rows, statuses, events, authorization, capacity, cancellation, recovery, retry, and parent/child projection.
+
+Control-flow nodes remain concrete `BaseInvocation` subclasses. They do not inherit from a new control-flow engine
+hierarchy, and they do not return a literal next-node ID. Internal planners and records may share implementation
+helpers, while successor readiness is selected from frame-scoped dependencies and effects.
+
+This is an incremental hybrid, not yet a token-authoritative engine. The execution ledger and internal planners are
+backend persistence details; they do not add author-time ports or change the frontend/backend external contract. No
+file under `invokeai/frontend/...` is part of this refactoring.
+
 ## Core contract
 
 `For` is a bounded collection loop, not a general `While` node. Its source is one `collection: list[Any]` input. Each
@@ -160,8 +188,8 @@ preserved across dump/load.
 For the exact fresh direct shape, the planner owns expansion, downstream admission, and empty closure atomically: a
 failed expansion leaves no partial prepared copies to be resumed. Versioned queue checkpoints and retries preserve the existing durable
 execution-state boundary and receive fresh execution identities. Materialization still owns those responsibilities for
-fallback shapes. Mixed control-flow and queue lifecycle remain compatibility-owned. `loop_linkage`
-remains association metadata and never becomes a data token.
+fallback shapes. Mixed control-flow outside the exact bounded admitted topology and queue lifecycle remain
+compatibility-owned. `loop_linkage` remains association metadata and never becomes a data token.
 
 The supported flat-loop differential gate covers generic/compatibility parity
 for successful execution, carried and replaced state, early break, empty and
@@ -202,7 +230,8 @@ chain, or exactly two, exactly three, or exactly four independent ordinary-node 
 activation dependencies in graph state. The three- and four-`If` admissions require `default` edges, all branch inputs
 (`condition`, `true_input`, `false_input`) on each `If`, and no output from inner or middle `If` except its direct nested
 branch edge; the four-`If` chain permits no extra output fan-out. Five-or-more nested `If`s, other fan-out, mixed
-shapes outside the bounded per-item `Iterate`/`If`/`Collect` topology, loop-containing, saved-workflow, legacy, and
+shapes outside the bounded per-item `Iterate`/`If`/`Collect` topology, loop-containing `For`/`ForReturn`, saved-workflow,
+legacy, and
 five-or-more sibling shapes use the compatibility scheduler with the dedicated
 `_IfActivationController` fallback. Legacy snapshots retain their generic compatibility
 projection. Legacy
@@ -220,8 +249,9 @@ their compatibility paths until differential coverage proves their generic repla
 The engine keeps compatibility materialization and queue readiness for loop-containing graphs outside the migration
 matrix and for existing snapshots. Admitted fresh `For` graphs use the generic opaque plan/scheduler plus
 `_GenericForPlanner`; `_ExecutionNodeBuilder` supplies shared low-level graph mutation mechanics. Ordinary static DAGs,
-legacy-shaped `If` graphs, and direct `Iterate`/`Collect`-only graphs retain their existing generic or compatibility
-routes. No activation, stream, or continuation ports are added to author-time graph JSON.
+supported fresh `If` graphs, direct `Iterate`/`Collect`-only graphs, and the exact bounded mixed
+`Iterate`/`If`/`Collect` graph use the generic adapter; unsupported or legacy shapes retain their compatibility routes.
+No activation, stream, or continuation ports are added to author-time graph JSON.
 Exact fresh serial nested-`Iterate` chains through eight levels use the generic planner for ordered frame expansion,
 empty-stream closure, checkpoint rehydration, source completion, and failure parity. Nine-level or deeper chains,
 five-level-or-deeper or unsupported sibling nested loops, and unsupported mixed shapes remain compatibility-owned. The exact fresh two-sibling `For`/`ForReturn` `CollectionConcat` fan-in shape, the exact fresh three-level serial nested-`For` shape with its bounded static `CollectionConcat` producer, and the exact fresh four-level serial nested-`For` shape are generic-routed. This migration does not modify any file under `invokeai/frontend/...`, including generated schemas; the existing

@@ -261,6 +261,42 @@ class DefaultSessionRunner(SessionRunnerBase):
                 self._on_before_run_node(invocation, queue_item)
 
                 execution_ref = queue_item.session.get_execution_ref(invocation.id)
+                child_capability = None
+                workflow_inputs = None
+                workflow_authorizer = None
+                if isinstance(invocation, CallSavedWorkflowInvocation):
+                    if not hasattr(queue_item.session, "build_child_execution_capability"):
+                        data = InvocationContextData(
+                            invocation=invocation,
+                            source_invocation_id=queue_item.session.prepared_source_mapping[invocation.id],
+                            queue_item=queue_item,
+                            execution_frame=execution_ref.frame.iteration_path,
+                            execution_state_id=execution_ref.state_id,
+                            execution_frame_id=execution_ref.frame.frame_id,
+                            execution_workflow_call_depth=execution_ref.frame.workflow_call_depth,
+                        )
+                        context = build_invocation_context(
+                            data=data,
+                            services=self._services,
+                            is_canceled=self._is_canceled,
+                        )
+                        workflow_record = invocation.validate_selected_workflow(context)
+                        self.workflow_call_coordinator.begin_workflow_call_boundary(
+                            invocation, queue_item, workflow_record
+                        )
+                        return
+                    child_capability = queue_item.session.build_child_execution_capability(
+                        execution_ref,
+                        authorization_context={"user_id": queue_item.user_id},
+                    )
+                    workflow_inputs = self.workflow_call_coordinator._collect_call_saved_workflow_inputs(
+                        invocation, queue_item
+                    )
+                if isinstance(invocation, CallSavedWorkflowInvocation):
+
+                    def workflow_authorizer(_workflow_id: str):
+                        return invocation.validate_selected_workflow(context)
+
                 data = InvocationContextData(
                     invocation=invocation,
                     source_invocation_id=queue_item.session.prepared_source_mapping[invocation.id],
@@ -269,6 +305,9 @@ class DefaultSessionRunner(SessionRunnerBase):
                     execution_state_id=execution_ref.state_id,
                     execution_frame_id=execution_ref.frame.frame_id,
                     execution_workflow_call_depth=execution_ref.frame.workflow_call_depth,
+                    execution_child_capability=child_capability,
+                    execution_workflow_authorizer=workflow_authorizer,
+                    execution_workflow_inputs=workflow_inputs,
                 )
                 context = build_invocation_context(
                     data=data,
@@ -276,7 +315,10 @@ class DefaultSessionRunner(SessionRunnerBase):
                     is_canceled=self._is_canceled,
                 )
 
-                if isinstance(invocation, CallSavedWorkflowInvocation):
+                # Retain the queue boundary for compatibility contexts that cannot record lifecycle effects.
+                if isinstance(invocation, CallSavedWorkflowInvocation) and not getattr(
+                    context.execution_effects, "allow_lifecycle_effects", False
+                ):
                     workflow_record = invocation.validate_selected_workflow(context)
                     self.workflow_call_coordinator.begin_workflow_call_boundary(invocation, queue_item, workflow_record)
                     return
@@ -293,6 +335,31 @@ class DefaultSessionRunner(SessionRunnerBase):
                     invocation.id, effect_count=len(run_result.effects)
                 )
                 finalized_outputs = queue_item.session.apply(execution_ref, run_result)
+
+                if isinstance(invocation, CallSavedWorkflowInvocation):
+                    failure_effect = next(
+                        (effect for effect in run_result.effects if getattr(effect, "kind", None) == "fail"),
+                        None,
+                    )
+                    if failure_effect is not None:
+                        error_message = str(getattr(failure_effect, "message", "saved workflow call failed"))
+                        self._on_node_error(
+                            invocation=invocation,
+                            queue_item=queue_item,
+                            error_type="ValueError",
+                            error_message=error_message,
+                            error_traceback=error_message,
+                        )
+                        return
+
+                    workflow_record = invocation.validate_selected_workflow(context)
+                    self._dispatch_workflow_call_effects(
+                        invocation=invocation,
+                        queue_item=queue_item,
+                        workflow_record=workflow_record,
+                        effects=run_result.effects,
+                    )
+                    return
 
                 if control_collection is not None:
                     invocation.collection = control_collection
@@ -330,6 +397,29 @@ class DefaultSessionRunner(SessionRunnerBase):
                 error_message=error_message,
                 error_traceback=error_traceback,
             )
+
+    def _dispatch_workflow_call_effects(
+        self,
+        *,
+        invocation: CallSavedWorkflowInvocation,
+        queue_item: SessionQueueItem,
+        workflow_record,
+        effects,
+    ) -> None:
+        """Pass lifecycle intent through queue adapter, retaining old boundary fallback."""
+
+        hook = getattr(self.workflow_call_queue_lifecycle, "apply_execution_effects", None)
+        if hook is None:
+            hook = getattr(self.workflow_call_coordinator, "apply_execution_effects", None)
+        if hook is not None:
+            hook(
+                invocation=invocation,
+                queue_item=queue_item,
+                workflow_record=workflow_record,
+                effects=effects,
+            )
+            return
+        self.workflow_call_coordinator.begin_workflow_call_boundary(invocation, queue_item, workflow_record)
 
     @contextmanager
     def _maybe_offload_to_idle_gpu(self, invocation: BaseInvocation) -> Iterator[None]:

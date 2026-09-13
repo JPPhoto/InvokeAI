@@ -796,7 +796,7 @@ class _DummyWorkflowRecords:
             nodes=workflow_dump["nodes"],
             edges=workflow_dump["edges"],
         )
-        workflow.model_dump = lambda: workflow_dump
+        workflow.model_dump = lambda **_: workflow_dump
         return SimpleNamespace(
             user_id="user-1",
             is_public=False,
@@ -855,9 +855,17 @@ def _build_workflow_runner(monkeypatch: pytest.MonkeyPatch, session_queue=None):
                 execution_effects := ExecutionEffectsRecorder(
                     source_node_id=data.invocation.id,
                     frame_path=data.execution_frame,
+                    state_id=data.execution_state_id,
+                    frame_id=data.execution_frame_id,
+                    workflow_call_depth=data.execution_workflow_call_depth,
+                    allow_lifecycle_effects=data.execution_child_capability is not None,
+                    child_capability=data.execution_child_capability,
                 )
             ),
-            execution=ExecutionInterface(execution_effects),
+            execution=ExecutionInterface(
+                execution_effects,
+                authorize_workflow=data.execution_workflow_authorizer,
+            ),
             images=SimpleNamespace(get_dto=services.images.get_dto),
             boards=SimpleNamespace(
                 get_all_image_names_for_board=services.board_images.get_all_board_image_names_for_board
@@ -1386,6 +1394,47 @@ def test_run_node_enters_waiting_state_without_executing_child_inline(monkeypatc
     assert events.errors == []
 
 
+def test_run_node_persists_saved_workflow_lifecycle_effects_before_queue_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_queue = _DummySessionQueue()
+    runner, events, _workflow_records = _build_workflow_runner(monkeypatch, session_queue=session_queue)
+    source_invocation = CallSavedWorkflowInvocation(id="call-node", workflow_id="workflow-a")
+    session = GraphExecutionState(graph=Graph())
+    session.graph.add_node(source_invocation)
+    invocation = session.next()
+    assert isinstance(invocation, CallSavedWorkflowInvocation)
+    queue_item = type(
+        "QueueItem",
+        (),
+        {
+            "item_id": 1,
+            "session_id": session.id,
+            "user_id": "user-1",
+            "status": "in_progress",
+            "session": session,
+            "queue_id": "default",
+            "batch_id": "batch-1",
+            "priority": 0,
+            "origin": None,
+            "destination": None,
+            "root_item_id": None,
+        },
+    )()
+
+    runner.run_node(invocation=invocation, queue_item=queue_item)
+
+    assert queue_item.status == "waiting"
+    assert session.execution_effects
+    effects = next(iter(session.execution_effects.values()))
+    assert [effect.kind for effect in effects] == ["spawn_execution", "await"]
+    assert session.waiting_workflow_call_execution is not None
+    dependency = session.execution_child_dependencies[session.waiting_workflow_call_execution.id]
+    assert dependency.child_execution_ids == [str(session_queue.enqueued_child_item_ids[0])]
+    assert dependency.status in {"waiting", "running"}
+    assert events.completed == []
+
+
 def test_run_node_fails_cleanly_for_invalid_batch_child_workflow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1611,7 +1660,10 @@ def test_workflow_call_queue_lifecycle_resumes_parent_from_completed_child(
     )
     parent_ref = session.execution_refs[prepared_call_node_id]
     assert session.execution_tokens[f"{parent_ref.reference_id}:values"].value == {"result": [3]}
-    assert session.execution_effects[parent_ref.reference_id] == []
+    assert [effect.kind for effect in session.execution_effects[parent_ref.reference_id]] == [
+        "spawn_execution",
+        "await",
+    ]
 
 
 def test_resume_waiting_workflow_call_applies_parent_output_to_execution_ledger(

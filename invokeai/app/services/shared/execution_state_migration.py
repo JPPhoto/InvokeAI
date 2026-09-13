@@ -37,6 +37,10 @@ def _append_runtime_fields(snapshot: dict[str, Any], state: GraphExecutionState)
         ]
         for reference_id, effects in state.execution_effects.items()
     }
+    snapshot["execution_child_dependencies"] = {
+        dependency_id: dependency.model_dump(mode="json", warnings=False)
+        for dependency_id, dependency in state.execution_child_dependencies.items()
+    }
     for reference_id, effects in state._legacy_execution_effects_for_snapshot().items():
         snapshot["execution_effects"][reference_id] = [
             effect.model_dump(mode="json") if hasattr(effect, "model_dump") else effect for effect in effects

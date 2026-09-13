@@ -1,7 +1,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 from dynamicprompts.wildcards import WildcardManager
 from PIL.Image import Image
@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from invokeai.app.invocations.baseinvocation import BaseInvocation
     from invokeai.app.invocations.model import ModelIdentifierField
     from invokeai.app.services.session_queue.session_queue_common import SessionQueueItem
+    from invokeai.app.services.shared.execution_engine.child import ChildExecutionCapability
 
 """
 The InvocationContext provides access to various services and data about the current invocation.
@@ -75,6 +76,12 @@ class InvocationContextData:
     """The durable frame identity for effect ownership validation."""
     execution_workflow_call_depth: int = 0
     """The active workflow-call depth for effect ownership validation."""
+    execution_child_capability: "ChildExecutionCapability | None" = None
+    """Engine-issued authority for lifecycle effects in this invocation frame."""
+    execution_workflow_authorizer: Callable[[str], Any] | None = None
+    """Engine-owned saved-workflow authorization callback, when enabled."""
+    execution_workflow_inputs: dict[str, Any] | None = None
+    """Resolved saved-workflow inputs supplied by the execution adapter."""
 
 
 class InvocationContextInterface:
@@ -1008,7 +1015,10 @@ class InvocationContext:
         """Effects recorded during the current invocation run."""
         self.effects = self.execution_effects
         """Alias for :attr:`execution_effects`."""
-        self.execution = ExecutionInterface(self.execution_effects)
+        self.execution = ExecutionInterface(
+            self.execution_effects,
+            authorize_workflow=data.execution_workflow_authorizer,
+        )
         """Restricted execution-effect recorder facade."""
         self._skip_invocation_cache = False
 
@@ -1047,6 +1057,8 @@ def build_invocation_context(
             state_id=data.execution_state_id,
             frame_id=data.execution_frame_id,
             workflow_call_depth=data.execution_workflow_call_depth,
+            allow_lifecycle_effects=data.execution_child_capability is not None,
+            child_capability=data.execution_child_capability,
         )
 
     ctx = InvocationContext(

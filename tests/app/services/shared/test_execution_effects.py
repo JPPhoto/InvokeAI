@@ -1,4 +1,5 @@
 from copy import deepcopy
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock
 
@@ -11,6 +12,7 @@ from invokeai.app.invocations.baseinvocation import (
     invocation,
     invocation_output,
 )
+from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvocation
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.logic import IfInvocation, IfInvocationOutput
 from invokeai.app.invocations.loops import (
@@ -20,6 +22,7 @@ from invokeai.app.invocations.loops import (
     ForReturnInvocationOutput,
     LoopState,
 )
+from invokeai.app.invocations.workflow_return import WorkflowReturnOutput
 from invokeai.app.services.shared.execution_effects import (
     AddEdgeEffect,
     AwaitEffect,
@@ -1078,6 +1081,30 @@ def test_capability_enabled_execution_interface_records_child_lifecycle_effects(
     assert spawn.authorization_context == {"user_id": "user"}
 
 
+def test_call_saved_workflow_declares_authorized_spawn_and_await_effects() -> None:
+    invocation = CallSavedWorkflowInvocation(id="call", workflow_id="workflow")
+    capability = ChildExecutionCapability(parent_execution_id="call", parent_frame=())
+    workflow_record = SimpleNamespace(workflow=SimpleNamespace(model_dump=lambda **_: {"nodes": {}}))
+    data = InvocationContextData(
+        queue_item=SimpleNamespace(user_id="user"),
+        invocation=invocation,
+        source_invocation_id="call",
+        execution_state_id="state",
+        execution_frame_id="frame",
+        execution_child_capability=capability,
+        execution_workflow_authorizer=lambda _workflow_id: workflow_record,
+        execution_workflow_inputs={"value": 3},
+    )
+    context = build_invocation_context(SimpleNamespace(), data, lambda: False)
+
+    invocation.invoke(context)
+
+    effects = context.execution_effects.snapshot()
+    assert [effect.kind for effect in effects] == ["spawn_execution", "await"]
+    assert effects[0].inputs == {"value": 3}
+    assert effects[1].dependency.execution_node_id == effects[0].child_execution_id
+
+
 def test_capability_enabled_execution_interface_rejects_wrong_parent_scope() -> None:
     capability = ChildExecutionCapability(parent_execution_id="other", parent_frame=())
     recorder = ExecutionEffectsRecorder(
@@ -1215,6 +1242,37 @@ def test_effect_values_survive_execution_state_json_dump() -> None:
     snapshot = dump_execution_state(state)
 
     assert snapshot["execution_effects"]["reference"][0]["value"] == effect.value
+
+
+def test_saved_workflow_lifecycle_effects_survive_json_round_trip() -> None:
+    graph = Graph()
+    graph.add_node(CallSavedWorkflowInvocation(id="saved-workflow", workflow_id="workflow"))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    parent = ExecutionRef(execution_node_id=node.id)
+    effects = [
+        SpawnExecutionEffect(
+            execution_ref=parent,
+            parent=parent,
+            graph={"nodes": {"output": {"type": "workflow_return"}}, "saved_workflow_id": "workflow"},
+            inputs={"prompt": "value"},
+            child_execution_id="child",
+            authorization_context={"user_id": "user"},
+        ),
+        AwaitEffect(execution_ref=parent, dependency=ExecutionRef(execution_node_id="child")),
+    ]
+    ref = state.get_execution_ref(node.id, effect_count=len(effects))
+    state.results[node.id] = WorkflowReturnOutput(values={})
+    state.executed.add(node.id)
+    state.execution_effects[ref.reference_id] = effects
+    state.execution_refs[node.id] = ref
+
+    snapshot = dump_execution_state(state)
+    restored = load_execution_state(snapshot)
+
+    assert snapshot["execution_effects"][ref.reference_id] == [effect.model_dump(mode="json") for effect in effects]
+    assert dump_execution_state(restored)["execution_effects"] == snapshot["execution_effects"]
 
 
 def test_set_value_effect_requires_a_value() -> None:

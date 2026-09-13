@@ -55,11 +55,11 @@ The bounded If evidence rerun on the current branch passes 639 tests across
 the differential, dependency, runtime, SQLite processor, and snapshot
 migration suites. This is focused migration evidence, not a full-suite result;
 the controller fallback and legacy projection remain intentional.
-The execution ledgers (`execution_refs`, `execution_tokens`, and
-`execution_effects`) are internal persistence data. They are excluded from
-ordinary model/API serialization and schemas; `dump_execution_state()` is the
-explicit internal persistence path that retains them, including nested child
-states.
+The execution ledgers (`execution_refs`, `execution_tokens`, `execution_effects`,
+and `execution_child_dependencies`) are internal persistence data. They are
+not part of public API schemas or client responses; `dump_execution_state()`
+is the explicit internal persistence path that retains them, including nested
+child states.
 Direct `Iterate`/`Collect` graphs that do not contain `If`, `For`, `ForReturn`, or saved-workflow control flow also use
 the generic adapter. Its adapter-level readiness predicate waits for canonical Iterate streams to close, and generic
 completion mirrors each Iterate result into that ledger before releasing `Collect`. The exact fresh four-node shape
@@ -359,7 +359,8 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
   `For` shape, the exact fresh three-level and four-level serial nested-`For` shapes (including the exact three-level producer-driven outer variant), the exact producer-driven nested extension, the exact bounded empty input-driven flat `For`, the bounded
   two- through eight-level serial nested-`Iterate` chains, and the bounded per-item `Iterate`/`If`/`Collect` topology use
   the generic adapter for readiness and continuation projection; other unsupported input-driven, nine-level or deeper,
-  mixed graphs outside that topology, and saved-workflow graphs retain the legacy scheduler. Optional
+  mixed graphs outside that topology retain the legacy scheduler, while saved-workflow calls use the generic lifecycle
+  effect/dependency projection with the dedicated durable queue adapter. Optional
   `ready_order: list[str]` prioritizes classes. Queues are rebuilt from persisted execution state when a session is
   deserialized.
 
@@ -555,9 +556,11 @@ Workflow-call note:
 
 - `GraphExecutionState` can represent a paused parent execution plus an attached child execution state, but it does not
   itself orchestrate child execution.
-- In the current implementation, `DefaultSessionRunner.run_node()` establishes the workflow call boundary and attaches
-  the child execution state, while `WorkflowCallCoordinator` handles call-specific setup and
-  `WorkflowCallQueueLifecycle` later resumes or fails the parent based on that child queue row's outcome.
+- In the current implementation, `DefaultSessionRunner.run_node()` invokes `CallSavedWorkflowInvocation` through the
+  effect-aware path. The invocation records capability-bound `spawn_execution` plus `await` (or `fail`) intent;
+  `GraphExecutionState.apply()` persists the pending batch, `WorkflowCallCoordinator` handles durable child setup,
+  and `WorkflowCallQueueLifecycle` later resumes or fails the parent based on the generic child dependency and child
+  queue outcome.
 - Child `SessionQueueItem` rows created by the coordinator now carry explicit relationship metadata such as
   `workflow_call_id`, `parent_item_id`, `parent_session_id`, `root_item_id`, and `workflow_call_depth`, even though the
   higher-level scheduler semantics are still evolving.
@@ -579,10 +582,10 @@ Workflow-call note:
   - child queue-row creation is cleaned up on boundary-setup failure and child fan-out is bounded by remaining queue
     capacity
   - child workflows that mix supported batch nodes with unrelated generator nodes are rejected for now
-- The generic `ChildDependencyRecord` adapter now validates the same waiting parent, ordered children, capability
-  identity, all-of aggregation, resource limits, and terminal transitions alongside this workflow-call lifecycle.
-  Existing queue fields, statuses, cancellation, retry, and event behavior remain authoritative; queue-row creation and
-  recovery are not silently delegated to an in-memory record.
+- The generic `ChildDependencyRecord` now owns the internal child identity, ordered all-of aggregation, capability
+  identity, resource limits, idempotent terminal transition, and parent terminal decision alongside this workflow-call
+  lifecycle. Existing queue fields, statuses, cancellation, retry, and event behavior remain authoritative; queue-row
+  creation and recovery are not silently delegated to an in-memory record.
 
 ### 4.3 Runtime helper classes
 
@@ -802,8 +805,9 @@ In normal execution, all runtime expansion occurs in `execution_graph` with trac
 - **Scheduling policy**: adjust `ready_order` to prioritize class queues. A batch-size or fairness cap is not currently
   implemented.
 - **Dynamic behaviors**: effect-enabled invocations may record frame-scoped stream, activation, and authorized child
-  lifecycle intent. `GraphExecutionState.apply()` remains the transactional graph boundary and rejects mutation or
-  queue effects unless a matching adapter owns their application.
+  lifecycle intent. `GraphExecutionState.apply()` remains the transactional graph boundary: it persists a pending
+  saved-workflow lifecycle batch and generic child dependency, while the matching queue adapter owns durable row
+  creation and queue transitions. Mutation effects remain rejected.
 - **Workflow call boundaries**: `GraphExecutionState` can suspend a parent execution state on a workflow call, attach a
   child execution state, and later resume the parent without mutating the source graph.
 

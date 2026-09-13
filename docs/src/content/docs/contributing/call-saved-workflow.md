@@ -17,13 +17,16 @@ The long-term feature goal is:
 - The architecture must work for Invoke frontend graphs and for externally submitted graphs that use the same node type.
 
 This document records the current state, the target architecture, and the execution contract needed to continue
-development later.
+development later. The target is not the current scheduler shape: saved-workflow calls still use a dedicated queue
+boundary for durable rows and queue transitions, while the invocation and graph state now use the generic lifecycle
+effect/dependency seam to declare, persist, and resume the call.
 
 The execution-engine refactoring does not change the callable node, saved-workflow, or queue interaction contract.
-Generated API schemas may be regenerated when backend runtime metadata becomes visible in a response, but existing
-fields, requiredness, statuses, events, and client behavior remain compatible. Frontend application behavior is outside
-this execution-engine slice. No code under `invokeai/frontend/...` may be changed by this refactoring; the existing
-frontend/backend external interface is frozen.
+Internal execution references, tokens, effects, frames, and scheduler records are persistence-only implementation
+metadata. They must remain out of ordinary client-facing responses and generated client schemas. Existing fields,
+requiredness, statuses, events, and client behavior remain compatible. Frontend application behavior is outside this
+execution-engine slice. No code under `invokeai/frontend/...`, including generated `openapi.json` or `schema.ts`, may be
+changed by this refactoring; the existing frontend/backend external interface is frozen.
 
 The internal generic boundary is implemented in
 `invokeai.app.services.shared.execution_engine`. It provides frame-scoped
@@ -90,15 +93,19 @@ Implemented runtime scaffolding:
   - child sessions carry a `workflow_call_parent` reference back to the parent call relationship
 - `GraphExecutionState.next()` returns no runnable node while the parent session is waiting on a child workflow call.
 - `GraphExecutionState.is_complete()` stays false while waiting.
-- `DefaultSessionRunner.run_node()` now treats `call_saved_workflow` as a call boundary instead of a normal executable
-  node.
-- On boundary entry, the runner:
-  - validates the selected workflow
-  - builds a workflow call frame
-  - converts the saved workflow JSON into a backend `Graph`
-  - validates and applies parent call arguments to the child graph
-  - creates a child `GraphExecutionState`
-  - attaches that child session to the waiting parent session
+- `DefaultSessionRunner.run_node()` invokes `call_saved_workflow` through the same effect-aware invocation path as
+  other nodes. The invocation records one capability-bound `spawn_execution` effect and one matching `await` effect;
+  authorization and input collection happen before those effects are recorded.
+- `GraphExecutionState.apply()` persists the pending lifecycle effects without completing the call node. The queue
+  adapter then consumes the effects to:
+  - build a workflow call frame
+  - convert the saved workflow JSON into a backend `Graph`
+  - validate and apply parent call arguments to the child graph
+  - create child `GraphExecutionState` instances and durable child queue rows
+  - attach those child sessions to the waiting parent session
+- When the generic child dependency reaches a terminal result, the queue adapter projects the legacy workflow-call
+  fields, resumes the parent through `GraphExecutionState.apply()`, and completes the call node with ordered return
+  values. A capability-gated `fail` effect records a parent failure without creating child rows.
 - Workflow-call runtime responsibilities are now split:
   - `WorkflowCallCoordinator` handles call-specific setup:
     - build the child graph
@@ -311,8 +318,9 @@ Current limitation:
 - connected batch child inputs produced by ordinary non-generator upstream nodes are still not supported and should fail
   early with a clear unsupported-feature error
 - the current queue-visible child execution path still relies on `WorkflowCallCoordinator` and
-  `WorkflowCallQueueLifecycle` to resume or fail parents; the generic child record supplies the identity and
-  aggregation boundary without changing the public queue contract
+  `WorkflowCallQueueLifecycle` for durable row creation and parent transitions; generic lifecycle effects and
+  `ChildDependencyRecord` supply the invocation intent, identity, ordered aggregation, idempotency, and terminal
+  decision without changing the public queue contract
 
 ### 4a. Queue Lifecycle Contract
 
@@ -586,7 +594,7 @@ Current insertion points already used:
 
 Next runtime work still needed:
 
-- keep `WorkflowCallQueueLifecycle` as the bounded workflow-call lifecycle component for this PR
+- keep `WorkflowCallQueueLifecycle` as the bounded workflow-call lifecycle component for this refactor
   - the current workflow-call feature is the only caller of parent/child queue semantics
   - replacing it with a generalized queue dependency scheduler now would add regression risk without unlocking a
     concrete user workflow
@@ -746,9 +754,10 @@ Tests first:
 
 ### Stage 5: Frontend Schema, UI, And Docs
 
-Status: mostly implemented. Schema/type generation includes the backend nodes and fields; editor connection coverage and
-localized UI strings are in place for the current node wiring. Future UX cleanup should be driven by concrete user
-testing rather than added as speculative work.
+Status: mostly implemented. Existing schema/type generation includes the backend nodes and fields; editor connection
+coverage and localized UI strings are in place for the current node wiring. This describes the callable-workflow
+feature baseline, not a request to regenerate or change frontend artifacts as part of the execution-engine refactor.
+Future UX cleanup should be driven by concrete user testing rather than added as speculative work.
 
 Goal:
 

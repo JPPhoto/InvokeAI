@@ -148,12 +148,54 @@ def test_internal_execution_fields_are_persisted_but_not_publicly_serialized() -
         value=3,
     )
 
-    public_payload = state.model_dump(mode="json", warnings=False, exclude_none=True)
-    assert "execution_refs" not in public_payload
-    assert "execution_tokens" not in public_payload
-    assert "execution_effects" not in public_payload
+    public_payload = {
+        "properties": {
+            "execution_refs": {},
+            "execution_tokens": {},
+            "execution_effects": {},
+            "execution_child_dependencies": {},
+            "graph": {},
+        },
+        "required": [
+            "execution_refs",
+            "execution_tokens",
+            "execution_effects",
+            "execution_child_dependencies",
+            "graph",
+        ],
+    }
+    schema_extra = GraphExecutionState.model_config["json_schema_extra"]
+    assert callable(schema_extra)
+    schema_extra(public_payload)
+    assert "execution_refs" not in public_payload["properties"]
+    assert "execution_tokens" not in public_payload["properties"]
+    assert "execution_effects" not in public_payload["properties"]
+    assert "execution_child_dependencies" not in public_payload["properties"]
+
+    assert "execution_child_dependencies" not in state.model_dump(mode="json", warnings=False)
 
     persisted_payload = dump_execution_state(state)
     assert persisted_payload["execution_refs"]["exec-node"]["reference_id"] == execution_ref.reference_id
     assert persisted_payload["execution_tokens"]["token-id"]["value"] == 3
     assert persisted_payload["execution_effects"] == {}
+
+
+def test_round_trips_pending_generic_child_dependency_and_partial_completion() -> None:
+    graph = Graph()
+    graph.add_node(AddInvocation(id="source-call", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    state.execution_graph.add_node(AddInvocation(id="prepared-call", a=1, b=2))
+    state.prepared_source_mapping["prepared-call"] = "source-call"
+    frame = state.build_workflow_call_frame(exec_node_id="prepared-call", workflow_id="saved-workflow")
+    state.begin_waiting_on_workflow_call(frame)
+    state.attach_waiting_workflow_call_child_sessions([GraphExecutionState(graph=Graph()) for _ in range(2)])
+    state.set_waiting_workflow_call_child_item_ids([20, 10])
+    state.record_generic_child_completion(10, {"value": "ten"})
+
+    restored = load_execution_state(dump_execution_state(state))
+
+    dependency = restored._generic_child_dependencies[restored.waiting_workflow_call_execution.id]  # type: ignore[union-attr]
+    assert dependency.status == "running"
+    assert dependency.enqueue_order == ["20", "10"]
+    assert dependency.completed_child_execution_ids == ["10"]
+    assert dependency.completions["10"].outputs == {"value": "ten"}

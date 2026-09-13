@@ -185,7 +185,9 @@ from invokeai.app.util.misc import uuid_string
 
 _JSON_SERIALIZER = TypeAdapter(Any)
 
-_EXECUTION_STATE_RUNTIME_FIELDS = frozenset({"execution_refs", "execution_tokens", "execution_effects"})
+_EXECUTION_STATE_RUNTIME_FIELDS = frozenset(
+    {"execution_refs", "execution_tokens", "execution_effects", "execution_child_dependencies"}
+)
 _EXECUTION_STATE_REQUIRED_FIELDS = (
     "id",
     "graph",
@@ -297,6 +299,11 @@ class GraphExecutionState(BaseModel):
     execution_effects: dict[str, list[Any]] = Field(
         default_factory=dict,
         description="Effects accepted for each execution reference",
+    )
+    execution_child_dependencies: dict[str, ChildDependencyRecord] = Field(
+        default_factory=dict,
+        description="Durable generic child dependency records",
+        exclude=True,
     )
     # Ready queues grouped by node class name (internal only)
     _ready_queues: dict[str, Deque[str]] = PrivateAttr(default_factory=dict)
@@ -1815,11 +1822,38 @@ class GraphExecutionState(BaseModel):
             return None
         existing = self._generic_child_dependencies.get(execution.id)
         if existing is not None:
+            expected_ref = self.execution_refs.get(execution.prepared_call_node_id)
+            if expected_ref is None:
+                expected_ref = self._expected_execution_ref(execution.prepared_call_node_id)
+            if (
+                existing.parent_execution_id != expected_ref.exec_node_id
+                or existing.parent_reference_id != expected_ref.reference_id
+                or existing.parent_frame != expected_ref.frame.iteration_path
+                or existing.child_execution_ids != [str(item_id) for item_id in execution.child_item_ids]
+            ):
+                raise ValueError("Child dependency does not belong to active workflow call")
             return existing
-        parent_reference_id = f"{self.id}:{execution.prepared_call_node_id}"
+        persisted = self.execution_child_dependencies.get(execution.id)
+        if persisted is not None:
+            expected_ref = self.execution_refs.get(execution.prepared_call_node_id)
+            if expected_ref is None:
+                expected_ref = self._expected_execution_ref(execution.prepared_call_node_id)
+            if (
+                persisted.parent_execution_id != expected_ref.exec_node_id
+                or persisted.parent_reference_id != expected_ref.reference_id
+                or persisted.parent_frame != expected_ref.frame.iteration_path
+                or persisted.child_execution_ids != [str(item_id) for item_id in execution.child_item_ids]
+            ):
+                raise ValueError("Persisted child dependency does not belong to active workflow call")
+            self._generic_child_dependencies[execution.id] = persisted
+            return persisted
+        execution_ref = self.execution_refs.get(execution.prepared_call_node_id)
+        if execution_ref is None:
+            execution_ref = self._expected_execution_ref(execution.prepared_call_node_id)
+        parent_reference_id = execution_ref.reference_id
         capability = ChildExecutionCapability(
-            parent_execution_id=self.id,
-            parent_frame=(),
+            parent_execution_id=execution_ref.exec_node_id,
+            parent_frame=execution_ref.frame.iteration_path,
             parent_reference_id=parent_reference_id,
             depth=max(execution.depth - 1, 0),
             max_depth=max(self.max_workflow_call_depth, execution.depth),
@@ -1835,7 +1869,31 @@ class GraphExecutionState(BaseModel):
             if output_values is not None:
                 record.complete_child(str(child_item_id), output_values)
         self._generic_child_dependencies[execution.id] = record
+        self.execution_child_dependencies[execution.id] = record
         return record
+
+    def build_child_execution_capability(
+        self,
+        execution_ref: ExecutionReference,
+        *,
+        authorization_context: dict[str, Any] | None = None,
+        max_children: int = 1,
+    ) -> ChildExecutionCapability:
+        """Issue lifecycle authority bound to one prepared node and exact frame."""
+
+        ref = self._validate_execution_ref(execution_ref)
+        if max_children < 1:
+            raise ValueError("max_children must be at least one")
+        return ChildExecutionCapability(
+            parent_execution_id=ref.exec_node_id,
+            parent_frame=ref.frame.iteration_path,
+            parent_reference_id=ref.reference_id,
+            authorization_context=authorization_context,
+            depth=ref.frame.workflow_call_depth,
+            max_depth=self.max_workflow_call_depth,
+            max_children=max_children,
+            capacity=max_children,
+        )
 
     def record_generic_child_completion(
         self, child_item_id: int, output_values: dict[str, Any]
@@ -2172,12 +2230,69 @@ class GraphExecutionState(BaseModel):
         continuation_payloads: dict[tuple[str, str], str] = {}
         duplicate_continuations: set[tuple[str, str]] = set()
         continuation_operations: set[str] = set()
+        spawned_child_ids: set[str] = set()
+        awaited_child_ids: list[str] = []
+        lifecycle_effect_kinds: set[str] = set()
         for effect in effects:
             try:
                 _JSON_SERIALIZER.dump_python(effect, mode="json", warnings="error")
             except (PydanticSerializationError, TypeError, ValueError) as exc:
                 raise ValueError("Execution effect must be JSON-serializable") from exc
             effect_kind = self._value_from_object(effect, "kind", "effect_type", "type")
+            if effect_kind in {"spawn_execution", "await", "fail"}:
+                lifecycle_effect_kinds.add(effect_kind)
+                lifecycle_owner = self._value_from_object(effect, "execution_ref", "execution_reference")
+                if lifecycle_owner is not None:
+                    owner_reference_id = self._value_from_object(lifecycle_owner, "reference_id", "id")
+                    if owner_reference_id not in (None, "", execution_ref.reference_id):
+                        raise ValueError("Lifecycle effect belongs to another execution reference")
+                    owner_state_id = self._value_from_object(lifecycle_owner, "state_id", "session_id")
+                    if owner_state_id not in (None, "", execution_ref.state_id):
+                        raise ValueError("Lifecycle effect belongs to another graph execution state")
+                    self._validate_execution_frame(
+                        self._value_from_object(lifecycle_owner, "frame", "frame_path"),
+                        execution_ref,
+                        "Lifecycle effect",
+                    )
+                    owner_frame_id = self._value_from_object(lifecycle_owner, "frame_id")
+                    if owner_frame_id not in (None, "", execution_ref.frame.frame_id):
+                        raise ValueError("Lifecycle effect belongs to another execution frame")
+                    owner_depth = self._value_from_object(lifecycle_owner, "workflow_call_depth", "call_depth", "depth")
+                    if owner_depth not in (None, execution_ref.frame.workflow_call_depth):
+                        raise ValueError("Lifecycle effect belongs to another workflow-call depth")
+                if effect_kind == "spawn_execution":
+                    child_execution_id = self._value_from_object(effect, "child_execution_id", "child_id")
+                    if not isinstance(child_execution_id, str) or not child_execution_id.strip():
+                        raise ValueError("Spawn effect requires a child execution identity")
+                    if child_execution_id in spawned_child_ids:
+                        raise ValueError("Spawn effect repeats a child execution identity")
+                    spawned_child_ids.add(child_execution_id)
+                    parent = self._value_from_object(effect, "parent")
+                    if parent is None or not self._same_execution_owner(parent, execution_ref):
+                        raise ValueError("Spawn effect parent is not owned by execution reference")
+                    self._validate_execution_frame(
+                        self._value_from_object(parent, "frame", "frame_path"),
+                        execution_ref,
+                        "Spawn effect parent",
+                    )
+                elif effect_kind == "await":
+                    dependency = self._value_from_object(effect, "dependency")
+                    child_execution_id = self._value_from_object(
+                        dependency,
+                        "execution_node_id",
+                        "exec_node_id",
+                        "node_id",
+                        "child_execution_id",
+                        "execution_id",
+                    )
+                    if not isinstance(child_execution_id, str) or not child_execution_id.strip():
+                        raise ValueError("Await effect requires a child execution identity")
+                    awaited_child_ids.append(child_execution_id)
+                elif effect_kind == "fail":
+                    message = self._value_from_object(effect, "message")
+                    if not isinstance(message, str) or not message.strip():
+                        raise ValueError("Fail effect requires an error message")
+
             token = self._value_from_object(effect, "token")
             token_port = self._value_from_object(token, "field", "port", "output", "output_name")
             preliminary_port = self._value_from_object(effect, "source_port", "output_port", "source_field", "port")
@@ -2272,7 +2387,8 @@ class GraphExecutionState(BaseModel):
             if owner is None or not self._same_execution_owner(owner, execution_ref):
                 raise ValueError("Execution effect is not owned by execution reference")
             if effect_kind is not None and (
-                not isinstance(effect_kind, str) or effect_kind not in {"emit", "close_stream", "continuation"}
+                not isinstance(effect_kind, str)
+                or effect_kind not in {"emit", "close_stream", "continuation", "spawn_execution", "await", "fail"}
             ):
                 raise ValueError(f"Unsupported execution effect kind: {effect_kind}")
 
@@ -2368,6 +2484,20 @@ class GraphExecutionState(BaseModel):
                     ):
                         raise ValueError("Execution effect ports do not match prepared graph edge")
 
+        if lifecycle_effect_kinds and not isinstance(node, CallSavedWorkflowInvocation):
+            raise ValueError("Lifecycle effects are only supported by saved-workflow calls")
+
+        if len(spawned_child_ids) > 1:
+            raise ValueError("Execution reference may spawn only one child dependency")
+        if len(awaited_child_ids) > 1:
+            raise ValueError("Execution reference may await only one child dependency")
+        if awaited_child_ids and spawned_child_ids and awaited_child_ids[0] not in spawned_child_ids:
+            raise ValueError("Await effect does not match spawned child execution")
+        if "fail" in lifecycle_effect_kinds and len(lifecycle_effect_kinds) != 1:
+            raise ValueError("Fail effect cannot share execution reference with another lifecycle effect")
+        if "await" in lifecycle_effect_kinds and "spawn_execution" not in lifecycle_effect_kinds:
+            raise ValueError("Await effect requires a spawn effect")
+
         if require_continuation and isinstance(node, ForInvocation) and "start" not in continuation_operations:
             raise ValueError("For execution must include a continuation effect")
         if require_continuation and isinstance(node, ForReturnInvocation) and "complete" not in continuation_operations:
@@ -2454,6 +2584,20 @@ class GraphExecutionState(BaseModel):
             )
         return tokens
 
+    @classmethod
+    def _lifecycle_effect_kinds(cls, effects: Iterable[Any]) -> set[str]:
+        return {
+            effect_kind
+            for effect in effects
+            if (effect_kind := cls._value_from_object(effect, "kind", "effect_type", "type"))
+            in {"spawn_execution", "await", "fail"}
+        }
+
+    @classmethod
+    def _is_pending_lifecycle_effects(cls, effects: Iterable[Any]) -> bool:
+        effect_kinds = cls._lifecycle_effect_kinds(effects)
+        return bool(effect_kinds & {"spawn_execution", "await"}) and "fail" not in effect_kinds
+
     def apply(
         self,
         execution_ref: ExecutionReference | str | Any,
@@ -2466,8 +2610,12 @@ class GraphExecutionState(BaseModel):
         """Apply output/effects through current scheduler while retaining old ``complete()`` behavior."""
 
         ref = self._validate_execution_ref(execution_ref)
-        if ref.exec_node_id in self.executed or ref.reference_id in self.execution_effects:
+        persisted_effects = self.execution_effects.get(ref.reference_id)
+        pending_resume = persisted_effects is not None and self._is_pending_lifecycle_effects(persisted_effects)
+        if ref.exec_node_id in self.executed or (persisted_effects is not None and not pending_resume):
             raise ValueError(f"Execution reference {ref.reference_id} has already been applied")
+        if pending_resume and self.is_waiting_on_workflow_call():
+            raise ValueError(f"Execution reference {ref.reference_id} is waiting on a child dependency")
         if isinstance(output, BaseInvocationOutput):
             result_effects = None
             result_output = None
@@ -2481,7 +2629,9 @@ class GraphExecutionState(BaseModel):
         output_value = self._validate_output_owner(ref, output)
         self._validate_for_continuation_output(ref, output_value, allow_return_state_override=_compatibility_completion)
         require_continuation = effects is not None or effect_count is not None
-        if effects is None:
+        if pending_resume and effects is None:
+            effect_values = list(persisted_effects)
+        elif effects is None:
             effect_values = []
             if effect_count is None and isinstance(
                 self.execution_graph.get_node(ref.exec_node_id), (ForInvocation, ForReturnInvocation)
@@ -2491,6 +2641,8 @@ class GraphExecutionState(BaseModel):
         else:
             batch_values = self._value_from_object(effects, "effects")
             effect_values = list(batch_values if batch_values is not None else effects)
+        if pending_resume and effects is not None and list(persisted_effects) != effect_values:
+            raise ValueError("Pending lifecycle effects do not match resumed execution")
         effect_values = self._validate_effects(
             ref,
             effect_values,
@@ -2505,6 +2657,18 @@ class GraphExecutionState(BaseModel):
         transaction = _ApplyTransaction()
         object.__setattr__(self, "_apply_transaction", transaction)
         try:
+            lifecycle_effect_kinds = self._lifecycle_effect_kinds(effect_values)
+            if lifecycle_effect_kinds and not pending_resume:
+                self._tx_set_mapping(self.execution_refs, ref.exec_node_id, ref)
+                self._tx_set_mapping(self.execution_effects, ref.reference_id, effect_values)
+                if "fail" in lifecycle_effect_kinds:
+                    failure = next(
+                        str(self._value_from_object(effect, "message"))
+                        for effect in effect_values
+                        if self._value_from_object(effect, "kind", "effect_type", "type") == "fail"
+                    )
+                    self._tx_set_mapping(self.errors, ref.exec_node_id, failure)
+                return []
             # Capture and record the continuation before scheduler completion can clear the prepared For
             # collection or otherwise mutate the node used to validate its durable payload.
             self._record_continuation_effects(ref, effect_values, allow_return_state_override=_compatibility_completion)
@@ -2987,6 +3151,16 @@ class GraphExecutionState(BaseModel):
         for exec_node_id in self.prepared_source_mapping:
             self._get_iteration_path(exec_node_id)
             existing = self.execution_refs.get(exec_node_id)
+            expected = self._expected_execution_ref(exec_node_id)
+            if existing is not None:
+                if (
+                    existing.reference_id not in ("", expected.reference_id)
+                    or existing.state_id not in ("", expected.state_id)
+                    or existing.exec_node_id not in ("", expected.exec_node_id)
+                    or existing.source_node_id not in ("", expected.source_node_id)
+                    or existing.frame != expected.frame
+                ):
+                    raise ValueError("Persisted execution reference does not belong to this execution frame")
             effect_count = existing.effect_count if existing is not None else None
             self.execution_refs[exec_node_id] = self._expected_execution_ref(exec_node_id, effect_count=effect_count)
 
@@ -3047,10 +3221,16 @@ class GraphExecutionState(BaseModel):
                 execution_ref = references_by_id.get(reference_id)
                 if execution_ref is None:
                     raise ValueError("Execution effects contain an unknown execution reference")
-                if execution_ref.exec_node_id not in self.results:
+                lifecycle_pending = self._is_pending_lifecycle_effects(effects)
+                lifecycle_failed = "fail" in self._lifecycle_effect_kinds(effects)
+                if execution_ref.exec_node_id not in self.results and not lifecycle_pending and not lifecycle_failed:
                     raise ValueError("Execution effects belong to a pending execution node")
-                if execution_ref.exec_node_id not in self.executed:
+                if execution_ref.exec_node_id not in self.executed and not lifecycle_pending and not lifecycle_failed:
                     raise ValueError("Execution effects require an executed marker")
+                if lifecycle_pending:
+                    waiting_frame = self.waiting_workflow_call
+                    if waiting_frame is not None and waiting_frame.prepared_call_node_id != execution_ref.exec_node_id:
+                        raise ValueError("Pending lifecycle effects belong to another workflow call")
                 node = self.execution_graph.get_node(execution_ref.exec_node_id)
                 effects = self._validate_effects(
                     execution_ref,
@@ -3134,6 +3314,12 @@ class GraphExecutionState(BaseModel):
             self._execution_effects_persisted = __context["execution_effects_persisted"]
             self._legacy_execution_snapshot = __context.get("legacy_execution_snapshot", False)
             self._legacy_snapshot_loaded = self._legacy_execution_snapshot
+        self._generic_child_dependencies = {
+            dependency_id: ChildDependencyRecord.model_validate(dependency.model_dump(mode="python"))
+            for dependency_id, dependency in self.execution_child_dependencies.items()
+        }
+        self.execution_child_dependencies.clear()
+        self.execution_child_dependencies.update(self._generic_child_dependencies)
         self._rehydrate_execution_refs()
         self._synthesize_legacy_execution_effects()
         self._rehydrate_runtime_state()
@@ -3152,7 +3338,7 @@ class GraphExecutionState(BaseModel):
         # TODO: enable multiple nodes to execute simultaneously by tracking currently executing nodes
         #       possibly with a timeout?
 
-        if self.is_waiting_on_workflow_call():
+        if self.is_waiting_on_workflow_call() or self._has_pending_lifecycle_execution():
             return None
         # Failed graphs stop scheduling immediately; is_complete() treats the error as terminal as well.
         if self.has_error():
@@ -3230,7 +3416,7 @@ class GraphExecutionState(BaseModel):
 
     def is_complete(self) -> bool:
         """Returns true if the graph is complete"""
-        if self.is_waiting_on_workflow_call():
+        if self.is_waiting_on_workflow_call() or self._has_pending_lifecycle_execution():
             return False
         return self._is_complete_with_completed_sources()
 
@@ -3275,6 +3461,16 @@ class GraphExecutionState(BaseModel):
 
     def is_waiting_on_workflow_call(self) -> bool:
         return self.waiting_workflow_call is not None
+
+    def _has_pending_lifecycle_execution(self) -> bool:
+        references_by_id = {reference.reference_id: reference for reference in self.execution_refs.values()}
+        return any(
+            self._is_pending_lifecycle_effects(effects)
+            and (reference := references_by_id.get(reference_id)) is not None
+            and reference.exec_node_id not in self.executed
+            for reference_id, effects in self.execution_effects.items()
+            if effects
+        )
 
     def build_workflow_call_frame(self, exec_node_id: str, workflow_id: str) -> WorkflowCallFrame:
         if exec_node_id not in self.execution_graph.nodes:
@@ -3372,6 +3568,9 @@ class GraphExecutionState(BaseModel):
                 and set(output_values.keys()) != set(next(iter(execution.child_outputs.values())).keys())
             ):
                 raise ValueError("Batched child workflows returned different workflow return keys.")
+            dependency = self._register_generic_child_dependency()
+            if dependency is not None:
+                dependency.complete_child(str(child_item_id), output_values)
             execution.completed_child_item_ids.append(child_item_id)
             execution.child_outputs[child_item_id] = dict(output_values)
 

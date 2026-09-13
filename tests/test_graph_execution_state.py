@@ -317,7 +317,7 @@ def test_graph_state_apply_rejects_invalid_input_before_mutation():
 
 @pytest.mark.parametrize(
     "effect_kind",
-    ["set_value", "add_edge", "remove_edge", "spawn_execution", "await", "fail", "unknown"],
+    ["set_value", "add_edge", "remove_edge", "unknown"],
 )
 def test_graph_state_apply_rejects_unsupported_effect_kinds(effect_kind: str):
     graph = Graph()
@@ -337,11 +337,7 @@ def test_graph_state_apply_rejects_unsupported_effect_kinds(effect_kind: str):
     assert not state.execution_effects
 
 
-@pytest.mark.parametrize(
-    "effect_kind, owner_field",
-    [("spawn_execution", "parent"), ("await", "dependency"), ("fail", "owner")],
-)
-def test_graph_state_apply_rejects_owned_unsupported_lifecycle_effects(effect_kind: str, owner_field: str):
+def test_graph_state_rejects_malformed_lifecycle_effects_for_non_call_nodes():
     graph = Graph()
     graph.add_node(AddInvocation(id="add", a=1, b=2))
     state = GraphExecutionState(graph=graph)
@@ -350,12 +346,32 @@ def test_graph_state_apply_rejects_owned_unsupported_lifecycle_effects(effect_ki
     output = node.invoke(Mock(InvocationContext))
     ref = state.get_execution_ref(node.id, effect_count=1)
 
-    with pytest.raises(ValueError, match=f"Unsupported execution effect kind: {effect_kind}"):
-        state.apply(
-            ref,
-            output,
-            effects=[{"kind": effect_kind, owner_field: {"execution_node_id": node.id}}],
-        )
+    owner = {
+        "execution_node_id": node.id,
+        "state_id": ref.state_id,
+        "frame_path": ref.frame.iteration_path,
+        "frame_id": ref.frame.frame_id,
+        "workflow_call_depth": ref.frame.workflow_call_depth,
+    }
+    malformed_effects = [
+        {
+            "kind": "spawn_execution",
+            "execution_ref": owner,
+            "parent": owner,
+            "graph": {},
+            "inputs": {},
+            "child_execution_id": "child",
+        },
+        {
+            "kind": "await",
+            "execution_ref": owner,
+            "dependency": {"execution_node_id": "child"},
+        },
+        {"kind": "fail", "execution_ref": owner, "message": "failed"},
+    ]
+    for effect in malformed_effects:
+        with pytest.raises(ValueError, match="Lifecycle effects are only supported"):
+            state.apply(ref, output, effects=[effect])
 
     assert not state.executed
     assert not state.results
@@ -3470,6 +3486,43 @@ def test_graph_record_waiting_workflow_call_child_completion_preserves_enqueue_o
     assert generic_dependency.status == "completed"
     assert generic_dependency.completions["101"].outputs == {"sum": 3}
     assert generic_dependency.completions["102"].outputs == {"sum": 7}
+
+
+def _pending_generic_child_state() -> GraphExecutionState:
+    parent = GraphExecutionState(graph=Graph())
+    parent.execution_graph.add_node(AddInvocation(id="prepared-parent", a=1, b=2))
+    parent.prepared_source_mapping["prepared-parent"] = "source-parent"
+    frame = parent.build_workflow_call_frame(exec_node_id="prepared-parent", workflow_id="workflow-a")
+    parent.begin_waiting_on_workflow_call(frame)
+    parent.attach_waiting_workflow_call_child_sessions([GraphExecutionState(graph=Graph()) for _ in range(3)])
+    parent.set_waiting_workflow_call_child_item_ids([101, 102, 103])
+    return parent
+
+
+def test_graph_generic_child_dependency_completes_in_enqueue_order() -> None:
+    parent = _pending_generic_child_state()
+
+    parent.record_generic_child_completion(102, {"sum": 7})
+    parent.record_generic_child_completion(101, {"sum": 3})
+    update = parent.record_generic_child_completion(103, {"sum": 11})
+
+    dependency = parent._generic_child_dependencies[parent.waiting_workflow_call_execution.id]  # type: ignore[union-attr]
+    assert update.terminal is True
+    assert dependency.status == "completed"
+    assert dependency.completed_child_execution_ids == ["101", "102", "103"]
+    assert dependency.aggregated_outputs == {"sum": [3, 7, 11]}
+
+
+def test_graph_generic_child_dependency_ignores_late_duplicate_completion() -> None:
+    parent = _pending_generic_child_state()
+    parent.record_generic_child_completion(101, {"sum": 3})
+    parent.record_generic_child_completion(102, {"sum": 7})
+    parent.record_generic_child_completion(103, {"sum": 11})
+
+    update = parent.record_generic_child_completion(101, {"sum": 3})
+    assert update is not None
+    assert update.changed is False
+    assert update.terminal is True
 
 
 def test_graph_end_waiting_on_workflow_call_records_lifecycle_history():
