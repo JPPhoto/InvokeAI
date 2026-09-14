@@ -29,13 +29,13 @@ from invokeai.app.invocations.fields import (
 from invokeai.app.invocations.model import VAEField
 from invokeai.app.invocations.primitives import ImageOutput
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.backend.krea2.vae_compat import (
+from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.oom import is_oom_error
+from invokeai.backend.util.qwen_image_vae import (
     QwenImageCompatibleVAE,
     as_qwen_image_vae,
     patch_qwen_image_vae_tiling,
 )
-from invokeai.backend.util.devices import TorchDevice
-from invokeai.backend.util.oom import is_oom_error
 from invokeai.backend.util.vae_decode_diagnostics import (
     allocator_state_summary,
     force_real_empty_cache,

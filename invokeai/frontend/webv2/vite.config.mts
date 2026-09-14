@@ -126,8 +126,10 @@ const GALLERY_STATE_MODULES = [
 ] as const;
 
 // The widget hosts the editor mounts once at boot, in one chunk instead of
-// one request per host.
+// one request per host. Small helpers shared by lazy widget chunks ride along:
+// every editor route loads this chunk, Launchpad never does.
 const WIDGET_HOST_MODULES = [
+  '/platform/react/focusIfUnclaimed.ts',
   '/features/queue/ui/QueueDataRuntime.tsx',
   '/features/workflow/ui/WorkflowWidgetChrome.tsx',
   '/workbench/widgets/image-map/ImageMapDataRuntime.tsx',

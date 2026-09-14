@@ -25,10 +25,10 @@ from invokeai.app.invocations.fields import (
 from invokeai.app.invocations.model import VAEField
 from invokeai.app.invocations.primitives import LatentsOutput
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.backend.krea2.vae_compat import as_qwen_image_vae
 from invokeai.backend.model_manager.load.load_base import LoadedModel
 from invokeai.backend.stable_diffusion.diffusers_pipeline import image_resized_to_grid_as_tensor
 from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.qwen_image_vae import as_qwen_image_vae
 from invokeai.backend.util.vae_working_memory import (
     estimate_vae_working_memory_anima,
 )
