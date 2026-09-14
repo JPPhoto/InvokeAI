@@ -25,8 +25,7 @@ from pydantic.fields import Field
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import core_schema
 
-# Importing * is bad karma but needed here for node detection
-from invokeai.app.invocations import *  # noqa: F401 F403
+from invokeai.app.invocations import load_all_modules
 from invokeai.app.invocations.baseinvocation import (
     BaseInvocation,
     BaseInvocationOutput,
@@ -48,6 +47,8 @@ from invokeai.app.invocations.loops import (
 from invokeai.app.services.shared.graph_models import Edge, EdgeConnection
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.misc import uuid_string
+
+load_all_modules()
 
 if TYPE_CHECKING:
     import networkx as nx

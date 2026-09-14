@@ -36,8 +36,6 @@ from pydantic.fields import Field
 from pydantic.json_schema import JsonSchemaValue, SkipJsonSchema  # noqa: F401
 from pydantic_core import PydanticSerializationError, core_schema  # noqa: F401
 
-# Importing * is bad karma but needed here for node detection
-from invokeai.app.invocations import *  # noqa: F401 F403
 from invokeai.app.invocations.baseinvocation import (
     BaseInvocation,
     BaseInvocationOutput,
