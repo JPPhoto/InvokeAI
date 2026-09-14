@@ -5,9 +5,7 @@ from pydantic import ValidationError
 
 from invokeai.app.services.shared.execution_engine.child import (
     ChildCompletion,
-    ChildDependencyCoordinator,
     ChildExecutionCapability,
-    ChildExecutionRecord,
     ChildTerminalStatus,
 )
 
@@ -150,39 +148,6 @@ def test_failure_cancels_siblings_and_notifies_parent_once() -> None:
     duplicate = dependency.fail_child("second", "child failed")
     assert duplicate.changed is False
     assert duplicate.terminal is True
-
-
-def test_queue_coordinator_enqueues_and_resumes_abstract_parent() -> None:
-    class Queue:
-        def __init__(self) -> None:
-            self.enqueued: list[str] = []
-            self.resumed: list[dict[str, list[object]]] = []
-
-        def enqueue_child(self, child: ChildExecutionRecord) -> None:
-            self.enqueued.append(child.child_execution_id)
-
-        def cancel_child(self, child_execution_id: str, reason: str) -> None:
-            del child_execution_id, reason
-
-        def resume_parent(self, dependency: object, outputs: dict[str, list[object]]) -> None:
-            del dependency
-            self.resumed.append(outputs)
-
-        def fail_parent(self, dependency: object, message: str) -> None:
-            del dependency, message
-
-        def cancel_parent(self, dependency: object, message: str) -> None:
-            del dependency, message
-
-    queue = Queue()
-    coordinator = ChildDependencyCoordinator(queue)
-    dependency = coordinator.spawn(_capability(), ["first", "second"], dependency_id="dependency")
-    coordinator.complete(dependency, "second", {"value": "second"})
-    update = coordinator.complete(dependency, "first", {"value": "first"})
-
-    assert queue.enqueued == ["first", "second"]
-    assert update.status == "completed"
-    assert queue.resumed == [{"value": ["first", "second"]}]
 
 
 def test_child_records_are_json_safe_and_round_trip() -> None:

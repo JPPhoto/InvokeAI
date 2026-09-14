@@ -2,13 +2,10 @@
 
 from invokeai.app.services.shared.execution_engine.child import (
     ChildCompletion,
-    ChildDependencyCoordinator,
     ChildDependencyRecord,
     ChildDependencyUpdate,
     ChildExecutionCapability,
     ChildExecutionRecord,
-    ChildQueueCallbacks,
-    ChildQueueProtocol,
     ChildState,
     ChildTerminalStatus,
 )
@@ -35,13 +32,10 @@ from invokeai.app.services.shared.execution_engine.scheduler import (
 
 __all__ = [
     "ChildCompletion",
-    "ChildDependencyCoordinator",
     "ChildDependencyRecord",
     "ChildDependencyUpdate",
     "ChildExecutionCapability",
     "ChildExecutionRecord",
-    "ChildQueueCallbacks",
-    "ChildQueueProtocol",
     "ChildState",
     "ChildTerminalStatus",
     "ActivationGate",

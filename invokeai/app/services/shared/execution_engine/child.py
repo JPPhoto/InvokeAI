@@ -1,16 +1,11 @@
-"""Generic, queue-independent parent-child execution primitives.
-
-The records in this module are the persistence boundary for a future generic
-child scheduler. They deliberately contain no queue implementation or graph
-runtime references. Queue services integrate through ``ChildQueueCallbacks``.
-"""
+"""Parent-child execution records used by workflow-call runtime state."""
 
 from __future__ import annotations
 
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_validator, model_validator
@@ -759,111 +754,3 @@ class ChildDependencyRecord(_ChildModel):
         if not isinstance(other, ChildDependencyRecord):
             return NotImplemented
         return self.model_dump(mode="python") == other.model_dump(mode="python")
-
-
-class ChildQueueCallbacks(Protocol):
-    """Minimal queue boundary used by ``ChildDependencyCoordinator``."""
-
-    def enqueue_child(self, child: ChildExecutionRecord) -> None: ...
-
-    def cancel_child(self, child_execution_id: str, reason: str) -> None: ...
-
-    def resume_parent(self, dependency: ChildDependencyRecord, outputs: dict[str, list[Any]]) -> None: ...
-
-    def fail_parent(self, dependency: ChildDependencyRecord, message: str) -> None: ...
-
-    def cancel_parent(self, dependency: ChildDependencyRecord, message: str) -> None: ...
-
-
-ChildQueueProtocol = ChildQueueCallbacks
-
-
-class ChildDependencyCoordinator:
-    """Apply child lifecycle events and notify an abstract queue boundary."""
-
-    def __init__(self, queue: ChildQueueCallbacks) -> None:
-        self._queue = queue
-
-    def spawn(
-        self,
-        capability: ChildExecutionCapability,
-        child_execution_ids: Sequence[str],
-        **kwargs: Any,
-    ) -> ChildDependencyRecord:
-        record = capability.create_dependency(child_execution_ids, **kwargs)
-        enqueued: list[str] = []
-        try:
-            for child in record.children:
-                self._queue.enqueue_child(child)
-                enqueued.append(child.child_execution_id)
-        except Exception:
-            cancel = getattr(self._queue, "cancel_child", None)
-            if cancel is not None:
-                for child_id in enqueued:
-                    cancel(child_id, "child dependency enqueue failed")
-            raise
-        return record
-
-    def complete(
-        self,
-        dependency: ChildDependencyRecord,
-        child_execution_id: str,
-        outputs: dict[str, Any] | None = None,
-        *,
-        parent_execution_id: str | None = None,
-        parent_frame: Sequence[int | str] | None = None,
-        parent_reference_id: str | None = None,
-        child_frame: Sequence[int | str] | None = None,
-    ) -> ChildDependencyUpdate:
-        update = dependency.complete_child(
-            child_execution_id,
-            outputs,
-            parent_execution_id=parent_execution_id,
-            parent_frame=parent_frame,
-            parent_reference_id=parent_reference_id,
-            child_frame=child_frame,
-        )
-        self._notify(dependency, update)
-        return update
-
-    def fail(
-        self,
-        dependency: ChildDependencyRecord,
-        child_execution_id: str,
-        message: str,
-        **identity: Any,
-    ) -> ChildDependencyUpdate:
-        update = dependency.fail_child(child_execution_id, message, **identity)
-        self._notify(dependency, update)
-        return update
-
-    def cancel(
-        self,
-        dependency: ChildDependencyRecord,
-        child_execution_id: str,
-        message: str = "child canceled",
-        **identity: Any,
-    ) -> ChildDependencyUpdate:
-        update = dependency.cancel_child(child_execution_id, message, **identity)
-        self._notify(dependency, update)
-        return update
-
-    def _notify(self, dependency: ChildDependencyRecord, update: ChildDependencyUpdate) -> None:
-        if not update.changed or not update.terminal:
-            return
-        for child_id in update.cancel_child_ids or []:
-            cancel = getattr(self._queue, "cancel_child", None)
-            if cancel is not None:
-                cancel(child_id, update.error_message or "sibling terminated")
-        if update.status == "completed":
-            resume = getattr(self._queue, "resume_parent", None)
-            if resume is not None:
-                resume(dependency, update.aggregated_outputs)
-        elif update.parent_action == "failed":
-            fail = getattr(self._queue, "fail_parent", None)
-            if fail is not None:
-                fail(dependency, update.error_message or "child failed")
-        elif update.parent_action == "canceled":
-            cancel_parent = getattr(self._queue, "cancel_parent", None)
-            if cancel_parent is not None:
-                cancel_parent(dependency, update.error_message or "child canceled")
