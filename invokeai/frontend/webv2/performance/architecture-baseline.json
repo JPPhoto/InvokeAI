@@ -2,15 +2,15 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 859420,
+        "brotliBytes": 859466,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 858588,
+        "gzipBytes": 858619,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2011057,
+        "initialRawBytes": 2011122,
         "largestAssetRawBytes": 747218,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 74568,
+        "ownedRawBytes": 74570,
         "requestCount": 44,
         "scriptRequestCount": 28,
         "sourceOwners": [
@@ -310,34 +310,21 @@
           "source:src/workbench/settings/store.ts"
         ]
       },
-      "limits": {
-        "brotliBytes": 868015,
-        "cssRawBytes": 2181,
-        "fontRawBytes": 221675,
-        "gzipBytes": 867174,
-        "imageRawBytes": 157940,
-        "initialRawBytes": 2031168,
-        "largestAssetRawBytes": 754691,
-        "otherAssetRawBytes": 0,
-        "ownedRawBytes": 74568,
-        "requestCount": 44,
-        "scriptRequestCount": 28
-      },
       "owner": "app",
       "remediationTicket": "set-performance-budgets",
       "source": "index.html"
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1183830,
+        "brotliBytes": 1185385,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1177930,
+        "gzipBytes": 1179399,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2992407,
+        "initialRawBytes": 2996432,
         "largestAssetRawBytes": 747218,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 131242,
+        "ownedRawBytes": 133035,
         "requestCount": 109,
         "scriptRequestCount": 93,
         "sourceOwners": [
@@ -463,6 +450,7 @@
           "source:src/app/ModelsUiAdapter.tsx",
           "source:src/app/QueueRuntimeAdapter.tsx",
           "source:src/app/QueueUiAdapter.tsx",
+          "source:src/app/RecallParametersRuntime.tsx",
           "source:src/app/SocketHubRuntime.tsx",
           "source:src/app/ThemeController.tsx",
           "source:src/app/UpscaleUiAdapter.tsx",
@@ -830,6 +818,7 @@
           "source:src/workbench/hotkeys/resolve.ts",
           "source:src/workbench/hotkeys/targetWidget.ts",
           "source:src/workbench/iconResolver.tsx",
+          "source:src/workbench/image-actions/recallParametersBridge.ts",
           "source:src/workbench/invocation.ts",
           "source:src/workbench/invocationSubmit.ts",
           "source:src/workbench/launchpad/HelpMenu.tsx",
@@ -1015,6 +1004,7 @@
           "source:src/workbench/widgets/preview/manifest.ts",
           "source:src/workbench/widgets/preview/previewSettings.ts",
           "source:src/workbench/widgets/preview/settingsContribution.ts",
+          "source:src/workbench/widgets/preview/spanPlaybackRequest.ts",
           "source:src/workbench/widgets/project/manifest.ts",
           "source:src/workbench/widgets/queue-status/manifest.ts",
           "source:src/workbench/widgets/queue/manifest.ts",
@@ -1026,25 +1016,12 @@
           "source:src/workbench/workbenchStore.ts"
         ]
       },
-      "limits": {
-        "brotliBytes": 1195669,
-        "cssRawBytes": 2181,
-        "fontRawBytes": 221675,
-        "gzipBytes": 1189710,
-        "imageRawBytes": 157940,
-        "initialRawBytes": 3022332,
-        "largestAssetRawBytes": 754691,
-        "otherAssetRawBytes": 0,
-        "ownedRawBytes": 131242,
-        "requestCount": 109,
-        "scriptRequestCount": 93
-      },
       "owner": "workbench",
       "remediationTicket": "deepen-widget-registry-loading",
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-11",
+  "capturedAt": "2026-09-14",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",

@@ -1,5 +1,6 @@
-/* oxlint-disable react-perf/jsx-no-new-function-as-prop */
 import { ChakraProvider } from '@chakra-ui/react';
+/* oxlint-disable react-perf/jsx-no-new-function-as-prop */
+import { settleAnimations } from '@platform/browser/settleAnimations.testing';
 import { accountLifecycle, captureAccountScope } from '@platform/state/accountLifecycle';
 import { system } from '@theme/system';
 import { createInstance } from 'i18next';
@@ -76,6 +77,7 @@ it('defaults to references, includes files only when selected, and restores focu
   await act(() => trigger.click());
   await act(() => page.getByText('Include font files', { exact: true }).click());
   await expect.element(page.getByText(/permission to redistribute/)).toBeVisible();
+  await settleAnimations();
   await page.screenshot({ path: '../../../../artifacts/fonts/export-dialog.png' });
   await act(() => page.getByRole('button', { name: 'Export project', exact: true }).click());
   expect(results).toEqual([{ includeFonts: false }, { includeFonts: true }]);

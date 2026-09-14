@@ -1,3 +1,4 @@
+import type { GalleryVideoItem } from '@features/gallery';
 import type { VideoWidgetValues } from '@features/video/core/types';
 import type { ReactNode } from 'react';
 
@@ -15,17 +16,54 @@ export interface VideoUiAdapter {
    */
   getUploadBoardId(): string;
   patchValues(values: Partial<VideoWidgetValues>, origin?: 'user' | 'system'): void;
+  /**
+   * Show `item` in the Preview widget and loop the given window of it — how the
+   * panel's play buttons let a trim be judged before it is generated against.
+   * Selecting the item is part of the gesture: Preview shows the gallery
+   * selection, and the panel has no other way to put a clip in front of it.
+   *
+   * Returns the request's token, which `videoSpanPlayback` reports under once
+   * the player has the loop running; `null` when Preview could not be raised
+   * and nothing was asked of it.
+   */
+  playVideoSpanInPreview(span: { endSeconds: number; item: GalleryVideoItem; startSeconds: number }): number | null;
   projectId: string;
   rawValues: Record<string, unknown>;
   reportError(message: string): void;
   showPromptSyntaxHighlighting: boolean;
   touchGalleryImages(): void;
+  /** What Preview is doing with the last span it was asked to play, for the button that asked. */
+  videoSpanPlayback: VideoSpanPlaybackPort;
+}
+
+/**
+ * The player's side of a span request: reported under the request's token, so a button
+ * can tell its own loop from a sibling card's, and gone (`null`) once nothing is armed —
+ * the user scrubbed out of the window, a newer request took over, or the player left the
+ * screen. `isPlaying` tracks the element itself, so a native pause shows in the panel
+ * too; `pause` stops the element and leaves the loop armed, so a native play resumes the
+ * selection rather than the whole clip.
+ */
+export interface VideoSpanPlaybackState {
+  isPlaying: boolean;
+  pause(): void;
+  token: number;
+}
+
+export interface VideoSpanPlaybackPort {
+  getState(): VideoSpanPlaybackState | null;
+  subscribe(listener: () => void): () => void;
 }
 
 /** The adapter's callbacks, which are stable for the lifetime of a project. */
 export type VideoUiActions = Pick<
   VideoUiAdapter,
-  'getUploadBoardId' | 'patchValues' | 'reportError' | 'touchGalleryImages'
+  | 'getUploadBoardId'
+  | 'patchValues'
+  | 'playVideoSpanInPreview'
+  | 'reportError'
+  | 'touchGalleryImages'
+  | 'videoSpanPlayback'
 >;
 
 const VideoUiContext = createContext<VideoUiAdapter | null>(null);
@@ -38,10 +76,18 @@ const VideoUiContext = createContext<VideoUiAdapter | null>(null);
 const VideoUiActionsContext = createContext<VideoUiActions | null>(null);
 
 export const VideoUiProvider = ({ adapter, children }: { adapter: VideoUiAdapter; children: ReactNode }) => {
-  const { getUploadBoardId, patchValues, reportError, touchGalleryImages } = adapter;
+  const { getUploadBoardId, patchValues, playVideoSpanInPreview, reportError, touchGalleryImages, videoSpanPlayback } =
+    adapter;
   const actions = useMemo<VideoUiActions>(
-    () => ({ getUploadBoardId, patchValues, reportError, touchGalleryImages }),
-    [getUploadBoardId, patchValues, reportError, touchGalleryImages]
+    () => ({
+      getUploadBoardId,
+      patchValues,
+      playVideoSpanInPreview,
+      reportError,
+      touchGalleryImages,
+      videoSpanPlayback,
+    }),
+    [getUploadBoardId, patchValues, playVideoSpanInPreview, reportError, touchGalleryImages, videoSpanPlayback]
   );
 
   return (

@@ -16,6 +16,14 @@ import {
   type PreviewVideoFrameController,
   type PreviewVideoFrameCopyResult,
 } from './PreviewFrame';
+import {
+  clearVideoSpanPlaybackState,
+  consumeVideoSpanPlaybackRequest,
+  getVideoSpanPlaybackRequest,
+  getVideoSpanPlaybackState,
+  requestVideoSpanPlayback,
+  subscribeVideoSpanPlaybackState,
+} from './spanPlaybackRequest';
 
 const identityMocks = vi.hoisted(() => ({
   accountEpoch: 7,
@@ -131,6 +139,8 @@ beforeEach(() => {
 afterEach(async () => {
   await interact(() => root?.unmount());
   vi.restoreAllMocks();
+  vi.useRealTimers();
+  clearSpanRequest();
   host?.remove();
   host = null;
   root = null;
@@ -188,6 +198,395 @@ describe('PreviewFrame native video arm', () => {
     await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
 
     expect(position.get()).toBe(0);
+  });
+
+  it('plays and loops the span a request published before the player mounted asked for', async () => {
+    requestVideoSpanPlayback({ endSeconds: 4, itemKey: videoSource.itemKey, startSeconds: 2 });
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video);
+
+    // Published before the mount, because the Video panel selects the clip and raises
+    // Preview first: the player has to read the standing request on its first pass.
+    await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
+
+    expect(playback.getTime()).toBe(2);
+    expect(playback.play).toHaveBeenCalledTimes(1);
+    // Retired on arrival, so the next player to show this clip does not replay it.
+    expect(getVideoSpanPlaybackRequest()).toBeNull();
+
+    await interact(() => {
+      playback.setTime(4.02);
+      video.dispatchEvent(new Event('timeupdate'));
+    });
+
+    expect(playback.getTime()).toBe(2);
+  });
+
+  it('applies a span published while the clip is already on screen', async () => {
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video);
+
+    await interact(() => requestVideoSpanPlayback({ endSeconds: 7, itemKey: videoSource.itemKey, startSeconds: 5 }));
+
+    expect(playback.getTime()).toBe(5);
+    expect(playback.play).toHaveBeenCalledTimes(1);
+  });
+
+  it('clamps the span to the clip and ignores a request aimed at another item', async () => {
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video, { duration: 6 });
+
+    await interact(() => requestVideoSpanPlayback({ endSeconds: 9, itemKey: 'video:other.mp4', startSeconds: 8 }));
+
+    expect(playback.play).not.toHaveBeenCalled();
+    // Left standing: it belongs to whichever player shows that clip, not to this one.
+    expect(getVideoSpanPlaybackRequest()?.itemKey).toBe('video:other.mp4');
+    clearSpanRequest();
+
+    // A panel frame count is an estimate (duration x fps), so a window can run past the
+    // clip's real end; the loop has to wrap there rather than at the requested end.
+    await interact(() => requestVideoSpanPlayback({ endSeconds: 9, itemKey: videoSource.itemKey, startSeconds: 5 }));
+    expect(playback.getTime()).toBe(5);
+
+    await interact(() => {
+      playback.setTime(6);
+      video.dispatchEvent(new Event('timeupdate'));
+    });
+
+    expect(playback.getTime()).toBe(5);
+  });
+
+  it('drops a request the user has long since moved on from', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['Date'] });
+    requestVideoSpanPlayback({ endSeconds: 4, itemKey: videoSource.itemKey, startSeconds: 2 });
+    vi.setSystemTime(Date.now() + 60_000);
+
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video);
+
+    await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
+
+    // Preview may have been closed the whole time. Starting audio now would come out of
+    // nowhere — but the request still has to be retired, not left to fire later.
+    expect(playback.play).not.toHaveBeenCalled();
+    expect(getVideoSpanPlaybackRequest()).toBeNull();
+    expect(playback.getTime()).toBeLessThan(0.001);
+  });
+
+  it('holds a span that arrives before metadata and prefers it to the first-frame nudge', async () => {
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video, { readyState: HTMLMediaElement.HAVE_NOTHING });
+
+    await interact(() => requestVideoSpanPlayback({ endSeconds: 4, itemKey: videoSource.itemKey, startSeconds: 2 }));
+
+    // Nothing to clamp against and the element drops the seek outright before metadata.
+    expect(playback.getTime()).toBe(0);
+    expect(playback.play).not.toHaveBeenCalled();
+
+    playback.setReadyState(HTMLMediaElement.HAVE_METADATA);
+    await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
+
+    expect(playback.getTime()).toBe(2);
+    expect(playback.play).toHaveBeenCalledTimes(1);
+  });
+
+  it('wraps on its own animation frame, without waiting for a timeupdate', async () => {
+    requestVideoSpanPlayback({ endSeconds: 4, itemKey: videoSource.itemKey, startSeconds: 2 });
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video);
+
+    await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
+    expect(playback.getTime()).toBe(2);
+
+    // `timeupdate` fires about four times a second and would overrun this window by an
+    // eighth of it; the frame loop is what keeps the wrap tight, and nothing else here
+    // exercises it.
+    await interact(() => playback.setTime(4.01));
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    });
+
+    expect(playback.getTime()).toBe(2);
+  });
+
+  it('keeps looping across a pause and a resume', async () => {
+    requestVideoSpanPlayback({ endSeconds: 4, itemKey: videoSource.itemKey, startSeconds: 2 });
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video);
+
+    await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
+    await interact(() => playback.pause());
+    // Pausing to look at a frame is not handing the playhead back — only scrubbing is.
+    await interact(() => void video.play());
+    await interact(() => {
+      playback.setTime(4.02);
+      video.dispatchEvent(new Event('timeupdate'));
+    });
+
+    expect(playback.getTime()).toBe(2);
+  });
+
+  it('wraps a window that ends on the clip itself', async () => {
+    requestVideoSpanPlayback({ endSeconds: 10, itemKey: videoSource.itemKey, startSeconds: 8 });
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video, { duration: 10 });
+
+    await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
+    expect(playback.getTime()).toBe(8);
+
+    // The playhead reaches this window's end only as the media ends, where `pause` has
+    // already stopped the watch — without an `ended` handler whether it wrapped was down
+    // to which event the browser delivered first.
+    const token = getVideoSpanPlaybackState()?.token;
+    const reports: boolean[] = [];
+    const unsubscribe = subscribeVideoSpanPlaybackState(() => {
+      reports.push(getVideoSpanPlaybackState()?.isPlaying ?? false);
+    });
+
+    playback.playToEnd();
+
+    expect(playback.getTime()).toBe(8);
+    expect(playback.play).toHaveBeenCalledTimes(2);
+    // The wrap is reported as running again in the same task as the `pause` that preceded
+    // `ended`, not a paint later when the `play` event lands: the panel's pause icon must
+    // not blink on every loop of a window that ends on the clip's last frame.
+    expect(reports).toEqual([false, true]);
+
+    await interact(() => undefined);
+
+    expect(reports).toEqual([false, true]);
+    expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: true, token });
+    unsubscribe();
+  });
+
+  it('keeps the window scoped across a protected-media reload', async () => {
+    requestVideoSpanPlayback({ endSeconds: 4, itemKey: videoSource.itemKey, startSeconds: 2 });
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video);
+    vi.spyOn(video, 'load').mockImplementation(() => {
+      playback.reload();
+      video.dispatchEvent(new Event('emptied'));
+      video.dispatchEvent(new Event('loadedmetadata'));
+    });
+
+    await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
+    expect(playback.getTime()).toBe(2);
+
+    // A cookie refresh mid-loop rewinds the clip and refires `loadedmetadata`. The
+    // first-frame poster nudge used to run there, and its unmarked seek read as the user
+    // taking the playhead back — the loop was abandoned and the clip sat on frame 0.
+    await interact(() => video.dispatchEvent(new Event('error')));
+    await interact(() => undefined);
+
+    // Back inside the window, and still paused, exactly as `load()` left it — and reported
+    // so: `load()` flips the element to paused without a `pause` event, so the panel's
+    // button would otherwise go on offering a stop that pauses a paused element (a no-op).
+    expect(playback.getTime()).toBe(2);
+    expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: false });
+
+    await interact(() => void video.play());
+    await interact(() => {
+      playback.setTime(4.02);
+      video.dispatchEvent(new Event('timeupdate'));
+    });
+
+    expect(playback.getTime()).toBe(2);
+  });
+
+  it('does not replay a span parked behind a failed load once the gesture is stale', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['Date'] });
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video, { readyState: HTMLMediaElement.HAVE_NOTHING });
+
+    await interact(() => requestVideoSpanPlayback({ endSeconds: 4, itemKey: videoSource.itemKey, startSeconds: 2 }));
+    expect(playback.play).not.toHaveBeenCalled();
+
+    // The request itself was consumed on arrival, so only the parked span is left to keep
+    // the gesture honest — a Retry pressed ten minutes later must not start audio.
+    vi.setSystemTime(Date.now() + 600_000);
+    playback.setReadyState(HTMLMediaElement.HAVE_METADATA);
+    await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
+
+    expect(playback.play).not.toHaveBeenCalled();
+    expect(playback.getTime()).toBeLessThan(0.001);
+  });
+
+  it('still honours the user when a span seek fires no seeking event', async () => {
+    // The Initial Video's trim starts at frame 0, so the very first press seeks the
+    // playhead to where it already sits. A marker left standing there would swallow the
+    // user's next real scrub and haul them back into the window.
+    requestVideoSpanPlayback({ endSeconds: 4, itemKey: videoSource.itemKey, startSeconds: 0 });
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video);
+
+    playback.setSilentSeek(true);
+    await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
+    playback.setSilentSeek(false);
+
+    await interact(() => playback.scrubTo(8));
+    await interact(() => {
+      playback.setTime(9);
+      video.dispatchEvent(new Event('timeupdate'));
+    });
+
+    expect(playback.getTime()).toBe(9);
+  });
+
+  it('loops a window as tight as the panel can make one', async () => {
+    // The panel's floor is two frames (`MIN_VIDEO_TRIM_FRAMES`), which at 60fps is 33ms —
+    // narrower than any width threshold worth writing down, and precisely the selection
+    // the two still bounds convey least. A width floor here silently played the whole
+    // remainder of the clip instead, with audio.
+    requestVideoSpanPlayback({ endSeconds: 2 + 2 / 60, itemKey: videoSource.itemKey, startSeconds: 2 });
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video);
+
+    await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
+    await interact(() => {
+      playback.setTime(2.1);
+      video.dispatchEvent(new Event('timeupdate'));
+    });
+
+    expect(playback.getTime()).toBe(2);
+  });
+
+  it("does not extend a parked span's deadline by re-showing the view", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['Date'] });
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video, { readyState: HTMLMediaElement.HAVE_NOTHING });
+
+    await interact(() => requestVideoSpanPlayback({ endSeconds: 4, itemKey: videoSource.itemKey, startSeconds: 2 }));
+
+    // Hiding and re-showing re-parks the span. Its deadline belongs to the press, so a
+    // clip that never loads cannot have it renewed indefinitely.
+    vi.setSystemTime(Date.now() + 10_000);
+    await renderVideo();
+    vi.setSystemTime(Date.now() + 10_000);
+
+    const reshown = getVideo();
+    const reshownPlayback = stubSpanPlayback(reshown, { readyState: HTMLMediaElement.HAVE_METADATA });
+
+    await interact(() => reshown.dispatchEvent(new Event('loadedmetadata')));
+
+    expect(reshownPlayback.play).not.toHaveBeenCalled();
+    expect(playback.play).not.toHaveBeenCalled();
+  });
+
+  it('hands the playhead back for good once the user scrubs', async () => {
+    requestVideoSpanPlayback({ endSeconds: 4, itemKey: videoSource.itemKey, startSeconds: 2 });
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video);
+
+    await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
+    expect(playback.getTime()).toBe(2);
+
+    await interact(() => playback.scrubTo(8));
+    await interact(() => {
+      playback.setTime(9);
+      video.dispatchEvent(new Event('timeupdate'));
+    });
+
+    expect(playback.getTime()).toBe(9);
+  });
+
+  it('reports the loop under its request, stops it on demand, and resumes it from the native control', async () => {
+    const token = requestVideoSpanPlayback({ endSeconds: 4, itemKey: videoSource.itemKey, startSeconds: 2 });
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video);
+
+    // Nothing to report until the element has the loop running: before metadata the
+    // request is parked, and the panel's button must not offer to stop a loop that is not
+    // yet there.
+    expect(getVideoSpanPlaybackState()).toBeNull();
+
+    await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
+
+    expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: true, token });
+
+    // The panel's pause stops the element and leaves the window armed...
+    await interact(() => getVideoSpanPlaybackState()?.pause());
+
+    expect(playback.pauseSpy).toHaveBeenCalledTimes(1);
+    expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: false, token });
+
+    // ...so the native play control resumes the selection, under the same request, with
+    // the wrap still enforced.
+    await interact(() => void video.play());
+
+    expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: true, token });
+
+    await interact(() => {
+      playback.setTime(4.02);
+      video.dispatchEvent(new Event('timeupdate'));
+    });
+
+    expect(playback.getTime()).toBe(2);
+  });
+
+  it('withdraws the report when the user scrubs out, a newer request takes over, or the view leaves the screen', async () => {
+    const first = requestVideoSpanPlayback({ endSeconds: 4, itemKey: videoSource.itemKey, startSeconds: 2 });
+    await renderKeptVideo('visible');
+    const video = getVideo();
+    const playback = stubSpanPlayback(video);
+
+    await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
+    expect(getVideoSpanPlaybackState()?.token).toBe(first);
+
+    // The user took the playhead somewhere else: the button goes back to offering play.
+    await interact(() => playback.scrubTo(8));
+    expect(getVideoSpanPlaybackState()).toBeNull();
+
+    const second = requestVideoSpanPlayback({ endSeconds: 7, itemKey: videoSource.itemKey, startSeconds: 5 });
+    await interact(() => undefined);
+    expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: true, token: second });
+
+    // A press on another card (or the same one, after a trim change) replaces the loop; the
+    // earlier button's report goes with it.
+    const third = requestVideoSpanPlayback({ endSeconds: 9, itemKey: videoSource.itemKey, startSeconds: 8 });
+    await interact(() => undefined);
+    expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: true, token: third });
+
+    // Hidden behind a layout switch, the element is paused and nothing is on screen to
+    // stop, so nothing is offered. Shown again, the loop is still armed: a native play
+    // resumes it under the request it belongs to.
+    await renderKeptVideo('hidden');
+    expect(getVideoSpanPlaybackState()).toBeNull();
+
+    await renderKeptVideo('visible');
+    expect(getVideoSpanPlaybackState()).toBeNull();
+
+    await interact(() => void video.play());
+    expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: true, token: third });
+  });
+
+  it('does not offer a stop for a window the clamp collapsed', async () => {
+    await renderVideo();
+    const video = getVideo();
+    const playback = stubSpanPlayback(video, { duration: 6 });
+
+    // Inverted bounds after clamping: the clip plays once with no loop armed, and a pause
+    // control for it would promise to stop a selection that is not playing.
+    await interact(() => requestVideoSpanPlayback({ endSeconds: 9, itemKey: videoSource.itemKey, startSeconds: 8 }));
+
+    expect(playback.play).toHaveBeenCalledTimes(1);
+    expect(getVideoSpanPlaybackState()).toBeNull();
   });
 
   it('does not arm a drag or cancel wheel events from the video surface and native controls', async () => {
@@ -694,6 +1093,98 @@ const stubPlaybackPosition = (video: HTMLVideoElement, state: { paused?: boolean
   });
 
   return { get: () => currentTime };
+};
+
+/**
+ * A playable stand-in for the `data:` source, whose seekable range is empty: a real
+ * `currentTime` assignment clamps back to 0, and `play()` on it never enters a playing
+ * state, so neither the seek nor the loop would be observable against the element itself.
+ */
+const stubSpanPlayback = (
+  video: HTMLVideoElement,
+  { duration = 10, readyState = HTMLMediaElement.HAVE_METADATA }: { duration?: number; readyState?: number } = {}
+) => {
+  let currentTime = 0;
+  let paused = true;
+  let silentSeek = false;
+  let currentReadyState = readyState;
+
+  Object.defineProperties(video, {
+    currentTime: {
+      configurable: true,
+      get: () => currentTime,
+      set: (value: number) => {
+        currentTime = value;
+
+        if (!silentSeek) {
+          video.dispatchEvent(new Event('seeking'));
+        }
+      },
+    },
+    duration: { configurable: true, get: () => duration },
+    paused: { configurable: true, get: () => paused },
+    readyState: { configurable: true, get: () => currentReadyState },
+  });
+
+  // `paused` flips synchronously; the `play` event is a queued task, as in a real engine.
+  const play = vi.spyOn(video, 'play').mockImplementation(() => {
+    paused = false;
+    queueMicrotask(() => video.dispatchEvent(new Event('play')));
+
+    return Promise.resolve();
+  });
+  const pause = vi.spyOn(video, 'pause').mockImplementation(() => {
+    paused = true;
+    video.dispatchEvent(new Event('pause'));
+  });
+
+  return {
+    play,
+    pauseSpy: pause,
+    /** What `load()` does to the element before it refires `loadedmetadata`. */
+    reload: () => {
+      currentTime = 0;
+      paused = true;
+      silentSeek = false;
+    },
+    getTime: () => currentTime,
+    pause: () => video.pause(),
+    /** Engines fire `pause` first, then `ended`. */
+    playToEnd: () => {
+      currentTime = duration;
+      paused = true;
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    },
+    scrubTo: (value: number) => {
+      currentTime = value;
+      video.dispatchEvent(new Event('seeking'));
+    },
+    /** Engines fire no `seeking` for a seek the playhead cannot act on. */
+    setSilentSeek: (value: boolean) => {
+      silentSeek = value;
+    },
+    setReadyState: (value: number) => {
+      currentReadyState = value;
+    },
+    setTime: (value: number) => {
+      currentTime = value;
+    },
+  };
+};
+
+const clearSpanRequest = (): void => {
+  const request = getVideoSpanPlaybackRequest();
+
+  if (request) {
+    consumeVideoSpanPlaybackRequest(request.token);
+  }
+
+  const state = getVideoSpanPlaybackState();
+
+  if (state) {
+    clearVideoSpanPlaybackState(state.token);
+  }
 };
 
 const setVideoFrameState = (
