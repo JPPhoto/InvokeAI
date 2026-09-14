@@ -1,14 +1,20 @@
+import type { SeedMode } from '@features/generation/contracts';
+
+import { isSeedMode, planSeedSubmission, SEED_MAX, wrapSeed } from '@features/generation/seed';
+
 import type { CompiledWorkflowGraph, WorkflowBackendGraph } from './graphContracts';
 import type {
   FieldInputTemplate,
   InvocationTemplates,
   InvocationTemplatesSnapshot,
   ProjectGraphState,
+  WorkflowFieldInstance,
   WorkflowInvocationNode,
+  WorkflowSeedFieldAdvance,
 } from './types';
 
 import { createWorkflowId } from './document';
-import { getWorkflowFieldInvalidReason } from './fields';
+import { getWorkflowFieldInvalidReason, isDirectInputField } from './fields';
 import {
   createForLoopValidationReason,
   ForLoopGraphValidationError,
@@ -265,5 +271,144 @@ export const compileProjectGraph = (
     })),
     updatedAt: new Date().toISOString(),
     version: 1,
+  };
+};
+
+/**
+ * The inputs that carry a seed mode: the scalar integer a node declares as `seed`
+ * over the full seed range. Read from the template alone, so an editable label
+ * cannot turn an ordinary integer into a seed, and a provider's own-range `seed`
+ * keeps its plain control instead of wrapping at a bound it never had.
+ *
+ * Seed policy lives here rather than in `fields.ts` because it is the one place
+ * the workflow core depends on Generate's runtime seed arithmetic: the shared
+ * field/document helpers stay in the lighter utility chunk every overlay loads.
+ */
+export const isSeedInputField = (template: FieldInputTemplate): boolean =>
+  template.name === 'seed' &&
+  template.type.name === 'IntegerField' &&
+  template.type.cardinality === 'SINGLE' &&
+  template.maximum === SEED_MAX &&
+  isDirectInputField(template);
+
+export const getWorkflowFieldSeedMode = (instance: Pick<WorkflowFieldInstance, 'seedMode'> | undefined): SeedMode =>
+  isSeedMode(instance?.seedMode) ? instance.seedMode : 'fixed';
+
+/**
+ * The seeds one varying input contributes to a submission of `runCount` runs,
+ * and where its authored seed goes afterwards. Stepping modes count from the
+ * authored seed; random draws its start and runs consecutively from it, like
+ * Generate's random mode, leaving the authored seed in reserve.
+ */
+const getWorkflowSeedFieldSequence = (
+  seedMode: Exclude<SeedMode, 'fixed'>,
+  authoredSeed: number,
+  runCount: number
+): { nextSeed: number | null; seeds: number[] } => {
+  const startSeed = seedMode === 'random' ? Math.floor(Math.random() * SEED_MAX) : wrapSeed(authoredSeed);
+  const plan = planSeedSubmission({
+    batchCount: runCount,
+    promptCount: 1,
+    seedBehaviour: 'per-iteration',
+    seedMode,
+    startSeed,
+  });
+
+  return {
+    nextSeed: plan.nextSeed,
+    seeds: Array.from({ length: plan.sequenceLength }, (_, index) => wrapSeed(startSeed + plan.step * index)),
+  };
+};
+
+/** One value list of a zipped batch group, in the backend's `BatchDatum` shape. */
+export interface WorkflowBatchDatum {
+  field_name: string;
+  items: number[];
+  node_path: string;
+}
+
+export interface WorkflowSubmissionPlan {
+  graph: CompiledWorkflowGraph;
+  /** One zipped group over every seed input that varies between runs; null while every seed holds. */
+  data: WorkflowBatchDatum[][] | null;
+  /** Backend `runs`: the batch count while every seed holds, else 1 with the runs enumerated by `data`. */
+  runs: number;
+  /** Sessions the submission produces either way. */
+  generationCount: number;
+  /** Stepping-mode fields to move once the submission is queued. */
+  seedAdvances: WorkflowSeedFieldAdvance[];
+}
+
+export interface WorkflowSubmissionPlanOptions {
+  /** Runs per submission; already sanitized to a positive integer by the caller. */
+  batchCount: number;
+}
+
+/**
+ * Compiles the document and fixes every seed input's values for one submission.
+ * Seeds vary per queued run, not per iteration of a loop inside a run, which
+ * repeats its run's seed. Every varying input joins one zipped group, so three
+ * runs over two stepping seeds stay three runs rather than nine combinations;
+ * fixed inputs stay constants in the graph. A random input draws its start here
+ * and runs consecutively from it, like Generate's random mode, while the entered
+ * seed stays in reserve. Only the stepping modes report an advance.
+ */
+export const planWorkflowSubmission = (
+  document: ProjectGraphState,
+  templates: InvocationTemplates,
+  { batchCount }: WorkflowSubmissionPlanOptions
+): WorkflowSubmissionPlan => {
+  const graph = compileProjectGraph(document, templates);
+  const connectedInputs = new Set(graph.edges.map((edge) => `${edge.targetNodeId}:${edge.targetField}`));
+  const data: WorkflowBatchDatum[] = [];
+  const seedAdvances: WorkflowSeedFieldAdvance[] = [];
+
+  for (const node of getExecutableNodes(document)) {
+    const template = templates[node.data.type];
+
+    if (!template) {
+      continue;
+    }
+
+    for (const inputTemplate of Object.values(template.inputs)) {
+      if (!isSeedInputField(inputTemplate) || connectedInputs.has(`${node.id}:${inputTemplate.name}`)) {
+        continue;
+      }
+
+      const instance = node.data.inputs[inputTemplate.name];
+      const seedMode = getWorkflowFieldSeedMode(instance);
+
+      if (seedMode === 'fixed') {
+        continue;
+      }
+
+      const authoredSeed =
+        typeof instance?.value === 'number'
+          ? instance.value
+          : typeof inputTemplate.default === 'number'
+            ? inputTemplate.default
+            : 0;
+      const sequence = getWorkflowSeedFieldSequence(seedMode, authoredSeed, batchCount);
+
+      data.push({ field_name: inputTemplate.name, items: sequence.seeds, node_path: node.id });
+
+      if (sequence.nextSeed !== null) {
+        seedAdvances.push({
+          fieldName: inputTemplate.name,
+          ...(typeof instance?.value === 'number' ? { fromSeed: instance.value } : {}),
+          nodeId: node.id,
+          seedMode,
+          toSeed: sequence.nextSeed,
+        });
+      }
+    }
+  }
+
+  return {
+    data: data.length > 0 ? [data] : null,
+    generationCount: batchCount,
+    graph,
+    runs: data.length > 0 ? 1 : batchCount,
+    seedAdvances,
   };
 };

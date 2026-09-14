@@ -1407,6 +1407,8 @@
     "nodeType": "Type: {{type}}",
     "nodeVersion": "Version: {{version}}",
     "nodeClassification": "Classification: {{classification}}",
+    "seedModeTooltip": "Seed mode. Applies between queued runs of the workflow; a loop inside one run reuses that run's seed.",
+    "seedProvidedByConnection": "Provided by connection.",
     "iterationOutputs": "Iteration outputs",
     "finalOutputs": "Final outputs",
     "forLoopValidationFailed": "For loop validation failed",

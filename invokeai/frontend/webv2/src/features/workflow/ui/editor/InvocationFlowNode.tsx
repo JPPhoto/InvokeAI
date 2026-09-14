@@ -3,6 +3,7 @@ import type { FieldInputTemplate, FieldOutputTemplate, WorkflowInvocationNode } 
 import type { WorkflowNodeExecutionState as NodeExecutionState } from '@features/workflow/ui/contracts';
 
 import { Box, Checkbox, Field, Flex, HStack, Icon, IconButton, Image, Input, Stack, Text } from '@chakra-ui/react';
+import { getWorkflowFieldSeedMode, isSeedInputField } from '@features/workflow/graph';
 import { FieldDescriptionPopover } from '@features/workflow/ui/fields/FieldDescriptionPopover';
 import { WorkflowFieldInput } from '@features/workflow/ui/fields/WorkflowFieldInput';
 import {
@@ -287,6 +288,17 @@ const NodeFooter = ({ canUseCache, node }: { canUseCache: boolean; node: Workflo
   );
 };
 
+/** The upstream node owns the seed now; the local mode waits for a disconnect. A leaf so only this row subscribes to i18n. */
+const SeedProvidedByConnectionNote = () => {
+  const { t } = useTranslation();
+
+  return (
+    <Text color="fg.subtle" fontSize="2xs" mt="0.5">
+      {t('nodes.seedProvidedByConnection')}
+    </Text>
+  );
+};
+
 const InputFieldRow = ({
   isConnected,
   isExposed,
@@ -428,13 +440,19 @@ const InputFieldRow = ({
               id={`${node.id}-${template.name}-value`}
               invalid={isInvalid}
               nodeId={node.id}
+              seedMode={getWorkflowFieldSeedMode(instance)}
               template={template}
               value={instance?.value}
               onChange={(value) =>
                 editGraph({ fieldName: template.name, nodeId: node.id, type: 'setFieldValue', value })
               }
+              onSeedModeChange={(seedMode) =>
+                editGraph({ fieldName: template.name, nodeId: node.id, seedMode, type: 'setFieldSeedMode' })
+              }
             />
           </Box>
+        ) : isConnected && isSeedInputField(template) ? (
+          <SeedProvidedByConnectionNote />
         ) : null}
         {invalidReason ? <Field.ErrorText fontSize="2xs">{invalidReason}</Field.ErrorText> : null}
       </Field.Root>

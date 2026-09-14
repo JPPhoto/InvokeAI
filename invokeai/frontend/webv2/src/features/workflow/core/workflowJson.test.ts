@@ -241,3 +241,38 @@ describe('parseWorkflowJson tolerance', () => {
     expect(document.form.elements[document.form.rootElementId]?.type).toBe('container');
   });
 });
+
+describe('seed modes in workflow JSON', () => {
+  it('round-trips a stepping mode and reads its absence as unset', () => {
+    const node = buildInvocationNode(template, { x: 0, y: 0 });
+    let doc = createProjectGraph('seed-json');
+
+    doc = projectGraphReducer(doc, { node, type: 'addNode' });
+    doc = projectGraphReducer(doc, {
+      fieldName: 'prompt',
+      nodeId: node.id,
+      seedMode: 'increment',
+      type: 'setFieldSeedMode',
+    });
+
+    const serialized = serializeWorkflowJson(doc);
+    const parsed = parseWorkflowJson(serialized).document.nodes[0];
+
+    expect(parsed?.type === 'invocation' && parsed.data.inputs.prompt).toMatchObject({ seedMode: 'increment' });
+
+    // Fixed is the absent key, which is also what a legacy reader hands back after stripping it.
+    const fixed = serializeWorkflowJson(
+      projectGraphReducer(doc, { fieldName: 'prompt', nodeId: node.id, seedMode: 'fixed', type: 'setFieldSeedMode' })
+    ).nodes as Array<{ data: { inputs: { prompt: { seedMode?: unknown } } } }>;
+
+    expect(fixed[0]?.data.inputs.prompt).not.toHaveProperty('seedMode');
+
+    const nodes = serialized.nodes as Array<{ data: { inputs: { prompt: { seedMode?: unknown } } } }>;
+
+    (nodes[0] as NonNullable<(typeof nodes)[number]>).data.inputs.prompt.seedMode = 'shuffle';
+
+    const degraded = parseWorkflowJson(serialized).document.nodes[0];
+
+    expect(degraded?.type === 'invocation' && degraded.data.inputs.prompt).not.toHaveProperty('seedMode');
+  });
+});

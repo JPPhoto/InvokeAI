@@ -3197,6 +3197,7 @@
       "source:src/features/generation/queries.ts",
       "source:src/features/generation/react.ts",
       "source:src/features/generation/runtime.ts",
+      "source:src/features/generation/seedModeMenu.ts",
       "source:src/features/generation/settings.ts",
       "source:src/features/generation/ui/GenerateAdvancedFields.tsx",
       "source:src/features/generation/ui/GenerateCanvasSections.tsx",

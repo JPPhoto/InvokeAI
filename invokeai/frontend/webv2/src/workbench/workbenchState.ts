@@ -2,6 +2,7 @@ import type { GenerateWidgetValues } from '@features/generation/contracts';
 import type { ModelConfig } from '@features/models';
 import type { QueueCompiledSubmission, QueueHistoryItemStatus } from '@features/queue/contracts';
 import type { ProjectGraphState } from '@features/workflow/contracts';
+import type { WorkflowSubmissionPlan } from '@features/workflow/graph';
 import type {
   CanvasDocumentContractV3,
   CanvasPlacementContract,
@@ -134,7 +135,7 @@ import {
   syncVideoWidgetValuesWithModels,
   type VideoWidgetValues,
 } from '@features/video';
-import { compileProjectGraph } from '@features/workflow/graph';
+import { planWorkflowSubmission } from '@features/workflow/graph';
 import { getInvocationTemplatesSnapshot } from '@features/workflow/react';
 import {
   cloneProjectGraph,
@@ -2431,7 +2432,11 @@ const compileInvocationSnapshot = (
   project: Project,
   route: InvocationRoute,
   models?: readonly ModelConfig[]
-): { graph: GraphContract; widgetStates: WidgetStateMap } | null => {
+): {
+  graph: GraphContract;
+  widgetStates: WidgetStateMap;
+  workflow?: Omit<WorkflowSubmissionPlan, 'graph'>;
+} | null => {
   const widgetStates = getWidgetStatesSnapshot(project.widgetInstances);
   const randDevice = resolveRandDeviceMetadata(project.settings.useCpuNoise, getGenerationDevicesSnapshot().options);
 
@@ -2444,7 +2449,11 @@ const compileInvocationSnapshot = (
       return null;
     }
 
-    return { graph: compileProjectGraph(project.projectGraph, templatesSnapshot.templates), widgetStates };
+    const { graph, ...workflow } = planWorkflowSubmission(project.projectGraph, templatesSnapshot.templates, {
+      batchCount: sanitizeBatchCount(widgetStates.generate?.values.batchCount),
+    });
+
+    return { graph, widgetStates, workflow };
   }
 
   if (route.sourceId === 'upscale') {
@@ -3092,6 +3101,8 @@ const enqueueCompiledSnapshot = (
     graph: GraphContract;
     positivePrompts?: string[];
     widgetStates: WidgetStateMap;
+    /** The workflow route's seed plan: batch data, run count, and the fields to advance. */
+    workflow?: Omit<WorkflowSubmissionPlan, 'graph'>;
   },
   backendSupportsCancellation: boolean,
   canvasSnapshot?: CanvasStateContractV3
@@ -3166,7 +3177,8 @@ const enqueueCompiledSnapshot = (
     ? { error: `${route.sourceId} queue item is missing a compiled backend graph.`, kind: 'invalid' }
     : route.sourceId === 'workflow'
       ? {
-          batchCount: sanitizeBatchCount(widgetStates.generate?.values.batchCount),
+          batchCount: compiled.workflow?.runs ?? sanitizeBatchCount(widgetStates.generate?.values.batchCount),
+          ...(compiled.workflow?.data ? { data: compiled.workflow.data } : {}),
           graph: backendGraph,
           kind: 'workflow',
           // Provenance for the completed-run capture: a run submitted from a
@@ -3245,7 +3257,9 @@ const enqueueCompiledSnapshot = (
         batchCount:
           backendSubmission.kind === 'invalid'
             ? 1
-            : backendSubmission.batchCount * (expandedPositivePrompts?.length ?? 1),
+            : compiled.workflow
+              ? compiled.workflow.generationCount
+              : backendSubmission.batchCount * (expandedPositivePrompts?.length ?? 1),
         height: presentationDimensions.height,
         // The merged prompt, so the queue row reads the same before and after the
         // backend session arrives with its own (already merged) field values.
@@ -3272,13 +3286,21 @@ const enqueueCompiledSnapshot = (
   // may be stale by the time it lands: only settings still at the submitted
   // seed and mode are advanced; an edit made meanwhile is the user's, and stays.
   const advancedProject =
-    seedPlan === null || seedPlan.nextSeed === null
-      ? project
-      : updateProjectWidgetValues(project, route.sourceId === 'canvas' ? 'generate' : route.sourceId, (values) =>
+    seedPlan !== null && seedPlan.nextSeed !== null
+      ? updateProjectWidgetValues(project, route.sourceId === 'canvas' ? 'generate' : route.sourceId, (values) =>
           values.seed === seedPlan.startSeed && values.seedMode === seedPlan.seedMode
             ? { ...values, seed: seedPlan.nextSeed }
             : values
-        );
+        )
+      : compiled.workflow && compiled.workflow.seedAdvances.length > 0
+        ? {
+            ...project,
+            projectGraph: projectGraphReducer(project.projectGraph, {
+              advances: compiled.workflow.seedAdvances,
+              type: 'advanceSeedFields',
+            }),
+          }
+        : project;
 
   return {
     ...advancedProject,

@@ -1,5 +1,8 @@
+import type { SeedMode } from '@features/generation/contracts';
+
 import { Alert, Field, HStack, Icon, Input, Stack, Text } from '@chakra-ui/react';
 import { isInvocationNode, type NodeFieldFormElement, type ProjectGraphState } from '@features/workflow/contracts';
+import { getWorkflowFieldSeedMode } from '@features/workflow/graph';
 import { useInvocationTemplatesSelector } from '@features/workflow/react';
 import { WorkflowFieldInput } from '@features/workflow/ui/fields/WorkflowFieldInput';
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
@@ -93,6 +96,10 @@ export const NodeFieldControl = ({
     (value: unknown) => editGraph({ fieldName, nodeId, type: 'setFieldValue', value }),
     [editGraph, fieldName, nodeId]
   );
+  const onSeedModeChange = useCallback(
+    (seedMode: SeedMode) => editGraph({ fieldName, nodeId, seedMode, type: 'setFieldSeedMode' }),
+    [editGraph, fieldName, nodeId]
+  );
   const resetAriaLabel = useMemo(() => `Reset ${label} to default value`, [label]);
 
   if (!invocationNode || !template) {
@@ -167,9 +174,11 @@ export const NodeFieldControl = ({
             id={valueInputId}
             invalid={isInvalid}
             nodeId={nodeId}
+            seedMode={getWorkflowFieldSeedMode(instance)}
             template={template}
             value={instance?.value}
             onChange={onValueChange}
+            onSeedModeChange={onSeedModeChange}
           />
         )}
         {invalidReason ? <Field.ErrorText fontSize="2xs">{invalidReason}</Field.ErrorText> : null}

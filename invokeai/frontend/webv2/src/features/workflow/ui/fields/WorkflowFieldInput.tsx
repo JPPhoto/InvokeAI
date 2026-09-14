@@ -1,3 +1,4 @@
+import type { SeedMode } from '@features/generation/contracts';
 import type { ModelConfig, ModelTaxonomyType } from '@features/models/react';
 import type { FieldInputTemplate } from '@features/workflow/contracts';
 import type { LoraFieldCollectionEntry } from '@features/workflow/utility';
@@ -30,8 +31,10 @@ import { getSelectedGalleryImageFromValues } from '@features/gallery/contracts';
 import { GalleryPickerPopover } from '@features/gallery/picker';
 import { invalidateGallery } from '@features/gallery/queries';
 import { galleryImageUrls, galleryVideoUrls } from '@features/gallery/utility';
+import { SeedModeMenu } from '@features/generation/seedModeMenu';
 import { DEFAULT_LORA_WEIGHT_CONFIG, SCHEDULER_OPTIONS } from '@features/generation/settings';
 import { isInvocationNode } from '@features/workflow/contracts';
+import { isSeedInputField } from '@features/workflow/graph';
 import {
   getWorkflowMediaFieldDropId,
   getWorkflowMediaFieldDropItem,
@@ -93,6 +96,9 @@ export interface WorkflowFieldInputProps {
   template: FieldInputTemplate;
   value: unknown;
   onChange: (value: unknown) => void;
+  /** The instance's seed mode; read only for seed inputs (`isSeedInputField`), which render the mode menu. */
+  seedMode?: SeedMode;
+  onSeedModeChange?: (seedMode: SeedMode) => void;
 }
 
 const invalidProps = (invalid: boolean | undefined) => (invalid ? { 'aria-invalid': true } : {});
@@ -154,7 +160,14 @@ const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldIn
   );
 };
 
-const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
+const NumericInput = ({
+  disabled,
+  id,
+  invalid,
+  onChange,
+  template,
+  value,
+}: WorkflowFieldInputProps & { disabled?: boolean }) => {
   const isInteger = template.type.name === 'IntegerField';
   const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : '';
   const min = template.minimum ?? template.exclusiveMinimum ?? undefined;
@@ -174,6 +187,7 @@ const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldI
     <Input
       aria-label={template.title}
       className="nodrag"
+      disabled={disabled}
       id={id ? `${id}-number-input` : undefined}
       max={max !== undefined ? String(max) : undefined}
       min={min !== undefined ? String(min) : undefined}
@@ -185,6 +199,35 @@ const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldI
       {...invalidProps(invalid)}
       onChange={onInputChange}
     />
+  );
+};
+
+/**
+ * A seed input with its mode beside it. Random quiets the value the way the
+ * Generate seed does: the entered seed stays in reserve for Fixed. The mode
+ * applies between queued runs; a loop inside a run reuses that run's seed.
+ *
+ * `nokey` on the row and the portaled menu keeps xyflow's node key handling
+ * out of the trigger and the open menu: arrows would nudge the selected node
+ * and Backspace would delete it (zag lets unhandled keys propagate).
+ */
+const SeedInput = ({
+  onSeedModeChange,
+  seedMode,
+  ...props
+}: WorkflowFieldInputProps & { onSeedModeChange: (seedMode: SeedMode) => void; seedMode: SeedMode }) => {
+  const { t } = useTranslation();
+
+  return (
+    <HStack className="nodrag nokey" gap="1" w="full">
+      <NumericInput {...props} disabled={seedMode === 'random'} />
+      <SeedModeMenu
+        contentClassName="nokey"
+        tooltip={t('nodes.seedModeTooltip')}
+        value={seedMode}
+        onChange={onSeedModeChange}
+      />
+    </HStack>
   );
 };
 
@@ -1157,6 +1200,10 @@ export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
     case 'IntegerField':
       if (props.template.uiComponent === 'video-frame-index' && props.template.type.cardinality === 'SINGLE') {
         return <VideoFrameIndexInput {...props} />;
+      }
+
+      if (props.onSeedModeChange && isSeedInputField(props.template)) {
+        return <SeedInput {...props} onSeedModeChange={props.onSeedModeChange} seedMode={props.seedMode ?? 'fixed'} />;
       }
 
       return <NumericInput {...props} />;

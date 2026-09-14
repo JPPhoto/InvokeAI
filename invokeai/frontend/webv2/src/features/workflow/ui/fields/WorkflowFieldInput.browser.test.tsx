@@ -9,7 +9,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 
-import { WorkflowFieldInput } from './WorkflowFieldInput';
+import { WorkflowFieldInput, type WorkflowFieldInputProps } from './WorkflowFieldInput';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -114,6 +114,16 @@ const VIDEO_TEMPLATE = {
   type: { name: 'VideoField' },
 } as unknown as FieldInputTemplate;
 
+const SEED_TEMPLATE = {
+  input: 'any',
+  maximum: 4_294_967_295,
+  minimum: 0,
+  multipleOf: null,
+  name: 'seed',
+  title: 'Seed',
+  type: { cardinality: 'SINGLE', name: 'IntegerField' },
+} as unknown as FieldInputTemplate;
+
 const FRAME_INDEX_TEMPLATE = {
   name: 'frame_index',
   title: 'Frame Index',
@@ -193,14 +203,15 @@ const renderField = async (
   template: FieldInputTemplate,
   value: unknown,
   onChange: (value: unknown) => void,
-  nodeId?: string
+  nodeId?: string,
+  seedProps: Pick<WorkflowFieldInputProps, 'onSeedModeChange' | 'seedMode'> = {}
 ) => {
   await act(() => {
     root.render(
       <ChakraProvider value={system}>
         <QueryClientProvider client={queryClient}>
           <DndContext>
-            <WorkflowFieldInput nodeId={nodeId} template={template} value={value} onChange={onChange} />
+            <WorkflowFieldInput nodeId={nodeId} template={template} value={value} onChange={onChange} {...seedProps} />
           </DndContext>
         </QueryClientProvider>
       </ChakraProvider>
@@ -655,5 +666,63 @@ describe('WorkflowFieldInput LoRA collection', () => {
 
     expect(host.textContent).not.toContain('Connection only');
     expect(host.querySelectorAll('input')).toHaveLength(1);
+  });
+});
+
+describe('WorkflowFieldInput seed inputs', () => {
+  const settle = async (action: () => void) => {
+    await act(async () => {
+      action();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+  };
+  const seedInput = () => host.querySelector<HTMLInputElement>('input[type="number"]');
+  const modeTrigger = () => host.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]');
+  const menuItem = (mode: string) =>
+    document.querySelector<HTMLElement>(`[role="menuitemradio"][data-value="${mode}"]`);
+
+  it('renders a plain number input when no seed mode is supplied, and for non-seed integers', async () => {
+    await renderField(SEED_TEMPLATE, 42, vi.fn());
+
+    expect(seedInput()?.value).toBe('42');
+    expect(modeTrigger()).toBeNull();
+
+    await renderField({ ...SEED_TEMPLATE, name: 'steps' } as FieldInputTemplate, 20, vi.fn(), undefined, {
+      onSeedModeChange: vi.fn(),
+      seedMode: 'increment',
+    });
+
+    expect(modeTrigger()).toBeNull();
+  });
+
+  it('puts the mode menu beside a seed input and commits the chosen mode without touching the value', async () => {
+    const onChange = vi.fn();
+    const onSeedModeChange = vi.fn();
+
+    await renderField(SEED_TEMPLATE, 42, onChange, undefined, { onSeedModeChange, seedMode: 'fixed' });
+
+    expect(seedInput()?.disabled).toBe(false);
+    // xyflow reads `.nokey` to leave a control's keys alone; the trigger and the portaled menu both need it,
+    // or arrows nudge the node and Backspace deletes it while the menu is in use.
+    expect(modeTrigger()?.closest('.nokey')).not.toBeNull();
+
+    await settle(() => modeTrigger()?.click());
+
+    expect(menuItem('fixed')?.getAttribute('aria-checked')).toBe('true');
+    expect(menuItem('fixed')?.closest('.nokey')).not.toBeNull();
+
+    await settle(() => menuItem('increment')?.click());
+
+    expect(onSeedModeChange).toHaveBeenCalledWith('increment');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('quiets the value in random mode but keeps it on show', async () => {
+    await renderField(SEED_TEMPLATE, 42, vi.fn(), undefined, { onSeedModeChange: vi.fn(), seedMode: 'random' });
+
+    expect(seedInput()?.disabled).toBe(true);
+    expect(seedInput()?.value).toBe('42');
   });
 });

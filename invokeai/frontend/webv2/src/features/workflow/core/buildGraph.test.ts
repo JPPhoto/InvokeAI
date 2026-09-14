@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { FieldInputTemplate, InvocationTemplate, InvocationTemplatesSnapshot, ProjectGraphState } from './types';
 
-import { compileProjectGraph, getProjectGraphReadiness } from './buildGraph';
+import {
+  compileProjectGraph,
+  getProjectGraphReadiness,
+  getWorkflowFieldSeedMode,
+  isSeedInputField,
+  planWorkflowSubmission,
+} from './buildGraph';
 import {
   buildConnectorNode,
   buildInvocationNode,
@@ -552,5 +558,194 @@ describe('compileProjectGraph', () => {
       canInvoke: false,
       reasons: [{ key: 'nodes.forLoopLinkageInvalid' }],
     });
+  });
+});
+
+describe('planWorkflowSubmission', () => {
+  const SEED_MAX = 4_294_967_295;
+  const seedInput = input('seed', {
+    default: 0,
+    maximum: SEED_MAX,
+    minimum: 0,
+    type: { batch: false, cardinality: 'SINGLE', name: 'IntegerField' },
+  });
+  const seededTemplates = {
+    integer: template('integer', {
+      value: input('value', { default: 0, type: { batch: false, cardinality: 'SINGLE', name: 'IntegerField' } }),
+    }),
+    noise: template('noise', { seed: seedInput, width: input('width', { default: 512 }) }),
+  };
+  const seededTemplate = seededTemplates.noise;
+
+  const buildSeeded = (nodes: Array<{ seed?: number; seedMode?: 'random' | 'fixed' | 'increment' | 'decrement' }>) => {
+    let doc = createProjectGraph('seed-plan');
+    const ids: string[] = [];
+
+    for (const [index, config] of nodes.entries()) {
+      const node = buildInvocationNode(seededTemplate, { x: index * 100, y: 0 });
+
+      ids.push(node.id);
+      doc = projectGraphReducer(doc, { node, type: 'addNode' });
+
+      if (config.seed !== undefined) {
+        doc = projectGraphReducer(doc, {
+          fieldName: 'seed',
+          nodeId: node.id,
+          type: 'setFieldValue',
+          value: config.seed,
+        });
+      }
+
+      if (config.seedMode) {
+        doc = projectGraphReducer(doc, {
+          fieldName: 'seed',
+          nodeId: node.id,
+          seedMode: config.seedMode,
+          type: 'setFieldSeedMode',
+        });
+      }
+    }
+
+    return { doc, ids };
+  };
+
+  it('repeats an unchanged graph while every seed holds', () => {
+    const { doc, ids } = buildSeeded([{ seed: 7 }, { seed: 9, seedMode: 'fixed' }]);
+    const plan = planWorkflowSubmission(doc, seededTemplates, { batchCount: 3 });
+
+    expect(plan).toMatchObject({ data: null, generationCount: 3, runs: 3, seedAdvances: [] });
+    expect(plan.graph.backendGraph.nodes[ids[0] as string]?.seed).toBe(7);
+    expect(plan.graph.backendGraph.nodes[ids[1] as string]?.seed).toBe(9);
+  });
+
+  it('zips every stepping seed into one group so three runs stay three runs', () => {
+    const { doc, ids } = buildSeeded([
+      { seed: 42, seedMode: 'increment' },
+      { seed: 100, seedMode: 'decrement' },
+      { seed: 5 },
+    ]);
+    const plan = planWorkflowSubmission(doc, seededTemplates, { batchCount: 3 });
+
+    expect(plan.runs).toBe(1);
+    expect(plan.generationCount).toBe(3);
+    expect(plan.data).toEqual([
+      [
+        { field_name: 'seed', items: [42, 43, 44], node_path: ids[0] },
+        { field_name: 'seed', items: [100, 99, 98], node_path: ids[1] },
+      ],
+    ]);
+    expect(plan.seedAdvances).toEqual([
+      { fieldName: 'seed', fromSeed: 42, nodeId: ids[0], seedMode: 'increment', toSeed: 45 },
+      { fieldName: 'seed', fromSeed: 100, nodeId: ids[1], seedMode: 'decrement', toSeed: 97 },
+    ]);
+    // The fixed node keeps its constant in the graph; the varying ones keep theirs as the fallback the batch overrides.
+    expect(plan.graph.backendGraph.nodes[ids[2] as string]?.seed).toBe(5);
+  });
+
+  it('wraps the sequence over the inclusive seed range', () => {
+    const { doc } = buildSeeded([{ seed: 1, seedMode: 'decrement' }]);
+    const plan = planWorkflowSubmission(doc, seededTemplates, { batchCount: 3 });
+
+    expect(plan.data?.[0]?.[0]?.items).toEqual([1, 0, SEED_MAX]);
+    expect(plan.seedAdvances[0]?.toSeed).toBe(SEED_MAX - 1);
+  });
+
+  it('draws a random start per input, runs consecutively from it, and never advances the entered seed', () => {
+    const { doc, ids } = buildSeeded([
+      { seed: 42, seedMode: 'random' },
+      { seed: 42, seedMode: 'random' },
+    ]);
+    // A constant draw: the graph id generator shares the random source, so a queue of draws would skew.
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.25);
+    const start = Math.floor(0.25 * SEED_MAX);
+
+    try {
+      const plan = planWorkflowSubmission(doc, seededTemplates, { batchCount: 2 });
+
+      expect(plan.data).toEqual([
+        [
+          { field_name: 'seed', items: [start, start + 1], node_path: ids[0] },
+          { field_name: 'seed', items: [start, start + 1], node_path: ids[1] },
+        ],
+      ]);
+      expect(plan.seedAdvances).toEqual([]);
+      expect(plan.graph.backendGraph.nodes[ids[0] as string]?.seed).toBe(42);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('leaves a connected seed to its upstream node and keeps the local mode for later', () => {
+    const { doc, ids } = buildSeeded([{ seed: 42, seedMode: 'increment' }]);
+    const source = buildInvocationNode(seededTemplates.integer, { x: -100, y: 0 });
+    const connected = projectGraphReducer(projectGraphReducer(doc, { node: source, type: 'addNode' }), {
+      edge: {
+        id: 'e',
+        source: source.id,
+        sourceHandle: 'out',
+        target: ids[0] as string,
+        targetHandle: 'seed',
+        type: 'default',
+      },
+      type: 'addEdge',
+    });
+    const plan = planWorkflowSubmission(connected, seededTemplates, { batchCount: 2 });
+
+    expect(plan).toMatchObject({ data: null, runs: 2, seedAdvances: [] });
+    expect(connected.nodes.find((node) => node.id === ids[0])).toMatchObject({
+      data: { inputs: { seed: { seedMode: 'increment', value: 42 } } },
+    });
+  });
+
+  it('steps an empty seed input from the template default', () => {
+    const { doc, ids } = buildSeeded([{ seedMode: 'increment' }]);
+    const emptied = projectGraphReducer(doc, {
+      fieldName: 'seed',
+      nodeId: ids[0] as string,
+      type: 'setFieldValue',
+      value: undefined,
+    });
+    const plan = planWorkflowSubmission(emptied, seededTemplates, { batchCount: 2 });
+
+    expect(plan.data?.[0]?.[0]?.items).toEqual([0, 1]);
+    // The advance is fenced on the empty value, so the field fills in with the seed after the batch.
+    expect(plan.seedAdvances).toEqual([{ fieldName: 'seed', nodeId: ids[0], seedMode: 'increment', toSeed: 2 }]);
+    expect(
+      projectGraphReducer(emptied, { advances: plan.seedAdvances, type: 'advanceSeedFields' }).nodes[0]
+    ).toMatchObject({ data: { inputs: { seed: { value: 2 } } } });
+  });
+});
+
+describe('seed inputs', () => {
+  const seed = (overrides: Partial<FieldInputTemplate> = {}) =>
+    input('seed', {
+      maximum: 4_294_967_295,
+      minimum: 0,
+      type: { batch: false, cardinality: 'SINGLE', name: 'IntegerField' },
+      ...overrides,
+    });
+
+  it('recognises the scalar integer a node declares as seed over the seed range', () => {
+    expect(isSeedInputField(seed())).toBe(true);
+    // The title is what a user edits; the name and range are what the backend declared.
+    expect(isSeedInputField(seed({ title: 'Noise seed' }))).toBe(true);
+  });
+
+  it('leaves other integers, other ranges, and connection-only seeds alone', () => {
+    expect(isSeedInputField(seed({ name: 'steps' }))).toBe(false);
+    expect(isSeedInputField(seed({ maximum: 1_000 }))).toBe(false);
+    expect(isSeedInputField(seed({ maximum: null }))).toBe(false);
+    expect(isSeedInputField(seed({ type: { batch: false, cardinality: 'SINGLE', name: 'FloatField' } }))).toBe(false);
+    expect(isSeedInputField(seed({ type: { batch: false, cardinality: 'COLLECTION', name: 'IntegerField' } }))).toBe(
+      false
+    );
+    expect(isSeedInputField(seed({ input: 'connection' }))).toBe(false);
+  });
+
+  it('reads an absent or unknown mode as fixed', () => {
+    expect(getWorkflowFieldSeedMode(undefined)).toBe('fixed');
+    expect(getWorkflowFieldSeedMode({})).toBe('fixed');
+    expect(getWorkflowFieldSeedMode({ seedMode: 'shuffle' as never })).toBe('fixed');
+    expect(getWorkflowFieldSeedMode({ seedMode: 'decrement' })).toBe('decrement');
   });
 });

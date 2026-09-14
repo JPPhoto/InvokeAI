@@ -71,7 +71,22 @@ vi.mock('@features/queue/devices', async (importOriginal) => {
   };
 });
 
+const workflowTemplatesMock = vi.hoisted(() => ({
+  snapshot: { error: null, status: 'idle', templates: {} } as {
+    error: string | null;
+    status: 'idle' | 'loading' | 'loaded' | 'error';
+    templates: Record<string, unknown>;
+  },
+}));
+
+vi.mock('@features/workflow/react', async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+
+  return { ...original, getInvocationTemplatesSnapshot: () => workflowTemplatesMock.snapshot };
+});
+
 afterEach(() => {
+  workflowTemplatesMock.snapshot = { error: null, status: 'idle', templates: {} };
   generationDeviceMock.options = [];
 });
 
@@ -3264,6 +3279,146 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       expect(getActiveProject(state).queue.items[0]?.snapshot.backendSubmission).toMatchObject({
         positivePrompts: ['a cat, red tint', 'a cat, green tint'],
       });
+    });
+  });
+
+  describe('workflow seed modes on the compiled submission', () => {
+    const SEED_MAX = 4_294_967_295;
+    const seedTemplate = {
+      category: 'noise',
+      classification: 'stable',
+      description: '',
+      inputs: {
+        seed: {
+          default: 0,
+          description: '',
+          exclusiveMaximum: null,
+          exclusiveMinimum: null,
+          fieldKind: 'input',
+          input: 'any',
+          maximum: SEED_MAX,
+          minimum: 0,
+          multipleOf: null,
+          name: 'seed',
+          options: null,
+          required: false,
+          title: 'Seed',
+          type: { batch: false, cardinality: 'SINGLE', name: 'IntegerField' },
+          uiChoiceLabels: null,
+          uiComponent: null,
+          uiHidden: false,
+          uiModelBase: null,
+          uiModelFormat: null,
+          uiModelType: null,
+          uiOrder: null,
+        },
+      },
+      nodePack: 'invokeai',
+      outputs: {},
+      outputType: 'noise_output',
+      tags: [],
+      title: 'Noise',
+      type: 'noise',
+      useCache: true,
+      version: '1.0.0',
+    };
+    const primeWorkflow = (seed: number, seedMode: 'random' | 'fixed' | 'increment' | 'decrement', batchCount = 3) => {
+      workflowTemplatesMock.snapshot = { error: null, status: 'loaded', templates: { noise: seedTemplate } };
+
+      // The Automate preset mounts the Workflow widget, which the route requires.
+      let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'automate', type: 'applyPreset' });
+
+      state = workbenchReducer(state, { type: 'patchWidgetValues', values: { batchCount }, widgetId: 'generate' });
+      state = workbenchReducer(state, {
+        action: {
+          node: {
+            data: {
+              inputs: { seed: { label: '', name: 'seed', seedMode, value: seed } },
+              isIntermediate: true,
+              isOpen: true,
+              label: '',
+              nodePack: 'invokeai',
+              notes: '',
+              type: 'noise',
+              useCache: true,
+              version: '1.0.0',
+            },
+            id: 'noise-1',
+            position: { x: 0, y: 0 },
+            type: 'invocation',
+          },
+          type: 'addNode',
+        },
+        type: 'applyProjectGraphAction',
+      });
+
+      return state;
+    };
+    const submitWorkflow = (state: WorkbenchState) =>
+      workbenchReducer(state, {
+        backendSupportsCancellation: true,
+        route: { destination: 'gallery', destinationLocked: false, sourceId: 'workflow', sourceLocked: false },
+        type: 'submitResolvedInvocationSnapshot',
+      });
+    const readSubmission = (state: WorkbenchState, index = 0) =>
+      getActiveProject(state).queue.items[index]?.snapshot.backendSubmission;
+    const readNodeSeed = (state: WorkbenchState) => {
+      const node = getActiveProject(state).projectGraph.nodes[0];
+
+      return node?.type === 'invocation' ? node.data.inputs.seed?.value : undefined;
+    };
+
+    it('zips a stepping seed into the batch, advances the node, and continues on the next submission', () => {
+      let state = submitWorkflow(primeWorkflow(42, 'increment'));
+
+      expect(readSubmission(state)).toMatchObject({
+        batchCount: 1,
+        data: [[{ field_name: 'seed', items: [42, 43, 44], node_path: 'noise-1' }]],
+        kind: 'workflow',
+      });
+      expect(getActiveProject(state).queue.items[0]?.snapshot.presentation.batchCount).toBe(3);
+      expect(readNodeSeed(state)).toBe(45);
+
+      state = submitWorkflow(state);
+
+      expect(readSubmission(state)).toMatchObject({ data: [[{ items: [45, 46, 47] }]] });
+      expect(readSubmission(state, 1)).toMatchObject({ data: [[{ items: [42, 43, 44] }]] });
+      expect(readNodeSeed(state)).toBe(48);
+    });
+
+    it('holds a fixed seed as a graph constant and repeats the graph for every run', () => {
+      const state = submitWorkflow(primeWorkflow(42, 'fixed'));
+      const submission = readSubmission(state);
+
+      expect(submission).toMatchObject({ batchCount: 3, kind: 'workflow' });
+      expect(submission).not.toHaveProperty('data');
+      expect(submission?.kind === 'workflow' && submission.graph.nodes['noise-1']?.seed).toBe(42);
+      expect(readNodeSeed(state)).toBe(42);
+    });
+
+    it('draws a random start for the batch and preserves the entered seed', () => {
+      const random = vi.spyOn(Math, 'random').mockReturnValue(0.25);
+
+      try {
+        const state = submitWorkflow(primeWorkflow(42, 'random', 2));
+        const start = Math.floor(0.25 * SEED_MAX);
+
+        expect(readSubmission(state)).toMatchObject({ data: [[{ items: [start, start + 1] }]] });
+        expect(readNodeSeed(state)).toBe(42);
+      } finally {
+        random.mockRestore();
+      }
+    });
+
+    it('does not move the seed when the route is not ready to submit', () => {
+      const state = primeWorkflow(42, 'increment');
+
+      workflowTemplatesMock.snapshot = { error: null, status: 'loading', templates: {} };
+
+      const next = submitWorkflow(state);
+
+      expect(getActiveProject(next).queue.items).toEqual([]);
+      expect(readNodeSeed(next)).toBe(42);
     });
   });
 
