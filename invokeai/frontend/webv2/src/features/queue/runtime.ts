@@ -10,7 +10,12 @@ import type {
 import type { BackendConnectionStatus } from '@platform/transport/types';
 
 import { collectGraphInputMediaNames } from '@features/queue/core/graphInputMedia';
-import { isQueuePromptSeedBehaviour, isQueueSeedStep, MAX_QUEUE_BATCH_ITEMS } from '@features/queue/core/promptBatch';
+import {
+  isQueueBatchData,
+  isQueuePromptSeedBehaviour,
+  isQueueSeedStep,
+  MAX_QUEUE_BATCH_ITEMS,
+} from '@features/queue/core/promptBatch';
 import { shouldSubmitPendingQueueItem } from '@features/queue/core/submissionRules';
 import { progressImageStore } from '@features/queue/data/progressImageStore';
 import {
@@ -200,6 +205,10 @@ export const createQueueItemBackendSubmission = (
         sourceQueueItemId: queueItem.id,
       },
     };
+  }
+
+  if (submission.data !== undefined && !isQueueBatchData(submission.data)) {
+    return { error: 'Queue item has malformed workflow batch data.', kind: 'invalid' };
   }
 
   // `libraryWorkflowId` is provenance for the completed-run sink, not something

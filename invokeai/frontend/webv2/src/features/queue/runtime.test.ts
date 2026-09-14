@@ -148,6 +148,33 @@ describe('queue runtime', () => {
     ).not.toHaveProperty('shouldRandomizeSeed');
   });
 
+  it('replays workflow batch data as recorded and rejects a malformed record', () => {
+    const asWorkflow = (data: unknown) => {
+      const queueItem = createPendingQueueItem();
+      queueItem.snapshot.backendSubmission = {
+        batchCount: 1,
+        graph: { edges: [], id: 'backend-graph', nodes: {} },
+        kind: 'workflow',
+        ...(data === undefined ? {} : { data: data as never }),
+      };
+      queueItem.snapshot.sourceId = 'workflow';
+      return queueItem;
+    };
+    const data = [[{ field_name: 'seed', items: [1, 2], node_path: 'noise' }]];
+
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow(data))).toMatchObject({
+      kind: 'workflow',
+      request: { batchCount: 1, data },
+    });
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow(undefined))).toMatchObject({
+      kind: 'workflow',
+    });
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([{ items: [1] }]))).toEqual({
+      error: 'Queue item has malformed workflow batch data.',
+      kind: 'invalid',
+    });
+  });
+
   it('rejects a generate item that records neither a seed step nor the legacy toggle', () => {
     const queueItem = createPendingQueueItem();
     delete (queueItem.snapshot.backendSubmission as Record<string, unknown>).seedStep;

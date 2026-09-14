@@ -278,6 +278,25 @@ describe('enqueueWorkflow', () => {
     expect(getSubmittedBody().batch.batch_id).toBeUndefined();
   });
 
+  it('sends zipped seed batch data alongside the run count', async () => {
+    const { enqueueWorkflow } = await import('./submissionApi');
+    const data = [
+      [
+        { field_name: 'seed', items: [1, 2, 3], node_path: 'noise-a' },
+        { field_name: 'seed', items: [9, 8, 7], node_path: 'noise-b' },
+      ],
+    ];
+
+    await enqueueWorkflow(createWorkflowRequest({ batchCount: 1, data }));
+
+    expect(getSubmittedBody().batch).toMatchObject({ data, runs: 1 });
+
+    mocks.apiFetchJson.mockClear();
+    await enqueueWorkflow(createWorkflowRequest());
+
+    expect(getSubmittedBody().batch).not.toHaveProperty('data');
+  });
+
   it('does not cap workflow runs', async () => {
     const { enqueueWorkflow } = await import('./submissionApi');
 

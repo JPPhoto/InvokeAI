@@ -105,6 +105,7 @@ export const enqueueWorkflow = async (request: QueueEnqueueWorkflowRequest): Pro
   const result = await apiFetchJson<unknown>('/api/v1/queue/default/enqueue_batch', {
     body: JSON.stringify({
       batch: {
+        ...(request.data ? { data: request.data } : {}),
         destination: request.destination,
         graph: request.graph,
         idempotency_key: getQueueIdempotencyKey(request.projectId, request.sourceQueueItemId),

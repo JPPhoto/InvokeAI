@@ -40,11 +40,32 @@ export const generateSeedSequence = (start: number, count: number, step: QueueSe
   );
 };
 
-export interface GeneratePromptBatchDatum {
-  field_name: 'value';
+/** One value list of a zipped batch group, in the backend's `BatchDatum` shape. */
+export interface QueueBatchDatum {
+  field_name: string;
   items: (number | string)[];
   node_path: string;
 }
+
+export interface GeneratePromptBatchDatum extends QueueBatchDatum {
+  field_name: 'value';
+}
+
+/** Structural check for batch data read back from a persisted snapshot. */
+export const isQueueBatchData = (value: unknown): value is QueueBatchDatum[][] =>
+  Array.isArray(value) &&
+  value.every(
+    (group) =>
+      Array.isArray(group) &&
+      group.every(
+        (datum) =>
+          typeof datum === 'object' &&
+          datum !== null &&
+          typeof (datum as QueueBatchDatum).field_name === 'string' &&
+          typeof (datum as QueueBatchDatum).node_path === 'string' &&
+          Array.isArray((datum as QueueBatchDatum).items)
+      )
+  );
 
 export interface GeneratePromptBatchPlanInput {
   batchCount: number;
