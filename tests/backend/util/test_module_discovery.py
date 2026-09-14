@@ -49,6 +49,10 @@ def test_descends_into_subpackages(tree: Path) -> None:
     ]
 
 
+def test_excludes_named_modules(tree: Path) -> None:
+    assert discover_modules(tree, "synthetic_pkg.", {"synthetic_pkg.sub.nested"}) == ["synthetic_pkg.flat"]
+
+
 def test_skips_private_modules_and_pycache(tree: Path) -> None:
     found = discover_modules(tree, "synthetic_pkg.")
     assert not [n for n in found if "_private" in n or "__pycache__" in n or "stale" in n]
