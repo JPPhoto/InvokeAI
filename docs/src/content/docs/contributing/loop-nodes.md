@@ -259,9 +259,9 @@ rehydration, source completion, and failure parity. Nine-level or deeper chains,
 sibling nested loops, and unsupported mixed shapes remain compatibility-owned. The exact fresh two-sibling
 `For`/`ForReturn` `CollectionConcat` fan-in shape, the exact fresh three-level serial nested-`For` shape with its
 bounded static `CollectionConcat` producer, and the exact fresh four-level serial nested-`For` shape are
-generic-routed. The execution engine does not modify any file under `invokeai/frontend/...`, including generated schemas; the
-existing frontend/backend external interface remains stable. Branch-membership analysis remains internal, while fresh
-execution no longer creates skipped-state projection and old snapshots retain it for compatibility.
+generic-routed. The execution engine does not modify any file under `invokeai/frontend/...`, including generated
+schemas; the existing frontend/backend external interface remains stable. Branch-membership analysis remains internal,
+while fresh execution no longer creates skipped-state projection and old snapshots retain it for compatibility.
 
 The frontend and backend validate the same boundary rules. Saved workflows preserve node types, field handles, and the
 direct linkage edge. The current invocation templates provide output-scope metadata when a workflow is loaded. The
