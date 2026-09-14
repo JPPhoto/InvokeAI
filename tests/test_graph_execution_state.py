@@ -14,6 +14,7 @@ from invokeai.app.invocations.baseinvocation import (
     invocation,
     invocation_output,
 )
+from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvocation
 from invokeai.app.invocations.collections import (
     CollectionCartesianInvocation,
     CollectionConcatInvocation,
@@ -39,11 +40,14 @@ from invokeai.app.invocations.primitives import (
     BooleanOutput,
     IntegerCollectionInvocation,
 )
+from invokeai.app.invocations.workflow_return import WorkflowReturnOutput
 from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
 from invokeai.app.services.shared.execution_effects import (
+    AwaitEffect,
     EmitEffect,
     ExecutionEffectsRecorder,
     ExecutionInterface,
+    SpawnExecutionEffect,
 )
 from invokeai.app.services.shared.execution_effects import (
     ExecutionRef as ProtocolExecutionRef,
@@ -3311,6 +3315,54 @@ def test_graph_execution_state_serializes_workflow_call_state():
     assert restored.workflow_call_stack == [frame]
     assert restored.waiting_workflow_call == frame
     assert restored.max_workflow_call_depth == 4
+
+
+def test_graph_state_rehydrates_after_a_completed_call_before_a_later_call_waits():
+    graph = Graph()
+    graph.add_node(CallSavedWorkflowInvocation(id="call_a", workflow_id="workflow-a"))
+    graph.add_node(CallSavedWorkflowInvocation(id="call_b", workflow_id="workflow-b"))
+    state = GraphExecutionState(graph=graph)
+
+    def lifecycle_effects(reference: Any, child_id: str) -> list[Any]:
+        owner = ProtocolExecutionRef(
+            execution_node_id=reference.exec_node_id,
+            state_id=reference.state_id,
+            frame_path=reference.frame.iteration_path,
+            frame_id=reference.frame.frame_id,
+            workflow_call_depth=reference.frame.workflow_call_depth,
+        )
+        child = ProtocolExecutionRef(
+            execution_node_id=child_id,
+            state_id=reference.state_id,
+            frame_path=reference.frame.iteration_path,
+            frame_id=reference.frame.frame_id,
+            workflow_call_depth=reference.frame.workflow_call_depth,
+        )
+        return [
+            SpawnExecutionEffect(execution_ref=owner, parent=owner, graph={}, child_execution_id=child_id),
+            AwaitEffect(execution_ref=owner, dependency=child),
+        ]
+
+    first = state.next()
+    assert isinstance(first, CallSavedWorkflowInvocation)
+    first_ref = state.get_execution_ref(first.id)
+    state.apply(first_ref, WorkflowReturnOutput(values={}), effects=lifecycle_effects(first_ref, "child-a"))
+    state.begin_waiting_on_workflow_call(state.build_workflow_call_frame(first.id, "workflow-a"))
+    state = load_execution_state(dump_execution_state(state))
+
+    state.end_waiting_on_workflow_call()
+    state.apply(state.get_execution_ref(first.id), WorkflowReturnOutput(values={}))
+
+    second = state.next()
+    assert isinstance(second, CallSavedWorkflowInvocation)
+    second_ref = state.get_execution_ref(second.id)
+    state.apply(second_ref, WorkflowReturnOutput(values={}), effects=lifecycle_effects(second_ref, "child-b"))
+    second_frame = state.build_workflow_call_frame(second.id, "workflow-b")
+    state.begin_waiting_on_workflow_call(second_frame)
+
+    restored = load_execution_state(dump_execution_state(state))
+
+    assert restored.waiting_workflow_call == second_frame
 
 
 def test_graph_waiting_on_workflow_call_blocks_until_suspended_node_is_completed():

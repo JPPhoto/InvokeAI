@@ -2605,8 +2605,11 @@ class GraphExecutionState(BaseModel):
         effect_kinds = cls._lifecycle_effect_kinds(effects)
         return bool(effect_kinds & {"spawn_execution", "await"}) and "fail" not in effect_kinds
 
+    def _is_pending_lifecycle_execution(self, exec_node_id: str, effects: Iterable[Any]) -> bool:
+        return exec_node_id not in self.executed and self._is_pending_lifecycle_effects(effects)
+
     def _update_pending_lifecycle_execution(self, exec_node_id: str, effects: Iterable[Any]) -> None:
-        if self._is_pending_lifecycle_effects(effects) and exec_node_id not in self.executed:
+        if self._is_pending_lifecycle_execution(exec_node_id, effects):
             self._pending_lifecycle_execution_nodes.add(exec_node_id)
         else:
             self._pending_lifecycle_execution_nodes.discard(exec_node_id)
@@ -2624,7 +2627,9 @@ class GraphExecutionState(BaseModel):
 
         ref = self._validate_execution_ref(execution_ref)
         persisted_effects = self.execution_effects.get(ref.reference_id)
-        pending_resume = persisted_effects is not None and self._is_pending_lifecycle_effects(persisted_effects)
+        pending_resume = persisted_effects is not None and self._is_pending_lifecycle_execution(
+            ref.exec_node_id, persisted_effects
+        )
         if ref.exec_node_id in self.executed or (persisted_effects is not None and not pending_resume):
             raise ValueError(f"Execution reference {ref.reference_id} has already been applied")
         if pending_resume and self.is_waiting_on_workflow_call():
@@ -3236,7 +3241,7 @@ class GraphExecutionState(BaseModel):
                 execution_ref = references_by_id.get(reference_id)
                 if execution_ref is None:
                     raise ValueError("Execution effects contain an unknown execution reference")
-                lifecycle_pending = self._is_pending_lifecycle_effects(effects)
+                lifecycle_pending = self._is_pending_lifecycle_execution(execution_ref.exec_node_id, effects)
                 lifecycle_failed = "fail" in self._lifecycle_effect_kinds(effects)
                 if execution_ref.exec_node_id not in self.results and not lifecycle_pending and not lifecycle_failed:
                     raise ValueError("Execution effects belong to a pending execution node")
@@ -3342,9 +3347,9 @@ class GraphExecutionState(BaseModel):
             reference.exec_node_id
             for reference_id, effects in self.execution_effects.items()
             if effects
-            and self._is_pending_lifecycle_effects(effects)
             and (reference := references_by_id.get(reference_id)) is not None
             and reference.exec_node_id not in self.errors
+            and self._is_pending_lifecycle_execution(reference.exec_node_id, effects)
         }
         self._rehydrate_runtime_state()
 
