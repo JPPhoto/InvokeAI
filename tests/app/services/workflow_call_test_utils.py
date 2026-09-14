@@ -25,6 +25,7 @@ from invokeai.app.services.session_processor.workflow_call_runtime import (
     WorkflowCallCoordinator,
     WorkflowCallQueueLifecycle,
 )
+from invokeai.app.services.session_queue.session_queue_base import WorkflowCallChildCompletion
 from invokeai.app.services.session_queue.session_queue_common import SessionQueueItemNotFoundError
 from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder, ExecutionInterface
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState, WorkflowCallFrame
@@ -992,6 +993,46 @@ class _DummySessionQueue:
         queue_item.session = session
         self.session_updates.append((item_id, session))
 
+    def enqueue_workflow_call_children(self, parent_queue_item, child_sessions):
+        self._ensure_queue_item(parent_queue_item.item_id, parent_queue_item.session)
+        child_queue_items = []
+        try:
+            for child_session, field_values in child_sessions:
+                child_queue_items.append(
+                    self.enqueue_workflow_call_child(parent_queue_item, child_session, field_values)
+                )
+        except Exception:
+            self.delete_queue_items_by_id([child_queue_item.item_id for child_queue_item in child_queue_items])
+            raise
+        parent_queue_item.session.set_waiting_workflow_call_child_item_ids(
+            [child_queue_item.item_id for child_queue_item in child_queue_items]
+        )
+        parent_queue_item.status = "waiting"
+        self.waiting_item_ids.append(parent_queue_item.item_id)
+        return child_queue_items
+
+    def record_workflow_call_child_completion(self, parent_item_id, child_item_id, output_values):
+        parent_queue_item = self.get_queue_item(parent_item_id)
+        if parent_queue_item.status in ("completed", "failed", "canceled"):
+            return None
+        generic_update = parent_queue_item.session.record_generic_child_completion(child_item_id, output_values)
+        if generic_update is not None and not generic_update.changed:
+            return None
+        legacy_should_resume, legacy_values = parent_queue_item.session.record_waiting_workflow_call_child_completion(
+            child_item_id, output_values
+        )
+        if generic_update is None:
+            should_resume_parent, aggregated_values = legacy_should_resume, legacy_values
+        else:
+            should_resume_parent = generic_update.status == "completed"
+            aggregated_values = {
+                key: values[0] if len(values) == 1 else values
+                for key, values in generic_update.aggregated_outputs.items()
+            }
+            if generic_update.status == "completed" and aggregated_values != legacy_values:
+                raise ValueError("Generic child aggregation disagrees with workflow-call aggregation.")
+        return WorkflowCallChildCompletion(parent_queue_item, should_resume_parent, aggregated_values)
+
     def suspend_queue_item(self, item_id: int, queue_item=None):
         self._raise_if_not_found(item_id)
         queue_item = queue_item or self._ensure_queue_item(item_id, None)
@@ -1664,6 +1705,59 @@ def test_workflow_call_queue_lifecycle_resumes_parent_from_completed_child(
         "spawn_execution",
         "await",
     ]
+
+
+def test_nonfinal_child_completion_does_not_rewrite_the_persisted_parent_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_queue = _DummySessionQueue()
+    runner, _events, _workflow_records = _build_workflow_runner(monkeypatch, session_queue=session_queue)
+    lifecycle = WorkflowCallQueueLifecycle(runner)
+
+    parent_graph = Graph()
+    parent_graph.add_node(CallSavedWorkflowInvocation(id="call-node", workflow_id="workflow-a"))
+    parent_session = GraphExecutionState(graph=parent_graph)
+    parent_invocation = parent_session.next()
+    assert isinstance(parent_invocation, CallSavedWorkflowInvocation)
+    frame = parent_session.build_workflow_call_frame(parent_invocation.id, "workflow-a")
+    parent_session.begin_waiting_on_workflow_call(frame)
+
+    child_sessions = [parent_session.create_child_workflow_execution_state(Graph(), frame) for _ in range(2)]
+    parent_session.attach_waiting_workflow_call_child_sessions(child_sessions)
+    parent_session.set_waiting_workflow_call_child_item_ids([100, 101])
+    parent_queue_item = SimpleNamespace(
+        item_id=1,
+        status="waiting",
+        session=parent_session,
+        session_id=parent_session.id,
+        user_id="user-1",
+        queue_id="default",
+        batch_id="batch-1",
+    )
+    session_queue.add_queue_item(parent_queue_item)
+
+    child_graph = Graph()
+    child_graph.add_node(WorkflowReturnInvocation(id="return"))
+    child_session = GraphExecutionState(graph=child_graph)
+    child_return = child_session.next()
+    assert isinstance(child_return, WorkflowReturnInvocation)
+    child_session.complete(child_return.id, WorkflowReturnOutput(values={"result": 1}))
+    child_queue_item = SimpleNamespace(
+        item_id=100,
+        status="completed",
+        session=child_session,
+        session_id=child_session.id,
+        parent_item_id=1,
+    )
+
+    def fail_stale_save(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("non-final child completion rewrote the persisted parent session")
+
+    monkeypatch.setattr(session_queue, "save_queue_item_session", fail_stale_save)
+    lifecycle._resume_parent_from_completed_child(child_queue_item)
+
+    assert parent_session.waiting_workflow_call_execution is not None
+    assert parent_session.waiting_workflow_call_execution.completed_child_item_ids == [100]
 
 
 def test_resume_waiting_workflow_call_applies_parent_output_to_execution_ledger(

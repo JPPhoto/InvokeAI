@@ -9,7 +9,7 @@ from typing import Any, Optional, Union, cast
 from pydantic_core import to_jsonable_python
 
 from invokeai.app.services.invoker import Invoker
-from invokeai.app.services.session_queue.session_queue_base import SessionQueueBase
+from invokeai.app.services.session_queue.session_queue_base import SessionQueueBase, WorkflowCallChildCompletion
 from invokeai.app.services.session_queue.session_queue_common import (
     DEFAULT_QUEUE_ID,
     QUEUE_ITEM_STATUS,
@@ -1490,6 +1490,185 @@ class SqliteSessionQueue(SessionQueueBase):
     def set_queue_item_session(self, item_id: int, session: GraphExecutionState) -> SessionQueueItem:
         self.save_queue_item_session(item_id, session)
         return self.get_queue_item(item_id)
+
+    def record_workflow_call_child_completion(
+        self, parent_item_id: int, child_item_id: int, output_values: dict[str, Any]
+    ) -> WorkflowCallChildCompletion | None:
+        with self._db.transaction() as cursor:
+            cursor.execute(
+                """--sql
+                SELECT *
+                FROM session_queue
+                WHERE item_id = ?
+                """,
+                (parent_item_id,),
+            )
+            row = cast(sqlite3.Row | None, cursor.fetchone())
+            if row is None:
+                raise SessionQueueItemNotFoundError(f"No queue item with id {parent_item_id}")
+            parent_queue_item, readable = self._hydrate_queue_item(dict(row), quarantine=False)
+            if not readable:
+                raise ValueError("Unable to record workflow call child completion for an unreadable parent session.")
+            if parent_queue_item.status in ("completed", "failed", "canceled"):
+                return None
+
+            execution = parent_queue_item.session.waiting_workflow_call_execution
+            if execution is not None and child_item_id in execution.completed_child_item_ids:
+                return None
+            generic_update = parent_queue_item.session.record_generic_child_completion(child_item_id, output_values)
+            if generic_update is not None and not generic_update.changed:
+                return None
+            legacy_should_resume, legacy_values = (
+                parent_queue_item.session.record_waiting_workflow_call_child_completion(child_item_id, output_values)
+            )
+            if generic_update is None:
+                should_resume_parent, aggregated_values = legacy_should_resume, legacy_values
+            else:
+                should_resume_parent = generic_update.status == "completed"
+                aggregated_values = {
+                    key: values[0] if len(values) == 1 else values
+                    for key, values in generic_update.aggregated_outputs.items()
+                }
+                if generic_update.status == "completed" and aggregated_values != legacy_values:
+                    raise ValueError("Generic child aggregation disagrees with workflow-call aggregation.")
+
+            session_json = json.dumps(dump_execution_state(parent_queue_item.session), default=to_jsonable_python)
+            cursor.execute(
+                """--sql
+                UPDATE session_queue
+                SET session = ?
+                WHERE item_id = ?
+                """,
+                (session_json, parent_item_id),
+            )
+            if cursor.rowcount == 0:
+                raise SessionQueueItemNotFoundError(f"No queue item with id {parent_item_id}")
+
+        return WorkflowCallChildCompletion(
+            parent_queue_item=parent_queue_item,
+            should_resume=should_resume_parent,
+            aggregated_values=aggregated_values,
+        )
+
+    def enqueue_workflow_call_children(
+        self,
+        parent_queue_item: SessionQueueItem,
+        child_sessions: list[tuple[GraphExecutionState, list[NodeFieldValue] | None]],
+    ) -> list[SessionQueueItem]:
+        workflow_call_execution = parent_queue_item.session.waiting_workflow_call_execution
+        if workflow_call_execution is None:
+            raise ValueError("Parent queue item is missing active workflow call execution metadata.")
+        if not child_sessions:
+            raise ValueError("Workflow call must enqueue at least one child execution.")
+
+        serialized_children = [
+            (
+                json.dumps(dump_execution_state(child_session), default=to_jsonable_python),
+                json.dumps(field_values, default=to_jsonable_python) if field_values is not None else None,
+            )
+            for child_session, field_values in child_sessions
+        ]
+        root_item_id = parent_queue_item.root_item_id or parent_queue_item.item_id
+        child_item_ids: list[int] = []
+        with self._db.transaction() as cursor:
+            cursor.execute(
+                """--sql
+                SELECT status
+                FROM session_queue
+                WHERE item_id = ?
+                """,
+                (parent_queue_item.item_id,),
+            )
+            parent_status_row = cursor.fetchone()
+            if parent_status_row is None:
+                raise SessionQueueItemNotFoundError(f"No queue item with id {parent_queue_item.item_id}")
+            if parent_status_row[0] in ("completed", "failed", "canceled"):
+                raise ValueError("Cannot enqueue workflow call children for a terminal parent queue item.")
+
+            cursor.execute(
+                """--sql
+                SELECT COUNT(*)
+                FROM session_queue
+                WHERE queue_id = ? AND status = 'pending'
+                """,
+                (parent_queue_item.queue_id,),
+            )
+            pending_count = cast(int, cursor.fetchone()[0])
+            max_queue_size = self.__invoker.services.configuration.max_queue_size
+            if pending_count + len(child_sessions) > max_queue_size:
+                raise TooManySessionsError(
+                    "call_saved_workflow exceeds remaining queue capacity for child workflow executions"
+                )
+
+            for (session_json, field_values_json), (child_session, _field_values) in zip(
+                serialized_children, child_sessions, strict=True
+            ):
+                cursor.execute(
+                    """--sql
+                    INSERT INTO session_queue (
+                        queue_id,
+                        session,
+                        session_id,
+                        batch_id,
+                        field_values,
+                        priority,
+                        workflow,
+                        origin,
+                        destination,
+                        retried_from_item_id,
+                        user_id,
+                        workflow_call_id,
+                        parent_item_id,
+                        parent_session_id,
+                        root_item_id,
+                        workflow_call_depth,
+                        status
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                    """,
+                    (
+                        parent_queue_item.queue_id,
+                        session_json,
+                        child_session.id,
+                        parent_queue_item.batch_id,
+                        field_values_json,
+                        parent_queue_item.priority,
+                        None,
+                        parent_queue_item.origin,
+                        parent_queue_item.destination,
+                        None,
+                        parent_queue_item.user_id,
+                        workflow_call_execution.id,
+                        parent_queue_item.item_id,
+                        parent_queue_item.session_id,
+                        root_item_id,
+                        workflow_call_execution.depth,
+                    ),
+                )
+                child_item_ids.append(cast(int, cursor.lastrowid))
+
+            parent_queue_item.session.set_waiting_workflow_call_child_item_ids(child_item_ids)
+            session_json = json.dumps(dump_execution_state(parent_queue_item.session), default=to_jsonable_python)
+            cursor.execute(
+                """--sql
+                UPDATE session_queue
+                SET session = ?, status = 'waiting', status_sequence = COALESCE(status_sequence, 0) + 1
+                WHERE item_id = ?
+                """,
+                (session_json, parent_queue_item.item_id),
+            )
+            if cursor.rowcount == 0:
+                raise SessionQueueItemNotFoundError(f"No queue item with id {parent_queue_item.item_id}")
+
+        parent_queue_item.status = "waiting"
+        child_queue_items = [self.get_queue_item(item_id) for item_id in child_item_ids]
+        for queue_item in [self.get_queue_item(parent_queue_item.item_id), *child_queue_items]:
+            batch_status = self.get_batch_status(queue_id=queue_item.queue_id, batch_id=queue_item.batch_id)
+            queue_status = self.get_queue_status(
+                queue_id=queue_item.queue_id, user_id=queue_item.user_id, acting_user_id=queue_item.user_id
+            )
+            self.__invoker.services.events.emit_queue_item_status_changed(queue_item, batch_status, queue_status)
+        return child_queue_items
 
     def enqueue_workflow_call_child(
         self,

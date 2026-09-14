@@ -18,8 +18,9 @@ dependencies in `GraphExecutionState`; unsupported fresh shapes use the compatib
 `_IfActivationController` fallback, while legacy snapshots retain their generic compatibility projection.
 Current fresh sibling support includes exactly four independent `If`s with no nesting, fan-out, or other control-flow
 nodes. The bounded three-`If` chain requires direct `default` edges, all three `If`s to have `condition`, `true_input`,
-and `false_input` inputs, and inner/middle `If`s to have no output except their direct nested branch edge. The exact
-four-`If` chain has the same input and direct-edge requirements, with no extra
+and `false_input` inputs. The inner `If` has only its direct nested branch output; the middle `If.value` may also feed
+one ordinary leaf consumer with no outputs. That leaf inherits the outer branch dependency, not middle-`If` polarity.
+The exact four-`If` chain has the same input and direct-edge requirements, with no extra
 output fan-out. Five or more nested `If`s, other fan-out, mixed graphs outside
 the bounded per-item `Iterate`/`If`/`Collect` topology, loop-containing,
 saved-workflow, legacy, and five-or-more sibling shapes remain on the
@@ -371,8 +372,9 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
 
 ### 4.2 Core methods
 
-- `next()` Returns the next ready exec node. If none are ready, it asks the materializer to expand more source nodes and
-  then retries. If the execution state is paused on a workflow call boundary, it returns `None` without scheduling more
+- `next()` Returns the next ready exec node. If none are ready, it asks the admitted planner or compatibility materializer
+  to expand more source nodes and then retries. If the execution state is paused on a workflow call boundary, it returns
+  `None` without scheduling more
   work. Before returning a node, the runtime helper deep-copies inbound values into the node fields.
 - `complete(node_id, output)` is the compatibility completion boundary. For a first JSON-safe completion it delegates
   validation and the atomic scheduler/ledger transition to `apply()`, including output tokens and synthetic
@@ -403,7 +405,7 @@ rehydration, every activation token is bound to a currently prepared owner and i
 declared port, value, canonical token id, mapping key, and known frame fields must match. Unknown extra frame metadata
 remains forward-compatible.
 For a fresh generic `If` graph with one ordinary-node `If`, the exact one-level nested shape described above, the exact
-bounded three-`If` inner/middle/outer chain, the exact four-`If` nested chain,
+bounded three-`If` inner/middle/outer chain (including its single middle-value leaf consumer), the exact four-`If` nested chain,
 or exactly two, exactly three, or exactly four independent sibling `If`s,
 `GraphExecutionState` compiles opaque, frame-local activation-dependency records privately on each branch-local plan
 node. Five-or-more nesting, five-or-more sibling `If`s, other fan-out, mixed graphs outside the bounded per-item
@@ -653,8 +655,10 @@ the pending `If` is admitted. Before token validation,
 missing legacy iteration-path metadata is rebuilt from the prepared execution graph. Persisted activation identity is
 then validated fail-closed
 against prepared owners, derived references, declared activation fields, canonical ids, and known frame fields; extra
-frame metadata is retained. Persisted execution references, tokens, and effects remain part of serialized state; private
-helper objects do not. Queue snapshots carry an additive execution-state version marker and use version-aware loader;
+frame metadata is retained. `dump_execution_state()` retains execution references, tokens, effects, and child dependencies,
+including those in attached child states. Ordinary model serialization and public schemas omit these four internal ledgers;
+private helper objects are not serialized. Queue snapshots carry an additive execution-state version marker and use a
+version-aware loader;
 legacy unmarked snapshots are treated as version 0, while unreadable snapshots are quarantined by queue service.
 
 ### 4.4 Compatibility preparation (`_prepare()`)
@@ -706,9 +710,10 @@ materialization.
   for its frame. Fresh admission prevents rejected branch nodes from reaching this queue. For direct `Collect` nodes,
   the adapter also requires available Iterate streams to be closed. Compatibility uses the same opaque activation
   dependencies; legacy skipped metadata remains for old snapshots.
-- `_get_next_node()` uses the generic scheduler for ordinary static DAGs and legacy-shaped `If` graphs, projecting its
-  deterministic class/frame order into the compatibility queues. Loop and saved-workflow control-flow graphs use `_active_class`
-  and the legacy class queues. No batch-size or fairness cap is currently implemented.
+- `_get_next_node()` uses the generic scheduler for ordinary static DAGs, legacy-shaped `If` graphs, and the admitted
+  fresh control-flow shapes described above, projecting deterministic class/frame order into the compatibility queues.
+  Fallback control-flow graphs, including saved-workflow calls, use `_active_class` and the legacy class queues.
+  No batch-size or fairness cap is currently implemented.
 
 #### 4.5.1 Indegree (what it is and how it's used)
 

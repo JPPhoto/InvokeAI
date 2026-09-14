@@ -29,9 +29,10 @@ Control-flow nodes remain concrete `BaseInvocation` subclasses. They do not inhe
 hierarchy, and they do not return a literal next-node ID. Internal planners and records may share implementation
 helpers, while successor readiness is selected from frame-scoped dependencies and effects.
 
-This is an incremental hybrid, not yet a token-authoritative engine. The execution ledger and internal planners are
-backend persistence details; they do not add author-time ports or change the frontend/backend external contract. No
-file under `invokeai/frontend/...` is part of this refactoring.
+Ownership is topology-dependent: admitted fresh `If` branches require matching activation tokens; bounded planners own
+admitted loop expansion and continuation. Compatibility adapters own the remaining shapes. Execution ledgers are internal
+persistence data, excluded from ordinary model serialization and public schemas. `dump_execution_state()` retains them,
+including attached child states. They add no author-time ports or frontend/backend external fields.
 
 ## Core contract
 
@@ -91,7 +92,7 @@ Nested `For` boundaries are supported recursively when each inner boundary has i
 continuation. Independent inner loops must all feed one explicit fan-in continuation; collection concatenation, zipping,
 or Cartesian semantics come from the connected collection operation, not from loop scheduling.
 
-A bounded internal `Iterate` is supported only for the canonical outer-`For` shape: one ordinary preparation node
+A bounded single internal `Iterate` is supported for the canonical outer-`For` shape: one ordinary preparation node
 converts `For.item` to the inner collection, one ordinary body node consumes `Iterate.item`, and one `Collect` collapses
 that item dimension before the parent `ForReturn`:
 
@@ -104,9 +105,21 @@ Collect.collection -> ForReturn.output
 The fresh generic scheduler admits this exact shape when the outer collection is a non-empty literal or one of the
 supported input-driven outer-collection variants, and there is one final consumer of `For.output_collection`. Each
 outer frame is isolated, including when the preparation node produces an empty inner collection. A checkpoint after a
-nested iterator boundary restores the generic class-drain state and continues the same frame/stream order. Unsupported
-input-driven outer collections, additional loop or control-flow nodes, escaped body paths, and other mixed shapes
-remain on the compatibility scheduler.
+nested iterator boundary restores the generic class-drain state and continues the same frame/stream order. Valid
+topologies outside these bounds retain compatibility ownership; escaped body paths fail graph validation.
+
+The exact serial two-`Iterate` body is also supported:
+
+```text
+For.item -> preparation1 -> Iterate1.collection
+Iterate1.item -> preparation2 -> Iterate2.collection
+Iterate2.item -> body -> Collect.item
+Collect.collection -> ForReturn.output
+```
+
+Generic admission requires a non-empty literal outer collection, those two ordinary preparation nodes, one ordinary
+body node, and one ordinary `For.output_collection` consumer: nine nodes and nine edges including linkage. This does
+not admit sibling iterators, fan-in, or additional control-flow nodes.
 
 Unsupported shapes, including independent iterator-derived body inputs, mixed nested `For`/`Iterate` bodies, escaping
 body paths, ambiguous returns, and arbitrary cyclic graphs, are rejected before execution.
@@ -120,15 +133,16 @@ shape and for explicitly forced compatibility runs:
   four-node/four-edge empty input producer with no downstream consumer.
 - Canonical two-level nested `For` with a non-empty literal outer collection or supported non-empty input producer;
   empty input-driven outer results remain compatibility-owned.
-- Exact two-sibling nested `For` fan-in through non-empty `CollectionConcat`.
+- Exact two-sibling nested `For` fan-in through `CollectionConcat`, with a non-empty literal outer collection.
 - Exact serial three-level nested `For`, including its statically non-empty `CollectionConcat` producer variant.
 - Exact serial four-level nested `For`.
 - Exact bounded outer `For`/`Iterate`/`Collect`.
 - Exact serial two-`Iterate` nested outer-`For` shape with one ordinary final consumer.
 
-Compatibility-owned shapes include legacy snapshots, unsupported input producers, extra nodes or consumers, fan-out,
-malformed linkage or output-scope edges, nested `For` depth five or greater, unsupported sibling or deeper shapes,
-unsupported mixed control flow, and saved-workflow or `If`-containing `For` graphs. No invocation emits or requires a
+Valid shapes outside this admission matrix retain compatibility ownership, including legacy snapshots, unsupported input
+producers, extra nodes or consumers, fan-out, nested `For` depth five or greater, unsupported sibling or deeper shapes,
+and saved-workflow or `If`-containing `For` graphs. Malformed linkage, invalid output-scope edges, and unsupported mixed
+bodies fail graph validation; a compatibility route does not make them executable. No invocation emits or requires a
 literal successor node ID. This matrix changes no invocation, API, saved-workflow, frontend, or generated-schema contract.
 
 ## Persistence and validation
@@ -228,8 +242,10 @@ the exact one-level nested shape with two `If` nodes where the inner value feeds
 consumer, the exact bounded three-`If` chain with direct inner-to-middle-to-outer branch edges, the exact four-`If` nested
 chain, or exactly two, exactly three, or exactly four independent ordinary-node sibling `If`s compile opaque, frame-local
 activation dependencies in graph state. The three- and four-`If` admissions require `default` edges, all branch inputs
-(`condition`, `true_input`, `false_input`) on each `If`, and no output from inner or middle `If` except its direct nested
-branch edge; the four-`If` chain permits no extra output fan-out. Five-or-more nested `If`s, other fan-out, mixed
+(`condition`, `true_input`, `false_input`) on each `If`. The three-`If` chain permits one extra `middle If.value` edge to
+an ordinary leaf consumer with no outputs; that leaf inherits only the outer branch dependency. Other inner/middle outputs
+must be direct nested branch edges, and the four-`If` chain permits no extra output fan-out. Five-or-more nested `If`s,
+other fan-out, mixed
 shapes outside the bounded per-item `Iterate`/`If`/`Collect` topology, loop-containing `For`/`ForReturn`, saved-workflow,
 legacy, and
 five-or-more sibling shapes use the compatibility scheduler with the dedicated

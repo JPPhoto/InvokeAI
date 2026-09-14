@@ -3,6 +3,7 @@ import sys
 import textwrap
 
 import pytest
+from fastapi import FastAPI
 from pydantic import TypeAdapter, model_validator
 from pydantic.json_schema import models_json_schema
 
@@ -12,6 +13,29 @@ from invokeai.app.invocations.math import AddInvocation
 from invokeai.app.services.session_queue.session_queue_common import SessionQueueItem
 from invokeai.app.services.shared import graph as graph_facade
 from invokeai.app.services.shared import graph_models, graph_validation
+from invokeai.app.util.custom_openapi import get_openapi_func
+
+
+def test_queue_openapi_excludes_runtime_ledgers_and_internal_components() -> None:
+    app = FastAPI(separate_input_output_schemas=False)
+    app.get("/queue-item", response_model=SessionQueueItem)(lambda: None)
+    app.openapi = get_openapi_func(app)
+
+    schemas = app.openapi()["components"]["schemas"]
+    assert {
+        "execution_refs",
+        "execution_tokens",
+        "execution_effects",
+        "execution_child_dependencies",
+    }.isdisjoint(schemas["GraphExecutionState"]["properties"])
+    assert {
+        "ExecutionFrame",
+        "ExecutionReference",
+        "ExecutionToken",
+        "ChildCompletion",
+        "ChildDependencyRecord",
+        "ChildExecutionRecord",
+    }.isdisjoint(schemas)
 
 
 def test_graph_facade_reexports_authoring_graph_boundary() -> None:

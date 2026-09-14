@@ -263,9 +263,7 @@ def test_graph_state_apply_stores_stable_frame_tokens_and_effects():
     assert state.execution_effects[ref.reference_id] == [{"owner_node_id": node.id, "source_port": "value"}]
     assert state.execution_tokens[f"{ref.reference_id}:value"].value == 3
 
-    restored = TypeAdapter(GraphExecutionState).validate_python(
-        state.model_dump(mode="json", warnings=False), strict=False
-    )
+    restored = load_execution_state(dump_execution_state(state))
     assert restored.get_execution_ref(node.id).reference_id == ref.reference_id
     assert restored.execution_tokens[f"{ref.reference_id}:value"].frame == ref.frame
 
@@ -439,7 +437,7 @@ def test_graph_state_apply_records_generic_effect_stream_and_rehydrates_it():
     assert streams[0].closed
     assert streams[0].values == (3,)
 
-    restored = TypeAdapter(GraphExecutionState).validate_json(state.model_dump_json(), strict=False)
+    restored = load_execution_state(dump_execution_state(state))
     restored_streams = list(restored._generic_runtime().streams.values())
     assert len(restored_streams) == 1
     assert restored_streams[0].closed
@@ -1078,11 +1076,11 @@ def test_graph_state_rehydration_rejects_persisted_effect_token_from_another_own
         output,
         effects=[{"kind": "emit", "token": {"node_id": node.id, "field": "value", "value": 3}}],
     )
-    snapshot = state.model_dump(mode="json")
+    snapshot = dump_execution_state(state)
     snapshot["execution_effects"][ref.reference_id][0]["token"]["node_id"] = "other"
 
     with pytest.raises(ValueError, match="not owned"):
-        TypeAdapter(GraphExecutionState).validate_python(snapshot, strict=False)
+        load_execution_state(snapshot)
 
 
 def test_graph_state_apply_does_not_complete_when_effect_persistence_preparation_fails():
@@ -1221,12 +1219,13 @@ def test_graph_state_rehydrates_execution_refs_for_legacy_state():
     state = GraphExecutionState(graph=graph)
     node = state.next()
     assert node is not None
-    legacy_payload = state.model_dump(mode="json", warnings=False)
+    legacy_payload = dump_execution_state(state)
+    legacy_payload.pop("execution_state_version")
     legacy_payload.pop("execution_refs")
     legacy_payload.pop("execution_tokens")
     legacy_payload.pop("execution_effects")
 
-    restored = TypeAdapter(GraphExecutionState).validate_python(legacy_payload, strict=False)
+    restored = load_execution_state(legacy_payload)
 
     ref = restored.get_execution_ref(node.id)
     assert ref.state_id == restored.id
@@ -5076,7 +5075,7 @@ def test_if_snapshot_rejects_conflicting_activation_tokens():
 
     state = GraphExecutionState(graph=graph)
     execute_all_nodes(state)
-    snapshot = state.model_dump(mode="json")
+    snapshot = dump_execution_state(state)
     activation_id, activation = next(
         (token_id, token)
         for token_id, token in snapshot["execution_tokens"].items()
@@ -5091,7 +5090,7 @@ def test_if_snapshot_rejects_conflicting_activation_tokens():
     }
 
     with pytest.raises(ValueError, match="conflicting activation tokens"):
-        TypeAdapter(GraphExecutionState).validate_python(snapshot, strict=False)
+        load_execution_state(snapshot)
 
 
 def test_if_snapshot_rejects_activation_token_with_contradictory_value():
@@ -5106,7 +5105,7 @@ def test_if_snapshot_rejects_activation_token_with_contradictory_value():
 
     state = GraphExecutionState(graph=graph)
     execute_all_nodes(state)
-    snapshot = state.model_dump(mode="json")
+    snapshot = dump_execution_state(state)
     token_id, token = next(
         (token_id, token)
         for token_id, token in snapshot["execution_tokens"].items()
@@ -5115,7 +5114,7 @@ def test_if_snapshot_rejects_activation_token_with_contradictory_value():
     snapshot["execution_tokens"][token_id] = {**token, "value": "false_input"}
 
     with pytest.raises(ValueError, match="stale value"):
-        TypeAdapter(GraphExecutionState).validate_python(snapshot, strict=False)
+        load_execution_state(snapshot)
 
 
 def test_empty_iterate_graph_records_a_closed_empty_stream():

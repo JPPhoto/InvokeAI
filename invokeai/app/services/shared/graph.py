@@ -33,7 +33,7 @@ from pydantic import (
     model_validator,  # noqa: F401
 )
 from pydantic.fields import Field
-from pydantic.json_schema import JsonSchemaValue  # noqa: F401
+from pydantic.json_schema import JsonSchemaValue, SkipJsonSchema  # noqa: F401
 from pydantic_core import PydanticSerializationError, core_schema  # noqa: F401
 
 # Importing * is bad karma but needed here for node detection
@@ -288,22 +288,22 @@ class GraphExecutionState(BaseModel):
         description="The iteration coordinates of each prepared execution node",
         default_factory=dict,
     )
-    execution_refs: dict[str, ExecutionReference] = Field(
+    execution_refs: SkipJsonSchema[dict[str, ExecutionReference]] = Field(
         default_factory=dict,
         description="Stable frame-aware references for prepared execution nodes",
         exclude=True,
     )
-    execution_tokens: dict[str, ExecutionToken] = Field(
+    execution_tokens: SkipJsonSchema[dict[str, ExecutionToken]] = Field(
         default_factory=dict,
         description="Data tokens produced by prepared execution output ports",
         exclude=True,
     )
-    execution_effects: dict[str, list[Any]] = Field(
+    execution_effects: SkipJsonSchema[dict[str, list[Any]]] = Field(
         default_factory=dict,
         description="Effects accepted for each execution reference",
         exclude=True,
     )
-    execution_child_dependencies: dict[str, ChildDependencyRecord] = Field(
+    execution_child_dependencies: SkipJsonSchema[dict[str, ChildDependencyRecord]] = Field(
         default_factory=dict,
         description="Durable generic child dependency records",
         exclude=True,

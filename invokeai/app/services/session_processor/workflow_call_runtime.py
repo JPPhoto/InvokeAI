@@ -106,29 +106,22 @@ class WorkflowCallCoordinator:
                 raise ValueError("Execution state is waiting on a workflow call but has no execution metadata.")
             queue_item.session.waiting_workflow_call_execution.id = dependency_id
         queue_item.session.attach_waiting_workflow_call_child_sessions(child_sessions)
-        child_queue_item = None
         enqueued_child_item_ids: list[int] = []
         try:
-            self._session_runner._services.session_queue.save_queue_item_session(queue_item.item_id, queue_item.session)
-            for child_result in child_session_results:
-                child_queue_item = self._session_runner._services.session_queue.enqueue_workflow_call_child(
-                    parent_queue_item=queue_item,
-                    child_session=child_result.session,
-                    field_values=child_result.field_values,
-                )
-                enqueued_child_item_ids.append(child_queue_item.item_id)
-            queue_item.session.set_waiting_workflow_call_child_item_ids(enqueued_child_item_ids)
-            self._session_runner._services.session_queue.save_queue_item_session(queue_item.item_id, queue_item.session)
-            self._session_runner._services.session_queue.suspend_queue_item(queue_item.item_id, queue_item=queue_item)
+            child_queue_items = self._session_runner._services.session_queue.enqueue_workflow_call_children(
+                parent_queue_item=queue_item,
+                child_sessions=[(result.session, result.field_values) for result in child_session_results],
+            )
+            enqueued_child_item_ids.extend(child_queue_item.item_id for child_queue_item in child_queue_items)
         except Exception as e:
             if enqueued_child_item_ids:
                 self._session_runner._services.session_queue.delete_queue_items_by_id(enqueued_child_item_ids)
             queue_item.session.end_waiting_on_workflow_call(status="failed", error_message=str(e))
             raise
         queue_item.status = "waiting"
-        if child_queue_item is None:
+        if not child_queue_items:
             raise ValueError("Workflow call did not produce any child executions.")
-        return child_queue_item
+        return child_queue_items[-1]
 
 
 class WorkflowCallQueueLifecycle:
@@ -298,29 +291,16 @@ class WorkflowCallQueueLifecycle:
             return
         try:
             output = self.get_child_workflow_return_output(child_queue_item.session)
-            generic_update = parent_queue_item.session.record_generic_child_completion(
-                child_queue_item.item_id, output.values
+            completion = self._session_runner._services.session_queue.record_workflow_call_child_completion(
+                parent_item_id=parent_queue_item.item_id,
+                child_item_id=child_queue_item.item_id,
+                output_values=output.values,
             )
-            if generic_update is not None and not generic_update.changed:
+            if completion is None:
                 return
-            # Keep legacy fields as a durable projection. Generic dependency state owns
-            # ordering, idempotency, readiness, and aggregated output decisions.
-            legacy_should_resume, legacy_values = (
-                parent_queue_item.session.record_waiting_workflow_call_child_completion(
-                    child_queue_item.item_id, output.values
-                )
-            )
-            if generic_update is None:
-                should_resume_parent, aggregated_values = legacy_should_resume, legacy_values
-            else:
-                should_resume_parent = generic_update.status == "completed"
-                generic_values = {
-                    key: values[0] if len(values) == 1 else values
-                    for key, values in generic_update.aggregated_outputs.items()
-                }
-                aggregated_values = generic_values
-                if generic_update.status == "completed" and generic_values != legacy_values:
-                    raise ValueError("Generic child aggregation disagrees with workflow-call aggregation.")
+            parent_queue_item = completion.parent_queue_item
+            should_resume_parent = completion.should_resume
+            aggregated_values = completion.aggregated_values
         except Exception as e:
             workflow_call_execution = parent_queue_item.session.waiting_workflow_call_execution
             if workflow_call_execution is not None:
@@ -339,9 +319,8 @@ class WorkflowCallQueueLifecycle:
                 self._fail_parent_from_failed_child(parent_queue_item)
             return
         if not should_resume_parent:
-            self._session_runner._services.session_queue.save_queue_item_session(
-                parent_queue_item.item_id, parent_queue_item.session
-            )
+            # The queue-owned completion transaction already persisted this parent session. Do not
+            # write the returned snapshot again: another child may have committed newer state.
             return
         parent_queue_item.session.waiting_workflow_call_child_session = child_queue_item.session
         waiting_invocation = self.get_waiting_workflow_call_invocation(parent_queue_item)

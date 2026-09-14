@@ -23,8 +23,10 @@ effect/dependency seam to declare, persist, and resume the call.
 
 The execution-engine refactoring does not change the callable node, saved-workflow, or queue interaction contract.
 Internal execution references, tokens, effects, frames, and scheduler records are persistence-only implementation
-metadata. They must remain out of ordinary client-facing responses and generated client schemas. Existing fields,
-requiredness, statuses, events, and client behavior remain compatible. Frontend application behavior is outside this
+metadata. `dump_execution_state()` retains `execution_refs`, `execution_tokens`, `execution_effects`, and
+`execution_child_dependencies`, including attached child states. Ordinary model serialization and public schemas exclude
+these four internal ledgers. Existing fields, requiredness, statuses, events, and client behavior remain compatible.
+Frontend application behavior is outside this
 execution-engine slice. No code under `invokeai/frontend/...`, including generated `openapi.json` or `schema.ts`, may be
 changed by this refactoring; the existing frontend/backend external interface is frozen.
 
@@ -113,7 +115,7 @@ Implemented runtime scaffolding:
     - create the child `GraphExecutionState`
     - suspend the parent and enqueue the child queue item
   - `WorkflowCallQueueLifecycle` handles queue-visible parent/child lifecycle:
-    - run child queue items
+    - dispatch child queue items through the normal session runner
     - resume waiting parents after child success
     - complete the parent call node with the child `workflow_return` values
     - fail suspended parents after child failure and cascade that failure upward through parent call chains
@@ -131,6 +133,9 @@ Implemented runtime scaffolding:
   - `root_item_id`
   - `workflow_call_depth`
   - child workflow executions are now inserted as their own pending queue rows using those columns
+- Child queue rows and the parent's complete waiting-session projection are published in one durable queue
+  transaction. Concurrent child completions update the latest parent session transactionally, so a sibling cannot
+  overwrite another sibling's completion.
 - Parent queue items now enter a real `waiting` status while suspended on a child workflow execution.
 - `_on_after_run_session()` no longer completes queue items whose sessions are incomplete but waiting.
 - Dynamic call arguments now execute end-to-end in the current runner path:
@@ -359,8 +364,8 @@ validation and aggregation seam; it does not add queue columns, statuses, events
   - workflow-call child enqueue events use the same owner-aware redaction as ordinary status transitions, even though
     they do not pass through `_set_queue_item_status`
 
-This is now part of the intended user-facing contract, even though the orchestration still lives in
-`WorkflowCallCoordinator`.
+`WorkflowCallCoordinator` owns child setup and enqueueing. `WorkflowCallQueueLifecycle` owns parent resume and terminal
+propagation, using the session queue service for durable row transitions.
 
 ### 4b. Batch Child Workflows
 
@@ -585,7 +590,8 @@ Relevant existing path:
 
 Current insertion points already used:
 
-- `DefaultSessionRunner.run_node()` detects `call_saved_workflow` and enters boundary state
+- `DefaultSessionRunner.run_node()` supplies the call capability and inputs, invokes the node through the effect-aware
+  path, persists its pending lifecycle effects through `GraphExecutionState.apply()`, then dispatches the queue adapter
 - `GraphExecutionState` stores the waiting/call-stack state and attached child session
 - `WorkflowCallCoordinator` currently establishes the call boundary and enqueues child workflow executions as real queue
   rows

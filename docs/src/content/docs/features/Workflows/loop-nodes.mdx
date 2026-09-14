@@ -180,14 +180,17 @@ An `Iterate` can also be used inside a `For` for a bounded inner pass. The inner
 `Collect` before the outer `ForReturn`:
 
 ```text
-For.item -> Iterate.collection
+For.item -> preparation -> Iterate.collection
 Iterate.item -> inner work -> Collect.item
 Collect.collection -> ForReturn.output
 ```
 
 The outer loop waits for the inner `Iterate` and `Collect` to finish, then returns one collection for that outer item.
-Other arrangements, such as multiple internal `Iterate` nodes or an independent external `Iterate` feeding a `For` body,
-are not supported as user-facing workflow shapes. The backend has a bounded
+One exact serial two-`Iterate` body is also supported: `For.item` feeds a preparation node and the first `Iterate`;
+its item feeds a second preparation node and `Iterate`, followed by one work node, one `Collect`, and `ForReturn`.
+For this bounded pattern, use a non-empty literal outer collection and one consumer of `For.output_collection`.
+Other arrangements, such as sibling internal `Iterate` nodes or an independent external `Iterate` feeding a `For` body,
+are unsupported. The backend has a bounded
 two-branch execution-planner case for an internal body-mediated fan-in, but
 that implementation detail does not expand the supported workflow contract.
 
