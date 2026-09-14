@@ -1,6 +1,10 @@
-"""Compatibility helpers for the Qwen-Image VAE used by Krea-2.
+"""Compatibility helpers for the 16-channel Wan 2.1 / Qwen-Image VAE.
 
-Krea-2 (and Qwen-Image) decode/encode with ``AutoencoderKLQwenImage``. A standalone single-file
+Three architectures decode with this one autoencoder and reach it through these helpers: Qwen-Image
+and Krea-2 (both through the Qwen-Image VAE nodes) and Anima. It lives here rather than under any of
+them because a change for one of them changes what all three accept.
+
+Qwen-Image and Krea-2 decode/encode with ``AutoencoderKLQwenImage``. A standalone single-file
 ``qwen_image_vae.safetensors`` in the native (ComfyUI/Wan) layout is byte-identical to the Anima VAE
 and therefore classified with the Anima base, which loads it as ``AutoencoderKLWan``. The two classes
 share the exact same diffusers state-dict (identical keys and shapes), so a Wan-loaded VAE can be

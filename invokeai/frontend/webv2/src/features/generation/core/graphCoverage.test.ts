@@ -2,7 +2,7 @@
  * Every supported base compiles a graph — the systematic counterpart to `graph.test.ts`.
  *
  * `graph.test.ts` asserts *what* individual families wire up, one hand-written case at a time. That
- * leaves a base added to `BASE_GENERATION` and `GRAPH_BUILDERS` but never given a case silently
+ * leaves a base added to `SUPPORTED_GENERATE_BASES` and `GRAPH_BUILDERS` but never given a case silently
  * untested. This file instead iterates `SUPPORTED_GENERATE_BASES`, so a new architecture is covered
  * the moment it is registered, and asserts the properties that hold for *all* of them: the
  * component policy is satisfiable, the builder runs, and the resulting graph is structurally sound.
@@ -28,6 +28,7 @@
 
 import type { BackendGraphContract } from '@features/generation/core/contracts';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import type {
@@ -36,7 +37,7 @@ import type {
   GenerateComponentValueKey,
   SupportedGenerateBase,
 } from './baseGenerationPolicies';
-import type { GenerateSettings, MainModelConfig, ModelIdentifierConfig } from './types';
+import type { GenerateSettings, MainModelConfig, ModelIdentifierConfig, VaeModelConfig } from './types';
 
 import {
   getComponentSectionPolicy,
@@ -83,7 +84,7 @@ const shapesForBase = (base: SupportedGenerateBase): readonly ModelShape[] => SH
  * Candidate components the slot filters get to choose from.
  *
  * Deliberately a search over a pool rather than a hand-written model per slot: the filters
- * (`isAnimaQwen3Encoder`, `isKrea2Vae`, `isFlux2Qwen3EncoderForModel`, ...) encode which base and
+ * (`isAnimaQwen3Encoder`, `isVaeAcceptedByBase`, `isFlux2Qwen3EncoderForModel`, ...) encode which base and
  * variant a component must carry, and duplicating that knowledge here would make the test agree
  * with itself instead of with the policy.
  */
@@ -99,6 +100,8 @@ const CANDIDATE_VARIANTS = [
   'klein_4b',
   'klein_9b',
 ] as const;
+/** VAE widths. A served row can constrain the width as well as the base -- Wan ships 16 and 48. */
+const CANDIDATE_LATENT_CHANNELS = [undefined, 16, 48] as const;
 
 const candidatesForSlot = (slot: ComponentSlotPolicy): ModelIdentifierConfig[] => {
   const candidates: ModelIdentifierConfig[] = [];
@@ -106,16 +109,19 @@ const candidatesForSlot = (slot: ComponentSlotPolicy): ModelIdentifierConfig[] =
   for (const type of slot.modelTypes) {
     for (const base of CANDIDATE_BASES) {
       for (const variant of CANDIDATE_VARIANTS) {
-        candidates.push({
-          base,
-          // A component source is a main model, and only a bundled one can stand in for the slots
-          // it satisfies — `isDiffusersMainForBase` and `isBundledMainForBase` both demand it.
-          format: slot.valueKind === 'main' ? 'diffusers' : undefined,
-          key: `${base}-${type}-${variant ?? 'novariant'}`,
-          name: `${base} ${type} ${variant ?? ''}`.trim(),
-          type,
-          variant: variant ?? null,
-        });
+        for (const latentChannels of type === 'vae' ? CANDIDATE_LATENT_CHANNELS : [undefined]) {
+          candidates.push({
+            base,
+            // A component source is a main model, and only a bundled one can stand in for the slots
+            // it satisfies — `isDiffusersMainForBase` and `isBundledMainForBase` both demand it.
+            format: slot.valueKind === 'main' ? 'diffusers' : undefined,
+            key: `${base}-${type}-${variant ?? 'novariant'}${latentChannels ? `-${latentChannels}` : ''}`,
+            name: `${base} ${type} ${variant ?? ''}`.trim(),
+            type,
+            variant: variant ?? null,
+            ...(latentChannels ? { latent_channels: latentChannels } : {}),
+          });
+        }
       }
     }
   }
@@ -188,17 +194,25 @@ const createModel = (base: SupportedGenerateBase, shape: ModelShape): MainModelC
   ...shape.overrides,
 });
 
+const satisfiedSettingsFor = (base: SupportedGenerateBase, shape: ModelShape) => {
+  const model = createModel(base, shape);
+
+  return {
+    model,
+    ...satisfyRequiredComponents(model, {
+      ...getDefaultGenerateSettings(model),
+      positivePrompt: 'a test prompt',
+      seed: 1,
+      shouldRandomizeSeed: false,
+    }),
+  };
+};
+
 const compileForShape = (
   base: SupportedGenerateBase,
   shape: ModelShape
 ): { filled: GenerateComponentValueKey[]; graph: BackendGraphContract } => {
-  const model = createModel(base, shape);
-  const { filled, settings } = satisfyRequiredComponents(model, {
-    ...getDefaultGenerateSettings(model),
-    positivePrompt: 'a test prompt',
-    seed: 1,
-    shouldRandomizeSeed: false,
-  });
+  const { filled, model, settings } = satisfiedSettingsFor(base, shape);
 
   // Compiling an invalid selection throws the first reason, which makes for a poor failure message.
   // Asserting here reports every unmet requirement at once, and doubles as the check that the
@@ -211,6 +225,8 @@ const compileForShape = (
 const cases = SUPPORTED_GENERATE_BASES.flatMap((base) =>
   shapesForBase(base).map((shape) => ({ base, label: `${base} / ${shape.label}`, shape }))
 );
+
+seedArchitectureCapabilities();
 
 describe('generate graph coverage', () => {
   it('has a builder for every supported base and no builder for anything else', () => {
@@ -242,6 +258,60 @@ describe('generate graph coverage', () => {
       expect(edge.source.field, `edge ${description} has no source field`).toBeTruthy();
       expect(edge.destination.field, `edge ${description} has no destination field`).toBeTruthy();
     }
+  });
+
+  it('sends every VAE the picker offers into the graph wherever a VAE is required', () => {
+    // The slots above are filled with their *first* accepted candidate, which is how a builder that
+    // re-filtered VAEs by its own base list -- dropping a Qwen-Image VAE installed under `anima` --
+    // passed this suite. One VAE per accepted (base, width) is enough to see every rule a row has.
+    //
+    // Deliberately one test iterating the cases rather than `it.each` over a pre-filtered list: which
+    // shapes require a VAE is answered by the capability table, and that is only seeded once tests run.
+    const checked: string[] = [];
+
+    for (const { base, shape } of cases) {
+      const { filled, model, settings } = satisfiedSettingsFor(base, shape);
+
+      if (!filled.includes('vae')) {
+        continue;
+      }
+
+      const { slots } = getComponentSectionPolicy(model, settings);
+      const vaeSlot = slots.find((slot) => slot.key === 'vae')!;
+      const context = buildContext(model, settings, slots);
+      const offered = new Map<string, ModelIdentifierConfig>();
+
+      for (const candidate of candidatesForSlot(vaeSlot)) {
+        if (!vaeSlot.filter || vaeSlot.filter(candidate, context)) {
+          offered.set(`${candidate.base}/${String(candidate.latent_channels)}`, candidate);
+        }
+      }
+
+      for (const vae of offered.values()) {
+        const { backendGraph } = compileGenerateGraph({ ...settings, vae: vae as VaeModelConfig }, model, 'gallery', {
+          useCpuNoise: true,
+        });
+        // Metadata records the selection whether or not the builder used it, so it does not count.
+        const sent = Object.values(backendGraph.nodes).some(
+          (node) => node.type !== 'core_metadata' && JSON.stringify(node).includes(`"${vae.key}"`)
+        );
+
+        expect(sent, `${base}/${shape.label} dropped the offered VAE ${vae.key}`).toBe(true);
+        checked.push(`${base}/${shape.label}:${vae.base}/${String(vae.latent_channels)}`);
+      }
+    }
+
+    // Guards against this test passing vacuously -- it did, while the list was computed before seeding.
+    // The cross-base rows must each have been exercised with a VAE from another base.
+    expect(checked).toEqual(
+      expect.arrayContaining([
+        'anima/standalone-components:qwen-image/undefined',
+        'anima/standalone-components:wan/16',
+        'krea-2/standalone-components:anima/undefined',
+        'qwen-image/standalone-components:anima/undefined',
+        'z-image/standalone-components:flux/undefined',
+      ])
+    );
   });
 
   it('emits the node types and fields the backend has to provide', async () => {

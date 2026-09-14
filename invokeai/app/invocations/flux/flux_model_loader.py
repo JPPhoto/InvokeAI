@@ -20,6 +20,7 @@ from invokeai.app.util.t5_model_identifier import (
     preprocess_t5_encoder_model_identifier,
     preprocess_t5_tokenizer_model_identifier,
 )
+from invokeai.backend.architectures import accepted_vae_bases
 from invokeai.backend.flux.util import get_flux_max_seq_length
 from invokeai.backend.model_manager.configs.base import Checkpoint_Config_Base
 from invokeai.backend.model_manager.configs.main import Main_SDNQ_Diffusers_FLUX_Config
@@ -78,7 +79,7 @@ class FluxModelLoaderInvocation(BaseInvocation):
         default=None,
         description=FieldDescriptions.vae_model,
         title="VAE",
-        ui_model_base=BaseModelType.Flux,
+        ui_model_base=accepted_vae_bases(BaseModelType.Flux),
         ui_model_type=ModelType.VAE,
     )
 

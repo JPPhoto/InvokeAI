@@ -1,5 +1,6 @@
 import type { GenerationModelCatalogItem, MainModelConfig } from '@features/generation/contracts';
 
+import { architectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import type { VideoSettings } from './types';
@@ -773,6 +774,29 @@ describe('component section policy', () => {
     // Configs without the field (open union) stay allowed on both.
     expect(forA14b.slot?.filter?.(vaeUnknown, forA14b.ctx)).toBe(true);
     expect(forTi2v.slot?.filter?.(vaeUnknown, forTi2v.ctx)).toBe(true);
+  });
+
+  it('agrees with the served Wan rows on which VAE width each variant takes', () => {
+    // The rule is written out rather than read from the table, because this surface syncs its stored
+    // VAE before the table arrives. This keeps the copy honest: a Wan variant or VAE width added to
+    // the backend changes the served rows, and fails here until the rule follows.
+    const wanRows = architectureCapabilitiesFixture.filter((row) => row.base === 'wan');
+
+    expect(wanRows.map((row) => row.variant)).toContain('ti2v_5b');
+
+    for (const row of wanRows) {
+      const model = wanModel(row.variant ?? 'i2v_a14b');
+      const settings = settingsFor(model);
+      const ctx = { model, selectedComponents: settings, settings };
+      const slot = getVideoComponentSectionPolicy(model, settings).slots.find((s) => s.key === 'vae');
+
+      for (const width of [16, 48]) {
+        const vae = { base: 'wan', key: `vae${width}`, latent_channels: width, name: `Wan VAE ${width}`, type: 'vae' };
+        const served = row.vae?.accepted.some((entry) => entry.base === 'wan' && entry.latent_channels === width);
+
+        expect(slot?.filter?.(vae, ctx), `${row.variant ?? 'base row'}, ${width} channels`).toBe(served ?? false);
+      }
+    }
   });
 
   it('a cross-family component source covers the encoder but not the VAE', () => {

@@ -14,14 +14,14 @@ from invokeai.app.invocations.fields import (
 from invokeai.app.invocations.model import VAEField
 from invokeai.app.invocations.primitives import ImageOutput
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.backend.krea2.vae_compat import (
+from invokeai.backend.stable_diffusion.extensions.seamless import SeamlessExt
+from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.qwen_image_vae import (
     QWEN_IMAGE_VAE_MIN_TILE_SIZE,
     as_qwen_image_vae,
     patch_qwen_image_vae_tiling,
     resolve_qwen_image_vae_tile_size,
 )
-from invokeai.backend.stable_diffusion.extensions.seamless import SeamlessExt
-from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_qwen_image
 
 

@@ -15,6 +15,7 @@ from invokeai.app.invocations.model import (
     WanTransformerField,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContext
+from invokeai.backend.architectures import accepted_vae_bases, accepts_vae
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType, SubModelType, WanVariantType
 
 # Transformer-only Wan formats: one file holds exactly one expert, so the A14B MoE
@@ -95,7 +96,7 @@ class WanModelLoaderInvocation(BaseInvocation):
         description="Standalone Wan VAE model. If not set, the VAE is loaded from the main model "
         "(when in Diffusers format) or from the Component Source.",
         input=Input.Direct,
-        ui_model_base=BaseModelType.Wan,
+        ui_model_base=accepted_vae_bases(BaseModelType.Wan),
         ui_model_type=ModelType.VAE,
         title="VAE",
     )
@@ -336,11 +337,12 @@ class WanModelLoaderInvocation(BaseInvocation):
         context: InvocationContext, model: ModelIdentifierField, main_variant: WanVariantType
     ) -> None:
         vae_config = context.models.get_config(model)
-        if vae_config.base != BaseModelType.Wan or vae_config.type != ModelType.VAE:
+        if vae_config.type != ModelType.VAE:
             raise ValueError("The VAE must resolve to a standalone Wan VAE model.")
-        expected_channels = 48 if main_variant == WanVariantType.TI2V_5B else 16
-        if vae_config.latent_channels != expected_channels:
+        if not accepts_vae(
+            BaseModelType.Wan, vae_config.base, getattr(vae_config, "latent_channels", None), main_variant
+        ):
             raise ValueError(
-                "The standalone VAE is incompatible with the selected transformer. "
+                f"The standalone VAE '{vae_config.name}' is incompatible with the selected transformer. "
                 "TI2V-5B requires the 48-channel Wan 2.2 VAE; A14B models require the 16-channel Wan 2.1 VAE."
             )

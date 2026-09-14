@@ -15,6 +15,7 @@ from invokeai.app.invocations.model import (
     VAEField,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContext
+from invokeai.backend.architectures import accepted_vae_bases
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType, SubModelType
 
 
@@ -65,7 +66,7 @@ class QwenImageModelLoaderInvocation(BaseInvocation):
         description="Standalone Qwen Image VAE model. "
         "If not provided, VAE will be loaded from the Component Source (or from the main model if it is Diffusers).",
         input=Input.Direct,
-        ui_model_base=BaseModelType.QwenImage,
+        ui_model_base=accepted_vae_bases(BaseModelType.QwenImage),
         ui_model_type=ModelType.VAE,
         title="VAE",
     )

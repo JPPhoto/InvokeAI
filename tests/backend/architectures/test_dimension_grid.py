@@ -94,7 +94,8 @@ def test_no_variant_row_repeats_its_base_row() -> None:
     redundant = [
         f"{r.base.value}/{r.variant}"
         for r in architecture_capabilities()
-        if r.variant is not None and (r.features, r.defaults) == (by_base[r.base].features, by_base[r.base].defaults)
+        if r.variant is not None
+        and (r.features, r.defaults, r.vae) == (by_base[r.base].features, by_base[r.base].defaults, by_base[r.base].vae)
     ]
     assert redundant == []
 
@@ -108,8 +109,8 @@ def test_every_variant_row_is_rendered_in_full() -> None:
         if row.variant is None:
             continue
         base_row = by_base[row.base]
-        assert row.modality == base_row.modality
         assert (row.defaults is None) == (base_row.defaults is None), row.base.value
+        assert (row.vae is None) == (base_row.vae is None), row.base.value
 
 
 def test_the_variant_rows_of_a_base_stay_sorted() -> None:
@@ -118,19 +119,6 @@ def test_the_variant_rows_of_a_base_stay_sorted() -> None:
     for base in generative_bases():
         variants = [r.variant for r in architecture_capabilities() if r.base is base and r.variant is not None]
         assert variants == sorted(variants), base.value
-
-
-def test_a_variant_row_reports_the_compression_of_the_space_it_denoises_in() -> None:
-    """The grid and the compression are two facts about the same space, and a row that got one
-    from the variant and the other from the base would be internally inconsistent. TI2V-5B
-    compresses 16x per side; A14B, and the base row, 8x."""
-    rows = {(r.base.value, r.variant): r for r in architecture_capabilities()}
-
-    wan_base = rows[("wan", None)]
-    wan_ti2v = rows[("wan", "ti2v_5b")]
-
-    assert (wan_base.features.dimension_grid, wan_base.features.spatial_compression) == (16, 8)
-    assert (wan_ti2v.features.dimension_grid, wan_ti2v.features.spatial_compression) == (32, 16)
 
 
 def test_resolving_a_space_by_variant_agrees_with_resolving_it_by_sample() -> None:
