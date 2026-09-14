@@ -7,7 +7,11 @@ import { VideoUiProvider } from '@features/video';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
 import { useOpenWorkbenchWidget } from '@workbench/useOpenWorkbenchWidget';
-import { requestVideoSpanPlayback } from '@workbench/widgets/preview/spanPlaybackRequest';
+import {
+  getVideoSpanPlaybackState,
+  requestVideoSpanPlayback,
+  subscribeVideoSpanPlaybackState,
+} from '@workbench/widgets/preview/spanPlaybackRequest';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
@@ -85,15 +89,16 @@ export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) =>
       // switched projects in that window. This callback still carries the project it was
       // built for, so writing a selection now would land it in the project they left.
       if (activeProjectIdRef.current !== projectId) {
-        return;
+        return null;
       }
 
       if (!openWorkbenchWidget('preview', { preferredRegions: ['center'], requireCenterView: true }).ok) {
-        return;
+        return null;
       }
 
       commands.gallery.selectItem(item, projectId);
-      requestVideoSpanPlayback({ endSeconds, itemKey: toGalleryItemKey(item), startSeconds });
+
+      return requestVideoSpanPlayback({ endSeconds, itemKey: toGalleryItemKey(item), startSeconds });
     },
     [commands, openWorkbenchWidget, projectId]
   );
@@ -107,6 +112,7 @@ export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) =>
       reportError,
       showPromptSyntaxHighlighting,
       touchGalleryImages,
+      videoSpanPlayback: VIDEO_SPAN_PLAYBACK_PORT,
     }),
     [
       getUploadBoardId,
@@ -120,4 +126,11 @@ export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) =>
   );
 
   return <VideoUiProvider adapter={adapter}>{children}</VideoUiProvider>;
+};
+
+// The player's report is module-scoped in the Preview widget, so the port is one constant
+// object: subscribing to it never re-renders on a project switch.
+const VIDEO_SPAN_PLAYBACK_PORT: VideoUiAdapter['videoSpanPlayback'] = {
+  getState: getVideoSpanPlaybackState,
+  subscribe: subscribeVideoSpanPlaybackState,
 };
