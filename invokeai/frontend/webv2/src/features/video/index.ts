@@ -106,4 +106,11 @@ export {
   resolveVideoSeed,
   syncVideoWidgetValuesWithModels,
 } from './core/widgetValues';
-export { VideoUiProvider, useVideoUi, useVideoUiActions, type VideoUiAdapter } from './ui/VideoUiContext';
+export {
+  VideoUiProvider,
+  useVideoUi,
+  useVideoUiActions,
+  type VideoSpanPlaybackPort,
+  type VideoSpanPlaybackState,
+  type VideoUiAdapter,
+} from './ui/VideoUiContext';
