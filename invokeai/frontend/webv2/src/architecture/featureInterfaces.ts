@@ -30,7 +30,7 @@ export const FEATURE_PUBLIC_INTERFACES: Readonly<Record<string, readonly string[
     'react',
     'runtime',
     'seed',
-    'seedModeMenu',
+    'seedControls',
     'settings',
     'widget',
   ],

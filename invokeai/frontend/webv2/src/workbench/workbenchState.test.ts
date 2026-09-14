@@ -968,6 +968,39 @@ describe('adopting a project from another realm', () => {
     expect(normalized.queue.items).toEqual([]);
   });
 
+  it('carries the iteration count workflow runs borrowed from Generate over to the workflow widget once', () => {
+    const workflowValuesOf = (candidate: Project) => getProjectWidgetValues(candidate, 'workflow');
+    const withoutWorkflowCount = (candidate: Project): Project => {
+      const { batchCount: _, ...values } = workflowValuesOf(candidate);
+      const instance = candidate.widgetInstances.workflow!;
+
+      return {
+        ...candidate,
+        widgetInstances: {
+          ...candidate.widgetInstances,
+          workflow: { ...instance, state: { ...instance.state, values } },
+        },
+      };
+    };
+    let state = workbenchReducer(createInitialWorkbenchState(), {
+      type: 'patchWidgetValues',
+      values: { batchCount: 4 },
+      widgetId: 'generate',
+    });
+    const fresh = getActiveProject(state);
+
+    state = workbenchReducer(state, { type: 'patchWidgetValues', values: { batchCount: 2 }, widgetId: 'workflow' });
+    const owned = getActiveProject(state);
+
+    // A fresh project owns its default from the start, so Generate's count never reaches it, reload after reload.
+    expect(workflowValuesOf(fresh).batchCount).toBe(1);
+    expect(workflowValuesOf(normalizeWorkbenchProject(fresh)).batchCount).toBe(1);
+    // A project saved before the widget owned a count keeps the runs it effectively had.
+    expect(workflowValuesOf(normalizeWorkbenchProject(withoutWorkflowCount(fresh))).batchCount).toBe(4);
+    // A count the workflow already owns is never overwritten by Generate's.
+    expect(workflowValuesOf(normalizeWorkbenchProject(owned)).batchCount).toBe(2);
+  });
+
   it('preserves and caps session events during live normalization', () => {
     const project = createInitialWorkbenchState().projects[0]!;
     project.events = Array.from({ length: PROJECT_EVENT_LIMIT + 1 }, (_, index) => ({
@@ -3328,7 +3361,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       // The Automate preset mounts the Workflow widget, which the route requires.
       let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'automate', type: 'applyPreset' });
 
-      state = workbenchReducer(state, { type: 'patchWidgetValues', values: { batchCount }, widgetId: 'generate' });
+      state = workbenchReducer(state, { type: 'patchWidgetValues', values: { batchCount }, widgetId: 'workflow' });
       state = workbenchReducer(state, {
         action: {
           node: {
@@ -3388,7 +3421,14 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     });
 
     it('holds a fixed seed as a graph constant and repeats the graph for every run', () => {
-      const state = submitWorkflow(primeWorkflow(42, 'fixed'));
+      // Generate's own iteration count no longer leaks into workflow runs.
+      const state = submitWorkflow(
+        workbenchReducer(primeWorkflow(42, 'fixed'), {
+          type: 'patchWidgetValues',
+          values: { batchCount: 5 },
+          widgetId: 'generate',
+        })
+      );
       const submission = readSubmission(state);
 
       expect(submission).toMatchObject({ batchCount: 3, kind: 'workflow' });

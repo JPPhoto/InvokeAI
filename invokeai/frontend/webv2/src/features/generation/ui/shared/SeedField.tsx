@@ -3,7 +3,7 @@ import type { DynamicPromptsSeedBehaviour } from '@features/generation/core/dyna
 import type { SeedMode } from '@features/generation/core/seed';
 import type { ReactNode } from 'react';
 
-import { HStack, InputGroup, NumberInput, Stack, Text } from '@chakra-ui/react';
+import { HStack, InputGroup, NumberInput, Stack } from '@chakra-ui/react';
 import { planSeedSubmission, SEED_MAX } from '@features/generation/core/seed';
 import { IconButton } from '@platform/ui/Button';
 import { Field } from '@platform/ui/Field';
@@ -11,10 +11,9 @@ import { DicesIcon } from 'lucide-react';
 import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { SeedModeMenu } from './SeedModeMenu';
+import { SeedModeMenu, SeedSequencePreview, TABULAR_NUMS } from './SeedControls';
 
 const SEED_END_ELEMENT_PROPS = { pointerEvents: 'auto', pr: '0.5' } as const;
-const TABULAR_NUMS = { fontVariantNumeric: 'tabular-nums' } as const;
 
 export interface SeedFieldPatch {
   seed?: number;
@@ -104,13 +103,7 @@ export const SeedField = ({
           </NumberInput.Root>
           <SeedModeMenu value={seedMode} onChange={(nextMode) => onCommit({ seedMode: nextMode })} />
         </HStack>
-        {plan ? (
-          <Text color="fg.subtle" css={TABULAR_NUMS} data-testid="seed-sequence-preview" fontSize="2xs" id={previewId}>
-            {plan.sequenceLength > 1
-              ? t('widgets.generate.seedNextBatchRange', { first: plan.startSeed, last: plan.lastSeed })
-              : t('widgets.generate.seedNextBatch', { seed: plan.startSeed })}
-          </Text>
-        ) : null}
+        {plan ? <SeedSequencePreview id={previewId} plan={plan} /> : null}
         {children}
       </Stack>
     </Field>

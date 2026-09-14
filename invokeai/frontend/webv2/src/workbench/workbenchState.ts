@@ -1183,7 +1183,7 @@ const createWidgetStates = (): WidgetStateMap => ({
   queue: { id: 'queue', label: 'Queue', values: {}, version: 1 },
   'server-status': { id: 'server-status', label: 'Server Status', values: {}, version: 1 },
   users: { id: 'users', label: 'Users', values: {}, version: 1 },
-  workflow: { graphId: 'workflow-graph', id: 'workflow', label: 'Workflow', values: {}, version: 1 },
+  workflow: { graphId: 'workflow-graph', id: 'workflow', label: 'Workflow', values: { batchCount: 1 }, version: 1 },
   upscale: { graphId: 'upscale-graph', id: 'upscale', label: 'Upscale', values: {}, version: 1 },
   video: { graphId: 'video-graph', id: 'video', label: 'Video', values: {}, version: 1 },
 });
@@ -1677,6 +1677,24 @@ const assembleWorkbenchProject = (
         state: { ...upscaleInstance.state, values: clearedLegacyUpscaleValues },
       };
     }
+  }
+
+  // Workflow runs used to borrow Generate's iteration count. A project saved before the
+  // widget owned one has no key; carry the count over once so it keeps the runs it
+  // effectively had. A fresh project starts with the widget's own default, so it never migrates.
+  const workflowInstance = widgetInstances.workflow;
+
+  if (workflowInstance && typeof workflowInstance.state.values.batchCount !== 'number') {
+    widgetInstances.workflow = {
+      ...workflowInstance,
+      state: {
+        ...workflowInstance.state,
+        values: {
+          ...workflowInstance.state.values,
+          batchCount: sanitizeBatchCount(generateInstance?.state.values.batchCount),
+        },
+      },
+    };
   }
 
   if (leftRegion.instanceIds.includes('upscale') && !widgetInstances.upscale) {
@@ -2450,7 +2468,7 @@ const compileInvocationSnapshot = (
     }
 
     const { graph, ...workflow } = planWorkflowSubmission(project.projectGraph, templatesSnapshot.templates, {
-      batchCount: sanitizeBatchCount(widgetStates.generate?.values.batchCount),
+      batchCount: sanitizeBatchCount(widgetStates.workflow?.values.batchCount),
     });
 
     return { graph, widgetStates, workflow };
@@ -3176,19 +3194,21 @@ const enqueueCompiledSnapshot = (
   const backendSubmission: QueueCompiledSubmission = !backendGraph
     ? { error: `${route.sourceId} queue item is missing a compiled backend graph.`, kind: 'invalid' }
     : route.sourceId === 'workflow'
-      ? {
-          batchCount: compiled.workflow?.batchCount ?? sanitizeBatchCount(widgetStates.generate?.values.batchCount),
-          ...(compiled.workflow?.seeds.length ? { seeds: compiled.workflow.seeds } : {}),
-          graph: backendGraph,
-          kind: 'workflow',
-          // Provenance for the completed-run capture: a run submitted from a
-          // library-bound graph knows which record to stamp, even after the
-          // editor has moved on to another workflow. An unbound graph stamps
-          // nothing, so an ad-hoc workflow never writes to the library.
-          ...(project.projectGraph.libraryWorkflowId
-            ? { libraryWorkflowId: project.projectGraph.libraryWorkflowId }
-            : {}),
-        }
+      ? !compiled.workflow
+        ? { error: 'workflow queue item is missing its seed plan.', kind: 'invalid' }
+        : {
+            batchCount: compiled.workflow.batchCount,
+            ...(compiled.workflow.seeds.length ? { seeds: compiled.workflow.seeds } : {}),
+            graph: backendGraph,
+            kind: 'workflow',
+            // Provenance for the completed-run capture: a run submitted from a
+            // library-bound graph knows which record to stamp, even after the
+            // editor has moved on to another workflow. An unbound graph stamps
+            // nothing, so an ad-hoc workflow never writes to the library.
+            ...(project.projectGraph.libraryWorkflowId
+              ? { libraryWorkflowId: project.projectGraph.libraryWorkflowId }
+              : {}),
+          }
       : sourceGenerateSettings && effectivePrompts
         ? {
             batchCount: sourceGenerateSettings.batchCount,

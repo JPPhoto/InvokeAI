@@ -94,7 +94,13 @@ const ADDABLE_LORA = {
 const galleryValues: Record<string, unknown> = {};
 const graphNodes: unknown[] = [];
 const graphEdges: unknown[] = [];
-const projectSnapshot = { galleryValues, id: 'project-1', projectGraph: { edges: graphEdges, nodes: graphNodes } };
+const workflowValues: Record<string, unknown> = {};
+const projectSnapshot = {
+  galleryValues,
+  id: 'project-1',
+  projectGraph: { edges: graphEdges, nodes: graphNodes },
+  workflowValues,
+};
 
 vi.mock('@features/workflow/ui/WorkflowUiContext', () => ({
   useWorkflowProjectSelector: (selector: (project: typeof projectSnapshot) => unknown) => selector(projectSnapshot),
@@ -190,6 +196,7 @@ beforeEach(() => {
   delete galleryValues.selectedImage;
   graphNodes.length = 0;
   graphEdges.length = 0;
+  delete workflowValues.batchCount;
 });
 
 afterEach(async () => {
@@ -701,6 +708,8 @@ describe('WorkflowFieldInput seed inputs', () => {
     const onChange = vi.fn();
     const onSeedModeChange = vi.fn();
 
+    // Box the row at the node width so the width assertions below mean what they say.
+    host.style.width = '18rem';
     await renderField(SEED_TEMPLATE, 42, onChange, undefined, { onSeedModeChange, seedMode: 'fixed' });
 
     expect(seedInput()?.disabled).toBe(false);
@@ -717,6 +726,34 @@ describe('WorkflowFieldInput seed inputs', () => {
 
     expect(onSeedModeChange).toHaveBeenCalledWith('increment');
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("previews the next batch from the workflow's own run count and describes the input with it", async () => {
+    workflowValues.batchCount = 3;
+
+    await renderField(SEED_TEMPLATE, 42, vi.fn(), undefined, { onSeedModeChange: vi.fn(), seedMode: 'increment' });
+
+    const preview = host.querySelector<HTMLElement>('[data-testid="seed-sequence-preview"]');
+
+    // Without i18n resources the key renders, carrying the interpolated bounds.
+    expect(preview?.textContent).toBe('widgets.generate.seedNextBatchRange');
+    expect(seedInput()?.getAttribute('aria-describedby')).toBe(preview?.id);
+
+    await renderField(SEED_TEMPLATE, 42, vi.fn(), undefined, { onSeedModeChange: vi.fn(), seedMode: 'fixed' });
+
+    expect(host.querySelector('[data-testid="seed-sequence-preview"]')).toBeNull();
+    expect(seedInput()?.getAttribute('aria-describedby')).toBeNull();
+
+    // An empty field previews from the template default, which is where the plan starts it.
+    workflowValues.batchCount = 2;
+    await renderField({ ...SEED_TEMPLATE, default: 1_234 } as FieldInputTemplate, undefined, vi.fn(), undefined, {
+      onSeedModeChange: vi.fn(),
+      seedMode: 'increment',
+    });
+
+    expect(host.querySelector('[data-testid="seed-sequence-preview"]')?.textContent).toBe(
+      'widgets.generate.seedNextBatchRange'
+    );
   });
 
   it('quiets the value in random mode but keeps it on show', async () => {

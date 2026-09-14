@@ -31,8 +31,9 @@ import { getSelectedGalleryImageFromValues } from '@features/gallery/contracts';
 import { GalleryPickerPopover } from '@features/gallery/picker';
 import { invalidateGallery } from '@features/gallery/queries';
 import { galleryImageUrls, galleryVideoUrls } from '@features/gallery/utility';
-import { SeedModeMenu } from '@features/generation/seedModeMenu';
-import { DEFAULT_LORA_WEIGHT_CONFIG, SCHEDULER_OPTIONS } from '@features/generation/settings';
+import { planSeedSubmission, wrapSeed } from '@features/generation/seed';
+import { SeedModeMenu, SeedSequencePreview } from '@features/generation/seedControls';
+import { DEFAULT_LORA_WEIGHT_CONFIG, sanitizeBatchCount, SCHEDULER_OPTIONS } from '@features/generation/settings';
 import { isInvocationNode } from '@features/workflow/contracts';
 import { isSeedInputField } from '@features/workflow/graph';
 import {
@@ -161,13 +162,14 @@ const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldIn
 };
 
 const NumericInput = ({
+  describedBy,
   disabled,
   id,
   invalid,
   onChange,
   template,
   value,
-}: WorkflowFieldInputProps & { disabled?: boolean }) => {
+}: WorkflowFieldInputProps & { describedBy?: string; disabled?: boolean }) => {
   const isInteger = template.type.name === 'IntegerField';
   const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : '';
   const min = template.minimum ?? template.exclusiveMinimum ?? undefined;
@@ -185,6 +187,7 @@ const NumericInput = ({
 
   return (
     <Input
+      aria-describedby={describedBy}
       aria-label={template.title}
       className="nodrag"
       disabled={disabled}
@@ -217,17 +220,40 @@ const SeedInput = ({
   ...props
 }: WorkflowFieldInputProps & { onSeedModeChange: (seedMode: SeedMode) => void; seedMode: SeedMode }) => {
   const { t } = useTranslation();
+  const previewId = useId();
+  // The workflow's own run count: the stride the next submission takes from this seed.
+  const batchCount = useWorkflowProjectSelector((project) => sanitizeBatchCount(project.workflowValues.batchCount));
+  // An empty field runs from the template default, as the plan does.
+  const authoredSeed =
+    typeof props.value === 'number'
+      ? props.value
+      : typeof props.template.default === 'number'
+        ? props.template.default
+        : 0;
+  const plan =
+    seedMode === 'increment' || seedMode === 'decrement'
+      ? planSeedSubmission({
+          batchCount,
+          promptCount: 1,
+          seedBehaviour: 'per-iteration',
+          seedMode,
+          startSeed: wrapSeed(authoredSeed),
+        })
+      : null;
 
   return (
-    <HStack className="nodrag nokey" gap="1" w="full">
-      <NumericInput {...props} disabled={seedMode === 'random'} />
-      <SeedModeMenu
-        contentClassName="nokey"
-        tooltip={t('nodes.seedModeTooltip')}
-        value={seedMode}
-        onChange={onSeedModeChange}
-      />
-    </HStack>
+    <Stack className="nodrag nokey" gap="1" w="full">
+      <HStack gap="1" w="full">
+        <NumericInput {...props} describedBy={plan ? previewId : undefined} disabled={seedMode === 'random'} />
+        <SeedModeMenu
+          contentClassName="nokey"
+          tooltip={t('nodes.seedModeTooltip')}
+          value={seedMode}
+          onChange={onSeedModeChange}
+        />
+      </HStack>
+      {plan ? <SeedSequencePreview id={previewId} plan={plan} /> : null}
+    </Stack>
   );
 };
 

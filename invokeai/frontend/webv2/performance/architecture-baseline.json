@@ -551,7 +551,7 @@
           "source:src/features/generation/ui/promptFields/promptFocus.ts",
           "source:src/features/generation/ui/promptFields/promptHistoryNavigation.ts",
           "source:src/features/generation/ui/promptTemplateDraftStore.ts",
-          "source:src/features/generation/ui/shared/SeedModeMenu.tsx",
+          "source:src/features/generation/ui/shared/SeedControls.tsx",
           "source:src/features/generation/ui/useDebouncedDraftValue.ts",
           "source:src/features/generation/ui/useDynamicPrompts.ts",
           "source:src/features/identity/capabilities.ts",

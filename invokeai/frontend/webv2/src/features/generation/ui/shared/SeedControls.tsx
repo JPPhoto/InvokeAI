@@ -1,5 +1,5 @@
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
-import type { SeedMode } from '@features/generation/core/seed';
+import type { SeedMode, SeedSubmissionPlan } from '@features/generation/core/seed';
 import type { LucideIcon } from 'lucide-react';
 
 import { Icon, Menu, Portal, Stack, Text } from '@chakra-ui/react';
@@ -12,6 +12,7 @@ import { useId, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const SEED_MODE_MENU_POSITIONING = { placement: 'bottom-end' } as const;
+export const TABULAR_NUMS = { fontVariantNumeric: 'tabular-nums' } as const;
 const SEED_MODE_ICONS: Record<SeedMode, LucideIcon> = {
   decrement: MinusIcon,
   fixed: LocateFixedIcon,
@@ -75,5 +76,24 @@ export const SeedModeMenu = ({ contentClassName, onChange, tooltip, value }: See
         </Menu.Positioner>
       </Portal>
     </Menu.Root>
+  );
+};
+
+export interface SeedSequencePreviewProps {
+  /** Id the seed input names in `aria-describedby`. */
+  id?: string;
+  plan: Pick<SeedSubmissionPlan, 'lastSeed' | 'sequenceLength' | 'startSeed'>;
+}
+
+/** Where the next submission's seeds start and end; the host resolves the run count it plans with. */
+export const SeedSequencePreview = ({ id, plan }: SeedSequencePreviewProps) => {
+  const { t } = useTranslation();
+
+  return (
+    <Text color="fg.subtle" css={TABULAR_NUMS} data-testid="seed-sequence-preview" fontSize="2xs" id={id}>
+      {plan.sequenceLength > 1
+        ? t('widgets.generate.seedNextBatchRange', { first: plan.startSeed, last: plan.lastSeed })
+        : t('widgets.generate.seedNextBatch', { seed: plan.startSeed })}
+    </Text>
   );
 };

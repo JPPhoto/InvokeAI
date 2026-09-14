@@ -97,7 +97,7 @@ const EDITOR_BOOT_SHARED_MODULES = [
   '/features/generation/ui/promptFields/promptAttentionHotkeys.ts',
   // Shared by the Generate/Upscale/Video seed row and workflow seed inputs; left to rolldown it
   // splits into a chunk every editor route would fetch separately.
-  '/features/generation/ui/shared/SeedModeMenu.tsx',
+  '/features/generation/ui/shared/SeedControls.tsx',
   '/workbench/shell/topbar/LayoutPresetAdminDialogs.tsx',
   '/workbench/shell/topbar/LayoutPresetStrip.tsx',
   '/workbench/shell/topbar/ProjectSwitcher.tsx',

@@ -242,7 +242,7 @@ describe('feature public-interface registry', () => {
     // side-effect-free entry rather than the settings surface.
     expect(checkDependency('features/workflow/core/buildGraph.ts', '@features/generation/seed')).toEqual([]);
     expect(
-      checkDependency('features/workflow/ui/fields/WorkflowFieldInput.tsx', '@features/generation/seedModeMenu')
+      checkDependency('features/workflow/ui/fields/WorkflowFieldInput.tsx', '@features/generation/seedControls')
     ).toEqual([]);
     expect(
       checkDependency('workbench/invocationSubmit.ts', '@features/generation/data/dynamicPromptsQueries')
