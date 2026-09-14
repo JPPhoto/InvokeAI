@@ -156,6 +156,16 @@ export const resizeReferenceSampleWindow = (clip: VideoSourceClip, rawSampleFram
 };
 
 const VIDEO_REFERENCE_CONDITIONINGS = ['video_audio', 'video', 'audio'] as const;
+
+/**
+ * Whether a value is one of the three conditionings a video reference can carry.
+ *
+ * Exported for recall, which must tell "the run recorded this" from "the run recorded
+ * nothing usable" -- the two take different branches, and enumerating the literals at the
+ * call site is how one of them gets forgotten.
+ */
+export const isVideoReferenceConditioning = (value: unknown): value is VideoReferenceConditioning =>
+  VIDEO_REFERENCE_CONDITIONINGS.includes(value as (typeof VIDEO_REFERENCE_CONDITIONINGS)[number]);
 const VIDEO_REFERENCE_IMAGE_DETAILS = ['max', 'match'] as const;
 
 export const isVideoReferenceItem = (value: unknown): value is VideoReferenceItem => {
@@ -556,15 +566,22 @@ export const createVideoSourceClip = (item: {
  * The conditioning a video reference starts on when it is added from the gallery or an
  * upload.
  *
+ * NOT used for the reference-extend anchor: that role requires visual rows, so it takes
+ * `video_audio` regardless of the clip and promotes an adopted audio-only entry via
+ * {@link anchorReferenceConditioning}.
+ *
  * Audio uploads are stored as videos: the server wraps an uploaded audio file into a
- * rendered-waveform clip at ingest and stamps `media_origin: audio_upload` on it. Those
- * frames are a picture of the sound rather than footage anyone means to condition on, so
+ * rendered-waveform clip at ingest and marks it `audio_upload`. Those frames are a picture
+ * of the sound rather than footage anyone means to condition on — and conditioning on them
+ * is not free, it costs a video reference slot and roughly doubles the packed sequence — so
  * such a reference defaults to its soundtrack alone. Everything else keeps video + audio.
  * This is only the starting value — the card's selector still offers all three.
+ *
+ * Takes the marker rather than a metadata bag: it rides on the gallery item and on
+ * `VideoSourceClip`, so no caller needs a second request to decide this.
  */
-export const getDefaultReferenceConditioning = (
-  metadata: Record<string, unknown> | null | undefined
-): VideoReferenceConditioning => (metadata?.media_origin === 'audio_upload' ? 'audio' : 'video_audio');
+export const getDefaultReferenceConditioning = (mediaOrigin: string | null | undefined): VideoReferenceConditioning =>
+  mediaOrigin === 'audio_upload' ? 'audio' : 'video_audio';
 
 /**
  * Whether a video reference can serve as the reference-extend ANCHOR.
@@ -602,6 +619,75 @@ const canAnchorReferenceExtend = (entry: VideoReferenceItem): boolean =>
  */
 export const anchorReferenceConditioning = (conditioning: VideoReferenceConditioning): VideoReferenceConditioning =>
   conditioning === 'audio' ? 'video_audio' : conditioning;
+
+/**
+ * The structured-prompt labels one reference answers to, or `null` where it has none.
+ *
+ * Ref2VA presents every reference to the model under a per-MODALITY label numbered in
+ * attachment order — `<Picture i>` for an image, `<Video k>` for conditioned footage,
+ * `<Audio j>` for a soundtrack — and the prompt refers to references only by those labels.
+ * The three counters run independently, so a reference's label numbers are not its position
+ * in the list: the second card can be `<Picture 1>`, and a video contributing both streams
+ * claims one number from each of two counters.
+ *
+ * Mirrors the backend's `build_ref2va_presentation` numbering (audio on 'video_audio' and
+ * 'audio', a `<Video k>` on everything else video-kind), which is the numbering the model
+ * actually sees. The two must not drift: a label shown here that the prompt cannot address
+ * is worse than no label at all.
+ */
+export type VideoReferencePromptLabels = {
+  audio: number | null;
+  picture: number | null;
+  video: number | null;
+};
+
+/**
+ * The labels, spelled the way the prompt must spell them.
+ *
+ * Never translated and never reformatted: these are tokens the text encoder matches
+ * literally, so what the badge shows is exactly what the user types into the prompt. The
+ * visual track leads a reference that carries both, since that is what the card depicts.
+ */
+export const formatReferencePromptLabels = (labels: VideoReferencePromptLabels): string[] => {
+  const formatted: string[] = [];
+
+  if (labels.picture !== null) {
+    formatted.push(`<Picture ${labels.picture}>`);
+  }
+  if (labels.video !== null) {
+    formatted.push(`<Video ${labels.video}>`);
+  }
+  if (labels.audio !== null) {
+    formatted.push(`<Audio ${labels.audio}>`);
+  }
+
+  return formatted;
+};
+
+/** {@link VideoReferencePromptLabels} for every reference, positionally. */
+export const referencePromptLabels = (references: readonly VideoReferenceItem[]): VideoReferencePromptLabels[] => {
+  const counts = { audio: 0, picture: 0, video: 0 };
+
+  return references.map((reference) => {
+    if (reference.kind === 'image') {
+      counts.picture += 1;
+      return { audio: null, picture: counts.picture, video: null };
+    }
+
+    if (reference.conditioning !== 'audio') {
+      counts.video += 1;
+    }
+    if (reference.conditioning !== 'video') {
+      counts.audio += 1;
+    }
+
+    return {
+      audio: reference.conditioning === 'video' ? null : counts.audio,
+      picture: null,
+      video: reference.conditioning === 'audio' ? null : counts.video,
+    };
+  });
+};
 
 /**
  * The sample window a newly added video reference starts on.

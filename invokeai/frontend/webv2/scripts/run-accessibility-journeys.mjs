@@ -41,6 +41,29 @@ const waitForPreview = async () => {
 const waitForSettledDocument = async (page) => {
   await page.evaluate(async () => {
     await document.fonts.ready;
+    // Every audit below reads rendered appearance, and a surface still animating in composites
+    // its text over whatever is behind it -- a dialog caught mid fade-in audits as a contrast
+    // failure its palette does not have. Two frames do not cover a 200ms fade, so wait on the
+    // animations themselves. Mirrors `settleAnimations` in
+    // `src/platform/browser/settleAnimations.testing.ts`, re-expressed here because this body is
+    // serialised into the page and cannot import it; the two must change together.
+    await Promise.allSettled(
+      document
+        .getAnimations({ subtree: true })
+        .filter((animation) => {
+          const timing = animation.effect?.getComputedTiming();
+          const duration = typeof timing?.duration === 'number' ? timing.duration : 0;
+
+          // A spinner, a shimmering skeleton, or a paused animation never finishes.
+          return (
+            timing?.iterations !== Infinity &&
+            Number.isFinite(duration) &&
+            animation.playbackRate !== 0 &&
+            animation.playState !== 'paused'
+          );
+        })
+        .map((animation) => animation.finished)
+    );
     await new Promise((resolveFrame) => {
       requestAnimationFrame(() => requestAnimationFrame(resolveFrame));
     });
@@ -937,6 +960,7 @@ const runSettingsJourney = async (browser) => {
     await numericAttention.focus();
     await numericAttention.press('Space');
     assert.equal(await numericAttention.isChecked(), true);
+    await waitForSettledDocument(page);
     await assertNoAxeViolations(page, `${id}:search`, SETTINGS_DIALOG_SCOPE);
     await dialog.getByRole('button', { exact: true, name: 'Show in section' }).click();
     await expectFocused(numericAttention, 'Revealing a setting should focus its control.');
@@ -947,9 +971,6 @@ const runSettingsJourney = async (browser) => {
     await gear.press('Enter');
     const popover = page.locator('[data-scope="popover"][data-part="content"][data-state="open"]');
     await popover.waitFor();
-    await popover.evaluate(async (element) => {
-      await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished));
-    });
     await waitForSettledDocument(page);
     // Quick settings are nonmodal; scan their popup independently of the workbench behind it.
     await assertNoAxeViolations(page, `${id}:quick`, { include: ['[data-scope="popover"][data-part="content"]'] });
