@@ -229,7 +229,9 @@ const getLegacyChunkName = (id: string): string | null => {
 
 export default defineConfig({
   define: {
-    __CANVAS_GOLDEN_UPDATE__: 'false',
+    // A boolean, not a code string: Vitest 5 browser mode injects string
+    // values as string literals, and "false" is truthy.
+    __CANVAS_GOLDEN_UPDATE__: false,
   },
   base: './',
   build: {
