@@ -2,17 +2,17 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 859335,
+        "brotliBytes": 883294,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 858507,
+        "gzipBytes": 882486,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2010911,
-        "largestAssetRawBytes": 747218,
+        "initialRawBytes": 2084551,
+        "largestAssetRawBytes": 754382,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 74443,
-        "requestCount": 44,
-        "scriptRequestCount": 28,
+        "ownedRawBytes": 80397,
+        "requestCount": 38,
+        "scriptRequestCount": 22,
         "sourceOwners": [
           "package:@ark-ui/react",
           "package:@chakra-ui/react",
@@ -56,6 +56,7 @@
           "package:@zag-js/color-utils",
           "package:@zag-js/combobox",
           "package:@zag-js/core",
+          "package:@zag-js/date-input",
           "package:@zag-js/date-picker",
           "package:@zag-js/dialog",
           "package:@zag-js/dismissable",
@@ -316,17 +317,17 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1182691,
+        "brotliBytes": 1202959,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1176792,
+        "gzipBytes": 1196912,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2993632,
-        "largestAssetRawBytes": 747218,
+        "initialRawBytes": 3063084,
+        "largestAssetRawBytes": 754382,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 133058,
-        "requestCount": 106,
-        "scriptRequestCount": 90,
+        "ownedRawBytes": 134170,
+        "requestCount": 89,
+        "scriptRequestCount": 73,
         "sourceOwners": [
           "package:@ark-ui/react",
           "package:@chakra-ui/react",
@@ -375,6 +376,7 @@
           "package:@zag-js/color-utils",
           "package:@zag-js/combobox",
           "package:@zag-js/core",
+          "package:@zag-js/date-input",
           "package:@zag-js/date-picker",
           "package:@zag-js/dialog",
           "package:@zag-js/dismissable",
@@ -1017,7 +1019,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-13",
+  "capturedAt": "2026-09-14",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",
