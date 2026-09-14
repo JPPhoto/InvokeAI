@@ -31,9 +31,6 @@ import {
   getCompatibleDiffusersComponentSource,
   isBundledMainForBase,
   isAnimaQwen3Encoder,
-  isAnimaVae,
-  isKrea2Vae,
-  isQwenImageFamilyVae,
   isClipVariant,
   isDiffusersMainForBase,
   isFlux2DiffusersSourceForModel,
@@ -42,7 +39,7 @@ import {
   isNonAnimaQwen3Encoder,
   isSelfContainedSDNQFlux1Pipeline,
   isSelfContainedSDNQPipeline,
-  isVaeForBases,
+  isVaeAcceptedByBase,
   type GenerateComponentFilter,
 } from './componentCompatibility';
 import { DYNAMIC_PROMPTS_DEFAULT_MAX_PROMPTS } from './dynamicPrompts';
@@ -255,9 +252,15 @@ const getBaseGenerationConfig = (
  *
  * `null` rather than a default so callers keep owning their own "nothing selected" behaviour --
  * the canvas has a different sensible answer there than a generation graph does.
+ *
+ * External generators are the exception: the backend describes the architectures it runs, not a
+ * provider's API, so no row will ever arrive for them. They keep the generic grid, as they did
+ * before the table existed -- answering `null` would stop recall and the canvas size sync for good.
  */
 export const getDimensionGrid = (base: string, variant?: unknown): number | null =>
-  getArchitectureFeatures(base, variant)?.dimension_grid ?? null;
+  base === 'external'
+    ? FALLBACK_GENERATION_CONFIG.dimensions.grid
+    : (getArchitectureFeatures(base, variant)?.dimension_grid ?? null);
 
 /**
  * Whether the served table actually describes this model's architecture.
@@ -950,6 +953,9 @@ const getBaseComponentSectionPolicy = (
     return EMPTY_COMPONENT_POLICY;
   }
 
+  // The graph builder sends a VAE by `isVaeCompatibleWithGenerateModel`, which reads the same row.
+  const isAcceptedVae = isVaeAcceptedByBase(model.base);
+
   switch (model.base) {
     case 'flux':
       return {
@@ -965,7 +971,7 @@ const getBaseComponentSectionPolicy = (
             missingMessage: 'Generate needs a CLIP Embed model for FLUX models.',
           },
           {
-            ...vaeSlot('Required for FLUX.1 models.', isVaeForBases(['flux'])),
+            ...vaeSlot('Required for FLUX.1 models.', isAcceptedVae),
             required: (ctx) => !isSelfContainedSDNQFlux1Pipeline(ctx.model),
             missingMessage: 'Generate needs a VAE for FLUX models.',
           },
@@ -1000,10 +1006,7 @@ const getBaseComponentSectionPolicy = (
       return createPolicy(!isSelfContainedSDNQPipeline(model) && model.format !== 'diffusers', [
         encoderSlot,
         {
-          ...vaeSlot(
-            'Optional override; otherwise an installed FLUX.2 Diffusers model is used.',
-            isVaeForBases(['flux2'])
-          ),
+          ...vaeSlot('Optional override; otherwise an installed FLUX.2 Diffusers model is used.', isAcceptedVae),
           required: (ctx) => !hasFlux2DiffusersVaeSource(ctx),
           missingMessage: 'Generate needs a VAE for non-Diffusers FLUX.2 models.',
         },
@@ -1014,7 +1017,7 @@ const getBaseComponentSectionPolicy = (
         t5EncoderSlot('Optional override; the main model is used when omitted.'),
         clipVariantSlot('clipLEmbedModel', 'CLIP L', 'large', 'Optional CLIP-L override.'),
         clipVariantSlot('clipGEmbedModel', 'CLIP G', 'gigantic', 'Optional CLIP-G override.'),
-        vaeSlot('Optional VAE override.', isVaeForBases(['sd-3'])),
+        vaeSlot('Optional VAE override.', isAcceptedVae),
       ]);
     case 'qwen-image':
       return createPolicy(model.format !== 'diffusers', [
@@ -1029,8 +1032,8 @@ const getBaseComponentSectionPolicy = (
         },
         {
           ...vaeSlot(
-            'Optional override, or required with a non-Diffusers model and no component source.',
-            isQwenImageFamilyVae
+            'The same VAE may be installed under the Qwen-Image or Anima base, so both are listed. Optional override, or required with a non-Diffusers model and no component source.',
+            isAcceptedVae
           ),
           required: (ctx) => !isBundledOrDiffusersSourceSatisfied(ctx),
           missingMessage: 'Generate needs a VAE for non-Diffusers Qwen Image models.',
@@ -1050,7 +1053,7 @@ const getBaseComponentSectionPolicy = (
         {
           ...vaeSlot(
             'Z-Image decodes with the FLUX VAE, so FLUX-base VAEs are listed here — they are fully compatible. Required unless a Diffusers component source is available.',
-            isVaeForBases(['flux'])
+            isAcceptedVae
           ),
           required: (ctx) => !isBundledOrDiffusersSourceSatisfied(ctx),
           missingMessage: 'Generate needs a VAE for Z-Image models.',
@@ -1063,7 +1066,7 @@ const getBaseComponentSectionPolicy = (
         {
           ...vaeSlot(
             'Krea-2 decodes with the Qwen-Image 16-channel VAE; the same VAE may be installed under the Qwen-Image or Anima base, so both are listed. Required for non-Diffusers Krea-2 models.',
-            isKrea2Vae
+            isAcceptedVae
           ),
           required: (ctx) => ctx.model.format !== 'diffusers',
           missingMessage: 'Generate needs a VAE for non-Diffusers Krea-2 models.',
@@ -1083,7 +1086,7 @@ const getBaseComponentSectionPolicy = (
           'Select a Diffusers Wan model to provide VAE and text-encoder components.'
         ),
         {
-          ...vaeSlot('Required unless a Diffusers component source is available.', isVaeForBases(['wan'])),
+          ...vaeSlot('Required unless a Diffusers component source is available.', isAcceptedVae),
           required: (ctx) => !isBundledOrDiffusersSourceSatisfied(ctx),
           missingMessage: 'Generate needs a VAE for Wan models.',
         },
@@ -1103,8 +1106,8 @@ const getBaseComponentSectionPolicy = (
         },
         {
           ...vaeSlot(
-            'Anima accepts VAEs installed under the Anima, Qwen-Image, or FLUX base — the same physical VAE ships under any of the three. Required for Anima models.',
-            isAnimaVae
+            'Anima decodes with the 16-channel Wan 2.1 VAE, which may be installed under the Anima, Qwen-Image, or Wan base, so all three are listed. Required for Anima models.',
+            isAcceptedVae
           ),
           required: () => true,
           missingMessage: 'Generate needs a VAE for Anima models.',

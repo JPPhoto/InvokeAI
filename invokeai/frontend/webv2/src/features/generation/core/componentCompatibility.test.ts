@@ -10,13 +10,13 @@ import type { ComponentModelConfig, GenerateModelConfig, VaeModelConfig } from '
 import {
   getCompatibleSelectedComponentKey,
   isAnimaQwen3Encoder,
-  isAnimaVae,
   isFlux2DiffusersSourceForModel,
   isFlux2MistralEncoder,
   isFlux2Qwen3EncoderForModel,
   isNonAnimaQwen3Encoder,
   isSelfContainedSDNQFlux1Pipeline,
   isSelfContainedSDNQPipeline,
+  isVaeAcceptedByBase,
   isVaeCompatibleWithGenerateModel,
   isVaeForBases,
   type GenerateComponentCandidate,
@@ -144,6 +144,8 @@ describe('Generate component compatibility', () => {
   });
 
   it('allows only backend-supported Anima VAE families', () => {
+    const isAnimaVae = isVaeAcceptedByBase('anima');
+
     expect(isAnimaVae(candidate({ base: 'anima', type: 'vae' }))).toBe(true);
     expect(isAnimaVae(candidate({ base: 'qwen-image', type: 'vae' }))).toBe(true);
     expect(isAnimaVae(candidate({ base: 'wan', latent_channels: 16, type: 'vae' }))).toBe(true);
@@ -156,7 +158,7 @@ describe('Generate component compatibility', () => {
   it('offers no VAE at all before the capability table has loaded', () => {
     resetArchitectureCapabilities();
 
-    expect(isAnimaVae(candidate({ base: 'anima', type: 'vae' }))).toBe(false);
+    expect(isVaeAcceptedByBase('anima')(candidate({ base: 'anima', type: 'vae' }))).toBe(false);
     expect(
       isVaeCompatibleWithGenerateModel({ base: 'sdxl', key: 'sdxl', name: 'SDXL', type: 'main' }, {
         base: 'sdxl',
@@ -183,7 +185,7 @@ describe('Generate component compatibility', () => {
   it('hides a stale selected component when it no longer passes the picker filter', () => {
     const staleVae: ComponentModelConfig = { base: 'sdxl', key: 'sdxl-vae', name: 'SDXL VAE', type: 'vae' };
 
-    expect(getCompatibleSelectedComponentKey(staleVae, isAnimaVae)).toBeNull();
+    expect(getCompatibleSelectedComponentKey(staleVae, isVaeAcceptedByBase('anima'))).toBeNull();
   });
 });
 

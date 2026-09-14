@@ -1027,7 +1027,7 @@ describe('Krea-2, Ideogram 4 and Wan policies', () => {
     name: 'Qwen3-VL',
     type: 'qwen3_vl_encoder',
   };
-  const wanVae: VaeModelConfig = { base: 'wan', key: 'wan-vae', name: 'Wan VAE', type: 'vae' };
+  const wanVae: VaeModelConfig = { base: 'wan', key: 'wan-vae', latent_channels: 16, name: 'Wan VAE', type: 'vae' };
   const wanT5Encoder: ComponentModelConfig = { base: 'any', key: 'wan-t5', name: 'Wan T5', type: 'wan_t5_encoder' };
 
   it('uses a 16px grid for all three, matching their transformer patch sizes', () => {

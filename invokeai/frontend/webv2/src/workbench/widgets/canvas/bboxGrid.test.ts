@@ -69,6 +69,12 @@ describe('resolveModelGrid before the capability table arrives', () => {
     expect(resolveModelGrid(undefined)).toBe(DEFAULT_MODEL_GRID);
   });
 
+  it('answers for an external generator too, which will never get a row to wait for', () => {
+    // A writer holds off on `null`, so answering it here would stop the bbox <-> dims sync for
+    // external providers for the whole session.
+    expect(resolveModelGrid('external')).toBe(DEFAULT_MODEL_GRID);
+  });
+
   it('keeps the default for readers that must show something', () => {
     expect(gridSizeForModelBase('wan')).toBe(DEFAULT_MODEL_GRID);
   });

@@ -517,6 +517,39 @@ describe('image recall', () => {
     expect(result?.values.aspectRatioId).toBe('2:3');
   });
 
+  it('recalls the size for an external generator, which has no architecture row to wait for', () => {
+    // The fail-closed rule below is for architectures the backend describes. An external provider
+    // never gets a row, so treating it the same way lost its dimension recall for good.
+    const externalModel = {
+      base: 'external',
+      capabilities: { modes: ['txt2img'], supports_seed: true },
+      format: 'external_api',
+      key: 'external-model',
+      name: 'OpenAI Image',
+      provider_id: 'openai',
+      type: 'external_image_generator',
+    } as GenerateWidgetValues['model'];
+    const recall = () =>
+      buildImageRecallSettings({
+        currentValues: createValues({ model: externalModel, modelKey: externalModel.key }),
+        image,
+        kind: 'dimensions',
+        metadata: null,
+        models: [],
+        supportedModels: [],
+        vaeModels: [],
+      });
+
+    expect(recall()?.values).toMatchObject({ height: 768, width: 512 });
+
+    resetArchitectureCapabilities();
+    try {
+      expect(recall()?.values).toMatchObject({ height: 768, width: 512 });
+    } finally {
+      setArchitectureCapabilities(architectureCapabilitiesFixture);
+    }
+  });
+
   describe('before the capability table arrives', () => {
     // Recalled dimensions are snapped to the architecture's grid and then persisted into the
     // project. With no table every base reads as grid 8, so a 16- or 32-grid project would

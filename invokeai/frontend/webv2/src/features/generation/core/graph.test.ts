@@ -322,6 +322,44 @@ describe('compileGenerateGraph', () => {
     expect(getEdge(mismatched, 'canvas_output', 'vae')?.source.node_id).toBe('model_loader');
   });
 
+  it('keeps an SD3 VAE override its picker would hide out of the graph', () => {
+    // The slot is optional, so validation never looks at it and the picker only hides a stale
+    // selection. The builder used to send whatever was stored -- a FLUX VAE left over from a model
+    // switch reached `sd3_model_loader`.
+    const graph = compile(sd3Model, { vae: fluxVae });
+
+    expect(graph.nodes.model_loader?.vae_model).toBeUndefined();
+    expect(compile(sd3Model, { vae: { ...fluxVae, base: 'sd-3', key: 'sd3-vae' } }).nodes.model_loader).toMatchObject({
+      vae_model: { key: 'sd3-vae' },
+    });
+  });
+
+  it('sends the Qwen Image loader every VAE its picker offers', () => {
+    // Regression: the picker read the served row, which lists Qwen-Image VAEs installed under
+    // `anima`, while the builder filtered to base `qwen-image`. A checkpoint model then failed to
+    // compile, and a Diffusers model silently dropped the override the user had selected.
+    const animaRegisteredVae: VaeModelConfig = {
+      base: 'anima',
+      key: 'anima-qwen-vae',
+      name: 'Qwen VAE (installed for Anima)',
+      type: 'vae',
+    };
+    const qwenVlEncoder: ComponentModelConfig = {
+      base: 'any',
+      key: 'qwen-vl',
+      name: 'Qwen VL',
+      type: 'qwen_vl_encoder',
+    };
+    const qwenImageCheckpoint: MainModelConfig = { ...qwenImageModel, format: 'checkpoint', key: 'qwen-checkpoint' };
+
+    expect(
+      compile(qwenImageCheckpoint, { qwenVLEncoderModel: qwenVlEncoder, vae: animaRegisteredVae }).nodes.model_loader
+    ).toMatchObject({ vae_model: animaRegisteredVae });
+    expect(compile(qwenImageModel, { vae: animaRegisteredVae }).nodes.model_loader).toMatchObject({
+      vae_model: animaRegisteredVae,
+    });
+  });
+
   it('routes SD LoRAs through the UNet and CLIP conditioning chain', () => {
     const graph = compile(sd1Model, {
       loras: [{ isEnabled: true, model: sd1Lora, weight: 0.5 }],

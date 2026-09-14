@@ -28,14 +28,12 @@ import {
 import {
   getCompatibleDiffusersComponentSource,
   isAnimaQwen3Encoder,
-  isAnimaVae,
   isBundledMainForBase,
   isFlux2MistralEncoder,
   isFlux2Qwen3EncoderForModel,
   isNonAnimaQwen3Encoder,
   isSelfContainedSDNQFlux1Pipeline,
-  isKrea2Vae,
-  isVaeForBases,
+  isVaeCompatibleWithGenerateModel,
 } from './componentCompatibility';
 import {
   addEdge,
@@ -56,8 +54,9 @@ const getCompatibleComponentSource = (
   model: MainModelConfig
 ): MainModelConfig | undefined => getCompatibleDiffusersComponentSource(model, settings.componentSourceModel);
 
-const getCompatibleVae = (settings: GenerateSettings, bases: readonly string[]) =>
-  settings.vae && isVaeForBases(bases)(settings.vae) ? settings.vae : null;
+// The picker's rule, not a copy of it: a base list here once dropped a VAE the picker offered.
+const getCompatibleVae = (settings: GenerateSettings, model: MainModelConfig) =>
+  settings.vae && isVaeCompatibleWithGenerateModel(model, settings.vae) ? settings.vae : null;
 
 const toImageField = (image: GenerateReferenceImageAsset) => ({
   image_name: getEffectiveReferenceImage(image).image_name,
@@ -350,10 +349,10 @@ const buildSDGraph = (
     type: 'denoise_latents',
   });
   // A VAE override only applies when it matches the main model's architecture.
-  const vaeLoader =
-    settings.vae && settings.vae.base === model.base
-      ? addNode(graph, { id: 'vae_loader', type: 'vae_loader', vae_model: settings.vae })
-      : null;
+  const vaeOverride = getCompatibleVae(settings, model);
+  const vaeLoader = vaeOverride
+    ? addNode(graph, { id: 'vae_loader', type: 'vae_loader', vae_model: vaeOverride })
+    : null;
   const seamless =
     settings.seamlessXAxis || settings.seamlessYAxis
       ? addNode(graph, {
@@ -542,6 +541,7 @@ const buildSD3Graph = (
   projectSettings: GenerationProjectSettings
 ): BackendGraphContract => {
   const graph: BackendGraphContract = { edges: [], id: createId('sd3_graph'), nodes: {} };
+  const vaeModel = getCompatibleVae(settings, model);
   const { negativePrompt, positivePrompt, seed } = addPromptAndSeedNodes(graph);
   const modelLoader = addNode(graph, {
     clip_g_model: settings.clipGEmbedModel ?? undefined,
@@ -550,7 +550,7 @@ const buildSD3Graph = (
     model,
     t5_encoder_model: settings.t5EncoderModel ?? undefined,
     type: 'sd3_model_loader',
-    vae_model: settings.vae ?? undefined,
+    vae_model: vaeModel ?? undefined,
   });
   const posCond = addNode(graph, { id: 'pos_cond', type: 'sd3_text_encoder' });
   const negCond = addNode(graph, { id: 'neg_cond', type: 'sd3_text_encoder' });
@@ -591,7 +591,7 @@ const buildSD3Graph = (
   addEdge(graph, seed, 'value', denoise, 'seed');
   addMetadata(graph, output, settings, model, 'sd3_txt2img', projectSettings, {
     scheduler: undefined,
-    vae: settings.vae ?? undefined,
+    vae: vaeModel ?? undefined,
     ...(shouldUsePidDecode(settings, model.base) ? getPidMetadata(settings) : {}),
   });
 
@@ -613,7 +613,7 @@ const buildFluxGraph = (
   const hasBundledComponents = isSelfContainedSDNQFlux1Pipeline(model);
   const t5EncoderModel = hasBundledComponents ? null : requireComponent(settings.t5EncoderModel, 'T5 Encoder');
   const clipEmbedModel = hasBundledComponents ? null : requireComponent(settings.clipEmbedModel, 'CLIP Embed');
-  const vaeModel = hasBundledComponents ? null : requireComponent(getCompatibleVae(settings, ['flux']), 'FLUX VAE');
+  const vaeModel = hasBundledComponents ? null : requireComponent(getCompatibleVae(settings, model), 'FLUX VAE');
   const scheduler = coerceSchedulerForGraph(model, settings.scheduler);
   const activeLoras = getActiveCompatibleLoras(settings, model);
   const modelLoader = addNode(graph, {
@@ -702,7 +702,7 @@ const buildFlux2Graph = (
       ? settings.qwen3EncoderModel
       : null;
   const encoderModel = isDev ? mistralEncoderModel : qwen3EncoderModel;
-  const vaeModel = getCompatibleVae(settings, ['flux2']);
+  const vaeModel = getCompatibleVae(settings, model);
 
   if (!hasBundledComponents && (!vaeModel || !encoderModel)) {
     throw new Error(
@@ -900,7 +900,7 @@ const buildQwenImageGraph = (
 ): BackendGraphContract => {
   const sourceModel = getCompatibleComponentSource(settings, model);
   const hasBundledComponents = model.format === 'diffusers' || sourceModel;
-  const vaeModel = getCompatibleVae(settings, ['qwen-image']);
+  const vaeModel = getCompatibleVae(settings, model);
 
   if (!hasBundledComponents && (!vaeModel || !settings.qwenVLEncoderModel)) {
     throw new Error(
@@ -1026,7 +1026,7 @@ const buildZImageGraph = (
     settings.qwen3EncoderModel && isNonAnimaQwen3Encoder(settings.qwen3EncoderModel)
       ? settings.qwen3EncoderModel
       : null;
-  const vaeModel = getCompatibleVae(settings, ['flux']);
+  const vaeModel = getCompatibleVae(settings, model);
 
   if (!sourceModel && (!vaeModel || !qwen3EncoderModel)) {
     throw new Error('Z-Image models require a VAE and Qwen3 Encoder, or a Diffusers component source.');
@@ -1111,7 +1111,7 @@ const buildAnimaGraph = (
   outputIsIntermediate: boolean,
   projectSettings: GenerationProjectSettings
 ): BackendGraphContract => {
-  const vaeModel = requireComponent(settings.vae && isAnimaVae(settings.vae) ? settings.vae : null, 'Anima VAE');
+  const vaeModel = requireComponent(getCompatibleVae(settings, model), 'Anima VAE');
   const qwen3EncoderModel = requireComponent(
     settings.qwen3EncoderModel && isAnimaQwen3Encoder(settings.qwen3EncoderModel) ? settings.qwen3EncoderModel : null,
     'Qwen3 Encoder'
@@ -1186,10 +1186,7 @@ const buildKrea2Graph = (
   // or GGUF) bundles neither VAE nor encoder, so both must be selected. A diffusers model
   // carries them, and the loader extracts them when these are omitted.
   const isDiffusers = model.format === 'diffusers';
-  // Same base set as the picker (`isKrea2Vae`) and the backend loader: a Qwen-Image VAE
-  // installed under the `anima` base is still the VAE Krea-2 wants. Narrowing it here would
-  // silently drop a VAE the user had legitimately selected.
-  const vaeModel = settings.vae && isKrea2Vae(settings.vae) ? settings.vae : null;
+  const vaeModel = getCompatibleVae(settings, model);
   const qwen3VlEncoderModel = settings.qwen3VLEncoderModel;
 
   if (!isDiffusers) {
@@ -1326,7 +1323,7 @@ const buildWanGraph = (
   // A GGUF Wan main carries only the transformer, so the VAE and UMT5-XXL encoder come from
   // standalone models or a Diffusers component source.
   const sourceModel = getDiffusersSource(settings, model);
-  const vaeModel = getCompatibleVae(settings, ['wan']);
+  const vaeModel = getCompatibleVae(settings, model);
   const wanT5EncoderModel = settings.wanT5EncoderModel;
 
   if (!sourceModel && (!vaeModel || !wanT5EncoderModel)) {

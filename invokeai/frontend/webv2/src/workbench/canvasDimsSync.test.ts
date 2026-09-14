@@ -1,4 +1,4 @@
-import type { MainModelConfig } from '@features/generation/contracts';
+import type { GenerateWidgetValues, MainModelConfig } from '@features/generation/contracts';
 import type { WorkbenchState } from '@workbench/projectContracts';
 
 import {
@@ -486,6 +486,35 @@ describe('createCanvasDimsSync before the capability table arrives', () => {
 
     return { getSyncDispatches: () => syncDispatches, store, sync: createCanvasDimsSync(countingStore) };
   };
+
+  it('reconciles an external generator at once, which will never get a row to wait for', () => {
+    // Holding off on `null` is right for an architecture the backend will describe. An external
+    // provider has no row coming, so waiting would leave its canvas sync off for the whole session.
+    const externalModel = {
+      base: 'external',
+      capabilities: { modes: ['txt2img'], supports_seed: true },
+      format: 'external_api',
+      key: 'external-model',
+      name: 'OpenAI Image',
+      provider_id: 'openai',
+      type: 'external_image_generator',
+    } as GenerateWidgetValues['model'];
+    const store = createWorkbenchStore();
+
+    store.commands.generation.setSource('canvas');
+    store.commands.generation.patchSettings({
+      height: 1024,
+      model: externalModel,
+      modelKey: externalModel.key,
+      width: 1024,
+    });
+    dispatchCanvas(store, { bbox: { height: 1032, width: 1032, x: 0, y: 0 }, type: 'setCanvasBbox' });
+
+    const sync = createCanvasDimsSync(store);
+
+    expect(getActiveGenerate(store.getState()).values.width).toBe(1032);
+    sync.dispose();
+  });
 
   it('writes nothing into the project while the architecture has no answer', () => {
     // Reopening a saved canvas project: `prev` is null, so the bbox wins and the dims are patched

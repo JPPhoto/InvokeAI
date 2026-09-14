@@ -186,22 +186,11 @@ export const isVaeAcceptedByBase =
     acceptsVae(base, model);
 
 /**
- * Anima's decode takes the 16-channel Wan 2.1 VAE, which is the same 194-tensor checkpoint
- * whichever of three bases it was installed under. The 48-channel Wan VAE is a different decoder,
- * which is why the served row constrains the width as well as the base.
+ * The one VAE rule for a Generate model. The component picker and its validation filter with
+ * `isVaeAcceptedByBase(model.base)` and the graph builder with this, so a VAE the user can select is
+ * always one the graph sends -- the served row decides for both, including cross-base families such
+ * as a Qwen-Image VAE installed under `anima`.
  */
-export const isAnimaVae: GenerateComponentFilter = isVaeAcceptedByBase('anima');
-
-/** Qwen-Image's VAE, wherever it is registered from. */
-export const isQwenImageFamilyVae: GenerateComponentFilter = isVaeAcceptedByBase('qwen-image');
-
-/**
- * Krea-2 decodes with the Qwen-Image VAE, which is why its graph reuses `qwen_image_l2i`. It reads
- * its own row rather than aliasing Qwen-Image's: they agree today, and the point of reading the
- * table is that neither has to stay in step with the other by hand.
- */
-export const isKrea2Vae: GenerateComponentFilter = isVaeAcceptedByBase('krea-2');
-
 export const isVaeCompatibleWithGenerateModel = (model: GenerateModelConfig, vae: VaeModelConfig): boolean => {
   if (model.type === 'external_image_generator') {
     return false;
