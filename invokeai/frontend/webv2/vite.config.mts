@@ -67,6 +67,9 @@ const ROUTE_SHARED_MODULES = [
 
 // Modules every editor boot fetches (topbar UI plus the realtime runtime the
 // widget hosts share), folded into one chunk so they cost bytes, not requests.
+// The generation runtime, capability store and prompt-attention modules are
+// imported by the app shell and by several lazy widget chunks; left to the
+// bundler, each set becomes its own request on every editor route.
 const EDITOR_BOOT_SHARED_MODULES = [
   '/app/GalleryUiAdapter.tsx',
   '/features/gallery/picker.ts',
@@ -85,6 +88,13 @@ const EDITOR_BOOT_SHARED_MODULES = [
   '/features/gallery/ui/useGalleryData.ts',
   '/features/gallery/ui/useGalleryUploadAction.ts',
   '/features/gallery/ui/useGalleryUploadInput.ts',
+  '/features/generation/core/prompt/ast.ts',
+  '/features/generation/core/prompt/attention.ts',
+  '/features/generation/data/architectureCapabilitiesApi.ts',
+  '/features/generation/data/architectureCapabilitiesStore.ts',
+  '/features/generation/queries.ts',
+  '/features/generation/runtime.ts',
+  '/features/generation/ui/promptFields/promptAttentionHotkeys.ts',
   '/workbench/shell/topbar/LayoutPresetAdminDialogs.tsx',
   '/workbench/shell/topbar/LayoutPresetStrip.tsx',
   '/workbench/shell/topbar/ProjectSwitcher.tsx',
