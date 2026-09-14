@@ -2,10 +2,10 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 859351,
+        "brotliBytes": 859335,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 858522,
+        "gzipBytes": 858507,
         "imageRawBytes": 156376,
         "initialRawBytes": 2010911,
         "largestAssetRawBytes": 747218,
@@ -310,34 +310,21 @@
           "source:src/workbench/settings/store.ts"
         ]
       },
-      "limits": {
-        "brotliBytes": 867945,
-        "cssRawBytes": 2181,
-        "fontRawBytes": 221675,
-        "gzipBytes": 867108,
-        "imageRawBytes": 157940,
-        "initialRawBytes": 2031021,
-        "largestAssetRawBytes": 754691,
-        "otherAssetRawBytes": 0,
-        "ownedRawBytes": 74443,
-        "requestCount": 44,
-        "scriptRequestCount": 28
-      },
       "owner": "app",
       "remediationTicket": "set-performance-budgets",
       "source": "index.html"
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1183096,
+        "brotliBytes": 1182691,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1177212,
+        "gzipBytes": 1176792,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2994831,
+        "initialRawBytes": 2993632,
         "largestAssetRawBytes": 747218,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 134160,
+        "ownedRawBytes": 133058,
         "requestCount": 106,
         "scriptRequestCount": 90,
         "sourceOwners": [
@@ -828,7 +815,6 @@
           "source:src/workbench/hotkeys/targetWidget.ts",
           "source:src/workbench/iconResolver.tsx",
           "source:src/workbench/image-actions/recallParametersBridge.ts",
-          "source:src/workbench/image-actions/useFindGalleryItem.ts",
           "source:src/workbench/invocation.ts",
           "source:src/workbench/invocationSubmit.ts",
           "source:src/workbench/launchpad/HelpMenu.tsx",
@@ -1026,25 +1012,12 @@
           "source:src/workbench/workbenchStore.ts"
         ]
       },
-      "limits": {
-        "brotliBytes": 1194927,
-        "cssRawBytes": 2181,
-        "fontRawBytes": 221675,
-        "gzipBytes": 1188985,
-        "imageRawBytes": 157940,
-        "initialRawBytes": 3024780,
-        "largestAssetRawBytes": 754691,
-        "otherAssetRawBytes": 0,
-        "ownedRawBytes": 134160,
-        "requestCount": 106,
-        "scriptRequestCount": 90
-      },
       "owner": "workbench",
       "remediationTicket": "deepen-widget-registry-loading",
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-14",
+  "capturedAt": "2026-09-13",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",
