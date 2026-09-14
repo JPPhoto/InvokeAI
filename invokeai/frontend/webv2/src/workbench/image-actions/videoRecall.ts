@@ -17,6 +17,7 @@ import {
   getVideoTargetResolutionOptions,
   isSupportedVideoModel,
   isValidVideoNumFrames,
+  MINIMAX_H3_HYBRID_BLOCK_RANGE,
   snapVideoNumFrames,
 } from '@features/video';
 
@@ -230,6 +231,7 @@ const VIDEO_COMPONENT_METADATA_KEYS = [
   ['minimax_h3_transformer_model', 'h3TransformerModel'],
   ['minimax_h3_component_source', 'componentSourceModel'],
   ['minimax_h3_text_encoder_model', 'h3TextEncoderModel'],
+  ['minimax_h3_hybrid_base_model', 'h3HybridBaseModel'],
 ] as const;
 
 /**
@@ -531,6 +533,7 @@ export const buildVideoRecallSettings = ({
   // Components recall FIRST: the accelerator derivation below resolves the H3 task off the
   // recalled transformer override, so `values` must already hold it.
   let componentsRecalled = false;
+  let hybridBaseRecalled = false;
 
   for (const [metadataKey, valuesKey] of VIDEO_COMPONENT_METADATA_KEYS) {
     const recordedKey = getMetadataModelKey(metadata, metadataKey);
@@ -544,7 +547,21 @@ export const buildVideoRecallSettings = ({
     if (installed) {
       values = { ...values, [valuesKey]: installed };
       componentsRecalled = true;
+      hybridBaseRecalled ||= valuesKey === 'h3HybridBaseModel';
     }
+  }
+
+  // The hybrid's start block belongs to the recorded base: it only comes back
+  // with it, never onto a base the panel happened to hold already.
+  const hybridStartBlock = getInteger(metadata, 'minimax_h3_hybrid_start_block');
+
+  if (
+    hybridBaseRecalled &&
+    hybridStartBlock !== null &&
+    hybridStartBlock >= MINIMAX_H3_HYBRID_BLOCK_RANGE.min &&
+    hybridStartBlock <= MINIMAX_H3_HYBRID_BLOCK_RANGE.max
+  ) {
+    values = { ...values, h3HybridStartBlock: hybridStartBlock };
   }
 
   if (componentsRecalled) {

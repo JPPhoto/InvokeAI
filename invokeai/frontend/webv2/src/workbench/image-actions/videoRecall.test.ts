@@ -509,6 +509,52 @@ describe('model-position recall shapes', () => {
     expect(result?.values).toMatchObject({ acceleratorEnabled: true, acceleratorLoraKeys: [ref2vTurbo.key] });
   });
 
+  it('recalls the hybrid quality base together with its start block, never the block alone', () => {
+    const fl2vaBase: MainModelConfig = {
+      base: 'minimax-h3',
+      format: 'checkpoint',
+      key: 'h3-fl2va-ckpt',
+      name: 'MiniMax H3 FL2VA Transformer (int8, pruned)',
+      type: 'main',
+      variant: 'fl2va',
+    };
+    const metadata = {
+      generation_mode: 'minimax_h3_ref2v',
+      minimax_h3_component_source: { key: install.key },
+      minimax_h3_hybrid_base_model: { key: fl2vaBase.key },
+      minimax_h3_hybrid_start_block: 30,
+      minimax_h3_references: [{ detail: 'max', image_name: 'ref.png', kind: 'image' }],
+      model: { key: checkpoint.key },
+      num_frames: 124,
+    };
+    const result = buildVideoRecallSettings({ currentValues, kind: 'all', metadata, models: [...catalog, fl2vaBase] });
+
+    expect(result?.fields).toContain('components');
+    expect(result?.values.model?.key).toBe(checkpoint.key);
+    expect(result?.values.h3HybridBaseModel?.key).toBe(fl2vaBase.key);
+    expect(result?.values.h3HybridStartBlock).toBe(30);
+
+    // With the base uninstalled, the block stays at the panel's value: a start block only
+    // means something for the base it was recorded with.
+    const gone = buildVideoRecallSettings({ currentValues, kind: 'all', metadata, models: catalog });
+
+    expect(gone?.values.h3HybridBaseModel).toBeNull();
+    expect(gone?.values.h3HybridStartBlock).toBe(currentValues.h3HybridStartBlock);
+
+    // Nor onto a different base the panel already holds: base Y's block 30 must not land on base X.
+    const otherBase: MainModelConfig = { ...fl2vaBase, key: 'h3-fl2va-other', name: 'Another FL2VA' };
+    const holding = { ...currentValues, h3HybridBaseModel: otherBase, h3HybridStartBlock: 12 };
+    const onto = buildVideoRecallSettings({
+      currentValues: holding,
+      kind: 'all',
+      metadata,
+      models: [...catalog, otherBase],
+    });
+
+    expect(onto?.values.h3HybridBaseModel?.key).toBe(otherBase.key);
+    expect(onto?.values.h3HybridStartBlock).toBe(12);
+  });
+
   it('recalls the recorded component source for a checkpoint-main recording', () => {
     const result = buildVideoRecallSettings({
       currentValues,
