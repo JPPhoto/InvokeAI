@@ -757,13 +757,6 @@
         "An image size (in number of pixels) equivalent to 512x512 is recommended for SD1.5 models and a size equivalent to 1024x1024 is recommended for SDXL models."
       ]
     },
-    "batchCount": {
-      "heading": "Iterations",
-      "paragraphs": [
-        "The number of images to generate.",
-        "If Dynamic Prompts is enabled, each of the prompts will be generated this many times."
-      ]
-    },
     "cfgRescale": {
       "heading": "CFG Rescale Multiplier",
       "paragraphs": [
@@ -2359,7 +2352,6 @@
     "upscale": {
       "addLora": "LoRAs",
       "advanced": "Advanced",
-      "batchCount": "Batch count",
       "bundledVae": "Bundled VAE",
       "cfgScale": "CFG scale",
       "clipSkip": "CLIP skip",
