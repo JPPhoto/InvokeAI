@@ -16,7 +16,7 @@ import {
 } from '@features/generation/core/architectureCapabilities.testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { buildImageRecallSettings, getImageRecallCapabilities } from './imageRecall';
+import { buildImageRecallSettings, getImageRecallCapabilities, type ImageRecallKind } from './imageRecall';
 
 const sdxlModel: MainModelConfig = { base: 'sdxl', key: 'sdxl-model', name: 'SDXL', type: 'main' };
 const sd1Model: MainModelConfig = { base: 'sd-1', key: 'sd1-model', name: 'SD 1.5', type: 'main' };
@@ -577,19 +577,35 @@ describe('image recall', () => {
       expect(result?.fields ?? []).not.toContain('size');
     });
 
-    it('recalls no size from metadata either', () => {
-      const result = buildImageRecallSettings({
-        currentValues: createValues(),
-        image,
-        kind: 'all',
-        metadata: { height: 768, width: 512 },
-        models: [],
-        supportedModels: [],
-        vaeModels: [],
-      });
+    it('withholds Recall All and Remix but keeps prompts and seed', () => {
+      const metadata = { height: 768, model: { key: sdxlModel.key }, positive_prompt: 'a cat', seed: 7, width: 512 };
+      const recall = (kind: ImageRecallKind) =>
+        buildImageRecallSettings({
+          currentValues: createValues(),
+          image,
+          kind,
+          metadata,
+          models: [],
+          supportedModels: [sdxlModel],
+          vaeModels: [],
+        });
 
-      // Without the fix this is ['size'] with the width snapped to the fallback grid 8.
-      expect(result?.fields ?? []).not.toContain('size');
+      // Recall All used to apply the model's fallback defaults and skip the size, and the project kept
+      // that result after the table arrived.
+      expect(recall('all')).toBeNull();
+      expect(recall('remix')).toBeNull();
+      expect(recall('prompts')?.fields).toEqual(['prompts']);
+      expect(recall('seed')?.fields).toEqual(['seed']);
+      expect(
+        getImageRecallCapabilities({
+          currentValues: createValues(),
+          image,
+          metadata,
+          models: [],
+          supportedModels: [sdxlModel],
+          vaeModels: [],
+        })
+      ).toMatchObject({ all: false, clipSkip: false, prompts: true, remix: false, seed: true });
     });
   });
 

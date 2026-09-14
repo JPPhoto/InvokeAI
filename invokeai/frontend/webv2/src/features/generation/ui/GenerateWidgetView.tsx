@@ -7,13 +7,12 @@ import { isLoraModelConfig, normalizeGenerateSettings } from '@features/generati
 import {
   ensureArchitectureCapabilitiesLoaded,
   getArchitectureCapabilitiesSnapshot,
-  subscribeArchitectureCapabilities,
   useArchitectureCapabilitiesSelector,
 } from '@features/generation/data/architectureCapabilitiesStore';
 import { resolveGenerateWidgetValues } from '@features/generation/settings';
 import { focusIfUnclaimed } from '@platform/react/focusIfUnclaimed';
 import { Button } from '@platform/ui/Button';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { getGenerateFormCommitPatch } from './generateFormViewModel';
@@ -62,26 +61,14 @@ export const GenerateWidgetView = () => {
 
     focusHandoffPending.current = true;
     setHasRequestedRetry(true);
-    ensureArchitectureCapabilitiesLoaded();
-  }, [isRetrying]);
-
-  // The request belongs to one retry. Once that load settles, a later reload -- an account switch,
-  // a retry started from another panel -- is not this widget's retry: no failure surface while it
-  // loads, and no focus taken when it lands.
-  useEffect(() => {
-    if (!hasRequestedRetry) {
-      return undefined;
-    }
-
-    return subscribeArchitectureCapabilities(() => {
-      const next = getArchitectureCapabilitiesSnapshot().status;
-
-      if (next !== 'loading') {
-        focusHandoffPending.current = next === 'loaded';
-        setHasRequestedRetry(false);
-      }
+    // The request belongs to this retry. Once it settles, a later reload -- an account switch, a
+    // retry started from another panel -- is not this widget's: no failure surface while it loads,
+    // and no focus taken when it lands. The form may already have mounted and taken the handoff.
+    void ensureArchitectureCapabilitiesLoaded().then(() => {
+      focusHandoffPending.current &&= getArchitectureCapabilitiesSnapshot().status === 'loaded';
+      setHasRequestedRetry(false);
     });
-  }, [hasRequestedRetry]);
+  }, [isRetrying]);
 
   const handOverFocus = useCallback((element: HTMLDivElement | null) => {
     if (element && focusHandoffPending.current) {

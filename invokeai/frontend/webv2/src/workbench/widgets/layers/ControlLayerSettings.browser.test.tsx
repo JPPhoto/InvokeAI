@@ -146,4 +146,34 @@ describe('ControlLayerSettings and the capability table', () => {
     expect(document.activeElement).not.toBe(document.body);
     expect(host!.contains(document.activeElement)).toBe(true);
   });
+
+  it('leaves focus where the user moved it while the retry was in flight', async () => {
+    getArchitectureCapabilities.mockRejectedValueOnce(new Error('Fixture capability outage.'));
+    await settle(ensureArchitectureCapabilitiesLoaded);
+    await render();
+
+    let finishLoad: (rows: ArchitectureCapabilitiesRow[]) => void = () => undefined;
+    getArchitectureCapabilities.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishLoad = resolve;
+      })
+    );
+    await settle(() => {
+      retryButton()?.focus();
+      retryButton()?.click();
+    });
+
+    // Someone starts typing elsewhere; the load landing must not pull them into this panel.
+    const elsewhere = document.createElement('input');
+    document.body.append(elsewhere);
+    elsewhere.focus();
+    try {
+      await settle(() => finishLoad(architectureCapabilitiesFixture));
+
+      expect(retryButton()).toBeUndefined();
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
+  });
 });

@@ -14,7 +14,14 @@ const galleryApi = vi.hoisted(() => ({
 
 vi.mock('@features/gallery', () => galleryApi);
 
-import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
+import {
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
+import {
+  architectureCapabilitiesFixture,
+  seedArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities.testing';
 
 import { executeImageRecall } from './executeImageRecall';
 
@@ -86,6 +93,35 @@ describe('executeImageRecall', () => {
       'project-1'
     );
     expect(add).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success', title: 'Recalled remix settings' }));
+  });
+
+  it('persists no remix until model capabilities load, and says why', async () => {
+    const { add, commands, setSettings } = createCommands();
+
+    resetArchitectureCapabilities();
+    try {
+      await expect(
+        executeImageRecall({
+          commands,
+          generateValues: { modelKey: model.key },
+          image,
+          kind: 'remix',
+          models: [model],
+          projectId: 'project-1',
+        })
+      ).resolves.toBe(false);
+    } finally {
+      setArchitectureCapabilities(architectureCapabilitiesFixture);
+    }
+
+    expect(galleryApi.galleryImages.metadata).not.toHaveBeenCalled();
+    expect(setSettings).not.toHaveBeenCalled();
+    expect(add).toHaveBeenCalledWith({
+      kind: 'info',
+      message:
+        'Model capabilities are not loaded, so settings that depend on the model cannot be recalled yet. Prompts and seed can. If loading failed, retry from the Generate panel.',
+      title: 'Cannot recall image data',
+    });
   });
 
   it('uses the freshest Generate values when recalling image dimensions', async () => {

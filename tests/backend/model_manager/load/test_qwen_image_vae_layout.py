@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from diffusers.models.autoencoders import AutoencoderKLWan
 
 from invokeai.backend.model_manager.configs.vae import (
     VAE_Checkpoint_Anima_Config,
@@ -37,6 +38,16 @@ _ORIGINAL_LAYOUT = {
     "decoder.middle.0.residual.0.gamma": "decoder.mid_block.resnets.0.norm1.gamma",
     "decoder.upsamples.0.residual.0.gamma": "decoder.up_blocks.0.resnets.0.norm1.gamma",
     "decoder.head.0.gamma": "decoder.norm_out.gamma",
+}
+
+
+# The 16-channel Wan VAE's structure (8x spatial, unpatchified) at the smallest width that builds.
+_TINY_WAN_KWARGS = {
+    "base_dim": 2,
+    "dim_mult": [1, 1, 1, 1],
+    "num_res_blocks": 1,
+    "attn_scales": [],
+    "temperal_downsample": [False, True, True],
 }
 
 
@@ -135,23 +146,29 @@ def test_a_wan_registered_checkpoint_follows_the_same_format_and_precision_polic
     """Anima also accepts the 16-channel VAE installed under `wan`, and that registration has its own
     loader. It read safetensors only and forced bfloat16, so one file behaved differently depending
     on the base it happened to be probed as -- `Wan2.1_VAE.pth` installed, then failed to load."""
+    torch.manual_seed(0)
+    state_dict = AutoencoderKLWan(z_dim=16, **_TINY_WAN_KWARGS).state_dict()
     path = tmp_path / "Wan2.1_VAE.pth"
-    state_dict = _original_layout_state_dict()
     torch.save(state_dict, path)
 
+    # A real module and the loader's own strict `load_state_dict`; only the width is shrunk. A
+    # checkpoint whose keys or shapes do not fit the model the loader builds fails here as it would
+    # for a user.
     with (
-        patch("accelerate.init_empty_weights"),
-        patch("diffusers.models.autoencoders.autoencoder_kl_wan.AutoencoderKLWan") as wan,
+        patch(
+            "invokeai.backend.model_manager.load.model_loaders.vae._wan_vae_init_kwargs_for",
+            side_effect=lambda latent_channels: {**_TINY_WAN_KWARGS, "z_dim": latent_channels},
+        ),
         patch("invokeai.backend.wan.rocm_causal_conv3d.patch_wan_causal_conv3d_for_rocm"),
     ):
-        _loader(torch.float32)._load_model(
+        model = _loader(torch.float32)._load_model(
             VAE_Checkpoint_Wan_Config.model_construct(path=str(path), latent_channels=16)
         )
 
-    wan.assert_called_once_with(z_dim=16)
-    (loaded,), _ = wan.return_value.load_state_dict.call_args
-    assert set(loaded) == set(state_dict)
-    assert {tensor.dtype for tensor in loaded.values()} == {torch.float32}
+    loaded = model.state_dict()
+    assert loaded.keys() == state_dict.keys()
+    assert all(torch.equal(loaded[key], state_dict[key]) for key in state_dict)
+    assert {tensor.dtype for tensor in loaded.values() if tensor.is_floating_point()} == {torch.float32}
 
 
 @pytest.mark.parametrize(("requested", "expected"), [(torch.float16, torch.bfloat16), (torch.float32, torch.float32)])

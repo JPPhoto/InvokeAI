@@ -28,6 +28,7 @@ import {
   buildImageRecallSettings,
   getImageRecallMessage,
   getImageRecallTitle,
+  isImageRecallKindAvailable,
   type ImageRecallKind,
 } from './imageRecall';
 
@@ -153,6 +154,16 @@ export const executeImageRecall = async ({
       commands.notifications.add({
         kind: 'info',
         message: 'Select a supported Generate model first.',
+        title: 'Cannot recall image data',
+      });
+      return false;
+    }
+
+    if (!isImageRecallKindAvailable(kind)) {
+      commands.notifications.add({
+        kind: 'info',
+        message:
+          'Model capabilities are not loaded, so settings that depend on the model cannot be recalled yet. Prompts and seed can. If loading failed, retry from the Generate panel.',
         title: 'Cannot recall image data',
       });
       return false;

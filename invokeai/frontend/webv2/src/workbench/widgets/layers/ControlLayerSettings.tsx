@@ -25,13 +25,13 @@ import {
   subscribeArchitectureCapabilities,
 } from '@features/generation/runtime';
 import { useModelsSelector } from '@features/models';
-import { focusIfUnclaimed } from '@platform/react/focusIfUnclaimed';
+import { focusFirstOperable } from '@platform/react/focusIfUnclaimed';
 import { useExternalStoreSelector } from '@platform/state/selectors';
 import { Button, Field, Select, Slider } from '@platform/ui';
 import { lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import { getCanvasOperations, resolveDefaultFilterForModel } from '@workbench/canvas-operations/api';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { getCompatibleControlModels } from './controlModelOptions';
@@ -124,29 +124,27 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
   );
   const [hasRequestedCapabilitiesRetry, setHasRequestedCapabilitiesRetry] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  // Set by the click, consumed once the retry has filled the panel in.
-  const focusHandoffPending = useRef(false);
   const retryCapabilities = useCallback(() => {
     if (hasRequestedCapabilitiesRetry && capabilitiesStatus === 'loading') {
       return;
     }
-    focusHandoffPending.current = true;
     setHasRequestedCapabilitiesRetry(true);
-    ensureArchitectureCapabilitiesLoaded();
+    // The request belongs to this retry; a later reload started elsewhere is not this panel's retry.
+    void ensureArchitectureCapabilitiesLoaded().then(() => setHasRequestedCapabilitiesRetry(false));
   }, [capabilitiesStatus, hasRequestedCapabilitiesRetry]);
-  // The request belongs to one retry; a later reload started elsewhere is not this panel's retry.
-  useEffect(() => {
-    if (!hasRequestedCapabilitiesRetry) {
+  // A load that lands unmounts the failure surface, and with it the retry button a keyboard user may
+  // be on. The ref's cleanup runs while the surface is still in the document, so focus is handed to
+  // the panel the load filled in before it can fall to <body>.
+  const handOverFocusOnLoad = useCallback((surface: HTMLDivElement | null) => {
+    if (!surface) {
       return undefined;
     }
-    return subscribeArchitectureCapabilities(() => {
-      const next = getArchitectureCapabilitiesSnapshot().status;
-      if (next !== 'loading') {
-        focusHandoffPending.current = next === 'loaded';
-        setHasRequestedCapabilitiesRetry(false);
+    return () => {
+      if (surface.contains(document.activeElement) && getArchitectureCapabilitiesSnapshot().status === 'loaded') {
+        focusFirstOperable(rootRef.current);
       }
-    });
-  }, [hasRequestedCapabilitiesRetry]);
+    };
+  }, []);
   // Adapter kinds supported by the selected base. Z-Image Control is only shown
   // when a compatible Z-Image main model is selected. Read inside the store's
   // selector: the answer comes from the capability table, and a call memoised on
@@ -402,14 +400,6 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
       ? validationReason
       : null;
 
-  // A successful retry unmounts the button that held focus; hand it to the panel the retry filled in.
-  useEffect(() => {
-    if (!capabilitiesUnavailable && focusHandoffPending.current) {
-      focusHandoffPending.current = false;
-      focusIfUnclaimed(rootRef.current);
-    }
-  }, [capabilitiesUnavailable]);
-
   return (
     <Stack ref={rootRef} gap="2">
       <HStack gap="2">
@@ -519,7 +509,7 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
         </Text>
       ) : null}
       {showCapabilitiesFailure ? (
-        <HStack aria-busy={isRetryingCapabilities} gap="2" role="alert">
+        <HStack ref={handOverFocusOnLoad} aria-busy={isRetryingCapabilities} gap="2" role="alert">
           <Text color="fg.warning" flex="1" fontSize="2xs">
             {t('widgets.layers.control.capabilitiesLoadFailed')}
           </Text>

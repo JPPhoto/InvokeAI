@@ -45,7 +45,7 @@ export const GenerateWidgetSyncRuntime = () => {
 
     // Kicked here, at app boot, so the gate's window is one round trip rather than "whenever the
     // Generate panel is first opened".
-    ensureArchitectureCapabilitiesLoaded();
+    void ensureArchitectureCapabilitiesLoaded();
     void ensureModelsLoaded();
     return () => runtime.dispose();
   });

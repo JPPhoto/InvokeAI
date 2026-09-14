@@ -56,6 +56,7 @@ export {
   SCHEDULER_OPTIONS,
   type GenerateModelSelectionResult,
 } from './core/baseGenerationPolicies';
+export { hasArchitectureCapabilities } from './core/architectureCapabilities';
 export {
   resolveGenerateWidgetValues,
   type ResolvedGenerateWidgetValues,

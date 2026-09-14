@@ -12,6 +12,7 @@ import {
   getDimensionGrid,
   getGenerationUiPolicy,
   getSettingsWithModelDefaults,
+  hasArchitectureCapabilities,
   isKnownScheduler,
   isVaeCompatibleWithGenerateModel,
   isValidKrea2RebalanceWeights,
@@ -464,6 +465,15 @@ export const getSupportedClipSkip = (metadata: unknown, model: GenerateModelConf
   return clipSkip !== null && clipSkipMax !== null ? Math.min(clipSkipMax, clipSkip) : null;
 };
 
+/**
+ * Recall All, Remix and CLIP skip read architecture policy -- model defaults, VAE and CLIP skip rules
+ * -- and their result is persisted into the project, where it outlives the outage. Without the served
+ * table they would be computed on fallbacks and stored. Prompts and seed are the image's own, and
+ * a dimensions recall already declines per model when it has no grid to snap to.
+ */
+export const isImageRecallKindAvailable = (kind: ImageRecallKind): boolean =>
+  kind === 'prompts' || kind === 'seed' || kind === 'dimensions' || hasArchitectureCapabilities();
+
 export const getImageRecallCapabilities = ({
   currentValues,
   image,
@@ -517,11 +527,11 @@ export const getImageRecallCapabilities = ({
     hasRebalance;
 
   return {
-    all: hasAnyMetadata,
-    clipSkip: getSupportedClipSkip(metadata, currentValues.model) !== null,
+    all: hasAnyMetadata && isImageRecallKindAvailable('all'),
+    clipSkip: getSupportedClipSkip(metadata, currentValues.model) !== null && isImageRecallKindAvailable('clipSkip'),
     dimensions: getImageSize(image, currentValues.model) !== null,
     prompts: hasPrompts,
-    remix: hasNonSeedMetadata,
+    remix: hasNonSeedMetadata && isImageRecallKindAvailable('remix'),
     seed: hasSeed,
   };
 };
@@ -543,6 +553,10 @@ export const buildImageRecallSettings = ({
   models: ComponentModelConfig[];
   vaeModels: VaeModelConfig[];
 }): ImageRecallResult | null => {
+  if (!isImageRecallKindAvailable(kind)) {
+    return null;
+  }
+
   const fields: RecalledField[] = [];
   let values: GenerateWidgetValues = cloneGenerateWidgetValues(currentValues);
 

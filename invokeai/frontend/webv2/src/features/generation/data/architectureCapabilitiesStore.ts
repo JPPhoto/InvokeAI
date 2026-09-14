@@ -99,15 +99,20 @@ export const refreshArchitectureCapabilities = (): Promise<void> =>
       });
   });
 
-/** Fetch on first use or retry after an error, so one failed load never sticks. */
-export const ensureArchitectureCapabilitiesLoaded = (): void => {
+/**
+ * Fetch on first use or retry after an error, so one failed load never sticks. Settles when the load
+ * it started or joined does; it never rejects -- the outcome is the snapshot's status.
+ */
+export const ensureArchitectureCapabilitiesLoaded = (): Promise<void> => {
   isRequested = true;
 
   const { status } = store.getSnapshot();
 
   if (status === 'idle' || status === 'error') {
-    void refreshArchitectureCapabilities();
+    return refreshArchitectureCapabilities();
   }
+
+  return refreshFlight.inflight() ?? Promise.resolve();
 };
 
 export const getArchitectureCapabilitiesSnapshot = (): ArchitectureCapabilitiesSnapshot => store.getSnapshot();
