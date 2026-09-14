@@ -14,17 +14,6 @@
         "scriptRequestCount": 0,
         "totalRawBytes": 0
       },
-      "activatedResourceLimits": {
-        "cssRawBytes": 0,
-        "fontRawBytes": 0,
-        "imageRawBytes": 0,
-        "largestAssetRawBytes": 0,
-        "otherRawBytes": 0,
-        "requestCount": 0,
-        "scriptRawBytes": 0,
-        "scriptRequestCount": 0,
-        "totalRawBytes": 0
-      },
       "domContentLoadedMedianMs": 104,
       "id": "launchpad",
       "layoutAckMedianMs": 0,
@@ -47,34 +36,12 @@
         "scriptRequestCount": 35,
         "totalRawBytes": 1871108
       },
-      "resourceLimits": {
-        "cssRawBytes": 2181,
-        "fontRawBytes": 23901,
-        "imageRawBytes": 0,
-        "largestAssetRawBytes": 754691,
-        "otherRawBytes": 154501,
-        "requestCount": 39,
-        "scriptRawBytes": 1709238,
-        "scriptRequestCount": 35,
-        "totalRawBytes": 1889820
-      },
       "routeReadyMedianMs": 237.29999995231628,
       "scriptSourceOwnerSet": "launchpad-static",
       "stateProfile": "empty"
     },
     {
       "activatedResourceBaseline": {
-        "cssRawBytes": 0,
-        "fontRawBytes": 0,
-        "imageRawBytes": 0,
-        "largestAssetRawBytes": 0,
-        "otherRawBytes": 0,
-        "requestCount": 0,
-        "scriptRawBytes": 0,
-        "scriptRequestCount": 0,
-        "totalRawBytes": 0
-      },
-      "activatedResourceLimits": {
         "cssRawBytes": 0,
         "fontRawBytes": 0,
         "imageRawBytes": 0,
@@ -107,34 +74,12 @@
         "scriptRequestCount": 35,
         "totalRawBytes": 1871108
       },
-      "resourceLimits": {
-        "cssRawBytes": 2181,
-        "fontRawBytes": 23901,
-        "imageRawBytes": 0,
-        "largestAssetRawBytes": 754691,
-        "otherRawBytes": 154501,
-        "requestCount": 39,
-        "scriptRawBytes": 1709238,
-        "scriptRequestCount": 35,
-        "totalRawBytes": 1889820
-      },
       "routeReadyMedianMs": 244.69999992847443,
       "scriptSourceOwnerSet": "launchpad-static",
       "stateProfile": "representative"
     },
     {
       "activatedResourceBaseline": {
-        "cssRawBytes": 0,
-        "fontRawBytes": 0,
-        "imageRawBytes": 0,
-        "largestAssetRawBytes": 0,
-        "otherRawBytes": 0,
-        "requestCount": 0,
-        "scriptRawBytes": 0,
-        "scriptRequestCount": 0,
-        "totalRawBytes": 0
-      },
-      "activatedResourceLimits": {
         "cssRawBytes": 0,
         "fontRawBytes": 0,
         "imageRawBytes": 0,
@@ -167,34 +112,12 @@
         "scriptRequestCount": 117,
         "totalRawBytes": 3884863
       },
-      "resourceLimits": {
-        "cssRawBytes": 2181,
-        "fontRawBytes": 23901,
-        "imageRawBytes": 157940,
-        "largestAssetRawBytes": 754691,
-        "otherRawBytes": 154501,
-        "requestCount": 122,
-        "scriptRawBytes": 3585190,
-        "scriptRequestCount": 117,
-        "totalRawBytes": 3923712
-      },
       "routeReadyMedianMs": 372.8000000715256,
       "scriptSourceOwnerSet": "editor-minimal-static",
       "stateProfile": "empty"
     },
     {
       "activatedResourceBaseline": {
-        "cssRawBytes": 0,
-        "fontRawBytes": 0,
-        "imageRawBytes": 0,
-        "largestAssetRawBytes": 0,
-        "otherRawBytes": 0,
-        "requestCount": 0,
-        "scriptRawBytes": 0,
-        "scriptRequestCount": 0,
-        "totalRawBytes": 0
-      },
-      "activatedResourceLimits": {
         "cssRawBytes": 0,
         "fontRawBytes": 0,
         "imageRawBytes": 0,
@@ -227,17 +150,6 @@
         "scriptRequestCount": 117,
         "totalRawBytes": 3884863
       },
-      "resourceLimits": {
-        "cssRawBytes": 2181,
-        "fontRawBytes": 23901,
-        "imageRawBytes": 157940,
-        "largestAssetRawBytes": 754691,
-        "otherRawBytes": 154501,
-        "requestCount": 122,
-        "scriptRawBytes": 3585190,
-        "scriptRequestCount": 117,
-        "totalRawBytes": 3923712
-      },
       "routeReadyMedianMs": 379.7999999523163,
       "scriptSourceOwnerSet": "editor-minimal-static",
       "stateProfile": "representative"
@@ -253,17 +165,6 @@
         "scriptRawBytes": 501646,
         "scriptRequestCount": 10,
         "totalRawBytes": 501646
-      },
-      "activatedResourceLimits": {
-        "cssRawBytes": 0,
-        "fontRawBytes": 0,
-        "imageRawBytes": 0,
-        "largestAssetRawBytes": 310251,
-        "otherRawBytes": 0,
-        "requestCount": 10,
-        "scriptRawBytes": 506663,
-        "scriptRequestCount": 10,
-        "totalRawBytes": 506663
       },
       "domContentLoadedMedianMs": 96.39999997615814,
       "id": "editor-canvas",
@@ -287,17 +188,6 @@
         "scriptRequestCount": 127,
         "totalRawBytes": 4386509
       },
-      "resourceLimits": {
-        "cssRawBytes": 2181,
-        "fontRawBytes": 23901,
-        "imageRawBytes": 157940,
-        "largestAssetRawBytes": 754691,
-        "otherRawBytes": 154501,
-        "requestCount": 132,
-        "scriptRawBytes": 4091853,
-        "scriptRequestCount": 127,
-        "totalRawBytes": 4430375
-      },
       "routeReadyMedianMs": 1051.5,
       "scriptSourceOwnerSet": "editor-canvas-static",
       "stateProfile": "empty"
@@ -313,17 +203,6 @@
         "scriptRawBytes": 501646,
         "scriptRequestCount": 10,
         "totalRawBytes": 501646
-      },
-      "activatedResourceLimits": {
-        "cssRawBytes": 0,
-        "fontRawBytes": 0,
-        "imageRawBytes": 0,
-        "largestAssetRawBytes": 310251,
-        "otherRawBytes": 0,
-        "requestCount": 10,
-        "scriptRawBytes": 506663,
-        "scriptRequestCount": 10,
-        "totalRawBytes": 506663
       },
       "domContentLoadedMedianMs": 101.60000002384186,
       "id": "editor-canvas",
@@ -347,17 +226,6 @@
         "scriptRequestCount": 127,
         "totalRawBytes": 4386509
       },
-      "resourceLimits": {
-        "cssRawBytes": 2181,
-        "fontRawBytes": 23901,
-        "imageRawBytes": 157940,
-        "largestAssetRawBytes": 754691,
-        "otherRawBytes": 154501,
-        "requestCount": 132,
-        "scriptRawBytes": 4091853,
-        "scriptRequestCount": 127,
-        "totalRawBytes": 4430375
-      },
       "routeReadyMedianMs": 1060.3000000715256,
       "scriptSourceOwnerSet": "editor-canvas-static",
       "stateProfile": "representative"
@@ -373,17 +241,6 @@
         "scriptRawBytes": 368285,
         "scriptRequestCount": 6,
         "totalRawBytes": 383698
-      },
-      "activatedResourceLimits": {
-        "cssRawBytes": 15568,
-        "fontRawBytes": 0,
-        "imageRawBytes": 0,
-        "largestAssetRawBytes": 175873,
-        "otherRawBytes": 0,
-        "requestCount": 7,
-        "scriptRawBytes": 371968,
-        "scriptRequestCount": 6,
-        "totalRawBytes": 387535
       },
       "domContentLoadedMedianMs": 103.29999995231628,
       "id": "editor-workflow",
@@ -407,17 +264,6 @@
         "scriptRequestCount": 123,
         "totalRawBytes": 4268561
       },
-      "resourceLimits": {
-        "cssRawBytes": 17748,
-        "fontRawBytes": 23901,
-        "imageRawBytes": 157940,
-        "largestAssetRawBytes": 754691,
-        "otherRawBytes": 154501,
-        "requestCount": 129,
-        "scriptRawBytes": 3957158,
-        "scriptRequestCount": 123,
-        "totalRawBytes": 4311247
-      },
       "routeReadyMedianMs": 1048.3999999761581,
       "scriptSourceOwnerSet": "editor-workflow-static",
       "stateProfile": "empty"
@@ -433,17 +279,6 @@
         "scriptRawBytes": 368285,
         "scriptRequestCount": 6,
         "totalRawBytes": 383698
-      },
-      "activatedResourceLimits": {
-        "cssRawBytes": 15568,
-        "fontRawBytes": 0,
-        "imageRawBytes": 0,
-        "largestAssetRawBytes": 175873,
-        "otherRawBytes": 0,
-        "requestCount": 7,
-        "scriptRawBytes": 371968,
-        "scriptRequestCount": 6,
-        "totalRawBytes": 387535
       },
       "domContentLoadedMedianMs": 100.60000002384186,
       "id": "editor-workflow",
@@ -467,34 +302,12 @@
         "scriptRequestCount": 123,
         "totalRawBytes": 4268561
       },
-      "resourceLimits": {
-        "cssRawBytes": 17748,
-        "fontRawBytes": 23901,
-        "imageRawBytes": 157940,
-        "largestAssetRawBytes": 754691,
-        "otherRawBytes": 154501,
-        "requestCount": 129,
-        "scriptRawBytes": 3957158,
-        "scriptRequestCount": 123,
-        "totalRawBytes": 4311247
-      },
       "routeReadyMedianMs": 1107.3000000715256,
       "scriptSourceOwnerSet": "editor-workflow-static",
       "stateProfile": "representative"
     },
     {
       "activatedResourceBaseline": {
-        "cssRawBytes": 0,
-        "fontRawBytes": 0,
-        "imageRawBytes": 0,
-        "largestAssetRawBytes": 0,
-        "otherRawBytes": 0,
-        "requestCount": 0,
-        "scriptRawBytes": 0,
-        "scriptRequestCount": 0,
-        "totalRawBytes": 0
-      },
-      "activatedResourceLimits": {
         "cssRawBytes": 0,
         "fontRawBytes": 0,
         "imageRawBytes": 0,
@@ -527,34 +340,12 @@
         "scriptRequestCount": 117,
         "totalRawBytes": 3884863
       },
-      "resourceLimits": {
-        "cssRawBytes": 2181,
-        "fontRawBytes": 23901,
-        "imageRawBytes": 157940,
-        "largestAssetRawBytes": 754691,
-        "otherRawBytes": 154501,
-        "requestCount": 122,
-        "scriptRawBytes": 3585190,
-        "scriptRequestCount": 117,
-        "totalRawBytes": 3923712
-      },
       "routeReadyMedianMs": 1259.5,
       "scriptSourceOwnerSet": "editor-minimal-static",
       "stateProfile": "empty"
     },
     {
       "activatedResourceBaseline": {
-        "cssRawBytes": 0,
-        "fontRawBytes": 0,
-        "imageRawBytes": 0,
-        "largestAssetRawBytes": 0,
-        "otherRawBytes": 0,
-        "requestCount": 0,
-        "scriptRawBytes": 0,
-        "scriptRequestCount": 0,
-        "totalRawBytes": 0
-      },
-      "activatedResourceLimits": {
         "cssRawBytes": 0,
         "fontRawBytes": 0,
         "imageRawBytes": 0,
@@ -586,17 +377,6 @@
         "scriptRawBytes": 3549693,
         "scriptRequestCount": 117,
         "totalRawBytes": 3884863
-      },
-      "resourceLimits": {
-        "cssRawBytes": 2181,
-        "fontRawBytes": 23901,
-        "imageRawBytes": 157940,
-        "largestAssetRawBytes": 754691,
-        "otherRawBytes": 154501,
-        "requestCount": 122,
-        "scriptRawBytes": 3585190,
-        "scriptRequestCount": 117,
-        "totalRawBytes": 3923712
       },
       "routeReadyMedianMs": 1278.0999999046326,
       "scriptSourceOwnerSet": "editor-minimal-static",
