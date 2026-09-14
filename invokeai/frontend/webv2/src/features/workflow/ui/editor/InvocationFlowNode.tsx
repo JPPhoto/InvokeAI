@@ -289,12 +289,12 @@ const NodeFooter = ({ canUseCache, node }: { canUseCache: boolean; node: Workflo
 };
 
 /** The upstream node owns the seed now; the local mode waits for a disconnect. A leaf so only this row subscribes to i18n. */
-const SeedProvidedByConnectionNote = () => {
+const ProvidedByConnectionNote = () => {
   const { t } = useTranslation();
 
   return (
     <Text color="fg.subtle" fontSize="2xs" mt="0.5">
-      {t('nodes.seedProvidedByConnection')}
+      {t('nodes.providedByConnection')}
     </Text>
   );
 };
@@ -452,7 +452,7 @@ const InputFieldRow = ({
             />
           </Box>
         ) : isConnected && isSeedInputField(template) ? (
-          <SeedProvidedByConnectionNote />
+          <ProvidedByConnectionNote />
         ) : null}
         {invalidReason ? <Field.ErrorText fontSize="2xs">{invalidReason}</Field.ErrorText> : null}
       </Field.Root>

@@ -1,4 +1,4 @@
-/* oxlint-disable react-perf/jsx-no-new-function-as-prop */
+/* oxlint-disable react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-jsx-as-prop */
 import type { SeedMode, SeedSubmissionPlan } from '@features/generation/core/seed';
 import type { LucideIcon } from 'lucide-react';
 
@@ -23,8 +23,8 @@ const SEED_MODE_ICONS: Record<SeedMode, LucideIcon> = {
 export interface SeedModeMenuProps {
   value: SeedMode;
   onChange: (mode: SeedMode) => void;
-  /** Trigger tooltip; the mode label unless the host has more to say about what a step is. */
-  tooltip?: string;
+  /** A second tooltip line for hosts that need to say what one step means (a queued run, not a loop pass). */
+  description?: string;
   /** Class for the portaled menu content, for hosts whose key handling must skip it (xyflow's `nokey`). */
   contentClassName?: string;
 }
@@ -34,7 +34,7 @@ export interface SeedModeMenuProps {
  * toggle because the choice has four answers, and each needs a line of
  * explanation the first time it is read.
  */
-export const SeedModeMenu = ({ contentClassName, onChange, tooltip, value }: SeedModeMenuProps) => {
+export const SeedModeMenu = ({ contentClassName, description, onChange, value }: SeedModeMenuProps) => {
   const { t } = useTranslation();
   // Shared ids let the tooltip ride the menu trigger without wrapping it
   // (wrapping `Menu.Trigger` swallows the anchor ref — see RoutingControl).
@@ -42,15 +42,31 @@ export const SeedModeMenu = ({ contentClassName, onChange, tooltip, value }: See
   const triggerIds = useMemo(() => ({ trigger: triggerId }), [triggerId]);
   const label = t('widgets.generate.seedMode.label');
   const valueLabel = t(`widgets.generate.seedMode.${value}`);
+  const accessibleName = `${label}: ${valueLabel}`;
 
   return (
     <Menu.Root ids={triggerIds} positioning={SEED_MODE_MENU_POSITIONING}>
-      <Tooltip content={tooltip ?? label} ids={triggerIds}>
+      {/* The visible label may truncate in a dense row; the full name always reads here and in the tooltip. */}
+      <Tooltip
+        content={
+          description ? (
+            <Stack gap="0.5">
+              <Text>{accessibleName}</Text>
+              <Text color="fg.subtle">{description}</Text>
+            </Stack>
+          ) : (
+            accessibleName
+          )
+        }
+        ids={triggerIds}
+      >
         <Menu.Trigger asChild>
-          <Button aria-label={`${label}: ${valueLabel}`} flexShrink={0} gap="1" size="xs" variant="outline">
-            <Icon as={SEED_MODE_ICONS[value]} boxSize="3.5" color="fg.muted" />
-            {valueLabel}
-            <Icon as={ChevronDownIcon} boxSize="3" color="fg.muted" />
+          <Button aria-label={accessibleName} flexShrink={0} gap="1" maxW="9rem" minW="0" size="xs" variant="outline">
+            <Icon as={SEED_MODE_ICONS[value]} boxSize="3.5" color="fg.muted" flexShrink={0} />
+            <Text as="span" minW="0" truncate>
+              {valueLabel}
+            </Text>
+            <Icon as={ChevronDownIcon} boxSize="3" color="fg.muted" flexShrink={0} />
           </Button>
         </Menu.Trigger>
       </Tooltip>

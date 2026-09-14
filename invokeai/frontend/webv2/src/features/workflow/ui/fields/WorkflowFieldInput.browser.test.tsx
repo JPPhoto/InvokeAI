@@ -713,6 +713,14 @@ describe('WorkflowFieldInput seed inputs', () => {
     await renderField(SEED_TEMPLATE, 42, onChange, undefined, { onSeedModeChange, seedMode: 'fixed' });
 
     expect(seedInput()?.disabled).toBe(false);
+    // Without i18n the label is the long key, which stands in for a long translation: the
+    // trigger stays bounded and truncates, its accessible name stays whole, and the number
+    // input keeps a usable width beside it.
+    expect(modeTrigger()?.getAttribute('aria-label')).toBe(
+      'widgets.generate.seedMode.label: widgets.generate.seedMode.fixed'
+    );
+    expect(modeTrigger()?.getBoundingClientRect().width).toBeLessThanOrEqual(144);
+    expect(seedInput()?.getBoundingClientRect().width).toBeGreaterThan(80);
     // xyflow reads `.nokey` to leave a control's keys alone; the trigger and the portaled menu both need it,
     // or arrows nudge the node and Backspace deletes it while the menu is in use.
     expect(modeTrigger()?.closest('.nokey')).not.toBeNull();

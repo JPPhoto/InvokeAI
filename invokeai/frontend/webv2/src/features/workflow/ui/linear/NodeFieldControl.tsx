@@ -16,6 +16,7 @@ import {
 import { FieldLabel, IconButton, Tooltip } from '@platform/ui';
 import { RotateCcwIcon } from 'lucide-react';
 import { useCallback, useMemo, useState, type ChangeEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 
 /**
  * One exposed node field, shared by the Linear UI's view mode and the form
@@ -47,6 +48,7 @@ export const NodeFieldControl = ({
   isLabelEditable?: boolean;
   projectGraph: ProjectGraphState;
 }) => {
+  const { t } = useTranslation();
   const { editGraph } = useProjectGraphCommands();
   const { fieldName, instance, invocationNode, nodeContext, nodeId, template } = useNodeFieldBinding(
     element,
@@ -167,7 +169,7 @@ export const NodeFieldControl = ({
         ) : null}
         {isConnected ? (
           <Text color="fg.subtle" fontSize="2xs">
-            Driven by a graph connection.
+            {t('nodes.providedByConnection')}
           </Text>
         ) : (
           <WorkflowFieldInput

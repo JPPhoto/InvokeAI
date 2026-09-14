@@ -247,7 +247,7 @@ const SeedInput = ({
         <NumericInput {...props} describedBy={plan ? previewId : undefined} disabled={seedMode === 'random'} />
         <SeedModeMenu
           contentClassName="nokey"
-          tooltip={t('nodes.seedModeTooltip')}
+          description={t('nodes.seedModeTooltip')}
           value={seedMode}
           onChange={onSeedModeChange}
         />
