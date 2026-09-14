@@ -1,4 +1,6 @@
-import type { QueuePromptSeedBehaviour } from '@features/queue/core/promptBatch';
+import type { QueuePromptSeedBehaviour, QueueSeedStep } from '@features/queue/core/promptBatch';
+
+export type { QueueSeedStep };
 
 export interface QueueBackendInvocation {
   id: string;
@@ -53,7 +55,7 @@ export interface QueueEnqueueGenerateRequest extends QueueEnqueueWorkflowRequest
   seed: number;
   seedBehaviour?: QueuePromptSeedBehaviour;
   seedNodeId: string;
-  shouldRandomizeSeed: boolean;
+  seedStep: QueueSeedStep;
 }
 
 export interface QueueEnqueueResult {
@@ -89,7 +91,8 @@ export type QueueCompiledSubmission =
       seed: number;
       seedBehaviour?: QueuePromptSeedBehaviour;
       seedNodeId: string;
-      shouldRandomizeSeed: boolean;
+      /** Items compiled before seed modes carry `shouldRandomizeSeed` instead; the runtime maps it on read. */
+      seedStep: QueueSeedStep;
     }
   | { error: string; kind: 'invalid' };
 

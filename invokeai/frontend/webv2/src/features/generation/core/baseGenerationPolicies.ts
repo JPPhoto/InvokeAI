@@ -678,7 +678,7 @@ export const getDefaultGenerateSettings = (model?: GenerateModelConfig): Generat
     seamlessXAxis: false,
     seamlessYAxis: false,
     seed: Math.floor(Math.random() * SEED_MAX),
-    shouldRandomizeSeed: true,
+    seedMode: 'random',
     steps: defaults.steps,
     t5EncoderModel: null,
     vae: null,

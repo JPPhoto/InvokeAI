@@ -1,6 +1,6 @@
 import type { GenerateWidgetValues } from '@features/generation/contracts';
 import type { ModelConfig } from '@features/models';
-import type { QueueCompiledSubmission, QueueHistoryItemStatus } from '@features/queue/contracts';
+import type { QueueCompiledSubmission, QueueHistoryItemStatus, QueueSeedStep } from '@features/queue/contracts';
 import type { ProjectGraphState } from '@features/workflow/contracts';
 import type {
   CanvasDocumentContractV3,
@@ -105,6 +105,7 @@ import {
   migrateProjectPromptDraft,
   normalizeGenerateSettings,
   normalizeGenerateWidgetValues,
+  planSeedSubmission,
   type ProjectPromptDraftPatch,
   removePromptHistoryItem,
   sanitizeBatchCount,
@@ -3148,6 +3149,29 @@ const enqueueCompiledSnapshot = (
   const expandedSeedBehaviour = expandedPositivePrompts
     ? (canvasGenerateSettings ?? generateSettings)?.dynamicPromptsSeedBehaviour
     : undefined;
+  // The seed was resolved when the graph compiled (random modes drew it then),
+  // so `seed` is this submission's start. The plan fixes how the batch steps
+  // from it and where the editable seed goes next; a submission that fails or
+  // is cancelled later keeps its seeds — the sequence only ever moves forward.
+  const seedModeSettings = canvasGenerateSettings ?? generateSettings;
+  const seedPlan = seedModeSettings
+    ? planSeedSubmission({
+        batchCount: seedModeSettings.batchCount,
+        promptCount: expandedPositivePrompts?.length ?? 1,
+        seedBehaviour: expandedSeedBehaviour ?? 'per-iteration',
+        seedMode: seedModeSettings.seedMode,
+        startSeed: seedModeSettings.seed,
+      })
+    : null;
+  // Upscale and Video keep their random toggle: on, the batch steps from the
+  // drawn seed; off, it holds the entered one.
+  const seedStep: QueueSeedStep = seedPlan
+    ? seedPlan.step
+    : sourceGenerateSettings &&
+        'shouldRandomizeSeed' in sourceGenerateSettings &&
+        sourceGenerateSettings.shouldRandomizeSeed
+      ? 1
+      : 0;
   const backendSubmission: QueueCompiledSubmission = !backendGraph
     ? { error: `${route.sourceId} queue item is missing a compiled backend graph.`, kind: 'invalid' }
     : route.sourceId === 'workflow'
@@ -3179,7 +3203,7 @@ const enqueueCompiledSnapshot = (
             seed: sourceGenerateSettings.seed,
             ...(expandedSeedBehaviour ? { seedBehaviour: expandedSeedBehaviour } : {}),
             seedNodeId: generate?.seedNodeId ?? 'seed',
-            shouldRandomizeSeed: sourceGenerateSettings.shouldRandomizeSeed,
+            seedStep,
           }
         : { error: `${route.sourceId} queue item is missing source submission metadata.`, kind: 'invalid' };
   const selectedGalleryBoardId = widgetStates.gallery?.values.selectedBoardId;
@@ -3252,8 +3276,22 @@ const enqueueCompiledSnapshot = (
     status: 'pending',
   };
 
+  // A stepping mode hands the next seed to the editable settings in the same
+  // transition that queues the batch, so submissions queued back to back
+  // continue the sequence. The canvas compiles outside the reducer, so its plan
+  // may be stale by the time it lands: only settings still at the submitted
+  // seed and mode are advanced; an edit made meanwhile is the user's, and stays.
+  const advancedProject =
+    seedPlan === null || seedPlan.nextSeed === null
+      ? project
+      : updateProjectWidgetValues(project, 'generate', (values) =>
+          values.seed === seedPlan.startSeed && values.seedMode === seedPlan.seedMode
+            ? { ...values, seed: seedPlan.nextSeed }
+            : values
+        );
+
   return {
-    ...project,
+    ...advancedProject,
     events: prependProjectEvent(project.events, {
       createdAt: submittedAt,
       id: createId('event'),

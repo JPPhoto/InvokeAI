@@ -80,7 +80,7 @@ export const enqueueGenerate = async (request: QueueEnqueueGenerateRequest): Pro
     seed: request.seed,
     seedBehaviour: request.seedBehaviour ?? 'per-iteration',
     seedNodeId: request.seedNodeId,
-    shouldRandomizeSeed: request.shouldRandomizeSeed,
+    seedStep: request.seedStep,
   });
   const result = await apiFetchJson<unknown>('/api/v1/queue/default/enqueue_batch', {
     body: JSON.stringify({

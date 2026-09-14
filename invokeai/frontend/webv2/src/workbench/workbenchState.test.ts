@@ -233,7 +233,7 @@ const createGenerateValues = (overrides: Partial<GenerateWidgetValues> = {}): Ge
   seamlessXAxis: false,
   seamlessYAxis: false,
   seed: 123,
-  shouldRandomizeSeed: false,
+  seedMode: 'fixed',
   steps: 30,
   t5EncoderModel: null,
   vae: null,
@@ -453,7 +453,7 @@ describe('generation-device orchestration metadata', () => {
       ...createDefaultUpscaleWidgetValues(models),
       inputImage: { height: 64, image_name: 'input.png', width: 64 },
       seed: 1,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
     };
     let state = workbenchReducer(createInitialWorkbenchState(), {
       settings: { useCpuNoise: false },
@@ -2244,7 +2244,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
   });
 
   it('keeps submitted Generate snapshots immutable after later settings changes', () => {
-    let state = submitGenerate(primeGenerate(undefined, { positivePrompt: 'first prompt', shouldRandomizeSeed: true }));
+    let state = submitGenerate(primeGenerate(undefined, { positivePrompt: 'first prompt', seedMode: 'random' }));
     const firstQueueItem = getActiveProject(state).queue.items[0];
 
     expect(firstQueueItem).toBeDefined();
@@ -2257,7 +2257,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     const secondValues = secondQueueItem?.snapshot.recall?.generateValues as GenerateWidgetValues;
 
     expect(firstValues.positivePrompt).toBe('first prompt');
-    expect(firstValues.shouldRandomizeSeed).toBe(true);
+    expect(firstValues.seedMode).toBe('random');
     expect(typeof firstValues.seed).toBe('number');
     expect(secondValues.positivePrompt).toBe('second prompt');
     expect(secondValues.seed).toBe(999);
@@ -3080,7 +3080,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
           negativePromptNodeId: 'negative_prompt',
           positivePromptNodeId: 'positive_prompt',
           seedNodeId: 'seed',
-          values: createGenerateValues({ positivePrompt: 'canvas prompt', seed: 101, shouldRandomizeSeed: false }),
+          values: createGenerateValues({ positivePrompt: 'canvas prompt', seed: 101, seedMode: 'fixed' }),
         },
         graph,
         projectId: otherProjectId,
@@ -3258,6 +3258,140 @@ describe('workbenchReducer Phase 5 generation flow', () => {
 
       expect(getActiveProject(state).queue.items[0]?.snapshot.backendSubmission).toMatchObject({
         positivePrompts: ['a cat, red tint', 'a cat, green tint'],
+      });
+    });
+  });
+
+  describe('seed modes on the compiled submission', () => {
+    const SEED_MAX = 4_294_967_295;
+    const readSeed = (state: WorkbenchState) => getProjectWidgetValues(getActiveProject(state), 'generate').seed;
+    const readSubmission = (state: WorkbenchState) =>
+      getActiveProject(state).queue.items[0]?.snapshot.backendSubmission;
+    const submitWithPrompts = (state: WorkbenchState, positivePrompts?: string[]) =>
+      workbenchReducer(state, {
+        backendSupportsCancellation: true,
+        positivePrompts,
+        route: { destination: 'gallery', destinationLocked: false, sourceId: 'generate', sourceLocked: false },
+        type: 'submitResolvedInvocationSnapshot',
+      });
+
+    it('increment queues consecutive seeds and leaves the editable seed after the batch', () => {
+      let state = submitGenerate(primeGenerate(undefined, { batchCount: 3, seed: 42, seedMode: 'increment' }));
+
+      expect(readSubmission(state)).toMatchObject({ batchCount: 3, seed: 42, seedStep: 1 });
+      expect(readSeed(state)).toBe(45);
+
+      // Queued back to back, the next submission continues where the last one ended.
+      state = submitGenerate(state);
+
+      expect(readSubmission(state)).toMatchObject({ seed: 45, seedStep: 1 });
+      expect(readSeed(state)).toBe(48);
+      expect(getActiveProject(state).queue.items[1]?.snapshot.backendSubmission).toMatchObject({ seed: 42 });
+    });
+
+    it('decrement counts down and wraps below zero onto the top of the range', () => {
+      const state = submitGenerate(primeGenerate(undefined, { batchCount: 2, seed: 1, seedMode: 'decrement' }));
+
+      expect(readSubmission(state)).toMatchObject({ seed: 1, seedStep: -1 });
+      expect(readSeed(state)).toBe(SEED_MAX);
+    });
+
+    it('fixed holds the seed for the batch and does not move it', () => {
+      const state = submitGenerate(primeGenerate(undefined, { batchCount: 3, seed: 42, seedMode: 'fixed' }));
+
+      expect(readSubmission(state)).toMatchObject({ seed: 42, seedStep: 0 });
+      expect(readSeed(state)).toBe(42);
+    });
+
+    it('random draws the start seed for the batch and preserves the entered one', () => {
+      const random = vi.spyOn(Math, 'random').mockReturnValue(0.25);
+
+      try {
+        const state = submitGenerate(primeGenerate(undefined, { batchCount: 2, seed: 42, seedMode: 'random' }));
+
+        expect(readSubmission(state)).toMatchObject({ seed: Math.floor(0.25 * SEED_MAX), seedStep: 1 });
+        expect(readSeed(state)).toBe(42);
+      } finally {
+        random.mockRestore();
+      }
+    });
+
+    it('advances by every seed a prompt set consumes', () => {
+      const perIteration = submitWithPrompts(
+        primeGenerate(undefined, {
+          batchCount: 2,
+          dynamicPromptsSeedBehaviour: 'per-iteration',
+          positivePrompt: 'a {red|green} cat',
+          seed: 42,
+          seedMode: 'increment',
+        }),
+        ['a red cat', 'a green cat']
+      );
+      const perImage = submitWithPrompts(
+        primeGenerate(undefined, {
+          batchCount: 2,
+          dynamicPromptsSeedBehaviour: 'per-image',
+          positivePrompt: 'a {red|green} cat',
+          seed: 42,
+          seedMode: 'increment',
+        }),
+        ['a red cat', 'a green cat']
+      );
+
+      expect(readSeed(perIteration)).toBe(44);
+      expect(readSeed(perImage)).toBe(46);
+    });
+
+    it('does not consume seeds when the submission is rejected', () => {
+      const state = primeGenerate(undefined, { seed: 42, seedMode: 'increment', steps: Number.NaN });
+      const next = submitGenerate(state);
+
+      expect(getActiveProject(next).queue.items).toEqual([]);
+      expect(readSeed(next)).toBe(42);
+    });
+
+    describe('from the canvas, which compiles outside the reducer', () => {
+      const submitCanvas = (state: WorkbenchState, values: GenerateWidgetValues) =>
+        workbenchReducer(state, {
+          backendSupportsCancellation: true,
+          canvas: structuredClone(getActiveProject(state).canvas),
+          destination: 'canvas',
+          generate: {
+            negativePromptNodeId: 'negative_prompt',
+            positivePromptNodeId: 'positive_prompt',
+            seedNodeId: 'seed',
+            values,
+          },
+          graph: {
+            backendGraph: { edges: [], id: 'canvas-backend-graph', nodes: {} },
+            edges: [],
+            id: 'canvas-graph',
+            label: 'Canvas',
+            nodes: [],
+            updatedAt: '2026-06-09T00:00:00.000Z',
+            version: 1,
+          },
+          projectId: state.activeProjectId,
+          type: 'submitCanvasInvocationSnapshot',
+        });
+
+      it('advances the settings the snapshot was compiled from', () => {
+        const values = createGenerateValues({ batchCount: 2, seed: 10, seedMode: 'increment' });
+        const state = submitCanvas(primeGenerate(undefined, values), values);
+
+        expect(readSubmission(state)).toMatchObject({ seed: 10, seedStep: 1 });
+        expect(readSeed(state)).toBe(12);
+      });
+
+      it('leaves settings the user changed while the canvas was compiling', () => {
+        const compiled = createGenerateValues({ batchCount: 2, seed: 10, seedMode: 'increment' });
+        const seedEdited = submitCanvas(primeGenerate(undefined, { ...compiled, seed: 500 }), compiled);
+        const modeEdited = submitCanvas(primeGenerate(undefined, { ...compiled, seedMode: 'fixed' }), compiled);
+
+        expect(readSubmission(seedEdited)).toMatchObject({ seed: 10, seedStep: 1 });
+        expect(readSeed(seedEdited)).toBe(500);
+        expect(readSubmission(modeEdited)).toMatchObject({ seed: 10, seedStep: 1 });
+        expect(readSeed(modeEdited)).toBe(10);
       });
     });
   });
@@ -6254,7 +6388,7 @@ describe('workbenchReducer canvas staging auto-switch + canvas submission', () =
     negativePromptNodeId: 'negative_prompt',
     positivePromptNodeId: 'positive_prompt',
     seedNodeId: 'seed',
-    values: createGenerateValues({ positivePrompt: 'canvas prompt', seed: 101, shouldRandomizeSeed: false }),
+    values: createGenerateValues({ positivePrompt: 'canvas prompt', seed: 101, seedMode: 'fixed' }),
   });
 
   const submitCanvasGeneration = (state: WorkbenchState): { queueItemId: string; state: WorkbenchState } => {
@@ -6343,7 +6477,7 @@ describe('workbenchReducer canvas staging auto-switch + canvas submission', () =
           negativePrompt: 'avoid blur',
           positivePrompt: 'inpaint prompt',
           seed: 42,
-          shouldRandomizeSeed: false,
+          seedMode: 'fixed',
         }),
       },
       graph,
@@ -6360,7 +6494,7 @@ describe('workbenchReducer canvas staging auto-switch + canvas submission', () =
       negativePrompt: 'avoid blur',
       positivePrompt: 'inpaint prompt',
       seed: 42,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
     });
     expect(queueItem?.snapshot).not.toHaveProperty('generate');
     expect(queueItem?.snapshot).not.toHaveProperty('widgetStates');
@@ -6374,7 +6508,7 @@ describe('workbenchReducer canvas staging auto-switch + canvas submission', () =
       positivePromptNodeId: 'positive_prompt',
       seed: 42,
       seedNodeId: 'seed',
-      shouldRandomizeSeed: false,
+      seedStep: 0,
     });
     expect(queueItem?.snapshot.resultNodeIds).toEqual(['canvas_output']);
     expect(getActiveProject(state).invocation.sourceId).toBe('canvas');

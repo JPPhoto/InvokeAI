@@ -1,3 +1,4 @@
+import type { DynamicPromptsConfig } from './dynamicPrompts';
 import type {
   AspectRatioId,
   ComponentModelConfig,
@@ -68,6 +69,22 @@ export const MIN_DIMENSION = 64;
 export const MAX_DIMENSION = 4096;
 
 export const SEED_MAX = 4_294_967_295;
+
+/** The expansion config the settings describe, under the names the expansion route and preview use. */
+export const getDynamicPromptsConfig = (
+  settings: Pick<
+    GenerateSettings,
+    | 'dynamicPromptsCombinatorial'
+    | 'dynamicPromptsMaxPrompts'
+    | 'dynamicPromptsSampleSeed'
+    | 'dynamicPromptsSeedBehaviour'
+  >
+): DynamicPromptsConfig => ({
+  combinatorial: settings.dynamicPromptsCombinatorial,
+  maxPrompts: settings.dynamicPromptsMaxPrompts,
+  sampleSeed: settings.dynamicPromptsSampleSeed,
+  seedBehaviour: settings.dynamicPromptsSeedBehaviour,
+});
 export const MIN_NEGATIVE_PROMPT_HEIGHT_PX = 56;
 export const MAX_NEGATIVE_PROMPT_HEIGHT_PX = 240;
 export const DEFAULT_NEGATIVE_PROMPT_HEIGHT_PX = 56;
@@ -661,7 +678,7 @@ export const normalizeGenerateSettings = (values: unknown): GenerateSettings | n
     typeof values.positivePrompt === 'string' &&
     typeof values.negativePrompt === 'string' &&
     typeof values.scheduler === 'string' &&
-    typeof values.shouldRandomizeSeed === 'boolean' &&
+    (isSeedMode(values.seedMode) || typeof values.shouldRandomizeSeed === 'boolean') &&
     ['width', 'height', 'steps', 'cfgScale', 'cfgRescaleMultiplier', 'seed'].every((key) =>
       hasFiniteNumber(values, key)
     );
@@ -748,7 +765,8 @@ export const normalizeGenerateSettings = (values: unknown): GenerateSettings | n
     seamlessXAxis: typeof values.seamlessXAxis === 'boolean' ? values.seamlessXAxis : false,
     seamlessYAxis: typeof values.seamlessYAxis === 'boolean' ? values.seamlessYAxis : false,
     seed: values.seed as number,
-    shouldRandomizeSeed: values.shouldRandomizeSeed as boolean,
+    // Values saved before seed modes carry the random toggle instead.
+    seedMode: isSeedMode(values.seedMode) ? values.seedMode : values.shouldRandomizeSeed ? 'random' : 'fixed',
     steps: values.steps as number,
     vae: isVaeModelConfig(values.vae) ? values.vae : null,
     vaePrecision: isVaePrecision(values.vaePrecision) ? values.vaePrecision : 'fp32',
@@ -873,3 +891,76 @@ export const isGenerateSettings = (values: unknown): values is GenerateSettings 
 
 export const isGenerateWidgetValues = (values: unknown): values is GenerateWidgetValues =>
   isGenerateSettings(values) && isGenerateModelConfig((values as unknown as Record<string, unknown>).model);
+
+export const SEED_MODES = ['random', 'fixed', 'increment', 'decrement'] as const;
+
+export type SeedMode = (typeof SEED_MODES)[number];
+
+/** Direction the seed moves between the entries of one submission's sequence. */
+export type SeedStep = -1 | 0 | 1;
+
+export const isSeedMode = (value: unknown): value is SeedMode => SEED_MODES.includes(value as SeedMode);
+
+export const getSeedStep = (mode: SeedMode): SeedStep => (mode === 'fixed' ? 0 : mode === 'decrement' ? -1 : 1);
+
+/** Wraps over the inclusive seed range so decrementing past 0 lands on `SEED_MAX`. */
+export const wrapSeed = (seed: number): number => {
+  const range = SEED_MAX + 1;
+
+  return ((seed % range) + range) % range;
+};
+
+export interface SeedSequenceInput {
+  batchCount: number;
+  /** Concrete prompts the submission carries; one unless dynamic prompts expanded it. */
+  promptCount: number;
+  seedBehaviour: 'per-image' | 'per-iteration';
+  seedMode: SeedMode;
+}
+
+/**
+ * How many entries of the seed sequence one submission uses. A fixed seed uses
+ * its single entry however many images run. Otherwise every iteration takes an
+ * entry, and with several prompts sharing disabled every image does.
+ */
+export const getSeedSequenceLength = ({
+  batchCount,
+  promptCount,
+  seedBehaviour,
+  seedMode,
+}: SeedSequenceInput): number =>
+  seedMode === 'fixed' ? 1 : promptCount > 1 && seedBehaviour === 'per-image' ? promptCount * batchCount : batchCount;
+
+export interface SeedSubmissionPlan {
+  /** The last sequence entry the submission uses. */
+  lastSeed: number;
+  /** What the editable seed becomes once the submission is queued; null when the mode leaves it alone. */
+  nextSeed: number | null;
+  seedMode: SeedMode;
+  sequenceLength: number;
+  startSeed: number;
+  step: SeedStep;
+}
+
+/**
+ * The seeds a submission consumes and where the editable seed goes afterwards.
+ * Only the stepping modes advance it: random keeps the manual value in reserve,
+ * fixed reuses it.
+ */
+export const planSeedSubmission = ({
+  startSeed,
+  ...sequence
+}: SeedSequenceInput & { startSeed: number }): SeedSubmissionPlan => {
+  const step = getSeedStep(sequence.seedMode);
+  const sequenceLength = getSeedSequenceLength(sequence);
+  const advances = sequence.seedMode === 'increment' || sequence.seedMode === 'decrement';
+
+  return {
+    lastSeed: wrapSeed(startSeed + step * (sequenceLength - 1)),
+    nextSeed: advances ? wrapSeed(startSeed + step * sequenceLength) : null,
+    seedMode: sequence.seedMode,
+    sequenceLength,
+    startSeed,
+    step,
+  };
+};

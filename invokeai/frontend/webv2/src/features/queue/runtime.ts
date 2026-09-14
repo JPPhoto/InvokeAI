@@ -10,7 +10,7 @@ import type {
 import type { BackendConnectionStatus } from '@platform/transport/types';
 
 import { collectGraphInputMediaNames } from '@features/queue/core/graphInputMedia';
-import { isQueuePromptSeedBehaviour, MAX_QUEUE_BATCH_ITEMS } from '@features/queue/core/promptBatch';
+import { isQueuePromptSeedBehaviour, isQueueSeedStep, MAX_QUEUE_BATCH_ITEMS } from '@features/queue/core/promptBatch';
 import { shouldSubmitPendingQueueItem } from '@features/queue/core/submissionRules';
 import { progressImageStore } from '@features/queue/data/progressImageStore';
 import {
@@ -118,6 +118,20 @@ const getQueueItemCompiledGraph = (queueItem: QueueItem): unknown => {
   return submission && typeof submission === 'object' && 'graph' in submission ? submission.graph : undefined;
 };
 
+/**
+ * Items queued before seed modes recorded the random toggle instead of a step;
+ * a randomized batch ran consecutive seeds and a pinned one held its seed, so
+ * recovery replays them exactly as they were planned.
+ */
+const readSubmissionSeedStep = (submission: { seedStep?: unknown; shouldRandomizeSeed?: unknown }) =>
+  isQueueSeedStep(submission.seedStep)
+    ? submission.seedStep
+    : typeof submission.shouldRandomizeSeed === 'boolean'
+      ? submission.shouldRandomizeSeed
+        ? 1
+        : 0
+      : null;
+
 export const createQueueItemBackendSubmission = (
   project: Pick<QueueHistoryProject, 'id'>,
   queueItem: QueueItem
@@ -153,6 +167,8 @@ export const createQueueItemBackendSubmission = (
   }
 
   if (submission.kind === 'generate') {
+    const seedStep = readSubmissionSeedStep(submission);
+
     if (
       typeof submission.negativePrompt !== 'string' ||
       typeof submission.negativePromptNodeId !== 'string' ||
@@ -161,7 +177,7 @@ export const createQueueItemBackendSubmission = (
       typeof submission.seed !== 'number' ||
       !Number.isFinite(submission.seed) ||
       typeof submission.seedNodeId !== 'string' ||
-      typeof submission.shouldRandomizeSeed !== 'boolean' ||
+      seedStep === null ||
       (submission.positivePrompts !== undefined &&
         (!Array.isArray(submission.positivePrompts) ||
           submission.positivePrompts.some((prompt) => typeof prompt !== 'string'))) ||
@@ -169,13 +185,18 @@ export const createQueueItemBackendSubmission = (
     ) {
       return { error: 'Queue item has malformed generate submission metadata.', kind: 'invalid' };
     }
-    const { kind: _, ...compiled } = submission;
+    const {
+      kind: _,
+      shouldRandomizeSeed: _legacyToggle,
+      ...compiled
+    } = submission as typeof submission & { shouldRandomizeSeed?: unknown };
     return {
       kind: 'generate',
       request: {
         ...compiled,
         destination: queueItem.snapshot.destination,
         projectId: project.id,
+        seedStep,
         sourceQueueItemId: queueItem.id,
       },
     };

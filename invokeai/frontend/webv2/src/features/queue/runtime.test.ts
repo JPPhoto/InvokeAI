@@ -34,7 +34,7 @@ const createPendingQueueItem = (): QueueItem => ({
       positivePromptNodeId: 'positive_prompt',
       seed: 0,
       seedNodeId: 'seed',
-      shouldRandomizeSeed: false,
+      seedStep: 0,
     },
     destination: 'canvas',
     filterIntermediateResults: false,
@@ -122,6 +122,38 @@ describe('queue runtime', () => {
 
     expect(createQueueItemBackendSubmission({ id: 'project-1' }, queueItem)).toEqual({
       error: 'Queue item is missing a compiled backend submission.',
+      kind: 'invalid',
+    });
+  });
+
+  it('replays items queued before seed modes with the step their random toggle implied', () => {
+    const asLegacy = (shouldRandomizeSeed: boolean) => {
+      const queueItem = createPendingQueueItem();
+      const submission = queueItem.snapshot.backendSubmission as Record<string, unknown>;
+      delete submission.seedStep;
+      submission.shouldRandomizeSeed = shouldRandomizeSeed;
+      return queueItem;
+    };
+
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asLegacy(true))).toMatchObject({
+      kind: 'generate',
+      request: { seedStep: 1 },
+    });
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asLegacy(false))).toMatchObject({
+      kind: 'generate',
+      request: { seedStep: 0 },
+    });
+    expect(
+      (createQueueItemBackendSubmission({ id: 'project-1' }, asLegacy(false)) as { request: object }).request
+    ).not.toHaveProperty('shouldRandomizeSeed');
+  });
+
+  it('rejects a generate item that records neither a seed step nor the legacy toggle', () => {
+    const queueItem = createPendingQueueItem();
+    delete (queueItem.snapshot.backendSubmission as Record<string, unknown>).seedStep;
+
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, queueItem)).toEqual({
+      error: 'Queue item has malformed generate submission metadata.',
       kind: 'invalid',
     });
   });

@@ -87,7 +87,7 @@ const createRequest = (overrides: Partial<QueueEnqueueGenerateRequest> = {}): Qu
   projectId: 'project-1',
   seed: 10,
   seedNodeId: 'seed',
-  shouldRandomizeSeed: false,
+  seedStep: 0,
   sourceQueueItemId: 'local-1',
   ...overrides,
 });
@@ -128,10 +128,10 @@ describe('enqueueGenerate', () => {
     });
   });
 
-  it('keeps a fixed seed for every run when randomization is disabled', async () => {
+  it('keeps a held seed for every run', async () => {
     const { enqueueGenerate } = await import('./submissionApi');
 
-    await enqueueGenerate(createRequest({ shouldRandomizeSeed: false }));
+    await enqueueGenerate(createRequest({ seedStep: 0 }));
 
     const body = getSubmittedBody();
 
@@ -143,10 +143,10 @@ describe('enqueueGenerate', () => {
     ]);
   });
 
-  it('expands seeds per batch item only when randomization is enabled', async () => {
+  it('expands seeds per batch item when the seed steps', async () => {
     const { enqueueGenerate } = await import('./submissionApi');
 
-    await enqueueGenerate(createRequest({ shouldRandomizeSeed: true }));
+    await enqueueGenerate(createRequest({ seedStep: 1 }));
 
     const body = getSubmittedBody();
 
@@ -182,7 +182,7 @@ describe('enqueueGenerate', () => {
           positivePrompt: 'a {red|green} cat',
           positivePrompts: ['a red cat', 'a green cat'],
           seedBehaviour: 'per-iteration',
-          shouldRandomizeSeed: true,
+          seedStep: 1,
         })
       );
 
@@ -206,7 +206,7 @@ describe('enqueueGenerate', () => {
       expect(getSubmittedBody().batch.data[0][1].items).toEqual(['a red cat']);
     });
 
-    it('gives every image its own seed under per-image behaviour', async () => {
+    it('gives every image its own seed under per-image behaviour while the seed steps', async () => {
       const { enqueueGenerate } = await import('./submissionApi');
 
       await enqueueGenerate(
@@ -214,6 +214,7 @@ describe('enqueueGenerate', () => {
           batchCount: 2,
           positivePrompts: ['a red cat', 'a green cat'],
           seedBehaviour: 'per-image',
+          seedStep: 1,
         })
       );
 
