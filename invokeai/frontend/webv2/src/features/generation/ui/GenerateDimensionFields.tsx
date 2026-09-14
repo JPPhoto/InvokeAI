@@ -1,7 +1,7 @@
 /* eslint-disable react/react-compiler, react-perf/jsx-no-new-object-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-jsx-as-prop */
 import type { AspectRatioId, GenerateModelConfig, GenerateSettings } from '@features/generation/core/types';
 
-import { Badge, Box, HStack, Icon, InputGroup, NumberInput, Stack, Text } from '@chakra-ui/react';
+import { Badge, Box, HStack, Icon, Stack, Text } from '@chakra-ui/react';
 import { getDefaultGenerateSettings, getGenerationDimensions } from '@features/generation/core/baseGenerationPolicies';
 import {
   ASPECT_RATIO_MAP,
@@ -11,8 +11,8 @@ import {
   MIN_DIMENSION,
 } from '@features/generation/core/settings';
 import { Button, IconButton, Tooltip } from '@platform/ui';
-import { MODEL_DEFAULT_END_ELEMENT_PROPS, ModelDefaultButton } from '@platform/ui/ModelDefaultButton';
-import { ArrowLeftRightIcon, LockIcon, RulerDimensionLineIcon } from 'lucide-react';
+import { ScrubberField } from '@platform/ui/ScrubberField';
+import { ArrowLeftRightIcon, LockIcon } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -40,6 +40,41 @@ const getActiveRatio = (settings: GenerateSettings): number =>
       : 1;
 
 const PREVIEW_STAGE_PX = 108;
+/** The scrub range covers everyday sizes; typing still reaches `MAX_DIMENSION`. */
+const DIMENSION_SLIDER_MAX = 2048;
+/** Vertical gap between the width and height rows; the lock bracket's geometry assumes it. */
+const DIMENSION_ROW_GAP = '2';
+
+/**
+ * One continuous line leaves the width row, runs behind the lock, and returns
+ * to the height row: the coupling is drawn, and it lights up with the button
+ * when locked. Geometry assumes `xs` rows (28px), an 8px row gap, a 4px column
+ * gap, and the `2xs` button (24px).
+ */
+const LOCK_BRACKET_PATH = 'M0 14H12a4 4 0 0 1 4 4v28a4 4 0 0 1-4 4H0';
+const LOCK_BRACKET_CSS = {
+  alignItems: 'center',
+  alignSelf: 'stretch',
+  display: 'flex',
+  flexShrink: 0,
+  justifyContent: 'center',
+  position: 'relative',
+  w: '6',
+  '& [data-part="bracket"]': {
+    fill: 'none',
+    h: '64px',
+    insetInlineStart: '-4px',
+    pointerEvents: 'none',
+    position: 'absolute',
+    stroke: 'border',
+    strokeWidth: '1px',
+    top: 0,
+    transitionDuration: 'var(--wb-motion-duration-fast)',
+    transitionProperty: 'stroke',
+    w: '28px',
+  },
+  '&[data-locked] [data-part="bracket"]': { stroke: 'accent.solid' },
+};
 const PREVIEW_PAD_PX = 10;
 
 const clampToRange = (value: number): number => Math.min(MAX_DIMENSION, Math.max(MIN_DIMENSION, value));
@@ -287,50 +322,8 @@ export const GenerateDimensionFields = ({
       : { height: nextValue, width: shouldSnap ? clampDimension(nextValue * ratio, dimensionGrid) : nextValue * ratio };
   };
 
-  const setDimension =
-    (key: 'height' | 'width') =>
-    ({ valueAsNumber }: NumberInput.ValueChangeDetails) => {
-      const value = valueAsNumber;
-
-      if (!Number.isFinite(value) || value <= 0) {
-        return;
-      }
-
-      setDraftDimensions(getNextDimensions(key, value, false));
-    };
-
-  const commitDimension =
-    (key: 'height' | 'width') =>
-    ({ valueAsNumber }: NumberInput.ValueChangeDetails) => {
-      const value = valueAsNumber;
-
-      if (!Number.isFinite(value) || value <= 0) {
-        return;
-      }
-
-      const dimensions = getNextDimensions(key, value, true);
-
-      setDraftDimensions(dimensions);
-      commitDimensions(dimensions);
-    };
-
-  const snapDimension = (key: 'height' | 'width') => () => {
-    const snapped = clampDimension(displayDimensions[key], dimensionGrid);
-
-    if (snapped !== displayDimensions[key]) {
-      const dimensions = getNextDimensions(key, snapped, true);
-
-      setDraftDimensions(dimensions);
-      commitDimensions(dimensions);
-    }
-  };
-
-  const setDimensionToModelDefault = (key: 'height' | 'width') => {
-    if (!modelDefaults) {
-      return;
-    }
-
-    const dimensions = getNextDimensions(key, modelDefaults[key], true);
+  const commitDimension = (key: 'height' | 'width') => (value: number) => {
+    const dimensions = getNextDimensions(key, value, true);
 
     setDraftDimensions(dimensions);
     commitDimensions(dimensions);
@@ -423,43 +416,21 @@ export const GenerateDimensionFields = ({
     </>
   );
 
-  const dimensionInput = (key: 'height' | 'width') => (
-    <NumberInput.Root
-      size="xs"
-      allowMouseWheel
-      flex="1"
-      max={MAX_DIMENSION}
+  // The model's optimal side is the stop worth landing on; the recommended
+  // size for the live ratio is what "Set optimal size" would produce.
+  const dimensionField = (key: 'height' | 'width') => (
+    <ScrubberField
+      defaultValue={modelDefaults?.[key]}
+      hint={key}
+      inputMax={MAX_DIMENSION}
+      label={key === 'width' ? t('widgets.generate.width') : t('widgets.generate.height')}
+      marks={[dimensions.optimal, recommendedDimensions[key]]}
+      max={DIMENSION_SLIDER_MAX}
       min={MIN_DIMENSION}
-      value={String(displayDimensions[key])}
       step={dimensionGrid}
-      onBlur={snapDimension(key)}
-      onValueCommit={commitDimension(key)}
-      onValueChange={setDimension(key)}
-    >
-      <InputGroup
-        endElement={
-          modelDefaults && displayDimensions[key] !== modelDefaults[key] ? (
-            <ModelDefaultButton
-              label={
-                key === 'width'
-                  ? t('widgets.generate.useModelDefaultWidth')
-                  : t('widgets.generate.useModelDefaultHeight')
-              }
-              onClick={() => setDimensionToModelDefault(key)}
-            />
-          ) : undefined
-        }
-        endElementProps={MODEL_DEFAULT_END_ELEMENT_PROPS}
-        startElementProps={{ pointerEvents: 'auto' }}
-        startElement={
-          <NumberInput.Scrubber>
-            <Icon as={RulerDimensionLineIcon} boxSize="3" rotate={key === 'height' ? '90' : undefined} />
-          </NumberInput.Scrubber>
-        }
-      >
-        <NumberInput.Input aria-label={key === 'width' ? t('widgets.generate.width') : t('widgets.generate.height')} />
-      </InputGroup>
-    </NumberInput.Root>
+      value={displayDimensions[key]}
+      onChange={commitDimension(key)}
+    />
   );
 
   return (
@@ -485,9 +456,16 @@ export const GenerateDimensionFields = ({
               }
             >
               <HStack alignItems="center" gap="1">
-                {dimensionInput('width')}
-                <AspectRatioLockButton isLocked={settings.aspectRatioIsLocked} onToggle={toggleLock} />
-                {dimensionInput('height')}
+                <Stack flex="1" gap={DIMENSION_ROW_GAP} minW="0">
+                  {dimensionField('width')}
+                  {dimensionField('height')}
+                </Stack>
+                <Box css={LOCK_BRACKET_CSS} data-locked={settings.aspectRatioIsLocked ? '' : undefined}>
+                  <svg aria-hidden="true" data-part="bracket" viewBox="0 0 28 64">
+                    <path d={LOCK_BRACKET_PATH} />
+                  </svg>
+                  <AspectRatioLockButton isLocked={settings.aspectRatioIsLocked} size="2xs" onToggle={toggleLock} />
+                </Box>
               </HStack>
             </GenerateFieldContextMenu>
             {/* Every preset stays visible in the run beneath the values it
