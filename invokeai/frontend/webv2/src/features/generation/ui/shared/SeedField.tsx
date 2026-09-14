@@ -1,6 +1,7 @@
 /* oxlint-disable react-perf/jsx-no-new-object-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-jsx-as-prop */
 import type { DynamicPromptsSeedBehaviour } from '@features/generation/core/dynamicPrompts';
 import type { SeedMode } from '@features/generation/core/settings';
+import type { LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import { HStack, Icon, InputGroup, Menu, NumberInput, Portal, Stack, Text } from '@chakra-ui/react';
@@ -9,13 +10,19 @@ import { Button, IconButton } from '@platform/ui/Button';
 import { Field } from '@platform/ui/Field';
 import { MenuContent } from '@platform/ui/Menu';
 import { Tooltip } from '@platform/ui/Tooltip';
-import { ChevronDownIcon, DicesIcon } from 'lucide-react';
+import { ChevronDownIcon, DicesIcon, LocateFixedIcon, MinusIcon, PlusIcon, ShuffleIcon } from 'lucide-react';
 import { useId, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const SEED_END_ELEMENT_PROPS = { pointerEvents: 'auto', pr: '0.5' } as const;
 const SEED_MODE_MENU_POSITIONING = { placement: 'bottom-end' } as const;
 const TABULAR_NUMS = { fontVariantNumeric: 'tabular-nums' } as const;
+const SEED_MODE_ICONS: Record<SeedMode, LucideIcon> = {
+  decrement: MinusIcon,
+  fixed: LocateFixedIcon,
+  increment: PlusIcon,
+  random: ShuffleIcon,
+};
 
 /**
  * How the seed moves from one submission to the next. A menu rather than a
@@ -36,6 +43,7 @@ const SeedModeMenu = ({ onChange, value }: { value: SeedMode; onChange: (mode: S
       <Tooltip content={label} ids={triggerIds}>
         <Menu.Trigger asChild>
           <Button aria-label={`${label}: ${valueLabel}`} flexShrink={0} gap="1" size="xs" variant="outline">
+            <Icon as={SEED_MODE_ICONS[value]} boxSize="3.5" color="fg.muted" />
             {valueLabel}
             <Icon as={ChevronDownIcon} boxSize="3" color="fg.muted" />
           </Button>
@@ -49,6 +57,7 @@ const SeedModeMenu = ({ onChange, value }: { value: SeedMode; onChange: (mode: S
                 <Menu.RadioItem key={mode} py="1.5" value={mode}>
                   {/* The recipe centers the check on the row; on a two-line item it belongs on the label line. */}
                   <Menu.ItemIndicator top="2" transform="none" />
+                  <Icon alignSelf="flex-start" as={SEED_MODE_ICONS[mode]} boxSize="3.5" color="fg.subtle" mt="0.5" />
                   <Stack gap="0" minW="0">
                     <Menu.ItemText>{t(`widgets.generate.seedMode.${mode}`)}</Menu.ItemText>
                     <Text color="fg.subtle" fontSize="2xs">
