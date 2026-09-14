@@ -11,9 +11,9 @@ import type { BackendConnectionStatus } from '@platform/transport/types';
 
 import { collectGraphInputMediaNames } from '@features/queue/core/graphInputMedia';
 import {
-  isQueueBatchData,
   isQueuePromptSeedBehaviour,
   isQueueSeedStep,
+  isQueueWorkflowSeed,
   MAX_QUEUE_BATCH_ITEMS,
 } from '@features/queue/core/promptBatch';
 import { shouldSubmitPendingQueueItem } from '@features/queue/core/submissionRules';
@@ -137,6 +137,25 @@ const readSubmissionSeedStep = (submission: { seedStep?: unknown; shouldRandomiz
         : 0
       : null;
 
+/** Every recorded seed must name a distinct field on a node the graph still has, in the seed range, stepping ±1. */
+const areQueueWorkflowSeedsValid = (seeds: unknown, graph: { nodes?: Record<string, unknown> }): boolean => {
+  if (!Array.isArray(seeds)) {
+    return false;
+  }
+
+  const targets = new Set<string>();
+
+  return seeds.every((seed) => {
+    if (!isQueueWorkflowSeed(seed) || !graph.nodes || !(seed.nodeId in graph.nodes)) {
+      return false;
+    }
+
+    const target = `${seed.nodeId}:${seed.fieldName}`;
+
+    return targets.has(target) ? false : (targets.add(target), true);
+  });
+};
+
 export const createQueueItemBackendSubmission = (
   project: Pick<QueueHistoryProject, 'id'>,
   queueItem: QueueItem
@@ -207,8 +226,8 @@ export const createQueueItemBackendSubmission = (
     };
   }
 
-  if (submission.data !== undefined && !isQueueBatchData(submission.data)) {
-    return { error: 'Queue item has malformed workflow batch data.', kind: 'invalid' };
+  if (submission.seeds !== undefined && !areQueueWorkflowSeedsValid(submission.seeds, submission.graph)) {
+    return { error: 'Queue item has malformed workflow seed metadata.', kind: 'invalid' };
   }
 
   // `libraryWorkflowId` is provenance for the completed-run sink, not something

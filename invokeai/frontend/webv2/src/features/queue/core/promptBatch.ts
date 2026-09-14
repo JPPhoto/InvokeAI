@@ -51,21 +51,74 @@ export interface GeneratePromptBatchDatum extends QueueBatchDatum {
   field_name: 'value';
 }
 
-/** Structural check for batch data read back from a persisted snapshot. */
-export const isQueueBatchData = (value: unknown): value is QueueBatchDatum[][] =>
-  Array.isArray(value) &&
-  value.every(
-    (group) =>
-      Array.isArray(group) &&
-      group.every(
-        (datum) =>
-          typeof datum === 'object' &&
-          datum !== null &&
-          typeof (datum as QueueBatchDatum).field_name === 'string' &&
-          typeof (datum as QueueBatchDatum).node_path === 'string' &&
-          Array.isArray((datum as QueueBatchDatum).items)
-      )
+/**
+ * One workflow seed input that varies between runs: its first seed and the
+ * direction of the rest. Compact on purpose — the snapshot records the start
+ * the plan drew, and the runs expand from it deterministically at send time.
+ */
+export interface QueueWorkflowSeed {
+  fieldName: string;
+  nodeId: string;
+  seed: number;
+  seedStep: -1 | 1;
+}
+
+export const isQueueWorkflowSeed = (value: unknown): value is QueueWorkflowSeed => {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  const seed = value as Partial<QueueWorkflowSeed>;
+
+  return (
+    typeof seed.fieldName === 'string' &&
+    seed.fieldName.length > 0 &&
+    typeof seed.nodeId === 'string' &&
+    seed.nodeId.length > 0 &&
+    typeof seed.seed === 'number' &&
+    Number.isInteger(seed.seed) &&
+    seed.seed >= 0 &&
+    seed.seed <= SEED_MAX &&
+    (seed.seedStep === -1 || seed.seedStep === 1)
   );
+};
+
+export interface WorkflowSeedBatchPlan {
+  /** One zipped group over every varying input, or undefined while every seed holds. */
+  data?: QueueBatchDatum[][];
+  runs: number;
+}
+
+/**
+ * A workflow batch repeats one graph unless a seed input varies, in which case
+ * every varying input joins one zipped group so `batchCount` runs stay
+ * `batchCount` runs. A single run needs no data: the plan already wrote each
+ * start seed into the graph.
+ */
+export const buildWorkflowSeedBatchPlan = ({
+  batchCount,
+  seeds,
+}: {
+  batchCount: number;
+  seeds: readonly QueueWorkflowSeed[] | undefined;
+}): WorkflowSeedBatchPlan => {
+  const runs = sanitizeBatchCount(batchCount);
+
+  if (!seeds || seeds.length === 0 || runs === 1) {
+    return { runs };
+  }
+
+  return {
+    data: [
+      seeds.map((seed) => ({
+        field_name: seed.fieldName,
+        items: generateSeedSequence(seed.seed, runs, seed.seedStep),
+        node_path: seed.nodeId,
+      })),
+    ],
+    runs: 1,
+  };
+};
 
 export interface GeneratePromptBatchPlanInput {
   batchCount: number;

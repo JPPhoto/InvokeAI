@@ -613,12 +613,12 @@ describe('planWorkflowSubmission', () => {
     const { doc, ids } = buildSeeded([{ seed: 7 }, { seed: 9, seedMode: 'fixed' }]);
     const plan = planWorkflowSubmission(doc, seededTemplates, { batchCount: 3 });
 
-    expect(plan).toMatchObject({ data: null, generationCount: 3, runs: 3, seedAdvances: [] });
+    expect(plan).toMatchObject({ batchCount: 3, seedAdvances: [], seeds: [] });
     expect(plan.graph.backendGraph.nodes[ids[0] as string]?.seed).toBe(7);
     expect(plan.graph.backendGraph.nodes[ids[1] as string]?.seed).toBe(9);
   });
 
-  it('zips every stepping seed into one group so three runs stay three runs', () => {
+  it('records one start per stepping seed and where each field goes after the batch', () => {
     const { doc, ids } = buildSeeded([
       { seed: 42, seedMode: 'increment' },
       { seed: 100, seedMode: 'decrement' },
@@ -626,31 +626,29 @@ describe('planWorkflowSubmission', () => {
     ]);
     const plan = planWorkflowSubmission(doc, seededTemplates, { batchCount: 3 });
 
-    expect(plan.runs).toBe(1);
-    expect(plan.generationCount).toBe(3);
-    expect(plan.data).toEqual([
-      [
-        { field_name: 'seed', items: [42, 43, 44], node_path: ids[0] },
-        { field_name: 'seed', items: [100, 99, 98], node_path: ids[1] },
-      ],
+    expect(plan.seeds).toEqual([
+      { fieldName: 'seed', nodeId: ids[0], seed: 42, seedStep: 1 },
+      { fieldName: 'seed', nodeId: ids[1], seed: 100, seedStep: -1 },
     ]);
     expect(plan.seedAdvances).toEqual([
       { fieldName: 'seed', fromSeed: 42, nodeId: ids[0], seedMode: 'increment', toSeed: 45 },
       { fieldName: 'seed', fromSeed: 100, nodeId: ids[1], seedMode: 'decrement', toSeed: 97 },
     ]);
-    // The fixed node keeps its constant in the graph; the varying ones keep theirs as the fallback the batch overrides.
+    // Every node carries its first run's seed as a constant; the fixed one stays as authored.
+    expect(plan.graph.backendGraph.nodes[ids[0] as string]?.seed).toBe(42);
     expect(plan.graph.backendGraph.nodes[ids[2] as string]?.seed).toBe(5);
+    expect(plan.graph.nodes.find((node) => node.id === ids[1])?.inputs.seed).toBe(100);
   });
 
-  it('wraps the sequence over the inclusive seed range', () => {
+  it('wraps the authored seed and the advance over the inclusive seed range', () => {
     const { doc } = buildSeeded([{ seed: 1, seedMode: 'decrement' }]);
     const plan = planWorkflowSubmission(doc, seededTemplates, { batchCount: 3 });
 
-    expect(plan.data?.[0]?.[0]?.items).toEqual([1, 0, SEED_MAX]);
+    expect(plan.seeds[0]).toMatchObject({ seed: 1, seedStep: -1 });
     expect(plan.seedAdvances[0]?.toSeed).toBe(SEED_MAX - 1);
   });
 
-  it('draws a random start per input, runs consecutively from it, and never advances the entered seed', () => {
+  it('draws a random start into the graph and never advances the entered seed', () => {
     const { doc, ids } = buildSeeded([
       { seed: 42, seedMode: 'random' },
       { seed: 42, seedMode: 'random' },
@@ -662,14 +660,14 @@ describe('planWorkflowSubmission', () => {
     try {
       const plan = planWorkflowSubmission(doc, seededTemplates, { batchCount: 2 });
 
-      expect(plan.data).toEqual([
-        [
-          { field_name: 'seed', items: [start, start + 1], node_path: ids[0] },
-          { field_name: 'seed', items: [start, start + 1], node_path: ids[1] },
-        ],
+      expect(plan.seeds).toEqual([
+        { fieldName: 'seed', nodeId: ids[0], seed: start, seedStep: 1 },
+        { fieldName: 'seed', nodeId: ids[1], seed: start, seedStep: 1 },
       ]);
       expect(plan.seedAdvances).toEqual([]);
-      expect(plan.graph.backendGraph.nodes[ids[0] as string]?.seed).toBe(42);
+      expect(plan.graph.backendGraph.nodes[ids[0] as string]?.seed).toBe(start);
+      // The document keeps the entered seed in reserve.
+      expect(doc.nodes[0]).toMatchObject({ data: { inputs: { seed: { value: 42 } } } });
     } finally {
       random.mockRestore();
     }
@@ -691,13 +689,14 @@ describe('planWorkflowSubmission', () => {
     });
     const plan = planWorkflowSubmission(connected, seededTemplates, { batchCount: 2 });
 
-    expect(plan).toMatchObject({ data: null, runs: 2, seedAdvances: [] });
+    expect(plan).toMatchObject({ seedAdvances: [], seeds: [] });
+    expect(plan.graph.backendGraph.nodes[ids[0] as string]).not.toHaveProperty('seed');
     expect(connected.nodes.find((node) => node.id === ids[0])).toMatchObject({
       data: { inputs: { seed: { seedMode: 'increment', value: 42 } } },
     });
   });
 
-  it('steps an empty seed input from the template default', () => {
+  it('steps an empty seed input from the template default and fills it in afterwards', () => {
     const { doc, ids } = buildSeeded([{ seedMode: 'increment' }]);
     const emptied = projectGraphReducer(doc, {
       fieldName: 'seed',
@@ -707,7 +706,8 @@ describe('planWorkflowSubmission', () => {
     });
     const plan = planWorkflowSubmission(emptied, seededTemplates, { batchCount: 2 });
 
-    expect(plan.data?.[0]?.[0]?.items).toEqual([0, 1]);
+    expect(plan.seeds).toEqual([{ fieldName: 'seed', nodeId: ids[0], seed: 0, seedStep: 1 }]);
+    expect(plan.graph.backendGraph.nodes[ids[0] as string]?.seed).toBe(0);
     // The advance is fenced on the empty value, so the field fills in with the seed after the batch.
     expect(plan.seedAdvances).toEqual([{ fieldName: 'seed', nodeId: ids[0], seedMode: 'increment', toSeed: 2 }]);
     expect(

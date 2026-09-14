@@ -1,6 +1,6 @@
-import type { QueueBatchDatum, QueuePromptSeedBehaviour, QueueSeedStep } from '@features/queue/core/promptBatch';
+import type { QueuePromptSeedBehaviour, QueueSeedStep, QueueWorkflowSeed } from '@features/queue/core/promptBatch';
 
-export type { QueueBatchDatum, QueueSeedStep };
+export type { QueueSeedStep, QueueWorkflowSeed };
 
 export interface QueueBackendInvocation {
   id: string;
@@ -43,8 +43,8 @@ interface QueueEnqueueRequestBase {
 }
 
 export interface QueueEnqueueWorkflowRequest extends QueueEnqueueRequestBase {
-  /** Zipped batch groups over graph fields; the backend takes their product `batchCount` times. */
-  data?: QueueBatchDatum[][];
+  /** The seed inputs that vary between the `batchCount` runs; the graph carries each one's first seed. */
+  seeds?: QueueWorkflowSeed[];
 }
 
 export interface QueueEnqueueGenerateRequest extends QueueEnqueueRequestBase {
@@ -73,12 +73,11 @@ export interface QueueEnqueueResult {
 /** Immutable source-compiled payload. Queue submits it without reading source widget state. */
 export type QueueCompiledSubmission =
   | {
-      /** Backend `runs`; with `data` present the runs are enumerated there and this is 1. */
       batchCount: number;
-      /** The seed inputs that vary between runs, zipped so every run gets one seed per field. */
-      data?: QueueBatchDatum[][];
       graph: QueueBackendGraph;
       kind: 'workflow';
+      /** The seed inputs that vary between runs, expanded into one zipped batch group at send time. */
+      seeds?: QueueWorkflowSeed[];
       /**
        * The library record this run's workflow was loaded from, when the project
        * graph is bound to one. Stamped at compile time so a completed run can be

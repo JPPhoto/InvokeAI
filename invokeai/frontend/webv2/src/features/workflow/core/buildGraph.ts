@@ -294,73 +294,38 @@ export const isSeedInputField = (template: FieldInputTemplate): boolean =>
 export const getWorkflowFieldSeedMode = (instance: Pick<WorkflowFieldInstance, 'seedMode'> | undefined): SeedMode =>
   isSeedMode(instance?.seedMode) ? instance.seedMode : 'fixed';
 
-/**
- * The seeds one varying input contributes to a submission of `runCount` runs,
- * and where its authored seed goes afterwards. Stepping modes count from the
- * authored seed; random draws its start and runs consecutively from it, like
- * Generate's random mode, leaving the authored seed in reserve.
- */
-const getWorkflowSeedFieldSequence = (
-  seedMode: Exclude<SeedMode, 'fixed'>,
-  authoredSeed: number,
-  runCount: number
-): { nextSeed: number | null; seeds: number[] } => {
-  const startSeed = seedMode === 'random' ? Math.floor(Math.random() * SEED_MAX) : wrapSeed(authoredSeed);
-  const plan = planSeedSubmission({
-    batchCount: runCount,
-    promptCount: 1,
-    seedBehaviour: 'per-iteration',
-    seedMode,
-    startSeed,
-  });
-
-  return {
-    nextSeed: plan.nextSeed,
-    seeds: Array.from({ length: plan.sequenceLength }, (_, index) => wrapSeed(startSeed + plan.step * index)),
-  };
-};
-
-/** One value list of a zipped batch group, in the backend's `BatchDatum` shape. */
-export interface WorkflowBatchDatum {
-  field_name: string;
-  items: number[];
-  node_path: string;
+/** One seed input that varies between runs: the seed the first run uses and the direction of the rest. */
+export interface WorkflowSeedAssignment {
+  fieldName: string;
+  nodeId: string;
+  seed: number;
+  seedStep: -1 | 1;
 }
 
-export interface WorkflowSubmissionPlan {
-  graph: CompiledWorkflowGraph;
-  /** One zipped group over every seed input that varies between runs; null while every seed holds. */
-  data: WorkflowBatchDatum[][] | null;
-  /** Backend `runs`: the batch count while every seed holds, else 1 with the runs enumerated by `data`. */
-  runs: number;
-  /** Sessions the submission produces either way. */
-  generationCount: number;
-  /** Stepping-mode fields to move once the submission is queued. */
+export interface WorkflowSeedPlan {
+  /** Every unconnected seed input in a varying mode, with its first seed; fixed inputs are absent. */
+  seeds: WorkflowSeedAssignment[];
+  /** Stepping-mode fields to move once the submission is reserved. */
   seedAdvances: WorkflowSeedFieldAdvance[];
 }
 
-export interface WorkflowSubmissionPlanOptions {
-  /** Runs per submission; already sanitized to a positive integer by the caller. */
-  batchCount: number;
-}
-
 /**
- * Compiles the document and fixes every seed input's values for one submission.
- * Seeds vary per queued run, not per iteration of a loop inside a run, which
- * repeats its run's seed. Every varying input joins one zipped group, so three
- * runs over two stepping seeds stay three runs rather than nine combinations;
- * fixed inputs stay constants in the graph. A random input draws its start here
- * and runs consecutively from it, like Generate's random mode, while the entered
- * seed stays in reserve. Only the stepping modes report an advance.
+ * Decides every seed input's start for a submission of `batchCount` runs. Seeds
+ * vary per queued run, not per iteration of a loop inside a run. A random input
+ * draws its start here and the runs step consecutively from it, like Generate's
+ * random mode, while the entered seed stays in reserve; a stepping input counts
+ * from the authored seed and reports where the field goes afterwards. Expansion
+ * into per-run values happens at send time from these starts, never redrawing.
  */
-export const planWorkflowSubmission = (
+export const planWorkflowSeeds = (
   document: ProjectGraphState,
   templates: InvocationTemplates,
-  { batchCount }: WorkflowSubmissionPlanOptions
-): WorkflowSubmissionPlan => {
-  const graph = compileProjectGraph(document, templates);
-  const connectedInputs = new Set(graph.edges.map((edge) => `${edge.targetNodeId}:${edge.targetField}`));
-  const data: WorkflowBatchDatum[] = [];
+  batchCount: number
+): WorkflowSeedPlan => {
+  const connectedInputs = new Set(
+    getCanonicalWorkflowEdges(document).map((edge) => `${edge.destination.node_id}:${edge.destination.field}`)
+  );
+  const seeds: WorkflowSeedAssignment[] = [];
   const seedAdvances: WorkflowSeedFieldAdvance[] = [];
 
   for (const node of getExecutableNodes(document)) {
@@ -388,27 +353,80 @@ export const planWorkflowSubmission = (
           : typeof inputTemplate.default === 'number'
             ? inputTemplate.default
             : 0;
-      const sequence = getWorkflowSeedFieldSequence(seedMode, authoredSeed, batchCount);
+      const startSeed = seedMode === 'random' ? Math.floor(Math.random() * SEED_MAX) : wrapSeed(authoredSeed);
+      const plan = planSeedSubmission({
+        batchCount,
+        promptCount: 1,
+        seedBehaviour: 'per-iteration',
+        seedMode,
+        startSeed,
+      });
 
-      data.push({ field_name: inputTemplate.name, items: sequence.seeds, node_path: node.id });
+      seeds.push({
+        fieldName: inputTemplate.name,
+        nodeId: node.id,
+        seed: startSeed,
+        seedStep: seedMode === 'decrement' ? -1 : 1,
+      });
 
-      if (sequence.nextSeed !== null) {
+      if (plan.nextSeed !== null) {
         seedAdvances.push({
           fieldName: inputTemplate.name,
           ...(typeof instance?.value === 'number' ? { fromSeed: instance.value } : {}),
           nodeId: node.id,
           seedMode,
-          toSeed: sequence.nextSeed,
+          toSeed: plan.nextSeed,
         });
       }
     }
   }
 
+  return { seedAdvances, seeds };
+};
+
+/** Writes each planned first seed into the compiled graph, so a single run needs no batch data. */
+export const applyWorkflowSeeds = (
+  graph: CompiledWorkflowGraph,
+  seeds: readonly WorkflowSeedAssignment[]
+): CompiledWorkflowGraph => {
+  for (const { fieldName, nodeId, seed } of seeds) {
+    const backendNode = graph.backendGraph.nodes[nodeId];
+    const node = graph.nodes.find((candidate) => candidate.id === nodeId);
+
+    if (backendNode) {
+      backendNode[fieldName] = seed;
+    }
+
+    if (node) {
+      node.inputs[fieldName] = seed;
+    }
+  }
+
+  return graph;
+};
+
+export interface WorkflowSubmissionPlan extends WorkflowSeedPlan {
+  /** Runs the submission produces. */
+  batchCount: number;
+  graph: CompiledWorkflowGraph;
+}
+
+export interface WorkflowSubmissionPlanOptions {
+  /** Runs per submission; already sanitized to a positive integer by the caller. */
+  batchCount: number;
+}
+
+/** Compiles the document with every planned first seed in place and reports the seeds that vary. */
+export const planWorkflowSubmission = (
+  document: ProjectGraphState,
+  templates: InvocationTemplates,
+  { batchCount }: WorkflowSubmissionPlanOptions
+): WorkflowSubmissionPlan => {
+  const seedPlan = planWorkflowSeeds(document, templates, batchCount);
+
   return {
-    data: data.length > 0 ? [data] : null,
-    generationCount: batchCount,
-    graph,
-    runs: data.length > 0 ? 1 : batchCount,
-    seedAdvances,
+    ...seedPlan,
+    batchCount,
+    graph: applyWorkflowSeeds(compileProjectGraph(document, templates), seedPlan.seeds),
   };
 };

@@ -278,23 +278,33 @@ describe('enqueueWorkflow', () => {
     expect(getSubmittedBody().batch.batch_id).toBeUndefined();
   });
 
-  it('sends zipped seed batch data alongside the run count', async () => {
+  it('expands recorded seeds into one zipped group and never redraws them', async () => {
     const { enqueueWorkflow } = await import('./submissionApi');
-    const data = [
-      [
-        { field_name: 'seed', items: [1, 2, 3], node_path: 'noise-a' },
-        { field_name: 'seed', items: [9, 8, 7], node_path: 'noise-b' },
-      ],
+    const seeds = [
+      { fieldName: 'seed', nodeId: 'noise-a', seed: 1, seedStep: 1 as const },
+      { fieldName: 'seed', nodeId: 'noise-b', seed: 4_294_967_295, seedStep: -1 as const },
     ];
 
-    await enqueueWorkflow(createWorkflowRequest({ batchCount: 1, data }));
+    await enqueueWorkflow(createWorkflowRequest({ batchCount: 3, seeds }));
 
-    expect(getSubmittedBody().batch).toMatchObject({ data, runs: 1 });
+    expect(getSubmittedBody().batch).toMatchObject({
+      data: [
+        [
+          { field_name: 'seed', items: [1, 2, 3], node_path: 'noise-a' },
+          { field_name: 'seed', items: [4_294_967_295, 4_294_967_294, 4_294_967_293], node_path: 'noise-b' },
+        ],
+      ],
+      runs: 1,
+    });
 
-    mocks.apiFetchJson.mockClear();
-    await enqueueWorkflow(createWorkflowRequest());
+    // A single run already carries its seed in the graph; a seedless batch repeats the graph.
+    for (const request of [createWorkflowRequest({ batchCount: 1, seeds }), createWorkflowRequest({ batchCount: 2 })]) {
+      mocks.apiFetchJson.mockClear();
+      await enqueueWorkflow(request);
 
-    expect(getSubmittedBody().batch).not.toHaveProperty('data');
+      expect(getSubmittedBody().batch).not.toHaveProperty('data');
+      expect(getSubmittedBody().batch.runs).toBe(request.batchCount);
+    }
   });
 
   it('does not cap workflow runs', async () => {

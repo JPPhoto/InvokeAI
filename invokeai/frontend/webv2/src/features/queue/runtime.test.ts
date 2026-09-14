@@ -148,31 +148,37 @@ describe('queue runtime', () => {
     ).not.toHaveProperty('shouldRandomizeSeed');
   });
 
-  it('replays workflow batch data as recorded and rejects a malformed record', () => {
-    const asWorkflow = (data: unknown) => {
+  it('replays workflow seeds as recorded and rejects records the graph cannot honour', () => {
+    const asWorkflow = (seeds: unknown) => {
       const queueItem = createPendingQueueItem();
       queueItem.snapshot.backendSubmission = {
-        batchCount: 1,
-        graph: { edges: [], id: 'backend-graph', nodes: {} },
+        batchCount: 3,
+        graph: { edges: [], id: 'backend-graph', nodes: { noise: { id: 'noise', seed: 7, type: 'noise' } } },
         kind: 'workflow',
-        ...(data === undefined ? {} : { data: data as never }),
+        ...(seeds === undefined ? {} : { seeds: seeds as never }),
       };
       queueItem.snapshot.sourceId = 'workflow';
       return queueItem;
     };
-    const data = [[{ field_name: 'seed', items: [1, 2], node_path: 'noise' }]];
+    const seed = { fieldName: 'seed', nodeId: 'noise', seed: 7, seedStep: 1 };
+    const invalid = { error: 'Queue item has malformed workflow seed metadata.', kind: 'invalid' };
 
-    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow(data))).toMatchObject({
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([seed]))).toMatchObject({
       kind: 'workflow',
-      request: { batchCount: 1, data },
+      request: { batchCount: 3, seeds: [seed] },
     });
     expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow(undefined))).toMatchObject({
       kind: 'workflow',
     });
-    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([{ items: [1] }]))).toEqual({
-      error: 'Queue item has malformed workflow batch data.',
-      kind: 'invalid',
-    });
+    // Out of range, a step the plan never emits, a node the graph lost, and the same field twice.
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([{ ...seed, seed: -1 }]))).toEqual(invalid);
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([{ ...seed, seedStep: 0 }]))).toEqual(
+      invalid
+    );
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([{ ...seed, nodeId: 'gone' }]))).toEqual(
+      invalid
+    );
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([seed, seed]))).toEqual(invalid);
   });
 
   it('rejects a generate item that records neither a seed step nor the legacy toggle', () => {

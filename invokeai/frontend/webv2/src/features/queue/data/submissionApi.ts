@@ -7,7 +7,11 @@ import type {
   QueueResultVideoOptions,
 } from '@features/queue/core/types';
 
-import { buildGeneratePromptBatchPlan, sanitizeBatchCount } from '@features/queue/core/promptBatch';
+import {
+  buildGeneratePromptBatchPlan,
+  buildWorkflowSeedBatchPlan,
+  sanitizeBatchCount,
+} from '@features/queue/core/promptBatch';
 import { mapWithConcurrency } from '@platform/core/concurrency';
 import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/accountLifecycle';
 import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
@@ -102,16 +106,17 @@ export const enqueueGenerate = async (request: QueueEnqueueGenerateRequest): Pro
 };
 
 export const enqueueWorkflow = async (request: QueueEnqueueWorkflowRequest): Promise<QueueEnqueueResult> => {
+  const plan = buildWorkflowSeedBatchPlan({ batchCount: request.batchCount, seeds: request.seeds });
   const result = await apiFetchJson<unknown>('/api/v1/queue/default/enqueue_batch', {
     body: JSON.stringify({
       batch: {
-        ...(request.data ? { data: request.data } : {}),
+        ...(plan.data ? { data: plan.data } : {}),
         destination: request.destination,
         graph: request.graph,
         idempotency_key: getQueueIdempotencyKey(request.projectId, request.sourceQueueItemId),
         project_id: request.projectId,
         origin: buildQueueItemOrigin(request.sourceQueueItemId, request.projectId),
-        runs: sanitizeBatchCount(request.batchCount),
+        runs: plan.runs,
       },
       prepend: false,
     }),

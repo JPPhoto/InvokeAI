@@ -3177,8 +3177,8 @@ const enqueueCompiledSnapshot = (
     ? { error: `${route.sourceId} queue item is missing a compiled backend graph.`, kind: 'invalid' }
     : route.sourceId === 'workflow'
       ? {
-          batchCount: compiled.workflow?.runs ?? sanitizeBatchCount(widgetStates.generate?.values.batchCount),
-          ...(compiled.workflow?.data ? { data: compiled.workflow.data } : {}),
+          batchCount: compiled.workflow?.batchCount ?? sanitizeBatchCount(widgetStates.generate?.values.batchCount),
+          ...(compiled.workflow?.seeds.length ? { seeds: compiled.workflow.seeds } : {}),
           graph: backendGraph,
           kind: 'workflow',
           // Provenance for the completed-run capture: a run submitted from a
@@ -3257,9 +3257,7 @@ const enqueueCompiledSnapshot = (
         batchCount:
           backendSubmission.kind === 'invalid'
             ? 1
-            : compiled.workflow
-              ? compiled.workflow.generationCount
-              : backendSubmission.batchCount * (expandedPositivePrompts?.length ?? 1),
+            : backendSubmission.batchCount * (expandedPositivePrompts?.length ?? 1),
         height: presentationDimensions.height,
         // The merged prompt, so the queue row reads the same before and after the
         // backend session arrives with its own (already merged) field values.

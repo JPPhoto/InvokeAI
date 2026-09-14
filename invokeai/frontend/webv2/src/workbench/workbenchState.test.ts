@@ -3372,17 +3372,18 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       let state = submitWorkflow(primeWorkflow(42, 'increment'));
 
       expect(readSubmission(state)).toMatchObject({
-        batchCount: 1,
-        data: [[{ field_name: 'seed', items: [42, 43, 44], node_path: 'noise-1' }]],
+        batchCount: 3,
         kind: 'workflow',
+        seeds: [{ fieldName: 'seed', nodeId: 'noise-1', seed: 42, seedStep: 1 }],
       });
+      expect(readSubmission(state)).toMatchObject({ graph: { nodes: { 'noise-1': { seed: 42 } } } });
       expect(getActiveProject(state).queue.items[0]?.snapshot.presentation.batchCount).toBe(3);
       expect(readNodeSeed(state)).toBe(45);
 
       state = submitWorkflow(state);
 
-      expect(readSubmission(state)).toMatchObject({ data: [[{ items: [45, 46, 47] }]] });
-      expect(readSubmission(state, 1)).toMatchObject({ data: [[{ items: [42, 43, 44] }]] });
+      expect(readSubmission(state)).toMatchObject({ seeds: [{ seed: 45 }] });
+      expect(readSubmission(state, 1)).toMatchObject({ seeds: [{ seed: 42 }] });
       expect(readNodeSeed(state)).toBe(48);
     });
 
@@ -3391,7 +3392,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       const submission = readSubmission(state);
 
       expect(submission).toMatchObject({ batchCount: 3, kind: 'workflow' });
-      expect(submission).not.toHaveProperty('data');
+      expect(submission).not.toHaveProperty('seeds');
       expect(submission?.kind === 'workflow' && submission.graph.nodes['noise-1']?.seed).toBe(42);
       expect(readNodeSeed(state)).toBe(42);
     });
@@ -3403,7 +3404,10 @@ describe('workbenchReducer Phase 5 generation flow', () => {
         const state = submitWorkflow(primeWorkflow(42, 'random', 2));
         const start = Math.floor(0.25 * SEED_MAX);
 
-        expect(readSubmission(state)).toMatchObject({ data: [[{ items: [start, start + 1] }]] });
+        expect(readSubmission(state)).toMatchObject({
+          graph: { nodes: { 'noise-1': { seed: start } } },
+          seeds: [{ seed: start, seedStep: 1 }],
+        });
         expect(readNodeSeed(state)).toBe(42);
       } finally {
         random.mockRestore();
