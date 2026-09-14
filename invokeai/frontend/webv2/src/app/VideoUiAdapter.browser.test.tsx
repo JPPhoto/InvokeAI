@@ -5,8 +5,10 @@ import type { ReactNode } from 'react';
 
 import { getGalleryRevealRequest } from '@features/gallery/core/selection';
 import {
+  clearVideoSpanPlaybackState,
   consumeVideoSpanPlaybackRequest,
   getVideoSpanPlaybackRequest,
+  publishVideoSpanPlaybackState,
 } from '@workbench/widgets/preview/spanPlaybackRequest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -84,11 +86,32 @@ afterEach(async () => {
   }
 });
 
+describe('videoSpanPlayback', () => {
+  it("hands the panel the player's report and its changes", () => {
+    const listener = vi.fn();
+    const unsubscribe = adapter.videoSpanPlayback.subscribe(listener);
+    const pause = vi.fn();
+
+    expect(adapter.videoSpanPlayback.getState()).toBeNull();
+
+    publishVideoSpanPlaybackState({ isPlaying: true, pause, token: 41 });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(adapter.videoSpanPlayback.getState()).toMatchObject({ isPlaying: true, token: 41 });
+
+    unsubscribe();
+    clearVideoSpanPlaybackState(41);
+  });
+});
+
 describe('playVideoSpanInPreview', () => {
   it('puts the clip in front of the user without disturbing their place in the gallery', () => {
     const revealBefore = getGalleryRevealRequest()?.token;
 
-    act(() => adapter.playVideoSpanInPreview(span));
+    let token: number | null = null;
+    act(() => {
+      token = adapter.playVideoSpanInPreview(span);
+    });
 
     expect(selectItem).toHaveBeenCalledWith(videoItem, 'project-1');
     expect(getVideoSpanPlaybackRequest()).toMatchObject({
@@ -96,6 +119,8 @@ describe('playVideoSpanInPreview', () => {
       itemKey: 'video:clip.mp4',
       startSeconds: 2,
     });
+    // The button keeps the token to recognise the player's report on this request.
+    expect(token).toBe(getVideoSpanPlaybackRequest()?.token);
     // Deliberately no reveal: auditioning a trim must not scroll the gallery grid out
     // from under a user who is browsing it, and the gallery's own "open in Preview"
     // does not reveal either.
@@ -105,13 +130,18 @@ describe('playVideoSpanInPreview', () => {
   it('changes nothing at all when Preview refuses to open', () => {
     openResult = { ok: false, reason: 'unavailable' };
 
-    act(() => adapter.playVideoSpanInPreview(span));
+    let token: number | null = 0;
+    act(() => {
+      token = adapter.playVideoSpanInPreview(span);
+    });
 
     // A press that cannot play must not cost the user their selection — that is a change
     // they did not ask for and cannot undo. And a span nothing is there to read would sit
     // until the next player showed this clip, starting audio out of nowhere.
     expect(selectItem).not.toHaveBeenCalled();
     expect(getVideoSpanPlaybackRequest()).toBeNull();
+    // Nothing was asked, so there is no report to wait for.
+    expect(token).toBeNull();
   });
 
   it('drops a press whose lookup landed after the user switched projects', async () => {
