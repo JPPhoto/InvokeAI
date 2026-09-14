@@ -50,6 +50,7 @@ import {
   getPidDecoderBaseForMainBase,
   getPidDimensionOverrides,
 } from './pid';
+import { SEED_MAX } from './seed';
 import {
   clampDimension,
   DEFAULT_HIDIFFUSION_T1_RATIO,
@@ -75,7 +76,6 @@ import {
   MAX_DIMENSION,
   MIN_DIMENSION,
   normalizeGenerateSettings,
-  SEED_MAX,
 } from './settings';
 
 // Generation policy registry keyed by model base. Display identity stays in @features/models;

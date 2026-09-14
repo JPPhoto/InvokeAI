@@ -95,6 +95,9 @@ const EDITOR_BOOT_SHARED_MODULES = [
   '/features/generation/queries.ts',
   '/features/generation/runtime.ts',
   '/features/generation/ui/promptFields/promptAttentionHotkeys.ts',
+  // Shared by the Generate/Upscale/Video seed row and workflow seed inputs; left to rolldown it
+  // splits into a chunk every editor route would fetch separately.
+  '/features/generation/ui/shared/SeedModeMenu.tsx',
   '/workbench/shell/topbar/LayoutPresetAdminDialogs.tsx',
   '/workbench/shell/topbar/LayoutPresetStrip.tsx',
   '/workbench/shell/topbar/ProjectSwitcher.tsx',
@@ -187,6 +190,8 @@ const getLegacyChunkName = (id: string): string | null => {
       '/workbench/palette/paletteStore.ts',
       '/platform/search/dateTokens.ts',
       '/platform/performance/semanticReady.ts',
+      // A pure leaf every seeded owner imports; on its own it would cost the editor boot a request.
+      '/features/generation/core/seed.ts',
     ])
   ) {
     return 'shared';

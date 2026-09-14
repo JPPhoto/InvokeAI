@@ -29,6 +29,8 @@ export const FEATURE_PUBLIC_INTERFACES: Readonly<Record<string, readonly string[
     'queries',
     'react',
     'runtime',
+    'seed',
+    'seedModeMenu',
     'settings',
     'widget',
   ],

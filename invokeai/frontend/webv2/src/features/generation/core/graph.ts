@@ -47,7 +47,7 @@ import {
 import { addKrea2ConditioningEnhancers } from './krea2Conditioning';
 import { addPidDecode, getPidDenoiseSize, getPidMetadata, shouldUsePidDecode } from './pidGraph';
 import { getEffectiveReferenceImage } from './referenceImage';
-import { SEED_MAX } from './settings';
+import { SEED_MAX } from './seed';
 
 const getCompatibleComponentSource = (
   settings: GenerateSettings,

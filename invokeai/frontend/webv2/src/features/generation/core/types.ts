@@ -1,7 +1,7 @@
 import type { BackendGraphContract, GraphContract } from '@features/generation/core/contracts';
 import type { DynamicPromptsSeedBehaviour } from '@features/generation/core/dynamicPrompts';
 import type { PromptTemplateSnapshot } from '@features/generation/core/promptTemplates';
-import type { SeedMode } from '@features/generation/core/settings';
+import type { SeedMode } from '@features/generation/core/seed';
 
 export type ModelIdentifierConfig = {
   key: string;

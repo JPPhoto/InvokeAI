@@ -31,7 +31,6 @@ export {
   normalizeGenerateSettings,
   normalizeGenerateWidgetValues,
   normalizeReferenceImages,
-  SEED_MAX,
   syncGenerateWidgetValuesWithModels,
 } from './core/settings';
 export {
@@ -78,11 +77,13 @@ export {
   getSeedStep,
   isSeedMode,
   planSeedSubmission,
+  SEED_MAX,
   SEED_MODES,
+  wrapSeed,
   type SeedMode,
   type SeedStep,
   type SeedSubmissionPlan,
-} from './core/settings';
+} from './core/seed';
 export {
   createDynamicPromptsSampleSeed,
   DYNAMIC_PROMPTS_DEFAULT_MAX_PROMPTS,

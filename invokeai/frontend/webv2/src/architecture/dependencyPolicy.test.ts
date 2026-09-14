@@ -238,6 +238,12 @@ describe('feature public-interface registry', () => {
     expect(checkDependency('workbench/invocationSubmit.ts', '@features/generation/prompts')).toEqual([]);
     expect(checkDependency('app/GenerateWidgetSyncRuntime.tsx', '@features/generation/runtime')).toEqual([]);
     expect(checkDependency('workbench/widgets/canvas/invoke.ts', '@features/generation/canvasGraph')).toEqual([]);
+    // Workflow's pure graph compiler reuses Generate's seed arithmetic through its
+    // side-effect-free entry rather than the settings surface.
+    expect(checkDependency('features/workflow/core/buildGraph.ts', '@features/generation/seed')).toEqual([]);
+    expect(
+      checkDependency('features/workflow/ui/fields/WorkflowFieldInput.tsx', '@features/generation/seedModeMenu')
+    ).toEqual([]);
     expect(
       checkDependency('workbench/invocationSubmit.ts', '@features/generation/data/dynamicPromptsQueries')
     ).toMatchObject([{ rule: 'feature-private-interface' }]);
