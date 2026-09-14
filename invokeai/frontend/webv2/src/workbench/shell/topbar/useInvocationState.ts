@@ -1,5 +1,4 @@
 import type { DynamicPromptsExpansion } from '@features/generation/react';
-import type { ArchitectureCapabilitiesSnapshot } from '@features/generation/runtime';
 import type { GraphWidgetSource } from '@workbench/graphWidgets';
 import type { InvocationRoute, ResultDestination } from '@workbench/invocationContracts';
 import type { WidgetTypeId } from '@workbench/widgetContracts';
@@ -35,7 +34,6 @@ import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const selectInvocationRouteInput = createInvocationRouteInputSelector();
-const selectCapabilitiesRevision = (snapshot: ArchitectureCapabilitiesSnapshot): number => snapshot.revision;
 
 const areTypeIdSetsEqual = (left: ReadonlySet<WidgetTypeId>, right: ReadonlySet<WidgetTypeId>): boolean =>
   left.size === right.size && [...left].every((typeId) => right.has(typeId));
@@ -87,19 +85,23 @@ export const useInvocationState = (): InvocationState => {
   // Project-graph route validation reads the invocation templates imperatively;
   // subscribing here keeps the resolved route live while they load.
   useInvocationTemplatesSelector((snapshot) => snapshot.status);
-  // Same shape, for the architecture capability table: `getGenerationValidationReasons` fails closed
-  // while it is absent, so a load that only succeeds on retry has to reach Invoke on its own rather
-  // than waiting for the next unrelated edit to re-render this hook.
-  useExternalStoreSelector(
-    subscribeArchitectureCapabilities,
-    getArchitectureCapabilitiesSnapshot,
-    selectCapabilitiesRevision
-  );
   useMountEffect(() => {
     void ensureModelsLoaded();
   });
 
-  const resolvedRoute = resolveInvocationRouteInput(routeInput, 'global', invocation, availabilityModels);
+  // `getGenerationValidationReasons` fails closed while the capability table is absent, so a load
+  // that only succeeds on retry has to reach Invoke on its own. The route is resolved inside the
+  // store's selector, like `useModelGridSize`: the table is core module state, so to React Compiler a
+  // bare call is a pure function of these arguments and stays memoised -- Invoke would remain blocked
+  // until an unrelated edit changed one of them.
+  const resolvedRoute = useExternalStoreSelector(
+    subscribeArchitectureCapabilities,
+    getArchitectureCapabilitiesSnapshot,
+    useCallback(
+      () => resolveInvocationRouteInput(routeInput, 'global', invocation, availabilityModels),
+      [availabilityModels, invocation, routeInput]
+    )
+  );
   const isConnected = backendConnectionStatus === 'connected';
   const sourceValues =
     invocation.sourceId === 'upscale'

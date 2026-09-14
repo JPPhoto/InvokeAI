@@ -19,7 +19,9 @@ vi.mock('@features/generation/react', () => ({
 }));
 vi.mock('@features/models', () => ({
   ensureModelsLoaded: () => Promise.resolve(),
-  useModelsSelector: (selector: (snapshot: unknown) => unknown) => selector({ models: [sdxlModel], status: 'loaded' }),
+  // One snapshot object, as the real store hands out. A fresh `models` array per render would change
+  // an input React Compiler memoises the route on, and re-resolve it by accident.
+  useModelsSelector: (selector: (snapshot: unknown) => unknown) => selector(modelsSnapshot),
 }));
 vi.mock('@workbench/activeInvocationSubmission', () => ({ submitActiveInvocation: () => Promise.resolve() }));
 vi.mock('@workbench/canvasInvocationPreparation', () => ({ useIsCanvasInvocationPreparing: () => false }));
@@ -37,6 +39,7 @@ import { createInitialWorkbenchState, workbenchReducer } from '@workbench/workbe
 import { useInvocationState } from './useInvocationState';
 
 const sdxlModel: MainModelConfig = { base: 'sdxl', key: 'sdxl-model', name: 'SDXL', type: 'main' };
+const modelsSnapshot = { models: [sdxlModel], status: 'loaded' };
 
 const buildProject = (): Project => {
   // The table is needed to derive a *valid* saved project; the point of the test is what happens
