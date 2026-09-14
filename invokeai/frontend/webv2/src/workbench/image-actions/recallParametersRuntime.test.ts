@@ -1,6 +1,7 @@
 import type { ComponentModelConfig } from '@features/generation/contracts';
 import type { ModelsSnapshot } from '@features/models';
 import type { SocketHub } from '@platform/transport/socketHub';
+import type { TFunction } from 'i18next';
 
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { getProjectWidgetValues } from '@workbench/widgetState';
@@ -79,7 +80,9 @@ const createRuntime = (
   store: ReturnType<typeof createWorkbenchStore>,
   hub: Pick<SocketHub, 'on'>,
   options: Partial<Parameters<typeof createRecallParametersRuntime>[0]> = {}
-) => createRecallParametersRuntime({ commands: store.commands, hub, queries: store.queries, ...options });
+) => createRecallParametersRuntime({ commands: store.commands, hub, queries: store.queries, t, ...options });
+
+const t = ((key: string) => key) as unknown as TFunction;
 
 seedArchitectureCapabilities();
 
