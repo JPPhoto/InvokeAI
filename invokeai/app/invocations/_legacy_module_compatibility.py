@@ -117,6 +117,6 @@ LEGACY_MODULE_MAP: dict[str, str] = {
 
 def forward_legacy_module(legacy_name: str, canonical_name: str) -> ModuleType:
     module = importlib.import_module(canonical_name)
-    logging.getLogger("InvokeAI").warning("Legacy invocation module %s moved to %s", legacy_name, canonical_name)
+    logging.getLogger("InvokeAI").info("Legacy invocation module %s moved to %s", legacy_name, canonical_name)
     sys.modules[legacy_name] = module
     return module
