@@ -233,5 +233,5 @@ export const getVideoWidgetValidationReasons = (
   return reasons;
 };
 
-export const resolveVideoSeed = (values: Pick<VideoWidgetValues, 'seed' | 'shouldRandomizeSeed'>): number =>
-  values.shouldRandomizeSeed ? Math.floor(Math.random() * SEED_MAX) : values.seed;
+export const resolveVideoSeed = (values: Pick<VideoWidgetValues, 'seed' | 'seedMode'>): number =>
+  values.seedMode === 'random' ? Math.floor(Math.random() * SEED_MAX) : values.seed;

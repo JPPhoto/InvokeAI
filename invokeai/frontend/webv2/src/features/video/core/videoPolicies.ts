@@ -1324,7 +1324,7 @@ export const getDefaultVideoSettings = (
     positivePromptHeightPx: 96,
     references: [],
     seed: Math.floor(Math.random() * SEED_MAX),
-    shouldRandomizeSeed: true,
+    seedMode: 'random',
     sourceVideo: null,
     steps: config.defaults.steps,
     targetResolution: config.defaults.targetResolution,

@@ -3,6 +3,7 @@ import type {
   ImageWithDims,
   MainModelConfig,
   ModelIdentifierConfig,
+  SeedMode,
   VaeModelConfig,
 } from '@features/generation/contracts';
 
@@ -144,7 +145,7 @@ export interface VideoSettings {
    */
   acceleratorLoraKeys: string[];
   seed: number;
-  shouldRandomizeSeed: boolean;
+  seedMode: SeedMode;
   loras: GenerateLora[];
   /** Optional VAE override; null uses the VAE bundled with the main model or component source. */
   vae: VaeModelConfig | null;

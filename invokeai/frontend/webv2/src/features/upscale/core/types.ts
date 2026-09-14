@@ -4,6 +4,7 @@ import type {
   ImageWithDims,
   MainModelConfig,
   ModelIdentifierConfig,
+  SeedMode,
   VaeModelConfig,
   VaePrecision,
 } from '@features/generation/contracts';
@@ -31,7 +32,7 @@ export interface UpscaleWidgetValues {
   scheduler: string;
   batchCount: number;
   seed: number;
-  shouldRandomizeSeed: boolean;
+  seedMode: SeedMode;
   clipSkip: number;
   vae: VaeModelConfig | null;
   vaePrecision: VaePrecision;

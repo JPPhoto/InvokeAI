@@ -443,7 +443,7 @@ export const buildVideoRecallSettings = ({
     const seed = getSeed(metadata);
 
     if (seed !== null) {
-      values = { ...values, seed, shouldRandomizeSeed: false };
+      values = { ...values, seed, seedMode: 'fixed' };
       fields.push('seed');
     }
   }

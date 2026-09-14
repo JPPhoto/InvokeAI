@@ -1,6 +1,6 @@
 import type { GenerateWidgetValues } from '@features/generation/contracts';
 import type { ModelConfig } from '@features/models';
-import type { QueueCompiledSubmission, QueueHistoryItemStatus, QueueSeedStep } from '@features/queue/contracts';
+import type { QueueCompiledSubmission, QueueHistoryItemStatus } from '@features/queue/contracts';
 import type { ProjectGraphState } from '@features/workflow/contracts';
 import type {
   CanvasDocumentContractV3,
@@ -3153,25 +3153,15 @@ const enqueueCompiledSnapshot = (
   // so `seed` is this submission's start. The plan fixes how the batch steps
   // from it and where the editable seed goes next; a submission that fails or
   // is cancelled later keeps its seeds — the sequence only ever moves forward.
-  const seedModeSettings = canvasGenerateSettings ?? generateSettings;
-  const seedPlan = seedModeSettings
+  const seedPlan = sourceGenerateSettings
     ? planSeedSubmission({
-        batchCount: seedModeSettings.batchCount,
+        batchCount: sourceGenerateSettings.batchCount,
         promptCount: expandedPositivePrompts?.length ?? 1,
         seedBehaviour: expandedSeedBehaviour ?? 'per-iteration',
-        seedMode: seedModeSettings.seedMode,
-        startSeed: seedModeSettings.seed,
+        seedMode: sourceGenerateSettings.seedMode,
+        startSeed: sourceGenerateSettings.seed,
       })
     : null;
-  // Upscale and Video keep their random toggle: on, the batch steps from the
-  // drawn seed; off, it holds the entered one.
-  const seedStep: QueueSeedStep = seedPlan
-    ? seedPlan.step
-    : sourceGenerateSettings &&
-        'shouldRandomizeSeed' in sourceGenerateSettings &&
-        sourceGenerateSettings.shouldRandomizeSeed
-      ? 1
-      : 0;
   const backendSubmission: QueueCompiledSubmission = !backendGraph
     ? { error: `${route.sourceId} queue item is missing a compiled backend graph.`, kind: 'invalid' }
     : route.sourceId === 'workflow'
@@ -3203,7 +3193,7 @@ const enqueueCompiledSnapshot = (
             seed: sourceGenerateSettings.seed,
             ...(expandedSeedBehaviour ? { seedBehaviour: expandedSeedBehaviour } : {}),
             seedNodeId: generate?.seedNodeId ?? 'seed',
-            seedStep,
+            seedStep: seedPlan?.step ?? 0,
           }
         : { error: `${route.sourceId} queue item is missing source submission metadata.`, kind: 'invalid' };
   const selectedGalleryBoardId = widgetStates.gallery?.values.selectedBoardId;
@@ -3284,7 +3274,7 @@ const enqueueCompiledSnapshot = (
   const advancedProject =
     seedPlan === null || seedPlan.nextSeed === null
       ? project
-      : updateProjectWidgetValues(project, 'generate', (values) =>
+      : updateProjectWidgetValues(project, route.sourceId === 'canvas' ? 'generate' : route.sourceId, (values) =>
           values.seed === seedPlan.startSeed && values.seedMode === seedPlan.seedMode
             ? { ...values, seed: seedPlan.nextSeed }
             : values

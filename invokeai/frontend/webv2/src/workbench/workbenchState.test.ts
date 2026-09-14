@@ -3350,6 +3350,71 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       expect(readSeed(next)).toBe(42);
     });
 
+    it('advances Upscale and Video seeds through the same boundary', () => {
+      const upscaleModels = [
+        createUpscaleModel('main', 'main', 'sd-1'),
+        createUpscaleModel('spandrel', 'spandrel_image_to_image', 'any'),
+        createUpscaleModel('tile', 'controlnet', 'sd-1', 'Tile ControlNet'),
+      ];
+      let state = workbenchReducer(createInitialWorkbenchState(), {
+        type: 'patchWidgetValues',
+        values: {
+          ...createDefaultUpscaleWidgetValues(upscaleModels),
+          batchCount: 2,
+          inputImage: { height: 64, image_name: 'input.png', width: 64 },
+          seed: 10,
+          seedMode: 'increment',
+        },
+        widgetId: 'upscale',
+      });
+
+      state = workbenchReducer(state, {
+        backendSupportsCancellation: true,
+        models: upscaleModels,
+        route: { destination: 'gallery', destinationLocked: false, sourceId: 'upscale', sourceLocked: false },
+        type: 'submitResolvedInvocationSnapshot',
+      });
+
+      expect(readSubmission(state)).toMatchObject({ batchCount: 2, seed: 10, seedStep: 1 });
+      expect(getProjectWidgetValues(getActiveProject(state), 'upscale').seed).toBe(12);
+      // Generate's own seed is not the one that moved.
+      expect(getProjectWidgetValues(getActiveProject(state), 'generate').seed).not.toBe(12);
+
+      const wanModel: ModelConfig = {
+        base: 'wan',
+        file_size: 1,
+        format: 'diffusers',
+        hash: 'wan-t2v-hash',
+        key: 'wan-t2v_a14b-diffusers',
+        name: 'Wan 2.2 t2v_a14b',
+        path: 'wan-t2v_a14b-diffusers',
+        source: 'wan-t2v_a14b-diffusers',
+        source_type: 'path',
+        type: 'main',
+        variant: 't2v_a14b',
+      };
+      state = workbenchReducer(createInitialWorkbenchState(), {
+        region: 'left',
+        type: 'toggleRegionWidget',
+        widgetId: 'video',
+      });
+      state = workbenchReducer(state, {
+        type: 'patchWidgetValues',
+        values: { batchCount: 3, model: wanModel, positivePrompt: 'a fox running', seed: 7, seedMode: 'decrement' },
+        widgetId: 'video',
+      });
+      state = workbenchReducer(state, { sourceId: 'video', type: 'setInvocationSource' });
+      state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
+      state = workbenchReducer(state, {
+        backendSupportsCancellation: true,
+        models: [wanModel],
+        type: 'submitInvocationSnapshot',
+      });
+
+      expect(readSubmission(state)).toMatchObject({ batchCount: 3, seed: 7, seedStep: -1 });
+      expect(getProjectWidgetValues(getActiveProject(state), 'video').seed).toBe(4);
+    });
+
     describe('from the canvas, which compiles outside the reducer', () => {
       const submitCanvas = (state: WorkbenchState, values: GenerateWidgetValues) =>
         workbenchReducer(state, {

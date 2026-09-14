@@ -6,6 +6,7 @@ import {
   isLoraModelConfig,
   isMainModelConfig,
   isModelIdentifierConfig,
+  isSeedMode,
   isVaeModelConfig,
   MAX_NEGATIVE_PROMPT_HEIGHT_PX,
   MAX_POSITIVE_PROMPT_HEIGHT_PX,
@@ -432,7 +433,12 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
     ),
     references,
     seed: hasFiniteNumber(values, 'seed') ? (values.seed as number) : 0,
-    shouldRandomizeSeed: typeof values.shouldRandomizeSeed === 'boolean' ? values.shouldRandomizeSeed : true,
+    // Values saved before seed modes carry the random toggle instead.
+    seedMode: isSeedMode(values.seedMode)
+      ? values.seedMode
+      : typeof values.shouldRandomizeSeed === 'boolean' && !values.shouldRandomizeSeed
+        ? 'fixed'
+        : 'random',
     sourceVideo,
     steps: hasFiniteNumber(values, 'steps') ? (values.steps as number) : SETTINGS_FALLBACKS.steps,
     targetResolution: isVideoTargetResolution(values.targetResolution)

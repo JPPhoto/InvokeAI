@@ -34,7 +34,7 @@ export const getVideoQueueRecallCapabilities = (
   dimensions: false,
   prompts: snapshot !== null || meta.positivePrompt !== undefined,
   remix: snapshot !== null,
-  seed: meta.seed !== undefined || (snapshot !== null && !snapshot.shouldRandomizeSeed),
+  seed: meta.seed !== undefined || (snapshot !== null && snapshot.seedMode !== 'random'),
 });
 
 export const buildQueueRecallValues = (
@@ -123,7 +123,7 @@ export const buildVideoQueueRecallPatch = (
       return null;
     }
     const values = cloneVideoWidgetValues(snapshot);
-    return kind === 'remix' ? { ...values, shouldRandomizeSeed: true } : values;
+    return kind === 'remix' ? { ...values, seedMode: 'random' } : values;
   }
   if (kind === 'prompts') {
     if (snapshot) {
@@ -154,8 +154,8 @@ export const buildVideoQueueRecallPatch = (
   }
 
   if (kind === 'seed') {
-    const seed = meta.seed ?? (snapshot && !snapshot.shouldRandomizeSeed ? snapshot.seed : undefined);
-    return seed === undefined ? null : { seed, shouldRandomizeSeed: false };
+    const seed = meta.seed ?? (snapshot && snapshot.seedMode !== 'random' ? snapshot.seed : undefined);
+    return seed === undefined ? null : { seed, seedMode: 'fixed' };
   }
 
   return null;
