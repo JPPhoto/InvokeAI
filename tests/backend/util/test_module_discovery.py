@@ -4,6 +4,7 @@ A walker that silently finds nothing is green forever, so these run it against a
 whose expected result is written out by hand — independent of any real package's layout.
 """
 
+import importlib
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -53,15 +54,29 @@ def test_skips_private_modules_and_pycache(tree: Path) -> None:
     assert not [n for n in found if "_private" in n or "__pycache__" in n or "stale" in n]
 
 
-def test_reports_a_broken_subpackage(tree: Path) -> None:
-    """The default `walk_packages` behaviour is to swallow this, leaving the caller none the wiser."""
+def test_an_excluded_package_is_neither_imported_nor_descended_into(tree: Path) -> None:
+    """`walk_packages` imports a package to descend into it, so a `_disabled` package's initializer
+    ran -- and could register nodes or abort startup -- before its name was ever filtered."""
+    (tree / "_disabled").mkdir()
+    (tree / "_disabled" / "__init__.py").write_text("raise RuntimeError('imported')", encoding="utf-8")
+    (tree / "_disabled" / "node.py").write_text("", encoding="utf-8")
+
+    assert sorted(discover_modules(tree, "synthetic_pkg.")) == ["synthetic_pkg.flat", "synthetic_pkg.sub.nested"]
+    assert "synthetic_pkg._disabled" not in sys.modules
+
+
+def test_a_broken_subpackage_fails_when_its_modules_are_imported(tree: Path) -> None:
+    """Discovery imports nothing, so a broken initializer surfaces at the caller's import, with its
+    own error, rather than as a module that quietly does not exist."""
     (tree / "sub" / "__init__.py").write_text("raise RuntimeError('boom')", encoding="utf-8")
-    with pytest.raises(ImportError, match="synthetic_pkg.sub"):
-        discover_modules(tree, "synthetic_pkg.")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        for name in discover_modules(tree, "synthetic_pkg."):
+            importlib.import_module(name)
 
 
 def test_reports_a_directory_with_no_init(tree: Path) -> None:
-    """`walk_packages` does not descend into one, and does not complain either.
+    """The walk does not descend into one, and does not complain either.
 
     The result is a module that is simply never imported and a registration that silently never
     happens — the failure this whole module exists to make impossible.

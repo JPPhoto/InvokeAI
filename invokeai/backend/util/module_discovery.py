@@ -12,19 +12,6 @@ from collections.abc import Iterator
 from pathlib import Path
 
 
-def _reraise(name: str) -> None:
-    """Refuse to continue past a subpackage that would not import.
-
-    `pkgutil.walk_packages` swallows such errors by default, which turns "this package's
-    `__init__.py` is broken" into "the things it holds quietly do not exist" — the exact failure
-    mode a registry filled by import is meant to avoid.
-    """
-    # `walk_packages` calls this from inside its own `except ImportError`, so the original failure
-    # is chained implicitly and the traceback shows the offending file and line above this message.
-    # An explicit `raise ... from` would need `sys.exc_info()` and would only change the wording.
-    raise ImportError(f"Failed to walk package {name!r} while discovering modules.")
-
-
 def _holds_modules(directory: Path) -> bool:
     """Whether `directory` contains any module that discovery would be expected to reach.
 
@@ -40,7 +27,7 @@ def _holds_modules(directory: Path) -> bool:
 def _orphan_directories(package_dir: Path) -> Iterator[Path]:
     """Directories under `package_dir` that hold modules but have no `__init__.py`.
 
-    `pkgutil.walk_packages` does not descend into such a directory, and says nothing about it: every
+    The walk does not descend into such a directory, and says nothing about it: every
     module below it is simply absent from the result, which is indistinguishable from there being
     nothing to find. That is the discovery mistake that actually happens — one `__init__.py`
     forgotten in a new subdirectory — so it is looked for rather than waited for.
@@ -58,19 +45,21 @@ def discover_modules(root: Path, prefix: str) -> list[str]:
     """Fully-qualified names of every non-private module in the package tree rooted at `root`.
 
     `prefix` is the dotted path of the package that lives at `root`, trailing dot included; it is
-    what the returned names are prefixed with, and what `walk_packages` uses to import subpackages
-    so it can descend into them.
+    what the returned names are prefixed with.
 
-    A path component starting with `_` excludes the module: that covers `__pycache__` and marks a
-    module as internal. Packages themselves are skipped — importing them is a side effect of the
-    walk, and it is their contents that carry the registrations.
+    A path component starting with `_` excludes the module and everything below it: that covers
+    `__pycache__` and marks a module or package as internal. Packages themselves are not returned --
+    importing a module imports its packages, and it is their contents that carry the registrations.
 
-    A directory holding modules but no `__init__.py` raises: `walk_packages` would skip it in
-    silence, which is the one discovery failure that produces no symptom at all.
+    A directory holding modules but no `__init__.py` raises: the walk would skip it in silence,
+    which is the one discovery failure that produces no symptom at all.
 
-    Names only; importing them is the caller's job. Keeping the two apart is what lets the walk be
-    tested against a synthetic tree, which matters because a walker with a bug returns an empty list
-    and no test that merely asserts "some modules were found" would notice.
+    Names only, and nothing is imported to find them: `pkgutil.walk_packages` imports every package
+    to descend into it, which runs an excluded package's `__init__.py` before any filter can see its
+    name. Importing is the caller's job, so a broken package fails there, with its own traceback.
+    Keeping the two apart is also what lets the walk be tested against a synthetic tree, which
+    matters because a walker with a bug returns an empty list and no test that merely asserts "some
+    modules were found" would notice.
     """
     orphans = [d.relative_to(root).as_posix() for d in _orphan_directories(root)]
     if orphans:
@@ -80,10 +69,14 @@ def discover_modules(root: Path, prefix: str) -> list[str]:
             f"rename it with a leading underscore if it is not meant to be imported."
         )
 
-    names: list[str] = []
-    for info in pkgutil.walk_packages([str(root)], prefix=prefix, onerror=_reraise):
-        relative = info.name.removeprefix(prefix)
-        if info.ispkg or any(part.startswith("_") for part in relative.split(".")):
+    return list(_walk(root, prefix))
+
+
+def _walk(directory: Path, prefix: str) -> Iterator[str]:
+    for info in pkgutil.iter_modules([str(directory)]):
+        if info.name.startswith("_"):
             continue
-        names.append(info.name)
-    return names
+        if info.ispkg:
+            yield from _walk(directory / info.name, f"{prefix}{info.name}.")
+        else:
+            yield f"{prefix}{info.name}"
