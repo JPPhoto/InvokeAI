@@ -2,10 +2,10 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 859335,
+        "brotliBytes": 859351,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 858507,
+        "gzipBytes": 858522,
         "imageRawBytes": 156376,
         "initialRawBytes": 2010911,
         "largestAssetRawBytes": 747218,
@@ -311,10 +311,10 @@
         ]
       },
       "limits": {
-        "brotliBytes": 867929,
+        "brotliBytes": 867945,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 867093,
+        "gzipBytes": 867108,
         "imageRawBytes": 157940,
         "initialRawBytes": 2031021,
         "largestAssetRawBytes": 754691,
@@ -329,15 +329,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1182691,
+        "brotliBytes": 1183096,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1176792,
+        "gzipBytes": 1177212,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2993632,
+        "initialRawBytes": 2994831,
         "largestAssetRawBytes": 747218,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 133058,
+        "ownedRawBytes": 134160,
         "requestCount": 106,
         "scriptRequestCount": 90,
         "sourceOwners": [
@@ -828,6 +828,7 @@
           "source:src/workbench/hotkeys/targetWidget.ts",
           "source:src/workbench/iconResolver.tsx",
           "source:src/workbench/image-actions/recallParametersBridge.ts",
+          "source:src/workbench/image-actions/useFindGalleryItem.ts",
           "source:src/workbench/invocation.ts",
           "source:src/workbench/invocationSubmit.ts",
           "source:src/workbench/launchpad/HelpMenu.tsx",
@@ -1026,15 +1027,15 @@
         ]
       },
       "limits": {
-        "brotliBytes": 1194518,
+        "brotliBytes": 1194927,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 1188560,
+        "gzipBytes": 1188985,
         "imageRawBytes": 157940,
-        "initialRawBytes": 3023569,
+        "initialRawBytes": 3024780,
         "largestAssetRawBytes": 754691,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 133058,
+        "ownedRawBytes": 134160,
         "requestCount": 106,
         "scriptRequestCount": 90
       },
@@ -1043,7 +1044,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-13",
+  "capturedAt": "2026-09-14",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",
