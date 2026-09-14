@@ -185,6 +185,9 @@
       "saturationValue": "Saturation and value",
       "saturationValueText": "Saturation {{saturation}}%, value {{value}}%"
     },
+    "scrubber": {
+      "editValue": "Edit {{label}}"
+    },
     "configure": "Configure",
     "copy": "Copy",
     "crop": "Crop",
