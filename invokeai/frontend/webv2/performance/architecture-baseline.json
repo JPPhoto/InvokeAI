@@ -2,12 +2,12 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 859342,
+        "brotliBytes": 859335,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 858484,
+        "gzipBytes": 858507,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2010846,
+        "initialRawBytes": 2010911,
         "largestAssetRawBytes": 747218,
         "otherAssetRawBytes": 0,
         "ownedRawBytes": 74443,
@@ -316,15 +316,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1182294,
+        "brotliBytes": 1182691,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1176418,
+        "gzipBytes": 1176792,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2992581,
+        "initialRawBytes": 2993632,
         "largestAssetRawBytes": 747218,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 132979,
+        "ownedRawBytes": 133058,
         "requestCount": 106,
         "scriptRequestCount": 90,
         "sourceOwners": [
@@ -1017,7 +1017,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-11",
+  "capturedAt": "2026-09-13",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",
