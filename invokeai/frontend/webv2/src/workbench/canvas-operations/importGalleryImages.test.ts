@@ -736,6 +736,33 @@ describe('importGalleryImagesToCanvas', () => {
   });
 });
 
+describe('importGalleryImagesToCanvas with a table that does not describe the architecture', () => {
+  it('refuses a resized import rather than uploading at fallback dimensions for that model', async () => {
+    // A backend build that has no row for the project's architecture answers with the same fallback
+    // 1024 / grid 8 for that one model as a missing table does for all of them, and the upload is
+    // just as irreversible.
+    const { project, state } = withProject((value) => setModel(value, 'sd-1'));
+    const fetchImage = vi.fn<typeof fetch>();
+    const uploadImage = vi.fn<typeof uploadCanvasImage>();
+
+    setArchitectureCapabilities(architectureCapabilitiesFixture.filter((row) => row.base !== 'sd-1'));
+    const result = await importGalleryImagesToCanvas({
+      destination: 'control-resized',
+      applyCanvasMutation: () => undefined,
+      engine: engine(project.id),
+      fetchImage,
+      ...queriesFor(() => state),
+      images: [image('wide.png', 1600, 900)],
+      project,
+      uploadImage,
+    });
+
+    expect(result).toEqual({ status: 'capabilities-unavailable' });
+    expect(fetchImage).not.toHaveBeenCalled();
+    expect(uploadImage).not.toHaveBeenCalled();
+  });
+});
+
 describe('importGalleryImagesToCanvas before the capability table arrives', () => {
   it('refuses a resized import rather than uploading at fallback dimensions', async () => {
     // The resize target is the model's native size and grid, and this is the one import path whose

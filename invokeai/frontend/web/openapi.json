@@ -17799,9 +17799,6 @@
             "title": "Variant",
             "description": "Null for the architecture's own row. A variant row overrides it."
           },
-          "modality": {
-            "$ref": "#/components/schemas/ArchitectureModality"
-          },
           "features": {
             "$ref": "#/components/schemas/ArchitectureFeatures"
           },
@@ -17829,7 +17826,7 @@
           }
         },
         "type": "object",
-        "required": ["base", "modality", "features"],
+        "required": ["base", "features"],
         "title": "ArchitectureCapabilities",
         "description": "One row of the table."
       },
@@ -17842,11 +17839,6 @@
             "type": "integer",
             "title": "Dimension Grid",
             "description": "Width and height must be a multiple of this. A variant row may carry its own."
-          },
-          "spatial_compression": {
-            "type": "integer",
-            "title": "Spatial Compression",
-            "description": "How much smaller a latent is than the image, per side."
           },
           "guidance_label": {
             "type": "string",
@@ -17922,6 +17914,7 @@
           "regional_negative": {
             "type": "boolean",
             "title": "Regional Negative",
+            "description": "Whether a region's negative prompt is masked, rather than applied globally.",
             "default": false
           },
           "clip_skip_max": {
@@ -17962,50 +17955,9 @@
           }
         },
         "type": "object",
-        "required": ["negative_prompt", "dimension_grid", "spatial_compression", "guidance_label", "guidance_min"],
+        "required": ["negative_prompt", "dimension_grid", "guidance_label", "guidance_min"],
         "title": "ArchitectureFeatures",
         "description": "What a UI may offer for this architecture."
-      },
-      "ArchitectureModality": {
-        "properties": {
-          "modes": {
-            "items": {
-              "type": "string",
-              "enum": [
-                "txt2img",
-                "img2img",
-                "inpaint",
-                "outpaint",
-                "t2v",
-                "i2v",
-                "lf2v",
-                "flf2v",
-                "interpolate",
-                "extend_video",
-                "ref2v"
-              ]
-            },
-            "type": "array",
-            "title": "Modes",
-            "description": "Sorted. Empty means it generates nothing on its own."
-          },
-          "metadata_slug": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metadata Slug",
-            "description": "Prefix its mode strings carry in image metadata; null means unprefixed."
-          }
-        },
-        "type": "object",
-        "required": ["modes"],
-        "title": "ArchitectureModality",
-        "description": "What this architecture can produce, and what it calls it in image metadata."
       },
       "ArchitectureVae": {
         "properties": {
@@ -18020,7 +17972,7 @@
         "type": "object",
         "required": ["accepted"],
         "title": "ArchitectureVae",
-        "description": "Which VAEs an architecture's decode accepts, beyond its own base.\n\nServed because the clients keep their own copy of this and it drifts: widening a backend list\nwithout the picker leaves a VAE that loads but cannot be chosen."
+        "description": "Which VAEs an architecture's decode accepts, beyond its own base.\n\nServed because the clients keep their own copy of this and it drifts: widening a backend list\nwithout the picker leaves a VAE that loads but cannot be chosen. A variant row carries its own\nlist where its decoder differs -- Wan TI2V-5B takes the 48-channel VAE, A14B the 16-channel one."
       },
       "BaseMetadata": {
         "properties": {

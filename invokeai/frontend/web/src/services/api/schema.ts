@@ -5171,7 +5171,6 @@ export type components = {
              * @description Null for the architecture's own row. A variant row overrides it.
              */
             variant?: string | null;
-            modality: components["schemas"]["ArchitectureModality"];
             features: components["schemas"]["ArchitectureFeatures"];
             /** @description Recommended generation parameters, if the architecture has any. */
             defaults?: components["schemas"]["MainModelDefaultSettings"] | null;
@@ -5189,11 +5188,6 @@ export type components = {
              * @description Width and height must be a multiple of this. A variant row may carry its own.
              */
             dimension_grid: number;
-            /**
-             * Spatial Compression
-             * @description How much smaller a latent is than the image, per side.
-             */
-            spatial_compression: number;
             /**
              * Guidance Label
              * @description What to call the guidance slider: 'CFG' or 'Guidance'.
@@ -5241,6 +5235,7 @@ export type components = {
             supports_regional_guidance?: boolean;
             /**
              * Regional Negative
+             * @description Whether a region's negative prompt is masked, rather than applied globally.
              * @default false
              */
             regional_negative?: boolean;
@@ -5273,27 +5268,12 @@ export type components = {
             vae_precision?: boolean;
         };
         /**
-         * ArchitectureModality
-         * @description What this architecture can produce, and what it calls it in image metadata.
-         */
-        ArchitectureModality: {
-            /**
-             * Modes
-             * @description Sorted. Empty means it generates nothing on its own.
-             */
-            modes: ("txt2img" | "img2img" | "inpaint" | "outpaint" | "t2v" | "i2v" | "lf2v" | "flf2v" | "interpolate" | "extend_video" | "ref2v")[];
-            /**
-             * Metadata Slug
-             * @description Prefix its mode strings carry in image metadata; null means unprefixed.
-             */
-            metadata_slug?: string | null;
-        };
-        /**
          * ArchitectureVae
          * @description Which VAEs an architecture's decode accepts, beyond its own base.
          *
          *     Served because the clients keep their own copy of this and it drifts: widening a backend list
-         *     without the picker leaves a VAE that loads but cannot be chosen.
+         *     without the picker leaves a VAE that loads but cannot be chosen. A variant row carries its own
+         *     list where its decoder differs -- Wan TI2V-5B takes the 48-channel VAE, A14B the 16-channel one.
          */
         ArchitectureVae: {
             /** Accepted */

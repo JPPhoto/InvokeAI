@@ -407,10 +407,11 @@ class VAELoader(GenericDiffusersLoader):
 
         sd = _read_checkpoint(config.path)
 
-        if self._torch_dtype is not None:
-            for k in list(sd.keys()):
-                if sd[k].is_floating_point():
-                    sd[k] = sd[k].to(self._torch_dtype)
+        # The same autoencoder as the Wan-family layout above, so the same precision policy.
+        dtype = _wan_family_dtype(self._torch_dtype)
+        for k in list(sd.keys()):
+            if sd[k].is_floating_point():
+                sd[k] = sd[k].to(dtype)
 
         new_sd_size = sum(t.nelement() * t.element_size() for t in sd.values())
         self._ram_cache.make_room(new_sd_size)

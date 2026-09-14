@@ -1,10 +1,13 @@
 import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
 
 import { Icon } from '@chakra-ui/react';
+import { getArchitectureCapabilitiesSnapshot, subscribeArchitectureCapabilities } from '@features/generation/runtime';
 import { useModelsSelector } from '@features/models';
+import { useExternalStoreSelector } from '@platform/state/selectors';
 import { Tooltip } from '@platform/ui';
 import { getControlLayerAttentionReason } from '@workbench/controlLayerChecks';
 import { TriangleAlertIcon } from 'lucide-react';
+import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useSelectedMainModel } from './useSelectedMainModel';
@@ -25,11 +28,21 @@ export const ControlLayerWarningIcon = ({
   const { t } = useTranslation();
   const models = useModelsSelector((snapshot) => snapshot.models);
   const mainModel = useSelectedMainModel();
+  // Read inside the store's selector: whether the adapter kind is supported comes from the capability
+  // table, and a call memoised on the layer and model would keep flagging "unsupported adapter" after a
+  // retried load succeeded, until something unrelated re-rendered the row.
+  const reason = useExternalStoreSelector(
+    subscribeArchitectureCapabilities,
+    getArchitectureCapabilitiesSnapshot,
+    useCallback(
+      () =>
+        layer.type === 'control' && contributing && mainModel
+          ? getControlLayerAttentionReason(layer, mainModel.base, models)
+          : null,
+      [contributing, layer, mainModel, models]
+    )
+  );
 
-  if (layer.type !== 'control' || !contributing || !mainModel) {
-    return null;
-  }
-  const reason = getControlLayerAttentionReason(layer, mainModel.base, models);
   if (!reason) {
     return null;
   }

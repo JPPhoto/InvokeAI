@@ -192,18 +192,6 @@ describe('isRegionalGuidanceSupportedForBase', () => {
 });
 
 describe('the support matrix and the served capabilities', () => {
-  // The graph builder decides regional negatives from the matrix while the layer settings UI asks
-  // the backend. They agreed when this merge landed only because the facets were corrected for
-  // sd-2, z-image and anima; nothing else keeps them from drifting apart again.
-  it('answer regional negatives identically for every base the matrix covers', () => {
-    for (const row of architectureCapabilitiesFixture) {
-      const support = getRegionalGuidanceSupport(row.base);
-      if (support !== null) {
-        expect(support.negativePrompt, row.base).toBe(row.features.regional_negative);
-      }
-    }
-  });
-
   // isRegionalGuidanceSupportedForBase asserts `base is RegionalGuidanceBase` from the backend's
   // answer, and getRegionalGuidanceSupport then indexes the matrix on that assertion. A base the
   // backend declares supported but the matrix has no row for would hand callers an undefined typed

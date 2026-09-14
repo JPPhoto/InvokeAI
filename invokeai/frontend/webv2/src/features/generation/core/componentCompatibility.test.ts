@@ -18,7 +18,6 @@ import {
   isSelfContainedSDNQPipeline,
   isVaeAcceptedByBase,
   isVaeCompatibleWithGenerateModel,
-  isVaeForBases,
   type GenerateComponentCandidate,
 } from './componentCompatibility';
 
@@ -187,28 +186,40 @@ describe('Generate component compatibility', () => {
 
     expect(getCompatibleSelectedComponentKey(staleVae, isVaeAcceptedByBase('anima'))).toBeNull();
   });
-});
 
-const vae = (base: string) => ({ base, type: 'vae' }) as Parameters<ReturnType<typeof isVaeForBases>>[0];
+  it('offers each Wan variant only the VAE width its decode accepts', () => {
+    // `wan_model_loader` refuses a 48-channel VAE for A14B and a 16-channel one for TI2V-5B. The
+    // served base row used to accept both widths for every variant, so both pickers offered a VAE
+    // that failed at enqueue.
+    const wanMain = (variant: string) =>
+      ({ base: 'wan', key: `wan-${variant}`, name: `Wan ${variant}`, type: 'main', variant }) as GenerateModelConfig;
+    const wanVae = (latentChannels: number) =>
+      ({
+        base: 'wan',
+        key: `wan-vae-${latentChannels}`,
+        latent_channels: latentChannels,
+        name: 'Wan VAE',
+        type: 'vae',
+      }) as VaeModelConfig;
 
-describe('isVaeForBases', () => {
-  it('matches a VAE whose base is listed', () => {
-    expect(isVaeForBases(['flux'])(vae('flux'))).toBe(true);
-    expect(isVaeForBases(['flux'])(vae('sdxl'))).toBe(false);
-  });
-
-  it('an empty base list matches nothing (no all-pass escape hatch)', () => {
-    expect(isVaeForBases([])(vae('flux'))).toBe(false);
-  });
-
-  it('never matches a non-vae model', () => {
-    expect(isVaeForBases(['flux'])({ base: 'flux', type: 'main' } as never)).toBe(false);
+    expect(isVaeCompatibleWithGenerateModel(wanMain('i2v_a14b'), wanVae(16))).toBe(true);
+    expect(isVaeCompatibleWithGenerateModel(wanMain('i2v_a14b'), wanVae(48))).toBe(false);
+    expect(isVaeCompatibleWithGenerateModel(wanMain('ti2v_5b'), wanVae(48))).toBe(true);
+    expect(isVaeCompatibleWithGenerateModel(wanMain('ti2v_5b'), wanVae(16))).toBe(false);
   });
 });
 
 describe('the VAE filters and the backend declarations', () => {
-  const mainOf = (base: string) =>
-    ({ base, key: `${base}-main`, name: base, type: 'main' as const }) as unknown as GenerateModelConfig;
+  // With the row's variant: a variant row states what *that* variant accepts, which for Wan TI2V-5B
+  // is a different VAE from the one its base row names.
+  const mainOf = (base: string, variant: string | null = null) =>
+    ({
+      base,
+      key: `${base}-main`,
+      name: base,
+      type: 'main' as const,
+      ...(variant === null ? {} : { variant }),
+    }) as unknown as GenerateModelConfig;
 
   const vaeOf = (base: string, latentChannels?: number) =>
     ({
@@ -237,7 +248,7 @@ describe('the VAE filters and the backend declarations', () => {
         expect(
           // Only wan distinguishes VAEs by latent width; the others leave it null.
           isVaeCompatibleWithGenerateModel(
-            mainOf(row.base),
+            mainOf(row.base, row.variant),
             vaeOf(accepted.base, accepted.latent_channels ?? undefined)
           ),
           `${row.base} should accept a VAE registered under ${accepted.base}`
@@ -261,7 +272,7 @@ describe('the VAE filters and the backend declarations', () => {
           continue;
         }
         expect(
-          isVaeCompatibleWithGenerateModel(mainOf(row.base), vaeOf(base)),
+          isVaeCompatibleWithGenerateModel(mainOf(row.base, row.variant), vaeOf(base)),
           `${row.base} should refuse a VAE registered under ${base}`
         ).toBe(false);
       }
@@ -277,7 +288,7 @@ describe('the VAE filters and the backend declarations', () => {
           continue;
         }
         expect(
-          isVaeCompatibleWithGenerateModel(mainOf(row.base), vaeOf(entry.base, otherWidth)),
+          isVaeCompatibleWithGenerateModel(mainOf(row.base, row.variant), vaeOf(entry.base, otherWidth)),
           `${row.base} should refuse a ${otherWidth}-channel ${entry.base} VAE`
         ).toBe(false);
       }

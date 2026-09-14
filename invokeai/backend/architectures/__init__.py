@@ -9,7 +9,6 @@ from invokeai.backend.architectures import facets as facets  # noqa: F401  (impo
 from invokeai.backend.architectures.capabilities import (
     ArchitectureCapabilities,
     ArchitectureFeatures,
-    ArchitectureModality,
     NegativePromptPolicy,
     architecture_capabilities,
 )
@@ -61,7 +60,6 @@ from invokeai.backend.architectures.registry import (
 __all__ = [
     "ArchitectureCapabilities",
     "ArchitectureFeatures",
-    "ArchitectureModality",
     "NegativePromptPolicy",
     "architecture_capabilities",
     "ArchitectureError",

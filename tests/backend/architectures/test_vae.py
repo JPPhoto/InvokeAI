@@ -10,11 +10,11 @@ import pytest
 
 from invokeai.app.invocations.baseinvocation import InvocationRegistry
 from invokeai.app.services.shared.graph import Graph  # noqa: F401 -- imports every invocation
-from invokeai.backend.architectures import generative_bases, get
+from invokeai.backend.architectures import architecture_capabilities, generative_bases, get
 from invokeai.backend.architectures.facets.latent_space import LatentSpace, LatentSpaceFacet
 from invokeai.backend.architectures.facets.vae import VaeCompatibility, VaeFacet, accepts_vae
 from invokeai.backend.architectures.registry import require
-from invokeai.backend.model_manager.taxonomy import BaseModelType
+from invokeai.backend.model_manager.taxonomy import BaseModelType, WanVariantType
 
 # The loader that owns each architecture's VAE input. Architectures absent from this map take no
 # standalone VAE: the SD family overrides it through model settings instead.
@@ -152,24 +152,59 @@ def test_every_accepted_vae_shares_the_architectures_latent_space() -> None:
             continue
 
         own = require(base, LatentSpaceFacet)
-        own_spaces = (own.primary, *own.alternates)
 
-        for entry in sorted(facet.accepted, key=_sort_key):
-            space = _declared_latent_space(entry.base, entry.latent_channels)
-            if space is None:
-                violations.append(
-                    f"{base.value} accepts {entry.base.value} at {entry.latent_channels} channels, "
-                    f"but {entry.base.value} declares no such latent space"
-                )
-            elif space not in own_spaces:
-                violations.append(
-                    f"{base.value} denoises in {own.primary.channels}ch/"
-                    f"{own.primary.spatial_compression}x but accepts a {entry.base.value} VAE, "
-                    f"whose latent space is a different basis of {space.channels}ch/"
-                    f"{space.spatial_compression}x"
-                )
+        # Per variant, against the one space that variant denoises in -- not against any space the
+        # architecture declares. Against the union, Wan A14B accepting TI2V-5B's 48-channel VAE
+        # passed, and `wan_model_loader` rejects exactly that pairing.
+        for variant in (None, *facet.by_variant):
+            expected = own.resolve_variant(variant)
+            label = base.value if variant is None else f"{base.value}/{variant.value}"
+
+            for entry in sorted(facet.resolve(variant), key=_sort_key):
+                space = _declared_latent_space(entry.base, entry.latent_channels)
+                if space is None:
+                    violations.append(
+                        f"{label} accepts {entry.base.value} at {entry.latent_channels} channels, "
+                        f"but {entry.base.value} declares no such latent space"
+                    )
+                elif space != expected:
+                    violations.append(
+                        f"{label} denoises in {expected.channels}ch/{expected.spatial_compression}x but "
+                        f"accepts a {entry.base.value} VAE, whose latent space is a different basis of "
+                        f"{space.channels}ch/{space.spatial_compression}x"
+                    )
 
     assert violations == []
+
+
+def test_wan_offers_each_variant_only_the_vae_its_decode_accepts() -> None:
+    """`wan_model_loader` and `wan_l2i` refuse a 48-channel VAE for A14B and a 16-channel one for
+    TI2V-5B. The served rows said both widths were fine for both, so the variant row stated a
+    pairing that fails at enqueue -- the one fact `latent_channels` is on the contract for."""
+    assert accepts_vae(BaseModelType.Wan, BaseModelType.Wan, 16) is True
+    assert accepts_vae(BaseModelType.Wan, BaseModelType.Wan, 48) is False
+    assert accepts_vae(BaseModelType.Wan, BaseModelType.Wan, 48, WanVariantType.TI2V_5B) is True
+    assert accepts_vae(BaseModelType.Wan, BaseModelType.Wan, 16, WanVariantType.TI2V_5B) is False
+
+    served = {
+        row.variant: [(a.base, a.latent_channels) for a in row.vae.accepted]
+        for row in architecture_capabilities()
+        if row.base is BaseModelType.Wan and row.vae is not None
+    }
+    assert served == {None: [(BaseModelType.Wan, 16)], "ti2v_5b": [(BaseModelType.Wan, 48)]}
+
+
+def test_a_variant_mapping_that_is_never_read_or_accepts_nothing_is_refused_at_declaration() -> None:
+    """An empty set is served as `accepted: []` and leaves the picker with nothing to offer for that
+    variant, with nothing pointing at the facet; a None key is dead weight `resolve` never reads."""
+    wan16 = frozenset({VaeCompatibility(BaseModelType.Wan, latent_channels=16)})
+
+    with pytest.raises(ValueError, match="None key"):
+        VaeFacet(wan16, by_variant={None: wan16})  # type: ignore[dict-item]
+    with pytest.raises(ValueError, match="ti2v_5b"):
+        VaeFacet(wan16, by_variant={WanVariantType.TI2V_5B: frozenset()})
+    with pytest.raises(ValueError, match="no VAE at all"):
+        VaeFacet(frozenset())
 
 
 def test_the_facet_is_only_declared_where_it_says_something_new() -> None:
@@ -184,8 +219,10 @@ def test_the_facet_is_only_declared_where_it_says_something_new() -> None:
         facet = get(base, VaeFacet)
         if facet is None:
             continue
+        # Across every variant: a channel constraint that lives only in `by_variant` still says something.
+        entries = facet.accepted.union(*facet.by_variant.values())
         says_nothing_new = facet.accepted_bases == frozenset({base}) and all(
-            entry.latent_channels is None for entry in facet.accepted
+            entry.latent_channels is None for entry in entries
         )
         if says_nothing_new:
             redundant.append(base.value)

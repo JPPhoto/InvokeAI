@@ -97,9 +97,9 @@ def test_reference_images_and_the_one_variant_condition() -> None:
 
 
 def test_regional_guidance_and_its_negative_subset() -> None:
-    """Transcribed from `REGIONAL_GUIDANCE_SUPPORT` in webv2's `addRegionalGuidance.ts`, which is
-    the only place these two facts live today -- neither field is served in a form the frontend
-    fixture pins, so nothing else cross-checks them.
+    """Both are served, and webv2 builds its regional graph from them: `supports_regional_guidance`
+    decides whether a region reaches the graph at all, `regional_negative` whether its negative
+    prompt and auto-negative do. A wrong declaration here is a region silently applied globally.
 
     Regional negative prompts are a strict subset: only the SD family's `compel` /
     `sdxl_compel_prompt` path masks both prompt polarities. The FLUX / FLUX.2 / Krea-2 / Z-Image /

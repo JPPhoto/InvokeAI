@@ -947,6 +947,40 @@ describe('component policies', () => {
     ).toBe(5);
   });
 
+  it('validates the reference image count against the served limit, not a local default', () => {
+    // Every image base serves 5 today, which is also the old local default -- so a table that serves
+    // a different number is the only way to tell "reads the table" from "happens to agree with it".
+    setArchitectureCapabilities(
+      architectureCapabilitiesFixture.map((row) =>
+        row.base === 'sdxl' ? { ...row, features: { ...row.features, max_reference_images: 2 } } : row
+      )
+    );
+    const model = createModel('sdxl');
+    const ipAdapterReference = (index: number) => ({
+      config: {
+        beginEndStepPct: [0, 1] as [number, number],
+        clipVisionModel: 'ViT-H' as const,
+        image: referenceImage,
+        method: 'full' as const,
+        model: sdxlIpAdapter,
+        type: 'ip_adapter' as const,
+        weight: 1,
+      },
+      id: `ref-${index}`,
+      isEnabled: true,
+    });
+    const countReasons = (count: number) =>
+      getGenerationValidationReasons(
+        model,
+        createSettings(model, {
+          referenceImages: Array.from({ length: count }, (_, index) => ipAdapterReference(index)),
+        })
+      ).filter((reason) => reason.startsWith('Generate supports at most'));
+
+    expect(countReasons(2)).toEqual([]);
+    expect(countReasons(3)).toEqual(['Generate supports at most 2 reference images for sdxl model.']);
+  });
+
   it('rejects unsupported reference image configs for the selected model', () => {
     const model = createModel('sd-3');
 

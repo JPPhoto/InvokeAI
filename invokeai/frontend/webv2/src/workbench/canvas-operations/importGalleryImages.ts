@@ -9,6 +9,7 @@ import { getArchitectureCapabilitiesSnapshot } from '@features/generation/runtim
 import {
   calculateNewSize,
   getGenerationDimensions,
+  isArchitectureDescribed,
   normalizeGenerateWidgetValues,
 } from '@features/generation/settings';
 import { getModelsSnapshot } from '@features/models';
@@ -282,8 +283,14 @@ export const importGalleryImagesToCanvas = async (options: {
       // whose mistake is irreversible: the resized asset is uploaded to the server and becomes a
       // layer. Without the table `getGenerationDimensions` answers 1024 / grid 8 for every
       // architecture, so an SD-1 project would upload four times the area it asked for and a
-      // CogView 4 project an off-grid layer. Refuse instead, the way the Invoke gate does.
-      if (getArchitectureCapabilitiesSnapshot().revision === 0) {
+      // CogView 4 project an off-grid layer. Refuse instead, the way the Invoke gate does -- also
+      // when the table is there but has no row for the selected architecture, which is the same
+      // fallback answer for that one model.
+      const targetModel = normalizeGenerateWidgetValues(getProjectWidgetValues(project, 'generate'))?.model;
+      if (
+        getArchitectureCapabilitiesSnapshot().revision === 0 ||
+        (targetModel !== undefined && !isArchitectureDescribed(targetModel))
+      ) {
         return { status: 'capabilities-unavailable' };
       }
 

@@ -24,14 +24,9 @@ export interface ArchitectureCapabilitiesRow {
   base: string;
   /** Null for the architecture's own row. A variant row overrides it. */
   variant: string | null;
-  modality: {
-    modes: string[];
-    metadata_slug: string | null;
-  };
   features: {
     negative_prompt: { visible: boolean; usage: NegativePromptUsage };
     dimension_grid: number;
-    spatial_compression: number;
     guidance_label: GuidanceLabel | (string & {});
     /** The floor the denoise node enforces on the guidance field; `0` where it enforces none. */
     guidance_min: number;
@@ -68,7 +63,8 @@ export interface ArchitectureCapabilitiesRow {
   /**
    * Which VAEs this architecture's decode accepts beyond its own base, or null where it accepts
    * only its own. `latent_channels` is null unless the base ships VAEs of more than one width;
-   * today only `wan` does, and its two are different decoders.
+   * today only `wan` does, and its two are different decoders -- which is why the `ti2v_5b` row
+   * carries its own list.
    */
   vae: {
     accepted: { base: string; latent_channels: number | null }[];

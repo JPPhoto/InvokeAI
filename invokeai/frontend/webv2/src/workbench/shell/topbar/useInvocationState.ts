@@ -12,7 +12,7 @@ import {
   sanitizeDynamicPromptsConfig,
 } from '@features/generation/settings';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models';
-import { useInvocationTemplatesSelector } from '@features/workflow/react';
+import { getInvocationTemplatesSnapshot, subscribeInvocationTemplates } from '@features/workflow/react';
 import { localizeForLoopValidationReason } from '@features/workflow/utility';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { useExternalStoreSelector } from '@platform/state/selectors';
@@ -34,6 +34,40 @@ import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const selectInvocationRouteInput = createInvocationRouteInputSelector();
+
+/**
+ * Route resolution reads two stores imperatively: the capability table (Generate validation fails
+ * closed without it) and the invocation templates (workflow readiness). The selector that resolves
+ * the route is only re-run when its snapshot changes, so the snapshot has to change with either --
+ * a templates load that lands after the table would otherwise leave "Node definitions are still
+ * loading." on Invoke until an unrelated edit.
+ */
+const subscribeRouteSources = (listener: () => void): (() => void) => {
+  const unsubscribeCapabilities = subscribeArchitectureCapabilities(listener);
+  const unsubscribeTemplates = subscribeInvocationTemplates(listener);
+
+  return () => {
+    unsubscribeCapabilities();
+    unsubscribeTemplates();
+  };
+};
+
+let routeSources: {
+  capabilities: ReturnType<typeof getArchitectureCapabilitiesSnapshot>;
+  templates: ReturnType<typeof getInvocationTemplatesSnapshot>;
+} | null = null;
+
+/** Referentially stable until one of the two stores publishes a new snapshot. */
+const getRouteSourcesSnapshot = () => {
+  const capabilities = getArchitectureCapabilitiesSnapshot();
+  const templates = getInvocationTemplatesSnapshot();
+
+  if (routeSources?.capabilities !== capabilities || routeSources.templates !== templates) {
+    routeSources = { capabilities, templates };
+  }
+
+  return routeSources;
+};
 
 const areTypeIdSetsEqual = (left: ReadonlySet<WidgetTypeId>, right: ReadonlySet<WidgetTypeId>): boolean =>
   left.size === right.size && [...left].every((typeId) => right.has(typeId));
@@ -82,21 +116,18 @@ export const useInvocationState = (): InvocationState => {
   const isCanvasPreparing = useIsCanvasInvocationPreparing(routeInput.projectId);
   const isPreparing = invocation.sourceId === 'canvas' && isCanvasPreparing;
 
-  // Project-graph route validation reads the invocation templates imperatively;
-  // subscribing here keeps the resolved route live while they load.
-  useInvocationTemplatesSelector((snapshot) => snapshot.status);
   useMountEffect(() => {
     void ensureModelsLoaded();
   });
 
-  // `getGenerationValidationReasons` fails closed while the capability table is absent, so a load
-  // that only succeeds on retry has to reach Invoke on its own. The route is resolved inside the
-  // store's selector, like `useModelGridSize`: the table is core module state, so to React Compiler a
-  // bare call is a pure function of these arguments and stays memoised -- Invoke would remain blocked
-  // until an unrelated edit changed one of them.
+  // `getGenerationValidationReasons` fails closed while the capability table is absent, and workflow
+  // readiness while the node templates are, so either load -- including one that only succeeds on
+  // retry -- has to reach Invoke on its own. The route is resolved inside the stores' selector, like
+  // `useModelGridSize`: both are module state, so to React Compiler a bare call is a pure function of
+  // these arguments and stays memoised until an unrelated edit changes one of them.
   const resolvedRoute = useExternalStoreSelector(
-    subscribeArchitectureCapabilities,
-    getArchitectureCapabilitiesSnapshot,
+    subscribeRouteSources,
+    getRouteSourcesSnapshot,
     useCallback(
       () => resolveInvocationRouteInput(routeInput, 'global', invocation, availabilityModels),
       [availabilityModels, invocation, routeInput]

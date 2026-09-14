@@ -10,14 +10,19 @@ Nor is it derivable from the VAE's `base` alone. The same physical file is regis
 tensors -- and a `wan` VAE may be either the 16-channel Wan 2.1 file (the same family again) or
 TI2V-5B's 48-channel Wan2.2-VAE, which fits nothing else. `VAE_Checkpoint_Wan_Config` already
 records `latent_channels`; this facet is what finally reads it.
+
+Nor, for Wan, is it a property of the architecture: A14B decodes with the 16-channel VAE and
+TI2V-5B with the 48-channel one, and `wan_model_loader` rejects the other pairing. `by_variant`
+says so, the same way `FeaturesFacet.dimension_grid_by_variant` does for the grid.
 """
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 from invokeai.backend.architectures.facet import Facet
 from invokeai.backend.architectures.registry import get
-from invokeai.backend.model_manager.taxonomy import BaseModelType
+from invokeai.backend.model_manager.taxonomy import AnyVariant, BaseModelType
 
 
 @dataclass(frozen=True)
@@ -53,19 +58,52 @@ class VaeFacet(Facet):
     REQUIRED: ClassVar[bool] = False
 
     accepted: frozenset[VaeCompatibility]
+    """What the architecture accepts, and what any variant not named in `by_variant` accepts."""
 
-    def accepts(self, vae_base: BaseModelType, vae_latent_channels: int | None = None) -> bool:
-        return any(entry.matches(vae_base, vae_latent_channels) for entry in self.accepted)
+    by_variant: Mapping[AnyVariant, frozenset[VaeCompatibility]] = field(default_factory=dict)
+    """A variant whose decoder is a different one. Replaces `accepted` for that variant, never extends it."""
+
+    def __post_init__(self) -> None:
+        if None in self.by_variant:
+            raise ValueError(
+                "VaeFacet.by_variant has a None key. `accepted` is the answer for every variant not "
+                "named here, so a None key would never be read."
+            )
+
+        empty = sorted(
+            str(getattr(variant, "value", variant)) for variant, entries in self.by_variant.items() if not entries
+        )
+        if not self.accepted or empty:
+            raise ValueError(
+                f"VaeFacet accepts no VAE at all for {', '.join(empty) or 'the architecture itself'}. The picker "
+                "would offer nothing and a model that needs a VAE could never generate."
+            )
+
+    def resolve(self, variant: AnyVariant | None = None) -> frozenset[VaeCompatibility]:
+        if variant is None:
+            return self.accepted
+        return self.by_variant.get(variant, self.accepted)
+
+    def accepts(
+        self, vae_base: BaseModelType, vae_latent_channels: int | None = None, variant: AnyVariant | None = None
+    ) -> bool:
+        return any(entry.matches(vae_base, vae_latent_channels) for entry in self.resolve(variant))
 
     @property
     def accepted_bases(self) -> frozenset[BaseModelType]:
-        """The bases alone, for the UI's first-pass filter and for comparing against a loader's
-        `ui_model_base`, which cannot express a channel constraint."""
-        return frozenset(entry.base for entry in self.accepted)
+        """The bases alone, across every variant, for comparing against a loader's `ui_model_base` --
+        one loader serves all variants and cannot express a channel constraint."""
+        entries = self.accepted.union(*self.by_variant.values())
+        return frozenset(entry.base for entry in entries)
 
 
-def accepts_vae(base: BaseModelType, vae_base: BaseModelType, vae_latent_channels: int | None = None) -> bool:
-    """Whether `base` can decode with this VAE.
+def accepts_vae(
+    base: BaseModelType,
+    vae_base: BaseModelType,
+    vae_latent_channels: int | None = None,
+    variant: AnyVariant | None = None,
+) -> bool:
+    """Whether a model of `base` (and `variant`, where it matters) can decode with this VAE.
 
     Architectures that declare no `VaeFacet` accept only their own base -- the SD family and
     anything whose loader has no VAE input at all.
@@ -75,4 +113,4 @@ def accepts_vae(base: BaseModelType, vae_base: BaseModelType, vae_latent_channel
     if facet is None:
         return vae_base == base
 
-    return facet.accepts(vae_base, vae_latent_channels)
+    return facet.accepts(vae_base, vae_latent_channels, variant)

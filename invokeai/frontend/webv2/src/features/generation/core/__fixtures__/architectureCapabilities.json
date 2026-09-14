@@ -2,22 +2,12 @@
   {
     "base": "anima",
     "variant": null,
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "anima"
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "cfg-gated"
       },
       "dimension_grid": 8,
-      "spatial_compression": 8,
       "guidance_label": "CFG",
       "guidance_min": 1.0,
       "guidance_max": null,
@@ -68,22 +58,12 @@
   {
     "base": "cogview4",
     "variant": null,
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "cogview4"
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "always"
       },
       "dimension_grid": 32,
-      "spatial_compression": 8,
       "guidance_label": "CFG",
       "guidance_min": 0.0,
       "guidance_max": null,
@@ -119,19 +99,12 @@
   {
     "base": "ernie-image",
     "variant": null,
-    "modality": {
-      "modes": [
-        "txt2img"
-      ],
-      "metadata_slug": "ernie_image"
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "cfg-gated"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "CFG",
       "guidance_min": 1.0,
       "guidance_max": null,
@@ -167,22 +140,12 @@
   {
     "base": "flux",
     "variant": null,
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "flux"
-    },
     "features": {
       "negative_prompt": {
         "visible": false,
         "usage": "never"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "Guidance",
       "guidance_min": 0.0,
       "guidance_max": null,
@@ -221,22 +184,12 @@
   {
     "base": "flux",
     "variant": "dev_fill",
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "flux"
-    },
     "features": {
       "negative_prompt": {
         "visible": false,
         "usage": "never"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "Guidance",
       "guidance_min": 0.0,
       "guidance_max": null,
@@ -275,22 +228,12 @@
   {
     "base": "flux",
     "variant": "schnell",
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "flux"
-    },
     "features": {
       "negative_prompt": {
         "visible": false,
         "usage": "never"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "Guidance",
       "guidance_min": 0.0,
       "guidance_max": null,
@@ -329,22 +272,12 @@
   {
     "base": "flux2",
     "variant": null,
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "flux2"
-    },
     "features": {
       "negative_prompt": {
         "visible": false,
         "usage": "never"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "Guidance",
       "guidance_min": 0.0,
       "guidance_max": 20.0,
@@ -380,22 +313,12 @@
   {
     "base": "flux2",
     "variant": "dev",
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "flux2"
-    },
     "features": {
       "negative_prompt": {
         "visible": false,
         "usage": "never"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "Guidance",
       "guidance_min": 0.0,
       "guidance_max": 20.0,
@@ -431,22 +354,12 @@
   {
     "base": "flux2",
     "variant": "klein_4b_base",
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "flux2"
-    },
     "features": {
       "negative_prompt": {
         "visible": false,
         "usage": "never"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "Guidance",
       "guidance_min": 0.0,
       "guidance_max": 20.0,
@@ -482,22 +395,12 @@
   {
     "base": "flux2",
     "variant": "klein_9b_base",
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "flux2"
-    },
     "features": {
       "negative_prompt": {
         "visible": false,
         "usage": "never"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "Guidance",
       "guidance_min": 0.0,
       "guidance_max": 20.0,
@@ -533,19 +436,12 @@
   {
     "base": "ideogram-4",
     "variant": null,
-    "modality": {
-      "modes": [
-        "txt2img"
-      ],
-      "metadata_slug": "ideogram4"
-    },
     "features": {
       "negative_prompt": {
         "visible": false,
         "usage": "never"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "Guidance",
       "guidance_min": 0.0,
       "guidance_max": null,
@@ -581,22 +477,12 @@
   {
     "base": "krea-2",
     "variant": null,
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "krea2"
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "cfg-gated"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "CFG",
       "guidance_min": 0.0,
       "guidance_max": null,
@@ -643,22 +529,12 @@
   {
     "base": "krea-2",
     "variant": "krea2_base",
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "krea2"
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "cfg-gated"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "CFG",
       "guidance_min": 0.0,
       "guidance_max": null,
@@ -705,25 +581,12 @@
   {
     "base": "minimax-h3",
     "variant": null,
-    "modality": {
-      "modes": [
-        "extend_video",
-        "flf2v",
-        "i2v",
-        "lf2v",
-        "ref2v",
-        "t2v",
-        "txt2img"
-      ],
-      "metadata_slug": "minimax_h3"
-    },
     "features": {
       "negative_prompt": {
         "visible": false,
         "usage": "never"
       },
       "dimension_grid": 32,
-      "spatial_compression": 16,
       "guidance_label": "Guidance",
       "guidance_min": 0.0,
       "guidance_max": null,
@@ -759,22 +622,12 @@
   {
     "base": "qwen-image",
     "variant": null,
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "qwen_image"
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "cfg-gated"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "CFG",
       "guidance_min": 0.0,
       "guidance_max": null,
@@ -821,22 +674,12 @@
   {
     "base": "sd-1",
     "variant": null,
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": null
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "always"
       },
       "dimension_grid": 8,
-      "spatial_compression": 8,
       "guidance_label": "CFG",
       "guidance_min": 0.0,
       "guidance_max": null,
@@ -875,22 +718,12 @@
   {
     "base": "sd-2",
     "variant": null,
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": null
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "always"
       },
       "dimension_grid": 8,
-      "spatial_compression": 8,
       "guidance_label": "CFG",
       "guidance_min": 0.0,
       "guidance_max": null,
@@ -926,22 +759,12 @@
   {
     "base": "sd-3",
     "variant": null,
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "sd3"
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "always"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "CFG",
       "guidance_min": 0.0,
       "guidance_max": null,
@@ -977,22 +800,12 @@
   {
     "base": "sdxl",
     "variant": null,
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "sdxl"
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "always"
       },
       "dimension_grid": 8,
-      "spatial_compression": 8,
       "guidance_label": "CFG",
       "guidance_min": 0.0,
       "guidance_max": null,
@@ -1031,17 +844,12 @@
   {
     "base": "sdxl-refiner",
     "variant": null,
-    "modality": {
-      "modes": [],
-      "metadata_slug": null
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "always"
       },
       "dimension_grid": 8,
-      "spatial_compression": 8,
       "guidance_label": "CFG",
       "guidance_min": 0.0,
       "guidance_max": null,
@@ -1077,26 +885,12 @@
   {
     "base": "wan",
     "variant": null,
-    "modality": {
-      "modes": [
-        "extend_video",
-        "i2v",
-        "img2img",
-        "inpaint",
-        "interpolate",
-        "outpaint",
-        "t2v",
-        "txt2img"
-      ],
-      "metadata_slug": "wan"
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "always"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "Guidance",
       "guidance_min": 1.0,
       "guidance_max": null,
@@ -1132,10 +926,6 @@
         {
           "base": "wan",
           "latent_channels": 16
-        },
-        {
-          "base": "wan",
-          "latent_channels": 48
         }
       ]
     }
@@ -1143,26 +933,12 @@
   {
     "base": "wan",
     "variant": "ti2v_5b",
-    "modality": {
-      "modes": [
-        "extend_video",
-        "i2v",
-        "img2img",
-        "inpaint",
-        "interpolate",
-        "outpaint",
-        "t2v",
-        "txt2img"
-      ],
-      "metadata_slug": "wan"
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "always"
       },
       "dimension_grid": 32,
-      "spatial_compression": 16,
       "guidance_label": "Guidance",
       "guidance_min": 1.0,
       "guidance_max": null,
@@ -1197,10 +973,6 @@
       "accepted": [
         {
           "base": "wan",
-          "latent_channels": 16
-        },
-        {
-          "base": "wan",
           "latent_channels": 48
         }
       ]
@@ -1209,22 +981,12 @@
   {
     "base": "z-image",
     "variant": null,
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "z_image"
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "cfg-gated"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "CFG",
       "guidance_min": 1.0,
       "guidance_max": null,
@@ -1269,22 +1031,12 @@
   {
     "base": "z-image",
     "variant": "zbase",
-    "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
-      "metadata_slug": "z_image"
-    },
     "features": {
       "negative_prompt": {
         "visible": true,
         "usage": "cfg-gated"
       },
       "dimension_grid": 16,
-      "spatial_compression": 8,
       "guidance_label": "CFG",
       "guidance_min": 1.0,
       "guidance_max": null,

@@ -53,16 +53,12 @@ register(
         guidance_min=1.0,
         scheduler_set="flow",
     ),
+    # A14B uses the 16-channel Wan 2.1 VAE; TI2V-5B needs the 48-channel Wan2.2-VAE, and
+    # `wan_model_loader` rejects either the other way round. Both are registered under `wan`, so
+    # the channel count is the only thing that tells them apart.
     VaeFacet(
-        frozenset(
-            {
-                # A14B uses the 16-channel Wan 2.1 VAE; TI2V-5B needs the 48-channel
-                # Wan2.2-VAE. Both are registered under `wan`, so the channel count is the
-                # only thing that tells them apart.
-                VaeCompatibility(BaseModelType.Wan, latent_channels=16),
-                VaeCompatibility(BaseModelType.Wan, latent_channels=48),
-            }
-        )
+        frozenset({VaeCompatibility(BaseModelType.Wan, latent_channels=16)}),
+        by_variant={WanVariantType.TI2V_5B: frozenset({VaeCompatibility(BaseModelType.Wan, latent_channels=48)})},
     ),
     # The one architecture whose LoRAs carry a different variant enum from its mains. They are not
     # interchangeable: an A14B LoRA (inner_dim=5120) against a TI2V-5B main (3072) crashes in the

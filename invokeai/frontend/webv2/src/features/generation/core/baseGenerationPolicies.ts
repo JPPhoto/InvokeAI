@@ -954,7 +954,7 @@ const getBaseComponentSectionPolicy = (
   }
 
   // The graph builder sends a VAE by `isVaeCompatibleWithGenerateModel`, which reads the same row.
-  const isAcceptedVae = isVaeAcceptedByBase(model.base);
+  const isAcceptedVae = isVaeAcceptedByBase(model.base, model.variant);
 
   switch (model.base) {
     case 'flux':
@@ -1601,12 +1601,11 @@ const getPidValidationReasons = (model: GenerateModelConfig, settings: GenerateS
 const getReferenceImageValidationReasons = (model: GenerateModelConfig, settings: GenerateSettings): string[] => {
   const reasons: string[] = [];
   const enabled = settings.referenceImages.filter((referenceImage) => referenceImage.isEnabled);
-  const maxReferenceImages =
-    model.type === 'external_image_generator' && typeof model.capabilities?.max_reference_images === 'number'
-      ? model.capabilities.max_reference_images
-      : DEFAULT_REFERENCE_IMAGE_LIMIT;
+  // The limit the reference-image panel enforces, so validation cannot pass what the panel refuses.
+  // A model without reference images is reported per image below rather than as "at most 0".
+  const maxReferenceImages = getMaxReferenceImages(model);
 
-  if (enabled.length > maxReferenceImages) {
+  if (isReferenceImageSupported(model) && enabled.length > maxReferenceImages) {
     reasons.push(`Generate supports at most ${maxReferenceImages} reference images for ${model.name}.`);
   }
 

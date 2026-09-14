@@ -64,11 +64,6 @@ export const isDiffusersMainForBase =
   (model) =>
     model.type === 'main' && model.base === base && model.format === 'diffusers';
 
-export const isVaeForBases =
-  (bases: readonly string[]): GenerateComponentFilter =>
-  (model) =>
-    model.type === 'vae' && bases.length > 0 && bases.includes(model.base);
-
 export const isClipVariant =
   (variant: string): GenerateComponentFilter =>
   (model) =>
@@ -156,12 +151,13 @@ export const getCompatibleDiffusersComponentSource = <T extends GenerateComponen
  * table, or no row for this base, nothing is offered. Choosing a VAE the graph then rejects is
  * worse than an empty picker that fills in as soon as the table lands.
  */
-const acceptsVae = (base: string, model: GenerateComponentCandidate): boolean => {
+const acceptsVae = (base: string, model: GenerateComponentCandidate, variant?: unknown): boolean => {
   if (model.type !== 'vae') {
     return false;
   }
 
-  const row = getArchitectureCapabilityRow(base);
+  // With the variant: Wan A14B and TI2V-5B decode with different VAEs, and only the variant row says so.
+  const row = getArchitectureCapabilityRow(base, variant);
 
   if (!row) {
     return false;
@@ -181,13 +177,13 @@ const acceptsVae = (base: string, model: GenerateComponentCandidate): boolean =>
 };
 
 export const isVaeAcceptedByBase =
-  (base: string): GenerateComponentFilter =>
+  (base: string, variant?: unknown): GenerateComponentFilter =>
   (model) =>
-    acceptsVae(base, model);
+    acceptsVae(base, model, variant);
 
 /**
  * The one VAE rule for a Generate model. The component picker and its validation filter with
- * `isVaeAcceptedByBase(model.base)` and the graph builder with this, so a VAE the user can select is
+ * `isVaeAcceptedByBase(model.base, model.variant)` and the graph builder with this, so a VAE the user can select is
  * always one the graph sends -- the served row decides for both, including cross-base families such
  * as a Qwen-Image VAE installed under `anima`.
  */
@@ -196,5 +192,5 @@ export const isVaeCompatibleWithGenerateModel = (model: GenerateModelConfig, vae
     return false;
   }
 
-  return acceptsVae(model.base, vae);
+  return acceptsVae(model.base, vae, model.variant);
 };

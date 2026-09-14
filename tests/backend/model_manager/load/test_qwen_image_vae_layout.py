@@ -217,7 +217,9 @@ def test_the_diffusers_layout_still_loads_directly() -> None:
         result = _loader()._load_qwen_image_vae(_config())
 
     wan.assert_not_called()
-    qwen.return_value.load_state_dict.assert_called_once()
+    (loaded,), _ = qwen.return_value.load_state_dict.call_args
+    # The same autoencoder as the converted layout, so float16 is raised the same way.
+    assert {tensor.dtype for tensor in loaded.values()} == {torch.bfloat16}
     assert result is qwen.return_value
 
 

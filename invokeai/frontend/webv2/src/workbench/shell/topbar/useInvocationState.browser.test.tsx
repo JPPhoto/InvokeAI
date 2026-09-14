@@ -14,6 +14,32 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const harness = vi.hoisted(() => ({ project: null as unknown }));
 
+// A controllable stand-in for the node-template store, so a test can decide which of the two stores
+// the route depends on finishes loading last.
+const templates = vi.hoisted(() => {
+  type Snapshot = { error: string | null; status: string; templates: Record<string, unknown> };
+  const loading: Snapshot = { error: null, status: 'loading', templates: {} };
+  const listeners = new Set<() => void>();
+  let snapshot = loading;
+
+  return {
+    get: () => snapshot,
+    reset: () => {
+      snapshot = loading;
+    },
+    set: (next: Snapshot) => {
+      snapshot = next;
+      listeners.forEach((listener) => listener());
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+});
+
 vi.mock('@features/generation/react', () => ({
   useDynamicPrompts: () => ({ count: 1, error: null, isDynamic: false, isError: false, isLoading: false, prompts: [] }),
 }));
@@ -22,6 +48,11 @@ vi.mock('@features/models', () => ({
   // One snapshot object, as the real store hands out. A fresh `models` array per render would change
   // an input React Compiler memoises the route on, and re-resolve it by accident.
   useModelsSelector: (selector: (snapshot: unknown) => unknown) => selector(modelsSnapshot),
+}));
+vi.mock('@features/workflow/react', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getInvocationTemplatesSnapshot: () => templates.get(),
+  subscribeInvocationTemplates: templates.subscribe,
 }));
 vi.mock('@workbench/activeInvocationSubmission', () => ({ submitActiveInvocation: () => Promise.resolve() }));
 vi.mock('@workbench/canvasInvocationPreparation', () => ({ useIsCanvasInvocationPreparing: () => false }));
@@ -41,7 +72,10 @@ import { useInvocationState } from './useInvocationState';
 const sdxlModel: MainModelConfig = { base: 'sdxl', key: 'sdxl-model', name: 'SDXL', type: 'main' };
 const modelsSnapshot = { models: [sdxlModel], status: 'loaded' };
 
-const buildProject = (): Project => {
+const activeProject = (state: ReturnType<typeof createInitialWorkbenchState>): Project =>
+  state.projects.find((candidate) => candidate.id === state.activeProjectId)!;
+
+const buildGenerateProject = (): Project => {
   // The table is needed to derive a *valid* saved project; the point of the test is what happens
   // when the app is restarted and that project is reopened before the table comes back.
   setArchitectureCapabilities(architectureCapabilitiesFixture);
@@ -53,8 +87,7 @@ const buildProject = (): Project => {
   };
   resetArchitectureCapabilities();
 
-  const state = workbenchReducer(createInitialWorkbenchState(), { type: 'setGenerateSettings', values });
-  return state.projects.find((candidate) => candidate.id === state.activeProjectId)!;
+  return activeProject(workbenchReducer(createInitialWorkbenchState(), { type: 'setGenerateSettings', values }));
 };
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -64,6 +97,16 @@ let root: Root | null = null;
 
 const Probe = (): ReactNode => <span data-testid="reasons">{useInvocationState().blockingReasons.join(' | ')}</span>;
 
+const renderProbe = async (project: Project) => {
+  harness.project = project;
+  host = document.createElement('div');
+  document.body.append(host);
+  root = createRoot(host);
+  await act(() => {
+    root?.render(<Probe />);
+  });
+};
+
 const blockingReasons = (): string => host?.querySelector('[data-testid="reasons"]')?.textContent ?? '';
 
 afterEach(async () => {
@@ -72,17 +115,12 @@ afterEach(async () => {
   host = null;
   root = null;
   resetArchitectureCapabilities();
+  templates.reset();
 });
 
 describe('useInvocationState and the architecture capability table', () => {
   it('stops blocking Invoke as soon as a retried load succeeds', async () => {
-    harness.project = buildProject();
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    await act(() => {
-      root?.render(<Probe />);
-    });
+    await renderProbe(buildGenerateProject());
 
     expect(blockingReasons()).toBe(
       'Model capabilities are not available. Generation is blocked until they load; if this persists, retry from the Generate panel.'
@@ -95,5 +133,26 @@ describe('useInvocationState and the architecture capability table', () => {
     });
 
     expect(blockingReasons()).toBe('');
+  });
+});
+
+describe('useInvocationState and the workflow node templates', () => {
+  it('re-resolves a workflow route when the templates finish loading after the capability table', async () => {
+    // The capability table is already there, so its snapshot never changes again. A route cached on
+    // that snapshot alone kept "still loading" after the templates arrived.
+    setArchitectureCapabilities(architectureCapabilitiesFixture);
+    await renderProbe(
+      activeProject(
+        workbenchReducer(createInitialWorkbenchState(), { sourceId: 'workflow', type: 'setInvocationSource' })
+      )
+    );
+
+    expect(blockingReasons()).toContain('Node definitions are still loading.');
+
+    await act(() => {
+      templates.set({ error: null, status: 'loaded', templates: {} });
+    });
+
+    expect(blockingReasons()).not.toContain('Node definitions are still loading.');
   });
 });

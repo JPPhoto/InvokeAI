@@ -49,6 +49,7 @@ export {
   getMaxReferenceImages,
   getPromptHistoryRecallPatch,
   getSettingsWithModelDefaults,
+  isArchitectureDescribed,
   isKnownScheduler,
   isReferenceImageSupported,
   isSupportedGenerateModel,
@@ -63,8 +64,8 @@ export {
 export {
   getCompatibleDiffusersComponentSource,
   isDiffusersMainForBase,
+  isVaeAcceptedByBase,
   isVaeCompatibleWithGenerateModel,
-  isVaeForBases,
 } from './core/componentCompatibility';
 export {
   isValidKrea2RebalanceWeights,

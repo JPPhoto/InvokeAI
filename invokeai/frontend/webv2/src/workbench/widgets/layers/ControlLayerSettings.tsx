@@ -18,7 +18,9 @@ import {
   isControlKindSupportedForBase,
   type ControlAdapterKind,
 } from '@features/generation/graph';
+import { getArchitectureCapabilitiesSnapshot, subscribeArchitectureCapabilities } from '@features/generation/runtime';
 import { useModelsSelector } from '@features/models';
+import { useExternalStoreSelector } from '@platform/state/selectors';
 import { Field, Select, Slider } from '@platform/ui';
 import { lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import { getCanvasOperations, resolveDefaultFilterForModel } from '@workbench/canvas-operations/api';
@@ -108,13 +110,19 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
   );
 
   // Adapter kinds supported by the selected base. Z-Image Control is only shown
-  // when a compatible Z-Image main model is selected.
-  const kindOptions = useMemo(
-    () =>
-      CONTROL_ADAPTER_KINDS.filter((kind) =>
-        base ? isControlKindSupportedForBase(base, kind) : kind !== 'z_image_control'
-      ),
-    [base]
+  // when a compatible Z-Image main model is selected. Read inside the store's
+  // selector: the answer comes from the capability table, and a call memoised on
+  // `base` alone keeps the empty list it gave before a retried load succeeded.
+  const kindOptions = useExternalStoreSelector(
+    subscribeArchitectureCapabilities,
+    getArchitectureCapabilitiesSnapshot,
+    useCallback(
+      () =>
+        CONTROL_ADAPTER_KINDS.filter((kind) =>
+          base ? isControlKindSupportedForBase(base, kind) : kind !== 'z_image_control'
+        ),
+      [base]
+    )
   );
   const kindCollection = useMemo(
     () =>
@@ -313,19 +321,36 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
   const contributing = engine
     ? (lookupDocumentLeaf(engine.document.model()?.document, layer.id)?.contributionEnabled ?? false)
     : layer.isEnabled;
-  const validationReason =
-    contributing && mainModel
-      ? getControlValidationReason({
-          adapterModel: adapterModel ? { base: adapterModel.base, type: adapterModel.type } : null,
-          beginEndStepPct: adapter.beginEndStepPct,
-          controlLoraIndex: Math.max(0, controlLoraIndex),
-          kind: adapter.kind,
-          mainBase: mainModel.base,
-          mainVariant: mainModel.variant ?? undefined,
-          weight: adapter.weight,
-          zImageControlIndex: Math.max(0, zImageControlIndex),
-        })
-      : null;
+  // Same reason as `kindOptions`: validation asks the capability table whether the kind is supported.
+  const validationReason = useExternalStoreSelector(
+    subscribeArchitectureCapabilities,
+    getArchitectureCapabilitiesSnapshot,
+    useCallback(
+      () =>
+        contributing && mainModel
+          ? getControlValidationReason({
+              adapterModel: adapterModel ? { base: adapterModel.base, type: adapterModel.type } : null,
+              beginEndStepPct: adapter.beginEndStepPct,
+              controlLoraIndex: Math.max(0, controlLoraIndex),
+              kind: adapter.kind,
+              mainBase: mainModel.base,
+              mainVariant: mainModel.variant ?? undefined,
+              weight: adapter.weight,
+              zImageControlIndex: Math.max(0, zImageControlIndex),
+            })
+          : null,
+      [
+        adapter.beginEndStepPct,
+        adapter.kind,
+        adapter.weight,
+        adapterModel,
+        contributing,
+        controlLoraIndex,
+        mainModel,
+        zImageControlIndex,
+      ]
+    )
+  );
   // Content-dependent problems only matter once the layer has pixels, but a
   // missing model deserves the warning even on a fresh empty layer.
   const visibleValidationReason =
