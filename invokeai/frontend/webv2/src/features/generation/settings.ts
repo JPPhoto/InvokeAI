@@ -41,6 +41,7 @@ export {
   getDefaultGenerateSettings,
   getDefaultReferenceImageConfig,
   getGenerateModelSelectionResult,
+  getDimensionGrid,
   getGenerationDimensions,
   getGenerationModelAvailabilityReasons,
   getGenerationUiPolicy,
@@ -48,12 +49,14 @@ export {
   getMaxReferenceImages,
   getPromptHistoryRecallPatch,
   getSettingsWithModelDefaults,
+  isArchitectureDescribed,
   isKnownScheduler,
   isReferenceImageSupported,
   isSupportedGenerateModel,
   SCHEDULER_OPTIONS,
   type GenerateModelSelectionResult,
 } from './core/baseGenerationPolicies';
+export { hasArchitectureCapabilities } from './core/architectureCapabilities';
 export {
   resolveGenerateWidgetValues,
   type ResolvedGenerateWidgetValues,
@@ -62,8 +65,8 @@ export {
 export {
   getCompatibleDiffusersComponentSource,
   isDiffusersMainForBase,
+  isVaeAcceptedByBase,
   isVaeCompatibleWithGenerateModel,
-  isVaeForBases,
 } from './core/componentCompatibility';
 export {
   isValidKrea2RebalanceWeights,

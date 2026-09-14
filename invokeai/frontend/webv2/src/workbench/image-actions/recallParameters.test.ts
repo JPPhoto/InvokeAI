@@ -1,5 +1,6 @@
 import type { ComponentModelConfig, GenerateModelConfig, VaeModelConfig } from '@features/generation/contracts';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import {
   getDefaultGenerateSettings,
   getMaxReferenceImages,
@@ -43,6 +44,8 @@ const currentFor = (model: ComponentModelConfig, overrides: Record<string, unkno
 
 const build = (currentValues: ReturnType<typeof currentFor>, parameters: Record<string, unknown>) =>
   buildRecallParametersSettings({ currentValues, models, parameters, supportedModels, vaeModels });
+
+seedArchitectureCapabilities();
 
 describe('buildRecallParametersSettings', () => {
   it('applies prompts, seed, size and sampler parameters to the current values', () => {

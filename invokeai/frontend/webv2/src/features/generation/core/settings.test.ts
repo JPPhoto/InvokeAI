@@ -1,3 +1,4 @@
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import type {
@@ -47,6 +48,8 @@ const legacyStoredValues = {
   steps: 30,
   width: 512,
 };
+
+seedArchitectureCapabilities();
 
 describe('normalizeGenerateSettings', () => {
   it('reads the seed mode saved before modes existed from the random toggle', () => {

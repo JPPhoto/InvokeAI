@@ -9,9 +9,10 @@ import type {
 
 import {
   getCompatibleReferenceImages,
-  getGenerationDimensions,
+  getDimensionGrid,
   getGenerationUiPolicy,
   getSettingsWithModelDefaults,
+  hasArchitectureCapabilities,
   isKnownScheduler,
   isVaeCompatibleWithGenerateModel,
   isValidKrea2RebalanceWeights,
@@ -223,7 +224,16 @@ const getImageSize = (
   image: GalleryImage,
   model: GenerateModelConfig
 ): Pick<GenerateWidgetValues, 'height' | 'width'> | null => {
-  const grid = getGenerationDimensions(model).grid;
+  // Fail closed: recalled dimensions are snapped to the architecture's grid and then persisted
+  // into the project. Without the served table every base reads as grid 8, so a krea-2 or
+  // CogView 4 project would store a size its denoise node rejects. Recalling nothing is
+  // recoverable; storing the wrong size silently is not.
+  const grid = getDimensionGrid(model.base, model.variant);
+
+  if (grid === null) {
+    return null;
+  }
+
   const width = getImageDimension(image, 'width', grid);
   const height = getImageDimension(image, 'height', grid);
 
@@ -234,7 +244,14 @@ export const getMetadataSize = (
   metadata: unknown,
   model: GenerateModelConfig
 ): Partial<Pick<GenerateWidgetValues, 'height' | 'width'>> => {
-  const grid = getGenerationDimensions(model).grid;
+  // Same reason as getImageSize: an empty result means 'no size recalled', which the caller
+  // already handles, and the field list then does not claim a size was restored.
+  const grid = getDimensionGrid(model.base, model.variant);
+
+  if (grid === null) {
+    return {};
+  }
+
   const width = getDimension(metadata, 'width', grid);
   const height = getDimension(metadata, 'height', grid);
 
@@ -448,6 +465,15 @@ export const getSupportedClipSkip = (metadata: unknown, model: GenerateModelConf
   return clipSkip !== null && clipSkipMax !== null ? Math.min(clipSkipMax, clipSkip) : null;
 };
 
+/**
+ * Recall All, Remix and CLIP skip read architecture policy -- model defaults, VAE and CLIP skip rules
+ * -- and their result is persisted into the project, where it outlives the outage. Without the served
+ * table they would be computed on fallbacks and stored. Prompts and seed are the image's own, and
+ * a dimensions recall already declines per model when it has no grid to snap to.
+ */
+export const isImageRecallKindAvailable = (kind: ImageRecallKind): boolean =>
+  kind === 'prompts' || kind === 'seed' || kind === 'dimensions' || hasArchitectureCapabilities();
+
 export const getImageRecallCapabilities = ({
   currentValues,
   image,
@@ -501,11 +527,11 @@ export const getImageRecallCapabilities = ({
     hasRebalance;
 
   return {
-    all: hasAnyMetadata,
-    clipSkip: getSupportedClipSkip(metadata, currentValues.model) !== null,
+    all: hasAnyMetadata && isImageRecallKindAvailable('all'),
+    clipSkip: getSupportedClipSkip(metadata, currentValues.model) !== null && isImageRecallKindAvailable('clipSkip'),
     dimensions: getImageSize(image, currentValues.model) !== null,
     prompts: hasPrompts,
-    remix: hasNonSeedMetadata,
+    remix: hasNonSeedMetadata && isImageRecallKindAvailable('remix'),
     seed: hasSeed,
   };
 };
@@ -527,6 +553,10 @@ export const buildImageRecallSettings = ({
   models: ComponentModelConfig[];
   vaeModels: VaeModelConfig[];
 }): ImageRecallResult | null => {
+  if (!isImageRecallKindAvailable(kind)) {
+    return null;
+  }
+
   const fields: RecalledField[] = [];
   let values: GenerateWidgetValues = cloneGenerateWidgetValues(currentValues);
 

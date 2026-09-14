@@ -2,11 +2,21 @@
 import type { GenerateModelConfig, GenerateSettings, Ideogram4SamplerPreset } from '@features/generation/core/types';
 
 import { Badge, Box, createListCollection, HStack, Image, Input, Stack, Text } from '@chakra-ui/react';
-import { getDefaultGenerateSettings, getGenerationModelPolicy } from '@features/generation/core/baseGenerationPolicies';
+import {
+  getDefaultGenerateSettings,
+  getGenerationModelPolicy,
+  getGuidanceBoundReason,
+} from '@features/generation/core/baseGenerationPolicies';
 import { getEffectivePrompts } from '@features/generation/core/promptTemplates';
 import {
   getDynamicPromptsConfig,
+  IDEOGRAM4_GUIDANCE_MAX,
+  IDEOGRAM4_GUIDANCE_MIN,
+  IDEOGRAM4_MU_MAX,
+  IDEOGRAM4_MU_MIN,
   IDEOGRAM4_SAMPLER_PRESETS,
+  IDEOGRAM4_STEPS_MAX,
+  IDEOGRAM4_STEPS_MIN,
   MAX_KREA2_SEED_VARIANCE_STRENGTH,
 } from '@features/generation/core/settings';
 import { Combobox } from '@platform/ui/Combobox';
@@ -26,6 +36,17 @@ import { SeedField as SharedSeedField } from './shared/SeedField';
 import { useDynamicPrompts } from './useDynamicPrompts';
 
 const STEPS_SLIDER_MAX = 100;
+
+/** The guidance/CFG slider's practical range — a UI choice about the track, not a rule. FLUX Fill
+ *  recommends 30, which is off the track but a real value, so the number input keeps its own looser
+ *  bound; without it the field clamps the model's own default away the first time it is focused.
+ *
+ *  Where the architecture declares a ceiling (`policy.ui.guidanceMax`, e.g. `flux2_denoise.guidance`
+ *  is `le=20`) that ceiling wins over this local cap, and where it declares none the local cap stays
+ *  — `flux_denoise.guidance` genuinely has no upper bound. The floor comes from the architecture
+ *  either way: 0 for most, 1 for the samplers whose node is `ge=1`. */
+const GUIDANCE_SLIDER_MAX = 10;
+const GUIDANCE_INPUT_MAX = 100;
 
 interface GenerateRenderSectionProps {
   settings: GenerateSettings;
@@ -86,8 +107,8 @@ const Ideogram4SamplingFields = ({ onCommit, settings }: Pick<GenerateRenderSect
         {settings.ideogram4Steps !== null ? (
           <SliderNumberField
             ariaLabel={t('widgets.generate.ideogram4Steps')}
-            max={100}
-            min={1}
+            max={IDEOGRAM4_STEPS_MAX}
+            min={IDEOGRAM4_STEPS_MIN}
             step={1}
             value={settings.ideogram4Steps}
             onChange={(value) => onCommit({ ideogram4Steps: value })}
@@ -107,8 +128,8 @@ const Ideogram4SamplingFields = ({ onCommit, settings }: Pick<GenerateRenderSect
         {settings.ideogram4GuidanceScale !== null ? (
           <SliderNumberField
             ariaLabel={t('widgets.generate.ideogram4GuidanceScale')}
-            max={20}
-            min={0}
+            max={IDEOGRAM4_GUIDANCE_MAX}
+            min={IDEOGRAM4_GUIDANCE_MIN}
             step={0.1}
             value={settings.ideogram4GuidanceScale}
             onChange={(value) => onCommit({ ideogram4GuidanceScale: value })}
@@ -125,8 +146,8 @@ const Ideogram4SamplingFields = ({ onCommit, settings }: Pick<GenerateRenderSect
         {settings.ideogram4Mu !== null ? (
           <SliderNumberField
             ariaLabel={t('widgets.generate.ideogram4Mu')}
-            max={10}
-            min={0}
+            max={IDEOGRAM4_MU_MAX}
+            min={IDEOGRAM4_MU_MIN}
             step={0.1}
             value={settings.ideogram4Mu}
             onChange={(value) => onCommit({ ideogram4Mu: value })}
@@ -296,6 +317,17 @@ export const GenerateRenderSection = ({
   const policy = getGenerationModelPolicy(selectedModel, settings);
   const familyBase = selectedModel && selectedModel.type !== 'external_image_generator' ? selectedModel.base : null;
 
+  // The node's ceiling caps the number input where the architecture declares one; the slider's own
+  // track never grows past its practical range, but it does shrink if an architecture ever declares
+  // a ceiling below it -- and never below its own floor, since the bounds are served and can change
+  // without a frontend release.
+  const guidanceInputMax = policy.ui.guidanceMax ?? GUIDANCE_INPUT_MAX;
+  const guidanceSliderMax = Math.max(policy.ui.guidanceMin, Math.min(GUIDANCE_SLIDER_MAX, guidanceInputMax));
+  // A value the model switch did not clamp -- recalled from an image, or persisted before the
+  // architecture's bounds changed. Invoke is already disabled for it; without this the only cue is
+  // that button's tooltip, three collapsed sections away from the field holding the bad value.
+  const guidanceError = selectedModel ? getGuidanceBoundReason(selectedModel, settings.cfgScale) : null;
+
   const commitNumber = (key: 'cfgScale' | 'steps', value: number) => {
     if (!Number.isFinite(value)) {
       return;
@@ -357,13 +389,14 @@ export const GenerateRenderSection = ({
           isAtDefault={modelDefaults !== null && settings.cfgScale === modelDefaults.cfgScale}
           onReset={modelDefaults ? () => onCommit({ cfgScale: modelDefaults.cfgScale }) : undefined}
         >
-          <Field hint="guidance" label={policy.ui.guidanceLabel}>
+          <Field error={guidanceError} hint="guidance" label={policy.ui.guidanceLabel}>
             <SliderNumberField
               ariaLabel={policy.ui.guidanceLabel}
               defaultValue={modelDefaults?.cfgScale}
               marks={modelDefaults ? [modelDefaults.cfgScale] : undefined}
-              max={10}
-              min={0}
+              max={guidanceSliderMax}
+              min={policy.ui.guidanceMin}
+              numberInputMax={guidanceInputMax}
               resetLabel={t('widgets.generate.useModelDefaultField', { field: policy.ui.guidanceLabel })}
               step={0.5}
               value={settings.cfgScale}
