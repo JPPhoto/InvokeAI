@@ -2,7 +2,7 @@ import accelerate
 import pytest
 from diffusers.models.autoencoders import AutoencoderKLWan
 
-from invokeai.backend.krea2.vae_compat import as_qwen_image_vae
+from invokeai.backend.util.qwen_image_vae import as_qwen_image_vae
 
 
 def test_as_qwen_image_vae_preserves_the_cached_model_and_its_hooks() -> None:

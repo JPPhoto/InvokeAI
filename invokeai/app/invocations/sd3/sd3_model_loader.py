@@ -13,6 +13,7 @@ from invokeai.app.util.t5_model_identifier import (
     preprocess_t5_encoder_model_identifier,
     preprocess_t5_tokenizer_model_identifier,
 )
+from invokeai.backend.architectures import accepted_vae_bases
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ClipVariantType, ModelType, SubModelType
 
 
@@ -74,7 +75,7 @@ class Sd3ModelLoaderInvocation(BaseInvocation):
         description=FieldDescriptions.vae_model,
         title="VAE",
         default=None,
-        ui_model_base=BaseModelType.StableDiffusion3,
+        ui_model_base=accepted_vae_bases(BaseModelType.StableDiffusion3),
         ui_model_type=ModelType.VAE,
     )
 

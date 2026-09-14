@@ -15,6 +15,7 @@ from invokeai.app.invocations.model import (
     VAEField,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContext
+from invokeai.backend.architectures import accepted_vae_bases, accepts_vae
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType, SubModelType
 
 
@@ -58,7 +59,7 @@ class Krea2ModelLoaderInvocation(BaseInvocation):
         description="Standalone VAE model. Krea-2 uses the Qwen-Image VAE (16-channel). "
         "If not provided, the VAE is loaded from the Krea-2 (diffusers) model.",
         input=Input.Direct,
-        ui_model_base=[BaseModelType.QwenImage, BaseModelType.Anima],
+        ui_model_base=accepted_vae_bases(BaseModelType.Krea2),
         ui_model_type=ModelType.VAE,
         title="VAE",
     )
@@ -85,12 +86,12 @@ class Krea2ModelLoaderInvocation(BaseInvocation):
         # Determine VAE source.
         if self.vae_model is not None:
             vae_config = context.models.get_config(self.vae_model)
-            if vae_config.type is not ModelType.VAE or vae_config.base not in (
-                BaseModelType.QwenImage,
-                BaseModelType.Anima,
+            if vae_config.type is not ModelType.VAE or not accepts_vae(
+                BaseModelType.Krea2, vae_config.base, getattr(vae_config, "latent_channels", None)
             ):
+                accepted = " or ".join(base.value for base in accepted_vae_bases(BaseModelType.Krea2))
                 raise ValueError(
-                    f"VAE '{vae_config.name}' is not compatible with Krea-2. Select a Qwen Image or Anima VAE."
+                    f"VAE '{vae_config.name}' is not compatible with Krea-2. Select a VAE of base {accepted}."
                 )
             vae = self.vae_model.model_copy(update={"submodel_type": SubModelType.VAE})
         else:

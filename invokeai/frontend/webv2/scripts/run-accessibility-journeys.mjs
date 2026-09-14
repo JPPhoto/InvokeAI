@@ -431,6 +431,13 @@ const runTopbarMenuJourney = async (browser) => {
   try {
     await waitForWorkbench(page);
 
+    // The fixture routes from Workflow, but Compose does not place that widget. Open it before
+    // auditing a present source, then return to Preview for the missing-source checks below.
+    await centerViewTrigger(page, 'Preview').click();
+    await page.getByRole('menuitem', { exact: true, name: 'Workflow' }).click();
+    await centerViewTrigger(page, 'Workflow').waitFor();
+    await selectCenterView(page, 'Workflow', 'Preview');
+
     const leftWidgetRail = page.getByRole('navigation', { exact: true, name: 'Create widget visibility' });
     const upscaleWidget = leftWidgetRail.getByRole('button', { exact: true, name: 'Upscale' });
     await upscaleWidget.click({ button: 'right' });
@@ -504,7 +511,7 @@ const runTopbarMenuJourney = async (browser) => {
     await page.getByRole('button', { exact: true, name: 'Open menu' }).click();
     const appMenu = page.getByRole('menu', { exact: true, name: 'Open menu' });
     const commandPaletteItem = page.getByRole('menuitem', { name: /^Command palette/ });
-    const settingsItem = page.getByRole('menuitem', { exact: true, name: 'Settings' });
+    const settingsItem = appMenu.getByRole('menuitem', { name: /^Settings(?: \(.+\))?$/ });
     const documentationItem = page.getByRole('menuitem', { exact: true, name: 'Documentation' });
     const discordItem = page.getByRole('menuitem', { exact: true, name: 'Discord' });
     await commandPaletteItem.waitFor();
@@ -758,8 +765,10 @@ const runKeepAliveStateJourney = async (browser) => {
 
     // The preview filmstrip only renders once an item is selected — with
     // nothing selected the centre view is a "No gallery selection" empty
-    // state, filmstrip included.
+    // state, filmstrip included. Use the unstarred listing: the starred strip's
+    // smaller navigation list fits without overflowing at this viewport.
     await galleryItems
+      .locator('[data-gallery-section="regular"]')
       .getByRole('button', { name: /for preview$/ })
       .first()
       .click();

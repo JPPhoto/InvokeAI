@@ -9,7 +9,6 @@ from invokeai.backend.architectures import facets as facets  # noqa: F401  (impo
 from invokeai.backend.architectures.capabilities import (
     ArchitectureCapabilities,
     ArchitectureFeatures,
-    ArchitectureModality,
     NegativePromptPolicy,
     architecture_capabilities,
 )
@@ -42,6 +41,11 @@ from invokeai.backend.architectures.facets.unet import (
     UNetDownscaleFacet,
     get_max_unet_downscale,
 )
+from invokeai.backend.architectures.facets.vae import (
+    VaeFacet,
+    accepted_vae_bases,
+    accepts_vae,
+)
 from invokeai.backend.architectures.facets.variant import (
     VariantFacet,
     declared_variant_enums,
@@ -61,7 +65,6 @@ from invokeai.backend.architectures.registry import (
 __all__ = [
     "ArchitectureCapabilities",
     "ArchitectureFeatures",
-    "ArchitectureModality",
     "NegativePromptPolicy",
     "architecture_capabilities",
     "ArchitectureError",
@@ -74,9 +77,12 @@ __all__ = [
     "GenerationModeKind",
     "ModalityFacet",
     "UNetDownscaleFacet",
+    "VaeFacet",
     "VariantFacet",
     "LatentSpace",
     "LatentSpaceFacet",
+    "accepted_vae_bases",
+    "accepts_vae",
     "conditioning_infos",
     "conditioning_safe_globals",
     "declared_variant_enums",

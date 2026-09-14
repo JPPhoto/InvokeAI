@@ -11,7 +11,6 @@ import {
   isDiffusersMainForBase,
   isLoraCompatibleWithModel,
   isLoraModelConfig,
-  isVaeForBases,
   isWanLoraTargetingMain,
   SEED_MAX,
 } from '@features/generation/settings';
@@ -1042,8 +1041,12 @@ const isWanLowNoiseExpertCandidate = (candidate: ModelConfig, ctx: VideoComponen
 // wan_model_loader validates the standalone VAE's latent channels against the
 // main: TI2V-5B needs the 48-channel Wan 2.2 VAE, A14B the 16-channel Wan 2.1
 // VAE. A config without the field (open union) stays allowed.
+//
+// The served (wan, variant) rows say the same thing, but this surface does not
+// wait for the capability table: reading it here would drop a stored VAE during
+// the widget sync that runs before the table arrives, and persist the loss.
 const isWanVaeForMain = (candidate: ModelConfig, ctx: VideoComponentPolicyContext): boolean => {
-  if (!isVaeForBases(['wan'])(candidate)) {
+  if (candidate.type !== 'vae' || candidate.base !== 'wan') {
     return false;
   }
 

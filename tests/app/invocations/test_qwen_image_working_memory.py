@@ -10,7 +10,7 @@ from diffusers.models.autoencoders.autoencoder_kl_qwenimage import AutoencoderKL
 
 from invokeai.app.invocations.vae.qwen_image_image_to_latents import QwenImageImageToLatentsInvocation
 from invokeai.app.invocations.vae.qwen_image_latents_to_image import QwenImageLatentsToImageInvocation
-from invokeai.backend.krea2.vae_compat import (
+from invokeai.backend.util.qwen_image_vae import (
     QWEN_IMAGE_VAE_DEFAULT_TILE_SIZE,
     patch_qwen_image_vae_tiling,
 )

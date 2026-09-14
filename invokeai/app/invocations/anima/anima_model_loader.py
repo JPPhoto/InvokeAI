@@ -13,6 +13,7 @@ from invokeai.app.invocations.model import (
     VAEField,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContext
+from invokeai.backend.architectures import accepted_vae_bases
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType, SubModelType
 
 
@@ -39,7 +40,7 @@ class AnimaModelLoaderInvocation(BaseInvocation):
     Anima uses:
     - Transformer: Cosmos Predict2 DiT + LLM Adapter (from single-file checkpoint)
     - Qwen3 Encoder: Qwen3 0.6B (standalone single-file)
-    - VAE: AutoencoderKLQwenImage / Wan 2.1 VAE (standalone single-file or FLUX VAE)
+    - VAE: AutoencoderKLQwenImage / Wan 2.1 VAE (standalone single-file)
 
     The T5-XXL tokenizer needed for LLM Adapter token IDs is bundled in the package,
     so no T5-XXL encoder model needs to be installed.
@@ -54,9 +55,9 @@ class AnimaModelLoaderInvocation(BaseInvocation):
     )
 
     vae_model: ModelIdentifierField = InputField(
-        description="Standalone VAE model. Anima uses a Wan 2.1 / QwenImage VAE (16-channel). "
-        "A FLUX VAE can also be used as a compatible fallback.",
+        description="Standalone VAE model. Anima uses a Wan 2.1 / QwenImage VAE (16-channel).",
         input=Input.Direct,
+        ui_model_base=accepted_vae_bases(BaseModelType.Anima),
         ui_model_type=ModelType.VAE,
         title="VAE",
     )

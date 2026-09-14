@@ -4565,7 +4565,7 @@ export type components = {
         };
         /**
          * Image to Latents - Anima
-         * @description Generates latents from an image using the Anima VAE (supports Wan 2.1 and FLUX VAE).
+         * @description Generates latents from an image using the Anima VAE (the Wan 2.1 VAE, in either layout).
          */
         AnimaImageToLatentsInvocation: {
             /**
@@ -4732,10 +4732,7 @@ export type components = {
         };
         /**
          * Latents to Image - Anima
-         * @description Generates an image from latents using the Anima VAE.
-         *
-         *     Supports the Wan 2.1 QwenImage VAE (AutoencoderKLWan) with explicit
-         *     latent denormalization, and FLUX VAE as fallback.
+         * @description Generates an image from latents using the Anima VAE (the Wan 2.1 VAE, in either layout).
          */
         AnimaLatentsToImageInvocation: {
             /**
@@ -4913,7 +4910,7 @@ export type components = {
          *     Anima uses:
          *     - Transformer: Cosmos Predict2 DiT + LLM Adapter (from single-file checkpoint)
          *     - Qwen3 Encoder: Qwen3 0.6B (standalone single-file)
-         *     - VAE: AutoencoderKLQwenImage / Wan 2.1 VAE (standalone single-file or FLUX VAE)
+         *     - VAE: AutoencoderKLQwenImage / Wan 2.1 VAE (standalone single-file)
          *
          *     The T5-XXL tokenizer needed for LLM Adapter token IDs is bundled in the package,
          *     so no T5-XXL encoder model needs to be installed.
@@ -4943,7 +4940,7 @@ export type components = {
             model: components["schemas"]["ModelIdentifierField"];
             /**
              * VAE
-             * @description Standalone VAE model. Anima uses a Wan 2.1 / QwenImage VAE (16-channel). A FLUX VAE can also be used as a compatible fallback.
+             * @description Standalone VAE model. Anima uses a Wan 2.1 / QwenImage VAE (16-channel).
              */
             vae_model: components["schemas"]["ModelIdentifierField"];
             /**
@@ -5171,10 +5168,11 @@ export type components = {
              * @description Null for the architecture's own row. A variant row overrides it.
              */
             variant?: string | null;
-            modality: components["schemas"]["ArchitectureModality"];
             features: components["schemas"]["ArchitectureFeatures"];
             /** @description Recommended generation parameters, if the architecture has any. */
             defaults?: components["schemas"]["MainModelDefaultSettings"] | null;
+            /** @description Null where the architecture declares no VAE compatibility beyond its own base. */
+            vae?: components["schemas"]["ArchitectureVae"] | null;
         };
         /**
          * ArchitectureFeatures
@@ -5187,11 +5185,6 @@ export type components = {
              * @description Width and height must be a multiple of this. A variant row may carry its own.
              */
             dimension_grid: number;
-            /**
-             * Spatial Compression
-             * @description How much smaller a latent is than the image, per side.
-             */
-            spatial_compression: number;
             /**
              * Guidance Label
              * @description What to call the guidance slider: 'CFG' or 'Guidance'.
@@ -5211,7 +5204,7 @@ export type components = {
              * Scheduler Set
              * @description Which scheduler family to offer; null means no choice.
              */
-            scheduler_set?: ("standard" | "flow" | "anima") | null;
+            scheduler_set?: ("standard" | "flow" | "flow-no-lcm" | "anima") | null;
             /**
              * Scheduler Applies To Graph
              * @default false
@@ -5239,6 +5232,7 @@ export type components = {
             supports_regional_guidance?: boolean;
             /**
              * Regional Negative
+             * @description Whether a region's negative prompt is masked, rather than applied globally.
              * @default false
              */
             regional_negative?: boolean;
@@ -5271,20 +5265,16 @@ export type components = {
             vae_precision?: boolean;
         };
         /**
-         * ArchitectureModality
-         * @description What this architecture can produce, and what it calls it in image metadata.
+         * ArchitectureVae
+         * @description Which VAEs an architecture's decode accepts, beyond its own base.
+         *
+         *     Served because the clients keep their own copy of this and it drifts: widening a backend list
+         *     without the picker leaves a VAE that loads but cannot be chosen. A variant row carries its own
+         *     list where its decoder differs -- Wan TI2V-5B takes the 48-channel VAE, A14B the 16-channel one.
          */
-        ArchitectureModality: {
-            /**
-             * Modes
-             * @description Sorted. Empty means it generates nothing on its own.
-             */
-            modes: ("txt2img" | "img2img" | "inpaint" | "outpaint" | "t2v" | "i2v" | "lf2v" | "flf2v" | "interpolate" | "extend_video" | "ref2v")[];
-            /**
-             * Metadata Slug
-             * @description Prefix its mode strings carry in image metadata; null means unprefixed.
-             */
-            metadata_slug?: string | null;
+        ArchitectureVae: {
+            /** Accepted */
+            accepted: components["schemas"]["VaeAcceptance"][];
         };
         /**
          * BaseMetadata
@@ -13499,7 +13489,7 @@ export type components = {
             model: components["schemas"]["ModelIdentifierField"];
             /**
              * VAE
-             * @description Standalone VAE model. Flux2 Klein uses the same VAE as FLUX (16-channel). If not provided, VAE will be loaded from the Qwen3 Source model.
+             * @description Standalone VAE model (AutoencoderKLFlux2, 32-channel). If not provided, VAE will be loaded from the Qwen3 Source model.
              * @default null
              */
             vae_model?: components["schemas"]["ModelIdentifierField"] | null;
@@ -43419,6 +43409,18 @@ export type components = {
              * @enum {integer}
              */
             latent_channels: 16 | 48;
+        };
+        /**
+         * VaeAcceptance
+         * @description One VAE this architecture's decode accepts.
+         */
+        VaeAcceptance: {
+            base: components["schemas"]["BaseModelType"];
+            /**
+             * Latent Channels
+             * @description Null unless the base ships VAEs of more than one latent width; only wan does.
+             */
+            latent_channels?: number | null;
         };
         /** ValidationError */
         ValidationError: {
