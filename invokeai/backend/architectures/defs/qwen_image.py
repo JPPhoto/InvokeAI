@@ -37,6 +37,8 @@ register(
     VaeFacet(
         frozenset(
             {
+                # The same 16-channel checkpoint is registered under either base depending on which
+                # family it was installed for.
                 VaeCompatibility(BaseModelType.QwenImage),
                 VaeCompatibility(BaseModelType.Anima),
             }

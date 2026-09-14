@@ -22,6 +22,7 @@ from invokeai.app.invocations.model import (
     is_self_contained_sdnq_pipeline,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContext
+from invokeai.backend.architectures import accepted_vae_bases
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
 from invokeai.backend.model_manager.taxonomy import (
     BaseModelType,
@@ -99,7 +100,7 @@ class Flux2KleinModelLoaderInvocation(BaseInvocation):
         # A FLUX VAE was offered here and does not work: it is the legacy `AutoEncoder` class with
         # a 16-channel latent space, and decoding a FLUX.2 latent with it raises
         # `AutoEncoder.decode() got an unexpected keyword argument 'return_dict'`.
-        ui_model_base=BaseModelType.Flux2,
+        ui_model_base=accepted_vae_bases(BaseModelType.Flux2),
         ui_model_type=ModelType.VAE,
         title="VAE",
     )

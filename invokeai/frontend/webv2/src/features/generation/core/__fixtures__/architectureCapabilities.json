@@ -1040,7 +1040,7 @@
       "guidance_label": "CFG",
       "guidance_min": 1.0,
       "guidance_max": null,
-      "scheduler_set": "flow",
+      "scheduler_set": "flow-no-lcm",
       "scheduler_applies_to_graph": true,
       "control_kinds": [
         "z_image_control"

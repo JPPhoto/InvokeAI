@@ -114,3 +114,15 @@ def accepts_vae(
         return vae_base == base
 
     return facet.accepts(vae_base, vae_latent_channels, variant)
+
+
+def accepted_vae_bases(base: BaseModelType) -> list[BaseModelType]:
+    """The VAE bases a loader for `base` offers, as its `vae_model` field's `ui_model_base`.
+
+    Bases only, across every variant: one loader serves all variants and the field cannot express a
+    channel constraint, so the loader's own validation narrows further with `accepts_vae`. Sorted by
+    value because frozenset iteration order follows the hash seed, and this lands in the schema.
+    """
+    facet = get(base, VaeFacet)
+    bases = facet.accepted_bases if facet is not None else frozenset({base})
+    return sorted(bases, key=lambda b: b.value)

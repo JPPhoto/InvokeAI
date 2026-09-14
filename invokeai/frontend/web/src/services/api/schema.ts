@@ -4565,7 +4565,7 @@ export type components = {
         };
         /**
          * Image to Latents - Anima
-         * @description Generates latents from an image using the Anima VAE (supports Wan 2.1 and FLUX VAE).
+         * @description Generates latents from an image using the Anima VAE (the Wan 2.1 VAE, in either layout).
          */
         AnimaImageToLatentsInvocation: {
             /**
@@ -4732,10 +4732,7 @@ export type components = {
         };
         /**
          * Latents to Image - Anima
-         * @description Generates an image from latents using the Anima VAE.
-         *
-         *     Supports the Wan 2.1 QwenImage VAE (AutoencoderKLWan) with explicit
-         *     latent denormalization, and FLUX VAE as fallback.
+         * @description Generates an image from latents using the Anima VAE (the Wan 2.1 VAE, in either layout).
          */
         AnimaLatentsToImageInvocation: {
             /**
@@ -5207,7 +5204,7 @@ export type components = {
              * Scheduler Set
              * @description Which scheduler family to offer; null means no choice.
              */
-            scheduler_set?: ("standard" | "flow" | "anima") | null;
+            scheduler_set?: ("standard" | "flow" | "flow-no-lcm" | "anima") | null;
             /**
              * Scheduler Applies To Graph
              * @default false

@@ -3064,6 +3064,9 @@
         "applyFilter": "Apply filter",
         "beginStep": "Begin step",
         "cancel": "Cancel",
+        "capabilitiesLoadFailed": "Model capabilities could not be loaded, so this layer cannot be checked yet.",
+        "capabilitiesLoading": "This layer is checked once model capabilities have loaded.",
+        "capabilitiesRetryHint": "Open the layer's settings to retry.",
         "endStep": "End step",
         "filter": "Filter",
         "filterParams": {
@@ -3171,6 +3174,7 @@
         "stepRange": "Step range",
         "transparencyEffect": "Transparent preview",
         "validation": {
+          "capabilities_unavailable": "waiting for model capabilities to load.",
           "control_lora_limit": "Only one Control LoRA can be used at a time.",
           "flux_fill_control_lora": "Control LoRA is not compatible with FLUX Fill.",
           "incompatible_adapter": "The selected model does not match this adapter type.",

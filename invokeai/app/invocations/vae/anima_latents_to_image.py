@@ -1,7 +1,10 @@
 """Anima latents-to-image invocation.
 
-Decodes Anima latents using the QwenImage VAE (AutoencoderKLWan) or
-compatible FLUX VAE as fallback.
+Decodes Anima latents with the Wan 2.1 VAE, whichever of the anima, qwen-image or 16-channel wan
+registrations it was installed under and in either layout: the original-layout file loads as
+AutoencoderKLWan, the diffusers-layout Qwen-Image export as AutoencoderKLQwenImage (same weights, same
+latent statistics). Any other decoder is refused, and so is a Wan VAE of another geometry (Wan 2.2's
+48-channel VAE).
 
 Latents from the denoiser are in normalized space (zero-centered). Before
 VAE decode, they must be denormalized using the Wan 2.1 per-channel
@@ -11,7 +14,6 @@ The VAE expects 5D latents [B, C, T, H, W] — for single images, T=1.
 """
 
 import torch
-from diffusers.models.autoencoders import AutoencoderKLWan
 from einops import rearrange
 from PIL import Image
 
@@ -27,7 +29,11 @@ from invokeai.app.invocations.fields import (
 from invokeai.app.invocations.model import VAEField
 from invokeai.app.invocations.primitives import ImageOutput
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.backend.krea2.vae_compat import patch_qwen_image_vae_tiling
+from invokeai.backend.krea2.vae_compat import (
+    QwenImageCompatibleVAE,
+    as_qwen_image_vae,
+    patch_qwen_image_vae_tiling,
+)
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.oom import is_oom_error
 from invokeai.backend.util.vae_decode_diagnostics import (
@@ -54,15 +60,11 @@ ANIMA_VAE_TILE_STRIDE = 384
     title="Latents to Image - Anima",
     tags=["latents", "image", "vae", "l2i", "anima"],
     category="latents",
-    version="1.0.3",
+    version="1.0.4",
     classification=Classification.Prototype,
 )
 class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
-    """Generates an image from latents using the Anima VAE.
-
-    Supports the Wan 2.1 QwenImage VAE (AutoencoderKLWan) with explicit
-    latent denormalization, and FLUX VAE as fallback.
-    """
+    """Generates an image from latents using the Anima VAE (the Wan 2.1 VAE, in either layout)."""
 
     latents: LatentsField = InputField(description=FieldDescriptions.latents, input=Input.Connection)
     vae: VAEField = InputField(description=FieldDescriptions.vae, input=Input.Connection)
@@ -91,7 +93,10 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
         latents = context.tensors.load(self.latents.latents_name)
 
         vae_info = context.models.load(self.vae.vae)
-        if not isinstance(vae_info.model, AutoencoderKLWan):
+        try:
+            # Also raises ValueError for a Wan VAE of another geometry (Wan 2.2's 48-channel VAE).
+            as_qwen_image_vae(vae_info.model)
+        except TypeError as e:
             # A FLUX VAE reaches here with the right shape -- 16 channels at 8x, same as Anima --
             # and decodes without raising, which is why it was offered for a while. It is a
             # different basis: measured against the correct decode of the same latent, 8.67 dB
@@ -104,7 +109,7 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
                 "'anima', 'qwen-image', or a 16-channel 'wan' VAE -- all three are the same "
                 "194-tensor checkpoint. A FLUX VAE has the same channel count but a different "
                 "basis, and converting between them is not implemented."
-            )
+            ) from e
 
         full_decode_working_memory = estimate_vae_working_memory_anima(
             operation="decode",
@@ -122,8 +127,7 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
 
         with vae_info.model_on_device(working_mem_bytes=estimated_working_memory) as (_, vae):
             context.util.signal_progress("Running Anima VAE decode")
-            if not isinstance(vae, AutoencoderKLWan):
-                raise TypeError(f"Expected AutoencoderKLWan, got {type(vae).__name__}.")
+            vae = as_qwen_image_vae(vae)
 
             vae_dtype = next(iter(vae.parameters())).dtype
             # Use the VAE's intended compute device (CUDA/MPS, or CPU if configured cpu_only). Do NOT infer it from
@@ -201,7 +205,7 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
     def _recover_nonfinite_decode(
         self,
         context: InvocationContext,
-        vae: AutoencoderKLWan,
+        vae: QwenImageCompatibleVAE,
         latents: torch.Tensor,
         decoded: torch.Tensor,
         latents_finite: bool,
@@ -226,7 +230,7 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
     def _recover_nonfinite_decode_impl(
         self,
         context: InvocationContext,
-        vae: AutoencoderKLWan,
+        vae: QwenImageCompatibleVAE,
         latents: torch.Tensor,
         decoded: torch.Tensor,
         latents_finite: bool,

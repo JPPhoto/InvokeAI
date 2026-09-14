@@ -4,12 +4,10 @@ The UI has to know whether to show a negative prompt box, whether a ControlNet l
 how many reference images to accept, whether clip-skip means anything. None of it is derivable from
 a model file — it follows from what the architecture is — and all of it was living in the frontend.
 
-webv2 holds the working version of this table for thirteen bases at
-`features/generation/core/baseGenerationPolicies.ts`, plus three more predicates scattered across
-`controlValidation.ts` and `addRegionalGuidance.ts`. Those values are the source for what is
-declared here; the point is not to change them but to move them somewhere a new architecture cannot
-be added without them, and where the three bases webv2 has never heard of — ERNIE-Image, MiniMax H3
-and the SDXL refiner — get an answer too.
+This is where those answers live now. `capabilities.py` serves them, and webv2 reads the served table
+instead of keeping its own copy; a new architecture cannot be registered without declaring them.
+Where a number is enforced by a node -- a `multiple_of`, a `ge`/`le` -- a test pins the declaration to
+that node, so the table cannot offer what the graph will reject.
 """
 
 from collections.abc import Mapping
@@ -24,9 +22,10 @@ NegativePromptUsage = Literal["always", "cfg-gated", "never"]
 
 ControlKind = Literal["controlnet", "t2i_adapter", "control_lora", "z_image_control"]
 
-SchedulerSet = Literal["standard", "flow", "anima"]
+SchedulerSet = Literal["standard", "flow", "flow-no-lcm", "anima"]
 """Which family of schedulers to offer. `None` means the architecture drives its own and offers no
-choice — MiniMax H3 steps video and audio down two hardcoded flow schedules."""
+choice — MiniMax H3 steps video and audio down two hardcoded flow schedules. `flow-no-lcm` is the flow
+set without LCM, for a variant whose schedule LCM does not fit."""
 
 
 @dataclass(frozen=True)
@@ -101,6 +100,9 @@ class FeaturesFacet(Facet):
     only says the graph will not reject a large value."""
 
     scheduler_set: SchedulerSet | None = None
+    scheduler_set_by_variant: Mapping[AnyVariant, SchedulerSet] = field(default_factory=dict)
+    """A variant whose scheduler choice differs from `scheduler_set`; the declaring architecture says why."""
+
     scheduler_applies_to_graph: bool = False
     """Whether the chosen scheduler reaches the graph, or is only a UI affordance."""
 
@@ -129,6 +131,12 @@ class FeaturesFacet(Facet):
                 "answer for every variant not named here, and a None key would be dead weight."
             )
 
+        if None in self.scheduler_set_by_variant:
+            raise ValueError(
+                "FeaturesFacet.scheduler_set_by_variant has a None key; `scheduler_set` is already the "
+                "answer for every variant not named here."
+            )
+
         if self.guidance_max is not None and self.guidance_max < self.guidance_min:
             raise ValueError(
                 f"FeaturesFacet declares a guidance range that holds no values: guidance_min="
@@ -140,6 +148,12 @@ class FeaturesFacet(Facet):
         if variant is None:
             return self.dimension_grid
         return self.dimension_grid_by_variant.get(variant, self.dimension_grid)
+
+    def resolve_scheduler_set(self, variant: AnyVariant | None = None) -> SchedulerSet | None:
+        """The scheduler family one concrete model is offered."""
+        if variant is None:
+            return self.scheduler_set
+        return self.scheduler_set_by_variant.get(variant, self.scheduler_set)
 
     @property
     def supports_reference_images(self) -> bool:

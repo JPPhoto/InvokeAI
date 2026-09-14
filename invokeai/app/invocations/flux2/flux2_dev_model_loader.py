@@ -21,6 +21,7 @@ from invokeai.app.invocations.model import (
     VAEField,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContext
+from invokeai.backend.architectures import accepted_vae_bases
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
 from invokeai.backend.model_manager.taxonomy import (
     BaseModelType,
@@ -81,7 +82,7 @@ class Flux2DevModelLoaderInvocation(BaseInvocation):
         description="Standalone FLUX.2 VAE (AutoencoderKLFlux2). "
         "If not provided, the VAE is extracted from the Diffusers source model.",
         input=Input.Direct,
-        ui_model_base=BaseModelType.Flux2,
+        ui_model_base=accepted_vae_bases(BaseModelType.Flux2),
         ui_model_type=ModelType.VAE,
         title="VAE",
     )

@@ -1,8 +1,12 @@
-import { getArchitectureFeatures } from '@features/generation/core/architectureCapabilities';
+import {
+  getArchitectureFeatures,
+  hasArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
 
 export type ControlAdapterKind = 'controlnet' | 't2i_adapter' | 'control_lora' | 'z_image_control';
 
 export type ControlValidationReason =
+  | 'capabilities_unavailable'
   | 'missing_model'
   | 'unsupported_adapter'
   | 'incompatible_base'
@@ -47,6 +51,11 @@ export const getControlValidationReason = (params: {
   }
   if (!adapterModel) {
     return 'missing_model';
+  }
+  // Without the table every kind reads as unsupported. Report that the answer is not in yet rather
+  // than calling a valid adapter unsupported.
+  if (!hasArchitectureCapabilities()) {
+    return 'capabilities_unavailable';
   }
   if (!isControlKindSupportedForBase(mainBase, kind)) {
     return 'unsupported_adapter';

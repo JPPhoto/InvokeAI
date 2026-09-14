@@ -357,10 +357,6 @@ export const getSchedulerOptions = (
 ): readonly SchedulerOption[] => {
   const config = getBaseGenerationConfig(model);
   const options = (() => {
-    if (model?.base === 'z-image' && model.variant === 'zbase') {
-      return FLOW_SCHEDULER_OPTIONS_WITHOUT_LCM;
-    }
-
     switch (config.schedulerSet) {
       case 'flow':
         return FLOW_SCHEDULER_OPTIONS;
@@ -390,10 +386,6 @@ export const coerceSchedulerForGraph = (
   // Some graph builders ignore scheduler entirely; coerce to stable metadata/defaults instead of leaking stale UI state.
   if (!config.schedulerAppliesToGraph) {
     return config.defaults.scheduler;
-  }
-
-  if (model?.base === 'z-image' && model.variant === 'zbase') {
-    return FLOW_SCHEDULERS_WITHOUT_LCM.has(scheduler) ? scheduler : 'euler';
   }
 
   switch (config.schedulerSet) {

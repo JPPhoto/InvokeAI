@@ -129,7 +129,7 @@ def _features_of(facet: FeaturesFacet, variant: AnyVariant | None = None) -> Arc
         guidance_label=facet.guidance_label,
         guidance_min=facet.guidance_min,
         guidance_max=facet.guidance_max,
-        scheduler_set=facet.scheduler_set,
+        scheduler_set=facet.resolve_scheduler_set(variant),
         scheduler_applies_to_graph=facet.scheduler_applies_to_graph,
         control_kinds=sorted(facet.control_kinds),
         max_reference_images=facet.max_reference_images,
@@ -162,7 +162,8 @@ def architecture_capabilities() -> list[ArchitectureCapabilities]:
 
     A variant gets its own row only where something served actually differs: its recommended
     parameters (`DefaultSettingsFacet.by_variant`), its dimension grid
-    (`FeaturesFacet.dimension_grid_by_variant`) or the VAEs it decodes with (`VaeFacet.by_variant`).
+    (`FeaturesFacet.dimension_grid_by_variant`), its schedulers (`FeaturesFacet.scheduler_set_by_variant`)
+    or the VAEs it decodes with (`VaeFacet.by_variant`).
     Those mappings are the whole rule — a row is emitted for the union of their keys, and every row
     is rendered in full, so a client never has to know which fields a variant row is allowed to omit.
 
@@ -192,6 +193,7 @@ def architecture_capabilities() -> list[ArchitectureCapabilities]:
         differing = (
             set(defaults.by_variant)
             | set(features.dimension_grid_by_variant)
+            | set(features.scheduler_set_by_variant)
             | set(vae_facet.by_variant if vae_facet is not None else ())
         ) - {None}
         for variant in sorted(differing):

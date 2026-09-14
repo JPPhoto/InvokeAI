@@ -3,6 +3,7 @@ import type {
   SelectValueChangeDetails,
   SliderValueChangeDetails,
 } from '@chakra-ui/react';
+import type { ArchitectureCapabilitiesSnapshot } from '@features/generation/runtime';
 import type {
   CanvasControlAdapterContract,
   CanvasControlLayerContract,
@@ -18,14 +19,19 @@ import {
   isControlKindSupportedForBase,
   type ControlAdapterKind,
 } from '@features/generation/graph';
-import { getArchitectureCapabilitiesSnapshot, subscribeArchitectureCapabilities } from '@features/generation/runtime';
+import {
+  ensureArchitectureCapabilitiesLoaded,
+  getArchitectureCapabilitiesSnapshot,
+  subscribeArchitectureCapabilities,
+} from '@features/generation/runtime';
 import { useModelsSelector } from '@features/models';
+import { focusIfUnclaimed } from '@platform/react/focusIfUnclaimed';
 import { useExternalStoreSelector } from '@platform/state/selectors';
-import { Field, Select, Slider } from '@platform/ui';
+import { Button, Field, Select, Slider } from '@platform/ui';
 import { lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import { getCanvasOperations, resolveDefaultFilterForModel } from '@workbench/canvas-operations/api';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { getCompatibleControlModels } from './controlModelOptions';
@@ -35,6 +41,8 @@ import { runLayerFilterOperation } from './layerPropertiesOperation';
 import { useSelectedMainModel } from './useSelectedMainModel';
 
 const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: true } as const;
+
+const selectCapabilitiesStatus = (snapshot: ArchitectureCapabilitiesSnapshot) => snapshot.status;
 
 const CONTROL_ADAPTER_KINDS: readonly ControlAdapterKind[] = [
   'controlnet',
@@ -109,6 +117,36 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
     [commitPrepared, layer.id]
   );
 
+  const capabilitiesStatus = useExternalStoreSelector(
+    subscribeArchitectureCapabilities,
+    getArchitectureCapabilitiesSnapshot,
+    selectCapabilitiesStatus
+  );
+  const [hasRequestedCapabilitiesRetry, setHasRequestedCapabilitiesRetry] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // Set by the click, consumed once the retry has filled the panel in.
+  const focusHandoffPending = useRef(false);
+  const retryCapabilities = useCallback(() => {
+    if (hasRequestedCapabilitiesRetry && capabilitiesStatus === 'loading') {
+      return;
+    }
+    focusHandoffPending.current = true;
+    setHasRequestedCapabilitiesRetry(true);
+    ensureArchitectureCapabilitiesLoaded();
+  }, [capabilitiesStatus, hasRequestedCapabilitiesRetry]);
+  // The request belongs to one retry; a later reload started elsewhere is not this panel's retry.
+  useEffect(() => {
+    if (!hasRequestedCapabilitiesRetry) {
+      return undefined;
+    }
+    return subscribeArchitectureCapabilities(() => {
+      const next = getArchitectureCapabilitiesSnapshot().status;
+      if (next !== 'loading') {
+        focusHandoffPending.current = next === 'loaded';
+        setHasRequestedCapabilitiesRetry(false);
+      }
+    });
+  }, [hasRequestedCapabilitiesRetry]);
   // Adapter kinds supported by the selected base. Z-Image Control is only shown
   // when a compatible Z-Image main model is selected. Read inside the store's
   // selector: the answer comes from the capability table, and a call memoised on
@@ -352,11 +390,28 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
     )
   );
   // Content-dependent problems only matter once the layer has pixels, but a
-  // missing model deserves the warning even on a fresh empty layer.
+  // missing model deserves the warning even on a fresh empty layer. A missing
+  // capability table is not a problem with this layer and is shown on its own.
+  const capabilitiesUnavailable = validationReason === 'capabilities_unavailable';
+  // The click flips the status to `loading` synchronously; keeping the failure surface mounted for the
+  // retry it started keeps the button, and the user's focus, in place.
+  const isRetryingCapabilities = hasRequestedCapabilitiesRetry && capabilitiesStatus === 'loading';
+  const showCapabilitiesFailure = capabilitiesUnavailable && (capabilitiesStatus === 'error' || isRetryingCapabilities);
   const visibleValidationReason =
-    validationReason && (hasContent || validationReason === 'missing_model') ? validationReason : null;
+    validationReason && !capabilitiesUnavailable && (hasContent || validationReason === 'missing_model')
+      ? validationReason
+      : null;
+
+  // A successful retry unmounts the button that held focus; hand it to the panel the retry filled in.
+  useEffect(() => {
+    if (!capabilitiesUnavailable && focusHandoffPending.current) {
+      focusHandoffPending.current = false;
+      focusIfUnclaimed(rootRef.current);
+    }
+  }, [capabilitiesUnavailable]);
+
   return (
-    <Stack gap="2">
+    <Stack ref={rootRef} gap="2">
       <HStack gap="2">
         <Field flex="1" label={t('widgets.layers.control.kind')} minW="0">
           <Select
@@ -461,6 +516,28 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
       {visibleValidationReason ? (
         <Text color="fg.warning" fontSize="2xs" role="alert">
           {t(`widgets.layers.control.validation.${visibleValidationReason}`)}
+        </Text>
+      ) : null}
+      {showCapabilitiesFailure ? (
+        <HStack aria-busy={isRetryingCapabilities} gap="2" role="alert">
+          <Text color="fg.warning" flex="1" fontSize="2xs">
+            {t('widgets.layers.control.capabilitiesLoadFailed')}
+          </Text>
+          {/* `aria-disabled` rather than `disabled`: a disabled button drops the focus it holds. */}
+          <Button
+            aria-busy={isRetryingCapabilities}
+            aria-disabled={isRetryingCapabilities}
+            size="xs"
+            variant="outline"
+            onClick={retryCapabilities}
+          >
+            {t('common.retry')}
+          </Button>
+        </HStack>
+      ) : null}
+      {capabilitiesUnavailable && !showCapabilitiesFailure ? (
+        <Text color="fg.muted" fontSize="2xs" role="status">
+          {t('widgets.layers.control.capabilitiesLoading')}
         </Text>
       ) : null}
     </Stack>

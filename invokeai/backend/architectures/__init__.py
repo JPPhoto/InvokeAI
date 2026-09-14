@@ -41,6 +41,11 @@ from invokeai.backend.architectures.facets.unet import (
     UNetDownscaleFacet,
     get_max_unet_downscale,
 )
+from invokeai.backend.architectures.facets.vae import (
+    VaeFacet,
+    accepted_vae_bases,
+    accepts_vae,
+)
 from invokeai.backend.architectures.facets.variant import (
     VariantFacet,
     declared_variant_enums,
@@ -72,9 +77,12 @@ __all__ = [
     "GenerationModeKind",
     "ModalityFacet",
     "UNetDownscaleFacet",
+    "VaeFacet",
     "VariantFacet",
     "LatentSpace",
     "LatentSpaceFacet",
+    "accepted_vae_bases",
+    "accepts_vae",
     "conditioning_infos",
     "conditioning_safe_globals",
     "declared_variant_enums",

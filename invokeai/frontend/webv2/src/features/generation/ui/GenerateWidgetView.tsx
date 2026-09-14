@@ -1,16 +1,19 @@
 import type { GenerationModelCatalogItem as ModelConfig } from '@features/generation/contracts';
 import type { GenerateModelConfig, GenerateSettings, LoraModelConfig } from '@features/generation/core/types';
 
-import { HStack, Spinner, Stack, Text } from '@chakra-ui/react';
+import { Box, HStack, Spinner, Stack, Text } from '@chakra-ui/react';
 import { getDefaultGenerateSettings, isSupportedGenerateModel } from '@features/generation/core/baseGenerationPolicies';
 import { isLoraModelConfig, normalizeGenerateSettings } from '@features/generation/core/settings';
 import {
   ensureArchitectureCapabilitiesLoaded,
+  getArchitectureCapabilitiesSnapshot,
+  subscribeArchitectureCapabilities,
   useArchitectureCapabilitiesSelector,
 } from '@features/generation/data/architectureCapabilitiesStore';
 import { resolveGenerateWidgetValues } from '@features/generation/settings';
+import { focusIfUnclaimed } from '@platform/react/focusIfUnclaimed';
 import { Button } from '@platform/ui/Button';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { getGenerateFormCommitPatch } from './generateFormViewModel';
@@ -49,14 +52,43 @@ export const GenerateWidgetView = () => {
   // the retry it started is what keeps the button -- and the user's focus -- in place.
   const isRetrying = hasRequestedRetry && capabilitiesStatus === 'loading';
 
+  // Set by the click, consumed when the form the retry revealed mounts.
+  const focusHandoffPending = useRef(false);
+
   const retryCapabilities = useCallback(() => {
     if (isRetrying) {
       return;
     }
 
+    focusHandoffPending.current = true;
     setHasRequestedRetry(true);
     ensureArchitectureCapabilitiesLoaded();
   }, [isRetrying]);
+
+  // The request belongs to one retry. Once that load settles, a later reload -- an account switch,
+  // a retry started from another panel -- is not this widget's retry: no failure surface while it
+  // loads, and no focus taken when it lands.
+  useEffect(() => {
+    if (!hasRequestedRetry) {
+      return undefined;
+    }
+
+    return subscribeArchitectureCapabilities(() => {
+      const next = getArchitectureCapabilitiesSnapshot().status;
+
+      if (next !== 'loading') {
+        focusHandoffPending.current = next === 'loaded';
+        setHasRequestedRetry(false);
+      }
+    });
+  }, [hasRequestedRetry]);
+
+  const handOverFocus = useCallback((element: HTMLDivElement | null) => {
+    if (element && focusHandoffPending.current) {
+      focusHandoffPending.current = false;
+      focusIfUnclaimed(element);
+    }
+  }, []);
 
   const commitSettings = useCallback(
     (nextSettings: GenerateSettings) => {
@@ -94,8 +126,13 @@ export const GenerateWidgetView = () => {
       return (
         <Stack aria-busy={isRetrying} aria-live="polite" gap="2" justify="center" minH="8rem" p="1" role="alert">
           <Text color="fg.error" fontSize="2xs" textWrap="pretty">
-            {capabilitiesError ?? t('widgets.generate.capabilitiesLoadFailed')}
+            {t('widgets.generate.capabilitiesLoadFailed')}
           </Text>
+          {capabilitiesError ? (
+            <Text color="fg.muted" fontSize="2xs" textWrap="pretty">
+              {capabilitiesError}
+            </Text>
+          ) : null}
           {/* `aria-disabled` rather than `disabled`: a disabled button drops the focus it holds. */}
           <Button
             alignSelf="flex-start"
@@ -132,17 +169,20 @@ export const GenerateWidgetView = () => {
   }
 
   return (
-    <GenerateSettingsForm
-      isLoadingModels={status === 'idle' || status === 'loading'}
-      loadError={error}
-      loraModels={loraModels}
-      models={models}
-      projectId={projectId}
-      selectedModel={selectedModel}
-      settings={settings}
-      supportedModels={supportedModels}
-      onCommitSettings={commitSettings}
-      onPatchSettings={patchSettings}
-    />
+    // A successful retry unmounts the button that held focus; hand it to the form the retry revealed.
+    <Box ref={handOverFocus}>
+      <GenerateSettingsForm
+        isLoadingModels={status === 'idle' || status === 'loading'}
+        loadError={error}
+        loraModels={loraModels}
+        models={models}
+        projectId={projectId}
+        selectedModel={selectedModel}
+        settings={settings}
+        supportedModels={supportedModels}
+        onCommitSettings={commitSettings}
+        onPatchSettings={patchSettings}
+      />
+    </Box>
   );
 };

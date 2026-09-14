@@ -16242,7 +16242,7 @@
         "category": "image",
         "class": "invocation",
         "classification": "prototype",
-        "description": "Generates latents from an image using the Anima VAE (supports Wan 2.1 and FLUX VAE).",
+        "description": "Generates latents from an image using the Anima VAE (the Wan 2.1 VAE, in either layout).",
         "node_pack": "invokeai",
         "properties": {
           "board": {
@@ -16343,7 +16343,7 @@
         "tags": ["image", "latents", "vae", "i2l", "anima"],
         "title": "Image to Latents - Anima",
         "type": "object",
-        "version": "1.0.1",
+        "version": "1.0.2",
         "output": {
           "$ref": "#/components/schemas/LatentsOutput"
         }
@@ -16561,7 +16561,7 @@
         "category": "latents",
         "class": "invocation",
         "classification": "prototype",
-        "description": "Generates an image from latents using the Anima VAE.\n\nSupports the Wan 2.1 QwenImage VAE (AutoencoderKLWan) with explicit\nlatent denormalization, and FLUX VAE as fallback.",
+        "description": "Generates an image from latents using the Anima VAE (the Wan 2.1 VAE, in either layout).",
         "node_pack": "invokeai",
         "properties": {
           "board": {
@@ -16662,7 +16662,7 @@
         "tags": ["latents", "image", "vae", "l2i", "anima"],
         "title": "Latents to Image - Anima",
         "type": "object",
-        "version": "1.0.3",
+        "version": "1.0.4",
         "output": {
           "$ref": "#/components/schemas/ImageOutput"
         }
@@ -17866,7 +17866,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "enum": ["standard", "flow", "anima"]
+                "enum": ["standard", "flow", "flow-no-lcm", "anima"]
               },
               {
                 "type": "null"
@@ -56892,7 +56892,7 @@
             "orig_default": null,
             "orig_required": false,
             "title": "VAE",
-            "ui_model_base": ["qwen-image", "anima"],
+            "ui_model_base": ["anima", "qwen-image"],
             "ui_model_type": ["vae"]
           },
           "qwen3_vl_encoder_model": {
@@ -84122,7 +84122,7 @@
             "orig_default": null,
             "orig_required": false,
             "title": "VAE",
-            "ui_model_base": ["qwen-image", "anima"],
+            "ui_model_base": ["anima", "qwen-image"],
             "ui_model_type": ["vae"]
           },
           "qwen_vl_encoder_model": {

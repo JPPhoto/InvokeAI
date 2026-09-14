@@ -35,7 +35,10 @@ vi.mock('./GenerateSettingsForm', () => ({
     selectedModel?: { key: string };
     settings: { positivePrompt: string };
   }) => (
-    <div data-testid="generate-form">{`model:${selectedModel?.key ?? 'none'} prompt:${settings.positivePrompt}`}</div>
+    // A button, so the form has something operable to receive focus, as the real one does.
+    <button data-testid="generate-form" type="button">
+      {`model:${selectedModel?.key ?? 'none'} prompt:${settings.positivePrompt}`}
+    </button>
   ),
 }));
 
@@ -171,15 +174,51 @@ describe('GenerateWidgetView capability gate', () => {
 
     const alert = document.querySelector('[role="alert"]');
 
+    // A localized headline, with what the request said as the detail beneath it.
+    expect(alert?.textContent).toContain('Could not load model capabilities from the backend.');
     expect(alert?.textContent).toContain('Fixture capability outage.');
     expect(formStub()).toBeNull();
 
     getArchitectureCapabilities.mockResolvedValueOnce(architectureCapabilitiesFixture);
 
-    await settle(() => retryButton().click());
+    await settle(() => {
+      retryButton().focus();
+      retryButton().click();
+    });
 
     // The stored selection, not the catalog's first entry, and the project's own prompt.
     expect(formStub()?.textContent).toBe('model:stored-sdxl prompt:a saved prompt');
+    // The button that held focus is gone; focus moved into the form it revealed, not to <body>.
+    expect(document.activeElement).toBe(formStub());
+  });
+
+  it('leaves focus where the user moved it while the retry was in flight', async () => {
+    getArchitectureCapabilities.mockRejectedValueOnce(new Error('Fixture capability outage.'));
+
+    await renderView();
+    await settle(ensureArchitectureCapabilitiesLoaded);
+
+    let finishLoad: (rows: ArchitectureCapabilitiesRow[]) => void = () => undefined;
+    getArchitectureCapabilities.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishLoad = resolve;
+      })
+    );
+
+    await settle(() => {
+      retryButton().focus();
+      retryButton().click();
+    });
+
+    const elsewhere = document.createElement('input');
+    document.body.append(elsewhere);
+    elsewhere.focus();
+
+    await settle(() => finishLoad(architectureCapabilitiesFixture));
+
+    expect(formStub()).not.toBeNull();
+    expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
   });
 
   it('keeps focus on the retry button while its own retry is in flight', async () => {

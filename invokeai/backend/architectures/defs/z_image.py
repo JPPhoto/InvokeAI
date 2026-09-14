@@ -35,6 +35,8 @@ register(
         # z_image_denoise.guidance_scale is ge=1.0; 1.0 is CFG off, which is what Turbo runs at.
         guidance_min=1.0,
         scheduler_set="flow",
+        # `z_image_denoise.scheduler` documents LCM as working with Turbo only, not Base.
+        scheduler_set_by_variant={ZImageVariantType.ZBase: "flow-no-lcm"},
         scheduler_applies_to_graph=True,
         control_kinds=frozenset({"z_image_control"}),
         # The text encoder masks positive conditioning; the denoiser takes a negative list but

@@ -32,7 +32,7 @@ export interface ArchitectureCapabilitiesRow {
     guidance_min: number;
     /** The ceiling the denoise node enforces, or `null` where it enforces none. */
     guidance_max: number | null;
-    /** No `flow-no-lcm` here: that set is reached by a frontend-only variant rule, see below. */
+    /** A variant row may carry its own. */
     scheduler_set: SchedulerSetId | null;
     scheduler_applies_to_graph: boolean;
     control_kinds: string[];

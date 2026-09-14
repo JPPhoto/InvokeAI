@@ -16,6 +16,7 @@ from invokeai.app.invocations.model import (
     is_self_contained_sdnq_pipeline,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContext
+from invokeai.backend.architectures import accepted_vae_bases
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType, SubModelType
 
 
@@ -61,7 +62,7 @@ class ZImageModelLoaderInvocation(BaseInvocation):
         description="Standalone VAE model. Z-Image uses the same VAE as FLUX (16-channel). "
         "If not provided, VAE will be loaded from the Qwen3 Source model.",
         input=Input.Direct,
-        ui_model_base=BaseModelType.Flux,
+        ui_model_base=accepted_vae_bases(BaseModelType.ZImage),
         ui_model_type=ModelType.VAE,
         title="VAE",
     )

@@ -13,6 +13,7 @@ from invokeai.app.invocations.model import (
     VAEField,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContext
+from invokeai.backend.architectures import accepted_vae_bases
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType, SubModelType
 
 
@@ -56,15 +57,7 @@ class AnimaModelLoaderInvocation(BaseInvocation):
     vae_model: ModelIdentifierField = InputField(
         description="Standalone VAE model. Anima uses a Wan 2.1 / QwenImage VAE (16-channel).",
         input=Input.Direct,
-        # The same Wan-family checkpoint whichever of the three bases it was installed under.
-        # Declaring nothing here offered every VAE ever installed. A FLUX VAE is *not* among
-        # them: it shares the channel count but not the basis, so `anima_l2i` decodes it
-        # without error into noise -- 6.10 dB PSNR against the Wan decode, measured.
-        ui_model_base=[
-            BaseModelType.Anima,
-            BaseModelType.QwenImage,
-            BaseModelType.Wan,
-        ],
+        ui_model_base=accepted_vae_bases(BaseModelType.Anima),
         ui_model_type=ModelType.VAE,
         title="VAE",
     )

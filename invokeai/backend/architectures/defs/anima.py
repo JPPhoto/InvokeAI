@@ -39,9 +39,9 @@ register(
                 #
                 # Not FLUX. `anima_l2i` takes a FluxAutoEncoder without raising, but that branch
                 # skips the Wan denormalisation and decodes a WAN21_16 latent in FLUX's basis:
-                # measured against the Anima VAE on real weights, 6.10 dB PSNR, 0.93 MAE, a
-                # magenta moire in place of the subject. Accepting it is a silent corruption, not
-                # a fallback. See `tests/backend/architectures/test_vae.py`.
+                # measured on a real denoised latent against the Anima VAE's decode of it, 8.67 dB
+                # PSNR, a magenta moire in place of the subject. Accepting it is a silent corruption,
+                # not a fallback. See `tests/app/invocations/test_anima_vae.py`.
                 VaeCompatibility(BaseModelType.Anima),
                 VaeCompatibility(BaseModelType.QwenImage),
                 VaeCompatibility(BaseModelType.Wan, latent_channels=16),
