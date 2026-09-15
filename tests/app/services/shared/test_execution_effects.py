@@ -1105,6 +1105,37 @@ def test_call_saved_workflow_declares_authorized_spawn_and_await_effects() -> No
     assert effects[1].dependency.execution_node_id == effects[0].child_execution_id
 
 
+def test_call_saved_workflow_failure_effect_preserves_empty_message_exception() -> None:
+    class EmptyMessageError(Exception):
+        pass
+
+    def authorize_workflow(_workflow_id: str) -> object:
+        raise EmptyMessageError()
+
+    invocation = CallSavedWorkflowInvocation(id="call", workflow_id="workflow")
+    capability = ChildExecutionCapability(parent_execution_id="call", parent_frame=())
+    data = InvocationContextData(
+        queue_item=SimpleNamespace(user_id="user"),
+        invocation=invocation,
+        source_invocation_id="call",
+        execution_state_id="state",
+        execution_frame_id="frame",
+        execution_child_capability=capability,
+        execution_workflow_authorizer=authorize_workflow,
+    )
+    context = build_invocation_context(SimpleNamespace(), data, lambda: False)
+
+    invocation.invoke(context)
+
+    effects = context.execution_effects.snapshot()
+    assert len(effects) == 1
+    effect = effects[0]
+    assert isinstance(effect, FailEffect)
+    assert effect.message == ""
+    assert effect.error_type == "EmptyMessageError"
+    assert "EmptyMessageError" in (effect.error_traceback or "")
+
+
 def test_capability_enabled_execution_interface_rejects_wrong_parent_scope() -> None:
     capability = ChildExecutionCapability(parent_execution_id="other", parent_frame=())
     recorder = ExecutionEffectsRecorder(

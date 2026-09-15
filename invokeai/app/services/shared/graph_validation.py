@@ -4,6 +4,7 @@ import copy
 import itertools
 import sys
 import weakref
+from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import wraps
 from typing import (
@@ -78,6 +79,8 @@ else:
 
 NoneType = type(None)
 
+_ACTIVE_FACADE_OVERRIDES: ContextVar[frozenset[str]] = ContextVar("active_facade_overrides", default=frozenset())
+
 # Port name constants
 ITEM_FIELD = "item"
 COLLECTION_FIELD = "collection"
@@ -93,7 +96,26 @@ def _get_facade_override(name: str, implementation: Callable[..., Any]) -> Calla
     override = vars(facade).get(name)
     if override is None or override is implementation:
         return implementation
-    return override
+
+    # A compatibility wrapper commonly saves the facade function and calls it from the override. In that case the
+    # saved function must execute its canonical body instead of rediscovering the wrapper. The extra frame check keeps
+    # the wrapper's side effects single-shot; the context guard covers callable overrides without a Python code object.
+    caller = sys._getframe(1)
+    override_code = getattr(override, "__code__", None)
+    if caller.f_back is not None and override_code is not None and caller.f_back.f_code is override_code:
+        return implementation
+    if name in _ACTIVE_FACADE_OVERRIDES.get():
+        return implementation
+
+    @wraps(override)
+    def dispatch(*args: Any, **kwargs: Any) -> Any:
+        token = _ACTIVE_FACADE_OVERRIDES.set(_ACTIVE_FACADE_OVERRIDES.get() | {name})
+        try:
+            return override(*args, **kwargs)
+        finally:
+            _ACTIVE_FACADE_OVERRIDES.reset(token)
+
+    return dispatch
 
 
 @dataclass(frozen=True)

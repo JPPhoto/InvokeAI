@@ -1579,7 +1579,7 @@ def _effect_ledger_projection(state: GraphExecutionState) -> tuple[Any, ...]:
 
 
 def _execution_token_projection(state: GraphExecutionState) -> tuple[Any, ...]:
-    """Project durable data tokens without generated execution identities."""
+    """Project durable activation tokens without generated execution identities."""
     return tuple(
         sorted(
             (
@@ -1593,6 +1593,7 @@ def _execution_token_projection(state: GraphExecutionState) -> tuple[Any, ...]:
                     token.frame.workflow_call_depth,
                 )
                 for token in state.execution_tokens.values()
+                if token.token_kind == "activation"
             ),
             key=repr,
         )
@@ -1722,12 +1723,11 @@ def _direct_iterate_fan_in_execution_ref_projection(
             state.prepared_source_mapping.get(exec_node_id, exec_node_id),
             tuple(reference.frame.iteration_path),
             reference.frame.workflow_call_depth,
-            reference.effect_count,
         )
         for exec_node_id, reference in state.execution_refs.items()
         if exec_node_id in state.prepared_source_mapping and (execution_ids is None or exec_node_id in execution_ids)
     ]
-    return tuple(sorted(refs, key=lambda ref: (ref[0], ref[1], ref[2], ref[3] is not None, ref[3] or -1)))
+    return tuple(sorted(refs, key=lambda ref: (ref[0], ref[1], ref[2])))
 
 
 def _source_edge_projection(graph: Graph) -> tuple[tuple[str, str, str, str, str], ...]:
@@ -5575,7 +5575,7 @@ def test_direct_iterate_body_collect_downstream_checkpoint_after_none_item_rehyd
     assert _state_projection(resumed_state) == _state_projection(expected_state)
 
 
-def test_direct_flat_for_completion_persists_continuations_and_final_tokens() -> None:
+def test_direct_flat_for_completion_persists_continuations_and_result_outputs() -> None:
     trace, state = _run(GraphExecutionState(graph=_flat_for_graph()))
 
     assert trace == ["for", "body", "return", "for", "body", "return"]
@@ -5585,16 +5585,15 @@ def test_direct_flat_for_completion_persists_continuations_and_final_tokens() ->
         state.source_prepared_mapping["for"],
         key=lambda exec_node_id: state.execution_graph.get_node(exec_node_id).index,
     )
-    final_ref = state.execution_refs[final_for_id]
     final_output = state.results[final_for_id]
-    output_collection_token_id = f"{final_ref.reference_id}:output_collection"
-    final_state_token_id = f"{final_ref.reference_id}:final_state"
 
     assert snapshot["execution_effects"]
-    assert state.execution_tokens[output_collection_token_id].value == final_output.output_collection == [11, 12]
-    assert state.execution_tokens[final_state_token_id].value == final_output.final_state
-    assert restored.execution_tokens[output_collection_token_id].value == [11, 12]
-    assert restored.execution_tokens[final_state_token_id].value == final_output.final_state.model_dump(mode="json")
+    assert final_output.output_collection == [11, 12]
+    assert snapshot["execution_refs"] == {}
+    assert restored.execution_tokens == {}
+    assert restored.execution_refs
+    assert restored.results[final_for_id].output_collection == [11, 12]
+    assert restored.results[final_for_id].final_state == final_output.final_state
     assert sorted(
         (effect.operation, effect.continuation_kind)
         for effects in state.execution_effects.values()
@@ -5772,9 +5771,8 @@ def test_flat_for_apply_partial_rehydration_preserves_continuation_runtime() -> 
 
         assert _effect_ledger_projection(restored) == _effect_ledger_projection(partial_state)
         # Rehydration reconstructs references for all prepared nodes, while the partial in-memory
-        # state only has references for nodes reached so far. Compare durable tokens/effects here;
-        # resumed execution below compares the complete identity projection.
-        assert _execution_identity_projection(restored)[1:] == _execution_identity_projection(partial_state)[1:]
+        # state only has references for nodes reached so far. Compare the durable token/effect projection.
+        assert _execution_token_projection(restored) == _execution_token_projection(partial_state)
         _assert_execution_identity_consistent(restored)
         assert any(
             (effect.get("kind") if isinstance(effect, dict) else effect.kind) == "continuation"
@@ -5794,7 +5792,8 @@ def test_flat_for_apply_partial_rehydration_preserves_continuation_runtime() -> 
         assert _state_projection(resumed_state) == _state_projection(expected_state)
         assert _continuation_projection(resumed_state) == _continuation_projection(expected_state)
         assert _effect_ledger_projection(resumed_state) == _effect_ledger_projection(expected_state)
-        assert _execution_identity_projection(resumed_state) == _execution_identity_projection(expected_state)
+        assert _execution_token_projection(resumed_state) == _execution_token_projection(expected_state)
+        assert _effect_ledger_projection(resumed_state) == _effect_ledger_projection(expected_state)
         assert _final_for_output(resumed_state).output_collection == [None, None]
         _assert_execution_identity_consistent(resumed_state)
         if force_compatibility_scheduler:
@@ -5884,17 +5883,23 @@ def test_flat_for_partial_rehydration_matches_compatibility_scheduler(stop_after
         assert partial_trace + remaining_trace == expected_trace
         assert _state_projection(resumed_state) == _state_projection(expected_state)
         # Rehydration reconstructs durable execution references for all prepared nodes; a fresh
-        # in-memory run does not retain those references after terminal cleanup. Compare the
-        # durable token/effect portions directly and compare references across the two resumed
-        # scheduler paths below.
-        assert _execution_identity_projection(resumed_state)[1:] == _execution_identity_projection(expected_state)[1:]
+        # in-memory run does not retain those references after terminal cleanup. Compare durable
+        # token/effect state and continuation records instead.
+        assert _execution_token_projection(resumed_state) == _execution_token_projection(expected_state)
         assert _continuation_projection(resumed_state) == _continuation_projection(expected_state)
+        assert _effect_ledger_projection(resumed_state) == _effect_ledger_projection(expected_state)
         _assert_execution_identity_consistent(resumed_state)
         if force_compatibility_scheduler:
             assert isinstance(resumed_state._execution_scheduler, _ExecutionScheduler)
         else:
             assert isinstance(resumed_state._execution_scheduler, _GenericGraphSchedulerAdapter)
-        resumed_projections.append((_state_projection(resumed_state), _execution_identity_projection(resumed_state)))
+        resumed_projections.append(
+            (
+                _state_projection(resumed_state),
+                _continuation_projection(resumed_state),
+                _effect_ledger_projection(resumed_state),
+            )
+        )
 
     assert resumed_projections[0] == resumed_projections[1]
 
@@ -6342,8 +6347,10 @@ def test_fixture_is_versioned_and_future_versions_are_explicitly_rejected() -> N
     with FIXTURE_PATH.open(encoding="utf-8") as fixture:
         snapshot = json.load(fixture)
 
-    assert snapshot["execution_state_version"] == CURRENT_EXECUTION_STATE_VERSION
-    assert load_execution_state(snapshot).id == "fixture-state"
+    assert snapshot["execution_state_version"] == 1
+    restored = load_execution_state(snapshot)
+    assert restored.id == "fixture-state"
+    assert dump_execution_state(restored)["execution_state_version"] == CURRENT_EXECUTION_STATE_VERSION
 
     future_snapshot = dict(snapshot)
     future_snapshot["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION + 1
@@ -6922,6 +6929,164 @@ def test_fresh_mixed_iterate_if_collect_uses_selected_branches_in_both_scheduler
 
     assert runs[0][0] == runs[1][0]
     assert _state_projection(runs[0][1]) == _state_projection(runs[1][1])
+
+
+@pytest.mark.parametrize(("condition", "branch"), [(True, "true:"), (False, "false:")])
+def test_constant_if_inside_iterate_routes_each_loop_item(condition: bool, branch: str) -> None:
+    graph = Graph()
+    graph.add_node(CollectionConcatInvocation(id="source", first=[1, 2]))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(IfInvocation(id="if", condition=condition))
+    graph.add_node(MarkedAnyTypeTestInvocation(id="true_branch", marker="true:"))
+    graph.add_node(MarkedAnyTypeTestInvocation(id="false_branch", marker="false:"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("source", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "true_branch", "value"))
+    graph.add_edge(create_edge("iterate", "item", "false_branch", "value"))
+    graph.add_edge(create_edge("true_branch", "value", "if", "true_input"))
+    graph.add_edge(create_edge("false_branch", "value", "if", "false_input"))
+    graph.add_edge(create_edge("if", "value", "collect", "item"))
+
+    trace, state = _run_graph(GraphExecutionState(graph=graph))
+
+    selected_source = "true_branch" if condition else "false_branch"
+    unselected_source = "false_branch" if condition else "true_branch"
+    assert trace[0] == "source"
+    assert trace[-1] == "collect"
+    assert trace.count("iterate") == 2
+    assert trace.count(selected_source) == 2
+    assert trace.count("if") == 2
+    assert unselected_source not in trace
+    collect_id = next(iter(state.source_prepared_mapping["collect"]))
+    assert state.results[collect_id].collection == [f"{branch}1", f"{branch}2"]
+    assert state.is_complete()
+    assert state.next() is None
+    assert not state._ready_node_ids
+    assert all(not queue for queue in state._ready_queues.values())
+
+
+@pytest.mark.parametrize(("condition", "branch"), [(True, "true:"), (False, "false:")])
+def test_constant_if_inside_for_routes_each_loop_item(condition: bool, branch: str) -> None:
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=[1, 2]))
+    graph.add_node(IfInvocation(id="if", condition=condition))
+    graph.add_node(MarkedAnyTypeTestInvocation(id="true_branch", marker="true:"))
+    graph.add_node(MarkedAnyTypeTestInvocation(id="false_branch", marker="false:"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(create_edge("for", "item", "true_branch", "value"))
+    graph.add_edge(create_edge("for", "item", "false_branch", "value"))
+    graph.add_edge(create_edge("true_branch", "value", "if", "true_input"))
+    graph.add_edge(create_edge("false_branch", "value", "if", "false_input"))
+    graph.add_edge(create_edge("if", "value", "return", "output"))
+    graph.add_edge(create_loop_linkage("for", "return"))
+
+    trace, state = _run_graph(GraphExecutionState(graph=graph))
+
+    selected_source = "true_branch" if condition else "false_branch"
+    unselected_source = "false_branch" if condition else "true_branch"
+    assert trace.count("for") == 2
+    assert trace.count(selected_source) == 2
+    assert trace.count("if") == 2
+    assert trace.count("return") == 2
+    assert unselected_source not in trace
+    assert sorted(state._get_iteration_path(exec_node_id) for exec_node_id in state.source_prepared_mapping["if"]) == [
+        (0,),
+        (1,),
+    ]
+    final_for_id = max(
+        state.source_prepared_mapping["for"],
+        key=lambda exec_node_id: state.execution_graph.get_node(exec_node_id).index,
+    )
+    assert state.results[final_for_id].output_collection == [f"{branch}1", f"{branch}2"]
+    assert state.is_complete()
+    assert state.next() is None
+    assert not state._ready_node_ids
+    assert all(not queue for queue in state._ready_queues.values())
+
+
+@pytest.mark.parametrize(("condition", "branch"), [(True, "true:"), (False, "false:")])
+def test_external_condition_if_inside_iterate_routes_each_loop_item(condition: bool, branch: str) -> None:
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=condition))
+    graph.add_node(CollectionConcatInvocation(id="source", first=[1, 2]))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_node(MarkedAnyTypeTestInvocation(id="true_branch", marker="true:"))
+    graph.add_node(MarkedAnyTypeTestInvocation(id="false_branch", marker="false:"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("condition", "value", "if", "condition"))
+    graph.add_edge(create_edge("source", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "true_branch", "value"))
+    graph.add_edge(create_edge("iterate", "item", "false_branch", "value"))
+    graph.add_edge(create_edge("true_branch", "value", "if", "true_input"))
+    graph.add_edge(create_edge("false_branch", "value", "if", "false_input"))
+    graph.add_edge(create_edge("if", "value", "collect", "item"))
+
+    trace, state = _run_graph(GraphExecutionState(graph=graph))
+
+    selected_source = "true_branch" if condition else "false_branch"
+    unselected_source = "false_branch" if condition else "true_branch"
+    assert trace.count("condition") == 1
+    assert trace.count("source") == 1
+    assert trace.count("iterate") == 2
+    assert trace.count(selected_source) == 2
+    assert trace.count("if") == 2
+    assert trace.count("collect") == 1
+    assert unselected_source not in trace
+    assert sorted(state._get_iteration_path(exec_node_id) for exec_node_id in state.source_prepared_mapping["if"]) == [
+        (0,),
+        (1,),
+    ]
+    collect_id = next(iter(state.source_prepared_mapping["collect"]))
+    assert state.results[collect_id].collection == [f"{branch}1", f"{branch}2"]
+    assert state.is_complete()
+    assert state.next() is None
+    assert not state._pending_if_exec_nodes
+    assert not state._ready_node_ids
+    assert all(not queue for queue in state._ready_queues.values())
+
+
+@pytest.mark.parametrize(("condition", "branch"), [(True, "true:"), (False, "false:")])
+def test_external_condition_if_inside_for_routes_each_loop_item(condition: bool, branch: str) -> None:
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=condition))
+    graph.add_node(ForInvocation(id="for", collection=[1, 2]))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_node(MarkedAnyTypeTestInvocation(id="true_branch", marker="true:"))
+    graph.add_node(MarkedAnyTypeTestInvocation(id="false_branch", marker="false:"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(create_edge("condition", "value", "if", "condition"))
+    graph.add_edge(create_edge("for", "item", "true_branch", "value"))
+    graph.add_edge(create_edge("for", "item", "false_branch", "value"))
+    graph.add_edge(create_edge("true_branch", "value", "if", "true_input"))
+    graph.add_edge(create_edge("false_branch", "value", "if", "false_input"))
+    graph.add_edge(create_edge("if", "value", "return", "output"))
+    graph.add_edge(create_loop_linkage("for", "return"))
+
+    trace, state = _run_graph(GraphExecutionState(graph=graph))
+
+    selected_source = "true_branch" if condition else "false_branch"
+    unselected_source = "false_branch" if condition else "true_branch"
+    assert trace.count("condition") == 1
+    assert trace.count("for") == 2
+    assert trace.count(selected_source) == 2
+    assert trace.count("if") == 2
+    assert trace.count("return") == 2
+    assert unselected_source not in trace
+    assert sorted(state._get_iteration_path(exec_node_id) for exec_node_id in state.source_prepared_mapping["if"]) == [
+        (0,),
+        (1,),
+    ]
+    final_for_id = max(
+        state.source_prepared_mapping["for"],
+        key=lambda exec_node_id: state.execution_graph.get_node(exec_node_id).index,
+    )
+    assert state.results[final_for_id].output_collection == [f"{branch}1", f"{branch}2"]
+    assert state.is_complete()
+    assert state.next() is None
+    assert not state._pending_if_exec_nodes
+    assert not state._ready_node_ids
+    assert all(not queue for queue in state._ready_queues.values())
 
 
 @pytest.mark.parametrize("force_compatibility_scheduler", [False, True])

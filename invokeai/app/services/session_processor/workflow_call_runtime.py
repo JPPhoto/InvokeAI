@@ -170,7 +170,7 @@ class WorkflowCallQueueLifecycle:
                     "Workflow call lifecycle effects must contain either one fail or one spawn+await pair."
                 )
             message = self._effect_value(fail_effects[0], "message")
-            if not isinstance(message, str) or not message.strip():
+            if not isinstance(message, str):
                 raise ValueError("Workflow call fail effect requires an error message.")
             raise ValueError(message)
 

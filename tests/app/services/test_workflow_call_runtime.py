@@ -9,6 +9,10 @@ def test_run_node_persists_saved_workflow_lifecycle_effects_before_queue_dispatc
     workflow_call_tests.test_run_node_persists_saved_workflow_lifecycle_effects_before_queue_dispatch(monkeypatch)
 
 
+def test_run_node_preserves_saved_workflow_failure_metadata(monkeypatch) -> None:
+    workflow_call_tests.test_run_node_preserves_saved_workflow_failure_metadata(monkeypatch)
+
+
 def test_run_persists_waiting_session_without_completing_queue_item(monkeypatch) -> None:
     workflow_call_tests.test_run_persists_waiting_session_without_completing_queue_item(monkeypatch)
 

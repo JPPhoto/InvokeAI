@@ -269,7 +269,7 @@ def test_graph_state_apply_stores_stable_frame_tokens_and_effects():
 
     restored = load_execution_state(dump_execution_state(state))
     assert restored.get_execution_ref(node.id).reference_id == ref.reference_id
-    assert restored.execution_tokens[f"{ref.reference_id}:value"].frame == ref.frame
+    assert restored.execution_tokens == {}
 
 
 def test_graph_state_apply_accepts_protocol_ref_without_token():

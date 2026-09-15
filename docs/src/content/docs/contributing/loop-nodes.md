@@ -31,8 +31,10 @@ helpers, while successor readiness is selected from frame-scoped dependencies an
 
 Ownership is topology-dependent: admitted fresh `If` branches require matching activation tokens; bounded planners own
 admitted loop expansion and continuation. Compatibility adapters own the remaining shapes. Execution ledgers are
-internal persistence data, excluded from ordinary model serialization and public schemas. `dump_execution_state()`
-retains them, including attached child states. They add no author-time ports or frontend/backend external fields.
+internal persistence data, excluded from ordinary model serialization and public schemas. Version-2
+`dump_execution_state()` rebuilds references and ordinary output tokens, retains activation tokens and effects needed
+for resume, and omits terminal lifecycle records and completed child dependencies. They add no author-time ports or
+frontend/backend external fields.
 
 ## Core contract
 

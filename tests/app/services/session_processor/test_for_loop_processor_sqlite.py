@@ -1017,11 +1017,12 @@ def test_processor_sqlite_two_sibling_nested_for_failure_cleans_runtime(
     session = failed_item.session
     assert session.execution_refs
     assert all(
-        session.execution_refs[execution_id] == execution_ref
+        session.execution_refs[execution_id].source_node_id == execution_ref.source_node_id
+        and session.execution_refs[execution_id].frame == execution_ref.frame
+        and session.execution_refs[execution_id].state_id == execution_ref.state_id
         for execution_id, execution_ref in live_failed_session.execution_refs.items()
     )
-    assert session.execution_tokens
-    assert set(live_failed_session.execution_tokens) <= set(session.execution_tokens)
+    assert session.execution_tokens == {}
     assert session.execution_effects
     assert set(live_failed_session.execution_effects) <= set(session.execution_effects)
     assert session.has_error()
@@ -1106,8 +1107,8 @@ def test_processor_sqlite_three_level_nested_for_failure_cleans_runtime(
     execution_refs_snapshot, execution_tokens_snapshot, execution_effects_snapshot, errors_snapshot = (
         failed_persistence_snapshot
     )
-    assert execution_refs_snapshot
-    assert execution_tokens_snapshot
+    assert execution_refs_snapshot == {}
+    assert execution_tokens_snapshot == {}
     assert execution_effects_snapshot
 
     failed_item = queue.get_queue_item(item_id)
@@ -1212,8 +1213,8 @@ def test_processor_sqlite_four_level_nested_for_failure_cleans_runtime(
     execution_refs_snapshot, execution_tokens_snapshot, execution_effects_snapshot, errors_snapshot = (
         failed_persistence_snapshot
     )
-    assert execution_refs_snapshot
-    assert execution_tokens_snapshot
+    assert execution_refs_snapshot == {}
+    assert execution_tokens_snapshot == {}
     assert execution_effects_snapshot
 
     failed_item = queue.get_queue_item(item_id)
@@ -1260,7 +1261,7 @@ def test_processor_sqlite_four_level_nested_for_failure_cleans_runtime(
         "deepest_return": (0, 0, 0, 0),
     }
     assert len(session.execution_refs) == 6
-    assert len(session.execution_tokens) == 24
+    assert session.execution_tokens == {}
     assert len(session.execution_effects) == 4
     assert all(
         reference.state_id == session.id

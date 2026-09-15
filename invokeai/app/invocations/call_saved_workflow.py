@@ -1,3 +1,4 @@
+import traceback
 from typing import Any
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, Classification, invocation
@@ -101,7 +102,11 @@ class CallSavedWorkflowInvocation(BaseInvocation):
             )
         except Exception as e:
             if lifecycle_enabled:
-                execution.fail(str(e))
+                execution.fail(
+                    str(e),
+                    error_type=type(e).__name__,
+                    error_traceback=traceback.format_exc(),
+                )
                 return WorkflowReturnOutput(values={})
             raise
 

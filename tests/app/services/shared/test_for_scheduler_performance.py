@@ -12,8 +12,16 @@ from unittest.mock import Mock
 import pytest
 
 from invokeai.app.invocations.collections import RangeInvocation
+from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation
-from invokeai.app.services.shared.graph import CollectInvocation, Graph, GraphExecutionState, IterateInvocation
+from invokeai.app.invocations.primitives import BooleanInvocation
+from invokeai.app.services.shared.graph import (
+    CollectInvocation,
+    Graph,
+    GraphExecutionState,
+    IterateInvocation,
+    _GenericGraphSchedulerAdapter,
+)
 from tests.test_nodes import AnyTypeTestInvocation, create_edge, create_loop_linkage
 
 
@@ -56,6 +64,18 @@ class _CountingMapping(dict[str, object]):
             self._counter.record(self._mapping_name)
             yield key
 
+    def __contains__(self, key: object) -> bool:
+        self._counter.record(self._mapping_name)
+        return super().__contains__(key)
+
+    def __getitem__(self, key: str) -> object:
+        self._counter.record(self._mapping_name)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default: object = None) -> object:  # type: ignore[override]
+        self._counter.record(self._mapping_name)
+        return super().get(key, default)
+
 
 def _run_trivial_loop(
     loop_type: str,
@@ -63,25 +83,47 @@ def _run_trivial_loop(
     *,
     clock: Callable[[], float] = time.process_time,
     mapping_counter: _MappingTraversalCounter | None = None,
+    include_if: bool = False,
+    external_condition: bool = False,
 ) -> float:
     graph = Graph()
     graph.add_node(RangeInvocation(id="range", start=0, stop=count))
     graph.add_node(ForInvocation(id="loop") if loop_type == "for" else IterateInvocation(id="loop"))
-    graph.add_node(AnyTypeTestInvocation(id="body"))
     graph.add_edge(create_edge("range", "collection", "loop", "collection"))
-    graph.add_edge(create_edge("loop", "item", "body", "value"))
+    if include_if:
+        graph.add_node(AnyTypeTestInvocation(id="true_body"))
+        graph.add_node(AnyTypeTestInvocation(id="false_body"))
+        graph.add_node(IfInvocation(id="if") if external_condition else IfInvocation(id="if", condition=True))
+        if external_condition:
+            graph.add_node(BooleanInvocation(id="condition", value=True))
+            graph.add_edge(create_edge("condition", "value", "if", "condition"))
+        graph.add_edge(create_edge("loop", "item", "true_body", "value"))
+        graph.add_edge(create_edge("loop", "item", "false_body", "value"))
+        graph.add_edge(create_edge("true_body", "value", "if", "true_input"))
+        graph.add_edge(create_edge("false_body", "value", "if", "false_input"))
+        output_source = "if"
+    else:
+        graph.add_node(AnyTypeTestInvocation(id="body"))
+        graph.add_edge(create_edge("loop", "item", "body", "value"))
+        output_source = "body"
     if loop_type == "for":
         graph.add_node(ForReturnInvocation(id="return"))
-        graph.add_edge(create_edge("body", "value", "return", "output"))
+        graph.add_edge(create_edge(output_source, "value", "return", "output"))
         graph.add_edge(create_loop_linkage("loop", "return"))
     else:
         graph.add_node(CollectInvocation(id="collect"))
-        graph.add_edge(create_edge("body", "value", "collect", "item"))
+        graph.add_edge(create_edge(output_source, "value", "collect", "item"))
     state = GraphExecutionState(graph=graph)
     if mapping_counter is not None:
-        state._scheduler()
-        state.execution_effects = _CountingMapping(state.execution_effects, mapping_counter, "execution_effects")
-        state.results = _CountingMapping(state.results, mapping_counter, "results")
+        scheduler = state._scheduler()
+        state.execution_refs = _CountingMapping(state.execution_refs, mapping_counter, "execution_refs")  # type: ignore[assignment]
+        state.execution_tokens = _CountingMapping(state.execution_tokens, mapping_counter, "execution_tokens")  # type: ignore[assignment]
+        state.execution_effects = _CountingMapping(state.execution_effects, mapping_counter, "execution_effects")  # type: ignore[assignment]
+        state.results = _CountingMapping(state.results, mapping_counter, "results")  # type: ignore[assignment]
+        if isinstance(scheduler, _GenericGraphSchedulerAdapter):
+            scheduler._scheduler.plan.nodes = _CountingMapping(
+                scheduler._scheduler.plan.nodes, mapping_counter, "scheduler_plan"
+            )
     context = Mock()
     started = clock()
     while (node := state.next()) is not None:
@@ -90,21 +132,40 @@ def _run_trivial_loop(
     return clock() - started
 
 
-@pytest.mark.parametrize("loop_type", ["iterate", "for"])
-def test_loop_scheduler_does_not_rescan_growing_state(loop_type: str) -> None:
+@pytest.mark.parametrize(
+    ("loop_type", "include_if", "external_condition"),
+    [
+        ("iterate", False, False),
+        ("for", False, False),
+        ("iterate", True, False),
+        ("iterate", True, True),
+        ("for", True, False),
+        ("for", True, True),
+    ],
+)
+def test_loop_scheduler_does_not_rescan_growing_state(
+    loop_type: str, include_if: bool, external_condition: bool
+) -> None:
     visits: dict[int, int] = {}
     visits_by_mapping: dict[int, dict[str, int]] = {}
     for count in (300, 1200):
         counter = _MappingTraversalCounter()
-        _run_trivial_loop(loop_type, count, mapping_counter=counter)
+        _run_trivial_loop(
+            loop_type,
+            count,
+            mapping_counter=counter,
+            include_if=include_if,
+            external_condition=external_condition,
+        )
         visits[count] = counter.entries_visited
         visits_by_mapping[count] = counter.visits_by_mapping
 
     # A small constant number of full mapping passes is acceptable. A pass per iteration is not:
     # it visits growing scheduler state quadratically. For covers durable effect history; Iterate covers
     # result synchronization in the generic scheduler.
-    assert all(visits[count] <= count * 32 for count in visits), (
-        f"mapping visits for {loop_type}: {visits}; by mapping: {visits_by_mapping}"
+    assert all(visits[count] <= count * 128 for count in visits), (
+        f"mapping visits for {loop_type}, include_if={include_if}, external_condition={external_condition}: "
+        f"{visits}; by mapping: {visits_by_mapping}"
     )
 
 

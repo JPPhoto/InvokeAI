@@ -49,9 +49,9 @@ def _is_source_inactive(
         return any(state._is_activation_dependency_rejected(dependency) for dependency in dependencies)
 
     frames = {
-        state._get_iteration_path(exec_node_id)
+        iteration_path
         for dependency in dependencies
-        for exec_node_id in state._prepared_registry().get_prepared_ids(dependency.owner_id)
+        for iteration_path in state._prepared_if_exec_frames(dependency.owner_id)
     }
     if not frames:
         return all(_is_empty_if_condition(state, dependency) for dependency in dependencies)
@@ -113,11 +113,7 @@ def _record_compatibility_activation_token(
 
 def _is_activation_dependency_satisfied(state: "GraphExecutionState", dependency: ActivationDependency) -> bool:
     """Check one opaque plan requirement against durable gate and token state."""
-    matching_gate_ids = [
-        prepared_if_id
-        for prepared_if_id in state._prepared_registry().get_prepared_ids(dependency.owner_id)
-        if state._get_iteration_path(prepared_if_id) == dependency.frame
-    ]
+    matching_gate_ids = state._prepared_if_exec_ids(dependency.owner_id, dependency.frame)
     if not matching_gate_ids:
         return False
 
@@ -134,7 +130,8 @@ def _is_activation_dependency_satisfied(state: "GraphExecutionState", dependency
             return False
         if not gate.is_active(dependency.branch, owner_id=gate_id, frame=gate.frame):
             return False
-        if not any(
+        token = state.execution_tokens.get(f"{expected_ref.reference_id}:activation:{dependency.branch}")
+        if token is None or not (
             token.token_id == f"{expected_ref.reference_id}:activation:{dependency.branch}"
             and token.reference_id == expected_ref.reference_id
             and token.owner_node_id == gate_id
@@ -145,7 +142,6 @@ def _is_activation_dependency_satisfied(state: "GraphExecutionState", dependency
             and token.frame.frame_id == expected_ref.frame.frame_id
             and token.frame.iteration_path == expected_ref.frame.iteration_path
             and token.frame.workflow_call_depth == expected_ref.frame.workflow_call_depth
-            for token in state.execution_tokens.values()
         ):
             return False
     return True
@@ -154,11 +150,7 @@ def _is_activation_dependency_satisfied(state: "GraphExecutionState", dependency
 def _is_activation_dependency_rejected(state: "GraphExecutionState", dependency: ActivationDependency) -> bool:
     """Return whether a resolved gate explicitly selected another branch."""
 
-    matching_gate_ids = [
-        prepared_if_id
-        for prepared_if_id in state._prepared_registry().get_prepared_ids(dependency.owner_id)
-        if state._get_iteration_path(prepared_if_id) == dependency.frame
-    ]
+    matching_gate_ids = state._prepared_if_exec_ids(dependency.owner_id, dependency.frame)
     for gate_id in matching_gate_ids:
         gate = state._activation_gate(gate_id)
         expected_frame = state._expected_execution_ref(gate_id).frame

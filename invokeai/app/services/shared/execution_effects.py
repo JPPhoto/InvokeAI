@@ -334,7 +334,9 @@ class AwaitEffect(ExecutionEffect):
 
 class FailEffect(ExecutionEffect):
     kind: Literal["fail"] = "fail"
-    message: str = Field(min_length=1)
+    message: str = Field(default="")
+    error_type: str | None = Field(default=None, min_length=1)
+    error_traceback: str | None = None
 
 
 class ContinuationEffect(ExecutionEffect):
@@ -456,9 +458,22 @@ class ExecutionInterface:
         self._require_lifecycle_capability("await")
         self._recorder.record(AwaitEffect(execution_ref=self._recorder.execution_ref, dependency=dependency))
 
-    def fail(self, message: str) -> None:
+    def fail(
+        self,
+        message: str,
+        *,
+        error_type: str | None = None,
+        error_traceback: str | None = None,
+    ) -> None:
         self._require_lifecycle_capability("fail")
-        self._recorder.record(FailEffect(execution_ref=self._recorder.execution_ref, message=message))
+        self._recorder.record(
+            FailEffect(
+                execution_ref=self._recorder.execution_ref,
+                message=message,
+                error_type=error_type,
+                error_traceback=error_traceback,
+            )
+        )
 
     def start_continuation(self, continuation_kind: str, *, payload: Any | None = None) -> None:
         self._recorder.record(

@@ -1476,6 +1476,47 @@ def test_run_node_persists_saved_workflow_lifecycle_effects_before_queue_dispatc
     assert events.completed == []
 
 
+def test_run_node_preserves_saved_workflow_failure_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    class EmptyWorkflowError(Exception):
+        pass
+
+    session_queue = _DummySessionQueue()
+    runner, events, _workflow_records = _build_workflow_runner(monkeypatch, session_queue=session_queue)
+
+    def fail_validation(self, context):
+        raise EmptyWorkflowError()
+
+    monkeypatch.setattr(CallSavedWorkflowInvocation, "validate_selected_workflow", fail_validation)
+    graph = Graph()
+    graph.add_node(CallSavedWorkflowInvocation(id="call-node", workflow_id="workflow-a"))
+    session = GraphExecutionState(graph=graph)
+    invocation = session.next()
+    assert isinstance(invocation, CallSavedWorkflowInvocation)
+    queue_item = type(
+        "QueueItem",
+        (),
+        {
+            "item_id": 1,
+            "status": "in_progress",
+            "session": session,
+            "session_id": session.id,
+            "user_id": "user-1",
+            "queue_id": "default",
+            "batch_id": "batch-1",
+        },
+    )()
+
+    session_queue.add_queue_item(queue_item)
+    runner.run_node(invocation=invocation, queue_item=queue_item)
+
+    assert session_queue.failed_item_ids == [1]
+    assert len(events.errors) == 1
+    _queue_item, _invocation, error_type, error_message, error_traceback = events.errors[0]
+    assert error_type == "EmptyWorkflowError"
+    assert error_message == ""
+    assert "EmptyWorkflowError" in error_traceback
+
+
 def test_run_node_fails_cleanly_for_invalid_batch_child_workflow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

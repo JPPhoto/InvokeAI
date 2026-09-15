@@ -905,3 +905,70 @@ def test_graph_state_apply_rolls_back_generic_scheduler_transition() -> None:
         state._record_effect_streams = original_record_effect_streams  # type: ignore[method-assign]
 
     assert state.executed == set()
+
+
+def test_graph_state_apply_retry_after_if_branch_failure_completes_graph() -> None:
+    graph = Graph()
+    graph.add_node(BooleanInvocation(id="condition", value=True))
+    graph.add_node(AddInvocation(id="true_value", a=1, b=2))
+    graph.add_node(AddInvocation(id="false_value", a=3, b=4))
+    graph.add_node(IfInvocation(id="if"))
+    graph.add_node(AddInvocation(id="consumer", b=10))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="condition", field="value"),
+            destination=EdgeConnection(node_id="if", field="condition"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="true_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="true_input"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="false_value", field="value"),
+            destination=EdgeConnection(node_id="if", field="false_input"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="if", field="value"),
+            destination=EdgeConnection(node_id="consumer", field="a"),
+        )
+    )
+
+    state = GraphExecutionState(graph=graph)
+    branch_node = None
+    while (node := state.next()) is not None:
+        source_node_id = state.prepared_source_mapping[node.id]
+        if source_node_id == "true_value":
+            branch_node = node
+            break
+        state.complete(node.id, node.invoke(Mock()))
+    assert branch_node is not None
+
+    execution_ref = state.get_execution_ref(branch_node.id)
+    output = branch_node.invoke(Mock())
+    original_record_effect_streams = state._record_effect_streams
+
+    def fail_after_scheduler_mutation(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("effect recording failed")
+
+    state._record_effect_streams = fail_after_scheduler_mutation  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RuntimeError, match="effect recording failed"):
+            state.apply(execution_ref, output)
+    finally:
+        state._record_effect_streams = original_record_effect_streams  # type: ignore[method-assign]
+
+    assert branch_node.id not in state.executed
+
+    state.apply(execution_ref, output)
+    while (node := state.next()) is not None:
+        state.complete(node.id, node.invoke(Mock()))
+
+    consumer_exec_id = next(iter(state.source_prepared_mapping["consumer"]))
+    assert state.results[consumer_exec_id].value == 13
+    assert state.is_complete()

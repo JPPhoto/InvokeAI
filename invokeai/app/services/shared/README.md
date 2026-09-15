@@ -42,8 +42,11 @@ invocation, frontend, generated-schema, image, or external-interface contract. T
 for every currently supported fresh shape listed above. The controller remains required for unsupported fresh shapes
 and legacy snapshots. The execution ledgers (`execution_refs`, `execution_tokens`, `execution_effects`, and
 `execution_child_dependencies`) are internal persistence data. They are not part of public API schemas or client
-responses; `dump_execution_state()` is the explicit internal persistence path that retains them, including nested child
-states. Direct `Iterate`/`Collect` graphs that do not contain `If`, `For`, `ForReturn`, or saved-workflow control flow
+responses. Version-2 `dump_execution_state()` writes a compact projection: execution references and ordinary output
+tokens are rebuilt from the prepared graph, mappings, and results; frame-scoped activation tokens remain durable;
+effects remain durable when needed for stream, continuation, or active workflow-call recovery; completed workflow-call
+lifecycle effects and completed child-dependency records are omitted. Attached child state is retained only while its
+parent call is active. Direct `Iterate`/`Collect` graphs that do not contain `If`, `For`, `ForReturn`, or saved-workflow control flow
 also use the generic adapter. Its adapter-level readiness predicate waits for canonical Iterate streams to close, and
 generic completion mirrors each Iterate result into that ledger before releasing `Collect`. The exact fresh four-node
 shape `literal collection source -> Iterate -> one ordinary body -> Collect`, plus any number of ordinary downstream
@@ -302,9 +305,10 @@ mutation helpers. Those helpers reject changes once the affected nodes have alre
   - source node id
   - iteration path
   - runtime state such as pending, ready, executed, or skipped
-- `execution_refs: dict[str, ExecutionReference]` - stable references for prepared execution nodes, including their
-  source node and execution frame.
-- `execution_tokens: dict[str, ExecutionToken]` - output tokens produced by applied execution results.
+- `execution_refs: dict[str, ExecutionReference]` - in-memory stable references for prepared execution nodes, including
+  their source node and execution frame; version-2 snapshots rebuild these references instead of storing them.
+- `execution_tokens: dict[str, ExecutionToken]` - in-memory output tokens produced by applied execution results;
+  version-2 snapshots retain only frame-scoped activation tokens.
 - `execution_effects: dict[str, list[Any]]` - JSON-safe effects accepted for each execution reference.
 - **Ready queues grouped by class** (private projection): `_ready_queues: dict[class_name, deque[str]]` and
   `_active_class: Optional[str]`. Ordinary static DAGs and legacy-shaped `If` graphs derive readiness from the generic
@@ -573,11 +577,13 @@ remain excluded from ready-queue projection during rehydration, preserving ready
 the pending `If` is admitted. Before token validation, missing legacy iteration-path metadata is rebuilt from the
 prepared execution graph. Persisted activation identity is then validated fail-closed against prepared owners, derived
 references, declared activation fields, canonical ids, and known frame fields; extra frame metadata is retained.
-`dump_execution_state()` retains execution references, tokens, effects, and child dependencies, including those in
-attached child states. Ordinary model serialization and public schemas omit these four internal ledgers; private helper
-objects are not serialized. Queue snapshots carry an additive execution-state version marker and use a version-aware
-loader; legacy unmarked snapshots are treated as version 0, while unreadable snapshots are quarantined by queue
-service.
+Version-2 `dump_execution_state()` omits derived execution references and ordinary output tokens, keeps activation
+tokens, retains stream/continuation effects needed to resume, and drops terminal saved-workflow lifecycle effects and
+completed child-dependency records. Active workflow-call child state remains attached for recovery; completed calls use
+their workflow-call history instead. Ordinary model serialization and public schemas omit these four internal ledgers;
+private helper objects are not serialized. Queue snapshots carry an additive execution-state version marker and use a
+version-aware loader; legacy unmarked snapshots are treated as version 0, while unreadable snapshots are quarantined by
+queue service.
 
 ### 4.4 Compatibility preparation (`_prepare()`)
 

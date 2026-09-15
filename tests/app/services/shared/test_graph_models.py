@@ -100,6 +100,23 @@ def test_graph_facade_preserves_authoring_helper_patch_points(monkeypatch: pytes
     assert not graph_facade.are_connections_compatible(source, "value", destination, "a")
 
 
+def test_graph_facade_override_can_delegate_to_saved_original(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = AddInvocation(id="source", a=1, b=2)
+    destination = AddInvocation(id="destination", a=3, b=4)
+    original = graph_facade.are_connections_compatible
+    calls = 0
+
+    def wrapped(*args: object, **kwargs: object) -> bool:
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(graph_facade, "are_connections_compatible", wrapped)
+
+    assert graph_facade.are_connections_compatible(source, "value", destination, "a")
+    assert calls == 1
+
+
 def test_graph_facade_reexports_graph_models() -> None:
     exported_names = (
         "EdgeConnection",

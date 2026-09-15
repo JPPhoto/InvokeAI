@@ -321,6 +321,11 @@ class GraphExecutionState(BaseModel):
         PrivateAttr(default_factory=dict)
     )
     _if_activation_dependencies_by_exec: dict[str, tuple[ActivationDependency, ...]] = PrivateAttr(default_factory=dict)
+    _prepared_if_exec_ids_by_source_and_frame: dict[tuple[str, tuple[int, ...]], tuple[str, ...]] = PrivateAttr(
+        default_factory=dict
+    )
+    _prepared_if_exec_frames_by_source: dict[str, tuple[tuple[int, ...], ...]] = PrivateAttr(default_factory=dict)
+    _prepared_if_exec_indexed_sources: set[str] = PrivateAttr(default_factory=set)
     _prepared_exec_metadata: dict[str, _PreparedExecNodeMetadata] = PrivateAttr(default_factory=dict)
     _prepared_exec_registry: Optional[_PreparedExecRegistry] = PrivateAttr(default=None)
     _if_activation_controller_instance: Optional[_IfActivationController] = PrivateAttr(default=None)
@@ -447,6 +452,9 @@ class GraphExecutionState(BaseModel):
         self._if_branch_sources_cache = {}
         self._if_activation_dependencies_by_source = {}
         self._if_activation_dependencies_by_exec = {}
+        self._prepared_if_exec_ids_by_source_and_frame = {}
+        self._prepared_if_exec_frames_by_source = {}
+        self._prepared_if_exec_indexed_sources = set()
         self._execution_runtime = None
         self._source_graph_flat = None
         self._execution_graph_flat = None
@@ -458,6 +466,16 @@ class GraphExecutionState(BaseModel):
         self._prepared_for_index = None
         self._final_prepared_for_index = None
         self._prepared_for_index_by_exec = {}
+        self._prepared_if_exec_ids_by_source_and_frame = {}
+        self._prepared_if_exec_frames_by_source = {}
+        self._prepared_if_exec_indexed_sources = set()
+        self._pending_if_exec_nodes = {
+            exec_node_id
+            for exec_node_id, node in self.execution_graph.nodes.items()
+            if exec_node_id not in self.executed
+            and isinstance(node, IfInvocation)
+            and self._is_pending_if(exec_node_id)
+        }
 
     def _type_key(self, node_obj: BaseInvocation) -> str:
         return node_obj.__class__.__name__
@@ -473,6 +491,30 @@ class GraphExecutionState(BaseModel):
                 state=self,
             )
         return self._prepared_exec_registry
+
+    def _prepared_if_exec_ids(self, source_node_id: str, iteration_path: tuple[int, ...]) -> tuple[str, ...]:
+        """Return prepared If executions for one source/frame without rescanning them per dependency check."""
+        if source_node_id not in self._prepared_if_exec_indexed_sources:
+            frame_paths: list[tuple[int, ...]] = []
+            for exec_node_id in self.source_prepared_mapping.get(source_node_id, ()):
+                if not isinstance(self.execution_graph.nodes.get(exec_node_id), IfInvocation):
+                    continue
+                prepared_path = self._get_iteration_path(exec_node_id)
+                if prepared_path is None:
+                    continue
+                key = (source_node_id, prepared_path)
+                existing = self._prepared_if_exec_ids_by_source_and_frame.get(key, ())
+                self._prepared_if_exec_ids_by_source_and_frame[key] = (*existing, exec_node_id)
+                if not existing:
+                    frame_paths.append(prepared_path)
+            self._prepared_if_exec_frames_by_source[source_node_id] = tuple(frame_paths)
+            self._prepared_if_exec_indexed_sources.add(source_node_id)
+        return self._prepared_if_exec_ids_by_source_and_frame.get((source_node_id, iteration_path), ())
+
+    def _prepared_if_exec_frames(self, source_node_id: str) -> tuple[tuple[int, ...], ...]:
+        """Return indexed If frames for one source."""
+        self._prepared_if_exec_ids(source_node_id, ())
+        return self._prepared_if_exec_frames_by_source.get(source_node_id, ())
 
     def _if_activation_controller(self) -> _IfActivationController:
         if self._if_activation_controller_instance is None:
@@ -1918,6 +1960,11 @@ class GraphExecutionState(BaseModel):
         return dependency.cancel_child(str(child_item_id), error_message)
 
     def _register_prepared_exec_node(self, exec_node_id: str, source_node_id: str) -> None:
+        self._prepared_if_exec_indexed_sources.discard(source_node_id)
+        for key in tuple(self._prepared_if_exec_ids_by_source_and_frame):
+            if key[0] == source_node_id:
+                self._prepared_if_exec_ids_by_source_and_frame.pop(key, None)
+        self._prepared_if_exec_frames_by_source.pop(source_node_id, None)
         is_new = exec_node_id not in self.source_prepared_mapping.get(source_node_id, ())
         self._prepared_registry().register(exec_node_id, source_node_id)
         if is_new and self._unexecuted_prepared_counts is not None and exec_node_id not in self.executed:
@@ -2295,7 +2342,7 @@ class GraphExecutionState(BaseModel):
                     awaited_child_ids.append(child_execution_id)
                 elif effect_kind == "fail":
                     message = self._value_from_object(effect, "message")
-                    if not isinstance(message, str) or not message.strip():
+                    if not isinstance(message, str):
                         raise ValueError("Fail effect requires an error message")
 
             token = self._value_from_object(effect, "token")
@@ -2715,6 +2762,11 @@ class GraphExecutionState(BaseModel):
     def _invalidate_loop_caches_for_exec_node(self, exec_node_id: str) -> None:
         source_node_id = self.prepared_source_mapping.get(exec_node_id)
         if source_node_id is not None:
+            self._prepared_if_exec_indexed_sources.discard(source_node_id)
+            for key in tuple(self._prepared_if_exec_ids_by_source_and_frame):
+                if key[0] == source_node_id:
+                    self._prepared_if_exec_ids_by_source_and_frame.pop(key, None)
+            self._prepared_if_exec_frames_by_source.pop(source_node_id, None)
             self._invalidate_loop_caches_for_source(source_node_id)
             prepared_node = self.execution_graph.nodes.get(exec_node_id)
             if isinstance(prepared_node, ForInvocation):
@@ -3046,6 +3098,8 @@ class GraphExecutionState(BaseModel):
         self._if_activation_controller_instance = None
         self._if_activation_dependencies_by_source = {}
         self._if_activation_dependencies_by_exec = {}
+        self._prepared_if_exec_ids_by_source_and_frame = {}
+        self._prepared_if_exec_indexed_sources = set()
         self._source_graph_flat = None
         self._execution_graph_flat = None
         self._completed_source_ids_cache = None
@@ -3118,15 +3172,15 @@ class GraphExecutionState(BaseModel):
 
     def _rehydrate_resolved_if_exec_branches(self) -> None:
         self._validate_persisted_activation_tokens()
+        activation_tokens_by_owner: dict[str, list[ExecutionToken]] = {}
+        for token in self.execution_tokens.values():
+            if token.token_kind == "activation":
+                activation_tokens_by_owner.setdefault(token.owner_node_id, []).append(token)
         for exec_node_id, node in self.execution_graph.nodes.items():
             if not isinstance(node, IfInvocation):
                 continue
 
-            activation_tokens = [
-                token
-                for token in self.execution_tokens.values()
-                if token.owner_node_id == exec_node_id and token.token_kind == "activation"
-            ]
+            activation_tokens = activation_tokens_by_owner.get(exec_node_id, [])
             if activation_tokens:
                 expected_ref = self._expected_execution_ref(exec_node_id)
                 selected_fields: set[str] = set()

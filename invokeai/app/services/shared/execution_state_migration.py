@@ -3,9 +3,10 @@
 from collections.abc import Callable, Mapping
 from typing import Any, Final
 
+from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvocation
 from invokeai.app.services.shared.graph import GraphExecutionState
 
-CURRENT_EXECUTION_STATE_VERSION: Final[int] = 1
+CURRENT_EXECUTION_STATE_VERSION: Final[int] = 2
 LEGACY_EXECUTION_STATE_VERSION: Final[int] = 0
 
 
@@ -23,13 +24,74 @@ def _retain_nullable_execution_token_values(snapshot: dict[str, Any]) -> None:
         _retain_nullable_execution_token_values(child_snapshot)
 
 
-def _append_runtime_fields(snapshot: dict[str, Any], state: GraphExecutionState) -> None:
-    """Add private runtime ledgers to an internal snapshot, including child states."""
-    snapshot["execution_refs"] = {
-        reference_id: reference.model_dump(mode="json") for reference_id, reference in state.execution_refs.items()
+def _object_value(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _completed_workflow_call_ids(state: GraphExecutionState) -> set[str]:
+    return {
+        execution.prepared_call_node_id
+        for execution in state.workflow_call_history
+        if execution.status in {"completed", "failed"}
     }
+
+
+def _compact_effects(snapshot: dict[str, Any], state: GraphExecutionState) -> None:
+    """Drop terminal saved-workflow lifecycle effects whose history is authoritative.
+
+    Active lifecycle effects and all stream/continuation effects remain authoritative for recovery and validation.
+    A completed saved-workflow call has already copied its child result into the parent history, so retaining the
+    spawn effect would retain the child graph and inputs for no recovery purpose. Unknown effect shapes stay durable
+    for forward compatibility.
+    """
+    references_by_id = {reference.reference_id: reference for reference in state.execution_refs.values()}
+    completed_workflow_calls = _completed_workflow_call_ids(state)
+    compacted: dict[str, list[Any]] = {}
+    for reference_id, effects in snapshot["execution_effects"].items():
+        reference = references_by_id.get(reference_id)
+        node = state.execution_graph.nodes.get(reference.exec_node_id) if reference is not None else None
+        drop_workflow_lifecycle = (
+            isinstance(node, CallSavedWorkflowInvocation)
+            and reference is not None
+            and reference.exec_node_id in state.executed
+            and reference.exec_node_id in completed_workflow_calls
+        )
+        retained: list[Any] = []
+        for effect in effects:
+            effect_kind = (
+                _object_value(effect, "kind") or _object_value(effect, "effect_type") or _object_value(effect, "type")
+            )
+            if drop_workflow_lifecycle and effect_kind in {"spawn_execution", "await", "fail"}:
+                continue
+            retained.append(effect)
+        if retained or not drop_workflow_lifecycle:
+            compacted[reference_id] = retained
+    snapshot["execution_effects"] = compacted
+
+
+def _compact_child_dependencies(snapshot: dict[str, Any], state: GraphExecutionState) -> None:
+    """Drop completed dependency records after the parent has left its waiting boundary."""
+    if state.waiting_workflow_call_execution is not None:
+        return
+    snapshot["execution_child_dependencies"] = {
+        dependency_id: dependency
+        for dependency_id, dependency in snapshot["execution_child_dependencies"].items()
+        if _object_value(dependency, "status") != "completed"
+    }
+
+
+def _append_runtime_fields(snapshot: dict[str, Any], state: GraphExecutionState) -> None:
+    """Add compact private runtime ledgers to an internal snapshot, including child states."""
+    # References are derived from the prepared execution graph and mappings during rehydration. Do not serialize
+    # them before dropping them: large loop snapshots otherwise pay the full copy/serialization cost for data that
+    # never crosses the persistence boundary.
+    snapshot["execution_refs"] = {}
     snapshot["execution_tokens"] = {
-        token_id: token.model_dump(mode="json") for token_id, token in state.execution_tokens.items()
+        token_id: token.model_dump(mode="json")
+        for token_id, token in state.execution_tokens.items()
+        if token.token_kind == "activation"
     }
     snapshot["execution_effects"] = {
         reference_id: [
@@ -45,6 +107,9 @@ def _append_runtime_fields(snapshot: dict[str, Any], state: GraphExecutionState)
         snapshot["execution_effects"][reference_id] = [
             effect.model_dump(mode="json") if hasattr(effect, "model_dump") else effect for effect in effects
         ]
+
+    _compact_effects(snapshot, state)
+    _compact_child_dependencies(snapshot, state)
 
     child_snapshot = snapshot.get("waiting_workflow_call_child_session")
     child_state = state.waiting_workflow_call_child_session
@@ -81,16 +146,23 @@ def _migrate_legacy_snapshot(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _migrate_v1_snapshot(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate the v1 payload boundary before a future migration is added."""
+    """Carry the full v1 payload forward; v2 changes only the dump projection."""
 
     return dict(payload)
 
 
-# Each key is the source version. A future version bump must add its v1 -> v2
+def _migrate_v2_snapshot(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the compact v2 payload boundary before a future migration is added."""
+
+    return dict(payload)
+
+
+# Each key is the source version. A future version bump must add its v2 -> v3
 # converter here before changing CURRENT_EXECUTION_STATE_VERSION.
 _SNAPSHOT_MIGRATIONS: dict[int, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
     LEGACY_EXECUTION_STATE_VERSION: _migrate_legacy_snapshot,
-    CURRENT_EXECUTION_STATE_VERSION: _migrate_v1_snapshot,
+    1: _migrate_v1_snapshot,
+    CURRENT_EXECUTION_STATE_VERSION: _migrate_v2_snapshot,
 }
 
 

@@ -342,13 +342,15 @@ class DefaultSessionRunner(SessionRunnerBase):
                         None,
                     )
                     if failure_effect is not None:
-                        error_message = str(getattr(failure_effect, "message", "saved workflow call failed"))
+                        error_message = str(getattr(failure_effect, "message", ""))
+                        error_type = getattr(failure_effect, "error_type", None) or "ValueError"
+                        error_traceback = getattr(failure_effect, "error_traceback", None) or error_message
                         self._on_node_error(
                             invocation=invocation,
                             queue_item=queue_item,
-                            error_type="ValueError",
+                            error_type=error_type,
                             error_message=error_message,
-                            error_traceback=error_message,
+                            error_traceback=error_traceback,
                         )
                         return
 

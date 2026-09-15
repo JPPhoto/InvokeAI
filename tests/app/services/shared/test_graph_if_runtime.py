@@ -1,8 +1,9 @@
 import pytest
 
 from invokeai.app.invocations.logic import IfInvocation
+from invokeai.app.invocations.math import AddInvocation
 from invokeai.app.services.shared.execution_engine.scheduler import ActivationDependency
-from invokeai.app.services.shared.graph import Graph, GraphExecutionState
+from invokeai.app.services.shared.graph import Edge, EdgeConnection, Graph, GraphExecutionState
 from invokeai.app.services.shared.graph_runtime_records import _ApplyTransaction
 from tests.app.services.shared.import_test_utils import assert_module_imports_without_graph
 
@@ -87,3 +88,18 @@ def test_activation_resolution_and_token_are_idempotent_and_rollback(state: Grap
     assert state._activation_gate("if-exec").model_dump() == gate_before
     assert state.execution_tokens == {}
     assert "if-exec" not in state._if_activation_dependencies_by_exec
+
+
+def test_apply_rollback_reconstructs_pending_if_nodes(state: GraphExecutionState) -> None:
+    state.graph.add_node(AddInvocation(id="source", a=1, b=2))
+    state.graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="source", field="value"),
+            destination=EdgeConnection(node_id="if", field="true_input"),
+        )
+    )
+    state._resolved_if_exec_branches["if-exec"] = "true_input"
+
+    state._reset_apply_derived_caches()
+
+    assert state._pending_if_exec_nodes == {"if-exec"}

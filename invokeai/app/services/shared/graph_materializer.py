@@ -1406,6 +1406,18 @@ class _ExecutionNodeBuilder:
         else:
             mappings = self._get_parent_iteration_mappings(node_id, graph)
         mappings = list(mappings)
+        if isinstance(self._state.graph.get_node(node_id), IfInvocation) and self.get_node_iterators(
+            node_id, self.iterator_graph(graph)
+        ):
+            if not any(mappings):
+                iterator_nodes = self.get_node_iterators(node_id, self.iterator_graph(graph))
+                if all(
+                    iterator_node_id in self._state.executed
+                    and not self._state.source_prepared_mapping.get(iterator_node_id)
+                    for iterator_node_id in iterator_nodes
+                ):
+                    return True
+                return False
         if not mappings:
             return self._state._is_source_activation_admitted(node_id)
         return any(
@@ -1419,9 +1431,54 @@ class _ExecutionNodeBuilder:
         self, node_id: str, graph: "nx.DiGraph"
     ) -> Iterable[list[tuple[str, str]]]:
         condition_edges = self._state.graph._get_input_edges(node_id, "condition")
-        if not condition_edges:
+        iterator_graph = self.iterator_graph(graph)
+        iterator_nodes = self.get_node_iterators(node_id, iterator_graph)
+        if condition_edges and not iterator_nodes:
+            return self._get_parent_iteration_mappings(node_id, graph, input_edges=condition_edges)
+        if not iterator_nodes:
             return iter([[]])
-        return self._get_parent_iteration_mappings(node_id, graph, input_edges=condition_edges)
+
+        if condition_edges and any(
+            edge.source.node_id == iterator_nodes[0]
+            or nx.has_path(iterator_graph, iterator_nodes[0], edge.source.node_id)
+            for edge in condition_edges
+        ):
+            return self._get_parent_iteration_mappings(node_id, graph, input_edges=condition_edges)
+
+        # This bounded path derives one frame axis. Leave mixed/nested axes on the existing path because
+        # _get_known_iteration_path() intentionally rejects incompatible parent paths.
+        if len(iterator_nodes) != 1 or any(
+            not any(
+                source_edge.source.node_id == iterator_nodes[0]
+                or nx.has_path(iterator_graph, iterator_nodes[0], source_edge.source.node_id)
+                for source_edge in self._state.graph._get_input_edges(node_id, branch_field)
+            )
+            for branch_field in ("true_input", "false_input")
+        ):
+            return iter([[]])
+
+        if any(iterator_node_id not in self._state.source_prepared_mapping for iterator_node_id in iterator_nodes):
+            return iter([])
+        iterator_nodes_prepared = [
+            sorted(self._state.source_prepared_mapping[iterator_node_id], key=self._state._get_iteration_path)
+            for iterator_node_id in iterator_nodes
+        ]
+
+        if condition_edges:
+            condition_mappings = self._get_parent_iteration_mappings(node_id, graph, input_edges=condition_edges)
+            return iter(
+                condition_mapping + list(zip(iterator_nodes, prepared_iterators, strict=True))
+                for condition_mapping, prepared_iterators in zip(
+                    condition_mappings, itertools.product(*iterator_nodes_prepared), strict=True
+                )
+            )
+
+        return iter(
+            [
+                list(zip(iterator_nodes, prepared_iterators, strict=True))
+                for prepared_iterators in itertools.product(*iterator_nodes_prepared)
+            ]
+        )
 
     def _is_if_condition_ready(self, node_id: str) -> bool:
         return all(

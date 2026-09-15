@@ -1,6 +1,18 @@
+import json
+
 import pytest
 
+from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvocation
+from invokeai.app.invocations.collections import RangeInvocation
 from invokeai.app.invocations.math import AddInvocation
+from invokeai.app.invocations.primitives import IntegerCollectionOutput
+from invokeai.app.services.shared.execution_effects import (
+    AwaitEffect,
+    SpawnExecutionEffect,
+)
+from invokeai.app.services.shared.execution_effects import (
+    ExecutionRef as EffectExecutionRef,
+)
 from invokeai.app.services.shared.execution_state_migration import (
     CURRENT_EXECUTION_STATE_VERSION,
     UnsupportedExecutionStateVersionError,
@@ -8,12 +20,16 @@ from invokeai.app.services.shared.execution_state_migration import (
     load_execution_state,
 )
 from invokeai.app.services.shared.graph import (
+    Edge,
+    EdgeConnection,
     ExecutionFrame,
     ExecutionReference,
     ExecutionToken,
     Graph,
     GraphExecutionState,
+    IterateInvocation,
 )
+from invokeai.app.services.shared.graph_validation import IterateInvocationOutput
 
 
 def _make_state() -> GraphExecutionState:
@@ -122,10 +138,10 @@ def test_round_trips_nullable_execution_token_value() -> None:
     state.execution_tokens["token-id"] = token
 
     snapshot = dump_execution_state(state)
-    assert snapshot["execution_tokens"]["token-id"]["value"] is None
+    assert snapshot["execution_tokens"] == {}
     restored = load_execution_state(snapshot)
 
-    assert restored.execution_tokens["token-id"].value is None
+    assert restored.execution_tokens == {}
 
 
 def test_round_trips_nullable_execution_token_value_in_child_state() -> None:
@@ -143,11 +159,11 @@ def test_round_trips_nullable_execution_token_value_in_child_state() -> None:
 
     snapshot = dump_execution_state(state)
     child_snapshot = snapshot["waiting_workflow_call_child_session"]
-    assert child_snapshot["execution_tokens"]["token-id"]["value"] is None
+    assert child_snapshot["execution_tokens"] == {}
     restored = load_execution_state(snapshot)
 
     assert restored.waiting_workflow_call_child_session is not None
-    assert restored.waiting_workflow_call_child_session.execution_tokens["token-id"].value is None
+    assert restored.waiting_workflow_call_child_session.execution_tokens == {}
 
 
 def test_internal_execution_fields_are_persisted_but_not_publicly_serialized() -> None:
@@ -202,8 +218,8 @@ def test_internal_execution_fields_are_persisted_but_not_publicly_serialized() -
     }.isdisjoint(public_model_dump)
 
     persisted_payload = dump_execution_state(state)
-    assert persisted_payload["execution_refs"]["exec-node"]["reference_id"] == execution_ref.reference_id
-    assert persisted_payload["execution_tokens"]["token-id"]["value"] == 3
+    assert persisted_payload["execution_refs"] == {}
+    assert persisted_payload["execution_tokens"] == {}
     assert persisted_payload["execution_effects"] == {}
 
 
@@ -226,3 +242,169 @@ def test_round_trips_pending_generic_child_dependency_and_partial_completion() -
     assert dependency.enqueue_order == ["20", "10"]
     assert dependency.completed_child_execution_ids == ["10"]
     assert dependency.completions["10"].outputs == {"value": "ten"}
+
+
+def _make_completed_iterate_state(iteration_count: int = 2) -> GraphExecutionState:
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="range", start=0, stop=iteration_count, step=1))
+    graph.add_node(IterateInvocation(id="iterate", collection=list(range(iteration_count))))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="range", field="collection"),
+            destination=EdgeConnection(node_id="iterate", field="collection"),
+        )
+    )
+    execution_graph = Graph()
+    prepared_source_mapping: dict[str, str] = {"range-exec": "range"}
+    source_prepared_mapping = {"range": {"range-exec"}, "iterate": set()}
+    prepared_iteration_paths: dict[str, tuple[int, ...]] = {}
+    results = {"range-exec": IntegerCollectionOutput(collection=list(range(iteration_count)))}
+    executed = {"range-exec"}
+    execution_graph.add_node(RangeInvocation(id="range-exec", start=0, stop=iteration_count, step=1))
+    for index in range(iteration_count):
+        exec_node_id = f"iterate-{index}"
+        execution_graph.add_node(
+            IterateInvocation(id=exec_node_id, collection=list(range(iteration_count)), index=index)
+        )
+        prepared_source_mapping[exec_node_id] = "iterate"
+        source_prepared_mapping["iterate"].add(exec_node_id)
+        prepared_iteration_paths[exec_node_id] = (index,)
+        results[exec_node_id] = IterateInvocationOutput(item=index, index=index, total=iteration_count)
+        executed.add(exec_node_id)
+
+    state = GraphExecutionState(
+        graph=graph,
+        execution_graph=execution_graph,
+        executed=executed,
+        results=results,
+        prepared_source_mapping=prepared_source_mapping,
+        source_prepared_mapping=source_prepared_mapping,
+        prepared_iteration_paths=prepared_iteration_paths,
+    )
+    for exec_node_id in prepared_source_mapping:
+        reference = state.get_execution_ref(exec_node_id)
+        iterate_output = results.get(exec_node_id)
+        if not isinstance(iterate_output, IterateInvocationOutput):
+            continue
+        state.execution_tokens[f"{reference.reference_id}:item"] = ExecutionToken(
+            token_id=f"{reference.reference_id}:item",
+            reference_id=reference.reference_id,
+            owner_node_id=exec_node_id,
+            port="item",
+            frame=reference.frame,
+            value=iterate_output.item,
+        )
+        effects = [
+            {
+                "kind": "emit",
+                "token": {
+                    "node_id": exec_node_id,
+                    "field": "item",
+                    "value": iterate_output.item,
+                    "sequence": iterate_output.index,
+                },
+                "value": iterate_output.item,
+            }
+        ]
+        if iterate_output.index + 1 >= iterate_output.total:
+            effects.append(
+                {
+                    "kind": "close_stream",
+                    "token": {
+                        "node_id": exec_node_id,
+                        "field": "item",
+                        "token_kind": "stream_end",
+                        "sequence": iteration_count,
+                    },
+                }
+            )
+        state.execution_effects[reference.reference_id] = effects
+    return state
+
+
+def test_compact_iterate_ledgers_have_deterministic_record_bound_and_rehydrate() -> None:
+    snapshot = dump_execution_state(_make_completed_iterate_state())
+
+    assert snapshot["execution_refs"] == {}
+    assert sum(len(effects) for effects in snapshot["execution_effects"].values()) == 3
+    assert snapshot["execution_tokens"] == {}
+    assert len(json.dumps(snapshot, sort_keys=True, separators=(",", ":"))) < 5000
+
+    restored = load_execution_state(snapshot)
+
+    stream = next(iter(restored._generic_runtime().streams.values()))
+    assert stream.values == (0, 1)
+    assert stream.closed
+    assert restored.is_complete()
+
+
+def test_completed_workflow_call_snapshot_does_not_retain_child_graph() -> None:
+    graph = Graph()
+    graph.add_node(CallSavedWorkflowInvocation(id="call", workflow_id="saved"))
+    parent = GraphExecutionState(graph=graph)
+    call = parent.next()
+    assert call is not None
+    frame = parent.build_workflow_call_frame(call.id, "saved")
+    parent.begin_waiting_on_workflow_call(frame)
+    child_graph = Graph()
+    child_graph.add_node(AddInvocation(id="child-node", a=1, b=2))
+    child = GraphExecutionState(graph=child_graph)
+    parent.attach_waiting_workflow_call_child_session(child)
+    execution_ref = parent._expected_execution_ref(call.id)
+    parent.execution_refs[call.id] = execution_ref
+    parent.execution_effects[execution_ref.reference_id] = [
+        SpawnExecutionEffect(
+            parent=EffectExecutionRef(
+                execution_node_id=call.id,
+                state_id=parent.id,
+                frame_path=execution_ref.frame.iteration_path,
+                frame_id=execution_ref.frame.frame_id,
+                workflow_call_depth=execution_ref.frame.workflow_call_depth,
+            ),
+            graph=child.graph.model_dump(mode="json"),
+            child_execution_id=child.id,
+        ),
+        AwaitEffect(
+            dependency=EffectExecutionRef(
+                execution_node_id=call.id,
+                state_id=parent.id,
+                frame_path=execution_ref.frame.iteration_path,
+                frame_id=execution_ref.frame.frame_id,
+                workflow_call_depth=execution_ref.frame.workflow_call_depth,
+            )
+        ),
+    ]
+    parent.end_waiting_on_workflow_call()
+    parent.executed.add(call.id)
+
+    snapshot = dump_execution_state(parent)
+
+    assert "waiting_workflow_call_child_session" not in snapshot
+    assert snapshot["workflow_call_history"][0]["child_session_id"] == child.id
+    assert execution_ref.reference_id not in snapshot["execution_effects"]
+
+    active_parent = GraphExecutionState(graph=parent.graph.model_copy(deep=True))
+    active_call = active_parent.next()
+    assert active_call is not None
+    active_frame = active_parent.build_workflow_call_frame(active_call.id, "saved")
+    active_parent.begin_waiting_on_workflow_call(active_frame)
+    active_child = GraphExecutionState(graph=child_graph.model_copy(deep=True))
+    active_parent.attach_waiting_workflow_call_child_session(active_child)
+    active_ref = active_parent._expected_execution_ref(active_call.id)
+    active_parent.execution_refs[active_call.id] = active_ref
+    active_parent.execution_effects[active_ref.reference_id] = [
+        SpawnExecutionEffect(
+            parent=EffectExecutionRef(
+                execution_node_id=active_call.id,
+                state_id=active_parent.id,
+                frame_path=active_ref.frame.iteration_path,
+                frame_id=active_ref.frame.frame_id,
+                workflow_call_depth=active_ref.frame.workflow_call_depth,
+            ),
+            graph=active_child.graph.model_dump(mode="json"),
+            child_execution_id=active_child.id,
+        )
+    ]
+    active_snapshot = dump_execution_state(active_parent)
+    assert active_ref.reference_id in active_snapshot["execution_effects"]
+    assert "waiting_workflow_call_child_session" in active_snapshot

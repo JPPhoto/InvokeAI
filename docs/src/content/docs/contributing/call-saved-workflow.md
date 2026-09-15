@@ -22,9 +22,11 @@ queue boundary for durable rows and queue transitions, while invocation and grap
 effect/dependency seam to declare, persist, and resume the call.
 
 The callable node, saved-workflow, and queue interaction contract is stable. Internal execution references, tokens,
-effects, frames, and scheduler records are persistence-only implementation metadata. `dump_execution_state()` retains
-`execution_refs`, `execution_tokens`, `execution_effects`, and `execution_child_dependencies`, including attached child
-states. Ordinary model serialization and public schemas exclude these four internal ledgers. Existing fields,
+effects, frames, and scheduler records are persistence-only implementation metadata. Version-2
+`dump_execution_state()` rebuilds execution references and ordinary output tokens, retains frame-scoped activation
+tokens and effects needed for active recovery, and omits terminal saved-workflow lifecycle effects and completed child
+dependencies. Attached child state is retained while a call is active and omitted after the call is terminal.
+Ordinary model serialization and public schemas exclude these four internal ledgers. Existing fields,
 requiredness, statuses, events, and client behavior remain compatible. Frontend application behavior is outside this
 backend architecture. No code under `invokeai/frontend/...`, including generated `openapi.json` or `schema.ts`, is part
 of this execution behavior; the existing frontend/backend external interface is stable.
