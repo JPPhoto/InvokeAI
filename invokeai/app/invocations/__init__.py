@@ -21,6 +21,7 @@ from importlib import import_module
 from pathlib import Path
 from types import ModuleType
 
+from invokeai.app.invocations._legacy_module_compatibility import LEGACY_MODULE_MAP
 from invokeai.backend.util.module_discovery import discover_modules
 
 
@@ -30,4 +31,11 @@ def load_all_modules() -> dict[str, ModuleType]:
     Idempotent: `import_module` returns the cached module on later calls, so callers do not have to
     coordinate who invokes it first.
     """
-    return {name: import_module(name) for name in discover_modules(Path(__file__).parent, f"{__name__}.")}
+    return {
+        name: import_module(name)
+        for name in discover_modules(
+            Path(__file__).parent,
+            f"{__name__}.",
+            excluded_modules=LEGACY_MODULE_MAP,
+        )
+    }
