@@ -1,3 +1,4 @@
+import { areJsonValuesStructurallyEqual } from '@platform/core/json';
 import { isSeedMode } from '@platform/core/seed';
 
 import type { DynamicPromptsConfig } from './dynamicPrompts';
@@ -29,7 +30,7 @@ import {
 import { isDynamicPromptsSeedBehaviour, sanitizeMaxPrompts, sanitizeSampleSeed } from './dynamicPrompts';
 import { clampPidSteps, DEFAULT_PID_STEPS, isPidMode } from './pid';
 import { isCanonicalPromptTemplateSnapshot, sanitizePromptTemplateSnapshot } from './promptTemplates';
-import { cloneCroppableImage, isCanonicalCroppableImage, normalizeCroppableImage } from './referenceImage';
+import { cloneCroppableImage, normalizeCroppableImage } from './referenceImage';
 
 /** Preset ratios, with the preset to switch to when dimensions are swapped. */
 export const ASPECT_RATIO_MAP: Record<Exclude<AspectRatioId, 'Free'>, { ratio: number; inverseId: AspectRatioId }> = {
@@ -332,15 +333,6 @@ export const normalizeReferenceImages = (value: unknown): GenerateReferenceImage
 
   return images;
 };
-
-const areReferenceImagesCanonical = (value: unknown): boolean =>
-  Array.isArray(value) &&
-  value.every(
-    (item) =>
-      isRecord(item) &&
-      isRecord(item.config) &&
-      (item.config.image === null || isCanonicalCroppableImage(item.config.image))
-  );
 
 const cloneReferenceImageConfig = (config: GenerateReferenceImageConfig): GenerateReferenceImageConfig => {
   switch (config.type) {
@@ -843,6 +835,12 @@ export const normalizeGenerateWidgetValues = (values: unknown): GenerateWidgetVa
   return { ...settings, model: values.model };
 };
 
+/**
+ * Canonical means normalize is the identity: every key it would write already
+ * holds that value. Defined that way rather than as a key list so a field
+ * normalize learns to invent (a seed mode from the old random toggle, PiD
+ * defaults) can never pass the guard unhealed and be reused as-is.
+ */
 export const isGenerateSettings = (values: unknown): values is GenerateSettings => {
   const normalized = normalizeGenerateSettings(values);
 
@@ -850,58 +848,7 @@ export const isGenerateSettings = (values: unknown): values is GenerateSettings 
     return false;
   }
 
-  // Strict only over the keys normalize would have to invent.
-  return (
-    isAspectRatioId(values.aspectRatioId) &&
-    typeof values.aspectRatioIsLocked === 'boolean' &&
-    hasFiniteNumber(values, 'aspectRatioValue') &&
-    hasFiniteNumber(values, 'clipSkip') &&
-    typeof values.colorCompensation === 'boolean' &&
-    typeof values.hiDiffusionEnabled === 'boolean' &&
-    typeof values.hiDiffusionRauNetEnabled === 'boolean' &&
-    typeof values.hiDiffusionWindowAttentionEnabled === 'boolean' &&
-    hasFiniteNumber(values, 'hiDiffusionT1Ratio') &&
-    (values.hiDiffusionT1Ratio as number) >= MIN_HIDIFFUSION_T1_RATIO &&
-    (values.hiDiffusionT1Ratio as number) <= MAX_HIDIFFUSION_RATIO &&
-    hasFiniteNumber(values, 'hiDiffusionT2Ratio') &&
-    (values.hiDiffusionT2Ratio as number) >= 0 &&
-    (values.hiDiffusionT2Ratio as number) <= MAX_HIDIFFUSION_RATIO &&
-    typeof values.negativePromptEnabled === 'boolean' &&
-    hasFiniteNumber(values, 'negativePromptHeightPx') &&
-    hasFiniteNumber(values, 'positivePromptHeightPx') &&
-    Array.isArray(values.loras) &&
-    values.loras.every(isGenerateLora) &&
-    Array.isArray(values.referenceImages) &&
-    normalizeReferenceImages(values.referenceImages).length === values.referenceImages.length &&
-    areReferenceImagesCanonical(values.referenceImages) &&
-    (values.promptTemplate === null || isCanonicalPromptTemplateSnapshot(values.promptTemplate)) &&
-    typeof values.promptTemplateViewMode === 'boolean' &&
-    (values.promptTemplate !== null || values.promptTemplateViewMode === false) &&
-    typeof values.seamlessXAxis === 'boolean' &&
-    typeof values.seamlessYAxis === 'boolean' &&
-    isVaePrecision(values.vaePrecision) &&
-    (values.vae === null || isVaeModelConfig(values.vae)) &&
-    (values.t5EncoderModel === null || isModelIdentifierConfig(values.t5EncoderModel)) &&
-    (values.clipEmbedModel === null || isModelIdentifierConfig(values.clipEmbedModel)) &&
-    (values.clipLEmbedModel === null || isModelIdentifierConfig(values.clipLEmbedModel)) &&
-    (values.clipGEmbedModel === null || isModelIdentifierConfig(values.clipGEmbedModel)) &&
-    (values.mistralEncoderModel === null || isModelIdentifierConfig(values.mistralEncoderModel)) &&
-    (values.qwen3EncoderModel === null || isModelIdentifierConfig(values.qwen3EncoderModel)) &&
-    (values.qwenVLEncoderModel === null || isModelIdentifierConfig(values.qwenVLEncoderModel)) &&
-    (values.qwen3VLEncoderModel === null || isModelIdentifierConfig(values.qwen3VLEncoderModel)) &&
-    (values.wanT5EncoderModel === null || isModelIdentifierConfig(values.wanT5EncoderModel)) &&
-    (values.wanLowNoiseModel === null || isMainModelConfig(values.wanLowNoiseModel)) &&
-    (values.componentSourceModel === null || isMainModelConfig(values.componentSourceModel)) &&
-    isIdeogram4SamplerPreset(values.ideogram4SamplerPreset) &&
-    Array.isArray(values.ideogram4ColorPalette) &&
-    values.ideogram4ColorPalette.every((entry) => typeof entry === 'string') &&
-    typeof values.krea2RebalanceEnabled === 'boolean' &&
-    hasFiniteNumber(values, 'krea2RebalanceMultiplier') &&
-    typeof values.krea2RebalanceWeights === 'string' &&
-    typeof values.krea2SeedVarianceEnabled === 'boolean' &&
-    hasFiniteNumber(values, 'krea2SeedVarianceStrength') &&
-    hasFiniteNumber(values, 'krea2SeedVarianceRandomizePercent')
-  );
+  return Object.entries(normalized).every(([key, value]) => areJsonValuesStructurallyEqual(values[key], value));
 };
 
 export const isGenerateWidgetValues = (values: unknown): values is GenerateWidgetValues =>

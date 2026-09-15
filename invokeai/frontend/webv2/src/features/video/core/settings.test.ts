@@ -74,6 +74,9 @@ describe('normalizeVideoSettings', () => {
       'increment'
     );
     expect(normalizeVideoSettings(legacy)?.seedMode).toBe('random');
+    // A record whose mode normalize has to invent is not canonical, so nothing may reuse it raw.
+    expect(isVideoSettings({ ...legacy, shouldRandomizeSeed: true })).toBe(false);
+    expect(isVideoSettings(legacy)).toBe(false);
   });
 
   it('round-trips canonical settings', () => {

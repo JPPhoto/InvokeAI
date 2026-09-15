@@ -170,6 +170,17 @@ describe('resolveGenerateWidgetValues', () => {
     expect(result?.systemPatch?.componentSourceModel).toBe(source);
   });
 
+  it('maps the random toggle saved before seed modes instead of reusing the record as-is', () => {
+    // Reused as-is, the record reaches the seed menu with no mode and the icon lookup throws.
+    const model = createModel('model');
+    const { seedMode: _, ...legacy } = createValues(model);
+    const storedValues = { ...legacy, shouldRandomizeSeed: true };
+    const result = resolveGenerateWidgetValues({ models: [model], storedValues });
+
+    expect(result?.values.seedMode).toBe('random');
+    expect(result?.systemPatch?.seedMode).toBe('random');
+  });
+
   it('repairs stale template view mode through canonical normalization', () => {
     const model = createModel('model');
     const storedValues = { ...createValues(model), promptTemplate: null, promptTemplateViewMode: true };
