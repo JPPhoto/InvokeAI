@@ -370,15 +370,18 @@ describe('GalleryMediaSlot', () => {
     // Hidden until the slot is hovered or holds focus. A mouse hover cannot be
     // synthesised, but both come from the same `.group` ancestor, so focus
     // proves the wiring the badge depends on entirely.
+    //
+    // `pointer-events` rather than `opacity`: the reveal sets both under one
+    // selector, but only opacity is transitioned, so opacity answers for where
+    // the animation has got to rather than for whether the badge is revealed.
+    expect(getComputedStyle(find!).pointerEvents).toBe('none');
     expect(getComputedStyle(find!).opacity).toBe('0');
 
     await act(() => {
       find!.focus();
     });
 
-    // Polled: the reveal is a CSS transition, which does not exist to be
-    // awaited until the style recalc that starts it has run.
-    await vi.waitFor(() => expect(getComputedStyle(find!).opacity).toBe('1'));
+    expect(getComputedStyle(find!).pointerEvents).toBe('auto');
 
     // The badge is a SIBLING of the slot's face — the face is a <button> and
     // may not contain one — so its position is hand-mirrored from the value

@@ -136,28 +136,28 @@ describe('video reference find-in-gallery badges', () => {
     // mechanism that makes it a hover overlay rather than permanent chrome. A
     // mouse hover cannot be synthesised, but focus-within comes from the same
     // ancestor, so it proves the scoping either way.
+    //
+    // Read through `pointer-events` rather than `opacity`: the reveal sets both,
+    // under the same selector, but only opacity is transitioned — so opacity
+    // answers for where the animation has got to, while pointer-events answers
+    // for which badge the CSS considers revealed. That is the actual claim here,
+    // and it is true the instant focus lands rather than a few frames later.
     const badges = [...findButtons('still.png'), ...findButtons('clip.mp4')];
-    const opacities = () => badges.map((button) => getComputedStyle(button).opacity);
+    const revealed = () => badges.map((button) => getComputedStyle(button).pointerEvents);
 
     expect(badges).toHaveLength(2);
-    expect(opacities()).toEqual(['0', '0']);
+    expect(revealed()).toEqual(['none', 'none']);
+    expect(badges.map((button) => getComputedStyle(button).opacity)).toEqual(['0', '0']);
 
-    // Each in turn: the one holding focus lights and only it. A badge whose
-    // thumbnail lost its `.group` would never light; a `.group` hoisted to the
-    // card would light both at once.
-    //
-    // Polled rather than settled once: the reveal is a CSS transition, which
-    // does not exist to be awaited until the style recalc that starts it has
-    // run. Settling at the moment of the focus call can therefore return
-    // before the transition is even scheduled, and reads its start value.
+    // Each in turn: the one holding focus is revealed and only it. A badge whose
+    // thumbnail lost its `.group` would never be revealed; a `.group` hoisted to
+    // the card would reveal both at once.
     for (const [index] of badges.entries()) {
       await act(() => {
         badges[index]!.focus();
       });
 
-      await vi.waitFor(() =>
-        expect(opacities()).toEqual(badges.map((_button, other) => (other === index ? '1' : '0')))
-      );
+      expect(revealed()).toEqual(badges.map((_button, other) => (other === index ? 'auto' : 'none')));
     }
   });
 

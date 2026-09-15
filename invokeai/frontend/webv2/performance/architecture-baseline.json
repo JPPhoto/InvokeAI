@@ -2,12 +2,12 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 859305,
+        "brotliBytes": 859400,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 858515,
+        "gzipBytes": 858537,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2010918,
+        "initialRawBytes": 2010995,
         "largestAssetRawBytes": 747218,
         "otherAssetRawBytes": 0,
         "ownedRawBytes": 74443,
@@ -316,15 +316,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1184710,
+        "brotliBytes": 1185405,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1178978,
+        "gzipBytes": 1179571,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2995640,
+        "initialRawBytes": 2998256,
         "largestAssetRawBytes": 747218,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 132910,
+        "ownedRawBytes": 134012,
         "requestCount": 106,
         "scriptRequestCount": 90,
         "sourceOwners": [
@@ -819,6 +819,7 @@
           "source:src/workbench/hotkeys/targetWidget.ts",
           "source:src/workbench/iconResolver.tsx",
           "source:src/workbench/image-actions/recallParametersBridge.ts",
+          "source:src/workbench/image-actions/useFindGalleryItem.ts",
           "source:src/workbench/invocation.ts",
           "source:src/workbench/invocationSubmit.ts",
           "source:src/workbench/launchpad/HelpMenu.tsx",
@@ -1021,7 +1022,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-14",
+  "capturedAt": "2026-09-15",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",
