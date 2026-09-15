@@ -1,6 +1,7 @@
 import type { ModelConfig, ModelTaxonomyType } from '@features/models/react';
 import type { FieldInputTemplate } from '@features/workflow/contracts';
 import type { LoraFieldCollectionEntry } from '@features/workflow/utility';
+import type { SeedInputPatch } from '@platform/ui/SeedInput';
 
 import {
   Badge,
@@ -30,8 +31,9 @@ import { getSelectedGalleryImageFromValues } from '@features/gallery/contracts';
 import { GalleryPickerPopover } from '@features/gallery/picker';
 import { invalidateGallery } from '@features/gallery/queries';
 import { galleryImageUrls, galleryVideoUrls } from '@features/gallery/utility';
-import { DEFAULT_LORA_WEIGHT_CONFIG, SCHEDULER_OPTIONS } from '@features/generation/settings';
+import { DEFAULT_LORA_WEIGHT_CONFIG, sanitizeBatchCount, SCHEDULER_OPTIONS } from '@features/generation/settings';
 import { isInvocationNode } from '@features/workflow/contracts';
+import { isSeedInputField } from '@features/workflow/graph';
 import {
   getWorkflowMediaFieldDropId,
   getWorkflowMediaFieldDropItem,
@@ -43,6 +45,7 @@ import {
   isLoraFieldCollectionEntry,
   toLoraFieldCollectionList,
 } from '@features/workflow/utility';
+import { planSeedSubmission, type SeedMode, wrapSeed } from '@platform/core/seed';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -65,6 +68,7 @@ import {
   Tooltip,
 } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
+import { SeedInput } from '@platform/ui/SeedInput';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FilmIcon, ImageIcon, Trash2Icon } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type ChangeEvent } from 'react';
@@ -93,6 +97,9 @@ export interface WorkflowFieldInputProps {
   template: FieldInputTemplate;
   value: unknown;
   onChange: (value: unknown) => void;
+  /** The instance's seed mode; read only for seed inputs (`isSeedInputField`), which render the mode menu. */
+  seedMode?: SeedMode;
+  onSeedModeChange?: (seedMode: SeedMode) => void;
 }
 
 const invalidProps = (invalid: boolean | undefined) => (invalid ? { 'aria-invalid': true } : {});
@@ -184,6 +191,65 @@ const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldI
       w="full"
       {...invalidProps(invalid)}
       onChange={onInputChange}
+    />
+  );
+};
+
+/**
+ * The shared seed control under a workflow row. The workflow owns the value
+ * and its run count, so the stepping preview is planned here from the
+ * workflow's own iterations; an empty field runs from the template default,
+ * as the plan does. `nokey` keeps xyflow's node key handling out of the row
+ * and the portaled menu: arrows would nudge the node and Backspace delete it.
+ */
+const WorkflowSeedInput = ({
+  id,
+  invalid,
+  onChange,
+  onSeedModeChange,
+  seedMode,
+  template,
+  value,
+}: WorkflowFieldInputProps & { onSeedModeChange: (seedMode: SeedMode) => void; seedMode: SeedMode }) => {
+  const { t } = useTranslation();
+  const batchCount = useWorkflowProjectSelector((project) => sanitizeBatchCount(project.workflowValues.batchCount));
+  const seed = typeof value === 'number' ? value : undefined;
+  const authoredSeed = seed ?? (typeof template.default === 'number' ? template.default : 0);
+  const plan =
+    seedMode === 'increment' || seedMode === 'decrement'
+      ? planSeedSubmission({
+          batchCount,
+          promptCount: 1,
+          seedBehaviour: 'per-iteration',
+          seedMode,
+          startSeed: wrapSeed(authoredSeed),
+        })
+      : null;
+  const onCommit = useCallback(
+    (patch: SeedInputPatch) => {
+      if (patch.seed !== undefined) {
+        onChange(patch.seed);
+      }
+
+      if (patch.seedMode !== undefined) {
+        onSeedModeChange(patch.seedMode);
+      }
+    },
+    [onChange, onSeedModeChange]
+  );
+
+  return (
+    <SeedInput
+      ariaLabel={template.title}
+      className="nodrag nokey"
+      contentClassName="nokey"
+      description={t('nodes.seedModeTooltip')}
+      id={id ? `${id}-number-input` : undefined}
+      invalid={invalid}
+      plan={plan}
+      seed={seed}
+      seedMode={seedMode}
+      onCommit={onCommit}
     />
   );
 };
@@ -1157,6 +1223,16 @@ export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
     case 'IntegerField':
       if (props.template.uiComponent === 'video-frame-index' && props.template.type.cardinality === 'SINGLE') {
         return <VideoFrameIndexInput {...props} />;
+      }
+
+      if (props.onSeedModeChange && isSeedInputField(props.template)) {
+        return (
+          <WorkflowSeedInput
+            {...props}
+            onSeedModeChange={props.onSeedModeChange}
+            seedMode={props.seedMode ?? 'fixed'}
+          />
+        );
       }
 
       return <NumericInput {...props} />;

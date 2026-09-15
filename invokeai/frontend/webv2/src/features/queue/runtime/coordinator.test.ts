@@ -171,7 +171,7 @@ const generateRequest: QueueEnqueueGenerateRequest = {
   projectId: 'project-1',
   seed: 1,
   seedNodeId: 'seed',
-  shouldRandomizeSeed: false,
+  seedStep: 0,
   sourceQueueItemId: 'local-1',
 };
 

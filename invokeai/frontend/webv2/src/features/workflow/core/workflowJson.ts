@@ -1,3 +1,4 @@
+import { SEED_MODES } from '@platform/core/seed';
 import { z } from 'zod';
 
 import type {
@@ -20,10 +21,15 @@ import { createWorkflowForm, createWorkflowId } from './document';
 
 const zXYPosition = z.object({ x: z.number().catch(0), y: z.number().catch(0) }).catch({ x: 0, y: 0 });
 
+// `seedMode` is this workbench's extension of the field instance. The legacy
+// editor parses instances through a stripping schema, so a workflow it re-saves
+// comes back without the key — every seed reads as fixed again, which is the
+// legacy behaviour rather than a corrupted value.
 const zFieldInstance = z.object({
   description: z.string().optional().catch(undefined),
   label: z.string().catch(''),
   name: z.string(),
+  seedMode: z.enum(SEED_MODES).optional().catch(undefined),
   value: z.unknown().optional(),
 });
 
@@ -281,6 +287,7 @@ export const parseWorkflowJson = (raw: unknown): ParsedWorkflow => {
         description: instance.description,
         label: instance.label,
         name: instance.name || name,
+        ...(instance.seedMode === undefined ? {} : { seedMode: instance.seedMode }),
         value: instance.value,
       };
     }

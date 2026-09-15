@@ -22,6 +22,7 @@ export type {
   QueueProcessorReadModel,
   QueueQueryScope,
   QueueReadModel,
+  QueueSeedStep,
   QueueSourceId,
   QueueStatusReadModel,
   QueueSubmissionPresentation,
