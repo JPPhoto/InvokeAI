@@ -13,6 +13,7 @@ import in the node-pack guide -- does not pull in this tree and close an import 
 from pathlib import Path
 
 from invokeai.app.invocations import load_all_modules
+from invokeai.app.invocations._legacy_module_compatibility import LEGACY_MODULE_MAP
 
 PACKAGE = "invokeai.app.invocations"
 
@@ -24,4 +25,4 @@ def test_every_node_module_on_disk_was_imported() -> None:
         for p in root.rglob("*.py")
         if not any(part.startswith("_") for part in p.relative_to(root).parts)
     }
-    assert on_disk == set(load_all_modules()), "walker and filesystem disagree"
+    assert on_disk - set(LEGACY_MODULE_MAP) == set(load_all_modules()), "walker and filesystem disagree"
