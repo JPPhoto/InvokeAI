@@ -40,37 +40,48 @@ def _marker_blob(marker: dict) -> torch.Tensor:
     return torch.frombuffer(bytearray(json.dumps(marker).encode("utf-8")), dtype=torch.uint8)
 
 
-def _write_checkpoint(tmp_path: Path) -> tuple[Path, dict[str, torch.Tensor], torch.Tensor]:
+def _write_checkpoint(tmp_path: Path, evidence: str) -> tuple[Path, dict[str, torch.Tensor], torch.Tensor]:
     """A Comfy-style fp4_mixed Mistral: nvfp4 projections, one scaled-fp8 projection, bf16 for the rest.
+
+    The nvfp4 layers are named by per-tensor markers, as in Comfy-Org's build, or -- with `evidence="header"` --
+    only in the `_quantization_metadata` header, with every key under the `language_model.` wrapper prefix some
+    redistributions add. The loader strips that prefix from the keys and has to strip it from the header's
+    names as well, or it refuses the layers as unnamed.
 
     Returns the file, the weights the nvfp4 projections must load as, and the fp8 projection's
     dequantized weight. Codes 2 and 10 decode to +1.0 and -1.0, so no E2M1 table is needed here.
     """
     torch.manual_seed(0)
+    prefix = "language_model." if evidence == "header" else ""
     tensors: dict[str, torch.Tensor] = {}
     expected: dict[str, torch.Tensor] = {}
+    header: dict[str, dict[str, str]] = {}
     for name, shape in NVFP4_PROJECTIONS.items():
         positive = torch.randint(0, 2, shape, dtype=torch.bool)
         codes = torch.where(positive, 2, 10).to(torch.uint8)
-        path = f"model.layers.0.{name}"
+        path = f"{prefix}model.layers.0.{name}"
         tensors[f"{path}.weight"] = (codes[:, 0::2] << 4) | codes[:, 1::2]
         tensors[f"{path}.weight_scale"] = torch.full((shape[0], shape[1] // 16), 2.0).to(torch.float8_e4m3fn)
         tensors[f"{path}.weight_scale_2"] = torch.tensor(0.25)
-        tensors[f"{path}.comfy_quant"] = _marker_blob({"format": "nvfp4"})
+        if evidence == "header":
+            header[path] = {"format": "nvfp4"}
+        else:
+            tensors[f"{path}.comfy_quant"] = _marker_blob({"format": "nvfp4"})
         expected[f"layers.0.{name}.weight"] = torch.where(positive, 0.5, -0.5)
 
     fp8_values = torch.randint(-8, 9, (HIDDEN, HIDDEN)).float()
-    tensors["model.layers.0.self_attn.v_proj.weight"] = fp8_values.to(torch.float8_e4m3fn)
-    tensors["model.layers.0.self_attn.v_proj.weight_scale"] = torch.tensor(0.5)
-    tensors["model.layers.0.self_attn.v_proj.comfy_quant"] = _marker_blob({"format": "float8_e4m3fn"})
+    tensors[f"{prefix}model.layers.0.self_attn.v_proj.weight"] = fp8_values.to(torch.float8_e4m3fn)
+    tensors[f"{prefix}model.layers.0.self_attn.v_proj.weight_scale"] = torch.tensor(0.5)
+    tensors[f"{prefix}model.layers.0.self_attn.v_proj.comfy_quant"] = _marker_blob({"format": "float8_e4m3fn"})
 
-    tensors["model.embed_tokens.weight"] = torch.randn(VOCAB, HIDDEN)
+    tensors[f"{prefix}model.embed_tokens.weight"] = torch.randn(VOCAB, HIDDEN)
     for norm in ("model.layers.0.input_layernorm", "model.layers.0.post_attention_layernorm", "model.norm"):
-        tensors[f"{norm}.weight"] = torch.ones(HIDDEN)
+        tensors[f"{prefix}{norm}.weight"] = torch.ones(HIDDEN)
     tensors["tekken_model"] = torch.randint(0, 256, (64,), dtype=torch.uint8)
 
     checkpoint = tmp_path / "mistral_3_small_flux2_fp4_mixed.safetensors"
-    save_file(tensors, checkpoint)
+    metadata = {"_quantization_metadata": json.dumps({"layers": header})} if header else None
+    save_file(tensors, checkpoint, metadata=metadata)
     return checkpoint, expected, fp8_values * 0.5
 
 
@@ -83,11 +94,15 @@ def _loader(monkeypatch: pytest.MonkeyPatch, keep_fp8: bool) -> MistralEncoderCh
     return loader
 
 
-@pytest.mark.parametrize("keep_fp8", [False, True], ids=["fp8_dequantized", "fp8_kept"])
+@pytest.mark.parametrize(
+    ("keep_fp8", "evidence"),
+    [(False, "marker"), (True, "marker"), (False, "header")],
+    ids=["fp8_dequantized", "fp8_kept", "named_in_prefixed_header"],
+)
 def test_an_nvfp4_mixed_checkpoint_loads_under_either_fp8_branch(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, keep_fp8: bool
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, keep_fp8: bool, evidence: str
 ) -> None:
-    checkpoint, expected, fp8_dequantized = _write_checkpoint(tmp_path)
+    checkpoint, expected, fp8_dequantized = _write_checkpoint(tmp_path, evidence)
     loader = _loader(monkeypatch, keep_fp8)
     config = MistralEncoder_Checkpoint_Config.model_construct(path=str(checkpoint), variant=MistralVariantType.Cow)
 

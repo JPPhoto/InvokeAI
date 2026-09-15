@@ -67,9 +67,10 @@ class Fp8ScaledLayer:
 def read_safetensors_metadata(path: Path, logger: Logger | None = None) -> dict[str, str] | None:
     """Read the safetensors header metadata, or None if it cannot be read.
 
-    Only used to enrich fp8 handling (per-layer ``full_precision_matrix_mult`` hints), so an
-    unreadable header must not fail the model load. It is warned about rather than swallowed: without
-    the hints, layers the quantizer marked as unsafe would silently be multiplied in fp8.
+    Only used for per-layer quantization hints, so an unreadable header must not fail the model load
+    by itself. It is warned about rather than swallowed: without the hints, layers the quantizer marked
+    as unsafe would silently be multiplied in fp8, and nvfp4 layers that only the header names are
+    refused as unnamed.
     """
     try:
         from safetensors import safe_open
@@ -78,7 +79,9 @@ def read_safetensors_metadata(path: Path, logger: Logger | None = None) -> dict[
             return f.metadata()
     except Exception as e:
         if logger is not None:
-            logger.warning(f"Could not read safetensors metadata from {path.name} ({e}); fp8 layer hints unavailable.")
+            logger.warning(
+                f"Could not read safetensors metadata from {path.name} ({e}); per-layer quantization hints unavailable."
+            )
         return None
 
 

@@ -948,11 +948,22 @@ class MistralEncoderCheckpointLoader(ModelLoader):
         sd = load_file(model_path)
         sd = _strip_known_prefixes(sd)
 
+        # The header names layers before this loader strips its own wrapper prefixes on top of the generic ones,
+        # so the names need both lists. With only the generic tuple, a `language_model.`-prefixed redistribution
+        # keeps its names while the sd keys lose the prefix: every `full_precision_matrix_mult` is silently
+        # ignored, and nvfp4 layers only the header names are refused as unnamed.
+        header_hints = strip_layer_path_prefix(
+            parse_quantization_metadata(read_safetensors_metadata(model_path, logger)),
+            prefixes=(*MISTRAL_KEY_PREFIXES, *TRANSFORMER_KEY_PREFIXES),
+        )
+
         # Comfy's fp4_mixed build keeps most projections in nvfp4 beside scaled fp8. Decode those first:
         # the keep-fp8 branch below pops every `weight_scale` and discards the ones whose weight is not
         # float8, nvfp4's block scales included, and the dequantizing branch would stretch them over the
         # packed weight.
-        nvfp4_layers = dequantize_nvfp4_layers(sd, model_dtype, reserve=self._ram_cache.make_room)
+        nvfp4_layers = dequantize_nvfp4_layers(
+            sd, model_dtype, reserve=self._ram_cache.make_room, header_layers=header_hints
+        )
         if nvfp4_layers:
             logger.info(
                 f"Mistral encoder: decoded {nvfp4_layers} nvfp4 layer(s) to {model_dtype}. They are not kept packed, "
@@ -970,14 +981,6 @@ class MistralEncoderCheckpointLoader(ModelLoader):
         keep_fp8 = should_keep_fp8_weights(target_device)
         fp8_layers: dict[str, Any] = {}
         if keep_fp8:
-            # This loader strips its own wrapper prefixes on top of the generic ones, so the hints
-            # need both lists. With only the generic tuple, a `language_model.`-prefixed
-            # redistribution keeps its hint names while the sd keys lose the prefix, and every
-            # `full_precision_matrix_mult` is silently ignored.
-            header_hints = strip_layer_path_prefix(
-                parse_quantization_metadata(read_safetensors_metadata(model_path, logger)),
-                prefixes=(*MISTRAL_KEY_PREFIXES, *TRANSFORMER_KEY_PREFIXES),
-            )
             layer_hints = {**extract_comfy_quant_hints(sd), **header_hints}
             fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
         if not fp8_layers:

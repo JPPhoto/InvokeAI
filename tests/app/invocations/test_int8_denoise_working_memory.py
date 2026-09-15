@@ -5,7 +5,7 @@ forward. That allocation is not part of the model's resident size, so unless the
 cache to hold room for it, the cache is free to pack the device with weights right up to the
 default working memory and the first forward competes with what it just placed.
 
-`peak_int8_dequant_transient_bytes` is unit-tested next to the module it belongs to. What is
+`peak_dequant_transient_bytes` is unit-tested next to the modules it reads. What is
 pinned here is the wire: deleting the `working_mem_bytes=` argument from the node leaves every
 other test green. Z-Image only -- MiniMax H3 adds the same term; reaching its `model_on_device()` call needs a packed sequence.
 Krea-2's wiring is pinned separately, in `tests/app/invocations/test_krea2_denoise.py`.

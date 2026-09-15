@@ -74,10 +74,7 @@ from invokeai.backend.patches.lora_conversions.minimax_h3_lora_conversion_utils 
     is_minimax_h3_adaln_layer_path,
 )
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
-from invokeai.backend.quantization.int8_convrot import (
-    peak_int8_dequant_transient_bytes,
-    requires_sidecar_patching,
-)
+from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes, requires_sidecar_patching
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import MiniMaxH3ConditioningInfo
 from invokeai.backend.util.devices import TorchDevice
@@ -477,7 +474,7 @@ class MiniMaxH3DenoiseInvocation(BaseInvocation):
         # Added to the activation estimate rather than compared against it: the transient is alive
         # inside the same forward. Zero on a bf16 build. Read from the unlocked model, before the
         # VRAM lock the reservation applies to.
-        estimated_working_memory += peak_int8_dequant_transient_bytes(transformer_info.model, torch.bfloat16)
+        estimated_working_memory += peak_dequant_transient_bytes(transformer_info.model, torch.bfloat16)
 
         # LoRA patches are materialized (RAM cache) before any VRAM locks. On the AdaLN-pruned
         # transformer the AdaLN layers cannot be weight patches (their 2688-dim input space was

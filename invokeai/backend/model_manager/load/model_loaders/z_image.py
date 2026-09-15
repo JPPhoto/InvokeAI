@@ -68,7 +68,13 @@ from invokeai.backend.quantization.int8_convrot import (
     split_int8_convrot_layers,
     swap_in_int8_linears,
 )
-from invokeai.backend.quantization.nvfp4 import dequantize_nvfp4_layers
+from invokeai.backend.quantization.nvfp4 import (
+    NVFP4Payload,
+    install_nvfp4_layers,
+    pop_nvfp4_layers,
+    predict_nvfp4_install_size,
+    split_nvfp4_rows,
+)
 from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
 from invokeai.backend.quantization.sdnq.loaders import raise_on_incomplete_sdnq_load, sdnq_sd_loader
 from invokeai.backend.qwen3.qwen3_tokenizer import load_bundled_qwen3_tokenizer
@@ -97,6 +103,17 @@ def _remap_z_image_layer_paths(layer_names: Any) -> dict[str, list[str]]:
         if targets:
             mapping[name] = targets
     return mapping
+
+
+def _remap_nvfp4_payloads(payloads: dict[str, NVFP4Payload]) -> dict[str, NVFP4Payload]:
+    """Move packed nvfp4 layers to their diffusers paths, splitting a fused QKV's tensors the way the converter
+    splits its weight: into equal thirds by rows, which the block scales only survive on whole tile rows."""
+    path_map = _remap_z_image_layer_paths(payloads.keys())
+    remapped: dict[str, NVFP4Payload] = {}
+    for name, payload in payloads.items():
+        targets = path_map.get(name, [name])
+        remapped.update(zip(targets, split_nvfp4_rows(name, payload, len(targets)), strict=True))
+    return remapped
 
 
 def _convert_z_image_gguf_to_diffusers(sd: dict[str, Any]) -> dict[str, Any]:
@@ -486,23 +503,19 @@ class ZImageCheckpointModel(ModelLoader):
         target_device = TorchDevice.choose_torch_device()
         model_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
 
-        # Before anything below reads the quantization side channel: the scaled-fp8 extraction pops every
-        # `weight_scale` and drops the ones whose weight is not float8, nvfp4's block scales included, and
-        # the fused-QKV split has no destination for `weight_scale_2`.
-        nvfp4_layers = dequantize_nvfp4_layers(sd, model_dtype, reserve=self._ram_cache.make_room)
-        if nvfp4_layers:
-            self._logger.info(
-                f"Z-Image: decoded {nvfp4_layers} nvfp4 layer(s) to {model_dtype}. They are not kept packed, so the "
-                "model needs as much memory as its bf16 build."
-            )
-
-        # Per-layer `full_precision_matrix_mult` hints, from the safetensors header and/or the
-        # per-tensor `.comfy_quant` markers. The header names layers in the checkpoint's own scheme,
-        # so it is remapped below; the markers ride along through the key conversion instead.
-        # The names in the header still carry the checkpoint prefix stripped off `sd` above.
+        # Per-layer hints from the safetensors header and/or the per-tensor `.comfy_quant` markers:
+        # `full_precision_matrix_mult` for scaled fp8, and for nvfp4 the evidence that a layer follows
+        # ComfyUI's conventions. The header names layers in the checkpoint's own scheme, so it is remapped
+        # below; the markers ride along through the key conversion instead. The names in the header still
+        # carry the checkpoint prefix stripped off `sd` above.
         header_hints = strip_layer_path_prefix(
             parse_quantization_metadata(read_safetensors_metadata(model_path, self._logger))
         )
+
+        # Out of the state dict before anything below reads the quantization side channel: the scaled-fp8
+        # extraction pops every `weight_scale` and drops the ones whose weight is not float8, nvfp4's block
+        # scales included, and the casts would widen the packed payload.
+        nvfp4_payloads = pop_nvfp4_layers(sd, header_layers=header_hints)
 
         # Check if the state dict is in original format (not diffusers format)
         # Original format has keys like "x_embedder.weight" instead of "all_x_embedder.2-1.weight"
@@ -515,6 +528,7 @@ class ZImageCheckpointModel(ModelLoader):
             header_hints = {
                 target: hints for name, hints in header_hints.items() for target in path_map.get(name, [name])
             }
+            nvfp4_payloads = _remap_nvfp4_payloads(nvfp4_payloads)
 
         # Create an empty model with the default Z-Image config
         # Z-Image-Turbo uses these default parameters from diffusers
@@ -556,6 +570,20 @@ class ZImageCheckpointModel(ModelLoader):
         keys_to_remove = [k for k in sd.keys() if not (k.startswith(valid_prefixes) or k in valid_exact)]
         for k in keys_to_remove:
             del sd[k]
+        # A bundled encoder's nvfp4 layers go the same way.
+        nvfp4_payloads = {path: payload for path, payload in nvfp4_payloads.items() if path.startswith(valid_prefixes)}
+
+        # Honor the model's own precision-sensitive list on every path below. Z-Image declares
+        # ["t_embedder", "cap_embedder"] because `ZImageTimestepEmbedder.forward` reads
+        # `self.mlp[0].weight.dtype` to pick the dtype it casts its activations to, and a quantized
+        # weight there breaks that branch whichever scheme it comes from: an fp8 weight turns the
+        # activations fp8 and the forward dies in `x.abs()`; an `Int8ConvrotLinear` or `NVFP4Linear`
+        # reports an integer dtype, the forward falls through to a `compute_dtype` attribute these
+        # modules do not have, and the timestep branch silently runs in float32 into a bf16 model.
+        skip_patterns = _model_declared_skip_patterns(model)
+        # What the nvfp4 layers will occupy, packed or decoded. Both branches reserve it together with the
+        # rest of the state dict: a reservation makes that much room, it does not add to an earlier one.
+        nvfp4_bytes = predict_nvfp4_install_size(model, nvfp4_payloads, model_dtype, skip_patterns)
 
         # Two ComfyUI side-channel formats reach this loader, and a checkpoint carries one or the
         # other: `comfy_quant` names its format per layer, and `int8_tensorwise` never appears in a
@@ -582,14 +610,6 @@ class ZImageCheckpointModel(ModelLoader):
             sd.update(kept_sd)
             del kept_sd
 
-            # Honor the model's own precision-sensitive list here too, not only on the fp8 side.
-            # Z-Image declares ["t_embedder", "cap_embedder"] because
-            # `ZImageTimestepEmbedder.forward` reads `self.mlp[0].weight.dtype` to pick the dtype
-            # it casts its activations to; on an `Int8ConvrotLinear` that reads `torch.int8`, the
-            # forward falls through to a `compute_dtype` attribute these modules do not have, and
-            # the timestep branch silently runs in float32 into a bf16 model.
-            skip_patterns = _model_declared_skip_patterns(model)
-
             # Reserve before the split, not after: the split dequantizes the layers it widens, so
             # reserving afterwards lets that transient land on an unreserved cache. The prediction
             # is given the same inputs, so it charges those layers the compute dtype's width and
@@ -597,6 +617,7 @@ class ZImageCheckpointModel(ModelLoader):
             # memory this load never uses.
             self._ram_cache.make_room(
                 predict_int8_cast_size(sd, model_dtype, int8_markers, model=model, skip_patterns=skip_patterns)
+                + nvfp4_bytes
             )
 
             quantized = split_int8_convrot_layers(
@@ -619,24 +640,14 @@ class ZImageCheckpointModel(ModelLoader):
             # them here would discard both the VRAM saving and the tensor cores before the model is
             # built.
             keep_fp8 = should_keep_fp8_weights(self._torch_device)
-            if fp8_layers and not keep_fp8:
-                # Legacy behavior, but now with the scale actually applied: fold it into the weight.
-                dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
-                fp8_layers = {}
 
-            # Honor the model's own precision-sensitive list. Z-Image declares
-            # ["t_embedder", "cap_embedder"], and `TimestepEmbedder.forward` casts its activations to
-            # `self.mlp[0].weight.dtype` — an fp8 weight there turns the activations fp8 and the
-            # forward dies in `x.abs()`. Those layers must be dequantized even though the rest stays
-            # quantized.
-            skip_patterns = _model_declared_skip_patterns(model)
-            # Scaled layers that the cast would dequantize anyway are folded here, scale applied, so
-            # `cast_state_dict` never strips a scale it cannot put back.
-            # Reserve before the split, not after: `split_fp8_scaled_layers` dequantizes its unusable
-            # subset through fp32, so reserving afterwards lets that transient peak land on an
-            # unreserved cache. `scaled_layers` is what keeps that honest: the split also widens
-            # layers whose scale layout `scaled_mm` cannot apply, and without the mapping the
-            # prediction would charge those 1 byte/element and arrive at 2.
+            # Reserve before anything below widens a weight, not after: without fp8 compute the fold right
+            # after this widens every scaled layer, and `split_fp8_scaled_layers` dequantizes its unusable
+            # subset through fp32 -- reserving afterwards lets either peak land on an unreserved cache.
+            # Without fp8 compute the prediction charges every float at `model_dtype`, folded yet or not.
+            # With it, `scaled_layers` is what keeps the prediction honest: the split also widens layers
+            # whose scale layout `scaled_mm` cannot apply, and without the mapping the prediction would
+            # charge those 1 byte/element and arrive at 2.
             self._ram_cache.make_room(
                 predict_cast_state_dict_size(
                     sd,
@@ -646,7 +657,16 @@ class ZImageCheckpointModel(ModelLoader):
                     skip_patterns=skip_patterns,
                     scaled_layers=fp8_layers,
                 )
+                + nvfp4_bytes
             )
+
+            if fp8_layers and not keep_fp8:
+                # Legacy behavior, but now with the scale actually applied: fold it into the weight.
+                dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
+                fp8_layers = {}
+
+            # Scaled layers that the cast would dequantize anyway are folded here, scale applied, so
+            # `cast_state_dict` never strips a scale it cannot put back.
 
             fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
             kept = cast_state_dict(
@@ -655,6 +675,18 @@ class ZImageCheckpointModel(ModelLoader):
                 keep_fp8=keep_fp8,
                 model=model,
                 skip_patterns=skip_patterns,
+            )
+
+        if nvfp4_payloads:
+            packed = install_nvfp4_layers(model, sd, nvfp4_payloads, model_dtype, skip_patterns)
+            decoded = len(nvfp4_payloads) - packed
+            self._logger.info(
+                f"Z-Image: kept {packed} nvfp4 layer(s) packed"
+                + (
+                    f" and decoded {decoded} to {model_dtype} (precision-sensitive or not a Linear)."
+                    if decoded
+                    else "."
+                )
             )
 
         model.load_state_dict(sd, assign=True)
