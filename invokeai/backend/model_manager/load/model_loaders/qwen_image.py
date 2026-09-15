@@ -14,7 +14,7 @@ from invokeai.backend.model_manager.configs.qwen_vl_encoder import (
     QwenVLEncoder_Checkpoint_Config,
     QwenVLEncoder_Diffusers_Config,
 )
-from invokeai.backend.model_manager.load.load_default import ModelLoader
+from invokeai.backend.model_manager.load.load_default import ModelLoader, _model_declared_skip_patterns
 from invokeai.backend.model_manager.load.model_loader_registry import ModelLoaderRegistry
 from invokeai.backend.model_manager.load.model_loaders.comfyui_state_dict_utils import (
     _dequantize_comfyui_fp8,
@@ -30,8 +30,15 @@ from invokeai.backend.model_manager.taxonomy import (
     QwenImageVariantType,
     SubModelType,
 )
+from invokeai.backend.quantization.fp8_scaled import (
+    parse_quantization_metadata,
+    predict_cast_state_dict_size,
+    read_safetensors_metadata,
+    strip_layer_path_prefix,
+)
 from invokeai.backend.quantization.gguf.ggml_tensor import GGMLTensor
 from invokeai.backend.quantization.gguf.loaders import gguf_sd_loader
+from invokeai.backend.quantization.nvfp4 import install_nvfp4_layers, pop_nvfp4_layers, predict_nvfp4_install_size
 from invokeai.backend.util.devices import TorchDevice
 
 
@@ -264,26 +271,43 @@ class QwenImageCheckpointModel(ModelLoader):
         sd = load_file(str(model_path))
         sd = _strip_comfyui_prefix(sd)
 
+        # Comfy's nvfp4 build keeps the image stream's attention and MLP in nvfp4, beside scaled fp8. Take those layers
+        # out before the fold: `_dequantize_comfyui_fp8` multiplies every `.weight_scale` into its weight, nvfp4's
+        # block scales included. `install_nvfp4_layers` puts them back, packed.
+        header_layers = strip_layer_path_prefix(
+            parse_quantization_metadata(read_safetensors_metadata(model_path, logger))
+        )
+        nvfp4_payloads = pop_nvfp4_layers(sd, header_layers=header_layers)
+
+        is_edit = getattr(config, "variant", None) == QwenImageVariantType.Edit
+        model_config = _build_qwen_image_transformer_config(sd, is_edit=is_edit)
+
+        # Built before the reservation, which depends on its modules: they decide which nvfp4 layers stay packed.
+        with accelerate.init_empty_weights():
+            model = QwenImageTransformer2DModel(**model_config)
+        skip_patterns = _model_declared_skip_patterns(model)
+
+        # One reservation, before the fold widens a single weight: `make_room` makes that much room rather than adding
+        # to an earlier one. Every fp8 layer is folded to the compute dtype.
+        self._ram_cache.make_room(
+            predict_cast_state_dict_size(sd, model_dtype, keep_fp8=False)
+            + predict_nvfp4_install_size(model, nvfp4_payloads, model_dtype, skip_patterns)
+        )
+
         dequantized = _dequantize_comfyui_fp8(sd, model_dtype)
         if dequantized > 0:
             logger.info(f"Dequantized {dequantized} ComfyUI-quantized weights")
         _strip_quantization_metadata(sd)
 
-        is_edit = getattr(config, "variant", None) == QwenImageVariantType.Edit
-        model_config = _build_qwen_image_transformer_config(sd, is_edit=is_edit)
-
-        with accelerate.init_empty_weights():
-            model = QwenImageTransformer2DModel(**model_config)
-
         # Dequantized fp8 weights are already at model_dtype; this only casts any remaining
-        # non-quantized float weights (e.g. a plain fp16/fp32 checkpoint) to the compute dtype
-        # so the cache reservation below is sized from the actual post-cast tensors.
+        # non-quantized float weights (e.g. a plain fp16/fp32 checkpoint) to the compute dtype.
         for k in list(sd.keys()):
             if sd[k].is_floating_point():
                 sd[k] = sd[k].to(model_dtype)
 
-        new_sd_size = sum(t.nelement() * t.element_size() for t in sd.values())
-        self._ram_cache.make_room(new_sd_size)
+        if nvfp4_payloads:
+            packed = install_nvfp4_layers(model, sd, nvfp4_payloads, model_dtype, skip_patterns)
+            logger.info(f"Qwen Image: kept {packed} of {len(nvfp4_payloads)} nvfp4 layer(s) packed.")
 
         model.load_state_dict(sd, strict=False, assign=True)
         return model
@@ -396,23 +420,12 @@ class QwenVLEncoderCheckpointLoader(ModelLoader):
 
         sd = load_file(str(model_path))
 
-        # Dequantize ComfyUI-style fp8 weights, then strip the now-unused quantization
-        # metadata (`scale_input` is the activation scale ComfyUI's fp8 matmul kernels
-        # use at runtime — we run the encoder in bf16 after dequantization).
-        dequantized_count = _dequantize_comfyui_fp8(sd, model_dtype)
-        if dequantized_count > 0:
-            logger.info(f"Dequantized {dequantized_count} ComfyUI-quantized weights")
-        _strip_quantization_metadata(sd)
-
-        # ComfyUI single-file checkpoints use the legacy Qwen2.5-VL key layout
-        # (`visual.X`, `model.X`); remap to the `model.visual.X` / `model.language_model.X`
-        # layout transformers expects. See `_remap_qwen_vl_checkpoint_keys` for details.
-        sd = _remap_qwen_vl_checkpoint_keys(sd)
-
-        # Cast to compute dtype (skip integer/index tensors)
-        for k in list(sd.keys()):
-            if sd[k].is_floating_point():
-                sd[k] = sd[k].to(model_dtype)
+        # Comfy's nvfp4 build keeps the language model's projections in nvfp4, beside scaled fp8 embeddings. Take those
+        # layers out before the fold: `_dequantize_comfyui_fp8` multiplies every `.weight_scale` into its weight,
+        # nvfp4's block scales included. `install_nvfp4_layers` puts them back, packed.
+        nvfp4_payloads = pop_nvfp4_layers(
+            sd, header_layers=parse_quantization_metadata(read_safetensors_metadata(model_path, logger))
+        )
 
         # Fetch the architecture config from HuggingFace (small, ~5KB).
         # Offline fallback: tries cache first, downloads only if missing.
@@ -435,11 +448,41 @@ class QwenVLEncoderCheckpointLoader(ModelLoader):
                 ) from e
         qwen_config.torch_dtype = model_dtype
 
-        new_sd_size = sum(t.nelement() * t.element_size() for t in sd.values())
-        self._ram_cache.make_room(new_sd_size)
-
+        # Built before the reservation, which depends on its modules: they decide which nvfp4 layers stay packed.
         with accelerate.init_empty_weights():
             model = Qwen2_5_VLForConditionalGeneration(qwen_config)
+        skip_patterns = _model_declared_skip_patterns(model)
+        # The packed layers are named in the same legacy layout as the keys.
+        nvfp4_payloads = _remap_qwen_vl_checkpoint_keys(nvfp4_payloads)
+
+        # One reservation, before the fold widens a single weight: `make_room` makes that much room rather than adding
+        # to an earlier one. Every fp8 layer is folded to the compute dtype.
+        self._ram_cache.make_room(
+            predict_cast_state_dict_size(sd, model_dtype, keep_fp8=False)
+            + predict_nvfp4_install_size(model, nvfp4_payloads, model_dtype, skip_patterns)
+        )
+
+        # Dequantize ComfyUI-style fp8 weights, then strip the now-unused quantization
+        # metadata (`scale_input` is the activation scale ComfyUI's fp8 matmul kernels
+        # use at runtime — we run the encoder in bf16 after dequantization).
+        dequantized_count = _dequantize_comfyui_fp8(sd, model_dtype)
+        if dequantized_count > 0:
+            logger.info(f"Dequantized {dequantized_count} ComfyUI-quantized weights")
+        _strip_quantization_metadata(sd)
+
+        # ComfyUI single-file checkpoints use the legacy Qwen2.5-VL key layout
+        # (`visual.X`, `model.X`); remap to the `model.visual.X` / `model.language_model.X`
+        # layout transformers expects. See `_remap_qwen_vl_checkpoint_keys` for details.
+        sd = _remap_qwen_vl_checkpoint_keys(sd)
+
+        # Cast to compute dtype (skip integer/index tensors)
+        for k in list(sd.keys()):
+            if sd[k].is_floating_point():
+                sd[k] = sd[k].to(model_dtype)
+
+        if nvfp4_payloads:
+            packed = install_nvfp4_layers(model, sd, nvfp4_payloads, model_dtype, skip_patterns)
+            logger.info(f"Qwen VL encoder: kept {packed} of {len(nvfp4_payloads)} nvfp4 layer(s) packed.")
 
         # Load weights; allow missing keys for tied lm_head and re-initialised buffers.
         load_result = model.load_state_dict(sd, strict=False, assign=True)

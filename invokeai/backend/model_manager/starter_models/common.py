@@ -164,6 +164,17 @@ qwen_vl_encoder_fp8 = StarterModel(
     format=ModelFormat.Checkpoint,
 )
 
+qwen_vl_encoder_nvfp4 = StarterModel(
+    name="Qwen2.5-VL Encoder (NVFP4)",
+    base=BaseModelType.Any,
+    source="https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_nvfp4.safetensors",
+    description="ComfyUI's single-file nvfp4/fp8-mixed Qwen2.5-VL 7B encoder. Bundles the language model and visual "
+    "tower; tokenizer/processor are fetched from HuggingFace on first use. Its nvfp4 layers stay packed, about 6.7GB "
+    "once loaded. ~5.7GB download",
+    type=ModelType.QwenVLEncoder,
+    format=ModelFormat.Checkpoint,
+)
+
 qwen_vl_encoder_diffusers = StarterModel(
     name="Qwen2.5-VL Encoder (Diffusers)",
     base=BaseModelType.Any,
@@ -238,6 +249,22 @@ flux2_klein_qwen3_8b_encoder = StarterModel(
     base=BaseModelType.Any,
     source="black-forest-labs/FLUX.2-klein-9B::text_encoder+tokenizer",
     description="Qwen3 8B text encoder for FLUX.2 Klein 9B models. ~16GB",
+    type=ModelType.Qwen3Encoder,
+)
+
+flux2_klein_qwen3_4b_encoder_fp4 = StarterModel(
+    name="FLUX.2 Klein Qwen3 4B Encoder (FP4 mixed)",
+    base=BaseModelType.Any,
+    source="https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/text_encoders/qwen_3_4b_fp4_flux2.safetensors",
+    description="Comfy-Org's nvfp4/fp8-mixed Qwen3 4B text encoder for FLUX.2 Klein 4B. Its nvfp4 layers stay packed, about 5.2GB once loaded. ~3.6GB download",
+    type=ModelType.Qwen3Encoder,
+)
+
+flux2_klein_qwen3_8b_encoder_fp4 = StarterModel(
+    name="FLUX.2 Klein Qwen3 8B Encoder (FP4 mixed)",
+    base=BaseModelType.Any,
+    source="https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/text_encoders/qwen_3_8b_fp4mixed.safetensors",
+    description="Comfy-Org's nvfp4/fp8-mixed Qwen3 8B text encoder for FLUX.2 Klein 9B. Its nvfp4 layers stay packed, about 9.4GB once loaded. ~6.3GB download",
     type=ModelType.Qwen3Encoder,
 )
 
