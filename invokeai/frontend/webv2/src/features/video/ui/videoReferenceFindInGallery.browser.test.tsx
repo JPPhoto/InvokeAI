@@ -8,6 +8,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
 
 import { VideoReferenceListField } from './VideoReferenceListField';
 import { VideoUiProvider, type VideoUiAdapter } from './VideoUiContext';
@@ -102,6 +103,27 @@ const render = async (): Promise<void> => {
   );
 };
 
+/**
+ * Park the cursor clear of the harness. The runner's pointer is stationary at
+ * the viewport origin and this list renders into the top-left corner, so the
+ * first card's thumbnail sits under it — and a hover badge whose whole contract
+ * is "hidden until this thumbnail is hovered" is then revealed before the test
+ * has touched anything. Mirrors `resetPointerAndScroll` in the rebalance-bars
+ * suite, which hit the same stationary cursor.
+ */
+const parkPointer = async (): Promise<void> => {
+  const parking = document.createElement('div');
+
+  parking.style.cssText = 'position:fixed;right:0;bottom:0;width:2px;height:2px;z-index:2147483647';
+  document.body.append(parking);
+
+  await act(async () => {
+    await userEvent.hover(parking);
+  });
+
+  parking.remove();
+};
+
 const findButtons = (name: string): HTMLButtonElement[] => [
   ...host.querySelectorAll<HTMLButtonElement>(`button[aria-label="Find ${name} in Gallery"]`),
 ];
@@ -131,6 +153,7 @@ describe('video reference find-in-gallery badges', () => {
 
   it('keeps the badge out of the way until its own thumbnail is hovered or focused', async () => {
     await render();
+    await parkPointer();
 
     // Each badge is scoped to its own thumbnail's `.group`, which is the whole
     // mechanism that makes it a hover overlay rather than permanent chrome. A
