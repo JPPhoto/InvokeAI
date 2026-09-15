@@ -12,6 +12,7 @@ preset; Comfy-Org repackages both generations as single safetensors files. See
 
 import re
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Literal, Self
 
 from pydantic import Field
@@ -31,7 +32,12 @@ from invokeai.backend.model_manager.taxonomy import (
     ModelType,
     PiDDecoderVariantType,
 )
-from invokeai.backend.pid.state_dict_utils import PID_VERSION_BY_LQ_HIDDEN_DIM, PiDVersion, pid_net_shapes
+from invokeai.backend.pid.state_dict_utils import (
+    PID_VERSION_BY_LQ_HIDDEN_DIM,
+    PiDVersion,
+    pid_net_shapes,
+    strip_net_prefix,
+)
 
 # Marker substring produced by `PidNet.lq_proj` (see
 # invokeai/backend/pid/_src/networks/pid_net.py). The pretrained PixDiT_T2I
@@ -300,6 +306,80 @@ def _raise_if_named_undistilled(components: tuple[str, ...], folder_name: str) -
             )
 
 
+def _int8_sidecar_keys(state_dict: dict[Any, Any], path: Path) -> set[str]:
+    """The keys of Comfy-Org's `int8_tensorwise` side channel, which the contract does not list; reject a quantization
+    `load_pid_decoder` would refuse.
+
+    Held to what the loader accepts, so an int8 build that registers also loads: every marked layer needs an int8
+    weight, a per-row or per-tensor `weight_scale`, and a marker declaring `int8_tensorwise` with a rotation group the
+    decode has a Hadamard for and that divides the layer's inputs; every int8 weight needs a marker. Anything else
+    decodes garbage or fails at every decode, and every config class would turn the file away for the same reason.
+
+    Dtypes and shapes come from the header identification reads. The markers' JSON does not — a header has no tensor
+    data — so it is read from the safetensors file itself, once the dtypes have shown the file is worth reading.
+    """
+    import torch
+
+    from invokeai.backend.quantization.fp8_scaled import COMFY_QUANT_SUFFIX
+    from invokeai.backend.quantization.int8_convrot import (
+        CONVROT_GROUP_SIZE,
+        INT8_TENSORWISE_FORMAT,
+        check_hadamard_size,
+        check_int8_scale_layout,
+        read_comfy_quant_markers,
+    )
+
+    stripped = strip_net_prefix(state_dict)
+    marked = {k[: -len(COMFY_QUANT_SUFFIX)] for k in stripped if isinstance(k, str) and k.endswith(COMFY_QUANT_SUFFIX)}
+    if not_int8 := sorted(
+        layer for layer in marked if getattr(stripped.get(f"{layer}.weight"), "dtype", None) is not torch.int8
+    ):
+        raise InvalidMatchError(
+            f"PiD checkpoint quantizes {len(not_int8)} layer(s) other than as int8, e.g. '{not_int8[0]}'; only "
+            "int8_tensorwise builds are supported."
+        )
+    if unmarked := sorted(
+        k
+        for k, v in stripped.items()
+        if getattr(v, "dtype", None) is torch.int8
+        and not (isinstance(k, str) and k.endswith(".weight") and k[: -len(".weight")] in marked)
+    ):
+        raise InvalidMatchError(
+            f"PiD checkpoint has {len(unmarked)} int8 weight(s) with no int8_tensorwise marker, e.g. {unmarked[:3]}."
+        )
+    if not marked:
+        return set()
+
+    try:
+        markers = strip_net_prefix(read_comfy_quant_markers(path))
+    except Exception as e:
+        raise InvalidMatchError(
+            f"PiD checkpoint marks {len(marked)} layer(s) int8, but its markers cannot be read from {path.name}: {e}"
+        ) from e
+    for layer in sorted(marked):
+        weight, scale, marker = (
+            stripped[f"{layer}.weight"],
+            stripped.get(f"{layer}.weight_scale"),
+            markers.get(layer, {}),
+        )
+        try:
+            if marker.get("format") != INT8_TENSORWISE_FORMAT:
+                raise ValueError(f"'{layer}' is marked {marker.get('format') or 'with an unreadable marker'}")
+            if scale is None:
+                raise ValueError(f"'{layer}' is missing its weight_scale")
+            check_int8_scale_layout(layer, weight, scale)
+            if marker.get("convrot", False):
+                group = int(marker.get("convrot_groupsize", CONVROT_GROUP_SIZE))
+                check_hadamard_size(group)
+                if weight.shape[-1] % group:
+                    raise ValueError(
+                        f"'{layer}' rotates groups of {group}, which do not divide its {weight.shape[-1]} inputs"
+                    )
+        except ValueError as e:
+            raise InvalidMatchError(f"PiD int8 checkpoint cannot be loaded: {e}") from e
+    return {f"{layer}{suffix}" for layer in marked for suffix in (COMFY_QUANT_SUFFIX, ".weight_scale")}
+
+
 class PiDDecoder_Checkpoint_Config_Base(Checkpoint_Config_Base):
     """Shared logic for PiD decoder checkpoint configs.
 
@@ -328,7 +408,8 @@ class PiDDecoder_Checkpoint_Config_Base(Checkpoint_Config_Base):
         # no reason to load for the overwhelming majority of files.
         from invokeai.backend.pid.decode import required_pid_net_shapes
 
-        shapes = pid_net_shapes(state_dict)
+        sidecars = _int8_sidecar_keys(state_dict, mod.path)
+        shapes = {k: v for k, v in pid_net_shapes(state_dict).items() if k not in sidecars}
 
         # Everything from here to `_validate_base` is backbone-independent: each of these rejects a file
         # *every* PiD config class would reject for the same reason, which is exactly the case the plain

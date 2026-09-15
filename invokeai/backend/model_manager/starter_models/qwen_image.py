@@ -36,6 +36,17 @@ pid_1_5_decoder_qwenimage_2kto4k = StarterModel(
     dependencies=[gemma2_2b_encoder],
 )
 
+pid_1_5_decoder_qwenimage_2kto4k_int8 = StarterModel(
+    name="PiD 1.5 Decoder Qwen-Image (2K to 4K, int8)",
+    base=BaseModelType.QwenImage,
+    source="https://huggingface.co/Comfy-Org/PixelDiT/resolve/main/diffusion_models/pid_1.5_qwenimage_1024_to_4096_4step_int8_convrot.safetensors",
+    description="PiD 1.5 Qwen-Image decoder in Comfy-Org's int8_convrot build: its transformer layers stay int8, about 2GB once loaded instead of 5.6GB, with output practically identical to the full-precision build. ~1.6GB",
+    type=ModelType.PiDDecoder,
+    format=ModelFormat.Checkpoint,
+    variant=PiDDecoderVariantType.Res2kTo4k_Sr4x,
+    dependencies=[gemma2_2b_encoder],
+)
+
 # region Qwen Image components (shared between Edit and txt2img variants)
 qwen_image_vae = StarterModel(
     name="Qwen Image VAE",

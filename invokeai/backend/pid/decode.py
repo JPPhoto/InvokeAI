@@ -32,6 +32,13 @@ from torch import Tensor
 from invokeai.backend.model_manager.taxonomy import BaseModelType
 from invokeai.backend.pid._src.networks.pid_net import PidNet
 from invokeai.backend.pid.state_dict_utils import PID_VERSION_BY_LQ_HIDDEN_DIM, PiDVersion
+from invokeai.backend.quantization.int8_convrot import (
+    extract_int8_convrot_markers,
+    peak_int8_dequant_transient_bytes,
+    reject_unmarked_int8_weights,
+    split_int8_convrot_layers,
+    swap_in_int8_linears,
+)
 from invokeai.backend.util.logging import InvokeAILogger
 
 _PID_ACTIVATION_CHUNK_SIZE = 1024
@@ -179,8 +186,26 @@ def estimate_pid_decode_working_memory(
     latent: Tensor,
     backbone: BaseModelType,
     pid_memory_optimization: bool = False,
+    pid_net: torch.nn.Module | None = None,
 ) -> int:
-    """Estimate the working memory in bytes for a PiD decode of *latent*.
+    """Estimate the working memory in bytes for a PiD decode of *latent* by *pid_net*.
+
+    The activations, plus — for an `int8_tensorwise` decoder — the weight its largest int8 Linear dequantizes per
+    forward, which the model's resident size does not cover. That weight materializes in the input's dtype, float32
+    at most. Returns 0 for unsupported backbones so callers fall back to the cache's default reservation.
+    """
+    activations = _estimate_pid_activation_memory(latent, backbone, pid_memory_optimization)
+    if activations == 0 or pid_net is None:
+        return activations
+    return activations + peak_int8_dequant_transient_bytes(pid_net, torch.float32)
+
+
+def _estimate_pid_activation_memory(
+    latent: Tensor,
+    backbone: BaseModelType,
+    pid_memory_optimization: bool = False,
+) -> int:
+    """Estimate the activation working memory in bytes for a PiD decode of *latent*.
 
     Each decoded image is ``latent_spatial * sr_scale * latent_spatial_down_factor`` pixels per side. PidNet
     runs in float32 (see ``model_loaders/pid_decoder.py``), so the element size is 4 bytes. The per-pixel term
@@ -304,6 +329,17 @@ def load_pid_decoder(state_dict: dict[Any, Tensor], backbone: BaseModelType) -> 
             f"PiD checkpoint has {len(not_strings)} keys that are not strings and so cannot name a "
             f"PidNet parameter: {not_strings[:5]}"
             + (f" (+ {len(not_strings) - 5} more)" if len(not_strings) > 5 else "")
+        )
+
+    # Comfy-Org's `int8_tensorwise` builds keep their marked Linears int8. Each becomes an `Int8ConvrotLinear`
+    # whose `weight`/`weight_scale` buffers the load below fills with the stored tensors, so the contract's keys
+    # still match; the markers are taken out of *state_dict*. The dense tensors reach the float32 parameters
+    # through `load_state_dict`'s own copy.
+    int8_markers = extract_int8_convrot_markers(state_dict)
+    reject_unmarked_int8_weights(state_dict, int8_markers, "PiD")
+    if int8_markers:
+        swap_in_int8_linears(
+            net, state_dict, split_int8_convrot_layers(state_dict, int8_markers, torch.float32, model=net)
         )
 
     # strict=False so we can report missing and unexpected keys separately; both are fatal. The model

@@ -203,6 +203,92 @@ def test_a_v1_5_file_whose_name_names_no_preset_is_2k_to_4k() -> None:
     assert config.variant is PiDDecoderVariantType.Res2kTo4k_Sr4x
 
 
+_INT8_LAYER = "patch_blocks.0.attn.qkv_x"
+
+
+def _int8_v1_5_state_dict(
+    weight_dtype: torch.dtype = torch.int8, scale_shape: tuple[int, ...] | None = (4608, 1)
+) -> dict[str, object]:
+    """A v1.5 contract with one Linear in Comfy-Org's `int8_tensorwise` layout, as identification reads it off a
+    safetensors header: meta tensors with shapes and dtypes, and no data — the marker's bytes are not in it."""
+    sd = _pid_state_dict(version=PiDVersion.V1_5)
+    layer = f"{_NET_PREFIX}{_INT8_LAYER}"
+    sd[f"{layer}.weight"] = torch.empty(4608, 1536, dtype=weight_dtype, device="meta")
+    if scale_shape is not None:
+        sd[f"{layer}.weight_scale"] = torch.empty(*scale_shape, device="meta")
+    sd[f"{layer}.comfy_quant"] = torch.empty(72, dtype=torch.uint8, device="meta")
+    return sd
+
+
+def _int8_mod(root: Path, state_dict: dict[str, object], marker_format: str = "int8_tensorwise", group: int = 256):
+    """`_mock_mod` over a safetensors file holding the marker's bytes, which is where identification reads them."""
+    from safetensors.torch import save_file
+
+    mod = _mock_mod(root, state_dict, file_name="pid_1.5_qwenimage_1024_to_4096_4step_int8_convrot.safetensors")
+    marker = f'{{"format": "{marker_format}", "convrot": true, "convrot_groupsize": {group}}}'.encode()
+    save_file(
+        {f"{_NET_PREFIX}{_INT8_LAYER}.comfy_quant": torch.frombuffer(bytearray(marker), dtype=torch.uint8)}, mod.path
+    )
+    return mod
+
+
+def test_an_int8_tensorwise_v1_5_checkpoint_identifies() -> None:
+    """Its scales and markers are not PidNet parameters, but `load_pid_decoder` consumes them."""
+    with TemporaryDirectory() as tmpdir:
+        mod = _int8_mod(Path(tmpdir), _int8_v1_5_state_dict())
+        config = PiDDecoder_Checkpoint_QwenImage_Config.from_model_on_disk(
+            mod, dict(_OVERRIDE_FIELDS, base="qwen-image")
+        )
+    assert config.base is BaseModelType.QwenImage
+
+
+def test_a_checkpoint_quantized_in_another_format_is_rejected() -> None:
+    """The decode applies no fp8 scale, so such a layer would load off by its scale."""
+    with TemporaryDirectory() as tmpdir:
+        mod = _int8_mod(Path(tmpdir), _int8_v1_5_state_dict(weight_dtype=torch.float8_e4m3fn))
+        with pytest.raises(InvalidMatchError, match=f"1 layer\\(s\\) other than as int8, e.g. '{_INT8_LAYER}'"):
+            PiDDecoder_Checkpoint_FLUX_Config.from_model_on_disk(mod, dict(_OVERRIDE_FIELDS))
+
+
+@pytest.mark.parametrize(
+    ("marker_format", "group", "scale_shape", "reason"),
+    [
+        ("float8_e4m3fn", 256, (4608, 1), "is marked float8_e4m3fn"),
+        ("int8_tensorwise", 256, None, "is missing its weight_scale"),
+        ("int8_tensorwise", 256, (48, 48), "Blockwise scale grids are not implemented"),
+        ("int8_tensorwise", 512, (4608, 1), "power of 4"),
+        ("int8_tensorwise", 1024, (4608, 1), "groups of 1024, which do not divide its 1536 inputs"),
+    ],
+    ids=["foreign_marker", "missing_scale", "blockwise_scale", "no_hadamard", "group_does_not_divide"],
+)
+def test_an_int8_build_the_loader_would_refuse_does_not_register(
+    marker_format: str, group: int, scale_shape: tuple[int, ...] | None, reason: str
+) -> None:
+    """Identification accepts exactly what `load_pid_decoder` accepts: a file registered here fails at every decode.
+    Each case is one the loader refuses, read off the header and the marker the file carries."""
+    with TemporaryDirectory() as tmpdir:
+        mod = _int8_mod(Path(tmpdir), _int8_v1_5_state_dict(scale_shape=scale_shape), marker_format, group)
+        with pytest.raises(InvalidMatchError, match=reason):
+            PiDDecoder_Checkpoint_FLUX_Config.from_model_on_disk(mod, dict(_OVERRIDE_FIELDS))
+
+
+def test_an_int8_build_whose_markers_cannot_be_read_does_not_register() -> None:
+    with TemporaryDirectory() as tmpdir:
+        mod = _mock_mod(Path(tmpdir), _int8_v1_5_state_dict())
+        with pytest.raises(InvalidMatchError, match="markers cannot be read"):
+            PiDDecoder_Checkpoint_FLUX_Config.from_model_on_disk(mod, dict(_OVERRIDE_FIELDS))
+
+
+def test_an_int8_weight_no_marker_claims_is_rejected() -> None:
+    """Loaded as the float parameter it replaces, the raw codes would decode noise without any error."""
+    sd = _int8_v1_5_state_dict()
+    del sd[f"{_NET_PREFIX}patch_blocks.0.attn.qkv_x.comfy_quant"]
+    with TemporaryDirectory() as tmpdir:
+        mod = _mock_mod(Path(tmpdir), sd)
+        with pytest.raises(InvalidMatchError, match="1 int8 weight\\(s\\) with no int8_tensorwise marker"):
+            PiDDecoder_Checkpoint_FLUX_Config.from_model_on_disk(mod, dict(_OVERRIDE_FIELDS))
+
+
 def test_an_lq_width_no_generation_has_is_rejected_as_an_architecture() -> None:
     with TemporaryDirectory() as tmpdir:
         mod = _mock_mod(Path(tmpdir), _pid_state_dict(lq_hidden_dim=768))
@@ -390,9 +476,8 @@ class TestUnusableCheckpointIsNeverRegistered:
         """Intact but for an LQ width no generation has: every config class would reject it for that reason."""
         return _real_pid_state_dict(lq_hidden_dim=768)
 
-    def _int8_convrot_v1_5(self) -> dict[str, object]:
-        """Comfy-Org's `pid_1.5_*_int8_convrot` builds carry a scale and a marker beside each int8 weight. Loading
-        such a weight as the float parameter it replaces decodes garbage, so the file must not register."""
+    def _marker_beside_a_float_weight(self) -> dict[str, object]:
+        """A quantization marker on a layer whose weight is not int8 names a scale the decode would never apply."""
         sd = _real_pid_state_dict(version=PiDVersion.V1_5)
         sd[f"{_NET_PREFIX}patch_blocks.0.attn.qkv_x.weight_scale"] = torch.ones(())
         sd[f"{_NET_PREFIX}patch_blocks.0.attn.qkv_x.comfy_quant"] = torch.zeros(28, dtype=torch.uint8)
@@ -428,7 +513,7 @@ class TestUnusableCheckpointIsNeverRegistered:
             ("_missing_backbone_weight", "missing 1 of the weights required by PidNet"),
             ("_truncated_v1_5", "missing 1 of the weights required by PidNet"),
             ("_unknown_architecture", "lq_proj hidden dim 768"),
-            ("_int8_convrot_v1_5", "2 keys PidNet does not expect"),
+            ("_marker_beside_a_float_weight", "quantizes 1 layer(s) other than as int8"),
             ("_unsupported_latent_channels", "32 latent channels"),
             ("_malformed_discriminator", "malformed lq_proj.latent_proj.0.weight"),
             ("_bare_with_a_non_string_key", "2 keys PidNet does not expect"),
