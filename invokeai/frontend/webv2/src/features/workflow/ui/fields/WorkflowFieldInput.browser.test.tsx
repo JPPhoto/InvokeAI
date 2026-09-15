@@ -685,7 +685,8 @@ describe('WorkflowFieldInput seed inputs', () => {
       });
     });
   };
-  const seedInput = () => host.querySelector<HTMLInputElement>('input[type="number"]');
+  const seedInput = () => host.querySelector<HTMLInputElement>('input[aria-label="Seed"]');
+  const diceButton = () => host.querySelector<HTMLButtonElement>('button[aria-label="common.newSeed"]');
   const modeTrigger = () => host.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]');
   const menuItem = (mode: string) =>
     document.querySelector<HTMLElement>(`[role="menuitemradio"][data-value="${mode}"]`);
@@ -695,6 +696,7 @@ describe('WorkflowFieldInput seed inputs', () => {
 
     expect(seedInput()?.value).toBe('42');
     expect(modeTrigger()).toBeNull();
+    expect(diceButton()).toBeNull();
 
     await renderField({ ...SEED_TEMPLATE, name: 'steps' } as FieldInputTemplate, 20, vi.fn(), undefined, {
       onSeedModeChange: vi.fn(),
@@ -708,19 +710,20 @@ describe('WorkflowFieldInput seed inputs', () => {
     const onChange = vi.fn();
     const onSeedModeChange = vi.fn();
 
-    // Box the row at the node width so the width assertions below mean what they say.
+    // Box the row at the node width so the width assertions below mean what they say; the
+    // largest seed has to fit beside the stepper, the dice and the trigger without scrolling.
     host.style.width = '18rem';
-    await renderField(SEED_TEMPLATE, 42, onChange, undefined, { onSeedModeChange, seedMode: 'fixed' });
+    await renderField(SEED_TEMPLATE, 4_294_967_295, onChange, undefined, { onSeedModeChange, seedMode: 'fixed' });
 
     expect(seedInput()?.disabled).toBe(false);
     // Without i18n the label is the long key, which stands in for a long translation: the
     // trigger stays bounded and truncates, its accessible name stays whole, and the number
     // input keeps a usable width beside it.
-    expect(modeTrigger()?.getAttribute('aria-label')).toBe(
-      'widgets.generate.seedMode.label: widgets.generate.seedMode.fixed'
-    );
+    expect(modeTrigger()?.getAttribute('aria-label')).toBe('common.seedMode.label: common.seedMode.fixed');
     expect(modeTrigger()?.getBoundingClientRect().width).toBeLessThanOrEqual(144);
-    expect(seedInput()?.getBoundingClientRect().width).toBeGreaterThan(80);
+    expect((seedInput() as HTMLInputElement).scrollWidth).toBeLessThanOrEqual(
+      (seedInput() as HTMLInputElement).clientWidth
+    );
     // xyflow reads `.nokey` to leave a control's keys alone; the trigger and the portaled menu both need it,
     // or arrows nudge the node and Backspace deletes it while the menu is in use.
     expect(modeTrigger()?.closest('.nokey')).not.toBeNull();
@@ -744,7 +747,7 @@ describe('WorkflowFieldInput seed inputs', () => {
     const preview = host.querySelector<HTMLElement>('[data-testid="seed-sequence-preview"]');
 
     // Without i18n resources the key renders, carrying the interpolated bounds.
-    expect(preview?.textContent).toBe('widgets.generate.seedNextBatchRange');
+    expect(preview?.textContent).toBe('common.seedNextBatchRange');
     expect(seedInput()?.getAttribute('aria-describedby')).toBe(preview?.id);
 
     await renderField(SEED_TEMPLATE, 42, vi.fn(), undefined, { onSeedModeChange: vi.fn(), seedMode: 'fixed' });
@@ -759,15 +762,28 @@ describe('WorkflowFieldInput seed inputs', () => {
       seedMode: 'increment',
     });
 
-    expect(host.querySelector('[data-testid="seed-sequence-preview"]')?.textContent).toBe(
-      'widgets.generate.seedNextBatchRange'
-    );
+    expect(host.querySelector('[data-testid="seed-sequence-preview"]')?.textContent).toBe('common.seedNextBatchRange');
   });
 
-  it('quiets the value in random mode but keeps it on show', async () => {
+  it('rolls a new seed from the dice and writes it to the field as an integer in range', async () => {
+    const onChange = vi.fn();
+
+    await renderField(SEED_TEMPLATE, 42, onChange, undefined, { onSeedModeChange: vi.fn(), seedMode: 'fixed' });
+    await settle(() => diceButton()?.click());
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const rolled = onChange.mock.calls[0]?.[0] as number;
+
+    expect(Number.isInteger(rolled)).toBe(true);
+    expect(rolled).toBeGreaterThanOrEqual(0);
+    expect(rolled).toBeLessThanOrEqual(4_294_967_295);
+  });
+
+  it('quiets the value and the dice in random mode but keeps the seed on show', async () => {
     await renderField(SEED_TEMPLATE, 42, vi.fn(), undefined, { onSeedModeChange: vi.fn(), seedMode: 'random' });
 
     expect(seedInput()?.disabled).toBe(true);
     expect(seedInput()?.value).toBe('42');
+    expect(diceButton()?.disabled).toBe(true);
   });
 });

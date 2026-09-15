@@ -4,7 +4,8 @@ import type {
   ModelIdentifierConfig,
 } from '@features/generation/contracts';
 
-import { isLoraCompatibleWithModel, isLoraModelConfig, SEED_MAX } from '@features/generation/settings';
+import { isLoraCompatibleWithModel, isLoraModelConfig } from '@features/generation/settings';
+import { SEED_MAX } from '@platform/core/seed';
 
 import type { VideoWidgetValues } from './types';
 

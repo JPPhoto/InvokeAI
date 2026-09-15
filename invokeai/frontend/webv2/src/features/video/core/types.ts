@@ -3,9 +3,9 @@ import type {
   ImageWithDims,
   MainModelConfig,
   ModelIdentifierConfig,
-  SeedMode,
   VaeModelConfig,
 } from '@features/generation/contracts';
+import type { SeedMode } from '@platform/core/seed';
 
 /**
  * How a video generation is conditioned. There is no explicit mode selector:

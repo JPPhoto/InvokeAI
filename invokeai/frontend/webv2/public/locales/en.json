@@ -251,7 +251,23 @@
     "view": "View",
     "viewJson": "View JSON",
     "widgetViewUnavailable": "Widget view unavailable.",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "seedMode": {
+      "label": "Seed mode",
+      "random": "Random",
+      "randomDescription": "Choose a fresh starting seed for each submission.",
+      "fixed": "Fixed",
+      "fixedDescription": "Reuse the entered seed.",
+      "increment": "Increment",
+      "incrementDescription": "Use successive seeds, increasing by 1.",
+      "decrement": "Decrement",
+      "decrementDescription": "Use successive seeds, decreasing by 1."
+    },
+    "newSeed": "New seed",
+    "seedNextBatch": "Next batch: {{seed}}",
+    "seedNextBatchRange": "Next batch: {{first}} → {{last}}",
+    "decreaseValue": "Decrease value",
+    "increaseValue": "Increase value"
   },
   "app": {
     "name": "Invoke AI",
@@ -2175,7 +2191,6 @@
       "negativePrompt": "Negative prompt",
       "negativePromptAdd": "Negative prompt…",
       "negativePromptHide": "Turn off negative prompt",
-      "newSeed": "New seed",
       "noMatchingPrompts": "No matching prompts.",
       "noMatchingTriggers": "No matching triggers.",
       "noPromptHistoryYet": "No prompt history yet.",
@@ -2198,19 +2213,6 @@
       "promptHistoryEntries": "Prompt history entries",
       "promptHistoryKeyboardHelp": "Alt+Up/Down switches between prompts while focused.",
       "recentSeeds": "Recent seeds",
-      "seedMode": {
-        "label": "Seed mode",
-        "random": "Random",
-        "randomDescription": "Choose a fresh starting seed for each submission.",
-        "fixed": "Fixed",
-        "fixedDescription": "Reuse the entered seed.",
-        "increment": "Increment",
-        "incrementDescription": "Use successive seeds, increasing by 1.",
-        "decrement": "Decrement",
-        "decrementDescription": "Use successive seeds, decreasing by 1."
-      },
-      "seedNextBatch": "Next batch: {{seed}}",
-      "seedNextBatchRange": "Next batch: {{first}} → {{last}}",
       "seedSummary": "{{mode}} · {{seed}}",
       "renamePresetNamed": "Rename preset {{name}}",
       "renamePresetTitle": "Rename preset",

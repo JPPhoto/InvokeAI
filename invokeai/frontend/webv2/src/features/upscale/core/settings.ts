@@ -14,7 +14,6 @@ import {
   isLoraModelConfig,
   isMainModelConfig,
   isModelIdentifierConfig,
-  isSeedMode,
   isVaeCompatibleWithGenerateModel,
   isVaeModelConfig,
   MAX_NEGATIVE_PROMPT_HEIGHT_PX,
@@ -22,8 +21,8 @@ import {
   MIN_NEGATIVE_PROMPT_HEIGHT_PX,
   MIN_POSITIVE_PROMPT_HEIGHT_PX,
   sanitizeBatchCount,
-  SEED_MAX,
 } from '@features/generation/settings';
+import { isSeedMode, SEED_MAX } from '@platform/core/seed';
 
 import type { SpandrelModelConfig, TileControlNetModelConfig, UpscaleWidgetValues } from './types';
 

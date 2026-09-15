@@ -6,7 +6,7 @@ import type {
 } from '@features/generation/contracts';
 import type { VideoAspectRatioId, VideoTargetResolution, VideoWidgetValues } from '@features/video';
 
-import { isLoraCompatibleWithModel, isLoraModelConfig, SEED_MAX } from '@features/generation/settings';
+import { isLoraCompatibleWithModel, isLoraModelConfig } from '@features/generation/settings';
 import {
   findAcceleratorLorasIn,
   getAcceleratorSteps,
@@ -19,6 +19,7 @@ import {
   isValidVideoNumFrames,
   snapVideoNumFrames,
 } from '@features/video';
+import { SEED_MAX } from '@platform/core/seed';
 
 /**
  * Pure mapping from a video's recorded `core_metadata` to a Video-panel

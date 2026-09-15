@@ -344,11 +344,11 @@ export const GenerateRenderSection = ({
       {policy.ui.seedVisible ? (
         <Badge size="xs">
           {settings.seedMode === 'random'
-            ? t('widgets.generate.seedMode.random')
+            ? t('common.seedMode.random')
             : settings.seedMode === 'fixed'
               ? settings.seed
               : t('widgets.generate.seedSummary', {
-                  mode: t(`widgets.generate.seedMode.${settings.seedMode}`),
+                  mode: t(`common.seedMode.${settings.seedMode}`),
                   seed: settings.seed,
                 })}
         </Badge>

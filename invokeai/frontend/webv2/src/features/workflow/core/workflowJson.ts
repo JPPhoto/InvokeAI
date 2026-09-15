@@ -1,4 +1,4 @@
-import { SEED_MODES } from '@features/generation/seed';
+import { SEED_MODES } from '@platform/core/seed';
 import { z } from 'zod';
 
 import type {

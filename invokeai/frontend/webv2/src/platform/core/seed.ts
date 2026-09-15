@@ -1,10 +1,9 @@
 /**
  * The seed policy every seeded submission shares: the range, the four modes,
  * and how a submission walks its sequence. Kept pure (no top-level calls, no
- * dependencies) so any owner can import it without taking on the settings
- * module: a side-effectful import here would make the workflow graph compiler
- * side-effectful, which materializes its facade and pulls the canvas-layer
- * chunk into the settings and palette overlays.
+ * dependencies) so a graph compiler can import it without becoming
+ * side-effectful; rolldown would otherwise materialise that compiler's facade
+ * and pull the canvas-layer chunk into the settings and palette overlays.
  */
 
 export const SEED_MAX = 4_294_967_295;
@@ -29,7 +28,7 @@ export const wrapSeed = (seed: number): number => {
 
 export interface SeedSequenceInput {
   batchCount: number;
-  /** Concrete prompts the submission carries; one unless dynamic prompts expanded it. */
+  /** Concrete prompts the submission carries; one unless the host expands a prompt into several. */
   promptCount: number;
   seedBehaviour: 'per-image' | 'per-iteration';
   seedMode: SeedMode;

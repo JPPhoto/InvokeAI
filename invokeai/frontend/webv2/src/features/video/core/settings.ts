@@ -6,7 +6,6 @@ import {
   isLoraModelConfig,
   isMainModelConfig,
   isModelIdentifierConfig,
-  isSeedMode,
   isVaeModelConfig,
   MAX_NEGATIVE_PROMPT_HEIGHT_PX,
   MAX_POSITIVE_PROMPT_HEIGHT_PX,
@@ -14,6 +13,7 @@ import {
   MIN_POSITIVE_PROMPT_HEIGHT_PX,
   sanitizeBatchCount,
 } from '@features/generation/settings';
+import { isSeedMode } from '@platform/core/seed';
 
 import type {
   MiniMaxH3TargetResolution,

@@ -1,4 +1,12 @@
 import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
+import {
+  getSeedSequenceLength,
+  getSeedStep,
+  isSeedMode,
+  planSeedSubmission,
+  SEED_MAX,
+  wrapSeed,
+} from '@platform/core/seed';
 import { describe, expect, it } from 'vitest';
 
 import type {
@@ -11,7 +19,6 @@ import type {
 } from './types';
 
 import { getGenerationDimensions } from './baseGenerationPolicies';
-import { getSeedSequenceLength, getSeedStep, isSeedMode, planSeedSubmission, SEED_MAX, wrapSeed } from './seed';
 import {
   calculateNewSize,
   clampDimension,

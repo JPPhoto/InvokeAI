@@ -1,6 +1,4 @@
-import type { SeedMode } from '@features/generation/contracts';
-
-import { isSeedMode, planSeedSubmission, SEED_MAX, wrapSeed } from '@features/generation/seed';
+import { isSeedMode, planSeedSubmission, SEED_MAX, type SeedMode, wrapSeed } from '@platform/core/seed';
 
 import type { CompiledWorkflowGraph, WorkflowBackendGraph } from './graphContracts';
 import type {

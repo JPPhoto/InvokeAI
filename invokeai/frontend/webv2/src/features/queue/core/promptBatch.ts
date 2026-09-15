@@ -12,7 +12,8 @@
  * route itself.
  */
 
-const SEED_MAX = 4_294_967_295;
+import { SEED_MAX } from '@platform/core/seed';
+
 export const MAX_QUEUE_BATCH_ITEMS = 10_000;
 
 export type QueuePromptSeedBehaviour = 'per-iteration' | 'per-image';

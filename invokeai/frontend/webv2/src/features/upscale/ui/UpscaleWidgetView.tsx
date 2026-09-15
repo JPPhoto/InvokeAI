@@ -15,13 +15,12 @@ import {
 } from '@chakra-ui/react';
 import { GenerationSettingsSection, SeedField } from '@features/generation/components';
 import {
-  SCHEDULER_OPTIONS,
   getDefaultLoraWeight,
   isLoraCompatibleWithModel,
   isLoraModelConfig,
   isMainModelConfig,
   isVaeModelConfig,
-  SEED_MAX,
+  SCHEDULER_OPTIONS,
 } from '@features/generation/settings';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { ModelSelect } from '@features/models/react';
@@ -45,6 +44,7 @@ import {
   UPSCALE_TILE_SIZE_MAX,
   UPSCALE_TILE_SIZE_MIN,
 } from '@features/upscale/core/settings';
+import { SEED_MAX } from '@platform/core/seed';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { Combobox, Field, Select, Tooltip } from '@platform/ui';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';

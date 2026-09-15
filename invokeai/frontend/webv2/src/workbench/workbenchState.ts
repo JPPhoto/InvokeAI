@@ -70,6 +70,7 @@ import {
   type GallerySettings,
   type GeneratedImageContract,
 } from '@features/gallery/contracts';
+import { planSeedSubmission } from '@platform/core/seed';
 import { WIDGET_REGIONS } from '@workbench/layoutContracts';
 import { prependProjectEvent, PROJECT_EVENT_LIMIT } from '@workbench/projectEvents';
 
@@ -93,6 +94,8 @@ import { gateProjectCanvases } from './projectCanvasGate';
 import { normalizeRestoredQueueItem } from './queue-integration/queueRunRestoration';
 import { getProjectWidgetValues } from './widgetState';
 export { nextLayerName } from './canvasProjectMutations';
+import type { ProjectPromptDraftPatch } from '@features/generation/settings';
+
 import { compileGenerateGraph, resolveGenerateSeed } from '@features/generation/graph';
 import {
   addPromptHistoryItem,
@@ -106,8 +109,6 @@ import {
   migrateProjectPromptDraft,
   normalizeGenerateSettings,
   normalizeGenerateWidgetValues,
-  planSeedSubmission,
-  type ProjectPromptDraftPatch,
   removePromptHistoryItem,
   sanitizeBatchCount,
   syncGenerateWidgetValuesWithModels,

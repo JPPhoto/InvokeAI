@@ -34,7 +34,23 @@ void i18n.use(initReactI18next).init({
   resources: {
     en: {
       translation: {
-        common: { seed: 'Seed' },
+        common: {
+          newSeed: 'New seed',
+          seed: 'Seed',
+          seedMode: {
+            decrement: 'Decrement',
+            decrementDescription: 'Use successive seeds, decreasing by 1.',
+            fixed: 'Fixed',
+            fixedDescription: 'Reuse the entered seed.',
+            increment: 'Increment',
+            incrementDescription: 'Use successive seeds, increasing by 1.',
+            label: 'Seed mode',
+            random: 'Random',
+            randomDescription: 'Choose a fresh starting seed for each submission.',
+          },
+          seedNextBatch: 'Next batch: {{seed}}',
+          seedNextBatchRange: 'Next batch: {{first}} → {{last}}',
+        },
         widgets: {
           generate: {
             // Verbatim from `public/locales/en.json`: Ideogram 4's overrides really are labelled
@@ -48,24 +64,10 @@ void i18n.use(initReactI18next).init({
             ideogram4PresetDerived: 'Set by the sampler preset unless overridden.',
             ideogram4SamplerPreset: 'Sampler preset',
             ideogram4Steps: 'Steps',
-            newSeed: 'New seed',
             override: 'Override',
             recentSeeds: 'Recent seeds',
             render: 'Render',
             scheduler: 'Scheduler',
-            seedMode: {
-              decrement: 'Decrement',
-              decrementDescription: 'Use successive seeds, decreasing by 1.',
-              fixed: 'Fixed',
-              fixedDescription: 'Reuse the entered seed.',
-              increment: 'Increment',
-              incrementDescription: 'Use successive seeds, increasing by 1.',
-              label: 'Seed mode',
-              random: 'Random',
-              randomDescription: 'Choose a fresh starting seed for each submission.',
-            },
-            seedNextBatch: 'Next batch: {{seed}}',
-            seedNextBatchRange: 'Next batch: {{first}} → {{last}}',
             seedSummary: '{{mode}} · {{seed}}',
             steps: 'Steps',
             useSeed: 'Use seed {{seed}}',

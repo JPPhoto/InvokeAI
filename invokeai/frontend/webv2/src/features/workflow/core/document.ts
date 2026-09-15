@@ -1,4 +1,4 @@
-import type { SeedMode } from '@features/generation/contracts';
+import type { SeedMode } from '@platform/core/seed';
 
 import type {
   ContainerFormElement,

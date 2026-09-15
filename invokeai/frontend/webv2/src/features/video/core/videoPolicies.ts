@@ -12,8 +12,8 @@ import {
   isLoraCompatibleWithModel,
   isLoraModelConfig,
   isWanLoraTargetingMain,
-  SEED_MAX,
 } from '@features/generation/settings';
+import { SEED_MAX } from '@platform/core/seed';
 
 import type { VideoAspectRatioId, VideoGenerationMode, VideoSettings, VideoTargetResolution } from './types';
 

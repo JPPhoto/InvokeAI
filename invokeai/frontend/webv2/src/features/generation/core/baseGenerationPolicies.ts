@@ -15,6 +15,7 @@ import {
   SUPPORTED_GENERATE_BASES,
   type SupportedGenerateBase,
 } from '@features/generation/core/supportedBases';
+import { SEED_MAX } from '@platform/core/seed';
 
 import type {
   GenerateModelConfig,
@@ -50,7 +51,6 @@ import {
   getPidDecoderBaseForMainBase,
   getPidDimensionOverrides,
 } from './pid';
-import { SEED_MAX } from './seed';
 import {
   clampDimension,
   DEFAULT_HIDIFFUSION_T1_RATIO,

@@ -1,3 +1,5 @@
+import { isSeedMode } from '@platform/core/seed';
+
 import type { DynamicPromptsConfig } from './dynamicPrompts';
 import type {
   AspectRatioId,
@@ -28,7 +30,6 @@ import { isDynamicPromptsSeedBehaviour, sanitizeMaxPrompts, sanitizeSampleSeed }
 import { clampPidSteps, DEFAULT_PID_STEPS, isPidMode } from './pid';
 import { isCanonicalPromptTemplateSnapshot, sanitizePromptTemplateSnapshot } from './promptTemplates';
 import { cloneCroppableImage, isCanonicalCroppableImage, normalizeCroppableImage } from './referenceImage';
-import { isSeedMode } from './seed';
 
 /** Preset ratios, with the preset to switch to when dimensions are swapped. */
 export const ASPECT_RATIO_MAP: Record<Exclude<AspectRatioId, 'Free'>, { ratio: number; inverseId: AspectRatioId }> = {

@@ -1,4 +1,4 @@
-import type { SeedMode } from '@features/generation/contracts';
+import type { SeedMode } from '@platform/core/seed';
 
 import { Alert, Field, HStack, Icon, Input, Stack, Text } from '@chakra-ui/react';
 import { isInvocationNode, type NodeFieldFormElement, type ProjectGraphState } from '@features/workflow/contracts';

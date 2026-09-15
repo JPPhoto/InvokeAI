@@ -9,7 +9,7 @@
  * editor, the workflow library backend, and this workbench.
  */
 
-import type { SeedMode } from '@features/generation/contracts';
+import type { SeedMode } from '@platform/core/seed';
 
 export type FieldCardinality = 'SINGLE' | 'COLLECTION' | 'SINGLE_OR_COLLECTION';
 

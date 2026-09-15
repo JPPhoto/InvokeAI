@@ -8,26 +8,26 @@ import type {
 } from '@features/generation/contracts';
 
 import {
+  clampDimension,
+  cloneGenerateWidgetValues,
+  deriveAspectRatioId,
   getCompatibleReferenceImages,
   getDimensionGrid,
   getGenerationUiPolicy,
+  getModelDefaultVae,
   getSettingsWithModelDefaults,
   hasArchitectureCapabilities,
-  isKnownScheduler,
-  isVaeCompatibleWithGenerateModel,
-  isValidKrea2RebalanceWeights,
-  cloneGenerateWidgetValues,
-  getModelDefaultVae,
   hasModelDefaultVae,
+  isKnownScheduler,
   isMainModelConfig,
   isModelIdentifierConfig,
-  clampDimension,
-  deriveAspectRatioId,
-  normalizeReferenceImages,
+  isVaeCompatibleWithGenerateModel,
+  isValidKrea2RebalanceWeights,
   MAX_HIDIFFUSION_RATIO,
   MIN_HIDIFFUSION_T1_RATIO,
-  SEED_MAX,
+  normalizeReferenceImages,
 } from '@features/generation/settings';
+import { SEED_MAX } from '@platform/core/seed';
 
 export type ImageRecallKind = 'all' | 'remix' | 'prompts' | 'seed' | 'dimensions' | 'clipSkip';
 

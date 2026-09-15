@@ -1,7 +1,7 @@
-import type { SeedMode } from '@features/generation/contracts';
 import type { ModelConfig, ModelTaxonomyType } from '@features/models/react';
 import type { FieldInputTemplate } from '@features/workflow/contracts';
 import type { LoraFieldCollectionEntry } from '@features/workflow/utility';
+import type { SeedInputPatch } from '@platform/ui/SeedInput';
 
 import {
   Badge,
@@ -31,8 +31,6 @@ import { getSelectedGalleryImageFromValues } from '@features/gallery/contracts';
 import { GalleryPickerPopover } from '@features/gallery/picker';
 import { invalidateGallery } from '@features/gallery/queries';
 import { galleryImageUrls, galleryVideoUrls } from '@features/gallery/utility';
-import { planSeedSubmission, wrapSeed } from '@features/generation/seed';
-import { SeedModeMenu, SeedSequencePreview } from '@features/generation/seedControls';
 import { DEFAULT_LORA_WEIGHT_CONFIG, sanitizeBatchCount, SCHEDULER_OPTIONS } from '@features/generation/settings';
 import { isInvocationNode } from '@features/workflow/contracts';
 import { isSeedInputField } from '@features/workflow/graph';
@@ -47,6 +45,7 @@ import {
   isLoraFieldCollectionEntry,
   toLoraFieldCollectionList,
 } from '@features/workflow/utility';
+import { planSeedSubmission, type SeedMode, wrapSeed } from '@platform/core/seed';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -69,6 +68,7 @@ import {
   Tooltip,
 } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
+import { SeedInput } from '@platform/ui/SeedInput';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FilmIcon, ImageIcon, Trash2Icon } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type ChangeEvent } from 'react';
@@ -161,15 +161,7 @@ const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldIn
   );
 };
 
-const NumericInput = ({
-  describedBy,
-  disabled,
-  id,
-  invalid,
-  onChange,
-  template,
-  value,
-}: WorkflowFieldInputProps & { describedBy?: string; disabled?: boolean }) => {
+const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
   const isInteger = template.type.name === 'IntegerField';
   const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : '';
   const min = template.minimum ?? template.exclusiveMinimum ?? undefined;
@@ -187,10 +179,8 @@ const NumericInput = ({
 
   return (
     <Input
-      aria-describedby={describedBy}
       aria-label={template.title}
       className="nodrag"
-      disabled={disabled}
       id={id ? `${id}-number-input` : undefined}
       max={max !== undefined ? String(max) : undefined}
       min={min !== undefined ? String(min) : undefined}
@@ -206,30 +196,25 @@ const NumericInput = ({
 };
 
 /**
- * A seed input with its mode beside it. Random quiets the value the way the
- * Generate seed does: the entered seed stays in reserve for Fixed. The mode
- * applies between queued runs; a loop inside a run reuses that run's seed.
- *
- * `nokey` on the row and the portaled menu keeps xyflow's node key handling
- * out of the trigger and the open menu: arrows would nudge the selected node
- * and Backspace would delete it (zag lets unhandled keys propagate).
+ * The shared seed control under a workflow row. The workflow owns the value
+ * and its run count, so the stepping preview is planned here from the
+ * workflow's own iterations; an empty field runs from the template default,
+ * as the plan does. `nokey` keeps xyflow's node key handling out of the row
+ * and the portaled menu: arrows would nudge the node and Backspace delete it.
  */
-const SeedInput = ({
+const WorkflowSeedInput = ({
+  id,
+  invalid,
+  onChange,
   onSeedModeChange,
   seedMode,
-  ...props
+  template,
+  value,
 }: WorkflowFieldInputProps & { onSeedModeChange: (seedMode: SeedMode) => void; seedMode: SeedMode }) => {
   const { t } = useTranslation();
-  const previewId = useId();
-  // The workflow's own run count: the stride the next submission takes from this seed.
   const batchCount = useWorkflowProjectSelector((project) => sanitizeBatchCount(project.workflowValues.batchCount));
-  // An empty field runs from the template default, as the plan does.
-  const authoredSeed =
-    typeof props.value === 'number'
-      ? props.value
-      : typeof props.template.default === 'number'
-        ? props.template.default
-        : 0;
+  const seed = typeof value === 'number' ? value : undefined;
+  const authoredSeed = seed ?? (typeof template.default === 'number' ? template.default : 0);
   const plan =
     seedMode === 'increment' || seedMode === 'decrement'
       ? planSeedSubmission({
@@ -240,20 +225,32 @@ const SeedInput = ({
           startSeed: wrapSeed(authoredSeed),
         })
       : null;
+  const onCommit = useCallback(
+    (patch: SeedInputPatch) => {
+      if (patch.seed !== undefined) {
+        onChange(patch.seed);
+      }
+
+      if (patch.seedMode !== undefined) {
+        onSeedModeChange(patch.seedMode);
+      }
+    },
+    [onChange, onSeedModeChange]
+  );
 
   return (
-    <Stack className="nodrag nokey" gap="1" w="full">
-      <HStack gap="1" w="full">
-        <NumericInput {...props} describedBy={plan ? previewId : undefined} disabled={seedMode === 'random'} />
-        <SeedModeMenu
-          contentClassName="nokey"
-          description={t('nodes.seedModeTooltip')}
-          value={seedMode}
-          onChange={onSeedModeChange}
-        />
-      </HStack>
-      {plan ? <SeedSequencePreview id={previewId} plan={plan} /> : null}
-    </Stack>
+    <SeedInput
+      ariaLabel={template.title}
+      className="nodrag nokey"
+      contentClassName="nokey"
+      description={t('nodes.seedModeTooltip')}
+      id={id ? `${id}-number-input` : undefined}
+      invalid={invalid}
+      plan={plan}
+      seed={seed}
+      seedMode={seedMode}
+      onCommit={onCommit}
+    />
   );
 };
 
@@ -1229,7 +1226,13 @@ export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
       }
 
       if (props.onSeedModeChange && isSeedInputField(props.template)) {
-        return <SeedInput {...props} onSeedModeChange={props.onSeedModeChange} seedMode={props.seedMode ?? 'fixed'} />;
+        return (
+          <WorkflowSeedInput
+            {...props}
+            onSeedModeChange={props.onSeedModeChange}
+            seedMode={props.seedMode ?? 'fixed'}
+          />
+        );
       }
 
       return <NumericInput {...props} />;
