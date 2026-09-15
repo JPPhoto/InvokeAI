@@ -119,6 +119,8 @@ export interface QueueBackendItem {
 }
 
 export interface QueueResultImage {
+  /** Board the backend saved the image to (a node's explicit board); unset when uncategorized. */
+  boardId?: string;
   /** Backend creation timestamp; `queuedAt` is the submission instant. */
   createdAt?: string;
   height: number;
