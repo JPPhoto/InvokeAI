@@ -40,18 +40,18 @@ const MODEL_FIELD_TYPE_NAMES = new Set([
 
 export const isModelFieldType = (type: FieldType): boolean => MODEL_FIELD_TYPE_NAMES.has(type.name);
 
+/** Collection field types with a direct-input list widget; other collections are connection-only. */
+const DIRECT_COLLECTION_FIELD_TYPE_NAMES = new Set(['ImageField']);
+
 /** True when the field renders an editable control on the node / linear form. */
 export const isDirectInputField = (template: FieldInputTemplate): boolean =>
-  template.input !== 'connection' && isStatefulFieldType(template.type) && template.type.cardinality !== 'COLLECTION';
+  template.input !== 'connection' &&
+  isStatefulFieldType(template.type) &&
+  (template.type.cardinality !== 'COLLECTION' || DIRECT_COLLECTION_FIELD_TYPE_NAMES.has(template.type.name));
 
 /** A field can be exposed to the Linear UI when it can be edited directly. */
 export const isExposableField = (template: FieldInputTemplate): boolean => isDirectInputField(template);
 
-export const cloneWorkflowFieldDefault = (template: FieldInputTemplate): unknown =>
-  template.default === undefined ? undefined : structuredClone(template.default);
-
-export const isWorkflowFieldValueDefault = (template: FieldInputTemplate, value: unknown): boolean => {
-  if (value === template.default) {
 /** Numeric fields whose linear-form element can show a randomize button. */
 export const isShuffleableField = (template: FieldInputTemplate): boolean =>
   (template.type.name === 'IntegerField' || template.type.name === 'FloatField') && isDirectInputField(template);
@@ -95,6 +95,11 @@ export const getRandomWorkflowFieldValue = (template: FieldInputTemplate, random
   return Number((Math.min(last, index) * step).toFixed(decimals));
 };
 
+export const cloneWorkflowFieldDefault = (template: FieldInputTemplate): unknown =>
+  template.default === undefined ? undefined : structuredClone(template.default);
+
+export const isWorkflowFieldValueDefault = (template: FieldInputTemplate, value: unknown): boolean => {
+  if (value === template.default) {
     return true;
   }
 
@@ -209,7 +214,8 @@ const isColorValueValid = (value: unknown): boolean => {
 export const isWorkflowFieldValueValid = (template: FieldInputTemplate, value: unknown): boolean => {
   switch (template.type.name) {
     case 'StringField':
-      return isNonEmptyString(value);
+      // An empty string is a legitimate string value (e.g. a blank negative prompt).
+      return typeof value === 'string';
     case 'IntegerField':
     case 'FloatField':
       return isNumberFieldValueValid(template, value);
@@ -224,8 +230,7 @@ export const isWorkflowFieldValueValid = (template: FieldInputTemplate, value: u
       // models through untouched.
       return Array.isArray(value) ? value.every(isLoraFieldCollectionEntry) : isLoraFieldCollectionEntry(value);
     case 'SchedulerField':
-      // An empty string is a legitimate string value (e.g. a blank negative prompt).
-      return typeof value === 'string';
+      return isNonEmptyString(value);
     case 'BoardField':
       return (
         value === undefined ||
@@ -235,15 +240,14 @@ export const isWorkflowFieldValueValid = (template: FieldInputTemplate, value: u
         hasNonEmptyStringProp(value, 'board_id')
       );
     case 'ImageField':
-      // COLLECTION media values are arrays the direct-input widget never
-      // authors; keep the generic non-null check for them so persisted array
-      // values (imported workflows) stay exactly as valid as before.
       if (template.type.cardinality === 'COLLECTION') {
-        return value !== undefined && value !== null;
+        return Array.isArray(value) && value.every((item) => hasNonEmptyStringProp(item, 'image_name'));
       }
 
       return hasNonEmptyStringProp(value, 'image_name');
     case 'VideoField':
+      // COLLECTION video values are arrays no direct-input widget authors; keep the
+      // generic non-null check so persisted values (imported workflows) stay valid.
       if (template.type.cardinality === 'COLLECTION') {
         return value !== undefined && value !== null;
       }

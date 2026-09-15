@@ -55,14 +55,14 @@ describe('workflow field validation', () => {
     );
   });
 
-  it('treats connected required fields as valid', () => {
-    expect(
   it('accepts an empty string as a required string value', () => {
     expect(getWorkflowFieldInvalidReason({ isConnected: false, template: input(), value: '' })).toBe(null);
     expect(isWorkflowFieldValueValid(input(), '')).toBe(true);
     expect(isWorkflowFieldValueValid(input({ options: ['a'], type: single('EnumField') }), '')).toBe(false);
   });
 
+  it('treats connected required fields as valid', () => {
+    expect(
       getWorkflowFieldInvalidReason({ isConnected: true, template: input({ input: 'connection' }), value: '' })
     ).toBe(null);
   });
@@ -113,13 +113,28 @@ describe('workflow field validation', () => {
     expect(isWorkflowFieldValueValid(input({ type: single('VideoField') }), {})).toBe(false);
   });
 
-  it('keeps COLLECTION media values on the generic non-null check (persisted arrays stay valid)', () => {
+  it('validates image collections as lists of image refs and keeps video collections on the non-null check', () => {
     const videos = input({ type: { batch: false, cardinality: 'COLLECTION', name: 'VideoField' } });
     const images = input({ type: { batch: false, cardinality: 'COLLECTION', name: 'ImageField' } });
 
     expect(isWorkflowFieldValueValid(videos, [{ video_name: 'a.mp4' }, { video_name: 'b.mp4' }])).toBe(true);
     expect(isWorkflowFieldValueValid(videos, undefined)).toBe(false);
     expect(isWorkflowFieldValueValid(images, [{ image_name: 'a.png' }])).toBe(true);
+    expect(isWorkflowFieldValueValid(images, [])).toBe(true);
+    expect(isWorkflowFieldValueValid(images, [{ image_name: '' }])).toBe(false);
+    expect(isWorkflowFieldValueValid(images, { image_name: 'a.png' })).toBe(false);
+  });
+
+  it('exposes image collections as direct inputs but keeps other collections connection-only', () => {
+    expect(isDirectInputField(input({ type: { batch: false, cardinality: 'COLLECTION', name: 'ImageField' } }))).toBe(
+      true
+    );
+    expect(isDirectInputField(input({ type: { batch: false, cardinality: 'COLLECTION', name: 'VideoField' } }))).toBe(
+      false
+    );
+    expect(isDirectInputField(input({ type: { batch: false, cardinality: 'COLLECTION', name: 'StringField' } }))).toBe(
+      false
+    );
   });
 
   it('accepts a LoRA collection as a list, a bare entry, or an empty list', () => {

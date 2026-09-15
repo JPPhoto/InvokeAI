@@ -1442,6 +1442,8 @@
     "forLoopBodyBoundary": "For loop body",
     "forLoopBodyBoundaryStatus": {
       "missing_linkage": "missing loop linkage",
+    "imageCollectionCount_one": "{{count}} image",
+    "imageCollectionCount_other": "{{count}} images",
       "invalid_linkage": "invalid loop linkage",
       "duplicate_linkage": "duplicate loop linkage",
       "missing_return": "missing ForReturn",
