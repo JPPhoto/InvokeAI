@@ -3626,6 +3626,8 @@
       "exportProjectFromBoard": "Export project (.invk)",
       "expandStarredItems": "Expand starred items",
       "filterAndSortBoards": "Filter & sort boards",
+      "findInGallery": "Find in Gallery",
+      "findNamedInGallery": "Find {{name}} in Gallery",
       "generationProgress": "Generation progress",
       "generationProgressPercent": "Generation {{percentage}}%",
       "imageCount_one": "{{count}} image",
