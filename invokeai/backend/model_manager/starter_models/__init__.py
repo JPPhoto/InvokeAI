@@ -129,6 +129,7 @@ from invokeai.backend.model_manager.starter_models.krea_2 import (
     krea2_turbo,
     krea2_turbo_gguf_q4_k_m,
     krea2_turbo_gguf_q8_0,
+    krea2_turbo_nvfp4,
 )
 from invokeai.backend.model_manager.starter_models.minimax_h3 import (
     minimax_h3_components,
@@ -398,6 +399,7 @@ STARTER_MODELS: list[StarterModel] = [
     krea2_raw,
     krea2_turbo_gguf_q4_k_m,
     krea2_turbo_gguf_q8_0,
+    krea2_turbo_nvfp4,
     qwen3_vl_encoder_4b,
     wan_22_t5_encoder,
     wan_22_a14b_vae,
@@ -565,6 +567,7 @@ krea2_bundle: list[StarterModel] = [
     krea2_raw,
     krea2_turbo_gguf_q4_k_m,
     krea2_turbo_gguf_q8_0,
+    krea2_turbo_nvfp4,
 ]
 
 # Wan 2.2 starter bundles. Split into T2V and I2V so users only pay for the
