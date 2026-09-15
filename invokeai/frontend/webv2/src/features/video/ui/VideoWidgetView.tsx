@@ -29,7 +29,7 @@ import { createDefaultVideoWidgetValues, syncVideoWidgetValuesWithModels } from 
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { Field, IconButton, Select } from '@platform/ui';
 import { Button } from '@platform/ui/Button';
-import { SliderNumberField } from '@platform/ui/SliderNumberField';
+import { ScrubberField } from '@platform/ui/ScrubberField';
 import { toaster } from '@platform/ui/toaster';
 import { ArrowLeftRightIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
@@ -635,32 +635,27 @@ export const VideoWidgetView = () => {
               onValueChange={set.targetResolution}
             />
           </Field>
-          <Field helpText={durationText} label={t('widgets.video.frames')}>
-            <SliderNumberField
-              ariaLabel={t('widgets.video.frames')}
-              max={framesSlider.max}
-              min={framesSlider.min}
-              step={framesSlider.step}
-              value={values.numFrames}
-              onChange={setNumFrames}
-            />
-          </Field>
+          <ScrubberField
+            helpText={durationText}
+            label={t('widgets.video.frames')}
+            max={framesSlider.max}
+            min={framesSlider.min}
+            step={framesSlider.step}
+            value={values.numFrames}
+            onChange={setNumFrames}
+          />
           {policy.ui.fpsVisible ? (
-            <Field
+            <ScrubberField
+              disabled={fpsLockedForExtend}
               helpText={fpsLockedForExtend ? t('widgets.video.fpsExtendLocked') : undefined}
+              inputMax={policy.fps.max}
               label={t('widgets.video.fps')}
-            >
-              <SliderNumberField
-                ariaLabel={t('widgets.video.fps')}
-                disabled={fpsLockedForExtend}
-                max={60}
-                min={policy.fps.min}
-                numberInputMax={policy.fps.max}
-                step={1}
-                value={values.fps}
-                onChange={set.fps}
-              />
-            </Field>
+              max={60}
+              min={policy.fps.min}
+              step={1}
+              value={values.fps}
+              onChange={set.fps}
+            />
           ) : (
             <Text color="fg.muted" fontSize="2xs">
               {t('widgets.video.fixedFps', { fps: policy.fps.defaultValue })}
@@ -688,42 +683,39 @@ export const VideoWidgetView = () => {
               </Switch.Root>
             </Field>
           ) : null}
-          <Field hint="steps" label={t('widgets.video.steps')}>
-            <SliderNumberField
-              ariaLabel={t('widgets.video.steps')}
-              max={100}
-              min={policy.minSteps}
-              numberInputMax={500}
-              step={1}
-              value={values.steps}
-              onChange={set.steps}
-            />
-          </Field>
+          <ScrubberField
+            hint="steps"
+            inputMax={500}
+            label={t('widgets.video.steps')}
+            max={100}
+            min={policy.minSteps}
+            step={1}
+            value={values.steps}
+            onChange={set.steps}
+          />
           {policy.ui.cfgVisible ? (
-            <Field hint="cfgScale" label={t('widgets.video.cfg')}>
-              <SliderNumberField
-                ariaLabel={t('widgets.video.cfg')}
-                max={15}
-                min={1}
-                numberInputMax={100}
-                step={0.1}
-                value={values.cfgScale}
-                onChange={set.cfgScale}
-              />
-            </Field>
+            <ScrubberField
+              hint="cfgScale"
+              inputMax={100}
+              label={t('widgets.video.cfg')}
+              max={15}
+              min={1}
+              step={0.1}
+              value={values.cfgScale}
+              onChange={set.cfgScale}
+            />
           ) : null}
           {policy.ui.cfgLowNoiseVisible ? (
-            <Field helpText={t('widgets.video.cfgLowNoiseHelp')} label={t('widgets.video.cfgLowNoise')}>
-              <SliderNumberField
-                ariaLabel={t('widgets.video.cfgLowNoise')}
-                max={15}
-                min={0}
-                numberInputMax={100}
-                step={0.1}
-                value={values.cfgScaleLowNoise ?? values.cfgScale}
-                onChange={set.cfgScaleLowNoise}
-              />
-            </Field>
+            <ScrubberField
+              helpText={t('widgets.video.cfgLowNoiseHelp')}
+              inputMax={100}
+              label={t('widgets.video.cfgLowNoise')}
+              max={15}
+              min={0}
+              step={0.1}
+              value={values.cfgScaleLowNoise ?? values.cfgScale}
+              onChange={set.cfgScaleLowNoise}
+            />
           ) : null}
           <SeedField
             batchCount={values.batchCount}

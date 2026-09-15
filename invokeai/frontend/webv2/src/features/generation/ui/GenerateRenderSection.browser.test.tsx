@@ -36,6 +36,7 @@ void i18n.use(initReactI18next).init({
       translation: {
         common: {
           newSeed: 'New seed',
+          scrubber: { editValue: 'Edit {{label}}' },
           seed: 'Seed',
           seedMode: {
             decrement: 'Decrement',
@@ -71,9 +72,7 @@ void i18n.use(initReactI18next).init({
             seedSummary: '{{mode}} · {{seed}}',
             steps: 'Steps',
             useSeed: 'Use seed {{seed}}',
-            useModelDefaultField: 'Use model default {{field}}',
             useModelDefaultScheduler: 'Use model default scheduler',
-            useModelDefaultSteps: 'Use model default steps',
           },
         },
       },
@@ -83,7 +82,7 @@ void i18n.use(initReactI18next).init({
 
 /**
  * FLUX Fill's own recommendation is `guidance=30`, well past the guidance slider's practical top of
- * 10. That is the case the number input's looser `numberInputMax` exists for: without it the field
+ * 10. That is the case the scrubber's looser `inputMax` exists for: without it the field
  * clamps to the slider's bound the first time it loses focus, and the model's own default is gone
  * before the user has touched anything.
  */
@@ -262,39 +261,66 @@ describe('GenerateRenderSection seed field', () => {
 });
 
 /**
- * The thumb is the tooltip trigger, so `role="slider"` is the stable selector rather than
- * `[data-part="thumb"]`. Guidance is the second slider in the section; steps is the first.
+ * The shared steps and guidance controls are scrubbers, whose slider is named by `aria-labelledby`;
+ * Ideogram 4's overrides are still sliders named by `aria-label`. One resolver reads both.
  */
-const guidanceThumb = (label = 'Guidance'): Element | undefined =>
-  [...(host?.querySelectorAll('[role="slider"]') ?? [])].find(
-    (candidate) => candidate.getAttribute('aria-label') === label
+const sliderName = (slider: Element): string | null => {
+  const labelId = slider.getAttribute('aria-labelledby');
+
+  return (
+    slider.getAttribute('aria-label') ??
+    (labelId === null ? null : (host?.querySelector(`#${CSS.escape(labelId)}`)?.textContent ?? null))
   );
+};
+const slidersNamed = (label: string): Element[] =>
+  [...(host?.querySelectorAll('[role="slider"]') ?? [])].filter((slider) => sliderName(slider) === label);
+const guidanceSlider = (label = 'Guidance'): Element | undefined => slidersNamed(label)[0];
+const guidanceFrame = (label = 'Guidance'): Element | null =>
+  guidanceSlider(label)?.closest('[data-scope="scrubber"]') ?? null;
+const guidanceValue = (label = 'Guidance'): string | undefined =>
+  guidanceFrame(label)?.querySelector('button[data-part="value"]')?.textContent ?? undefined;
+
+/** Opens the scrubber's editor on the shown value and closes it without a change, as a focus-out does. */
+const openAndBlurEditor = async (label = 'Guidance') => {
+  await settle(() => guidanceFrame(label)?.querySelector<HTMLButtonElement>('button[data-part="value"]')?.click());
+  const editor = guidanceFrame(label)?.querySelector<HTMLInputElement>('input[data-part="value"]');
+
+  if (!editor) {
+    throw new Error(`The ${label} scrubber did not open its editor`);
+  }
+
+  await settle(() => editor.blur());
+};
+
+const pressOnSlider = (label: string, key: string) =>
+  settle(() => guidanceSlider(label)?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key })));
 
 describe('GenerateRenderSection guidance field', () => {
   // The guidance label and the model's stored guidance both come from the served table now,
   // and the resolver returns nothing without it -- the field would render empty.
   seedArchitectureCapabilities();
 
-  it('does not clamp a model default above the slider track when the field loses focus', async () => {
+  it('does not clamp a model default above the slider track when the editor closes', async () => {
     const onCommit = await render(fluxFillModel);
-    const input = host?.querySelector<HTMLInputElement>('input[aria-label="Guidance"]');
 
-    expect(input?.value).toBe('30');
+    expect(guidanceValue()).toBe('30');
 
-    await settle(() => input?.focus());
-    await settle(() => input?.blur());
+    await openAndBlurEditor();
 
-    // The commit is the observable, not the input's value: the field is controlled, so the value
-    // prop puts 30 back either way and only the caller sees the clamp. Dropping numberInputMax
-    // makes this a commit of 10, which is then the value every subsequent graph is compiled with.
+    // The commit is the observable, not the shown value: the field is controlled, so the value
+    // prop puts 30 back either way and only the caller sees the clamp. Dropping inputMax makes
+    // this a commit of 10, which is then the value every subsequent graph is compiled with.
     expect(onCommit).not.toHaveBeenCalled();
   });
 
-  it('still holds the guidance slider itself to its practical range', async () => {
-    await render(fluxFillModel);
+  it('still holds the guidance track itself to its practical range', async () => {
+    const onCommit = await render(fluxFillModel);
 
-    expect(guidanceThumb()?.getAttribute('aria-valuenow')).toBe('10');
-    expect(guidanceThumb()?.getAttribute('aria-valuemax')).toBe('10');
+    // The track ends at 10 even while the value sits past it: End lands on the track's end, not
+    // on the input ceiling the model default needed.
+    await pressOnSlider('Guidance', 'End');
+
+    expect(onCommit).toHaveBeenCalledWith({ cfgScale: 10 });
   });
 
   it('clamps a typed guidance to the ceiling the architecture declares', async () => {
@@ -302,37 +328,35 @@ describe('GenerateRenderSection guidance field', () => {
     // selected a FLUX.2 model. With a fixed input maximum of 100 the 30 persisted and was submitted
     // to `flux2_denoise.guidance` (le=20), which rejects it at enqueue with nothing said in the UI.
     const onCommit = await render(flux2Model, { cfgScale: 30 });
-    const input = host?.querySelector<HTMLInputElement>('input[aria-label="Guidance"]');
 
-    await settle(() => input?.focus());
-    await settle(() => input?.blur());
+    await openAndBlurEditor();
 
     expect(onCommit).toHaveBeenCalledWith({ cfgScale: 20 });
   });
 
   it('starts the guidance track at the floor the architecture declares', async () => {
-    // `ernie_image_denoise.guidance_scale` is ge=1: dragging the slider to 0, or typing 0.5, used
-    // to persist and be forwarded unchanged by graph.ts.
+    // `ernie_image_denoise.guidance_scale` is ge=1: scrubbing to 0, or typing 0.5, used to persist
+    // and be forwarded unchanged by graph.ts.
     const onCommit = await render(ernieModel, { cfgScale: 0.5 });
-    const input = host?.querySelector<HTMLInputElement>('input[aria-label="CFG"]');
 
-    expect(guidanceThumb('CFG')?.getAttribute('aria-valuemin')).toBe('1');
+    await openAndBlurEditor('CFG');
 
-    await settle(() => input?.focus());
-    await settle(() => input?.blur());
-
+    expect(onCommit).toHaveBeenCalledTimes(1);
     expect(onCommit).toHaveBeenCalledWith({ cfgScale: 1 });
+
+    await pressOnSlider('CFG', 'Home');
+
+    expect(onCommit).toHaveBeenCalledTimes(2);
+    expect(onCommit).toHaveBeenLastCalledWith({ cfgScale: 1 });
   });
 
   it('holds the Ideogram 4 overrides to their own node bounds', async () => {
-    // Not the shared slider: `ideogram4_denoise` takes preset-derived optional overrides whose
+    // Not the shared control: `ideogram4_denoise` takes preset-derived optional overrides whose
     // constraints sit on the numeric branch of an `anyOf` -- guidance ge=1/le=20, steps ge=2, mu
     // ge=-4/le=4. The guidance control offered 0 and the mu control 0..10, both forwarded verbatim.
     await render(ideogram4Model, { ideogram4GuidanceScale: 5, ideogram4Mu: 1, ideogram4Steps: 48 });
     const ranges = (label: string) =>
-      [...(host?.querySelectorAll('[role="slider"]') ?? [])]
-        .filter((thumb) => thumb.getAttribute('aria-label') === label)
-        .map((thumb) => [thumb.getAttribute('aria-valuemin'), thumb.getAttribute('aria-valuemax')]);
+      slidersNamed(label).map((slider) => [slider.getAttribute('aria-valuemin'), slider.getAttribute('aria-valuemax')]);
 
     // Two per name: the shared control first, then Ideogram's override. They carry the same
     // accessible name in the product, which is its own (pre-existing) problem — asserting both
@@ -355,7 +379,8 @@ describe('GenerateRenderSection guidance field', () => {
     await render(flux2Model, { cfgScale: 30 });
 
     expect(host?.querySelector('[role="alert"]')?.textContent).toBe('Guidance must be at most 20 for FLUX.2 dev.');
-    expect(host?.querySelector<HTMLInputElement>('input[aria-label="Guidance"]')?.value).toBe('30');
+    expect(guidanceValue()).toBe('30');
+    expect(guidanceFrame()?.hasAttribute('data-invalid')).toBe(true);
   });
 
   it('says nothing on the field while the value is inside the architecture bound', async () => {
@@ -368,12 +393,10 @@ describe('GenerateRenderSection guidance field', () => {
     // FLUX Fill's default of 30 has no position on a track that stops at 10. Steps keeps its own
     // mark (30 of 100), so this is the out-of-range mark going, not marks in general.
     await render(fluxFillModel);
-    const [stepsSlider, guidanceSlider] = [
-      ...(host?.querySelectorAll('[data-scope="slider"][data-part="root"]') ?? []),
-    ];
+    const [stepsFrame, guidanceFrameElement] = [...(host?.querySelectorAll('[data-scope="scrubber"]') ?? [])];
 
-    expect(stepsSlider?.querySelectorAll('[data-part="marker"]')).toHaveLength(1);
-    expect(guidanceSlider?.querySelectorAll('[data-part="marker"]')).toHaveLength(0);
+    expect(stepsFrame?.querySelectorAll('[data-part="mark"]')).toHaveLength(1);
+    expect(guidanceFrameElement?.querySelectorAll('[data-part="mark"]')).toHaveLength(0);
   });
 });
 
@@ -383,13 +406,11 @@ describe('GenerateRenderSection before the capability table arrives', () => {
   // a stored value the user legitimately had while the capabilities are still in flight.
   it('keeps the guidance field permissive rather than guessing a bound', async () => {
     const onCommit = await render(fluxFillModel, { cfgScale: 30 });
-    const input = host?.querySelector<HTMLInputElement>('input[aria-label="CFG"]');
 
-    expect(input?.value).toBe('30');
+    expect(guidanceValue('CFG')).toBe('30');
     expect(host?.querySelector('[role="alert"]')).toBeNull();
 
-    await settle(() => input?.focus());
-    await settle(() => input?.blur());
+    await openAndBlurEditor('CFG');
 
     expect(onCommit).not.toHaveBeenCalled();
   });

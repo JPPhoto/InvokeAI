@@ -22,6 +22,7 @@ import {
 import { Combobox } from '@platform/ui/Combobox';
 import { Field } from '@platform/ui/Field';
 import { ModelDefaultButton } from '@platform/ui/ModelDefaultButton';
+import { ScrubberField } from '@platform/ui/ScrubberField';
 import { Select } from '@platform/ui/Select';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
 import { Tooltip } from '@platform/ui/Tooltip';
@@ -36,6 +37,7 @@ import { SeedField as SharedSeedField } from './shared/SeedField';
 import { useDynamicPrompts } from './useDynamicPrompts';
 
 const STEPS_SLIDER_MAX = 100;
+const formatPercent = (value: number): string => `${value}%`;
 
 /** The guidance/CFG slider's practical range — a UI choice about the track, not a rule. FLUX Fill
  *  recommends 30, which is off the track but a real value, so the number input keeps its own looser
@@ -220,27 +222,23 @@ const Krea2SeedVarianceFields = ({ onCommit, settings }: Pick<GenerateRenderSect
       </Field>
       {settings.krea2SeedVarianceEnabled ? (
         <>
-          <Field label={t('widgets.generate.krea2SeedVarianceStrength')}>
-            <SliderNumberField
-              ariaLabel={t('widgets.generate.krea2SeedVarianceStrength')}
-              max={MAX_KREA2_SEED_VARIANCE_STRENGTH}
-              min={0}
-              step={0.05}
-              value={settings.krea2SeedVarianceStrength}
-              onChange={(value) => onCommit({ krea2SeedVarianceStrength: value })}
-            />
-          </Field>
-          <Field label={t('widgets.generate.krea2SeedVarianceRandomize')}>
-            <SliderNumberField
-              ariaLabel={t('widgets.generate.krea2SeedVarianceRandomize')}
-              formatValue={(value) => `${value}%`}
-              max={100}
-              min={0}
-              step={1}
-              value={settings.krea2SeedVarianceRandomizePercent}
-              onChange={(value) => onCommit({ krea2SeedVarianceRandomizePercent: value })}
-            />
-          </Field>
+          <ScrubberField
+            label={t('widgets.generate.krea2SeedVarianceStrength')}
+            max={MAX_KREA2_SEED_VARIANCE_STRENGTH}
+            min={0}
+            step={0.05}
+            value={settings.krea2SeedVarianceStrength}
+            onChange={(value) => onCommit({ krea2SeedVarianceStrength: value })}
+          />
+          <ScrubberField
+            formatValue={formatPercent}
+            label={t('widgets.generate.krea2SeedVarianceRandomize')}
+            max={100}
+            min={0}
+            step={1}
+            value={settings.krea2SeedVarianceRandomizePercent}
+            onChange={(value) => onCommit({ krea2SeedVarianceRandomizePercent: value })}
+          />
         </>
       ) : null}
     </>
@@ -369,40 +367,37 @@ export const GenerateRenderSection = ({
           isAtDefault={modelDefaults !== null && settings.steps === modelDefaults.steps}
           onReset={modelDefaults ? () => onCommit({ steps: modelDefaults.steps }) : undefined}
         >
-          <Field hint="steps" label={t('widgets.generate.steps')}>
-            <SliderNumberField
-              ariaLabel={t('widgets.generate.steps')}
-              defaultValue={modelDefaults?.steps}
-              marks={modelDefaults ? [modelDefaults.steps] : undefined}
-              max={STEPS_SLIDER_MAX}
-              min={1}
-              numberInputMax={Number.MAX_SAFE_INTEGER}
-              resetLabel={t('widgets.generate.useModelDefaultSteps')}
-              step={1}
-              value={settings.steps}
-              onChange={(steps) => commitNumber('steps', steps)}
-            />
-          </Field>
+          <ScrubberField
+            defaultValue={modelDefaults?.steps}
+            hint="steps"
+            inputMax={Number.MAX_SAFE_INTEGER}
+            label={t('widgets.generate.steps')}
+            marks={modelDefaults ? [modelDefaults.steps] : undefined}
+            max={STEPS_SLIDER_MAX}
+            min={1}
+            step={1}
+            value={settings.steps}
+            onChange={(steps) => commitNumber('steps', steps)}
+          />
         </GenerateFieldContextMenu>
         <GenerateFieldContextMenu
           copyValue={() => String(settings.cfgScale)}
           isAtDefault={modelDefaults !== null && settings.cfgScale === modelDefaults.cfgScale}
           onReset={modelDefaults ? () => onCommit({ cfgScale: modelDefaults.cfgScale }) : undefined}
         >
-          <Field error={guidanceError} hint="guidance" label={policy.ui.guidanceLabel}>
-            <SliderNumberField
-              ariaLabel={policy.ui.guidanceLabel}
-              defaultValue={modelDefaults?.cfgScale}
-              marks={modelDefaults ? [modelDefaults.cfgScale] : undefined}
-              max={guidanceSliderMax}
-              min={policy.ui.guidanceMin}
-              numberInputMax={guidanceInputMax}
-              resetLabel={t('widgets.generate.useModelDefaultField', { field: policy.ui.guidanceLabel })}
-              step={0.5}
-              value={settings.cfgScale}
-              onChange={(cfgScale) => commitNumber('cfgScale', cfgScale)}
-            />
-          </Field>
+          <ScrubberField
+            defaultValue={modelDefaults?.cfgScale}
+            error={guidanceError}
+            hint="guidance"
+            inputMax={guidanceInputMax}
+            label={policy.ui.guidanceLabel}
+            marks={modelDefaults ? [modelDefaults.cfgScale] : undefined}
+            max={guidanceSliderMax}
+            min={policy.ui.guidanceMin}
+            step={0.5}
+            value={settings.cfgScale}
+            onChange={(cfgScale) => commitNumber('cfgScale', cfgScale)}
+          />
         </GenerateFieldContextMenu>
         {familyBase === 'krea-2' ? (
           <GenerateConditioningRebalanceField

@@ -35,10 +35,10 @@ import {
 import { Button, IconButton } from '@platform/ui/Button';
 import { DropTargetOverlay } from '@platform/ui/DropTargetOverlay';
 import { DropZone } from '@platform/ui/DropZone';
-import { Field, FieldLabel } from '@platform/ui/Field';
+import { Field } from '@platform/ui/Field';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
+import { ScrubberField } from '@platform/ui/ScrubberField';
 import { Select } from '@platform/ui/Select';
-import { SliderNumberField } from '@platform/ui/SliderNumberField';
 import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, ImagePlusIcon, UploadIcon, XIcon } from 'lucide-react';
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -136,7 +136,7 @@ const ReferenceCard = memo(function ReferenceCard({
    * object would be a fresh prop on every card on every edit to any reference. `updateReference`
    * keeps the identity of the entries it did not touch, which is what lets the other cards bail
    * out of a trim drag entirely; a per-card object would re-render all twelve — each one a zag
-   * Select and two SliderNumberFields — once per pointer step.
+   * Select and two ScrubberFields — once per pointer step.
    */
   audioLabel: number | null;
   collections: ReferenceCollections;
@@ -383,19 +383,15 @@ const ReferenceCard = memo(function ReferenceCard({
                   src={galleryVideoUrls.full(name)}
                   onFindInGallery={findReferenceInGallery}
                 />
-                <Stack flex="1" gap="0.5" minW="0">
-                  <FieldLabel>{t('widgets.video.trimStart')}</FieldLabel>
-                  <SliderNumberField
-                    ariaLabel={t('widgets.video.trimStart')}
-                    disabled={disabled}
-                    max={Math.max(0, reference.clip.numFrames - 1)}
-                    min={0}
-                    showStepper
-                    step={1}
-                    value={reference.clip.startFrame}
-                    onChange={handleStartFrame}
-                  />
-                </Stack>
+                <ScrubberField
+                  disabled={disabled}
+                  label={t('widgets.video.trimStart')}
+                  max={Math.max(0, reference.clip.numFrames - 1)}
+                  min={0}
+                  step={1}
+                  value={reference.clip.startFrame}
+                  onChange={handleStartFrame}
+                />
               </HStack>
               <HStack gap="2">
                 <TrimBoundThumb
@@ -404,25 +400,21 @@ const ReferenceCard = memo(function ReferenceCard({
                   label={`${t('widgets.video.trimEndShort')} · ${reference.clip.endFrame}`}
                   src={galleryVideoUrls.full(name)}
                 />
-                <Stack flex="1" gap="0.5" minW="0">
-                  <FieldLabel>
-                    {sampleSeconds === null
+                <ScrubberField
+                  disabled={disabled}
+                  label={
+                    sampleSeconds === null
                       ? t('widgets.video.sampleLength')
-                      : t('widgets.video.sampleLengthWithSeconds', { seconds: sampleSeconds })}
-                  </FieldLabel>
-                  <SliderNumberField
-                    ariaLabel={t('widgets.video.sampleLength')}
-                    disabled={disabled}
-                    // The window grows forward from its start, so the ceiling is what the
-                    // clip has left from there — it falls as the start frame climbs.
-                    max={Math.max(1, reference.clip.numFrames - reference.clip.startFrame)}
-                    min={1}
-                    showStepper
-                    step={1}
-                    value={sampleFrames}
-                    onChange={handleSampleFrames}
-                  />
-                </Stack>
+                      : t('widgets.video.sampleLengthWithSeconds', { seconds: sampleSeconds })
+                  }
+                  // The window grows forward from its start, so the ceiling is what the
+                  // clip has left from there — it falls as the start frame climbs.
+                  max={Math.max(1, reference.clip.numFrames - reference.clip.startFrame)}
+                  min={1}
+                  step={1}
+                  value={sampleFrames}
+                  onChange={handleSampleFrames}
+                />
               </HStack>
             </Stack>
           ) : null}

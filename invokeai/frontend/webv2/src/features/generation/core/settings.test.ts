@@ -72,6 +72,30 @@ describe('normalizeGenerateSettings', () => {
     expect(normalizeGenerateSettings(withoutSeedPolicy)).toBeNull();
   });
 
+  it('never lets the strict guard pass a record whose seed mode still needs inventing', () => {
+    // Stored values that pass the guard are reused as-is by the widget resolver, so a legacy
+    // record with only the random toggle would reach the seed menu with `seedMode` undefined.
+    const normalized = normalizeGenerateSettings(legacyStoredValues);
+
+    expect(normalized && isGenerateSettings(normalized)).toBe(true);
+    const { seedMode: _, ...withoutSeedMode } = normalized as NonNullable<typeof normalized>;
+
+    expect(isGenerateSettings({ ...withoutSeedMode, shouldRandomizeSeed: true })).toBe(false);
+    expect(isGenerateSettings({ ...withoutSeedMode, seedMode: 'bogus', shouldRandomizeSeed: true })).toBe(false);
+  });
+
+  it('treats any key normalize would fill in or repair as non-canonical, not only the seed mode', () => {
+    // Saved before PiD existed, or with a ratio outside the range normalize clamps to.
+    const normalized = normalizeGenerateSettings(legacyStoredValues) as NonNullable<
+      ReturnType<typeof normalizeGenerateSettings>
+    >;
+    const { pidMode: _, ...withoutPidMode } = normalized;
+
+    expect(isGenerateSettings(withoutPidMode)).toBe(false);
+    expect(isGenerateSettings({ ...normalized, hiDiffusionT1Ratio: 99 })).toBe(false);
+    expect(normalizeGenerateSettings(withoutPidMode)?.pidMode).toBe(normalized.pidMode);
+  });
+
   it('enforces template view mode only when a valid template remains', () => {
     const validTemplate = {
       id: 'template-1',

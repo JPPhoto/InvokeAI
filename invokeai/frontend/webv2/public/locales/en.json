@@ -185,6 +185,9 @@
       "saturationValue": "Saturation and value",
       "saturationValueText": "Saturation {{saturation}}%, value {{value}}%"
     },
+    "scrubber": {
+      "editValue": "Edit {{label}}"
+    },
     "configure": "Configure",
     "copy": "Copy",
     "crop": "Crop",
@@ -768,13 +771,6 @@
       "paragraphs": [
         "The aspect ratio of the dimensions of the image generated.",
         "An image size (in number of pixels) equivalent to 512x512 is recommended for SD1.5 models and a size equivalent to 1024x1024 is recommended for SDXL models."
-      ]
-    },
-    "batchCount": {
-      "heading": "Iterations",
-      "paragraphs": [
-        "The number of images to generate.",
-        "If Dynamic Prompts is enabled, each of the prompts will be generated this many times."
       ]
     },
     "cfgRescale": {
@@ -2037,6 +2033,7 @@
       "deletePresetNamed": "Delete preset {{name}}",
       "deletePromptHistoryItem": "Delete prompt history item",
       "denoisingStrength": "Denoising strength",
+      "strength": "Strength",
       "disableConcept": "Disable {{name}}",
       "disableReferenceImage": "Disable reference image",
       "dropImageToPrompt": "Describe this image",
@@ -2149,7 +2146,6 @@
       "krea2RebalanceAxisDeep": "deep",
       "krea2RebalanceAxisShallow": "shallow",
       "krea2RebalanceGain": "Gain",
-      "krea2RebalanceGainReset": "Reset gain",
       "krea2RebalanceHelp": "Scales conditioning toward the prompt before denoising.",
       "krea2RebalancePreset": "Rebalance preset",
       "krea2RebalancePresetActions": "Preset actions",
@@ -2217,6 +2213,8 @@
       "renamePresetNamed": "Rename preset {{name}}",
       "renamePresetTitle": "Rename preset",
       "resetToModelDefault": "Reset to model default",
+      "resetToConceptDefault": "Reset to concept default",
+      "resetToDefault": "Reset to default",
       "retry": "Retry",
       "savePresetAction": "Save",
       "savePresetTitle": "Save preset",
@@ -2349,16 +2347,9 @@
       "templatesButton": "Templates",
       "unlockAspectRatio": "Unlock aspect ratio",
       "upload": "Upload",
-      "useConceptDefaultWeight": "Use concept default weight",
-      "useModelDefault": "Use model default",
-      "useModelDefaultCfgRescale": "Use model default CFG rescale",
-      "useModelDefaultField": "Use model default {{field}}",
-      "useModelDefaultHeight": "Use model default height",
       "useModelDefaultScheduler": "Use model default scheduler",
-      "useModelDefaultSteps": "Use model default steps",
       "useModelDefaultVae": "Use model default VAE",
       "useModelDefaultVaePrecision": "Use model default VAE precision",
-      "useModelDefaultWidth": "Use model default width",
       "usePrompt": "Use prompt",
       "useSeed": "Use seed {{seed}}",
       "useSize": "Use size",
@@ -2385,7 +2376,6 @@
     "upscale": {
       "addLora": "LoRAs",
       "advanced": "Advanced",
-      "batchCount": "Batch count",
       "bundledVae": "Bundled VAE",
       "cfgScale": "CFG scale",
       "clipSkip": "CLIP skip",
