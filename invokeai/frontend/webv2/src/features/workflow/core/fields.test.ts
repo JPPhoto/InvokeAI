@@ -44,8 +44,10 @@ const input = (overrides: Partial<FieldInputTemplate> = {}): FieldInputTemplate 
 });
 
 describe('workflow field validation', () => {
-  it('flags empty required direct values and ignores optional fields', () => {
-    expect(getWorkflowFieldInvalidReason({ isConnected: false, template: input(), value: '' })).toBe('Required value.');
+  it('flags missing required direct values and ignores optional fields', () => {
+    expect(getWorkflowFieldInvalidReason({ isConnected: false, template: input(), value: undefined })).toBe(
+      'Required value.'
+    );
     expect(getWorkflowFieldInvalidReason({ isConnected: false, template: input({ required: false }), value: '' })).toBe(
       null
     );
@@ -53,6 +55,12 @@ describe('workflow field validation', () => {
 
   it('treats connected required fields as valid', () => {
     expect(
+  it('accepts an empty string as a required string value', () => {
+    expect(getWorkflowFieldInvalidReason({ isConnected: false, template: input(), value: '' })).toBe(null);
+    expect(isWorkflowFieldValueValid(input(), '')).toBe(true);
+    expect(isWorkflowFieldValueValid(input({ options: ['a'], type: single('EnumField') }), '')).toBe(false);
+  });
+
       getWorkflowFieldInvalidReason({ isConnected: true, template: input({ input: 'connection' }), value: '' })
     ).toBe(null);
   });

@@ -179,7 +179,8 @@ export const isWorkflowFieldValueValid = (template: FieldInputTemplate, value: u
       // models through untouched.
       return Array.isArray(value) ? value.every(isLoraFieldCollectionEntry) : isLoraFieldCollectionEntry(value);
     case 'SchedulerField':
-      return isNonEmptyString(value);
+      // An empty string is a legitimate string value (e.g. a blank negative prompt).
+      return typeof value === 'string';
     case 'BoardField':
       return (
         value === undefined ||

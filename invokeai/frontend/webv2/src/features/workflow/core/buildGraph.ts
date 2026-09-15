@@ -47,8 +47,10 @@ export const isExecutableInvocationType = (type: string): boolean => !UNSUPPORTE
 const getExecutableNodes = (document: ProjectGraphState): WorkflowInvocationNode[] =>
   document.nodes.filter(isInvocationNode);
 
+const isMissingValue = (value: unknown): boolean => value === undefined || value === null;
+
 const isEmptyValue = (value: unknown): boolean =>
-  value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+  isMissingValue(value) || (typeof value === 'string' && value.trim() === '');
 
 const getNodeDisplayName = (node: WorkflowInvocationNode, templates: InvocationTemplates): string =>
   node.data.label || templates[node.data.type]?.title || node.data.type;
@@ -136,7 +138,7 @@ export const getProjectGraphReadiness = (
         value: node.data.inputs[inputTemplate.name]?.value,
       });
 
-      if (inputTemplate.required && isEmptyValue(node.data.inputs[inputTemplate.name]?.value)) {
+      if (inputTemplate.required && isMissingValue(node.data.inputs[inputTemplate.name]?.value)) {
         reasons.push(`"${getNodeDisplayName(node, templates)}" is missing required input "${inputTemplate.title}".`);
       } else if (invalidReason) {
         reasons.push(`"${getNodeDisplayName(node, templates)}" has invalid input "${inputTemplate.title}".`);
