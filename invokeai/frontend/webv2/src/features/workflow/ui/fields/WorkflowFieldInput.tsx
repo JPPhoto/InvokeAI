@@ -267,20 +267,20 @@ const BooleanInput = ({ id, invalid, onChange, template, value }: WorkflowFieldI
       size="sm"
       onCheckedChange={onCheckedChange}
     >
-      <Switch.HiddenInput
-        aria-label={template.title}
-        id={id ? `${id}-switch-input` : undefined}
-        {...invalidProps(invalid)}
-      />
+      <Switch.HiddenInput aria-label={template.title} {...invalidProps(invalid)} />
       <Switch.Control _checked={SWITCH_CHECKED_PROPS}>
         <Switch.Thumb />
       </Switch.Control>
     </Switch.Root>
+  // The host id goes through zag's id map: the root is a `<label for>` pointing at zag's hidden-input
+  // id, so an `id` set on the element itself would leave the label pointing at nothing (an inert switch).
+  const switchIds = useMemo(() => (id ? { hiddenInput: `${id}-switch-input` } : undefined), [id]);
   );
 };
 
 const SELECT_VALUE_TEXT_PROPS = { placeholder: 'Select…' };
 
+      ids={switchIds}
 const SelectInput = ({
   id,
   invalid,

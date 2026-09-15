@@ -1,6 +1,6 @@
 import type { FieldInputTemplate } from '@features/workflow/contracts';
 
-import { ChakraProvider } from '@chakra-ui/react';
+import { ChakraProvider, Field } from '@chakra-ui/react';
 import { DndContext } from '@dnd-kit/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { system } from '@theme/system';
@@ -263,6 +263,40 @@ const findButton = (label: string): HTMLButtonElement => {
 };
 
 describe('WorkflowFieldInput textarea', () => {
+const BOOLEAN_TEMPLATE = {
+  name: 'enabled',
+  title: 'Enabled',
+  type: { batch: false, cardinality: 'SINGLE', name: 'BooleanField' },
+} as unknown as FieldInputTemplate;
+
+describe('WorkflowFieldInput boolean', () => {
+  it('toggles from a click on the switch when hosted in a Field with an external id', async () => {
+    const onChange = vi.fn();
+
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <Field.Root>
+            <WorkflowFieldInput id="node-enabled-value" template={BOOLEAN_TEMPLATE} value={false} onChange={onChange} />
+          </Field.Root>
+        </ChakraProvider>
+      );
+    });
+
+    const control = host.querySelector('[data-scope="switch"][data-part="control"]');
+
+    if (!(control instanceof HTMLElement)) {
+      throw new Error('Switch control not rendered');
+    }
+
+    await act(async () => {
+      await userEvent.click(control);
+    });
+
+    expect(onChange).toHaveBeenCalledWith(true);
+  });
+});
+
   it('uses the accessible unbounded resizable textarea for prompt-like string fields', async () => {
     await renderField(TEXTAREA_TEMPLATE, 'hello', vi.fn());
 
