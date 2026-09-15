@@ -249,6 +249,89 @@ describe('ScrubberField', () => {
     expect(editor()).toBeNull();
   });
 
+  it('leaves focus where a blur sent it and only returns to the slider on Enter or Escape', async () => {
+    const { onChange, slider } = await mount({ inputMax: 500 });
+    const next = document.createElement('button');
+
+    host?.append(next);
+    await act(() => {
+      valueButton()?.click();
+    });
+    await act(() => userEvent.keyboard('40'));
+    await act(() => {
+      next.focus();
+    });
+
+    expect(onChange).toHaveBeenLastCalledWith(40);
+    expect(editor()).toBeNull();
+    expect(document.activeElement).toBe(next);
+
+    await act(() => {
+      slider.focus();
+    });
+    await act(() => userEvent.keyboard('{Enter}{Escape}'));
+
+    expect(document.activeElement).toBe(slider);
+
+    // A blur with no destination (window deactivated, click on nothing focusable) keeps the tab stop.
+    await act(() => userEvent.keyboard('{Enter}'));
+    await act(() => {
+      editor()?.blur();
+    });
+
+    expect(editor()).toBeNull();
+    expect(document.activeElement).toBe(slider);
+  });
+
+  it('ignores pointers other than the one that started the drag', async () => {
+    const { frame, onChange } = await mount();
+
+    await pointer(frame, 'pointerdown', { clientX: trackX(frame, 0.5), pointerId: 1 });
+
+    expect(onChange).toHaveBeenLastCalledWith(50);
+
+    await pointer(window, 'pointermove', { clientX: trackX(frame, 0.8), pointerId: 2 });
+    await pointer(window, 'pointerup', { clientX: trackX(frame, 0.8), pointerId: 2 });
+
+    expect(onChange).toHaveBeenLastCalledWith(50);
+    expect(frame.hasAttribute('data-dragging')).toBe(true);
+
+    await pointer(window, 'pointermove', { clientX: trackX(frame, 0.6), pointerId: 1 });
+    await pointer(window, 'pointerup', { clientX: trackX(frame, 0.6), pointerId: 1 });
+
+    expect(onChange).toHaveBeenLastCalledWith(60);
+    expect(frame.hasAttribute('data-dragging')).toBe(false);
+  });
+
+  it('consumes the keys it handles before they reach window-level shortcuts', async () => {
+    // No default: Backspace/Delete restore nothing but are still the slider's keys.
+    const { onChange, slider } = await mount();
+    const seen: string[] = [];
+    const listener = (event: KeyboardEvent) => {
+      seen.push(event.key);
+    };
+
+    window.addEventListener('keydown', listener);
+
+    try {
+      await act(async () => {
+        slider.focus();
+        await userEvent.keyboard('{ArrowRight}{Home}{Delete}2');
+      });
+
+      expect(editor()?.value).toBe('2');
+      expect(seen).toEqual([]);
+      expect(onChange).toHaveBeenLastCalledWith(0);
+
+      await act(() => userEvent.keyboard('{Escape}'));
+      await act(() => userEvent.keyboard('q'));
+
+      expect(seen).toEqual(['Escape', 'q']);
+    } finally {
+      window.removeEventListener('keydown', listener);
+    }
+  });
+
   it('restores the default on double-click or Backspace, and only when one is given', async () => {
     const { frame, onChange, slider } = await mount({ defaultValue: 20 });
 

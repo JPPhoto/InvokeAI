@@ -2,6 +2,7 @@ import type { StackProps } from '@chakra-ui/react';
 import type { FeatureHintId } from '@platform/ui/hints';
 import type {
   ChangeEvent,
+  FocusEvent,
   KeyboardEvent,
   PointerEvent as ReactPointerEvent,
   MouseEvent as ReactMouseEvent,
@@ -313,8 +314,10 @@ export const ScrubberField = ({
     setEdit({ draft, selectAll });
   }, []);
 
+  // Enter and Escape hand focus back to the slider; a blur means focus already
+  // went where the user sent it, and pulling it back would break Tab and clicks.
   const finishEditing = useCallback(
-    (commit: boolean) => {
+    (commit: boolean, restoreFocus: boolean) => {
       const session = editSessionRef.current;
 
       if (!session || session.finished) {
@@ -323,7 +326,10 @@ export const ScrubberField = ({
 
       session.finished = true;
       setEdit(null);
-      sliderRef.current?.focus({ preventScroll: true });
+
+      if (restoreFocus) {
+        sliderRef.current?.focus({ preventScroll: true });
+      }
 
       if (commit && edit) {
         const parsed = Number(edit.draft.trim());
@@ -372,7 +378,8 @@ export const ScrubberField = ({
         // No capture available — fall through to the window listeners.
       }
 
-      const resolve = (pointer: { altKey: boolean; clientX: number; shiftKey: boolean }): number => {
+      type PointerSample = { altKey: boolean; clientX: number; pointerId: number; shiftKey: boolean };
+      const resolve = (pointer: PointerSample): number => {
         let raw: number;
 
         if (pointer.shiftKey || anchor) {
@@ -389,7 +396,13 @@ export const ScrubberField = ({
 
         return pointer.altKey && markValues?.length ? nearestMark(raw, markValues) : snapToStep(raw);
       };
-      const apply = (pointer: { altKey: boolean; clientX: number; shiftKey: boolean }) => {
+      // The gesture belongs to the pointer that started it; a second finger or
+      // pen contact neither moves the value nor ends the drag.
+      const apply = (pointer: PointerSample) => {
+        if (pointer.pointerId !== event.pointerId) {
+          return;
+        }
+
         if (isPendingTouch) {
           if (Math.abs(pointer.clientX - event.clientX) < TOUCH_INTENT_PX) {
             return;
@@ -405,7 +418,11 @@ export const ScrubberField = ({
           onChange(next);
         }
       };
-      const end = () => {
+      const end = (pointer: PointerEvent) => {
+        if (pointer.pointerId !== event.pointerId) {
+          return;
+        }
+
         session.abort();
         pointerSessionRef.current = null;
         setIsDragging(false);
@@ -432,6 +449,9 @@ export const ScrubberField = ({
     [defaultValue, disabled, emit]
   );
 
+  // Every key the slider acts on is consumed outright: the window-level hotkey
+  // runtime only exempts editable elements, so a digit that opens the editor
+  // must not also fire the shortcut bound to that digit.
   const handleSliderKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
       if (disabled || event.ctrlKey || event.metaKey) {
@@ -466,12 +486,16 @@ export const ScrubberField = ({
         case 'Enter':
         case 'F2':
           event.preventDefault();
+          event.stopPropagation();
           startEditing(String(value), true);
           return;
         case 'Backspace':
         case 'Delete':
+          // Owned even without a default: unconsumed, they reach delete hotkeys.
+          event.preventDefault();
+          event.stopPropagation();
+
           if (defaultValue !== undefined) {
-            event.preventDefault();
             emit(defaultValue);
           }
           return;
@@ -479,12 +503,14 @@ export const ScrubberField = ({
           // A digit (or sign/point) starts typing straight away, like a spreadsheet cell.
           if (!event.altKey && /^[\d.-]$/.test(event.key)) {
             event.preventDefault();
+            event.stopPropagation();
             startEditing(event.key, false);
           }
           return;
       }
 
       event.preventDefault();
+      event.stopPropagation();
       emit(clamp(roundTo(next, decimals), typedMin, typedMax));
     },
     [decimals, defaultValue, disabled, emit, max, min, startEditing, step, typedMax, typedMin, value]
@@ -517,15 +543,20 @@ export const ScrubberField = ({
     },
     [observeText, selectAll]
   );
-  const handleInputBlur = useCallback(() => finishEditing(true), [finishEditing]);
+  // No `relatedTarget` means nothing else took focus (the window deactivated,
+  // or a click landed on nothing focusable), so the slider keeps the tab stop.
+  const handleInputBlur = useCallback(
+    (event: FocusEvent<HTMLInputElement>) => finishEditing(true, event.relatedTarget === null),
+    [finishEditing]
+  );
   const handleInputKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
       if (event.key === 'Enter') {
         event.preventDefault();
-        finishEditing(true);
+        finishEditing(true, true);
       } else if (event.key === 'Escape') {
         event.preventDefault();
-        finishEditing(false);
+        finishEditing(false, true);
       }
     },
     [finishEditing]
