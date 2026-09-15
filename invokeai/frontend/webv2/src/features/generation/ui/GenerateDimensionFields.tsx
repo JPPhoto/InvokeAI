@@ -1,4 +1,4 @@
-/* eslint-disable react/react-compiler, react-perf/jsx-no-new-object-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-jsx-as-prop */
+/* eslint-disable react-perf/jsx-no-new-object-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-jsx-as-prop */
 import type { AspectRatioId, GenerateModelConfig, GenerateSettings } from '@features/generation/core/types';
 
 import { Badge, Box, HStack, Icon, Stack, Text } from '@chakra-ui/react';
@@ -298,6 +298,7 @@ export const GenerateDimensionFields = ({
 
     if (settings.width === draftDimensions.width && settings.height === draftDimensions.height) {
       pendingDimensionsRef.current = null;
+      // eslint-disable-next-line react/set-state-in-effect
       setDraftDimensions(null);
       return;
     }

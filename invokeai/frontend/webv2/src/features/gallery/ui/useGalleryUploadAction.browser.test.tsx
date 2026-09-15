@@ -121,7 +121,7 @@ const Probe = ({
 }) => {
   const currentGalleryLocationRef = useRef({ galleryView, selectedBoardId });
 
-  // eslint-disable-next-line react/react-compiler
+  // eslint-disable-next-line react/refs
   currentGalleryLocationRef.current = { galleryView, selectedBoardId };
   const getCurrentGalleryLocation = useCallback(() => currentGalleryLocationRef.current, []);
   const uploadFiles = useGalleryUploadAction({

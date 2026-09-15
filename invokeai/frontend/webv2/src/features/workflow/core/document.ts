@@ -533,9 +533,10 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
     case 'setFieldSeedMode': {
       // Fixed is the absent default, so choosing it leaves the instance exactly as
       // pre-seed-mode documents (and legacy readers) write it.
-      return setFieldInstance(document, action.nodeId, action.fieldName, ({ seedMode: _, ...instance }) =>
-        action.seedMode === 'fixed' ? instance : { ...instance, seedMode: action.seedMode }
-      );
+      return setFieldInstance(document, action.nodeId, action.fieldName, (instance) => {
+        const { seedMode: _, ...withoutSeedMode } = instance;
+        return action.seedMode === 'fixed' ? withoutSeedMode : { ...instance, seedMode: action.seedMode };
+      });
     }
     case 'advanceSeedFields': {
       return action.advances.reduce((next, advance) => {

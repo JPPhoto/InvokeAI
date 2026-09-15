@@ -182,10 +182,12 @@ interface Harness {
     settle: ReturnType<typeof vi.fn>;
   };
   api: {
-    [Key in Exclude<
-      keyof QueueCoordinatorBackendPort,
-      'emit' | 'on' | 'onConnectionChange' | 'getEnqueueReceipt' | 'readProgressPreviews'
-    >]: ReturnType<typeof vi.fn>;
+    [
+      Key in Exclude<
+        keyof QueueCoordinatorBackendPort,
+        'emit' | 'on' | 'onConnectionChange' | 'getEnqueueReceipt' | 'readProgressPreviews'
+      >
+    ]: ReturnType<typeof vi.fn>;
   } & {
     getEnqueueReceipt?: ReturnType<typeof vi.fn>;
     readProgressPreviews?: ReturnType<typeof vi.fn<() => Promise<QueueProgressPreviewPayload[]>>>;
