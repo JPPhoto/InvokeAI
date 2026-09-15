@@ -2152,6 +2152,52 @@ describe('queue runtime video board routing', () => {
 
     runtime.dispose();
   });
+
+  it('leaves an image on the board its node saved it to and attaches only unassigned images', async () => {
+    // A workflow node with an explicit board writes the image there server-side; re-attaching
+    // it to the active board would move it, and the recents overlay must show its real board.
+    const nodeBoardImage = { ...resultImage('node-board.png'), boardId: 'board-b' };
+    const { commands, destinations, runtime } = createHarness({
+      getResultImages: vi.fn().mockResolvedValue([nodeBoardImage, resultImage('unassigned.png')]),
+      getResultVideoNames: vi.fn().mockResolvedValue([]),
+    });
+
+    runtime.start();
+
+    await vi.waitFor(() => {
+      expect(destinations.addImagesToGalleryBoard).toHaveBeenCalledWith('board-1', ['unassigned.png']);
+      expect(commands.routeResults).toHaveBeenCalledWith(
+        expect.objectContaining({
+          images: [
+            expect.objectContaining({ boardId: 'board-b' }),
+            expect.objectContaining({ imageName: 'unassigned.png' }),
+          ],
+        })
+      );
+    });
+    expect(destinations.addImagesToGalleryBoard).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.arrayContaining(['node-board.png'])
+    );
+
+    runtime.dispose();
+  });
+
+  it('skips the board attach call when every image already has a board', async () => {
+    const { commands, destinations, runtime } = createHarness({
+      getResultImages: vi.fn().mockResolvedValue([{ ...resultImage('node-board.png'), boardId: 'board-b' }]),
+      getResultVideoNames: vi.fn().mockResolvedValue([]),
+    });
+
+    runtime.start();
+
+    await vi.waitFor(() => {
+      expect(commands.routeResults).toHaveBeenCalled();
+    });
+    expect(destinations.addImagesToGalleryBoard).not.toHaveBeenCalled();
+
+    runtime.dispose();
+  });
 });
 
 describe('queue runtime workflow run capture', () => {

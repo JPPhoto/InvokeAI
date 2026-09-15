@@ -194,6 +194,7 @@ const APP_COMMAND_GROUPS: Record<string, string> = {
   'app.selectWorkflowsTab': 'Navigation',
   'app.toggleLeftPanel': 'Layout',
   'app.togglePanels': 'Layout',
+  'app.togglePreview': 'Layout',
   'app.toggleRightPanel': 'Layout',
 };
 

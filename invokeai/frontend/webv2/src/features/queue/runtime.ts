@@ -778,14 +778,16 @@ export const createQueueRuntime = ({
       scheduleResultReadFlush();
     });
 
-  const addImagesToDestination = async (queueItem: QueueItem, imageNames: string[]): Promise<void> => {
+  // An image a node saved to its own board stays there; only unassigned images land on the active board.
+  const addImagesToDestination = async (queueItem: QueueItem, images: QueueResultImage[]): Promise<void> => {
     if (!isActive() || queueItem.snapshot.destination !== 'gallery') {
       return;
     }
 
     const boardId = queueItem.snapshot.galleryBoardId;
+    const imageNames = images.filter((image) => !image.boardId).map((image) => image.imageName);
 
-    if (boardId && boardId !== 'none') {
+    if (boardId && boardId !== 'none' && imageNames.length > 0) {
       await destinations.addImagesToGalleryBoard(boardId, imageNames);
     }
   };
@@ -874,10 +876,7 @@ export const createQueueRuntime = ({
       ? producedImages.filter((image) => !image.isIntermediate)
       : producedImages;
 
-    await addImagesToDestination(
-      queueItem,
-      images.map((image) => image.imageName)
-    );
+    await addImagesToDestination(queueItem, images);
 
     return images;
   };
