@@ -1,3 +1,6 @@
+import { isSeedMode } from '@platform/core/seed';
+
+import type { DynamicPromptsConfig } from './dynamicPrompts';
 import type {
   AspectRatioId,
   ComponentModelConfig,
@@ -67,7 +70,21 @@ export const DIMENSION_GRID = 8;
 export const MIN_DIMENSION = 64;
 export const MAX_DIMENSION = 4096;
 
-export const SEED_MAX = 4_294_967_295;
+/** The expansion config the settings describe, under the names the expansion route and preview use. */
+export const getDynamicPromptsConfig = (
+  settings: Pick<
+    GenerateSettings,
+    | 'dynamicPromptsCombinatorial'
+    | 'dynamicPromptsMaxPrompts'
+    | 'dynamicPromptsSampleSeed'
+    | 'dynamicPromptsSeedBehaviour'
+  >
+): DynamicPromptsConfig => ({
+  combinatorial: settings.dynamicPromptsCombinatorial,
+  maxPrompts: settings.dynamicPromptsMaxPrompts,
+  sampleSeed: settings.dynamicPromptsSampleSeed,
+  seedBehaviour: settings.dynamicPromptsSeedBehaviour,
+});
 export const MIN_NEGATIVE_PROMPT_HEIGHT_PX = 56;
 export const MAX_NEGATIVE_PROMPT_HEIGHT_PX = 240;
 export const DEFAULT_NEGATIVE_PROMPT_HEIGHT_PX = 56;
@@ -676,7 +693,7 @@ export const normalizeGenerateSettings = (values: unknown): GenerateSettings | n
     typeof values.positivePrompt === 'string' &&
     typeof values.negativePrompt === 'string' &&
     typeof values.scheduler === 'string' &&
-    typeof values.shouldRandomizeSeed === 'boolean' &&
+    (isSeedMode(values.seedMode) || typeof values.shouldRandomizeSeed === 'boolean') &&
     ['width', 'height', 'steps', 'cfgScale', 'cfgRescaleMultiplier', 'seed'].every((key) =>
       hasFiniteNumber(values, key)
     );
@@ -763,7 +780,8 @@ export const normalizeGenerateSettings = (values: unknown): GenerateSettings | n
     seamlessXAxis: typeof values.seamlessXAxis === 'boolean' ? values.seamlessXAxis : false,
     seamlessYAxis: typeof values.seamlessYAxis === 'boolean' ? values.seamlessYAxis : false,
     seed: values.seed as number,
-    shouldRandomizeSeed: values.shouldRandomizeSeed as boolean,
+    // Values saved before seed modes carry the random toggle instead.
+    seedMode: isSeedMode(values.seedMode) ? values.seedMode : values.shouldRandomizeSeed ? 'random' : 'fixed',
     steps: values.steps as number,
     vae: isVaeModelConfig(values.vae) ? values.vae : null,
     vaePrecision: isVaePrecision(values.vaePrecision) ? values.vaePrecision : 'fp32',

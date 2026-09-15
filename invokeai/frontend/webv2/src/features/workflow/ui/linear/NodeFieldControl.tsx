@@ -1,5 +1,8 @@
+import type { SeedMode } from '@platform/core/seed';
+
 import { Alert, Field, HStack, Icon, Input, Stack, Text } from '@chakra-ui/react';
 import { isInvocationNode, type NodeFieldFormElement, type ProjectGraphState } from '@features/workflow/contracts';
+import { getWorkflowFieldSeedMode } from '@features/workflow/graph';
 import { useInvocationTemplatesSelector } from '@features/workflow/react';
 import { WorkflowFieldInput } from '@features/workflow/ui/fields/WorkflowFieldInput';
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
@@ -13,6 +16,7 @@ import {
 import { FieldLabel, IconButton, Tooltip } from '@platform/ui';
 import { RotateCcwIcon } from 'lucide-react';
 import { useCallback, useMemo, useState, type ChangeEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 
 /**
  * One exposed node field, shared by the Linear UI's view mode and the form
@@ -44,6 +48,7 @@ export const NodeFieldControl = ({
   isLabelEditable?: boolean;
   projectGraph: ProjectGraphState;
 }) => {
+  const { t } = useTranslation();
   const { editGraph } = useProjectGraphCommands();
   const { fieldName, instance, invocationNode, nodeContext, nodeId, template } = useNodeFieldBinding(
     element,
@@ -91,6 +96,10 @@ export const NodeFieldControl = ({
   const onLabelFocus = useCallback(() => setDraftLabel(label), [label]);
   const onValueChange = useCallback(
     (value: unknown) => editGraph({ fieldName, nodeId, type: 'setFieldValue', value }),
+    [editGraph, fieldName, nodeId]
+  );
+  const onSeedModeChange = useCallback(
+    (seedMode: SeedMode) => editGraph({ fieldName, nodeId, seedMode, type: 'setFieldSeedMode' }),
     [editGraph, fieldName, nodeId]
   );
   const resetAriaLabel = useMemo(() => `Reset ${label} to default value`, [label]);
@@ -160,16 +169,18 @@ export const NodeFieldControl = ({
         ) : null}
         {isConnected ? (
           <Text color="fg.subtle" fontSize="2xs">
-            Driven by a graph connection.
+            {t('nodes.providedByConnection')}
           </Text>
         ) : (
           <WorkflowFieldInput
             id={valueInputId}
             invalid={isInvalid}
             nodeId={nodeId}
+            seedMode={getWorkflowFieldSeedMode(instance)}
             template={template}
             value={instance?.value}
             onChange={onValueChange}
+            onSeedModeChange={onSeedModeChange}
           />
         )}
         {invalidReason ? <Field.ErrorText fontSize="2xs">{invalidReason}</Field.ErrorText> : null}
