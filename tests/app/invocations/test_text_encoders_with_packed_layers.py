@@ -1,8 +1,9 @@
-"""The Qwen3 text-encoder nodes have to treat a quantized encoder the way the denoise nodes treat a quantized
-transformer: reserve working memory for the per-forward dequantization of packed nvfp4 Linears, and apply LoRA as
-a sidecar wherever a direct patch cannot write the weights -- packed nvfp4 Linears, and GGUF or SDNQ encoders,
-which the denoise nodes already patch this way. All three nodes load through the same Qwen3 loader, so each of
-them receives a packed encoder as soon as someone installs Comfy's fp4_mixed file.
+"""The text-encoder nodes have to treat a quantized encoder the way the denoise nodes treat a quantized transformer:
+reserve working memory for the per-forward dequantization of packed nvfp4 Linears, and apply LoRA as a sidecar
+wherever a direct patch cannot write the weights -- packed nvfp4 Linears, and GGUF or SDNQ encoders, which the denoise
+nodes already patch this way. The three Qwen3 nodes load through the Qwen3 loader and the FLUX.2 [dev] node through
+the Mistral loader, and both keep Comfy's fp4_mixed files packed, so each node receives a packed encoder as soon as
+someone installs one.
 """
 
 from contextlib import ExitStack, contextmanager
@@ -13,6 +14,7 @@ import pytest
 import torch
 
 from invokeai.app.invocations.text_encoder.anima_text_encoder import AnimaTextEncoderInvocation
+from invokeai.app.invocations.text_encoder.flux2_dev_text_encoder import Flux2DevTextEncoderInvocation
 from invokeai.app.invocations.text_encoder.flux2_klein_text_encoder import Flux2KleinTextEncoderInvocation
 from invokeai.app.invocations.text_encoder.z_image_text_encoder import ZImageTextEncoderInvocation
 from invokeai.backend.model_manager.taxonomy import ModelFormat
@@ -49,10 +51,24 @@ def _encoder(packed: bool) -> torch.nn.Module:
     return encoder
 
 
+# (node class, the field naming its encoder, how the node's encode step is called)
 NODES = {
-    "z_image": (ZImageTextEncoderInvocation, lambda node, context: node._encode_prompt(context, max_seq_len=512)),
-    "flux2_klein": (Flux2KleinTextEncoderInvocation, lambda node, context: node._encode_prompt(context, ExitStack())),
-    "anima": (AnimaTextEncoderInvocation, lambda node, context: node._encode_prompt(context)),
+    "z_image": (
+        ZImageTextEncoderInvocation,
+        "qwen3_encoder",
+        lambda node, context: node._encode_prompt(context, max_seq_len=512),
+    ),
+    "flux2_klein": (
+        Flux2KleinTextEncoderInvocation,
+        "qwen3_encoder",
+        lambda node, context: node._encode_prompt(context, ExitStack()),
+    ),
+    "anima": (AnimaTextEncoderInvocation, "qwen3_encoder", lambda node, context: node._encode_prompt(context)),
+    "flux2_dev": (
+        Flux2DevTextEncoderInvocation,
+        "mistral_encoder",
+        lambda node, context: node._encode_prompt(context, ExitStack()),
+    ),
 }
 
 
@@ -74,7 +90,7 @@ def test_the_node_reserves_the_dequant_transient_and_patches_quantized_encoders_
     sidecar: bool,
     working_memory: bool,
 ) -> None:
-    invocation_class, encode = NODES[node_name]
+    invocation_class, encoder_field, encode = NODES[node_name]
     encoder = _LoadedModel(_encoder(packed))
     context = MagicMock()
     context.models.load.side_effect = [encoder, _LoadedModel(object())]
@@ -88,7 +104,7 @@ def test_the_node_reserves_the_dequant_transient_and_patches_quantized_encoders_
     monkeypatch.setattr(LayerPatcher, "apply_smart_model_patches", stop)
     node = invocation_class.model_construct(
         prompt="a prompt",
-        qwen3_encoder=SimpleNamespace(text_encoder=SimpleNamespace(), tokenizer=SimpleNamespace(), loras=[]),
+        **{encoder_field: SimpleNamespace(text_encoder=SimpleNamespace(), tokenizer=SimpleNamespace(), loras=[])},
         mask=None,
         max_seq_len=512,
     )

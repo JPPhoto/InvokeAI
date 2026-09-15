@@ -25,7 +25,6 @@ from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
 from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes, requires_sidecar_patching
 from invokeai.backend.quantization.nvfp4 import (
     NVFP4Linear,
-    dequantize_nvfp4_layers,
     dequantize_nvfp4_weight,
     install_nvfp4_layers,
     pop_nvfp4_layers,
@@ -35,8 +34,6 @@ from invokeai.backend.quantization.nvfp4 import (
 )
 
 FIXTURE = Path(__file__).parent / "data" / "z_image_turbo_nvfp4_slices.safetensors"
-
-E2M1 = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0])
 
 
 def _marker_blob(marker: dict) -> torch.Tensor:
@@ -140,46 +137,19 @@ def test_a_real_checkpoint_slice_decodes_to_its_bf16_build(layer: str) -> None:
     assert torch.equal(module(x), torch.nn.functional.linear(x, decoded.view(128, 128)))
 
 
-@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-def test_only_nvfp4_layers_are_decoded_and_the_rest_is_left_for_the_fp8_path(dtype: torch.dtype) -> None:
-    torch.manual_seed(0)
-    codes = torch.randint(0, 16, (128, 64), dtype=torch.uint8)
+def test_popped_layers_keep_their_tensors_as_stored_and_leave_the_rest_for_the_fp8_path() -> None:
     fp8_weight = torch.randn(32, 32).to(torch.float8_e4m3fn)
     fp8_scale = torch.tensor(0.5)
     fp8_marker = _marker_blob({"format": "float8_e4m3fn"})
-    dense = torch.randn(8)
     tekken = torch.randint(0, 256, (64,), dtype=torch.uint8)
-    sd = {
-        **_nvfp4_tensors("blocks.0.mlp", codes, block_scale=2.0, global_scale=0.25),
-        "blocks.0.mlp.input_scale": torch.tensor(1.0),
-        "blocks.0.attn.weight": fp8_weight,
-        "blocks.0.attn.weight_scale": fp8_scale,
-        "blocks.0.attn.comfy_quant": fp8_marker,
-        "blocks.0.norm.weight": dense,
-        "tekken_model": tekken,
-    }
-
-    assert dequantize_nvfp4_layers(sd, dtype) == 1
-
-    assert sd["blocks.0.mlp.weight"].dtype is dtype
-    assert torch.equal(sd["blocks.0.mlp.weight"], (E2M1[codes.long()] * 0.5).to(dtype))
-    assert [k for k in sd if k.startswith("blocks.0.mlp.")] == ["blocks.0.mlp.weight"]
-    # The scaled-fp8 layer, its scale and its marker belong to the fp8 path.
-    assert sd["blocks.0.attn.weight"] is fp8_weight
-    assert sd["blocks.0.attn.weight_scale"] is fp8_scale
-    assert sd["blocks.0.attn.comfy_quant"] is fp8_marker
-    assert sd["blocks.0.norm.weight"] is dense
-    assert sd["tekken_model"] is tekken
-
-
-def test_popped_layers_keep_their_tensors_as_stored_and_leave_the_rest_in_place() -> None:
-    fp8_weight = torch.randn(32, 32).to(torch.float8_e4m3fn)
     sd = {
         **_zero_layer("blocks.0.mlp"),
         "blocks.0.mlp.input_scale": torch.tensor(1.0),
         "blocks.0.mlp.bias": torch.zeros(128),
         "blocks.0.attn.weight": fp8_weight,
-        "blocks.0.attn.weight_scale": torch.tensor(0.5),
+        "blocks.0.attn.weight_scale": fp8_scale,
+        "blocks.0.attn.comfy_quant": fp8_marker,
+        "tekken_model": tekken,
     }
     weight, scale = sd["blocks.0.mlp.weight"], sd["blocks.0.mlp.weight_scale"]
 
@@ -189,7 +159,18 @@ def test_popped_layers_keep_their_tensors_as_stored_and_leave_the_rest_in_place(
     assert payloads["blocks.0.mlp"].weight is weight
     assert payloads["blocks.0.mlp"].weight_scale is scale
     # The bias is an ordinary tensor the loader casts; everything else of the layer is gone.
-    assert sorted(sd) == ["blocks.0.attn.weight", "blocks.0.attn.weight_scale", "blocks.0.mlp.bias"]
+    assert sorted(sd) == [
+        "blocks.0.attn.comfy_quant",
+        "blocks.0.attn.weight",
+        "blocks.0.attn.weight_scale",
+        "blocks.0.mlp.bias",
+        "tekken_model",
+    ]
+    # The scaled-fp8 layer, its scale and its marker belong to the fp8 path.
+    assert sd["blocks.0.attn.weight"] is fp8_weight
+    assert sd["blocks.0.attn.weight_scale"] is fp8_scale
+    assert sd["blocks.0.attn.comfy_quant"] is fp8_marker
+    assert sd["tekken_model"] is tekken
 
 
 def test_a_layer_only_the_safetensors_header_names_is_read() -> None:
@@ -197,7 +178,7 @@ def test_a_layer_only_the_safetensors_header_names_is_read() -> None:
     sd = _zero_layer("layer")
     del sd["layer.comfy_quant"]
 
-    assert dequantize_nvfp4_layers(sd, torch.float32, header_layers={"layer": {"format": "nvfp4"}}) == 1
+    assert list(pop_nvfp4_layers(sd, header_layers={"layer": {"format": "nvfp4"}})) == ["layer"]
 
 
 def test_a_layer_nothing_names_as_nvfp4_is_refused_rather_than_read_by_comfy_conventions() -> None:
@@ -211,32 +192,12 @@ def test_a_layer_nothing_names_as_nvfp4_is_refused_rather_than_read_by_comfy_con
     assert "layer.weight" in sd
 
 
-def test_room_for_the_decoded_state_dict_is_reserved_before_any_layer_is_widened() -> None:
-    sd = {**_zero_layer("layer", rows=256), "layer.input_scale": torch.tensor(1.0), "norm.weight": torch.zeros(10)}
-    reservations: list[tuple[int, torch.dtype]] = []
-
-    dequantize_nvfp4_layers(
-        sd, torch.bfloat16, reserve=lambda size: reservations.append((size, sd["layer.weight"].dtype))
-    )
-
-    # The decoded [256, 64] weight at two bytes per element plus the untouched float32 norm; the packed
-    # payload and the side channel are gone by then. Still uint8 when asked: nothing was widened yet.
-    assert reservations == [(256 * 64 * 2 + 10 * 4, torch.uint8)]
-
-
-def test_nothing_is_reserved_for_a_checkpoint_without_nvfp4_layers() -> None:
-    reservations: list[int] = []
-
-    assert dequantize_nvfp4_layers({"norm.weight": torch.zeros(10)}, torch.bfloat16, reserve=reservations.append) == 0
-    assert reservations == []
-
-
-def test_an_awq_checkpoint_is_refused_before_anything_is_decoded() -> None:
+def test_an_awq_checkpoint_is_refused_before_anything_is_taken_out() -> None:
     sd = {**_zero_layer("layer"), "layer.pre_quant_scale": torch.ones(64)}
 
     with pytest.raises(ValueError, match="AWQ"):
-        dequantize_nvfp4_layers(sd, torch.float32)
-    assert sd["layer.weight"].dtype is torch.uint8
+        pop_nvfp4_layers(sd)
+    assert "layer.weight" in sd
 
 
 def test_a_packed_weight_without_its_global_scale_is_refused() -> None:
@@ -244,7 +205,7 @@ def test_a_packed_weight_without_its_global_scale_is_refused() -> None:
     del sd["layer.weight_scale_2"], sd["layer.comfy_quant"]
 
     with pytest.raises(ValueError, match="with a weight_scale but no weight_scale_2"):
-        dequantize_nvfp4_layers(sd, torch.float32)
+        pop_nvfp4_layers(sd)
 
 
 @pytest.mark.parametrize("missing", ["weight", "weight_scale"])
@@ -253,7 +214,7 @@ def test_a_global_scale_without_its_layer_is_refused_naming_it(missing: str) -> 
     del sd[f"layer.{missing}"]
 
     with pytest.raises(ValueError, match=f"nvfp4 layer 'layer': has a weight_scale_2 but no {missing}$"):
-        dequantize_nvfp4_layers(sd, torch.float32)
+        pop_nvfp4_layers(sd)
 
 
 def test_a_global_scale_on_a_dense_weight_is_refused() -> None:
@@ -261,18 +222,16 @@ def test_a_global_scale_on_a_dense_weight_is_refused() -> None:
     sd["layer.weight"] = torch.zeros(128, 64)
 
     with pytest.raises(ValueError, match="nvfp4 layer 'layer': expected a packed uint8"):
-        dequantize_nvfp4_layers(sd, torch.float32)
+        pop_nvfp4_layers(sd)
 
 
-def test_a_malformed_layer_is_refused_before_any_layer_is_decoded_or_reserved() -> None:
+def test_a_malformed_layer_is_refused_before_any_layer_is_taken_out() -> None:
     sd = {**_zero_layer("a"), **_zero_layer("b")}
     sd["b.weight_scale"] = torch.ones(128, 8).to(torch.float8_e4m3fn)
-    reservations: list[int] = []
 
     with pytest.raises(ValueError, match="nvfp4 layer 'b': .* does not describe"):
-        dequantize_nvfp4_layers(sd, torch.float32, reserve=reservations.append)
-    assert sd["a.weight"].dtype is torch.uint8
-    assert reservations == []
+        pop_nvfp4_layers(sd)
+    assert "a.weight" in sd
 
 
 @pytest.mark.parametrize(
@@ -287,7 +246,7 @@ def test_a_marker_that_contradicts_its_tensors_is_refused(tensors: str, marker: 
     sd["layer.comfy_quant"] = _marker_blob(marker)
 
     with pytest.raises(ValueError, match=message):
-        dequantize_nvfp4_layers(sd, torch.float32)
+        pop_nvfp4_layers(sd)
 
 
 @pytest.mark.parametrize(

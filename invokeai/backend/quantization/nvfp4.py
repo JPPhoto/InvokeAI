@@ -1,4 +1,4 @@
-"""Comfy "nvfp4" quantized linears: packed storage decoded per forward, or a decode at load.
+"""Comfy "nvfp4" quantized linears: packed storage decoded per forward.
 
 ``nvfp4`` is a ComfyUI-wide scheme, not one architecture's format: Comfy-Org ships it for Z-Image,
 Krea-2, Qwen-Image, the FLUX.2 Mistral encoder and more, often beside scaled fp8 and plain bf16 in the
@@ -24,20 +24,16 @@ its conditioning slightly worse -- which is why tests pin the layout against the
 and a slice of a real checkpoint. Nothing guarantees that another producer writing the same key names
 shares these conventions, so a layer is only read when a Comfy marker or header entry names it nvfp4.
 
-Loaders take one of two routes:
+Loaders keep the layers packed: :func:`pop_nvfp4_layers` takes them out of the state dict before any fp8
+handling, and :func:`install_nvfp4_layers` swaps :class:`NVFP4Linear` modules in before the load. A layer
+then occupies about 0.56 bytes per weight element against bf16's 2 and dequantizes per forward.
 
-- Keep the layers packed: :func:`pop_nvfp4_layers` takes them out of the state dict before any fp8
-  handling, and :func:`install_nvfp4_layers` swaps :class:`NVFP4Linear` modules in before the load. A
-  layer then occupies about 0.56 bytes per weight element against bf16's 2 and dequantizes per forward.
-- Decode at load with :func:`dequantize_nvfp4_layers`. The model then needs as much memory as its bf16
-  build.
-
-AWQ builds (``pre_quant_scale``) are refused either way: their input channels were rescaled before
-quantization, so a plain decode would produce wrong weights.
+AWQ builds (``pre_quant_scale``) are refused: their input channels were rescaled before quantization, so a
+plain decode would produce wrong weights.
 """
 
 import functools
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -299,36 +295,6 @@ def _find_nvfp4_layers(sd: Mapping[str, Any], header_layers: Mapping[str, Any] |
     return layers
 
 
-def dequantize_nvfp4_layers(
-    sd: dict[str, Any],
-    dtype: torch.dtype,
-    reserve: Callable[[int], object] | None = None,
-    header_layers: Mapping[str, Any] | None = None,
-) -> int:
-    """Decode every nvfp4 layer in ``sd`` to ``dtype`` in place, drop its side channel, return the count.
-
-    For loaders that do not keep the layers packed. Call it before any fp8 handling, for the reasons given
-    at :func:`pop_nvfp4_layers`; the scaled-fp8 weights, scales and markers of a mixed file are left for
-    that path.
-
-    Nothing is widened until every layer has been checked. Then ``reserve`` -- a loader's ``make_room`` --
-    is called once with the size ``sd`` will have after decoding. The model cache reserves only the file
-    size before a load and decoding more than triples it, so reserving afterwards would let the peak land
-    on memory other cached models still hold.
-    """
-    layers = _find_nvfp4_layers(sd, header_layers)
-    if not layers:
-        return 0
-    if reserve is not None:
-        reserve(_decoded_size(sd, layers, dtype))
-    for path in layers:
-        weight, scale = sd[f"{path}.weight"], sd[f"{path}.weight_scale"]
-        sd[f"{path}.weight"] = dequantize_nvfp4_weight(weight, scale, sd[f"{path}{WEIGHT_SCALE_2_SUFFIX}"], dtype)
-        for suffix in _SIDE_CHANNEL_SUFFIXES:
-            sd.pop(f"{path}{suffix}", None)
-    return len(layers)
-
-
 def pop_nvfp4_layers(sd: dict[str, Any], header_layers: Mapping[str, Any] | None = None) -> dict[str, NVFP4Payload]:
     """Take every nvfp4 layer's packed tensors out of ``sd`` and drop the rest of its side channel.
 
@@ -452,11 +418,3 @@ def _stays_packed(model: torch.nn.Module, path: str, payload: NVFP4Payload, skip
             f"Linear there is {module.out_features}x{module.in_features}. The checkpoint is misidentified."
         )
     return True
-
-
-def _decoded_size(sd: dict[str, Any], layers: list[str], dtype: torch.dtype) -> int:
-    """Bytes ``sd`` occupies once ``layers`` are decoded to ``dtype`` and their side channels dropped."""
-    replaced = {f"{path}{suffix}" for path in layers for suffix in (".weight", *_SIDE_CHANNEL_SUFFIXES)}
-    kept = sum(tensor.nelement() * tensor.element_size() for key, tensor in sd.items() if key not in replaced)
-    decoded = sum(sd[f"{path}.weight"].shape[0] * sd[f"{path}.weight"].shape[1] * 2 for path in layers)
-    return kept + decoded * dtype.itemsize
