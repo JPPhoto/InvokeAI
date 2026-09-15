@@ -2,7 +2,7 @@
 import type { SeedMode, SeedSubmissionPlan } from '@platform/core/seed';
 import type { LucideIcon } from 'lucide-react';
 
-import { HStack, Icon, Menu, NumberInput, Portal, Stack, Text } from '@chakra-ui/react';
+import { HStack, Icon, Menu, NumberInput, Portal, Stack, Text, useFieldContext } from '@chakra-ui/react';
 import { SEED_MAX, SEED_MODES } from '@platform/core/seed';
 import { ChevronDownIcon, DicesIcon, LocateFixedIcon, MinusIcon, PlusIcon, ShuffleIcon } from 'lucide-react';
 import { useId, useMemo } from 'react';
@@ -158,6 +158,10 @@ export const SeedInput = ({
   const { t } = useTranslation();
   const previewId = useId();
   const isRandom = seedMode === 'random';
+  // Inside a Field the input is already described by the field's error and helper text; the
+  // preview joins that list rather than replacing it.
+  const field = useFieldContext();
+  const describedBy = [field?.ariaDescribedby, plan ? previewId : undefined].filter(Boolean).join(' ') || undefined;
   // The host's id goes through zag's id map, never onto the element: zag syncs the DOM value
   // by looking the input up under its own id, so an overriding `id` leaves an external change
   // (the dice, a recall, an advance) invisible until the next keystroke.
@@ -189,11 +193,7 @@ export const SeedInput = ({
           }}
         >
           <NumberInput.Control />
-          <NumberInput.Input
-            aria-describedby={plan ? previewId : undefined}
-            aria-label={ariaLabel}
-            css={TABULAR_NUMS}
-          />
+          <NumberInput.Input aria-describedby={describedBy} aria-label={ariaLabel} css={TABULAR_NUMS} />
         </NumberInput.Root>
         {/* The tooltip is the visible hint; the accessible name stays on the button because a
             tooltip only describes its trigger while open. */}

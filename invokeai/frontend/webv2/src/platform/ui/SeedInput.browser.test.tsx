@@ -9,6 +9,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 
+import { Field } from './Field';
 import { SeedInput, type SeedInputPatch } from './SeedInput';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -193,6 +194,44 @@ describe('SeedInput', () => {
 
     expect(host.querySelector('[data-testid="seed-sequence-preview"]')).toBeNull();
     expect(seedInput()?.getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it("keeps the field's error in the input's description alongside the preview", async () => {
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <Field error="Out of range" label="Seed">
+            <Host initialSeed={42} seedMode="increment" onCommit={vi.fn()} />
+          </Field>
+        </ChakraProvider>
+      );
+    });
+
+    const errorId = host.querySelector('[data-part="error-text"]')?.id;
+    const previewId = host.querySelector('[data-testid="seed-sequence-preview"]')?.id;
+    const describedBy = seedInput()?.getAttribute('aria-describedby')?.split(' ') ?? [];
+
+    expect(errorId).toBeTruthy();
+    expect(describedBy).toContain(errorId);
+    expect(describedBy).toContain(previewId);
+  });
+
+  it("keeps the field's error as the whole description while the seed holds", async () => {
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <Field error="Out of range" label="Seed">
+            <Host initialSeed={42} seedMode="fixed" onCommit={vi.fn()} />
+          </Field>
+        </ChakraProvider>
+      );
+    });
+
+    const errorId = host.querySelector('[data-part="error-text"]')?.id;
+
+    expect(errorId).toBeTruthy();
+    expect(host.querySelector('[data-testid="seed-sequence-preview"]')).toBeNull();
+    expect(seedInput()?.getAttribute('aria-describedby')).toBe(errorId);
   });
 
   it('renders an empty field for an absent seed without committing anything', async () => {
