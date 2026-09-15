@@ -13,7 +13,8 @@ Hyperparameters were extracted from PiD's `pid_sr4x` base net config and
 the per-backbone experiment overrides (NVIDIA's upstream `pid/_src/configs/`,
 not vendored here — only the values needed at inference). See
 `shared_config.py` and `experiment/{flux,flux2,sd3}.py` in the upstream
-repository for the source of truth.
+repository for the source of truth; the PiD v1.5 deltas come from
+`common/defaults/net.py` (`PID_SR4X_V1PT5`) and `experiment_2kto4k_v1pt5/`.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from torch import Tensor
 
 from invokeai.backend.model_manager.taxonomy import BaseModelType
 from invokeai.backend.pid._src.networks.pid_net import PidNet
+from invokeai.backend.pid.state_dict_utils import PID_VERSION_BY_LQ_HIDDEN_DIM, PiDVersion
 from invokeai.backend.util.logging import InvokeAILogger
 
 _PID_ACTIVATION_CHUNK_SIZE = 1024
@@ -69,7 +71,6 @@ _PID_SR4X_BASE: dict = {
     "train_lq_proj_only": False,
     "sr_scale": 4,
     "pit_lq_inject": False,
-    "pit_lq_gate_type": "sigma_aware_per_token_per_dim",
 }
 
 # Per-backbone net deltas (mirrors upstream experiment/{name}.py).
@@ -94,6 +95,24 @@ _PER_BACKBONE: dict[BaseModelType, dict] = {
         "lq_latent_channels": 16,
         "latent_spatial_down_factor": 8,
     },
+}
+
+# PiD v1.5 net deltas over the v1 base (upstream `PID_SR4X_V1PT5` in configs/common/defaults/net.py). Upstream also
+# enables `lq_aux_rgb_head`, a training-only reconstruction head the released checkpoints do not carry.
+_V1_5_NET_DELTAS: dict = {
+    "lq_hidden_dim": 1024,
+    "lq_gate_type": "sigma_aware_per_token",
+    "lq_conv_padding_mode": "replicate",
+    "pit_lq_inject": True,
+    "rope_ref_h": 2048,
+    "rope_ref_w": 2048,
+}
+
+# The backbones NVIDIA released v1.5 decoders for, with their own deltas (upstream `PID_SR4X_V1PT5_FOR_FLUX2`).
+_V1_5_PER_BACKBONE: dict[BaseModelType, dict] = {
+    BaseModelType.Flux: {},
+    BaseModelType.Flux2: {"lq_latent_unpatchify_factor": 2},
+    BaseModelType.QwenImage: {},
 }
 
 # Distilled-student schedule (`student_t_list` from shared_config).
@@ -195,8 +214,8 @@ def estimate_pid_decode_working_memory(
     return min(chunked, unoptimized)
 
 
-def build_pid_net(backbone: BaseModelType) -> PidNet:
-    """Build an uninitialised PidNet of the right shape for *backbone*.
+def build_pid_net(backbone: BaseModelType, version: PiDVersion = PiDVersion.V1) -> PidNet:
+    """Build an uninitialised PidNet of the right shape for *backbone* and decoder *version*.
 
     The returned network is on CPU and in float32; the caller is responsible
     for casting it to the desired dtype/device before loading weights.
@@ -206,13 +225,21 @@ def build_pid_net(backbone: BaseModelType) -> PidNet:
             f"PiD decoder backbone {backbone!r} is not supported. Expected one of: {list(_PER_BACKBONE.keys())}."
         )
     kwargs = {**_PID_SR4X_BASE, **_PER_BACKBONE[backbone]}
+    if version is PiDVersion.V1_5:
+        if backbone not in _V1_5_PER_BACKBONE:
+            raise ValueError(
+                f"PiD v1.5 decoder backbone {backbone!r} is not supported. Expected one of: "
+                f"{list(_V1_5_PER_BACKBONE.keys())}."
+            )
+        kwargs |= {**_V1_5_NET_DELTAS, **_V1_5_PER_BACKBONE[backbone]}
     return PidNet(**kwargs)
 
 
 # The one PidNet parameter whose shape depends on the backbone: a Conv2d whose in-channels are the
-# backbone's latent channel count (4 SDXL / 16 FLUX.1, SD3, Qwen-Image / 128 FLUX.2). Every other
-# parameter is name- and shape-identical across all five, which is what lets model identification
-# hold a checkpoint to one contract before it knows which backbone the checkpoint is for.
+# backbone's latent channel count as the projection takes it (4 SDXL / 16 FLUX.1, SD3, Qwen-Image /
+# 128 FLUX.2, unpatchified to 32 in v1.5). Within a generation every other parameter is name- and
+# shape-identical across its backbones, which is what lets model identification hold a checkpoint to
+# one contract before it knows which backbone the checkpoint is for. Its dim 0 names the generation.
 BACKBONE_DISCRIMINATOR_KEY = "lq_proj.latent_proj.0.weight"
 
 # The backbone the contract is probed from. Any of the five would do — see the docstring below.
@@ -220,8 +247,10 @@ _KEY_CONTRACT_BACKBONE = BaseModelType.Flux
 
 
 @lru_cache(maxsize=None)
-def required_pid_net_shapes(backbone: BaseModelType = _KEY_CONTRACT_BACKBONE) -> Mapping[str, tuple[int, ...]]:
-    """Every parameter `PidNet` expects, mapped to its shape.
+def required_pid_net_shapes(
+    backbone: BaseModelType = _KEY_CONTRACT_BACKBONE, version: PiDVersion = PiDVersion.V1
+) -> Mapping[str, tuple[int, ...]]:
+    """Every parameter a *version* `PidNet` expects, mapped to its shape.
 
     This is the contract `load_pid_decoder` enforces — set equality on the keys, plus the shape
     agreement `load_state_dict` demands — so model identification can accept precisely the files the
@@ -236,13 +265,14 @@ def required_pid_net_shapes(backbone: BaseModelType = _KEY_CONTRACT_BACKBONE) ->
     otherwise shift the seedless stream by an amount that depends on how many candidate files were
     probed, making later unseeded randomness depend on install order.
 
-    ``backbone`` exists for `test_pid_decode.py`, which pins that the key set is identical across all
-    five and that `BACKBONE_DISCRIMINATOR_KEY` is the only shape that varies. Identification itself
-    must use the default: it has to validate a checkpoint *before* it can know the backbone, since
-    the backbone is read from one of the weights the contract is there to require.
+    ``backbone`` exists for the tests, which pin that within a generation the key set is identical
+    across its backbones and that `BACKBONE_DISCRIMINATOR_KEY` is the only shape that varies.
+    Identification itself must use the default backbone: it has to validate a checkpoint *before* it
+    can know the backbone, since the backbone is read from one of the weights the contract is there to
+    require. It does pass ``version``, read off that weight's width, which no backbone varies.
     """
     with torch.random.fork_rng(devices=[]), torch.device("meta"):
-        net = build_pid_net(backbone)
+        net = build_pid_net(backbone, version)
     return MappingProxyType({k: tuple(v.shape) for k, v in net.state_dict().items()})
 
 
@@ -251,10 +281,18 @@ def load_pid_decoder(state_dict: dict[Any, Tensor], backbone: BaseModelType) -> 
 
     The state dict is expected to be the model-manager loader's output, i.e.
     already stripped of the `net.` prefix used by NVIDIA's distill model
-    serialisation. The caller still owns dtype/device placement of the
-    returned net.
+    serialisation. The decoder generation is read off the latent projection's
+    width; a state dict that names none is built as v1, so a truncated or
+    malformed file still reaches the key reports below. The caller still owns
+    dtype/device placement of the returned net.
     """
-    net = build_pid_net(backbone)
+    discriminator_shape = getattr(state_dict.get(BACKBONE_DISCRIMINATOR_KEY), "shape", None)
+    version = (
+        PID_VERSION_BY_LQ_HIDDEN_DIM.get(discriminator_shape[0], PiDVersion.V1)
+        if discriminator_shape
+        else PiDVersion.V1
+    )
+    net = build_pid_net(backbone, version)
 
     # A `.pth` unpickles to whatever it contains, and a bare (un-prefixed) checkpoint reaches here
     # with its keys untouched — see `strip_net_prefix`. `nn.Module.load_state_dict` calls

@@ -6,9 +6,9 @@ Covers what identification has to get right before a checkpoint reaches the deco
   enforces. Checking a subset is not a milder version of the same guarantee — loaders run under
   `skip_torch_weight_init()`, so a weight the checkpoint does not supply is uninitialised memory
   rather than a default, and a file accepted here but refused there decodes nothing.
-- Architecture: InvokeAI's build_pid_net constructs only the legacy 512-dim PidNet. NVIDIA's v1.5
-  decoders use lq_hidden_dim=1024 (plus PiT injection, scalar gates, ...), which cannot be loaded
-  into it, so such a checkpoint must be rejected here instead of crashing mid-decode.
+- Architecture: the LQ projection's width names the decoder generation (512 for v1, 1024 for v1.5),
+  and the file is held to that generation's contract. A width no generation has is rejected as an
+  architecture rather than reported as a pile of missing and unexpected keys.
 - Backbone and variant: read from the weights where the weights can say, and from name evidence only
   for the FLUX.1 / SD3 / Qwen-Image tie the weights cannot break.
 
@@ -38,6 +38,7 @@ from invokeai.backend.model_manager.configs.pid_decoder import (
 from invokeai.backend.model_manager.configs.unknown import Unknown_Config
 from invokeai.backend.model_manager.taxonomy import BaseModelType, PiDDecoderVariantType
 from invokeai.backend.pid.decode import BACKBONE_DISCRIMINATOR_KEY, required_pid_net_shapes
+from invokeai.backend.pid.state_dict_utils import PiDVersion
 
 _OVERRIDE_FIELDS: dict[str, object] = {
     "hash": "blake3:fakehash",
@@ -71,13 +72,15 @@ def test_the_config_and_the_network_agree_on_the_discriminator_weight() -> None:
     assert _LATENT_PROJ_KEY == BACKBONE_DISCRIMINATOR_KEY
 
 
-def _pid_state_dict(lq_hidden_dim: int = 512, latent_channels: int = 16) -> dict[str, object]:
-    """A complete PiD-looking state dict: every weight PidNet expects, at the shape it expects, with
-    the discriminator conv overridden to the given hidden dim / latent channel count."""
-    sd: dict[str, object] = {
-        f"{_NET_PREFIX}{k}": _FakeShapeTensor(*shape) for k, shape in required_pid_net_shapes().items()
-    }
-    sd[f"{_NET_PREFIX}{_LATENT_PROJ_KEY}"] = _FakeShapeTensor(lq_hidden_dim, latent_channels, 3, 3)
+def _pid_state_dict(
+    lq_hidden_dim: int | None = None, latent_channels: int = 16, version: PiDVersion = PiDVersion.V1
+) -> dict[str, object]:
+    """A complete PiD-looking state dict: every weight a *version* PidNet expects, at the shape it expects, with
+    the discriminator conv overridden to the given latent channel count (and hidden dim, if given)."""
+    contract = required_pid_net_shapes(version=version)
+    sd: dict[str, object] = {f"{_NET_PREFIX}{k}": _FakeShapeTensor(*shape) for k, shape in contract.items()}
+    width = contract[_LATENT_PROJ_KEY][0] if lq_hidden_dim is None else lq_hidden_dim
+    sd[f"{_NET_PREFIX}{_LATENT_PROJ_KEY}"] = _FakeShapeTensor(width, latent_channels, 3, 3)
     return sd
 
 
@@ -109,16 +112,101 @@ def test_legacy_512_checkpoint_is_accepted() -> None:
         assert config.base.value == "flux"
 
 
-def test_v1_5_checkpoint_is_rejected_at_identification() -> None:
-    """A 1024-dim (v1.5) checkpoint must be rejected, not accepted and crashed on later.
+@pytest.mark.parametrize(
+    ("config_class", "latent_channels", "file_name", "base"),
+    [
+        (
+            PiDDecoder_Checkpoint_FLUX_Config,
+            16,
+            "pid_1.5_flux1_1024_to_4096_4step_bf16.safetensors",
+            BaseModelType.Flux,
+        ),
+        (
+            PiDDecoder_Checkpoint_QwenImage_Config,
+            16,
+            "pid_1.5_qwenimage_1024_to_4096_4step_bf16.safetensors",
+            BaseModelType.QwenImage,
+        ),
+        (
+            PiDDecoder_Checkpoint_Flux2_Config,
+            32,
+            "pid_1.5_flux2_1024_to_4096_4step_bf16.safetensors",
+            BaseModelType.Flux2,
+        ),
+    ],
+)
+def test_a_v1_5_checkpoint_identifies_under_comfy_org_s_name(
+    config_class: type, latent_channels: int, file_name: str, base: BaseModelType
+) -> None:
+    """Comfy-Org ships the v1.5 decoders as single files named by input and output size; FLUX.2's is unpatchified
+    to 32 channels before its projection. Only the 2K-to-4K preset exists for v1.5, and the name says so."""
+    fields = {k: v for k, v in _OVERRIDE_FIELDS.items() if k != "base"}
+    state_dict = _pid_state_dict(latent_channels=latent_channels, version=PiDVersion.V1_5)
+    with TemporaryDirectory() as tmpdir:
+        mod = _mock_mod(Path(tmpdir), state_dict, file_name=file_name)
+        config = config_class.from_model_on_disk(mod, dict(fields))
+    assert config.base is base
+    assert config.variant is PiDDecoderVariantType.Res2kTo4k_Sr4x
 
-    The architecture check runs before the contract check so the diagnosis is the accurate one: a
-    v1.5 file is intact, and judged against the legacy contract it would be reported as a pile of
-    missing and unexpected keys rather than as the newer architecture it is.
-    """
+
+@pytest.mark.parametrize("latent_channels", [4, 128])
+def test_v1_5_has_no_sdxl_or_unpatchified_flux2_decoder(latent_channels: int) -> None:
+    with TemporaryDirectory() as tmpdir:
+        mod = _mock_mod(Path(tmpdir), _pid_state_dict(latent_channels=latent_channels, version=PiDVersion.V1_5))
+        with pytest.raises(InvalidMatchError, match=f"PiD v1.5 checkpoint has {latent_channels} latent channels"):
+            PiDDecoder_Checkpoint_FLUX_Config.from_model_on_disk(mod, dict(_OVERRIDE_FIELDS))
+
+
+def test_a_v1_checkpoint_at_v1_5_width_lacks_the_pit_injection() -> None:
+    """The width selects the v1.5 contract, and a v1 file widened to it is missing what v1.5 adds."""
     with TemporaryDirectory() as tmpdir:
         mod = _mock_mod(Path(tmpdir), _pid_state_dict(lq_hidden_dim=1024))
-        with pytest.raises(InvalidMatchError, match="lq_proj hidden dim 1024"):
+        with pytest.raises(InvalidMatchError, match="missing 5 of the weights required by PidNet"):
+            PiDDecoder_Checkpoint_FLUX_Config.from_model_on_disk(mod, dict(_OVERRIDE_FIELDS))
+
+
+@pytest.mark.parametrize(
+    "file_name",
+    ["pid_1.5_qwenimage_1024_to_4096_bf16.safetensors", "PiD_v1pt5_res2kto4k_sr4x_qwenimage_undistilled.pth"],
+)
+def test_a_v1_5_teacher_is_rejected_by_its_name(file_name: str) -> None:
+    """Teacher and 4-step student share every key and shape, and sampled with the student schedule a teacher
+    decodes to a degraded image without any error. Comfy-Org's teacher files lack `_4step`; NVIDIA's say
+    `undistilled`. The name is the only evidence, so it has to be heeded."""
+    with TemporaryDirectory() as tmpdir:
+        mod = _mock_mod(Path(tmpdir), _pid_state_dict(version=PiDVersion.V1_5), file_name=file_name)
+        with pytest.raises(InvalidMatchError, match="undistilled"):
+            PiDDecoder_Checkpoint_QwenImage_Config.from_model_on_disk(mod, dict(_OVERRIDE_FIELDS, base="qwen-image"))
+
+
+def test_a_v1_5_student_in_a_folder_named_like_a_comfy_file_is_accepted() -> None:
+    """Comfy-Org's teacher spelling is read off file names: a local install is identified before it moves, so its
+    parent is whatever folder the user keeps decoders in."""
+    with TemporaryDirectory() as tmpdir:
+        mod = _mock_mod(
+            Path(tmpdir),
+            _pid_state_dict(version=PiDVersion.V1_5),
+            dir_name="pid_1.5_decoders",
+            file_name="pid_1.5_qwenimage_1024_to_4096_4step_bf16.safetensors",
+        )
+        config = PiDDecoder_Checkpoint_QwenImage_Config.from_model_on_disk(
+            mod, dict(_OVERRIDE_FIELDS, base="qwen-image")
+        )
+    assert config.base is BaseModelType.QwenImage
+
+
+def test_a_v1_5_file_whose_name_names_no_preset_is_2k_to_4k() -> None:
+    """v1.5 exists only as 2K-to-4K, so a renamed FLUX.1 file must not take the v1 FLUX default of 2K."""
+    with TemporaryDirectory() as tmpdir:
+        mod = _mock_mod(Path(tmpdir), _pid_state_dict(version=PiDVersion.V1_5), file_name="decoder.safetensors")
+        config = PiDDecoder_Checkpoint_FLUX_Config.from_model_on_disk(mod, dict(_OVERRIDE_FIELDS))
+    assert config.variant is PiDDecoderVariantType.Res2kTo4k_Sr4x
+
+
+def test_an_lq_width_no_generation_has_is_rejected_as_an_architecture() -> None:
+    with TemporaryDirectory() as tmpdir:
+        mod = _mock_mod(Path(tmpdir), _pid_state_dict(lq_hidden_dim=768))
+        with pytest.raises(InvalidMatchError, match=r"lq_proj hidden dim 768; InvokeAI supports 512 \(v1\), 1024"):
             PiDDecoder_Checkpoint_FLUX_Config.from_model_on_disk(mod, dict(_OVERRIDE_FIELDS))
 
 
@@ -255,17 +343,19 @@ def _write_pid_checkpoint(root: Path, state_dict: dict[Any, object]) -> Path:
     return path
 
 
-def _real_pid_state_dict(lq_hidden_dim: int = 512, latent_channels: int = 16) -> dict[str, object]:
+def _real_pid_state_dict(
+    lq_hidden_dim: int | None = None, latent_channels: int = 16, version: PiDVersion = PiDVersion.V1
+) -> dict[str, object]:
     """`_pid_state_dict` with tensors that can actually be serialised.
 
     PidNet is ~5.5 GB in float32, so every weight is a zero-stride view onto one shared scalar: the
     shapes are the real ones, the file is ~50 KB, and `torch.save` deduplicates the storage.
     """
     scalar = torch.zeros(())
-    sd: dict[str, object] = {
-        f"{_NET_PREFIX}{k}": scalar.expand(shape) for k, shape in required_pid_net_shapes().items()
-    }
-    sd[f"{_NET_PREFIX}{_LATENT_PROJ_KEY}"] = scalar.expand(lq_hidden_dim, latent_channels, 3, 3)
+    contract = required_pid_net_shapes(version=version)
+    sd: dict[str, object] = {f"{_NET_PREFIX}{k}": scalar.expand(shape) for k, shape in contract.items()}
+    width = contract[_LATENT_PROJ_KEY][0] if lq_hidden_dim is None else lq_hidden_dim
+    sd[f"{_NET_PREFIX}{_LATENT_PROJ_KEY}"] = scalar.expand(width, latent_channels, 3, 3)
     return sd
 
 
@@ -291,14 +381,22 @@ class TestUnusableCheckpointIsNeverRegistered:
         return sd
 
     def _truncated_v1_5(self) -> dict[str, object]:
-        """Both wrong at once. The architecture check fires first, so this is the case where an
-        unsupported-but-not-fatal verdict would let a *truncated* file through to Unknown_Config."""
-        sd = _real_pid_state_dict(lq_hidden_dim=1024)
-        del sd[f"{_NET_PREFIX}lq_proj.output_heads.3.weight"]
+        """A v1.5 file is held to the v1.5 contract, down to the one weight only its PiT injection has."""
+        sd = _real_pid_state_dict(version=PiDVersion.V1_5)
+        del sd[f"{_NET_PREFIX}pit_lq_gate.log_alpha"]
         return sd
 
-    def _intact_v1_5(self) -> dict[str, object]:
-        return _real_pid_state_dict(lq_hidden_dim=1024)
+    def _unknown_architecture(self) -> dict[str, object]:
+        """Intact but for an LQ width no generation has: every config class would reject it for that reason."""
+        return _real_pid_state_dict(lq_hidden_dim=768)
+
+    def _int8_convrot_v1_5(self) -> dict[str, object]:
+        """Comfy-Org's `pid_1.5_*_int8_convrot` builds carry a scale and a marker beside each int8 weight. Loading
+        such a weight as the float parameter it replaces decodes garbage, so the file must not register."""
+        sd = _real_pid_state_dict(version=PiDVersion.V1_5)
+        sd[f"{_NET_PREFIX}patch_blocks.0.attn.qkv_x.weight_scale"] = torch.ones(())
+        sd[f"{_NET_PREFIX}patch_blocks.0.attn.qkv_x.comfy_quant"] = torch.zeros(28, dtype=torch.uint8)
+        return sd
 
     def _unsupported_latent_channels(self) -> dict[str, object]:
         return _real_pid_state_dict(latent_channels=32)
@@ -328,8 +426,9 @@ class TestUnusableCheckpointIsNeverRegistered:
         [
             ("_partial", "missing 456 of the weights"),
             ("_missing_backbone_weight", "missing 1 of the weights required by PidNet"),
-            ("_truncated_v1_5", "lq_proj hidden dim 1024"),
-            ("_intact_v1_5", "lq_proj hidden dim 1024"),
+            ("_truncated_v1_5", "missing 1 of the weights required by PidNet"),
+            ("_unknown_architecture", "lq_proj hidden dim 768"),
+            ("_int8_convrot_v1_5", "2 keys PidNet does not expect"),
             ("_unsupported_latent_channels", "32 latent channels"),
             ("_malformed_discriminator", "malformed lq_proj.latent_proj.0.weight"),
             ("_bare_with_a_non_string_key", "2 keys PidNet does not expect"),
@@ -347,10 +446,11 @@ class TestUnusableCheckpointIsNeverRegistered:
         assert result.invalid_matches
         assert expected_reason in str(result.invalid_matches[0])
 
-    def test_a_valid_checkpoint_still_identifies(self) -> None:
-        """The counterweight: none of the above may make a real decoder harder to install."""
+    @pytest.mark.parametrize("version", list(PiDVersion))
+    def test_a_valid_checkpoint_still_identifies(self, version: PiDVersion) -> None:
+        """The counterweight: none of the above may make a real decoder of either generation harder to install."""
         with TemporaryDirectory() as tmpdir:
-            path = _write_pid_checkpoint(Path(tmpdir), _real_pid_state_dict())
+            path = _write_pid_checkpoint(Path(tmpdir), _real_pid_state_dict(version=version))
             result = ModelConfigFactory.from_model_on_disk(path, allow_unknown=True)
 
         assert result.config is not None
