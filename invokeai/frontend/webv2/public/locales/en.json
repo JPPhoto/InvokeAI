@@ -267,6 +267,7 @@
       "decrementDescription": "Use successive seeds, decreasing by 1."
     },
     "newSeed": "New seed",
+    "shuffle": "Shuffle",
     "seedNextBatch": "Next batch: {{seed}}",
     "seedNextBatchRange": "Next batch: {{first}} → {{last}}",
     "decreaseValue": "Decrease value",

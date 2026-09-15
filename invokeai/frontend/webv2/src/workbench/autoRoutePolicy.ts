@@ -98,6 +98,7 @@ const GRAPH_EDIT_CONFIDENCE = {
   setFormElementContent: false,
   setMetadata: false,
   setNodeFieldShowDescription: false,
+  setNodeFieldShowShuffle: false,
   setNodeIsIntermediate: false,
   setNodeIsOpen: false,
   setNodeLabel: false,

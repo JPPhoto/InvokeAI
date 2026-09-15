@@ -1,3 +1,5 @@
+import { SEED_MAX } from '@platform/core/seed';
+
 import type { FieldInputTemplate, FieldType } from './types';
 
 /**
@@ -50,6 +52,49 @@ export const cloneWorkflowFieldDefault = (template: FieldInputTemplate): unknown
 
 export const isWorkflowFieldValueDefault = (template: FieldInputTemplate, value: unknown): boolean => {
   if (value === template.default) {
+/** Numeric fields whose linear-form element can show a randomize button. */
+export const isShuffleableField = (template: FieldInputTemplate): boolean =>
+  (template.type.name === 'IntegerField' || template.type.name === 'FloatField') && isDirectInputField(template);
+
+const countDecimals = (value: number): number => {
+  const [, fraction = ''] = String(value).split('.');
+
+  return fraction.length;
+};
+
+/** A random value inside the template's bounds, snapped to its step; unbounded ends default to 0…SEED_MAX. */
+export const getRandomWorkflowFieldValue = (template: FieldInputTemplate, random = Math.random): number => {
+  const isInteger = template.type.name === 'IntegerField';
+  const step = template.multipleOf ?? (isInteger ? 1 : 0);
+  const { exclusiveMaximum, exclusiveMinimum, maximum, minimum } = template;
+
+  if (step <= 0) {
+    const min = minimum ?? exclusiveMinimum ?? 0;
+    const max = maximum ?? exclusiveMaximum ?? SEED_MAX;
+
+    return min + random() * (max - min);
+  }
+
+  // Draw among the step multiples that lie inside the bounds (exclusive ends excluded), so the
+  // result is always valid.
+  const decimals = countDecimals(step);
+  const first =
+    minimum !== null
+      ? Math.ceil(minimum / step)
+      : exclusiveMinimum !== null
+        ? Math.floor(exclusiveMinimum / step) + 1
+        : 0;
+  const last =
+    maximum !== null
+      ? Math.floor(maximum / step)
+      : exclusiveMaximum !== null
+        ? Math.ceil(exclusiveMaximum / step) - 1
+        : Math.floor(SEED_MAX / step);
+  const index = first + Math.floor(random() * (last - first + 1));
+
+  return Number((Math.min(last, index) * step).toFixed(decimals));
+};
+
     return true;
   }
 

@@ -9,6 +9,8 @@ import {
   isModelFieldType,
   isWorkflowFieldValueValid,
   toLoraFieldCollectionList,
+  getRandomWorkflowFieldValue,
+  isShuffleableField,
 } from './fields';
 
 const single = (name: string): FieldType => ({ batch: false, cardinality: 'SINGLE', name });
@@ -187,5 +189,51 @@ describe('workflow field type helpers', () => {
     expect(isModelFieldType(single('UNetField'))).toBe(true);
     expect(isModelFieldType(single('CLIPField'))).toBe(true);
     expect(isModelFieldType(single('ImageField'))).toBe(false);
+  });
+});
+
+describe('getRandomWorkflowFieldValue', () => {
+  it('stays inside the template bounds and snaps to the step', () => {
+    const template = input({ maximum: 10, minimum: 2, multipleOf: 2, type: single('IntegerField') });
+
+    expect(getRandomWorkflowFieldValue(template, () => 0)).toBe(2);
+    expect(getRandomWorkflowFieldValue(template, () => 0.999)).toBe(10);
+    expect(getRandomWorkflowFieldValue(template, () => 0.55)).toBe(6);
+
+    const odd = input({ maximum: 9, minimum: 0, multipleOf: 2, type: single('IntegerField') });
+
+    expect(getRandomWorkflowFieldValue(odd, () => 0.999)).toBe(8);
+
+    const decimal = input({ maximum: 1, minimum: 0, multipleOf: 0.1, type: single('FloatField') });
+
+    expect(getRandomWorkflowFieldValue(decimal, () => 0.3)).toBe(0.3);
+  });
+
+  it('respects exclusive bounds for integers and keeps floats unrounded', () => {
+    const integer = input({ exclusiveMaximum: 5, exclusiveMinimum: 0, type: single('IntegerField') });
+
+    expect(getRandomWorkflowFieldValue(integer, () => 0)).toBe(1);
+    expect(getRandomWorkflowFieldValue(integer, () => 0.999)).toBe(4);
+
+    const float = input({ maximum: 1, minimum: 0, type: single('FloatField') });
+
+    expect(getRandomWorkflowFieldValue(float, () => 0.25)).toBe(0.25);
+
+    const steppedExclusive = input({
+      exclusiveMaximum: 1,
+      exclusiveMinimum: 0,
+      multipleOf: 0.5,
+      type: single('FloatField'),
+    });
+
+    expect(getRandomWorkflowFieldValue(steppedExclusive, () => 0)).toBe(0.5);
+    expect(getRandomWorkflowFieldValue(steppedExclusive, () => 0.999)).toBe(0.5);
+  });
+
+  it('shuffles only direct numeric fields', () => {
+    expect(isShuffleableField(input({ type: single('IntegerField') }))).toBe(true);
+    expect(isShuffleableField(input({ type: single('FloatField') }))).toBe(true);
+    expect(isShuffleableField(input({ input: 'connection', type: single('IntegerField') }))).toBe(false);
+    expect(isShuffleableField(input())).toBe(false);
   });
 });

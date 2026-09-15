@@ -305,6 +305,16 @@ describe('projectGraphReducer', () => {
     const updatedField = next.form.elements[field?.id ?? ''];
 
     expect(updatedField?.type === 'node-field' && updatedField.data.showDescription).toBe(true);
+
+    next = projectGraphReducer(next, {
+      elementId: field?.id ?? '',
+      showShuffle: true,
+      type: 'setNodeFieldShowShuffle',
+    });
+
+    const shuffledField = next.form.elements[field?.id ?? ''];
+
+    expect(shuffledField?.type === 'node-field' && shuffledField.data.showShuffle).toBe(true);
   });
 
   it('updates metadata via patch', () => {

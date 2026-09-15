@@ -172,7 +172,7 @@ describe('flowAdapters identity preservation', () => {
         elements: {
           ...doc.form.elements,
           'field-1': {
-            data: { fieldIdentifier: { fieldName: 'a', nodeId: 'b' }, showDescription: false },
+            data: { fieldIdentifier: { fieldName: 'a', nodeId: 'b' }, showDescription: false, showShuffle: false },
             id: 'field-1',
             parentId: doc.form.rootElementId,
             type: 'node-field' as const,
