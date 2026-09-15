@@ -1221,28 +1221,16 @@ class Qwen3EncoderCheckpointLoader(ModelLoader):
 
         # Load the state dict from safetensors file
         sd = load_file(model_path)
-
-        # Handle ComfyUI quantized checkpoints
-        # ComfyUI stores quantized weights with accompanying scale factors:
-        # - layer.weight: quantized data (FP8)
-        # - layer.weight_scale: scale factor (FP32 scalar)
-        # Dequantization formula: dequantized = weight.to(dtype) * weight_scale
-        # Reference: https://github.com/Comfy-Org/ComfyUI/blob/master/QUANTIZATION.md
         original_key_count = len(sd)
-        dequantized_count = _fold_comfy_scaled_weights(sd, model_dtype)
 
-        if dequantized_count > 0:
-            logger.info(f"Dequantized {dequantized_count} ComfyUI quantized weights")
-
-        # Filter out ComfyUI quantization metadata keys (comfy_quant, weight_scale)
-        # These are no longer needed after dequantization
-        comfy_metadata_keys = [k for k in sd.keys() if is_scale_metadata_key(k)]
-        for k in comfy_metadata_keys:
-            del sd[k]
-        if comfy_metadata_keys:
-            logger.info(f"Filtered out {len(comfy_metadata_keys)} ComfyUI quantization metadata keys")
-
-        logger.info(f"Loaded state dict with {len(sd)} keys (originally {original_key_count})")
+        # Comfy's fp4_mixed encoders keep most projections in nvfp4, beside scaled fp8. Take those out before
+        # anything below reads the side channel: the fold pairs every `weight_scale` with its weight and would
+        # stretch nvfp4's block scales over the packed codes, and the cast further down would widen them.
+        nvfp4_payloads = pop_nvfp4_layers(
+            sd, header_layers=parse_quantization_metadata(read_safetensors_metadata(model_path, logger))
+        )
+        # `lm_head` is tied to the embeddings below, which replaces the weight a packed module would hold.
+        nvfp4_payloads.pop("lm_head", None)
 
         # Count the number of layers by looking at layer keys
         layer_count = 0
@@ -1293,18 +1281,26 @@ class Qwen3EncoderCheckpointLoader(ModelLoader):
                 f"Unknown Qwen3 variant: embed_hidden_size={embed_hidden_size}, layers={layer_count}. "
                 "Attempting to detect configuration from weights..."
             )
-            q_proj_weight = sd.get("model.layers.0.self_attn.q_proj.weight")
-            k_proj_weight = sd.get("model.layers.0.self_attn.k_proj.weight")
-            gate_proj_weight = sd.get("model.layers.0.mlp.gate_proj.weight")
 
-            if q_proj_weight is None or k_proj_weight is None or gate_proj_weight is None:
+            def output_rows(path: str) -> int | None:
+                # A packed layer's weight has left `sd`; its payload knows the rows.
+                if path in nvfp4_payloads:
+                    return nvfp4_payloads[path].out_features
+                weight = sd.get(f"{path}.weight")
+                return None if weight is None else weight.shape[0]
+
+            q_rows = output_rows("model.layers.0.self_attn.q_proj")
+            k_rows = output_rows("model.layers.0.self_attn.k_proj")
+            gate_rows = output_rows("model.layers.0.mlp.gate_proj")
+
+            if q_rows is None or k_rows is None or gate_rows is None:
                 raise ValueError("Could not find attention/mlp weights to determine configuration")
 
             hidden_size = embed_hidden_size
             head_dim = 128
-            num_attention_heads = q_proj_weight.shape[0] // head_dim
-            num_kv_heads = k_proj_weight.shape[0] // head_dim
-            intermediate_size = gate_proj_weight.shape[0]
+            num_attention_heads = q_rows // head_dim
+            num_kv_heads = k_rows // head_dim
+            intermediate_size = gate_rows
             max_position_embeddings = 40960
 
         logger.info(
@@ -1331,18 +1327,52 @@ class Qwen3EncoderCheckpointLoader(ModelLoader):
             torch_dtype=model_dtype,
         )
 
-        # Handle memory management
-        new_sd_size = sum([ten.nelement() * model_dtype.itemsize for ten in sd.values()])
-        self._ram_cache.make_room(new_sd_size)
+        # Use Qwen3ForCausalLM - the correct model class for Z-Image text encoder
+        # Use init_empty_weights for fast model creation, then load weights with assign=True. Built before the
+        # reservation, which depends on its modules: they decide which nvfp4 layers stay packed.
+        with accelerate.init_empty_weights():
+            model = Qwen3ForCausalLM(qwen_config)
+        skip_patterns = _model_declared_skip_patterns(model)
+
+        # Handle memory management before anything below widens a weight: the scaled-fp8 fold turns every quantized
+        # layer into the compute dtype, and the base loader reserved only the file size. One reservation for what
+        # the state dict ends up holding -- every tensor but the scale metadata at the compute dtype, plus the nvfp4
+        # layers as they will be held -- since `make_room` makes that much room rather than adding to an earlier one.
+        new_sd_size = sum(
+            tensor.nelement() * model_dtype.itemsize for key, tensor in sd.items() if not is_scale_metadata_key(key)
+        )
+        self._ram_cache.make_room(
+            new_sd_size + predict_nvfp4_install_size(model, nvfp4_payloads, model_dtype, skip_patterns)
+        )
+
+        # Handle ComfyUI quantized checkpoints
+        # ComfyUI stores quantized weights with accompanying scale factors:
+        # - layer.weight: quantized data (FP8)
+        # - layer.weight_scale: scale factor (FP32 scalar)
+        # Dequantization formula: dequantized = weight.to(dtype) * weight_scale
+        # Reference: https://github.com/Comfy-Org/ComfyUI/blob/master/QUANTIZATION.md
+        dequantized_count = _fold_comfy_scaled_weights(sd, model_dtype)
+
+        if dequantized_count > 0:
+            logger.info(f"Dequantized {dequantized_count} ComfyUI quantized weights")
+
+        # Filter out ComfyUI quantization metadata keys (comfy_quant, weight_scale)
+        # These are no longer needed after dequantization
+        comfy_metadata_keys = [k for k in sd.keys() if is_scale_metadata_key(k)]
+        for k in comfy_metadata_keys:
+            del sd[k]
+        if comfy_metadata_keys:
+            logger.info(f"Filtered out {len(comfy_metadata_keys)} ComfyUI quantization metadata keys")
+
+        logger.info(f"Loaded state dict with {len(sd)} keys (originally {original_key_count})")
 
         # Convert to target dtype
         for k in sd.keys():
             sd[k] = sd[k].to(model_dtype)
 
-        # Use Qwen3ForCausalLM - the correct model class for Z-Image text encoder
-        # Use init_empty_weights for fast model creation, then load weights with assign=True
-        with accelerate.init_empty_weights():
-            model = Qwen3ForCausalLM(qwen_config)
+        if nvfp4_payloads:
+            packed = install_nvfp4_layers(model, sd, nvfp4_payloads, model_dtype, skip_patterns)
+            logger.info(f"Kept {packed} of {len(nvfp4_payloads)} nvfp4 layer(s) packed.")
 
         # Load the text model weights from checkpoint
         # assign=True replaces meta tensors with real ones from state dict

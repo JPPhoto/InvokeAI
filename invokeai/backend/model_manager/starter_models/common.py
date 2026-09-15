@@ -314,6 +314,14 @@ z_image_qwen3_encoder_quantized = StarterModel(
     format=ModelFormat.GGUFQuantized,
 )
 
+z_image_qwen3_encoder_fp4 = StarterModel(
+    name="Z-Image Qwen3 Text Encoder (FP4 mixed)",
+    base=BaseModelType.Any,
+    source="https://huggingface.co/Comfy-Org/z_image/resolve/main/split_files/text_encoders/qwen_3_4b_fp4_mixed.safetensors",
+    description="Comfy-Org's nvfp4/fp8-mixed Qwen3 4B text encoder for Z-Image. Its nvfp4 layers stay packed, about 4.3GB once loaded. ~3.5GB download",
+    type=ModelType.Qwen3Encoder,
+)
+
 # region Krea-2
 # Standalone Qwen3-VL text encoder used by Krea-2 (distinct from the Qwen2.5-VL encoder above). Pair
 # with single-file / GGUF Krea-2 transformers, which ship only the transformer. The Qwen-Image VAE

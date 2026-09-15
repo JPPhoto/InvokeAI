@@ -52,6 +52,7 @@ from invokeai.backend.model_manager.starter_models.common import (
     t5_gguf_q6_k_encoder,
     wan_22_t5_encoder,
     z_image_qwen3_encoder,
+    z_image_qwen3_encoder_fp4,
     z_image_qwen3_encoder_quantized,
 )
 from invokeai.backend.model_manager.starter_models.ernie_image import (
@@ -244,6 +245,7 @@ from invokeai.backend.model_manager.starter_models.z_image import (
     z_image_controlnet_tile,
     z_image_controlnet_union,
     z_image_turbo,
+    z_image_turbo_nvfp4,
     z_image_turbo_q8,
     z_image_turbo_quantized,
     z_image_turbo_sdnq,
@@ -383,9 +385,11 @@ STARTER_MODELS: list[StarterModel] = [
     z_image_turbo,
     z_image_turbo_quantized,
     z_image_turbo_q8,
+    z_image_turbo_nvfp4,
     z_image_turbo_sdnq,
     z_image_qwen3_encoder,
     z_image_qwen3_encoder_quantized,
+    z_image_qwen3_encoder_fp4,
     z_image_controlnet_union,
     z_image_controlnet_tile,
     ernie_image,
