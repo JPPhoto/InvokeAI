@@ -534,6 +534,39 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v2/models/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Architecture Capabilities
+         * @description What each model architecture can generate, and which generation features it supports.
+         *
+         *     A static table, the same for every install and every user, derived from what the architectures
+         *     declare under `invokeai/backend/architectures/defs/`. Fetch it once and join it against model
+         *     records locally: look up `(base, variant)`, fall back to `(base, null)`.
+         *
+         *     Deliberately not a field on the model records themselves — it is the same for every model of an
+         *     architecture, and putting it there would add these fields to all 115 config schemas.
+         *
+         *     Authenticated like every other route here even though the response holds nothing user-specific:
+         *     the allowlist for public routes is short and deliberate, and this is not a reason to lengthen it.
+         *
+         *     Declared `def`, not `async def`: it awaits nothing, so FastAPI runs it in a threadpool instead of
+         *     on the event loop. See docs/contributing/blocking-work-in-api-routes.
+         */
+        get: operations["list_architecture_capabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v2/models/": {
         parameters: {
             query?: never;
@@ -4532,7 +4565,7 @@ export type components = {
         };
         /**
          * Image to Latents - Anima
-         * @description Generates latents from an image using the Anima VAE (supports Wan 2.1 and FLUX VAE).
+         * @description Generates latents from an image using the Anima VAE (the Wan 2.1 VAE, in either layout).
          */
         AnimaImageToLatentsInvocation: {
             /**
@@ -4699,10 +4732,7 @@ export type components = {
         };
         /**
          * Latents to Image - Anima
-         * @description Generates an image from latents using the Anima VAE.
-         *
-         *     Supports the Wan 2.1 QwenImage VAE (AutoencoderKLWan) with explicit
-         *     latent denormalization, and FLUX VAE as fallback.
+         * @description Generates an image from latents using the Anima VAE (the Wan 2.1 VAE, in either layout).
          */
         AnimaLatentsToImageInvocation: {
             /**
@@ -4880,7 +4910,7 @@ export type components = {
          *     Anima uses:
          *     - Transformer: Cosmos Predict2 DiT + LLM Adapter (from single-file checkpoint)
          *     - Qwen3 Encoder: Qwen3 0.6B (standalone single-file)
-         *     - VAE: AutoencoderKLQwenImage / Wan 2.1 VAE (standalone single-file or FLUX VAE)
+         *     - VAE: AutoencoderKLQwenImage / Wan 2.1 VAE (standalone single-file)
          *
          *     The T5-XXL tokenizer needed for LLM Adapter token IDs is bundled in the package,
          *     so no T5-XXL encoder model needs to be installed.
@@ -4910,7 +4940,7 @@ export type components = {
             model: components["schemas"]["ModelIdentifierField"];
             /**
              * VAE
-             * @description Standalone VAE model. Anima uses a Wan 2.1 / QwenImage VAE (16-channel). A FLUX VAE can also be used as a compatible fallback.
+             * @description Standalone VAE model. Anima uses a Wan 2.1 / QwenImage VAE (16-channel).
              */
             vae_model: components["schemas"]["ModelIdentifierField"];
             /**
@@ -5126,6 +5156,125 @@ export type components = {
              * @constant
              */
             type: "apply_mask_to_image";
+        };
+        /**
+         * ArchitectureCapabilities
+         * @description One row of the table.
+         */
+        ArchitectureCapabilities: {
+            base: components["schemas"]["BaseModelType"];
+            /**
+             * Variant
+             * @description Null for the architecture's own row. A variant row overrides it.
+             */
+            variant?: string | null;
+            features: components["schemas"]["ArchitectureFeatures"];
+            /** @description Recommended generation parameters, if the architecture has any. */
+            defaults?: components["schemas"]["MainModelDefaultSettings"] | null;
+            /** @description Null where the architecture declares no VAE compatibility beyond its own base. */
+            vae?: components["schemas"]["ArchitectureVae"] | null;
+        };
+        /**
+         * ArchitectureFeatures
+         * @description What a UI may offer for this architecture.
+         */
+        ArchitectureFeatures: {
+            negative_prompt: components["schemas"]["NegativePromptPolicy"];
+            /**
+             * Dimension Grid
+             * @description Width and height must be a multiple of this. A variant row may carry its own.
+             */
+            dimension_grid: number;
+            /**
+             * Guidance Label
+             * @description What to call the guidance slider: 'CFG' or 'Guidance'.
+             */
+            guidance_label: string;
+            /**
+             * Guidance Min
+             * @description Lowest guidance value the denoise node accepts; a smaller one fails at enqueue.
+             */
+            guidance_min: number;
+            /**
+             * Guidance Max
+             * @description Highest guidance value the denoise node accepts; null means it enforces no ceiling.
+             */
+            guidance_max?: number | null;
+            /**
+             * Scheduler Set
+             * @description Which scheduler family to offer; null means no choice.
+             */
+            scheduler_set?: ("standard" | "flow" | "flow-no-lcm" | "anima") | null;
+            /**
+             * Scheduler Applies To Graph
+             * @default false
+             */
+            scheduler_applies_to_graph?: boolean;
+            /**
+             * Control Kinds
+             * @description Sorted.
+             */
+            control_kinds?: ("controlnet" | "t2i_adapter" | "control_lora" | "z_image_control")[];
+            /**
+             * Max Reference Images
+             * @default 0
+             */
+            max_reference_images?: number;
+            /**
+             * Reference Images Require Variant
+             * @description If set, reference images are only accepted for models of this variant.
+             */
+            reference_images_require_variant?: string | null;
+            /**
+             * Supports Regional Guidance
+             * @default false
+             */
+            supports_regional_guidance?: boolean;
+            /**
+             * Regional Negative
+             * @description Whether a region's negative prompt is masked, rather than applied globally.
+             * @default false
+             */
+            regional_negative?: boolean;
+            /** Clip Skip Max */
+            clip_skip_max?: number | null;
+            /**
+             * Supports Seamless
+             * @default false
+             */
+            supports_seamless?: boolean;
+            /**
+             * Supports Cfg Rescale
+             * @default false
+             */
+            supports_cfg_rescale?: boolean;
+            /**
+             * Sd Vae Override
+             * @default false
+             */
+            sd_vae_override?: boolean;
+            /**
+             * Color Compensation
+             * @default false
+             */
+            color_compensation?: boolean;
+            /**
+             * Vae Precision
+             * @default false
+             */
+            vae_precision?: boolean;
+        };
+        /**
+         * ArchitectureVae
+         * @description Which VAEs an architecture's decode accepts, beyond its own base.
+         *
+         *     Served because the clients keep their own copy of this and it drifts: widening a backend list
+         *     without the picker leaves a VAE that loads but cannot be chosen. A variant row carries its own
+         *     list where its decoder differs -- Wan TI2V-5B takes the 48-channel VAE, A14B the 16-channel one.
+         */
+        ArchitectureVae: {
+            /** Accepted */
+            accepted: components["schemas"]["VaeAcceptance"][];
         };
         /**
          * BaseMetadata
@@ -13340,7 +13489,7 @@ export type components = {
             model: components["schemas"]["ModelIdentifierField"];
             /**
              * VAE
-             * @description Standalone VAE model. Flux2 Klein uses the same VAE as FLUX (16-channel). If not provided, VAE will be loaded from the Qwen3 Source model.
+             * @description Standalone VAE model (AutoencoderKLFlux2, 32-channel). If not provided, VAE will be loaded from the Qwen3 Source model.
              * @default null
              */
             vae_model?: components["schemas"]["ModelIdentifierField"] | null;
@@ -17081,7 +17230,7 @@ export type components = {
             base: "sdxl";
         };
         /**
-         * Ideal Size - SD1.5, SDXL
+         * Ideal Size
          * @description Calculates the ideal size for generation to avoid duplication
          */
         IdealSizeInvocation: {
@@ -32832,6 +32981,20 @@ export type components = {
              */
             type: "mul";
         };
+        /** NegativePromptPolicy */
+        NegativePromptPolicy: {
+            /**
+             * Visible
+             * @description Whether to show a negative prompt field at all.
+             */
+            visible: boolean;
+            /**
+             * Usage
+             * @description 'always', 'cfg-gated' (only above CFG 1), or 'never'.
+             * @enum {string}
+             */
+            usage: "always" | "cfg-gated" | "never";
+        };
         /** NodeFieldValue */
         NodeFieldValue: {
             /**
@@ -43365,6 +43528,18 @@ export type components = {
              */
             latent_channels: 16 | 48;
         };
+        /**
+         * VaeAcceptance
+         * @description One VAE this architecture's decode accepts.
+         */
+        VaeAcceptance: {
+            base: components["schemas"]["BaseModelType"];
+            /**
+             * Latent Channels
+             * @description Null unless the base ships VAEs of more than one latent width; only wan does.
+             */
+            latent_channels?: number | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -47520,6 +47695,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_architecture_capabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What each model architecture supports */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchitectureCapabilities"][];
                 };
             };
         };

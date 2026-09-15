@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from invokeai.app.invocations.minimax_h3_hybrid_overlay import MiniMaxH3HybridOverlayInvocation
+from invokeai.app.invocations.minimax_h3.minimax_h3_hybrid_overlay import MiniMaxH3HybridOverlayInvocation
 from invokeai.app.invocations.model import LoRAField, MiniMaxH3TransformerField, ModelIdentifierField
 from invokeai.backend.model_manager.configs.lora import LoRA_LyCORIS_MiniMaxH3_Config
 from invokeai.backend.model_manager.configs.main import (

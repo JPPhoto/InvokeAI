@@ -9,7 +9,7 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from invokeai.app.invocations.minimax_h3_denoise import MiniMaxH3DenoiseInvocation
+from invokeai.app.invocations.minimax_h3.minimax_h3_denoise import MiniMaxH3DenoiseInvocation
 from invokeai.app.invocations.model import MiniMaxH3AdaLNOverlayField, MiniMaxH3TransformerField, ModelIdentifierField
 from invokeai.backend.minimax_h3.adaln_overlay import MiniMaxH3AdaLNOverlay
 from invokeai.backend.model_manager.configs.lora import LoRA_LyCORIS_MiniMaxH3_Config
