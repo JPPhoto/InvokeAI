@@ -34,7 +34,7 @@ const createPendingQueueItem = (): QueueItem => ({
       positivePromptNodeId: 'positive_prompt',
       seed: 0,
       seedNodeId: 'seed',
-      shouldRandomizeSeed: false,
+      seedStep: 0,
     },
     destination: 'canvas',
     filterIntermediateResults: false,
@@ -122,6 +122,82 @@ describe('queue runtime', () => {
 
     expect(createQueueItemBackendSubmission({ id: 'project-1' }, queueItem)).toEqual({
       error: 'Queue item is missing a compiled backend submission.',
+      kind: 'invalid',
+    });
+  });
+
+  it('replays items queued before seed modes with the step their random toggle implied', () => {
+    const asLegacy = (shouldRandomizeSeed: boolean) => {
+      const queueItem = createPendingQueueItem();
+      const submission = queueItem.snapshot.backendSubmission as Record<string, unknown>;
+      delete submission.seedStep;
+      submission.shouldRandomizeSeed = shouldRandomizeSeed;
+      return queueItem;
+    };
+
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asLegacy(true))).toMatchObject({
+      kind: 'generate',
+      request: { legacySeedPlan: true, seedStep: 1 },
+    });
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asLegacy(false))).toMatchObject({
+      kind: 'generate',
+      request: { legacySeedPlan: true, seedStep: 0 },
+    });
+    // An item that already carries a step never takes the legacy expansion, even if a
+    // stale toggle rides along beside it.
+    const withBoth = createPendingQueueItem();
+    (withBoth.snapshot.backendSubmission as Record<string, unknown>).shouldRandomizeSeed = true;
+
+    for (const queueItem of [createPendingQueueItem(), withBoth]) {
+      const { request } = createQueueItemBackendSubmission({ id: 'project-1' }, queueItem) as { request: object };
+
+      expect(request).not.toHaveProperty('legacySeedPlan');
+      expect(request).toMatchObject({ seedStep: 0 });
+    }
+    expect(
+      (createQueueItemBackendSubmission({ id: 'project-1' }, asLegacy(false)) as { request: object }).request
+    ).not.toHaveProperty('shouldRandomizeSeed');
+  });
+
+  it('replays workflow seeds as recorded and rejects records the graph cannot honour', () => {
+    const asWorkflow = (seeds: unknown) => {
+      const queueItem = createPendingQueueItem();
+      queueItem.snapshot.backendSubmission = {
+        batchCount: 3,
+        graph: { edges: [], id: 'backend-graph', nodes: { noise: { id: 'noise', seed: 7, type: 'noise' } } },
+        kind: 'workflow',
+        ...(seeds === undefined ? {} : { seeds: seeds as never }),
+      };
+      queueItem.snapshot.sourceId = 'workflow';
+      return queueItem;
+    };
+    const seed = { fieldName: 'seed', nodeId: 'noise', seed: 7, seedStep: 1 };
+    const invalid = { error: 'Queue item has malformed workflow seed metadata.', kind: 'invalid' };
+
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([seed]))).toMatchObject({
+      kind: 'workflow',
+      request: { batchCount: 3, seeds: [seed] },
+    });
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow(undefined))).toMatchObject({
+      kind: 'workflow',
+    });
+    // Out of range, a step the plan never emits, a node the graph lost, and the same field twice.
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([{ ...seed, seed: -1 }]))).toEqual(invalid);
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([{ ...seed, seedStep: 0 }]))).toEqual(
+      invalid
+    );
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([{ ...seed, nodeId: 'gone' }]))).toEqual(
+      invalid
+    );
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([seed, seed]))).toEqual(invalid);
+  });
+
+  it('rejects a generate item that records neither a seed step nor the legacy toggle', () => {
+    const queueItem = createPendingQueueItem();
+    delete (queueItem.snapshot.backendSubmission as Record<string, unknown>).seedStep;
+
+    expect(createQueueItemBackendSubmission({ id: 'project-1' }, queueItem)).toEqual({
+      error: 'Queue item has malformed generate submission metadata.',
       kind: 'invalid',
     });
   });
