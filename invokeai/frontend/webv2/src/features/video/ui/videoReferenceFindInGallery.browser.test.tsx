@@ -104,12 +104,19 @@ const render = async (): Promise<void> => {
 };
 
 /**
- * Park the cursor clear of the harness. The runner's pointer is stationary at
- * the viewport origin and this list renders into the top-left corner, so the
- * first card's thumbnail sits under it — and a hover badge whose whole contract
- * is "hidden until this thumbnail is hovered" is then revealed before the test
- * has touched anything. Mirrors `resetPointerAndScroll` in the rebalance-bars
- * suite, which hit the same stationary cursor.
+ * Park the cursor clear of the harness, BEFORE anything renders. The runner's
+ * pointer is stationary at the viewport origin and this list renders into the
+ * top-left corner, so the first card's thumbnail sits under it — and a hover
+ * badge whose whole contract is "hidden until this thumbnail is hovered" is
+ * then revealed before the test has touched anything. Mirrors
+ * `resetPointerAndScroll` in the rebalance-bars suite, which hit the same
+ * stationary cursor.
+ *
+ * Parking first, rather than after mounting, is what keeps the resting state
+ * readable: un-hovering something already on screen starts the reveal's
+ * fade-out, and the resting opacity then answers for where that animation has
+ * got to. A badge mounted un-hovered has no previous value to transition from,
+ * so it is simply at rest.
  */
 const parkPointer = async (): Promise<void> => {
   const parking = document.createElement('div');
@@ -152,19 +159,22 @@ describe('video reference find-in-gallery badges', () => {
   });
 
   it('keeps the badge out of the way until its own thumbnail is hovered or focused', async () => {
-    await render();
     await parkPointer();
+    await render();
 
     // Each badge is scoped to its own thumbnail's `.group`, which is the whole
     // mechanism that makes it a hover overlay rather than permanent chrome. A
     // mouse hover cannot be synthesised, but focus-within comes from the same
     // ancestor, so it proves the scoping either way.
     //
-    // Read through `pointer-events` rather than `opacity`: the reveal sets both,
-    // under the same selector, but only opacity is transitioned — so opacity
-    // answers for where the animation has got to, while pointer-events answers
-    // for which badge the CSS considers revealed. That is the actual claim here,
-    // and it is true the instant focus lands rather than a few frames later.
+    // The focus sweep below reads `pointer-events` rather than `opacity`: the
+    // reveal sets both, under the same selector, but only opacity is
+    // transitioned — so opacity answers for where the animation has got to,
+    // while pointer-events answers for which badge the CSS considers revealed.
+    // That is the actual claim, and it is true the instant focus lands rather
+    // than a few frames later. Opacity is still worth asserting at rest, where
+    // nothing is animating: it is what makes the badge invisible rather than
+    // merely inert.
     const badges = [...findButtons('still.png'), ...findButtons('clip.mp4')];
     const revealed = () => badges.map((button) => getComputedStyle(button).pointerEvents);
 
