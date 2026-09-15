@@ -107,8 +107,9 @@ const edgeTypes: EdgeTypes = {
  * document change (undo, import, field edits), while transient view state
  * (selection, in-flight drags, the active tool) lives in local component state.
  */
-/** Snap spacing matches the background dot grid. */
-const SNAP_GRID: [number, number] = [24, 24];
+// 25px matches v6 so workflows aligned there stay on the grid here.
+const GRID_SIZE = 25;
+const SNAP_GRID: [number, number] = [GRID_SIZE, GRID_SIZE];
 
 const DELETE_KEY_CODES = ['Backspace', 'Delete'];
 
@@ -1081,7 +1082,7 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
         <Background
           bgColor="var(--xy-background-color)"
           color="var(--wb-flow-grid)"
-          gap={24}
+          gap={GRID_SIZE}
           id={`workflow-grid-${backgroundId}`}
           size={1.5}
           variant={BackgroundVariant.Dots}
