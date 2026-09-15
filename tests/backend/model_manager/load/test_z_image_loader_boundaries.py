@@ -183,3 +183,67 @@ def test_a_precision_sensitive_layer_is_not_left_int8(monkeypatch, tmp_path) -> 
     # And the reservation covers the widened layer at its post-split width, not at one byte.
     (reserved,), _ = loader._ram_cache.make_room.call_args
     assert reserved >= sensitive.nelement() * 4 + ordinary_q.nelement()
+
+
+class _TinyAttention(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.to_q = torch.nn.Linear(64, 128, bias=False)
+        self.to_k = torch.nn.Linear(64, 128, bias=False)
+        self.to_v = torch.nn.Linear(64, 128, bias=False)
+
+
+class _TinyAttentionBlock(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attention = _TinyAttention()
+
+
+class _TinyNativeZImage(torch.nn.Module):
+    """What the native-to-diffusers conversion makes of a checkpoint with a fused `attention.qkv`."""
+
+    def __init__(self, **_kwargs) -> None:
+        super().__init__()
+        self.all_x_embedder = torch.nn.ModuleDict({"2-1": torch.nn.Linear(4, 4, bias=False)})
+        self.layers = torch.nn.ModuleList([_TinyAttentionBlock()])
+
+
+def test_an_nvfp4_checkpoint_is_decoded_before_the_qkv_split(monkeypatch, tmp_path) -> None:
+    """Comfy's nvfp4 Z-Image build quantizes the fused `attention.qkv` and names its layers only in the
+    safetensors header. The decode has to run before the key conversion and the scaled-fp8 extraction,
+    with room reserved for its result first. Without it the strict load meets a packed weight and an
+    orphaned `weight_scale_2`; placed after the conversion or the extraction, it finds its layers
+    incomplete and refuses them."""
+    torch.manual_seed(4)
+    # Codes 2 and 10 decode to +1.0 and -1.0, so the expected weight needs no E2M1 table.
+    positive = torch.randint(0, 2, (384, 64), dtype=torch.bool)
+    codes = torch.where(positive, 2, 10).to(torch.uint8)
+    embedder = torch.randn(4, 4)
+    state_dict = {
+        "x_embedder.weight": embedder,
+        "layers.0.attention.qkv.weight": (codes[:, 0::2] << 4) | codes[:, 1::2],
+        "layers.0.attention.qkv.weight_scale": torch.full((384, 4), 2.0).to(torch.float8_e4m3fn),
+        "layers.0.attention.qkv.weight_scale_2": torch.tensor(0.25),
+        "layers.0.attention.qkv.input_scale": torch.tensor(1.0),
+    }
+    loader, config = _driver(monkeypatch, tmp_path, state_dict)
+    import diffusers
+
+    monkeypatch.setattr(diffusers, "ZImageTransformer2DModel", _TinyNativeZImage, raising=False)
+    # The decode works on the very dict `load_file` returned, so the weight's dtype at each reservation
+    # tells whether that reservation came before the widening.
+    reservations = []
+    loader._ram_cache.make_room.side_effect = lambda size: reservations.append(
+        (size, state_dict["layers.0.attention.qkv.weight"].dtype)
+    )
+
+    model = loader._load_from_singlefile(config)
+
+    expected = torch.where(positive, 0.5, -0.5)
+    attention = model.layers[0].attention
+    assert torch.equal(attention.to_q.weight, expected[:128])
+    assert torch.equal(attention.to_k.weight, expected[128:256])
+    assert torch.equal(attention.to_v.weight, expected[256:])
+    assert torch.equal(model.all_x_embedder["2-1"].weight, embedder)
+    # First the decoded float32 qkv plus the embedder, asked for while the weight was still packed.
+    assert reservations[0] == (384 * 64 * 4 + 4 * 4 * 4, torch.uint8)

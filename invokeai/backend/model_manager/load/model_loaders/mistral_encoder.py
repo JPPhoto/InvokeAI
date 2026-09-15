@@ -56,6 +56,7 @@ from invokeai.backend.quantization.fp8_scaled import (
 )
 from invokeai.backend.quantization.gguf.ggml_tensor import GGMLTensor
 from invokeai.backend.quantization.gguf.loaders import gguf_sd_loader
+from invokeai.backend.quantization.nvfp4 import dequantize_nvfp4_layers
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.logging import InvokeAILogger
 
@@ -369,7 +370,10 @@ def _warn_if_40_layer_mistral(variant: MistralVariantType, logger: Any) -> None:
 
 
 def _drop_quantization_metadata(sd: dict[str, Any], logger, target_dtype: torch.dtype | None = None) -> dict[str, Any]:
-    """Dequantize Comfy-Org-style FP8/FP4 weights and drop their metadata keys.
+    """Dequantize Comfy-Org-style scaled FP8 weights and drop their metadata keys.
+
+    nvfp4 layers must be decoded before this runs (see ``_load_text_encoder``): their block scales pair
+    with a ``.weight`` just like an fp8 scale, and the fold below would stretch them over the packed weight.
 
     Comfy-Org's Mistral FLUX.2 redistributions store quantized weights alongside
     ``*.weight_scale`` (and occasionally ``*.input_scale``) tensors. We apply the
@@ -943,6 +947,17 @@ class MistralEncoderCheckpointLoader(ModelLoader):
         model_path = Path(config.path)
         sd = load_file(model_path)
         sd = _strip_known_prefixes(sd)
+
+        # Comfy's fp4_mixed build keeps most projections in nvfp4 beside scaled fp8. Decode those first:
+        # the keep-fp8 branch below pops every `weight_scale` and discards the ones whose weight is not
+        # float8, nvfp4's block scales included, and the dequantizing branch would stretch them over the
+        # packed weight.
+        nvfp4_layers = dequantize_nvfp4_layers(sd, model_dtype, reserve=self._ram_cache.make_room)
+        if nvfp4_layers:
+            logger.info(
+                f"Mistral encoder: decoded {nvfp4_layers} nvfp4 layer(s) to {model_dtype}. They are not kept packed, "
+                "so the encoder needs as much memory as its bf16 build."
+            )
 
         # These redistributions are ComfyUI 'scaled fp8': an fp8 weight plus a `weight_scale`.
         # Folding the scale doubles the encoder -- 16.8 GiB on disk becomes 32.3 GiB in bf16, which

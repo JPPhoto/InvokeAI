@@ -263,7 +263,7 @@ flux2_dev_comfy_mistral_fp4 = StarterModel(
     name="FLUX.2 [dev] Mistral Encoder (Comfy FP4 mixed)",
     base=BaseModelType.Any,
     source="https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/text_encoders/mistral_3_small_flux2_fp4_mixed.safetensors",
-    description="Comfy-Org FP4-mixed of BFL's 30-layer cow-mistral3-small. Smallest safetensors variant; embeds Tekken tokenizer. ~12.3GB",
+    description="Comfy-Org FP4-mixed of BFL's 30-layer cow-mistral3-small; embeds Tekken tokenizer. Smallest download, but loads at BF16 size. ~12.3GB",
     type=ModelType.MistralEncoder,
 )
 

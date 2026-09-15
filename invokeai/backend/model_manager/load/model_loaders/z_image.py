@@ -68,6 +68,7 @@ from invokeai.backend.quantization.int8_convrot import (
     split_int8_convrot_layers,
     swap_in_int8_linears,
 )
+from invokeai.backend.quantization.nvfp4 import dequantize_nvfp4_layers
 from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
 from invokeai.backend.quantization.sdnq.loaders import raise_on_incomplete_sdnq_load, sdnq_sd_loader
 from invokeai.backend.qwen3.qwen3_tokenizer import load_bundled_qwen3_tokenizer
@@ -481,6 +482,20 @@ class ZImageCheckpointModel(ModelLoader):
                     stripped_sd[key] = value
             sd = stripped_sd
 
+        # Determine safe dtype based on target device capabilities
+        target_device = TorchDevice.choose_torch_device()
+        model_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
+
+        # Before anything below reads the quantization side channel: the scaled-fp8 extraction pops every
+        # `weight_scale` and drops the ones whose weight is not float8, nvfp4's block scales included, and
+        # the fused-QKV split has no destination for `weight_scale_2`.
+        nvfp4_layers = dequantize_nvfp4_layers(sd, model_dtype, reserve=self._ram_cache.make_room)
+        if nvfp4_layers:
+            self._logger.info(
+                f"Z-Image: decoded {nvfp4_layers} nvfp4 layer(s) to {model_dtype}. They are not kept packed, so the "
+                "model needs as much memory as its bf16 build."
+            )
+
         # Per-layer `full_precision_matrix_mult` hints, from the safetensors header and/or the
         # per-tensor `.comfy_quant` markers. The header names layers in the checkpoint's own scheme,
         # so it is remapped below; the markers ride along through the key conversion instead.
@@ -521,10 +536,6 @@ class ZImageCheckpointModel(ModelLoader):
                 axes_dims=[32, 48, 48],
                 axes_lens=[1024, 512, 512],
             )
-
-        # Determine safe dtype based on target device capabilities
-        target_device = TorchDevice.choose_torch_device()
-        model_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
 
         # Filter out keys that don't belong to the ZImageTransformer2DModel.
         # Merged checkpoints (e.g. LoRA-baked models) may bundle text encoder weights
