@@ -138,6 +138,17 @@ describe('ScrubberField', () => {
     await pointer(window, 'pointerup', { clientX: trackX(frame, 0.8) });
   });
 
+  it('ignores stops beyond the track while Alt is held', async () => {
+    // A default past the track (FLUX Fill's guidance of 30 on a 0..10 track) is not a stop: an Alt
+    // gesture would otherwise snap straight off the track's end.
+    const { frame, onChange } = await mount({ defaultValue: 30, marks: [50], max: 10, value: 5 });
+
+    await pointer(frame, 'pointerdown', { altKey: true, clientX: trackX(frame, 0.9) });
+
+    expect(onChange).toHaveBeenLastCalledWith(9);
+    await pointer(window, 'pointerup', { clientX: trackX(frame, 0.9) });
+  });
+
   it('ignores the value region and secondary buttons when scrubbing', async () => {
     const { frame, onChange } = await mount();
     const button = valueButton();

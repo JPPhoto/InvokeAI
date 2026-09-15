@@ -11,6 +11,7 @@ import type { ChangeEvent } from 'react';
 import { Badge, Box, createListCollection, HStack, Icon, Image, Input, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
 import { galleryItems, galleryTransfers, toGalleryItemKey } from '@features/gallery';
+import { FindInGalleryThumbnailButton } from '@features/gallery/mediaSlot';
 import { GalleryPickerPopover } from '@features/gallery/picker';
 import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
 import { resolveMiniMaxH3ReferenceImage } from '@features/video/core/dimensions';
@@ -135,7 +136,7 @@ const ReferenceCard = memo(function ReferenceCard({
    * object would be a fresh prop on every card on every edit to any reference. `updateReference`
    * keeps the identity of the entries it did not touch, which is what lets the other cards bail
    * out of a trim drag entirely; a per-card object would re-render all twelve — each one a zag
-   * Select and two SliderNumberFields — once per pointer step.
+   * Select and two ScrubberFields — once per pointer step.
    */
   audioLabel: number | null;
   collections: ReferenceCollections;
@@ -153,9 +154,17 @@ const ReferenceCard = memo(function ReferenceCard({
   targetArea: number | null;
 }) {
   const { t } = useTranslation();
+  const { findInGallery } = useVideoUiActions();
   const moveUpRef = useRef<HTMLButtonElement>(null);
   const moveDownRef = useRef<HTMLButtonElement>(null);
   const name = reference.kind === 'video' ? reference.clip.video_name : reference.image.image_name;
+  const kind = reference.kind;
+  // Never gated on `disabled`, for the same reason the play button is not:
+  // locating the media changes nothing about the generation. Offered once per
+  // card — from the poster, or from the START bound of a clip: both bounds are
+  // frames of one gallery record, so badging each would be two controls with
+  // one destination and one name for a screen reader to tell apart.
+  const findReferenceInGallery = useCallback(() => findInGallery({ kind, name }), [findInGallery, kind, name]);
   const promptLabels = useMemo(
     () => formatReferencePromptLabels({ audio: audioLabel, picture: pictureLabel, video: videoLabel }),
     [audioLabel, pictureLabel, videoLabel]
@@ -305,8 +314,18 @@ const ReferenceCard = memo(function ReferenceCard({
             an audio reference, whose frames are a drawing of the sound, nothing can. */}
         {reference.kind === 'video' ? <PlayClipSpanButton clip={reference.clip} /> : null}
         {reference.kind === 'image' ? (
-          <Box bg="blackAlpha.300" flexShrink={0} h="12" overflow="hidden" rounded="sm" w="16">
+          <Box
+            bg="blackAlpha.300"
+            className="group"
+            flexShrink={0}
+            h="12"
+            overflow="hidden"
+            position="relative"
+            rounded="sm"
+            w="16"
+          >
             <Image alt="" fit="cover" h="100%" src={galleryImageUrls.thumbnail(name)} w="100%" />
+            <FindInGalleryThumbnailButton name={name} onFind={findReferenceInGallery} />
           </Box>
         ) : null}
         <Stack flex="1" gap="1" minW="0">
@@ -360,7 +379,9 @@ const ReferenceCard = memo(function ReferenceCard({
                   fps={reference.clip.fps}
                   frame={reference.clip.startFrame}
                   label={t('widgets.video.trimStartShort')}
+                  name={name}
                   src={galleryVideoUrls.full(name)}
+                  onFindInGallery={findReferenceInGallery}
                 />
                 <ScrubberField
                   disabled={disabled}

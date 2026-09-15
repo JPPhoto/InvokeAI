@@ -1,3 +1,6 @@
+import { isSeedMode } from '@platform/core/seed';
+
+import type { DynamicPromptsConfig } from './dynamicPrompts';
 import type {
   AspectRatioId,
   ComponentModelConfig,
@@ -67,7 +70,21 @@ export const DIMENSION_GRID = 8;
 export const MIN_DIMENSION = 64;
 export const MAX_DIMENSION = 4096;
 
-export const SEED_MAX = 4_294_967_295;
+/** The expansion config the settings describe, under the names the expansion route and preview use. */
+export const getDynamicPromptsConfig = (
+  settings: Pick<
+    GenerateSettings,
+    | 'dynamicPromptsCombinatorial'
+    | 'dynamicPromptsMaxPrompts'
+    | 'dynamicPromptsSampleSeed'
+    | 'dynamicPromptsSeedBehaviour'
+  >
+): DynamicPromptsConfig => ({
+  combinatorial: settings.dynamicPromptsCombinatorial,
+  maxPrompts: settings.dynamicPromptsMaxPrompts,
+  sampleSeed: settings.dynamicPromptsSampleSeed,
+  seedBehaviour: settings.dynamicPromptsSeedBehaviour,
+});
 export const MIN_NEGATIVE_PROMPT_HEIGHT_PX = 56;
 export const MAX_NEGATIVE_PROMPT_HEIGHT_PX = 240;
 export const DEFAULT_NEGATIVE_PROMPT_HEIGHT_PX = 56;
@@ -175,6 +192,21 @@ const isVaePrecision = (value: unknown): value is VaePrecision => value === 'fp1
 /** Backend defaults from `Ideogram4DenoiseInvocation` / `Krea2*Invocation`. */
 export const IDEOGRAM4_SAMPLER_PRESETS: Ideogram4SamplerPreset[] = ['V4_QUALITY_48', 'V4_DEFAULT_20', 'V4_TURBO_12'];
 export const DEFAULT_IDEOGRAM4_SAMPLER_PRESET: Ideogram4SamplerPreset = 'V4_QUALITY_48';
+/**
+ * `Ideogram4DenoiseInvocation.guidance_scale` is `Optional[float]` with `ge=1, le=20` -- the
+ * constraints sit on the numeric branch of its `anyOf`, which is why a naive schema read misses
+ * them. Not served through the capability table: the shared guidance slider never reaches this
+ * field (`NO_GUIDANCE_SLIDER` in `tests/backend/architectures/test_guidance_range.py` records why),
+ * so it is a local bound on a local, preset-overriding control.
+ */
+export const IDEOGRAM4_GUIDANCE_MIN = 1;
+export const IDEOGRAM4_GUIDANCE_MAX = 20;
+/** `steps` is `ge=2`: the node keeps a polish step and a main step, so 1 is not a schedule. */
+export const IDEOGRAM4_STEPS_MIN = 2;
+export const IDEOGRAM4_STEPS_MAX = 100;
+/** `mu` is `ge=-4, le=4`. A negative shift spends more of the schedule at low noise. */
+export const IDEOGRAM4_MU_MIN = -4;
+export const IDEOGRAM4_MU_MAX = 4;
 export const DEFAULT_KREA2_SEED_VARIANCE_STRENGTH = 0.1;
 export const MAX_KREA2_SEED_VARIANCE_STRENGTH = 2;
 export const DEFAULT_KREA2_SEED_VARIANCE_RANDOMIZE_PERCENT = 50;
@@ -661,7 +693,7 @@ export const normalizeGenerateSettings = (values: unknown): GenerateSettings | n
     typeof values.positivePrompt === 'string' &&
     typeof values.negativePrompt === 'string' &&
     typeof values.scheduler === 'string' &&
-    typeof values.shouldRandomizeSeed === 'boolean' &&
+    (isSeedMode(values.seedMode) || typeof values.shouldRandomizeSeed === 'boolean') &&
     ['width', 'height', 'steps', 'cfgScale', 'cfgRescaleMultiplier', 'seed'].every((key) =>
       hasFiniteNumber(values, key)
     );
@@ -748,7 +780,8 @@ export const normalizeGenerateSettings = (values: unknown): GenerateSettings | n
     seamlessXAxis: typeof values.seamlessXAxis === 'boolean' ? values.seamlessXAxis : false,
     seamlessYAxis: typeof values.seamlessYAxis === 'boolean' ? values.seamlessYAxis : false,
     seed: values.seed as number,
-    shouldRandomizeSeed: values.shouldRandomizeSeed as boolean,
+    // Values saved before seed modes carry the random toggle instead.
+    seedMode: isSeedMode(values.seedMode) ? values.seedMode : values.shouldRandomizeSeed ? 'random' : 'fixed',
     steps: values.steps as number,
     vae: isVaeModelConfig(values.vae) ? values.vae : null,
     vaePrecision: isVaePrecision(values.vaePrecision) ? values.vaePrecision : 'fp32',

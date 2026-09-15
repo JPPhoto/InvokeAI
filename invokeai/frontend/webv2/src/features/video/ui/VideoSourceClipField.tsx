@@ -78,7 +78,7 @@ export const VideoSourceClipField = memo(
     sourceVideo: VideoSourceClip | null;
   }) {
     const { t } = useTranslation();
-    const { getUploadBoardId, reportError, touchGalleryImages } = useVideoUiActions();
+    const { findInGallery, getUploadBoardId, reportError, touchGalleryImages } = useVideoUiActions();
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -230,6 +230,15 @@ export const VideoSourceClipField = memo(
     );
 
     const previewSrc = sourceVideo ? galleryVideoUrls.full(sourceVideo.video_name) : null;
+    // Offered from the START bound only: both thumbs are frames of one gallery
+    // record, so badging each would be two controls with one destination and
+    // one name for a screen reader to tell apart.
+    const videoName = sourceVideo?.video_name;
+    const findClipInGallery = useCallback(() => {
+      if (videoName !== undefined) {
+        findInGallery({ kind: 'video', name: videoName });
+      }
+    }, [findInGallery, videoName]);
 
     return (
       <Stack gap="2">
@@ -321,7 +330,9 @@ export const VideoSourceClipField = memo(
                       fps={sourceVideo.fps}
                       frame={sourceVideo.startFrame}
                       label={t('widgets.video.trimStartShort')}
+                      name={sourceVideo.video_name}
                       src={previewSrc}
+                      onFindInGallery={findClipInGallery}
                     />
                     <ScrubberField
                       disabled={disabled}

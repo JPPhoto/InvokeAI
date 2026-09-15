@@ -1,3 +1,5 @@
+import type { SeedMode } from '@platform/core/seed';
+
 import type {
   ContainerFormElement,
   FieldIdentifier,
@@ -13,6 +15,7 @@ import type {
   WorkflowMetadata,
   WorkflowNode,
   WorkflowNotesNode,
+  WorkflowSeedFieldAdvance,
   XYPosition,
 } from './types';
 
@@ -297,6 +300,9 @@ export type ProjectGraphAction =
   | { type: 'setFieldValue'; nodeId: string; fieldName: string; value: unknown }
   | { type: 'setFieldLabel'; nodeId: string; fieldName: string; label: string }
   | { type: 'setFieldDescription'; nodeId: string; fieldName: string; description: string }
+  | { type: 'setFieldSeedMode'; nodeId: string; fieldName: string; seedMode: SeedMode }
+  /** Moves stepping-mode seeds past a queued submission; each field is fenced on the value and mode it was planned from. */
+  | { type: 'advanceSeedFields'; advances: readonly WorkflowSeedFieldAdvance[] }
   | { type: 'addEdge'; edge: WorkflowEdge }
   | { type: 'removeEdges'; edgeIds: string[] }
   | { type: 'exposeField'; fieldIdentifier: FieldIdentifier }
@@ -523,6 +529,29 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
         ...instance,
         description: action.description || undefined,
       }));
+    }
+    case 'setFieldSeedMode': {
+      // Fixed is the absent default, so choosing it leaves the instance exactly as
+      // pre-seed-mode documents (and legacy readers) write it.
+      return setFieldInstance(document, action.nodeId, action.fieldName, ({ seedMode: _, ...instance }) =>
+        action.seedMode === 'fixed' ? instance : { ...instance, seedMode: action.seedMode }
+      );
+    }
+    case 'advanceSeedFields': {
+      return action.advances.reduce((next, advance) => {
+        const node = next.nodes.find((candidate) => candidate.id === advance.nodeId);
+        const instance = node && isInvocationNode(node) ? node.data.inputs[advance.fieldName] : undefined;
+
+        return instance &&
+          instance.value === advance.fromSeed &&
+          // An absent mode is fixed, which never plans an advance, so a bare compare is the whole fence.
+          (instance.seedMode ?? 'fixed') === advance.seedMode
+          ? setFieldInstance(next, advance.nodeId, advance.fieldName, (current) => ({
+              ...current,
+              value: advance.toSeed,
+            }))
+          : next;
+      }, document);
     }
     case 'addEdge': {
       return addEdgeToDocument(document, action.edge);
