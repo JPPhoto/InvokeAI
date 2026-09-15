@@ -1085,6 +1085,35 @@
         }
       }
     },
+    "/api/v2/models/capabilities": {
+      "get": {
+        "tags": ["model_manager"],
+        "summary": "List Architecture Capabilities",
+        "description": "What each model architecture can generate, and which generation features it supports.\n\nA static table, the same for every install and every user, derived from what the architectures\ndeclare under `invokeai/backend/architectures/defs/`. Fetch it once and join it against model\nrecords locally: look up `(base, variant)`, fall back to `(base, null)`.\n\nDeliberately not a field on the model records themselves \u2014 it is the same for every model of an\narchitecture, and putting it there would add these fields to all 115 config schemas.\n\nAuthenticated like every other route here even though the response holds nothing user-specific:\nthe allowlist for public routes is short and deliberate, and this is not a reason to lengthen it.\n\nDeclared `def`, not `async def`: it awaits nothing, so FastAPI runs it in a threadpool instead of\non the event loop. See docs/contributing/blocking-work-in-api-routes.",
+        "operationId": "list_architecture_capabilities",
+        "responses": {
+          "200": {
+            "description": "What each model architecture supports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArchitectureCapabilities"
+                  },
+                  "type": "array",
+                  "title": "Response List Architecture Capabilities"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v2/models/": {
       "get": {
         "tags": ["model_manager"],
@@ -16213,7 +16242,7 @@
         "category": "image",
         "class": "invocation",
         "classification": "prototype",
-        "description": "Generates latents from an image using the Anima VAE (supports Wan 2.1 and FLUX VAE).",
+        "description": "Generates latents from an image using the Anima VAE (the Wan 2.1 VAE, in either layout).",
         "node_pack": "invokeai",
         "properties": {
           "board": {
@@ -16314,7 +16343,7 @@
         "tags": ["image", "latents", "vae", "i2l", "anima"],
         "title": "Image to Latents - Anima",
         "type": "object",
-        "version": "1.0.1",
+        "version": "1.0.2",
         "output": {
           "$ref": "#/components/schemas/LatentsOutput"
         }
@@ -16532,7 +16561,7 @@
         "category": "latents",
         "class": "invocation",
         "classification": "prototype",
-        "description": "Generates an image from latents using the Anima VAE.\n\nSupports the Wan 2.1 QwenImage VAE (AutoencoderKLWan) with explicit\nlatent denormalization, and FLUX VAE as fallback.",
+        "description": "Generates an image from latents using the Anima VAE (the Wan 2.1 VAE, in either layout).",
         "node_pack": "invokeai",
         "properties": {
           "board": {
@@ -16633,7 +16662,7 @@
         "tags": ["latents", "image", "vae", "l2i", "anima"],
         "title": "Latents to Image - Anima",
         "type": "object",
-        "version": "1.0.3",
+        "version": "1.0.4",
         "output": {
           "$ref": "#/components/schemas/ImageOutput"
         }
@@ -16905,7 +16934,7 @@
         "category": "model",
         "class": "invocation",
         "classification": "prototype",
-        "description": "Loads an Anima model, outputting its submodels.\n\nAnima uses:\n- Transformer: Cosmos Predict2 DiT + LLM Adapter (from single-file checkpoint)\n- Qwen3 Encoder: Qwen3 0.6B (standalone single-file)\n- VAE: AutoencoderKLQwenImage / Wan 2.1 VAE (standalone single-file or FLUX VAE)\n\nThe T5-XXL tokenizer needed for LLM Adapter token IDs is bundled in the package,\nso no T5-XXL encoder model needs to be installed.",
+        "description": "Loads an Anima model, outputting its submodels.\n\nAnima uses:\n- Transformer: Cosmos Predict2 DiT + LLM Adapter (from single-file checkpoint)\n- Qwen3 Encoder: Qwen3 0.6B (standalone single-file)\n- VAE: AutoencoderKLQwenImage / Wan 2.1 VAE (standalone single-file)\n\nThe T5-XXL tokenizer needed for LLM Adapter token IDs is bundled in the package,\nso no T5-XXL encoder model needs to be installed.",
         "node_pack": "invokeai",
         "properties": {
           "id": {
@@ -16944,11 +16973,12 @@
           },
           "vae_model": {
             "$ref": "#/components/schemas/ModelIdentifierField",
-            "description": "Standalone VAE model. Anima uses a Wan 2.1 / QwenImage VAE (16-channel). A FLUX VAE can also be used as a compatible fallback.",
+            "description": "Standalone VAE model. Anima uses a Wan 2.1 / QwenImage VAE (16-channel).",
             "field_kind": "input",
             "input": "direct",
             "orig_required": true,
             "title": "VAE",
+            "ui_model_base": ["anima", "qwen-image", "wan"],
             "ui_model_type": ["vae"]
           },
           "qwen3_encoder_model": {
@@ -17751,6 +17781,198 @@
         "output": {
           "$ref": "#/components/schemas/ImageOutput"
         }
+      },
+      "ArchitectureCapabilities": {
+        "properties": {
+          "base": {
+            "$ref": "#/components/schemas/BaseModelType"
+          },
+          "variant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant",
+            "description": "Null for the architecture's own row. A variant row overrides it."
+          },
+          "features": {
+            "$ref": "#/components/schemas/ArchitectureFeatures"
+          },
+          "defaults": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MainModelDefaultSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Recommended generation parameters, if the architecture has any."
+          },
+          "vae": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArchitectureVae"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null where the architecture declares no VAE compatibility beyond its own base."
+          }
+        },
+        "type": "object",
+        "required": ["base", "features"],
+        "title": "ArchitectureCapabilities",
+        "description": "One row of the table."
+      },
+      "ArchitectureFeatures": {
+        "properties": {
+          "negative_prompt": {
+            "$ref": "#/components/schemas/NegativePromptPolicy"
+          },
+          "dimension_grid": {
+            "type": "integer",
+            "title": "Dimension Grid",
+            "description": "Width and height must be a multiple of this. A variant row may carry its own."
+          },
+          "guidance_label": {
+            "type": "string",
+            "title": "Guidance Label",
+            "description": "What to call the guidance slider: 'CFG' or 'Guidance'."
+          },
+          "guidance_min": {
+            "type": "number",
+            "title": "Guidance Min",
+            "description": "Lowest guidance value the denoise node accepts; a smaller one fails at enqueue."
+          },
+          "guidance_max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guidance Max",
+            "description": "Highest guidance value the denoise node accepts; null means it enforces no ceiling."
+          },
+          "scheduler_set": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["standard", "flow", "flow-no-lcm", "anima"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduler Set",
+            "description": "Which scheduler family to offer; null means no choice."
+          },
+          "scheduler_applies_to_graph": {
+            "type": "boolean",
+            "title": "Scheduler Applies To Graph",
+            "default": false
+          },
+          "control_kinds": {
+            "items": {
+              "type": "string",
+              "enum": ["controlnet", "t2i_adapter", "control_lora", "z_image_control"]
+            },
+            "type": "array",
+            "title": "Control Kinds",
+            "description": "Sorted."
+          },
+          "max_reference_images": {
+            "type": "integer",
+            "title": "Max Reference Images",
+            "default": 0
+          },
+          "reference_images_require_variant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Images Require Variant",
+            "description": "If set, reference images are only accepted for models of this variant."
+          },
+          "supports_regional_guidance": {
+            "type": "boolean",
+            "title": "Supports Regional Guidance",
+            "default": false
+          },
+          "regional_negative": {
+            "type": "boolean",
+            "title": "Regional Negative",
+            "description": "Whether a region's negative prompt is masked, rather than applied globally.",
+            "default": false
+          },
+          "clip_skip_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clip Skip Max"
+          },
+          "supports_seamless": {
+            "type": "boolean",
+            "title": "Supports Seamless",
+            "default": false
+          },
+          "supports_cfg_rescale": {
+            "type": "boolean",
+            "title": "Supports Cfg Rescale",
+            "default": false
+          },
+          "sd_vae_override": {
+            "type": "boolean",
+            "title": "Sd Vae Override",
+            "default": false
+          },
+          "color_compensation": {
+            "type": "boolean",
+            "title": "Color Compensation",
+            "default": false
+          },
+          "vae_precision": {
+            "type": "boolean",
+            "title": "Vae Precision",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": ["negative_prompt", "dimension_grid", "guidance_label", "guidance_min"],
+        "title": "ArchitectureFeatures",
+        "description": "What a UI may offer for this architecture."
+      },
+      "ArchitectureVae": {
+        "properties": {
+          "accepted": {
+            "items": {
+              "$ref": "#/components/schemas/VaeAcceptance"
+            },
+            "type": "array",
+            "title": "Accepted"
+          }
+        },
+        "type": "object",
+        "required": ["accepted"],
+        "title": "ArchitectureVae",
+        "description": "Which VAEs an architecture's decode accepts, beyond its own base.\n\nServed because the clients keep their own copy of this and it drifts: widening a backend list\nwithout the picker leaves a VAE that loads but cannot be chosen. A variant row carries its own\nlist where its decoder differs -- Wan TI2V-5B takes the 48-channel VAE, A14B the 16-channel one."
       },
       "BaseMetadata": {
         "properties": {
@@ -33414,13 +33636,13 @@
               }
             ],
             "default": null,
-            "description": "Standalone VAE model. Flux2 Klein uses the same VAE as FLUX (16-channel). If not provided, VAE will be loaded from the Qwen3 Source model.",
+            "description": "Standalone VAE model (AutoencoderKLFlux2, 32-channel). If not provided, VAE will be loaded from the Qwen3 Source model.",
             "field_kind": "input",
             "input": "direct",
             "orig_default": null,
             "orig_required": false,
             "title": "VAE",
-            "ui_model_base": ["flux", "flux2"],
+            "ui_model_base": ["flux2"],
             "ui_model_type": ["vae"]
           },
           "qwen3_encoder_model": {
@@ -42182,9 +42404,9 @@
         },
         "required": ["type", "id"],
         "tags": ["latents", "math", "ideal_size"],
-        "title": "Ideal Size - SD1.5, SDXL",
+        "title": "Ideal Size",
         "type": "object",
-        "version": "1.0.6",
+        "version": "1.1.0",
         "output": {
           "$ref": "#/components/schemas/IdealSizeOutput"
         }
@@ -56670,7 +56892,7 @@
             "orig_default": null,
             "orig_required": false,
             "title": "VAE",
-            "ui_model_base": ["qwen-image", "anima"],
+            "ui_model_base": ["anima", "qwen-image"],
             "ui_model_type": ["vae"]
           },
           "qwen3_vl_encoder_model": {
@@ -78256,6 +78478,24 @@
           "$ref": "#/components/schemas/IntegerOutput"
         }
       },
+      "NegativePromptPolicy": {
+        "properties": {
+          "visible": {
+            "type": "boolean",
+            "title": "Visible",
+            "description": "Whether to show a negative prompt field at all."
+          },
+          "usage": {
+            "type": "string",
+            "enum": ["always", "cfg-gated", "never"],
+            "title": "Usage",
+            "description": "'always', 'cfg-gated' (only above CFG 1), or 'never'."
+          }
+        },
+        "type": "object",
+        "required": ["visible", "usage"],
+        "title": "NegativePromptPolicy"
+      },
       "NodeFieldValue": {
         "properties": {
           "node_path": {
@@ -83882,7 +84122,7 @@
             "orig_default": null,
             "orig_required": false,
             "title": "VAE",
-            "ui_model_base": ["qwen-image"],
+            "ui_model_base": ["anima", "qwen-image"],
             "ui_model_type": ["vae"]
           },
           "qwen_vl_encoder_model": {
@@ -97543,6 +97783,29 @@
         ],
         "title": "VAE_Diffusers_Wan_Config",
         "description": "Model config for Wan 2.2 VAE in diffusers folder layout (AutoencoderKLWan)."
+      },
+      "VaeAcceptance": {
+        "properties": {
+          "base": {
+            "$ref": "#/components/schemas/BaseModelType"
+          },
+          "latent_channels": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latent Channels",
+            "description": "Null unless the base ships VAEs of more than one latent width; only wan does."
+          }
+        },
+        "type": "object",
+        "required": ["base"],
+        "title": "VaeAcceptance",
+        "description": "One VAE this architecture's decode accepts."
       },
       "ValidationError": {
         "properties": {

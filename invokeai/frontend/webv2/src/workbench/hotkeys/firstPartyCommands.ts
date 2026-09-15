@@ -29,6 +29,7 @@ import { getWidgetsForRegion } from '@workbench/widgetRegistry';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useWorkbenchCommands, useWorkbenchExtensions, useWorkbenchQueries } from '@workbench/WorkbenchContext';
 import { resolvePanelToggle } from '@workbench/workbenchState';
+import { useTranslation } from 'react-i18next';
 
 const layoutPresetCommands = builtInLayoutPresetDescriptors.map(({ hotkeyId, preset }) => ({
   id: `app.${hotkeyId}`,
@@ -86,6 +87,7 @@ export const useRegisterFirstPartyCommands = () => {
   const { commands: commandApi } = useWorkbenchExtensions();
   const queries = useWorkbenchQueries();
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
   const { layout, notifications, queue, widgets } = commands;
   useInvocationTemplatesSelector((snapshot) => snapshot.status);
 
@@ -132,6 +134,7 @@ export const useRegisterFirstPartyCommands = () => {
         models: getAvailableModels() ?? [],
         owner,
         projectId: activeProject.id,
+        t,
       });
 
       assertAccountScopeCurrent(owner);
