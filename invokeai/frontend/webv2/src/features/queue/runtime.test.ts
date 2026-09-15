@@ -137,12 +137,23 @@ describe('queue runtime', () => {
 
     expect(createQueueItemBackendSubmission({ id: 'project-1' }, asLegacy(true))).toMatchObject({
       kind: 'generate',
-      request: { seedStep: 1 },
+      request: { legacySeedPlan: true, seedStep: 1 },
     });
     expect(createQueueItemBackendSubmission({ id: 'project-1' }, asLegacy(false))).toMatchObject({
       kind: 'generate',
-      request: { seedStep: 0 },
+      request: { legacySeedPlan: true, seedStep: 0 },
     });
+    // An item that already carries a step never takes the legacy expansion, even if a
+    // stale toggle rides along beside it.
+    const withBoth = createPendingQueueItem();
+    (withBoth.snapshot.backendSubmission as Record<string, unknown>).shouldRandomizeSeed = true;
+
+    for (const queueItem of [createPendingQueueItem(), withBoth]) {
+      const { request } = createQueueItemBackendSubmission({ id: 'project-1' }, queueItem) as { request: object };
+
+      expect(request).not.toHaveProperty('legacySeedPlan');
+      expect(request).toMatchObject({ seedStep: 0 });
+    }
     expect(
       (createQueueItemBackendSubmission({ id: 'project-1' }, asLegacy(false)) as { request: object }).request
     ).not.toHaveProperty('shouldRandomizeSeed');

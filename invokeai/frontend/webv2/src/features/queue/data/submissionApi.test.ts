@@ -234,6 +234,65 @@ describe('enqueueGenerate', () => {
   });
 });
 
+describe('enqueueGenerate legacy replays', () => {
+  beforeEach(() => {
+    mocks.apiFetchJson.mockReset();
+    mocks.apiFetchJson.mockResolvedValue({
+      batch: { batch_id: 'batch-1' },
+      enqueued: 1,
+      item_ids: [1],
+      requested: 1,
+    });
+  });
+
+  it('replays a pinned two-prompt per-image batch with the seeds that version stepped', async () => {
+    const { enqueueGenerate } = await import('./submissionApi');
+
+    await enqueueGenerate(
+      createRequest({
+        batchCount: 2,
+        legacySeedPlan: true,
+        positivePrompts: ['a', 'b'],
+        seed: 42,
+        seedBehaviour: 'per-image',
+        seedStep: 0,
+      })
+    );
+
+    // Before seed modes, sharing disabled always stepped, toggle or not: one zipped group
+    // with a seed per image and the prompt list repeated per iteration.
+    expect(getSubmittedBody().batch.data).toEqual([
+      [
+        { field_name: 'value', items: [42, 43, 44, 45], node_path: 'seed' },
+        { field_name: 'value', items: ['a', 'b', 'a', 'b'], node_path: 'positive_prompt' },
+        {
+          field_name: 'value',
+          items: ['low quality', 'low quality', 'low quality', 'low quality'],
+          node_path: 'negative_prompt',
+        },
+      ],
+    ]);
+    expect(getSubmittedBody().batch.runs).toBe(1);
+  });
+
+  it('wraps a legacy sequence one short of the range, as that version did', async () => {
+    const { enqueueGenerate } = await import('./submissionApi');
+
+    await enqueueGenerate(createRequest({ batchCount: 2, legacySeedPlan: true, seed: 4_294_967_294, seedStep: 1 }));
+
+    expect(getSubmittedBody().batch.data[0]?.[0]?.items).toEqual([4_294_967_294, 0]);
+  });
+
+  it('holds a pinned single-prompt batch across its runs', async () => {
+    const { enqueueGenerate } = await import('./submissionApi');
+
+    await enqueueGenerate(createRequest({ batchCount: 3, legacySeedPlan: true, seed: 42, seedStep: 0 }));
+
+    expect(getSubmittedBody().batch.data[0]?.[0]?.items).toEqual([42]);
+    expect(getSubmittedBody().batch.runs).toBe(3);
+  });
+});
+
 describe('enqueueWorkflow', () => {
   beforeEach(() => {
     mocks.apiFetchJson.mockReset();

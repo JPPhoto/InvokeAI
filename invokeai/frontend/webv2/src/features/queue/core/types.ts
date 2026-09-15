@@ -61,6 +61,11 @@ export interface QueueEnqueueGenerateRequest extends QueueEnqueueRequestBase {
   seedBehaviour?: QueuePromptSeedBehaviour;
   seedNodeId: string;
   seedStep: QueueSeedStep;
+  /**
+   * Set only when replaying an item queued before seed modes: its `seedStep` is
+   * the mapped random toggle, and the expansion follows that version's rules.
+   */
+  legacySeedPlan?: true;
 }
 
 export interface QueueEnqueueResult {

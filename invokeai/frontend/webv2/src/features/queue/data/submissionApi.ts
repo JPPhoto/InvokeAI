@@ -9,6 +9,7 @@ import type {
 
 import {
   buildGeneratePromptBatchPlan,
+  buildLegacyGeneratePromptBatchPlan,
   buildWorkflowSeedBatchPlan,
   sanitizeBatchCount,
 } from '@features/queue/core/promptBatch';
@@ -75,7 +76,7 @@ const mapEnqueueResult = (value: unknown, isReceipt = false): QueueEnqueueResult
 };
 
 export const enqueueGenerate = async (request: QueueEnqueueGenerateRequest): Promise<QueueEnqueueResult> => {
-  const plan = buildGeneratePromptBatchPlan({
+  const planInput = {
     batchCount: sanitizeBatchCount(request.batchCount),
     negativePrompt: request.negativePrompt,
     negativePromptNodeId: request.negativePromptNodeId,
@@ -84,6 +85,9 @@ export const enqueueGenerate = async (request: QueueEnqueueGenerateRequest): Pro
     seed: request.seed,
     seedBehaviour: request.seedBehaviour ?? 'per-iteration',
     seedNodeId: request.seedNodeId,
+  };
+  const plan = (request.legacySeedPlan ? buildLegacyGeneratePromptBatchPlan : buildGeneratePromptBatchPlan)({
+    ...planInput,
     seedStep: request.seedStep,
   });
   const result = await apiFetchJson<unknown>('/api/v1/queue/default/enqueue_batch', {

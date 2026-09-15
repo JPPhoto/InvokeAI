@@ -141,6 +141,69 @@ export interface GeneratePromptBatchPlan {
   expectedImageCount: number;
 }
 
+/** The pre-seed-mode sequence: consecutive from `start`, wrapping one short of the inclusive range. */
+const generateLegacySeedSequence = (start: number, count: number): number[] =>
+  Array.from({ length: sanitizeBatchCount(count) }, (_, index) => (start + index) % SEED_MAX);
+
+/**
+ * The expansion items queued before seed modes were planned with, reproduced so
+ * recovery replays them as recorded. Those items knew only a random toggle,
+ * which the runtime maps to a step of 1 or 0: the toggle decided whether one
+ * prompt (or per-iteration prompts) stepped or held, while several prompts with
+ * sharing disabled always stepped per image, and the sequence wrapped at
+ * `SEED_MAX` exclusive. New submissions never take this path.
+ */
+export const buildLegacyGeneratePromptBatchPlan = ({
+  batchCount,
+  negativePrompt,
+  negativePromptNodeId,
+  positivePromptNodeId,
+  prompts,
+  seed,
+  seedBehaviour,
+  seedNodeId,
+  seedStep,
+}: GeneratePromptBatchPlanInput): GeneratePromptBatchPlan => {
+  const shouldRandomizeSeed = seedStep !== 0;
+  const iterations = sanitizeBatchCount(batchCount);
+  const promptList = prompts.length > 0 ? [...prompts] : [''];
+  const promptDatum = (items: string[]): GeneratePromptBatchDatum[] => [
+    { field_name: 'value', items, node_path: positivePromptNodeId },
+    { field_name: 'value', items: items.map(() => negativePrompt), node_path: negativePromptNodeId },
+  ];
+
+  if (promptList.length === 1) {
+    const seeds = shouldRandomizeSeed ? generateLegacySeedSequence(seed, iterations) : [seed];
+
+    return {
+      data: [
+        [{ field_name: 'value', items: seeds, node_path: seedNodeId }, ...promptDatum(seeds.map(() => promptList[0]))],
+      ],
+      expectedImageCount: iterations,
+      runs: shouldRandomizeSeed ? 1 : iterations,
+    };
+  }
+
+  if (seedBehaviour === 'per-image') {
+    const seeds = generateLegacySeedSequence(seed, promptList.length * iterations);
+    const repeatedPrompts = Array.from({ length: iterations }, () => promptList).flat();
+
+    return {
+      data: [[{ field_name: 'value', items: seeds, node_path: seedNodeId }, ...promptDatum(repeatedPrompts)]],
+      expectedImageCount: seeds.length,
+      runs: 1,
+    };
+  }
+
+  const seeds = shouldRandomizeSeed ? generateLegacySeedSequence(seed, iterations) : [seed];
+
+  return {
+    data: [[{ field_name: 'value', items: seeds, node_path: seedNodeId }], promptDatum(promptList)],
+    expectedImageCount: promptList.length * iterations,
+    runs: shouldRandomizeSeed ? 1 : iterations,
+  };
+};
+
 /**
  * With a single prompt this reproduces the pre-dynamic-prompts payload exactly,
  * which `promptBatch.test.ts` pins:

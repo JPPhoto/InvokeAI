@@ -125,8 +125,8 @@ const getQueueItemCompiledGraph = (queueItem: QueueItem): unknown => {
 
 /**
  * Items queued before seed modes recorded the random toggle instead of a step;
- * a randomized batch ran consecutive seeds and a pinned one held its seed, so
- * recovery replays them exactly as they were planned.
+ * the mapped step plus `legacySeedPlan` lets the send path expand them with that
+ * version's rules, so recovery replays the seeds exactly as they were planned.
  */
 const readSubmissionSeedStep = (submission: { seedStep?: unknown; shouldRandomizeSeed?: unknown }) =>
   isQueueSeedStep(submission.seedStep)
@@ -219,6 +219,7 @@ export const createQueueItemBackendSubmission = (
       request: {
         ...compiled,
         destination: queueItem.snapshot.destination,
+        ...(isQueueSeedStep(submission.seedStep) ? {} : { legacySeedPlan: true as const }),
         projectId: project.id,
         seedStep,
         sourceQueueItemId: queueItem.id,
