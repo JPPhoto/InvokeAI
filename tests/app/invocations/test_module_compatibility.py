@@ -33,7 +33,7 @@ handler = logging.Handler()
 handler.emit = lambda record: records.append(record.getMessage())
 logger = logging.getLogger("InvokeAI")
 logger.addHandler(handler)
-logger.setLevel(logging.WARNING)
+logger.setLevel(logging.INFO)
 mapping = {dict(LEGACY_MODULE_MAP)!r}
 with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter("always")
@@ -134,7 +134,7 @@ handler = logging.Handler()
 handler.emit = lambda record: records.append(record.getMessage())
 logger = logging.getLogger("InvokeAI")
 logger.addHandler(handler)
-logger.setLevel(logging.WARNING)
+logger.setLevel(logging.INFO)
 legacy_names = {set(LEGACY_MODULE_MAP)!r}
 modules = load_all_modules()
 types = list(InvocationRegistry.get_invocation_types())
