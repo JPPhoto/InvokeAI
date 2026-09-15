@@ -305,6 +305,8 @@ export type ProjectGraphAction =
   | { type: 'advanceSeedFields'; advances: readonly WorkflowSeedFieldAdvance[] }
   | { type: 'addEdge'; edge: WorkflowEdge }
   | { type: 'removeEdges'; edgeIds: string[] }
+  /** Replaces `edgeId` with `edge` as one undoable step (dragging an edge end to a new handle). */
+  | { type: 'reconnectEdge'; edgeId: string; edge: WorkflowEdge }
   | { type: 'exposeField'; fieldIdentifier: FieldIdentifier }
   | { type: 'unexposeField'; fieldIdentifier: FieldIdentifier }
   | { type: 'removeFormElement'; elementId: string }
@@ -325,6 +327,7 @@ const undoLabels: Partial<Record<ProjectGraphAction['type'], string>> = {
   addEdge: 'Connect workflow fields',
   addFormElement: 'Edit workflow form',
   addGraphElements: 'Paste workflow nodes',
+  reconnectEdge: 'Reconnect workflow fields',
   addNode: 'Add workflow node',
   addNodeAndEdge: 'Add workflow node',
   exposeField: 'Expose workflow field',
@@ -579,6 +582,16 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
           type: 'node-field',
         }),
       };
+    }
+    case 'reconnectEdge': {
+      if (!document.edges.some((edge) => edge.id === action.edgeId)) {
+        return document;
+      }
+
+      return addEdgeToDocument(
+        { ...document, edges: document.edges.filter((edge) => edge.id !== action.edgeId) },
+        action.edge
+      );
     }
     case 'unexposeField': {
       const element = findNodeFieldElement(document.form, action.fieldIdentifier);
