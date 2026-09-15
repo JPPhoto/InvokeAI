@@ -1442,10 +1442,10 @@
     "executionCompleted": "Completed",
     "executionFailed": "Failed",
     "forLoopBodyBoundary": "For loop body",
-    "forLoopBodyBoundaryStatus": {
-      "missing_linkage": "missing loop linkage",
     "imageCollectionCount_one": "{{count}} image",
     "imageCollectionCount_other": "{{count}} images",
+    "forLoopBodyBoundaryStatus": {
+      "missing_linkage": "missing loop linkage",
       "invalid_linkage": "invalid loop linkage",
       "duplicate_linkage": "duplicate loop linkage",
       "missing_return": "missing ForReturn",
@@ -2479,7 +2479,6 @@
         "nextComparisonMode": "Next comparison mode",
         "swapComparisonImages": "Swap comparison images",
         "toggleFilmstrip": "Toggle filmstrip",
-        "togglePreview": "Toggle preview",
         "zoomToActual": "Zoom preview to 100%",
         "zoomToFit": "Zoom preview to fit"
       },
