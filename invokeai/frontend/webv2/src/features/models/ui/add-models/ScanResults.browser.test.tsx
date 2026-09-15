@@ -46,12 +46,14 @@ const SCAN = { path: '/home/user/downloads', results: [{ is_installed: false, pa
 const Harness = () => (
   <ChakraProvider value={system}>
     <ScanResults
+      fp8Storage={false}
       inplace
       pendingSources={NO_PENDING}
       scan={SCAN}
       onClear={noop}
       onInstall={noop}
       onInstallAll={noop}
+      onSetFp8Storage={noop}
       onSetInplace={noop}
     />
   </ChakraProvider>

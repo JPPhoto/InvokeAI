@@ -11,7 +11,7 @@ FP8 Storage cuts a model's VRAM footprint roughly in half by keeping weights on 
 It pairs well with [Low-VRAM mode](/configuration/low-vram-mode/): low-VRAM mode streams layers between RAM and VRAM, while FP8 Storage shrinks the layers themselves.
 
 :::caution[For full precision models only]
-FP8 Storage only applies to **full precision** checkpoints (FP16 / BF16 / FP32). It is **silently a no-op** for already-quantized formats — **GGUF**, **NF4**, **int8**, and [**SDNQ**](/configuration/sdnq-quantization/) checkpoints carry their own storage precision and the loader returns a different module type that the FP8 layer cast does not touch. If your model is already quantized, the toggle has no effect; use the full-precision variant of the model if you want to enable FP8 Storage.
+FP8 Storage only applies to **full precision** checkpoints (FP16 / BF16 / FP32). It is **silently a no-op** for already-quantized formats — **GGUF**, **NF4**, **int8**, and [**SDNQ**](/configuration/sdnq-quantization/) checkpoints carry their own storage precision and the loader returns a different module type that the FP8 layer cast does not touch. If your model is already quantized, the toggle has no effect; use the full-precision variant of the model if you want to enable FP8 Storage. Checkpoints that store FP8 weights are the exception: InvokeAI loads them at BF16 unless FP8 Storage is on, so they get it automatically when installed (see [When installing](#when-installing)).
 :::
 
 ## Requirements
@@ -53,6 +53,13 @@ FP8 Storage is a **per-model setting**, configured from the Model Manager:
 </Steps>
 
 The setting takes effect on the next load. If the model is already in the cache, InvokeAI evicts the cached copy automatically so the new setting applies — even if a generation is currently using the model (the eviction is deferred until the generation finishes).
+
+### When installing
+
+- **Checkpoints that already store FP8 weights get FP8 Storage automatically.** InvokeAI reads the weight types from the file while identifying the model, not its name, so a renamed `fp8_scaled` file is recognised and a full-precision file with "fp8" in its name is not. Only the denoiser counts: an all-in-one checkpoint with an FP8 text encoder beside a full-precision UNet or transformer is left alone. Without this, an FP8 checkpoint would be loaded at BF16 and take twice the VRAM.
+- **For any other model, tick FP8 storage next to the install source** (a file path, URL or HuggingFace repo, and in folder scan results). It applies to the models you install from there.
+
+Either way the setting stays editable under **Default Settings** afterwards. Re-identifying a model resets its default settings, including this one, to what identification chooses.
 
 :::tip[When to enable]
   Enable FP8 Storage on large models that don't fit comfortably in VRAM — FLUX dev/Klein, large SDXL checkpoints, ControlNet-XL adapters. For smaller SD1 / SD2 models, the savings are negligible and not worth the small precision trade-off.
@@ -115,7 +122,7 @@ If you see unexpected quality regressions, disable FP8 Storage on the affected m
 
 Everything above describes FP8 *Storage*, which changes how weights are **stored** while the math still runs in BF16. `fp8_compute` is a separate, global setting in `invokeai.yaml` that also does the **math** in FP8, on GPUs that have hardware for it. That makes generation faster, not just smaller.
 
-It is for models that were **already saved in FP8** by whoever published them — you'll often see these labelled "fp8" or "fp8_scaled" in the filename. Normally InvokeAI unpacks them back to BF16 while loading; with `fp8_compute` on, they stay as they are and run directly on the GPU's FP8 hardware. FP8 Storage is the toggle for the other case: a full-precision model you want to shrink yourself.
+It is for models that were **already saved in FP8** by whoever published them — you'll often see these labelled "fp8" or "fp8_scaled" in the filename. Without it InvokeAI unpacks them to BF16 while loading, and FP8 Storage — which they get automatically when installed — keeps them FP8 in VRAM; with `fp8_compute` on, they stay as they are and run directly on the GPU's FP8 hardware, and FP8 Storage has nothing left to do for those layers.
 
 Not every part of a model stays in FP8 — the small, precision-sensitive pieces are always unpacked. Those are a tiny share of the weights, so you still get nearly the full VRAM saving.
 

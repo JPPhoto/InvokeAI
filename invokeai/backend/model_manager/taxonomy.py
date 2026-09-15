@@ -334,6 +334,17 @@ class ModelFormat(str, Enum):
     Unknown = "unknown"
 
 
+QUANTIZED_MODEL_FORMATS: frozenset[ModelFormat] = frozenset(
+    {
+        ModelFormat.GGUFQuantized,
+        ModelFormat.BnbQuantizednf4b,
+        ModelFormat.BnbQuantizedLlmInt8b,
+        ModelFormat.SDNQQuantized,
+    }
+)
+"""Formats whose weights are already quantized: packed payloads FP8 Storage must never re-encode."""
+
+
 class SchedulerPredictionType(str, Enum):
     """Scheduler prediction type."""
 
