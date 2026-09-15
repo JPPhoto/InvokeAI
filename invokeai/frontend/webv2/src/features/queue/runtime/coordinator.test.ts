@@ -2,6 +2,7 @@ import type {
   QueueBackendItem,
   QueueEnqueueResult,
   QueueEnqueueGenerateRequest,
+  QueueEnqueueWorkflowRequest,
   QueueItemProgress,
   QueueProgressPreviewPayload,
   QueueResultImage,
@@ -172,6 +173,14 @@ const generateRequest: QueueEnqueueGenerateRequest = {
   seed: 1,
   seedNodeId: 'seed',
   seedStep: 0,
+  sourceQueueItemId: 'local-1',
+};
+
+const workflowRequest: QueueEnqueueWorkflowRequest = {
+  batchCount: 1,
+  destination: 'gallery',
+  graph: { edges: [], id: 'graph-1', nodes: {} },
+  projectId: 'project-1',
   sourceQueueItemId: 'local-1',
 };
 
@@ -937,6 +946,135 @@ describe('queueCoordinator', () => {
     harness.hub.disconnect();
 
     expect(harness.modelLoads.reset).toHaveBeenCalled();
+  });
+
+  it('replays node events that landed before the enqueue response and settles the nodes', async () => {
+    const acceptance = deferred<QueueEnqueueResult>();
+
+    harness.api.enqueueWorkflow.mockReturnValue(acceptance.promise);
+    harness.coordinator.connect();
+    const submission = harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    harness.socket.fire('invocation_started', { ...createStatusEvent({ item_id: 1 }), invocation_source_id: 'node-1' });
+    harness.socket.fire('invocation_complete', {
+      ...createStatusEvent({ item_id: 1 }),
+      invocation_source_id: 'node-1',
+      result: { type: 'integer_output', value: 7 },
+    });
+    harness.socket.fire('invocation_started', { ...createStatusEvent({ item_id: 1 }), invocation_source_id: 'node-2' });
+    harness.socket.fire('queue_item_status_changed', createStatusEvent({ item_id: 1, status: 'completed' }));
+
+    expect(harness.nodeExecution.started).not.toHaveBeenCalled();
+
+    acceptance.resolve({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    await submission;
+
+    expect(harness.nodeExecution.started.mock.calls.map(([event]) => event.invocation_source_id)).toEqual([
+      'node-1',
+      'node-2',
+    ]);
+    expect(harness.nodeExecution.completed).toHaveBeenCalledTimes(1);
+    expect(harness.nodeExecution.settleRunning).toHaveBeenCalledWith(new Set(['node-1', 'node-2']), 'completed');
+    await expect(harness.coordinator.waitForResults('local-1', '2026-06-10T00:00:00Z')).resolves.toHaveLength(1);
+  });
+
+  it('does not buffer node events while no enqueue request is in flight', async () => {
+    harness.api.enqueueWorkflow.mockResolvedValueOnce({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    harness.coordinator.connect();
+    harness.socket.fire('invocation_started', { ...createStatusEvent({ item_id: 1 }), invocation_source_id: 'node-1' });
+
+    await harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    expect(harness.nodeExecution.started).not.toHaveBeenCalled();
+  });
+
+  it('follows whichever item runs live, even a lower id after a higher one', async () => {
+    harness.api.enqueueWorkflow
+      .mockResolvedValueOnce({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 })
+      .mockResolvedValueOnce({ batchId: 'batch-2', enqueued: 1, itemIds: [2], requested: 1 });
+    harness.coordinator.connect();
+    await harness.coordinator.submitWorkflow('local-1', workflowRequest);
+    await harness.coordinator.submitWorkflow('local-2', { ...workflowRequest, sourceQueueItemId: 'local-2' });
+
+    // Model affinity ran item 2 first.
+    harness.socket.fire('invocation_started', { ...createStatusEvent({ item_id: 2 }), invocation_source_id: 'node-1' });
+    harness.socket.fire('queue_item_status_changed', createStatusEvent({ item_id: 2, status: 'completed' }));
+    harness.nodeExecution.clearAll.mockClear();
+    harness.socket.fire('invocation_started', { ...createStatusEvent({ item_id: 1 }), invocation_source_id: 'node-1' });
+    harness.socket.fire('invocation_complete', {
+      ...createStatusEvent({ item_id: 1 }),
+      invocation_source_id: 'node-1',
+      result: { type: 'integer_output', value: 1 },
+    });
+    harness.socket.fire('queue_item_status_changed', createStatusEvent({ item_id: 1, status: 'completed' }));
+
+    expect(harness.nodeExecution.clearAll).toHaveBeenCalledTimes(1);
+    expect(harness.nodeExecution.completed).toHaveBeenCalledTimes(1);
+    expect(harness.nodeExecution.settleRunning).toHaveBeenLastCalledWith(new Set(['node-1']), 'completed');
+  });
+
+  it('skips replayed events and a late settle from an item another item has since taken over', async () => {
+    const acceptance = deferred<QueueEnqueueResult>();
+
+    harness.api.enqueueWorkflow
+      .mockReturnValueOnce(acceptance.promise)
+      .mockResolvedValueOnce({ batchId: 'batch-2', enqueued: 1, itemIds: [2], requested: 1 });
+    harness.coordinator.connect();
+    const submission = harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    // Item 1 ran while its enqueue response was still in flight; those events are buffered.
+    harness.socket.fire('invocation_started', { ...createStatusEvent({ item_id: 1 }), invocation_source_id: 'node-1' });
+    harness.socket.fire('invocation_complete', {
+      ...createStatusEvent({ item_id: 1 }),
+      invocation_source_id: 'node-1',
+      result: { type: 'integer_output', value: 1 },
+    });
+    await harness.coordinator.submitWorkflow('local-2', { ...workflowRequest, sourceQueueItemId: 'local-2' });
+    harness.socket.fire('invocation_started', { ...createStatusEvent({ item_id: 2 }), invocation_source_id: 'node-1' });
+    harness.nodeExecution.clearAll.mockClear();
+
+    acceptance.resolve({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    await submission;
+    harness.socket.fire('queue_item_status_changed', createStatusEvent({ item_id: 1, status: 'completed' }));
+
+    expect(harness.nodeExecution.clearAll).not.toHaveBeenCalled();
+    expect(harness.nodeExecution.completed).not.toHaveBeenCalled();
+    expect(harness.nodeExecution.settleRunning).not.toHaveBeenCalled();
+
+    harness.socket.fire('queue_item_status_changed', createStatusEvent({ item_id: 2, status: 'completed' }));
+    expect(harness.nodeExecution.settleRunning).toHaveBeenLastCalledWith(new Set(['node-1']), 'completed');
+  });
+
+  it('resets node state when a new item starts and settles running nodes to the item outcome', async () => {
+    harness.api.enqueueWorkflow
+      .mockResolvedValueOnce({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 })
+      .mockResolvedValueOnce({ batchId: 'batch-2', enqueued: 1, itemIds: [2], requested: 1 });
+    harness.coordinator.connect();
+    await harness.coordinator.submitWorkflow('local-1', workflowRequest);
+    await harness.coordinator.submitWorkflow('local-2', { ...workflowRequest, sourceQueueItemId: 'local-2' });
+    harness.nodeExecution.clearAll.mockClear();
+
+    harness.socket.fire('invocation_started', { ...createStatusEvent({ item_id: 1 }), invocation_source_id: 'node-1' });
+    expect(harness.nodeExecution.clearAll).toHaveBeenCalledTimes(1);
+    harness.socket.fire('invocation_progress', {
+      ...createStatusEvent({ item_id: 1 }),
+      invocation_source_id: 'node-1',
+      message: 'sampling',
+      percentage: 0.5,
+    });
+    expect(harness.nodeExecution.clearAll).toHaveBeenCalledTimes(1);
+    harness.socket.fire(
+      'queue_item_status_changed',
+      createStatusEvent({ error_message: 'boom', item_id: 1, status: 'failed' })
+    );
+
+    expect(harness.nodeExecution.settleRunning).toHaveBeenLastCalledWith(new Set(['node-1']), 'failed');
+
+    harness.socket.fire('invocation_started', { ...createStatusEvent({ item_id: 2 }), invocation_source_id: 'node-1' });
+    expect(harness.nodeExecution.clearAll).toHaveBeenCalledTimes(2);
+
+    harness.coordinator.detachRun('local-2');
+    expect(harness.nodeExecution.settleRunning).toHaveBeenLastCalledWith(new Set(['node-1']), 'canceled');
   });
 
   it('ignores untracked queue events before mutating local execution state', () => {

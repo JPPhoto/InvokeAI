@@ -1,20 +1,22 @@
 import type { SeedMode } from '@platform/core/seed';
 
-import { Alert, Field, HStack, Icon, Input, Stack, Text } from '@chakra-ui/react';
+import { Alert, Box, Field, HStack, Icon, Input, Stack, Text } from '@chakra-ui/react';
 import { isInvocationNode, type NodeFieldFormElement, type ProjectGraphState } from '@features/workflow/contracts';
-import { getWorkflowFieldSeedMode } from '@features/workflow/graph';
+import { getWorkflowFieldSeedMode, isSeedInputField } from '@features/workflow/graph';
 import { useInvocationTemplatesSelector } from '@features/workflow/react';
 import { WorkflowFieldInput } from '@features/workflow/ui/fields/WorkflowFieldInput';
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
 import {
   cloneWorkflowFieldDefault,
+  getRandomWorkflowFieldValue,
   getResolvedWorkflowEdges,
   getWorkflowFieldInvalidReason,
   isDirectInputField,
+  isShuffleableField,
   isWorkflowFieldValueDefault,
 } from '@features/workflow/utility';
 import { FieldLabel, IconButton, Tooltip } from '@platform/ui';
-import { RotateCcwIcon } from 'lucide-react';
+import { DicesIcon, RotateCcwIcon } from 'lucide-react';
 import { useCallback, useMemo, useState, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -103,6 +105,17 @@ export const NodeFieldControl = ({
     [editGraph, fieldName, nodeId]
   );
   const resetAriaLabel = useMemo(() => `Reset ${label} to default value`, [label]);
+  const showsShuffle =
+    element.data.showShuffle &&
+    !!template &&
+    !isConnected &&
+    isShuffleableField(template) &&
+    !isSeedInputField(template);
+  const onShuffleClick = useCallback(() => {
+    if (template) {
+      editGraph({ fieldName, nodeId, type: 'setFieldValue', value: getRandomWorkflowFieldValue(template) });
+    }
+  }, [editGraph, fieldName, nodeId, template]);
 
   if (!invocationNode || !template) {
     return (
@@ -142,7 +155,6 @@ export const NodeFieldControl = ({
               id={labelInputId}
               placeholder={template.title}
               size="2xs"
-              textTransform="uppercase"
               value={draftLabel ?? label}
               variant="flushed"
               w="full"
@@ -172,16 +184,34 @@ export const NodeFieldControl = ({
             {t('nodes.providedByConnection')}
           </Text>
         ) : (
-          <WorkflowFieldInput
-            id={valueInputId}
-            invalid={isInvalid}
-            nodeId={nodeId}
-            seedMode={getWorkflowFieldSeedMode(instance)}
-            template={template}
-            value={instance?.value}
-            onChange={onValueChange}
-            onSeedModeChange={onSeedModeChange}
-          />
+          <HStack alignItems="start" gap="1" minW="0" w="full">
+            <Box flex="1" minW="0">
+              <WorkflowFieldInput
+                id={valueInputId}
+                invalid={isInvalid}
+                nodeId={nodeId}
+                seedMode={getWorkflowFieldSeedMode(instance)}
+                template={template}
+                value={instance?.value}
+                onChange={onValueChange}
+                onSeedModeChange={onSeedModeChange}
+              />
+            </Box>
+            {showsShuffle ? (
+              <Tooltip content={t('common.shuffle')}>
+                <IconButton
+                  aria-label={`${t('common.shuffle')} ${label}`}
+                  color="fg.muted"
+                  flexShrink={0}
+                  size="xs"
+                  variant="outline"
+                  onClick={onShuffleClick}
+                >
+                  <Icon as={DicesIcon} boxSize="3.5" />
+                </IconButton>
+              </Tooltip>
+            ) : null}
+          </HStack>
         )}
         {invalidReason ? <Field.ErrorText fontSize="2xs">{invalidReason}</Field.ErrorText> : null}
       </Stack>

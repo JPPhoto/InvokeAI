@@ -4369,6 +4369,7 @@ export const __workbenchReducerInternal = (
       return addNotification(
         nextState,
         createNotification({
+          category: 'run-outcome',
           kind: action.status === 'failed' ? 'error' : 'info',
           message: action.error ?? `Queue item ${action.queueItemId} ${action.status}.`,
           projectId: action.projectId,

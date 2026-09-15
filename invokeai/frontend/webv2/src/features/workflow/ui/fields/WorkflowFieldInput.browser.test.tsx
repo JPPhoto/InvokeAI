@@ -1,7 +1,8 @@
 import type { FieldInputTemplate } from '@features/workflow/contracts';
 
-import { ChakraProvider } from '@chakra-ui/react';
+import { ChakraProvider, Field } from '@chakra-ui/react';
 import { DndContext } from '@dnd-kit/core';
+import { toaster } from '@platform/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { system } from '@theme/system';
 import { act, cloneElement, useCallback, useState } from 'react';
@@ -262,6 +263,40 @@ const findButton = (label: string): HTMLButtonElement => {
   return button;
 };
 
+const BOOLEAN_TEMPLATE = {
+  name: 'enabled',
+  title: 'Enabled',
+  type: { batch: false, cardinality: 'SINGLE', name: 'BooleanField' },
+} as unknown as FieldInputTemplate;
+
+describe('WorkflowFieldInput boolean', () => {
+  it('toggles from a click on the switch when hosted in a Field with an external id', async () => {
+    const onChange = vi.fn();
+
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <Field.Root>
+            <WorkflowFieldInput id="node-enabled-value" template={BOOLEAN_TEMPLATE} value={false} onChange={onChange} />
+          </Field.Root>
+        </ChakraProvider>
+      );
+    });
+
+    const control = host.querySelector('[data-scope="switch"][data-part="control"]');
+
+    if (!(control instanceof HTMLElement)) {
+      throw new Error('Switch control not rendered');
+    }
+
+    await act(async () => {
+      await userEvent.click(control);
+    });
+
+    expect(onChange).toHaveBeenCalledWith(true);
+  });
+});
+
 describe('WorkflowFieldInput textarea', () => {
   it('uses the accessible unbounded resizable textarea for prompt-like string fields', async () => {
     await renderField(TEXTAREA_TEMPLATE, 'hello', vi.fn());
@@ -309,7 +344,81 @@ describe('WorkflowFieldInput media inputs', () => {
     expect(onChange).toHaveBeenCalledWith(undefined);
   });
 
-  it('keeps COLLECTION media fields connection-only (the widget would write a bare object into a list)', async () => {
+  it('edits image collections as a list: picks append, remove drops one, clear empties', async () => {
+    const onChange = vi.fn();
+    const collectionTemplate = {
+      name: 'images',
+      title: 'Images',
+      type: { cardinality: 'COLLECTION', name: 'ImageField' },
+    } as unknown as FieldInputTemplate;
+
+    await renderField(collectionTemplate, [{ image_name: 'a.png' }, { image_name: 'b.png' }], onChange);
+
+    expect(host.textContent).not.toContain('Connection only');
+    expect(host.querySelectorAll('img')).toHaveLength(2);
+    expect(host.querySelector<HTMLInputElement>('input[type="file"]')?.multiple).toBe(true);
+
+    await act(() => findButton('common.add').click());
+    expect(onChange).toHaveBeenLastCalledWith([
+      { image_name: 'a.png' },
+      { image_name: 'b.png' },
+      { image_name: SELECTED_GALLERY_VIDEO.name },
+    ]);
+
+    await act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Remove a.png"]')!.click());
+    expect(onChange).toHaveBeenLastCalledWith([{ image_name: 'b.png' }]);
+
+    await act(() => findButton('Clear').click());
+    expect(onChange).toHaveBeenLastCalledWith([]);
+  });
+
+  it('keeps an empty image collection droppable and pickable', async () => {
+    const onChange = vi.fn();
+    const collectionTemplate = {
+      name: 'images',
+      title: 'Images',
+      type: { cardinality: 'COLLECTION', name: 'ImageField' },
+    } as unknown as FieldInputTemplate;
+
+    await renderField(collectionTemplate, [], onChange);
+
+    const emptyState = findButton('widgets.gallery.picker.chooseImage');
+
+    expect(emptyState.getBoundingClientRect().height).toBeGreaterThanOrEqual(64);
+    await act(() => emptyState.click());
+    expect(onChange).toHaveBeenLastCalledWith([{ image_name: SELECTED_GALLERY_VIDEO.name }]);
+  });
+
+  it('adopts the files that uploaded when one of a multi-file batch fails', async () => {
+    uploadImageMock.mockResolvedValueOnce({ imageName: 'first.png' }).mockRejectedValueOnce(new Error('413'));
+    const createToast = vi.spyOn(toaster, 'create').mockImplementation(() => '');
+    const onChange = vi.fn();
+    const collectionTemplate = {
+      name: 'images',
+      title: 'Images',
+      type: { cardinality: 'COLLECTION', name: 'ImageField' },
+    } as unknown as FieldInputTemplate;
+
+    await renderField(collectionTemplate, [{ image_name: 'a.png' }], onChange);
+
+    const fileInput = host.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const transfer = new DataTransfer();
+
+    transfer.items.add(new File(['1'], 'one.png', { type: 'image/png' }));
+    transfer.items.add(new File(['2'], 'two.png', { type: 'image/png' }));
+    fileInput.files = transfer.files;
+    await act(() => fileInput.dispatchEvent(new Event('change', { bubbles: true })));
+
+    await vi.waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith([{ image_name: 'a.png' }, { image_name: 'first.png' }]);
+    });
+    await vi.waitFor(() => {
+      expect(createToast).toHaveBeenCalledWith(expect.objectContaining({ description: 'two.png', type: 'error' }));
+    });
+    createToast.mockRestore();
+  });
+
+  it('keeps video COLLECTION fields connection-only (the widget would write a bare object into a list)', async () => {
     const collectionTemplate = {
       name: 'videos',
       title: 'Videos',

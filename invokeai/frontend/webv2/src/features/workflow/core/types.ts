@@ -193,6 +193,10 @@ export interface NodeFieldFormElement {
   data: {
     fieldIdentifier: FieldIdentifier;
     showDescription: boolean;
+    /** Shows a randomize button beside numeric fields in the linear view. */
+    showShuffle: boolean;
+    /** The legacy editor's per-element settings, preserved verbatim; `showShuffle` is mirrored into it. */
+    settings?: Record<string, unknown>;
   };
 }
 
