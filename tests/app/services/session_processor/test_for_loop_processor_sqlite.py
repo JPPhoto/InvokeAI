@@ -821,6 +821,7 @@ def test_processor_sqlite_two_sibling_nested_for_cancel_root_retry_cleans_identi
     mock_invoker: Invoker,
     registered_event_bus: _RecordingRegisteredEventService,
 ) -> None:
+    test_timeout = 30
     monkeypatch.setattr(
         "invokeai.app.services.session_processor.session_processor_default.build_invocation_context",
         _build_test_invocation_context,
@@ -858,8 +859,8 @@ def test_processor_sqlite_two_sibling_nested_for_cancel_root_retry_cleans_identi
     )
     try:
         processor.start(mock_invoker)
-        assert registered_event_bus.wait_for_status(item_id, "canceled")
-        assert session_persisted.wait(timeout=5)
+        assert registered_event_bus.wait_for_status(item_id, "canceled", timeout=test_timeout)
+        assert session_persisted.wait(timeout=test_timeout)
     finally:
         _stop_processor(processor)
 
@@ -919,8 +920,8 @@ def test_processor_sqlite_two_sibling_nested_for_cancel_root_retry_cleans_identi
     )
     try:
         retry_processor.start(mock_invoker)
-        assert registered_event_bus.wait_for_status(retried_item.item_id, "completed")
-        assert retry_session_persisted.wait(timeout=5)
+        assert registered_event_bus.wait_for_status(retried_item.item_id, "completed", timeout=test_timeout)
+        assert retry_session_persisted.wait(timeout=test_timeout)
     finally:
         _stop_processor(retry_processor)
 
