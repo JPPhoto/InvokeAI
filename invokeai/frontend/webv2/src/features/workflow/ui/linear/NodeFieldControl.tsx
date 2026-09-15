@@ -142,7 +142,6 @@ export const NodeFieldControl = ({
               id={labelInputId}
               placeholder={template.title}
               size="2xs"
-              textTransform="uppercase"
               value={draftLabel ?? label}
               variant="flushed"
               w="full"
