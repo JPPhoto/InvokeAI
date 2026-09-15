@@ -279,14 +279,20 @@ export const compileProjectGraph = (
  * keeps its plain control instead of wrapping at a bound it never had.
  *
  * Seed policy lives here rather than in `fields.ts` because it is the one place
- * the workflow core depends on Generate's runtime seed arithmetic: the shared
- * field/document helpers stay in the lighter utility chunk every overlay loads.
+ * the workflow core depends on the platform seed arithmetic at runtime: the
+ * shared field/document helpers stay in the lighter utility chunk every overlay loads.
  */
 export const isSeedInputField = (template: FieldInputTemplate): boolean =>
   template.name === 'seed' &&
   template.type.name === 'IntegerField' &&
   template.type.cardinality === 'SINGLE' &&
+  // The modes walk and wrap over 0…SEED_MAX in steps of one, so the template has to
+  // accept every value on that walk; a tighter range or step keeps its plain control.
   template.maximum === SEED_MAX &&
+  (template.minimum === null || template.minimum <= 0) &&
+  template.exclusiveMinimum === null &&
+  template.exclusiveMaximum === null &&
+  (template.multipleOf === null || template.multipleOf === 1) &&
   isDirectInputField(template);
 
 export const getWorkflowFieldSeedMode = (instance: Pick<WorkflowFieldInstance, 'seedMode'> | undefined): SeedMode =>

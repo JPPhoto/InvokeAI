@@ -121,6 +121,8 @@ const VIDEO_TEMPLATE = {
 } as unknown as FieldInputTemplate;
 
 const SEED_TEMPLATE = {
+  exclusiveMaximum: null,
+  exclusiveMinimum: null,
   input: 'any',
   maximum: 4_294_967_295,
   minimum: 0,

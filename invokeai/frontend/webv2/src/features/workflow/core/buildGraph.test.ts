@@ -742,6 +742,16 @@ describe('seed inputs', () => {
     expect(isSeedInputField(seed({ input: 'connection' }))).toBe(false);
   });
 
+  it('requires the template to accept the whole walk: every value from 0 to the maximum in steps of one', () => {
+    expect(isSeedInputField(seed({ minimum: null }))).toBe(true);
+    expect(isSeedInputField(seed({ multipleOf: 1 }))).toBe(true);
+    // A custom node with a seed of 1…SEED_MAX would receive Decrement and submit 0.
+    expect(isSeedInputField(seed({ minimum: 1 }))).toBe(false);
+    expect(isSeedInputField(seed({ exclusiveMinimum: 0 }))).toBe(false);
+    expect(isSeedInputField(seed({ exclusiveMaximum: 4_294_967_295 }))).toBe(false);
+    expect(isSeedInputField(seed({ multipleOf: 2 }))).toBe(false);
+  });
+
   it('reads an absent or unknown mode as fixed', () => {
     expect(getWorkflowFieldSeedMode(undefined)).toBe('fixed');
     expect(getWorkflowFieldSeedMode({})).toBe('fixed');
