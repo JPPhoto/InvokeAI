@@ -70,8 +70,19 @@ import {
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { SeedInput } from '@platform/ui/SeedInput';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { FilmIcon, ImageIcon, Trash2Icon } from 'lucide-react';
-import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { FilmIcon, ImageIcon, ImagePlusIcon, Trash2Icon, XIcon } from 'lucide-react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type MouseEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 
 const ModelSelect = lazy(() => import('@features/models/react').then((module) => ({ default: module.ModelSelect })));
@@ -164,6 +175,9 @@ const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldIn
 const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
   const isInteger = template.type.name === 'IntegerField';
   const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : '';
+/** A double-click anywhere in the box selects the whole value, not just the word under the pointer. */
+const selectInputText = (event: MouseEvent<HTMLInputElement>) => event.currentTarget.select();
+
   const min = template.minimum ?? template.exclusiveMinimum ?? undefined;
   const max = template.maximum ?? template.exclusiveMaximum ?? undefined;
   const onInputChange = useCallback(
@@ -194,6 +208,7 @@ const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldI
     />
   );
 };
+      onDoubleClick={selectInputText}
 
 /**
  * The shared seed control under a workflow row. The workflow owns the value
