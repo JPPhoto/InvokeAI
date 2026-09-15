@@ -7,6 +7,7 @@ import {
   ASPECT_RATIO_MAP,
   calculateNewSize,
   clampDimension,
+  deriveAspectRatioId,
   MAX_DIMENSION,
   MIN_DIMENSION,
 } from '@features/generation/core/settings';
@@ -17,8 +18,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useTranslation } from 'react-i18next';
 
 import { useGenerationUi } from './GenerationUiContext';
-import { AspectRatioChips } from './shared/AspectRatioChips';
-import { AspectRatioLockButton } from './shared/AspectRatioSelect';
+import { AspectRatioLockButton, AspectRatioSelect } from './shared/AspectRatioSelect';
 import { GenerateCollapsibleSection } from './shared/GenerateCollapsibleSection';
 import { GenerateFieldContextMenu } from './shared/GenerateFieldContextMenu';
 
@@ -75,6 +75,8 @@ const LOCK_BRACKET_CSS = {
   },
   '&[data-locked] [data-part="bracket"]': { stroke: 'accent.solid' },
 };
+/** Same width as the lock column so the swap lines up under the lock. */
+const SWAP_COLUMN_CSS = { display: 'flex', flexShrink: 0, justifyContent: 'center', w: '6' };
 const PREVIEW_PAD_PX = 10;
 
 const clampToRange = (value: number): number => Math.min(MAX_DIMENSION, Math.max(MIN_DIMENSION, value));
@@ -356,14 +358,26 @@ export const GenerateDimensionFields = ({
     });
   };
 
+  // The lock shows whether the ratio is held at all, preset or captured, so a
+  // chosen preset reads as locked and unlocking always returns to Free. Locking
+  // captures the current ratio, named by its preset when it matches one.
   const toggleLock = () => {
+    if (isRatioConstrained) {
+      commitSettings({
+        aspectRatioId: 'Free',
+        aspectRatioIsLocked: false,
+        aspectRatioValue: dimensionRatio,
+        ...displayDimensions,
+      });
+      return;
+    }
+
+    const id = deriveAspectRatioId(displayDimensions.width, displayDimensions.height);
+
     commitSettings({
-      aspectRatioIsLocked: !settings.aspectRatioIsLocked,
-      // Locking in Free mode captures the current ratio so further edits preserve it.
-      aspectRatioValue:
-        !settings.aspectRatioIsLocked && settings.aspectRatioId === 'Free' && displayDimensions.height > 0
-          ? displayDimensions.width / displayDimensions.height
-          : settings.aspectRatioValue,
+      aspectRatioId: id,
+      aspectRatioIsLocked: true,
+      aspectRatioValue: id === 'Free' ? dimensionRatio : ASPECT_RATIO_MAP[id].ratio,
       ...displayDimensions,
     });
   };
@@ -408,7 +422,7 @@ export const GenerateDimensionFields = ({
       <Badge size="xs">
         {displayDimensions.width}x{displayDimensions.height}
       </Badge>
-      {settings.aspectRatioIsLocked && (
+      {isRatioConstrained && (
         <Badge size="xs">
           <Icon as={LockIcon} boxSize="3" />
         </Badge>
@@ -460,33 +474,34 @@ export const GenerateDimensionFields = ({
                   {dimensionField('width')}
                   {dimensionField('height')}
                 </Stack>
-                <Box css={LOCK_BRACKET_CSS} data-locked={settings.aspectRatioIsLocked ? '' : undefined}>
+                <Box css={LOCK_BRACKET_CSS} data-locked={isRatioConstrained ? '' : undefined}>
                   <svg aria-hidden="true" data-part="bracket" viewBox="0 0 28 64">
                     <path d={LOCK_BRACKET_PATH} />
                   </svg>
-                  <AspectRatioLockButton isLocked={settings.aspectRatioIsLocked} size="2xs" onToggle={toggleLock} />
+                  <AspectRatioLockButton isLocked={isRatioConstrained} size="2xs" onToggle={toggleLock} />
                 </Box>
               </HStack>
             </GenerateFieldContextMenu>
-            {/* Every preset stays visible in the run beneath the values it
-                reshapes — nothing hides behind an overflow menu. */}
-            <HStack alignItems="flex-start" gap="1">
-              <AspectRatioChips
+            {/* The preset row mirrors the dimension rows: the select fills the value
+                column and the swap sits in the lock's column beneath it. */}
+            <HStack alignItems="center" gap="1">
+              <AspectRatioSelect
                 fallbackRatio={dimensionRatio}
                 value={settings.aspectRatioId}
                 onChange={setAspectRatioId}
               />
-              <Tooltip content={t('widgets.generate.swapWidthAndHeight')}>
-                <IconButton
-                  aria-label={t('widgets.generate.swapWidthAndHeight')}
-                  flexShrink="0"
-                  size="2xs"
-                  variant="outline"
-                  onClick={swapDimensions}
-                >
-                  <ArrowLeftRightIcon />
-                </IconButton>
-              </Tooltip>
+              <Box css={SWAP_COLUMN_CSS}>
+                <Tooltip content={t('widgets.generate.swapWidthAndHeight')}>
+                  <IconButton
+                    aria-label={t('widgets.generate.swapWidthAndHeight')}
+                    size="2xs"
+                    variant="outline"
+                    onClick={swapDimensions}
+                  >
+                    <ArrowLeftRightIcon />
+                  </IconButton>
+                </Tooltip>
+              </Box>
             </HStack>
             <HStack gap="2" justify="space-between" minH="5" mt="auto">
               <Text color="fg.muted" fontSize="2xs">
