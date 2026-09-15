@@ -1439,6 +1439,8 @@
     "forLoopLinkageInvalid": "Loop linkage must connect a For to its ForReturn",
     "forLoopLinkageDuplicate": "A For and ForReturn can each belong to only one loop",
     "forReturnOwnership": "Each ForReturn must belong to exactly one For",
+    "executionCompleted": "Completed",
+    "executionFailed": "Failed",
     "forLoopBodyBoundary": "For loop body",
     "forLoopBodyBoundaryStatus": {
       "missing_linkage": "missing loop linkage",
