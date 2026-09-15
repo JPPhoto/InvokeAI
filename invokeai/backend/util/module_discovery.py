@@ -8,7 +8,7 @@ pitfalls are handled and tested in one place.
 """
 
 import pkgutil
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from pathlib import Path
 
 
@@ -41,11 +41,12 @@ def _orphan_directories(package_dir: Path) -> Iterator[Path]:
             yield child
 
 
-def discover_modules(root: Path, prefix: str) -> list[str]:
+def discover_modules(root: Path, prefix: str, excluded_modules: Collection[str] | None = None) -> list[str]:
     """Fully-qualified names of every non-private module in the package tree rooted at `root`.
 
     `prefix` is the dotted path of the package that lives at `root`, trailing dot included; it is
-    what the returned names are prefixed with.
+    what the returned names are prefixed with. `excluded_modules` contains fully-qualified module
+    names to omit from the result.
 
     A path component starting with `_` excludes the module and everything below it: that covers
     `__pycache__` and marks a module or package as internal. Packages themselves are not returned --
@@ -69,14 +70,16 @@ def discover_modules(root: Path, prefix: str) -> list[str]:
             f"rename it with a leading underscore if it is not meant to be imported."
         )
 
-    return list(_walk(root, prefix))
+    return list(_walk(root, prefix, excluded_modules or set()))
 
 
-def _walk(directory: Path, prefix: str) -> Iterator[str]:
+def _walk(directory: Path, prefix: str, excluded_modules: Collection[str]) -> Iterator[str]:
     for info in pkgutil.iter_modules([str(directory)]):
         if info.name.startswith("_"):
             continue
         if info.ispkg:
-            yield from _walk(directory / info.name, f"{prefix}{info.name}.")
+            yield from _walk(directory / info.name, f"{prefix}{info.name}.", excluded_modules)
         else:
-            yield f"{prefix}{info.name}"
+            module_name = f"{prefix}{info.name}"
+            if module_name not in excluded_modules:
+                yield module_name
