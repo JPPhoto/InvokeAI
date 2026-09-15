@@ -1161,23 +1161,6 @@ export const getVideoComponentSectionPolicy = (
   }
 
   return createComponentPolicy(true, [
-    // The hybrid is a Ref2VA-only option: an FL2VA checkpoint stands in for
-    // every weight but the AdaLN projections, whose task-defining half stays
-    // the selected Ref2VA main's. Offered on the Ref2VA selection so the
-    // panel's reference mode (decided by the top model) is unaffected.
-    ...(model.variant === 'ref2va'
-      ? [
-          {
-            filter: isH3HybridBaseCandidate,
-            helpText:
-              'Optional: an FL2VA transformer to run with this Ref2VA model’s AdaLN projections (the per-block time-conditioning layers) from the chosen block onward — FL2VA’s output quality, references still routed. Same file kind as the model (pruned with pruned).',
-            key: 'h3HybridBaseModel',
-            label: 'Hybrid quality base (FL2VA)',
-            modelTypes: ['main'],
-            valueKind: 'main',
-          } satisfies VideoComponentSlotPolicy,
-        ]
-      : []),
     {
       filter: (candidate) =>
         candidate.type === 'main' && candidate.base === 'minimax-h3' && candidate.format === 'diffusers',
@@ -1202,6 +1185,24 @@ export const getVideoComponentSectionPolicy = (
       required: (ctx) => !isH3TextEncoderSatisfied(ctx),
       valueKind: 'component',
     },
+    // The hybrid is a Ref2VA-only option: an FL2VA checkpoint stands in for
+    // every weight but the AdaLN projections, whose task-defining half stays
+    // the selected Ref2VA main's. Offered on the Ref2VA selection so the
+    // panel's reference mode (decided by the top model) is unaffected. Listed
+    // last: optional tuning sits below the slots the panel needs to run.
+    ...(model.variant === 'ref2va'
+      ? [
+          {
+            filter: isH3HybridBaseCandidate,
+            helpText:
+              'Optional: an FL2VA transformer to run with this Ref2VA model’s AdaLN projections (the per-block time-conditioning layers) from the chosen block onward — FL2VA’s output quality, references still routed. Same file kind as the model (pruned with pruned).',
+            key: 'h3HybridBaseModel',
+            label: 'Hybrid quality base (FL2VA)',
+            modelTypes: ['main'],
+            valueKind: 'main',
+          } satisfies VideoComponentSlotPolicy,
+        ]
+      : []),
   ]);
 };
 

@@ -703,13 +703,14 @@ describe('component section policy', () => {
     const settings = settingsFor(ref2va);
     const policy = getVideoComponentSectionPolicy(ref2va, settings);
 
+    // Last: optional tuning sits below the slots the panel needs to run.
     expect(policy.slots.map((slot) => slot.key)).toEqual([
-      'h3HybridBaseModel',
       'componentSourceModel',
       'h3TextEncoderModel',
+      'h3HybridBaseModel',
     ]);
 
-    const slot = policy.slots[0];
+    const slot = policy.slots.find((candidate) => candidate.key === 'h3HybridBaseModel');
     const ctx = { model: ref2va, selectedComponents: settings, settings };
 
     // Optional: the panel is complete without it.

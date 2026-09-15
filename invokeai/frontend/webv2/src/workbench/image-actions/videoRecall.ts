@@ -551,6 +551,21 @@ export const buildVideoRecallSettings = ({
     }
   }
 
+  // The hybrid base reproduces the recorded run exactly: it comes back when
+  // the run recorded a still-installed one, and is CLEARED otherwise — a run
+  // without the hybrid (or one whose base is gone) must not keep the panel's
+  // base, which would misrepresent the run. The required components (source
+  // install, text encoder) keep the panel's pick on absence instead: they are
+  // what makes the main runnable, not a record of the run. Reported against
+  // the ORIGINAL panel state, like media: a base the model transition above
+  // already dropped was still cleared by this recall.
+  if (!hybridBaseRecalled) {
+    if (values.h3HybridBaseModel) {
+      values = { ...values, h3HybridBaseModel: null };
+    }
+    componentsRecalled ||= currentValues.h3HybridBaseModel !== null;
+  }
+
   // The hybrid's start block belongs to the recorded base: it only comes back
   // with it, never onto a base the panel happened to hold already.
   const hybridStartBlock = getInteger(metadata, 'minimax_h3_hybrid_start_block');
