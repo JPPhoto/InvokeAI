@@ -31,10 +31,18 @@ from invokeai.backend.model_manager.taxonomy import (
     SubModelType,
 )
 from invokeai.backend.quantization.fp8_scaled import (
+    attach_fp8_scales,
+    cast_state_dict,
+    dequantize_fp8_scaled,
+    extract_comfy_quant_hints,
+    extract_fp8_scaled_layers,
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
+    should_keep_fp8_weights,
+    split_fp8_scaled_layers,
     strip_layer_path_prefix,
+    warn_on_unattached_scales,
 )
 from invokeai.backend.quantization.gguf.ggml_tensor import GGMLTensor
 from invokeai.backend.quantization.gguf.loaders import gguf_sd_loader
@@ -232,9 +240,10 @@ class QwenImageGGUFCheckpointModel(ModelLoader):
 @ModelLoaderRegistry.register(base=BaseModelType.QwenImage, type=ModelType.Main, format=ModelFormat.Checkpoint)
 class QwenImageCheckpointModel(ModelLoader):
     """Loads Qwen Image transformer models from single-file safetensors checkpoints
-    (e.g. ComfyUI fp8_scaled, plain bf16/fp16). Dequantizes ComfyUI fp8 scaling to
-    bf16 at load time; the `default_settings.fp8_storage` toggle then optionally
-    re-casts to fp8 for VRAM savings."""
+    (e.g. ComfyUI fp8_scaled or nvfp4, plain bf16/fp16). nvfp4 layers stay packed. Scaled
+    fp8 layers keep their fp8 weight and scale when fp8 compute is available or the model's
+    `default_settings.fp8_storage` is on (which then also casts the dense remainder to fp8);
+    otherwise they are dequantized to bf16 at load time."""
 
     def _load_model(
         self,
@@ -279,37 +288,69 @@ class QwenImageCheckpointModel(ModelLoader):
         )
         nvfp4_payloads = pop_nvfp4_layers(sd, header_layers=header_layers)
 
+        # ComfyUI 'scaled fp8': an fp8 weight plus its `weight_scale`, named in the header or by a per-layer marker.
+        fp8_layers = extract_fp8_scaled_layers(sd, layer_hints={**extract_comfy_quant_hints(sd), **header_layers})
+        # Kept fp8 only when something uses them: the fp8 matmul, or fp8 storage the user asked of this model. For
+        # storage the checkpoint's own scale is exact, where the layerwise cast of a folded weight has none. Without
+        # either, a dequantize per forward would cost speed for memory nobody asked to save, so they are folded.
+        use_fp8_storage = bool(fp8_layers) and self._should_use_fp8(config, SubModelType.Transformer)
+        keep_fp8 = bool(fp8_layers) and (should_keep_fp8_weights(target_device) or use_fp8_storage)
+
         is_edit = getattr(config, "variant", None) == QwenImageVariantType.Edit
         model_config = _build_qwen_image_transformer_config(sd, is_edit=is_edit)
 
-        # Built before the reservation, which depends on its modules: they decide which nvfp4 layers stay packed.
+        # Built before the reservation, which depends on its modules: they decide which nvfp4 and fp8 layers stay
+        # quantized.
         with accelerate.init_empty_weights():
             model = QwenImageTransformer2DModel(**model_config)
         skip_patterns = _model_declared_skip_patterns(model)
 
-        # One reservation, before the fold widens a single weight: `make_room` makes that much room rather than adding
-        # to an earlier one. Every fp8 layer is folded to the compute dtype.
+        # One reservation, before the fold or the split widens a single weight: `make_room` makes that much room
+        # rather than adding to an earlier one.
         self._ram_cache.make_room(
-            predict_cast_state_dict_size(sd, model_dtype, keep_fp8=False)
+            predict_cast_state_dict_size(
+                sd, model_dtype, keep_fp8=keep_fp8, model=model, skip_patterns=skip_patterns, scaled_layers=fp8_layers
+            )
             + predict_nvfp4_install_size(model, nvfp4_payloads, model_dtype, skip_patterns)
         )
 
-        dequantized = _dequantize_comfyui_fp8(sd, model_dtype)
-        if dequantized > 0:
-            logger.info(f"Dequantized {dequantized} ComfyUI-quantized weights")
-        _strip_quantization_metadata(sd)
-
-        # Dequantized fp8 weights are already at model_dtype; this only casts any remaining
-        # non-quantized float weights (e.g. a plain fp16/fp32 checkpoint) to the compute dtype.
-        for k in list(sd.keys()):
-            if sd[k].is_floating_point():
-                sd[k] = sd[k].to(model_dtype)
+        if fp8_layers and not keep_fp8:
+            dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
+            logger.info(f"Qwen Image: folded {len(fp8_layers)} scaled fp8 layer(s) into {model_dtype}.")
+            fp8_layers = {}
+        # Layers the cast would widen anyway are folded here with their scale applied, so the cast never drops one.
+        fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
+        cast_state_dict(sd, model_dtype, keep_fp8=keep_fp8, model=model, skip_patterns=skip_patterns)
 
         if nvfp4_payloads:
             packed = install_nvfp4_layers(model, sd, nvfp4_payloads, model_dtype, skip_patterns)
             logger.info(f"Qwen Image: kept {packed} of {len(nvfp4_payloads)} nvfp4 layer(s) packed.")
 
         model.load_state_dict(sd, strict=False, assign=True)
+        # `assign=True` aliases every param to its `sd` tensor: without this, the fp8 storage cast below would hold
+        # each dense weight at bf16 and fp8 at once, past the reservation.
+        sd.clear()
+
+        if fp8_layers:
+            attached = attach_fp8_scales(model, fp8_layers)
+            warn_on_unattached_scales(logger, "Qwen Image", attached, fp8_layers)
+            if not use_fp8_storage:
+                logger.info(f"Qwen Image: kept {attached} scaled fp8 layer(s) fp8 for fp8 compute.")
+            else:
+                # The rest of the dense weights go to fp8 storage too. The scaled layers are left alone: the cast
+                # hooks would upcast them without their scale. Marking the model cast keeps
+                # `_apply_fp8_layerwise_casting` from doing exactly that afterwards.
+                self._apply_fp8_to_nn_module(
+                    model,
+                    storage_dtype=torch.float8_e4m3fn,
+                    compute_dtype=model_dtype,
+                    extra_skip_patterns=skip_patterns,
+                    skip=lambda _name, module: getattr(module, "weight_scale", None) is not None,
+                )
+                logger.info(
+                    f"FP8 layerwise casting enabled for {config.name} (storage=float8_e4m3fn, compute={model_dtype}); "
+                    f"kept {attached} scaled fp8 layer(s) with their own scale."
+                )
         return model
 
 

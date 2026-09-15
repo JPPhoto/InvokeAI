@@ -1,10 +1,11 @@
 """Qwen-Image's single-file loaders keep Comfy's nvfp4 builds packed.
 
-Both Comfy files mix nvfp4 with scaled fp8, and both loaders fold ComfyUI fp8 with `_dequantize_comfyui_fp8`, which
-multiplies every `.weight_scale` into its weight -- nvfp4's block scales included. So what these tests pin is the order:
-the nvfp4 layers leave the state dict before the fold, come back packed under the paths the model uses (the encoder's
-legacy `model.X` keys become `model.language_model.X`), the fp8 layers are still folded, and one reservation is made
-before the fold widens anything. The compute dtype is bf16, as in production: the packed global scale must not be cast.
+Both Comfy files mix nvfp4 with scaled fp8, and an fp8 fold multiplies every `.weight_scale` into its weight -- nvfp4's
+block scales included. So what these tests pin is the order: the nvfp4 layers leave the state dict before any fp8
+handling, come back packed under the paths the model uses (the encoder's legacy `model.X` keys become
+`model.language_model.X`), and one reservation is made before anything is widened. The transformer's scaled fp8 layers
+are folded unless fp8 compute or the model's fp8 storage setting keeps them; the encoder's are always folded. The compute
+dtype is bf16, as in production: the packed global scale must not be cast.
 """
 
 import json
@@ -16,6 +17,9 @@ import torch
 
 from invokeai.backend.model_manager.configs.main import Main_Checkpoint_QwenImage_Config
 from invokeai.backend.model_manager.configs.qwen_vl_encoder import QwenVLEncoder_Checkpoint_Config
+from invokeai.backend.model_manager.load.model_cache.torch_module_autocast.torch_module_autocast import (
+    apply_custom_layers_to_model,
+)
 from invokeai.backend.model_manager.load.model_loaders import qwen_image
 from invokeai.backend.model_manager.load.model_loaders.qwen_image import (
     QwenImageCheckpointModel,
@@ -49,7 +53,7 @@ def _marker(fmt: str) -> torch.Tensor:
 
 
 def _patch_common(monkeypatch: pytest.MonkeyPatch, state_dict: dict, metadata: dict) -> list[bool]:
-    """Patch file access and devices; return a log of whether room had been made when the fp8 fold ran."""
+    """Patch file access and devices; return a log for `_record_fold`."""
     import safetensors.torch
 
     monkeypatch.setattr(safetensors.torch, "load_file", lambda _path: state_dict)
@@ -59,14 +63,16 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch, state_dict: dict, metadata: d
     return []
 
 
-def _record_fold(monkeypatch: pytest.MonkeyPatch, loader, log: list[bool]) -> None:
-    fold = qwen_image._dequantize_comfyui_fp8
+def _record_fold(monkeypatch: pytest.MonkeyPatch, loader, log: list[bool], *names: str) -> None:
+    """At every call of the named `qwen_image` functions, log whether room had been made yet."""
+    for name in names or ("_dequantize_comfyui_fp8",):
+        original = getattr(qwen_image, name)
 
-    def recording_fold(*args, **kwargs):
-        log.append(loader._ram_cache.make_room.called)
-        return fold(*args, **kwargs)
+        def recording(*args, _original=original, **kwargs):
+            log.append(loader._ram_cache.make_room.called)
+            return _original(*args, **kwargs)
 
-    monkeypatch.setattr(qwen_image, "_dequantize_comfyui_fp8", recording_fold)
+        monkeypatch.setattr(qwen_image, name, recording)
 
 
 class _TinyQwenImageTransformer(torch.nn.Module):
@@ -88,10 +94,17 @@ class _TinyQwenImageTransformer(torch.nn.Module):
         self.img_in = torch.nn.Linear(64, 128)
 
 
-def test_the_transformer_keeps_header_named_nvfp4_layers_packed_beside_folded_fp8(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+@pytest.mark.parametrize("mode", ["fold", "fp8_compute", "fp8_storage"])
+def test_the_transformer_keeps_nvfp4_packed_and_scaled_fp8_only_where_something_uses_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, mode: str
 ) -> None:
+    """Scaled fp8 layers stay fp8, with their own scale, for the fp8 matmul or for fp8 storage the model asks for; with
+    neither they are folded. Under fp8 storage the dense remainder goes to fp8 too, but not the scaled layers, whose
+    cast hooks would drop their scale."""
     import diffusers
+
+    from invokeai.backend.model_manager.load import load_default
+    from invokeai.backend.model_manager.taxonomy import SubModelType
 
     torch.manual_seed(0)
     state_dict: dict[str, torch.Tensor] = {}
@@ -118,14 +131,29 @@ def test_the_transformer_keeps_header_named_nvfp4_layers_packed_beside_folded_fp
 
     log = _patch_common(monkeypatch, state_dict, {"_quantization_metadata": json.dumps({"layers": header})})
     monkeypatch.setattr(diffusers, "QwenImageTransformer2DModel", _TinyQwenImageTransformer, raising=False)
+    monkeypatch.setattr(qwen_image, "should_keep_fp8_weights", lambda _device: mode == "fp8_compute")
+    monkeypatch.setattr(load_default, "_device_supports_fp8_storage", lambda *_args: True)
     checkpoint = tmp_path / "qwen_image_nvfp4.safetensors"
     checkpoint.touch()
     loader = object.__new__(QwenImageCheckpointModel)
     loader._ram_cache = SimpleNamespace(make_room=MagicMock())
-    _record_fold(monkeypatch, loader, log)
+    loader._torch_device = torch.device("cpu")
+    loader._logger = MagicMock()
+    _record_fold(monkeypatch, loader, log, "dequantize_fp8_scaled", "split_fp8_scaled_layers")
+    # The storage cast allocates an fp8 copy per weight; the loaded state dict must no longer hold the originals.
+    entries_at_storage_cast: list[int] = []
+    loader._apply_fp8_to_nn_module = lambda *args, **kwargs: (
+        entries_at_storage_cast.append(len(state_dict)),
+        QwenImageCheckpointModel._apply_fp8_to_nn_module(*args, **kwargs),
+    )
     biases = {path: state_dict[f"{path}.bias"] for path in expected}
+    config = Main_Checkpoint_QwenImage_Config.model_construct(
+        path=str(checkpoint),
+        name="qwen_image_nvfp4",
+        default_settings=SimpleNamespace(fp8_storage=mode == "fp8_storage"),
+    )
 
-    model = loader._load_from_singlefile(Main_Checkpoint_QwenImage_Config.model_construct(path=str(checkpoint)))
+    model = loader._load_model(config, SubModelType.Transformer)
 
     for path, weight in expected.items():
         module = model.get_submodule(path)
@@ -135,16 +163,34 @@ def test_the_transformer_keeps_header_named_nvfp4_layers_packed_beside_folded_fp
         x = torch.randn(3, module.in_features, dtype=COMPUTE_DTYPE)
         expected_out = torch.nn.functional.linear(x, weight.to(COMPUTE_DTYPE), biases[path].to(COMPUTE_DTYPE))
         torch.testing.assert_close(module(x), expected_out)
-    folded = model.transformer_blocks[0].txt_mlp.net[2]
-    assert type(folded) is torch.nn.Linear
-    assert torch.equal(folded.weight, (fp8_values * 0.5).to(COMPUTE_DTYPE))
-    assert log == [True]
+    fp8_layer = model.transformer_blocks[0].txt_mlp.net[2]
+    if mode == "fold":
+        assert torch.equal(fp8_layer.weight, (fp8_values * 0.5).to(COMPUTE_DTYPE))
+        assert getattr(fp8_layer, "weight_scale", None) is None
+    else:
+        assert fp8_layer.weight.dtype is torch.float8_e4m3fn
+        assert torch.equal(fp8_layer.weight.float(), fp8_values)
+        assert torch.equal(fp8_layer.weight_scale.float(), torch.tensor(0.5))
+    assert model.img_in.weight.dtype is (torch.float8_e4m3fn if mode == "fp8_storage" else COMPUTE_DTYPE)
+    assert getattr(model.img_in, "weight_scale", None) is None
+    # Through the cache's custom layers, as denoising runs it: a cast hook on the kept layer would upcast its codes
+    # without the scale before CustomLinear could apply it.
+    fp8_bias = fp8_layer.bias.detach().to(COMPUTE_DTYPE)
+    apply_custom_layers_to_model(model)
+    x = torch.randn(3, 64, dtype=COMPUTE_DTYPE)
+    expected_fp8_out = torch.nn.functional.linear(x, (fp8_values * 0.5).to(COMPUTE_DTYPE), fp8_bias)
+    torch.testing.assert_close(model.transformer_blocks[0].txt_mlp.net[2](x), expected_fp8_out)
+    # The reservation lands before the fold and before the split, whichever runs.
+    assert log == ([True, True] if mode == "fold" else [True])
+    assert entries_at_storage_cast == ([0] if mode == "fp8_storage" else [])
 
-    # Counted by hand: the packed layers as stored; their biases, the folded fp8 weight and its bias, its two scale
-    # scalars, and the dense input projection at bf16. The packed layers' scales are part of their stored size.
+    # Counted by hand: the packed layers as stored; their biases, the fp8 layer's bias and the dense input projection at
+    # bf16; the fp8 weight at bf16 when folded and one byte per element when kept. The side-channel scales, recovered
+    # before the reservation, are not in the state dict it sizes.
     packed = _packed_bytes(128, 64) + _packed_bytes(256, 64)
-    widened = (128 + 256) + (128 * 64 + 128 + 2) + (128 * 64 + 128)
-    loader._ram_cache.make_room.assert_called_once_with(packed + widened * COMPUTE_DTYPE.itemsize)
+    fp8_weight = 128 * 64 * (COMPUTE_DTYPE.itemsize if mode == "fold" else 1)
+    dense = (128 + 256) + 128 + (128 * 64 + 128)
+    loader._ram_cache.make_room.assert_called_once_with(packed + fp8_weight + dense * COMPUTE_DTYPE.itemsize)
 
 
 class _TinyQwenVL(torch.nn.Module):
