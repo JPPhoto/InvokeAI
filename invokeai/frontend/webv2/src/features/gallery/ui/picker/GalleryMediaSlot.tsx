@@ -3,14 +3,15 @@ import type { GalleryItem, GalleryItemKind, GalleryItemRef } from '@features/gal
 
 import { Box, HStack, Icon, Image, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useDndMonitor } from '@dnd-kit/core';
-import { classifyGalleryUpload, getGalleryItemByRef } from '@features/gallery/data/backend';
+import { classifyGalleryUpload, getGalleryUploadAccept } from '@features/gallery/core/items';
+import { getGalleryItemByRef } from '@features/gallery/data/backend';
 import { getGalleryImageThumbnailUrl } from '@features/gallery/data/imageUrls';
 import { galleryBoardsOptions } from '@features/gallery/data/queries';
 import { getGalleryVideoThumbnailUrl } from '@features/gallery/data/videoUrls';
 import { isGalleryItemDragData, useGalleryItemDroppable } from '@features/gallery/ui/galleryDnd';
 import { useGalleryUi } from '@features/gallery/ui/GalleryUiContext';
 import { useGalleryUploadAction } from '@features/gallery/ui/useGalleryUploadAction';
-import { getGalleryUploadAccept, useGalleryUploadInput } from '@features/gallery/ui/useGalleryUploadInput';
+import { useGalleryUploadInput } from '@features/gallery/ui/useGalleryUploadInput';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
