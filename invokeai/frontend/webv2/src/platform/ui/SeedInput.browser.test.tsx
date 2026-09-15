@@ -234,6 +234,39 @@ describe('SeedInput', () => {
     expect(seedInput()?.getAttribute('aria-describedby')).toBe(errorId);
   });
 
+  it("describes the input with the field's help text ahead of the preview", async () => {
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <Field helpText="Any whole number" label="Seed">
+            <Host initialSeed={42} seedMode="increment" onCommit={vi.fn()} />
+          </Field>
+        </ChakraProvider>
+      );
+    });
+
+    const helperId = host.querySelector('[data-part="helper-text"]')?.id;
+    const previewId = host.querySelector('[data-testid="seed-sequence-preview"]')?.id;
+
+    expect(helperId).toBeTruthy();
+    expect(seedInput()?.getAttribute('aria-describedby')).toBe(`${helperId} ${previewId}`);
+  });
+
+  it('never names an error text the field does not render', async () => {
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <Field invalid label="Seed">
+            <Host initialSeed={42} seedMode="fixed" onCommit={vi.fn()} />
+          </Field>
+        </ChakraProvider>
+      );
+    });
+
+    expect(seedInput()?.getAttribute('aria-invalid')).toBe('true');
+    expect(seedInput()?.getAttribute('aria-describedby')).toBeNull();
+  });
+
   it('renders an empty field for an absent seed without committing anything', async () => {
     const onCommit = await renderHost('fixed', undefined);
 

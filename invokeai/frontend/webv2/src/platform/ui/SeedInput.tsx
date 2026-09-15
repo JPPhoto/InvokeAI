@@ -158,10 +158,13 @@ export const SeedInput = ({
   const { t } = useTranslation();
   const previewId = useId();
   const isRandom = seedMode === 'random';
-  // Inside a Field the input is already described by the field's error and helper text; the
-  // preview joins that list rather than replacing it.
+  // Inside a Field the input stays described by the field's helper and error text, and the preview
+  // joins that list. Ark 5.39 moved the error id from `ariaDescribedby` to its input props' error message.
   const field = useFieldContext();
-  const describedBy = [field?.ariaDescribedby, plan ? previewId : undefined].filter(Boolean).join(' ') || undefined;
+  const describedBy =
+    [field?.ariaDescribedby, field?.getInputProps()['aria-errormessage'], plan ? previewId : undefined]
+      .filter(Boolean)
+      .join(' ') || undefined;
   // The host's id goes through zag's id map, never onto the element: zag syncs the DOM value
   // by looking the input up under its own id, so an overriding `id` leaves an external change
   // (the dice, a recall, an advance) invisible until the next keystroke.
