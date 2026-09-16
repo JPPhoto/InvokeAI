@@ -66,7 +66,6 @@ const createGallery = (overrides: Partial<GalleryStateView> = {}) =>
   ({
     boards: [board],
     compareImageKey: null,
-    currentItem: null,
     galleryView: 'images',
     isLoading: false,
     items: [createItem('a.png'), createItem('b.png')],

@@ -253,3 +253,32 @@ export const getGalleryGridRowIndexForItem = (rows: GalleryGridRow[], itemIndex:
   rows.findIndex(
     (row) => row.kind === 'cells' && row.cells.some((cell) => cell.kind === 'item' && cell.itemIndex === itemIndex)
   );
+
+export const getGalleryProgressLayout = ({
+  columns,
+  tileSize,
+  sessionCount,
+  visible,
+  collapsed,
+}: {
+  columns: number;
+  tileSize: number;
+  sessionCount: number;
+  visible: boolean;
+  collapsed: boolean;
+}) => {
+  const headerHeight = GALLERY_STARRED_HEADER_HEIGHT_PX;
+  const paddingBottom = 8;
+  const rowCount = Math.ceil(sessionCount / columns);
+  const rowHeight = tileSize + GALLERY_GRID_GAP_PX;
+  return {
+    columns,
+    tileSize,
+    headerHeight,
+    paddingBottom,
+    rowCount,
+    rowHeight,
+    height: visible && sessionCount > 0 ? headerHeight + (collapsed ? 0 : rowCount * rowHeight + paddingBottom) : 0,
+  };
+};
+export type GalleryProgressLayout = ReturnType<typeof getGalleryProgressLayout>;

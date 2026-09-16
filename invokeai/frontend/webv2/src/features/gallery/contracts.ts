@@ -57,7 +57,6 @@ export {
   getGallerySelectedImagePage,
   getGallerySelectedImageQuery,
   getGallerySemanticImageQuery,
-  type GalleryCurrentItem,
   type GallerySelectedImageQuery,
 } from './ui/galleryStateView';
 export {

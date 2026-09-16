@@ -1,26 +1,26 @@
+import type { GalleryThumbnailFit } from '@features/gallery/core/settings';
 import type { QueueProgressSession } from '@features/queue/contracts';
 
-import { Box, chakra, Icon, Skeleton, Text } from '@chakra-ui/react';
+import { Box, chakra, Icon, ProgressCircle, Skeleton, Text } from '@chakra-ui/react';
 import { getDeterminateProgressPercent } from '@features/queue/contracts';
 import { useItemProgress, useQueueItemProgressImage } from '@features/queue/react';
 import { StreamingImageFrame } from '@platform/ui/streaming-image/StreamingImageFrame';
 import { progressImageToStreamingSource } from '@platform/ui/streaming-image/streamingImageSource';
-import { ChevronRightIcon, HourglassIcon } from 'lucide-react';
-import { useCallback, useId, useRef } from 'react';
+import { CheckIcon, ChevronRightIcon, HourglassIcon } from 'lucide-react';
+import { useCallback, useEffectEvent, useId, useLayoutEffect, useRef } from 'react';
 import { useVirtualizer } from 'react-hook-tanstack-virtual';
 import { useTranslation } from 'react-i18next';
 
-import { GALLERY_GRID_GAP_PX, GALLERY_STARRED_HEADER_HEIGHT_PX } from './galleryGridLayout';
+import type { GalleryProgressLayout } from './galleryGridLayout';
+
 import { useGalleryUi } from './GalleryUiContext';
 import { useGalleryWidget } from './GalleryWidgetContext';
 
 export const GalleryProgressSection = ({
-  columns,
-  tileSize,
+  layout,
   getScrollElement,
 }: {
-  columns: number;
-  tileSize: number;
+  layout: GalleryProgressLayout;
   getScrollElement(): HTMLDivElement | null;
 }) => {
   const { t } = useTranslation();
@@ -31,8 +31,13 @@ export const GalleryProgressSection = ({
   const contentId = useId();
   const restoreFocus = useCallback(() => {
     const root = rootRef.current;
-    (root?.querySelector<HTMLButtonElement>('[data-progress-disclosure]') ?? root)?.focus({ preventScroll: true });
-  }, []);
+    const viewport = getScrollElement();
+    const target =
+      root?.querySelector<HTMLButtonElement>('[data-progress-disclosure]') ??
+      viewport?.querySelector<HTMLElement>('button[aria-current="true"], [role="listitem"] button, [role="button"]') ??
+      viewport;
+    target?.focus({ preventScroll: true });
+  }, [getScrollElement]);
   const disclosureRef = useCallback(
     (element: HTMLButtonElement | null) => {
       if (!element) {
@@ -52,8 +57,12 @@ export const GalleryProgressSection = ({
   );
   const visible = showPendingItems && progressSessions.length > 0;
 
+  if (!visible) {
+    return null;
+  }
+
   return (
-    <Box ref={rootRef} aria-label={t('widgets.gallery.inProgress')} flexShrink={0} minW="0" role="region" tabIndex={-1}>
+    <Box ref={rootRef} aria-label={t('widgets.gallery.inProgress')} flexShrink={0} minW="0" role="region">
       {visible ? (
         <>
           <chakra.button
@@ -66,7 +75,7 @@ export const GalleryProgressSection = ({
             focusVisibleRing="inside"
             data-progress-disclosure
             gap="1"
-            h={`${GALLERY_STARRED_HEADER_HEIGHT_PX}px`}
+            h={`${layout.headerHeight}px`}
             py="0"
             px="1"
             textAlign="start"
@@ -90,10 +99,9 @@ export const GalleryProgressSection = ({
           <Box id={contentId} hidden={progressSectionCollapsed}>
             {!progressSectionCollapsed ? (
               <GalleryProgressGrid
-                key={`${columns}:${tileSize}`}
                 sessions={progressSessions}
-                size={tileSize}
-                columns={columns}
+                layout={layout}
+                fit={gallery.settings.thumbnailFit}
                 getScrollElement={getScrollElement}
                 pinnedSessionId={pinnedProgressSessionId}
                 liveFollowEnabled={liveFollowEnabled}
@@ -110,8 +118,8 @@ export const GalleryProgressSection = ({
 
 const GalleryProgressGrid = ({
   sessions,
-  size,
-  columns,
+  layout,
+  fit,
   getScrollElement,
   pinnedSessionId,
   liveFollowEnabled,
@@ -119,52 +127,49 @@ const GalleryProgressGrid = ({
   restoreFocus,
 }: {
   sessions: QueueProgressSession[];
-  size: number;
-  columns: number;
+  layout: GalleryProgressLayout;
+  fit: GalleryThumbnailFit;
   getScrollElement(): HTMLDivElement | null;
   pinnedSessionId: string | null;
   liveFollowEnabled: boolean;
   onFollow(id: string): void;
   restoreFocus(): void;
 }) => {
-  const rowHeight = size + GALLERY_GRID_GAP_PX;
-  const rowCount = Math.ceil(sessions.length / columns);
+  const { columns, tileSize, headerHeight, paddingBottom, rowCount, rowHeight } = layout;
   const estimateSize = useCallback(() => rowHeight, [rowHeight]);
-  const getItemKey = useCallback((index: number) => sessions[index * columns]!.id, [sessions, columns]);
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement,
     estimateSize,
-    getItemKey,
-    scrollMargin: GALLERY_STARRED_HEADER_HEIGHT_PX,
+    scrollMargin: headerHeight,
     overscan: 2,
   });
+  const measure = useEffectEvent(() => virtualizer.measure());
+  useLayoutEffect(() => {
+    measure();
+  }, [rowHeight, columns]);
   return (
-    <Box minW="0" pb="2">
+    <Box minW="0" pb={`${paddingBottom}px`}>
       <Box position="relative" h={`${virtualizer.totalSize}px`} w="full">
-        {virtualizer.virtualItems.map((row) => (
-          <Box
-            key={row.key}
-            position="absolute"
-            top={`${row.start - GALLERY_STARRED_HEADER_HEIGHT_PX}px`}
-            left="0"
-            display="grid"
-            gridTemplateColumns={`repeat(${columns}, minmax(0, 1fr))`}
-            gap={`${GALLERY_GRID_GAP_PX}px`}
-            w="full"
-          >
-            {sessions.slice(row.index * columns, (row.index + 1) * columns).map((session) => (
+        {virtualizer.virtualItems.flatMap((row) =>
+          sessions.slice(row.index * columns, (row.index + 1) * columns).map((session, column) => (
+            <Box
+              key={session.id}
+              position="absolute"
+              top={`${row.start - headerHeight}px`}
+              left={`${column * rowHeight}px`}
+            >
               <GalleryProgressTile
-                key={session.id}
                 session={session}
-                size={size}
+                size={tileSize}
+                fit={fit}
                 selected={liveFollowEnabled && (pinnedSessionId === null || pinnedSessionId === session.id)}
                 onFollow={onFollow}
                 restoreFocus={restoreFocus}
               />
-            ))}
-          </Box>
-        ))}
+            </Box>
+          ))
+        )}
       </Box>
     </Box>
   );
@@ -173,12 +178,14 @@ const GalleryProgressGrid = ({
 const GalleryProgressTile = ({
   session,
   size,
+  fit,
   selected,
   onFollow,
   restoreFocus,
 }: {
   session: QueueProgressSession;
   size: number;
+  fit: GalleryThumbnailFit;
   selected: boolean;
   onFollow(id: string): void;
   restoreFocus(): void;
@@ -204,7 +211,11 @@ const GalleryProgressTile = ({
         : percentage !== null
           ? `${percentage}%`
           : progress?.message || t('widgets.gallery.progressPreparing');
-  const follow = useCallback(() => onFollow(session.id), [onFollow, session.id]);
+  const follow = useCallback(() => {
+    if (session.state === 'running') {
+      onFollow(session.id);
+    }
+  }, [onFollow, session.id, session.state]);
   const buttonRef = useCallback(
     (element: HTMLButtonElement | null) => {
       if (!element) {
@@ -226,7 +237,7 @@ const GalleryProgressTile = ({
       focusVisibleRing="inside"
       aria-label={`${label} · ${status}`}
       aria-pressed={selected && session.state !== 'queued'}
-      disabled={session.state === 'queued'}
+      aria-disabled={session.state !== 'running'}
       borderColor={selected && session.state !== 'queued' ? 'accent.solid' : 'border.subtle'}
       borderWidth="1px"
       flexShrink={0}
@@ -234,19 +245,41 @@ const GalleryProgressTile = ({
       overflow="hidden"
       rounded="md"
       textAlign="start"
-      title={label}
+      title={`${label} · ${status}`}
+      position="relative"
       w={`${size}px`}
       onClick={follow}
     >
       <StreamingImageFrame
         aspectRatio={1}
-        fit="contain"
+        fit={fit === 'aspect' ? 'contain' : 'cover'}
         liveImage={progressImageToStreamingSource(image)}
         shouldAntialiasLiveImage={antialiasProgressImages}
         w="full"
       >
-        <Skeleton h="full" w="full" />
+        {session.state === 'queued' ? <Box bg="bg.subtle" h="full" w="full" /> : <Skeleton h="full" w="full" />}
       </StreamingImageFrame>
+      <Box
+        position="absolute"
+        bottom="1"
+        right="1"
+        pointerEvents="none"
+        bg="bg/85"
+        rounded="full"
+        p="0.5"
+        display="flex"
+      >
+        {session.state === 'running' ? (
+          <ProgressCircle.Root aria-label={status} size="xs" value={percentage}>
+            <ProgressCircle.Circle>
+              <ProgressCircle.Track />
+              <ProgressCircle.Range />
+            </ProgressCircle.Circle>
+          </ProgressCircle.Root>
+        ) : (
+          <Icon as={session.state === 'queued' ? HourglassIcon : CheckIcon} boxSize="4" aria-label={status} />
+        )}
+      </Box>
     </chakra.button>
   );
 };

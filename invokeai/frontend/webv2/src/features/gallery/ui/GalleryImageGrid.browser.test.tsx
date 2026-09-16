@@ -44,6 +44,7 @@ import { GalleryWidgetContext } from './GalleryWidgetContext';
 import { EMPTY_GALLERY_STARRED_STRIP } from './useGalleryStarredStrip';
 
 const mocks = vi.hoisted(() => ({
+  itemProgress: null as { percentage: number; message: string } | null,
   progressFrame: null as { dataUrl: string; width: number; height: number } | null,
   fetchNames: vi.fn(),
   measure: vi.fn(),
@@ -105,7 +106,7 @@ vi.mock('react-hook-tanstack-virtual', async (importOriginal) => {
 });
 
 vi.mock('@features/queue/react', () => ({
-  useItemProgress: () => null,
+  useItemProgress: () => mocks.itemProgress,
   useQueueItemProgressImage: () => mocks.progressFrame,
 }));
 
@@ -241,7 +242,6 @@ const createGallery = (overrides: Partial<GalleryStateView> = {}): GalleryStateV
     anchoredWindowPage: 0,
     boards: [board],
     compareImageKey: null,
-    currentItem: { itemKey: 'image:first.png', kind: 'item' },
     galleryView: 'images',
     isComparisonActive: false,
     isLoading: false,
@@ -517,6 +517,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   registeredCommands.clear();
   currentGallery = createGallery();
+  mocks.itemProgress = null;
   currentProgressSessions = [];
   currentLiveFollowEnabled = false;
   mocks.progressFrame = null;
@@ -1418,9 +1419,9 @@ describe('shared gallery progress section', () => {
       { page: 5, anchoredWindowPage: 5 },
     ]) {
       await renderGallery(createGallery(boardState));
-      expect(host?.querySelector('button[title="Workflow A"]')).not.toBeNull();
+      expect(host?.querySelector('button[title^="Workflow A ·"]')).not.toBeNull();
     }
-    await click(host!.querySelector<HTMLButtonElement>('button[title="Workflow A"]')!);
+    await click(host!.querySelector<HTMLButtonElement>('button[title^="Workflow A ·"]')!);
     expect(followProgressSession).toHaveBeenCalledWith('run:1');
     expect(host?.querySelectorAll('[role="listitem"]')).toHaveLength(currentGallery.items.length);
   });
@@ -1456,6 +1457,52 @@ describe('shared gallery progress section', () => {
     await renderGallery(createGallery({ settings: { ...DENSE_SETTINGS, progressSectionCollapsed: true } }));
     expect(tiles()).toHaveLength(0);
   });
+  it('keeps surviving tile nodes and focus through resizing, reflow and earlier completion', async () => {
+    mocks.progressFrame = {
+      dataUrl: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="64" height="64"/%3E',
+      width: 64,
+      height: 64,
+    };
+    currentProgressSessions = Array.from({ length: 6 }, (_, index) => ({
+      ...session,
+      id: `run:${index + 1}`,
+      itemIndex: index + 1,
+      label: `Slot ${index + 1}`,
+    }));
+    await renderGallery();
+    const tile = host!.querySelector<HTMLButtonElement>('button[title^="Slot 4 ·"]')!;
+    const image = tile.querySelector('img');
+    expect(image).not.toBeNull();
+    tile.focus();
+    host!.style.width = '520px';
+    await renderGallery(createGallery({ settings: { ...DENSE_SETTINGS, imageDensityPercent: 100 } }));
+    expect(host!.querySelector('button[title^="Slot 4 ·"]')).toBe(tile);
+    expect(tile.querySelector('img')).toBe(image);
+    expect(document.activeElement).toBe(tile);
+    currentProgressSessions = currentProgressSessions.slice(1);
+    await renderGallery();
+    expect(host!.querySelector('button[title^="Slot 4 ·"]')).toBe(tile);
+    expect(tile.querySelector('img')).toBe(image);
+    expect(document.activeElement).toBe(tile);
+  });
+  it('shows per-session progress and distinct queued and finishing indicators without captions', async () => {
+    mocks.itemProgress = { percentage: 0.42, message: 'Denoising' };
+    currentProgressSessions = [
+      session,
+      { ...session, id: 'run:2', state: 'queued' },
+      { ...session, id: 'run:3', state: 'settling' },
+    ];
+    await renderGallery();
+    const region = host!.querySelector('[aria-label="In progress"]')!;
+    expect(region.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('42');
+    expect(region.querySelector('svg[aria-label="Queued"]')).not.toBeNull();
+    expect(region.querySelector('svg[aria-label="Finishing"]')).not.toBeNull();
+    const finishing = region.querySelector<HTMLButtonElement>('button[aria-label$="Finishing"]')!;
+    finishing.focus();
+    await click(finishing);
+    expect(followProgressSession).not.toHaveBeenCalled();
+    expect(finishing.getAttribute('aria-disabled')).toBe('true');
+  });
   it('updates tile spacing when density changes without changing the batch', async () => {
     currentProgressSessions = [session, { ...session, id: 'run:2', itemIndex: 2 }];
     for (const imageDensityPercent of [100, 0, 100]) {
@@ -1479,7 +1526,8 @@ describe('shared gallery progress section', () => {
     expect(tiles[2]!.getBoundingClientRect().left).toBeCloseTo(tiles[0]!.getBoundingClientRect().left, 0);
     expect(tiles[0]!.disabled).toBe(false);
     for (const tile of [tiles[1]!, tiles[2]!]) {
-      expect(tile.disabled).toBe(true);
+      expect(tile.getAttribute('aria-disabled')).toBe('true');
+      expect(tile.disabled).toBe(false);
       expect(tile.textContent).toBe('');
       expect(tile.getAttribute('aria-label')).toContain('Queued');
     }
@@ -1492,12 +1540,13 @@ describe('shared gallery progress section', () => {
     await renderGallery(createGallery({ settings: { ...DENSE_SETTINGS, progressSectionCollapsed: true } }));
     expect(host?.querySelector('[data-progress-disclosure]')?.getAttribute('aria-expanded')).toBe('false');
     await renderGallery(createGallery());
-    host!.querySelector<HTMLButtonElement>('button[title="Workflow A"]')!.focus();
+    host!.querySelector<HTMLButtonElement>('button[title^="Workflow A ·"]')!.focus();
     currentProgressSessions = [];
     mocks.progressFrame = null;
     await renderGallery();
     expect(host?.querySelector('[data-progress-disclosure]')).toBeNull();
-    expect(host?.contains(document.activeElement)).toBe(true);
+    expect(host?.querySelector('[aria-label="In progress"]')).toBeNull();
+    expect(document.activeElement?.closest('[role="listitem"]')).not.toBeNull();
   });
   it('keeps concurrent progress separate from starred and saved items at narrow widths', async () => {
     await page.viewport(760, 580);

@@ -35,6 +35,7 @@ import {
   getGalleryColumnCount,
   getGalleryGridRowHeightPx,
   getGalleryGridRowIndexForItem,
+  getGalleryProgressLayout,
 } from './galleryGridLayout';
 import { GalleryProgressSection } from './GalleryProgressSection';
 import { GalleryThumbnailCell } from './GalleryThumbnail';
@@ -177,7 +178,7 @@ export const GalleryImageGrid = () => {
 
   const columnCount = getGalleryColumnCount({ imageDensityPercent, widthPx: viewportWidth });
   const isFollowingLive = liveFollowEnabled && progressSessions.some((session) => session.state !== 'queued');
-  const isComparisonActive = gallery.isComparisonActive;
+  const isComparisonActive = gallery.isComparisonActive && !isFollowingLive;
   const selectedBoard = gallery.boards.find((board) => board.id === gallery.selectedBoardId);
   const selectedBoardName = selectedBoard
     ? getGalleryBoardLabel(selectedBoard, t)
@@ -224,13 +225,14 @@ export const GalleryImageGrid = () => {
   const getRowKey = useCallback((index: number) => rows[index]?.key ?? index, [rows]);
   const getScrollElement = useCallback(() => viewportRef.current, []);
 
-  const progressHeight =
-    gallery.settings.showPendingItems && progressSessions.length > 0
-      ? GALLERY_STARRED_HEADER_HEIGHT_PX +
-        (gallery.settings.progressSectionCollapsed
-          ? 0
-          : Math.ceil(progressSessions.length / columnCount) * rowHeightPx + 8)
-      : 0;
+  const progressLayout = getGalleryProgressLayout({
+    columns: columnCount,
+    tileSize: cellSizePx,
+    sessionCount: progressSessions.length,
+    visible: gallery.settings.showPendingItems,
+    collapsed: gallery.settings.progressSectionCollapsed,
+  });
+  const progressHeight = progressLayout.height;
   const virtualizer = useVirtualizer({
     count: rowCount,
     scrollMargin: progressHeight,
@@ -498,7 +500,7 @@ export const GalleryImageGrid = () => {
         <ScrollArea.Root h="full" minH="0" size="xs" variant="hover" w="full">
           <ScrollArea.Viewport ref={viewportRef} h="full" outline="none" w="full">
             <ScrollArea.Content display="flex" flexDirection="column" minH="full">
-              <GalleryProgressSection columns={columnCount} tileSize={cellSizePx} getScrollElement={getScrollElement} />
+              <GalleryProgressSection layout={progressLayout} getScrollElement={getScrollElement} />
               {isEmpty ? (
                 gallery.isLoading || hasActiveSearch || isVirtualBoard || gallery.starredOnly ? (
                   <Flex align="center" color="fg.muted" flex="1" justify="center" minH="8rem">

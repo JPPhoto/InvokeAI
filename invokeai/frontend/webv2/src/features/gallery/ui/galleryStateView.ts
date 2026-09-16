@@ -35,8 +35,6 @@ const UNCATEGORIZED_BOARD: GalleryBoard = {
   videoCount: 0,
 };
 
-export type GalleryCurrentItem = { kind: 'item'; itemKey: GalleryItemKey } | null;
-
 export interface GalleryStateView {
   /**
    * Page the infinite window starts at, when a reveal has anchored it
@@ -47,7 +45,6 @@ export interface GalleryStateView {
   anchoredWindowPage: number;
   boards: GalleryBoard[];
   compareImageKey: GalleryItemKey | null;
-  currentItem: GalleryCurrentItem;
   galleryView: GalleryView;
   /** A compare image is set and differs from the visible image selection. */
   isComparisonActive: boolean;
@@ -238,9 +235,6 @@ export const getGalleryStateView = (
   const semanticImageQuery = getGallerySemanticImageQuery(values);
   const page = getGalleryPage(values);
   const isAnchoredInfiniteWindow = settings.paginationMode === 'infinite' && page > 0;
-  const currentItem: GalleryCurrentItem = visibleSelectedItemKey
-    ? { kind: 'item', itemKey: visibleSelectedItemKey }
-    : null;
   const selectedImageQuery = getGallerySelectedImageQuery(values);
   const revealTargetPage =
     settings.paginationMode === 'paginated' &&
@@ -261,7 +255,6 @@ export const getGalleryStateView = (
     anchoredWindowPage: isAnchoredInfiniteWindow ? page : 0,
     boards,
     compareImageKey,
-    currentItem,
     galleryView,
     isComparisonActive,
     items,
