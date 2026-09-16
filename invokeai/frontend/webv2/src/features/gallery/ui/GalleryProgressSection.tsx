@@ -34,7 +34,9 @@ export const GalleryProgressSection = ({
     const viewport = getScrollElement();
     const target =
       root?.querySelector<HTMLButtonElement>('[data-progress-disclosure]') ??
-      viewport?.querySelector<HTMLElement>('button[aria-current="true"], [role="listitem"] button, [role="button"]') ??
+      viewport?.querySelector<HTMLElement>('button[aria-current="true"]') ??
+      viewport?.querySelector<HTMLElement>('[role="listitem"] button') ??
+      viewport?.querySelector<HTMLElement>('[role="button"]') ??
       viewport;
     target?.focus({ preventScroll: true });
   }, [getScrollElement]);
@@ -63,55 +65,47 @@ export const GalleryProgressSection = ({
 
   return (
     <Box ref={rootRef} aria-label={t('widgets.gallery.inProgress')} flexShrink={0} minW="0" role="region">
-      {visible ? (
-        <>
-          <chakra.button
-            ref={disclosureRef}
-            display="flex"
-            alignItems="center"
-            aria-controls={contentId}
-            aria-expanded={!progressSectionCollapsed}
-            type="button"
-            focusVisibleRing="inside"
-            data-progress-disclosure
-            gap="1"
-            h={`${layout.headerHeight}px`}
-            py="0"
-            px="1"
-            textAlign="start"
-            title={t('widgets.gallery.progressShared')}
-            w="full"
-            onClick={toggleCollapsed}
-          >
-            <Icon
-              as={ChevronRightIcon}
-              boxSize="3"
-              transform={progressSectionCollapsed ? undefined : 'rotate(90deg)'}
-            />
-            <Icon as={HourglassIcon} boxSize="3" />
-            <Text fontSize="2xs" fontWeight="600" letterSpacing="wide" lineHeight="1" textTransform="uppercase">
-              {t('widgets.gallery.inProgress')}
-            </Text>
-            <Text color="fg.muted" fontSize="xs" fontVariantNumeric="tabular-nums">
-              · {progressSessions.length}
-            </Text>
-          </chakra.button>
-          <Box id={contentId} hidden={progressSectionCollapsed}>
-            {!progressSectionCollapsed ? (
-              <GalleryProgressGrid
-                sessions={progressSessions}
-                layout={layout}
-                fit={gallery.settings.thumbnailFit}
-                getScrollElement={getScrollElement}
-                pinnedSessionId={pinnedProgressSessionId}
-                liveFollowEnabled={liveFollowEnabled}
-                onFollow={followProgressSession}
-                restoreFocus={restoreFocus}
-              />
-            ) : null}
-          </Box>
-        </>
-      ) : null}
+      <chakra.button
+        ref={disclosureRef}
+        display="flex"
+        alignItems="center"
+        aria-controls={contentId}
+        aria-expanded={!progressSectionCollapsed}
+        type="button"
+        focusVisibleRing="inside"
+        data-progress-disclosure
+        gap="1"
+        h={`${layout.headerHeight}px`}
+        py="0"
+        px="1"
+        textAlign="start"
+        title={t('widgets.gallery.progressShared')}
+        w="full"
+        onClick={toggleCollapsed}
+      >
+        <Icon as={ChevronRightIcon} boxSize="3" transform={progressSectionCollapsed ? undefined : 'rotate(90deg)'} />
+        <Icon as={HourglassIcon} boxSize="3" />
+        <Text fontSize="2xs" fontWeight="600" letterSpacing="wide" lineHeight="1" textTransform="uppercase">
+          {t('widgets.gallery.inProgress')}
+        </Text>
+        <Text color="fg.muted" fontSize="xs" fontVariantNumeric="tabular-nums">
+          · {progressSessions.length}
+        </Text>
+      </chakra.button>
+      <Box id={contentId} hidden={progressSectionCollapsed}>
+        {!progressSectionCollapsed ? (
+          <GalleryProgressGrid
+            sessions={progressSessions}
+            layout={layout}
+            fit={gallery.settings.thumbnailFit}
+            getScrollElement={getScrollElement}
+            pinnedSessionId={pinnedProgressSessionId}
+            liveFollowEnabled={liveFollowEnabled}
+            onFollow={followProgressSession}
+            restoreFocus={restoreFocus}
+          />
+        ) : null}
+      </Box>
     </Box>
   );
 };
@@ -238,6 +232,7 @@ const GalleryProgressTile = ({
       aria-label={`${label} · ${status}`}
       aria-pressed={selected && session.state !== 'queued'}
       aria-disabled={session.state !== 'running'}
+      tabIndex={session.state === 'running' ? 0 : -1}
       borderColor={selected && session.state !== 'queued' ? 'accent.solid' : 'border.subtle'}
       borderWidth="1px"
       flexShrink={0}

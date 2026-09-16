@@ -1532,6 +1532,38 @@ describe('shared gallery progress section', () => {
       expect(tile.getAttribute('aria-label')).toContain('Queued');
     }
   });
+  it('restores focus to the current image ahead of an earlier starred thumbnail', async () => {
+    currentProgressSessions = [session];
+    currentLiveFollowEnabled = true;
+    setStrip([createItem('image', 'starred.png', { starred: true })]);
+    const gallery = createGallery({ selectedItemKey: 'image:last.png', selectedItemKeys: ['image:last.png'] });
+    await renderGallery(gallery);
+    host!.querySelector<HTMLButtonElement>('button[title^="Workflow A ·"]')!.focus();
+    currentProgressSessions = [];
+    await renderGallery(gallery);
+    const current = host!.querySelector('button[aria-current="true"]');
+    expect(current).not.toBeNull();
+    expect(current).not.toBe(host!.querySelector('[role="listitem"] button'));
+    expect(document.activeElement).toBe(current);
+  });
+  it('tabs through running previews and skips queued and settling tiles', async () => {
+    currentProgressSessions = [
+      { ...session, id: 'run:2', state: 'queued' },
+      session,
+      { ...session, id: 'run:3', state: 'settling' },
+    ];
+    await renderGallery();
+    host!.querySelector<HTMLButtonElement>('[data-progress-disclosure]')!.focus();
+    await act(() => userEvent.tab());
+    expect(document.activeElement).toBe(host!.querySelector('button[aria-label$="Preparing"]'));
+    await act(() => userEvent.tab());
+    expect(document.activeElement?.closest('[role="listitem"]')).not.toBeNull();
+    for (const tile of host!.querySelectorAll<HTMLButtonElement>(
+      '[aria-label="In progress"] button[aria-disabled="true"]'
+    )) {
+      expect(tile.tabIndex).toBe(-1);
+    }
+  });
   it('collapses independently and restores focus when the last session disappears', async () => {
     currentProgressSessions = [session];
     await renderGallery();
