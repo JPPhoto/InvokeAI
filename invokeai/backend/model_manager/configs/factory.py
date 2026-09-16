@@ -187,6 +187,7 @@ from invokeai.backend.model_manager.taxonomy import (
     ModelType,
     variant_type_adapter,
 )
+from invokeai.backend.quantization.fp8_scaled import is_scale_metadata_key
 
 logger = logging.getLogger(__name__)
 
@@ -202,11 +203,18 @@ SettingsT = TypeVar("SettingsT", bound=BaseModel)
 
 
 def _denoiser_stores_float8_weights(mod: ModelOnDisk) -> bool:
-    """Whether the model's denoiser weights are stored in float8, judged by the safetensors headers' dtypes and never
-    by a file name.
+    """Whether the denoiser's weights are stored in a float8 the storage cast can reproduce, judged by the safetensors
+    headers and never by a file name.
 
     Only headers are read, a few KB each. A header that cannot be read is no evidence of float8 weights: identification
     did not need that file, and picking a default setting is no reason to fail an install.
+
+    A *scaled* fp8 checkpoint is deliberately excluded. Its weights mean nothing without the per-tensor scale stored
+    beside them, and FP8 Storage has no scale to apply: the loader folds the scale into the weight and hands the cast
+    plain bf16, which then rounds to *unscaled* fp8. Measured on `flux-2-klein-4b-fp8`, that flushes 3.4% of the
+    weights to exactly zero -- by underflow, the scales being ~1e-3, not by saturation -- for 2-4% relative L2 error
+    per layer, and it buys nothing: the file already was one byte per weight. Keeping such a file in its own scaled
+    form is the lossless way to spend that byte, but that is a loader change rather than a default setting.
     """
     if mod.path.is_file():
         candidates = [mod.path]
@@ -217,6 +225,7 @@ def _denoiser_stores_float8_weights(mod: ModelOnDisk) -> bool:
             if path.parent == mod.path or path.relative_to(mod.path).parts[0] in _DENOISER_SUBFOLDERS
         ]
 
+    stores_float8 = False
     for path in candidates:
         if path.suffix != ".safetensors":
             continue
@@ -225,14 +234,15 @@ def _denoiser_stores_float8_weights(mod: ModelOnDisk) -> bool:
         except (OSError, ValueError) as e:
             logger.debug(f"Could not read the safetensors header of {path} to look for float8 weights: {e}")
             continue
-        if any(
-            not key.startswith(_BUNDLED_COMPONENT_KEY_PREFIXES)
-            and isinstance(info, dict)
-            and info.get("dtype") in _FP8_SAFETENSORS_DTYPES
-            for key, info in header.items()
-        ):
-            return True
-    return False
+        denoiser = {key: info for key, info in header.items() if not key.startswith(_BUNDLED_COMPONENT_KEY_PREFIXES)}
+        if any(is_scale_metadata_key(key) for key in denoiser):
+            return False
+        # No early return on a float8 hit: a sharded denoiser can keep its scales in a shard of its own, and finding
+        # them there still means the whole checkpoint is scaled.
+        stores_float8 = stores_float8 or any(
+            isinstance(info, dict) and info.get("dtype") in _FP8_SAFETENSORS_DTYPES for info in denoiser.values()
+        )
+    return stores_float8
 
 
 def _identified_default_settings(
