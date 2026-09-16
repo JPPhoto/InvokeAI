@@ -187,6 +187,7 @@ const getResultImage = async (
     const image = await apiFetchJson<QueueImageDTO>(`/api/v1/images/i/${encodeURIComponent(imageName)}`, { signal });
 
     return {
+      ...(image.board_id ? { boardId: image.board_id } : {}),
       createdAt: normalizeServerTimestamp(image.created_at),
       height: image.height,
       imageName: image.image_name,
