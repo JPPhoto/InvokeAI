@@ -297,8 +297,6 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
     Like the H3 transformer checkpoints, quantized layers are not autocast-wrapped, so
     residency is all-or-nothing: the int8 file needs ~26 GiB free VRAM while encoding (it
     idle-offloads afterwards); graceful partial-load degradation is the folder encoder's job.
-    If partial load does engage, the tied lm_head/embed_tokens alias additionally splits into
-    two device tensors (~1.56 GB overhead) - see the tie_weights() note in the load path.
     """
 
     def _load_model(
@@ -413,10 +411,8 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
             )
         # Re-tie now that embed_tokens holds the loaded tensor (assign=True replaced the meta
         # parameter the original tie pointed at). The head is never run; tying keeps the module
-        # free of meta tensors and adds no RAM (aliased storage). Caveat: the model cache's
-        # partial-load path moves state-dict keys independently (no data_ptr dedupe), so on that
-        # path the tied pair splits into two device tensors (~1.56 GB extra VRAM, double-counted
-        # in the cache's accounting). Fully-resident loads - the intended regime - keep the alias.
+        # free of meta tensors and adds no RAM (aliased storage), and the model cache keeps the
+        # alias on the compute device too (see `tensor_aliases`).
         model.tie_weights()
 
         return model
