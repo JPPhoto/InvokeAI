@@ -53,18 +53,10 @@ export {
 } from './core/settings';
 export {
   getGalleryCompareImage,
-  getGalleryCurrentItem,
-  getGalleryGenerationSequence,
-  getGalleryLiveSlots,
   getGalleryPage,
   getGallerySelectedImagePage,
   getGallerySelectedImageQuery,
   getGallerySemanticImageQuery,
-  getGalleryPlaceholderInsertionIndex,
-  type GalleryCurrentItem,
-  type GalleryGenerationSequence,
-  type GalleryLiveTarget,
-  type GalleryQueuePlaceholder,
   type GallerySelectedImageQuery,
 } from './ui/galleryStateView';
 export {

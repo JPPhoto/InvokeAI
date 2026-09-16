@@ -777,6 +777,39 @@ describe('queueCoordinator', () => {
     );
   });
 
+  it('publishes a running session before its first preview and on reconnect', async () => {
+    harness.coordinator.connect();
+    await harness.coordinator.submitGenerate('local-1', generateRequest);
+    expect(harness.activeProgressTarget.set).not.toHaveBeenCalled();
+    harness.socket.fire('queue_item_status_changed', createStatusEvent({ item_id: 1, status: 'in_progress' }));
+    expect(harness.activeProgressTarget.set).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: 'local-1' });
+    expect(harness.progressImage.set).not.toHaveBeenCalled();
+    harness.activeProgressTarget.set.mockClear();
+    harness.api.getItem.mockResolvedValue(
+      createQueueBackendItem({ id: 1, origin: buildQueueItemOrigin('local-1', 'project-1'), status: 'in_progress' })
+    );
+    await harness.coordinator.reconcile([
+      { backendItemIds: [1], id: 'local-1', projectId: 'project-1', status: 'running' },
+    ]);
+    expect(harness.activeProgressTarget.set).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: 'local-1' });
+  });
+
+  it.each(['pending', 'waiting'] as const)(
+    'clears a running session when reconciliation discovers a missed %s transition',
+    async (status) => {
+      harness.coordinator.connect();
+      await harness.coordinator.submitGenerate('local-1', generateRequest);
+      harness.socket.fire('queue_item_status_changed', createStatusEvent({ item_id: 1, status: 'in_progress' }));
+      harness.api.getItem.mockResolvedValue(
+        createQueueBackendItem({ id: 1, origin: buildQueueItemOrigin('local-1', 'project-1'), status })
+      );
+      await harness.coordinator.reconcile([
+        { backendItemIds: [1], id: 'local-1', projectId: 'project-1', status: 'running' },
+      ]);
+      expect(harness.activeProgressTarget.clear).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: 'local-1' });
+    }
+  );
+
   it('reopens the revision gate when an item goes back to waiting', async () => {
     harness.coordinator.connect();
     await harness.coordinator.submitGenerate('local-1', generateRequest);
