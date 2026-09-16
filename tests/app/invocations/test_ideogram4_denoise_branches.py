@@ -19,6 +19,7 @@ from invokeai.app.invocations.model import ModelIdentifierField, TransformerFiel
 from invokeai.backend.ideogram4.modeling_ideogram4 import Ideogram4Config, Ideogram4Transformer
 from invokeai.backend.ideogram4.transformer_pair import Ideogram4TransformerPair
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType
+from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import (
     ConditioningFieldData,
     Ideogram4ConditioningInfo,
@@ -46,9 +47,14 @@ def _field(key: str) -> TransformerField:
 
 
 class _LoadedModel:
-    """The slice of `LoadedModel` this method uses, plus a record of how it was entered and left."""
+    """The slice of `LoadedModel` this method uses, plus a record of how it was entered and left.
+
+    `model` is the real attribute name: the node reads it before locking, to see whether the branch
+    is an int8 build whose per-forward dequantization needs headroom of its own.
+    """
 
     def __init__(self, model: torch.nn.Module, calls: list[tuple[str, int]], released: list[str], key: str) -> None:
+        self.model = model
         self._model = model
         self._calls = calls
         self._released = released
@@ -64,14 +70,24 @@ class _LoadedModel:
 
 
 def _context(
-    models: dict[str, torch.nn.Module], released: list[str], calls: list[tuple[str, int]] | None = None
+    models: dict[str, torch.nn.Module],
+    released: list[str],
+    calls: list[tuple[str, int]] | None = None,
+    loaded: list[str] | None = None,
 ) -> SimpleNamespace:
+    """`calls` records the *locks* and their reservations; `loaded` records the RAM-level loads.
+
+    They are separate because the node's ordering distinguishes them: it reads both branches before
+    locking either, and refuses a mis-wired graph before reading the second.
+    """
     recorded = calls if calls is not None else []
-    return SimpleNamespace(
-        models=SimpleNamespace(
-            load=lambda identifier: _LoadedModel(models[identifier.key], recorded, released, identifier.key)
-        )
-    )
+    reads = loaded if loaded is not None else []
+
+    def load(identifier: ModelIdentifierField) -> _LoadedModel:
+        reads.append(identifier.key)
+        return _LoadedModel(models[identifier.key], recorded, released, identifier.key)
+
+    return SimpleNamespace(models=SimpleNamespace(load=load))
 
 
 def _invocation(**fields) -> Ideogram4DenoiseInvocation:
@@ -99,8 +115,10 @@ def test_two_single_files_are_both_held_for_the_whole_loop() -> None:
     invocation = _invocation(transformer=_field("cond"))
     invocation.unconditional_transformer = _field("uncond")
 
+    loaded: list[str] = []
+    calls: list[tuple[str, int]] = []
     with ExitStack() as stack:
-        conditional, unconditional = invocation._load_branches(_context(models, released), stack, 0)
+        conditional, unconditional = invocation._load_branches(_context(models, released, calls, loaded), stack, 0)
 
         assert conditional is models["cond"]
         assert unconditional is models["uncond"]
@@ -108,6 +126,10 @@ def test_two_single_files_are_both_held_for_the_whole_loop() -> None:
         assert released == []
 
     assert sorted(released) == ["cond", "uncond"]
+    # Both branches are read before either is locked, which is what lets the reservation below be
+    # the maximum of the two rather than each branch's own.
+    assert loaded == ["cond", "uncond"]
+    assert [key for key, _ in calls] == ["cond", "uncond"]
 
 
 def test_a_lone_single_file_is_refused() -> None:
@@ -126,10 +148,71 @@ def test_a_bundled_pair_with_a_second_branch_connected_is_refused() -> None:
     invocation = _invocation(transformer=_field("pipeline"))
     invocation.unconditional_transformer = _field("uncond")
 
+    loaded: list[str] = []
     with pytest.raises(ValueError, match="already carries both"), ExitStack() as stack:
         invocation._load_branches(
-            _context({"pipeline": pair, "uncond": Ideogram4Transformer(TINY)}, released), stack, 0
+            _context({"pipeline": pair, "uncond": Ideogram4Transformer(TINY)}, released, loaded=loaded), stack, 0
         )
+
+    # The refusal comes before the second branch is read: a mis-wired graph costs an error, not a
+    # ~9 GiB load of a model the node is about to reject. The node reads both branches before it
+    # locks either, so this is the ordering that has to be pinned, not the locking.
+    assert loaded == ["pipeline"]
+
+
+def _int8_branch() -> Ideogram4Transformer:
+    """A tiny branch whose largest linear is stored int8, as the `int8_convrot` build's are.
+
+    In bfloat16 because that is what the loader produces, and the transient is two weight-sized
+    tensors *in the compute dtype* -- a float32 model would quietly double the expected number.
+    """
+    model = Ideogram4Transformer(TINY).to(torch.bfloat16)
+    linear = model.layers[0].feed_forward.w1
+    model.layers[0].feed_forward.w1 = Int8ConvrotLinear(
+        weight=torch.zeros(linear.out_features, linear.in_features, dtype=torch.int8),
+        weight_scale=torch.ones(linear.out_features, 1),
+        convrot=False,
+    )
+    return model
+
+
+def test_an_int8_branch_adds_its_dequantization_headroom() -> None:
+    """`Int8ConvrotLinear` materializes the dequantized weight inside `forward`.
+
+    That peak is not part of the model's resident size, so it has to be reserved — and it is
+    measured from the model, since a bf16 or fp8 branch needs none of it.
+    """
+    dense = Ideogram4Transformer(TINY).to(torch.bfloat16)
+    int8 = _int8_branch()
+    largest = int8.layers[0].feed_forward.w1
+
+    assert Ideogram4DenoiseInvocation._dequant_transient(dense) == 0
+    assert Ideogram4DenoiseInvocation._dequant_transient(int8) == (
+        2 * largest.in_features * largest.out_features * torch.bfloat16.itemsize
+    )
+
+
+@pytest.mark.parametrize("int8_branch", ["cond", "uncond"])
+def test_a_mixed_pair_reserves_for_the_hungrier_branch(int8_branch: str) -> None:
+    """The cache keeps the *last* lock's reservation, not the sum.
+
+    Free VRAM is recomputed as `capacity - working_mem - in_use` at every lock, so a branch that
+    reserves less hands back exactly the headroom the other one still needs. Both orders are pinned
+    because both occur: the loader node allows an int8 branch guided against an fp8 one in either
+    slot, and reserving only for the first branch would leave one of the two orders green.
+    """
+    models = {"cond": Ideogram4Transformer(TINY).to(torch.bfloat16), "uncond": Ideogram4Transformer(TINY)}
+    models[int8_branch] = _int8_branch()
+    calls: list[tuple[str, int]] = []
+    invocation = _invocation(transformer=_field("cond"))
+    invocation.unconditional_transformer = _field("uncond")
+    transient = Ideogram4DenoiseInvocation._dequant_transient(models[int8_branch])
+    assert transient > 0
+
+    with ExitStack() as stack:
+        invocation._load_branches(_context(models, [], calls), stack, 4 * 1024**3)
+
+    assert calls == [("cond", 4 * 1024**3 + transient), ("uncond", 4 * 1024**3 + transient)]
 
 
 def test_both_branches_reserve_the_same_activation_headroom() -> None:

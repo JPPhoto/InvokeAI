@@ -9,6 +9,7 @@ and lets the file fall through to `Unknown_Config`, which would register a 9 GiB
 model record nothing can load.
 """
 
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -20,6 +21,8 @@ from safetensors.torch import save_file
 from invokeai.backend.model_manager.configs.identification_utils import InvalidMatchError, NotAMatchError
 from invokeai.backend.model_manager.configs.main import Main_Checkpoint_Ideogram4_Config
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType
+
+MARKER = {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 256}
 
 _REQUIRED_FIELDS = {
     "hash": "blake3:fakehash",
@@ -46,11 +49,40 @@ def _state_dict(**overrides: Any) -> dict[str, Any]:
     return sd
 
 
+def _int8_layer(path: str, marker: dict | None = MARKER) -> dict[str, Any]:
+    """One layer as the `int8_convrot` build stores it: codes, per-output-channel scale, marker."""
+    layer: dict[str, Any] = {
+        f"{path}.weight": torch.zeros(24, 8, dtype=torch.int8),
+        f"{path}.weight_scale": torch.zeros(24, 1, dtype=torch.float32),
+    }
+    if marker is not None:
+        layer[f"{path}.comfy_quant"] = torch.frombuffer(
+            bytearray(json.dumps(marker).encode("utf-8")), dtype=torch.uint8
+        ).clone()
+    return layer
+
+
 def _mod(state_dict: dict[str, Any], *, metadata: dict[str, str] | None = None, name: str = "ideogram4.safetensors"):
     mod = MagicMock()
     mod.path = Path(f"/fake/{name}")
     mod.load_state_dict.return_value = state_dict
     mod.metadata.return_value = metadata or {}
+    return mod
+
+
+def _mod_on_disk(state_dict: dict[str, Any], tmp_path: Path, *, name: str = "ideogram4.safetensors"):
+    """A mod whose `path` is a real file, for the checks that read the safetensors header.
+
+    Marker *contents* are not in the state dict identification sees -- it is on the meta device --
+    so the int8 refusal seeks into the file. A `MagicMock` path would make every one of those tests
+    pass for the wrong reason.
+    """
+    path = tmp_path / name
+    save_file(state_dict, path)
+    mod = MagicMock()
+    mod.path = path
+    mod.load_state_dict.return_value = state_dict
+    mod.metadata.return_value = {}
     return mod
 
 
@@ -151,15 +183,38 @@ class TestRefusals:
         with pytest.raises(InvalidMatchError, match="nvfp4"):
             _identify(_mod(sd))
 
-    def test_rejects_the_int8_repack(self) -> None:
-        # As released: bf16 input projection, int8 block linears.
-        sd = _state_dict(**{"layers.0.attention.qkv.weight": torch.zeros(24, 8, dtype=torch.int8)})
+    def test_accepts_the_int8_repack(self, tmp_path: Path) -> None:
+        # As released: bf16 input projection, int8 block linears with per-output-channel scales and
+        # an `int8_tensorwise` marker each. This build carries no `model_type` metadata at all, so
+        # its branch comes from the filename -- which makes that fallback load-bearing here rather
+        # than a courtesy.
+        sd = _state_dict(**_int8_layer("layers.0.attention.qkv"))
 
-        with pytest.raises(InvalidMatchError, match="int8"):
-            _identify(_mod(sd))
+        config = _identify(_mod_on_disk(sd, tmp_path, name="ideogram4_unconditional_int8_convrot.safetensors"))
+
+        assert config.branch == "unconditional"
+
+    @pytest.mark.parametrize(
+        ("marker", "case"),
+        [
+            (None, "no marker at all"),
+            ({"format": "int8_dynamic"}, "a scheme this loader cannot build"),
+        ],
+    )
+    def test_rejects_int8_weights_with_no_readable_marker(self, tmp_path: Path, marker: dict | None, case: str) -> None:
+        """The loader refuses these, so identification has to as well.
+
+        A rotated weight loaded as if it were not one generates noise, which is why
+        `reject_unmarked_int8_weights` exists. Letting the file install anyway would move that
+        refusal to the first render -- after a 9 GiB download and three installed dependencies.
+        """
+        sd = _state_dict(**_int8_layer("layers.0.attention.qkv", marker=marker))
+
+        with pytest.raises(InvalidMatchError, match="no readable 'int8_tensorwise' marker"):
+            _identify(_mod_on_disk(sd, tmp_path, name="ideogram4_int8.safetensors"))
 
     def test_accepts_the_scaled_fp8_release(self) -> None:
-        # The one quantized build this loader does handle: fp8 weight plus a per-tensor scale.
+        # The other quantized build: fp8 weight plus a per-tensor scale.
         sd = _state_dict(
             **{
                 "input_proj.weight": torch.zeros(8, 4, dtype=torch.float8_e4m3fn),
@@ -181,28 +236,41 @@ class TestRefusalReachesTheInstaller:
     reports.
     """
 
-    @pytest.mark.parametrize(
-        ("weight", "expected"),
-        [
-            (torch.zeros(24, 8, dtype=torch.int8), "int8"),
-            (torch.zeros(24, 4, dtype=torch.uint8), "nvfp4"),
-        ],
-    )
-    def test_an_unsupported_repack_is_not_registered_as_unknown(
-        self, tmp_path: Path, weight: torch.Tensor, expected: str
-    ) -> None:
+    def test_an_unsupported_repack_is_not_registered_as_unknown(self, tmp_path: Path) -> None:
         from invokeai.backend.model_manager.configs.factory import ModelConfigFactory
         from invokeai.backend.model_manager.model_on_disk import ModelOnDisk
 
-        sd = _state_dict(**{"layers.0.attention.qkv.weight": weight})
-        if expected == "nvfp4":
-            sd["layers.0.attention.qkv.weight_scale_2"] = torch.zeros((), dtype=torch.float32)
-
-        checkpoint = tmp_path / "ideogram4_repack.safetensors"
+        sd = _state_dict(
+            **{
+                "layers.0.attention.qkv.weight": torch.zeros(24, 4, dtype=torch.uint8),
+                "layers.0.attention.qkv.weight_scale_2": torch.zeros((), dtype=torch.float32),
+            }
+        )
+        checkpoint = tmp_path / "ideogram4_nvfp4_mixed.safetensors"
         save_file(sd, checkpoint, metadata={"model_type": "ideogram4_cond"})
 
         result = ModelConfigFactory.from_model_on_disk(ModelOnDisk(checkpoint), {}, allow_unknown=True)
 
         assert result.config is None, "an unsupported repack must not be registered at all"
         reasons = [str(detail) for detail in result.details.values() if isinstance(detail, InvalidMatchError)]
-        assert any(expected in reason for reason in reasons), reasons
+        assert any("nvfp4" in reason for reason in reasons), reasons
+
+    def test_a_supported_repack_is_registered(self, tmp_path: Path) -> None:
+        """The other half of the refusal.
+
+        `InvalidMatchError` suppresses the Unknown fallback for every class, so a detector that
+        fired one tensor too wide would take the int8 build down with it — and silently, since the
+        symptom is a file that simply stops installing.
+        """
+        from invokeai.backend.model_manager.configs.factory import ModelConfigFactory
+        from invokeai.backend.model_manager.model_on_disk import ModelOnDisk
+
+        sd = _state_dict(**_int8_layer("layers.0.attention.qkv"))
+        checkpoint = tmp_path / "ideogram4_int8_convrot.safetensors"
+        save_file(sd, checkpoint)
+
+        result = ModelConfigFactory.from_model_on_disk(ModelOnDisk(checkpoint), {}, allow_unknown=True)
+
+        assert result.config is not None
+        assert result.config.type is ModelType.Main
+        assert getattr(result.config, "branch", None) == "conditional"

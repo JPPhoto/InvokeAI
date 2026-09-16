@@ -144,6 +144,36 @@ def parse_comfy_quant_bytes(raw: bytes) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def read_comfy_quant_markers(path: Path) -> dict[str, dict[str, Any]]:
+    """Every ``<layer>.comfy_quant`` marker in a safetensors file, read from the header alone.
+
+    A header parse plus one seek per marker blob -- no tensor data. Two callers need the scheme
+    before they have the weights: a loader deciding whether to commit to a ~20 GiB read, and model
+    identification, whose state dict is on the meta device and therefore carries shapes and dtypes
+    but no bytes to parse. Keys are the raw (un-renamed) layer names.
+
+    Marker bytes go through the same tolerant parser the state-dict readers use. This reader runs
+    FIRST, so a strict parse here is what a NUL-padded marker -- which Comfy writes, and which that
+    parser exists to absorb -- would actually hit: a `JSONDecodeError` out of the middle of a load,
+    naming neither the file nor the key.
+
+    Raises whatever the file does (`OSError`, `struct.error`, `json.JSONDecodeError`) for a path
+    that is not readable safetensors; callers that reach this with an unvalidated file catch it.
+    """
+    markers: dict[str, dict[str, Any]] = {}
+    with open(path, "rb") as f:
+        header_len = struct.unpack("<Q", f.read(8))[0]
+        header = json.loads(f.read(header_len))
+        header.pop("__metadata__", None)
+        for key, entry in header.items():
+            if not key.endswith(".comfy_quant"):
+                continue
+            start, end = entry["data_offsets"]
+            f.seek(8 + header_len + start)
+            markers[key[: -len(".comfy_quant")]] = parse_comfy_quant_bytes(f.read(end - start))
+    return markers
+
+
 def parse_comfy_quant_marker(blob: torch.Tensor) -> dict:
     """Decode a ``<layer>.comfy_quant`` uint8 tensor into its JSON dict, or ``{}``."""
     try:
@@ -415,8 +445,8 @@ def resolve_quantized_module_paths(
     return resolved
 
 
-def _resolve_int8_target(model: torch.nn.Module, path: str) -> tuple[torch.nn.Module, str]:
-    """The owner and attribute name of the module a marker names, as ``setattr`` needs them.
+def _resolve_int8_target(model: torch.nn.Module, path: str) -> tuple[torch.nn.Module, str, torch.nn.Linear]:
+    """The owner, attribute name and module a marker names, as ``setattr`` and the swap need them.
 
     Refuses anything an ``Int8ConvrotLinear`` cannot stand in for. Without this, a marker naming a
     module the built model lacks leaves ``get_submodule`` to raise a bare ``AttributeError`` out of
@@ -437,7 +467,7 @@ def _resolve_int8_target(model: torch.nn.Module, path: str) -> tuple[torch.nn.Mo
             f"'{path}' is marked int8_tensorwise but is a {type(target).__name__}, not an nn.Linear. "
             "Only a Linear weight can be kept in int8 storage."
         )
-    return parent, attribute
+    return parent, attribute, target
 
 
 def _can_stay_int8(path: str, weight: Any, model: torch.nn.Module | None, skip_patterns: Iterable[str] = ()) -> bool:
@@ -610,7 +640,19 @@ def swap_in_int8_linears(model: torch.nn.Module, sd: dict[str, Any], quantized: 
                 "Only a Linear weight can be kept in int8 storage; dequantize this one instead."
             )
         check_int8_scale_layout(path, weight, scale)
-        parent, attribute = _resolve_int8_target(model, path)
+        parent, attribute, target = _resolve_int8_target(model, path)
+        bias = sd.get(f"{path}.bias")
+        if (bias is None) is not (target.bias is None):
+            # The replacement's buffers are whatever the checkpoint supplied, so from here on the
+            # module's key set mirrors the file rather than the architecture -- and the strict
+            # `load_state_dict` the loaders run afterwards can no longer tell the two apart. A
+            # repack that drops all-zero biases would otherwise load, cache and render with every
+            # quantized layer silently missing its offset.
+            missing, extra = ("checkpoint", "model") if bias is None else ("model", "checkpoint")
+            raise ValueError(
+                f"'{path}' is marked int8_tensorwise and the {extra}'s Linear has a bias, but the "
+                f"{missing} has none. The checkpoint does not match this architecture."
+            )
         setattr(
             parent,
             attribute,
@@ -618,7 +660,7 @@ def swap_in_int8_linears(model: torch.nn.Module, sd: dict[str, Any], quantized: 
                 weight=weight,
                 weight_scale=scale,
                 convrot=bool(marker.get("convrot", False)),
-                bias=sd.get(f"{path}.bias"),
+                bias=bias,
                 group_size=int(marker.get("convrot_groupsize", CONVROT_GROUP_SIZE)),
             ),
         )

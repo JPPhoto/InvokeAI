@@ -57,6 +57,7 @@ from invokeai.backend.model_manager.taxonomy import (
     ZImageVariantType,
 )
 from invokeai.backend.quantization.gguf.ggml_tensor import GGMLTensor
+from invokeai.backend.quantization.int8_convrot import INT8_TENSORWISE_FORMAT, read_comfy_quant_markers
 from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
 from invokeai.backend.quantization.sdnq.sdnq_tensor import SDNQTensor
 
@@ -1448,7 +1449,10 @@ def _has_ideogram4_keys(state_dict: dict[str | int, Any]) -> bool:
 
 
 def _ideogram4_branch_from_filename(filename: str) -> Ideogram4Branch:
-    """Fallback for files whose metadata was stripped by a re-upload or a repack tool.
+    """The branch for a file that declares none.
+
+    Not only a fallback for a stripped re-upload: the released `int8_convrot` pair carries no
+    `model_type` at all, so this is the sole path for that build.
 
     Only the unconditional file is named for its branch, so anything else is read as the conditional
     branch — the same default direction as the released naming. Both spellings are accepted: the
@@ -1466,17 +1470,19 @@ class Main_Checkpoint_Ideogram4_Config(Checkpoint_Config_Base, Main_Config_Base,
     FLUX.2 VAE are separate models, selected on the loader node; the diffusers pipeline folder
     (``Main_Diffusers_Ideogram4_Config``) is the variant that bundles everything.
 
-    Quantization: plain bf16/fp16 and ComfyUI "scaled fp8" load. The ``int8_convrot`` and ``nvfp4``
-    repacks of the same files are recognised and rejected with `InvalidMatchError`, which keeps them
-    out of the database entirely -- `NotAMatchError` would let them fall through to `Unknown_Config`
-    and register a 9 GiB file that nothing can ever load.
+    Quantization: plain bf16/fp16, ComfyUI "scaled fp8" and ComfyUI ``int8_tensorwise``(+convrot)
+    all load. The ``nvfp4`` repack of the same files is recognised and rejected with
+    `InvalidMatchError`, which keeps it out of the database entirely -- `NotAMatchError` would let
+    it fall through to `Unknown_Config` and register a 5 GiB file that nothing can ever load.
     """
 
     base: Literal[BaseModelType.Ideogram4] = Field(default=BaseModelType.Ideogram4)
     format: Literal[ModelFormat.Checkpoint] = Field(default=ModelFormat.Checkpoint)
     branch: Ideogram4Branch = Field(
         description="Which of Ideogram 4's two transformer branches this file holds. Read from the "
-        "file's `model_type` metadata, with the filename as the fallback for stripped re-uploads."
+        "file's `model_type` metadata where it has any, and from the filename otherwise — the "
+        "released int8 build records no metadata at all, so keep those files under their published "
+        "names. Rename and re-install to correct it."
     )
 
     @classmethod
@@ -1492,7 +1498,7 @@ class Main_Checkpoint_Ideogram4_Config(Checkpoint_Config_Base, Main_Config_Base,
         if _has_ggml_tensors(state_dict):
             raise NotAMatchError("GGUF-quantized Ideogram 4 checkpoints are not supported yet")
 
-        cls._raise_for_unsupported_quantization(state_dict)
+        cls._raise_for_unsupported_quantization(mod, state_dict)
 
         branch = override_fields.pop("branch", None) or cls._branch_or_raise(mod)
 
@@ -1521,29 +1527,58 @@ class Main_Checkpoint_Ideogram4_Config(Checkpoint_Config_Base, Main_Config_Base,
         return branch
 
     @classmethod
-    def _raise_for_unsupported_quantization(cls, state_dict: dict[str | int, Any]) -> None:
-        """Refuse the quantization schemes this loader cannot yet build.
+    def _raise_for_unsupported_quantization(cls, mod: ModelOnDisk, state_dict: dict[str | int, Any]) -> None:
+        """Refuse the quantization schemes this loader cannot build.
 
         `InvalidMatchError`, not `NotAMatchError`: the file *is* an Ideogram 4 transformer, so the
         right outcome is a refusal the installer shows, not a fall-through to `Unknown_Config` that
         registers it as a model nothing can load.
 
-        Neither scheme is visible in one fixed tensor: the int8_convrot repack leaves the input
-        projection bf16 and quantizes the block linears, and nvfp4 packs two codes per byte, so a
-        uint8 weight is indistinguishable from the `comfy_quant` markers every repack carries --
-        including the supported fp8 one. The per-tensor `weight_scale_2` is what only nvfp4 writes,
-        and int8 is a dtype nothing else here uses.
+        Two of them. nvfp4 packs two codes per byte, so its uint8 weights are indistinguishable from
+        the `comfy_quant` markers every repack carries -- including the two supported ones; the
+        per-tensor `weight_scale_2` is what only nvfp4 writes.
+
+        And int8 weights *without* a readable `int8_tensorwise` marker: the loader refuses those
+        (`reject_unmarked_int8_weights`), because a rotated weight loaded as if it were not one
+        generates noise. Refusing them here too is what keeps that refusal at install time -- a
+        torchao or `int8_dynamic` repack of this architecture would otherwise register as a 9 GiB
+        model, pull in its three starter dependencies, and fail at the first render.
+
+        The markers come from the file's header rather than from `state_dict`: identification loads
+        tensors on the meta device, so it has every dtype and shape but no bytes to parse. That read
+        is a header parse plus one seek per marker, and it only happens for a file that has int8
+        weights to explain in the first place.
         """
         if any(isinstance(key, str) and key.endswith(".weight_scale_2") for key in state_dict):
             raise InvalidMatchError(
                 "this is an nvfp4-quantized Ideogram 4 transformer, which is not supported yet. "
-                "Install the fp8_scaled build instead (ideogram4_fp8_scaled.safetensors)."
+                "Install the fp8_scaled or int8_convrot build instead."
             )
 
-        if any(getattr(value, "dtype", None) is torch.int8 for value in state_dict.values()):
+        int8_weights = sorted(
+            key
+            for key, value in state_dict.items()
+            if isinstance(key, str) and key.endswith(".weight") and getattr(value, "dtype", None) is torch.int8
+        )
+        if not int8_weights:
+            return
+
+        try:
+            markers = read_comfy_quant_markers(mod.path)
+        except Exception:
+            # Not readable safetensors, so there are no markers to find and nothing explains the
+            # int8 weights. The refusal below is the right answer for that file too.
+            markers = {}
+        unmarked = [
+            key
+            for key in int8_weights
+            if markers.get(key[: -len(".weight")], {}).get("format") != INT8_TENSORWISE_FORMAT
+        ]
+        if unmarked:
             raise InvalidMatchError(
-                "this is an int8-quantized Ideogram 4 transformer, which is not supported yet. "
-                "Install the fp8_scaled build instead (ideogram4_fp8_scaled.safetensors)."
+                f"{len(unmarked)} int8 weight(s) in this Ideogram 4 transformer carry no readable "
+                f"'{INT8_TENSORWISE_FORMAT}' marker (e.g. '{unmarked[0]}'), so the quantization scheme "
+                "cannot be identified. Only Comfy-Org's int8_convrot build is supported."
             )
 
 

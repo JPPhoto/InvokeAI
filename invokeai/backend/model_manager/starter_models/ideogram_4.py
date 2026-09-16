@@ -35,8 +35,13 @@ ideogram_4_fp8 = StarterModel(
 # step, so the conditional transformer pulls the unconditional one in as a dependency along with the
 # encoder and the VAE. The repo is ungated, unlike the diffusers pipelines above, but the same
 # non-commercial license applies.
+#
+# The build is named on both branches of both pairs, because the user picks the unconditional branch
+# by name in Components and any conditional accepts any unconditional. Dropping it from one name is
+# how a user ends up guiding an int8 branch against an fp8 one without meaning to.
 ideogram_4_unconditional_single_file = StarterModel(
-    name="Ideogram 4 Unconditional (single file)",
+    name="Ideogram 4 Unconditional (single file, fp8)",
+    previous_names=["Ideogram 4 Unconditional (single file)"],
     base=BaseModelType.Ideogram4,
     source="https://huggingface.co/Comfy-Org/Ideogram-4/resolve/main/diffusion_models/ideogram4_unconditional_fp8_scaled.safetensors",
     description="The unconditional branch of Ideogram 4, in ComfyUI scaled fp8. Useless on its own — "
@@ -55,8 +60,32 @@ ideogram_4_qwen3_vl_encoder_8b = StarterModel(
     format=ModelFormat.Checkpoint,
 )
 
+ideogram_4_unconditional_int8 = StarterModel(
+    name="Ideogram 4 Unconditional (single file, int8)",
+    base=BaseModelType.Ideogram4,
+    source="https://huggingface.co/Comfy-Org/Ideogram-4/resolve/main/diffusion_models/ideogram4_unconditional_int8_convrot.safetensors",
+    description="The unconditional branch of Ideogram 4, in ComfyUI int8_tensorwise. Useless on its "
+    "own — Ideogram 4 guides its conditional branch against this one. ~8.9GB",
+    type=ModelType.Main,
+    format=ModelFormat.Checkpoint,
+)
+
+ideogram_4_int8 = StarterModel(
+    name="Ideogram 4 (single file, int8)",
+    base=BaseModelType.Ideogram4,
+    source="https://huggingface.co/Comfy-Org/Ideogram-4/resolve/main/diffusion_models/ideogram4_int8_convrot.safetensors",
+    description="Comfy-Org single-file Ideogram 4 in ComfyUI int8_tensorwise. Unlike the fp8 build "
+    "it stays at its download size in memory on every device — 8.9GB per branch rather than ~17GB — "
+    "because the weights are dequantized per forward instead of on load. Installs the unconditional "
+    "branch, the Qwen3-VL 8B encoder and the VAE with it. Non-commercial license. ~28GB total",
+    type=ModelType.Main,
+    format=ModelFormat.Checkpoint,
+    dependencies=[ideogram_4_unconditional_int8, ideogram_4_qwen3_vl_encoder_8b, flux2_vae],
+)
+
 ideogram_4_single_file = StarterModel(
-    name="Ideogram 4 (single file)",
+    name="Ideogram 4 (single file, fp8)",
+    previous_names=["Ideogram 4 (single file)"],
     base=BaseModelType.Ideogram4,
     source="https://huggingface.co/Comfy-Org/Ideogram-4/resolve/main/diffusion_models/ideogram4_fp8_scaled.safetensors",
     description="Comfy-Org single-file Ideogram 4 in ComfyUI scaled fp8. Installs the unconditional "

@@ -35,6 +35,7 @@ from invokeai.backend.model_manager.taxonomy import (
     SubModelType,
 )
 from invokeai.backend.quantization.fp8_scaled import (
+    Fp8ScaledLayer,
     attach_fp8_scales,
     cast_state_dict,
     dequantize_fp8_scaled,
@@ -47,6 +48,16 @@ from invokeai.backend.quantization.fp8_scaled import (
     should_keep_fp8_weights,
     split_fp8_scaled_layers,
     warn_on_unattached_scales,
+)
+from invokeai.backend.quantization.int8_convrot import (
+    cast_unquantized,
+    drop_unconsumed_quantization_sidecars,
+    extract_int8_convrot_markers,
+    predict_int8_cast_size,
+    reject_foreign_quantization_scales,
+    reject_unmarked_int8_weights,
+    split_int8_convrot_layers,
+    swap_in_int8_linears,
 )
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_extras, log_unexpected_keys
@@ -258,11 +269,18 @@ class Ideogram4CheckpointModel(ModelLoader):
     as its own model and the loader node pairs them, which is why this returns a bare transformer
     where the diffusers loader returns an ``Ideogram4TransformerPair``.
 
-    Handles plain bf16/fp16 and ComfyUI "scaled fp8" (fp8 weight + per-tensor ``.weight_scale``,
-    plus ``.comfy_quant`` markers). The fp8 weights are kept quantized when the device can run the
-    fp8 matmul and folded into the compute dtype otherwise -- the same trade every other
-    single-file loader here makes, and the reason a 8.6 GiB file needs ~17 GiB resident without
-    ``fp8_compute``.
+    Three storage schemes, distinguished by what sits next to the weights:
+
+    - plain bf16/fp16 -- loaded verbatim;
+    - ComfyUI "scaled fp8" (fp8 weight + per-tensor ``.weight_scale``, plus ``.comfy_quant``
+      markers), kept quantized when the device can run the fp8 matmul and folded into the compute
+      dtype otherwise -- the same trade every other single-file loader here makes, and the reason an
+      8.6 GiB file needs ~17 GiB resident without ``fp8_compute``;
+    - ComfyUI ``int8_tensorwise`` + ``convrot`` (int8 weight + per-output-channel ``.weight_scale``),
+      kept in ``Int8ConvrotLinear`` and dequantized per forward, so the file's size is the resident
+      size with no setting to enable and no dependence on the device.
+
+    nvfp4 is refused at identification, not here.
     """
 
     def _load_model(
@@ -288,43 +306,83 @@ class Ideogram4CheckpointModel(ModelLoader):
 
         sd: dict[str, torch.Tensor] = load_file(model_path)
 
-        # Per-layer `.comfy_quant` markers are popped out of `sd` here; the header carries the same
-        # flags on some repacks and wins where both are present. Read before anything consumes the
-        # weights: `extract_fp8_scaled_layers` drops what is left of the side channel.
-        layer_hints = {
-            **extract_comfy_quant_hints(sd),
-            **parse_quantization_metadata(read_safetensors_metadata(model_path, self._logger)),
-        }
+        # Which of the two ComfyUI side channels this file carries is decided once, and int8 first:
+        # an int8 layer ships a `.weight_scale` too, so probing for scales without ruling int8 out
+        # would take the whole checkpoint down the fp8 path -- scaled, but never un-rotated, which
+        # loads cleanly and generates noise.
+        int8_markers = extract_int8_convrot_markers(sd)
+        # Outside the branch on purpose (see the helper): an int8 weight whose marker is missing or
+        # unparseable would otherwise be cast to the compute dtype as raw codes and load silently.
+        reject_unmarked_int8_weights(sd, int8_markers, "Ideogram 4")
 
-        fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
-        keep_fp8 = should_keep_fp8_weights(target_device)
-        if fp8_layers and not keep_fp8:
-            # Fold the scales in. Staying quantized without the fp8 matmul would halve VRAM but
-            # dequantize on every forward, so both are tied to the same setting.
-            dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
-            fp8_layers = {}
+        fp8_layers: dict[str, Fp8ScaledLayer] = {}
+        keep_fp8 = False
+        if not int8_markers:
+            # Per-layer `.comfy_quant` markers are popped out of `sd` here; the header carries the
+            # same flags on some repacks and wins where both are present. Read before anything
+            # consumes the weights: `extract_fp8_scaled_layers` drops what is left of the side
+            # channel.
+            layer_hints = {
+                **extract_comfy_quant_hints(sd),
+                **parse_quantization_metadata(read_safetensors_metadata(model_path, self._logger)),
+            }
+
+            fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
+            keep_fp8 = should_keep_fp8_weights(target_device)
+            if fp8_layers and not keep_fp8:
+                # Fold the scales in. Staying quantized without the fp8 matmul would halve VRAM but
+                # dequantize on every forward, so both are tied to the same setting.
+                dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
+                fp8_layers = {}
 
         with accelerate.init_empty_weights():
             model: torch.nn.Module = Ideogram4Transformer(Ideogram4Config())
 
-        # `input_proj` and `t_embedding` must not stay fp8 -- the model derives its activation dtype
-        # from their weights (see `Ideogram4Transformer._skip_layerwise_casting_patterns`).
+        # `input_proj` and `t_embedding` must not stay quantized in either scheme -- the model
+        # derives its activation dtype from their weights, and neither float8 nor int8 is a dtype
+        # torch computes in (see `Ideogram4Transformer._skip_layerwise_casting_patterns`). The
+        # released int8 build leaves both dense anyway; this holds for a repack that does not.
         skip_patterns = _model_declared_skip_patterns(model)
 
-        # Reserve before the split: it dequantizes the layers it cannot keep through float32, and a
-        # reservation made afterwards lets that transient peak land on an unreserved cache.
-        self._ram_cache.make_room(
-            predict_cast_state_dict_size(
-                sd,
-                model_dtype,
-                keep_fp8=keep_fp8,
-                model=model,
-                skip_patterns=skip_patterns,
-                scaled_layers=fp8_layers,
+        if int8_markers:
+            # W8A8 activation scales and any marker of another format: meaningless on this path,
+            # which dequantizes the weight and computes in `model_dtype`. They are dropped rather
+            # than tolerated because the load below is strict -- and because they would otherwise be
+            # cast and counted against the reservation for nothing.
+            # Rebinding is safe here where z_image filters in place: `sd` is the only reference to
+            # the dict, and the `sd.clear()` after the load acts on whatever `sd` names then -- the
+            # same dict `load_state_dict(assign=True)` aliased its parameters from.
+            sd = drop_unconsumed_quantization_sidecars(sd)
+
+            quantized = int8_markers
+            # A scale left over from another scheme means its weight is about to be cast without
+            # one. After the model exists, so the check can tell a real module from a stray key.
+            reject_foreign_quantization_scales(sd, quantized, "Ideogram 4", model)
+
+            # Reserve before the split for the same reason as below, and charge the int8 payloads
+            # their actual one byte rather than the compute dtype's two.
+            self._ram_cache.make_room(
+                predict_int8_cast_size(sd, model_dtype, quantized, model=model, skip_patterns=skip_patterns)
             )
-        )
-        fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
-        kept = cast_state_dict(sd, model_dtype, keep_fp8=keep_fp8, model=model, skip_patterns=skip_patterns)
+            quantized = split_int8_convrot_layers(sd, quantized, model_dtype, model=model, skip_patterns=skip_patterns)
+            cast_unquantized(sd, model_dtype, quantized)
+            swap_in_int8_linears(model, sd, quantized)
+            kept = 0
+        else:
+            # Reserve before the split: it dequantizes the layers it cannot keep through float32,
+            # and a reservation made afterwards lets that transient peak land on an unreserved cache.
+            self._ram_cache.make_room(
+                predict_cast_state_dict_size(
+                    sd,
+                    model_dtype,
+                    keep_fp8=keep_fp8,
+                    model=model,
+                    skip_patterns=skip_patterns,
+                    scaled_layers=fp8_layers,
+                )
+            )
+            fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
+            kept = cast_state_dict(sd, model_dtype, keep_fp8=keep_fp8, model=model, skip_patterns=skip_patterns)
 
         # Strict: the released files are key-for-key this model, so a missing or extra key means a
         # different checkpoint, not a benign naming difference.
@@ -332,6 +390,16 @@ class Ideogram4CheckpointModel(ModelLoader):
         # `assign=True` aliases every parameter to its `sd` tensor; dropping the dict's references
         # keeps the originals from staying reachable beside any fp8 copy made below.
         sd.clear()
+
+        if int8_markers:
+            # No setting behind this one and nothing to fall back to: `Int8ConvrotLinear` holds the
+            # stored codes and dequantizes per forward, so an 8.9 GiB file stays 8.9 GiB resident on
+            # every device. What it does not get is int8 *compute*.
+            self._logger.info(
+                f"Ideogram 4: kept {len(quantized)} layer(s) in int8 (int8_tensorwise checkpoint, "
+                "dequantized per forward)"
+            )
+            return model
 
         if kept and not fp8_layers:
             self._logger.info(
