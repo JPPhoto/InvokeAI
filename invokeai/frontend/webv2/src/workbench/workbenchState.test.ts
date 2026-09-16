@@ -3991,12 +3991,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(getProjectWidgetValues(getActiveProject(state), 'gallery').galleryPage).toBe(0);
   });
 
-  it('releases a mid-board infinite window anchor when a result lands on the viewed board', () => {
-    // A deep reveal from the image map anchors the infinite window mid-board.
-    // New images land at the TOP of that listing, which the anchored window
-    // never covers — and an anchored window also suppresses the recents
-    // overlay and the queue placeholders, so without releasing the anchor the
-    // user would never see their own generation appear.
+  it('preserves the browsed window when a result lands on the viewed board', () => {
     let state = primeGenerate();
 
     state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
@@ -4015,7 +4010,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       type: 'routeQueueItemResults',
     });
 
-    expect(getProjectWidgetValues(getActiveProject(state), 'gallery').galleryPage).toBe(0);
+    expect(getProjectWidgetValues(getActiveProject(state), 'gallery').galleryPage).toBe(11);
   });
 
   it('leaves the window anchor alone when the result lands on a board that is not being viewed', () => {

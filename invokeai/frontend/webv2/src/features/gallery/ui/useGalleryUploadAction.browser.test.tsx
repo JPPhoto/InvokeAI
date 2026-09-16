@@ -76,7 +76,6 @@ const NoopProvider = ({ children }: { children: ReactNode }) => children;
 const adapter: GalleryUiAdapter = {
   ItemActionsProvider: NoopProvider,
   ImageContextMenu: () => null,
-  account: { enableLiveFollow: noop },
   antialiasProgressImages: false,
   exportProject: vi.fn(),
   gallery: {
@@ -99,14 +98,15 @@ const adapter: GalleryUiAdapter = {
   galleryValues: {},
   generateValues: {},
   liveFollowEnabled: false,
-  liveProgressTarget: null,
+  progressSessions: [],
+  pinnedProgressSessionId: null,
+  followProgressSession: vi.fn(),
   notifications: {
     add: (...args: unknown[]) => mocks.notificationsAdd(...args),
     reportError: (...args: unknown[]) => mocks.notificationsReportError(...args),
   },
   projectId: 'project-1',
   projectName: 'Project',
-  queueItems: [],
   widgets: { openGallery: () => true, patchGalleryValues: noop },
 };
 
