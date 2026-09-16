@@ -2,15 +2,15 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 883578,
+        "brotliBytes": 883822,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 882731,
+        "gzipBytes": 882898,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2085140,
+        "initialRawBytes": 2085736,
         "largestAssetRawBytes": 754382,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 80359,
+        "ownedRawBytes": 80327,
         "requestCount": 38,
         "scriptRequestCount": 22,
         "sourceOwners": [
@@ -318,17 +318,17 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1207865,
+        "brotliBytes": 1211364,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1201982,
+        "gzipBytes": 1205312,
         "imageRawBytes": 156376,
-        "initialRawBytes": 3074577,
+        "initialRawBytes": 3085063,
         "largestAssetRawBytes": 754382,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 135048,
-        "requestCount": 88,
-        "scriptRequestCount": 72,
+        "ownedRawBytes": 135327,
+        "requestCount": 87,
+        "scriptRequestCount": 71,
         "sourceOwners": [
           "package:@ark-ui/react",
           "package:@chakra-ui/react",
@@ -652,6 +652,7 @@
           "source:src/features/video/index.ts",
           "source:src/features/video/ui/VideoUiContext.tsx",
           "source:src/features/workflow/core/buildGraph.ts",
+          "source:src/features/workflow/core/callSavedWorkflow.ts",
           "source:src/features/workflow/core/connectors.ts",
           "source:src/features/workflow/core/document.ts",
           "source:src/features/workflow/core/fields.ts",
@@ -663,6 +664,7 @@
           "source:src/features/workflow/data/api.ts",
           "source:src/features/workflow/data/libraryCache.ts",
           "source:src/features/workflow/data/runCapture.ts",
+          "source:src/features/workflow/data/savedWorkflowQueries.ts",
           "source:src/features/workflow/data/templates.ts",
           "source:src/features/workflow/queries.ts",
           "source:src/features/workflow/react.ts",
@@ -1028,7 +1030,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-15",
+  "capturedAt": "2026-09-16",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",
@@ -1073,7 +1075,9 @@
       "src/features/queue/ui/launchpad/QueueStatusBand.tsx",
       "src/workbench/launchpad/home/livePanels.ts"
     ],
-    "editorForbiddenInitialChunkNames": ["ag-psd"],
+    "editorForbiddenInitialChunkNames": [
+      "ag-psd"
+    ],
     "inactiveWidgetGateOwner": "deepen-widget-registry-loading"
   }
 }
